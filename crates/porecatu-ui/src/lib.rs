@@ -8,14 +8,16 @@ use porecatu_term::{
     GridSnapshot, Modifiers, PtySize, SpawnConfig, TermEvent, TermParams, Terminal,
 };
 use winit::application::ApplicationHandler;
-use winit::event::{Ime, WindowEvent};
+use winit::event::{ElementState, Ime, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
+mod clipboard;
 mod input;
 mod paint;
 mod palette;
 
+use input::ClickTracker;
 use paint::CellMetrics;
 
 // docs/config/porecatu.example.toml [terminal.font]: size = 12.5 (RF-5.3),
@@ -52,6 +54,13 @@ struct App {
     /// Estado corrente dos modificadores, mantido via `ModifiersChanged`
     /// -- o `KeyEvent` do `winit` não carrega isso junto.
     modifiers: Modifiers,
+    /// Última posição conhecida do cursor, em pixels físicos -- `winit` só
+    /// manda a posição em `CursorMoved`, não em `MouseInput`.
+    cursor_position: (f64, f64),
+    /// Botão pressionado no momento, se algum -- decide se `CursorMoved`
+    /// é arraste (estende seleção / reporta modo 1002) ou movimento livre.
+    mouse_button_down: Option<MouseButton>,
+    click_tracker: ClickTracker,
 }
 
 impl App {
@@ -70,6 +79,9 @@ impl App {
                 height: 1.0,
             },
             modifiers: Modifiers::NONE,
+            cursor_position: (0.0, 0.0),
+            mouse_button_down: None,
+            click_tracker: ClickTracker::default(),
         }
     }
 
@@ -128,6 +140,16 @@ impl App {
             window.request_redraw();
         }
     }
+
+    fn cell_at_cursor(&self) -> input::CellPosition {
+        input::cell_at(
+            self.cursor_position.0,
+            self.cursor_position.1,
+            self.cell_metrics,
+            self.snapshot.rows.max(MIN_GRID),
+            self.snapshot.cols.max(MIN_GRID),
+        )
+    }
 }
 
 impl ApplicationHandler<Wakeup> for App {
@@ -183,8 +205,17 @@ impl ApplicationHandler<Wakeup> for App {
                     // RF-1.21 (indicador de campainha) é F2, quando existe
                     // barra de abas para carregar o indicador.
                     TermEvent::Bell => {}
-                    // `arboard` é Etapa 6.
-                    TermEvent::ClipboardWrite(_) | TermEvent::ClipboardRead(_) => {}
+                    // OSC 52 escrita: vai pro clipboard do sistema, sujeito
+                    // ao teto de tamanho já aplicado em porecatu-term
+                    // (RF-10.10). Leitura: só dispara quando
+                    // `TermParams::osc52_read` permite -- `false` por
+                    // default (RF-10.11), então na prática este braço só
+                    // roda se isso um dia virar configurável (F4).
+                    TermEvent::ClipboardWrite(text) => clipboard::copy(&text),
+                    TermEvent::ClipboardRead(responder) => {
+                        let content = clipboard::paste().unwrap_or_default();
+                        terminal.write(responder.respond(&content).into_bytes());
+                    }
                     // Depende de tema resolvido -- F4.
                     TermEvent::ColorQuery(_) => {}
                     TermEvent::Exit { .. } => {
@@ -258,7 +289,55 @@ impl ApplicationHandler<Wakeup> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(terminal) = &self.terminal {
-                    input::handle_mouse_wheel(terminal, &terminal.modes(), delta);
+                    let cell = self.cell_at_cursor();
+                    input::handle_mouse_wheel(
+                        terminal,
+                        &terminal.modes(),
+                        delta,
+                        self.modifiers,
+                        cell,
+                    );
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_position = (position.x, position.y);
+                if let Some(terminal) = &self.terminal {
+                    let cell = self.cell_at_cursor();
+                    input::handle_mouse_motion(
+                        terminal,
+                        &terminal.modes(),
+                        cell,
+                        self.modifiers,
+                        self.mouse_button_down,
+                    );
+                    // Seleção mudou de forma sem passar pela thread de
+                    // leitura -- ninguém mais vai pedir redraw sozinho.
+                    if self.mouse_button_down.is_some()
+                        && let Some(window) = &self.window
+                    {
+                        window.request_redraw();
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.mouse_button_down = match state {
+                    ElementState::Pressed => Some(button),
+                    ElementState::Released => None,
+                };
+                if let Some(terminal) = &self.terminal {
+                    let cell = self.cell_at_cursor();
+                    input::handle_mouse_button(
+                        terminal,
+                        &terminal.modes(),
+                        button,
+                        state == ElementState::Pressed,
+                        cell,
+                        self.modifiers,
+                        &mut self.click_tracker,
+                    );
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
                 }
             }
             WindowEvent::RedrawRequested => {

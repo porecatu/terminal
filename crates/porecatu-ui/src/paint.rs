@@ -13,7 +13,7 @@
 //! prática.
 
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, TextRun};
-use porecatu_term::{Cell, CellFlags, CellText, GridSnapshot};
+use porecatu_term::{Cell, CellFlags, CellText, GridSnapshot, SelectionSpan};
 
 use crate::palette;
 
@@ -72,7 +72,8 @@ fn paint_row_backgrounds(
 ) {
     for col in 0..cols {
         let cell = &snapshot.cells[row * cols + col];
-        let (_, bg) = resolved_colors(cell);
+        let selected = is_selected(snapshot.selection, row, col);
+        let (_, bg) = resolved_colors(cell, selected);
         if bg != palette::TERM_BACKGROUND {
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
@@ -104,7 +105,8 @@ fn paint_row_text(
             continue;
         }
 
-        let (fg, _) = resolved_colors(cell);
+        let selected = is_selected(snapshot.selection, row, col);
+        let (fg, _) = resolved_colors(cell, selected);
         let bold = cell.flags.contains(CellFlags::BOLD);
         let start_col = col;
         let mut text = String::new();
@@ -115,7 +117,8 @@ fn paint_row_text(
                 col += 1;
                 continue;
             }
-            let (cell_fg, _) = resolved_colors(cell);
+            let cell_selected = is_selected(snapshot.selection, row, col);
+            let (cell_fg, _) = resolved_colors(cell, cell_selected);
             let cell_bold = cell.flags.contains(CellFlags::BOLD);
             if cell_fg != fg || cell_bold != bold {
                 break;
@@ -143,7 +146,39 @@ fn push_cell_text(cell: &Cell, clusters: &str, out: &mut String) {
     }
 }
 
-fn resolved_colors(cell: &Cell) -> (Color, Color) {
+/// Se `(row, col)` está dentro do span de seleção -- retangular pra
+/// `is_block`, por linha lógica (início/meio/fim) pros outros três modos.
+fn is_selected(selection: Option<SelectionSpan>, row: usize, col: usize) -> bool {
+    let Some(sel) = selection else {
+        return false;
+    };
+    if row < sel.start_row || row > sel.end_row {
+        return false;
+    }
+    if sel.is_block || sel.start_row == sel.end_row {
+        return col >= sel.start_col && col <= sel.end_col;
+    }
+    if row == sel.start_row {
+        return col >= sel.start_col;
+    }
+    if row == sel.end_row {
+        return col <= sel.end_col;
+    }
+    true // linha inteira entre a primeira e a última da seleção
+}
+
+fn resolved_colors(cell: &Cell, selected: bool) -> (Color, Color) {
+    if selected {
+        // Seleção domina a cor da célula -- não combina com `INVERSE`
+        // nem com a cor original; é o mesmo comportamento da maioria dos
+        // terminais (destaque uniforme, independente do que estava sob
+        // ele).
+        return (
+            palette::TERM_SELECTION_FOREGROUND,
+            palette::TERM_SELECTION_BACKGROUND,
+        );
+    }
+
     let mut fg = palette::resolve(
         cell.fg,
         palette::TERM_FOREGROUND,

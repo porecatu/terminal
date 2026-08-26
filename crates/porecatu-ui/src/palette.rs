@@ -22,11 +22,9 @@ const fn hex(r: u8, g: u8, b: u8) -> Color {
 pub const TERM_FOREGROUND: Color = hex(0xc7, 0xcc, 0xd6); // foreground, RF-5.12
 pub const TERM_BACKGROUND: Color = hex(0x0f, 0x12, 0x16); // background
 pub const TERM_CURSOR: Color = hex(0x5e, 0xd3, 0xbc); // cursor, RF-5.13
-#[allow(dead_code)] // usado quando o glyph sob o cursor for repintado (F5+)
+#[allow(dead_code)] // usado quando o glyph sob o cursor for repintado (F2+)
 pub const TERM_CURSOR_TEXT: Color = hex(0x0f, 0x12, 0x16); // cursor_text
-#[allow(dead_code)] // seleção é Etapa 6
 pub const TERM_SELECTION_BACKGROUND: Color = hex(0x2e, 0x6b, 0x62); // selection_background, RF-5.14
-#[allow(dead_code)]
 pub const TERM_SELECTION_FOREGROUND: Color = hex(0xee, 0xf2, 0xf4); // selection_foreground
 
 // [terminal.colors.normal], RF-5.11 -- indices 0..8

@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+arboard = "3"
 porecatu-core = { path = "../porecatu-core" }
 porecatu-render = { path = "../porecatu-render" }
 porecatu-term = { path = "../porecatu-term" }
