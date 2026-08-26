@@ -49,14 +49,14 @@ O maior salto de risco técnico. Ao fim desta fase o projeto é um emulador de t
 - `porecatu-term`: `alacritty_terminal` encapsulado, snapshot de grid
 - Thread de leitura por terminal, `Wakeup` via `EventLoopProxy`, render damage-driven ([ADR-0007](adr/0007-modelo-de-threading.md))
 - `porecatu-render`: pipeline de quads e de texto com `glyphon`, atlas em cache
-- Fontes do design embutidas em `assets/fonts/`, com o texto da OFL e a atribuição ([ADR-0016](adr/0016-fontes-embutidas.md)) — sem subsetting
+- Fontes do design embutidas em `assets/fonts/`, com o texto da OFL e a atribuição (PRD-010 RF-10.25, [ADR-0016](adr/0016-fontes-embutidas.md)) — sem subsetting
 - Snapshot de grade conforme a [seção 4 da arquitetura](arquitetura.md): tipos próprios, buffer reusado, cor não resolvida, `wide_spacer` para largura dupla
 - Roteamento de input, codificação de teclas, bracketed paste ([ADR-0008](adr/0008-teclas-e-roteamento-de-input.md))
 - Ambiente do shell: `TERM=xterm-256color`, `COLORTERM`, `TERM_PROGRAM` ([ADR-0012](adr/0012-identificacao-do-terminal.md))
-- Reporte de mouse ao programa (modos 1000/1002/1003, encoding SGR 1006), com `Shift` forçando seleção local ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
-- Seleção com mouse pelos quatro modos do motor, cópia com recorte de espaço e remontagem de `WRAPLINE` ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
-- Clipboard via `arboard`; OSC 52 com escrita permitida e leitura negada ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
-- Rolagem do scrollback por teclado e por roda, com tela alternativa tratada ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
+- Reporte de mouse ao programa (modos 1000/1002/1003, encoding SGR 1006), com `Shift` forçando seleção local ([PRD-010](prd/prd-010-interacao-e-superficie-de-app.md) RF-10.1 a RF-10.3, [ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
+- Seleção com mouse pelos quatro modos do motor, cópia com recorte de espaço e remontagem de `WRAPLINE` (PRD-010 RF-10.4 a RF-10.9)
+- Clipboard via `arboard`; OSC 52 com escrita permitida e leitura negada (PRD-010 RF-10.10 e RF-10.11)
+- Rolagem do scrollback por teclado e por roda, com tela alternativa tratada (PRD-010 RF-10.12 a RF-10.14)
 - Forçar UTF-8 no spawn do ConPTY
 - `Wakeup` carregando `(WindowId, TabId)` desde já — o tipo atravessa a fronteira de três crates, e corrigir depois é mexer no caminho quente ([ADR-0015](adr/0015-multiplas-janelas.md))
 
@@ -74,8 +74,8 @@ Implementa [PRD-001](prd/prd-001-abas.md).
 - Navegação sequencial e por índice; reordenação por drag e por teclado
 - Overflow: encolhimento até o mínimo, depois rolagem
 - Indicadores de atividade e campainha
-- Menu de contexto da aba, diálogo de confirmação e superfície de aviso do app ([ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md)) — RF-1.6 é cenário de aceite desta fase e depende do diálogo
-- Janelas múltiplas em escopo mínimo: `window.new`, `window.close`, um `Workspace` e uma surface por janela ([ADR-0015](adr/0015-multiplas-janelas.md))
+- Menu de contexto da aba, diálogo de confirmação e superfície de aviso do app (PRD-010 RF-10.15 a RF-10.21, [ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md)) — RF-1.6 é cenário de aceite desta fase e depende do diálogo
+- Janelas múltiplas em escopo mínimo: `window.new`, `window.close`, um `Workspace` e uma surface por janela (PRD-010 RF-10.22 a RF-10.24, [ADR-0015](adr/0015-multiplas-janelas.md))
 
 **Critério de saída:** todos os cenários de aceite de PRD-001 passam; **barra de abas confere com [`mockup-estatico.html`](design/mockup-estatico.html)** nos elementos `[v1]` — dimensões, raios, cores por estado, rename inline; layout da barra testado sem abrir janela; 50 abas abertas sem degradação perceptível; IME e teclas mortas continuam funcionando com a barra presente; duas janelas abertas em monitores de DPI diferente desenham com métricas corretas, e saída numa delas não redesenha a outra.
 

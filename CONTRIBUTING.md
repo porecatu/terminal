@@ -13,7 +13,8 @@ Boa parte do produto já está decidida por escrito. Vale conferir:
 
 | Onde | O quê |
 |---|---|
-| [docs/prd/](docs/prd/) | Requisitos. PRD-000 a 005 aprovados; 006 a 009 em rascunho, fase v2 |
+| [docs/prd/](docs/prd/) | Requisitos. PRD-000 a 005 e 010 aprovados; 006 a 009 em rascunho, fase v2 |
+| [PRD-010](docs/prd/prd-010-interacao-e-superficie-de-app.md) | Transversal aos cinco recursos: mouse, seleção, clipboard, avisos, diálogos, menus e janelas |
 | [docs/adr/](docs/adr/) | Decisões arquiteturais e o porquê de cada uma |
 | [docs/design/](docs/design/README.md) | Alvo visual, tokens e tabela de fases |
 | [docs/roadmap.md](docs/roadmap.md) | O que é escopo de agora |
