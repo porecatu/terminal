@@ -10,7 +10,18 @@ use porecatu_term::{
 };
 
 fn engine(rows: usize, cols: usize) -> (TermEngine, std::sync::mpsc::Receiver<TermEvent>) {
-    TermEngine::new(TermParams::default(), TermSize { rows, cols })
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Respostas automáticas do motor (PtyWrite) não passam por `TermEvent`
+    // -- ver o teste `dsr_posicao_do_cursor_responde_via_ptywrite`, que
+    // monta seu próprio motor para inspecionar esse canal.
+    let (pty_writer, _pty_writer_rx) = std::sync::mpsc::channel();
+    let engine = TermEngine::new(
+        TermParams::default(),
+        TermSize { rows, cols },
+        tx,
+        pty_writer,
+    );
+    (engine, rx)
 }
 
 fn cell_char(cells: &porecatu_term::GridSnapshot, row: usize, col: usize) -> char {
@@ -180,7 +191,9 @@ fn osc_52_leitura_liberada_gera_evento_respondivel() {
         osc52_read: true,
         ..TermParams::default()
     };
-    let (mut term, rx) = TermEngine::new(params, TermSize { rows: 2, cols: 10 });
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (pty_writer, _pty_writer_rx) = std::sync::mpsc::channel();
+    let mut term = TermEngine::new(params, TermSize { rows: 2, cols: 10 }, tx, pty_writer);
     term.advance(b"\x1b]52;c;?\x07");
 
     match rx.try_recv() {
@@ -195,14 +208,19 @@ fn osc_52_leitura_liberada_gera_evento_respondivel() {
 
 #[test]
 fn dsr_posicao_do_cursor_responde_via_ptywrite() {
-    let (mut term, rx) = engine(5, 10);
+    let (events_tx, _events_rx) = std::sync::mpsc::channel();
+    let (pty_writer, pty_writer_rx) = std::sync::mpsc::channel();
+    let mut term = TermEngine::new(
+        TermParams::default(),
+        TermSize { rows: 5, cols: 10 },
+        events_tx,
+        pty_writer,
+    );
     term.advance(b"\x1b[6n");
 
-    match rx.try_recv() {
-        Ok(TermEvent::PtyWrite(bytes)) => {
-            assert_eq!(bytes, b"\x1b[1;1R");
-        }
-        other => panic!("esperava PtyWrite com CPR, veio {other:?}"),
+    match pty_writer_rx.try_recv() {
+        Ok(bytes) => assert_eq!(bytes, b"\x1b[1;1R"),
+        other => panic!("esperava resposta de CPR no canal de escrita, veio {other:?}"),
     }
 }
 

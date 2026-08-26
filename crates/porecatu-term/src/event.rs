@@ -18,11 +18,6 @@ use std::sync::Arc;
 /// motor atravessa esta fronteira (mesma disciplina do snapshot, ADR-0002).
 #[derive(Debug, Clone)]
 pub enum TermEvent {
-    /// Resposta automática do motor a uma query que o próprio terminal deve
-    /// responder (DSR, DA, CPR, modos...), pronta para `PtyHandle::writer`.
-    /// Sem isso um programa que envia `ESC[6n` (posição do cursor) fica
-    /// esperando resposta que nunca chega.
-    PtyWrite(Vec<u8>),
     /// OSC 0 / OSC 2. `None` = reset para o título default (RF-1.7).
     Title(Option<String>),
     /// BEL (RF-1.21).
@@ -38,6 +33,10 @@ pub enum TermEvent {
     ClipboardRead(ClipboardResponder),
     /// OSC 4 / 10 / 11, consulta de cor (frente, fundo, paleta indexada).
     ColorQuery(ColorQueryResponder),
+    /// Fim do processo (RF-1.3). Não vem do motor VT -- vem de
+    /// `porecatu-pty::PtyHandle::try_wait`, detectado por `Terminal`
+    /// (Etapa 3) e injetado neste mesmo canal.
+    Exit { success: bool, code: u32 },
 }
 
 /// Formata o conteúdo do clipboard (fornecido por quem responde, via

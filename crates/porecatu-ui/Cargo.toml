@@ -10,5 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+porecatu-core = { path = "../porecatu-core" }
 porecatu-render = { path = "../porecatu-render" }
+porecatu-term = { path = "../porecatu-term" }
 winit = "0.30.13"

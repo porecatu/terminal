@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 alacritty_terminal = "=0.26.0"
 bitflags = "2"
+porecatu-pty = { path = "../porecatu-pty" }
