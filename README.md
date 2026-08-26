@@ -6,7 +6,7 @@
 
 Emulador de terminal cross-platform escrito em Rust, com foco em **organização de múltiplos terminais**: abas, grupos de abas nomeados e restauração de sessão.
 
-> Status: **fase de design**. Este repositório contém, no momento, apenas documentação (ADRs, PRDs e guias). Nenhum código foi implementado ainda.
+> Status: **em implementação**. As fases F0 (esqueleto) e F1 (terminal único) do [roadmap](docs/roadmap.md) estão implementadas: `cargo run` abre uma janela com um terminal funcional — motor VT, PTY, render por GPU, teclado, mouse, seleção e clipboard. Ainda não há abas, grupos, configuração nem sessão persistente; a próxima fase é a **F2 (abas)**.
 
 ---
 
@@ -31,6 +31,29 @@ Porecatu ataca esse problema:
 | 5 | Cores e fontes do terminal configuráveis | [PRD-005](docs/prd/prd-005-aparencia-do-terminal.md) | [anatomia 2.7](docs/design/especificacao-visual.md) |
 
 Visão de produto completa: [PRD-000](docs/prd/prd-000-visao-de-produto.md).
+
+## Estado atual
+
+| Fase | O que entrega | Status |
+|---|---|---|
+| F0 | Workspace Cargo, janela `winit` + surface `wgpu`, CI nas três plataformas | implementada |
+| F1 | Terminal único: PTY, motor VT, threading, render de texto, teclado, mouse, seleção, clipboard | implementada |
+| F2 | Abas | próxima |
+| F3–F6 | Grupos, configuração, sessão, polimento | não iniciadas |
+
+O que já roda hoje:
+
+- PTY cross-platform (`portable-pty`, ConPTY no Windows) com spawn, leitura, escrita, resize e encerramento
+- `alacritty_terminal` encapsulado, com snapshot de grade de tipos próprios e cor não resolvida
+- Três threads por terminal (leitura, escrita, observação do processo) e render **damage-driven**: terminal ocioso não gera frame
+- Pipelines `wgpu` de quads (com cantos arredondados via SDF) e de texto (`glyphon`, atlas em cache), com as cinco faces do IBM Plex embutidas no binário
+- Teclado com codificação xterm, `Ctrl`/`Alt`, DECCKM, bracketed paste e IME (tecla morta do ABNT2)
+- Mouse reportado ao programa (modos 1000/1002/1003, encoding SGR 1006), seleção nos quatro modos com `Shift` forçando seleção local, cópia/cola via `arboard` e OSC 52 com leitura negada por default
+- Rolagem de scrollback por teclado e por roda, com tela alternativa tratada
+
+Ainda **não** existe: `porecatu-config` e `porecatu-session` são stubs, e `porecatu-core` tem só o `TabId`. Múltiplas abas, grupos, arquivo de configuração e restauração de sessão chegam nas fases seguintes.
+
+O código da F1 está completo e o CI passa nas três plataformas (51 testes, `clippy -D warnings` limpo), mas o **critério de saída da fase ainda não foi fechado**: ele é interativo — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2 — e a verificação manual aconteceu só em parte, e só no Windows. Lista do que falta em [docs/roadmap.md](docs/roadmap.md).
 
 ## Design
 
@@ -69,17 +92,20 @@ Workspace Cargo multi-crate. Detalhes em [docs/arquitetura.md](docs/arquitetura.
 
 ```
 porecatu/
+├── src/main.rs             # binário: chama porecatu_ui::run()
 ├── crates/
 │   ├── porecatu-core/      # modelo de domínio: Workspace, Group, Tab, IDs
 │   ├── porecatu-config/    # parse TOML, defaults, hot reload
 │   ├── porecatu-pty/       # abstração de PTY sobre portable-pty
 │   ├── porecatu-term/      # wrapper de alacritty_terminal, snapshot de grid
 │   ├── porecatu-render/    # wgpu: pipelines de quad, texto, arredondamento
-│   ├── porecatu-ui/        # layout da tab bar, hit-testing, roteamento de input
-│   ├── porecatu-session/   # serialização/restauração de sessão
-│   └── porecatu/           # binário: event loop winit, cola as camadas
+│   ├── porecatu-ui/        # event loop winit, layout, hit-testing, roteamento de input
+│   └── porecatu-session/   # serialização/restauração de sessão
+├── assets/fonts/           # IBM Plex embutida no binário (OFL-1.1)
 └── docs/
 ```
+
+Versões travadas por igualdade exata onde a API quebra a cada release: `alacritty_terminal = "=0.26.0"` e `wgpu = "=30.0.1"` ([ADR-0002](docs/adr/0002-motor-vte.md), [ADR-0001](docs/adr/0001-stack-de-gui.md)). Toolchain em `rust-toolchain.toml`, com job canário semanal contra a stable do dia ([ADR-0011](docs/adr/0011-toolchain-rust.md)).
 
 ## Documentação
 
@@ -115,5 +141,8 @@ Convenções, processo de ADR e verificação local em [CONTRIBUTING.md](CONTRIB
 ```bash
 git clone https://github.com/porecatu/terminal.git
 cd terminal
+
+cargo run                    # abre a janela com um terminal
+cargo test --workspace       # 51 testes
 python scripts/verify-docs.py
 ```

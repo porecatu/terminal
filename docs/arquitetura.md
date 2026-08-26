@@ -2,6 +2,8 @@
 
 Documento técnico central. Os ADRs justificam *por que* cada peça foi escolhida; este documento descreve *como* elas se encaixam.
 
+As seções 2, 4 e 5 estão implementadas (F0 e F1 do [roadmap](roadmap.md)); as seções 3 (parte de chrome), 6 e a metade de `core`/`config`/`session` da seção 1 ainda são projeto. Onde o código divergiu do escrito, há um bloco **Na implementação** dizendo o quê e por quê.
+
 ---
 
 ## 1. Camadas
@@ -72,6 +74,10 @@ Bloquear aqui é correto e barato — a thread existe justamente para isso. O `M
 
 Input do teclado vira bytes no `porecatu-ui` e é enviado por `mpsc::Sender` para o handle de escrita do PTY. A escrita não passa pela thread de leitura.
 
+> **Na implementação.** São **três** threads por terminal, não duas: leitura, escrita e observação do processo (`try_wait` em intervalo curto). A de observação é a dona do `PtyHandle`, e por isso é ela quem aplica o resize do lado do PTY — o lado do motor é síncrono. Quem spawna as três é `porecatu-term::Terminal`; `porecatu-ui` nunca vê `PtyHandle` nem thread nenhuma, só `spawn`, `write`, `snapshot_into`, `try_recv_event`, `scroll`, `modes`, `resize` e as operações de seleção. A notificação de sujeira sai por um closure genérico (`on_wakeup`), para o crate não precisar conhecer `winit`; quem fecha esse closure sobre `EventLoopProxy` e `Wakeup` é a `ui`.
+>
+> **Encerramento (Windows).** `Terminal::shutdown` não dá `join` em nenhuma das três threads e **não fecha o pseudo-console**. `ClosePseudoConsole` bloqueia até o pipe de leitura clonado ser liberado, e a thread de leitura está parada num `read()` síncrono nele — as duas esperam uma pela outra e o app trava. O que se faz é matar o processo e `mem::forget` no handle: o SO reclama tudo quando o Porecatu sai. A confirmação de "processo morto" vem de um canal dedicado que a thread de observação sinaliza, com timeout de segurança. Dar `join` na thread de leitura violaria a regra de que a main thread nunca bloqueia, justamente no fechamento da janela.
+
 ### Render damage-driven
 
 Este é o ponto onde emuladores ingênuos queimam bateria. `cargo build` cospe centenas de linhas em milissegundos; se cada `Wakeup` disparar um frame, o app renderiza centenas de frames que ninguém vê.
@@ -84,6 +90,8 @@ A regra:
 4. Terminal ocioso = zero frames. Não há loop de render contínuo.
 
 O mesmo vale para o chrome: mudança de hover, foco ou config marca a barra de abas como suja.
+
+> **Na implementação.** O ponto 3 não precisou de bookkeeping próprio de sujeira na F1: `request_redraw` do `winit` já coalesce chamadas repetidas antes do próximo `RedrawRequested` num só evento (no Win32 é uma flag booleana, não fila). N wakeups de saída rápida viram um frame. O ponto 2 já existe com a forma final — `Wakeup { window, tab }` é comparado com a aba visível antes de qualquer redraw, mesmo havendo hoje uma janela e uma aba só.
 
 ### Propriedade dos dados
 
@@ -216,6 +224,16 @@ Os flags de modo (mouse, bracketed paste, tela alternativa) são exceção por s
 consultados no caminho de **input**, não de render: `porecatu-term` expõe um acessor
 barato para eles, além de estampá-los no snapshot.
 
+> **Na implementação.** Três desvios da tabela acima:
+>
+> - **`Cwd` não é capturado.** `alacritty_terminal` não trata OSC 7 (não é xterm-padrão) e capturá-lo exigiria um `Handler` próprio interceptando essa sequência antes de delegar o resto ao `Term`. O único consumidor real é `porecatu-session`, que só existe na F5 — entra junto com ela. OSC não reconhecido é descartado pelo parser, então nada vira lixo na tela nesse meio-tempo, que é o que o [ADR-0012](adr/0012-identificacao-do-terminal.md) exige.
+> - **`ColorSet` não existe**, só `ColorQuery`. OSC 4/10/11 de consulta viram evento com um responder que formata a resposta; a variante de escrita entra quando houver tema para escrever em cima (F4).
+> - **As respostas automáticas do motor (DSR, DA, CPR) não passam por evento.** Vão direto ao canal de escrita do PTY, de dentro do `TermEngine`. Roteá-las como `TermEvent` obrigaria todo consumidor a filtrar e repassar, e esquecer um write pendente é o programa ficar parado esperando resposta que nunca chega.
+>
+> E `Exit` não vem de EOF do PTY: vem do `try_wait` da thread de observação, injetado no mesmo canal. No Windows o pipe do ConPTY não emite EOF só porque o processo hospedado saiu — só quando o pseudo-console é fechado, o que (ver seção 2) não acontece.
+>
+> O teto de tamanho do payload de escrita OSC 52 é aplicado no `term`, já que o motor não tem essa noção; a negação de leitura, não — `alacritty_terminal` já não emite o evento quando só a escrita está habilitada, então o default do ADR-0013 cai direto no mapeamento.
+
 ---
 
 ## 5. Fronteira de render
@@ -232,6 +250,14 @@ Duas passadas de pipeline por frame: uma de geometria (quads instanciados, canto
 A grade do terminal é um caso particular: fundo de célula vira quads em batch, glyphs viram um `TextRun` por run de mesmo estilo — não um por caractere.
 
 **Nenhuma cor, raio ou dimensão é hardcoded no renderer.** Tudo vem de `Config` via `ui`. É isso que torna o requisito de customização (PRD-004, PRD-005) uma questão de configuração e não de recompilação.
+
+> **Na implementação.** As duas passadas existem e o atlas de glyphs é reusado entre frames. Três notas:
+>
+> - `PushClip`/`PopClip` estão na API mas **ainda não recortam nada** — não há consumidor até o overflow da barra de abas, na F2. Limitação conhecida, não esquecimento.
+> - As faces são carregadas por `include_bytes!` num `fontdb::Database` que **nunca chama `load_system_fonts`**. É o que garante a precedência do [ADR-0016](adr/0016-fontes-embutidas.md) sem lógica de desempate: não existe cópia do sistema para competir. Emoji, CJK e Nerd Font ficam de fora até haver fallback configurável (F4).
+> - A surface precisa de `remove_srgb_suffix()` no formato depois do `get_default_config`. O default é um formato `*Srgb`, e a GPU reaplicaria a curva sobre cores que já vêm em espaço sRGB (saem de hex do design): dupla conversão, fundo quase-preto virando cinza-azulado.
+>
+> Enquanto `porecatu-config` não existe, quem resolve `TermColor` em cor concreta é `porecatu-ui/palette.rs`, com a paleta ANSI do [porecatu.example.toml](config/porecatu.example.toml) e a fórmula xterm padrão para o range 256 (cubo 6×6×6 + rampa de cinza). `paint.rs` agrupa células contíguas de mesmo estilo num `TextRun` só.
 
 ---
 
@@ -265,3 +291,7 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 | `porecatu-ui` | hit-testing e layout são funções puras sobre geometria, testáveis sem janela |
 
 O layout da barra de abas é deliberadamente uma função pura `(Workspace, Config, largura) -> Vec<TabRect>`. Isso permite testar overflow, colapso de grupo e truncamento de título sem abrir uma janela.
+
+> **Na implementação (F1).** 51 testes no workspace. `porecatu-term` tem 43 deles: golden-style alimentando o parser com sequência VT crua (sem PTY real — o [ADR-0004](adr/0004-pty-cross-platform.md) avisa que o ConPTY reemite bytes de um jeito não portável), mais unitários puros de codificação de tecla e de reporte de mouse, que não dependem de `winit` nem do motor rodando, só de `TermModes`. `porecatu-pty` tem 8, incluindo integração de spawn/kill. Um teste de regressão cobre o deadlock de fechamento da seção 2: fecha um terminal com processo de longa duração numa thread separada com timeout, e falha se `shutdown` travar.
+>
+> `porecatu-ui` ainda não tem teste: o que existe nele na F1 é event loop, tradução de input e pintura — nada de layout puro até a F2 trazer a barra de abas.

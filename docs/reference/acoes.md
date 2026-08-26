@@ -80,6 +80,13 @@ O menu de contexto do grupo e o editor de grupo invocam **esta mesma lista**, po
 
 Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md)).
 
+> **Estado na F1.** Não há parser de `[keybindings]` até a F4, então nenhuma
+> dessas ações é *vinculável* ainda — o que existe é a mecânica e alguns
+> defaults fixos no código. `page_up`/`page_down` respondem a
+> `Shift+PageUp`/`PageDown`; `line_up`/`line_down` acontecem pela roda do
+> mouse; `to_top`/`to_bottom` têm a operação implementada em `porecatu-term`,
+> sem tecla que a dispare.
+
 ---
 
 ## `clipboard.*` e `selection.*`
@@ -89,6 +96,11 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 | `clipboard.copy` | Copia a seleção, com espaço à direita cortado e `WRAPLINE` remontado | [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md), ADR-0013 | F1 | |
 | `clipboard.paste` | Cola, envolvido em bracketed paste quando o modo está ativo | ADR-0008 | F1 | |
 | `selection.select_all` | Seleciona a tela visível e o scrollback | [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) — menu do terminal | F6 | |
+
+> **Estado na F1.** `clipboard.copy` e `clipboard.paste` estão ligados a
+> `Ctrl+Shift+C`/`V` fixos no código — os únicos defaults de app que não
+> dependem de `porecatu-config`. O caminho completo já existe: seleção pelo
+> motor, `arboard` de um lado só e bracketed paste na cola.
 
 ---
 
