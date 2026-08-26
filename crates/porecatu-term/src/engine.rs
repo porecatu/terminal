@@ -42,13 +42,28 @@ impl Dimensions for TermSize {
 
 struct EventProxy {
     sender: mpsc::Sender<TermEvent>,
+    /// Canal de escrita do PTY (o mesmo que `Terminal::write` usa) -- é
+    /// para lá, não para `sender`, que `Event::PtyWrite` vai. Diferente dos
+    /// outros eventos da seção 4.3, uma resposta automática do motor
+    /// (DSR/DA/CPR) não é decisão de `ui`: o motor já formatou os bytes
+    /// certos, só falta escrever. Rotear por `sender` obrigaria todo
+    /// consumidor de eventos a filtrar e repassar isso a cada wakeup --
+    /// esquecer um `PtyWrite` pendente é o programa ficar parado esperando
+    /// resposta que nunca chega (era exatamente o problema do teste de
+    /// integração da Etapa 1, antes deste motor existir).
+    pty_writer: mpsc::Sender<Vec<u8>>,
     clipboard_write_max_bytes: usize,
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(text) = event {
+            let _ = self.pty_writer.send(text.into_bytes());
+            return;
+        }
+
         let mapped = match event {
-            Event::PtyWrite(text) => Some(TermEvent::PtyWrite(text.into_bytes())),
+            Event::PtyWrite(_) => unreachable!("tratado acima"),
             Event::Title(title) => Some(TermEvent::Title(Some(title))),
             Event::ResetTitle => Some(TermEvent::Title(None)),
             Event::Bell => Some(TermEvent::Bell),
@@ -72,9 +87,11 @@ impl EventListener for EventProxy {
             }
             // Sem consumidor no v1 (dica de cursor de mouse, blink de
             // cursor, wakeup de coalescência própria do motor -- usamos a
-            // nossa, ver ADR-0007/0015 -- tamanho de área de texto em
-            // pixels, e fim de processo, que é responsabilidade de
-            // `porecatu-pty::PtyHandle::try_wait`, não do motor VT).
+            // nossa, ver ADR-0007/0015 -- e tamanho de área de texto em
+            // pixels). `Exit`/`ChildExit` também ficam de fora: o motor não
+            // sabe de PTY, quem detecta o fim do processo é `Terminal`
+            // (Etapa 3), via `porecatu-pty::PtyHandle::try_wait` -- é de lá
+            // que `TermEvent::Exit` sai, não daqui.
             Event::MouseCursorDirty
             | Event::CursorBlinkingChange
             | Event::Wakeup
@@ -106,13 +123,21 @@ pub struct TermEngine {
 }
 
 impl TermEngine {
-    /// Cria o motor e devolve o receptor dos eventos traduzidos
-    /// (docs/arquitetura.md seção 4.3). O `Sender` correspondente fica só
-    /// dentro do motor -- é chamado de dentro de `advance`, no mesmo lock
-    /// que a thread de leitura já segura (ADR-0007).
-    pub fn new(params: TermParams, size: TermSize) -> (Self, mpsc::Receiver<TermEvent>) {
-        let (sender, receiver) = mpsc::channel();
-
+    /// Cria o motor. `events` é o canal para onde o motor manda os eventos
+    /// traduzidos (docs/arquitetura.md seção 4.3) -- chamado de dentro de
+    /// `advance`, no mesmo lock que a thread de leitura já segura
+    /// (ADR-0007). Recebido de fora (em vez de criado aqui) porque
+    /// `Terminal` (Etapa 3) precisa do mesmo `Sender` para injetar
+    /// `TermEvent::Exit`, que não vem do motor -- vem do fim do processo.
+    ///
+    /// `pty_writer` é o canal para onde vão as respostas automáticas do
+    /// motor (DSR/DA/CPR) -- ver o comentário em `EventProxy::pty_writer`.
+    pub fn new(
+        params: TermParams,
+        size: TermSize,
+        events: mpsc::Sender<TermEvent>,
+        pty_writer: mpsc::Sender<Vec<u8>>,
+    ) -> Self {
         let config = AlacConfig {
             scrolling_history: params.scrollback_lines,
             semantic_escape_chars: params.word_separators,
@@ -120,18 +145,16 @@ impl TermEngine {
             ..Default::default()
         };
         let proxy = EventProxy {
-            sender,
+            sender: events,
+            pty_writer,
             clipboard_write_max_bytes: params.clipboard_write_max_bytes,
         };
 
         let term = Term::new(config, &size, proxy);
-        (
-            Self {
-                term,
-                parser: Processor::new(),
-            },
-            receiver,
-        )
+        Self {
+            term,
+            parser: Processor::new(),
+        }
     }
 
     /// Alimenta o parser VT com bytes crus do PTY.

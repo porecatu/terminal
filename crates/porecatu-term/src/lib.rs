@@ -14,6 +14,7 @@ mod engine;
 mod event;
 mod params;
 mod snapshot;
+mod terminal;
 
 pub use color::TermColor;
 pub use engine::{TermEngine, TermSize};
@@ -23,3 +24,10 @@ pub use snapshot::{
     Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, MouseReporting, SelectionSpan,
     TermModes,
 };
+pub use terminal::{Terminal, TerminalSpawnError};
+
+// `porecatu-ui` monta `SpawnConfig` para chamar `Terminal::spawn`, mas não
+// pode depender de `porecatu-pty` diretamente (tabela de dependências do
+// CLAUDE.md: só `porecatu-term` depende de `pty`). Re-exportar aqui é o
+// único caminho permitido para esses tipos chegarem em `ui`.
+pub use porecatu_pty::{PtyError, PtySize, SpawnConfig};

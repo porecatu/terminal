@@ -1555,13 +1555,16 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "bitflags 2.13.1",
+ "porecatu-pty",
 ]
 
 [[package]]
 name = "porecatu-ui"
 version = "0.1.0"
 dependencies = [
+ "porecatu-core",
  "porecatu-render",
+ "porecatu-term",
  "winit",
 ]
 
