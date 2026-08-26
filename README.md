@@ -55,7 +55,9 @@ Os valores default do [`porecatu.example.toml`](docs/config/porecatu.example.tom
 | Configuração | TOML (`serde` + `toml`) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
 | PTY | `portable-pty` (ConPTY no Windows) | [ADR-0004](docs/adr/0004-pty-cross-platform.md) |
 | Persistência de sessão | JSON versionado em state dir | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md) |
+| Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
 | Referência visual | design canvas importado | [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md) |
+| Toolchain | stable pinada, edition 2024 | [ADR-0011](docs/adr/0011-toolchain-rust.md) |
 | Licença | GPL-3.0-or-later | [ADR-0010](docs/adr/0010-licenciamento.md) |
 
 Plataformas-alvo do v1: **Windows 10+, Linux (X11/Wayland), macOS 12+**.
@@ -86,6 +88,7 @@ porecatu/
 - [docs/adr/](docs/adr/) — Architecture Decision Records
 - [docs/prd/](docs/prd/) — Product Requirement Documents
 - [docs/roadmap.md](docs/roadmap.md) — fases de entrega
+- [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo fechado de ações vinculáveis a teclas
 - [docs/config/porecatu.example.toml](docs/config/porecatu.example.toml) — configuração de referência comentada
 
 ## Nome

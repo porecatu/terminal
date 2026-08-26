@@ -14,6 +14,11 @@
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
 | [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Aceito |
 | [0010](0010-licenciamento.md) | Licenciamento sob GPL-3.0-or-later | Aceito |
+| [0011](0011-toolchain-rust.md) | Toolchain Rust pinada e política de versão | Aceito |
+| [0012](0012-identificacao-do-terminal.md) | Identificação do terminal: `TERM` e capacidades anunciadas | Aceito |
+| [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
+| [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
+| [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
 
 ## Convenção
 

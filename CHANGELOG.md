@@ -12,8 +12,19 @@ primeiro release.
 
 ### Adicionado
 
-- Documentação normativa completa do v1: [ADR-0001 a 0010](docs/adr/),
+- Documentação normativa completa do v1: [ADR-0001 a 0015](docs/adr/),
   [PRD-000 a 005](docs/prd/) aprovados e PRD-006 a 009 em rascunho
+- Decisões que faltavam para a F1 e a F2 começarem sem pendência:
+  toolchain Rust pinada ([ADR-0011](docs/adr/0011-toolchain-rust.md)),
+  `TERM` e capacidades anunciadas ([ADR-0012](docs/adr/0012-identificacao-do-terminal.md)),
+  reporte de mouse, seleção e política de clipboard
+  ([ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md)),
+  superfície de aviso, diálogo e menu de contexto
+  ([ADR-0014](docs/adr/0014-superficie-de-aviso-e-dialogo.md)) e
+  múltiplas janelas em escopo mínimo
+  ([ADR-0015](docs/adr/0015-multiplas-janelas.md))
+- [Catálogo fechado de ações](docs/reference/acoes.md), com a origem de cada
+  uma — a enumeração que o ADR-0008 exigia e não existia
 - [Arquitetura](docs/arquitetura.md): camadas, modelo de threading e render
   damage-driven
 - [Design](docs/design/README.md) importado do canvas, com tabela de tokens,

@@ -326,6 +326,44 @@ Corpo `padding: 18`, `gap: 24`. Três seções, cada uma com rótulo 10px upperc
 
 Ocupa a área de terminal quando não há aba. Centralizada, `gap: 34`, `padding: 48`. Título "Abrir um novo terminal" 19px/500 `#dfe4ea` e subtítulo 13px `#6b737e`. Grade de três colunas de 232px, `gap: 10`: cards `padding: 14`, raio 8, fundo `#161a20`, borda `#252a33`; hover borda `#3b434f` e fundo `#1b2028`. Cada card: badge grande (mono 11px/500, raio 5, `padding: 6px 7px`), nome 13px `#dfe4ea`, comando mono 10.5px `#6b737e`.
 
+### 2.14 Aviso do app `[v1]`
+
+Definido em [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), que não tem representação no canvas: os valores abaixo reaproveitam tokens de popover, sem cor nova.
+
+Empilhado no canto superior direito da área de conteúdo, sob a barra de abas. Largura 320, `padding: 11px 12px`, `gap: 8` entre avisos, no máximo **três** visíveis — o quarto substitui o mais antigo.
+
+Fundo `#1a1e25`, borda `1px #2e343e`, raio 8, sombra `0 18px 44px rgba(0,0,0,.55)`, animação `pop .13s`.
+
+Da esquerda para a direita: barra de severidade de 2px em altura cheia — erro `#ef8a8a`, aviso `#e0b060`, informação `#5ed3bc` —, depois título 12.5px/500 `#dfe4ea` e corpo 11px `#6b737e`. Botão de fechar 17×17, raio 4, `✕` 10px `#727a86`, hover fundo `#39404b` e ícone `#e4e8ee` — os mesmos do botão de fechar da aba.
+
+Erro de config cita caminho, linha e chave em mono 10.5px `#6b737e`, para que a coordenada seja legível. O convite de integração de shell (RF-3.1) é o único com ação embutida: snippet copiável em mono 10.5px sobre `#12151a`, raio 3, mais um "não mostrar mais".
+
+Erro e aviso persistem até dispensa; informação sai em 6 s. `Esc` dispensa o do topo.
+
+**O que não vem para cá:** fato de uma aba só é escrito como primeira linha no grid dela — diretório inexistente (RF-3.10), código de saída (RF-1.3) —, marcado em `#5ed3bc` e nunca imitando prompt.
+
+### 2.15 Diálogo de confirmação `[v1]`
+
+Overlay `rgba(6,7,9,.45)` sobre a janela. Modal largura 380, `padding: 16`, raio 10, fundo `#1a1e25`, borda `1px #2e343e`, sombra `0 28px 70px rgba(0,0,0,.6)`, animação `pop .14s`.
+
+Título 13px/500 `#e6eaef`, corpo 12.5px `#d7dce3`, `gap: 14`. Dois botões à direita, `gap: 8`, altura 30, `padding: 0 12`, raio 5: **cancelar** com borda `1px #262b34` e texto `#d7dce3`; **confirmar destrutivo** em `#e08585` com hover de fundo `#2e2224`.
+
+O foco inicial é o cancelar. `Enter` aciona o botão focado, `Esc` cancela.
+
+Usado por RF-1.6 (processo em primeiro plano), RF-2.23 (fechar grupo, com a contagem no corpo) e pelo fechamento de janela com mais de uma aba ([ADR-0015](../adr/0015-multiplas-janelas.md)).
+
+### 2.16 Menu de contexto `[v1]`
+
+Mesmos tokens do menu de perfis (2.9), que é `[v2]` — o menu de contexto é `[v1]` e reaproveita a definição.
+
+Popover ancorado no cursor, largura mínima 200, fundo `#1a1e25`, borda `#2e343e`, raio 8, `padding: 6`, sombra `0 18px 44px rgba(0,0,0,.55)`, animação `pop .13s`. Vira nos dois eixos para caber no monitor da janela.
+
+Itens: `padding: 7px 8px`, raio 5, `gap: 10`, texto 12.5px `#d7dce3`, hover `#242a33`. Chip de tecla à direita, mono 9.5px `#5c646f`. Divisor `1px #2a2f38` com `margin: 5px 4px`. Item destrutivo `#e08585`, hover `#2e2224`. **Item indisponível fica esmaecido em `#5c646f`, nunca ausente.**
+
+Navegável por setas, `Enter` aciona, `Esc` fecha; clique fora ou perda de foco também fecham.
+
+Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal (F6). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md).
+
 ---
 
 ## 3. Tabela de fases
@@ -348,6 +386,10 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Área de terminal, prompt, cursor | `[v1]` | [PRD-005](../prd/prd-005-aparencia-do-terminal.md) |
 | Paleta de cores de grupo | `[v1]` | PRD-004 RF-4.18 |
 | Tema (fontes, superfícies, cores) | `[v1]` | PRD-004, PRD-005 |
+| Aviso do app (empilhado, com severidade) | `[v1]` | [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) — sem representação no canvas |
+| Nota na aba (primeira linha do grid) | `[v1]` | ADR-0014, PRD-003 RF-3.10, PRD-001 RF-1.3 |
+| Diálogo de confirmação | `[v1]` | ADR-0014; PRD-001 RF-1.6, PRD-002 RF-2.23 |
+| Menu de contexto de aba e de grupo | `[v1]` | ADR-0014; PRD-001 RF-1.1, PRD-002 RF-2.22 |
 | **Painéis divididos** | `[v2]` | [PRD-006](../prd/prd-006-paineis-divididos.md) *(rascunho)* |
 | **Cabeçalho e botões do painel** | `[v2]` | PRD-006 *(rascunho)* |
 | **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md) *(rascunho)* |
@@ -391,10 +433,13 @@ Precisam de decisão de desenho na implementação. Listados para não passarem 
 | PRD-002 RF-2.5 | animação da reordenação ao formar grupo |
 | PRD-002 RF-2.16 | indicador agregado de atividade em grupo colapsado |
 | PRD-003 RF-3.9 | aba restaurada ainda sem shell iniciado |
-| PRD-004 RF-4.21 | como o erro de configuração é exibido |
-| PRD-005 RF-5.14 | cores de seleção de texto no terminal |
+| PRD-005 RF-5.14 | cores de seleção de texto no terminal — o valor da seção 1.5 vem do `::selection` do canvas, não de decisão deliberada |
 
 Enquanto não houver desenho aprovado para esses, valem os tokens da seção 1 e o julgamento de quem implementa — nunca cores ou dimensões novas fora da tabela.
+
+**Resolvidos depois da primeira versão desta lista.** O RF-4.21 (como o erro de configuração é exibido) estava aqui e saiu: o [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) definiu a superfície de aviso, e a anatomia está na seção 2.14. O mesmo ADR cobriu sete requisitos que não constavam nem desta lista nem da 4.1 — RF-1.6, RF-2.23, RF-3.1, RF-3.10, RF-3.14, RF-3.16 e RF-5.8 —, além do menu de contexto exigido por RF-1.1, RF-1.2, RF-2.20 e RF-2.22. Nenhum deles introduziu cor nova: todos saem dos tokens de popover da seção 1.
+
+O comportamento da seleção de texto — gesto, semântica de palavra, recorte de espaço, remontagem de linha quebrada — está no [ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md); o que a linha do RF-5.14 acima registra é só a origem incidental da **cor**.
 
 ### 4.3 Elementos do design **sem** requisito no v1
 

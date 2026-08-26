@@ -10,7 +10,9 @@ Guia operacional do projeto. Leia antes de mexer em qualquer coisa.
 
 ## Stack travada
 
-`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · TOML+`serde` (config).
+`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `arboard` (clipboard) · TOML+`serde` (config).
+
+Toolchain: stable **pinada** em `rust-toolchain.toml`, edition 2024, lints em `[workspace.lints]` ([ADR-0011](docs/adr/0011-toolchain-rust.md)).
 
 Cada uma dessas escolhas tem um ADR em [docs/adr/](docs/adr/). Não troque nenhuma sem escrever um ADR novo.
 
@@ -111,6 +113,11 @@ Anotadas aqui porque custam horas quando descobertas na marra:
 - **Render damage-driven**: 60 linhas de saída de `cargo build` não podem virar 60 frames. Wakeups do PTY são coalescidos por frame. Ver [ADR-0007](docs/adr/0007-modelo-de-threading.md).
 - **`cwd` no Windows**: não há API barata para ler o diretório atual de um processo filho. A restauração de sessão depende de OSC 7 emitido pelo shell. Ver [ADR-0005](docs/adr/0005-persistencia-de-sessao.md).
 - **ConPTY**: re-renderiza a tela e injeta sequências próprias; o comportamento não é idêntico a um PTY Unix. Ver [ADR-0004](docs/adr/0004-pty-cross-platform.md).
+- **`Wakeup` precisa de `(WindowId, TabId)`**, não só do `TabId`. Os IDs são por workspace e o workspace é por janela ([ADR-0006](docs/adr/0006-modelo-de-abas-e-grupos.md)): com duas janelas abertas, dois `TabId(1)` existem, e o evento sozinho não diz qual aba sujou. O sintoma é a janela errada redesenhando. Ver [ADR-0015](docs/adr/0015-multiplas-janelas.md).
+- **`Shift` sobrepõe o programa no mouse.** Quando um programa pede eventos de mouse, o arraste vira input dele e a seleção de texto para de funcionar. `Shift` força a seleção local, sempre — sem isso não se copia de dentro do `htop`. Ver [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md).
+- **`TERM=xterm-256color`, não terminfo próprio.** Sob SSH, o host remoto consulta o terminfo dele; um valor que só existe na máquina local produz `unknown terminal type` do outro lado. Ver [ADR-0012](docs/adr/0012-identificacao-do-terminal.md).
+- **Clipboard no Wayland** é o ponto frágil do `arboard`. Encapsular num só lugar; `copypasta` é o plano B, e a verificação é tarefa da F1, não da F6.
+- **Nenhum diálogo nativo do sistema.** `MessageBox` e `NSAlert` bloqueiam o event loop e são a única superfície que a config do usuário não alcança. Aviso, diálogo e menu de contexto são widgets nossos. Ver [ADR-0014](docs/adr/0014-superficie-de-aviso-e-dialogo.md).
 
 ## Índice
 
@@ -119,4 +126,5 @@ Anotadas aqui porque custam horas quando descobertas na marra:
 - [docs/adr/](docs/adr/) — decisões arquiteturais
 - [docs/prd/](docs/prd/) — requisitos de produto (000–005 aprovados; 006–009 rascunho, fase v2)
 - [docs/roadmap.md](docs/roadmap.md) — fases de entrega
+- [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo **fechado** de ações; ação fora dele é erro de config
 - [docs/config/porecatu.example.toml](docs/config/porecatu.example.toml) — configuração de referência
