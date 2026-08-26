@@ -37,6 +37,15 @@ primeiro release.
 - `scripts/verify-docs.py`: links, TOML, cores sem origem na especificação
   visual e cobertura da tabela de fases
 
+- [ADR-0016](docs/adr/0016-fontes-embutidas.md): as cinco faces do design
+  embutidas no binário, sem o que o critério *"o binário com a config padrão
+  bate com o mockup"* seria inalcançável em máquina limpa
+- [Fronteira de `porecatu-term`](docs/arquitetura.md) especificada: forma do
+  snapshot de grade, quem lê a config do terminal e por onde o OSC 52
+  atravessa para o clipboard
+- Job canário do [ADR-0011](docs/adr/0011-toolchain-rust.md) no `ci.yml`,
+  dormindo junto com a matriz
+
 ### Alterado
 
 - Actions do GitHub pinadas por SHA de commit em vez de tag major flutuante,
