@@ -6,7 +6,8 @@
 //! ConPTY reemite bytes de um jeito que não é portável entre plataformas.
 
 use porecatu_term::{
-    CellFlags, CellText, MouseReporting, TermColor, TermEngine, TermEvent, TermParams, TermSize,
+    CellFlags, CellText, MouseReporting, TermColor, TermEngine, TermEvent, TermParams, TermScroll,
+    TermSize,
 };
 
 fn engine(rows: usize, cols: usize) -> (TermEngine, std::sync::mpsc::Receiver<TermEvent>) {
@@ -236,4 +237,62 @@ fn modos_tela_alternativa_bracketed_paste_e_mouse() {
     assert!(snap.modes.bracketed_paste);
     assert_eq!(snap.modes.mouse_reporting, MouseReporting::ClickAndDrag);
     assert!(snap.modes.sgr_mouse);
+}
+
+#[test]
+fn decckm_liga_e_desliga_app_cursor_keys() {
+    let (mut term, _rx) = engine(5, 10);
+
+    term.advance(b"\x1b[?1h");
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+    assert!(snap.modes.app_cursor_keys);
+
+    term.advance(b"\x1b[?1l");
+    term.snapshot_into(&mut snap);
+    assert!(!snap.modes.app_cursor_keys);
+}
+
+#[test]
+fn scroll_move_scroll_offset_na_tela_principal() {
+    let (mut term, _rx) = engine(3, 10);
+    // 3 linhas de tela + 7 no scrollback.
+    for i in 0..10 {
+        term.advance(format!("linha {i}\r\n").as_bytes());
+    }
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+    assert_eq!(snap.scroll_offset, 0, "comeca no fundo do scrollback");
+
+    term.scroll(TermScroll::Lines(2));
+    term.snapshot_into(&mut snap);
+    assert_eq!(snap.scroll_offset, 2);
+
+    term.scroll(TermScroll::Top);
+    term.snapshot_into(&mut snap);
+    assert!(snap.scroll_offset > 2, "Top sobe ate o inicio do historico");
+
+    term.scroll(TermScroll::Bottom);
+    term.snapshot_into(&mut snap);
+    assert_eq!(snap.scroll_offset, 0, "Bottom volta ao fundo");
+}
+
+#[test]
+fn tela_alternativa_nao_tem_scrollback_para_rolar() {
+    let (mut term, _rx) = engine(3, 10);
+    for i in 0..10 {
+        term.advance(format!("linha {i}\r\n").as_bytes());
+    }
+    term.advance(b"\x1b[?1049h"); // entra na tela alternativa
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.scroll(TermScroll::Top);
+    term.snapshot_into(&mut snap);
+
+    assert!(snap.modes.alt_screen);
+    assert_eq!(
+        snap.scroll_offset, 0,
+        "tela alternativa nao tem historico -- rolar nao faz nada (ADR-0013)"
+    );
 }

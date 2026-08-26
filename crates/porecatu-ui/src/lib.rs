@@ -4,12 +4,15 @@ use std::sync::Arc;
 
 use porecatu_core::TabId;
 use porecatu_render::Renderer;
-use porecatu_term::{GridSnapshot, PtySize, SpawnConfig, TermEvent, TermParams, Terminal};
+use porecatu_term::{
+    GridSnapshot, Modifiers, PtySize, SpawnConfig, TermEvent, TermParams, Terminal,
+};
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
+mod input;
 mod paint;
 mod palette;
 
@@ -46,6 +49,9 @@ struct App {
     terminal: Option<Terminal>,
     snapshot: GridSnapshot,
     cell_metrics: CellMetrics,
+    /// Estado corrente dos modificadores, mantido via `ModifiersChanged`
+    /// -- o `KeyEvent` do `winit` não carrega isso junto.
+    modifiers: Modifiers,
 }
 
 impl App {
@@ -63,6 +69,7 @@ impl App {
                 width: 1.0,
                 height: 1.0,
             },
+            modifiers: Modifiers::NONE,
         }
     }
 
@@ -103,6 +110,24 @@ impl App {
             Err(err) => eprintln!("porecatu: falha ao iniciar terminal: {err}"),
         }
     }
+
+    /// Recalcula linhas/colunas a partir do tamanho físico (px) e da
+    /// métrica de célula já medida, e propaga pro `Renderer` e pro
+    /// terminal (motor + PTY) -- Etapa 5: "recalcular grade e propagar
+    /// para o PTY".
+    fn resize_to(&mut self, width: u32, height: u32) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.resize(width, height);
+        }
+        let cols = ((width as f32 / self.cell_metrics.width) as usize).max(MIN_GRID);
+        let rows = ((height as f32 / self.cell_metrics.height) as usize).max(MIN_GRID);
+        if let Some(terminal) = &self.terminal {
+            terminal.resize(rows, cols);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
 }
 
 impl ApplicationHandler<Wakeup> for App {
@@ -117,6 +142,11 @@ impl ApplicationHandler<Wakeup> for App {
                 .create_window(attributes)
                 .expect("falha ao criar janela"),
         );
+        // Acentuação por tecla morta e composição de IME (CJK) precisam
+        // disso ligado -- sem `set_ime_allowed`, o SO não tenta compor
+        // nada e a tecla morta chega crua (ADR-0008).
+        window.set_ime_allowed(true);
+
         let size = window.inner_size();
         let mut renderer = Renderer::new(Arc::clone(&window), size.width, size.height);
 
@@ -193,15 +223,7 @@ impl ApplicationHandler<Wakeup> for App {
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
-                if let Some(renderer) = &mut self.renderer {
-                    renderer.resize(size.width, size.height);
-                }
-                // Recalcular grade e propagar pro PTY é Etapa 5; por ora o
-                // conteúdo continua na grade original, só a superfície
-                // muda de tamanho.
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.resize_to(size.width, size.height);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 // O novo tamanho físico só é conhecido após o resize aplicado
@@ -209,10 +231,34 @@ impl ApplicationHandler<Wakeup> for App {
                 // não emitem `Resized` em seguida.
                 if let Some(window) = &self.window {
                     let size = window.inner_size();
-                    if let Some(renderer) = &mut self.renderer {
-                        renderer.resize(size.width, size.height);
-                    }
-                    window.request_redraw();
+                    self.resize_to(size.width, size.height);
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = input::modifiers_from(modifiers.state());
+            }
+            WindowEvent::KeyboardInput { event: key, .. } => {
+                if let Some(terminal) = &self.terminal {
+                    // Modos lidos agora, não do snapshot do último frame
+                    // (que pode estar obsoleto -- ex.: o programa acabou
+                    // de ligar DECCKM e ainda não houve redraw).
+                    input::handle_keyboard_input(terminal, &terminal.modes(), &key, self.modifiers);
+                }
+            }
+            // Composição de IME (CJK) e tecla morta já resolvida pelo SO
+            // (ABNT2) -- passam direto pro terminal, sem consultar
+            // keybind nenhum (ADR-0008). `Preedit`/`Enabled`/`Disabled`
+            // não geram bytes: a composição em andamento não é texto
+            // final ainda. Desenhar o preedit sobre o cursor fica para
+            // quando houver render de chrome sobre o texto (F2+).
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                if let Some(terminal) = &self.terminal {
+                    terminal.write(text.into_bytes());
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(terminal) = &self.terminal {
+                    input::handle_mouse_wheel(terminal, &terminal.modes(), delta);
                 }
             }
             WindowEvent::RedrawRequested => {

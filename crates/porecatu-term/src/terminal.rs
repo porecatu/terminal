@@ -24,7 +24,8 @@ use porecatu_pty::{PtyError, PtyHandle, SpawnConfig};
 use crate::engine::{TermEngine, TermSize};
 use crate::event::TermEvent;
 use crate::params::TermParams;
-use crate::snapshot::GridSnapshot;
+use crate::scroll::TermScroll;
+use crate::snapshot::{GridSnapshot, TermModes};
 
 /// Intervalo de checagem de `try_wait` na thread de observação do processo.
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -67,6 +68,11 @@ pub struct Terminal {
     /// Confirmação de "processo morto", mandada pela thread de observação
     /// quando `shutdown` sinaliza desligamento -- ver o comentário lá.
     killed: mpsc::Receiver<()>,
+    /// Novo tamanho para o PTY (linhas, colunas) -- a thread de
+    /// observação, dona do `PtyHandle`, é quem aplica (ver `watch_loop`).
+    /// O lado do motor (`engine`) é resizado direto e síncrono em
+    /// `Terminal::resize`, sem passar por canal nenhum.
+    resize: mpsc::Sender<(u16, u16)>,
     _shutdown: mpsc::Sender<()>,
     // Mantidos só para não desanexar as threads sem querer, não para dar
     // `join`: nenhuma delas tem retorno garantido -- ver `watch_loop`.
@@ -120,14 +126,16 @@ impl Terminal {
 
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
         let (killed_tx, killed_rx) = mpsc::channel::<()>();
+        let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>();
         let watch_thread =
-            thread::spawn(move || watch_loop(pty, events_tx, shutdown_rx, killed_tx));
+            thread::spawn(move || watch_loop(pty, events_tx, shutdown_rx, killed_tx, resize_rx));
 
         Ok(Self {
             engine,
             events: events_rx,
             writer: write_tx,
             killed: killed_rx,
+            resize: resize_tx,
             _shutdown: shutdown_tx,
             _read_thread: read_thread,
             _write_thread: write_thread,
@@ -153,6 +161,31 @@ impl Terminal {
     /// -- seção 4.3), se houver. Chamar em loop até `None` a cada wakeup.
     pub fn try_recv_event(&self) -> Option<TermEvent> {
         self.events.try_recv().ok()
+    }
+
+    /// Rola o scrollback (PRD-010 RF-10.12 a RF-10.14). Só o motor sabe
+    /// disso -- não precisa do PTY, então é síncrono, sem canal.
+    pub fn scroll(&self, scroll: TermScroll) {
+        lock(&self.engine).scroll(scroll);
+    }
+
+    /// Modos atuais do terminal (ADR-0008/0013) -- para decidir como
+    /// rotear teclado/roda sem depender do snapshot do último frame
+    /// renderizado, que pode estar obsoleto.
+    pub fn modes(&self) -> TermModes {
+        lock(&self.engine).modes()
+    }
+
+    /// Redimensiona a grade. O lado do motor acontece agora, síncrono
+    /// (travando o motor por um instante, igual a qualquer outro acesso);
+    /// o lado do PTY (`ioctl`/`ResizePseudoConsole`, o que avisa o
+    /// processo filho) é aplicado pela thread de observação, que é quem
+    /// tem o `PtyHandle` -- ver `watch_loop`. Perder um resize em trânsito
+    /// não é grave: o próximo `Resized` da janela manda o tamanho atual de
+    /// novo.
+    pub fn resize(&self, rows: usize, cols: usize) {
+        lock(&self.engine).resize(rows, cols);
+        let _ = self.resize.send((rows as u16, cols as u16));
     }
 
     /// Encerra o terminal: mata o processo e só devolve depois que a
@@ -235,6 +268,7 @@ fn watch_loop(
     events: mpsc::Sender<TermEvent>,
     shutdown: mpsc::Receiver<()>,
     killed: mpsc::Sender<()>,
+    resize: mpsc::Receiver<(u16, u16)>,
 ) {
     loop {
         match shutdown.recv_timeout(WATCH_POLL_INTERVAL) {
@@ -249,6 +283,17 @@ fn watch_loop(
                 return;
             }
             Err(RecvTimeoutError::Timeout) => {
+                // Se chegou mais de um resize desde o último ciclo, só o
+                // mais recente importa -- os intermediários já estão
+                // obsoletos.
+                let mut latest_resize = None;
+                while let Ok(size) = resize.try_recv() {
+                    latest_resize = Some(size);
+                }
+                if let Some((rows, cols)) = latest_resize {
+                    let _ = pty.resize(rows, cols);
+                }
+
                 if let Ok(Some(status)) = pty.try_wait() {
                     let _ = events.send(TermEvent::Exit {
                         success: status.success,

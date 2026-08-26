@@ -85,7 +85,9 @@ pub enum MouseReporting {
 }
 
 /// Subconjunto de `TermMode` que `porecatu-ui` precisa para rotear input
-/// (ADR-0008, ADR-0013): tela alternativa, bracketed paste e modo de mouse.
+/// (ADR-0008, ADR-0013): tela alternativa, bracketed paste, modo de mouse,
+/// e os dois modos que mudam a codificação de teclado (DECCKM e teclado
+/// numérico de aplicação).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TermModes {
     pub alt_screen: bool,
@@ -94,6 +96,11 @@ pub struct TermModes {
     /// Encoding SGR (1006) preferido; quando falso e `mouse_reporting !=
     /// None`, o programa negociou só o encoding X10 legado (ADR-0013).
     pub sgr_mouse: bool,
+    /// DECCKM: setas mandam `ESC O A` em vez de `ESC [ A` (ADR-0008).
+    pub app_cursor_keys: bool,
+    /// Teclado numérico de aplicação (ADR-0008). Sem consumidor ainda --
+    /// F1 não emula o teclado numérico separado do principal.
+    pub app_keypad: bool,
 }
 
 /// Span de seleção resolvido para pintura, em coordenadas de viewport.
