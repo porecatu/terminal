@@ -104,6 +104,10 @@ Copyright © 2026 Leonardo Otaviano Pedrozo.
 
 A escolha da versão 3 não é estética: `winit` e `alacritty_terminal` são Apache-2.0, e a FSF declara Apache-2.0 **incompatível com a GPLv2**. A v3 é compatível com toda a stack travada nos ADRs.
 
+### Fontes embutidas
+
+O binário embute cinco faces de **IBM Plex** (IBM Plex Mono 400/500, IBM Plex Sans 400/500/600), Copyright © 2017 IBM Corp. com Reserved Font Name "Plex", sob a [SIL Open Font License 1.1](assets/fonts/LICENSE-OFL.txt). Sem subsetting — decisão e motivo em [ADR-0016](docs/adr/0016-fontes-embutidas.md).
+
 ## Contribuindo
 
 Convenções, processo de ADR e verificação local em [CONTRIBUTING.md](CONTRIBUTING.md).
