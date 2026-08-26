@@ -3,6 +3,12 @@ name: docs
 # O Porecatu está em fase de documentação: este é o workflow que roda de
 # verdade hoje. Ver docs/roadmap.md.
 
+# Actions pinadas por SHA de commit, com a versão legível no comentário ao
+# lado. Tag major é ponteiro móvel: pode ser reapontada para outro commit, e
+# uma v7.1 muda comportamento sem passar por PR do Dependabot. É a mesma
+# disciplina do ADR-0011, um nível abaixo. O Dependabot atualiza SHA e
+# comentário juntos.
+
 on:
   push:
     branches: [main]
@@ -21,9 +27,9 @@ jobs:
     name: Verificar documentação
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 

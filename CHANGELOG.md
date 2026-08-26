@@ -37,6 +37,13 @@ primeiro release.
 - `scripts/verify-docs.py`: links, TOML, cores sem origem na especificação
   visual e cobertura da tabela de fases
 
+### Alterado
+
+- Actions do GitHub pinadas por SHA de commit em vez de tag major flutuante,
+  com a versão legível no comentário. Tag pode ser reapontada e uma release
+  menor muda comportamento sem PR do Dependabot — mesma disciplina que o
+  [ADR-0011](docs/adr/0011-toolchain-rust.md) aplica à toolchain Rust
+
 ### Corrigido
 
 - Etimologia de "Porecatu" no README: do tupi, **"salto bonito"**
