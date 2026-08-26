@@ -3,8 +3,9 @@
 Obrigado pelo interesse. Este documento reúne as convenções que já estão
 decididas, para que ninguém precise garimpá-las nos ADRs.
 
-> **Estado atual: fase de documentação.** Não existe código Rust. O que há é
-> documentação normativa — requisitos, decisões arquiteturais e design. Ver
+> **Estado atual: F0 e F1 implementadas.** `cargo run` abre uma janela com um
+> terminal funcional. Não há abas, grupos, arquivo de configuração nem sessão
+> persistente ainda — a próxima fase é a F2. Ver
 > [docs/roadmap.md](docs/roadmap.md).
 
 ## Antes de abrir uma issue ou um PR
@@ -84,16 +85,7 @@ antes de construir algo que aparece no desenho.
 
 ## Verificação local
 
-Documentação, hoje:
-
-```bash
-python scripts/verify-docs.py
-```
-
-Checa links relativos, o TOML de exemplo, cores sem origem na especificação
-visual e a cobertura da tabela de fases. É o mesmo que o CI roda.
-
-Código, a partir da F0:
+Código:
 
 ```bash
 cargo fmt --all --check
@@ -104,13 +96,32 @@ cargo test --workspace
 
 Warning de clippy é erro. O CI roda os quatro em Windows, Linux e macOS.
 
+Documentação:
+
+```bash
+python scripts/verify-docs.py
+```
+
+Checa links relativos, o TOML de exemplo, cores sem origem na especificação
+visual e a cobertura da tabela de fases. É o mesmo que o CI roda.
+
+**Verificação interativa não é opcional.** Boa parte do comportamento do
+terminal — teclado, mouse, seleção, clipboard, resize com TUI aberta — não é
+coberta por teste automatizado e não é testável com input sintético (a
+proteção de foco do Windows bloqueia isso). Se sua mudança toca esse caminho,
+abra o app de verdade, exercite `vim`/`htop`/`fzf` e diga no PR o que
+verificou e o que não conseguiu verificar.
+
 ## Ambiente
 
-- Python 3.11 ou superior (o script usa `tomllib`)
+- Rust na versão pinada em [rust-toolchain.toml](rust-toolchain.toml) — o
+  `rustup` instala sozinho ao entrar no diretório
+- No Linux, as bibliotecas de sistema listadas em
+  [.github/workflows/ci.yml](.github/workflows/ci.yml) (X11/Wayland, GL,
+  fontconfig)
+- Python 3.11 ou superior (o script de docs usa `tomllib`)
 - Git com `core.autocrlf` deixado em paz — o [.gitattributes](.gitattributes)
   já normaliza para LF
-- A partir da F0: Rust estável, e no Linux as bibliotecas de sistema listadas
-  em [.github/workflows/ci.yml](.github/workflows/ci.yml)
 
 ## Licença
 

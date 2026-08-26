@@ -6,9 +6,16 @@ A ordem não é arbitrária: cada fase entrega algo utilizável e é pré-requis
 
 O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o produto **completo**, não o v1 — a [tabela de fases](design/especificacao-visual.md) diz o que pertence a cada etapa. Nenhuma fase abaixo implementa elemento `[v2]`.
 
+| Fase | Status |
+|---|---|
+| F0 — Esqueleto | **implementada** |
+| F1 — Terminal único | **implementada**, com verificação interativa pendente (ver a fase) |
+| F2 — Abas | próxima |
+| F3 a F6 | não iniciadas |
+
 ---
 
-## F0 — Esqueleto
+## F0 — Esqueleto — implementada
 
 Colocar a infraestrutura de pé antes de escrever qualquer lógica.
 
@@ -19,13 +26,15 @@ Colocar a infraestrutura de pé antes de escrever qualquer lógica.
 - `rust-toolchain.toml` com a stable do dia, MSRV igual, edition 2024 e lints em `[workspace.lints]` ([ADR-0011](adr/0011-toolchain-rust.md))
 - Cabeçalho `// SPDX-License-Identifier: GPL-3.0-or-later` em todo arquivo ([ADR-0010](adr/0010-licenciamento.md))
 
-**O CI já existe.** `.github/workflows/ci.yml` traz a matriz das três plataformas com `fmt`, `clippy -D warnings`, `build` e `test`, além das dependências de sistema do Linux. Ele está dormindo: o job `detect` pula a matriz enquanto não houver `Cargo.toml` na raiz. **Criar o workspace liga o CI sozinho** — não editar o workflow.
+**O CI acordou junto com o `Cargo.toml`.** O job `detect` encontra o workspace e a matriz das três plataformas roda `fmt`, `clippy -D warnings`, `build` e `test` de verdade, como o contrato de [CLAUDE.md](../CLAUDE.md) prevê. Não foi preciso editar o workflow para isso.
 
-Três pendências pontuais nesta fase:
+As três pendências desta fase foram fechadas:
 
-- Remover a checagem `verificar_fase_documentacao()` de `scripts/verify-docs.py` — ela falha de propósito quando aparece código Rust, e o commit que cria o `Cargo.toml` é o que deve removê-la
-- Conferir se as dependências de sistema listadas no workflow bastam para o `winit` e o `wgpu` de verdade
-- Trocar `dtolnay/rust-toolchain@stable` pela versão pinada e ligar o job canário ([ADR-0011](adr/0011-toolchain-rust.md)). Instalar `stable` com um `rust-toolchain.toml` apontando para outra versão faz o CI baixar duas toolchains por job e cachear a errada
+- `verificar_fase_documentacao()` saiu de `scripts/verify-docs.py` no commit que criou o `Cargo.toml`
+- As dependências de sistema do Linux listadas no workflow bastam para `winit` e `wgpu` — a matriz passa nas três plataformas
+- `dtolnay/rust-toolchain` recebe `toolchain: "1.98.0"`, o mesmo valor do `channel` em `rust-toolchain.toml` (sem isso o rustup baixaria uma segunda toolchain por job), e o job canário semanal está ativo ([ADR-0011](adr/0011-toolchain-rust.md))
+
+Uma ficou em aberto, sem impedir a fase: os comandos do CI ainda não usam `--locked`. O `Cargo.lock` é versionado, mas nada impede o CI de resolver versões novas.
 
 > **A ordem de escolha das versões não é livre.** Nenhum ADR fixa números — eles são escolhidos aqui, olhando o crates.io do dia — mas quatro crates da stack são acoplados:
 >
@@ -36,14 +45,20 @@ Três pendências pontuais nesta fase:
 > Escolher os quatro de forma independente produz erro de tipo em `raw-window-handle` que não se parece com o que é, e é o jeito mais fácil de perder um dia na F0. A ordem que funciona: **fixar o `glyphon` primeiro**, aceitar o `wgpu` que ele exige, e só então escolher o `winit` cuja `raw-window-handle` casa com a do `wgpu`. `alacritty_terminal` e `portable-pty` são independentes dessa cadeia.
 >
 > O registro das escolhas é o `Cargo.lock`, que é versionado de propósito ([.gitignore](../.gitignore)). Considerar `--locked` nos comandos do CI para que a build seja reproduzível de fato.
+>
+> **Como ficou:** `glyphon = "0.12.0"` primeiro, `wgpu = "=30.0.1"` (o que ele exige) e `winit = "0.30.13"`, cuja `raw-window-handle` casa com a do `wgpu`. `alacritty_terminal = "=0.26.0"` e `portable-pty = "0.9.0"`, independentes dessa cadeia. Toolchain 1.98.0, edition 2024.
 
-**Critério de saída:** CI verde nas três plataformas, com a matriz Rust efetivamente rodando (não pulada); janela abre, redimensiona e fecha em Windows, Linux e macOS.
+**Critério de saída:** atendido. CI verde nas três plataformas com a matriz Rust efetivamente rodando; janela abre, redimensiona e fecha.
 
 ---
 
-## F1 — Terminal único
+## F1 — Terminal único — implementada
 
 O maior salto de risco técnico. Ao fim desta fase o projeto é um emulador de terminal.
+
+Entregue em seis etapas, uma por PR: PTY, motor VT e snapshot, threading e loop de render, fontes e render de texto, teclado/scroll/resize, mouse/seleção/clipboard.
+
+Todos os itens abaixo estão implementados:
 
 - `porecatu-pty`: spawn, read, write, resize, encerramento ([ADR-0004](adr/0004-pty-cross-platform.md))
 - `porecatu-term`: `alacritty_terminal` encapsulado, snapshot de grid
@@ -61,6 +76,21 @@ O maior salto de risco técnico. Ao fim desta fase o projeto é um emulador de t
 - `Wakeup` carregando `(WindowId, TabId)` desde já — o tipo atravessa a fronteira de três crates, e corrigir depois é mexer no caminho quente ([ADR-0015](adr/0015-multiplas-janelas.md))
 
 **Critério de saída:** `vim`, `htop` e `fzf` usáveis sem artefatos nas três plataformas; **mouse funciona dentro do `htop` e do `fzf`, e `Shift`+arraste seleciona texto mesmo com o programa pedindo o mouse**; roda do mouse rola `less` e `man`; copiar e colar funciona nas três plataformas, incluindo Wayland; resize funciona com TUI aberta; acentuação por tecla morta em teclado ABNT2 funciona; CPU em ~0% com o terminal ocioso; verificação de que a última linha de saída não se perde ao encerrar o shell.
+
+### O que ficou pendente da F1
+
+O código está escrito e o CI está verde nas três plataformas — 51 testes automatizados, `clippy -D warnings` limpo. O que **não** foi confirmado é o critério de saída na parte interativa:
+
+- Toda a verificação manual aconteceu no **Windows**. Linux e macOS têm build e teste verdes no CI, nada além disso.
+- Teclado real, arraste de mouse, seleção, copiar/colar e mouse dentro do `htop`/`fzf` **não foram exercitados**: a proteção de foco do Windows bloqueia `SetForegroundWindow`/`AppActivate` de processo em segundo plano, e input sintético não é caminho viável. Precisa de uma sessão desktop de verdade.
+- `vim`, `htop`, `fzf`, `less` e `man` não foram abertos de ponta a ponta; acentuação ABNT2 e resize com TUI aberta idem.
+- **Clipboard no Wayland** segue sem verificação (sem ambiente Linux na fase). O plano B `copypasta` do [ADR-0013](adr/0013-mouse-selecao-e-clipboard.md) continua de pé.
+- Confirmado no Windows: terminal spawna, CPU ~0% ocioso, título por OSC chega à janela, fechar a janela mata o processo filho sem órfão, cores ANSI do prompt batem com a paleta.
+
+Duas simplificações conscientes, documentadas no código:
+
+- `PushClip`/`PopClip` existem na API de `porecatu-render` mas ainda não recortam nada — sem consumidor até o overflow da barra de abas, na F2.
+- `line_height` é aplicado sobre `size` em vez das métricas naturais da face (ascent+descent+lineGap), que exigiria ler `hhea`/`OS/2`. Ajustar quando importar na prática.
 
 ---
 

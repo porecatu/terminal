@@ -6,7 +6,7 @@ Guia operacional do projeto. Leia antes de mexer em qualquer coisa.
 
 **Porecatu** — emulador de terminal cross-platform em Rust. Diferencial: gestão de muitos terminais (abas, grupos nomeados, sessão persistente), não conformidade VT.
 
-**Estado atual: fase de design. Não existe código.** O repositório contém apenas documentação. Antes de escrever a primeira linha de Rust, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs.
+**Estado atual: F0 e F1 implementadas; a próxima fase é a F2 (abas).** `cargo run` abre uma janela com um terminal funcional — PTY, motor VT, render por GPU, teclado, mouse, seleção e clipboard. `porecatu-config` e `porecatu-session` ainda são stubs (só o cabeçalho SPDX) e `porecatu-core` tem só o `TabId`; eles ganham corpo nas F2/F4/F5. Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs — o que está em código segue o que está escrito lá, incluindo os desvios anotados.
 
 ## Stack travada
 
@@ -42,28 +42,32 @@ Dependências apontam **só para baixo**. Em particular:
 
 `porecatu-render` **não conhece o domínio**: recebe primitivas de desenho (quad, retângulo arredondado, run de texto) e nada sobre abas ou grupos. Quem traduz config+estado em primitivas é `porecatu-ui`.
 
-`porecatu-term` **não conhece `Config`**: chaves como `scrollback.lines`, `selection.word_separators` e `terminal.clipboard.*` chegam num struct de parâmetros do próprio crate, montado por `porecatu-ui`. E o snapshot de grade sai com cor **não resolvida** (`Default`/`Indexed`/`Rgb`) — quem aplica paleta e tema é `ui`. Detalhes na [seção 4 da arquitetura](docs/arquitetura.md).
+`porecatu-term` **não conhece `Config`**: chaves como `scrollback.lines`, `selection.word_separators` e `terminal.clipboard.*` chegam num struct de parâmetros do próprio crate (`TermParams`), montado por `porecatu-ui`. E o snapshot de grade sai com cor **não resolvida** (`Default`/`Indexed`/`Rgb`) — quem aplica paleta e tema é `ui`. Detalhes na [seção 4 da arquitetura](docs/arquitetura.md).
+
+Duas consequências que já apareceram em código:
+
+- O binário `src/main.rs` só chama `porecatu_ui::run()`. **O event loop do `winit` vive em `porecatu-ui`**, não no bin — a árvore acima é grafo de dependência, não de responsabilidade.
+- `porecatu-ui` precisa de `SpawnConfig`/`PtySize`/`PtyError` para chamar `Terminal::spawn`, mas não pode depender de `porecatu-pty`. `porecatu-term` **re-exporta** esses tipos; é o único caminho permitido, e nenhum tipo do `portable-pty` ou do `alacritty_terminal` atravessa a fronteira.
 
 ## Comandos
 
-Documentação — roda hoje, e é o que o CI executa nesta fase:
-
-```bash
-python scripts/verify-docs.py
-```
-
-Código, a partir da F0:
+Código:
 
 ```bash
 cargo build --workspace
 cargo test  --workspace
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all --check
+cargo run                      # abre a janela
 ```
 
-CI roda os quatro nas três plataformas. Warning de clippy é erro.
+Documentação:
 
-O workflow de Rust (`.github/workflows/ci.yml`) já existe e está **dormindo**: um job `detect` pula a matriz enquanto não houver `Cargo.toml` na raiz. Criar o workspace na F0 liga tudo sozinho — não é preciso editar o workflow.
+```bash
+python scripts/verify-docs.py
+```
+
+CI roda os quatro comandos de código nas três plataformas, mais a verificação de documentação. Warning de clippy é erro. A matriz Rust do `.github/workflows/ci.yml` acordou junto com o `Cargo.toml` da F0 (o job `detect` já vê o workspace) e o job canário semanal contra a stable do dia está ativo.
 
 ## Convenções
 
@@ -121,8 +125,17 @@ Anotadas aqui porque custam horas quando descobertas na marra:
 - **`Wakeup` precisa de `(WindowId, TabId)`**, não só do `TabId`. Os IDs são por workspace e o workspace é por janela ([ADR-0006](docs/adr/0006-modelo-de-abas-e-grupos.md)): com duas janelas abertas, dois `TabId(1)` existem, e o evento sozinho não diz qual aba sujou. O sintoma é a janela errada redesenhando. Ver [ADR-0015](docs/adr/0015-multiplas-janelas.md).
 - **`Shift` sobrepõe o programa no mouse.** Quando um programa pede eventos de mouse, o arraste vira input dele e a seleção de texto para de funcionar. `Shift` força a seleção local, sempre — sem isso não se copia de dentro do `htop`. Ver [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md).
 - **`TERM=xterm-256color`, não terminfo próprio.** Sob SSH, o host remoto consulta o terminfo dele; um valor que só existe na máquina local produz `unknown terminal type` do outro lado. Ver [ADR-0012](docs/adr/0012-identificacao-do-terminal.md).
-- **Clipboard no Wayland** é o ponto frágil do `arboard`. Encapsular num só lugar; `copypasta` é o plano B, e a verificação é tarefa da F1, não da F6.
+- **Clipboard no Wayland** é o ponto frágil do `arboard`. Já está encapsulado num só lugar (`porecatu-ui/clipboard.rs`); `copypasta` é o plano B, e a verificação **continua pendente** — não houve ambiente Linux/Wayland na F1.
 - **Nenhum diálogo nativo do sistema.** `MessageBox` e `NSAlert` bloqueiam o event loop e são a única superfície que a config do usuário não alcança. Aviso, diálogo e menu de contexto são widgets nossos. Ver [ADR-0014](docs/adr/0014-superficie-de-aviso-e-dialogo.md).
+
+### Descobertas na F1 — custaram horas, não repetir
+
+- **Não fechar o pseudo-console no encerramento (Windows).** `ClosePseudoConsole` bloqueia até a cópia clonada do pipe de leitura ser liberada, e a thread de leitura está parada num `read()` síncrono nela: deadlock, app só morre por kill externo. `porecatu-term` mata o processo (`TerminateProcess`) e usa `mem::forget` no `PtyHandle` — o SO reclama as handles quando o processo do Porecatu sai. `Terminal::shutdown` **não dá `join` em nenhuma das três threads**; a confirmação de "processo morto" vem de um canal dedicado com timeout de segurança.
+- **Formato de surface `*Srgb` lava as cores.** `get_default_config` escolhe um formato sRGB e a GPU reaplica a curva sobre valores que já vêm em espaço sRGB (as cores saem de hex do design): fundo quase-preto vira cinza-azulado. Fix: `config.format.remove_srgb_suffix()` depois do `get_default_config`.
+- **Respostas automáticas do motor (DSR/DA/CPR) vão direto ao canal de escrita do PTY**, não por `TermEvent`. Roteá-las como evento obriga todo consumidor a filtrar e repassar, e esquecer um write pendente é o programa travar esperando resposta que nunca chega.
+- **`TermEvent::Exit` vem do `try_wait` do PTY, não de EOF.** No Windows o pipe do ConPTY não emite EOF só porque o processo hospedado saiu.
+- **Teste interativo é bloqueado pela proteção de foco do Windows.** `SetForegroundWindow`/`AppActivate` de processo em segundo plano não funcionam; teclado e arraste sintéticos não são caminho viável. Verificação de teclado, mouse e seleção precisa de sessão desktop real.
+- **O motor já invalida a seleção sozinho** quando o programa escreve sobre a região selecionada e ao entrar/sair de tela alternativa, e `scroll_display` a preserva. Não reimplementar isso do lado de fora.
 
 ## Índice
 
