@@ -33,7 +33,7 @@ jobs:
     outputs:
       has_cargo: ${{ steps.check.outputs.has_cargo }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: check
         run: |
           if [ -f Cargo.toml ]; then
@@ -59,7 +59,7 @@ jobs:
           - os: macos-latest
             alvo: aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Dependências de sistema (Linux)
         if: runner.os == 'Linux'
@@ -107,7 +107,7 @@ jobs:
     if: always() && needs.detect.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v4
         if: needs.detect.outputs.has_cargo == 'true'

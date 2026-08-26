@@ -33,7 +33,7 @@ jobs:
     outputs:
       has_cargo: ${{ steps.check.outputs.has_cargo }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: check
         run: |
@@ -58,7 +58,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # winit, wgpu e cosmic-text precisam destas no Linux. Declaradas já
       # agora para que a F0 não trave num erro de linkagem obscuro.
