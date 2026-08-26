@@ -17,6 +17,7 @@ Boa parte do produto já está decidida por escrito. Vale conferir:
 | [docs/adr/](docs/adr/) | Decisões arquiteturais e o porquê de cada uma |
 | [docs/design/](docs/design/README.md) | Alvo visual, tokens e tabela de fases |
 | [docs/roadmap.md](docs/roadmap.md) | O que é escopo de agora |
+| [docs/reference/acoes.md](docs/reference/acoes.md) | Ações vinculáveis a teclas. Conjunto **fechado**: ação nova exige RF ou ADR antes |
 | [PRD-000](docs/prd/prd-000-visao-de-produto.md) | Não-objetivos do v1 — cada um é decisão, não esquecimento |
 
 Se sua ideia contraria uma decisão aceita, diga isso explicitamente. Não é

@@ -16,14 +16,16 @@ Colocar a infraestrutura de pé antes de escrever qualquer lógica.
 - Grafo de dependências entre crates conforme a tabela de [CLAUDE.md](../CLAUDE.md), com os `Cargo.toml` já refletindo as restrições
 - Janela `winit` + surface `wgpu` limpando a tela, respondendo a resize e a mudança de DPI
 - Versões de `wgpu` e `alacritty_terminal` pinadas com igualdade exata ([ADR-0001](adr/0001-stack-de-gui.md), [ADR-0002](adr/0002-motor-vte.md))
+- `rust-toolchain.toml` com a stable do dia, MSRV igual, edition 2024 e lints em `[workspace.lints]` ([ADR-0011](adr/0011-toolchain-rust.md))
 - Cabeçalho `// SPDX-License-Identifier: GPL-3.0-or-later` em todo arquivo ([ADR-0010](adr/0010-licenciamento.md))
 
 **O CI já existe.** `.github/workflows/ci.yml` traz a matriz das três plataformas com `fmt`, `clippy -D warnings`, `build` e `test`, além das dependências de sistema do Linux. Ele está dormindo: o job `detect` pula a matriz enquanto não houver `Cargo.toml` na raiz. **Criar o workspace liga o CI sozinho** — não editar o workflow.
 
-Duas pendências pontuais nesta fase:
+Três pendências pontuais nesta fase:
 
 - Remover a checagem `verificar_fase_documentacao()` de `scripts/verify-docs.py` — ela falha de propósito quando aparece código Rust, e o commit que cria o `Cargo.toml` é o que deve removê-la
 - Conferir se as dependências de sistema listadas no workflow bastam para o `winit` e o `wgpu` de verdade
+- Trocar `dtolnay/rust-toolchain@stable` pela versão pinada e ligar o job canário ([ADR-0011](adr/0011-toolchain-rust.md)). Instalar `stable` com um `rust-toolchain.toml` apontando para outra versão faz o CI baixar duas toolchains por job e cachear a errada
 
 **Critério de saída:** CI verde nas três plataformas, com a matriz Rust efetivamente rodando (não pulada); janela abre, redimensiona e fecha em Windows, Linux e macOS.
 
@@ -38,10 +40,15 @@ O maior salto de risco técnico. Ao fim desta fase o projeto é um emulador de t
 - Thread de leitura por terminal, `Wakeup` via `EventLoopProxy`, render damage-driven ([ADR-0007](adr/0007-modelo-de-threading.md))
 - `porecatu-render`: pipeline de quads e de texto com `glyphon`, atlas em cache
 - Roteamento de input, codificação de teclas, bracketed paste ([ADR-0008](adr/0008-teclas-e-roteamento-de-input.md))
-- Seleção com mouse e cópia
+- Ambiente do shell: `TERM=xterm-256color`, `COLORTERM`, `TERM_PROGRAM` ([ADR-0012](adr/0012-identificacao-do-terminal.md))
+- Reporte de mouse ao programa (modos 1000/1002/1003, encoding SGR 1006), com `Shift` forçando seleção local ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
+- Seleção com mouse pelos quatro modos do motor, cópia com recorte de espaço e remontagem de `WRAPLINE` ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
+- Clipboard via `arboard`; OSC 52 com escrita permitida e leitura negada ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
+- Rolagem do scrollback por teclado e por roda, com tela alternativa tratada ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
 - Forçar UTF-8 no spawn do ConPTY
+- `Wakeup` carregando `(WindowId, TabId)` desde já — o tipo atravessa a fronteira de três crates, e corrigir depois é mexer no caminho quente ([ADR-0015](adr/0015-multiplas-janelas.md))
 
-**Critério de saída:** `vim`, `htop` e `fzf` usáveis sem artefatos nas três plataformas; resize funciona com TUI aberta; acentuação por tecla morta em teclado ABNT2 funciona; CPU em ~0% com o terminal ocioso; verificação de que a última linha de saída não se perde ao encerrar o shell.
+**Critério de saída:** `vim`, `htop` e `fzf` usáveis sem artefatos nas três plataformas; **mouse funciona dentro do `htop` e do `fzf`, e `Shift`+arraste seleciona texto mesmo com o programa pedindo o mouse**; roda do mouse rola `less` e `man`; copiar e colar funciona nas três plataformas, incluindo Wayland; resize funciona com TUI aberta; acentuação por tecla morta em teclado ABNT2 funciona; CPU em ~0% com o terminal ocioso; verificação de que a última linha de saída não se perde ao encerrar o shell.
 
 ---
 
@@ -55,8 +62,10 @@ Implementa [PRD-001](prd/prd-001-abas.md).
 - Navegação sequencial e por índice; reordenação por drag e por teclado
 - Overflow: encolhimento até o mínimo, depois rolagem
 - Indicadores de atividade e campainha
+- Menu de contexto da aba, diálogo de confirmação e superfície de aviso do app ([ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md)) — RF-1.6 é cenário de aceite desta fase e depende do diálogo
+- Janelas múltiplas em escopo mínimo: `window.new`, `window.close`, um `Workspace` e uma surface por janela ([ADR-0015](adr/0015-multiplas-janelas.md))
 
-**Critério de saída:** todos os cenários de aceite de PRD-001 passam; **barra de abas confere com [`mockup-estatico.html`](design/mockup-estatico.html)** nos elementos `[v1]` — dimensões, raios, cores por estado, rename inline; layout da barra testado sem abrir janela; 50 abas abertas sem degradação perceptível; IME e teclas mortas continuam funcionando com a barra presente.
+**Critério de saída:** todos os cenários de aceite de PRD-001 passam; **barra de abas confere com [`mockup-estatico.html`](design/mockup-estatico.html)** nos elementos `[v1]` — dimensões, raios, cores por estado, rename inline; layout da barra testado sem abrir janela; 50 abas abertas sem degradação perceptível; IME e teclas mortas continuam funcionando com a barra presente; duas janelas abertas em monitores de DPI diferente desenham com métricas corretas, e saída numa delas não redesenha a outra.
 
 ---
 
@@ -83,6 +92,7 @@ Implementa [PRD-004](prd/prd-004-aparencia-do-chrome.md) e [PRD-005](prd/prd-005
 - `porecatu-config`: structs `serde`, defaults completos, resolução de caminho, `PORECATU_CONFIG`, `--config`
 - Hot reload com `notify`, parse fora da main thread, debounce
 - Erro com linha e chave; chave desconhecida como aviso; config inválida preserva a anterior
+- Parser de `[keybindings]` contra o [catálogo fechado de ações](reference/acoes.md): ação desconhecida é erro com sugestão do nome mais próximo, binding duplicado cita as duas linhas ([ADR-0008](adr/0008-teclas-e-roteamento-de-input.md))
 - Toda a superfície de [porecatu.example.toml](config/porecatu.example.toml) ligada de fato ao desenho, com os valores default vindos da [tabela de tokens](design/especificacao-visual.md)
 - Fallback de fonte, temas nomeados com override, zoom por atalho
 - Recálculo de grade e resize de todos os PTYs ao mudar métricas de fonte
@@ -109,10 +119,10 @@ Implementa [PRD-003](prd/prd-003-persistencia-de-sessao.md).
 
 O que separa "funciona" de "usável o dia inteiro".
 
-- Busca no scrollback
-- Hyperlinks OSC 8, com clique
-- **Acessibilidade via `accesskit`** — dívida assumida em [ADR-0001](adr/0001-stack-de-gui.md), não esquecimento
-- Menu de contexto do terminal
+- Busca no scrollback, com as ações `search.*` do [catálogo](reference/acoes.md)
+- Hyperlinks OSC 8, com clique ([ADR-0012](adr/0012-identificacao-do-terminal.md))
+- **Acessibilidade via `accesskit`** — dívida assumida em [ADR-0001](adr/0001-stack-de-gui.md), não esquecimento. Precisa cobrir também os três widgets do [ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md): diálogo modal, menu e notificação são justamente os papéis que leitor de tela trata de forma especial
+- Menu de contexto do terminal, com `selection.select_all`
 - Notificação de desktop opcional na campainha
 - Ícone e empacotamento por plataforma
 - Documentação de usuário e página de release

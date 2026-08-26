@@ -1,0 +1,142 @@
+# Catálogo de ações
+
+Referência normativa do **conjunto fechado de ações** que o [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) exige:
+
+> O conjunto de ações é fechado e enumerado (`tab.new`, `tab.close`, `group.create`, ...). Ação desconhecida é erro de config com sugestão do nome mais próximo.
+
+Esta é a enumeração. É o insumo direto do parser de `[keybindings]` na F4 e do roteamento de input na F2.
+
+**Regra:** nenhuma ação existe sem origem. Toda linha abaixo rastreia a um RF aprovado ou a um ADR aceito. Ação nova exige requisito ou decisão nova primeiro — não o contrário.
+
+---
+
+## Convenções
+
+- Nome no formato `dominio.verbo`, em `snake_case`, sempre em inglês (é identificador, não texto de UI).
+- A coluna **Fase** é a do [roadmap](../roadmap.md) em que a ação passa a existir.
+- **Arg** marca ação que exige um argumento e por isso **não é vinculável a tecla**: ela é invocada por menu ou por arraste, onde o alvo é implícito. Vincular `group.set_color` a uma tecla não faria sentido — qual cor?
+- A ação especial `none` remove um binding e devolve a tecla ao terminal ([ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md)). É a válvula de escape para conflito com `emacs` e afins.
+- Ação desconhecida na config é **erro** com sugestão do nome mais próximo; binding duplicado é erro citando as duas linhas. Chave desconhecida é aviso (RF-4.22), mas ação desconhecida não — um binding que não faz nada é pior que um erro.
+
+---
+
+## `tab.*` — abas
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `tab.new` | Cria aba no grupo da aba ativa, herdando o `cwd` | [PRD-001](../prd/prd-001-abas.md) RF-1.1 | F2 | |
+| `tab.close` | Fecha a aba ativa; confirma se houver processo em primeiro plano | RF-1.2, RF-1.6 | F2 | |
+| `tab.next` | Próxima aba na ordem visual, circulando | RF-1.11 | F2 | |
+| `tab.prev` | Aba anterior na ordem visual, circulando | RF-1.11 | F2 | |
+| `tab.goto_1` … `tab.goto_9` | Ativa a N-ésima aba visível da janela | RF-1.12 | F2 | |
+| `tab.rename` | Abre a edição inline do título na aba ativa | RF-1.8 | F2 | |
+| `tab.move_left` | Move a aba ativa uma posição à esquerda | RF-1.17 | F2 | |
+| `tab.move_right` | Move a aba ativa uma posição à direita | RF-1.17 | F2 | |
+| `tab.move_to_group` | Move a aba ativa para um grupo | [PRD-002](../prd/prd-002-grupos-de-abas.md) RF-2.20 | F3 | sim |
+
+As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: o conjunto é fechado, e `tab.goto_12` precisa ser erro de config, não uma ação silenciosamente inerte. O índice é sobre a ordem visual da janela inteira, não por grupo (RF-1.12), e abas de grupo colapsado não contam (RF-2.15).
+
+---
+
+## `group.*` — grupos
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `group.create` | Cria grupo com as abas selecionadas, cor automática, nome em edição | RF-2.4, RF-2.5 | F3 | |
+| `group.dissolve` | Desagrupa: abas voltam ao grupo implícito na mesma posição | RF-2.6 | F3 | |
+| `group.rename` | Abre a edição inline do nome do grupo | RF-2.9 | F3 | |
+| `group.set_color` | Define a cor do grupo | RF-2.10 | F3 | sim |
+| `group.toggle_collapse` | Colapsa ou expande o grupo da aba ativa | RF-2.13, RF-2.14 | F3 | |
+| `group.next` | Próximo grupo, ativando sua última aba visitada | RF-2.21 | F3 | |
+| `group.prev` | Grupo anterior, ativando sua última aba visitada | RF-2.21 | F3 | |
+| `group.new_tab` | Cria aba dentro do grupo | RF-2.8, RF-2.22 | F3 | |
+| `group.close_all` | Fecha todas as abas do grupo; confirmação com contagem, **sempre** | RF-2.22, RF-2.23 | F3 | |
+
+`group.close_all` é a única ação cuja confirmação não é configurável — o RF-2.23 chama isso de *"a ação mais destrutiva da interface"*.
+
+O menu de contexto do grupo e o editor de grupo invocam **esta mesma lista**, por decisão do [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md): duas listas divergiriam na primeira mudança.
+
+---
+
+## `window.*` — janelas
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `window.new` | Abre janela nova com uma aba, herdando o `cwd` da aba ativa | [ADR-0015](../adr/0015-multiplas-janelas.md) | F2 | |
+| `window.close` | Fecha a janela; confirma se houver mais de uma aba | ADR-0015, RF-1.4 | F2 | |
+
+---
+
+## `scrollback.*` — rolagem
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `scrollback.line_up` | Rola uma linha para trás | [ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md) | F1 | |
+| `scrollback.line_down` | Rola uma linha para frente | ADR-0013 | F1 | |
+| `scrollback.page_up` | Rola uma tela para trás | ADR-0013 | F1 | |
+| `scrollback.page_down` | Rola uma tela para frente | ADR-0013 | F1 | |
+| `scrollback.to_top` | Vai ao início do scrollback | ADR-0013 | F1 | |
+| `scrollback.to_bottom` | Volta ao final, onde está o prompt | ADR-0013 | F1 | |
+
+Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md)).
+
+---
+
+## `clipboard.*` e `selection.*`
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `clipboard.copy` | Copia a seleção, com espaço à direita cortado e `WRAPLINE` remontado | [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md), ADR-0013 | F1 | |
+| `clipboard.paste` | Cola, envolvido em bracketed paste quando o modo está ativo | ADR-0008 | F1 | |
+| `selection.select_all` | Seleciona a tela visível e o scrollback | [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) — menu do terminal | F6 | |
+
+---
+
+## `font.*`, `theme.*`, `config.*`, `search.*`, `app.*`
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `font.increase` | Aumenta a fonte na sessão, sem tocar no arquivo | [PRD-005](../prd/prd-005-aparencia-do-terminal.md) RF-5.9 | F4 | |
+| `font.decrease` | Diminui a fonte na sessão | RF-5.9 | F4 | |
+| `font.reset` | Volta ao tamanho da config | RF-5.9 | F4 | |
+| `theme.cycle` | Cicla entre os temas nomeados definidos na config | RF-5.21 | F4 | |
+| `config.reload` | Relê o arquivo de config imediatamente | [ADR-0003](../adr/0003-formato-de-configuracao.md) | F4 | |
+| `search.open` | Abre a busca no scrollback | [roadmap](../roadmap.md) F6 | F6 | |
+| `search.next` | Próxima ocorrência | roadmap F6 | F6 | |
+| `search.prev` | Ocorrência anterior | roadmap F6 | F6 | |
+| `app.quit` | Encerra o app, gravando a sessão de forma síncrona | RF-1.4, RF-3.4 | F2 | |
+| `none` | Remove o binding; a tecla vai para o terminal | ADR-0008 | F4 | |
+
+`app.quit` existe por convenção de plataforma: `Cmd+Q` no macOS é esperado e o [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) já define defaults por plataforma. O efeito é o mesmo do RF-1.4 ao fechar a última janela, incluindo a gravação síncrona do RF-3.4.
+
+`config.reload` não substitui o hot reload automático (RF-4.20), que continua acontecendo a cada gravação do arquivo. Existe para o caso em que o watcher não disparou — editor que grava por `rename`, arquivo em rede.
+
+---
+
+## `[v2]` — reservadas, não implementar
+
+| Ação | O que faz | Origem |
+|---|---|---|
+| `command.palette` | Abre a paleta de comandos | [PRD-008](../prd/prd-008-paleta-de-comandos.md) *(rascunho)*, [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) |
+
+O nome está reservado porque o binding default já está no arquivo de exemplo: `Ctrl+Shift+P`, que foi o motivo de `theme.cycle` migrar para `Ctrl+Shift+Y` ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md)).
+
+---
+
+## Ações que **não** existem
+
+Ausências deliberadas, registradas para que ninguém as adicione achando que foram esquecidas. Cada uma é não-objetivo de um documento aprovado ou simplesmente não tem requisito:
+
+| Ação ausente | Por quê |
+|---|---|
+| `tab.duplicate` | Fora de escopo do PRD-001 (*"duplicar aba com o estado do processo"*) |
+| `tab.pin` | Fora de escopo do PRD-001 (*"fixar aba"*) |
+| `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000) |
+| `pane.split` / `pane.close` | Painéis divididos são v2 ([PRD-006](../prd/prd-006-paineis-divididos.md), rascunho) |
+| `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho) |
+| `terminal.clear` | Nenhum RF pede; o shell já tem `clear` |
+| `terminal.reset` | Idem; `reset` existe no shell |
+| `session.save` / `session.restore` | A gravação é automática por decisão do [ADR-0005](../adr/0005-persistencia-de-sessao.md); ação manual sugeriria que não é |
+| `group.select_all_tabs` | RF-2.1 define seleção múltipla por mouse; nenhum RF pede equivalente de teclado |
+
+Precisar de uma delas é sinal de requisito faltando, não de catálogo incompleto. O caminho é PRD ou ADR primeiro.

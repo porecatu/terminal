@@ -15,10 +15,15 @@
 # Config inválida NÃO derruba o app — mantém a anterior e mostra o erro.
 #
 # Governança de cada seção:
-#   [general] [shell]        PRD-000, PRD-001
+#   [general] [shell]        PRD-000, PRD-001; TERM em ADR-0012
 #   [appearance.*]           PRD-004  (aparência do chrome)
+#   [appearance.notices]     ADR-0014  (aviso, diálogo, menu de contexto)
+#   [appearance.dialog]      ADR-0014
+#   [appearance.context_menu] ADR-0014
 #   [terminal.*] [[themes]]  PRD-005  (aparência do terminal)
-#   [keybindings]            ADR-0008
+#   [terminal.selection]     ADR-0013  (mouse, seleção)
+#   [terminal.clipboard]     ADR-0013  (OSC 52)
+#   [keybindings]            ADR-0008; catálogo em docs/reference/acoes.md
 #   [session]                PRD-003
 #
 # ORIGEM DOS VALORES DE APARÊNCIA
@@ -37,7 +42,7 @@
 [general]
 # Pede confirmação ao fechar aba com processo em primeiro plano != shell.  RF-1.6
 confirm_close_with_process = true
-# Pede confirmação ao fechar uma janela com mais de uma aba.
+# Pede confirmação ao fechar uma janela com mais de uma aba.       ADR-0015
 confirm_close_window = true
 # Diretório da primeira aba de uma sessão nova. "home" ou um caminho absoluto.
 # Abas criadas depois herdam o diretório da aba ativa.  RF-1.1
@@ -52,7 +57,20 @@ startup_directory = "home"
 program = ""
 args = []
 
-# Variáveis injetadas no ambiente de cada shell. TERM é definido pelo app.
+# Variáveis injetadas no ambiente de cada shell.
+#
+# O app já define, antes desta seção (ADR-0012):
+#   TERM=xterm-256color        capacidades, via terminfo
+#   COLORTERM=truecolor        24 bits, que o terminfo do xterm não descreve
+#   TERM_PROGRAM=porecatu      identificação do app
+#   TERM_PROGRAM_VERSION=...   versão do binário
+#
+# Chaves declaradas aqui têm precedência sobre essas — a config do usuário é
+# soberana. Sobrescrever TERM é escape para caso específico, não rotina:
+# valor inválido faz o ncurses recusar-se a abrir.
+#
+# TERM_PROGRAM é o gancho para emitir OSC 7 condicionalmente no seu shell,
+# que é o que faz a restauração de diretório funcionar. Ver PRD-003 RF-3.1.
 [shell.env]
 # EDITOR = "vim"
 
@@ -200,6 +218,73 @@ badge_tint_strength = 0.14
 
 
 ##############################################################################
+# AVISO, DIÁLOGO E MENU DE CONTEXTO — ADR-0014
+#
+# Widgets próprios: nenhum diálogo nativo do sistema. Diálogo do SO bloqueia
+# o event loop, não é tematizável por esta config e é diferente nas três
+# plataformas. Os valores abaixo saem dos tokens de popover da especificação
+# visual, seções 1.2, 1.3 e 1.5 — não há cor nova aqui.
+##############################################################################
+
+# Avisos do APP, empilhados no canto superior direito: erro de config com
+# linha e chave (RF-4.21), chave desconhecida (RF-4.22), fonte ausente
+# (RF-5.8), sessão corrompida (RF-3.14), schema mais novo (RF-3.16), convite
+# de integração de shell (RF-3.1), fallback de GPU (ADR-0001).
+#
+# Fato de uma ABA só não vem para cá: vai como primeira linha no grid daquela
+# aba — diretório inexistente (RF-3.10), código de saída (RF-1.3).
+[appearance.notices]
+background = "#1a1e25"
+border = "#2e343e"
+corner_radius = 8
+foreground = "#dfe4ea"        # título
+body_foreground = "#6b737e"   # corpo
+font_size = 12.5
+# Barra de severidade de 2px à esquerda.
+error = "#ef8a8a"
+warning = "#e0b060"
+info = "#5ed3bc"
+# Quantos convivem na tela; o quarto substitui o mais antigo.
+max_visible = 3
+# Erro e aviso persistem até dispensa. Só informação sai sozinha.
+info_timeout_ms = 6000
+
+# Diálogo modal de confirmação: fechar aba com processo (RF-1.6), fechar
+# grupo com contagem (RF-2.23), fechar janela com mais de uma aba (ADR-0015).
+#
+# O foco inicial é sempre o CANCELAR, e isso não é configurável: diálogo
+# destrutivo que confirma no Enter transforma distração em perda de trabalho.
+[appearance.dialog]
+overlay = "#06070973"         # rgba(6,7,9,.45) da especificação visual
+background = "#1a1e25"
+border = "#2e343e"
+corner_radius = 10
+width = 380
+title_foreground = "#e6eaef"
+foreground = "#d7dce3"
+button_border = "#262b34"
+destructive_foreground = "#e08585"
+destructive_hover_background = "#2e2224"
+
+# Menu de contexto de aba (RF-1.1, RF-1.2, RF-2.20) e de grupo (RF-2.22).
+# O menu do grupo e o editor de grupo leem a MESMA lista de ações — ver
+# docs/reference/acoes.md.
+[appearance.context_menu]
+background = "#1a1e25"
+border = "#2e343e"
+corner_radius = 8
+item_corner_radius = 5
+item_hover_background = "#242a33"
+separator = "#2a2f38"
+foreground = "#d7dce3"
+# Item indisponível fica esmaecido, nunca ausente: menu que muda de tamanho
+# obriga a reaprender a posição dos itens a cada abertura.
+disabled_foreground = "#5c646f"
+destructive_foreground = "#e08585"
+font_size = 12.5
+
+
+##############################################################################
 # APARÊNCIA DO TERMINAL — PRD-005
 ##############################################################################
 
@@ -254,6 +339,54 @@ unfocused_hollow = true    # cursor vazado quando a janela perde foco   RF-5.24
 [terminal.scrollback]
 lines = 10000                                                        # RF-5.26
 scroll_multiplier = 3      # linhas por passo da roda do mouse         RF-5.27
+# Saída em segundo plano não arranca o usuário de onde ele estava lendo.
+scroll_on_output = false                                             # ADR-0013
+# Digitar volta ao final, que é onde o prompt está.
+scroll_on_input = true                                               # ADR-0013
+# Na tela alternativa (vim, htop, less) não existe scrollback. Com isto
+# ligado, a roda do mouse vira setas — é o que faz `less` e `man` rolarem.
+alternate_scroll = true                                              # ADR-0013
+
+
+# ---------------------------------------------------------------------------
+# SELEÇÃO COM MOUSE — ADR-0013
+#
+# Os gestos são fixos, não configuráveis: arraste seleciona caractere, duplo
+# clique seleciona palavra, triplo clique seleciona a linha lógica, Alt+arraste
+# seleciona retângulo.
+#
+# Quando o programa em execução pede o mouse (htop, fzf, vim), o evento vai
+# para ele. SHIFT força a seleção local, sempre — é a válvula de escape, e por
+# isso não é configurável. Convenção do xterm.
+# ---------------------------------------------------------------------------
+[terminal.selection]
+# Selecionar já copia para o clipboard. Desligado por default: quem seleciona
+# só para ler não espera perder o que tinha copiado.
+copy_on_select = false                                               # ADR-0013
+# Caracteres que delimitam "palavra" no duplo clique.
+word_separators = " \t\n\"'`()[]{}<>,;:!?=&|"
+# Seleção PRIMARY do X11/Wayland (colar com botão do meio) NÃO é implementada
+# no v1 — limitação conhecida, não bug. Nome reservado.
+# primary_selection = false
+
+
+# ---------------------------------------------------------------------------
+# CLIPBOARD — ADR-0013
+# ---------------------------------------------------------------------------
+[terminal.clipboard]
+# OSC 52: o programa em execução mexendo no clipboard do sistema.
+#
+# ESCRITA permitida: é o que faz copiar de dentro de um tmux ou nvim rodando
+# por SSH funcionar, onde o programa não alcança o clipboard local.
+osc52_write = true
+# LEITURA negada. Ligar isto permite que qualquer processo — inclusive num
+# host remoto comprometido — leia o que você copiou, senha de gerenciador de
+# senhas inclusa. Você não teria como saber que foi lido. Ligue com essa
+# consciência, ou não ligue.
+osc52_read = false
+# Teto do payload de escrita, em bytes. Sem limite, saída não confiável
+# despeja megabytes no seu clipboard.
+osc52_max_bytes = 102400
 
 
 [terminal.colors]
@@ -371,6 +504,10 @@ white   = "#ebdbb2"
 #
 # As linhas abaixo mostram os defaults de Windows e Linux. No macOS os
 # defaults usam Cmd — ver a tabela do ADR-0008.
+#
+# O conjunto de ações é FECHADO: ação desconhecida é erro de config, com
+# sugestão do nome mais próximo. A lista completa, com a origem de cada uma,
+# está em docs/reference/acoes.md.
 ##############################################################################
 
 [keybindings]
@@ -391,8 +528,21 @@ white   = "#ebdbb2"
 "ctrl+shift+pagedown" = "group.next"
 "ctrl+shift+pageup"   = "group.prev"
 
+# Janelas. Cada janela tem seu próprio conjunto de abas e grupos. ADR-0015.
+"ctrl+shift+n"        = "window.new"
+"ctrl+shift+q"        = "window.close"   # não é ctrl+shift+w: essa é tab.close
+# app.quit não tem default em Windows e Linux — fechar a última janela já
+# encerra o app (RF-1.4). No macOS o default é Cmd+Q, por convenção.
+
 "ctrl+shift+c"        = "clipboard.copy"
 "ctrl+shift+v"        = "clipboard.paste"
+
+# Rolagem do scrollback. Shift de novo como o modificador que fala com o
+# emulador em vez do programa. Nada disso age na tela alternativa. ADR-0013.
+"shift+pageup"        = "scrollback.page_up"
+"shift+pagedown"      = "scrollback.page_down"
+"shift+home"          = "scrollback.to_top"
+"shift+end"           = "scrollback.to_bottom"
 
 "ctrl+equals"         = "font.increase"
 "ctrl+minus"          = "font.decrease"
@@ -404,6 +554,14 @@ white   = "#ebdbb2"
 
 # [v2] O design abre a paleta de comandos com Ctrl+Shift+P. PRD-008.
 "ctrl+shift+p"        = "command.palette"
+
+# Busca no scrollback e "selecionar tudo" são da F6 do roadmap. As ações
+# existem no catálogo; os defaults são decididos quando a fase começar.
+# "ctrl+shift+f" = "search.open"
+# "ctrl+shift+a" = "selection.select_all"
+
+# Ações que aceitam argumento (group.set_color, tab.move_to_group) não são
+# vinculáveis a tecla: são invocadas por menu, onde o alvo é implícito.
 
 # Libera uma tecla para o terminal:
 # "ctrl+shift+k" = "none"
