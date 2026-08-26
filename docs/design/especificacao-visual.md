@@ -19,6 +19,8 @@ Tradução do design canvas em valores implementáveis. É a referência normati
 
 Fallback de UI: `system-ui, sans-serif`. Fallback mono: `monospace`.
 
+> **Estas cinco faces são embutidas no binário** ([ADR-0016](../adr/0016-fontes-embutidas.md)): nenhuma delas vem instalada por default em Windows, macOS ou Linux, e sem embuti-las o critério *"o binário com a config padrão bate com o mockup"* seria inalcançável — métrica de fonte diferente muda largura de célula, de aba e onde o título trunca. Itálico e negrito fora desses pesos seguem sintetizados (RF-5.4). A cadeia de fallback (Nerd Font, emoji, CJK) **não** é embutida e continua vindo do sistema.
+
 | Tamanho | Uso |
 |---|---|
 | 19px / 500 | título da tela de nova aba |

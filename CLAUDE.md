@@ -35,12 +35,14 @@ Dependências apontam **só para baixo**. Em particular:
 | `porecatu-core` | nada do projeto | tudo o mais |
 | `porecatu-config` | `core` | GUI, PTY |
 | `porecatu-pty` | — | GUI, `core` |
-| `porecatu-term` | `pty` | GUI |
+| `porecatu-term` | `pty` | GUI, `config` |
 | `porecatu-render` | — | `core`, `config`, `term` |
 | `porecatu-ui` | `core`, `config`, `term`, `render` | — |
 | `porecatu-session` | `core` | GUI, PTY |
 
 `porecatu-render` **não conhece o domínio**: recebe primitivas de desenho (quad, retângulo arredondado, run de texto) e nada sobre abas ou grupos. Quem traduz config+estado em primitivas é `porecatu-ui`.
+
+`porecatu-term` **não conhece `Config`**: chaves como `scrollback.lines`, `selection.word_separators` e `terminal.clipboard.*` chegam num struct de parâmetros do próprio crate, montado por `porecatu-ui`. E o snapshot de grade sai com cor **não resolvida** (`Default`/`Indexed`/`Rgb`) — quem aplica paleta e tema é `ui`. Detalhes na [seção 4 da arquitetura](docs/arquitetura.md).
 
 ## Comandos
 
@@ -89,6 +91,8 @@ Sem exceção — inclusive scripts. Registrar a convenção antes de existir o 
 Antes de implementar qualquer coisa de chrome — barra de abas, pílula de grupo, popover, terminal — leia [docs/design/especificacao-visual.md](docs/design/especificacao-visual.md).
 
 Regra: **nenhuma cor, dimensão, raio ou espaçamento é inventado.** Sai da tabela de tokens (seção 1) ou do [porecatu.example.toml](docs/config/porecatu.example.toml), que já traz esses mesmos valores como default. O binário com a config padrão deve bater com [docs/design/mockup-estatico.html](docs/design/mockup-estatico.html); divergência visível é bug de implementação, não questão de configuração.
+
+Isso só se sustenta porque as cinco faces do design (IBM Plex Mono 400/500, Sans 400/500/600) são **embutidas no binário** ([ADR-0016](docs/adr/0016-fontes-embutidas.md)) — métrica de fonte diferente muda largura de célula e de aba. Não fazer subsetting: viola a cláusula de Reserved Font Name da OFL e obrigaria a renomear a família.
 
 Nove requisitos do v1 não têm desenho aprovado (indicadores de atividade e campainha, estado de arraste, aba selecionada, entre outros). Estão listados na seção 4.2 da especificação. Para esses, vale o julgamento de quem implementa — mas ainda usando os tokens existentes, nunca cores novas.
 

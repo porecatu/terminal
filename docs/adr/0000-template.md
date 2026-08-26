@@ -19,6 +19,7 @@
 | [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
+| [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Aceito |
 
 ## Convenção
 

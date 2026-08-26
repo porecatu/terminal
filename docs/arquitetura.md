@@ -62,7 +62,7 @@ loop {
     let mut term = term.lock();              // Mutex<Term>
     parser.advance(&mut *term, &buf[..n]);   // aplica no grid
     drop(term);
-    proxy.send_event(Wakeup(tab_id));        // acorda a UI
+    proxy.send_event(Wakeup { window, tab }); // acorda a UI  [ADR-0015]
 }
 ```
 
@@ -78,7 +78,7 @@ Este é o ponto onde emuladores ingênuos queimam bateria. `cargo build` cospe c
 
 A regra:
 
-1. `Wakeup(tab_id)` marca a aba como suja e nada mais.
+1. `Wakeup { window, tab }` marca a aba como suja e nada mais. O par é necessário porque `TabId` é gerado por workspace, e workspace é por janela — só o `TabId` não identifica a aba ([ADR-0015](adr/0015-multiplas-janelas.md)).
 2. Se a aba suja não é a visível, para por aí — só o grid é atualizado, sem render.
 3. Se é a visível, agenda um `request_redraw()` **no máximo uma vez por intervalo de frame** (limitado pela taxa de atualização do monitor).
 4. Terminal ocioso = zero frames. Não há loop de render contínuo.
@@ -134,7 +134,91 @@ O snapshot existe para que o `Mutex` seja liberado antes do trabalho de GPU. Ren
 
 ---
 
-## 4. Fronteira de render
+## 4. Fronteira de `porecatu-term`
+
+É a fronteira mais crítica do projeto: separa a F1 da F2, contém o
+`alacritty_terminal` ([ADR-0002](adr/0002-motor-vte.md)) e é atravessada a cada frame.
+Três regras a governam, e as três derivam da mesma restrição — **`porecatu-term` não
+conhece `Config` nem GUI**.
+
+### 4.1 O snapshot de grade
+
+Tipo próprio de `porecatu-term`. Nenhum tipo do `alacritty_terminal` aparece na
+assinatura; trocar o motor não vaza para `ui`.
+
+```
+GridSnapshot
+  cols, rows            dimensões da viewport
+  cells                 rows*cols, row-major, SÓ a área visível
+  clusters              arena de texto do frame (String reusada)
+  cursor                posição, forma, visível
+  scroll_offset         linhas acima do fundo do scrollback
+  selection             span resolvido, para pintura
+  modes                 alt screen, mouse, bracketed paste
+
+Cell
+  text                  char único, ou fatia em `clusters`
+  fg, bg                TermColor — NÃO resolvido em RGBA
+  flags                 bold, italic, underline, inverse, wide, wide_spacer, wrapline
+```
+
+Quatro decisões que a forma acima carrega:
+
+**As cores não são resolvidas aqui.** `Cell.fg` e `Cell.bg` são um `TermColor`
+— `Default`, `Indexed(u8)` ou `Rgb`. Quem traduz para RGBA é `porecatu-ui`, que tem
+`Config` e portanto a paleta, o tema e os overrides. É o que permite ao `term` ignorar
+a existência de config e ao renderer receber só cor concreta (seção 5).
+
+**O buffer é reusado entre frames.** Nem `cells` nem `clusters` alocam no caminho
+quente ([ADR-0007](adr/0007-modelo-de-threading.md)). O snapshot é preenchido sob o
+lock e o lock cai antes do trabalho de GPU.
+
+**Grafema composto não aloca por célula.** Célula com um só `char` guarda o `char`;
+emoji com ZWJ ou base mais combinantes guarda uma fatia na arena `clusters`, que é a
+mesma `String` reusada a cada frame.
+
+**Caractere de largura dupla ocupa duas células.** A primeira leva o texto e a flag
+`wide`; a segunda vem vazia com `wide_spacer`. Sem isso, a coluna do CJK desalinha e
+o hit-testing do mouse erra.
+
+### 4.2 Quem lê a config que o terminal precisa
+
+`porecatu-term` **não importa `porecatu-config`**. Valores como `scrollback.lines`,
+`selection.word_separators` e `terminal.clipboard.*` chegam num struct simples de
+parâmetros, do próprio `porecatu-term`, montado por `porecatu-ui` a partir de
+`Config`. Hot reload é o mesmo caminho: `ui` remonta os parâmetros e reaplica.
+
+A tabela de dependências do [CLAUDE.md](../CLAUDE.md) fica valendo como está — `term`
+depende só de `pty`. Sem essa regra, a primeira chave de config nova arrasta o crate
+inteiro para dentro do grafo da GUI.
+
+### 4.3 O que sai do terminal além de pixels
+
+Sequências de escape que **não** são desenho viram eventos, consumidos por
+`porecatu-ui`. O `term` nunca age sobre elas:
+
+| Evento | Origem | Quem decide o que fazer |
+|---|---|---|
+| `Title` | OSC 0 / OSC 2 | `ui`, respeitando a precedência do RF-1.7 |
+| `Cwd` | OSC 7 | `ui` → `session` ([ADR-0005](adr/0005-persistencia-de-sessao.md)) |
+| `ClipboardWrite` | OSC 52 | `ui`, sujeito a `osc52_write` e ao teto de tamanho |
+| `ClipboardRead` | OSC 52 | `ui`, **negado por default** ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md)) |
+| `ColorSet` / `ColorQuery` | OSC 4 / 10 / 11 | `ui`, com escopo de sessão ([ADR-0012](adr/0012-identificacao-do-terminal.md)) |
+| `Bell` | BEL | `ui` (RF-1.21) |
+| `Exit` | EOF do PTY | `ui` (RF-1.3) |
+
+O clipboard é o caso que mais tenta o atalho errado: o OSC 52 chega **do PTY**, dentro
+do `term`, mas o `arboard` vive do lado da GUI. O caminho é `term` → evento → `ui` →
+`arboard`, sempre. Chamar o clipboard de dentro do `term` furaria o grafo e enterraria
+a política de segurança do ADR-0013 no lugar errado.
+
+Os flags de modo (mouse, bracketed paste, tela alternativa) são exceção por serem
+consultados no caminho de **input**, não de render: `porecatu-term` expõe um acessor
+barato para eles, além de estampá-los no snapshot.
+
+---
+
+## 5. Fronteira de render
 
 `porecatu-render` recebe uma lista de primitivas por frame:
 
@@ -151,7 +235,7 @@ A grade do terminal é um caso particular: fundo de célula vira quads em batch,
 
 ---
 
-## 5. Configuração e hot reload
+## 6. Configuração e hot reload
 
 Ver [ADR-0003](adr/0003-formato-de-configuracao.md).
 
@@ -168,7 +252,7 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 
 ---
 
-## 6. Estratégia de teste
+## 7. Estratégia de teste
 
 | Crate | Como testar |
 |---|---|
