@@ -46,8 +46,10 @@ jobs:
             echo "A matriz Rust liga sozinha quando a F0 criar o workspace."
           fi
 
+  # Sem `name:` explícito, o GitHub nomeia cada job da matriz como
+  # "rust (ubuntu-latest)" etc. — que é exatamente o contexto a exigir no
+  # branch protection quando a F0 ligar a matriz.
   rust:
-    name: ${{ matrix.os }}
     needs: detect
     if: needs.detect.outputs.has_cargo == 'true'
     runs-on: ${{ matrix.os }}

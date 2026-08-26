@@ -1,0 +1,127 @@
+name: release
+
+# Workflow de release, escrito por inteiro e DORMINDO — mesma estratégia do
+# ci.yml. Dispara ao empurrar uma tag `v*`.
+#
+# Enquanto não houver Cargo.toml na raiz, o job `detect` desliga a compilação
+# e a release sai só com as notas. Quando a F0 criar o workspace, os binários
+# das três plataformas passam a ser construídos e anexados automaticamente,
+# sem editar este arquivo.
+#
+# Nenhuma release foi publicada ainda: o roadmap coloca artefatos na F6.
+# Ver docs/roadmap.md e CHANGELOG.md.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag a publicar (ex.: v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect:
+    name: Detectar workspace Cargo
+    runs-on: ubuntu-latest
+    outputs:
+      has_cargo: ${{ steps.check.outputs.has_cargo }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ -f Cargo.toml ]; then
+            echo "has_cargo=true" >> "$GITHUB_OUTPUT"
+            echo "Cargo.toml encontrado — binários serão construídos."
+          else
+            echo "has_cargo=false" >> "$GITHUB_OUTPUT"
+            echo "Sem Cargo.toml: release sairá apenas com as notas."
+          fi
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.has_cargo == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            alvo: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            alvo: x86_64-pc-windows-msvc
+          - os: macos-latest
+            alvo: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependências de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libfontconfig1-dev libfreetype6-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.alvo }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilar
+        run: cargo build --release --locked --target ${{ matrix.alvo }}
+
+      # Checksum acompanha o binário: sem isso, quem baixa não tem como
+      # verificar o que recebeu.
+      - name: Empacotar
+        shell: bash
+        run: |
+          mkdir -p dist
+          nome="porecatu-${{ github.ref_name }}-${{ matrix.alvo }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.alvo }}/release/porecatu.exe" "dist/$nome.exe"
+          else
+            cp "target/${{ matrix.alvo }}/release/porecatu" "dist/$nome"
+          fi
+          cp LICENSE README.md dist/
+          cd dist && sha256sum * > "$nome.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.alvo }}
+          path: dist/
+
+  publish:
+    name: Publicar release
+    needs: [detect, build]
+    # `always()` para que a release saia mesmo sem binários — é o caso
+    # enquanto o projeto estiver na fase de documentação.
+    if: always() && needs.detect.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        if: needs.detect.outputs.has_cargo == 'true'
+        with:
+          path: artefatos
+          merge-multiple: true
+
+      - name: Publicar
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          # Pré-release enquanto não houver binário: deixa explícito que
+          # não há nada executável para baixar.
+          prerelease: ${{ needs.detect.outputs.has_cargo != 'true' }}
+          files: artefatos/**
+          fail_on_unmatched_files: false

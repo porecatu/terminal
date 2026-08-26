@@ -90,7 +90,7 @@ porecatu/
 
 ## Nome
 
-Porecatu é uma cidade do norte do Paraná. Do tupi *porã katu*, "muito bom".
+Porecatu é uma cidade do norte do Paraná. O nome vem do tupi e significa **"salto bonito"**.
 
 ## Licença
 
