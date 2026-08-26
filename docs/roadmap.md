@@ -27,6 +27,16 @@ Três pendências pontuais nesta fase:
 - Conferir se as dependências de sistema listadas no workflow bastam para o `winit` e o `wgpu` de verdade
 - Trocar `dtolnay/rust-toolchain@stable` pela versão pinada e ligar o job canário ([ADR-0011](adr/0011-toolchain-rust.md)). Instalar `stable` com um `rust-toolchain.toml` apontando para outra versão faz o CI baixar duas toolchains por job e cachear a errada
 
+> **A ordem de escolha das versões não é livre.** Nenhum ADR fixa números — eles são escolhidos aqui, olhando o crates.io do dia — mas quatro crates da stack são acoplados:
+>
+> ```
+> glyphon → wgpu → raw-window-handle → winit
+> ```
+>
+> Escolher os quatro de forma independente produz erro de tipo em `raw-window-handle` que não se parece com o que é, e é o jeito mais fácil de perder um dia na F0. A ordem que funciona: **fixar o `glyphon` primeiro**, aceitar o `wgpu` que ele exige, e só então escolher o `winit` cuja `raw-window-handle` casa com a do `wgpu`. `alacritty_terminal` e `portable-pty` são independentes dessa cadeia.
+>
+> O registro das escolhas é o `Cargo.lock`, que é versionado de propósito ([.gitignore](../.gitignore)). Considerar `--locked` nos comandos do CI para que a build seja reproduzível de fato.
+
 **Critério de saída:** CI verde nas três plataformas, com a matriz Rust efetivamente rodando (não pulada); janela abre, redimensiona e fecha em Windows, Linux e macOS.
 
 ---
@@ -39,6 +49,8 @@ O maior salto de risco técnico. Ao fim desta fase o projeto é um emulador de t
 - `porecatu-term`: `alacritty_terminal` encapsulado, snapshot de grid
 - Thread de leitura por terminal, `Wakeup` via `EventLoopProxy`, render damage-driven ([ADR-0007](adr/0007-modelo-de-threading.md))
 - `porecatu-render`: pipeline de quads e de texto com `glyphon`, atlas em cache
+- Fontes do design embutidas em `assets/fonts/`, com o texto da OFL e a atribuição ([ADR-0016](adr/0016-fontes-embutidas.md)) — sem subsetting
+- Snapshot de grade conforme a [seção 4 da arquitetura](arquitetura.md): tipos próprios, buffer reusado, cor não resolvida, `wide_spacer` para largura dupla
 - Roteamento de input, codificação de teclas, bracketed paste ([ADR-0008](adr/0008-teclas-e-roteamento-de-input.md))
 - Ambiente do shell: `TERM=xterm-256color`, `COLORTERM`, `TERM_PROGRAM` ([ADR-0012](adr/0012-identificacao-do-terminal.md))
 - Reporte de mouse ao programa (modos 1000/1002/1003, encoding SGR 1006), com `Shift` forçando seleção local ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md))
