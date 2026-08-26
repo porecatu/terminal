@@ -129,7 +129,7 @@ Anotadas aqui porque custam horas quando descobertas na marra:
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — alvo visual: tokens, anatomia, tabela de fases
 - [docs/adr/](docs/adr/) — decisões arquiteturais
-- [docs/prd/](docs/prd/) — requisitos de produto (000–005 aprovados; 006–009 rascunho, fase v2)
+- [docs/prd/](docs/prd/) — requisitos de produto (000–005 e 010 aprovados; 006–009 rascunho, fase v2). O [PRD-010](docs/prd/prd-010-interacao-e-superficie-de-app.md) é transversal: mouse, seleção, clipboard, avisos, diálogos, menus e janelas
 - [docs/roadmap.md](docs/roadmap.md) — fases de entrega
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo **fechado** de ações; ação fora dele é erro de config
 - [docs/config/porecatu.example.toml](docs/config/porecatu.example.toml) — configuração de referência

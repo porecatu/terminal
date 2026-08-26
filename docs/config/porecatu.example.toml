@@ -17,12 +17,12 @@
 # Governança de cada seção:
 #   [general] [shell]        PRD-000, PRD-001; TERM em ADR-0012
 #   [appearance.*]           PRD-004  (aparência do chrome)
-#   [appearance.notices]     ADR-0014  (aviso, diálogo, menu de contexto)
-#   [appearance.dialog]      ADR-0014
-#   [appearance.context_menu] ADR-0014
+#   [appearance.notices]     PRD-010, ADR-0014  (aviso, diálogo, menu)
+#   [appearance.dialog]      PRD-010, ADR-0014
+#   [appearance.context_menu] PRD-010, ADR-0014
 #   [terminal.*] [[themes]]  PRD-005  (aparência do terminal)
-#   [terminal.selection]     ADR-0013  (mouse, seleção)
-#   [terminal.clipboard]     ADR-0013  (OSC 52)
+#   [terminal.selection]     PRD-010, ADR-0013  (mouse, seleção)
+#   [terminal.clipboard]     PRD-010, ADR-0013  (OSC 52)
 #   [keybindings]            ADR-0008; catálogo em docs/reference/acoes.md
 #   [session]                PRD-003
 #
@@ -42,7 +42,7 @@
 [general]
 # Pede confirmação ao fechar aba com processo em primeiro plano != shell.  RF-1.6
 confirm_close_with_process = true
-# Pede confirmação ao fechar uma janela com mais de uma aba.       ADR-0015
+# Pede confirmação ao fechar uma janela com mais de uma aba.      RF-10.23
 confirm_close_window = true
 # Diretório da primeira aba de uma sessão nova. "home" ou um caminho absoluto.
 # Abas criadas depois herdam o diretório da aba ativa.  RF-1.1
@@ -218,7 +218,7 @@ badge_tint_strength = 0.14
 
 
 ##############################################################################
-# AVISO, DIÁLOGO E MENU DE CONTEXTO — ADR-0014
+# AVISO, DIÁLOGO E MENU DE CONTEXTO — PRD-010, ADR-0014
 #
 # Widgets próprios: nenhum diálogo nativo do sistema. Diálogo do SO bloqueia
 # o event loop, não é tematizável por esta config e é diferente nas três
@@ -232,7 +232,8 @@ badge_tint_strength = 0.14
 # de integração de shell (RF-3.1), fallback de GPU (ADR-0001).
 #
 # Fato de uma ABA só não vem para cá: vai como primeira linha no grid daquela
-# aba — diretório inexistente (RF-3.10), código de saída (RF-1.3).
+# aba — diretório inexistente (RF-3.10), código de saída (RF-1.3). Os dois
+# canais estão definidos em RF-10.15.
 [appearance.notices]
 background = "#1a1e25"
 border = "#2e343e"
@@ -245,15 +246,16 @@ error = "#ef8a8a"
 warning = "#e0b060"
 info = "#5ed3bc"
 # Quantos convivem na tela; o quarto substitui o mais antigo.
-max_visible = 3
+max_visible = 3                # RF-10.16
 # Erro e aviso persistem até dispensa. Só informação sai sozinha.
-info_timeout_ms = 6000
+info_timeout_ms = 6000         # RF-10.16
 
 # Diálogo modal de confirmação: fechar aba com processo (RF-1.6), fechar
 # grupo com contagem (RF-2.23), fechar janela com mais de uma aba (ADR-0015).
 #
 # O foco inicial é sempre o CANCELAR, e isso não é configurável: diálogo
-# destrutivo que confirma no Enter transforma distração em perda de trabalho.
+# destrutivo que confirma no Enter transforma distração em perda de
+# trabalho.                                                          RF-10.18
 [appearance.dialog]
 overlay = "#06070973"         # rgba(6,7,9,.45) da especificação visual
 background = "#1a1e25"
@@ -267,6 +269,7 @@ destructive_foreground = "#e08585"
 destructive_hover_background = "#2e2224"
 
 # Menu de contexto de aba (RF-1.1, RF-1.2, RF-2.20) e de grupo (RF-2.22).
+# Comportamento em RF-10.19 a RF-10.21.
 # O menu do grupo e o editor de grupo leem a MESMA lista de ações — ver
 # docs/reference/acoes.md.
 [appearance.context_menu]
@@ -279,7 +282,7 @@ separator = "#2a2f38"
 foreground = "#d7dce3"
 # Item indisponível fica esmaecido, nunca ausente: menu que muda de tamanho
 # obriga a reaprender a posição dos itens a cada abertura.
-disabled_foreground = "#5c646f"
+disabled_foreground = "#5c646f"   # RF-10.20
 destructive_foreground = "#e08585"
 font_size = 12.5
 
@@ -340,16 +343,16 @@ unfocused_hollow = true    # cursor vazado quando a janela perde foco   RF-5.24
 lines = 10000                                                        # RF-5.26
 scroll_multiplier = 3      # linhas por passo da roda do mouse         RF-5.27
 # Saída em segundo plano não arranca o usuário de onde ele estava lendo.
-scroll_on_output = false                                             # ADR-0013
+scroll_on_output = false                                            # RF-10.13
 # Digitar volta ao final, que é onde o prompt está.
-scroll_on_input = true                                               # ADR-0013
+scroll_on_input = true                                              # RF-10.13
 # Na tela alternativa (vim, htop, less) não existe scrollback. Com isto
 # ligado, a roda do mouse vira setas — é o que faz `less` e `man` rolarem.
-alternate_scroll = true                                              # ADR-0013
+alternate_scroll = true                                             # RF-10.14
 
 
 # ---------------------------------------------------------------------------
-# SELEÇÃO COM MOUSE — ADR-0013
+# SELEÇÃO COM MOUSE — PRD-010, ADR-0013
 #
 # Os gestos são fixos, não configuráveis: arraste seleciona caractere, duplo
 # clique seleciona palavra, triplo clique seleciona a linha lógica, Alt+arraste
@@ -362,31 +365,31 @@ alternate_scroll = true                                              # ADR-0013
 [terminal.selection]
 # Selecionar já copia para o clipboard. Desligado por default: quem seleciona
 # só para ler não espera perder o que tinha copiado.
-copy_on_select = false                                               # ADR-0013
-# Caracteres que delimitam "palavra" no duplo clique.
+copy_on_select = false                                               # RF-10.8
+# Caracteres que delimitam "palavra" no duplo clique.                 RF-10.5
 word_separators = " \t\n\"'`()[]{}<>,;:!?=&|"
 # Seleção PRIMARY do X11/Wayland (colar com botão do meio) NÃO é implementada
 # no v1 — limitação conhecida, não bug. Nome reservado.
-# primary_selection = false
+# primary_selection = false                                          RF-10.9
 
 
 # ---------------------------------------------------------------------------
-# CLIPBOARD — ADR-0013
+# CLIPBOARD — PRD-010, ADR-0013
 # ---------------------------------------------------------------------------
 [terminal.clipboard]
 # OSC 52: o programa em execução mexendo no clipboard do sistema.
 #
 # ESCRITA permitida: é o que faz copiar de dentro de um tmux ou nvim rodando
 # por SSH funcionar, onde o programa não alcança o clipboard local.
-osc52_write = true
+osc52_write = true                                                 # RF-10.10
 # LEITURA negada. Ligar isto permite que qualquer processo — inclusive num
 # host remoto comprometido — leia o que você copiou, senha de gerenciador de
 # senhas inclusa. Você não teria como saber que foi lido. Ligue com essa
 # consciência, ou não ligue.
-osc52_read = false
+osc52_read = false                                                 # RF-10.11
 # Teto do payload de escrita, em bytes. Sem limite, saída não confiável
 # despeja megabytes no seu clipboard.
-osc52_max_bytes = 102400
+osc52_max_bytes = 102400                                           # RF-10.10
 
 
 [terminal.colors]
@@ -528,7 +531,7 @@ white   = "#ebdbb2"
 "ctrl+shift+pagedown" = "group.next"
 "ctrl+shift+pageup"   = "group.prev"
 
-# Janelas. Cada janela tem seu próprio conjunto de abas e grupos. ADR-0015.
+# Janelas. Cada janela tem seu próprio conjunto de abas e grupos.  RF-10.22
 "ctrl+shift+n"        = "window.new"
 "ctrl+shift+q"        = "window.close"   # não é ctrl+shift+w: essa é tab.close
 # app.quit não tem default em Windows e Linux — fechar a última janela já
@@ -538,7 +541,7 @@ white   = "#ebdbb2"
 "ctrl+shift+v"        = "clipboard.paste"
 
 # Rolagem do scrollback. Shift de novo como o modificador que fala com o
-# emulador em vez do programa. Nada disso age na tela alternativa. ADR-0013.
+# emulador em vez do programa. Nada age na tela alternativa.       RF-10.12
 "shift+pageup"        = "scrollback.page_up"
 "shift+pagedown"      = "scrollback.page_down"
 "shift+home"          = "scrollback.to_top"

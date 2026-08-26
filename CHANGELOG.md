@@ -37,6 +37,12 @@ primeiro release.
 - `scripts/verify-docs.py`: links, TOML, cores sem origem na especificação
   visual e cobertura da tabela de fases
 
+- [PRD-010](docs/prd/prd-010-interacao-e-superficie-de-app.md): consolida como
+  requisito o comportamento visível ao usuário que os ADR-0013 a 0016 haviam
+  decidido — mouse, seleção, clipboard, rolagem, avisos, diálogos, menus de
+  contexto e janelas. Não decide nada novo: dá procedência de PRD ao que só
+  tinha procedência de ADR, e fecha a métrica do PRD-004 de zero chaves de
+  configuração sem requisito
 - [ADR-0016](docs/adr/0016-fontes-embutidas.md): as cinco faces do design
   embutidas no binário, sem o que o critério *"o binário com a config padrão
   bate com o mockup"* seria inalcançável em máquina limpa
