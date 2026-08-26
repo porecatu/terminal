@@ -13,6 +13,7 @@ use alacritty_terminal::vte::ansi::{CursorShape as AnsiCursorShape, Processor, R
 
 use crate::event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 use crate::params::TermParams;
+use crate::scroll::TermScroll;
 use crate::snapshot::{
     Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, MouseReporting, SelectionSpan,
     TermModes,
@@ -167,6 +168,23 @@ impl TermEngine {
         self.term.resize(TermSize { rows, cols });
     }
 
+    /// Rola o scrollback (PRD-010 RF-10.12 a RF-10.14). Sem efeito na tela
+    /// alternativa -- ela não tem histórico; quem chama decide se traduz
+    /// isso em outra coisa (ADR-0013: roda vira setas com
+    /// `alternate_scroll`), este método só reflete o que o motor já faz
+    /// (nada) nesse caso.
+    pub fn scroll(&mut self, scroll: TermScroll) {
+        self.term.scroll_display(scroll.into());
+    }
+
+    /// Modos atuais, sem montar o resto do snapshot -- mais barato que
+    /// `snapshot_into` para quem só precisa decidir como rotear um evento
+    /// de input (ADR-0008/0013), onde o snapshot do último frame já
+    /// poderia estar obsoleto.
+    pub fn modes(&self) -> TermModes {
+        convert_modes(*self.term.mode())
+    }
+
     /// Preenche `out` com o estado atual, reusando os buffers já alocados
     /// (`cells`/`clusters`) em vez de realocar (ADR-0007).
     pub fn snapshot_into(&self, out: &mut GridSnapshot) {
@@ -316,5 +334,7 @@ fn convert_modes(mode: alacritty_terminal::term::TermMode) -> TermModes {
         bracketed_paste: mode.contains(M::BRACKETED_PASTE),
         mouse_reporting,
         sgr_mouse: mode.contains(M::SGR_MOUSE),
+        app_cursor_keys: mode.contains(M::APP_CURSOR),
+        app_keypad: mode.contains(M::APP_KEYPAD),
     }
 }
