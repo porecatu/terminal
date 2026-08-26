@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentação do projeto
+    url: https://github.com/porecatu/terminal/tree/main/docs
+    about: Requisitos (PRD), decisões (ADR), arquitetura, design e roadmap.
+  - name: Como contribuir
+    url: https://github.com/porecatu/terminal/blob/main/CONTRIBUTING.md
+    about: Convenções de idioma, commits, processo de ADR e verificação local.

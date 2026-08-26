@@ -1,0 +1,97 @@
+name: ci
+
+# Workflow de Rust, escrito por inteiro e DORMINDO até existir código.
+#
+# O job `detect` verifica se há Cargo.toml na raiz. Enquanto não houver — ou
+# seja, durante toda a fase de documentação — a matriz é pulada e o badge fica
+# verde. Quando a F0 do roadmap criar o workspace Cargo, a matriz liga sozinha,
+# sem ninguém precisar lembrar de editar este arquivo.
+#
+# Os quatro comandos abaixo são o contrato definido em CLAUDE.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  detect:
+    name: Detectar workspace Cargo
+    runs-on: ubuntu-latest
+    outputs:
+      has_cargo: ${{ steps.check.outputs.has_cargo }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        run: |
+          if [ -f Cargo.toml ]; then
+            echo "has_cargo=true" >> "$GITHUB_OUTPUT"
+            echo "Cargo.toml encontrado — a matriz Rust vai rodar."
+          else
+            echo "has_cargo=false" >> "$GITHUB_OUTPUT"
+            echo "Sem Cargo.toml: projeto ainda na fase de documentação."
+            echo "A matriz Rust liga sozinha quando a F0 criar o workspace."
+          fi
+
+  rust:
+    name: ${{ matrix.os }}
+    needs: detect
+    if: needs.detect.outputs.has_cargo == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # winit, wgpu e cosmic-text precisam destas no Linux. Declaradas já
+      # agora para que a F0 não trave num erro de linkagem obscuro.
+      - name: Dependências de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libgl1-mesa-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatação
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Testes
+        run: cargo test --workspace

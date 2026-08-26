@@ -1,0 +1,81 @@
+name: Relatar bug
+description: Comportamento errado, travamento ou artefato visual
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        O Porecatu está em **fase de documentação** — ainda não há binário.
+        Bugs de documentação (link quebrado, contradição entre PRDs, valor
+        divergente entre o design e o `porecatu.example.toml`) são bem-vindos.
+
+  - type: textarea
+    id: descricao
+    attributes:
+      label: O que aconteceu
+      description: Descreva o comportamento observado.
+    validations:
+      required: true
+
+  - type: textarea
+    id: esperado
+    attributes:
+      label: O que era esperado
+      description: E, se souber, qual requisito ou ADR define isso.
+    validations:
+      required: true
+
+  - type: textarea
+    id: passos
+    attributes:
+      label: Como reproduzir
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: plataforma
+    attributes:
+      label: Plataforma
+      description: As três do v1.
+      multiple: true
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Não se aplica (documentação)
+    validations:
+      required: true
+
+  - type: input
+    id: versao
+    attributes:
+      label: Versão
+      description: Tag, commit ou "main".
+      placeholder: main
+
+  - type: textarea
+    id: ambiente
+    attributes:
+      label: Ambiente
+      description: Versão do SO, shell, GPU, sessão gráfica (X11/Wayland).
+      placeholder: |
+        SO:    Windows 11 26200
+        Shell: PowerShell 7.4
+        GPU:   Intel Iris Xe
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuração relevante
+      description: Trecho do `porecatu.toml`, se aplicável.
+      render: toml
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Contexto adicional
+      description: Logs, capturas de tela, saída do terminal.

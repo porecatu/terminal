@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #08090b; }
+  * { box-sizing: border-box; }
+  a { color: #7ad0c0; text-decoration: none; }
+  a:hover { color: #9fe0d3; }
+  input { font-family: inherit; }
+  ::selection { background: #2e6b62; color: #eef2f4; }
+  @keyframes blink { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
+  @keyframes pop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }
+  @keyframes slidein { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }
+</style>
+</helmet>
+<div style="min-height:100vh;background:#08090b;display:flex;align-items:center;justify-content:center;padding:28px;font-family:'IBM Plex Sans',system-ui,sans-serif">
+  <div style="width:100%;max-width:1420px;height:calc(100vh - 56px);min-height:720px;display:flex;flex-direction:column;background:#15181d;border:1px solid #2a2f38;border-radius:8px;overflow:hidden;box-shadow:0 32px 80px rgba(0,0,0,.6);position:relative">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;height:36px;padding-left:12px;background:#1b1f26;border-bottom:1px solid #23272f;flex:none">
+      <div style="display:flex;align-items:center;gap:9px">
+        <div style="width:14px;height:14px;border-radius:3px;border:1.5px solid #5ed3bc;display:flex;align-items:center;justify-content:center">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#5ed3bc;line-height:1">&gt;</span>
+        </div>
+        <span style="font-size:12px;font-weight:500;color:#9aa2ae;letter-spacing:.2px">Porecatu</span>
+        <span style="font-size:11px;color:#5c646f">—</span>
+        <span style="font-size:11px;color:#5c646f">{{ activeLabel }}</span>
+      </div>
+      <div style="display:flex;align-items:stretch;height:100%">
+        <div style="width:44px;display:flex;align-items:center;justify-content:center;color:#8b929e;font-size:11px" style-hover="background:#252a33">&#8211;</div>
+        <div style="width:44px;display:flex;align-items:center;justify-content:center;color:#8b929e;font-size:10px" style-hover="background:#252a33">&#9633;</div>
+        <div style="width:44px;display:flex;align-items:center;justify-content:center;color:#8b929e;font-size:11px" style-hover="background:#c4413f;color:#ffffff">&#10005;</div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#1b1f26;border-bottom:1px solid #23272f;flex:none;min-width:0">
+      <div style="flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;overflow-y:hidden;padding-bottom:1px">
+      <sc-for list="{{ rows }}" as="g" hint-placeholder-count="3">
+        <div style="display:flex;align-items:center;gap:4px;padding:3px;border-radius:8px;background:{{ g.wrapBg }}">
+          <sc-if value="{{ g.pill }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ g.onToggle }}" onDoubleClick="{{ g.onEdit }}" title="Clique para expandir · duplo clique para editar o grupo" style="display:flex;align-items:center;gap:7px;height:30px;padding:0 9px 0 8px;border-radius:6px;cursor:pointer;background:#1f242c;border:1px solid #2b313b" style-hover="filter:brightness(1.25)">
+              <span style="width:8px;height:8px;border-radius:2px;flex:none;background:{{ g.color }}"></span>
+              <span style="font-size:12px;font-weight:500;color:#c3cad3;white-space:nowrap">{{ g.name }}</span>
+              <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#7b838f;background:#12151a;border-radius:9px;padding:1px 6px">{{ g.count }}</span>
+              <span style="font-size:8px;color:#6b737e;display:inline-block;transition:transform .15s;transform:rotate({{ g.caret }})">&#9654;</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ g.open }}" hint-placeholder-val="{{ true }}">
+            <sc-for list="{{ g.tabs }}" as="t" hint-placeholder-count="2">
+              <div onClick="{{ t.onSelect }}" onDoubleClick="{{ t.onRename }}" title="Duplo clique para renomear" style="display:flex;align-items:center;gap:8px;height:30px;padding:0 6px 0 10px;border-radius:6px;cursor:pointer;background:{{ t.bg }};border:1px solid {{ t.border }};box-shadow:inset 0 -2px 0 {{ t.underline }}" style-hover="filter:brightness(1.18)">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:500;border-radius:3px;padding:2px 4px;letter-spacing:.4px;color:{{ t.badgeFg }};background:{{ t.badgeBg }}">{{ t.badge }}</span>
+                <sc-if value="{{ t.renaming }}" hint-placeholder-val="{{ false }}">
+                  <input value="{{ renameValue }}" onChange="{{ onRenameChange }}" onKeyDown="{{ onRenameKey }}" onBlur="{{ onRenameCommit }}" autoFocus="{{ true }}" style="width:120px;background:#0e1116;border:1px solid #5ed3bc;border-radius:4px;color:#e4e8ee;font-size:12px;padding:2px 5px;outline:none" />
+                </sc-if>
+                <sc-if value="{{ t.showLabel }}" hint-placeholder-val="{{ true }}">
+                  <span style="font-size:12.5px;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;color:{{ t.fg }}">{{ t.label }}</span>
+                </sc-if>
+                <span onClick="{{ t.onClose }}" style="width:17px;height:17px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#727a86" style-hover="background:#39404b;color:#e4e8ee">&#10005;</span>
+              </div>
+            </sc-for>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <div onClick="{{ onNewMenu }}" title="Nova guia" style="width:30px;height:30px;flex:none;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#9aa2ae;font-size:15px;cursor:pointer;border:1px solid #262b34" style-hover="background:#262b34;color:#e4e8ee">+</div>
+      </div>
+      <div onClick="{{ onPalette }}" style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border-radius:6px;background:#12151a;border:1px solid #262b34;cursor:pointer;flex:none" style-hover="border-color:#39404b">
+        <span style="font-size:11px;color:#6b737e;white-space:nowrap">Buscar</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#7b838f;background:#1d222a;border-radius:3px;padding:2px 5px">Ctrl+Shift+P</span>
+      </div>
+      <div onClick="{{ onSettings }}" title="Configurações" style="width:30px;height:30px;flex:none;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#9aa2ae;font-size:13px;cursor:pointer;border:1px solid #262b34" style-hover="background:#262b34;color:#e4e8ee">&#9881;</div>
+    </div>
+
+    <div style="flex:1;display:flex;min-height:0;background:#0f1216">
+      <sc-if value="{{ isNewTab }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px;padding:48px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+            <span style="font-size:19px;font-weight:500;color:#dfe4ea">Abrir um novo terminal</span>
+            <span style="font-size:13px;color:#6b737e">Escolha um perfil. A guia entra no grupo ativo.</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,232px);gap:10px">
+            <sc-for list="{{ profiles }}" as="p" hint-placeholder-count="6">
+              <div onClick="{{ p.onLaunch }}" style="display:flex;align-items:center;gap:12px;padding:14px;border-radius:8px;background:#161a20;border:1px solid #252a33;cursor:pointer" style-hover="border-color:#3b434f;background:#1b2028">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;border-radius:5px;padding:6px 7px;letter-spacing:.5px;color:{{ p.color }};background:{{ p.tint }}">{{ p.badge }}</span>
+                <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+                  <span style="font-size:13px;color:#dfe4ea;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b737e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.cmd }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ hasPanes }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;display:flex;min-width:0;gap:1px;background:#23272f">
+          <sc-for list="{{ panes }}" as="p" hint-placeholder-count="2">
+            <div onClick="{{ p.onFocus }}" style="flex:1;min-width:0;display:flex;flex-direction:column;background:#0f1216;border-top:2px solid {{ p.focusRing }}">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 12px;border-bottom:1px solid #1c2027;flex:none">
+                <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                  <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ p.dot }}"></span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#828a96;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.title }}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;flex:none">
+                  <span onClick="{{ p.onSplit }}" title="Dividir painel" style="width:22px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#6b737e;font-size:11px;cursor:pointer" style-hover="background:#1e232b;color:#cfd5dd">&#9707;</span>
+                  <span onClick="{{ p.onClose }}" title="Fechar painel" style="width:22px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#6b737e;font-size:10px;cursor:pointer" style-hover="background:#1e232b;color:#cfd5dd">&#10005;</span>
+                </div>
+              </div>
+              <div style="flex:1;overflow:hidden;padding:12px 14px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.75;display:flex;flex-direction:column">
+                <sc-for list="{{ p.lines }}" as="ln" hint-placeholder-count="8">
+                  <div style="white-space:pre-wrap;word-break:break-word;color:{{ ln.c }}">{{ ln.t }}</div>
+                </sc-for>
+                <div style="display:flex;align-items:center;margin-top:2px">
+                  <span style="color:{{ p.promptColor }}">{{ p.promptA }}</span>
+                  <span style="color:#6b737e">{{ p.promptB }}</span>
+                  <span style="width:7px;height:15px;margin-left:6px;animation:blink 1.1s step-end infinite;background:{{ p.caretColor }}"></span>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;height:26px;padding:0 12px;background:#1b1f26;border-top:1px solid #23272f;flex:none;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b737e">
+      <div style="display:flex;align-items:center;gap:16px">
+        <span style="color:#5ed3bc">{{ statusShell }}</span>
+        <span>{{ statusCwd }}</span>
+        <span>{{ statusGroup }}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <span>UTF-8</span>
+        <span>{{ statusPanes }}</span>
+        <span>Windows 11 · 1.4.2</span>
+      </div>
+    </div>
+
+    <sc-if value="{{ anyOverlay }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAll }}" style="position:absolute;inset:0;z-index:20"></div>
+    </sc-if>
+
+    <sc-if value="{{ newMenuOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;top:76px;right:120px;z-index:21;width:268px;background:#1a1e25;border:1px solid #2e343e;border-radius:8px;padding:6px;box-shadow:0 18px 44px rgba(0,0,0,.55);animation:pop .13s ease-out">
+        <div style="font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:#5c646f;padding:6px 8px 5px">Perfis</div>
+        <sc-for list="{{ profiles }}" as="p" hint-placeholder-count="5">
+          <div onClick="{{ p.onLaunch }}" style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:5px;cursor:pointer" style-hover="background:#242a33">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:500;border-radius:3px;padding:3px 5px;color:{{ p.color }};background:{{ p.tint }}">{{ p.badge }}</span>
+            <span style="font-size:12.5px;color:#d7dce3;flex:1">{{ p.name }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#5c646f">{{ p.key }}</span>
+          </div>
+        </sc-for>
+        <div style="height:1px;background:#2a2f38;margin:5px 4px"></div>
+        <div onClick="{{ onNewGroup }}" style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:5px;cursor:pointer" style-hover="background:#242a33">
+          <span style="width:19px;text-align:center;color:#7b838f;font-size:12px">&#9633;</span>
+          <span style="font-size:12.5px;color:#d7dce3">Novo grupo de guias</span>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ editorOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;top:76px;left:{{ editorLeft }};z-index:23;width:286px;background:#1a1e25;border:1px solid #2e343e;border-radius:8px;padding:14px;box-shadow:0 18px 44px rgba(0,0,0,.55);animation:pop .13s ease-out;display:flex;flex-direction:column;gap:13px">
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <span style="font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:#5c646f">Rótulo do grupo</span>
+          <input value="{{ groupNameValue }}" onChange="{{ onGroupNameChange }}" onKeyDown="{{ onGroupNameKey }}" autoFocus="{{ true }}" style="width:100%;background:#0f1216;border:1px solid #333a45;border-radius:5px;color:#e4e8ee;font-size:13px;padding:7px 9px;outline:none" style-focus="border-color:#5ed3bc" />
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <span style="font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:#5c646f">Cor</span>
+          <div style="display:flex;gap:8px">
+            <sc-for list="{{ swatches }}" as="s" hint-placeholder-count="6">
+              <div onClick="{{ s.onPick }}" style="width:28px;height:28px;border-radius:6px;cursor:pointer;background:{{ s.color }};border:2px solid {{ s.ring }}"></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="height:1px;background:#2a2f38"></div>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <div onClick="{{ onCollapseGroup }}" style="display:flex;align-items:center;justify-content:space-between;padding:7px 8px;border-radius:5px;cursor:pointer" style-hover="background:#242a33">
+            <span style="font-size:12.5px;color:#d7dce3">{{ collapseLabel }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#5c646f">Ctrl+G</span>
+          </div>
+          <div onClick="{{ onUngroup }}" style="padding:7px 8px;border-radius:5px;cursor:pointer;font-size:12.5px;color:#d7dce3" style-hover="background:#242a33">Desagrupar guias</div>
+          <div onClick="{{ onCloseGroup }}" style="padding:7px 8px;border-radius:5px;cursor:pointer;font-size:12.5px;color:#e08585" style-hover="background:#2e2224">Fechar grupo ({{ editorCount }} guias)</div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ paletteOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAll }}" style="position:absolute;inset:0;z-index:30;background:rgba(6,7,9,.55);display:flex;justify-content:center;padding-top:96px">
+        <div onClick="{{ stop }}" style="width:600px;max-height:440px;background:#1a1e25;border:1px solid #2e343e;border-radius:10px;box-shadow:0 28px 70px rgba(0,0,0,.6);overflow:hidden;display:flex;flex-direction:column;animation:pop .14s ease-out">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 15px;border-bottom:1px solid #262b34;flex:none">
+            <span style="color:#5ed3bc;font-family:'IBM Plex Mono',monospace;font-size:13px">&gt;</span>
+            <input value="{{ query }}" onChange="{{ onQuery }}" onKeyDown="{{ onQueryKey }}" autoFocus="{{ true }}" placeholder="Ir para guia, grupo ou comando…" style="flex:1;background:transparent;border:none;outline:none;color:#e6eaef;font-size:14.5px" />
+            <span onClick="{{ onCloseAll }}" style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#6b737e;background:#232830;border-radius:3px;padding:3px 6px;cursor:pointer">Esc</span>
+          </div>
+          <div style="overflow:auto;padding:6px;display:flex;flex-direction:column;gap:1px">
+            <sc-for list="{{ results }}" as="r" hint-placeholder-count="6">
+              <div onClick="{{ r.onRun }}" style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:6px;cursor:pointer;background:{{ r.bg }}" style-hover="background:#262c35">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:500;border-radius:3px;padding:3px 5px;flex:none;width:38px;text-align:center;color:{{ r.color }};background:{{ r.tint }}">{{ r.kind }}</span>
+                <span style="font-size:13px;color:#dfe4ea;flex:none">{{ r.label }}</span>
+                <span style="font-size:11.5px;color:#5c646f;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{{ r.hint }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#5c646f;flex:none">{{ r.key }}</span>
+              </div>
+            </sc-for>
+            <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:26px;text-align:center;font-size:13px;color:#5c646f">Nada encontrado</div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseAll }}" style="position:absolute;inset:0;z-index:28;background:rgba(6,7,9,.45);display:flex;justify-content:flex-end">
+        <div onClick="{{ stop }}" style="width:400px;height:100%;background:#171b21;border-left:1px solid #2a2f38;display:flex;flex-direction:column;animation:slidein .16s ease-out">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #23272f;flex:none">
+            <span style="font-size:15px;font-weight:500;color:#e6eaef">Configurações</span>
+            <span onClick="{{ onCloseAll }}" style="width:24px;height:24px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:#7b838f;font-size:11px;cursor:pointer" style-hover="background:#242a33;color:#e6eaef">&#10005;</span>
+          </div>
+          <div style="flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:24px">
+            <div style="display:flex;flex-direction:column;gap:11px">
+              <span style="font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:#5c646f">Guias e grupos</span>
+              <sc-for list="{{ settingRows }}" as="s" hint-placeholder-count="4">
+                <div onClick="{{ s.onToggle }}" style="display:flex;align-items:center;gap:12px;cursor:pointer;padding:2px 0">
+                  <div style="width:34px;height:19px;border-radius:10px;flex:none;padding:2px;display:flex;transition:background .15s;background:{{ s.trackBg }}">
+                    <div style="width:15px;height:15px;border-radius:50%;background:#f0f3f6;transition:transform .15s;transform:translateX({{ s.knobX }})"></div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:1px">
+                    <span style="font-size:12.5px;color:#d7dce3">{{ s.label }}</span>
+                    <span style="font-size:11px;color:#5c646f">{{ s.desc }}</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:11px">
+              <span style="font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:#5c646f">Perfis instalados</span>
+              <sc-for list="{{ profiles }}" as="p" hint-placeholder-count="6">
+                <div style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:6px;background:#1c2028;border:1px solid #262b34">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:500;border-radius:3px;padding:3px 5px;color:{{ p.color }};background:{{ p.tint }}">{{ p.badge }}</span>
+                  <div style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:0">
+                    <span style="font-size:12.5px;color:#d7dce3">{{ p.name }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#5c646f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.cmd }}</span>
+                  </div>
+                  <span style="font-size:10.5px;color:#5c646f">{{ p.os }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:11px">
+              <span style="font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:#5c646f">Atalhos</span>
+              <sc-for list="{{ shortcuts }}" as="k" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0">
+                  <span style="font-size:12.5px;color:#a8b0bb">{{ k.label }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#7b838f;background:#1e232b;border:1px solid #2a2f38;border-radius:4px;padding:3px 7px">{{ k.key }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1420,&quot;height&quot;:820}}">
+const C = { fg:'#c7ccd6', dim:'#6f7783', ok:'#86c56a', ac:'#5ed3bc', red:'#ef8a8a', yel:'#e0b060' };
+const L = (t, c) => ({ t, c: c || C.fg });
+const PALETTE = ['#ef8a8a', '#e0b060', '#5ed3bc', '#6fa8f5', '#a68cf0', '#86c56a'];
+const tint = (hex, a) => {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+};
+
+const PROFILES = [
+  { badge:'PS',  name:'Windows PowerShell', cmd:'pwsh.exe -NoLogo',     color:'#6fa8f5', key:'Ctrl+1', os:'Windows' },
+  { badge:'CMD', name:'Prompt de Comando',  cmd:'cmd.exe /k',           color:'#8b929e', key:'Ctrl+2', os:'Windows' },
+  { badge:'WSL', name:'Ubuntu 24.04',       cmd:'wsl.exe -d Ubuntu',    color:'#e0b060', key:'Ctrl+3', os:'Linux' },
+  { badge:'SSH', name:'prod-web-01',        cmd:'ssh deploy@10.4.1.20', color:'#ef8a8a', key:'Ctrl+4', os:'Remoto' },
+  { badge:'ZSH', name:'macOS zsh',          cmd:'/bin/zsh -l',          color:'#a68cf0', key:'Ctrl+5', os:'macOS' },
+  { badge:'PY',  name:'Python 3.12',        cmd:'python -i',            color:'#5ed3bc', key:'Ctrl+6', os:'Multi' }
+];
+
+const SHORTCUTS = [
+  { label:'Nova guia no grupo ativo', key:'Ctrl+T' },
+  { label:'Renomear guia', key:'F2' },
+  { label:'Agrupar guias selecionadas', key:'Ctrl+Shift+G' },
+  { label:'Dividir painel à direita', key:'Alt+Shift+D' },
+  { label:'Paleta de comandos', key:'Ctrl+Shift+P' }
+];
+
+const PANE = {
+  ssh: { title:'deploy@prod-web-01: /srv/porecatu', promptA:'deploy@prod-web-01', promptB:':/srv/porecatu$ ', lines:[
+    L('$ systemctl status porecatu-api'),
+    L('\u25cf porecatu-api.service — Porecatu API', C.dim),
+    L('   Loaded: loaded (/etc/systemd/system/porecatu-api.service; enabled)', C.dim),
+    L('   Active: active (running) since Tue 2026-08-25 09:14:02 -03', C.ok),
+    L(' Main PID: 21874 (node)   Memory: 412.6M', C.dim),
+    L('$ curl -s localhost:8080/healthz'),
+    L('{"status":"ok","db":"ok","queue":"ok","uptime":161038}', C.ac)
+  ]},
+  log: { title:'journalctl -fu porecatu-api', promptA:'deploy@prod-web-01', promptB:':/var/log$ ', lines:[
+    L('09:41:02  INFO   POST /api/v2/orders  201  84ms', C.dim),
+    L('09:41:03  INFO   GET  /api/v2/orders  200  22ms', C.dim),
+    L('09:41:07  WARN   cache miss rate 0.41 (limite 0.35)', C.yel),
+    L('09:41:11  INFO   worker#3 drenou 128 jobs', C.dim),
+    L('09:41:19  ERROR  timeout upstream billing-svc (2 retries)', C.red),
+    L('09:41:24  INFO   billing-svc recuperado em 3.8s', C.ok)
+  ]},
+  sql: { title:'psql — porecatu_prod', promptA:'porecatu_prod', promptB:'=# ', lines:[
+    L('psql (16.3) conexão SSL (TLSv1.3, AES_256_GCM)', C.dim),
+    L('porecatu_prod=# select status, count(*) from orders'),
+    L('porecatu_prod-#   where created_at > now() - interval \'1 day\' group by 1;'),
+    L(' status     | count', C.dim),
+    L('------------+-------', C.dim),
+    L(' paid       |  4128', C.ac),
+    L(' pending    |   317', C.yel),
+    L(' cancelled  |    62', C.dim),
+    L('(3 rows)', C.dim)
+  ]},
+  ci: { title:'runner — pipeline #4821', promptA:'runner', promptB:':~/builds/4821$ ', lines:[
+    L('\u2713 install      12.4s', C.ok),
+    L('\u2713 lint          8.1s', C.ok),
+    L('\u2713 typecheck    19.7s', C.ok),
+    L('\u2713 unit        1m 04s   842 passed', C.ok),
+    L('\u203a bundle      executando…', C.yel),
+    L('  chunks 24/31   1.8 MB gzip   cache hit 91%', C.dim)
+  ]},
+  dev: { title:'vite — porecatu-web', promptA:'vite', promptB:':~/porecatu-web$ ', lines:[
+    L('VITE v6.2.1  ready in 412 ms', C.ac),
+    L('  \u279c Local:   http://localhost:5173/', C.dim),
+    L('  \u279c Network: http://10.0.0.14:5173/', C.dim),
+    L('09:40:51  hmr update /src/tabs/TabStrip.tsx', C.ok),
+    L('09:41:06  hmr update /src/tabs/GroupPill.tsx', C.ok),
+    L('09:41:18  page reload /src/main.tsx', C.yel)
+  ]},
+  e2e: { title:'playwright — e2e', promptA:'test', promptB:':~/porecatu-web$ ', lines:[
+    L('Running 34 tests using 4 workers', C.dim),
+    L('  \u2713 guias \u203a renomeia rótulo com duplo clique (1.2s)', C.ok),
+    L('  \u2713 grupos \u203a expande pílula e mostra contador (0.8s)', C.ok),
+    L('  \u2713 grupos \u203a troca cor do grupo (0.6s)', C.ok),
+    L('  \u2717 panes \u203a arrasta divisor entre painéis (2.1s)', C.red),
+    L('    esperado 640, recebido 612', C.dim),
+    L('  33 passed  1 failed', C.yel)
+  ]},
+  ps: { title:'PowerShell — porecatu-web', promptA:'PS C:\\dev\\porecatu-web', promptB:'> ', lines:[
+    L('PS C:\\dev\\porecatu-web> git status -sb'),
+    L('## feat/tab-groups...origin/feat/tab-groups [ahead 2]', C.ac),
+    L(' M src/tabs/TabStrip.tsx', C.yel),
+    L(' M src/tabs/GroupPill.tsx', C.yel),
+    L('?? src/tabs/RenameField.tsx', C.ok),
+    L('PS C:\\dev\\porecatu-web> git log --oneline -3'),
+    L('a91f2c4 grupos: pílula colapsável com contador', C.dim),
+    L('7b31d08 guias: rótulo editável inline', C.dim),
+    L('12ce4aa panes: divisor redimensionável', C.dim)
+  ]},
+  wsl: { title:'ubuntu@wsl — ~', promptA:'igor@wsl', promptB:':~$ ', lines:[
+    L('$ uname -sr'),
+    L('Linux 6.6.36.6-microsoft-standard-WSL2', C.dim),
+    L('$ docker compose ps'),
+    L('NAME               STATUS         PORTS', C.dim),
+    L('porecatu-postgres  Up 4 hours     5432/tcp', C.ok),
+    L('porecatu-redis     Up 4 hours     6379/tcp', C.ok),
+    L('porecatu-minio     Up 4 hours     9000-9001/tcp', C.ok),
+    L('$ df -h /mnt/c | tail -1'),
+    L('C:\\  931G  612G  319G  66% /mnt/c', C.dim)
+  ]},
+  local: { title:'PowerShell — ~', promptA:'PS C:\\Users\\igor', promptB:'> ', lines:[
+    L('PS C:\\Users\\igor> winget upgrade'),
+    L('Nome              Versão     Disponível', C.dim),
+    L('Git               2.46.0     2.47.1', C.dim),
+    L('Node.js LTS       22.6.0     22.8.0', C.dim),
+    L('2 atualizações disponíveis.', C.yel)
+  ]}
+};
+
+class Component extends DCLogic {
+  state = {
+    groups: [
+      { id:'g1', name:'produção', color:'#ef8a8a', open:true,  collapsed:false },
+      { id:'g2', name:'porecatu-web', color:'#5ed3bc', open:true, collapsed:false },
+      { id:'g3', name:'sandbox', color:'#a68cf0', open:false, collapsed:true }
+    ],
+    tabs: [
+      { id:'t1', gid:'g1', badge:'SSH', label:'prod-web-01', panes:['ssh','log'] },
+      { id:'t2', gid:'g1', badge:'SQL', label:'psql prod',   panes:['sql'] },
+      { id:'t3', gid:'g2', badge:'DEV', label:'vite dev',    panes:['dev'] },
+      { id:'t4', gid:'g2', badge:'CI',  label:'pipeline',    panes:['ci'] },
+      { id:'t5', gid:'g2', badge:'E2E', label:'playwright',  panes:['e2e'] },
+      { id:'t6', gid:'g3', badge:'WSL', label:'ubuntu wsl',  panes:['wsl'] },
+      { id:'t7', gid:null, badge:'PS',  label:'local',       panes:['ps'] }
+    ],
+    activeId: 't1',
+    focusPane: 0,
+    renamingId: null,
+    renameValue: '',
+    editorGid: null,
+    groupNameValue: '',
+    newMenuOpen: false,
+    paletteOpen: false,
+    settingsOpen: false,
+    query: '',
+    settings: [
+      { label:'Cor do grupo na borda da guia', desc:'Pinta a base de cada guia com a cor do grupo', on:true },
+      { label:'Colapsar grupos inativos', desc:'Mostra só a pílula quando o grupo perde o foco', on:false },
+      { label:'Confirmar ao fechar grupo', desc:'Pergunta antes de encerrar várias sessões', on:true },
+      { label:'Restaurar guias na inicialização', desc:'Reabre grupos, rótulos e cores da última sessão', on:true }
+    ],
+    seq: 8
+  };
+
+  componentDidMount() {
+    this._key = (e) => {
+      if (e.key === 'Escape') this.closeAll();
+      if (e.key.toLowerCase() === 'p' && e.ctrlKey && e.shiftKey) { e.preventDefault(); this.setState({ paletteOpen:true, query:'', newMenuOpen:false, settingsOpen:false, editorGid:null }); }
+    };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._key); }
+
+  closeAll = () => this.setState({ newMenuOpen:false, paletteOpen:false, settingsOpen:false, editorGid:null, renamingId:null });
+
+  activeTab() { return this.state.tabs.find(t => t.id === this.state.activeId); }
+
+  selectTab = (id) => this.setState({ activeId:id, focusPane:0, renamingId:null });
+
+  closeTab = (id, e) => {
+    if (e) e.stopPropagation();
+    const tabs = this.state.tabs.filter(t => t.id !== id);
+    const next = this.state.activeId === id ? (tabs.length ? tabs[0].id : 'new') : this.state.activeId;
+    this.setState({ tabs, activeId:next });
+  };
+
+  startRename = (t, e) => {
+    if (e) e.stopPropagation();
+    this.setState({ activeId:t.id, renamingId:t.id, renameValue:t.label });
+  };
+  commitRename = () => {
+    const { renamingId, renameValue } = this.state;
+    if (!renamingId) return;
+    const v = renameValue.trim();
+    this.setState({
+      tabs: this.state.tabs.map(t => t.id === renamingId && v ? { ...t, label:v } : t),
+      renamingId: null
+    });
+  };
+
+  toggleGroup = (g, e) => {
+    if (e) e.stopPropagation();
+    this.setState({ groups: this.state.groups.map(x => x.id === g.id ? { ...x, open: !x.open } : x) });
+  };
+  openEditor = (g, e) => {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    this.setState({ editorGid:g.id, groupNameValue:g.name, newMenuOpen:false, paletteOpen:false, settingsOpen:false });
+  };
+  patchGroup = (gid, patch) => this.setState({ groups: this.state.groups.map(g => g.id === gid ? { ...g, ...patch } : g) });
+
+  launch = (p) => {
+    const at = this.activeTab();
+    const gid = at ? at.gid : null;
+    const id = 't' + this.state.seq;
+    const paneKey = p.badge === 'WSL' ? 'wsl' : p.badge === 'SSH' ? 'ssh' : p.badge === 'PY' ? 'sql' : 'local';
+    this.setState({
+      tabs: [...this.state.tabs, { id, gid, badge:p.badge, label:p.name.toLowerCase(), panes:[paneKey] }],
+      activeId:id, seq:this.state.seq + 1, newMenuOpen:false, focusPane:0
+    });
+  };
+
+  renderVals() {
+    const s = this.state;
+    const at = this.activeTab();
+    const editor = s.groups.find(g => g.id === s.editorGid);
+    const colorOnTab = s.settings[0].on;
+
+    const tabView = (t) => {
+      const active = t.id === s.activeId;
+      const g = s.groups.find(x => x.id === t.gid);
+      const gc = g ? g.color : '#7b838f';
+      return {
+        label: t.label,
+        badge: t.badge,
+        renaming: s.renamingId === t.id,
+        showLabel: s.renamingId !== t.id,
+        bg: active ? '#282e37' : '#191d23',
+        border: active ? '#39404b' : '#22262e',
+        underline: colorOnTab ? gc : 'transparent',
+        fg: active ? '#eaeef3' : '#98a0ab',
+        badgeFg: gc,
+        badgeBg: tint(gc, .14),
+        onSelect: () => this.selectTab(t.id),
+        onRename: (e) => this.startRename(t, e),
+        onClose: (e) => this.closeTab(t.id, e)
+      };
+    };
+
+    const rows = s.groups.map(g => {
+      const tabs = s.tabs.filter(t => t.gid === g.id);
+      return {
+        pill: true,
+        open: g.open,
+        name: g.name,
+        color: g.color,
+        count: tabs.length,
+        caret: g.open ? '90deg' : '0deg',
+        wrapBg: g.open ? tint(g.color, .07) : 'transparent',
+        tabs: tabs.map(tabView),
+        onToggle: (e) => this.toggleGroup(g, e),
+        onEdit: (e) => this.openEditor(g, e)
+      };
+    });
+    const loose = s.tabs.filter(t => !t.gid);
+    if (loose.length) rows.push({ pill:false, open:true, wrapBg:'transparent', tabs:loose.map(tabView), name:'', color:'#7b838f', count:loose.length, caret:'0deg', onToggle:()=>{}, onEdit:()=>{} });
+
+    const paneKeys = at ? at.panes : [];
+    const panes = paneKeys.map((k, i) => {
+      const d = PANE[k] || PANE.local;
+      const g = at && at.gid ? s.groups.find(x => x.id === at.gid) : null;
+      const gc = g ? g.color : '#5ed3bc';
+      return {
+        title: d.title,
+        lines: d.lines,
+        promptA: d.promptA,
+        promptB: d.promptB,
+        promptColor: gc,
+        caretColor: gc,
+        dot: i === s.focusPane ? gc : '#3b434f',
+        focusRing: i === s.focusPane && paneKeys.length > 1 ? gc : 'transparent',
+        onFocus: () => this.setState({ focusPane:i }),
+        onSplit: (e) => {
+          if (e) e.stopPropagation();
+          if (!at || at.panes.length > 2) return;
+          const extra = at.panes.includes('log') ? 'ci' : 'log';
+          this.setState({ tabs: s.tabs.map(t => t.id === at.id ? { ...t, panes:[...t.panes, extra] } : t) });
+        },
+        onClose: (e) => {
+          if (e) e.stopPropagation();
+          if (!at || at.panes.length < 2) return;
+          this.setState({ tabs: s.tabs.map(t => t.id === at.id ? { ...t, panes:t.panes.filter((_, j) => j !== i) } : t), focusPane:0 });
+        }
+      };
+    });
+
+    const profiles = PROFILES.map(p => ({ ...p, tint: tint(p.color, .14), onLaunch: () => this.launch(p) }));
+
+    const q = s.query.trim().toLowerCase();
+    let items = [];
+    s.tabs.forEach(t => {
+      const g = s.groups.find(x => x.id === t.gid);
+      items.push({ kind:'guia', color:'#5ed3bc', label:t.label, hint: g ? 'grupo ' + g.name : 'sem grupo', key:t.badge, run: () => { this.selectTab(t.id); this.closeAll(); } });
+    });
+    s.groups.forEach(g => items.push({ kind:'grupo', color:'#a68cf0', label:g.name, hint: s.tabs.filter(t => t.gid === g.id).length + ' guias · editar rótulo e cor', key:'Ctrl+G', run: () => { this.setState({ paletteOpen:false }); this.openEditor(g); } }));
+    items.push({ kind:'ação', color:'#e0b060', label:'Renomear guia atual', hint:'edita o rótulo inline na barra', key:'F2', run: () => { this.setState({ paletteOpen:false }); if (at) this.startRename(at); } });
+    items.push({ kind:'ação', color:'#e0b060', label:'Dividir painel', hint:'abre um segundo painel na guia atual', key:'Alt+Shift+D', run: () => { if (at && at.panes.length < 3) this.setState({ tabs: s.tabs.map(t => t.id === at.id ? { ...t, panes:[...t.panes, 'ci'] } : t) }); this.closeAll(); } });
+    items.push({ kind:'ação', color:'#e0b060', label:'Nova guia', hint:'escolher perfil', key:'Ctrl+T', run: () => this.setState({ paletteOpen:false, activeId:'new' }) });
+    items.push({ kind:'ação', color:'#e0b060', label:'Configurações', hint:'guias, grupos, perfis e atalhos', key:'Ctrl+,', run: () => this.setState({ paletteOpen:false, settingsOpen:true }) });
+    const filtered = items.filter(i => !q || (i.label + ' ' + i.hint + ' ' + i.kind).toLowerCase().includes(q));
+
+    return {
+      rows, panes, profiles,
+      shortcuts: SHORTCUTS,
+      activeLabel: at ? at.label : 'nova guia',
+      statusShell: at ? (PROFILES.find(p => p.badge === at.badge) || { name:'shell' }).name : 'nenhuma sessão',
+      statusCwd: panes.length ? (panes[Math.min(s.focusPane, panes.length - 1)].promptA + panes[Math.min(s.focusPane, panes.length - 1)].promptB).trim() : '—',
+      statusGroup: at && at.gid ? 'grupo: ' + (s.groups.find(g => g.id === at.gid) || {}).name : 'sem grupo',
+      statusPanes: panes.length === 1 ? '1 painel' : panes.length + ' painéis',
+      isNewTab: !at,
+      hasPanes: !!at,
+      renameValue: s.renameValue,
+      onRenameChange: (e) => this.setState({ renameValue:e.target.value }),
+      onRenameCommit: this.commitRename,
+      onRenameKey: (e) => { if (e.key === 'Enter') this.commitRename(); if (e.key === 'Escape') this.setState({ renamingId:null }); },
+      onNewMenu: (e) => { e.stopPropagation(); this.setState({ newMenuOpen: !s.newMenuOpen, paletteOpen:false, settingsOpen:false, editorGid:null }); },
+      onPalette: (e) => { e.stopPropagation(); this.setState({ paletteOpen:true, query:'', newMenuOpen:false, settingsOpen:false, editorGid:null }); },
+      onSettings: (e) => { e.stopPropagation(); this.setState({ settingsOpen:true, newMenuOpen:false, paletteOpen:false, editorGid:null }); },
+      onCloseAll: this.closeAll,
+      stop: (e) => e.stopPropagation(),
+      anyOverlay: s.newMenuOpen || !!s.editorGid,
+      newMenuOpen: s.newMenuOpen,
+      paletteOpen: s.paletteOpen,
+      settingsOpen: s.settingsOpen,
+      editorOpen: !!editor,
+      editorLeft: (24 + s.groups.findIndex(g => g.id === s.editorGid) * 40) + 'px',
+      editorCount: editor ? s.tabs.filter(t => t.gid === editor.id).length : 0,
+      collapseLabel: editor && editor.open ? 'Colapsar grupo' : 'Expandir grupo',
+      groupNameValue: s.groupNameValue,
+      onGroupNameChange: (e) => { this.setState({ groupNameValue:e.target.value }); if (editor) this.patchGroup(editor.id, { name:e.target.value }); },
+      onGroupNameKey: (e) => { if (e.key === 'Enter') this.setState({ editorGid:null }); },
+      swatches: PALETTE.map(c => ({ color:c, ring: editor && editor.color === c ? '#eef2f4' : 'transparent', onPick: () => editor && this.patchGroup(editor.id, { color:c }) })),
+      onCollapseGroup: () => editor && this.patchGroup(editor.id, { open: !editor.open }),
+      onUngroup: () => { if (!editor) return; this.setState({ tabs: s.tabs.map(t => t.gid === editor.id ? { ...t, gid:null } : t), groups: s.groups.filter(g => g.id !== editor.id), editorGid:null }); },
+      onCloseGroup: () => { if (!editor) return; const tabs = s.tabs.filter(t => t.gid !== editor.id); this.setState({ tabs, groups: s.groups.filter(g => g.id !== editor.id), editorGid:null, activeId: tabs.length ? tabs[0].id : 'new' }); },
+      onNewGroup: () => { const id = 'g' + s.seq; this.setState({ groups:[...s.groups, { id, name:'novo grupo', color:PALETTE[s.seq % PALETTE.length], open:true }], seq:s.seq + 1, newMenuOpen:false, editorGid:id, groupNameValue:'novo grupo' }); },
+      query: s.query,
+      onQuery: (e) => this.setState({ query:e.target.value }),
+      onQueryKey: (e) => { if (e.key === 'Enter' && filtered[0]) filtered[0].run(); },
+      noResults: filtered.length === 0,
+      results: filtered.map((r, i) => ({ ...r, tint: tint(r.color, .14), bg: i === 0 && q ? '#242a33' : 'transparent', onRun: r.run })),
+      settingRows: s.settings.map((x, i) => ({
+        label:x.label, desc:x.desc,
+        trackBg: x.on ? '#3f8f80' : '#2a3038',
+        knobX: x.on ? '15px' : '0px',
+        onToggle: () => this.setState({ settings: s.settings.map((y, j) => j === i ? { ...y, on: !y.on } : y) })
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>

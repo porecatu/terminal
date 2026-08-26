@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Porecatu — mockup estático</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ------------------------------------------------------------------
+     Render estático do estado padrão do design canvas.
+     Sem JavaScript, sem runtime. Valores idênticos aos da
+     especificacao-visual.md — se divergirem, a especificação vence.
+     ------------------------------------------------------------------ */
+  :root {
+    --desktop:#08090b; --window:#15181d; --bar:#1b1f26; --term:#0f1216;
+    --tab-active:#282e37; --tab-inactive:#191d23; --pill:#1f242c; --count:#12151a;
+    --b-window:#2a2f38; --b-bar:#23272f; --b-ctrl:#262b34;
+    --b-tab-active:#39404b; --b-tab-inactive:#22262e; --b-pill:#2b313b; --b-pane:#1c2027;
+    --t-max:#eaeef3; --t-high:#e4e8ee; --t-body:#c7ccd6; --t-group:#c3cad3;
+    --t-2:#9aa2ae; --t-tab-inactive:#98a0ab; --t-3:#7b838f; --t-pane:#828a96;
+    --t-4:#6b737e; --t-dim:#6f7783; --t-5:#5c646f; --t-close:#727a86;
+    --accent:#5ed3bc; --ok:#86c56a; --warn:#e0b060; --err:#ef8a8a;
+    --g1:#ef8a8a; --g2:#5ed3bc; --g3:#a68cf0; --g-none:#7b838f;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; padding:0; background:var(--desktop); }
+  body {
+    font-family:'IBM Plex Sans', system-ui, sans-serif;
+    min-height:100vh; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; padding:28px; gap:16px;
+  }
+  .mono { font-family:'IBM Plex Mono', monospace; }
+
+  .window {
+    width:100%; max-width:1420px; height:calc(100vh - 130px); min-height:660px;
+    display:flex; flex-direction:column; background:var(--window);
+    border:1px solid var(--b-window); border-radius:8px; overflow:hidden;
+    box-shadow:0 32px 80px rgba(0,0,0,.6); position:relative;
+  }
+
+  /* marcação de fase — não faz parte do design, é andaime desta página */
+  .v2 { position:relative; }
+  .v2::after {
+    content:"v2"; position:absolute; top:2px; right:2px; z-index:5;
+    font-family:'IBM Plex Mono',monospace; font-size:7.5px; line-height:1;
+    color:#0f1216; background:var(--warn); border-radius:2px; padding:1.5px 3px;
+    pointer-events:none; opacity:.85;
+  }
+
+  /* --- barra de título [v2] --- */
+  .titlebar {
+    display:flex; align-items:center; justify-content:space-between; height:36px;
+    padding-left:12px; background:var(--bar); border-bottom:1px solid var(--b-bar); flex:none;
+  }
+  .brand { display:flex; align-items:center; gap:9px; }
+  .logo {
+    width:14px; height:14px; border-radius:3px; border:1.5px solid var(--accent);
+    display:flex; align-items:center; justify-content:center;
+    font-family:'IBM Plex Mono',monospace; font-size:8px; color:var(--accent); line-height:1;
+  }
+  .brand .name { font-size:12px; font-weight:500; color:var(--t-2); letter-spacing:.2px; }
+  .brand .sub  { font-size:11px; color:var(--t-5); }
+  .wincontrols { display:flex; align-items:stretch; height:100%; }
+  .wincontrols > div {
+    width:44px; display:flex; align-items:center; justify-content:center;
+    color:#8b929e; font-size:11px;
+  }
+
+  /* --- barra de abas [v1] --- */
+  .tabbar {
+    display:flex; align-items:center; gap:8px; padding:6px 10px;
+    background:var(--bar); border-bottom:1px solid var(--b-bar); flex:none; min-width:0;
+  }
+  .track {
+    flex:1; min-width:0; display:flex; align-items:center; gap:6px;
+    overflow-x:auto; overflow-y:hidden; padding-bottom:1px;
+  }
+  .group { display:flex; align-items:center; gap:4px; padding:3px; border-radius:8px; }
+  .pill {
+    display:flex; align-items:center; gap:7px; height:30px; padding:0 9px 0 8px;
+    border-radius:6px; background:var(--pill); border:1px solid var(--b-pill); cursor:pointer;
+  }
+  .pill .swatch { width:8px; height:8px; border-radius:2px; flex:none; }
+  .pill .gname  { font-size:12px; font-weight:500; color:var(--t-group); white-space:nowrap; }
+  .pill .count  {
+    font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--t-3);
+    background:var(--count); border-radius:9px; padding:1px 6px;
+  }
+  .pill .caret { font-size:8px; color:var(--t-4); display:inline-block; }
+
+  .tab {
+    display:flex; align-items:center; gap:8px; height:30px; padding:0 6px 0 10px;
+    border-radius:6px; cursor:pointer;
+    background:var(--tab-inactive); border:1px solid var(--b-tab-inactive);
+  }
+  .tab.active { background:var(--tab-active); border-color:var(--b-tab-active); }
+  .tab .badge {
+    font-family:'IBM Plex Mono',monospace; font-size:9px; font-weight:500;
+    border-radius:3px; padding:2px 4px; letter-spacing:.4px;
+  }
+  .tab .label {
+    font-size:12.5px; white-space:nowrap; max-width:180px;
+    overflow:hidden; text-overflow:ellipsis; color:var(--t-tab-inactive);
+  }
+  .tab.active .label { color:var(--t-max); }
+  .tab .x {
+    width:17px; height:17px; border-radius:4px; display:flex;
+    align-items:center; justify-content:center; font-size:10px; color:var(--t-close);
+  }
+  .rename {
+    width:120px; background:#0e1116; border:1px solid var(--accent); border-radius:4px;
+    color:var(--t-high); font-size:12px; padding:2px 5px; font-family:inherit;
+  }
+
+  .barbtn {
+    width:30px; height:30px; flex:none; border-radius:6px; display:flex;
+    align-items:center; justify-content:center; color:var(--t-2);
+    border:1px solid var(--b-ctrl); cursor:pointer;
+  }
+  .search {
+    display:flex; align-items:center; gap:8px; height:30px; padding:0 10px;
+    border-radius:6px; background:var(--count); border:1px solid var(--b-ctrl);
+    cursor:pointer; flex:none;
+  }
+  .search .lbl { font-size:11px; color:var(--t-4); white-space:nowrap; }
+  .kbd {
+    font-family:'IBM Plex Mono',monospace; font-size:9.5px; color:var(--t-3);
+    background:#1d222a; border-radius:3px; padding:2px 5px;
+  }
+
+  /* --- área de terminal [v1] --- */
+  .surface { flex:1; display:flex; min-height:0; background:var(--term); }
+  .panes   { flex:1; display:flex; min-width:0; gap:1px; background:var(--b-bar); }
+  .pane {
+    flex:1; min-width:0; display:flex; flex-direction:column;
+    background:var(--term); border-top:2px solid transparent;
+  }
+  .pane.focused { border-top-color:var(--g1); }
+  .panehead {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:7px 12px; border-bottom:1px solid var(--b-pane); flex:none;
+  }
+  .panehead .left { display:flex; align-items:center; gap:8px; min-width:0; }
+  .dot { width:6px; height:6px; border-radius:50%; flex:none; background:#3b434f; }
+  .pane.focused .dot { background:var(--g1); }
+  .panehead .title {
+    font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--t-pane);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .panebtns { display:flex; align-items:center; gap:6px; flex:none; }
+  .panebtns span {
+    width:22px; height:20px; border-radius:4px; display:flex;
+    align-items:center; justify-content:center; color:var(--t-4); font-size:11px;
+  }
+  .content {
+    flex:1; overflow:hidden; padding:12px 14px;
+    font-family:'IBM Plex Mono',monospace; font-size:12.5px; line-height:1.75;
+    display:flex; flex-direction:column; color:var(--t-body);
+  }
+  .content div { white-space:pre-wrap; word-break:break-word; }
+  .dim { color:var(--t-dim); } .ok { color:var(--ok); }
+  .warn { color:var(--warn); } .err { color:var(--err); } .ac { color:var(--accent); }
+  .prompt { display:flex; align-items:center; margin-top:2px; }
+  .caret-blk {
+    width:7px; height:15px; margin-left:6px; background:var(--g1);
+    animation:blink 1.1s step-end infinite;
+  }
+  @keyframes blink { 0%,49% { opacity:1 } 50%,100% { opacity:0 } }
+
+  /* --- barra de status [v2] --- */
+  .status {
+    display:flex; align-items:center; justify-content:space-between; height:26px;
+    padding:0 12px; background:var(--bar); border-top:1px solid var(--b-bar); flex:none;
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--t-4);
+  }
+  .status > div { display:flex; align-items:center; gap:16px; }
+
+  /* --- editor de grupo [v1], mostrado aberto --- */
+  .editor {
+    position:absolute; top:76px; left:24px; z-index:23; width:286px;
+    background:#1a1e25; border:1px solid #2e343e; border-radius:8px; padding:14px;
+    box-shadow:0 18px 44px rgba(0,0,0,.55); display:flex; flex-direction:column; gap:13px;
+  }
+  .seclabel {
+    font-size:10px; letter-spacing:.7px; text-transform:uppercase; color:var(--t-5);
+  }
+  .ginput {
+    width:100%; background:var(--term); border:1px solid #333a45; border-radius:5px;
+    color:var(--t-high); font-size:13px; padding:7px 9px; font-family:inherit;
+  }
+  .swatches { display:flex; gap:8px; }
+  .swatches div {
+    width:28px; height:28px; border-radius:6px; border:2px solid transparent; cursor:pointer;
+  }
+  .swatches div.sel { border-color:#eef2f4; }
+  .rule { height:1px; background:var(--b-window); }
+  .menuitem {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:7px 8px; border-radius:5px; cursor:pointer;
+    font-size:12.5px; color:#d7dce3;
+  }
+  .menuitem.danger { color:#e08585; }
+
+  /* --- legenda desta página, fora do design --- */
+  .legend {
+    width:100%; max-width:1420px; display:flex; align-items:center; gap:14px;
+    font-size:11.5px; color:var(--t-5); flex-wrap:wrap;
+  }
+  .legend b { color:var(--t-4); font-weight:500; }
+  .legend .chip {
+    font-family:'IBM Plex Mono',monospace; font-size:8px; color:#0f1216;
+    background:var(--warn); border-radius:2px; padding:1.5px 3px;
+  }
+  .legend a { color:var(--accent); text-decoration:none; }
+  .legend a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+
+<div class="window">
+
+  <!-- ============ barra de título [v2] ============ -->
+  <div class="titlebar v2">
+    <div class="brand">
+      <div class="logo">&gt;</div>
+      <span class="name">Porecatu</span>
+      <span class="sub">—</span>
+      <span class="sub">prod-web-01</span>
+    </div>
+    <div class="wincontrols">
+      <div>&#8211;</div>
+      <div style="font-size:10px">&#9633;</div>
+      <div>&#10005;</div>
+    </div>
+  </div>
+
+  <!-- ============ barra de abas [v1] ============ -->
+  <div class="tabbar">
+    <div class="track">
+
+      <!-- grupo "produção" — expandido, cor #ef8a8a -->
+      <div class="group" style="background:rgba(239,138,138,.07)">
+        <div class="pill">
+          <span class="swatch" style="background:var(--g1)"></span>
+          <span class="gname">produção</span>
+          <span class="count">2</span>
+          <span class="caret" style="transform:rotate(90deg)">&#9654;</span>
+        </div>
+        <div class="tab active" style="box-shadow:inset 0 -2px 0 var(--g1)">
+          <span class="badge v2" style="color:var(--g1);background:rgba(239,138,138,.14)">SSH</span>
+          <span class="label">prod-web-01</span>
+          <span class="x">&#10005;</span>
+        </div>
+        <div class="tab" style="box-shadow:inset 0 -2px 0 var(--g1)">
+          <span class="badge v2" style="color:var(--g1);background:rgba(239,138,138,.14)">SQL</span>
+          <span class="label">psql prod</span>
+          <span class="x">&#10005;</span>
+        </div>
+      </div>
+
+      <!-- grupo "porecatu-web" — expandido, cor #5ed3bc; 3ª aba em rename -->
+      <div class="group" style="background:rgba(94,211,188,.07)">
+        <div class="pill">
+          <span class="swatch" style="background:var(--g2)"></span>
+          <span class="gname">porecatu-web</span>
+          <span class="count">3</span>
+          <span class="caret" style="transform:rotate(90deg)">&#9654;</span>
+        </div>
+        <div class="tab" style="box-shadow:inset 0 -2px 0 var(--g2)">
+          <span class="badge v2" style="color:var(--g2);background:rgba(94,211,188,.14)">DEV</span>
+          <span class="label">vite dev</span>
+          <span class="x">&#10005;</span>
+        </div>
+        <div class="tab" style="box-shadow:inset 0 -2px 0 var(--g2)">
+          <span class="badge v2" style="color:var(--g2);background:rgba(94,211,188,.14)">CI</span>
+          <span class="label">pipeline</span>
+          <span class="x">&#10005;</span>
+        </div>
+        <!-- estado de rename inline [v1] -->
+        <div class="tab" style="box-shadow:inset 0 -2px 0 var(--g2)">
+          <span class="badge v2" style="color:var(--g2);background:rgba(94,211,188,.14)">E2E</span>
+          <input class="rename" value="playwright" readonly>
+          <span class="x">&#10005;</span>
+        </div>
+      </div>
+
+      <!-- grupo "sandbox" — colapsado, cor #a68cf0: só a pílula -->
+      <div class="group">
+        <div class="pill">
+          <span class="swatch" style="background:var(--g3)"></span>
+          <span class="gname">sandbox</span>
+          <span class="count">1</span>
+          <span class="caret">&#9654;</span>
+        </div>
+      </div>
+
+      <!-- aba sem grupo: wrapper sem pílula, sem tingimento (ADR-0006) -->
+      <div class="group">
+        <div class="tab">
+          <span class="badge v2" style="color:var(--g-none);background:rgba(123,131,143,.14)">PS</span>
+          <span class="label">local</span>
+          <span class="x">&#10005;</span>
+        </div>
+      </div>
+
+      <div class="barbtn" style="font-size:15px">+</div>
+    </div>
+
+    <div class="search v2">
+      <span class="lbl">Buscar</span>
+      <span class="kbd">Ctrl+Shift+P</span>
+    </div>
+    <div class="barbtn v2" style="font-size:13px">&#9881;</div>
+  </div>
+
+  <!-- ============ área de terminal ============ -->
+  <div class="surface">
+    <div class="panes">
+
+      <!-- painel focado -->
+      <div class="pane focused">
+        <div class="panehead v2">
+          <div class="left">
+            <span class="dot"></span>
+            <span class="title">deploy@prod-web-01: /srv/porecatu</span>
+          </div>
+          <div class="panebtns">
+            <span>&#9707;</span>
+            <span style="font-size:10px">&#10005;</span>
+          </div>
+        </div>
+        <div class="content">
+          <div>$ systemctl status porecatu-api</div>
+          <div class="dim">&#9679; porecatu-api.service — Porecatu API</div>
+          <div class="dim">   Loaded: loaded (/etc/systemd/system/porecatu-api.service; enabled)</div>
+          <div class="ok">   Active: active (running) since Tue 2026-08-25 09:14:02 -03</div>
+          <div class="dim"> Main PID: 21874 (node)   Memory: 412.6M</div>
+          <div>$ curl -s localhost:8080/healthz</div>
+          <div class="ac">{"status":"ok","db":"ok","queue":"ok","uptime":161038}</div>
+          <div class="prompt">
+            <span style="color:var(--g1)">deploy@prod-web-01</span><span style="color:var(--t-4)">:/srv/porecatu$ </span>
+            <span class="caret-blk"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- segundo painel [v2] -->
+      <div class="pane v2">
+        <div class="panehead">
+          <div class="left">
+            <span class="dot"></span>
+            <span class="title">journalctl -fu porecatu-api</span>
+          </div>
+          <div class="panebtns">
+            <span>&#9707;</span>
+            <span style="font-size:10px">&#10005;</span>
+          </div>
+        </div>
+        <div class="content">
+          <div class="dim">09:41:02  INFO   POST /api/v2/orders  201  84ms</div>
+          <div class="dim">09:41:03  INFO   GET  /api/v2/orders  200  22ms</div>
+          <div class="warn">09:41:07  WARN   cache miss rate 0.41 (limite 0.35)</div>
+          <div class="dim">09:41:11  INFO   worker#3 drenou 128 jobs</div>
+          <div class="err">09:41:19  ERROR  timeout upstream billing-svc (2 retries)</div>
+          <div class="ok">09:41:24  INFO   billing-svc recuperado em 3.8s</div>
+          <div class="prompt">
+            <span style="color:var(--g1)">deploy@prod-web-01</span><span style="color:var(--t-4)">:/var/log$ </span>
+            <span class="caret-blk" style="background:#3b434f;animation:none"></span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ barra de status [v2] ============ -->
+  <div class="status v2">
+    <div>
+      <span style="color:var(--accent)">prod-web-01</span>
+      <span>deploy@prod-web-01:/srv/porecatu$</span>
+      <span>grupo: produção</span>
+    </div>
+    <div>
+      <span>UTF-8</span>
+      <span>2 painéis</span>
+      <span>Windows 11 · 1.4.2</span>
+    </div>
+  </div>
+
+  <!-- ============ editor de grupo [v1], aberto sobre "produção" ============ -->
+  <div class="editor">
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <span class="seclabel">Rótulo do grupo</span>
+      <input class="ginput" value="produção" readonly>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <span class="seclabel">Cor</span>
+      <div class="swatches">
+        <div class="sel" style="background:#ef8a8a"></div>
+        <div style="background:#e0b060"></div>
+        <div style="background:#5ed3bc"></div>
+        <div style="background:#6fa8f5"></div>
+        <div style="background:#a68cf0"></div>
+        <div style="background:#86c56a"></div>
+      </div>
+    </div>
+    <div class="rule"></div>
+    <div style="display:flex;flex-direction:column;gap:2px">
+      <div class="menuitem">
+        <span>Colapsar grupo</span>
+        <span class="mono" style="font-size:9.5px;color:var(--t-5)">Ctrl+Shift+K</span>
+      </div>
+      <div class="menuitem">Desagrupar abas</div>
+      <div class="menuitem danger">Fechar grupo (2 abas)</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <span><b>Estado mostrado:</b> 3 grupos (um colapsado), 1 aba solta, aba em rename inline, editor de grupo aberto, 2 painéis.</span>
+  <span><span class="chip">v2</span> marca elemento fora do escopo do v1 — não é parte do design, é andaime desta página.</span>
+  <span>Referência: <a href="especificacao-visual.md">especificacao-visual.md</a> · <a href="README.md">README</a></span>
+</div>
+
+</body>
+</html>

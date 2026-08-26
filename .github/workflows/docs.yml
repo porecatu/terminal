@@ -1,0 +1,49 @@
+name: docs
+
+# O Porecatu está em fase de documentação: este é o workflow que roda de
+# verdade hoje. Ver docs/roadmap.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verificar documentação
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Links relativos, TOML, tokens sem origem na especificação visual e
+      # cobertura da tabela de fases do design.
+      - name: Consistência da documentação
+        run: python scripts/verify-docs.py
+
+      # O texto da GPL-3.0 é imutável. Alteração aqui é acidente (fim de
+      # linha, editor) ou adulteração — nos dois casos, falha.
+      - name: Integridade do LICENSE
+        run: |
+          esperado=3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
+          obtido=$(sha256sum LICENSE | cut -d' ' -f1)
+          if [ "$obtido" != "$esperado" ]; then
+            echo "::error file=LICENSE::LICENSE foi alterado."
+            echo "  esperado: $esperado"
+            echo "  obtido:   $obtido"
+            echo "O texto da GPL-3.0 não deve ser editado. Para restaurar:"
+            echo "  curl -sSL https://www.gnu.org/licenses/gpl-3.0.txt -o LICENSE"
+            exit 1
+          fi
+          echo "LICENSE íntegro (GPL-3.0, sha256 confere)."

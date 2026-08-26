@@ -1,0 +1,61 @@
+name: Propor recurso
+description: Sugerir uma funcionalidade ou mudança de comportamento
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Antes de abrir: boa parte do produto **já está decidida e escrita**.
+
+        - [`docs/prd/`](../../tree/main/docs/prd) — requisitos (PRD-000 a 005
+          aprovados; 006 a 009 em rascunho, fase v2)
+        - [`docs/adr/`](../../tree/main/docs/adr) — decisões arquiteturais
+        - [tabela de fases](../../blob/main/docs/design/especificacao-visual.md) —
+          o que é `[v1]` e o que é `[v2]` no design
+        - [não-objetivos do v1](../../blob/main/docs/prd/prd-000-visao-de-produto.md)
+
+        Se a sua ideia já está lá, comente na issue existente em vez de abrir
+        outra. Se ela **contraria** uma decisão aceita, diga isso — mudar
+        decisão exige ADR novo, não edição do antigo.
+
+  - type: textarea
+    id: problema
+    attributes:
+      label: Qual problema isso resolve
+      description: Descreva a necessidade, não a solução.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposta
+    attributes:
+      label: Proposta
+      description: Como você imagina que funcionaria.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cobertura
+    attributes:
+      label: Isso já está coberto pela documentação existente?
+      description: Verifique nos links acima antes de responder.
+      options:
+        - 'Não — é assunto novo'
+        - 'Parcialmente — existe PRD/ADR relacionado, mas não cobre isto'
+        - 'Está como [v2] no design, quero discutir antecipar'
+        - 'Está como não-objetivo do v1, quero propor reabrir'
+    validations:
+      required: true
+
+  - type: input
+    id: referencia
+    attributes:
+      label: PRD, ADR ou seção relacionada
+      description: Se houver, informe qual.
+      placeholder: PRD-002, ADR-0006, especificação visual seção 2.4
+
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Alternativas consideradas
+      description: O que mais resolveria o mesmo problema, e por que é pior.

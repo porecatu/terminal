@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# Rust
+# ---------------------------------------------------------------------------
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock NÃO é ignorado.
+# Porecatu é uma aplicação, não uma biblioteca: a convenção do Cargo é
+# versionar o lock em binários. Aqui isso pesa mais que o normal, porque
+# ADR-0001 e ADR-0002 exigem versões pinadas de wgpu e alacritty_terminal.
+# Ver docs/adr/0001-stack-de-gui.md e docs/adr/0002-motor-vte.md.
+
+# ---------------------------------------------------------------------------
+# Editores
+# ---------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Sistemas operacionais
+# ---------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# ---------------------------------------------------------------------------
+# Ferramentas locais
+# ---------------------------------------------------------------------------
+.claude/settings.local.json
+
+# ---------------------------------------------------------------------------
+# Diversos
+# ---------------------------------------------------------------------------
+*.log
+*.tmp
+*.bak
+/dist/

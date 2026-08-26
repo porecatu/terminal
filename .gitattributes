@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Normalização de fim de linha
+#
+# Não é opcional neste projeto: o desenvolvimento acontece em Windows e o CI
+# roda também em Linux e macOS. Sem isto, arquivos gravados com CRLF quebram
+# scripts e produzem diffs inteiros a cada troca de plataforma.
+# ---------------------------------------------------------------------------
+* text=auto eol=lf
+
+# ---------------------------------------------------------------------------
+# Tipos explícitos
+# ---------------------------------------------------------------------------
+*.rs      text diff=rust
+*.toml    text
+*.md      text diff=markdown
+*.html    text
+*.py      text diff=python
+*.yml     text
+*.yaml    text
+*.json    text
+*.wgsl    text
+
+# Scripts de shell precisam de LF mesmo em Windows.
+*.sh      text eol=lf
+
+# ---------------------------------------------------------------------------
+# Binários — nunca normalizar nem tentar fazer diff
+# ---------------------------------------------------------------------------
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.icns    binary
+*.ttf     binary
+*.otf     binary
+*.woff    binary
+*.woff2   binary
+*.pdf     binary
+
+# ---------------------------------------------------------------------------
+# Estatísticas de linguagem do GitHub
+# ---------------------------------------------------------------------------
+# Cópia verbatim do canvas Claude Design: é material externo, não código do
+# projeto. Ver docs/design/README.md.
+*.dc.html          linguist-vendored
+
+# O repositório é majoritariamente documentação nesta fase; sem isto o GitHub
+# classificaria o projeto como HTML.
+docs/**            linguist-documentation
+*.md               linguist-documentation
+LICENSE            linguist-generated

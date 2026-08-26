@@ -1,0 +1,27 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    # ADR-0001 e ADR-0002 exigem versões pinadas com igualdade exata.
+    # `wgpu` quebra API a cada release e `alacritty_terminal` não segue
+    # SemVer estável — o ADR-0002 diz explicitamente que atualizá-lo é
+    # tarefa deliberada, com changelog na mão. Um PR automático de bump
+    # contrariaria uma decisão registrada, então estes dois ficam de fora.
+    ignore:
+      - dependency-name: wgpu
+      - dependency-name: alacritty_terminal
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci

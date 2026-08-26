@@ -1,0 +1,426 @@
+##############################################################################
+# Porecatu — configuração de referência
+#
+# Todos os valores mostrados aqui são os DEFAULTS. Nenhuma chave é obrigatória:
+# apagar este arquivo inteiro produz exatamente o mesmo comportamento.
+#
+# Local do arquivo:
+#   Linux    $XDG_CONFIG_HOME/porecatu/porecatu.toml  (~/.config/porecatu/)
+#   macOS    ~/.config/porecatu/porecatu.toml
+#   Windows  %APPDATA%\porecatu\porecatu.toml
+#
+# Override: --config <caminho>  ou  variável PORECATU_CONFIG
+#
+# Recarga a quente: salvar o arquivo aplica as mudanças em menos de 500 ms.
+# Config inválida NÃO derruba o app — mantém a anterior e mostra o erro.
+#
+# Governança de cada seção:
+#   [general] [shell]        PRD-000, PRD-001
+#   [appearance.*]           PRD-004  (aparência do chrome)
+#   [terminal.*] [[themes]]  PRD-005  (aparência do terminal)
+#   [keybindings]            ADR-0008
+#   [session]                PRD-003
+#
+# ORIGEM DOS VALORES DE APARÊNCIA
+# Cores, dimensões, raios e espaçamentos vêm do design canvas, via
+# docs/design/especificacao-visual.md (seção 1, Tokens). Não são arbitrários:
+# o binário com estes defaults deve bater com docs/design/mockup-estatico.html.
+# Divergência visível entre os dois é bug de implementação. Ver ADR-0009.
+#
+# Chaves marcadas [v2] descrevem elementos desenhados no canvas mas fora do
+# escopo do v1. Estão aqui para reserva de nome; não implementar ainda.
+#
+# Cores aceitam "#rrggbb", "#rrggbbaa" ou "transparent".
+##############################################################################
+
+
+[general]
+# Pede confirmação ao fechar aba com processo em primeiro plano != shell.  RF-1.6
+confirm_close_with_process = true
+# Pede confirmação ao fechar uma janela com mais de uma aba.
+confirm_close_window = true
+# Diretório da primeira aba de uma sessão nova. "home" ou um caminho absoluto.
+# Abas criadas depois herdam o diretório da aba ativa.  RF-1.1
+startup_directory = "home"
+
+
+[shell]
+# Vazio = detecta automaticamente:
+#   Linux    $SHELL -> /bin/sh
+#   macOS    $SHELL -> /bin/zsh
+#   Windows  pwsh.exe -> powershell.exe -> cmd.exe
+program = ""
+args = []
+
+# Variáveis injetadas no ambiente de cada shell. TERM é definido pelo app.
+[shell.env]
+# EDITOR = "vim"
+
+
+##############################################################################
+# APARÊNCIA DO CHROME — PRD-004
+##############################################################################
+
+[appearance.window]
+padding_x = 0              # espaçamento interno horizontal da janela   RF-4.1
+padding_y = 0              # espaçamento interno vertical
+opacity = 1.0              # 0.0 a 1.0; opacidade da janela inteira      RF-4.1
+background = "#15181d"     # corpo da janela, atrás das barras
+border = "#2a2f38"
+corner_radius = 8
+# Decorações do sistema. O design mostra uma barra de título própria,
+# mas ela é [v2]: reimplementar arrasto, snap e maximização nas três
+# plataformas é caro e arriscado. Default do v1 = nativo. Ver ADR-0009.
+decorations = true                                                     # RF-4.1
+tab_bar_position = "top"   # "top" | "bottom"                            RF-4.1
+
+
+[appearance.tabs]
+# --- dimensões ------------------------------------------------------- RF-4.3
+# Design: aba h30 + padding 6px da barra = 42px de altura total da barra.
+height = 42                # altura da barra, em px lógicos
+tab_height = 30            # altura da aba dentro da barra
+min_width = 90             # piso do encolhimento antes de a barra rolar RF-4.5
+max_width = 260            # rótulo trunca em 180px de texto
+padding_left = 10          # design usa padding assimétrico: 0 6px 0 10px
+padding_right = 6          # menor à direita por causa do botão de fechar
+gap = 4                    # espaço entre abas do mesmo grupo
+corner_radius = 6          # 0 = abas retangulares                       RF-4.4
+
+# --- fonte do título -------------------------------------------------- RF-4.10
+font_family = "IBM Plex Sans"
+font_size = 12.5
+
+# --- elementos visíveis ------------------------------------- RF-4.11, RF-4.12
+show_close_button = "always" # "always" | "hover" | "never"; design usa always
+show_index = false           # número da aba antes do título
+show_activity_indicator = true   # RF-1.20 — sem desenho aprovado ainda
+show_bell_indicator = true       # RF-1.21 — sem desenho aprovado ainda
+show_new_tab_button = true
+show_profile_badge = true    # [v2] badge de perfil na aba   RF-4.23, PRD-007
+# Oculta a barra inteira quando existe apenas uma aba.                   RF-4.2
+hide_when_single_tab = false
+
+
+[appearance.tabs.colors]
+# --- barra ------------------------------------------------------------ RF-4.7
+bar_background = "#1b1f26"
+bar_border = "#23272f"        # separador na base da barra
+
+# --- estados da aba --------------------------------------------------- RF-4.6
+# O design não define hover por cor: aplica filtro de brilho sobre o
+# estado atual. Com 6 cores de grupo, cor de hover exigiria 12 tokens.
+active_background = "#282e37"
+active_foreground = "#eaeef3"
+inactive_background = "#191d23"
+inactive_foreground = "#98a0ab"
+hover_brightness = 1.18       # multiplicador aplicado no hover da aba
+close_button_foreground = "#727a86"
+close_button_hover_background = "#39404b"
+close_button_hover_foreground = "#e4e8ee"
+
+# --- bordas ----------------------------------------------------------- RF-4.7
+# A aba ativa é distinguível por fundo, borda E cor de texto — nunca só
+# por matiz.                                                            RF-4.21
+active_border = "#39404b"
+inactive_border = "#22262e"
+active_border_width = 1
+selected_border = "#5ed3bc"   # aba em seleção múltipla; sem desenho     RF-2.2
+selected_border_width = 2
+
+# --- indicadores ------------------------------------------------------ RF-4.8
+# Sem desenho aprovado no canvas; ver especificacao-visual.md seção 4.2.
+activity_indicator = "#86c56a"
+bell_indicator = "#ef8a8a"
+
+# --- campo de rename inline ------------------------------------------- RF-1.8
+rename_background = "#0e1116"
+rename_border = "#5ed3bc"
+
+
+[appearance.groups]
+# --- pílula do grupo -------------------------------------------------- RF-4.13
+label_padding_left = 8
+label_padding_right = 9
+label_font_size = 12.0
+label_corner_radius = 6
+label_background = "#1f242c"
+label_border = "#2b313b"
+label_foreground = "#c3cad3"
+label_hover_brightness = 1.25
+swatch_size = 8               # quadrado de cor à esquerda do nome
+swatch_corner_radius = 2
+count_background = "#12151a"  # contador de abas no rótulo
+count_foreground = "#7b838f"
+count_corner_radius = 9
+caret_foreground = "#6b737e"
+
+# --- indicador -------------------------------------------- RF-4.14, RF-4.15
+# Lista combinável, não escolha exclusiva. O design usa pílula E
+# sublinhado juntos: a pílula identifica o grupo na barra, o sublinhado
+# diz a que grupo a aba pertence quando a pílula sai da vista por rolagem.
+#   "pill"      pílula colorida em volta do rótulo do grupo
+#   "underline" linha colorida na base de cada aba do grupo
+#   "left-bar"  barra vertical antes da primeira aba do grupo
+#   "outline"   contorno em volta do rótulo e das abas
+# Ver ADR-0009.
+indicator_style = ["pill", "underline"]
+indicator_thickness = 2
+
+# Espaço entre grupos, maior que o espaço entre abas do mesmo grupo.
+# É o que torna a fronteira do grupo perceptível sem depender de cor.    RF-4.16
+gap = 6
+wrapper_padding = 3           # respiro entre o tingimento e o conteúdo
+wrapper_corner_radius = 8
+
+# Quanto a cor do grupo tinge o fundo do wrapper: 0.0 a 1.0.             RF-4.19
+# Só se aplica ao grupo expandido; colapsado fica transparente.
+tint_strength = 0.07
+
+# Grupo colapsado exibe a contagem de abas no rótulo.                    RF-4.17
+show_tab_count_when_collapsed = true
+
+# Paleta oferecida na troca manual de cor e usada para atribuir cor
+# automaticamente a grupos novos, sem repetir na mesma janela.  RF-4.18, RF-2.4
+# Seis cores, na ordem do design.
+palette = [
+  { name = "vermelho", color = "#ef8a8a" },
+  { name = "amarelo",  color = "#e0b060" },
+  { name = "ciano",    color = "#5ed3bc" },
+  { name = "azul",     color = "#6fa8f5" },
+  { name = "roxo",     color = "#a68cf0" },
+  { name = "verde",    color = "#86c56a" },
+]
+# Cor usada por abas fora de qualquer grupo (grupo implícito, ADR-0006).
+ungrouped_color = "#7b838f"
+
+# Badge de perfil na aba: herda a cor do GRUPO, não a do perfil, para
+# manter a barra legível pelo eixo principal de organização.   [v2] PRD-007
+badge_tint_strength = 0.14
+
+
+##############################################################################
+# APARÊNCIA DO TERMINAL — PRD-005
+##############################################################################
+
+[terminal]
+# Nome de um tema definido em [[themes]]. Vazio = usa as cores de
+# [terminal.colors] diretamente.                                RF-5.18, RF-5.19
+theme = ""
+# Opacidade do fundo do terminal, independente da opacidade da janela.   RF-5.15
+background_opacity = 1.0
+
+
+[terminal.font]
+family = "IBM Plex Mono"                                              # RF-5.1
+# Cadeia de fallback, em ordem. Glyph ausente na família principal é
+# procurado aqui antes de virar retângulo vazio.                        RF-5.2
+fallback = ["Symbols Nerd Font Mono", "Noto Color Emoji", "Noto Sans CJK"]
+size = 12.5                                                           # RF-5.3
+
+# Variantes. Vazio = deriva da família principal.                       RF-5.4
+bold_family = ""
+italic_family = ""
+bold_italic_family = ""
+# Sintetiza negrito/itálico quando a variante não existe na fonte.
+synthesize_bold = true
+synthesize_italic = true
+
+# Texto em negrito usa a versão brilhante da cor ANSI.                  RF-5.5
+bold_is_bright = false
+
+# Multiplicadores das métricas naturais da fonte.                       RF-5.6
+line_height = 1.75
+letter_spacing = 0.0
+
+ligatures = false                                                     # RF-5.7
+
+# Zoom por atalho vale para a aba ativa ou para todas.       RF-5.9, RF-5.10
+zoom_scope = "all"         # "all" | "active"
+
+
+[terminal.cursor]
+shape = "block"            # "block" | "beam" | "underline"             RF-5.22
+width = 7                  # px lógicos quando shape = "beam" ou "block"
+# No design, cursor e prompt assumem a cor do grupo da aba — é o que
+# amarra o terminal ao grupo sem pintar o fundo.
+follows_group_color = true
+blink = false                                                        # RF-5.23
+blink_interval_ms = 500
+unfocused_hollow = true    # cursor vazado quando a janela perde foco   RF-5.24
+# DECSCUSR emitido pelo programa tem precedência sobre `shape`.         RF-5.25
+
+
+[terminal.scrollback]
+lines = 10000                                                        # RF-5.26
+scroll_multiplier = 3      # linhas por passo da roda do mouse         RF-5.27
+
+
+[terminal.colors]
+# Chaves declaradas aqui têm precedência sobre as do tema selecionado,
+# permitindo adotar um tema e ajustar uma cor sem copiar a paleta.      RF-5.19
+foreground = "#c7ccd6"                                               # RF-5.12
+background = "#0f1216"
+cursor = "#5ed3bc"                                                   # RF-5.13
+cursor_text = "#0f1216"
+selection_background = "#2e6b62"                                     # RF-5.14
+selection_foreground = "#eef2f4"
+# Segunda metade do prompt (caminho), quando o shell emite OSC 7.
+prompt_secondary = "#6b737e"
+
+# As 16 cores ANSI derivam das seis cores semânticas que o design usa
+# na saída de terminal (ok/warn/error/accent/dim/padrão), estendidas
+# para cobrir a paleta completa. Derivação declarada em
+# docs/design/especificacao-visual.md, seção 1.9.
+[terminal.colors.normal]                                             # RF-5.11
+black   = "#3b434f"
+red     = "#ef8a8a"
+green   = "#86c56a"
+yellow  = "#e0b060"
+blue    = "#6fa8f5"
+magenta = "#a68cf0"
+cyan    = "#5ed3bc"
+white   = "#c7ccd6"
+
+[terminal.colors.bright]                                             # RF-5.11
+black   = "#6f7783"
+red     = "#f5a3a3"
+green   = "#9bd482"
+yellow  = "#ecc37c"
+blue    = "#8dbcf8"
+magenta = "#bda6f5"
+cyan    = "#7fdfcc"
+white   = "#eaeef3"
+
+# Cores de 256 e true color emitidas pelos programas funcionam sempre e
+# não são afetadas por esta paleta.                                    RF-5.17
+
+
+##############################################################################
+# TEMAS NOMEADOS — PRD-005, RF-5.18
+# Selecione com `theme = "<nome>"` em [terminal]. Cicle por atalho (RF-5.21).
+##############################################################################
+
+[[themes]]
+name = "catppuccin-mocha"
+foreground = "#cdd6f4"
+background = "#1e1e2e"
+cursor = "#f5e0dc"
+cursor_text = "#1e1e2e"
+selection_background = "#585b70"
+selection_foreground = "#cdd6f4"
+
+[themes.normal]
+black   = "#45475a"
+red     = "#f38ba8"
+green   = "#a6e3a1"
+yellow  = "#f9e2af"
+blue    = "#89b4fa"
+magenta = "#f5c2e7"
+cyan    = "#94e2d5"
+white   = "#bac2de"
+
+[themes.bright]
+black   = "#585b70"
+red     = "#f37799"
+green   = "#89d88b"
+yellow  = "#ebd391"
+blue    = "#74a8fc"
+magenta = "#f2aede"
+cyan    = "#6bd7ca"
+white   = "#a6adc8"
+
+
+[[themes]]
+name = "gruvbox-dark"
+foreground = "#ebdbb2"
+background = "#282828"
+cursor = "#ebdbb2"
+cursor_text = "#282828"
+selection_background = "#504945"
+selection_foreground = "#ebdbb2"
+
+[themes.normal]
+black   = "#282828"
+red     = "#cc241d"
+green   = "#98971a"
+yellow  = "#d79921"
+blue    = "#458588"
+magenta = "#b16286"
+cyan    = "#689d6a"
+white   = "#a89984"
+
+[themes.bright]
+black   = "#928374"
+red     = "#fb4934"
+green   = "#b8bb26"
+yellow  = "#fabd2f"
+blue    = "#83a598"
+magenta = "#d3869b"
+cyan    = "#8ec07c"
+white   = "#ebdbb2"
+
+
+##############################################################################
+# KEYBINDINGS — ADR-0008
+#
+# Precedência: modo de captura -> keybind de app -> terminal.
+# Um binding que casa NUNCA cai para o terminal.
+# Ação "none" remove o binding e devolve a tecla ao terminal.
+# Nenhum default usa Ctrl+<letra> sozinho: esse espaço é do terminal.
+#
+# As linhas abaixo mostram os defaults de Windows e Linux. No macOS os
+# defaults usam Cmd — ver a tabela do ADR-0008.
+##############################################################################
+
+[keybindings]
+"ctrl+shift+t"        = "tab.new"
+"ctrl+shift+w"        = "tab.close"
+"ctrl+tab"            = "tab.next"
+"ctrl+shift+tab"      = "tab.prev"
+"alt+1"               = "tab.goto_1"
+"alt+9"               = "tab.goto_9"
+"ctrl+shift+r"        = "tab.rename"
+"ctrl+shift+left"     = "tab.move_left"
+"ctrl+shift+right"    = "tab.move_right"
+
+"ctrl+shift+g"        = "group.create"
+"ctrl+shift+u"        = "group.dissolve"
+"ctrl+shift+e"        = "group.rename"
+"ctrl+shift+k"        = "group.toggle_collapse"
+"ctrl+shift+pagedown" = "group.next"
+"ctrl+shift+pageup"   = "group.prev"
+
+"ctrl+shift+c"        = "clipboard.copy"
+"ctrl+shift+v"        = "clipboard.paste"
+
+"ctrl+equals"         = "font.increase"
+"ctrl+minus"          = "font.decrease"
+"ctrl+0"              = "font.reset"
+"ctrl+shift+y"        = "theme.cycle"      # RF-5.21; movido de ctrl+shift+p
+                                           # para liberar a paleta. ADR-0009.
+
+"ctrl+shift+comma"    = "config.reload"
+
+# [v2] O design abre a paleta de comandos com Ctrl+Shift+P. PRD-008.
+"ctrl+shift+p"        = "command.palette"
+
+# Libera uma tecla para o terminal:
+# "ctrl+shift+k" = "none"
+
+
+##############################################################################
+# SESSÃO — PRD-003
+##############################################################################
+
+[session]
+enabled = true                    # false = sempre abre com uma aba limpa  RF-3.6
+# Atraso do agrupamento de gravações. Fechar 10 abas gera 1 escrita.       RF-3.3
+save_debounce_ms = 2000
+# Só a aba ativa de cada janela inicia o shell no start; as demais
+# iniciam ao serem focadas.                                               RF-3.8
+lazy_restore = true
+restore_window_geometry = true                                          # RF-3.11
+# Oferece uma vez o trecho de integração de shell quando OSC 7 não é
+# detectado. No Windows, sem OSC 7 o diretório NÃO é restaurado.          RF-3.1
+suggest_shell_integration = true
