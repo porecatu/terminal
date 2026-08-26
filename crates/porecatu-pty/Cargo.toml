@@ -10,3 +10,4 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+portable-pty = "0.9.0"
