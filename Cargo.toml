@@ -1,0 +1,41 @@
+[workspace]
+members = [
+    "crates/porecatu-core",
+    "crates/porecatu-config",
+    "crates/porecatu-pty",
+    "crates/porecatu-term",
+    "crates/porecatu-render",
+    "crates/porecatu-ui",
+    "crates/porecatu-session",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.0"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/porecatu/terminal"
+
+[package]
+name = "porecatu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "porecatu"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+porecatu-ui = { path = "crates/porecatu-ui" }
+
+[workspace.lints.clippy]
+all = "warn"
+
+[workspace.lints.rust]
+unsafe_code = "deny"

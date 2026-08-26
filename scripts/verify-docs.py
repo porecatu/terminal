@@ -191,31 +191,6 @@ def verificar_fases() -> None:
         ok("nenhuma seção de anatomia sem etiqueta")
 
 
-# ---------------------------------------------------------------------------
-# 5. Fase de documentação
-# ---------------------------------------------------------------------------
-def verificar_fase_documentacao() -> None:
-    """
-    O projeto está na fase de documentação: F0 do roadmap ainda não começou
-    e nenhum código Rust deve existir.
-
-    REMOVER esta checagem ao iniciar a F0 — é o mesmo commit que cria o
-    Cargo.toml e liga a matriz Rust do .github/workflows/ci.yml.
-    """
-    secao("Fase de documentação")
-    codigo = glob.glob("**/*.rs", recursive=True) + glob.glob(
-        "**/Cargo.toml", recursive=True
-    )
-    if codigo:
-        erro(
-            "código Rust encontrado: "
-            + ", ".join(codigo)
-            + " — se a F0 começou, remova esta checagem do verify-docs.py"
-        )
-    else:
-        ok("nenhum .rs ou Cargo.toml, como esperado nesta fase")
-
-
 def main() -> int:
     os.chdir(ROOT)
     print(f"Porecatu — verificação de documentação\nraiz: {ROOT}")
@@ -224,7 +199,6 @@ def main() -> int:
     config = carregar_config()
     verificar_tokens(config)
     verificar_fases()
-    verificar_fase_documentacao()
 
     print()
     if falhas:

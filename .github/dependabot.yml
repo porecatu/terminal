@@ -8,28 +8,20 @@ updates:
     commit-message:
       prefix: ci
 
-  # ---------------------------------------------------------------------
-  # DESCOMENTAR NA F0, junto com o commit que cria o Cargo.toml.
-  #
-  # Fica comentado porque o Dependabot falha quando aponta para um
-  # ecossistema sem manifesto: sem Cargo.toml na raiz, cada execução
-  # semanal erraria e sujaria o histórico de segurança do repositório.
-  #
   # `wgpu` e `alacritty_terminal` entram em `ignore` de propósito:
   # ADR-0001 e ADR-0002 exigem versões pinadas com igualdade exata, e o
   # ADR-0002 diz explicitamente que atualizar o motor VT é tarefa
   # deliberada, com changelog na mão. Um PR automático de bump
   # contrariaria uma decisão registrada.
-  # ---------------------------------------------------------------------
-  # - package-ecosystem: cargo
-  #   directory: /
-  #   schedule:
-  #     interval: weekly
-  #     day: monday
-  #   open-pull-requests-limit: 5
-  #   commit-message:
-  #     prefix: chore
-  #     include: scope
-  #   ignore:
-  #     - dependency-name: wgpu
-  #     - dependency-name: alacritty_terminal
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      - dependency-name: wgpu
+      - dependency-name: alacritty_terminal
