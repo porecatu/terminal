@@ -3,28 +3,29 @@
 use std::sync::Arc;
 
 use porecatu_core::TabId;
-use porecatu_render::{Color, Renderer};
-use porecatu_term::{PtySize, SpawnConfig, TermEvent, TermParams, Terminal};
+use porecatu_render::Renderer;
+use porecatu_term::{GridSnapshot, PtySize, SpawnConfig, TermEvent, TermParams, Terminal};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
-// docs/design/especificacao-visual.md secao 1.2 ("Janela"); mesmo valor de
-// `[appearance.window] background` em docs/config/porecatu.example.toml.
-const WINDOW_BACKGROUND: Color = Color {
-    r: 0x15 as f64 / 255.0,
-    g: 0x18 as f64 / 255.0,
-    b: 0x1d as f64 / 255.0,
-    a: 1.0,
-};
+mod paint;
+mod palette;
 
-// Grade provisória. Sem métricas de fonte (Etapa 4 da F1) não há como
-// calcular linhas/colunas a partir do tamanho em pixels da janela --
-// 80x24 é o tamanho clássico de terminal. Resize recalculando a grade de
-// verdade é Etapa 5; até lá, redimensionar a janela não muda a grade.
-const PROVISIONAL_ROWS: usize = 24;
-const PROVISIONAL_COLS: usize = 80;
+use paint::CellMetrics;
+
+// docs/config/porecatu.example.toml [terminal.font]: size = 12.5 (RF-5.3),
+// line_height = 1.75 (RF-5.6, "multiplicador das métricas naturais da
+// fonte"). Simplificação desta etapa: aplicado direto sobre `size` em vez
+// da métrica natural da fonte (ascent+descent+lineGap), que exigiria ler
+// hhea/OS2 da face -- ajustar quando isso importar na prática.
+const FONT_SIZE_PX: f32 = 12.5;
+const LINE_HEIGHT_MULTIPLIER: f32 = 1.75;
+
+/// Grade mínima -- uma célula em cada direção, no pior caso de janela
+/// minúscula ou métrica de fonte falhando.
+const MIN_GRID: usize = 1;
 
 /// Evento de usuário do event loop: uma aba ficou suja (ADR-0007) e precisa
 /// de redraw. Carrega `(WindowId, TabId)` desde a F1 mesmo com uma única
@@ -43,7 +44,8 @@ struct App {
     proxy: EventLoopProxy<Wakeup>,
     tab: TabId,
     terminal: Option<Terminal>,
-    snapshot: porecatu_term::GridSnapshot,
+    snapshot: GridSnapshot,
+    cell_metrics: CellMetrics,
 }
 
 impl App {
@@ -54,15 +56,23 @@ impl App {
             proxy,
             tab: TabId::new(0),
             terminal: None,
-            snapshot: porecatu_term::GridSnapshot::default(),
+            snapshot: GridSnapshot::default(),
+            // Substituído antes de qualquer render real, assim que o
+            // `Renderer` existe e a métrica de fonte pode ser medida.
+            cell_metrics: CellMetrics {
+                width: 1.0,
+                height: 1.0,
+            },
         }
     }
 
-    /// Spawna o único terminal da F1 na janela recém-criada. Erro de spawn
-    /// (ex.: shell inexistente) não derruba o app -- fica sem terminal,
-    /// numa janela vazia. `porecatu-ui` ainda não tem superfície de aviso
-    /// (ADR-0014, F2); `stderr` é o único canal disponível nesta fase.
-    fn spawn_terminal(&mut self, window: &Arc<Window>) {
+    /// Spawna o único terminal da F1 na janela recém-criada, com a grade
+    /// derivada da métrica de fonte medida (Etapa 4: "a grade é derivada
+    /// da métrica de fonte, não o contrário"). Erro de spawn (ex.: shell
+    /// inexistente) não derruba o app -- fica sem terminal, numa janela
+    /// vazia. `porecatu-ui` ainda não tem superfície de aviso (ADR-0014,
+    /// F2); `stderr` é o único canal disponível nesta fase.
+    fn spawn_terminal(&mut self, window: &Arc<Window>, rows: usize, cols: usize) {
         let window_id = window.id();
         let tab = self.tab;
         let proxy = self.proxy.clone();
@@ -73,8 +83,8 @@ impl App {
             env: Vec::new(),
             cwd: None,
             size: PtySize {
-                rows: PROVISIONAL_ROWS as u16,
-                cols: PROVISIONAL_COLS as u16,
+                rows: rows as u16,
+                cols: cols as u16,
                 pixel_width: 0,
                 pixel_height: 0,
             },
@@ -108,9 +118,18 @@ impl ApplicationHandler<Wakeup> for App {
                 .expect("falha ao criar janela"),
         );
         let size = window.inner_size();
-        let renderer = Renderer::new(Arc::clone(&window), size.width, size.height);
+        let mut renderer = Renderer::new(Arc::clone(&window), size.width, size.height);
 
-        self.spawn_terminal(&window);
+        let (cell_width, cell_height) =
+            renderer.measure_mono_cell(FONT_SIZE_PX, FONT_SIZE_PX * LINE_HEIGHT_MULTIPLIER);
+        self.cell_metrics = CellMetrics {
+            width: cell_width,
+            height: cell_height,
+        };
+        let cols = ((size.width as f32 / cell_width) as usize).max(MIN_GRID);
+        let rows = ((size.height as f32 / cell_height) as usize).max(MIN_GRID);
+
+        self.spawn_terminal(&window, rows, cols);
         self.window = Some(window);
         self.renderer = Some(renderer);
     }
@@ -177,6 +196,9 @@ impl ApplicationHandler<Wakeup> for App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(size.width, size.height);
                 }
+                // Recalcular grade e propagar pro PTY é Etapa 5; por ora o
+                // conteúdo continua na grade original, só a superfície
+                // muda de tamanho.
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -197,10 +219,10 @@ impl ApplicationHandler<Wakeup> for App {
                 if let Some(terminal) = &self.terminal {
                     terminal.snapshot_into(&mut self.snapshot);
                 }
-                // Tradução do snapshot para primitivas de desenho (quads,
-                // texto) é Etapa 4 -- por ora o frame só limpa a tela.
                 if let Some(renderer) = &mut self.renderer {
-                    renderer.render(WINDOW_BACKGROUND);
+                    let primitives =
+                        paint::build_primitives(&self.snapshot, self.cell_metrics, FONT_SIZE_PX);
+                    renderer.render(palette::TERM_BACKGROUND, &primitives);
                 }
             }
             _ => {}

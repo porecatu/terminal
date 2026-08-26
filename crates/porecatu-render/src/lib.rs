@@ -4,16 +4,27 @@ use std::sync::Arc;
 
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
-/// Cor de limpeza de tela / fundo de primitiva, RGBA em `[0.0, 1.0]`.
-pub type Color = wgpu::Color;
+mod primitives;
+mod quad;
+mod text;
 
-/// Superfície `wgpu` de uma janela: cria device/queue, reconfigura em resize
-/// e limpa a tela. Primitivas de desenho (quad, texto) chegam em fases futuras.
+pub use primitives::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
+
+use quad::QuadPipeline;
+use text::TextPipeline;
+
+/// Superfície `wgpu` de uma janela, com os pipelines de geometria e de
+/// texto (docs/arquitetura.md seção 5): duas passadas por frame, quads
+/// instanciados e texto via `glyphon` com atlas em cache entre frames.
+/// Não conhece domínio -- recebe [`Primitive`]s prontas, nada sobre aba ou
+/// grupo; quem traduz é `porecatu-ui`.
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    quad_pipeline: QuadPipeline,
+    text_pipeline: TextPipeline,
 }
 
 impl Renderer {
@@ -44,16 +55,30 @@ impl Renderer {
             .await
             .expect("falha ao criar device wgpu");
 
-        let config = surface
+        let mut config = surface
             .get_default_config(&adapter, width.max(1), height.max(1))
             .expect("surface sem configuração padrão suportada pelo adapter");
+        // Formato *Srgb faz a GPU reaplicar a curva sRGB em cima de valores
+        // que já escrevemos em espaço sRGB (nossas cores vêm direto de hex
+        // do design) -- dupla conversão que lava as cores escuras. Unorm
+        // grava os bytes como pedimos, sem reinterpretar.
+        config.format = config.format.remove_srgb_suffix();
         surface.configure(&device, &config);
+
+        let mut quad_pipeline = QuadPipeline::new(&device, config.format);
+        quad_pipeline.resize(&queue, config.width, config.height);
+
+        let glyphon_cache = glyphon::Cache::new(&device);
+        let mut text_pipeline = TextPipeline::new(&device, &queue, &glyphon_cache, config.format);
+        text_pipeline.resize(&queue, config.width, config.height);
 
         Self {
             surface,
             device,
             queue,
             config,
+            quad_pipeline,
+            text_pipeline,
         }
     }
 
@@ -65,10 +90,41 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        self.quad_pipeline.resize(&self.queue, width, height);
+        self.text_pipeline.resize(&self.queue, width, height);
     }
 
-    /// Limpa a tela com `clear_color` e apresenta o frame.
-    pub fn render(&mut self, clear_color: Color) {
+    /// Largura de avanço de `M` na mono e altura de linha, no tamanho
+    /// pedido -- usado para derivar a largura/altura de célula da grade
+    /// (Etapa 4: a métrica de fonte decide a grade, não o contrário).
+    pub fn measure_mono_cell(&mut self, size_px: f32, line_height_px: f32) -> (f32, f32) {
+        self.text_pipeline
+            .measure_mono_cell(size_px, line_height_px)
+    }
+
+    /// Limpa a tela com `clear_color` e desenha `primitives` por cima.
+    ///
+    /// `PushClip`/`PopClip` ainda não recortam nada -- sem consumidor no
+    /// v1 até a F2 trazer overflow de barra de abas. Quads (com e sem
+    /// cantos) são desenhados antes do texto, em vez de respeitar a ordem
+    /// de `primitives`: para a grade do terminal (única consumidora nesta
+    /// fase) isso já é correto -- texto de uma célula nunca precisa ficar
+    /// atrás do fundo de outra -- e evita alternar pipeline em UM render
+    /// pass, que o `glyphon` não foi desenhado para fazer (seu `prepare`
+    /// já assume "todo o texto do frame" de uma vez).
+    pub fn render(&mut self, clear_color: Color, primitives: &[Primitive]) {
+        let mut quads = Vec::new();
+        let mut rounded = Vec::new();
+        let mut text_runs = Vec::new();
+        for primitive in primitives {
+            match primitive {
+                Primitive::Quad(quad) => quads.push(*quad),
+                Primitive::RoundedQuad(quad) => rounded.push(*quad),
+                Primitive::Text(run) => text_runs.push(run.clone()),
+                Primitive::PushClip(_) | Primitive::PopClip => {}
+            }
+        }
+
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -82,6 +138,11 @@ impl Renderer {
             wgpu::CurrentSurfaceTexture::Validation => return,
         };
 
+        self.quad_pipeline
+            .prepare(&self.device, &self.queue, &quads, &rounded);
+        self.text_pipeline
+            .prepare(&self.device, &self.queue, &text_runs);
+
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -89,8 +150,8 @@ impl Renderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("porecatu-render/clear"),
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("porecatu-render/frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -105,6 +166,8 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            self.quad_pipeline.render(&mut pass);
+            self.text_pipeline.render(&mut pass);
         }
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(frame);
