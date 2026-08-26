@@ -27,17 +27,14 @@ use crate::params::TermParams;
 use crate::snapshot::GridSnapshot;
 
 /// Intervalo de checagem de `try_wait` na thread de observação do processo.
-/// Não precisa ser fino: só existe para fechar o PTY quando o processo
-/// morre e a thread de leitura ficaria bloqueada esperando um EOF que, no
-/// Windows, o ConPTY não emite sozinho (ver o teste de integração da
-/// Etapa 1 em `porecatu-pty`).
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Folga entre detectar o fim do processo e fechar o PTY. Dá tempo dos
-/// últimos bytes já escritos no pipe chegarem à thread de leitura antes do
-/// fechamento cortar o canal -- ADR-0004: "ler até EOF antes de considerar
-/// a aba encerrada", adaptado à realidade do ConPTY (ver `PtyHandle::wait`).
-const DRAIN_GRACE_PERIOD: Duration = Duration::from_millis(50);
+/// Rede de segurança de [`Terminal::shutdown`]: tempo máximo de espera pela
+/// confirmação de que o processo foi morto, antes de desistir e devolver
+/// de qualquer jeito. Não é o mecanismo principal (esse é o canal
+/// `killed`) -- é só para que uma regressão aqui feche o app em vez de
+/// travá-lo para sempre, o mesmo bug que esta etapa corrigiu.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub enum TerminalSpawnError {
@@ -67,10 +64,12 @@ pub struct Terminal {
     engine: Arc<Mutex<TermEngine>>,
     events: mpsc::Receiver<TermEvent>,
     writer: mpsc::Sender<Vec<u8>>,
-    // Mantidos só para não desanexar as threads sem querer; o encerramento
-    // em si acontece sozinho quando os campos abaixo (e os `Sender`s acima)
-    // são derrubados no `Drop` -- ver o comentário em `spawn`.
+    /// Confirmação de "processo morto", mandada pela thread de observação
+    /// quando `shutdown` sinaliza desligamento -- ver o comentário lá.
+    killed: mpsc::Receiver<()>,
     _shutdown: mpsc::Sender<()>,
+    // Mantidos só para não desanexar as threads sem querer, não para dar
+    // `join`: nenhuma delas tem retorno garantido -- ver `watch_loop`.
     _read_thread: JoinHandle<()>,
     _write_thread: JoinHandle<()>,
     _watch_thread: JoinHandle<()>,
@@ -86,11 +85,11 @@ impl Terminal {
     /// rápido, nunca bloquear (é chamado com a grade *destrancada*, mas
     /// ainda assim é código rodando fora da main thread).
     ///
-    /// Não é preciso desligar nada explicitamente: soltar o `Terminal`
-    /// (`Drop`) já derruba `_shutdown` e o `Sender` de escrita, o que basta
-    /// para as três threads perceberem e encerrarem sozinhas -- a thread de
-    /// leitura desbloqueia quando a de observação mata o processo e fecha
-    /// o PTY.
+    /// Para desligar de propósito (ex.: fechar a janela), chamar
+    /// [`Terminal::shutdown`] -- ela garante que o processo foi morto antes
+    /// de devolver. Simplesmente dropar mata o processo mais cedo ou mais
+    /// tarde (a thread de observação nota o `Sender` de desligamento caído
+    /// dentro de [`WATCH_POLL_INTERVAL`]), mas não espera por isso.
     pub fn spawn(
         pty_config: SpawnConfig,
         term_params: TermParams,
@@ -120,12 +119,15 @@ impl Terminal {
         };
 
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-        let watch_thread = thread::spawn(move || watch_loop(pty, events_tx, shutdown_rx));
+        let (killed_tx, killed_rx) = mpsc::channel::<()>();
+        let watch_thread =
+            thread::spawn(move || watch_loop(pty, events_tx, shutdown_rx, killed_tx));
 
         Ok(Self {
             engine,
             events: events_rx,
             writer: write_tx,
+            killed: killed_rx,
             _shutdown: shutdown_tx,
             _read_thread: read_thread,
             _write_thread: write_thread,
@@ -153,30 +155,23 @@ impl Terminal {
         self.events.try_recv().ok()
     }
 
-    /// Encerra o terminal e só devolve depois que o processo foi morto e as
-    /// três threads saíram -- ao contrário de simplesmente dropar (que
-    /// dispara o mesmo desligamento mas não espera por ele). Chamar
+    /// Encerra o terminal: mata o processo e só devolve depois que a
+    /// thread de observação confirmou isso -- ao contrário de simplesmente
+    /// dropar (que dispara o mesmo sinal mas não espera por ele). Chamar
     /// explicitamente antes do processo do Porecatu sair de vez (ex.: ao
-    /// fechar a janela) -- sem isso, nada garante que a thread de
-    /// observação tenha a chance de rodar seu próximo ciclo (até
-    /// [`WATCH_POLL_INTERVAL`]) antes do processo inteiro já ter
-    /// terminado, o que deixaria o processo filho órfão.
+    /// fechar a janela), para não deixar o processo filho órfão.
+    ///
+    /// Não dá `join` em nenhuma das três threads: nenhuma tem retorno
+    /// garantido. A de leitura nunca mais desbloqueia sozinha depois disso
+    /// -- ver o comentário de [`watch_loop`] sobre por que este crate
+    /// desistiu de fechar o pseudo-console -- e ela mantém viva a cópia do
+    /// canal de escrita que `TermEngine` usa para respostas automáticas
+    /// (DSR/DA/CPR), o que por sua vez faria a thread de escrita nunca ver
+    /// o canal fechar. A confirmação de que o processo morreu vem por um
+    /// canal dedicado (`killed`), não de esperar threads retornarem.
     pub fn shutdown(self) {
         drop(self._shutdown);
-        drop(self.writer);
-        // Não junta `_read_thread`. Ela só desbloqueia quando o PTY fecha
-        // de fato (drop do master dentro de `watch_loop`, depois que a
-        // thread de observação processa o sinal de desligamento acima) --
-        // e verificado na prática (smoke test manual desta etapa) que essa
-        // espera pode passar muito de `WATCH_POLL_INTERVAL`. Bloquear a
-        // main thread nisso violaria a regra central do ADR-0007 ("a main
-        // thread nunca faz I/O bloqueante") bem no caminho de fechar a
-        // janela. A thread de leitura se encerra sozinha, mais cedo ou mais
-        // tarde -- e o processo do Porecatu inteiro saindo (que é o que
-        // `shutdown` antecede) derruba qualquer handle que ainda esteja
-        // aberta de qualquer forma.
-        let _ = self._write_thread.join();
-        let _ = self._watch_thread.join();
+        let _ = self.killed.recv_timeout(SHUTDOWN_TIMEOUT);
     }
 }
 
@@ -203,8 +198,10 @@ fn read_loop(
                 on_wakeup();
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            // Inclui o erro que aparece quando a thread de observação fecha
-            // o PTY após detectar o fim do processo (ver `watch_loop`).
+            // Na prática, quase nunca acontece: o PTY nunca é fechado por
+            // este crate (ver `watch_loop`), então isto só dispara num
+            // erro genuíno de I/O -- não no fim normal do processo, que
+            // fica só bloqueado aqui para sempre (aceito, ver `leak_pty`).
             Err(_) => break,
         }
     }
@@ -218,16 +215,38 @@ fn write_loop(mut writer: Box<dyn Write + Send>, rx: mpsc::Receiver<Vec<u8>>) {
     }
 }
 
-fn watch_loop(mut pty: PtyHandle, events: mpsc::Sender<TermEvent>, shutdown: mpsc::Receiver<()>) {
+/// Nunca fecha o PTY (nunca dropa `pty` de verdade -- ver [`leak_pty`]).
+///
+/// A tentativa original era: detectar o fim do processo via `try_wait`
+/// (ADR-0004 -- no Windows o ConPTY não emite EOF só porque o processo
+/// hospedado saiu) e então fechar o pseudo-console para a thread de
+/// leitura ver EOF. Bug real, encontrado no smoke test manual da Etapa 3:
+/// fechar a janela travava o app inteiro, e só morria com kill externo.
+///
+/// Causa: `ClosePseudoConsole` (chamado pelo `Drop` do master do
+/// `portable-pty`) bloqueia até a ponta de leitura clonada que a thread de
+/// leitura segura ser liberada -- e não existe jeito seguro de fechar essa
+/// handle de outra thread no Windows enquanto uma leitura síncrona está
+/// parada nela (é a mesma classe de UB que fechar um fd em uso). Como as
+/// duas threads (esta e a de leitura) esperam uma pela outra, é deadlock
+/// de verdade, não só lento.
+fn watch_loop(
+    mut pty: PtyHandle,
+    events: mpsc::Sender<TermEvent>,
+    shutdown: mpsc::Receiver<()>,
+    killed: mpsc::Sender<()>,
+) {
     loop {
         match shutdown.recv_timeout(WATCH_POLL_INTERVAL) {
             // `Ok(())` nunca é enviado de propósito hoje -- só o `Sender`
             // ser derrubado no `Drop` do `Terminal` importa -- mas tratar os
             // dois casos junto deixa a intenção clara: qualquer sinal de
-            // desligamento mata o processo e libera a thread de leitura.
+            // desligamento mata o processo.
             Ok(()) | Err(RecvTimeoutError::Disconnected) => {
                 let _ = pty.kill();
-                break;
+                let _ = killed.send(());
+                leak_pty(pty);
+                return;
             }
             Err(RecvTimeoutError::Timeout) => {
                 if let Ok(Some(status)) = pty.try_wait() {
@@ -235,14 +254,21 @@ fn watch_loop(mut pty: PtyHandle, events: mpsc::Sender<TermEvent>, shutdown: mps
                         success: status.success,
                         code: status.code,
                     });
-                    thread::sleep(DRAIN_GRACE_PERIOD);
-                    // Fecha o pseudo-console -- no Windows é o único jeito
-                    // de a thread de leitura ver EOF, porque o ConPTY não
-                    // fecha o pipe só porque o processo hospedado saiu.
-                    drop(pty);
-                    break;
+                    leak_pty(pty);
+                    return;
                 }
             }
         }
     }
+}
+
+/// Deliberadamente não fecha o PTY -- ver o porquê em [`watch_loop`].
+/// `mem::forget` evita rodar o destrutor (`ClosePseudoConsole` no
+/// Windows); o SO reclama a handle (e todas as outras do processo) quando
+/// o `porecatu` inteiro sai. Consequência aceita: a thread de leitura fica
+/// parada num `read()` que nunca mais retorna, pelo resto da vida do app
+/// -- não é um recurso do SO vazando (o processo filho já foi morto por
+/// `kill()` antes disso), só uma thread e sua pilha ociosas.
+fn leak_pty(pty: PtyHandle) {
+    std::mem::forget(pty);
 }

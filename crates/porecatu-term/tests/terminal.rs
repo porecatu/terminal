@@ -95,15 +95,8 @@ fn terminal_spawna_escreve_saida_no_snapshot_e_responde_dsr_sozinho() {
     );
 }
 
-/// Verifica que `Terminal::spawn` + `drop` não travam nem entram em pânico
-/// com um processo de longa duração. Não há, de dentro deste crate, uma
-/// forma cross-platform barata de confirmar que o processo foi mesmo
-/// encerrado (exigiria listar processos do SO, fora do escopo de uma
-/// dependência de teste) -- coberto por inspeção manual durante o smoke
-/// test da fase (Gerenciador de Tarefas / `ps`).
-#[test]
-fn terminal_de_processo_longo_nao_trava_ao_dropar() {
-    let (program, args) = if cfg!(target_os = "windows") {
+fn long_running_command() -> (String, Vec<String>) {
+    if cfg!(target_os = "windows") {
         (
             "cmd.exe".to_string(),
             vec![
@@ -118,9 +111,12 @@ fn terminal_de_processo_longo_nao_trava_ao_dropar() {
             "/bin/sh".to_string(),
             vec!["-c".to_string(), "sleep 60".to_string()],
         )
-    };
+    }
+}
 
-    let terminal = Terminal::spawn(
+fn spawn_long_running() -> Terminal {
+    let (program, args) = long_running_command();
+    Terminal::spawn(
         SpawnConfig {
             program: Some(program),
             args,
@@ -131,8 +127,42 @@ fn terminal_de_processo_longo_nao_trava_ao_dropar() {
         TermParams::default(),
         || {},
     )
-    .expect("spawn falhou");
+    .expect("spawn falhou")
+}
 
+/// Verifica que `Terminal::spawn` + `drop` não travam nem entram em pânico
+/// com um processo de longa duração. Não há, de dentro deste crate, uma
+/// forma cross-platform barata de confirmar que o processo foi mesmo
+/// encerrado (exigiria listar processos do SO, fora do escopo de uma
+/// dependência de teste) -- coberto por inspeção manual durante o smoke
+/// test da fase (Gerenciador de Tarefas / `ps`).
+#[test]
+fn terminal_de_processo_longo_nao_trava_ao_dropar() {
+    let terminal = spawn_long_running();
     std::thread::sleep(Duration::from_millis(200));
     drop(terminal);
+}
+
+/// Regressão: fechar a janela com um processo de longa duração rodando
+/// (ex.: um shell interativo esperando o prompt) travava o app inteiro --
+/// `Terminal::shutdown` acabava bloqueado dentro de `ClosePseudoConsole`
+/// esperando a thread de leitura, que por sua vez esperava o PTY fechar
+/// (achado no smoke test manual da Etapa 3, confirmado por usuário rodando
+/// `cargo run` numa sessão desktop de verdade). `shutdown` roda numa thread
+/// à parte e o teste falha se não voltar dentro do timeout -- do jeito que
+/// o bug original faria travar para sempre.
+#[test]
+fn terminal_shutdown_nao_trava_com_processo_de_longa_duracao() {
+    let terminal = spawn_long_running();
+    std::thread::sleep(Duration::from_millis(200));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        terminal.shutdown();
+        let _ = done_tx.send(());
+    });
+
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("Terminal::shutdown travou com um processo de longa duracao rodando");
 }
