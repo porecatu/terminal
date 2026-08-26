@@ -25,6 +25,7 @@ use crate::engine::{TermEngine, TermSize};
 use crate::event::TermEvent;
 use crate::params::TermParams;
 use crate::scroll::TermScroll;
+use crate::selection::{SelectionKind, SelectionSide};
 use crate::snapshot::{GridSnapshot, TermModes};
 
 /// Intervalo de checagem de `try_wait` na thread de observação do processo.
@@ -174,6 +175,33 @@ impl Terminal {
     /// renderizado, que pode estar obsoleto.
     pub fn modes(&self) -> TermModes {
         lock(&self.engine).modes()
+    }
+
+    /// Inicia uma seleção (PRD-010 RF-10.4).
+    pub fn start_selection(
+        &self,
+        kind: SelectionKind,
+        row: usize,
+        col: usize,
+        side: SelectionSide,
+    ) {
+        lock(&self.engine).start_selection(kind, row, col, side);
+    }
+
+    /// Estende a seleção em andamento.
+    pub fn update_selection(&self, row: usize, col: usize, side: SelectionSide) {
+        lock(&self.engine).update_selection(row, col, side);
+    }
+
+    /// Limpa a seleção.
+    pub fn clear_selection(&self) {
+        lock(&self.engine).clear_selection();
+    }
+
+    /// Texto selecionado, pronto para o clipboard (RF-10.6). `None` sem
+    /// seleção ativa.
+    pub fn selection_text(&self) -> Option<String> {
+        lock(&self.engine).selection_text()
     }
 
     /// Redimensiona a grade. O lado do motor acontece agora, síncrono

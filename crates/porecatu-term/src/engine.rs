@@ -6,14 +6,18 @@ use std::sync::mpsc;
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::Point;
+use alacritty_terminal::index::{Column, Point};
+use alacritty_terminal::selection::Selection as AlacSelection;
 use alacritty_terminal::term::cell::Flags as AlacFlags;
-use alacritty_terminal::term::{ClipboardType, Config as AlacConfig, Osc52, point_to_viewport};
+use alacritty_terminal::term::{
+    ClipboardType, Config as AlacConfig, Osc52, point_to_viewport, viewport_to_point,
+};
 use alacritty_terminal::vte::ansi::{CursorShape as AnsiCursorShape, Processor, Rgb as AnsiRgb};
 
 use crate::event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 use crate::params::TermParams;
 use crate::scroll::TermScroll;
+use crate::selection::{SelectionKind, SelectionSide};
 use crate::snapshot::{
     Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, MouseReporting, SelectionSpan,
     TermModes,
@@ -183,6 +187,49 @@ impl TermEngine {
     /// poderia estar obsoleto.
     pub fn modes(&self) -> TermModes {
         convert_modes(*self.term.mode())
+    }
+
+    /// Inicia uma seleção no ponto (linha/coluna de viewport, 0-based).
+    /// Usa o `Selection` do motor -- os quatro modos, `Alt`+arraste
+    /// incluso, já vêm de lá (ADR-0002/0013: não reimplementar).
+    pub fn start_selection(
+        &mut self,
+        kind: SelectionKind,
+        row: usize,
+        col: usize,
+        side: SelectionSide,
+    ) {
+        let point = self.viewport_point(row, col);
+        self.term.selection = Some(AlacSelection::new(kind.into(), point, side.into()));
+    }
+
+    /// Estende a seleção em andamento até o ponto dado. Sem efeito se não
+    /// há seleção ativa.
+    pub fn update_selection(&mut self, row: usize, col: usize, side: SelectionSide) {
+        let point = self.viewport_point(row, col);
+        if let Some(selection) = self.term.selection.as_mut() {
+            selection.update(point, side.into());
+        }
+    }
+
+    /// Limpa a seleção. Rolagem pura (`scroll`) nunca chama isto --
+    /// `scroll_display` não toca `selection` (ADR-0013: "rolagem pura
+    /// preserva"). O motor já limpa sozinho quando o programa escreve em
+    /// cima da região selecionada ou muda de tela alternativa.
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    /// Texto selecionado, já com o espaço à direita cortado e linhas
+    /// `WRAPLINE` remontadas sem quebra -- `Term::selection_to_string` do
+    /// motor já faz isso (RF-10.6), não precisa reimplementar aqui.
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string()
+    }
+
+    fn viewport_point(&self, row: usize, col: usize) -> Point {
+        let display_offset = self.term.grid().display_offset();
+        viewport_to_point(display_offset, Point::new(row, Column(col)))
     }
 
     /// Preenche `out` com o estado atual, reusando os buffers já alocados

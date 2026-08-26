@@ -296,3 +296,63 @@ fn tela_alternativa_nao_tem_scrollback_para_rolar() {
         "tela alternativa nao tem historico -- rolar nao faz nada (ADR-0013)"
     );
 }
+
+#[test]
+fn selecao_simples_recorta_espaco_a_direita() {
+    use porecatu_term::{SelectionKind, SelectionSide};
+
+    let (mut term, _rx) = engine(3, 10);
+    term.advance(b"hi\r\n"); // "hi" seguido de espacos em branco ate' a borda
+
+    term.start_selection(SelectionKind::Simple, 0, 0, SelectionSide::Left);
+    term.update_selection(0, 9, SelectionSide::Right);
+
+    let text = term.selection_text().expect("esperava selecao ativa");
+    assert_eq!(
+        text, "hi",
+        "espaco em branco a direita deveria ser cortado (RF-10.6)"
+    );
+}
+
+#[test]
+fn selecao_de_linha_remonta_wrapline_sem_quebra() {
+    use porecatu_term::{SelectionKind, SelectionSide};
+
+    let (mut term, _rx) = engine(3, 5);
+    // "abcdef" com grade de 5 colunas quebra em "abcde" + "f" (WRAPLINE).
+    term.advance(b"abcdef");
+
+    term.start_selection(SelectionKind::Lines, 0, 0, SelectionSide::Left);
+    term.update_selection(1, 0, SelectionSide::Right);
+
+    let text = term.selection_text().expect("esperava selecao ativa");
+    // SelectionType::Lines sempre fecha com um \n de fim de linha logica
+    // selecionada -- o que importa pro RF-10.6 e' nao ter \n NO MEIO,
+    // entre "abcde" e "f", que reconstituiria a quebra que so' existe por
+    // causa da largura da janela.
+    assert_eq!(
+        text, "abcdef\n",
+        "linha so' quebrada pela largura nao pode virar dois comandos ao colar (RF-10.6)"
+    );
+}
+
+#[test]
+fn rolagem_preserva_selecao() {
+    use porecatu_term::{SelectionKind, SelectionSide};
+
+    let (mut term, _rx) = engine(3, 10);
+    for i in 0..10 {
+        term.advance(format!("linha {i}\r\n").as_bytes());
+    }
+
+    term.start_selection(SelectionKind::Simple, 0, 0, SelectionSide::Left);
+    term.update_selection(0, 5, SelectionSide::Right);
+    assert!(term.selection_text().is_some());
+
+    term.scroll(TermScroll::Lines(2));
+
+    assert!(
+        term.selection_text().is_some(),
+        "rolagem pura preserva a selecao (ADR-0013, RF-10.7)"
+    );
+}
