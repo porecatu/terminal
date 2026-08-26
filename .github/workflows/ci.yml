@@ -9,6 +9,16 @@ name: ci
 #
 # Os quatro comandos abaixo são o contrato definido em CLAUDE.md.
 
+# Actions pinadas por SHA de commit, com a versão legível no comentário ao
+# lado. Tag major é ponteiro móvel: pode ser reapontada para outro commit, e
+# uma v7.1 muda comportamento sem passar por PR do Dependabot. É a mesma
+# disciplina do ADR-0011, um nível abaixo. O Dependabot atualiza SHA e
+# comentário juntos.
+#
+# `dtolnay/rust-toolchain@stable` fica sem pin de propósito: naquela action o
+# nome do ref É o seletor de toolchain, e a F0 vai trocar esta linha pela
+# versão pinada do rust-toolchain.toml (ADR-0011).
+
 on:
   push:
     branches: [main]
@@ -33,7 +43,7 @@ jobs:
     outputs:
       has_cargo: ${{ steps.check.outputs.has_cargo }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: check
         run: |
@@ -58,7 +68,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # winit, wgpu e cosmic-text precisam destas no Linux. Declaradas já
       # agora para que a F0 não trave num erro de linkagem obscuro.
@@ -84,7 +94,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Formatação
         run: cargo fmt --all --check

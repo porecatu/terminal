@@ -69,6 +69,7 @@ O workflow de Rust (`.github/workflows/ci.yml`) já existe e está **dormindo**:
 - **Documentação (README, ADR, PRD, docs/) e mensagens de commit: português do Brasil.**
 - Commits em [Conventional Commits](https://www.conventionalcommits.org): `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:`.
 - Arquivos de doc em `kebab-case.md`.
+- Actions do GitHub são pinadas por **SHA de commit**, com a versão no comentário ao lado (`@3d3c42e… # v7.0.1`). Tag major é ponteiro móvel; o Dependabot atualiza SHA e comentário juntos. Mesma disciplina do [ADR-0011](docs/adr/0011-toolchain-rust.md).
 - Terminologia: **"abas"**, nunca "guias" — inclusive em strings de UI ([ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md)).
 
 ## Licença
