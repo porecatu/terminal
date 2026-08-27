@@ -18,6 +18,15 @@ const fn hex(r: u8, g: u8, b: u8) -> Color {
     }
 }
 
+const fn hex_alpha(r: u8, g: u8, b: u8, a: f64) -> Color {
+    Color {
+        r: r as f64 / 255.0,
+        g: g as f64 / 255.0,
+        b: b as f64 / 255.0,
+        a,
+    }
+}
+
 // [terminal.colors]
 pub const TERM_FOREGROUND: Color = hex(0xc7, 0xcc, 0xd6); // foreground, RF-5.12
 pub const TERM_BACKGROUND: Color = hex(0x0f, 0x12, 0x16); // background
@@ -126,6 +135,42 @@ pub fn resolve(
         TermColor::Rgb { r, g, b } => hex(r, g, b),
     }
 }
+
+// Espec. visual §2.9/§2.14/§2.15/§2.16/§2.20 -- fundo, borda e sombra
+// (sombra não tem equivalente em `porecatu-render`, ver `overlay.rs`)
+// compartilhados por aviso, diálogo, menu de contexto e tooltip: os
+// "quatro widgets de chrome" do ADR-0014/ADR-0019 leem da mesma família de
+// popover, de propósito -- nenhuma cor nova por widget.
+pub const POPOVER_BACKGROUND: Color = hex(0x1a, 0x1e, 0x25);
+pub const POPOVER_BORDER: Color = hex(0x2e, 0x34, 0x3e);
+
+// Espec. §2.14 -- aviso do app.
+pub const WARNING_TITLE_TEXT: Color = hex(0xdf, 0xe4, 0xea);
+pub const WARNING_BODY_TEXT: Color = hex(0x6b, 0x73, 0x7e);
+pub const WARNING_SEVERITY_ERROR: Color = hex(0xef, 0x8a, 0x8a);
+pub const WARNING_SEVERITY_WARNING: Color = hex(0xe0, 0xb0, 0x60);
+pub const WARNING_SEVERITY_INFO: Color = hex(0x5e, 0xd3, 0xbc);
+
+// Espec. §2.15 -- diálogo de confirmação.
+pub const DIALOG_OVERLAY: Color = hex_alpha(0x06, 0x07, 0x09, 0.45);
+pub const DIALOG_TITLE_TEXT: Color = hex(0xe6, 0xea, 0xef);
+pub const DIALOG_BODY_TEXT: Color = hex(0xd7, 0xdc, 0xe3);
+pub const DIALOG_CANCEL_BORDER: Color = hex(0x26, 0x2b, 0x34);
+pub const DIALOG_CANCEL_TEXT: Color = hex(0xd7, 0xdc, 0xe3);
+pub const DIALOG_CONFIRM_BACKGROUND: Color = hex(0xe0, 0x85, 0x85);
+pub const DIALOG_CONFIRM_TEXT: Color = hex(0x1a, 0x1e, 0x25);
+// "O botão focado leva borda 1px #5ed3bc" (§2.15) -- mesmo acento do campo
+// de rename.
+pub const DIALOG_FOCUS_RING: Color = hex(0x5e, 0xd3, 0xbc);
+
+// Espec. §2.9/§2.16 -- item de menu de contexto (reaproveita os tokens do
+// menu de perfis, `[v2]`, por decisão do ADR-0014).
+pub const MENU_ITEM_TEXT: Color = hex(0xd7, 0xdc, 0xe3);
+pub const MENU_ITEM_DISABLED_TEXT: Color = hex(0x5c, 0x64, 0x6f);
+pub const MENU_ITEM_HOVER: Color = hex(0x24, 0x2a, 0x33);
+
+// Espec. §2.20 -- tooltip.
+pub const TOOLTIP_TEXT: Color = hex(0xd7, 0xdc, 0xe3);
 
 fn resolve_indexed(index: u8) -> Color {
     match index {

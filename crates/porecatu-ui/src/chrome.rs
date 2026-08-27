@@ -28,7 +28,7 @@ use crate::tab_bar::{
 
 /// Fonte dos ícones da barra (fechar, nova aba) -- mesma família do
 /// rótulo, peso regular (espec. não distingue peso pra glyphs de ícone).
-const ICON_FONT: FontFace = FontFace::Sans {
+pub(crate) const ICON_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
 const LABEL_FONT: FontFace = ICON_FONT;
@@ -427,7 +427,7 @@ fn paint_rename_field(
 /// Centraliza um glyph de ícone dentro de `rect`, medindo a largura real
 /// pra não depender de estimativa (`TextMeasurer` já está em mãos de quem
 /// pinta a barra).
-fn centered_glyph(
+pub(crate) fn centered_glyph(
     glyph: &str,
     rect: Rect,
     size_px: f32,

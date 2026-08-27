@@ -10,7 +10,7 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 |---|---|
 | F0 — Esqueleto | **implementada** |
 | F1 — Terminal único | **implementada**, com verificação interativa pendente (ver a fase) |
-| F2 — Abas | próxima |
+| F2 — Abas | **implementada**, com verificação interativa pendente (ver a fase) |
 | F3 a F6 | não iniciadas |
 
 ---
@@ -94,7 +94,7 @@ Duas simplificações conscientes, documentadas no código:
 
 ---
 
-## F2 — Abas
+## F2 — Abas — implementada, com verificação interativa pendente
 
 Implementa [PRD-001](prd/prd-001-abas.md).
 
@@ -126,6 +126,20 @@ Divisão sugerida, no padrão das seis etapas da F1, uma por PR: (1) `core` e as
 **Critério de saída:** todos os cenários de aceite de PRD-001 passam, **exceto "arrastar para dentro de um grupo" (RF-1.16), que passa para a F3** — na F2 só existe o grupo implícito, que não tem fronteira visual para dentro da qual arrastar, e `tab.move_to_group` já é catalogada como F3; **barra de abas confere com [`mockup-estatico.html`](design/mockup-estatico.html)** nos elementos `[v1]` — dimensões, raios, cores por estado, rename inline; layout da barra testado sem abrir janela **e sem GPU**; 50 abas abertas sem degradação perceptível, e fechar uma janela com 50 abas não bloqueia a main thread; menu, tooltip, aviso e diálogo desenham **por cima** do texto do terminal; IME e teclas mortas continuam funcionando com a barra presente; duas janelas abertas em monitores de DPI diferente desenham com métricas corretas e texto nítido, e saída numa delas não redesenha a outra.
 
 `app.quit` e o fechamento da última janela **não gravam sessão** nesta fase; o ponto de chamada existe como no-op documentado e a F5 o preenche (ADR-0017).
+
+### O que ficou pendente da F2
+
+O código está escrito e o CI está verde nas três plataformas, com testes automatizados cobrindo `porecatu-core` (invariantes de `Workspace`/`Group`), `porecatu-term` (OSC 7, ciclo de vida) e `porecatu-ui` (layout, overflow, indicadores, arraste, os quatro widgets de chrome — tudo o que é função pura, sem GPU nem janela). O que **não** foi confirmado, mesma limitação da F1:
+
+- Toda a verificação aconteceu por build/teste automatizado e por um smoke test não-interativo do `cargo run` (a janela sobe e roda alguns segundos sem `panic`) — a proteção de foco do Windows continua bloqueando input sintético, então nenhum gesto de mouse ou teclado de verdade foi exercitado nesta fase.
+- **Arraste de reordenação (RF-1.15), menu de contexto (clique direito), overflow por roda do mouse e o tooltip com atraso de 600ms** — a lógica está coberta por teste unitário isolado (`tab_bar`, `context_menu`, `tooltip`), mas o gesto ponta-a-ponta nunca rodou numa sessão desktop real.
+- **Segunda janela** (`Ctrl+Shift+N`/`Ctrl+Shift+Q`, ADR-0015): a cascata de geometria e a superfície `wgpu` compartilhada nunca foram exercitadas com duas janelas de verdade, muito menos em dois monitores com DPI diferente.
+- **Diálogo de confirmação de RF-1.6**: a condição (tela alternativa ou reporte de mouse ligado) depende de abrir `vim`/`htop`/`fzf` de verdade dentro do Porecatu, que segue bloqueado pela mesma proteção de foco.
+
+Duas simplificações conscientes, documentadas no código (`overlay.rs`, `lib.rs`):
+
+- Nenhuma sombra nos quatro widgets de chrome — `porecatu-render` não tem primitiva de sombra; e o corpo de aviso/diálogo não quebra linha (`TextRun` é sempre uma linha), truncando com reticências em vez do "três linhas" da espec.
+- A cascata da janela nova prende aos limites físicos do monitor, não à área útil (descontada a barra de tarefas/dock) que o parágrafo acima descreve — `winit::monitor::MonitorHandle` não expõe área útil em nenhuma plataforma.
 
 ---
 
