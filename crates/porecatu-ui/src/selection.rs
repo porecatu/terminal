@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Seleção múltipla de abas na barra (ADR-0021). Estado efêmero de janela,
-//! ao lado de `RenameState`/`Hover`/`TabDrag` -- **não persistido** (a lista
+//! ao lado de `RenameState`/`Hover`/`Drag` -- **não persistido** (a lista
 //! do ADR-0005 não a inclui): sobreviver a um restart armaria uma ação
 //! destrutiva de grupo sem o usuário ter escolhido o alvo desta sessão.
 //!

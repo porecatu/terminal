@@ -5,14 +5,17 @@
 //! TextMeasurer) -> TabBarLayout`. Cobre a geometria de trilha da espec.
 //! visual §2.2, §2.3, §2.5, §2.6 e, desde a Etapa 5 da F2, o encolhimento de
 //! rótulo e a rolagem do §2.18 (`fit_width`/`overflow_state`) e a geometria
-//! de arraste do §2.19 (`drag_target_index`). Desde a F3 etapa 3, também a
+//! de arraste do §2.19 (`drag_target`). Desde a F3 etapa 3, também a
 //! geometria da pílula de grupo (§2.4) e a participação dela na ordem de
 //! cedência do overflow. Desde a F3 etapa 4, grupo colapsado não gera
 //! `TabRect` nenhum (§2.4: "suas abas somem da barra") e a pílula ganha o
 //! indicador agregado (RF-2.16) e um alvo de hit-test próprio
-//! (`TabBarHit::Pill`). Pintura (`chrome.rs`) e wiring de clique/rename/
-//! arraste (`lib.rs`) ficam do outro lado da fronteira -- este módulo não
-//! sabe de `wgpu` nem de `winit`.
+//! (`TabBarHit::Pill`). Desde a F3 etapa 6, `drag_target` cruza fronteira
+//! de grupo (ADR-0021 §4) e `group_drag_target_index`/`pill_rect` cobrem o
+//! arraste do rótulo do grupo inteiro (espec. §2.19.1). Pintura
+//! (`chrome.rs`) e wiring de clique/rename/arraste (`lib.rs`) ficam do
+//! outro lado da fronteira -- este módulo não sabe de `wgpu` nem de
+//! `winit`.
 //!
 //! `porecatu-config` ainda não existe: os valores de [`TabBarStyle`] são
 //! constantes com a chave TOML de origem no comentário, no mesmo padrão de
@@ -763,27 +766,131 @@ pub fn tab_rect(layout: &TabBarLayout, id: TabId) -> Option<Rect> {
         .map(|t| t.rect)
 }
 
-/// Índice de inserção (o mesmo que [`Group::move_within`]/
-/// `Workspace::move_tab` esperam: posição entre as abas restantes, já sem a
-/// arrastada) para onde `ghost_center_x` cairia entre as demais abas do
-/// mesmo grupo da arrastada, comparando contra o centro de cada uma no
-/// layout corrente. Espec. §2.19: "o buraco é o marcador" -- isto só monta
-/// o preview de onde a aba cairia; mover de verdade é decisão de `lib.rs`
-/// ao soltar.
-pub fn drag_target_index(layout: &TabBarLayout, dragged: TabId, ghost_center_x: f32) -> usize {
-    for group in &layout.groups {
-        if group.tabs.iter().any(|t| t.id == dragged) {
-            let others: Vec<&TabRect> = group.tabs.iter().filter(|t| t.id != dragged).collect();
-            for (index, tab) in others.iter().enumerate() {
-                let center = tab.rect.x + tab.rect.width / 2.0;
-                if ghost_center_x < center {
-                    return index;
-                }
-            }
-            return others.len();
+/// Acha o retângulo da pílula de um grupo pelo `id` -- mesmo papel de
+/// [`tab_rect`], usado pelo arraste do rótulo do grupo (espec. §2.19.1,
+/// F3 etapa 6). `None` para grupo implícito (sem pílula).
+pub fn pill_rect(layout: &TabBarLayout, id: GroupId) -> Option<Rect> {
+    layout
+        .groups
+        .iter()
+        .find(|g| g.id == id)
+        .and_then(|g| g.pill.as_ref())
+        .map(|p| p.rect)
+}
+
+/// Alvo de um arraste de aba (ADR-0021 §4, F3 etapa 6): dentro de um grupo
+/// já existente, numa posição entre as abas restantes dele -- mesma
+/// convenção de índice que [`Group::move_within`]/`Workspace::move_tab`
+/// esperam --, ou fora de qualquer wrapper, criando um run implícito novo
+/// na posição dada da lista de grupos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragDrop {
+    IntoGroup { group: GroupId, pos: usize },
+    NewRun { group_index: usize },
+}
+
+/// Resolve onde `ghost_center_x` cairia (ADR-0021 §4): dentro do wrapper
+/// que ele sobrepõe -- sobre a pílula ou no meio das abas, comparando
+/// contra o centro de cada uma, igual ao arraste dentro do próprio grupo
+/// já fazia --, ou no `gap` entre dois wrappers, que **pertence ao grupo
+/// da esquerda** (soltar ali entra no fim daquele grupo -- os 6px do gap
+/// são estreitos demais pra mirar como zona própria). Só fora de **todos**
+/// os wrappers -- antes do primeiro ou depois do último -- é que cria um
+/// run implícito novo. Espec. §2.19: "o buraco é o marcador" -- isto só
+/// resolve o alvo; mover de verdade é decisão de `lib.rs` ao soltar.
+pub fn drag_target(layout: &TabBarLayout, dragged: TabId, ghost_center_x: f32) -> DragDrop {
+    for (index, group) in layout.groups.iter().enumerate() {
+        let start = group.rect.x;
+        let end = group.rect.x + group.rect.width;
+        if ghost_center_x < start {
+            return if index == 0 {
+                DragDrop::NewRun { group_index: 0 }
+            } else {
+                into_group_end(&layout.groups[index - 1], dragged)
+            };
+        }
+        if ghost_center_x < end {
+            return resolve_within_group(group, dragged, ghost_center_x);
         }
     }
-    0
+    DragDrop::NewRun {
+        group_index: layout.groups.len(),
+    }
+}
+
+fn into_group_end(group: &GroupWrapperRect, dragged: TabId) -> DragDrop {
+    let count = group.tabs.iter().filter(|t| t.id != dragged).count();
+    DragDrop::IntoGroup {
+        group: group.id,
+        pos: count,
+    }
+}
+
+fn resolve_within_group(group: &GroupWrapperRect, dragged: TabId, ghost_center_x: f32) -> DragDrop {
+    // ADR-0021 §4: "soltar sobre a pílula entra no início do grupo" --
+    // também cobre grupo colapsado, cujo wrapper é só a pílula (sem abas
+    // na trilha), então qualquer ponto dentro dele já cai aqui.
+    if let Some(pill) = &group.pill
+        && ghost_center_x < pill.rect.x + pill.rect.width
+    {
+        return DragDrop::IntoGroup {
+            group: group.id,
+            pos: 0,
+        };
+    }
+    let others: Vec<&TabRect> = group.tabs.iter().filter(|t| t.id != dragged).collect();
+    for (index, tab) in others.iter().enumerate() {
+        let center = tab.rect.x + tab.rect.width / 2.0;
+        if ghost_center_x < center {
+            return DragDrop::IntoGroup {
+                group: group.id,
+                pos: index,
+            };
+        }
+    }
+    DragDrop::IntoGroup {
+        group: group.id,
+        pos: others.len(),
+    }
+}
+
+/// Retângulo a realçar durante o arraste de aba (espec. §2.19: "o wrapper
+/// que receberia a aba" -- ou só a pílula, se o grupo estiver colapsado,
+/// já que não há trilha pra realçar ali). `None` quando o alvo é um run
+/// implícito novo fora de qualquer wrapper existente (`DragDrop::NewRun`
+/// nas pontas da trilha) -- não há retângulo pra desenhar.
+pub fn drag_highlight_rect(layout: &TabBarLayout, target: DragDrop) -> Option<(GroupId, Rect)> {
+    let DragDrop::IntoGroup { group, .. } = target else {
+        return None;
+    };
+    let wrapper = layout.groups.iter().find(|g| g.id == group)?;
+    let rect = match &wrapper.pill {
+        Some(pill) if wrapper.tabs.is_empty() => pill.rect,
+        _ => wrapper.rect,
+    };
+    Some((group, rect))
+}
+
+/// Índice de inserção (mesma convenção de [`drag_target`]/`Workspace::
+/// move_group`: posição entre os grupos **restantes**, já sem o
+/// arrastado) para onde o fantasma da pílula (espec. §2.19.1) cairia,
+/// comparando `ghost_center_x` contra o centro de cada wrapper que não é
+/// o arrastado. Grupos não aninham (ADR-0006): o alvo é sempre uma
+/// fronteira entre grupos, nunca o interior de outro -- por isso não há
+/// equivalente de "soltar sobre a pílula" aqui.
+pub fn group_drag_target_index(
+    layout: &TabBarLayout,
+    dragged: GroupId,
+    ghost_center_x: f32,
+) -> usize {
+    let others: Vec<&GroupWrapperRect> = layout.groups.iter().filter(|g| g.id != dragged).collect();
+    for (index, group) in others.iter().enumerate() {
+        let center = group.rect.x + group.rect.width / 2.0;
+        if ghost_center_x < center {
+            return index;
+        }
+    }
+    others.len()
 }
 
 /// Resolve o que `point` (coordenadas relativas ao topo-esquerda da
@@ -1143,23 +1250,170 @@ mod tests {
     }
 
     #[test]
-    fn drag_target_index_finds_insertion_point_by_ghost_center() {
+    fn drag_target_within_own_group_finds_insertion_point_by_ghost_center() {
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
+        let group = ws.group_of_tab(a).unwrap();
         ws.append_tab("bash", None);
         ws.append_tab("fish", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
-        let last = layout.groups[0].tabs[2].rect;
-        let ghost_center_past_everything = last.x + last.width + 1000.0;
+        // Dentro do wrapper, depois da última aba -- diferente de "depois
+        // de tudo", que agora é `NewRun` (ADR-0021 §4: só o gap **entre**
+        // wrappers, ou fora de qualquer um, tem essa regra especial; a
+        // ponta livre do único wrapper existente ainda é o próprio grupo).
+        let wrapper = &layout.groups[0];
+        let ghost_center_at_wrapper_end = wrapper.rect.x + wrapper.rect.width - 1.0;
         assert_eq!(
-            drag_target_index(&layout, a, ghost_center_past_everything),
-            2 // duas abas restantes (b, c) depois de tirar a
+            drag_target(&layout, a, ghost_center_at_wrapper_end),
+            // duas abas restantes (b, c) depois de tirar a
+            DragDrop::IntoGroup { group, pos: 2 }
         );
 
         let first_after_removal_center =
             layout.groups[0].tabs[1].rect.x + layout.groups[0].tabs[1].rect.width / 2.0 - 1.0;
-        assert_eq!(drag_target_index(&layout, a, first_after_removal_center), 0);
+        assert_eq!(
+            drag_target(&layout, a, first_after_removal_center),
+            DragDrop::IntoGroup { group, pos: 0 }
+        );
+    }
+
+    #[test]
+    fn drag_target_over_pill_of_other_group_enters_at_its_start() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let dest = ws.group_tabs(&[b], "dest", GroupColor::Blue).unwrap();
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let pill = layout.groups[1].pill.as_ref().unwrap();
+        let over_pill = pill.rect.x + pill.rect.width / 2.0;
+        assert_eq!(
+            drag_target(&layout, a, over_pill),
+            DragDrop::IntoGroup {
+                group: dest,
+                pos: 0
+            }
+        );
+    }
+
+    #[test]
+    fn drag_target_in_gap_between_wrappers_enters_end_of_left_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let dest = ws.group_tabs(&[b], "dest", GroupColor::Blue).unwrap();
+        // "a" fica sozinha num run implícito novo depois do split acima --
+        // o id dela mudou, então pega de novo em vez de reusar o de antes.
+        let group_a = ws.group_of_tab(a).unwrap();
+        // arrasta uma terceira aba, de fora dos dois grupos envolvidos.
+        let c = ws.new_tab(None, "fish", None, 0);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        // meio do `trilha_gap` entre os dois primeiros wrappers.
+        let gap_center = layout.groups[0].rect.x
+            + layout.groups[0].rect.width
+            + TabBarStyle::DEFAULT.trilha_gap / 2.0;
+        assert_eq!(
+            drag_target(&layout, c, gap_center),
+            DragDrop::IntoGroup {
+                group: group_a,
+                pos: 1
+            }
+        );
+        assert!(dest != group_a);
+    }
+
+    #[test]
+    fn drag_target_before_first_group_creates_new_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            drag_target(&layout, a, -100.0),
+            DragDrop::NewRun { group_index: 0 }
+        );
+    }
+
+    #[test]
+    fn drag_target_after_last_group_creates_new_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let far_right = layout.content_width + 1000.0;
+        assert_eq!(
+            drag_target(&layout, a, far_right),
+            DragDrop::NewRun { group_index: 1 }
+        );
+    }
+
+    #[test]
+    fn drag_target_over_collapsed_group_enters_it() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let dest = ws.group_tabs(&[b], "dest", GroupColor::Blue).unwrap();
+        ws.collapse_group(dest, true);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let wrapper = &layout.groups[1];
+        assert!(wrapper.tabs.is_empty());
+        let over = wrapper.rect.x + wrapper.rect.width / 2.0;
+        assert_eq!(
+            drag_target(&layout, a, over),
+            DragDrop::IntoGroup {
+                group: dest,
+                pos: 0
+            }
+        );
+    }
+
+    #[test]
+    fn drag_highlight_rect_is_none_for_new_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            drag_highlight_rect(&layout, DragDrop::NewRun { group_index: 0 }),
+            None
+        );
+        let _ = a;
+    }
+
+    #[test]
+    fn drag_highlight_rect_uses_pill_when_collapsed() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "g", GroupColor::Blue).unwrap();
+        ws.collapse_group(group, true);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let pill_rect = layout.groups[0].pill.as_ref().unwrap().rect;
+        let (highlighted_group, rect) =
+            drag_highlight_rect(&layout, DragDrop::IntoGroup { group, pos: 0 }).unwrap();
+        assert_eq!(highlighted_group, group);
+        assert_eq!(rect, pill_rect);
+    }
+
+    #[test]
+    fn group_drag_target_index_finds_insertion_point_by_ghost_center() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let g1 = ws.group_tabs(&[a], "g1", GroupColor::Red).unwrap();
+        let b = ws.new_tab(None, "bash", None, 0);
+        let g2 = ws.group_tabs(&[b], "g2", GroupColor::Blue).unwrap();
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let g2_rect = layout.groups[1].rect;
+        let over_g2_center = g2_rect.x + g2_rect.width / 2.0;
+        // arrastando g1 pra cima de g2: entra depois dele (índice 1, já
+        // sem g1 na lista de "outros").
+        assert_eq!(group_drag_target_index(&layout, g1, over_g2_center), 1);
+        let far_left = -100.0;
+        assert_eq!(group_drag_target_index(&layout, g2, far_left), 0);
     }
 
     #[test]

@@ -30,10 +30,27 @@
 //! pintado aqui com as mesmas cores de `Indicator` da seção 2.17. Clique na
 //! pílula (`group.toggle_collapse`, RF-2.13) e duplo clique (editor, F3
 //! etapa 5) são wiring de `lib.rs`, fora desta função de pintura pura.
+//!
+//! Desde a F3 etapa 6, três coisas a mais: o realce de fronteira do
+//! arraste de aba (`drag_highlight`, espec. §2.19/ADR-0021 §4); o fantasma
+//! do arraste de grupo (`group_drag`, espec. §2.19.1) -- só a pílula,
+//! reaproveitando `paint_group_pill` deslocada pelo `dx` certo, e o
+//! wrapper de origem inteiro pulado enquanto arrasta (`continue` no laço
+//! principal, abrindo o "vão" que a espec pede); e a interpolação do
+//! relógio de animação (`animations`, ADR-0022) -- todo o wrapper de um
+//! grupo (pílula + abas juntas, como unidade rígida) desliza da posição
+//! antiga até a que `layout` calculou, quando há uma reflui ativa pra ele.
+//! `DragGhost` carrega o `TabRect` de origem (`base_layout`, não o
+//! preview) desde esta etapa: soltar sobre um grupo colapsado faz o
+//! preview não gerar `TabRect` nenhum pra aba arrastada, e o fantasma
+//! precisa do conteúdo mesmo assim.
 
-use porecatu_core::{TabId, Workspace};
+use std::time::Instant;
+
+use porecatu_core::{GroupId, TabId, Workspace};
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
 
+use crate::animation::AnimationClock;
 use crate::group_editor::GroupEditor;
 use crate::palette;
 use crate::rename::RenameState;
@@ -62,6 +79,18 @@ const SELECTED_BORDER_WIDTH: f32 = 2.0;
 // Wrapper de grupo (espec §2.3, `[appearance.groups]`).
 const WRAPPER_CORNER_RADIUS: f32 = 8.0; // wrapper_corner_radius
 const WRAPPER_TINT_STRENGTH: f64 = 0.07; // tint_strength, RF-4.19
+
+// Realce de fronteira do arraste de aba (espec §2.19, ADR-0021 §4).
+// "Sobe o tingimento de .07 para .16 -- o mesmo badge_tint_strength que o
+// arquivo de exemplo já usa" -- mas `badge_tint_strength` no TOML vale
+// 0.14 (seção do badge de perfil, [v2]), não .16: a prosa da espec.
+// arredonda, o TOML é a fonte numérica canônica deste projeto. Usa-se o
+// valor do TOML, com a divergência registrada aqui em vez de inventar um
+// terceiro número.
+const DRAG_HIGHLIGHT_TINT_STRENGTH: f64 = 0.14; // badge_tint_strength
+// "Borda 1px na cor do grupo com alfa .45" -- sem chave própria no TOML.
+const DRAG_HIGHLIGHT_BORDER_ALPHA: f64 = 0.45;
+const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
 
 // Pílula de grupo (espec §2.4, `[appearance.groups]`).
 const PILL_CORNER_RADIUS: f32 = 6.0; // label_corner_radius
@@ -94,11 +123,27 @@ const OVERFLOW_INNER_GAP: f32 = 3.0; // folga de trabalho entre chevron e contag
 /// `layout` calculou para ela (que já reflete o preview de onde ela cairia,
 /// e é onde o "buraco" fica: a aba não é desenhada na posição normal
 /// enquanto isto está `Some`, deixando o fundo da barra aparecer).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DragGhost {
     pub tab: TabId,
     /// Coordenada de tela (sem o deslocamento de rolagem) do canto
     /// esquerdo do fantasma.
+    pub screen_x: f32,
+    /// Retângulo/rótulo/indicador de `base_layout` (`lib.rs`), de antes de
+    /// qualquer preview -- garante conteúdo mesmo quando o alvo do
+    /// arraste (F3 etapa 6) é um grupo colapsado, cujo preview não gera
+    /// `TabRect` nenhum pra essa aba (§2.4: "abas somem da barra").
+    pub source: tab_bar::TabRect,
+}
+
+/// O grupo sendo arrastado pelo rótulo (espec §2.19.1): o fantasma é só a
+/// pílula, seguindo o cursor no eixo X -- diferente do arraste de aba, o
+/// grupo inteiro (wrapper + abas) some da posição em que o preview o
+/// colocaria (`paint` pula o desenho dele por completo), abrindo o "vão"
+/// que a espec descreve, em vez de renderizar o conteúdo normalmente ali.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GroupDragGhost {
+    pub group: GroupId,
     pub screen_x: f32,
 }
 
@@ -124,6 +169,10 @@ pub fn paint(
     bar_width: f32,
     overflow: Overflow,
     drag: Option<DragGhost>,
+    group_drag: Option<GroupDragGhost>,
+    drag_highlight: Option<(GroupId, Rect)>,
+    animations: &AnimationClock,
+    now: Instant,
     measurer: &mut porecatu_render::TextMeasurer,
 ) -> Vec<Primitive> {
     let bar_height = style.tab_height + style.wrapper_padding * 2.0;
@@ -158,9 +207,30 @@ pub fn paint(
         width: bar_width,
         height: bar_height,
     }));
-    let dx = -overflow.scroll_offset;
+    let scroll_dx = -overflow.scroll_offset;
 
     for group in &layout.groups {
+        // Espec §2.19.1: "o wrapper de origem colapsa pra largura zero" --
+        // o grupo inteiro some daqui enquanto o rótulo dele está sendo
+        // arrastado; só o fantasma (pintado no fim) marca onde ele está.
+        // `layout` já é o preview (posição de destino provisória), então
+        // pular o desenho aqui é o que abre o "vão" que a espec descreve.
+        if group_drag.is_some_and(|g| g.group == group.id) {
+            continue;
+        }
+
+        // ADR-0022: enquanto o grupo tem uma reflui ativa (RF-2.5, ou o
+        // colapso/expansão de um grupo depois/antes deste na trilha), o
+        // wrapper inteiro -- pílula e abas juntas, como uma unidade rígida
+        // -- desliza da posição antiga até a que `layout` já calculou,
+        // interpolado linearmente. Fora de animação, `anim_dx` é zero e
+        // isto pinta exatamente onde sempre pintou.
+        let anim_dx = animations
+            .wrapper_progress(group.id, now)
+            .map(|(old_x, progress)| (old_x - group.rect.x) * (1.0 - progress))
+            .unwrap_or(0.0);
+        let dx = scroll_dx + anim_dx;
+
         let core_group = workspace.group(group.id);
         let is_collapsed = core_group.is_some_and(|g| g.is_collapsed());
         // Espec §2.5: "sublinhado de aba sem grupo" usa `ungrouped_color`;
@@ -170,6 +240,19 @@ pub fn paint(
             .and_then(|g| g.color())
             .map(palette::group_color)
             .unwrap_or(palette::UNGROUPED_UNDERLINE);
+
+        // Espec §2.19, ADR-0021 §4: "o wrapper que receberia a aba sobe o
+        // tingimento... e ganha borda 1px na cor do grupo com alfa .45".
+        if drag_highlight.is_some_and(|(id, _)| id == group.id) {
+            let highlight_rect = drag_highlight.map(|(_, rect)| rect).expect("checado acima");
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect: shift(highlight_rect, dx),
+                radius: WRAPPER_CORNER_RADIUS,
+                color: with_alpha(group_color, DRAG_HIGHLIGHT_TINT_STRENGTH),
+                border_color: with_alpha(group_color, DRAG_HIGHLIGHT_BORDER_ALPHA),
+                border_width: DRAG_HIGHLIGHT_BORDER_WIDTH,
+            }));
+        }
 
         if let Some(pill) = &group.pill {
             // Espec §2.3: fundo tingido só expandido -- "colapsado fica
@@ -205,7 +288,7 @@ pub fn paint(
         }
 
         for tab in &group.tabs {
-            let is_ghost = drag.is_some_and(|g| g.tab == tab.id);
+            let is_ghost = drag.as_ref().is_some_and(|g| g.tab == tab.id);
             let tab_rect = shift(tab.rect, dx);
 
             if is_ghost {
@@ -296,7 +379,7 @@ pub fn paint(
     }
 
     if let Some(button) = layout.new_tab_button {
-        let button = shift(button, dx);
+        let button = shift(button, scroll_dx);
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: button,
             radius: 6.0,
@@ -336,13 +419,8 @@ pub fn paint(
         );
     }
 
-    if let Some(ghost) = drag
-        && let Some(tab) = layout
-            .groups
-            .iter()
-            .flat_map(|g| &g.tabs)
-            .find(|t| t.id == ghost.tab)
-    {
+    if let Some(ghost) = &drag {
+        let tab = &ghost.source;
         let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
         let is_active = active == Some(tab.id);
         let (bg, border, text_color) = tab_colors(exited, is_active);
@@ -377,6 +455,38 @@ pub fn paint(
             size_px: style.font_size,
             color: text_color,
         }));
+    }
+
+    // Espec §2.19.1: "o fantasma é a pílula sozinha" -- reaproveita a
+    // geometria da pílula que `layout` já calculou pro grupo arrastado
+    // (presente ali mesmo sendo pulado no laço principal acima, que só
+    // filtra o desenho, não a busca) e desloca pelo `dx` que leva do X que
+    // o layout deu a ela até o X do fantasma -- o mesmo mecanismo que já
+    // move a pílula normal pela rolagem/animação, então funciona igual
+    // esteja `layout` refletindo a posição antiga ou o preview de destino.
+    if let Some(ghost) = group_drag
+        && let Some(group) = layout.groups.iter().find(|g| g.id == ghost.group)
+        && let Some(pill) = &group.pill
+    {
+        let color = workspace
+            .group(ghost.group)
+            .and_then(|g| g.color())
+            .map(palette::group_color)
+            .unwrap_or(palette::UNGROUPED_UNDERLINE);
+        let is_collapsed = workspace
+            .group(ghost.group)
+            .is_some_and(|g| g.is_collapsed());
+        let ghost_dx = ghost.screen_x - pill.rect.x;
+        paint_group_pill(
+            pill,
+            color,
+            is_collapsed,
+            None,
+            style.pill_font_size,
+            ghost_dx,
+            measurer,
+            &mut out,
+        );
     }
 
     out
