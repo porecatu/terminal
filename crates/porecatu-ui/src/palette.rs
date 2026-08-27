@@ -6,6 +6,7 @@
 //! subseções, como constantes com a chave de origem no comentário (mesmo
 //! padrão de `WINDOW_BACKGROUND`).
 
+use porecatu_core::GroupColor;
 use porecatu_render::Color;
 use porecatu_term::TermColor;
 
@@ -57,8 +58,40 @@ pub const TAB_INACTIVE_TEXT: Color = hex(0x98, 0xa0, 0xab);
 pub const TAB_EXITED_TEXT: Color = hex(0x72, 0x7a, 0x86);
 pub const CLOSE_BUTTON_ICON: Color = hex(0x72, 0x7a, 0x86);
 // `[appearance.groups] ungrouped_color` -- sublinhado das abas do grupo
-// implícito (F2 só tem esse grupo).
+// implícito (ADR-0006) e cor de tingimento do wrapper delas (que fica
+// sempre transparente, espec §2.3 -- este token só serve o sublinhado).
 pub const UNGROUPED_UNDERLINE: Color = hex(0x7b, 0x83, 0x8f);
+
+// `[appearance.groups] palette` -- RF-2.4, RF-4.18. Seis cores, na mesma
+// ordem de `GroupColor::ALL` (`porecatu-core`) -- é a ordem de atribuição
+// automática (ADR-0020 §5).
+const GROUP_RED: Color = hex(0xef, 0x8a, 0x8a);
+const GROUP_YELLOW: Color = hex(0xe0, 0xb0, 0x60);
+const GROUP_CYAN: Color = hex(0x5e, 0xd3, 0xbc);
+const GROUP_BLUE: Color = hex(0x6f, 0xa8, 0xf5);
+const GROUP_PURPLE: Color = hex(0xa6, 0x8c, 0xf0);
+const GROUP_GREEN: Color = hex(0x86, 0xc5, 0x6a);
+
+/// Resolve `GroupColor` (não resolvida, `porecatu-core`) para a cor
+/// concreta -- mesma separação que este módulo já faz para `TermColor`.
+pub const fn group_color(color: GroupColor) -> Color {
+    match color {
+        GroupColor::Red => GROUP_RED,
+        GroupColor::Yellow => GROUP_YELLOW,
+        GroupColor::Cyan => GROUP_CYAN,
+        GroupColor::Blue => GROUP_BLUE,
+        GroupColor::Purple => GROUP_PURPLE,
+        GroupColor::Green => GROUP_GREEN,
+    }
+}
+
+// Pílula de grupo (espec §2.4, `[appearance.groups]`).
+pub const PILL_BACKGROUND: Color = hex(0x1f, 0x24, 0x2c); // label_background
+pub const PILL_BORDER: Color = hex(0x2b, 0x31, 0x3b); // label_border
+pub const PILL_TEXT: Color = hex(0xc3, 0xca, 0xd3); // label_foreground
+pub const PILL_COUNT_BACKGROUND: Color = hex(0x12, 0x15, 0x1a); // count_background
+pub const PILL_COUNT_TEXT: Color = hex(0x7b, 0x83, 0x8f); // count_foreground
+pub const PILL_CARET: Color = hex(0x6b, 0x73, 0x7e); // caret_foreground
 
 // `[appearance.tabs] selected_border` -- ADR-0021, RF-2.2: aba em seleção
 // múltipla. Modificador sobre o estado de base (não é um quarto estado,
