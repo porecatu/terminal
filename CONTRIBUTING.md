@@ -3,12 +3,13 @@
 Obrigado pelo interesse. Este documento reúne as convenções que já estão
 decididas, para que ninguém precise garimpá-las nos ADRs.
 
-> **Estado atual: F0, F1 e F2 implementadas.** `cargo run` abre uma janela com
-> abas de terminal funcionais, menu de contexto, tooltip, aviso, diálogo de
-> confirmação e uma segunda janela por atalho. Não há grupos nomeados, arquivo
-> de configuração nem sessão persistente ainda — a próxima fase é a F3
-> (grupos), cujas decisões estão nos [ADR-0020 a
-> 0023](docs/adr/). Ver [docs/roadmap.md](docs/roadmap.md).
+> **Estado atual: F0, F1, F2 e F3 implementadas — a F3 exceto o RF-2.21**
+> (`group.next`/`group.prev`), que a mantém aberta. `cargo run` abre uma janela
+> com abas e grupos de terminal funcionais, seleção múltipla, editor de grupo,
+> arraste entre grupos, menu de contexto, tooltip, aviso, diálogo de confirmação
+> e uma segunda janela por atalho. Não há arquivo de configuração nem sessão
+> persistente ainda. As decisões da F3 estão nos [ADR-0020 a 0023](docs/adr/).
+> Ver [docs/roadmap.md](docs/roadmap.md).
 
 ## Antes de abrir uma issue ou um PR
 
