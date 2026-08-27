@@ -19,6 +19,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
+mod animation;
 mod chrome;
 mod clipboard;
 mod context_menu;
@@ -36,7 +37,8 @@ mod tab_bar;
 mod tooltip;
 mod warning;
 
-use chrome::DragGhost;
+use animation::AnimationClock;
+use chrome::{DragGhost, GroupDragGhost};
 use context_menu::{ContextMenu, MenuAction};
 use dialog::{ConfirmDialog, DialogAction, DialogButton};
 use group_editor::{EditorRegion, GroupEditor};
@@ -47,7 +49,7 @@ use paint::CellMetrics;
 use porecatu_core::GroupColor;
 use rename::RenameState;
 use selection::Selection;
-use tab_bar::{OverflowSide, TabBarHit, TabBarStyle};
+use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
 use tooltip::Hover;
 use warning::{Severity, WarningStack};
 
@@ -72,13 +74,21 @@ const DRAG_AUTOSCROLL_STEP_PX: f32 = 12.0;
 /// criou, em pixels físicos.
 const NEW_WINDOW_CASCADE_PX: i32 = 30;
 
-/// Estado do arraste de reordenação (espec §2.19, RF-1.15). `Pressed` é o
-/// meio-caminho entre o clique que já ativou a aba (RF-1.13) e o arraste de
-/// verdade -- existe só para medir o limiar de 4px antes de comprometer.
+/// ADR-0022, tabela de consumidores -- as únicas duas durações que o
+/// relógio de animação usa.
+const COLLAPSE_REFLOW_DURATION: std::time::Duration = std::time::Duration::from_millis(150);
+#[allow(dead_code)] // group.create ainda sem gesto que dispare isto (nota do módulo `animation.rs`)
+const GROUP_CREATE_REFLOW_DURATION: std::time::Duration = std::time::Duration::from_millis(180);
+
+/// Estado do arraste na barra (espec §2.19/§2.19.1, RF-1.15/RF-1.16/
+/// RF-2.18/RF-2.19, F3 etapa 6). `TabPressed`/`GroupPressed` são o meio-
+/// caminho entre o clique que já ativou a aba (ou vai decidir colapso/
+/// duplo clique, no caso da pílula) e o arraste de verdade -- existem só
+/// pra medir o limiar de 4px antes de comprometer.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum TabDrag {
+enum Drag {
     Idle,
-    Pressed {
+    TabPressed {
         tab: TabId,
         start: (f32, f32),
         /// Deslocamento (em coordenadas de tela) entre o ponto do clique e
@@ -87,12 +97,27 @@ enum TabDrag {
         /// trilha role (o fantasma segue o cursor, não o conteúdo).
         grab_offset: f32,
     },
-    Dragging {
+    TabDragging {
         tab: TabId,
         grab_offset: f32,
-        /// Índice de inserção calculado no último redraw
-        /// (`tab_bar::drag_target_index`) -- é o que `lib.rs` aplica de
-        /// verdade ao `Workspace` se o usuário soltar dentro da barra.
+        /// Alvo calculado no último redraw (`tab_bar::drag_target`,
+        /// ADR-0021 §4) -- o que `lib.rs` aplica de verdade ao `Workspace`
+        /// se o usuário soltar dentro da barra.
+        target: DragDrop,
+    },
+    /// Arraste do rótulo do grupo (espec §2.19.1, RF-2.19): o fantasma é só
+    /// a pílula, e o clique-e-espera nela ainda não decidiu entre colapso/
+    /// duplo clique (`handle_pill_click`, resolvido em `finish_drag` se
+    /// nunca virar `GroupDragging`).
+    GroupPressed {
+        group: GroupId,
+        start: (f32, f32),
+        grab_offset: f32,
+    },
+    GroupDragging {
+        group: GroupId,
+        grab_offset: f32,
+        /// Mesma convenção de `tab_bar::group_drag_target_index`.
         preview_index: usize,
     },
 }
@@ -186,7 +211,12 @@ struct WindowState {
     /// redraw por `tab_bar::overflow_state`, nunca lido cru fora dali.
     scroll_offset: f32,
     /// Arraste de reordenação em andamento (espec §2.19), se algum.
-    drag: TabDrag,
+    drag: Drag,
+    /// Relógio de animação (ADR-0022) -- reflui da trilha ao colapsar/
+    /// expandir (`.15s`, único gatilho de UI desta etapa) e, pelo mesmo
+    /// mecanismo, a reordenação do RF-2.5 (`.18s`, sem gatilho ainda --
+    /// `group.create` continua sem gesto, nota do módulo `animation.rs`).
+    animations: AnimationClock,
     /// Hover/tooltip do ADR-0019 -- RF-1.10, título truncado da aba.
     hover: Hover,
     /// Aviso do app (ADR-0014 canal 1, RF-10.15/RF-10.16).
@@ -230,7 +260,8 @@ impl WindowState {
             click_tracker: ClickTracker::default(),
             rename: RenameState::Idle,
             scroll_offset: 0.0,
-            drag: TabDrag::Idle,
+            drag: Drag::Idle,
+            animations: AnimationClock::default(),
             hover: Hover::default(),
             warnings: WarningStack::default(),
             dialog: None,
@@ -891,7 +922,7 @@ impl WindowState {
     /// espera as mesmas coordenadas não-roladas de `fit_width`. Clicar numa
     /// aba diferente da que está sendo renomeada confirma o rename primeiro
     /// (espec. §2.5: "blur" confirma"); clicar no corpo de uma aba também
-    /// arma o possível arraste do RF-1.15 (`TabDrag::Pressed`), resolvido
+    /// arma o possível arraste do RF-1.15 (`Drag::TabPressed`), resolvido
     /// de verdade só se o movimento passar do limiar em `CursorMoved`. Isso
     /// só vale para o clique **sem modificador**: `Ctrl`/`Cmd`+clique
     /// alterna a seleção e `Shift`+clique estende a partir da âncora
@@ -986,7 +1017,7 @@ impl WindowState {
                     self.ensure_active_tab_visible(gpu);
                     if let Some(rect) = tab_bar::tab_rect(&layout, id) {
                         let screen_x = rect.x - self.scroll_offset;
-                        self.drag = TabDrag::Pressed {
+                        self.drag = Drag::TabPressed {
                             tab: id,
                             start: logical_point,
                             grab_offset: logical_point.0 - screen_x,
@@ -1002,23 +1033,40 @@ impl WindowState {
                 false
             }
             TabBarHit::Pill(id) => {
-                // RF-2.22: duplo clique no rótulo abre o editor, no lugar
-                // do colapso que um clique simples faria (evita o
-                // flicker de colapsar-e-reabrir no segundo clique).
-                let now = Instant::now();
-                let is_double_click = self.last_pill_click.is_some_and(|(last_id, at)| {
-                    last_id == id && now.duration_since(at) <= PILL_DOUBLE_CLICK_THRESHOLD
-                });
-                self.last_pill_click = Some((id, now));
-                if is_double_click {
-                    self.last_pill_click = None;
-                    self.open_group_editor(id, EditorRegion::Name);
-                } else {
-                    self.toggle_group_collapse(id, gpu);
+                // Espec §2.19.1/RF-2.19: arma o possível arraste do
+                // rótulo -- se o gesto nunca passar do limiar de 4px,
+                // `finish_drag` trata como clique de verdade (colapso ou
+                // duplo clique, RF-2.13/RF-2.22).
+                if let Some(rect) = tab_bar::pill_rect(&layout, id) {
+                    let screen_x = rect.x - self.scroll_offset;
+                    self.drag = Drag::GroupPressed {
+                        group: id,
+                        start: logical_point,
+                        grab_offset: logical_point.0 - screen_x,
+                    };
                 }
                 false
             }
             TabBarHit::NewTabButton => true,
+        }
+    }
+
+    /// RF-2.13/RF-2.22: o que um clique **de verdade** (sem cruzar o
+    /// limiar de arraste) na pílula faz -- duplo clique abre o editor, no
+    /// lugar do colapso que um clique simples faria (evita o flicker de
+    /// colapsar-e-reabrir no segundo clique). Chamado por `finish_drag`
+    /// quando o `Drag::GroupPressed` armado nunca virou `GroupDragging`.
+    fn handle_pill_click(&mut self, id: GroupId, gpu: &mut GpuContext) {
+        let now = Instant::now();
+        let is_double_click = self.last_pill_click.is_some_and(|(last_id, at)| {
+            last_id == id && now.duration_since(at) <= PILL_DOUBLE_CLICK_THRESHOLD
+        });
+        self.last_pill_click = Some((id, now));
+        if is_double_click {
+            self.last_pill_click = None;
+            self.open_group_editor(id, EditorRegion::Name);
+        } else {
+            self.toggle_group_collapse(id, gpu);
         }
     }
 
@@ -1064,7 +1112,21 @@ impl WindowState {
             let group_tabs: Vec<TabId> = group.tabs().to_vec();
             self.selection.invalidate_group(&group_tabs, &order);
         }
+        // ADR-0022: captura o layout ANTES do colapso -- é o que a
+        // pintura interpola até a posição nova ao longo de `.15s`. Grupos
+        // depois deste (ou antes, se expandindo) deslizam em vez de
+        // saltar; o sublinhado/caret não têm equivalente animado (nota do
+        // módulo `animation.rs`).
+        let style = TabBarStyle::DEFAULT;
+        let old_layout = tab_bar::fit_width(
+            &self.workspace,
+            &style,
+            self.logical_width,
+            gpu.text_measurer(),
+        );
         self.workspace.collapse_group(id, collapsing);
+        self.animations
+            .start_reflow(&old_layout, COLLAPSE_REFLOW_DURATION, Instant::now());
         self.sync_window_title();
         self.ensure_active_tab_visible(gpu);
     }
@@ -1096,10 +1158,12 @@ impl WindowState {
     /// devolve o diálogo de confirmação pra `App` montar -- RF-2.23 exige
     /// confirmação sempre, e o diálogo é `Option<ConfirmDialog>` por
     /// janela, resolvido por quem já tem `self.dialog` em mãos.
+    #[allow(clippy::too_many_arguments)]
     fn run_group_action(
         &mut self,
         group: GroupId,
         action: GroupAction,
+        gpu: &mut GpuContext,
         cell_metrics: CellMetrics,
         proxy: &EventLoopProxy<Wakeup>,
         startup_directory: &Option<PathBuf>,
@@ -1108,25 +1172,7 @@ impl WindowState {
         match action {
             GroupAction::Rename => self.open_group_editor(group, EditorRegion::Name),
             GroupAction::SetColor => self.open_group_editor(group, EditorRegion::Swatches),
-            GroupAction::ToggleCollapse => {
-                // `toggle_group_collapse` precisa de `GpuContext` só pra
-                // `ensure_active_tab_visible` -- inatingível aqui (esta
-                // função não recebe `gpu`, e o colapso por menu/editor não
-                // precisa de medição de texto pra decidir rolagem: a
-                // trilha já cabe o que cabia antes). Duplicata mínima em
-                // vez de replumbar `gpu` por uma chamada indireta.
-                let Some(g) = self.workspace.group(group) else {
-                    return;
-                };
-                let collapsing = !g.is_collapsed();
-                if collapsing {
-                    let order: Vec<TabId> = self.workspace.visual_order().collect();
-                    let group_tabs: Vec<TabId> = g.tabs().to_vec();
-                    self.selection.invalidate_group(&group_tabs, &order);
-                }
-                self.workspace.collapse_group(group, collapsing);
-                self.sync_window_title();
-            }
+            GroupAction::ToggleCollapse => self.toggle_group_collapse(group, gpu),
             GroupAction::NewTab => {
                 self.action_new_tab_in_group(group, cell_metrics, proxy, startup_directory, now);
             }
@@ -1190,22 +1236,42 @@ impl WindowState {
         window_empty
     }
 
-    /// Solta o botão do mouse com um arraste em andamento (espec §2.19):
-    /// aplica o `preview_index` calculado no último redraw se o cursor
+    /// Solta o botão do mouse com um arraste em andamento (espec §2.19/
+    /// §2.19.1): aplica o alvo calculado no último redraw se o cursor
     /// ainda está dentro da barra, ou cancela em silêncio se não está --
     /// "soltar fora da trilha cancela também". `self.workspace` nunca foi
     /// mexido durante o arraste (só o preview clonado em `RedrawRequested`
     /// era), então cancelar é só voltar `drag` pra `Idle`, sem desfazer
-    /// nada. Também cobre soltar um `Pressed` que nunca virou arraste --
-    /// não há o que aplicar, o clique já ativou a aba na hora do `press`.
-    fn finish_drag(&mut self) {
-        let drag = std::mem::replace(&mut self.drag, TabDrag::Idle);
-        if let TabDrag::Dragging {
-            tab, preview_index, ..
-        } = drag
-            && self.in_bar(self.cursor_position.1)
-        {
-            self.workspace.move_tab(tab, preview_index);
+    /// nada. `GroupPressed` que nunca virou `GroupDragging` é um clique de
+    /// verdade na pílula -- resolvido aqui (`handle_pill_click`), não no
+    /// `press`, porque só agora se sabe que não foi arraste. `TabPressed`
+    /// sem `TabDragging` não precisa de nada: o clique já ativou a aba na
+    /// hora do `press`.
+    fn finish_drag(&mut self, gpu: &mut GpuContext) {
+        let drag = std::mem::replace(&mut self.drag, Drag::Idle);
+        match drag {
+            Drag::TabDragging { tab, target, .. } if self.in_bar(self.cursor_position.1) => {
+                match target {
+                    DragDrop::IntoGroup { group, pos } => {
+                        self.workspace.move_tab_to_group_at(tab, group, pos);
+                    }
+                    DragDrop::NewRun { group_index } => {
+                        self.workspace.move_tab_to_new_run(tab, group_index);
+                    }
+                }
+            }
+            Drag::GroupDragging {
+                group,
+                preview_index,
+                ..
+            } if self.in_bar(self.cursor_position.1) => {
+                self.workspace.move_group(group, preview_index);
+            }
+            Drag::GroupPressed { group, .. } => {
+                self.handle_pill_click(group, gpu);
+            }
+            Drag::TabPressed { .. } | Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {}
+            Drag::Idle => {}
         }
         self.window.set_cursor(CursorIcon::Default);
     }
@@ -1271,7 +1337,7 @@ impl WindowState {
             && self.group_context_menu.is_none()
             && self.group_editor.is_none()
             && self.move_to_group.is_none()
-            && matches!(self.drag, TabDrag::Idle)
+            && matches!(self.drag, Drag::Idle)
         {
             let style = TabBarStyle::DEFAULT;
             let layout = tab_bar::fit_width(
@@ -1308,13 +1374,18 @@ impl WindowState {
     fn tick(&mut self, now: Instant) {
         self.warnings.tick(now);
         self.hover.tick(now);
+        self.animations.tick(now);
     }
 
-    fn next_wake(&self) -> Option<Instant> {
-        [self.warnings.next_deadline(), self.hover.next_deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+    fn next_wake(&self, now: Instant) -> Option<Instant> {
+        [
+            self.warnings.next_deadline(),
+            self.hover.next_deadline(),
+            self.animations.next_deadline(now),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 }
 
@@ -1578,27 +1649,32 @@ impl App {
     }
 
     /// Agenda o próximo despertar via `ControlFlow::WaitUntil` -- o
-    /// temporizador da informação (ADR-0014) e o atraso do tooltip
-    /// (ADR-0019) marcam sujeira, não rodam loop nenhum: quando não há
-    /// nada pendente em nenhuma janela, o event loop dorme de verdade
-    /// (`ControlFlow::Wait`).
+    /// temporizador da informação (ADR-0014), o atraso do tooltip
+    /// (ADR-0019) e o relógio de animação (ADR-0022) marcam sujeira, não
+    /// rodam loop nenhum: quando não há nada pendente em nenhuma janela, o
+    /// event loop dorme de verdade (`ControlFlow::Wait`).
     fn schedule_next_wake(&self, event_loop: &ActiveEventLoop) {
-        let next = self.windows.values().filter_map(|w| w.next_wake()).min();
+        let now = Instant::now();
+        let next = self.windows.values().filter_map(|w| w.next_wake(now)).min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 
-    /// Roda o `tick` (expira avisos, promove tooltip pendente) em todas as
-    /// janelas e redesenha as que mudaram.
+    /// Roda o `tick` (expira avisos, promove tooltip pendente, avança/
+    /// remove animação) em todas as janelas e redesenha as que mudaram --
+    /// ou que têm animação em curso, já que ela precisa de um frame por
+    /// intervalo enquanto ativa (ADR-0022).
     fn tick_all(&mut self) {
         let now = Instant::now();
         for state in self.windows.values_mut() {
             let had_warnings = !state.warnings.is_empty();
             let had_tooltip = state.hover.visible().is_some();
+            let was_animating = !state.animations.is_empty();
             state.tick(now);
-            if had_warnings != !state.warnings.is_empty()
+            if was_animating
+                || had_warnings != !state.warnings.is_empty()
                 || had_tooltip != state.hover.visible().is_some()
             {
                 state.window.request_redraw();
@@ -1801,6 +1877,9 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
+        // ADR-0022: qualquer tecla descarta animação em curso e aplica o
+        // estado final na hora -- a animação nunca bloqueia input.
+        state.animations.clear();
 
         // Cadeia de captura (ADR-0008 passo 1): diálogo modal > menu de
         // contexto > cancelamento de arraste > rename > aviso > seleção
@@ -1832,10 +1911,12 @@ impl App {
             let group = state.group_context_menu.map(|m| m.group);
             if let Some(action) = state.handle_group_menu_key(&key)
                 && let Some(group) = group
+                && let Some(gpu) = &mut self.gpu
             {
                 state.run_group_action(
                     group,
                     action,
+                    gpu,
                     self.cell_metrics,
                     &self.proxy,
                     &self.startup_directory,
@@ -1849,10 +1930,13 @@ impl App {
         }
         if state.group_editor.is_some() {
             let outcome = state.handle_group_editor_key(&key);
-            if let GroupEditorOutcome::Action(group, action) = outcome {
+            if let GroupEditorOutcome::Action(group, action) = outcome
+                && let Some(gpu) = &mut self.gpu
+            {
                 state.run_group_action(
                     group,
                     action,
+                    gpu,
                     self.cell_metrics,
                     &self.proxy,
                     &self.startup_directory,
@@ -1876,11 +1960,13 @@ impl App {
             }
             return;
         }
-        if matches!(state.drag, TabDrag::Dragging { .. })
-            && key.state == ElementState::Pressed
+        if matches!(
+            state.drag,
+            Drag::TabDragging { .. } | Drag::GroupDragging { .. }
+        ) && key.state == ElementState::Pressed
             && matches!(key.logical_key, Key::Named(NamedKey::Escape))
         {
-            state.drag = TabDrag::Idle;
+            state.drag = Drag::Idle;
             state.window.set_cursor(CursorIcon::Default);
             state.window.request_redraw();
             return;
@@ -2007,6 +2093,7 @@ impl App {
                 state.run_group_action(
                     group,
                     action,
+                    gpu,
                     self.cell_metrics,
                     &self.proxy,
                     &self.startup_directory,
@@ -2161,7 +2248,7 @@ impl App {
         }
 
         let handled_by_drag = match &mut state.drag {
-            TabDrag::Pressed {
+            Drag::TabPressed {
                 tab,
                 start,
                 grab_offset,
@@ -2173,10 +2260,12 @@ impl App {
                 let past_threshold = (logical.0 - start.0).abs() > DRAG_THRESHOLD_PX
                     || (logical.1 - start.1).abs() > DRAG_THRESHOLD_PX;
                 if past_threshold {
-                    let dragging = TabDrag::Dragging {
+                    // Alvo provisório -- `redraw()` recalcula pelo cursor
+                    // corrente antes de qualquer pintura ou solta usá-lo.
+                    let dragging = Drag::TabDragging {
                         tab: *tab,
                         grab_offset: *grab_offset,
-                        preview_index: 0,
+                        target: DragDrop::NewRun { group_index: 0 },
                     };
                     state.drag = dragging;
                     state.window.set_cursor(CursorIcon::Grabbing);
@@ -2184,7 +2273,7 @@ impl App {
                 }
                 true
             }
-            TabDrag::Dragging { .. } => {
+            Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {
                 let logical_x = position.x as f32 / state.scale;
                 if logical_x < DRAG_EDGE_ZONE_PX {
                     state.scroll_offset = (state.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
@@ -2193,7 +2282,29 @@ impl App {
                 }
                 true
             }
-            TabDrag::Idle => false,
+            Drag::GroupPressed {
+                group,
+                start,
+                grab_offset,
+            } => {
+                let logical = (
+                    position.x as f32 / state.scale,
+                    position.y as f32 / state.scale,
+                );
+                let past_threshold = (logical.0 - start.0).abs() > DRAG_THRESHOLD_PX
+                    || (logical.1 - start.1).abs() > DRAG_THRESHOLD_PX;
+                if past_threshold {
+                    state.drag = Drag::GroupDragging {
+                        group: *group,
+                        grab_offset: *grab_offset,
+                        preview_index: 0,
+                    };
+                    state.window.set_cursor(CursorIcon::Grabbing);
+                    state.hover.dismiss();
+                }
+                true
+            }
+            Drag::Idle => false,
         };
 
         if handled_by_drag {
@@ -2240,10 +2351,16 @@ impl App {
             return;
         };
         let pressed = element_state == ElementState::Pressed;
+        if pressed {
+            // ADR-0022: qualquer clique descarta animação em curso.
+            state.animations.clear();
+        }
 
         if !pressed {
-            if button == MouseButton::Left && !matches!(state.drag, TabDrag::Idle) {
-                state.finish_drag();
+            if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
+                if let Some(gpu) = &mut self.gpu {
+                    state.finish_drag(gpu);
+                }
             } else if !state.in_bar(state.cursor_position.1) {
                 state.mouse_button_down = None;
             }
@@ -2328,10 +2445,12 @@ impl App {
             state.group_context_menu = None;
             if button == MouseButton::Left
                 && let Some(index) = hit
+                && let Some(gpu) = &mut self.gpu
             {
                 state.run_group_action(
                     menu.group,
                     items[index].action,
+                    gpu,
                     self.cell_metrics,
                     &self.proxy,
                     &self.startup_directory,
@@ -2451,37 +2570,85 @@ impl App {
         state.scroll_offset = overflow.scroll_offset;
 
         // Durante um arraste, o `Workspace` de verdade não é tocado -- só
-        // um clone com o preview de reordenação aplicado é usado pra
-        // desenhar (espec §2.19: as vizinhas "deslizam" mostrando onde a
-        // aba cairia; o `Workspace` real só recebe a troca ao soltar).
+        // um clone com o preview aplicado é usado pra desenhar (espec
+        // §2.19/§2.19.1: as vizinhas "deslizam" mostrando onde a aba/o
+        // grupo cairia; o `Workspace` real só recebe a troca ao soltar).
         let mut drag_ghost = None;
-        let paint_layout = if let TabDrag::Dragging {
-            tab, grab_offset, ..
-        } = state.drag
-        {
-            let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
-            let ghost_screen_x = cursor_logical_x - grab_offset;
-            let ghost_content_x = ghost_screen_x + state.scroll_offset;
-            let width = tab_bar::tab_rect(&base_layout, tab)
-                .map(|r| r.width)
-                .unwrap_or(0.0);
-            let ghost_center = ghost_content_x + width / 2.0;
-            let preview_index = tab_bar::drag_target_index(&base_layout, tab, ghost_center);
-            state.drag = TabDrag::Dragging {
-                tab,
-                grab_offset,
-                preview_index,
-            };
-            drag_ghost = Some(DragGhost {
-                tab,
-                screen_x: ghost_screen_x,
-            });
+        let mut group_drag_ghost = None;
+        let mut drag_highlight = None;
+        let now = Instant::now();
+        let paint_layout = match state.drag {
+            Drag::TabDragging {
+                tab, grab_offset, ..
+            } => {
+                let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
+                let ghost_screen_x = cursor_logical_x - grab_offset;
+                let ghost_content_x = ghost_screen_x + state.scroll_offset;
+                // `base_layout` (não o preview): a fonte do conteúdo do
+                // fantasma tem que existir sempre, mesmo quando o alvo
+                // corrente é um grupo colapsado -- lá o preview não gera
+                // `TabRect` nenhum pra esta aba (nota de `chrome::DragGhost`).
+                let source = base_layout
+                    .groups
+                    .iter()
+                    .flat_map(|g| &g.tabs)
+                    .find(|t| t.id == tab)
+                    .cloned();
+                let width = source.as_ref().map(|t| t.rect.width).unwrap_or(0.0);
+                let ghost_center = ghost_content_x + width / 2.0;
+                let target = tab_bar::drag_target(&base_layout, tab, ghost_center);
+                state.drag = Drag::TabDragging {
+                    tab,
+                    grab_offset,
+                    target,
+                };
+                if let Some(source) = source {
+                    drag_ghost = Some(DragGhost {
+                        tab,
+                        screen_x: ghost_screen_x,
+                        source,
+                    });
+                }
+                drag_highlight = tab_bar::drag_highlight_rect(&base_layout, target);
 
-            let mut preview = state.workspace.clone();
-            preview.move_tab(tab, preview_index);
-            tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer())
-        } else {
-            base_layout
+                let mut preview = state.workspace.clone();
+                match target {
+                    DragDrop::IntoGroup { group, pos } => {
+                        preview.move_tab_to_group_at(tab, group, pos);
+                    }
+                    DragDrop::NewRun { group_index } => {
+                        preview.move_tab_to_new_run(tab, group_index);
+                    }
+                }
+                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer())
+            }
+            Drag::GroupDragging {
+                group, grab_offset, ..
+            } => {
+                let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
+                let ghost_screen_x = cursor_logical_x - grab_offset;
+                let ghost_content_x = ghost_screen_x + state.scroll_offset;
+                let width = tab_bar::pill_rect(&base_layout, group)
+                    .map(|r| r.width)
+                    .unwrap_or(0.0);
+                let ghost_center = ghost_content_x + width / 2.0;
+                let preview_index =
+                    tab_bar::group_drag_target_index(&base_layout, group, ghost_center);
+                state.drag = Drag::GroupDragging {
+                    group,
+                    grab_offset,
+                    preview_index,
+                };
+                group_drag_ghost = Some(GroupDragGhost {
+                    group,
+                    screen_x: ghost_screen_x,
+                });
+
+                let mut preview = state.workspace.clone();
+                preview.move_group(group, preview_index);
+                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer())
+            }
+            _ => base_layout,
         };
 
         let chrome_primitives = chrome::paint(
@@ -2495,6 +2662,10 @@ impl App {
             bar_width,
             overflow,
             drag_ghost,
+            group_drag_ghost,
+            drag_highlight,
+            &state.animations,
+            now,
             gpu.text_measurer(),
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);

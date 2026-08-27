@@ -448,14 +448,32 @@ impl Workspace {
         Some(new_group_id)
     }
 
-    /// RF-2.20 (`tab.move_to_group`): move `tab` pro fim de `group`, um
-    /// grupo já existente. Diferente de `move_tab` -- que só reordena
-    /// **dentro** do mesmo grupo, de propósito (ADR-0006) --, este cruza
-    /// fronteira de grupo: o grupo de origem some se ficar vazio e dois
-    /// runs implícitos adjacentes se fundem, mesma limpeza de `close_tab`
-    /// (`normalize_groups`). `false` se `tab` ou `group` não existem, ou se
-    /// `tab` já está em `group` (no-op, não erro).
+    /// RF-2.20 (`tab.move_to_group`): move `tab` pro **fim** de `group`, um
+    /// grupo já existente. Conveniência de [`Self::move_tab_to_group_at`]
+    /// com a posição resolvida aqui (o chamador do menu não tem como saber
+    /// "quantas abas o grupo tem agora" sem consultar de volta).
     pub fn move_tab_to_group(&mut self, tab: TabId, group: GroupId) -> bool {
+        let Some(g) = self.group(group) else {
+            return false;
+        };
+        let pos = g.tabs().len();
+        self.move_tab_to_group_at(tab, group, pos)
+    }
+
+    /// RF-1.16/RF-2.18 (arraste entre grupos, F3 etapa 6): move `tab` pra
+    /// dentro de `group`, um grupo já existente (implícito ou explícito),
+    /// na posição `pos` dentro dele -- mesma convenção de índice que
+    /// `move_tab`/`Group::move_within` (posição entre as abas
+    /// **restantes**, saturando no fim). Diferente de `move_tab` -- que só
+    /// reordena **dentro** do mesmo grupo, de propósito (ADR-0006) --, este
+    /// cruza fronteira de grupo: o grupo de origem some se ficar vazio e
+    /// dois runs implícitos adjacentes se fundem, mesma limpeza de
+    /// `close_tab` (`normalize_groups`). Soltar sobre grupo colapsado
+    /// (ADR-0021 §4) não tem tratamento especial: a aba entra normalmente,
+    /// só não aparece na trilha porque o grupo está colapsado. `false` se
+    /// `tab` ou `group` não existem, ou se `tab` já está em `group` e a
+    /// posição não mudaria (no-op, não erro).
+    pub fn move_tab_to_group_at(&mut self, tab: TabId, group: GroupId, pos: usize) -> bool {
         if self.tab(tab).is_none() || self.group(group).is_none() {
             return false;
         }
@@ -467,12 +485,63 @@ impl Workspace {
             return false;
         };
         if self.groups[from_index].id() == group {
-            return false;
+            // Mesma fronteira do `Group::move_within` -- reordenar dentro
+            // do próprio grupo é `move_tab`, não isto, mas o arraste
+            // resolve o alvo sem saber de antemão se cruzou fronteira ou
+            // não, então aceitar e delegar aqui é o caminho mais simples.
+            return self.groups[from_index].move_within(tab, pos);
         }
         self.groups[from_index].remove(tab);
         let to_index = self.group_index(group).expect("checado acima");
-        let pos = self.groups[to_index].tabs().len();
         self.groups[to_index].insert(pos, tab);
+        self.normalize_groups();
+        true
+    }
+
+    /// RF-1.16, segunda frase (soltar fora de qualquer wrapper): move
+    /// `tab` pra um run implícito **novo**, inserido na posição
+    /// `group_index` da lista de grupos -- entre os grupos que já estão
+    /// lá, na mesma ordem que o layout da barra usou pra calcular
+    /// `group_index`. Funde com run implícito adjacente automaticamente
+    /// (`normalize_groups`), o mesmo mecanismo de `group_tabs`/`ungroup` --
+    /// é o que evita dois runs implícitos ficarem lado a lado se o destino
+    /// cair colado num run que já existe. `false` se `tab` não existe.
+    pub fn move_tab_to_new_run(&mut self, tab: TabId, group_index: usize) -> bool {
+        let Some(from_index) = self
+            .groups
+            .iter()
+            .position(|g| g.position_of(tab).is_some())
+        else {
+            return false;
+        };
+        self.groups[from_index].remove(tab);
+        let fresh_id = self.fresh_group_id();
+        let mut new_group = Group::new_implicit(fresh_id);
+        new_group.insert(0, tab);
+        let insert_at = group_index.min(self.groups.len());
+        self.groups.insert(insert_at, new_group);
+        self.normalize_groups();
+        true
+    }
+
+    /// RF-2.19 (arraste do rótulo do grupo, F3 etapa 6): reordena `id`
+    /// para a posição `pos` na lista de grupos -- mesma convenção de
+    /// índice de `move_tab_to_group_at`, posição entre os grupos
+    /// **restantes**, saturando no fim. Grupos não aninham (ADR-0006):
+    /// isto só reordena o `Vec<Group>` de nível superior, nunca move um
+    /// grupo pra dentro de outro. Pode deixar dois runs implícitos
+    /// adjacentes (ex.: mover um grupo explícito de entre dois implícitos
+    /// pra fora deles) -- `normalize_groups` funde. `false` se `id` não
+    /// existe.
+    pub fn move_group(&mut self, id: GroupId, pos: usize) -> bool {
+        let Some(from) = self.group_index(id) else {
+            return false;
+        };
+        let pos = pos.min(self.groups.len() - 1);
+        if from != pos {
+            let group = self.groups.remove(from);
+            self.groups.insert(pos, group);
+        }
         self.normalize_groups();
         true
     }
@@ -900,11 +969,18 @@ mod tests {
     }
 
     #[test]
-    fn move_tab_to_group_is_noop_for_own_group() {
+    fn move_tab_to_group_moving_to_own_group_is_a_successful_noop() {
+        // Diferente da versão da etapa 5: `move_tab_to_group` agora
+        // delega a `move_tab_to_group_at`, que trata "mesmo grupo" como
+        // reordenação (`Group::move_within`), não como erro -- mesma
+        // convenção de `move_within`, que também devolve `true` quando
+        // `from == pos`. Popover de destino já filtra o grupo atual da
+        // aba (`move_to_group.rs`), então este caso não chega da UI.
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
         let group = ws.group_of_tab(a).unwrap();
-        assert!(!ws.move_tab_to_group(a, group));
+        assert!(ws.move_tab_to_group(a, group));
+        assert_eq!(ws.group(group).unwrap().tabs(), [a]);
     }
 
     #[test]
@@ -914,6 +990,117 @@ mod tests {
         let group = ws.group_tabs(&[a], "g", GroupColor::Blue).unwrap();
         assert!(!ws.move_tab_to_group(TabId::new(999), group));
         assert!(!ws.move_tab_to_group(a, GroupId::new(999)));
+    }
+
+    // Cenário de aceite (RF-1.16/RF-2.18, F3 etapa 6): arraste pra posição
+    // arbitrária dentro de um grupo já existente.
+    #[test]
+    fn move_tab_to_group_at_inserts_in_the_middle() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let c = ws.append_tab("fish", None);
+        let dest = ws.group_tabs(&[b, c], "dest", GroupColor::Blue).unwrap();
+
+        assert!(ws.move_tab_to_group_at(a, dest, 1));
+        assert_eq!(ws.group(dest).unwrap().tabs(), [b, a, c]);
+    }
+
+    #[test]
+    fn move_tab_to_group_at_within_same_group_reorders() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let c = ws.append_tab("fish", None);
+        let group = ws.group_of_tab(a).unwrap();
+
+        assert!(ws.move_tab_to_group_at(c, group, 0));
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [c, a, b]);
+    }
+
+    // Cenário de aceite: soltar depois do último grupo cria run implícito
+    // novo ali -- o caso real que `tab_bar::drag_target` produz (fora da
+    // trilha, à direita de tudo).
+    #[test]
+    fn move_tab_to_new_run_creates_run_after_the_last_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group_a = ws.group_tabs(&[a], "a", GroupColor::Blue).unwrap();
+        let b = ws.new_tab(Some(group_a), "bash", None, 1); // dentro de "a" por ora
+
+        assert!(ws.move_tab_to_new_run(b, ws.groups().len()));
+        assert_eq!(ws.groups().len(), 2);
+        let new_run = ws.group_of_tab(b).unwrap();
+        assert!(ws.group(new_run).unwrap().is_implicit());
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [a, b]);
+        assert_eq!(ws.group(group_a).unwrap().tabs(), [a]);
+    }
+
+    // Cenário de aceite: soltar antes do primeiro grupo, quando ele já é
+    // implícito, funde no run existente em vez de deixar dois lado a lado.
+    #[test]
+    fn move_tab_to_new_run_merges_with_adjacent_implicit_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None); // implícito
+        let group_a = ws.group_of_tab(a).unwrap();
+        let group = ws.group_tabs(&[a], "g", GroupColor::Blue).unwrap();
+        // agrupar "a" sozinho não deixa run implícito nenhum pra trás
+        // (era o único); recria um segundo run pra ter o que fundir.
+        assert!(group != group_a);
+        let b = ws.new_tab(Some(group), "bash", None, 1); // dentro de "g" por ora
+
+        // solta "b" na posição 0 (antes do único grupo, que é "g" com a
+        // e b -- ainda sem run implícito). Cria um sozinho por ora.
+        assert!(ws.move_tab_to_new_run(b, 0));
+        assert_eq!(ws.groups().len(), 2);
+        let new_run = ws.group_of_tab(b).unwrap();
+        assert!(ws.group(new_run).unwrap().is_implicit());
+
+        // solta de novo na posição 0: agora já existe um run implícito
+        // ali (o "new_run" recém-criado) -- deve fundir, não duplicar.
+        let c = ws.new_tab(Some(group), "fish", None, 0);
+        assert!(ws.move_tab_to_new_run(c, 0));
+        assert_eq!(ws.groups().len(), 2);
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [c, b, a]);
+    }
+
+    // Cenário de aceite (RF-2.19): arrastar o rótulo do grupo reordena a
+    // lista de grupos.
+    #[test]
+    fn move_group_reorders_group_list() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let g1 = ws.group_tabs(&[a], "g1", GroupColor::Blue).unwrap();
+        let g2 = ws.group_tabs(&[b], "g2", GroupColor::Green).unwrap();
+
+        assert!(ws.move_group(g2, 0));
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [b, a]);
+        assert_eq!(
+            ws.groups().iter().map(|g| g.id()).collect::<Vec<_>>(),
+            [g2, g1]
+        );
+    }
+
+    #[test]
+    fn move_group_merges_adjacent_implicit_runs_left_behind() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None); // implícito
+        let b = ws.append_tab("bash", None); // mesmo implícito de a
+        let c = ws.new_tab(None, "fish", None, 0); // segundo run implícito
+        let group = ws.group_tabs(&[c], "mid", GroupColor::Blue).unwrap();
+        // ordem: [implícito: a,b] [mid: c] -- move "mid" pro início,
+        // deixando os dois implícitos adjacentes de novo (devem fundir).
+        assert!(ws.move_group(group, 0));
+        assert_eq!(ws.groups().len(), 2);
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [c, a, b]);
+    }
+
+    #[test]
+    fn move_group_unknown_id_is_noop() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        assert!(!ws.move_group(GroupId::new(999), 0));
     }
 
     // Cenário de aceite: desagrupar preserva ordem e posição.
