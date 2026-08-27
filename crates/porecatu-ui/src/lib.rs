@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use porecatu_core::{TabId, Workspace};
+use porecatu_core::{GroupId, TabId, Workspace};
 use porecatu_render::{Frame, GpuContext, Layer, Rect, WindowSurface};
 use porecatu_term::{
     GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermParams, Terminal,
@@ -767,6 +767,10 @@ impl WindowState {
                 }
                 false
             }
+            TabBarHit::Pill(id) => {
+                self.toggle_group_collapse(id, gpu);
+                false
+            }
             TabBarHit::NewTabButton => true,
         }
     }
@@ -793,6 +797,29 @@ impl WindowState {
         }
         self.close_tab_unconditionally(id);
         None
+    }
+
+    /// RF-2.13: clique na pílula alterna colapso. Ao **colapsar**, a
+    /// seleção das abas que estão saindo de vista é invalidada primeiro
+    /// (ADR-0021 §2, `Selection::invalidate_group`) -- ela usa a ordem
+    /// visual de antes, que `collapse_group` ainda não mudou. `expandir`
+    /// nunca invalida seleção: nenhuma aba fica menos selecionável por
+    /// entrar em vista. `collapse_group` pode mover o foco (RF-2.14) --
+    /// título da janela e posição de rolagem seguem a aba ativa, mesmo
+    /// tratamento do clique que ativa uma aba.
+    fn toggle_group_collapse(&mut self, id: GroupId, gpu: &mut GpuContext) {
+        let Some(group) = self.workspace.group(id) else {
+            return;
+        };
+        let collapsing = !group.is_collapsed();
+        if collapsing {
+            let order: Vec<TabId> = self.workspace.visual_order().collect();
+            let group_tabs: Vec<TabId> = group.tabs().to_vec();
+            self.selection.invalidate_group(&group_tabs, &order);
+        }
+        self.workspace.collapse_group(id, collapsing);
+        self.sync_window_title();
+        self.ensure_active_tab_visible(gpu);
     }
 
     /// Solta o botão do mouse com um arraste em andamento (espec §2.19):

@@ -7,7 +7,10 @@
 //! rótulo e a rolagem do §2.18 (`fit_width`/`overflow_state`) e a geometria
 //! de arraste do §2.19 (`drag_target_index`). Desde a F3 etapa 3, também a
 //! geometria da pílula de grupo (§2.4) e a participação dela na ordem de
-//! cedência do overflow. Pintura (`chrome.rs`) e wiring de clique/rename/
+//! cedência do overflow. Desde a F3 etapa 4, grupo colapsado não gera
+//! `TabRect` nenhum (§2.4: "suas abas somem da barra") e a pílula ganha o
+//! indicador agregado (RF-2.16) e um alvo de hit-test próprio
+//! (`TabBarHit::Pill`). Pintura (`chrome.rs`) e wiring de clique/rename/
 //! arraste (`lib.rs`) ficam do outro lado da fronteira -- este módulo não
 //! sabe de `wgpu` nem de `winit`.
 //!
@@ -211,6 +214,15 @@ pub struct GroupWrapperRect {
 pub struct GroupPillRect {
     pub rect: Rect,
     pub swatch: Rect,
+    /// Indicador agregado (espec. §2.4, RF-2.16): só `Some` com o grupo
+    /// **colapsado** e alguma aba dele com atividade/campainha pendente --
+    /// "com o grupo expandido, cada aba mostra o seu próprio ponto e um
+    /// agregado seria redundante". Mesma regra de "um ponto só, campainha
+    /// vence" da §2.17.
+    pub aggregate_indicator: Option<Indicator>,
+    /// Origem do ponto agregado -- só significativa quando
+    /// `aggregate_indicator` é `Some`, mesmo padrão de `name_origin`.
+    pub aggregate_indicator_origin: (f32, f32),
     /// Origem do texto do nome (já truncado com reticências, RF-2.12) --
     /// sem retângulo próprio, mesmo padrão do rótulo da aba.
     pub name_origin: (f32, f32),
@@ -245,6 +257,10 @@ pub struct TabBarLayout {
 pub enum TabBarHit {
     Tab(TabId),
     CloseButton(TabId),
+    /// Espec. §2.4: "clique alterna colapso; duplo clique abre o editor" --
+    /// o alvo é a pílula inteira, sem sub-região própria pro caret
+    /// (RF-2.13, `docs/reference/acoes.md`: "o alvo é a pílula clicada").
+    Pill(GroupId),
     NewTabButton,
 }
 
@@ -269,6 +285,7 @@ pub fn layout(
         }
         let group_start_x = x;
         let mut inner_x = x + style.wrapper_padding;
+        let collapsed = group.is_collapsed();
 
         // Pílula (espec. §2.3/§2.4): só grupo explícito -- "abas sem grupo
         // usam um wrapper sem pílula". Fica antes das abas no flex do
@@ -287,11 +304,37 @@ pub fn layout(
             };
             px += style.pill_swatch_size + style.pill_gap;
 
+            // Indicador agregado (espec. §2.4, RF-2.16): só colapsado, e só
+            // se houver atividade/campainha pendente entre as abas do
+            // grupo -- que continuam existindo em `group.tabs()` mesmo sem
+            // `TabRect` (elas "somem da barra", não do modelo). Consome
+            // largura do **nome**, não da pílula -- por isso o `dot_reserve`
+            // é subtraído do teto de nome abaixo, no mesmo padrão do
+            // indicador de aba (`dot_reserve` no laço de abas).
+            let aggregate_indicator = if collapsed {
+                aggregate_indicator(workspace, group.tabs())
+            } else {
+                None
+            };
+            let aggregate_indicator_origin = if aggregate_indicator.is_some() {
+                let origin = (px, pill_y + (pill_height - INDICATOR_DOT_SIZE) / 2.0);
+                px += INDICATOR_DOT_SIZE + style.pill_gap;
+                origin
+            } else {
+                (0.0, 0.0)
+            };
+            let name_dot_reserve = if aggregate_indicator.is_some() {
+                INDICATOR_DOT_SIZE + style.pill_gap
+            } else {
+                0.0
+            };
+            let name_cap = (style.pill_name_max_width - name_dot_reserve).max(0.0);
+
             let (name, name_truncated) = measurer.truncate(
                 group.name().unwrap_or_default(),
                 PILL_NAME_FONT,
                 style.pill_font_size,
-                style.pill_name_max_width,
+                name_cap,
             );
             let name_width = measurer.measure_width(&name, PILL_NAME_FONT, style.pill_font_size);
             let name_origin = (px, pill_y + (pill_height - style.pill_font_size) / 2.0);
@@ -331,6 +374,8 @@ pub fn layout(
             Some(GroupPillRect {
                 rect: pill_rect,
                 swatch,
+                aggregate_indicator,
+                aggregate_indicator_origin,
                 name_origin,
                 name,
                 name_truncated,
@@ -341,13 +386,19 @@ pub fn layout(
         } else {
             None
         };
-        if pill.is_some() {
+        // Espec. §2.4: "grupo colapsado... suas abas somem da barra" -- o
+        // `tab_gap` que normalmente separa a pílula da primeira aba não
+        // entra sem nenhuma aba pra separar (RF-2.13).
+        if pill.is_some() && !collapsed {
             inner_x += style.tab_gap;
         }
 
-        let mut tabs = Vec::with_capacity(group.tabs().len());
+        let mut tabs = Vec::with_capacity(if collapsed { 0 } else { group.tabs().len() });
 
         for (index, &tab_id) in group.tabs().iter().enumerate() {
+            if collapsed {
+                continue;
+            }
             let Some(tab) = workspace.tab(tab_id) else {
                 continue;
             };
@@ -471,6 +522,30 @@ pub fn layout(
         new_tab_button,
         content_width: x,
     }
+}
+
+/// Indicador agregado (espec. §2.4, RF-2.16) sobre as abas de um grupo
+/// colapsado: campainha vence atividade (mesma regra da §2.17), aba
+/// `Exited` nunca contribui (mesma exclusão da §2.17 -- o motivo de ela
+/// ficar aberta já está escrito no grid, não num indicador). `None` quando
+/// nenhuma aba tem nada pendente.
+fn aggregate_indicator(workspace: &Workspace, tabs: &[TabId]) -> Option<Indicator> {
+    let mut any_activity = false;
+    for &id in tabs {
+        let Some(tab) = workspace.tab(id) else {
+            continue;
+        };
+        if tab.is_exited() {
+            continue;
+        }
+        if tab.bell() {
+            return Some(Indicator::Bell);
+        }
+        if tab.activity() {
+            any_activity = true;
+        }
+    }
+    any_activity.then_some(Indicator::Activity)
 }
 
 /// Piso do rótulo (espec. §2.18: "sobram 49px de rótulo") derivado do piso
@@ -727,6 +802,13 @@ pub fn hit_test(layout: &TabBarLayout, point: (f32, f32)) -> Option<TabBarHit> {
             if rect_contains(tab.hit_rect, point) {
                 return Some(TabBarHit::Tab(tab.id));
             }
+        }
+    }
+    for group in &layout.groups {
+        if let Some(pill) = &group.pill
+            && rect_contains(pill.rect, point)
+        {
+            return Some(TabBarHit::Pill(group.id));
         }
     }
     if let Some(button) = layout.new_tab_button
@@ -1221,6 +1303,119 @@ mod tests {
             TabBarStyle::DEFAULT.pill_font_size,
         );
         assert!(name_width < TabBarStyle::DEFAULT.pill_name_max_width);
+    }
+
+    #[test]
+    fn collapsed_group_produces_no_tab_rects() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let group = ws.group_tabs(&[a, b], "col", GroupColor::Cyan).unwrap();
+        ws.collapse_group(group, true);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert!(layout.groups[0].tabs.is_empty());
+        assert!(layout.groups[0].pill.is_some());
+    }
+
+    #[test]
+    fn collapsed_group_wrapper_hugs_the_pill_without_trailing_tab_gap() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "col", GroupColor::Cyan).unwrap();
+        ws.collapse_group(group, true);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let wrapper = &layout.groups[0];
+        let pill = wrapper.pill.as_ref().unwrap();
+        assert_eq!(
+            wrapper.rect.width,
+            pill.rect.width + TabBarStyle::DEFAULT.wrapper_padding * 2.0
+        );
+    }
+
+    #[test]
+    fn expanded_group_has_no_aggregate_indicator() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.tab_mut(a).unwrap().mark_activity();
+        ws.group_tabs(&[a], "g", GroupColor::Cyan).unwrap();
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
+            None
+        );
+    }
+
+    #[test]
+    fn collapsed_group_shows_aggregate_activity_indicator() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        ws.tab_mut(b).unwrap().mark_activity();
+        let group = ws.group_tabs(&[a, b], "g", GroupColor::Cyan).unwrap();
+        ws.collapse_group(group, true);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
+            Some(Indicator::Activity)
+        );
+    }
+
+    #[test]
+    fn collapsed_group_aggregate_bell_wins_over_activity() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        ws.tab_mut(a).unwrap().mark_activity();
+        ws.tab_mut(b).unwrap().mark_bell();
+        let group = ws.group_tabs(&[a, b], "g", GroupColor::Cyan).unwrap();
+        ws.collapse_group(group, true);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
+            Some(Indicator::Bell)
+        );
+    }
+
+    #[test]
+    fn collapsed_group_exited_tab_does_not_trigger_aggregate_indicator() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.tab_mut(a).unwrap().mark_activity();
+        ws.tab_mut(a).unwrap().mark_exited(0);
+        let group = ws.group_tabs(&[a], "g", GroupColor::Cyan).unwrap();
+        ws.collapse_group(group, true);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
+            None
+        );
+    }
+
+    #[test]
+    fn hit_test_pill_returns_group_id() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "g", GroupColor::Cyan).unwrap();
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let pill = layout.groups[0].pill.as_ref().unwrap();
+        let center = (
+            pill.rect.x + pill.rect.width / 2.0,
+            pill.rect.y + pill.rect.height / 2.0,
+        );
+        assert_eq!(hit_test(&layout, center), Some(TabBarHit::Pill(group)));
     }
 
     #[test]

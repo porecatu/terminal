@@ -20,12 +20,16 @@
 //!
 //! Desde a F3 etapa 3, pílula e wrapper tingido (§2.3/§2.4) também entram
 //! aqui -- mas só a geometria e a cor que já existem em `porecatu-core`
-//! desde a etapa 1 (`Group::color`/`is_collapsed`). Indicador agregado
-//! (RF-2.16), esconder abas de grupo colapsado da trilha e a interação de
-//! clique/duplo clique na pílula são F3 etapa 4/5 -- fora do escopo daqui.
-//! O caret também não gira: `RoundedQuad`/`TextRun` não têm transform, então
-//! a troca de glyph (`▶`/`▼`) é o equivalente estático, mesma lacuna já
-//! registrada acima para `brightness`/sombra.
+//! desde a etapa 1 (`Group::color`/`is_collapsed`). O caret também não gira:
+//! `RoundedQuad`/`TextRun` não têm transform, então a troca de glyph
+//! (`▶`/`▼`) é o equivalente estático, mesma lacuna já registrada acima para
+//! `brightness`/sombra.
+//!
+//! Desde a F3 etapa 4, grupo colapsado não desenha abas (o layout já não as
+//! gera, ver `tab_bar.rs`) e a pílula ganha o indicador agregado (RF-2.16),
+//! pintado aqui com as mesmas cores de `Indicator` da seção 2.17. Clique na
+//! pílula (`group.toggle_collapse`, RF-2.13) e duplo clique (editor, F3
+//! etapa 5) são wiring de `lib.rs`, fora desta função de pintura pura.
 
 use porecatu_core::{TabId, Workspace};
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
@@ -426,6 +430,27 @@ fn paint_group_pill(
         border_color: palette::TRANSPARENT,
         border_width: 0.0,
     }));
+    if let Some(indicator) = pill.aggregate_indicator {
+        let dot_color = match indicator {
+            Indicator::Activity => palette::ACTIVITY_INDICATOR,
+            Indicator::Bell => palette::BELL_INDICATOR,
+        };
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: shift(
+                Rect {
+                    x: pill.aggregate_indicator_origin.0,
+                    y: pill.aggregate_indicator_origin.1,
+                    width: INDICATOR_DOT_SIZE,
+                    height: INDICATOR_DOT_SIZE,
+                },
+                dx,
+            ),
+            radius: INDICATOR_DOT_SIZE / 2.0,
+            color: dot_color,
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
+    }
     out.push(Primitive::Text(TextRun {
         origin: (pill.name_origin.0 + dx, pill.name_origin.1),
         text: pill.name.clone(),

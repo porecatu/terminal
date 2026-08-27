@@ -86,11 +86,18 @@ impl Selection {
         }
     }
 
-    // Colapsar o grupo de uma aba selecionada também invalida a seleção
-    // dela (ADR-0021 §2), no mesmo critério de `remove_tab` acima -- mas o
-    // gesto que colapsa um grupo (`group.toggle_collapse`) só existe a
-    // partir da F3 etapa 4 (`docs/roadmap.md`), então o método equivalente
-    // entra junto com ele: sem chamador, seria código morto agora.
+    /// Colapsar o grupo de uma aba selecionada também invalida a seleção
+    /// dela (ADR-0021 §2), no mesmo critério de `remove_tab`: a âncora, se
+    /// estava entre as abas do grupo, pula para a selecionada mais próxima
+    /// em `order`. Chamado por `group.toggle_collapse` (F3 etapa 4) antes de
+    /// `Workspace::collapse_group` -- `order` é a ordem visual de
+    /// **antes** do colapso (que não muda de definição, só de visibilidade),
+    /// mesmo motivo que `remove_tab` usa a ordem de antes da remoção.
+    pub fn invalidate_group(&mut self, group_tabs: &[TabId], order: &[TabId]) {
+        for &id in group_tabs {
+            self.remove_tab(id, order);
+        }
+    }
 }
 
 /// Aba selecionada mais próxima de `from` em `order`, por distância
@@ -253,6 +260,34 @@ mod tests {
         // âncora".
         sel.select_range(&order, t(2));
         assert!(sel.is_selected(t(2)));
+        assert!(!sel.is_selected(t(1)));
+    }
+
+    #[test]
+    fn invalidate_group_drops_selected_tabs_of_that_group() {
+        let mut sel = Selection::default();
+        let order = [t(1), t(2), t(3), t(4)];
+        sel.toggle(t(2));
+        sel.toggle(t(3));
+        sel.toggle(t(4));
+        sel.invalidate_group(&[t(2), t(3)], &order);
+        assert!(!sel.is_selected(t(2)));
+        assert!(!sel.is_selected(t(3)));
+        assert!(sel.is_selected(t(4)));
+    }
+
+    #[test]
+    fn invalidate_group_reassigns_anchor_when_it_was_inside() {
+        let mut sel = Selection::default();
+        let order = [t(1), t(2), t(3), t(4)];
+        sel.select_range(&order, t(2)); // âncora = t(2)
+        sel.toggle(t(4));
+        sel.invalidate_group(&[t(2)], &order);
+        // âncora pulou para a selecionada mais próxima (t(4)): Shift+clique
+        // em t(3) reabre [3,4].
+        sel.select_range(&order, t(3));
+        assert!(sel.is_selected(t(3)));
+        assert!(sel.is_selected(t(4)));
         assert!(!sel.is_selected(t(1)));
     }
 

@@ -258,18 +258,20 @@ impl Workspace {
         true
     }
 
-    /// RF-1.11: próxima aba na ordem visual, circulando.
+    /// RF-1.11, revisto por RF-2.15: próxima aba na ordem **navegável**,
+    /// circulando -- abas de grupo colapsado não participam.
     pub fn next_tab(&mut self) -> Option<TabId> {
         self.step_tab(1)
     }
 
-    /// RF-1.11: aba anterior na ordem visual, circulando.
+    /// RF-1.11, revisto por RF-2.15: aba anterior na ordem navegável,
+    /// circulando.
     pub fn prev_tab(&mut self) -> Option<TabId> {
         self.step_tab(-1)
     }
 
     fn step_tab(&mut self, delta: isize) -> Option<TabId> {
-        let order: Vec<TabId> = self.visual_order().collect();
+        let order: Vec<TabId> = self.navigable_order().collect();
         if order.is_empty() {
             return None;
         }
@@ -738,6 +740,22 @@ mod tests {
 
         let mut vi = visual.iter();
         assert!(navigable.iter().all(|n| vi.any(|v| v == n)));
+    }
+
+    // Cenário de aceite (RF-2.15): next/prev pulam abas de grupo colapsado.
+    #[test]
+    fn next_and_prev_tab_skip_collapsed_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b], "col", GroupColor::Blue).unwrap();
+        ws.collapse_group(group, true);
+        ws.activate_tab(a);
+
+        assert_eq!(ws.next_tab(), Some(c));
+        assert_eq!(ws.next_tab(), Some(a));
+        assert_eq!(ws.prev_tab(), Some(c));
     }
 
     // Cenário de aceite: colapso remove da navegação.
