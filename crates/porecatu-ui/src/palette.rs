@@ -46,11 +46,15 @@ pub const NOTE_ACCENT_RGB: (u8, u8, u8) = (0x5e, 0xd3, 0xbc);
 pub const BAR_BACKGROUND: Color = hex(0x1b, 0x1f, 0x26); // Barras
 pub const BAR_SEPARATOR: Color = hex(0x23, 0x27, 0x2f); // Separador de barra
 
-// Espec. visual §2.5 -- aba.
-pub const TAB_ACTIVE_BACKGROUND: Color = hex(0x28, 0x2e, 0x37);
+// Espec. visual §2.5 -- aba. Fundo em `hex_alpha` (F3 etapa 6, ajuste
+// pedido pelo usuário -- não vem da espec.): o grupo é uma "cápsula"
+// pintada com a cor cheia (`GROUP_CAPSULE_FILL_STRENGTH` em `chrome.rs`),
+// e a aba por cima deixa passar 15% dela como indício da cor -- sem isso,
+// o fundo opaco da aba cobriria a cápsula por completo.
+pub const TAB_ACTIVE_BACKGROUND: Color = hex_alpha(0x28, 0x2e, 0x37, 0.85);
 pub const TAB_ACTIVE_BORDER: Color = hex(0x39, 0x40, 0x4b);
 pub const TAB_ACTIVE_TEXT: Color = hex(0xea, 0xee, 0xf3);
-pub const TAB_INACTIVE_BACKGROUND: Color = hex(0x19, 0x1d, 0x23);
+pub const TAB_INACTIVE_BACKGROUND: Color = hex_alpha(0x19, 0x1d, 0x23, 0.85);
 pub const TAB_INACTIVE_BORDER: Color = hex(0x22, 0x26, 0x2e);
 pub const TAB_INACTIVE_TEXT: Color = hex(0x98, 0xa0, 0xab);
 // Aba `Exited` (ADR-0017): fundo/borda de inativa, texto no tom do botão

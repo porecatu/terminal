@@ -78,7 +78,13 @@ const SELECTED_BORDER_WIDTH: f32 = 2.0;
 
 // Wrapper de grupo (espec §2.3, `[appearance.groups]`).
 const WRAPPER_CORNER_RADIUS: f32 = 8.0; // wrapper_corner_radius
-const WRAPPER_TINT_STRENGTH: f64 = 0.07; // tint_strength, RF-4.19
+// Espec §2.3/RF-4.19 pede `tint_strength = 0.07` pro fundo do wrapper --
+// superado por pedido direto do usuário (F3 etapa 6): o grupo é uma
+// "cápsula" pintada com a cor cheia, não um tingimento sutil. Divergência
+// registrada aqui, não na especificação visual (que continua descrevendo
+// o v1 "de livro"; ver seção 4.4 dela pro registro formal de divergências
+// já conhecidas -- esta é nova e ainda não está lá).
+const GROUP_CAPSULE_FILL_STRENGTH: f64 = 1.0;
 
 // Realce de fronteira do arraste de aba (espec §2.19, ADR-0021 §4).
 // "Sobe o tingimento de .07 para .16 -- o mesmo badge_tint_strength que o
@@ -241,8 +247,29 @@ pub fn paint(
             .map(palette::group_color)
             .unwrap_or(palette::UNGROUPED_UNDERLINE);
 
+        // Ajuste pedido pelo usuário (F3 etapa 6, fora da espec.): o grupo
+        // é uma "cápsula" pintada com a cor cheia -- não o tingimento de
+        // 7% da espec §2.3, que ficava quase invisível atrás do fundo
+        // opaco das abas. `TAB_ACTIVE_BACKGROUND`/`TAB_INACTIVE_BACKGROUND`
+        // (`palette.rs`) agora têm alfa .85 pra deixar passar um indício
+        // dela por cima. Só pílula (grupo explícito) e expandido --
+        // "colapsado fica transparente" continua valendo, e abas sem
+        // grupo (`pill == None`) nunca pintam cápsula.
+        if group.pill.is_some() && !is_collapsed {
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect: shift(group.rect, dx),
+                radius: WRAPPER_CORNER_RADIUS,
+                color: with_alpha(group_color, GROUP_CAPSULE_FILL_STRENGTH),
+                border_color: palette::TRANSPARENT,
+                border_width: 0.0,
+            }));
+        }
         // Espec §2.19, ADR-0021 §4: "o wrapper que receberia a aba sobe o
-        // tingimento... e ganha borda 1px na cor do grupo com alfa .45".
+        // tingimento... e ganha borda 1px na cor do grupo com alfa .45" --
+        // por cima da cápsula (senão ela cobriria o realce por completo) e
+        // por baixo da pílula/abas (senão o realce cobriria o conteúdo).
+        // O run implícito também recebe realce, usando `ungrouped_color`
+        // (já resolvida em `group_color`).
         if drag_highlight.is_some_and(|(id, _)| id == group.id) {
             let highlight_rect = drag_highlight.map(|(_, rect)| rect).expect("checado acima");
             out.push(Primitive::RoundedQuad(RoundedQuad {
@@ -255,17 +282,6 @@ pub fn paint(
         }
 
         if let Some(pill) = &group.pill {
-            // Espec §2.3: fundo tingido só expandido -- "colapsado fica
-            // transparente". Abas sem grupo (pill == None) nunca tingem.
-            if !is_collapsed {
-                out.push(Primitive::RoundedQuad(RoundedQuad {
-                    rect: shift(group.rect, dx),
-                    radius: WRAPPER_CORNER_RADIUS,
-                    color: with_alpha(group_color, WRAPPER_TINT_STRENGTH),
-                    border_color: palette::TRANSPARENT,
-                    border_width: 0.0,
-                }));
-            }
             // Espec §2.10: "o nome muda na barra enquanto se digita" --
             // enquanto o editor deste grupo está aberto, a pílula mostra o
             // buffer ao vivo (`GroupEditor::name_buffer`) no lugar do nome

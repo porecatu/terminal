@@ -422,16 +422,34 @@ impl Workspace {
                     rebuilt.push(implicit_group_from(id, run));
                 }
             } else {
+                // Grupo explícito não se divide (comentário do método) --
+                // mas o grupo novo ainda precisa entrar do lado certo do
+                // que sobrou, senão a ordem visual inverte: se a primeira
+                // aba do grupo original é uma das selecionadas, a extração
+                // "começou pela frente" e o grupo novo vai antes do que
+                // sobrou; senão, vai depois. Bug real (F3 etapa 6):
+                // empurrar sempre antes invertia a ordem sempre que a
+                // aba extraída não era a primeira.
                 let before = group.tabs().len();
+                let starts_with_selected =
+                    group.tabs().first().is_some_and(|t| selected.contains(t));
                 let mut group = group;
                 group.retain_tabs(|t| !selected.contains(&t));
-                if before != group.tabs().len()
+                let shrunk = before != group.tabs().len();
+                if shrunk
+                    && starts_with_selected
                     && let Some(g) = new_group_slot.take()
                 {
                     rebuilt.push(g);
                 }
                 if !group.is_empty() {
                     rebuilt.push(group);
+                }
+                if shrunk
+                    && !starts_with_selected
+                    && let Some(g) = new_group_slot.take()
+                {
+                    rebuilt.push(g);
                 }
             }
         }
@@ -917,6 +935,48 @@ mod tests {
         let remaining_group = ws.group_of_tab(b).unwrap();
         assert_eq!(ws.group(remaining_group).unwrap().tabs(), [b, d]);
         assert!(ws.group(remaining_group).unwrap().is_implicit());
+    }
+
+    // Bug real (F3 etapa 6, achado ao investigar animação de colapso que só
+    // funcionava pro primeiro grupo): agrupar a partir de um grupo
+    // EXPLÍCITO já existente empurrava o grupo novo sempre antes do que
+    // sobrava, mesmo quando a aba extraída vinha depois -- invertendo a
+    // ordem visual. Grupo explícito não se divide (RF-2.7), mas o novo
+    // precisa entrar do lado certo do que sobrou.
+    #[test]
+    fn group_tabs_from_explicit_source_keeps_relative_order_when_extracting_the_last_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let source = ws.group_tabs(&[a, b], "source", GroupColor::Red).unwrap();
+
+        // extrai a ÚLTIMA aba (b) -- ela vinha depois de a, então o grupo
+        // novo tem que ficar depois do que sobrou (source, só com a).
+        let extracted = ws.group_tabs(&[b], "extracted", GroupColor::Blue).unwrap();
+
+        assert_eq!(
+            ws.groups().iter().map(|g| g.id()).collect::<Vec<_>>(),
+            [source, extracted]
+        );
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [a, b]);
+    }
+
+    #[test]
+    fn group_tabs_from_explicit_source_keeps_relative_order_when_extracting_the_first_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let source = ws.group_tabs(&[a, b], "source", GroupColor::Red).unwrap();
+
+        // extrai a PRIMEIRA aba (a) -- o grupo novo fica antes do que
+        // sobrou (source, só com b).
+        let extracted = ws.group_tabs(&[a], "extracted", GroupColor::Blue).unwrap();
+
+        assert_eq!(
+            ws.groups().iter().map(|g| g.id()).collect::<Vec<_>>(),
+            [extracted, source]
+        );
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [a, b]);
     }
 
     // Cenário de aceite: cor automática não repete até a sexta.
