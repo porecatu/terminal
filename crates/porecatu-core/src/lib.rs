@@ -5,18 +5,19 @@
 //! isso que `porecatu-session` (F5) pode ser um crate trivial: ele
 //! serializa `Workspace` e mais nada.
 //!
-//! `Workspace -> Vec<Group> -> Vec<TabId>`, com o grupo implícito sempre
-//! presente e as operações puras do ADR-0006 que a F2 exercita. `serde` é
-//! derivado desde já para que o round-trip `Workspace -> JSON -> Workspace`
-//! que o ADR lista como invariante seja testável nesta fase, mesmo com
-//! `porecatu-session` ainda vazio.
+//! `Workspace -> Vec<Group> -> Vec<TabId>`, com zero ou mais grupos
+//! implícitos -- um por run contíguo de abas sem grupo (ADR-0020) -- e as
+//! operações puras do ADR-0006/ADR-0020. `serde` é derivado desde já para
+//! que o round-trip `Workspace -> JSON -> Workspace` que o ADR lista como
+//! invariante seja testável nesta fase, mesmo com `porecatu-session` ainda
+//! vazio.
 
 mod group;
 mod id;
 mod tab;
 mod workspace;
 
-pub use group::Group;
+pub use group::{Group, GroupColor, GroupKind, GroupMeta};
 pub use id::{GroupId, TabId};
 pub use tab::{Tab, TabState};
 pub use workspace::Workspace;

@@ -262,8 +262,9 @@ impl WindowState {
         self.tabs.get(&id)
     }
 
-    /// Cria uma aba no grupo implícito, herdando `cwd` (RF-1.1, ADR-0017),
-    /// e spawna a `Terminal` dela. Erro de spawn desfaz a criação e vira
+    /// Cria uma aba no grupo da aba ativa (`Workspace::append_tab`,
+    /// ADR-0020 §1), herdando `cwd` (RF-1.1, ADR-0017), e spawna a
+    /// `Terminal` dela. Erro de spawn desfaz a criação e vira
     /// aviso do app (canal 1, ADR-0014) -- sem isso o `Workspace`
     /// acumularia abas sem `Terminal` nenhum atrás.
     fn open_tab(
@@ -275,12 +276,7 @@ impl WindowState {
     ) {
         let (rows, cols) = self.grid_size(cell_metrics);
         let shell_name = Self::shell_display_name();
-        let pos = self
-            .workspace
-            .groups()
-            .first()
-            .map_or(0, |g| g.tabs().len());
-        let tab_id = self.workspace.new_tab(shell_name, cwd.clone(), pos);
+        let tab_id = self.workspace.append_tab(shell_name, cwd.clone());
 
         let window_id = self.window.id();
         let tab = tab_id;
@@ -448,20 +444,32 @@ impl WindowState {
         self.ensure_active_tab_visible(gpu);
     }
 
-    fn action_goto(&mut self, visual_index: usize, gpu: &mut GpuContext) {
-        self.workspace.activate_visual_index(visual_index);
+    /// `tab.goto_N`: índice sobre a ordem **navegável**, não a visual --
+    /// aba de grupo colapsado sai da numeração, e colapsar renumera
+    /// `Alt+1..9` (deliberado, ADR-0020 §2).
+    fn action_goto(&mut self, navigable_index: usize, gpu: &mut GpuContext) {
+        self.workspace.activate_navigable_index(navigable_index);
         self.sync_window_title();
         self.ensure_active_tab_visible(gpu);
     }
 
-    /// RF-1.17: reordenação por teclado, uma posição por vez. F2 só tem o
-    /// grupo implícito (ADR-0006), então a ordem visual inteira é a ordem
-    /// do grupo -- `visual_order` já dá a posição certa pra `move_tab`.
+    /// RF-1.17: reordenação por teclado, uma posição por vez, dentro do
+    /// próprio grupo (`Workspace::move_tab` nunca move entre grupos --
+    /// isso é o arraste/`tab.move_to_group` da etapa 6). Por isso a
+    /// posição-alvo vem da ordem *dentro do grupo* da aba ativa, não da
+    /// ordem visual da janela inteira -- com mais de um grupo (F3) as duas
+    /// divergem.
     fn action_move_tab(&mut self, delta: isize, gpu: &mut GpuContext) {
         let Some(active) = self.workspace.active_tab() else {
             return;
         };
-        let order: Vec<TabId> = self.workspace.visual_order().collect();
+        let Some(group_id) = self.workspace.group_of_tab(active) else {
+            return;
+        };
+        let Some(group) = self.workspace.group(group_id) else {
+            return;
+        };
+        let order = group.tabs();
         let Some(index) = order.iter().position(|&id| id == active) else {
             return;
         };
