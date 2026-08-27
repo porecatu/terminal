@@ -11,10 +11,10 @@ use porecatu_term::{
     resolve_default_shell, search_path,
 };
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 mod chrome;
 mod clipboard;
@@ -24,10 +24,50 @@ mod palette;
 mod rename;
 mod tab_bar;
 
+use chrome::DragGhost;
 use input::ClickTracker;
 use paint::CellMetrics;
 use rename::RenameState;
-use tab_bar::{TabBarHit, TabBarStyle};
+use tab_bar::{OverflowSide, TabBarHit, TabBarStyle};
+
+/// Espec. §2.19: "limiar de 4px de movimento" -- abaixo disso o gesto é
+/// clique (RF-1.13), não arraste.
+const DRAG_THRESHOLD_PX: f32 = 4.0;
+/// Espec. §2.19: "cursor a menos de 30px de uma ponta da trilha rola
+/// naquela direção". A cadência real é "uma aba a cada .15s" -- não há
+/// relógio de animação nesta etapa (ADR-0007 é sobre frame ocioso, não
+/// sobre um temporizador de UI durante um gesto ativo, mas implementar um
+/// de verdade exigiria fiar `ControlFlow::WaitUntil`, fora do escopo desta
+/// etapa). Simplificação: o passo acontece por evento de `CursorMoved`
+/// dentro da zona, não por intervalo de tempo real -- em uso normal
+/// (arraste com o mouse em movimento) o efeito prático é parecido.
+const DRAG_EDGE_ZONE_PX: f32 = 30.0;
+const DRAG_AUTOSCROLL_STEP_PX: f32 = 12.0;
+
+/// Estado do arraste de reordenação (espec §2.19, RF-1.15). `Pressed` é o
+/// meio-caminho entre o clique que já ativou a aba (RF-1.13) e o arraste de
+/// verdade -- existe só para medir o limiar de 4px antes de comprometer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TabDrag {
+    Idle,
+    Pressed {
+        tab: TabId,
+        start: (f32, f32),
+        /// Deslocamento (em coordenadas de tela) entre o ponto do clique e
+        /// o canto esquerdo da aba -- onde dentro da aba o usuário
+        /// "segurou". Constante durante o arraste inteiro, mesmo que a
+        /// trilha role (o fantasma segue o cursor, não o conteúdo).
+        grab_offset: f32,
+    },
+    Dragging {
+        tab: TabId,
+        grab_offset: f32,
+        /// Índice de inserção calculado no último redraw
+        /// (`tab_bar::drag_target_index`) -- é o que `lib.rs` aplica de
+        /// verdade ao `Workspace` se o usuário soltar dentro da barra.
+        preview_index: usize,
+    },
+}
 
 // docs/config/porecatu.example.toml [terminal.font]: size = 12.5 (RF-5.3),
 // line_height = 1.75 (RF-5.6, "multiplicador das métricas naturais da
@@ -93,6 +133,11 @@ struct App {
     click_tracker: ClickTracker,
     /// Modo de captura do ADR-0008 passo 1 -- rename inline (RF-1.8).
     rename: RenameState,
+    /// Deslocamento horizontal da trilha (espec §2.18) -- saturado a cada
+    /// redraw por `tab_bar::overflow_state`, nunca lido cru fora dali.
+    scroll_offset: f32,
+    /// Arraste de reordenação em andamento (espec §2.19), se algum.
+    drag: TabDrag,
 }
 
 impl App {
@@ -117,6 +162,8 @@ impl App {
             mouse_button_down: None,
             click_tracker: ClickTracker::default(),
             rename: RenameState::Idle,
+            scroll_offset: 0.0,
+            drag: TabDrag::Idle,
         }
     }
 
@@ -156,6 +203,36 @@ impl App {
             .map(|s| s.to_string_lossy().into_owned())
             .filter(|s| !s.is_empty())
             .unwrap_or(resolved)
+    }
+
+    /// RF-1.18: rola a trilha o mínimo necessário para que a aba ativa
+    /// fique visível -- alinha à borda esquerda se ela está à esquerda da
+    /// janela visível, à direita se está à direita, nunca centraliza
+    /// (espec §2.18: "centralizar move mais que o necessário").
+    fn ensure_active_tab_visible(&mut self) {
+        let Some(gpu) = &mut self.gpu else {
+            return;
+        };
+        let Some(active) = self.workspace.active_tab() else {
+            return;
+        };
+        let style = TabBarStyle::DEFAULT;
+        let layout = tab_bar::fit_width(
+            &self.workspace,
+            &style,
+            self.logical_width,
+            gpu.text_measurer(),
+        );
+        let Some(rect) = tab_bar::tab_rect(&layout, active) else {
+            return;
+        };
+        let window_start = self.scroll_offset;
+        let window_end = self.scroll_offset + self.logical_width;
+        if rect.x < window_start {
+            self.scroll_offset = rect.x;
+        } else if rect.x + rect.width > window_end {
+            self.scroll_offset = rect.x + rect.width - self.logical_width;
+        }
     }
 
     fn active_runtime(&self) -> Option<&TabRuntime> {
@@ -218,6 +295,7 @@ impl App {
             }
         }
         self.sync_window_title();
+        self.ensure_active_tab_visible();
     }
 
     /// Fecha uma aba: sinaliza o processo sem bloquear (ADR-0017 item 4 --
@@ -239,6 +317,7 @@ impl App {
         }
         self.workspace.close_tab(id);
         self.sync_window_title();
+        self.ensure_active_tab_visible();
 
         if self.workspace.active_tab().is_none() {
             // `window.close`/RF-1.4 são Etapa 6 -- sem uma segunda aba ou
@@ -322,16 +401,40 @@ impl App {
     fn action_next_tab(&mut self) {
         self.workspace.next_tab();
         self.sync_window_title();
+        self.ensure_active_tab_visible();
     }
 
     fn action_prev_tab(&mut self) {
         self.workspace.prev_tab();
         self.sync_window_title();
+        self.ensure_active_tab_visible();
     }
 
     fn action_goto(&mut self, visual_index: usize) {
         self.workspace.activate_visual_index(visual_index);
         self.sync_window_title();
+        self.ensure_active_tab_visible();
+    }
+
+    /// RF-1.17: reordenação por teclado, uma posição por vez. F2 só tem o
+    /// grupo implícito (ADR-0006), então a ordem visual inteira é a ordem
+    /// do grupo -- `visual_order` já dá a posição certa pra `move_tab`.
+    fn action_move_tab(&mut self, delta: isize) {
+        let Some(active) = self.workspace.active_tab() else {
+            return;
+        };
+        let order: Vec<TabId> = self.workspace.visual_order().collect();
+        let Some(index) = order.iter().position(|&id| id == active) else {
+            return;
+        };
+        let Some(target) = index.checked_add_signed(delta) else {
+            return;
+        };
+        if target >= order.len() {
+            return;
+        }
+        self.workspace.move_tab(active, target);
+        self.ensure_active_tab_visible();
     }
 
     /// Passo 1 do ADR-0008 (modo de captura): consome tudo, exceto `Esc` e
@@ -386,6 +489,16 @@ impl App {
                     self.action_prev_tab();
                     return true;
                 }
+                // RF-1.17, `docs/config/porecatu.example.toml`
+                // `[keybindings]`: "ctrl+shift+left" = "tab.move_left".
+                Key::Named(NamedKey::ArrowLeft) => {
+                    self.action_move_tab(-1);
+                    return true;
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    self.action_move_tab(1);
+                    return true;
+                }
                 _ => {}
             }
         }
@@ -406,16 +519,54 @@ impl App {
         false
     }
 
-    /// Resolve o que um clique na área da barra de abas atinge
-    /// (`tab_bar::hit_test`) e dispara a ação correspondente. Clicar numa
+    /// Resolve o que um clique na área da barra de abas atinge e dispara a
+    /// ação correspondente. Indicadores de overflow (espec §2.18) primeiro
+    /// -- ficam em coordenadas de tela, fora do recorte que rola com a
+    /// trilha; só então o clique é convertido pra coordenadas de conteúdo
+    /// (somando `scroll_offset`) e testado contra `tab_bar::hit_test`, que
+    /// espera as mesmas coordenadas não-roladas de `fit_width`. Clicar numa
     /// aba diferente da que está sendo renomeada confirma o rename primeiro
-    /// (espec. §2.5: "blur" confirma).
+    /// (espec. §2.5: "blur" confirma"); clicar no corpo de uma aba também
+    /// arma o possível arraste do RF-1.15 (`TabDrag::Pressed`), resolvido
+    /// de verdade só se o movimento passar do limiar em `CursorMoved`.
     fn handle_bar_click(&mut self, logical_point: (f32, f32), event_loop: &ActiveEventLoop) {
         let Some(gpu) = &mut self.gpu else {
             return;
         };
-        let layout = tab_bar::layout(&self.workspace, &TabBarStyle::DEFAULT, gpu.text_measurer());
-        let Some(hit) = tab_bar::hit_test(&layout, logical_point) else {
+        let style = TabBarStyle::DEFAULT;
+        let bar_width = self.logical_width;
+        let bar_height = chrome::bar_height(&style);
+        let layout = tab_bar::fit_width(&self.workspace, &style, bar_width, gpu.text_measurer());
+        let overflow = tab_bar::overflow_state(&layout, bar_width, self.scroll_offset);
+        self.scroll_offset = overflow.scroll_offset;
+
+        if overflow.hidden_left > 0
+            && tab_bar::point_in_overflow_pill(
+                OverflowSide::Left,
+                bar_width,
+                bar_height,
+                logical_point,
+            )
+        {
+            self.scroll_offset = (self.scroll_offset - tab_bar::OVERFLOW_SCROLL_STEP).max(0.0);
+            self.request_redraw();
+            return;
+        }
+        if overflow.hidden_right > 0
+            && tab_bar::point_in_overflow_pill(
+                OverflowSide::Right,
+                bar_width,
+                bar_height,
+                logical_point,
+            )
+        {
+            self.scroll_offset += tab_bar::OVERFLOW_SCROLL_STEP;
+            self.request_redraw();
+            return;
+        }
+
+        let content_point = (logical_point.0 + self.scroll_offset, logical_point.1);
+        let Some(hit) = tab_bar::hit_test(&layout, content_point) else {
             return;
         };
         match hit {
@@ -429,12 +580,47 @@ impl App {
                 }
                 self.workspace.activate_tab(id);
                 self.sync_window_title();
+                self.ensure_active_tab_visible();
+                if let Some(rect) = tab_bar::tab_rect(&layout, id) {
+                    let screen_x = rect.x - self.scroll_offset;
+                    self.drag = TabDrag::Pressed {
+                        tab: id,
+                        start: logical_point,
+                        grab_offset: logical_point.0 - screen_x,
+                    };
+                }
             }
             TabBarHit::CloseButton(id) => self.close_tab(id, event_loop),
             TabBarHit::NewTabButton => self.action_new_tab(),
         }
+        self.request_redraw();
+    }
+
+    fn request_redraw(&self) {
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+    }
+
+    /// Solta o botão do mouse com um arraste em andamento (espec §2.19):
+    /// aplica o `preview_index` calculado no último redraw se o cursor
+    /// ainda está dentro da barra, ou cancela em silêncio se não está --
+    /// "soltar fora da trilha cancela também". `self.workspace` nunca foi
+    /// mexido durante o arraste (só o preview clonado em `RedrawRequested`
+    /// era), então cancelar é só voltar `drag` pra `Idle`, sem desfazer
+    /// nada. Também cobre soltar um `Pressed` que nunca virou arraste --
+    /// não há o que aplicar, o clique já ativou a aba na hora do `press`.
+    fn finish_drag(&mut self) {
+        let drag = std::mem::replace(&mut self.drag, TabDrag::Idle);
+        if let TabDrag::Dragging {
+            tab, preview_index, ..
+        } = drag
+            && self.in_bar(self.cursor_position.1)
+        {
+            self.workspace.move_tab(tab, preview_index);
+        }
+        if let Some(window) = &self.window {
+            window.set_cursor(CursorIcon::Default);
         }
     }
 
@@ -656,7 +842,20 @@ impl ApplicationHandler<Wakeup> for App {
                 self.modifiers = input::modifiers_from(modifiers.state());
             }
             WindowEvent::KeyboardInput { event: key, .. } => {
-                if self.rename.editing_tab().is_some() {
+                // `Esc` cancela o arraste em andamento (espec §2.19: "Esc
+                // cancela e a aba volta à origem") antes de qualquer outro
+                // roteamento -- o `Workspace` real nunca foi tocado, só
+                // solta o estado.
+                if matches!(self.drag, TabDrag::Dragging { .. })
+                    && key.state == ElementState::Pressed
+                    && matches!(key.logical_key, Key::Named(NamedKey::Escape))
+                {
+                    self.drag = TabDrag::Idle;
+                    if let Some(window) = &self.window {
+                        window.set_cursor(CursorIcon::Default);
+                        window.request_redraw();
+                    }
+                } else if self.rename.editing_tab().is_some() {
                     self.handle_rename_key(&key);
                     if let Some(window) = &self.window {
                         window.request_redraw();
@@ -689,9 +888,23 @@ impl ApplicationHandler<Wakeup> for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if !self.in_bar(self.cursor_position.1)
-                    && let Some(runtime) = self.active_runtime()
-                {
+                if self.in_bar(self.cursor_position.1) {
+                    // Espec §2.18: "roda do mouse sobre a barra rola a
+                    // trilha na horizontal, com ou sem Shift... passo de
+                    // 90px por notch". Sinal da roda decide a direção; sem
+                    // inércia nem easing (mesma razão do indicador que não
+                    // pisca -- rolagem contínua seria um frame por quadro
+                    // de animação).
+                    let notches = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y,
+                        MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if notches != 0.0 {
+                        self.scroll_offset -= notches.signum() * tab_bar::OVERFLOW_SCROLL_STEP;
+                        self.scroll_offset = self.scroll_offset.max(0.0);
+                        self.request_redraw();
+                    }
+                } else if let Some(runtime) = self.active_runtime() {
                     let cell = self.cell_at_cursor();
                     input::handle_mouse_wheel(
                         &runtime.terminal,
@@ -704,7 +917,49 @@ impl ApplicationHandler<Wakeup> for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = (position.x, position.y);
-                if !self.in_bar(position.y)
+                let handled_by_drag = match &mut self.drag {
+                    TabDrag::Pressed {
+                        tab,
+                        start,
+                        grab_offset,
+                    } => {
+                        let logical = (
+                            position.x as f32 / self.scale,
+                            position.y as f32 / self.scale,
+                        );
+                        let past_threshold = (logical.0 - start.0).abs() > DRAG_THRESHOLD_PX
+                            || (logical.1 - start.1).abs() > DRAG_THRESHOLD_PX;
+                        if past_threshold {
+                            let dragging = TabDrag::Dragging {
+                                tab: *tab,
+                                grab_offset: *grab_offset,
+                                preview_index: 0,
+                            };
+                            self.drag = dragging;
+                            if let Some(window) = &self.window {
+                                window.set_cursor(CursorIcon::Grabbing);
+                            }
+                        }
+                        true
+                    }
+                    TabDrag::Dragging { .. } => {
+                        // Auto-scroll nas bordas (espec §2.19) -- ver nota
+                        // de `DRAG_EDGE_ZONE_PX` sobre a simplificação da
+                        // cadência.
+                        let logical_x = position.x as f32 / self.scale;
+                        if logical_x < DRAG_EDGE_ZONE_PX {
+                            self.scroll_offset =
+                                (self.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
+                        } else if logical_x > self.logical_width - DRAG_EDGE_ZONE_PX {
+                            self.scroll_offset += DRAG_AUTOSCROLL_STEP_PX;
+                        }
+                        true
+                    }
+                    TabDrag::Idle => false,
+                };
+                if handled_by_drag {
+                    self.request_redraw();
+                } else if !self.in_bar(position.y)
                     && let Some(runtime) = self.active_runtime()
                 {
                     let cell = self.cell_at_cursor();
@@ -726,7 +981,12 @@ impl ApplicationHandler<Wakeup> for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
-                if pressed && button == MouseButton::Left && self.in_bar(self.cursor_position.1) {
+                if button == MouseButton::Left && !pressed && !matches!(self.drag, TabDrag::Idle) {
+                    self.finish_drag();
+                } else if pressed
+                    && button == MouseButton::Left
+                    && self.in_bar(self.cursor_position.1)
+                {
                     let logical_point = (
                         self.cursor_position.0 as f32 / self.scale,
                         self.cursor_position.1 as f32 / self.scale,
@@ -750,26 +1010,66 @@ impl ApplicationHandler<Wakeup> for App {
                         }
                     }
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw();
             }
             WindowEvent::RedrawRequested => {
                 let mut frame = Frame::new();
 
                 if let Some(gpu) = &mut self.gpu {
-                    let layout = tab_bar::layout(
-                        &self.workspace,
-                        &TabBarStyle::DEFAULT,
-                        gpu.text_measurer(),
-                    );
+                    let style = TabBarStyle::DEFAULT;
+                    let bar_width = self.logical_width;
+                    let base_layout =
+                        tab_bar::fit_width(&self.workspace, &style, bar_width, gpu.text_measurer());
+                    let overflow =
+                        tab_bar::overflow_state(&base_layout, bar_width, self.scroll_offset);
+                    self.scroll_offset = overflow.scroll_offset;
+
+                    // Durante um arraste, o `Workspace` de verdade não é
+                    // tocado -- só um clone com o preview de reordenação
+                    // aplicado é usado pra desenhar (espec §2.19: as
+                    // vizinhas "deslizam" mostrando onde a aba cairia; o
+                    // `Workspace` real só recebe a troca ao soltar, em
+                    // `finish_drag`).
+                    let mut drag_ghost = None;
+                    let paint_layout = if let TabDrag::Dragging {
+                        tab, grab_offset, ..
+                    } = self.drag
+                    {
+                        let cursor_logical_x = self.cursor_position.0 as f32 / self.scale;
+                        let ghost_screen_x = cursor_logical_x - grab_offset;
+                        let ghost_content_x = ghost_screen_x + self.scroll_offset;
+                        let width = tab_bar::tab_rect(&base_layout, tab)
+                            .map(|r| r.width)
+                            .unwrap_or(0.0);
+                        let ghost_center = ghost_content_x + width / 2.0;
+                        let preview_index =
+                            tab_bar::drag_target_index(&base_layout, tab, ghost_center);
+                        self.drag = TabDrag::Dragging {
+                            tab,
+                            grab_offset,
+                            preview_index,
+                        };
+                        drag_ghost = Some(DragGhost {
+                            tab,
+                            screen_x: ghost_screen_x,
+                        });
+
+                        let mut preview = self.workspace.clone();
+                        preview.move_tab(tab, preview_index);
+                        tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer())
+                    } else {
+                        base_layout
+                    };
+
                     let chrome_primitives = chrome::paint(
-                        &layout,
+                        &paint_layout,
                         &self.workspace,
                         self.workspace.active_tab(),
                         &self.rename,
-                        &TabBarStyle::DEFAULT,
-                        self.logical_width,
+                        &style,
+                        bar_width,
+                        overflow,
+                        drag_ghost,
                         gpu.text_measurer(),
                     );
                     frame.set_layer(Layer::Chrome, chrome_primitives);

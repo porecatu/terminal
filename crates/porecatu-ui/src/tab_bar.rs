@@ -2,11 +2,12 @@
 
 //! Layout e hit-testing da barra de abas -- função pura, sem `wgpu` e sem
 //! janela (docs/arquitetura.md seção 7): `(Workspace, TabBarStyle,
-//! TextMeasurer) -> TabBarLayout`. Cobre só o que a espec. visual §2.2,
-//! §2.3, §2.5 e §2.6 descrevem como geometria de trilha -- nada de
-//! encolhimento/rolagem (Etapa 5), indicadores (Etapa 5) nem arraste
-//! (Etapa 5). Pintura (`chrome.rs`) e wiring de clique/rename (`lib.rs`)
-//! chegam na Etapa 4.
+//! TextMeasurer) -> TabBarLayout`. Cobre a geometria de trilha da espec.
+//! visual §2.2, §2.3, §2.5, §2.6 e, desde a Etapa 5, o encolhimento de
+//! rótulo e a rolagem do §2.18 (`fit_width`/`overflow_state`) e a geometria
+//! de arraste do §2.19 (`drag_target_index`). Pintura (`chrome.rs`) e
+//! wiring de clique/rename/arraste (`lib.rs`) ficam do outro lado da
+//! fronteira -- este módulo não sabe de `wgpu` nem de `winit`.
 //!
 //! `porecatu-config` ainda não existe: os valores de [`TabBarStyle`] são
 //! constantes com a chave TOML de origem no comentário, no mesmo padrão de
@@ -20,6 +21,22 @@ use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer};
 const LABEL_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
+
+/// Espec. §2.17: "ponto circular 6×6". Consome largura do rótulo (mais o
+/// `internal_gap` reaproveitado como o `gap: 8` da mesma seção) -- não é
+/// chrome extra somado ao teto de 180px, é orçamento tirado dele. Visível a
+/// `chrome.rs` para desenhar o ponto na mesma posição que este módulo
+/// reservou.
+pub(crate) const INDICATOR_DOT_SIZE: f32 = 6.0;
+
+/// Qual dos dois indicadores da aba (espec. §2.17, RF-1.20/RF-1.21) mostrar.
+/// Só um por vez -- campainha vence atividade quando os dois são
+/// verdadeiros (a regra "um ponto só" da espec.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Indicator {
+    Activity,
+    Bell,
+}
 
 /// Valores geométricos da barra, hoje fixos no código (ver módulo).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,6 +77,11 @@ pub struct TabBarStyle {
     pub show_new_tab_button: bool,
     /// `[appearance.tabs] font_size`
     pub font_size: f32,
+    /// `[appearance.tabs] min_width` -- piso do encolhimento (espec. §2.18)
+    /// antes de a trilha ganhar rolagem. `41px` de cromo fixo (padding +
+    /// gap + botão de fechar) sobram `49px` de rótulo no piso, calculado
+    /// por [`fit_width`] a partir deste valor, não hardcoded direto.
+    pub min_width: f32,
 }
 
 impl TabBarStyle {
@@ -78,6 +100,7 @@ impl TabBarStyle {
         new_tab_button_size: 30.0,
         show_new_tab_button: true,
         font_size: 12.5,
+        min_width: 90.0,
     };
 }
 
@@ -103,6 +126,10 @@ pub struct TabRect {
     /// `TextMeasurer` já está em mãos, consumido só a partir da etapa que
     /// desenha o tooltip.
     pub label_truncated: bool,
+    /// Indicador de atividade/campainha (espec. §2.17), já resolvido a
+    /// partir do estado da aba -- `None` para aba `Exited` ou sem nenhum
+    /// dos dois fatos pendentes.
+    pub indicator: Option<Indicator>,
     /// Área de hit-test do corpo da aba: o retângulo visual estendido até
     /// a metade do `gap` para a aba vizinha do mesmo grupo (espec. §2.2:
     /// "a fronteira entre abas vizinhas parte o gap ao meio"). Não se
@@ -179,14 +206,34 @@ pub fn layout(
                 inner_x += style.tab_gap;
             }
 
-            let (label, label_truncated) = measurer.truncate(
-                tab.title(),
-                LABEL_FONT,
-                style.font_size,
-                style.label_max_width,
-            );
+            // Espec. §2.17: aba `Exited` não mostra indicador nenhum;
+            // campainha vence atividade quando as duas são verdadeiras.
+            let indicator = if tab.is_exited() {
+                None
+            } else if tab.bell() {
+                Some(Indicator::Bell)
+            } else if tab.activity() {
+                Some(Indicator::Activity)
+            } else {
+                None
+            };
+            // O ponto consome largura do rótulo, não soma chrome novo
+            // (§2.17: "a aba não muda de largura por causa do
+            // indicador") -- o teto de rótulo encolhe pelo tamanho do
+            // ponto mais o mesmo `gap: 8` que já separa rótulo e botão de
+            // fechar.
+            let dot_reserve = if indicator.is_some() {
+                INDICATOR_DOT_SIZE + style.internal_gap
+            } else {
+                0.0
+            };
+            let label_cap = (style.label_max_width - dot_reserve).max(0.0);
+
+            let (label, label_truncated) =
+                measurer.truncate(tab.title(), LABEL_FONT, style.font_size, label_cap);
             let label_width = measurer.measure_width(&label, LABEL_FONT, style.font_size);
             let content_width = style.padding_left
+                + dot_reserve
                 + label_width
                 + style.internal_gap
                 + style.close_button_size
@@ -231,6 +278,7 @@ pub fn layout(
                 close_button,
                 label,
                 label_truncated,
+                indicator,
                 hit_rect,
                 close_hit_rect,
             });
@@ -275,6 +323,187 @@ pub fn layout(
     }
 }
 
+/// Piso do rótulo (espec. §2.18: "sobram 49px de rótulo") derivado do piso
+/// de aba inteira (`min_width`) menos o cromo fixo que nunca cede: padding,
+/// `internal_gap` e botão de fechar.
+fn label_floor(style: &TabBarStyle) -> f32 {
+    (style.min_width
+        - style.padding_left
+        - style.internal_gap
+        - style.close_button_size
+        - style.padding_right)
+        .max(0.0)
+}
+
+/// Encolhe o teto do rótulo até caber em `available_width`, sem passar do
+/// piso (espec. §2.18: "quem encolhe é só o rótulo... nada mais cede").
+/// Abaixo do piso a trilha continua largando o mesmo `content_width` de
+/// antes -- é o sinal para [`overflow_state`] ativar a rolagem, não
+/// responsabilidade desta função (que permanece pura e sem estado de
+/// scroll, como o resto do módulo).
+///
+/// Busca binária sobre `label_max_width`: o `content_width` resultante de
+/// [`layout`] é não decrescente nesse parâmetro (nenhuma aba fica mais
+/// estreita ao aumentar o teto), então a busca converge para o maior teto
+/// que ainda cabe.
+pub fn fit_width(
+    workspace: &Workspace,
+    style: &TabBarStyle,
+    available_width: f32,
+    measurer: &mut TextMeasurer,
+) -> TabBarLayout {
+    let full = layout(workspace, style, measurer);
+    if full.content_width <= available_width {
+        return full;
+    }
+
+    let floor = label_floor(style);
+    let floor_style = TabBarStyle {
+        label_max_width: floor,
+        ..*style
+    };
+    let mut best = layout(workspace, &floor_style, measurer);
+    if best.content_width >= available_width {
+        // Nem no piso cabe -- devolve o layout do piso; rolar é com
+        // `overflow_state`.
+        return best;
+    }
+
+    let mut lo = floor;
+    let mut hi = style.label_max_width;
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        let mid_style = TabBarStyle {
+            label_max_width: mid,
+            ..*style
+        };
+        let mid_layout = layout(workspace, &mid_style, measurer);
+        if mid_layout.content_width <= available_width {
+            lo = mid;
+            best = mid_layout;
+        } else {
+            hi = mid;
+        }
+    }
+    best
+}
+
+/// Estado de rolagem da trilha (espec. §2.18) para um `content_width` e uma
+/// largura disponível dados: deslocamento já saturado em
+/// `[0, content_width - available_width]`, e a contagem de abas inteiramente
+/// fora da janela visível de cada lado (RF-1.19 -- "um indicador... com
+/// contagem"). Aba parcialmente visível não conta como oculta.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Overflow {
+    pub scroll_offset: f32,
+    pub hidden_left: usize,
+    pub hidden_right: usize,
+}
+
+pub fn overflow_state(layout: &TabBarLayout, available_width: f32, scroll_offset: f32) -> Overflow {
+    let max_scroll = (layout.content_width - available_width).max(0.0);
+    let offset = scroll_offset.clamp(0.0, max_scroll);
+    let window_start = offset;
+    let window_end = offset + available_width;
+
+    let mut hidden_left = 0;
+    let mut hidden_right = 0;
+    for group in &layout.groups {
+        for tab in &group.tabs {
+            let tab_end = tab.rect.x + tab.rect.width;
+            if tab_end <= window_start {
+                hidden_left += 1;
+            } else if tab.rect.x >= window_end {
+                hidden_right += 1;
+            }
+        }
+    }
+    Overflow {
+        scroll_offset: offset,
+        hidden_left,
+        hidden_right,
+    }
+}
+
+/// Lado da trilha em que um indicador de overflow (espec. §2.18) aparece.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowSide {
+    Left,
+    Right,
+}
+
+/// Largura de trabalho da pílula de overflow: a espec. não fixa um valor --
+/// o contador da pílula de grupo (§2.4) é largura variável -- então este é
+/// um valor fixo generoso o bastante para chevron + contagem de até dois
+/// dígitos com o padding `1px 6px` da mesma pílula. Mesmo tipo de nota que
+/// `RENAME_FIELD_HEIGHT` em `chrome.rs`.
+pub const OVERFLOW_PILL_WIDTH: f32 = 34.0;
+pub const OVERFLOW_PILL_HEIGHT: f32 = 18.0;
+/// "Nas duas pontas da trilha, por dentro" (espec. §2.18).
+pub const OVERFLOW_EDGE_INSET: f32 = 4.0;
+/// "Passo de 90px -- uma aba no piso -- por notch" (espec. §2.18); também o
+/// passo do clique no indicador ("clique rola uma aba").
+pub const OVERFLOW_SCROLL_STEP: f32 = 90.0;
+
+/// Retângulo da pílula de overflow, em coordenadas de tela da barra (não
+/// rolam com a trilha -- ficam "por dentro" das pontas, sempre visíveis).
+pub fn overflow_pill_rect(side: OverflowSide, bar_width: f32, bar_height: f32) -> Rect {
+    let x = match side {
+        OverflowSide::Left => OVERFLOW_EDGE_INSET,
+        OverflowSide::Right => bar_width - OVERFLOW_EDGE_INSET - OVERFLOW_PILL_WIDTH,
+    };
+    Rect {
+        x,
+        y: (bar_height - OVERFLOW_PILL_HEIGHT) / 2.0,
+        width: OVERFLOW_PILL_WIDTH,
+        height: OVERFLOW_PILL_HEIGHT,
+    }
+}
+
+pub fn point_in_overflow_pill(
+    side: OverflowSide,
+    bar_width: f32,
+    bar_height: f32,
+    point: (f32, f32),
+) -> bool {
+    rect_contains(overflow_pill_rect(side, bar_width, bar_height), point)
+}
+
+/// Acha o retângulo (coordenadas de conteúdo, sem rolagem) de uma aba pelo
+/// `id` -- usado por `lib.rs` para calcular o deslocamento de tela no início
+/// do arraste (espec. §2.19) e a largura do fantasma.
+pub fn tab_rect(layout: &TabBarLayout, id: TabId) -> Option<Rect> {
+    layout
+        .groups
+        .iter()
+        .flat_map(|g| &g.tabs)
+        .find(|t| t.id == id)
+        .map(|t| t.rect)
+}
+
+/// Índice de inserção (o mesmo que [`Group::move_within`]/
+/// `Workspace::move_tab` esperam: posição entre as abas restantes, já sem a
+/// arrastada) para onde `ghost_center_x` cairia entre as demais abas do
+/// mesmo grupo da arrastada, comparando contra o centro de cada uma no
+/// layout corrente. Espec. §2.19: "o buraco é o marcador" -- isto só monta
+/// o preview de onde a aba cairia; mover de verdade é decisão de `lib.rs`
+/// ao soltar.
+pub fn drag_target_index(layout: &TabBarLayout, dragged: TabId, ghost_center_x: f32) -> usize {
+    for group in &layout.groups {
+        if group.tabs.iter().any(|t| t.id == dragged) {
+            let others: Vec<&TabRect> = group.tabs.iter().filter(|t| t.id != dragged).collect();
+            for (index, tab) in others.iter().enumerate() {
+                let center = tab.rect.x + tab.rect.width / 2.0;
+                if ghost_center_x < center {
+                    return index;
+                }
+            }
+            return others.len();
+        }
+    }
+    0
+}
+
 /// Resolve o que `point` (coordenadas relativas ao topo-esquerda da
 /// trilha, as mesmas de [`layout`]) atinge. Botão de fechar tem
 /// prioridade sobre o corpo da aba onde os dois se sobrepõem.
@@ -310,7 +539,7 @@ fn expand(rect: Rect, amount: f32) -> Rect {
     }
 }
 
-fn rect_contains(rect: Rect, point: (f32, f32)) -> bool {
+pub(crate) fn rect_contains(rect: Rect, point: (f32, f32)) -> bool {
     let (x, y) = point;
     x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 }
@@ -482,6 +711,174 @@ mod tests {
             button.y + button.height / 2.0,
         );
         assert_eq!(hit_test(&layout, center), Some(TabBarHit::NewTabButton));
+    }
+
+    #[test]
+    fn activity_indicator_shows_when_backgrounded_activity() {
+        let mut ws = Workspace::new();
+        let id = ws.new_tab("zsh", None, 0);
+        ws.tab_mut(id).unwrap().mark_activity();
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            layout.groups[0].tabs[0].indicator,
+            Some(Indicator::Activity)
+        );
+    }
+
+    #[test]
+    fn bell_wins_over_activity() {
+        let mut ws = Workspace::new();
+        let id = ws.new_tab("zsh", None, 0);
+        ws.tab_mut(id).unwrap().mark_activity();
+        ws.tab_mut(id).unwrap().mark_bell();
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(layout.groups[0].tabs[0].indicator, Some(Indicator::Bell));
+    }
+
+    #[test]
+    fn exited_tab_never_shows_indicator() {
+        let mut ws = Workspace::new();
+        let id = ws.new_tab("zsh", None, 0);
+        ws.tab_mut(id).unwrap().mark_activity();
+        ws.tab_mut(id).unwrap().mark_exited(1);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(layout.groups[0].tabs[0].indicator, None);
+    }
+
+    #[test]
+    fn indicator_does_not_widen_a_truncated_tab() {
+        // Espec. §2.17: "a aba não muda de largura por causa do
+        // indicador" -- vale para o caso truncado, onde o teto reduzido
+        // compensa o espaço do ponto. Tolerância: o truncamento decide por
+        // caractere inteiro (medido, não interpolado), então os dois tetos
+        // (180 e 166) podem cada um sobrar uma fração de glyph diferente
+        // abaixo do próprio teto -- a garantia é "não estoura", não
+        // igualdade exata ao pixel.
+        let long_title = "um titulo bem comprido que estoura o maximo de 180px de largura reservado ao rotulo da aba";
+        let mut ws = Workspace::new();
+        let plain = ws.new_tab("zsh", None, 0);
+        ws.tab_mut(plain)
+            .unwrap()
+            .set_custom_title(Some(long_title.to_string()));
+        let with_indicator = ws.new_tab("zsh", None, 1);
+        ws.tab_mut(with_indicator)
+            .unwrap()
+            .set_custom_title(Some(long_title.to_string()));
+        ws.tab_mut(with_indicator).unwrap().mark_activity();
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let plain_width = layout.groups[0].tabs[0].rect.width;
+        let indicator_width = layout.groups[0].tabs[1].rect.width;
+        assert!(
+            (plain_width - indicator_width).abs() <= 10.0,
+            "plain={plain_width}, com indicador={indicator_width}"
+        );
+    }
+
+    #[test]
+    fn fit_width_no_shrink_when_it_already_fits() {
+        let mut ws = Workspace::new();
+        ws.new_tab("zsh", None, 0);
+        let mut m = measurer();
+        let unfit = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let fit = fit_width(&ws, &TabBarStyle::DEFAULT, 2000.0, &mut m);
+        assert_eq!(unfit, fit);
+    }
+
+    #[test]
+    fn fit_width_shrinks_labels_to_fit_before_scrolling() {
+        let mut ws = Workspace::new();
+        for i in 0..3 {
+            let id = ws.new_tab("zsh", None, i);
+            ws.tab_mut(id)
+                .unwrap()
+                .set_custom_title(Some("um titulo razoavelmente longo".to_string()));
+        }
+        let mut m = measurer();
+        let full = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        // Descobre o piso real (todas as abas no `label_floor`) pedindo um
+        // `available_width` que nem ele cabe, e usa uma folga acima disso
+        // -- evita fazer conta de geometria de cromo duplicada aqui.
+        let floor_total = fit_width(&ws, &TabBarStyle::DEFAULT, 1.0, &mut m).content_width;
+        let available = floor_total + 60.0;
+        assert!(
+            full.content_width > available,
+            "título precisa estourar `available` pra este teste fazer sentido"
+        );
+
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, available, &mut m);
+        assert!(fitted.content_width <= available + 1.0);
+        assert!(fitted.content_width < full.content_width);
+    }
+
+    #[test]
+    fn fit_width_stays_at_floor_when_it_still_does_not_fit() {
+        let mut ws = Workspace::new();
+        for i in 0..50 {
+            ws.new_tab("zsh", None, i);
+        }
+        let mut m = measurer();
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
+        assert!(fitted.content_width > 300.0);
+        for tab in &fitted.groups[0].tabs {
+            let width = m.measure_width(&tab.label, LABEL_FONT, TabBarStyle::DEFAULT.font_size);
+            assert!(width <= label_floor(&TabBarStyle::DEFAULT) + 0.5);
+        }
+    }
+
+    #[test]
+    fn overflow_state_clamps_scroll_and_counts_hidden_tabs() {
+        let mut ws = Workspace::new();
+        for i in 0..10 {
+            ws.new_tab("zsh", None, i);
+        }
+        let mut m = measurer();
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
+        assert!(fitted.content_width > 300.0);
+
+        let none = overflow_state(&fitted, 300.0, 0.0);
+        assert_eq!(none.hidden_left, 0);
+        assert!(none.hidden_right > 0);
+
+        let max_scroll = fitted.content_width - 300.0;
+        let clamped = overflow_state(&fitted, 300.0, max_scroll + 500.0);
+        assert_eq!(clamped.scroll_offset, max_scroll);
+        assert_eq!(clamped.hidden_right, 0);
+        assert!(clamped.hidden_left > 0);
+    }
+
+    #[test]
+    fn drag_target_index_finds_insertion_point_by_ghost_center() {
+        let mut ws = Workspace::new();
+        let a = ws.new_tab("zsh", None, 0);
+        ws.new_tab("bash", None, 1);
+        ws.new_tab("fish", None, 2);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let last = layout.groups[0].tabs[2].rect;
+        let ghost_center_past_everything = last.x + last.width + 1000.0;
+        assert_eq!(
+            drag_target_index(&layout, a, ghost_center_past_everything),
+            2 // duas abas restantes (b, c) depois de tirar a
+        );
+
+        let first_after_removal_center =
+            layout.groups[0].tabs[1].rect.x + layout.groups[0].tabs[1].rect.width / 2.0 - 1.0;
+        assert_eq!(drag_target_index(&layout, a, first_after_removal_center), 0);
+    }
+
+    #[test]
+    fn tab_rect_finds_by_id() {
+        let mut ws = Workspace::new();
+        let a = ws.new_tab("zsh", None, 0);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(tab_rect(&layout, a), Some(layout.groups[0].tabs[0].rect));
+        assert_eq!(tab_rect(&layout, TabId::new(999)), None);
     }
 
     #[test]
