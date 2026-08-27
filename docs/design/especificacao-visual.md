@@ -230,11 +230,12 @@ Altura 36, fundo `#1b1f26`, borda inferior `#23272f`, `padding-left: 12px`.
 
 ### 2.2 Barra de abas `[v1]`
 
-Fundo `#1b1f26`, borda inferior `#23272f`, `padding: 6px 10px`, `gap: 8`. Três zonas:
+Fundo `#1b1f26`, borda inferior `#23272f`, `padding: 6px 10px`, `gap: 8`. Quatro zonas:
 
-1. **Trilha rolável** — `flex: 1`, `min-width: 0`, `overflow-x: auto`, `gap: 6`. Contém os wrappers de grupo e, ao final, o botão de nova aba.
-2. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
-3. **Botão de configurações** `[v2]` — 30×30, raio 6, borda `#262b34`, engrenagem 13px `#9aa2ae`. Hover: fundo `#262b34`, ícone `#e4e8ee`.
+1. **Trilha rolável** — `flex: 1`, `min-width: 0`, `overflow-x: auto`, `gap: 6`. Contém os wrappers de grupo, e só eles.
+2. **Zona fixa à direita** `[v1]` — o botão de nova aba global (§2.6), com o mesmo `gap: 6` da trilha como respiro nas duas pontas. **Não rola**: a largura disponível para a trilha é a da barra menos esta zona. Decidido na F3 — com a trilha rolando como um componente só, um botão de nova aba que sai de vista é um botão que o usuário não alcança.
+3. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
+4. **Botão de configurações** `[v2]` — 30×30, raio 6, borda `#262b34`, engrenagem 13px `#9aa2ae`. Hover: fundo `#262b34`, ícone `#e4e8ee`.
 
 Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
@@ -249,7 +250,18 @@ Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
 Envolve a pílula e as abas do grupo. `display: flex`, `gap: 4`, `padding: 3`, raio 8.
 
-Fundo: cor do grupo com alfa `.07` quando expandido; `transparent` quando colapsado. **Abas sem grupo usam um wrapper sem pílula e com fundo transparente** — é a representação visual do grupo implícito do [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md).
+Fundo: **a cor cheia do grupo** quando expandido — a "cápsula" — e `transparent`
+quando colapsado. **Abas sem grupo usam um wrapper sem pílula e com fundo
+transparente** — é a representação visual do grupo implícito do
+[ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), e nunca ganha cápsula.
+
+O `tint_strength = 0.07` do arquivo de exemplo (RF-4.19) era o valor original desta
+seção, e a F3 o descartou na prática: com o fundo da aba opaco por cima, 7% da cor
+do grupo ficava invisível — o indicador de grupo mais visível da barra não podia ser
+o menos legível dela. Em vez do tingimento, o wrapper é pintado com a cor cheia, e
+**o fundo da aba passou a ter alfa `.85`** (§2.5), o que deixa passar um indício da
+cápsula por baixo de cada aba. A chave continua no arquivo e volta a governar o valor
+na F4; o que mudou é o default. Registro na seção 4.4.
 
 ### 2.4 Pílula de grupo `[v1]`
 
@@ -264,12 +276,13 @@ Da esquerda para a direita:
 
 Interação: clique alterna colapso; duplo clique abre o editor.
 
-**Teto e piso do nome.** O teto de 140 px é o da aba (180) menos os 41 px de
-cromo que a §2.18 contabiliza — uma pílula não deve poder ficar mais larga que a
-aba que ela rotula. O piso é **60 px**, e a pílula é o **segundo** a ceder na
-ordem da §2.18, depois do rótulo da aba e antes da rolagem da trilha: dez grupos
-no piso somam 600 px de pílula, o que caberia numa janela de largura usual, e é o
-que sustenta a métrica de dez grupos do [PRD-002](../prd/prd-002-grupos-de-abas.md).
+**Teto do nome, e nenhum piso.** O teto de 140 px é o da aba (180) menos os 41 px de
+cromo que a §2.18 contabiliza — uma pílula não deve poder ficar mais larga que a aba
+que ela rotula. **Não há piso:** o nome nunca encolhe abaixo do teto, porque nada
+encolhe — a trilha rola (§2.18). O piso de 60 px que esta seção especificava, e a
+`label_min_width` que o carregava no arquivo de exemplo, saíram na F3; a métrica de
+dez grupos do [PRD-002](../prd/prd-002-grupos-de-abas.md) continua valendo por
+rolagem, não por encolhimento.
 
 **Indicador agregado de grupo colapsado (RF-2.16).** Ponto de 6×6, raio 50%,
 entre o swatch e o nome, com o mesmo `gap: 7` dos demais elementos — as cores são
@@ -284,8 +297,8 @@ do arquivo de exemplo (RF-4.17) governa só o caso colapsado, que é o que o
 requisito nomeia; com o grupo expandido o contador segue visível, como o mockup
 desenha. Não são dois comportamentos: é uma chave que desliga metade de um.
 
-**Grupo colapsado** muda três coisas e nada mais: o caret gira, o wrapper perde o
-tingimento (§2.3) e o indicador agregado pode aparecer. A pílula mantém altura,
+**Grupo colapsado** muda três coisas e nada mais: o caret gira, o wrapper perde a
+cápsula (§2.3) e o indicador agregado pode aparecer. A pílula mantém altura,
 paddings e piso. O sublinhado de grupo (§2.5) desaparece junto com as abas, que é
 consequência de elas não estarem na trilha, não uma regra própria.
 
@@ -298,6 +311,12 @@ Altura 30, `padding: 0 6px 0 10px`, raio 6, `gap: 8`, borda 1px. Hover `brightne
 | Ativa | `#282e37` | `#39404b` | `#eaeef3` |
 | Inativa | `#191d23` | `#22262e` | `#98a0ab` |
 | Selecionada (RF-2.2) | o do estado de base | `#5ed3bc`, 2px **por dentro** | o do estado de base |
+
+**O fundo da aba tem alfa `.85`.** Os dois valores da tabela são as cores do design;
+o que a F3 acrescentou foi a transparência, para que a cápsula do grupo (§2.3)
+apareça por baixo da aba em vez de ficar coberta. Sobre a barra (`#1b1f26`), fora de
+qualquer grupo, o resultado é indistinguível do opaco — o que muda é só o que se vê
+dentro de um grupo.
 
 **Selecionada é um modificador, não um quarto estado.** Uma aba pode estar
 selecionada e ativa ao mesmo tempo (RF-2.2 é explícito: *"uma aba pode estar
@@ -322,7 +341,7 @@ Conteúdo:
 
 **Campo de rename** `[v1]` — substitui o rótulo no lugar. Largura 120, fundo `#0e1116`, borda `1px #5ed3bc`, raio 4, texto `#e4e8ee` 12px, `padding: 2px 5px`, `outline: none`, foco automático. Confirma em `Enter` e no blur; cancela em `Esc`.
 
-A largura é `min(120, largura disponível do rótulo)` — com a barra em overflow, o rótulo tem 49 px no piso, e um campo de 120 não caberia. **A aba não muda de largura ao entrar em rename**: mudar reflui a barra enquanto o usuário digita. Título mais longo que o campo rola dentro dele, com o caret sempre visível. OSC 0/2 que chegue com o campo aberto é registrado mas **não redesenha o campo**: o texto sob o cursor do usuário não muda sozinho.
+A largura é `min(120, largura disponível do rótulo)` — a cláusula sobrevive à mudança da §2.18, que deixou o rótulo sempre no teto de 180 px, porque um título curto ainda dá uma aba mais estreita que o campo. **A aba não muda de largura ao entrar em rename**: mudar reflui a barra enquanto o usuário digita. Título mais longo que o campo rola dentro dele, com o caret sempre visível. OSC 0/2 que chegue com o campo aberto é registrado mas **não redesenha o campo**: o texto sob o cursor do usuário não muda sozinho.
 
 **Aba no estado `Exited`** ([ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md)): fundo e borda de aba inativa, e o rótulo esmaecido para `#727a86` — o tom do botão de fechar, que é o token de "inerte" da barra. Nenhum indicador (seção 2.17) e nenhum estado novo: o **motivo** de a aba ter ficado aberta é o código de saída escrito no grid, que sobrevive à rolagem e continua lá quando o usuário voltar; um quarto estado de aba exigiria cor nova para dizer o que a nota já diz.
 
@@ -330,7 +349,15 @@ A largura é `min(120, largura disponível do rótulo)` — com a barra em overf
 
 ### 2.6 Botão de nova aba `[v1]`
 
-30×30, raio 6, `+` 15px `#9aa2ae`, borda `1px #262b34`. Hover: fundo `#262b34`, ícone `#e4e8ee`. Fica ao final da trilha rolável, acompanhando o scroll.
+30×30, raio 6, `+` 15px `#9aa2ae`, borda `1px #262b34`. Hover: fundo `#262b34`, ícone `#e4e8ee`.
+
+**Dois lugares, não um.** O botão global fica na **zona fixa à direita** da barra
+(§2.2) e não rola com a trilha. E **cada grupo tem o seu**, logo depois do último
+elemento do wrapper — a última aba, ou a pílula sozinha se o grupo estiver colapsado
+—, com as mesmas dimensões e cores, para ler como "o mesmo botão, num segundo lugar".
+O global executa `tab.new`; o do grupo executa `group.new_tab` naquele grupo
+(RF-2.8), inclusive num run implícito. Os dois lugares entraram na F3; ver a seção
+4.4.
 
 ### 2.7 Área de terminal `[v1]`
 
@@ -500,13 +527,26 @@ O ponto consome largura do rótulo — 6 px mais o `gap: 8` —, e o truncamento
 
 Sem representação no canvas — estava na seção 4.2. O canvas resolve a trilha com `overflow-x: auto`, que é a rolagem do navegador, não um desenho.
 
-**Ordem de cedência.** Ao faltar espaço, quem encolhe é **só o rótulo**, dos 180 px de `max-width` para baixo. Nada mais cede: `padding: 0 6px 0 10px`, `gap: 8`, botão de fechar 17×17 e o ponto de 6 px são fixos. Isso soma 41 px de cromo, e é de onde sai o piso de 90 px do `min_width` — sobram 49 px de rótulo, o suficiente para distinguir dois nomes curtos.
+**Nada cede: a trilha rola.** Ao faltar espaço, nenhum elemento da aba encolhe —
+rótulo no teto de 180 px de `max-width`, `padding: 0 6px 0 10px`, `gap: 8`, botão de
+fechar 17×17 e ponto de 6 px, todos fixos —, e a trilha inteira rola como um
+componente só. Os 41 px de cromo da aba seguem sendo a conta que dá o teto de 140 px
+do nome da pílula (§2.4); o que eles não dão mais é piso de encolhimento.
+
+Esta seção especificava uma **ordem de cedência** — encolhe o rótulo da aba até os
+90 px de `min_width`, depois o nome da pílula até os 60 px de `label_min_width`, e só
+então rola. Foi implementada assim na F2 e na F3, e **descartada na F3** por custo:
+encolher exige busca binária sobre o layout inteiro (até 24 recálculos por frame,
+cada um remedindo o texto de toda aba com `cosmic-text`, sem cache), e o custo cresce
+justamente no caso que a motiva — muitas abas, barra em overflow. A barra parecia
+travada ao trocar de aba. As duas chaves saíram do arquivo de exemplo. Registro na
+seção 4.4.
 
 O botão de fechar **não desaparece por falta de espaço**. `show_close_button` é escolha do usuário (RF-4.11), não degradação automática: aba cujo conteúdo muda conforme a largura é a mesma armadilha que o RF-10.20 evita no menu.
 
-**Abaixo do piso, a trilha rola.** Um recorte só, na camada de chrome do [ADR-0018](../adr/0018-composicao-de-frame.md); as abas fora da vista desaparecem pelo clip, sem lógica de visibilidade no layout.
+**A rolagem é um recorte só**, na camada de chrome do [ADR-0018](../adr/0018-composicao-de-frame.md); as abas fora da vista desaparecem pelo clip, sem lógica de visibilidade no layout. O que rola é a trilha (§2.2) — a zona fixa da direita fica parada.
 
-- Gesto: roda do mouse sobre a barra rola a trilha na horizontal, com ou sem `Shift`. Passo de 90 px — uma aba no piso — por notch. Não reaproveita `scroll_multiplier`, que conta linhas do grid.
+- Gesto: roda do mouse sobre a barra rola a trilha na horizontal, com ou sem `Shift`. Passo de 90 px por notch — era a largura de uma aba no piso, e sobreviveu como valor de passo ao fim do encolhimento. Não reaproveita `scroll_multiplier`, que conta linhas do grid.
 - Sem inércia e sem easing, pela mesma razão do indicador que não pisca: rolagem contínua é um frame por quadro de animação; rolagem discreta é um frame por evento.
 - **Sem barra de rolagem desenhada.** Não há token de scrollbar, e 6 px numa barra de 42 px sairiam do rótulo. A affordance é o indicador abaixo.
 - Trazer a aba ativa para a vista (RF-1.18) é **rolagem mínima**: alinha à borda esquerda da trilha se ela está à esquerda, à direita se está à direita. Nunca centraliza — centralizar move mais que o necessário e desorienta.
@@ -682,6 +722,10 @@ Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis 
 | Editor de grupo em `top: 76px` | Aquele valor pressupõe a barra de título `[v2]`. No v1, 8 px abaixo da barra de abas, com flip nos dois eixos — ver seção 2.10 | [ADR-0023](../adr/0023-editor-de-grupo.md) |
 | Menu de contexto **não rola** (seção 2.16) | Vale para listas de ação, cujo tamanho é conhecido em tempo de escrita. O popover de grupo de destino do RF-2.20 **rola**, porque a lista é do tamanho do número de grupos do usuário | ADR-0023 |
 | RF-2.10 permite cor por valor hexadecimal direto | O editor tem seis swatches e nada mais. A entrada por hex fica **diferida**: quem quer outra cor a coloca na `palette` da config (RF-4.18) | ADR-0023 |
+| Wrapper de grupo tingido com alfa `.07` (§2.3, RF-4.19) | Atrás do fundo **opaco** das abas, 7% da cor não se vê. O wrapper passa a ser **cápsula de cor cheia** e o fundo da aba ganha alfa `.85` (§2.3, §2.5). Pedido direto do usuário; `tint_strength` continua no arquivo e volta a governar o valor na F4 | F3 |
+| Um botão de nova aba só, ao final da trilha rolável (§2.6) | **Dois lugares**: o global sai da trilha para uma zona fixa à direita (§2.2) — com a trilha rolando, botão que sai de vista é botão inalcançável — e **cada grupo ganha o seu**, executando `group.new_tab`. Pedido do usuário. `show_new_tab_button = false` ainda não desliga o do grupo (F4) | F3 |
+| Ordem de cedência do overflow: rótulo, depois nome da pílula, só então rolagem (§2.18, §2.4) | **Nada cede.** Encolher exige busca binária sobre o layout (até 24 recálculos por frame, cada um remedindo texto sem cache) e era a lentidão da barra em overflow. Rótulo e nome ficam no teto e a trilha rola; `min_width` e `label_min_width` saem do arquivo de exemplo | F3 |
+| Interpolação do `reflow` descrita como deslocamento horizontal (§1.10, ADR-0022) | Deslocar só a posição faz os **vizinhos** parecerem suaves e o grupo tocado saltar. A cápsula interpola **posição e largura**, e as abas que entram ou saem da trilha ao expandir/colapsar interpolam **opacidade** — leitura literal do §2.4 ("o que anima de fato é o resto do colapso: as abas desaparecendo da trilha"). Nenhuma animação nova: mesmo relógio, mesmos dois consumidores | F3 |
 
 As quatro primeiras linhas são **dívida de primitiva**, não decisão de desenho:
 a especificação continua descrevendo o alvo, e o binário fica atrás dele. Onde

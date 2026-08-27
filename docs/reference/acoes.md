@@ -49,10 +49,22 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > primeiro plano. `tab.new` herda o `cwd` capturado por OSC 7, que passa a
 > existir na F2; sem OSC 7, cai em `startup_directory`.
 
-> **Estado na F3.** As nove `group.*` e a `tab.move_to_group` passam a existir,
-> ainda com defaults fixos no código — o parser de `[keybindings]` continua
-> sendo F4. O **nível de grupo** da cadeia do ADR-0008, que a F2 deixou vazio,
-> é preenchido aqui.
+> **Estado na F3, como ficou implementado.** Sete das nove `group.*` e a
+> `tab.move_to_group` existem: `group.create`, `group.dissolve`, `group.rename`,
+> `group.set_color`, `group.toggle_collapse`, `group.new_tab` e
+> `group.close_all`. **`group.next` e `group.prev` (RF-2.21) não foram
+> implementadas** — o MRU por grupo está gravado (`Group::last_active`), mas não
+> há operação que ande de grupo em grupo, e é isso que mantém a fase aberta.
+>
+> O **nível de grupo** da cadeia do ADR-0008 ficou pela metade: só
+> `group.create` tem tecla (`Ctrl+Shift+G`, default fixo no código). O
+> `Ctrl+Shift+U` que o ADR dá a `group.dissolve` não foi ligado, e
+> `group.toggle_collapse` só existe por clique na pílula, menu ou editor. Fecha
+> com o parser de `[keybindings]`, na F4.
+>
+> `group.new_tab` ganhou um segundo caminho que nenhum documento previa: um
+> botão "+" ao final de cada grupo na barra, inclusive de um run implícito
+> (espec. visual §2.6, seção 4.4). É gesto de mouse, não ação nova.
 >
 > `tab.goto_N` passa a numerar sobre a ordem **navegável**, não a visual: aba de
 > grupo colapsado sai da numeração, e colapsar um grupo renumera `Alt+1..9`. É a
@@ -113,6 +125,12 @@ Sobre um grupo implícito, `group.rename`, `group.set_color`, `group.dissolve` e
 `group.toggle_collapse` ficam **indisponíveis** — esmaecidas no menu, nunca
 ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 (ADR-0006, ADR-0020).
+
+> **Na implementação (F3).** O menu de grupo só abre a partir da pílula, e
+> pílula só existe para grupo explícito: nenhum item nasce esmaecido ali, porque
+> o menu nunca abre sobre um run implícito. A regra acima continua valendo como
+> contrato — quando houver outro caminho de invocação (tecla, na F4), é ela que
+> decide o que fica indisponível.
 
 ---
 
@@ -219,7 +237,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Doze comportamentos das F2 e F3 têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os seis últimos da F3. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Treze comportamentos das F2 e F3 têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete últimos da F3. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -235,5 +253,6 @@ Doze comportamentos das F2 e F3 têm requisito aprovado e **não recebem nome de
 | Abrir o editor por duplo clique no rótulo | RF-2.22 | idem; `group.rename` e `group.set_color` abrem o mesmo editor por outro caminho |
 | Arrastar aba para dentro ou fora de um grupo | RF-1.16, RF-2.18 | o grupo de destino vem dos limites visuais sob o cursor; `tab.move_to_group` é o equivalente sem mouse, e por isso é `Arg` |
 | Arrastar o rótulo do grupo | RF-2.19 | move o grupo inteiro para uma fronteira contínua; nenhum RF pede equivalente de teclado |
+| Botão "+" ao final de um grupo | RF-2.8 | o alvo é o wrapper clicado; `group.new_tab` **é** a ação que ele invoca, e continua sem default de tecla |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

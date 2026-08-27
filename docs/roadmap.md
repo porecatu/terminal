@@ -11,7 +11,7 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F0 — Esqueleto | **implementada** |
 | F1 — Terminal único | **implementada**, com verificação interativa pendente (ver a fase) |
 | F2 — Abas | **implementada**, com verificação interativa pendente (ver a fase) |
-| F3 — Grupos | **próxima**; decisões fechadas nos ADR-0020 a 0023 |
+| F3 — Grupos | **implementada exceto RF-2.21** (`group.next`/`group.prev`); fase **não fechada** |
 | F4 a F6 | não iniciadas |
 
 ---
@@ -146,9 +146,21 @@ Quatro simplificações conscientes, documentadas no código (`chrome.rs`, `over
 
 ---
 
-## F3 — Grupos — próxima
+## F3 — Grupos — implementada exceto RF-2.21
 
 Implementa [PRD-002](prd/prd-002-grupos-de-abas.md). É o diferencial do produto.
+
+Entregue em seis etapas, uma por PR, na divisão sugerida abaixo: modelo em `core`;
+seleção múltipla e gestos da barra; pílula, wrapper tingido e sublinhado por cor;
+colapso ponta a ponta; editor de grupo, menu de contexto e popover de destino;
+arraste entre grupos, arraste de grupo e a animação de reflui. Depois delas vieram
+quatro PRs de correção — bug de ordem em `group_tabs` mais o wiring de
+`group.create`, que atravessou a fase sem gesto de UI, e três causas distintas do
+mesmo sintoma ("o colapso só anima no primeiro grupo"), a última delas a lentidão
+da barra em overflow.
+
+**A fase não está fechada:** o RF-2.21 (`group.next`/`group.prev`) não foi
+implementado — ver [o que ficou pendente](#o-que-ficou-pendente-da-f3).
 
 Antes de a fase abrir, quatro ADRs fecharam as decisões que faltavam — mesmo movimento que os ADR-0017 a 0019 fizeram entre a F1 e a F2, e pela mesma razão: foi a fase anterior que expôs as lacunas. **Não é preâmbulo opcional**; dois deles mudam código que a F2 acabou de estabilizar.
 
@@ -171,11 +183,79 @@ Itens:
 
 **Aparência:** o que a F3 precisava e não tinha desenho está escrito. Saíram da seção 4.2 da [especificação visual](design/especificacao-visual.md) os quatro itens que eram desta fase — realce de fronteira (§2.19), aba selecionada (§2.5, como modificador de borda), animação de reordenação (token `reflow`, §1.10) e indicador agregado (§2.4) — e entraram três que não constavam de nenhuma lista: arraste do rótulo do grupo (§2.19.1), campo de nome inline na pílula (§2.10.1) e truncamento do nome do grupo (§2.4). A lista de pendências de desenho fica com **três** itens, todos de F4/F5 — nenhum bloqueia esta fase. Nenhuma cor nova.
 
-**Divisão sugerida**, no padrão das seis etapas da F1 e da F2, uma por PR: (1) modelo em `core` — grupos explícitos, runs implícitos, colapso, duas ordens, MRU, escada de foco; (2) seleção múltipla e gestos da barra; (3) pílula, wrapper tingido e sublinhado por cor de grupo, no layout e na pintura; (4) colapso ponta a ponta, incluindo overflow, navegação e indicador agregado; (5) editor de grupo, menu de contexto de grupo e popover de destino; (6) arraste entre grupos, arraste de grupo e a animação do RF-2.5.
+**Divisão sugerida** — foi a divisão executada —, no padrão das seis etapas da F1 e da F2, uma por PR: (1) modelo em `core` — grupos explícitos, runs implícitos, colapso, duas ordens, MRU, escada de foco; (2) seleção múltipla e gestos da barra; (3) pílula, wrapper tingido e sublinhado por cor de grupo, no layout e na pintura; (4) colapso ponta a ponta, incluindo overflow, navegação e indicador agregado; (5) editor de grupo, menu de contexto de grupo e popover de destino; (6) arraste entre grupos, arraste de grupo e a animação do RF-2.5.
 
 **Critério de saída:** todos os cenários de aceite de PRD-002 passam; **pílula, tingimento do wrapper, sublinhado da aba e editor de grupo conferem com o mockup**; 10 grupos numa janela sem quebra de layout, com a ordem de cedência do §2.18 respeitada; processos seguem vivos em grupo colapsado; as invariantes de run implícito — nenhum vazio, nenhum par adjacente — verificadas em teste depois de sequências de operações, não só de operações isoladas; `navigable_order()` sempre subsequência de `visual_order()`; o event loop volta a dormir depois de toda animação.
 
+> **Como o critério ficou.** Atendido em teste automatizado: invariantes de run
+> implícito depois de sequências de operações, `navigable_order()` como
+> subsequência de `visual_order()`, e o relógio de animação que sai do
+> `next_deadline()` quando a última reflui termina. **Não atendido:** os cenários
+> de aceite não foram exercitados com gesto real (verificação interativa), o
+> RF-2.21 não existe, e duas cláusulas mudaram de alvo junto com o desenho — a
+> "ordem de cedência do §2.18" foi descartada (nada cede, a trilha rola) e o
+> "tingimento do wrapper" virou cápsula de cor cheia. As duas estão registradas
+> na seção 4.4 da especificação visual, e é a F4 que cobra o casamento com o
+> mockup.
+
 O RF-2.17 (*"ativar uma aba de grupo colapsado expande o grupo"*) fica **parcialmente verificável** nesta fase: as duas fontes que o requisito cita são busca (F6) e restauração de sessão (F5), e na F3 não há caminho que ative uma aba oculta. A regra entra no modelo e no teste unitário; o cenário de ponta a ponta espera a F5.
+
+### O que ficou pendente da F3
+
+O código dos itens acima está escrito, o CI está verde nas três plataformas e o
+workspace tem **241 testes** (contra 145 ao fim da F2): `porecatu-ui` 108,
+`porecatu-core` 54, `porecatu-term` 51, `porecatu-render` 20, `porecatu-pty` 8.
+O que falta:
+
+- **RF-2.21 (`group.next`/`group.prev`) não existe** — e é por isso que a fase não
+  fecha. O MRU está no modelo desde a etapa 1 (`Group::last_active`, atualizado por
+  `Workspace::activate_tab`, [ADR-0020](adr/0020-grupos-explicitos.md) §6), mas não
+  há operação em `Workspace` que ande de grupo em grupo nem gesto que a acione. É o
+  próximo PR desta fase, não trabalho da F4.
+- **O nível de grupo da cadeia do [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md)
+  ficou pela metade.** Só `group.create` tem tecla (`Ctrl+Shift+G`, default fixo no
+  código). `group.dissolve` (o `Ctrl+Shift+U` do ADR) e `group.toggle_collapse` só
+  existem por menu, editor ou clique na pílula; as demais `group.*` são de menu por
+  natureza. Fecha com o parser de `[keybindings]`, na F4.
+- **Verificação interativa**, mesma limitação da F1 e da F2: build/teste automatizado
+  e um smoke test não-interativo do `cargo run`. Nenhum cenário de aceite de PRD-002
+  foi exercitado com gesto de verdade — seleção múltipla por `Ctrl`/`Shift`+clique,
+  arraste de aba entre grupos, arraste da pílula, duplo clique na pílula, editor de
+  grupo por teclado, e a animação de reflui vista com olho humano. Dez grupos numa
+  janela e a métrica do PRD-002 idem.
+- **Entrada de cor por hexadecimal** (RF-2.10) segue diferida pelo próprio
+  [ADR-0023](adr/0023-editor-de-grupo.md): o editor tem os seis swatches e nada mais.
+- **Roda do mouse no popover de destino.** A primeira lista rolável do chrome rola
+  por realce de teclado e por clique, não por roda — o ADR-0023 pediu lista rolável,
+  não disse por qual gesto.
+- **`show_new_tab_button = false` não desliga o botão "+" por grupo.** A zona fixa da
+  direita respeita a chave (largura zero, sem botão global); o botão ao final de cada
+  wrapper é desenhado sempre. Fica para a F4, quando a chave existir de verdade em
+  `porecatu-config`.
+- **`animations = false` (ADR-0022) não existe.** As durações são constantes
+  (`COLLAPSE_REFLOW_DURATION` 150 ms, `GROUP_CREATE_REFLOW_DURATION` 180 ms) com a
+  chave TOML citada no comentário, como o resto da aparência até a F4.
+- **Sem hover e sem sombra** — as duas dívidas de primitiva da F2 continuam, e a F3
+  acrescentou superfícies que a especificação também quer com realce
+  (`brightness(1.25)` na pílula). Nada no chrome desenha hover ainda.
+
+Quatro divergências entre desenho e binário, todas registradas na seção 4.4 da
+[especificação visual](design/especificacao-visual.md) e com a prosa das seções de
+anatomia já atualizada para o comportamento real:
+
+- **A cápsula do grupo é pintada com a cor cheia**, não com o tingimento de `.07` do
+  §2.3, e o fundo da aba passou a ter alfa `.85` para deixar passar um indício dela.
+  Pedido direto do usuário: a `.07` ficava invisível atrás do fundo opaco das abas.
+- **Botão "+" ao final de cada grupo** (`group.new_tab`), que a especificação não
+  previa — o §2.6 só tinha o botão global.
+- **A barra virou trilha rolável + zona fixa à direita**: o botão de nova aba global
+  não rola mais junto com a trilha.
+- **Não há mais ordem de cedência no overflow.** `fit_width` deixou de encolher
+  rótulo de aba e nome de pílula por busca binária — até 24 relayouts completos por
+  frame, cada um remedindo o texto de toda aba com `cosmic-text` sem cache, e a causa
+  real da barra parecer travada ao trocar de aba com overflow. Rótulo e nome ficam
+  sempre no teto e a trilha rola como componente só; as chaves `min_width` e
+  `label_min_width` saíram do arquivo de exemplo, órfãs.
 
 ---
 
@@ -190,6 +270,7 @@ Implementa [PRD-004](prd/prd-004-aparencia-do-chrome.md) e [PRD-005](prd/prd-005
 - Toda a superfície de [porecatu.example.toml](config/porecatu.example.toml) ligada de fato ao desenho, com os valores default vindos da [tabela de tokens](design/especificacao-visual.md)
 - Fallback de fonte, temas nomeados com override, zoom por atalho
 - Recálculo de grade e resize de todos os PTYs ao mudar métricas de fonte
+- **Cobranças que a F2 e a F3 deixaram** (seção 4.4 da [especificação visual](design/especificacao-visual.md)): hover por brilho resolvido em CPU, sombra de popover ou decisão registrada de não tê-la, corpo de aviso em três linhas, `show_new_tab_button` desligando também o botão por grupo, `animations = false` aplicando o reflui instantâneo ([ADR-0022](adr/0022-animacao-de-interface.md)) e `tint_strength` voltando a governar a cápsula do grupo
 
 **Critério de saída:** zero valores de aparência hardcoded (verificação por revisão dirigida); todos os cenários de aceite de PRD-004 e PRD-005 passam; **o binário com a config padrão bate com o mockup** — divergência visível é bug, não configuração ([ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md)); auditoria de rastreabilidade — nenhuma chave do exemplo sem requisito, nenhum requisito sem chave.
 

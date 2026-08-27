@@ -4,14 +4,71 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento seguirá [SemVer](https://semver.org/lang/pt-BR/) a partir do
 primeiro release.
 
-> **Nenhuma versão foi publicada ainda.** As fases F0, F1 e F2 do
-> [roadmap](docs/roadmap.md) estão implementadas — `cargo run` abre uma janela
-> com abas de terminal funcionais, e `Ctrl+Shift+N` abre uma segunda janela —,
-> mas artefatos de release só aparecem na F6.
+> **Nenhuma versão foi publicada ainda.** As fases F0, F1, F2 e F3 do
+> [roadmap](docs/roadmap.md) estão implementadas — a F3 exceto o RF-2.21
+> (`group.next`/`group.prev`), que a mantém aberta. `cargo run` abre uma janela
+> com abas e grupos de terminal funcionais, e `Ctrl+Shift+N` abre uma segunda
+> janela; artefatos de release só aparecem na F6.
 
 ## [Não publicado]
 
 ### Adicionado
+
+#### F3 — Grupos
+
+O diferencial do produto. Entregue em seis etapas, uma por PR, mais quatro PRs
+de correção. Ainda não há configuração nem sessão: os valores de aparência
+seguem como constantes citando a chave TOML de origem. **O RF-2.21
+(`group.next`/`group.prev`) não foi implementado** — o MRU por grupo está
+gravado, falta a operação que anda de grupo em grupo.
+
+- **Decisões que a fase exigia**, escritas antes de ela abrir:
+  [ADR-0020](docs/adr/0020-grupos-explicitos.md) (grupos explícitos — grupo
+  implícito deixa de ser único, colapso ganha ordem navegável própria, escada de
+  foco, regra de repetição da paleta de seis cores),
+  [ADR-0021](docs/adr/0021-selecao-multipla-e-gestos-da-barra.md) (seleção
+  múltipla e gestos da barra — estado efêmero de janela, `Cmd` no macOS,
+  fronteira do arraste entre grupos),
+  [ADR-0022](docs/adr/0022-animacao-de-interface.md) (animação sob render
+  damage-driven — relógio por janela, dois consumidores, lista fechada) e
+  [ADR-0023](docs/adr/0023-editor-de-grupo.md) (editor de grupo, o quinto widget
+  de chrome)
+- `porecatu-core`: `GroupColor`/`GroupKind`/`GroupMeta`, **N runs implícitos**
+  (um por trecho contíguo de abas sem grupo) mantidos por `normalize_groups`
+  depois de toda operação estrutural, `navigable_order()` ao lado de
+  `visual_order()`, MRU por grupo, escada de foco de quatro níveis numa função
+  só. Operações novas: `group_tabs`, `ungroup`, `rename_group`,
+  `set_group_color`, `collapse_group`, `next_auto_color`, `move_tab_to_group`,
+  `move_tab_to_group_at`, `move_tab_to_new_run`, `move_group`
+- Seleção múltipla (`selection.rs`), fora do core: `Ctrl`/`Cmd`+clique alterna,
+  `Shift`+clique estende sobre a ordem navegável, clique sem modificador limpa e
+  ativa, `Esc` limpa. Fechar ou colapsar reposiciona a âncora; no macOS
+  `Ctrl`+clique na barra abre o menu em vez de tocar a seleção
+- Pílula de grupo na geometria (swatch, nome truncável, contador, caret),
+  cápsula de cor por trás das abas do grupo e sublinhado da aba resolvido pela
+  cor do grupo — `ungrouped_color` para as abas soltas
+- Colapso ponta a ponta: a trilha para de gerar geometria para as abas do grupo
+  colapsado, `next_tab`/`prev_tab` e `Alt+1..9` passam a andar sobre a ordem
+  navegável (colapsar renumera, deliberadamente), e a pílula ganha o indicador
+  agregado — campainha vence atividade, aba `Exited` não contribui
+- Editor de grupo, menu de contexto de grupo e popover de destino do
+  `tab.move_to_group`, os três lendo a **mesma** lista de seis ações
+  (`group_menu.rs`, RF-10.21). Nome editado ao vivo sem escrever no `Workspace`
+  até o `Enter`; `group.close_all` sempre confirma, com a contagem no corpo do
+  diálogo. Os cinco popovers nunca coexistem
+- Arraste de aba **entre** grupos, com realce de fronteira, e arraste da pílula
+  movendo o grupo inteiro — nunca para dentro de outro grupo, porque grupos não
+  aninham. O gesto continua sem tocar o `Workspace` real até a soltura
+- Animação de reflui (`animation.rs`): relógio por janela dirigido pelo
+  `ControlFlow::WaitUntil`, ativo só enquanto há movimento pendente. Dois
+  gatilhos — formar grupo (`.18s`) e colapsar/expandir (`.15s`). Interpola
+  posição do wrapper, **largura da cápsula** e **opacidade** das abas que entram
+  ou saem da trilha; o `Workspace` nunca é interpolado
+- `Ctrl+Shift+G` agrupa a seleção corrente, ou a aba ativa quando não há
+  seleção, com cor automática e o editor aberto no nome
+- Botão "+" ao final de cada grupo (`group.new_tab`) e o botão de nova aba
+  global numa **zona fixa** à direita da barra, que não rola com a trilha
+- 241 testes no workspace, contra os 145 da F2
 
 #### F2 — Abas
 
@@ -177,6 +234,22 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Corrigido
 
+- `Workspace::group_tabs` invertia a ordem visual ao agrupar a partir de um
+  grupo explícito quando a aba extraída não era a primeira dele. Bagunçava
+  `self.groups` em silêncio, e era a causa real do relato de que a animação de
+  colapso "só funcionava no primeiro grupo": o grupo errado recebia a geometria
+  antiga
+- A animação de colapso não animava o **próprio** grupo — as abas dele sumiam na
+  hora (agora esmaecem) e a cápsula saltava para a largura final (agora
+  interpola largura, não só posição). Só os vizinhos deslizavam
+- Barra lenta com overflow: `fit_width` fazia até 24 recálculos completos da
+  trilha por frame, cada um remedindo o texto de toda aba sem cache. O
+  encolhimento de rótulo e de nome de pílula foi **descartado** — os dois ficam
+  no teto e a trilha rola como um componente só; as chaves `min_width` e
+  `label_min_width` saíram do arquivo de exemplo
+- `group.create` (RF-2.4/RF-2.5) tinha modelo e testes, mas nenhum gesto de UI
+  em seis etapas. Ganhou `Ctrl+Shift+G`, nome default "Novo grupo" e cor
+  automática
 - Deadlock ao fechar a janela no Windows: `ClosePseudoConsole` esperava o pipe
   de leitura clonado ser liberado enquanto a thread de leitura estava parada
   num `read()` síncrono nele, e o app só morria por kill externo. O terminal
