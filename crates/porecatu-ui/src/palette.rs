@@ -60,6 +60,11 @@ pub const CLOSE_BUTTON_ICON: Color = hex(0x72, 0x7a, 0x86);
 // implícito (F2 só tem esse grupo).
 pub const UNGROUPED_UNDERLINE: Color = hex(0x7b, 0x83, 0x8f);
 
+// `[appearance.tabs] selected_border` -- ADR-0021, RF-2.2: aba em seleção
+// múltipla. Modificador sobre o estado de base (não é um quarto estado,
+// espec. §2.5) -- mesmo acento do campo de rename e do anel de foco.
+pub const SELECTED_BORDER: Color = hex(0x5e, 0xd3, 0xbc);
+
 // Espec. visual §2.5 -- campo de rename.
 pub const RENAME_BACKGROUND: Color = hex(0x0e, 0x11, 0x16);
 pub const RENAME_BORDER: Color = hex(0x5e, 0xd3, 0xbc);
