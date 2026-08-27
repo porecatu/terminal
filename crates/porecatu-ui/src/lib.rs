@@ -28,6 +28,7 @@ mod overlay;
 mod paint;
 mod palette;
 mod rename;
+mod selection;
 mod tab_bar;
 mod tooltip;
 mod warning;
@@ -38,6 +39,7 @@ use dialog::{ConfirmDialog, DialogAction, DialogButton};
 use input::ClickTracker;
 use paint::CellMetrics;
 use rename::RenameState;
+use selection::Selection;
 use tab_bar::{OverflowSide, TabBarHit, TabBarStyle};
 use tooltip::Hover;
 use warning::{Severity, WarningStack};
@@ -170,6 +172,9 @@ struct WindowState {
     dialog: Option<ConfirmDialog>,
     /// Menu de contexto de aba em andamento (ADR-0014 §2.16, RF-10.19).
     context_menu: Option<ContextMenu>,
+    /// Seleção múltipla da barra (ADR-0021) -- efêmera como `rename`,
+    /// `drag` e `hover`, ao lado dos quais fica; não persistida.
+    selection: Selection,
 }
 
 impl WindowState {
@@ -194,6 +199,7 @@ impl WindowState {
             warnings: WarningStack::default(),
             dialog: None,
             context_menu: None,
+            selection: Selection::default(),
         }
     }
 
@@ -336,6 +342,11 @@ impl WindowState {
         if self.context_menu.is_some_and(|m| m.tab == id) {
             self.context_menu = None;
         }
+        // ADR-0021 §2: fechar aba selecionada tira-a da seleção; a ordem
+        // precisa ser capturada antes de `workspace.close_tab` -- é nela que
+        // "âncora mais próxima" faz sentido.
+        let order: Vec<TabId> = self.workspace.visual_order().collect();
+        self.selection.remove_tab(id, &order);
         if let Some(runtime) = self.tabs.remove(&id) {
             let _ = runtime.terminal.close();
         }
@@ -656,7 +667,10 @@ impl WindowState {
     /// aba diferente da que está sendo renomeada confirma o rename primeiro
     /// (espec. §2.5: "blur" confirma"); clicar no corpo de uma aba também
     /// arma o possível arraste do RF-1.15 (`TabDrag::Pressed`), resolvido
-    /// de verdade só se o movimento passar do limiar em `CursorMoved`.
+    /// de verdade só se o movimento passar do limiar em `CursorMoved`. Isso
+    /// só vale para o clique **sem modificador**: `Ctrl`/`Cmd`+clique
+    /// alterna a seleção e `Shift`+clique estende a partir da âncora
+    /// (ADR-0021 §1/§2) -- nenhum dos dois ativa a aba nem arma arraste.
     /// `right_click` abre o menu de contexto (RF-1.1, RF-1.2, RF-2.20) em
     /// vez de ativar/arrastar. Devolve `true` só quando o botão de nova
     /// aba foi clicado -- `open_tab` precisa de `cell_metrics`/`proxy`/
@@ -713,16 +727,37 @@ impl WindowState {
                 {
                     self.commit_rename();
                 }
-                self.workspace.activate_tab(id);
-                self.sync_window_title();
-                self.ensure_active_tab_visible(gpu);
-                if let Some(rect) = tab_bar::tab_rect(&layout, id) {
-                    let screen_x = rect.x - self.scroll_offset;
-                    self.drag = TabDrag::Pressed {
-                        tab: id,
-                        start: logical_point,
-                        grab_offset: logical_point.0 - screen_x,
-                    };
+                // ADR-0021 §3: modificador de seleção é `Ctrl` em Windows/
+                // Linux e `Cmd` (`super_`) no macOS -- lá `Ctrl`+clique é o
+                // clique secundário e já foi desviado pro menu de contexto
+                // antes de chegar aqui (`WindowState::is_secondary_bar_click`).
+                let select_modifier = if cfg!(target_os = "macos") {
+                    self.modifiers.super_
+                } else {
+                    self.modifiers.ctrl
+                };
+                if self.modifiers.shift {
+                    // ADR-0021 §2: intervalo sobre a ordem navegável --
+                    // atravessa fronteira de grupo e já exclui abas de
+                    // grupo colapsado.
+                    let order: Vec<TabId> = self.workspace.navigable_order().collect();
+                    self.selection.select_range(&order, id);
+                } else if select_modifier {
+                    self.selection.toggle(id);
+                } else {
+                    // RF-2.3: clique sem modificador limpa a seleção e ativa.
+                    self.selection.clear();
+                    self.workspace.activate_tab(id);
+                    self.sync_window_title();
+                    self.ensure_active_tab_visible(gpu);
+                    if let Some(rect) = tab_bar::tab_rect(&layout, id) {
+                        let screen_x = rect.x - self.scroll_offset;
+                        self.drag = TabDrag::Pressed {
+                            tab: id,
+                            start: logical_point,
+                            grab_offset: logical_point.0 - screen_x,
+                        };
+                    }
                 }
                 false
             }
@@ -783,6 +818,14 @@ impl WindowState {
     /// `y` físico está dentro da faixa da barra de abas (topo da janela).
     fn in_bar(&self, physical_y: f64) -> bool {
         physical_y < (bar_height() * self.scale) as f64
+    }
+
+    /// O que abre o menu de contexto da barra (ADR-0021 §3): botão direito
+    /// em qualquer plataforma, e `Ctrl`+clique esquerdo **só** no macOS --
+    /// lá é o clique secundário da plataforma, e não toca a seleção.
+    fn is_secondary_bar_click(&self, button: MouseButton) -> bool {
+        button == MouseButton::Right
+            || (cfg!(target_os = "macos") && button == MouseButton::Left && self.modifiers.ctrl)
     }
 
     /// Recalcula linhas/colunas a partir do tamanho lógico e propaga pra
@@ -1337,10 +1380,10 @@ impl App {
         };
 
         // Cadeia de captura (ADR-0008 passo 1): diálogo modal > menu de
-        // contexto > cancelamento de arraste > rename > ações de aba/
-        // janela > terminal. Cada nível consome a tecla por inteiro -- "um
-        // binding que casa nunca cai para o terminal" vale igual pros
-        // modos de captura.
+        // contexto > cancelamento de arraste > rename > aviso > seleção
+        // (ADR-0021 §2, `Esc` limpa) > ações de aba/janela > terminal. Cada
+        // nível consome a tecla por inteiro -- "um binding que casa nunca
+        // cai para o terminal" vale igual pros modos de captura.
         if state.dialog.is_some() {
             if let Some(action) = state.handle_dialog_key(&key) {
                 self.run_dialog_action(window_id, action, event_loop);
@@ -1385,6 +1428,16 @@ impl App {
             && matches!(key.logical_key, Key::Named(NamedKey::Escape))
         {
             state.warnings.dismiss_top();
+            state.window.request_redraw();
+            return;
+        }
+        // ADR-0021 §2: `Esc` limpa a seleção -- depois do rename e do
+        // diálogo (já resolvidos acima), antes da tabela de keybindings.
+        if !state.selection.is_empty()
+            && key.state == ElementState::Pressed
+            && matches!(key.logical_key, Key::Named(NamedKey::Escape))
+        {
+            state.selection.clear();
             state.window.request_redraw();
             return;
         }
@@ -1645,7 +1698,7 @@ impl App {
             return;
         }
 
-        if button == MouseButton::Right && state.in_bar(state.cursor_position.1) {
+        if state.is_secondary_bar_click(button) && state.in_bar(state.cursor_position.1) {
             state.hover.dismiss();
             if let Some(gpu) = &mut self.gpu {
                 state.handle_bar_click(logical_point, gpu, true);
@@ -1746,6 +1799,7 @@ impl App {
             &state.workspace,
             state.workspace.active_tab(),
             &state.rename,
+            &state.selection,
             &style,
             bar_width,
             overflow,

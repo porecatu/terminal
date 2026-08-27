@@ -2,10 +2,10 @@
 
 //! Traduz `tab_bar::TabBarLayout` (mais estado efêmero que o layout puro
 //! não conhece: aba ativa, aba `Exited`, edição de rename em andamento,
-//! rolagem e arraste desde a Etapa 5) em `Primitive`s da camada `Chrome`
-//! (ADR-0018). Cores e dimensões: espec. visual §1.2, §1.3, §2.5, §2.6,
-//! §2.17, §2.18, §2.19, como constantes em `palette.rs`/`tab_bar.rs`,
-//! mesmo padrão de `paint.rs` para a grade.
+//! rolagem e arraste desde a Etapa 5, seleção múltipla desde a F3 etapa 2)
+//! em `Primitive`s da camada `Chrome` (ADR-0018). Cores e dimensões: espec.
+//! visual §1.2, §1.3, §2.5, §2.6, §2.17, §2.18, §2.19, como constantes em
+//! `palette.rs`/`tab_bar.rs`, mesmo padrão de `paint.rs` para a grade.
 //!
 //! Sem hover nesta etapa -- a barra não rastreia posição do mouse fora de
 //! clique/arraste (`App::cursor_position` é da área do terminal); o estado
@@ -22,6 +22,7 @@ use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansW
 
 use crate::palette;
 use crate::rename::RenameState;
+use crate::selection::Selection;
 use crate::tab_bar::{
     self, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, TabBarLayout, TabBarStyle,
 };
@@ -37,6 +38,10 @@ const CLOSE_ICON_SIZE: f32 = 10.0; // espec §2.5: "✕ 10px"
 const NEW_TAB_ICON_SIZE: f32 = 15.0; // espec §2.6: "+ 15px"
 const TAB_UNDERLINE_HEIGHT: f32 = 2.0; // espec §2.5: "inset 0 -2px 0"
 const BAR_SEPARATOR_HEIGHT: f32 = 1.0;
+// `[appearance.tabs] selected_border_width` -- espec §2.5: "2px por dentro",
+// sobre a borda de 1px do estado de base (`Primitive::RoundedQuad` não soma
+// largura ao rect por causa da borda, então isto não reflui a aba).
+const SELECTED_BORDER_WIDTH: f32 = 2.0;
 
 // Campo de rename: espec §2.5 dá largura (120), padding (2px 5px) e fonte
 // (12px), mas não a altura da caixa. Valor de trabalho: texto 12px +
@@ -82,6 +87,7 @@ pub fn paint(
     workspace: &Workspace,
     active: Option<TabId>,
     rename: &RenameState,
+    selection: &Selection,
     style: &TabBarStyle,
     bar_width: f32,
     overflow: Overflow,
@@ -137,13 +143,21 @@ pub fn paint(
             let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
             let is_active = active == Some(tab.id);
             let (bg, border, text_color) = tab_colors(exited, is_active);
+            // RF-2.2/espec §2.5: selecionada é um modificador de borda, não
+            // um quarto estado -- fundo e texto continuam vindo de
+            // Ativa/Inativa acima.
+            let (border, border_width) = if selection.is_selected(tab.id) {
+                (palette::SELECTED_BORDER, SELECTED_BORDER_WIDTH)
+            } else {
+                (border, 1.0)
+            };
 
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: tab_rect,
                 radius: 6.0,
                 color: bg,
                 border_color: border,
-                border_width: 1.0,
+                border_width,
             }));
 
             // Sublinhado de grupo (espec §2.5): F2 só tem o grupo implícito,
@@ -256,6 +270,11 @@ pub fn paint(
         let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
         let is_active = active == Some(tab.id);
         let (bg, border, text_color) = tab_colors(exited, is_active);
+        let (border, border_width) = if selection.is_selected(tab.id) {
+            (palette::SELECTED_BORDER, SELECTED_BORDER_WIDTH)
+        } else {
+            (border, 1.0)
+        };
         let ghost_rect = Rect {
             x: ghost.screen_x,
             y: tab.rect.y,
@@ -267,7 +286,7 @@ pub fn paint(
             radius: 6.0,
             color: bg,
             border_color: border,
-            border_width: 1.0,
+            border_width,
         }));
         let dot_reserve = if tab.indicator.is_some() {
             INDICATOR_DOT_SIZE + style.internal_gap
