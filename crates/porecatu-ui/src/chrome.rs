@@ -44,7 +44,19 @@
 //! preview) desde esta etapa: soltar sobre um grupo colapsado faz o
 //! preview não gerar `TabRect` nenhum pra aba arrastada, e o fantasma
 //! precisa do conteúdo mesmo assim.
+//!
+//! Colapsar/expandir também esmaece as abas do próprio grupo em vez de
+//! picá-las (espec §2.4: "o que anima de fato é o resto do colapso: as
+//! abas desaparecendo da trilha") -- sem isso, um grupo sem nenhum outro
+//! depois dele na trilha (ex.: o último) não tinha *nada* pra animar, e a
+//! reflui do wrapper (parágrafo acima) só desliza quem está depois. Abas
+//! que sumiram do `layout` corrente mas existiam em `old_layout`
+//! (`AnimationClock::old_tabs`) continuam desenhadas na posição antiga,
+//! opacidade caindo; as que são novas ali (`AnimationClock::had_tab`
+//! devolve falso) entram com opacidade subindo, junto com o progresso da
+//! reflui do próprio wrapper delas.
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use porecatu_core::{GroupId, TabId, Workspace};
@@ -314,6 +326,20 @@ pub fn paint(
                 continue;
             }
 
+            // ADR-0022: aba que não existia em `old_layout` (grupo estava
+            // colapsado) mas já está no layout corrente (acabou de
+            // expandir) entra esmaecendo -- opacidade sobe de 0 a 1 junto
+            // com o progresso da mesma reflui que desliza o wrapper. Aba
+            // que já existia antes (não é nova) desenha na opacidade
+            // normal, animação ou não.
+            let fade_in = if animations.had_tab(tab.id) {
+                1.0
+            } else {
+                animations
+                    .wrapper_progress(group.id, now)
+                    .map_or(1.0, |(_, progress)| progress)
+            };
+
             let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
             let is_active = active == Some(tab.id);
             let (bg, border, text_color) = tab_colors(exited, is_active);
@@ -329,8 +355,8 @@ pub fn paint(
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: tab_rect,
                 radius: 6.0,
-                color: bg,
-                border_color: border,
+                color: scale_alpha(bg, fade_in),
+                border_color: scale_alpha(border, fade_in),
                 border_width,
             }));
 
@@ -344,7 +370,7 @@ pub fn paint(
                     width: tab_rect.width,
                     height: TAB_UNDERLINE_HEIGHT,
                 },
-                color: group_color,
+                color: scale_alpha(group_color, fade_in),
             }));
 
             let dot_reserve = if tab.indicator.is_some() {
@@ -365,7 +391,7 @@ pub fn paint(
                         height: INDICATOR_DOT_SIZE,
                     },
                     radius: INDICATOR_DOT_SIZE / 2.0,
-                    color,
+                    color: scale_alpha(color, fade_in),
                     border_color: palette::TRANSPARENT,
                     border_width: 0.0,
                 }));
@@ -380,7 +406,7 @@ pub fn paint(
                     text: tab.label.clone(),
                     font: LABEL_FONT,
                     size_px: style.font_size,
-                    color: text_color,
+                    color: scale_alpha(text_color, fade_in),
                 }));
             }
 
@@ -388,10 +414,54 @@ pub fn paint(
                 "\u{2715}",
                 shift(tab.close_button, dx),
                 CLOSE_ICON_SIZE,
-                palette::CLOSE_BUTTON_ICON,
+                scale_alpha(palette::CLOSE_BUTTON_ICON, fade_in),
                 measurer,
             ));
         }
+    }
+
+    // ADR-0022: abas que existiam em `old_layout` mas sumiram do layout
+    // corrente (grupo acabou de colapsar) continuam desenhadas, esmaecendo
+    // na posição antiga em vez de sumir na hora -- "o que anima de fato é
+    // o resto do colapso: as abas desaparecendo da trilha" (espec §2.4).
+    // O wrapper delas não se move (nada antes dele mudou, só ele mesmo
+    // encolheu), então só o deslocamento de rolagem se aplica aqui, não a
+    // reflui de nenhum grupo.
+    let current_tab_ids: HashSet<TabId> = layout
+        .groups
+        .iter()
+        .flat_map(|g| &g.tabs)
+        .map(|t| t.id)
+        .collect();
+    for (old_tab, progress) in animations.old_tabs(now) {
+        if current_tab_ids.contains(&old_tab.id) {
+            continue;
+        }
+        let fade_out = 1.0 - progress;
+        let tab_rect = shift(old_tab.rect, scroll_dx);
+        let exited = workspace.tab(old_tab.id).is_some_and(|t| t.is_exited());
+        let is_active = active == Some(old_tab.id);
+        let (bg, border, text_color) = tab_colors(exited, is_active);
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: tab_rect,
+            radius: 6.0,
+            color: scale_alpha(bg, fade_out),
+            border_color: scale_alpha(border, fade_out),
+            border_width: 1.0,
+        }));
+        let dot_reserve = if old_tab.indicator.is_some() {
+            INDICATOR_DOT_SIZE + style.internal_gap
+        } else {
+            0.0
+        };
+        let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
+        out.push(Primitive::Text(TextRun {
+            origin: (tab_rect.x + style.padding_left + dot_reserve, label_y),
+            text: old_tab.label.clone(),
+            font: LABEL_FONT,
+            size_px: style.font_size,
+            color: scale_alpha(text_color, fade_out),
+        }));
     }
 
     if let Some(button) = layout.new_tab_button {
@@ -539,6 +609,18 @@ fn shift(rect: Rect, dx: f32) -> Rect {
 
 fn with_alpha(color: Color, alpha: f64) -> Color {
     Color { a: alpha, ..color }
+}
+
+/// Multiplica o alfa que a cor já tem por `mult` -- diferente de
+/// `with_alpha`, que substitui. É o que faz a aba esmaecer em cima do
+/// alfa `.85` que `TAB_ACTIVE_BACKGROUND`/`TAB_INACTIVE_BACKGROUND` já
+/// carregam (ADR-0022, fade de entrada/saída do colapso), sem perder o
+/// "indício da cápsula" que esse `.85` existe pra deixar passar.
+fn scale_alpha(color: Color, mult: f32) -> Color {
+    Color {
+        a: color.a * mult as f64,
+        ..color
+    }
 }
 
 /// Pílula de grupo (espec §2.4): fundo/borda, swatch, nome, contador e
