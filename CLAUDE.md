@@ -8,6 +8,8 @@ Guia operacional do projeto. Leia antes de mexer em qualquer coisa.
 
 **Estado atual: F0 e F1 implementadas; a próxima fase é a F2 (abas).** `cargo run` abre uma janela com um terminal funcional — PTY, motor VT, render por GPU, teclado, mouse, seleção e clipboard. `porecatu-config` e `porecatu-session` ainda são stubs (só o cabeçalho SPDX) e `porecatu-core` tem só o `TabId`; eles ganham corpo nas F2/F4/F5. Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs — o que está em código segue o que está escrito lá, incluindo os desvios anotados.
 
+**As decisões que faltavam para a F2 já estão fechadas.** Três ADRs, escritos depois da F1 justamente porque foi ela que expôs as lacunas: [ADR-0017](docs/adr/0017-ciclo-de-vida-da-aba.md) (ciclo de vida da aba — OSC 7 antecipado, precedência de título sem processo em primeiro plano, encerramento sem EOF, estado `Exited`), [ADR-0018](docs/adr/0018-composicao-de-frame.md) (camadas, recorte e medição de texto — a API da F1 desenha todo o texto sobre todos os quads, então nenhum popover ficaria por cima) e [ADR-0019](docs/adr/0019-tooltip.md) (tooltip, o quarto widget de chrome). Não comece a F2 sem lê-los: dois deles mandam refatorar código que a F1 acabou de estabilizar.
+
 ## Stack travada
 
 `winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `arboard` (clipboard) · TOML+`serde` (config).
@@ -98,7 +100,9 @@ Regra: **nenhuma cor, dimensão, raio ou espaçamento é inventado.** Sai da tab
 
 Isso só se sustenta porque as cinco faces do design (IBM Plex Mono 400/500, Sans 400/500/600) são **embutidas no binário** ([ADR-0016](docs/adr/0016-fontes-embutidas.md)) — métrica de fonte diferente muda largura de célula e de aba. Não fazer subsetting: viola a cláusula de Reserved Font Name da OFL e obrigaria a renomear a família.
 
-Nove requisitos do v1 não têm desenho aprovado (indicadores de atividade e campainha, estado de arraste, aba selecionada, entre outros). Estão listados na seção 4.2 da especificação. Para esses, vale o julgamento de quem implementa — mas ainda usando os tokens existentes, nunca cores novas.
+Seis requisitos do v1 ainda não têm desenho aprovado (aba selecionada, animação ao formar grupo, indicador agregado de grupo colapsado, realce de fronteira no arraste, aba restaurada sem shell, cor de seleção de texto) — todos de F3 ou depois. Estão listados na seção 4.2 da especificação. Para esses, vale o julgamento de quem implementa — mas ainda usando os tokens existentes, nunca cores novas.
+
+O que a F2 precisava e não tinha desenho foi decidido e escrito: **seções 2.17 a 2.20** (indicadores da aba, overflow da trilha, arraste, tooltip), mais os detalhes completados nas seções 2.2, 2.5, 2.14, 2.15 e 2.16.
 
 > **O mockup mostra o produto completo, não o v1.** Painéis divididos, perfis de aba, paleta de comandos, painel de configurações GUI, barra de status e barra de título customizada são `[v2]`. A tabela de fases (seção 3) classifica todo elemento. Consulte-a antes de construir qualquer coisa que apareça no desenho. Ver [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md).
 
@@ -136,6 +140,8 @@ Anotadas aqui porque custam horas quando descobertas na marra:
 - **`TermEvent::Exit` vem do `try_wait` do PTY, não de EOF.** No Windows o pipe do ConPTY não emite EOF só porque o processo hospedado saiu.
 - **Teste interativo é bloqueado pela proteção de foco do Windows.** `SetForegroundWindow`/`AppActivate` de processo em segundo plano não funcionam; teclado e arraste sintéticos não são caminho viável. Verificação de teclado, mouse e seleção precisa de sessão desktop real.
 - **O motor já invalida a seleção sozinho** quando o programa escreve sobre a região selecionada e ao entrar/sair de tela alternativa, e `scroll_display` a preserva. Não reimplementar isso do lado de fora.
+- **`Renderer::render` achata as primitivas em três baldes** — todos os quads, todos os arredondados, todo o texto — e desenha nessa ordem, ignorando a ordem da lista. Correto para a grade, fatal para chrome: o fundo de um popover cai **atrás** do texto do terminal, e `PushClip` por índice não sobrevive ao achatamento. Resolvido pelas camadas do [ADR-0018](docs/adr/0018-composicao-de-frame.md) — ler antes de tentar desenhar qualquer menu.
+- **Não há como medir largura de string proporcional.** O único medidor é `measure_mono_cell`, e o `FontSystem` está trancado dentro do pipeline de texto, que exige `wgpu::Device`. Truncar título de aba, dimensionar item de menu e o layout puro que a seção 7 da arquitetura promete dependem do `TextMeasurer` sem GPU do ADR-0018.
 
 ## Índice
 

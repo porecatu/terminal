@@ -2,7 +2,7 @@
 
 Documento técnico central. Os ADRs justificam *por que* cada peça foi escolhida; este documento descreve *como* elas se encaixam.
 
-As seções 2, 4 e 5 estão implementadas (F0 e F1 do [roadmap](roadmap.md)); as seções 3 (parte de chrome), 6 e a metade de `core`/`config`/`session` da seção 1 ainda são projeto. Onde o código divergiu do escrito, há um bloco **Na implementação** dizendo o quê e por quê.
+As seções 2 e 4 estão implementadas (F0 e F1 do [roadmap](roadmap.md)); a seção 5 está implementada na forma da F1 e é revista pelo [ADR-0018](adr/0018-composicao-de-frame.md) na F2; as seções 3 (parte de chrome), 6 e a metade de `core`/`config`/`session` da seção 1 ainda são projeto. Onde o código divergiu do escrito, há um bloco **Na implementação** dizendo o quê e por quê.
 
 ---
 
@@ -40,7 +40,11 @@ O grafo de dependências permitido está tabelado em [CLAUDE.md](../CLAUDE.md). 
 
 **`porecatu-render` não conhece o domínio.** Ele expõe um punhado de primitivas — retângulo, retângulo arredondado, run de texto, clip rect — e nada mais. Não sabe o que é uma aba. Isso mantém o renderer testável e substituível, e força a aparência configurável a viver onde ela pertence: em `config` (o que o usuário pediu) + `ui` (como isso vira geometria).
 
+O [ADR-0018](adr/0018-composicao-de-frame.md) acrescenta duas coisas a esse crate sem furar a regra: **camadas** (uma sequência ordenada de listas de primitivas, para que popover possa cobrir texto) e um **medidor de texto sem GPU**, que mede string, face e tamanho e continua não sabendo o que é uma aba. É o medidor que torna o layout da barra a função pura da seção 7.
+
 **`porecatu-core` não depende de nada.** É o modelo de domínio puro: `Workspace`, `Group`, `Tab`, IDs, tipos geométricos. Serializável, testável sem GPU e sem PTY. É por isso que `porecatu-session` consegue ser um crate trivial: ele serializa `core` e mais nada.
+
+> **Na implementação.** Na F1 o crate tem só `TabId`, para que o `Wakeup { window, tab }` do [ADR-0015](adr/0015-multiplas-janelas.md) nascesse com o formato certo. `Workspace`, `Group` e `Tab` entram na F2, com `serde` derivado já ali — o round-trip que o [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md) lista como invariante é testável na fase que o exige, mesmo com `porecatu-session` ainda vazio. `Tab` carrega o estado `Exited` do [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md).
 
 ---
 
@@ -75,6 +79,8 @@ Bloquear aqui é correto e barato — a thread existe justamente para isso. O `M
 Input do teclado vira bytes no `porecatu-ui` e é enviado por `mpsc::Sender` para o handle de escrita do PTY. A escrita não passa pela thread de leitura.
 
 > **Na implementação.** São **três** threads por terminal, não duas: leitura, escrita e observação do processo (`try_wait` em intervalo curto). A de observação é a dona do `PtyHandle`, e por isso é ela quem aplica o resize do lado do PTY — o lado do motor é síncrono. Quem spawna as três é `porecatu-term::Terminal`; `porecatu-ui` nunca vê `PtyHandle` nem thread nenhuma, só `spawn`, `write`, `snapshot_into`, `try_recv_event`, `scroll`, `modes`, `resize` e as operações de seleção. A notificação de sujeira sai por um closure genérico (`on_wakeup`), para o crate não precisar conhecer `winit`; quem fecha esse closure sobre `EventLoopProxy` e `Wakeup` é a `ui`.
+>
+> **Encerramento de uma aba (F2).** O [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) decide o que o RF-1.2 chamava de "aguardar EOF": o ConPTY não emite EOF, então a espera é pela confirmação de morte da thread de observação, **fora da main thread**. A aba sai da barra imediatamente. Sem isso, fechar uma janela com 50 abas custaria 50 × `SHUTDOWN_TIMEOUT` na main thread, contra a métrica de 50 abas do PRD-001.
 >
 > **Encerramento (Windows).** `Terminal::shutdown` não dá `join` em nenhuma das três threads e **não fecha o pseudo-console**. `ClosePseudoConsole` bloqueia até o pipe de leitura clonado ser liberado, e a thread de leitura está parada num `read()` síncrono nele — as duas esperam uma pela outra e o app trava. O que se faz é matar o processo e `mem::forget` no handle: o SO reclama tudo quando o Porecatu sai. A confirmação de "processo morto" vem de um canal dedicado que a thread de observação sinaliza, com timeout de segurança. Dar `join` na thread de leitura violaria a regra de que a main thread nunca bloqueia, justamente no fechamento da janela.
 
@@ -207,8 +213,8 @@ Sequências de escape que **não** são desenho viram eventos, consumidos por
 
 | Evento | Origem | Quem decide o que fazer |
 |---|---|---|
-| `Title` | OSC 0 / OSC 2 | `ui`, respeitando a precedência do RF-1.7 |
-| `Cwd` | OSC 7 | `ui` → `session` ([ADR-0005](adr/0005-persistencia-de-sessao.md)) |
+| `Title` | OSC 0 / OSC 2 | `ui`, respeitando a precedência do RF-1.7 — customizado → OSC → shell, conforme o [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) |
+| `Cwd` | OSC 7 | `ui` → `tab.new`/`window.new` (F2, ADR-0017) e → `session` ([ADR-0005](adr/0005-persistencia-de-sessao.md), F5) |
 | `ClipboardWrite` | OSC 52 | `ui`, sujeito a `osc52_write` e ao teto de tamanho |
 | `ClipboardRead` | OSC 52 | `ui`, **negado por default** ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md)) |
 | `ColorSet` / `ColorQuery` | OSC 4 / 10 / 11 | `ui`, com escopo de sessão ([ADR-0012](adr/0012-identificacao-do-terminal.md)) |
@@ -226,7 +232,9 @@ barato para eles, além de estampá-los no snapshot.
 
 > **Na implementação.** Três desvios da tabela acima:
 >
-> - **`Cwd` não é capturado.** `alacritty_terminal` não trata OSC 7 (não é xterm-padrão) e capturá-lo exigiria um `Handler` próprio interceptando essa sequência antes de delegar o resto ao `Term`. O único consumidor real é `porecatu-session`, que só existe na F5 — entra junto com ela. OSC não reconhecido é descartado pelo parser, então nada vira lixo na tela nesse meio-tempo, que é o que o [ADR-0012](adr/0012-identificacao-do-terminal.md) exige.
+> - **`Cwd` não é capturado na F1.** `alacritty_terminal` não trata OSC 7 (não é xterm-padrão) e capturá-lo exige um `Handler` próprio interceptando essa sequência antes de delegar o resto ao `Term`. OSC não reconhecido é descartado pelo parser, então nada vira lixo na tela nesse meio-tempo, que é o que o [ADR-0012](adr/0012-identificacao-do-terminal.md) exige.
+>
+>   **Revisto na F2.** A avaliação de que o único consumidor era `porecatu-session` estava errada: o RF-1.1 e o `window.new` do [ADR-0015](adr/0015-multiplas-janelas.md) herdam o `cwd` da aba ativa, e os dois são da F2. O [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) antecipa a captura para lá — o `Handler` intercepta **só** OSC 7 e delega todo o resto —, e a F5 recebe um evento que já existe. Sem OSC 7, o fallback é `startup_directory`, comportamento esperado no Windows pelo [ADR-0005](adr/0005-persistencia-de-sessao.md).
 > - **`ColorSet` não existe**, só `ColorQuery`. OSC 4/10/11 de consulta viram evento com um responder que formata a resposta; a variante de escrita entra quando houver tema para escrever em cima (F4).
 > - **As respostas automáticas do motor (DSR, DA, CPR) não passam por evento.** Vão direto ao canal de escrita do PTY, de dentro do `TermEngine`. Roteá-las como `TermEvent` obrigaria todo consumidor a filtrar e repassar, e esquecer um write pendente é o programa ficar parado esperando resposta que nunca chega.
 >
@@ -238,14 +246,16 @@ barato para eles, além de estampá-los no snapshot.
 
 ## 5. Fronteira de render
 
-`porecatu-render` recebe uma lista de primitivas por frame:
+`porecatu-render` recebe uma **sequência de camadas** por frame ([ADR-0018](adr/0018-composicao-de-frame.md)), cada uma com sua lista de primitivas:
 
 - `Quad { rect, color }`
-- `RoundedQuad { rect, radii, color, border }`
+- `RoundedQuad { rect, radius, color, border }`
 - `TextRun { origin, text, font, size, color }`
 - `PushClip(rect)` / `PopClip`
 
-Duas passadas de pipeline por frame: uma de geometria (quads instanciados, cantos arredondados via SDF no fragment shader) e uma de texto (`glyphon`, com atlas de glyphs em cache entre frames).
+Duas passadas de pipeline **por camada**: uma de geometria (quads instanciados, cantos arredondados via SDF no fragment shader) e uma de texto (`glyphon`, com atlas de glyphs em cache entre frames). Dentro da camada vale a ordem geometria-antes-de-texto; **entre** camadas vale a ordem da sequência, e é isso que permite a um popover cobrir o texto do terminal. As camadas são cinco e enumeradas — grade, chrome, aviso, popover, modal —, não profundidade arbitrária. O `TextAtlas` é único; o que se multiplica por camada é o `TextRenderer`.
+
+`PushClip`/`PopClip` recortam dentro da camada: `set_scissor_rect` para os quads, `TextBounds` por área para o texto, com a pilha de clip intersectando no aninhamento.
 
 A grade do terminal é um caso particular: fundo de célula vira quads em batch, glyphs viram um `TextRun` por run de mesmo estilo — não um por caractere.
 
@@ -253,7 +263,9 @@ A grade do terminal é um caso particular: fundo de célula vira quads em batch,
 
 > **Na implementação.** As duas passadas existem e o atlas de glyphs é reusado entre frames. Três notas:
 >
-> - `PushClip`/`PopClip` estão na API mas **ainda não recortam nada** — não há consumidor até o overflow da barra de abas, na F2. Limitação conhecida, não esquecimento.
+> - `PushClip`/`PopClip` estão na API mas **ainda não recortam nada** — não há consumidor até o overflow da barra de abas, na F2. Limitação conhecida, não esquecimento. E maior do que parecia: a F1 achata as primitivas em três baldes (todos os quads, todos os arredondados, todo o texto) e desenha nessa ordem fixa, o que é correto para a grade e **impede** tanto o recorte por índice quanto qualquer popover sobre texto. As camadas do [ADR-0018](adr/0018-composicao-de-frame.md) resolvem as duas coisas de uma vez.
+>
+> - O `RoundedQuad` tem `radius` escalar, não `radii` por canto. Todo elemento `[v1]` usa raio uniforme; per-canto é aditivo e entra se a barra de título customizada `[v2]` pedir (ADR-0018).
 > - As faces são carregadas por `include_bytes!` num `fontdb::Database` que **nunca chama `load_system_fonts`**. É o que garante a precedência do [ADR-0016](adr/0016-fontes-embutidas.md) sem lógica de desempate: não existe cópia do sistema para competir. Emoji, CJK e Nerd Font ficam de fora até haver fallback configurável (F4).
 > - A surface precisa de `remove_srgb_suffix()` no formato depois do `get_default_config`. O default é um formato `*Srgb`, e a GPU reaplicaria a curva sobre cores que já vêm em espaço sRGB (saem de hex do design): dupla conversão, fundo quase-preto virando cinza-azulado.
 >
@@ -291,6 +303,8 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 | `porecatu-ui` | hit-testing e layout são funções puras sobre geometria, testáveis sem janela |
 
 O layout da barra de abas é deliberadamente uma função pura `(Workspace, Config, largura) -> Vec<TabRect>`. Isso permite testar overflow, colapso de grupo e truncamento de título sem abrir uma janela.
+
+Isso só é cumprível porque o medidor de texto do [ADR-0018](adr/0018-composicao-de-frame.md) se constrói **sem `Device` nem `Queue`**: a função recebe o medidor emprestado, e o teste constrói um sem tocar em `wgpu`. Na F1 não era — o `FontSystem` vivia dentro do pipeline de texto, que exige GPU, e não havia como medir largura de string proporcional.
 
 > **Na implementação (F1).** 51 testes no workspace. `porecatu-term` tem 43 deles: golden-style alimentando o parser com sequência VT crua (sem PTY real — o [ADR-0004](adr/0004-pty-cross-platform.md) avisa que o ConPTY reemite bytes de um jeito não portável), mais unitários puros de codificação de tecla e de reporte de mouse, que não dependem de `winit` nem do motor rodando, só de `TermModes`. `porecatu-pty` tem 8, incluindo integração de spawn/kill. Um teste de regressão cobre o deadlock de fechamento da seção 2: fecha um terminal com processo de longa duração numa thread separada com timeout, e falha se `shutdown` travar.
 >

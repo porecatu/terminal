@@ -3,7 +3,9 @@
 **Status:** Aprovado
 **Data:** 2026-08-26
 **Requisito de origem:** 1 — interface em tabs, para gestão de múltiplos terminais na mesma janela
-**Relacionados:** [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md), [PRD-002](prd-002-grupos-de-abas.md)
+**Relacionados:** [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md), [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), [ADR-0015](../adr/0015-multiplas-janelas.md), [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md), [ADR-0019](../adr/0019-tooltip.md), [PRD-002](prd-002-grupos-de-abas.md), [PRD-010](prd-010-interacao-e-superficie-de-app.md)
+
+> **Nota de reconciliação (2026-08-27).** Quatro requisitos deste PRD nomeavam mecanismo que não existe ou que outro ADR aceito já havia descartado. O [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md) decidiu o ciclo de vida da aba e é ele que vale para **RF-1.2, RF-1.3, RF-1.6 e RF-1.7**; cada um traz a nota abaixo. O texto original é preservado — quem decide é sempre o ADR novo. O RF-1.10 ganhou widget próprio no [ADR-0019](../adr/0019-tooltip.md), e o RF-1.4 é completado pelo [ADR-0015](../adr/0015-multiplas-janelas.md) e pelos RF-10.22 a RF-10.24 do [PRD-010](prd-010-interacao-e-superficie-de-app.md).
 
 ## Problema
 
@@ -23,7 +25,11 @@ Todo usuário do Porecatu. Este é o recurso de base.
 
 **RF-1.2** — O usuário fecha uma aba por atalho, por botão de fechar na aba, ou por clique do botão do meio. O shell recebe sinal de encerramento e o app aguarda EOF antes de remover a aba, para não perder a última saída ([ADR-0004](../adr/0004-pty-cross-platform.md)).
 
+> **Reconciliado pelo [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md).** A regra — não perder a última saída — vale; o mecanismo não. O pipe do ConPTY não emite EOF quando o processo hospedado sai, então a espera é pela confirmação de morte do processo, fora da main thread, e não por EOF.
+
 **RF-1.3** — Quando o shell de uma aba encerra por conta própria (`exit`, `Ctrl+D`), a aba fecha automaticamente. Se o processo encerrar com código diferente de zero, a aba permanece aberta exibindo o código de saída, até que o usuário a feche. *(Fechar uma aba que falhou esconde a mensagem de erro justamente quando ela importa.)*
+
+> **Reconciliado pelo [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md).** O ADR define o estado `Exited` da aba e a posição da nota: **após a última linha de saída**, não na primeira linha do grid como o [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) havia generalizado.
 
 **RF-1.4** — Fechar a última aba de uma janela fecha a janela. Fechar a última janela encerra o app, gravando a sessão de forma síncrona antes de sair.
 
@@ -31,9 +37,13 @@ Todo usuário do Porecatu. Este é o recurso de base.
 
 **RF-1.6** — Fechar uma aba com processo em primeiro plano diferente do shell (por exemplo `vim` ou `ssh`) pede confirmação. O comportamento é configurável e pode ser desligado.
 
+> **Reconciliado pelo [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md).** Detectar o processo em primeiro plano exigiria varrer a árvore de processos, que o [ADR-0005](../adr/0005-persistencia-de-sessao.md) e o [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) já descartaram por escrito. A condição passa a ser **tela alternativa ou reporte de mouse ligado** — dado que o app já tem, uniforme nas três plataformas. Cobre `vim`, `htop`, `less`, `fzf`, `tmux` e `ssh` com qualquer um deles aberto; **não** cobre comando não interativo de longa duração nem `ssh` parado num prompt remoto.
+
 ### Identidade e título
 
 **RF-1.7** — Cada aba exibe um título. A precedência é: título customizado definido pelo usuário → título vindo de OSC 0 / OSC 2 emitido pelo programa → nome do processo em primeiro plano → nome do shell.
+
+> **Reconciliado pelo [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md).** O nível do processo em primeiro plano **sai**, pelo mesmo motivo do RF-1.6. A precedência é: título customizado → OSC 0 / OSC 2 → nome do shell. Programa de tela cheia emite OSC 0/2 com o próprio nome, então o nível 2 já o cobre; comando que não emite título nenhum é sinalizado pelo indicador de atividade do RF-1.20.
 
 **RF-1.8** — O usuário renomeia uma aba por atalho ou duplo clique no título. A renomeação é edição inline na própria aba, com `Enter` para confirmar e `Esc` para cancelar. Título customizado **congela** o título: OSC 0/2 posteriores não o sobrescrevem.
 
@@ -74,6 +84,8 @@ Todo usuário do Porecatu. Este é o recurso de base.
 **RF-1.22** — Ambos os indicadores somem ao visitar a aba, e ambos são desligáveis na config.
 
 ## Critérios de aceite
+
+> **Nota de fase (2026-08-27).** Todos os cenários abaixo são verificados na F2, com uma exceção: **"arrastar para dentro de um grupo"** (RF-1.16) passa para a F3. Na F2 existe apenas o grupo implícito do [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), que não é desenhado como pílula e não tem fronteira visual para dentro da qual arrastar; e a ação `tab.move_to_group` já é catalogada como F3. O arraste de reordenação do RF-1.15 continua na F2. Ver [roadmap](../roadmap.md).
 
 ```gherkin
 Cenário: aba nova herda o diretório

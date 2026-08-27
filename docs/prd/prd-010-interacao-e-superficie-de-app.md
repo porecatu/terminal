@@ -80,7 +80,7 @@ O critério é a quem o fato pertence: informação sobre o app não pode ser ap
 
 **RF-10.18** — Todo diálogo de confirmação abre com o foco no **cancelar**. `Enter` aciona o botão focado, `Esc` cancela. *(Diálogo destrutivo que confirma no `Enter` transforma distração em perda de trabalho.)*
 
-Os diálogos existentes são os de RF-1.6 (aba com processo), RF-2.23 (fechar grupo, com contagem) e RF-10.20 (fechar janela).
+Os diálogos existentes são os de RF-1.6 (aba com programa de tela cheia, conforme o [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md)), RF-2.23 (fechar grupo, com contagem) e RF-10.23 (fechar janela com mais de uma aba). *(A primeira versão deste parágrafo citava RF-10.20 no lugar de RF-10.23; RF-10.20 é o item esmaecido do menu.)*
 
 ### Menu de contexto
 

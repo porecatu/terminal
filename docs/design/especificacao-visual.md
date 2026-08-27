@@ -221,6 +221,15 @@ Fundo `#1b1f26`, borda inferior `#23272f`, `padding: 6px 10px`, `gap: 8`. Três 
 2. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
 3. **Botão de configurações** `[v2]` — 30×30, raio 6, borda `#262b34`, engrenagem 13px `#9aa2ae`. Hover: fundo `#262b34`, ícone `#e4e8ee`.
 
+Quatro comportamentos que o canvas não mostra e que a configuração alcança:
+
+- **`tab_bar_position = "bottom"`** (RF-4.1): a barra vai para a base da janela e a borda `#23272f` muda para a **aresta superior**. Nada mais muda — mesmos raios, mesmo padding, mesma trilha. A pilha de avisos continua ancorada no alto da área de conteúdo.
+- **`hide_when_single_tab`** (RF-4.2): a barra aparece e desaparece **sem transição**, e a grade é redimensionada no mesmo frame. Animar a altura da barra animaria um resize de PTY, e resize por quadro é uma tempestade de `SIGWINCH` no programa que está rodando.
+- **`show_index`** (RF-4.11): prefixo antes do rótulo, em mono 10px `#7b838f` — os tokens do contador da pílula —, com o `gap: 8` da aba. Consome largura do rótulo como o ponto de indicador da seção 2.17.
+- **Janela sem foco:** a barra **não muda**. É omissão deliberada, não pendência: o `unfocused_hollow` do cursor (seção 2.7) já diz qual janela tem o foco, e no lugar onde o usuário está olhando. Esmaecer a barra inteira de cada janela inativa é ruído maior que a informação que carrega.
+
+**Folga de acerto:** o botão de fechar de 17×17 e o `gap: 4` entre abas são alvos pequenos. O hit-testing dá 2 px de folga em volta do botão de fechar, e a fronteira entre abas vizinhas parte o `gap` ao meio — nenhum pixel da barra fica sem dono.
+
 ### 2.3 Wrapper de grupo `[v1]`
 
 Envolve a pílula e as abas do grupo. `display: flex`, `gap: 4`, `padding: 3`, raio 8.
@@ -258,6 +267,12 @@ Conteúdo:
 3. **Botão de fechar** 17×17, raio 4, `✕` 10px `#727a86`. Hover: fundo `#39404b`, ícone `#e4e8ee`.
 
 **Campo de rename** `[v1]` — substitui o rótulo no lugar. Largura 120, fundo `#0e1116`, borda `1px #5ed3bc`, raio 4, texto `#e4e8ee` 12px, `padding: 2px 5px`, `outline: none`, foco automático. Confirma em `Enter` e no blur; cancela em `Esc`.
+
+A largura é `min(120, largura disponível do rótulo)` — com a barra em overflow, o rótulo tem 49 px no piso, e um campo de 120 não caberia. **A aba não muda de largura ao entrar em rename**: mudar reflui a barra enquanto o usuário digita. Título mais longo que o campo rola dentro dele, com o caret sempre visível. OSC 0/2 que chegue com o campo aberto é registrado mas **não redesenha o campo**: o texto sob o cursor do usuário não muda sozinho.
+
+**Aba no estado `Exited`** ([ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md)): fundo e borda de aba inativa, e o rótulo esmaecido para `#727a86` — o tom do botão de fechar, que é o token de "inerte" da barra. Nenhum indicador (seção 2.17) e nenhum estado novo: o **motivo** de a aba ter ficado aberta é o código de saída escrito no grid, que sobrevive à rolagem e continua lá quando o usuário voltar; um quarto estado de aba exigiria cor nova para dizer o que a nota já diz.
+
+**Sublinhado de aba sem grupo:** a "cor do grupo" do sublinhado, para as abas do grupo implícito do [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), é o `#7b838f` da seção 1.6 — o `ungrouped_color` do arquivo de exemplo.
 
 ### 2.6 Botão de nova aba `[v1]`
 
@@ -342,7 +357,11 @@ Erro de config cita caminho, linha e chave em mono 10.5px `#6b737e`, para que a 
 
 Erro e aviso persistem até dispensa; informação sai em 6 s. `Esc` dispensa o do topo.
 
-**O que não vem para cá:** fato de uma aba só é escrito como primeira linha no grid dela — diretório inexistente (RF-3.10), código de saída (RF-1.3) —, marcado em `#5ed3bc` e nunca imitando prompt.
+A pilha fica a **10 px** da borda direita da área de conteúdo e **8 px** abaixo da barra de abas. Saída é o `pop` invertido, em `.13s`; quando um aviso sai, os de baixo sobem com a transição `.15s` da seção 1.10. **O temporizador da informação pausa no hover** — perder a mensagem enquanto se lê é o pior momento possível. Corpo longo trunca em três linhas com reticências: aviso não é documento.
+
+Camada **aviso** do [ADR-0018](../adr/0018-composicao-de-frame.md): cobre o chrome, é coberto por menu, tooltip e diálogo.
+
+**O que não vem para cá:** fato de uma aba só é escrito no grid dela — diretório inexistente (RF-3.10), código de saída (RF-1.3) —, marcado em `#5ed3bc` e nunca imitando prompt. A **posição** dentro do grid segue o momento do fato, e está decidida no [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md): primeira linha para o RF-3.10, que acontece na abertura da aba; **após a última linha de saída** para o RF-1.3, que acontece no fim — na primeira linha o código de saída já teria rolado para fora da vista.
 
 ### 2.15 Diálogo de confirmação `[v1]`
 
@@ -352,7 +371,13 @@ Título 13px/500 `#e6eaef`, corpo 12.5px `#d7dce3`, `gap: 14`. Dois botões à d
 
 O foco inicial é o cancelar. `Enter` aciona o botão focado, `Esc` cancela.
 
-Usado por RF-1.6 (processo em primeiro plano), RF-2.23 (fechar grupo, com a contagem no corpo) e pelo fechamento de janela com mais de uma aba ([ADR-0015](../adr/0015-multiplas-janelas.md)).
+**Anel de foco:** o botão focado leva borda `1px #5ed3bc` — o mesmo acento do campo de rename, que é o token que o projeto usa para dizer "as teclas vão para cá". Sem isso o RF-10.18 é inverificável: "o foco inicial é o cancelar" não é observável se o foco não tem aparência. **Hover do cancelar:** fundo `#262b34`, o mesmo dos botões de borda `#262b34` da barra.
+
+O corpo é curto por construção nos três diálogos do v1, e **não rola**. Diálogo que precisasse de corpo longo seria aviso, não diálogo. Sem animação no overlay; só o modal tem `pop .14s`.
+
+Camada **modal** do [ADR-0018](../adr/0018-composicao-de-frame.md), a mais alta: cobre tudo e suprime tooltip.
+
+Usado por RF-1.6 (aba com programa de tela cheia, conforme o [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md)), RF-2.23 (fechar grupo, com a contagem no corpo) e RF-10.23, o fechamento de janela com mais de uma aba ([ADR-0015](../adr/0015-multiplas-janelas.md)).
 
 ### 2.16 Menu de contexto `[v1]`
 
@@ -364,7 +389,70 @@ Itens: `padding: 7px 8px`, raio 5, `gap: 10`, texto 12.5px `#d7dce3`, hover `#24
 
 Navegável por setas, `Enter` aciona, `Esc` fecha; clique fora ou perda de foco também fecham.
 
+**Hover e foco por teclado são o mesmo estado visual `#242a33`, e são mutuamente exclusivos:** mover o mouse move o realce, as setas movem o realce e limpam o hover. Um realce por vez — dois destaques simultâneos deixam ambíguo o que o `Enter` vai acionar.
+
+Largura máxima **320**, a do aviso; rótulo mais longo trunca com reticências. O menu **não rola**: as listas do v1 têm meia dúzia de itens, e quando não cabe na vertical o flip resolve. Deslocamento de 6 px do cursor até o canto do popover, e a animação `pop` nasce do canto ancorado — quando o menu vira para cima, o `translateY` inverte de sinal.
+
+Camada **popover** do [ADR-0018](../adr/0018-composicao-de-frame.md), compartilhada com o tooltip da seção 2.20.
+
 Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal (F6). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md).
+
+### 2.17 Indicadores da aba `[v1]`
+
+Sem representação no canvas — estava na seção 4.2. Os valores abaixo saem dos tokens da seção 1; as duas cores já existem no arquivo de exemplo (`activity_indicator`, `bell_indicator`) e vêm da semântica da seção 1.5.
+
+Ponto circular **6×6, raio 50%** — o token do ponto de status do painel —, à esquerda do rótulo, com o `gap: 8` da aba. Fica na posição que o badge de perfil `[v2]` ocupará; quando o badge existir, os dois convivem com o mesmo `gap`.
+
+| Estado | Cor |
+|---|---|
+| Atividade (RF-1.20) | `#86c56a` |
+| Campainha (RF-1.21) | `#ef8a8a` |
+
+**Um ponto só.** Atividade e campainha juntas mostram o de campainha: dois pontos consomem 14 px de uma aba que no piso tem 49 px de rótulo, e campainha é o fato mais raro e mais urgente dos dois.
+
+**Não pisca.** Indicador animado em trinta abas de fundo é um frame por intervalo de piscada, contra a regra do [ADR-0007](../adr/0007-modelo-de-threading.md) de que terminal ocioso não gera frame. Presença é o sinal.
+
+O ponto consome largura do rótulo — 6 px mais o `gap: 8` —, e o truncamento é recalculado com isso: a aba **não** muda de largura por causa do indicador. Ambos somem ao visitar a aba (RF-1.22) e são desligáveis na config. Aba no estado `Exited` do [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md) não exibe nenhum dos dois — não há mais saída possível.
+
+### 2.18 Overflow da trilha `[v1]`
+
+Sem representação no canvas — estava na seção 4.2. O canvas resolve a trilha com `overflow-x: auto`, que é a rolagem do navegador, não um desenho.
+
+**Ordem de cedência.** Ao faltar espaço, quem encolhe é **só o rótulo**, dos 180 px de `max-width` para baixo. Nada mais cede: `padding: 0 6px 0 10px`, `gap: 8`, botão de fechar 17×17 e o ponto de 6 px são fixos. Isso soma 41 px de cromo, e é de onde sai o piso de 90 px do `min_width` — sobram 49 px de rótulo, o suficiente para distinguir dois nomes curtos.
+
+O botão de fechar **não desaparece por falta de espaço**. `show_close_button` é escolha do usuário (RF-4.11), não degradação automática: aba cujo conteúdo muda conforme a largura é a mesma armadilha que o RF-10.20 evita no menu.
+
+**Abaixo do piso, a trilha rola.** Um recorte só, na camada de chrome do [ADR-0018](../adr/0018-composicao-de-frame.md); as abas fora da vista desaparecem pelo clip, sem lógica de visibilidade no layout.
+
+- Gesto: roda do mouse sobre a barra rola a trilha na horizontal, com ou sem `Shift`. Passo de 90 px — uma aba no piso — por notch. Não reaproveita `scroll_multiplier`, que conta linhas do grid.
+- Sem inércia e sem easing, pela mesma razão do indicador que não pisca: rolagem contínua é um frame por quadro de animação; rolagem discreta é um frame por evento.
+- **Sem barra de rolagem desenhada.** Não há token de scrollbar, e 6 px numa barra de 42 px sairiam do rótulo. A affordance é o indicador abaixo.
+- Trazer a aba ativa para a vista (RF-1.18) é **rolagem mínima**: alinha à borda esquerda da trilha se ela está à esquerda, à direita se está à direita. Nunca centraliza — centralizar move mais que o necessário e desorienta.
+
+**Indicador de abas fora da vista (RF-1.19).** Nas duas pontas da trilha, por dentro, desenhado sobre o clip. Chevron `‹` / `›` 10 px `#9aa2ae` — a cor do `+` do botão de nova aba — mais a contagem em mono 10 px `#7b838f` sobre `#12151a`, raio 9, `padding: 1px 6px`: exatamente o contador da pílula da seção 2.4. Cada ponta só aparece se houver aba oculta naquele lado. Clique rola uma aba.
+
+### 2.19 Arraste de aba `[v1]`
+
+Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15; o realce de fronteira de grupo do RF-1.16 é `[v1]` mas pertence à F3, quando existe grupo explícito para onde arrastar.
+
+- **Limiar de 4 px** de movimento com o botão apertado — o `gap` entre abas. Abaixo disso o gesto é clique, e ativa a aba (RF-1.13). Sem limiar, todo clique com micro-tremor vira arraste.
+- **Aba fantasma:** a aba arrastada continua desenhada, seguindo o cursor no eixo X e presa ao Y da barra, com `filter: brightness(1.18)` — o hover da aba — e sombra de popover `0 18px 44px rgba(0,0,0,.55)` para separá-la da trilha. Não sai da barra: arrastar aba entre janelas não é gesto do v1 (RF-10.24).
+- **O buraco é o marcador.** A posição de origem fica vazia, mostrando o fundo da barra `#1b1f26`, e as vizinhas deslizam com a transição `.15s` da seção 1.10. Não há caret de inserção separado: ele diria a mesma coisa que o buraco.
+- **Auto-scroll:** cursor a menos de 30 px de uma ponta da trilha rola naquela direção, uma aba a cada `.15s`.
+- `Esc` cancela e a aba volta à origem; soltar fora da trilha cancela também.
+- Cursor `Grabbing` durante o arraste. É o único elemento do gesto que vem do sistema, e não há alternativa desenhável — o ponteiro não é superfície nossa.
+
+### 2.20 Tooltip `[v1]`
+
+Definido em [ADR-0019](../adr/0019-tooltip.md), que também não tem representação no canvas: os valores reaproveitam tokens de popover, sem cor nova.
+
+Aparece **só quando o texto do alvo foi truncado**, após 600 ms de hover parado. Uma linha, largura máxima 320 — a do aviso —, texto além disso truncado com reticências.
+
+Fundo `#1a1e25`, borda `1px #2e343e`, raio **6** (não o 8 de popover: num retângulo de uma linha o 8 pesa, e o 6 é a classe dos elementos de 30 px da barra), sombra `0 18px 44px rgba(0,0,0,.55)`, animação `pop .13s`. Texto 11px `#d7dce3`, `padding: 7px 8px` — o espaçamento do item de menu.
+
+Ancorado no **alvo**, não no cursor: abaixo dele, alinhado à borda esquerda, a 6 px. Vira nos dois eixos para caber no monitor da janela. Some ao sair do alvo, clicar, digitar, começar arraste, a janela perder foco ou o alvo deixar de existir.
+
+Não recebe foco de teclado, **não participa do hit-testing** — o ponteiro atravessa — e não carrega ação. Diálogo aberto suprime tooltip.
 
 ---
 
@@ -389,9 +477,13 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Paleta de cores de grupo | `[v1]` | PRD-004 RF-4.18 |
 | Tema (fontes, superfícies, cores) | `[v1]` | PRD-004, PRD-005 |
 | Aviso do app (empilhado, com severidade) | `[v1]` | [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) — sem representação no canvas |
-| Nota na aba (primeira linha do grid) | `[v1]` | ADR-0014, PRD-003 RF-3.10, PRD-001 RF-1.3 |
+| Nota na aba (escrita no grid) | `[v1]` | ADR-0014, [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md); PRD-003 RF-3.10, PRD-001 RF-1.3 |
 | Diálogo de confirmação | `[v1]` | ADR-0014; PRD-001 RF-1.6, PRD-002 RF-2.23 |
 | Menu de contexto de aba e de grupo | `[v1]` | ADR-0014; PRD-001 RF-1.1, PRD-002 RF-2.22 |
+| Indicadores de atividade e campainha na aba | `[v1]` | PRD-001 RF-1.20 a RF-1.22, PRD-004 RF-4.8 — sem representação no canvas |
+| Overflow da trilha e indicador de abas fora da vista | `[v1]` | PRD-001 RF-1.18, RF-1.19 — sem representação no canvas |
+| Arraste de aba: fantasma, buraco, auto-scroll | `[v1]` | PRD-001 RF-1.15 — sem representação no canvas |
+| Tooltip de texto truncado | `[v1]` | [ADR-0019](../adr/0019-tooltip.md); PRD-001 RF-1.10, PRD-002 RF-2.12 — sem representação no canvas |
 | **Painéis divididos** | `[v2]` | [PRD-006](../prd/prd-006-paineis-divididos.md) *(rascunho)* |
 | **Cabeçalho e botões do painel** | `[v2]` | PRD-006 *(rascunho)* |
 | **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md) *(rascunho)* |
@@ -428,9 +520,7 @@ Precisam de decisão de desenho na implementação. Listados para não passarem 
 
 | Requisito | O que falta |
 |---|---|
-| PRD-001 RF-1.20, RF-1.21 | indicadores de atividade e de campainha na aba |
-| PRD-001 RF-1.19 | indicador de abas fora da vista, com contagem |
-| PRD-001 RF-1.15, RF-1.16 | estado de arraste: aba fantasma, deslocamento das vizinhas, realce da fronteira do grupo |
+| PRD-001 RF-1.16 | realce da fronteira do grupo ao arrastar uma aba para dentro dele (F3) |
 | PRD-002 RF-2.2 | aba selecionada (seleção múltipla) — distinta da aba ativa |
 | PRD-002 RF-2.5 | animação da reordenação ao formar grupo |
 | PRD-002 RF-2.16 | indicador agregado de atividade em grupo colapsado |
@@ -440,6 +530,8 @@ Precisam de decisão de desenho na implementação. Listados para não passarem 
 Enquanto não houver desenho aprovado para esses, valem os tokens da seção 1 e o julgamento de quem implementa — nunca cores ou dimensões novas fora da tabela.
 
 **Resolvidos depois da primeira versão desta lista.** O RF-4.21 (como o erro de configuração é exibido) estava aqui e saiu: o [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) definiu a superfície de aviso, e a anatomia está na seção 2.14. O mesmo ADR cobriu sete requisitos que não constavam nem desta lista nem da 4.1 — RF-1.6, RF-2.23, RF-3.1, RF-3.10, RF-3.14, RF-3.16 e RF-5.8 —, além do menu de contexto exigido por RF-1.1, RF-1.2, RF-2.20 e RF-2.22. Nenhum deles introduziu cor nova: todos saem dos tokens de popover da seção 1.
+
+**Segunda rodada, ao abrir a F2.** Saíram desta lista os RF-1.20 e RF-1.21 (seção 2.17), o RF-1.19 (seção 2.18) e o RF-1.15 (seção 2.19); do RF-1.16 sobrou só o realce de fronteira de grupo, que é da F3. Entrou um requisito que **não constava de nenhuma das duas listas**: o RF-1.10 pede tooltip para o título truncado, e o ADR-0014 havia decidido três widgets de chrome quando o v1 precisa de quatro — o [ADR-0019](../adr/0019-tooltip.md) fecha isso, e a anatomia está na seção 2.20. Também aqui, nenhuma cor nova.
 
 O comportamento da seleção de texto — gesto, semântica de palavra, recorte de espaço, remontagem de linha quebrada — está no [ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md); o que a linha do RF-5.14 acima registra é só a origem incidental da **cor**.
 

@@ -20,6 +20,9 @@
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Aceito |
+| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Aceito |
+| [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
+| [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
 
 ## Convenção
 

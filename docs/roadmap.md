@@ -89,7 +89,7 @@ O código está escrito e o CI está verde nas três plataformas — 51 testes a
 
 Duas simplificações conscientes, documentadas no código:
 
-- `PushClip`/`PopClip` existem na API de `porecatu-render` mas ainda não recortam nada — sem consumidor até o overflow da barra de abas, na F2.
+- `PushClip`/`PopClip` existem na API de `porecatu-render` mas ainda não recortam nada — sem consumidor até o overflow da barra de abas, na F2. *(A F2 descobriu que não bastava implementar: clip por índice não sobrevive ao achatamento das primitivas em baldes. Resolvido junto com as camadas no [ADR-0018](adr/0018-composicao-de-frame.md).)*
 - `line_height` é aplicado sobre `size` em vez das métricas naturais da face (ascent+descent+lineGap), que exigiria ler `hhea`/`OS/2`. Ajustar quando importar na prática.
 
 ---
@@ -98,16 +98,34 @@ Duas simplificações conscientes, documentadas no código:
 
 Implementa [PRD-001](prd/prd-001-abas.md).
 
-- `porecatu-core`: `Workspace`, `Tab`, IDs estáveis, operações puras com testes de invariante ([ADR-0006](adr/0006-modelo-de-abas-e-grupos.md))
-- Barra de abas: layout como função pura, hit-testing, hover, foco
-- Ciclo de vida, título com precedência (customizado > OSC > processo > shell), renomeação inline
-- Navegação sequencial e por índice; reordenação por drag e por teclado
-- Overflow: encolhimento até o mínimo, depois rolagem
+Antes de a fase abrir, três ADRs fecharam as decisões que faltavam — não é preâmbulo opcional, é o que torna os itens abaixo executáveis:
+
+- [**ADR-0017**](adr/0017-ciclo-de-vida-da-aba.md) — ciclo de vida e identidade da aba: OSC 7 antecipado para esta fase, precedência de título sem o nível de processo, condição da confirmação do RF-1.6, encerramento sem EOF e sem bloquear a main thread, posição da nota do RF-1.3, estado `Exited`.
+- [**ADR-0018**](adr/0018-composicao-de-frame.md) — composição de frame: camadas (a API da F1 desenha todo o texto sobre todos os quads, então nenhum popover ficaria por cima), recorte de verdade para o overflow, medidor de texto sem GPU, `GpuContext` do processo com surface por janela, atlas único com a escala na chave.
+- [**ADR-0019**](adr/0019-tooltip.md) — tooltip, o quarto widget de chrome, que o RF-1.10 exige e que o ADR-0014 não previu.
+
+Itens:
+
+- `porecatu-core`: `Workspace`, `Tab`, `Group` com o grupo implícito, IDs estáveis, operações puras com testes de invariante ([ADR-0006](adr/0006-modelo-de-abas-e-grupos.md)). Deriva `serde` já aqui, para que o round-trip `Workspace -> JSON -> Workspace` que o ADR lista como invariante seja testável na fase que o pede
+- `porecatu-render`: camadas, recorte, `TextMeasurer` sem GPU, separação `GpuContext`/`WindowSurface` (ADR-0018)
+- Barra de abas: layout como função pura `(Workspace, Config, largura) -> Vec<TabRect>`, hit-testing, hover, foco
+- Ciclo de vida, título com precedência (customizado → OSC 0/2 → shell), renomeação inline, captura de OSC 7 e herança de `cwd` (ADR-0017)
+- Navegação sequencial e por índice; reordenação por arraste e por teclado
+- Overflow: encolhimento do rótulo até o piso, depois rolagem da trilha, com indicador de abas fora da vista
 - Indicadores de atividade e campainha
-- Menu de contexto da aba, diálogo de confirmação e superfície de aviso do app (PRD-010 RF-10.15 a RF-10.21, [ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md)) — RF-1.6 é cenário de aceite desta fase e depende do diálogo
+- Menu de contexto da aba, tooltip, diálogo de confirmação e superfície de aviso do app (PRD-010 RF-10.15 a RF-10.21, [ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md), ADR-0019)
+- Enum de ação e modo de captura no roteamento de input — passo 1 da cadeia do [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md), que a F1 não tinha; defaults fixos no código, sem parser até a F4
 - Janelas múltiplas em escopo mínimo: `window.new`, `window.close`, um `Workspace` e uma surface por janela (PRD-010 RF-10.22 a RF-10.24, [ADR-0015](adr/0015-multiplas-janelas.md))
 
-**Critério de saída:** todos os cenários de aceite de PRD-001 passam; **barra de abas confere com [`mockup-estatico.html`](design/mockup-estatico.html)** nos elementos `[v1]` — dimensões, raios, cores por estado, rename inline; layout da barra testado sem abrir janela; 50 abas abertas sem degradação perceptível; IME e teclas mortas continuam funcionando com a barra presente; duas janelas abertas em monitores de DPI diferente desenham com métricas corretas, e saída numa delas não redesenha a outra.
+Um detalhe que nenhum documento cobria e que a fase decide: **a geometria da janela nova.** Ela nasce com o tamanho da janela que a criou, deslocada 30 px para a direita e para baixo, presa à área útil do monitor dessa janela — cascata, não sobreposição exata, que esconderia a janela nova atrás da antiga. Sem janela de origem (primeiro start sem sessão), vale o default da plataforma. A partir da F5 a sessão restaura a geometria gravada e isso só se aplica a janela criada pelo usuário.
+
+Divisão sugerida, no padrão das seis etapas da F1, uma por PR: (1) `core` e as operações puras; (2) camadas, recorte e medidor em `render`; (3) barra de abas com layout puro e hit-testing; (4) ciclo de vida, OSC 7, título e rename; (5) overflow, arraste e indicadores; (6) os quatro widgets de chrome e a segunda janela.
+
+**Aparência:** os valores que o canvas não desenhava estão agora nas seções 2.17 a 2.20 da [especificação visual](design/especificacao-visual.md) — indicadores, overflow, arraste e tooltip —, mais os detalhes completados nas seções 2.2, 2.5, 2.14, 2.15 e 2.16. Nenhuma cor nova. Enquanto `porecatu-config` não existe, os valores entram como constantes com a chave TOML citada no comentário, como a F1 fez em `palette.rs`; sem essa disciplina a revisão dirigida da F4 não tem por onde começar.
+
+**Critério de saída:** todos os cenários de aceite de PRD-001 passam, **exceto "arrastar para dentro de um grupo" (RF-1.16), que passa para a F3** — na F2 só existe o grupo implícito, que não tem fronteira visual para dentro da qual arrastar, e `tab.move_to_group` já é catalogada como F3; **barra de abas confere com [`mockup-estatico.html`](design/mockup-estatico.html)** nos elementos `[v1]` — dimensões, raios, cores por estado, rename inline; layout da barra testado sem abrir janela **e sem GPU**; 50 abas abertas sem degradação perceptível, e fechar uma janela com 50 abas não bloqueia a main thread; menu, tooltip, aviso e diálogo desenham **por cima** do texto do terminal; IME e teclas mortas continuam funcionando com a barra presente; duas janelas abertas em monitores de DPI diferente desenham com métricas corretas e texto nítido, e saída numa delas não redesenha a outra.
+
+`app.quit` e o fechamento da última janela **não gravam sessão** nesta fase; o ponto de chamada existe como no-op documentado e a F5 o preenche (ADR-0017).
 
 ---
 
@@ -115,11 +133,11 @@ Implementa [PRD-001](prd/prd-001-abas.md).
 
 Implementa [PRD-002](prd/prd-002-grupos-de-abas.md). É o diferencial do produto.
 
-- `Group` em `porecatu-core`, grupo implícito, invariantes de contiguidade
+- `Group` em `porecatu-core`, grupo implícito, invariantes de contiguidade — inclui desambiguar o RF-1.5 e o invariante correspondente do [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md): "a aba mais próxima do grupo adjacente" não diz a direção nem o que fazer se o grupo adjacente estiver colapsado (RF-1.13). Inerte na F2, onde só existe o grupo implícito
 - Seleção múltipla de abas
 - Criar, dissolver, renomear, recolorir; atribuição automática de cor sem repetir
 - Colapso, com efeito sobre navegação e foco
-- Drag de aba entre grupos e drag de grupo inteiro
+- Drag de aba entre grupos e drag de grupo inteiro — inclui o cenário de aceite "arrastar para dentro de um grupo" (PRD-001 RF-1.16), que veio da F2 porque exige grupo explícito, e o realce da fronteira do grupo, que é a última linha do RF-1.16 na seção 4.2 da [especificação visual](design/especificacao-visual.md)
 - Menu de contexto do grupo, incluindo fechar todas com confirmação
 - Animação da reordenação ao formar grupo
 

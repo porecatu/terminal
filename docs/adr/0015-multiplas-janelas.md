@@ -14,6 +14,8 @@ Três documentos aprovados pressupõem que o Porecatu tem mais de uma janela:
 
 E nada cria a segunda janela. Não existe ação, não existe keybinding, não existe RF, não existe cenário de aceite. O RF-3.17 restaura um conjunto de janelas que o usuário não tem como produzir.
 
+> **Nota de reconciliação (2026-08-27).** As duas afirmações desta seção sobre o estado da documentação já foram fechadas, pela própria decisão deste ADR: o [PRD-010](../prd/prd-010-interacao-e-superficie-de-app.md) formalizou os RF-10.22 a RF-10.24, e o [`porecatu.example.toml`](../config/porecatu.example.toml) já traz `confirm_close_window` etiquetada com `RF-10.23`. O texto abaixo é preservado como o registro do problema que motivou a decisão, não como descrição do estado atual.
+
 O sintoma menor dessa lacuna já está visível no [`porecatu.example.toml`](../config/porecatu.example.toml): a chave `confirm_close_window` é a única do arquivo sem etiqueta de origem, porque não há requisito a que ela se ligue. Isso contradiz a métrica do PRD-004 — *"chaves no arquivo de exemplo sem requisito correspondente: zero"*.
 
 O sintoma maior é técnico, e é o que torna este ADR necessário em vez de opcional.

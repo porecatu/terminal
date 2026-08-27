@@ -36,6 +36,19 @@ Esta é a enumeração. É o insumo direto do parser de `[keybindings]` na F4 e 
 
 As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: o conjunto é fechado, e `tab.goto_12` precisa ser erro de config, não uma ação silenciosamente inerte. O índice é sobre a ordem visual da janela inteira, não por grupo (RF-1.12), e abas de grupo colapsado não contam (RF-2.15).
 
+> **Estado na F2.** Não há parser de `[keybindings]` até a F4, então nenhuma
+> ação de aba é *vinculável* ainda: os defaults de plataforma do
+> [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) e do
+> [ADR-0015](../adr/0015-multiplas-janelas.md) entram fixos no código, como
+> `Ctrl+Shift+C`/`V` na F1. O que a F2 traz de novo é o **enum de ação** e o
+> **modo de captura** (passo 1 da cadeia do ADR-0008), que o rename inline
+> exige e que a F1 não tinha.
+>
+> `tab.close` confirma conforme o [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md):
+> a condição é tela alternativa ou reporte de mouse ligado, não o processo em
+> primeiro plano. `tab.new` herda o `cwd` capturado por OSC 7, que passa a
+> existir na F2; sem OSC 7, cai em `startup_directory`.
+
 ---
 
 ## `group.*` — grupos
@@ -121,6 +134,12 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 
 `app.quit` existe por convenção de plataforma: `Cmd+Q` no macOS é esperado e o [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) já define defaults por plataforma. O efeito é o mesmo do RF-1.4 ao fechar a última janela, incluindo a gravação síncrona do RF-3.4.
 
+> **Estado na F2.** `app.quit` e `window.close` da última janela **não gravam
+> sessão** — `porecatu-session` só existe na F5. O
+> [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md) decide que o ponto de
+> chamada da gravação síncrona existe desde a F2 como no-op documentado, para
+> que a F5 preencha em vez de procurar onde.
+
 `config.reload` não substitui o hot reload automático (RF-4.20), que continua acontecendo a cada gravação do arquivo. Existe para o caso em que o watcher não disparou — editor que grava por `rename`, arquivo em rede.
 
 ---
@@ -152,3 +171,18 @@ Ausências deliberadas, registradas para que ninguém as adicione achando que fo
 | `group.select_all_tabs` | RF-2.1 define seleção múltipla por mouse; nenhum RF pede equivalente de teclado |
 
 Precisar de uma delas é sinal de requisito faltando, não de catálogo incompleto. O caminho é PRD ou ADR primeiro.
+
+### Superfícies de mouse e de modal, que não são ações
+
+Seis comportamentos da F2 têm requisito aprovado e **não recebem nome de ação**. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+
+| Comportamento | Requisito | Por que não é ação |
+|---|---|---|
+| Ativar aba por clique | RF-1.13 | o alvo é o pixel clicado; sem alvo, a tecla equivalente já existe (`tab.next`, `tab.goto_N`) |
+| Abrir menu de contexto | RF-10.19 | ancora no cursor e o conteúdo varia com o alvo; o que o menu invoca **são** ações do catálogo |
+| Rolar a trilha de abas | RF-1.18, RF-1.19 | gesto de roda sobre a barra; `scrollback.*` é do grid e conta linhas |
+| Dispensar aviso | RF-10.16 | `Esc` sobre o aviso do topo é modo de captura, não binding — passo 1 da cadeia do [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) |
+| Confirmar ou cancelar diálogo | RF-10.18 | idem: `Enter` e `Esc` dentro de modal, consumidos antes da tabela de keybindings |
+| Reordenar aba por arraste | RF-1.15 | posição de queda é contínua; `tab.move_left`/`tab.move_right` são o equivalente de teclado, uma posição por vez |
+
+Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

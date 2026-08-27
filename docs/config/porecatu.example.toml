@@ -40,7 +40,10 @@
 
 
 [general]
-# Pede confirmação ao fechar aba com processo em primeiro plano != shell.  RF-1.6
+# Pede confirmação ao fechar aba tomada por um programa de tela cheia —
+# tela alternativa ou reporte de mouse ligado (vim, htop, less, fzf, tmux).
+# Detectar o processo em primeiro plano exigiria varrer a árvore de
+# processos, que o ADR-0005 e o ADR-0008 descartaram.        RF-1.6, ADR-0017
 confirm_close_with_process = true
 # Pede confirmação ao fechar uma janela com mais de uma aba.      RF-10.23
 confirm_close_window = true
@@ -285,6 +288,27 @@ foreground = "#d7dce3"
 disabled_foreground = "#5c646f"   # RF-10.20
 destructive_foreground = "#e08585"
 font_size = 12.5
+
+
+# Tooltip do texto truncado. Origem: ADR-0019 — o ADR-0014 decidiu três
+# widgets de chrome quando o v1 precisa de quatro (RF-1.10 título de aba,
+# RF-2.12 nome de grupo, RF-9.3 caminho na barra de status [v2]).
+# Anatomia na seção 2.20 da especificação visual.
+[appearance.tooltip]
+background = "#1a1e25"
+border = "#2e343e"
+# 6 e não 8: num retângulo de uma linha o raio de popover pesa.
+corner_radius = 6
+foreground = "#d7dce3"
+font_size = 11.0
+# Largura máxima; texto além disso trunca com reticências.
+max_width = 320
+# Atraso de hover parado antes de aparecer. Comportamento, não token de
+# design — a seção 1.10 não define atraso.
+delay_ms = 600
+# Aparece SÓ quando o texto do alvo foi efetivamente truncado. Desligar aqui
+# remove o tooltip por completo.
+enabled = true
 
 
 ##############################################################################
