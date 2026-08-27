@@ -172,11 +172,12 @@ pub struct GroupDragGhost {
 /// fechar), o botão de nova aba, os indicadores de overflow (espec §2.18) e
 /// o fantasma de arraste (espec §2.19), se algum estiver em andamento.
 ///
-/// `layout` já reflete o encolhimento do §2.18 (`tab_bar::fit_width`) e,
-/// durante um arraste, o preview de reordenação (`lib.rs` monta um
-/// `Workspace` clonado com a troca aplicada antes de chamar `fit_width`) --
-/// esta função só desenha o que recebe, sem saber de nenhuma das duas
-/// decisões.
+/// `layout` já reflete, durante um arraste, o preview de reordenação
+/// (`lib.rs` monta um `Workspace` clonado com a troca aplicada antes de
+/// chamar `tab_bar::fit_width`) -- esta função só desenha o que recebe, sem
+/// saber dessa decisão. `fit_width` não encolhe rótulo nem nome de pílula
+/// (nota do módulo `tab_bar.rs`): a rolagem (`overflow`, §2.18) é o único
+/// jeito de a trilha "caber" quando estoura.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(
     layout: &TabBarLayout,
@@ -219,12 +220,15 @@ pub fn paint(
 
     // Recorte de verdade da trilha (ADR-0018, espec §2.18: "um recorte só,
     // na camada de chrome; as abas fora da vista desaparecem pelo clip").
-    // Tudo dentro deste par desloca pelo scroll -- inclusive o botão de
-    // nova aba, que "acompanha o scroll" (espec §2.6).
+    // Tudo dentro deste par desloca pelo scroll -- inclusive o botão "+" de
+    // cada grupo, que "acompanha o scroll" igual às abas dele (fora da
+    // espec., mesmo raciocínio do §2.6 aplicado ao botão por grupo). Só vai
+    // até `trilha_width` -- a zona fixa da direita (pedido do usuário) fica
+    // de fora do recorte e do scroll.
     out.push(Primitive::PushClip(Rect {
         x: 0.0,
         y: 0.0,
-        width: bar_width,
+        width: tab_bar::trilha_width(style, bar_width),
         height: bar_height,
     }));
     let scroll_dx = -overflow.scroll_offset;
@@ -435,6 +439,26 @@ pub fn paint(
                 measurer,
             ));
         }
+
+        // Botão "+" do próprio grupo (pedido do usuário, fora da espec.):
+        // desliza com o wrapper (`dx`) igual à pílula e às abas dele --
+        // sem esticar, sem fade próprio -- mesmas cores do botão global
+        // pra ler como "o mesmo botão, num segundo lugar".
+        let group_button = shift(group.new_tab_button, dx);
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: group_button,
+            radius: 6.0,
+            color: palette::TRANSPARENT,
+            border_color: palette::NEW_TAB_BORDER,
+            border_width: 1.0,
+        }));
+        out.push(centered_glyph(
+            "+",
+            group_button,
+            NEW_TAB_ICON_SIZE,
+            palette::NEW_TAB_ICON,
+            measurer,
+        ));
     }
 
     // ADR-0022: abas que existiam em `old_layout` mas sumiram do layout
@@ -481,8 +505,12 @@ pub fn paint(
         }));
     }
 
-    if let Some(button) = layout.new_tab_button {
-        let button = shift(button, scroll_dx);
+    out.push(Primitive::PopClip);
+
+    // Botão de nova aba global (pedido do usuário): zona fixa à direita da
+    // barra, fora do recorte da trilha -- não rola com o conteúdo, ao
+    // contrário do botão por grupo pintado acima.
+    if let Some(button) = tab_bar::new_tab_button_rect(style, bar_width, bar_height) {
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: button,
             radius: 6.0,
@@ -499,13 +527,15 @@ pub fn paint(
         ));
     }
 
-    out.push(Primitive::PopClip);
-
+    // Pílulas de overflow (espec §2.18) ficam dentro da trilha rolável, não
+    // da barra inteira -- senão a da direita cairia por cima da zona fixa
+    // do botão global.
+    let trilha_width = tab_bar::trilha_width(style, bar_width);
     if overflow.hidden_left > 0 {
         paint_overflow_pill(
             OverflowSide::Left,
             overflow.hidden_left,
-            bar_width,
+            trilha_width,
             bar_height,
             measurer,
             &mut out,
@@ -515,7 +545,7 @@ pub fn paint(
         paint_overflow_pill(
             OverflowSide::Right,
             overflow.hidden_right,
-            bar_width,
+            trilha_width,
             bar_height,
             measurer,
             &mut out,
