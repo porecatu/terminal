@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn single_tab_lays_out_left_to_right() {
         let mut ws = Workspace::new();
-        ws.new_tab("zsh", None, 0);
+        ws.append_tab("zsh", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
 
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn long_title_is_truncated_with_ellipsis() {
         let mut ws = Workspace::new();
-        let id = ws.new_tab("zsh", None, 0);
+        let id = ws.append_tab("zsh", None);
         ws.tab_mut(id)
             .unwrap()
             .set_custom_title(Some("um titulo bem comprido que estoura o maximo de 180px de largura reservado ao rotulo da aba".to_string()));
@@ -621,8 +621,8 @@ mod tests {
     #[test]
     fn two_tabs_same_group_are_gapped() {
         let mut ws = Workspace::new();
-        ws.new_tab("zsh", None, 0);
-        ws.new_tab("bash", None, 1);
+        ws.append_tab("zsh", None);
+        ws.append_tab("bash", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let tabs = &layout.groups[0].tabs;
@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn hit_test_close_button_wins_over_tab_body() {
         let mut ws = Workspace::new();
-        let id = ws.new_tab("zsh", None, 0);
+        let id = ws.append_tab("zsh", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let close = layout.groups[0].tabs[0].close_button;
@@ -657,7 +657,7 @@ mod tests {
     #[test]
     fn hit_test_close_button_slop_extends_hit_area() {
         let mut ws = Workspace::new();
-        let id = ws.new_tab("zsh", None, 0);
+        let id = ws.append_tab("zsh", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let close = layout.groups[0].tabs[0].close_button;
@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn hit_test_tab_body_away_from_close_button() {
         let mut ws = Workspace::new();
-        let id = ws.new_tab("zsh", None, 0);
+        let id = ws.append_tab("zsh", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let tab = &layout.groups[0].tabs[0];
@@ -683,8 +683,8 @@ mod tests {
     #[test]
     fn hit_test_gap_boundary_splits_at_midpoint() {
         let mut ws = Workspace::new();
-        let a = ws.new_tab("zsh", None, 0);
-        let b = ws.new_tab("bash", None, 1);
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let first = &layout.groups[0].tabs[0];
@@ -716,7 +716,7 @@ mod tests {
     #[test]
     fn activity_indicator_shows_when_backgrounded_activity() {
         let mut ws = Workspace::new();
-        let id = ws.new_tab("zsh", None, 0);
+        let id = ws.append_tab("zsh", None);
         ws.tab_mut(id).unwrap().mark_activity();
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn bell_wins_over_activity() {
         let mut ws = Workspace::new();
-        let id = ws.new_tab("zsh", None, 0);
+        let id = ws.append_tab("zsh", None);
         ws.tab_mut(id).unwrap().mark_activity();
         ws.tab_mut(id).unwrap().mark_bell();
         let mut m = measurer();
@@ -740,7 +740,7 @@ mod tests {
     #[test]
     fn exited_tab_never_shows_indicator() {
         let mut ws = Workspace::new();
-        let id = ws.new_tab("zsh", None, 0);
+        let id = ws.append_tab("zsh", None);
         ws.tab_mut(id).unwrap().mark_activity();
         ws.tab_mut(id).unwrap().mark_exited(1);
         let mut m = measurer();
@@ -759,11 +759,11 @@ mod tests {
         // igualdade exata ao pixel.
         let long_title = "um titulo bem comprido que estoura o maximo de 180px de largura reservado ao rotulo da aba";
         let mut ws = Workspace::new();
-        let plain = ws.new_tab("zsh", None, 0);
+        let plain = ws.append_tab("zsh", None);
         ws.tab_mut(plain)
             .unwrap()
             .set_custom_title(Some(long_title.to_string()));
-        let with_indicator = ws.new_tab("zsh", None, 1);
+        let with_indicator = ws.append_tab("zsh", None);
         ws.tab_mut(with_indicator)
             .unwrap()
             .set_custom_title(Some(long_title.to_string()));
@@ -782,7 +782,7 @@ mod tests {
     #[test]
     fn fit_width_no_shrink_when_it_already_fits() {
         let mut ws = Workspace::new();
-        ws.new_tab("zsh", None, 0);
+        ws.append_tab("zsh", None);
         let mut m = measurer();
         let unfit = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let fit = fit_width(&ws, &TabBarStyle::DEFAULT, 2000.0, &mut m);
@@ -792,8 +792,8 @@ mod tests {
     #[test]
     fn fit_width_shrinks_labels_to_fit_before_scrolling() {
         let mut ws = Workspace::new();
-        for i in 0..3 {
-            let id = ws.new_tab("zsh", None, i);
+        for _ in 0..3 {
+            let id = ws.append_tab("zsh", None);
             ws.tab_mut(id)
                 .unwrap()
                 .set_custom_title(Some("um titulo razoavelmente longo".to_string()));
@@ -818,8 +818,8 @@ mod tests {
     #[test]
     fn fit_width_stays_at_floor_when_it_still_does_not_fit() {
         let mut ws = Workspace::new();
-        for i in 0..50 {
-            ws.new_tab("zsh", None, i);
+        for _ in 0..50 {
+            ws.append_tab("zsh", None);
         }
         let mut m = measurer();
         let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
@@ -833,8 +833,8 @@ mod tests {
     #[test]
     fn overflow_state_clamps_scroll_and_counts_hidden_tabs() {
         let mut ws = Workspace::new();
-        for i in 0..10 {
-            ws.new_tab("zsh", None, i);
+        for _ in 0..10 {
+            ws.append_tab("zsh", None);
         }
         let mut m = measurer();
         let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
@@ -854,9 +854,9 @@ mod tests {
     #[test]
     fn drag_target_index_finds_insertion_point_by_ghost_center() {
         let mut ws = Workspace::new();
-        let a = ws.new_tab("zsh", None, 0);
-        ws.new_tab("bash", None, 1);
-        ws.new_tab("fish", None, 2);
+        let a = ws.append_tab("zsh", None);
+        ws.append_tab("bash", None);
+        ws.append_tab("fish", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let last = layout.groups[0].tabs[2].rect;
@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn tab_rect_finds_by_id() {
         let mut ws = Workspace::new();
-        let a = ws.new_tab("zsh", None, 0);
+        let a = ws.append_tab("zsh", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         assert_eq!(tab_rect(&layout, a), Some(layout.groups[0].tabs[0].rect));
@@ -884,7 +884,7 @@ mod tests {
     #[test]
     fn hit_test_outside_everything_is_none() {
         let mut ws = Workspace::new();
-        ws.new_tab("zsh", None, 0);
+        ws.append_tab("zsh", None);
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         assert_eq!(hit_test(&layout, (-100.0, -100.0)), None);
