@@ -16,6 +16,7 @@ mod clipboard;
 mod input;
 mod paint;
 mod palette;
+mod tab_bar;
 
 use input::ClickTracker;
 use paint::CellMetrics;
