@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Modelo de domínio puro (docs/arquitetura.md seção 1). Nesta fase (F1) só
-//! existe o necessário para o `Wakeup { window, tab }` do ADR-0015 já
-//! nascer com o formato certo -- `Workspace`/`Tab`/`Group` completos
-//! (ADR-0006) são da F2.
+//! Modelo de domínio puro (docs/arquitetura.md seção 1, ADR-0006). Sem
+//! dependência de nada do projeto -- nem GUI, nem PTY, nem config. É por
+//! isso que `porecatu-session` (F5) pode ser um crate trivial: ele
+//! serializa `Workspace` e mais nada.
+//!
+//! `Workspace -> Vec<Group> -> Vec<TabId>`, com o grupo implícito sempre
+//! presente e as operações puras do ADR-0006 que a F2 exercita. `serde` é
+//! derivado desde já para que o round-trip `Workspace -> JSON -> Workspace`
+//! que o ADR lista como invariante seja testável nesta fase, mesmo com
+//! `porecatu-session` ainda vazio.
 
-/// Identificador opaco de aba, estável dentro de um workspace. Gerado por
-/// contador monotônico por workspace (ADR-0006) -- em F1 existe uma única
-/// aba por janela, então não há Workspace ainda para possuir esse contador;
-/// quem cria o `TabId` hoje é `porecatu-ui`, com o valor fixo `0`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TabId(u32);
+mod group;
+mod id;
+mod tab;
+mod workspace;
 
-impl TabId {
-    pub const fn new(id: u32) -> Self {
-        Self(id)
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0
-    }
-}
+pub use group::Group;
+pub use id::{GroupId, TabId};
+pub use tab::{Tab, TabState};
+pub use workspace::Workspace;
