@@ -27,9 +27,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use porecatu_core::GroupId;
+use porecatu_core::{GroupId, TabId};
 
-use crate::tab_bar::TabBarLayout;
+use crate::tab_bar::{TabBarLayout, TabRect};
 
 /// Cadência de redraw enquanto uma animação está ativa (~60fps) -- não é
 /// valor de design, é a mesma classe de constante de interação que
@@ -46,6 +46,14 @@ struct Reflow {
     /// um grupo recém-criado pela própria operação não tem "posição
     /// antiga" e não anima (nasce direto na posição final).
     wrapper_x: HashMap<GroupId, f32>,
+    /// Todas as abas de `old_layout`, com a geometria de antes. É o que
+    /// permite desenhar esmaecendo, em vez de sumir/aparecer na hora, as
+    /// abas do grupo que está colapsando (existiam antes, não existem no
+    /// layout novo) ou expandindo (o inverso -- não existiam antes, mas
+    /// `chrome.rs` já as desenha na posição nova, só precisa saber que são
+    /// "novas" pra começar a opacidade em zero). Espec. §2.4: "o que anima
+    /// de fato é o resto do colapso: as abas... desaparecendo da trilha".
+    old_tabs: HashMap<TabId, TabRect>,
 }
 
 impl Reflow {
@@ -77,10 +85,17 @@ impl AnimationClock {
     /// colapso/expansão (ADR-0022, lista fechada de dois consumidores).
     pub fn start_reflow(&mut self, old_layout: &TabBarLayout, duration: Duration, now: Instant) {
         let wrapper_x = old_layout.groups.iter().map(|g| (g.id, g.rect.x)).collect();
+        let old_tabs = old_layout
+            .groups
+            .iter()
+            .flat_map(|g| g.tabs.iter())
+            .map(|t| (t.id, t.clone()))
+            .collect();
         self.active.push(Reflow {
             started_at: now,
             duration,
             wrapper_x,
+            old_tabs,
         });
     }
 
@@ -110,6 +125,24 @@ impl AnimationClock {
             .iter()
             .rev()
             .find_map(|r| r.wrapper_x.get(&id).map(|&x| (x, r.progress(now))))
+    }
+
+    /// Todas as abas de "antes" de qualquer animação ativa, com o
+    /// progresso dela -- `chrome.rs` cruza contra o layout **corrente**:
+    /// as que não existem mais lá sumiram (colapso, desenha esmaecendo na
+    /// posição antiga); as que existem lá mas não estão aqui são novas
+    /// (expansão, desenha esmaecendo na posição nova que o layout já deu).
+    pub fn old_tabs(&self, now: Instant) -> impl Iterator<Item = (&TabRect, f32)> {
+        self.active
+            .iter()
+            .flat_map(move |r| r.old_tabs.values().map(move |t| (t, r.progress(now))))
+    }
+
+    /// Se `id` existia em `old_layout` de alguma animação ativa -- usado
+    /// pra decidir se uma aba do layout corrente é "nova" (expansão) e
+    /// deve entrar esmaecendo, ou se já existia e desenha normal.
+    pub fn had_tab(&self, id: TabId) -> bool {
+        self.active.iter().any(|r| r.old_tabs.contains_key(&id))
     }
 
     /// Próximo instante em que a janela deve acordar pra continuar a
@@ -185,6 +218,38 @@ mod tests {
         // g1 não se move (nada muda antes dele); g3 se move (g2 encolheu).
         assert_eq!(old_layout.groups[0].rect.x, new_layout.groups[0].rect.x);
         assert_ne!(old_layout.groups[2].rect.x, new_layout.groups[2].rect.x);
+    }
+
+    // Cenário de aceite (espec §2.4: "o que anima de fato é o resto do
+    // colapso: as abas desaparecendo da trilha"): mesmo sem nenhum grupo
+    // depois pra deslizar (ex.: colapsar o único/último grupo), a própria
+    // aba que sumiu continua disponível pra desenhar esmaecendo.
+    #[test]
+    fn collapsing_the_only_group_still_has_its_tab_available_to_fade_out() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let g1 = ws.group_tabs(&[a], "g1", GroupColor::Red).unwrap();
+
+        let mut m = TextMeasurer::new();
+        let old_layout = tab_bar::layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        ws.collapse_group(g1, true);
+        let new_layout = tab_bar::layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert!(
+            new_layout.groups[0].tabs.is_empty(),
+            "grupo colapsado não gera TabRect (tab_bar.rs)"
+        );
+
+        let mut clock = AnimationClock::default();
+        let now = Instant::now();
+        clock.start_reflow(&old_layout, Duration::from_millis(150), now);
+
+        let old_tabs: Vec<_> = clock.old_tabs(now).collect();
+        assert_eq!(old_tabs.len(), 1);
+        assert_eq!(old_tabs[0].0.id, a);
+        assert_eq!(old_tabs[0].1, 0.0); // progresso recém-começado
+
+        assert!(clock.had_tab(a));
+        assert!(!clock.had_tab(TabId::new(999)));
     }
 
     #[test]
