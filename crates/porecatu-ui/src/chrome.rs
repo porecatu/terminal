@@ -1,22 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Traduz `tab_bar::TabBarLayout` (mais estado efêmero que o layout puro
-//! não conhece: aba ativa, aba `Exited`, edição de rename em andamento) em
-//! `Primitive`s da camada `Chrome` (ADR-0018). Cores e dimensões: espec.
-//! visual §1.2, §1.3, §2.5, §2.6, como constantes em `palette.rs`, mesmo
-//! padrão de `paint.rs` para a grade.
+//! não conhece: aba ativa, aba `Exited`, edição de rename em andamento,
+//! rolagem e arraste desde a Etapa 5) em `Primitive`s da camada `Chrome`
+//! (ADR-0018). Cores e dimensões: espec. visual §1.2, §1.3, §2.5, §2.6,
+//! §2.17, §2.18, §2.19, como constantes em `palette.rs`/`tab_bar.rs`,
+//! mesmo padrão de `paint.rs` para a grade.
 //!
 //! Sem hover nesta etapa -- a barra não rastreia posição do mouse fora de
-//! clique (`App::cursor_position` é da área do terminal); o estado default
-//! de cada elemento já é o que a espec. descreve fora de hover, então a
-//! barra fica correta sem ele -- é um refinamento, não uma etapa 4/6.
+//! clique/arraste (`App::cursor_position` é da área do terminal); o estado
+//! default de cada elemento já é o que a espec. descreve fora de hover,
+//! então a barra fica correta sem ele -- é um refinamento, não uma etapa
+//! 4/5/6. Pelo mesmo motivo, o `filter: brightness(1.18)` e a sombra de
+//! popover do fantasma de arraste (espec. §2.19) não têm equivalente em
+//! `porecatu-render` -- nenhuma primitiva de filtro ou sombra existe ainda
+//! (nenhum hover em lugar nenhum do chrome usa isso hoje); o fantasma
+//! reaproveita as cores normais da aba, sem o realce.
 
 use porecatu_core::{TabId, Workspace};
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
 
 use crate::palette;
 use crate::rename::RenameState;
-use crate::tab_bar::{TabBarLayout, TabBarStyle};
+use crate::tab_bar::{
+    self, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, TabBarLayout, TabBarStyle,
+};
 
 /// Fonte dos ícones da barra (fechar, nova aba) -- mesma família do
 /// rótulo, peso regular (espec. não distingue peso pra glyphs de ícone).
@@ -40,9 +48,34 @@ const RENAME_FIELD_MAX_WIDTH: f32 = 120.0;
 const RENAME_FONT_SIZE: f32 = 12.0;
 const RENAME_PADDING_X: f32 = 5.0;
 
+const OVERFLOW_CHEVRON_SIZE: f32 = 10.0; // espec §2.18: "chevron ‹/› 10px"
+const OVERFLOW_COUNT_FONT_SIZE: f32 = 10.0; // espec §2.18: "contagem em mono 10px"
+const OVERFLOW_COUNT_RADIUS: f32 = 9.0; // espec §2.4 (mesmo contador da pílula)
+const OVERFLOW_INNER_GAP: f32 = 3.0; // folga de trabalho entre chevron e contagem
+
+/// A aba sendo arrastada (espec §2.19): desenhada como fantasma seguindo o
+/// cursor no eixo X, presa ao Y da barra -- em vez de na posição que o
+/// `layout` calculou para ela (que já reflete o preview de onde ela cairia,
+/// e é onde o "buraco" fica: a aba não é desenhada na posição normal
+/// enquanto isto está `Some`, deixando o fundo da barra aparecer).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DragGhost {
+    pub tab: TabId,
+    /// Coordenada de tela (sem o deslocamento de rolagem) do canto
+    /// esquerdo do fantasma.
+    pub screen_x: f32,
+}
+
 /// Monta as primitivas da barra inteira: fundo, separador, cada aba (fundo,
-/// borda, sublinhado, rótulo ou campo de rename, botão de fechar) e o
-/// botão de nova aba.
+/// borda, sublinhado, indicador, rótulo ou campo de rename, botão de
+/// fechar), o botão de nova aba, os indicadores de overflow (espec §2.18) e
+/// o fantasma de arraste (espec §2.19), se algum estiver em andamento.
+///
+/// `layout` já reflete o encolhimento do §2.18 (`tab_bar::fit_width`) e,
+/// durante um arraste, o preview de reordenação (`lib.rs` monta um
+/// `Workspace` clonado com a troca aplicada antes de chamar `fit_width`) --
+/// esta função só desenha o que recebe, sem saber de nenhuma das duas
+/// decisões.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(
     layout: &TabBarLayout,
@@ -51,6 +84,8 @@ pub fn paint(
     rename: &RenameState,
     style: &TabBarStyle,
     bar_width: f32,
+    overflow: Overflow,
+    drag: Option<DragGhost>,
     measurer: &mut porecatu_render::TextMeasurer,
 ) -> Vec<Primitive> {
     let bar_height = style.tab_height + style.wrapper_padding * 2.0;
@@ -75,32 +110,36 @@ pub fn paint(
         color: palette::BAR_SEPARATOR,
     }));
 
+    // Recorte de verdade da trilha (ADR-0018, espec §2.18: "um recorte só,
+    // na camada de chrome; as abas fora da vista desaparecem pelo clip").
+    // Tudo dentro deste par desloca pelo scroll -- inclusive o botão de
+    // nova aba, que "acompanha o scroll" (espec §2.6).
+    out.push(Primitive::PushClip(Rect {
+        x: 0.0,
+        y: 0.0,
+        width: bar_width,
+        height: bar_height,
+    }));
+    let dx = -overflow.scroll_offset;
+
     for group in &layout.groups {
         for tab in &group.tabs {
+            let is_ghost = drag.is_some_and(|g| g.tab == tab.id);
+            let tab_rect = shift(tab.rect, dx);
+
+            if is_ghost {
+                // O buraco (espec §2.19): fundo da barra já pintado acima
+                // aparece por baixo -- nada a desenhar aqui, o fantasma vem
+                // depois, fora do recorte.
+                continue;
+            }
+
             let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
             let is_active = active == Some(tab.id);
-            let (bg, border, text_color) = if exited {
-                (
-                    palette::TAB_INACTIVE_BACKGROUND,
-                    palette::TAB_INACTIVE_BORDER,
-                    palette::TAB_EXITED_TEXT,
-                )
-            } else if is_active {
-                (
-                    palette::TAB_ACTIVE_BACKGROUND,
-                    palette::TAB_ACTIVE_BORDER,
-                    palette::TAB_ACTIVE_TEXT,
-                )
-            } else {
-                (
-                    palette::TAB_INACTIVE_BACKGROUND,
-                    palette::TAB_INACTIVE_BORDER,
-                    palette::TAB_INACTIVE_TEXT,
-                )
-            };
+            let (bg, border, text_color) = tab_colors(exited, is_active);
 
             out.push(Primitive::RoundedQuad(RoundedQuad {
-                rect: tab.rect,
+                rect: tab_rect,
                 radius: 6.0,
                 color: bg,
                 border_color: border,
@@ -111,20 +150,44 @@ pub fn paint(
             // então é sempre `ungrouped_color` -- grupo de verdade é F3.
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
-                    x: tab.rect.x,
-                    y: tab.rect.y + tab.rect.height - TAB_UNDERLINE_HEIGHT,
-                    width: tab.rect.width,
+                    x: tab_rect.x,
+                    y: tab_rect.y + tab_rect.height - TAB_UNDERLINE_HEIGHT,
+                    width: tab_rect.width,
                     height: TAB_UNDERLINE_HEIGHT,
                 },
                 color: palette::UNGROUPED_UNDERLINE,
             }));
 
-            if rename.editing_tab() == Some(tab.id) {
-                paint_rename_field(tab.rect, style, rename.buffer(), measurer, &mut out);
+            let dot_reserve = if tab.indicator.is_some() {
+                INDICATOR_DOT_SIZE + style.internal_gap
             } else {
-                let label_y = tab.rect.y + (tab.rect.height - style.font_size) / 2.0;
+                0.0
+            };
+            if let Some(indicator) = tab.indicator {
+                let color = match indicator {
+                    Indicator::Activity => palette::ACTIVITY_INDICATOR,
+                    Indicator::Bell => palette::BELL_INDICATOR,
+                };
+                out.push(Primitive::RoundedQuad(RoundedQuad {
+                    rect: Rect {
+                        x: tab_rect.x + style.padding_left,
+                        y: tab_rect.y + (tab_rect.height - INDICATOR_DOT_SIZE) / 2.0,
+                        width: INDICATOR_DOT_SIZE,
+                        height: INDICATOR_DOT_SIZE,
+                    },
+                    radius: INDICATOR_DOT_SIZE / 2.0,
+                    color,
+                    border_color: palette::TRANSPARENT,
+                    border_width: 0.0,
+                }));
+            }
+
+            if rename.editing_tab() == Some(tab.id) {
+                paint_rename_field(tab_rect, style, rename.buffer(), measurer, &mut out);
+            } else {
+                let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
                 out.push(Primitive::Text(TextRun {
-                    origin: (tab.rect.x + style.padding_left, label_y),
+                    origin: (tab_rect.x + style.padding_left + dot_reserve, label_y),
                     text: tab.label.clone(),
                     font: LABEL_FONT,
                     size_px: style.font_size,
@@ -134,7 +197,7 @@ pub fn paint(
 
             out.push(centered_glyph(
                 "\u{2715}",
-                tab.close_button,
+                shift(tab.close_button, dx),
                 CLOSE_ICON_SIZE,
                 palette::CLOSE_BUTTON_ICON,
                 measurer,
@@ -143,6 +206,7 @@ pub fn paint(
     }
 
     if let Some(button) = layout.new_tab_button {
+        let button = shift(button, dx);
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: button,
             radius: 6.0,
@@ -159,7 +223,147 @@ pub fn paint(
         ));
     }
 
+    out.push(Primitive::PopClip);
+
+    if overflow.hidden_left > 0 {
+        paint_overflow_pill(
+            OverflowSide::Left,
+            overflow.hidden_left,
+            bar_width,
+            bar_height,
+            measurer,
+            &mut out,
+        );
+    }
+    if overflow.hidden_right > 0 {
+        paint_overflow_pill(
+            OverflowSide::Right,
+            overflow.hidden_right,
+            bar_width,
+            bar_height,
+            measurer,
+            &mut out,
+        );
+    }
+
+    if let Some(ghost) = drag
+        && let Some(tab) = layout
+            .groups
+            .iter()
+            .flat_map(|g| &g.tabs)
+            .find(|t| t.id == ghost.tab)
+    {
+        let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
+        let is_active = active == Some(tab.id);
+        let (bg, border, text_color) = tab_colors(exited, is_active);
+        let ghost_rect = Rect {
+            x: ghost.screen_x,
+            y: tab.rect.y,
+            width: tab.rect.width,
+            height: tab.rect.height,
+        };
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: ghost_rect,
+            radius: 6.0,
+            color: bg,
+            border_color: border,
+            border_width: 1.0,
+        }));
+        let dot_reserve = if tab.indicator.is_some() {
+            INDICATOR_DOT_SIZE + style.internal_gap
+        } else {
+            0.0
+        };
+        let label_y = ghost_rect.y + (ghost_rect.height - style.font_size) / 2.0;
+        out.push(Primitive::Text(TextRun {
+            origin: (ghost_rect.x + style.padding_left + dot_reserve, label_y),
+            text: tab.label.clone(),
+            font: LABEL_FONT,
+            size_px: style.font_size,
+            color: text_color,
+        }));
+    }
+
     out
+}
+
+fn tab_colors(exited: bool, is_active: bool) -> (Color, Color, Color) {
+    if exited {
+        (
+            palette::TAB_INACTIVE_BACKGROUND,
+            palette::TAB_INACTIVE_BORDER,
+            palette::TAB_EXITED_TEXT,
+        )
+    } else if is_active {
+        (
+            palette::TAB_ACTIVE_BACKGROUND,
+            palette::TAB_ACTIVE_BORDER,
+            palette::TAB_ACTIVE_TEXT,
+        )
+    } else {
+        (
+            palette::TAB_INACTIVE_BACKGROUND,
+            palette::TAB_INACTIVE_BORDER,
+            palette::TAB_INACTIVE_TEXT,
+        )
+    }
+}
+
+fn shift(rect: Rect, dx: f32) -> Rect {
+    Rect {
+        x: rect.x + dx,
+        ..rect
+    }
+}
+
+/// Indicador de abas fora da vista (espec §2.18, RF-1.19): chevron + a
+/// mesma pílula de contagem da §2.4, ancorado por dentro da ponta da
+/// trilha, fora do recorte de rolagem.
+fn paint_overflow_pill(
+    side: OverflowSide,
+    count: usize,
+    bar_width: f32,
+    bar_height: f32,
+    measurer: &mut porecatu_render::TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    let rect = tab_bar::overflow_pill_rect(side, bar_width, bar_height);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: OVERFLOW_COUNT_RADIUS,
+        color: palette::OVERFLOW_COUNT_BACKGROUND,
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+
+    let chevron = match side {
+        OverflowSide::Left => "\u{2039}",
+        OverflowSide::Right => "\u{203a}",
+    };
+    let count_text = count.to_string();
+    let chevron_width = measurer.measure_width(chevron, ICON_FONT, OVERFLOW_CHEVRON_SIZE);
+    let count_width = measurer.measure_width(&count_text, ICON_FONT, OVERFLOW_COUNT_FONT_SIZE);
+    let content_width = chevron_width + OVERFLOW_INNER_GAP + count_width;
+    let start_x = rect.x + (rect.width - content_width) / 2.0;
+    let mid_y = rect.y + rect.height / 2.0;
+
+    out.push(Primitive::Text(TextRun {
+        origin: (start_x, mid_y - OVERFLOW_CHEVRON_SIZE / 2.0),
+        text: chevron.to_string(),
+        font: ICON_FONT,
+        size_px: OVERFLOW_CHEVRON_SIZE,
+        color: palette::NEW_TAB_ICON,
+    }));
+    out.push(Primitive::Text(TextRun {
+        origin: (
+            start_x + chevron_width + OVERFLOW_INNER_GAP,
+            mid_y - OVERFLOW_COUNT_FONT_SIZE / 2.0,
+        ),
+        text: count_text,
+        font: ICON_FONT,
+        size_px: OVERFLOW_COUNT_FONT_SIZE,
+        color: palette::OVERFLOW_COUNT_TEXT,
+    }));
 }
 
 /// Campo de rename (espec §2.5): substitui o rótulo no lugar, largura

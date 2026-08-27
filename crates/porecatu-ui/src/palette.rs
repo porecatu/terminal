@@ -60,6 +60,16 @@ pub const RENAME_TEXT: Color = hex(0xe4, 0xe8, 0xee);
 pub const NEW_TAB_ICON: Color = hex(0x9a, 0xa2, 0xae);
 pub const NEW_TAB_BORDER: Color = hex(0x26, 0x2b, 0x34);
 
+// `[appearance.tabs] activity_indicator` / `bell_indicator` -- espec §2.17,
+// RF-1.20/RF-1.21. Mesmos tons de sucesso/erro da seção 1.5.
+pub const ACTIVITY_INDICATOR: Color = hex(0x86, 0xc5, 0x6a);
+pub const BELL_INDICATOR: Color = hex(0xef, 0x8a, 0x8a);
+
+// Espec. visual §2.18 -- indicador de abas fora da vista, mesmos tokens do
+// contador da pílula de grupo (§2.4).
+pub const OVERFLOW_COUNT_BACKGROUND: Color = hex(0x12, 0x15, 0x1a);
+pub const OVERFLOW_COUNT_TEXT: Color = hex(0x7b, 0x83, 0x8f);
+
 /// Transparente -- usado como preenchimento de um `RoundedQuad` que só
 /// desenha borda (botão de nova aba, espec. §2.6, sem "fundo" listado).
 pub const TRANSPARENT: Color = Color {
