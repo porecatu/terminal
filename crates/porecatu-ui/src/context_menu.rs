@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Menu de contexto da aba (ADR-0014 §2.16, ADR-0008, PRD-010 RF-10.19/
-//! RF-10.20). F2 só tem este menu -- o de grupo é RF-2.22/F3, o de
-//! terminal é F6 (docs/reference/acoes.md). Ancorado no cursor; a
-//! geometria de virada pra caber na janela é pintura (`overlay.rs`), não
-//! deste módulo.
+//! RF-10.20). F2 só tem este menu -- o de grupo é RF-2.22/F3
+//! (`group_menu.rs`), o de terminal é F6 (docs/reference/acoes.md).
+//! Ancorado no cursor; a geometria de virada pra caber na janela é
+//! pintura (`overlay.rs`), não deste módulo.
 
 use porecatu_core::TabId;
 
@@ -12,10 +12,10 @@ use porecatu_core::TabId;
 pub enum MenuAction {
     NewTab,
     CloseTab,
-    /// RF-2.20: mover a aba pra um grupo. Sem grupo explícito até a F3
-    /// (só existe o implícito, ADR-0006), o item fica **esmaecido, nunca
-    /// ausente** (RF-10.20) -- não é omissão, é o estado que o requisito
-    /// pede enquanto a ação de destino não existe.
+    /// RF-2.20: mover a aba pra um grupo. Sempre habilitado desde a F3
+    /// etapa 5 (ADR-0023 §4): "Novo grupo" é sempre um destino válido,
+    /// mesmo sem nenhum grupo explícito existir ainda. Aciona abre o
+    /// popover de destino (`move_to_group.rs`), não move direto.
     MoveToGroup,
 }
 
@@ -42,7 +42,7 @@ pub const TAB_MENU_ITEMS: [MenuItem; 3] = [
     MenuItem {
         action: MenuAction::MoveToGroup,
         label: "Mover para grupo",
-        enabled: false,
+        enabled: true,
     },
 ];
 
@@ -114,29 +114,36 @@ mod tests {
     }
 
     #[test]
-    fn move_highlight_skips_disabled_items() {
+    fn move_highlight_advances_and_wraps() {
         let mut menu = ContextMenu::new(TabId::new(0), (0.0, 0.0));
         menu.move_highlight(1);
         assert_eq!(menu.selected(), MenuAction::CloseTab);
-        // O terceiro item (mover pra grupo) está desabilitado -- avançar
-        // de novo deve pular pra ele e circular de volta ao primeiro.
+        menu.move_highlight(1);
+        assert_eq!(menu.selected(), MenuAction::MoveToGroup);
         menu.move_highlight(1);
         assert_eq!(menu.selected(), MenuAction::NewTab);
     }
 
     #[test]
-    fn move_highlight_backwards_wraps_to_last_enabled() {
+    fn move_highlight_backwards_wraps_to_last() {
         let mut menu = ContextMenu::new(TabId::new(0), (0.0, 0.0));
         menu.move_highlight(-1);
+        assert_eq!(menu.selected(), MenuAction::MoveToGroup);
+    }
+
+    #[test]
+    fn set_highlight_moves_to_valid_index() {
+        let mut menu = ContextMenu::new(TabId::new(0), (0.0, 0.0));
+        menu.set_highlight(2);
+        assert_eq!(menu.selected(), MenuAction::MoveToGroup);
+        menu.set_highlight(1);
         assert_eq!(menu.selected(), MenuAction::CloseTab);
     }
 
     #[test]
-    fn set_highlight_ignores_disabled_index() {
+    fn set_highlight_ignores_out_of_range_index() {
         let mut menu = ContextMenu::new(TabId::new(0), (0.0, 0.0));
-        menu.set_highlight(2);
+        menu.set_highlight(99);
         assert_eq!(menu.selected(), MenuAction::NewTab);
-        menu.set_highlight(1);
-        assert_eq!(menu.selected(), MenuAction::CloseTab);
     }
 }

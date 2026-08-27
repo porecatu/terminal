@@ -23,7 +23,10 @@ mod chrome;
 mod clipboard;
 mod context_menu;
 mod dialog;
+mod group_editor;
+mod group_menu;
 mod input;
+mod move_to_group;
 mod overlay;
 mod paint;
 mod palette;
@@ -36,13 +39,24 @@ mod warning;
 use chrome::DragGhost;
 use context_menu::{ContextMenu, MenuAction};
 use dialog::{ConfirmDialog, DialogAction, DialogButton};
+use group_editor::{EditorRegion, GroupEditor};
+use group_menu::{GroupAction, GroupContextMenu};
 use input::ClickTracker;
+use move_to_group::{MoveTarget, MoveToGroupPopover};
 use paint::CellMetrics;
+use porecatu_core::GroupColor;
 use rename::RenameState;
 use selection::Selection;
 use tab_bar::{OverflowSide, TabBarHit, TabBarStyle};
 use tooltip::Hover;
 use warning::{Severity, WarningStack};
+
+/// Janela de tempo entre o clique que colapsa/expande a pílula e um
+/// segundo clique no mesmo grupo pra contar como duplo clique (RF-2.22:
+/// "abrir o editor por duplo clique no rótulo"). Mesmo valor e mesma nota
+/// de procedência de `input::MULTI_CLICK_THRESHOLD` -- convenção comum de
+/// SO, não token de design.
+const PILL_DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Espec. §2.19: "limiar de 4px de movimento" -- abaixo disso o gesto é
 /// clique (RF-1.13), não arraste.
@@ -131,6 +145,16 @@ enum ActionOutcome {
     Unhandled,
 }
 
+/// O que `WindowState::handle_group_editor_key` não pode resolver sozinho:
+/// `Enter` na lista de ações pode disparar `group.new_tab` (precisa de
+/// `cell_metrics`/`proxy`, que só `App` tem) -- as outras duas ações da
+/// lista (`ToggleCollapse`/`Dissolve`) e as duas do campo/faixa
+/// (`Rename`/`SetColor`) já se resolvem dentro do método.
+enum GroupEditorOutcome {
+    None,
+    Action(GroupId, GroupAction),
+}
+
 /// Estado por janela (ADR-0015: "um `Workspace` independente por janela").
 /// `App` guarda um `HashMap<WindowId, WindowState>`; o que não varia por
 /// janela (GPU do processo, diretório de início, métricas de célula --
@@ -172,6 +196,18 @@ struct WindowState {
     dialog: Option<ConfirmDialog>,
     /// Menu de contexto de aba em andamento (ADR-0014 §2.16, RF-10.19).
     context_menu: Option<ContextMenu>,
+    /// Menu de contexto de grupo (RF-2.22, ADR-0023) -- mutuamente
+    /// exclusivo com `context_menu`/`group_editor`/`move_to_group`
+    /// (`close_all_popovers`).
+    group_context_menu: Option<GroupContextMenu>,
+    /// Editor de grupo (ADR-0023), o quinto widget de chrome.
+    group_editor: Option<GroupEditor>,
+    /// Popover de destino do `tab.move_to_group` (RF-2.20, ADR-0023 §4).
+    move_to_group: Option<MoveToGroupPopover>,
+    /// Último clique numa pílula, pra detectar o duplo clique do RF-2.22 --
+    /// mesmo padrão de `input::ClickTracker`, mas escopado à pílula (que
+    /// não passa pelo roteamento de mouse do terminal).
+    last_pill_click: Option<(GroupId, Instant)>,
     /// Seleção múltipla da barra (ADR-0021) -- efêmera como `rename`,
     /// `drag` e `hover`, ao lado dos quais fica; não persistida.
     selection: Selection,
@@ -199,8 +235,23 @@ impl WindowState {
             warnings: WarningStack::default(),
             dialog: None,
             context_menu: None,
+            group_context_menu: None,
+            group_editor: None,
+            move_to_group: None,
+            last_pill_click: None,
             selection: Selection::default(),
         }
+    }
+
+    /// Fecha os quatro widgets da camada popover (ADR-0023: "abrir
+    /// qualquer um dos dois fecha o outro, num ponto só do código") --
+    /// chamado antes de abrir qualquer um deles, garantindo que nunca
+    /// coexistem.
+    fn close_all_popovers(&mut self) {
+        self.context_menu = None;
+        self.group_context_menu = None;
+        self.group_editor = None;
+        self.move_to_group = None;
     }
 
     /// `cwd` herdado por `tab.new`/`window.new` (ADR-0017 item 1, ADR-0015):
@@ -263,15 +314,40 @@ impl WindowState {
         }
     }
 
+    /// Canto esquerdo, em coordenadas de tela, da pílula de `group` --
+    /// posição horizontal do editor de grupo (espec. §2.10: "posicionado
+    /// horizontalmente sobre o grupo que está sendo editado"). `0.0` se o
+    /// grupo não existe mais (editor prestes a fechar) ou não tem pílula
+    /// (grupo implícito -- inatingível aqui, o editor nunca abre sobre
+    /// um).
+    fn group_pill_screen_x(&self, group: GroupId, gpu: &mut GpuContext) -> f32 {
+        let style = TabBarStyle::DEFAULT;
+        let layout = tab_bar::fit_width(
+            &self.workspace,
+            &style,
+            self.logical_width,
+            gpu.text_measurer(),
+        );
+        layout
+            .groups
+            .iter()
+            .find(|g| g.id == group)
+            .and_then(|g| g.pill.as_ref())
+            .map(|p| p.rect.x - self.scroll_offset)
+            .unwrap_or(0.0)
+    }
+
     fn active_runtime(&self) -> Option<&TabRuntime> {
         let id = self.workspace.active_tab()?;
         self.tabs.get(&id)
     }
 
-    /// Cria uma aba no grupo da aba ativa (`Workspace::append_tab`,
-    /// ADR-0020 §1), herdando `cwd` (RF-1.1, ADR-0017), e spawna a
-    /// `Terminal` dela. Erro de spawn desfaz a criação e vira
-    /// aviso do app (canal 1, ADR-0014) -- sem isso o `Workspace`
+    /// Cria uma aba, herdando `cwd` (RF-1.1, ADR-0017), e spawna a
+    /// `Terminal` dela. `target_group`: `None` segue o grupo da aba ativa
+    /// (`Workspace::append_tab`, ADR-0020 §1) -- o caminho de `tab.new`/
+    /// `window.new`; `Some(id)` cria no fim de um grupo específico
+    /// (`group.new_tab`, RF-2.8/RF-2.22). Erro de spawn desfaz a criação e
+    /// vira aviso do app (canal 1, ADR-0014) -- sem isso o `Workspace`
     /// acumularia abas sem `Terminal` nenhum atrás.
     fn open_tab(
         &mut self,
@@ -279,10 +355,18 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         cwd: Option<PathBuf>,
         now: Instant,
+        target_group: Option<GroupId>,
     ) {
         let (rows, cols) = self.grid_size(cell_metrics);
         let shell_name = Self::shell_display_name();
-        let tab_id = self.workspace.append_tab(shell_name, cwd.clone());
+        let tab_id = match target_group.and_then(|g| self.workspace.group(g)) {
+            Some(group) => {
+                let pos = group.tabs().len();
+                self.workspace
+                    .new_tab(target_group, shell_name, cwd.clone(), pos)
+            }
+            None => self.workspace.append_tab(shell_name, cwd.clone()),
+        };
 
         let window_id = self.window.id();
         let tab = tab_id;
@@ -402,7 +486,7 @@ impl WindowState {
             self.commit_rename();
         }
         let cwd = self.resolve_new_tab_cwd(startup_directory);
-        self.open_tab(cell_metrics, proxy, cwd, now);
+        self.open_tab(cell_metrics, proxy, cwd, now, None);
     }
 
     /// RF-1.6 (ADR-0017): fechar a aba ativa pede confirmação quando ela
@@ -581,6 +665,147 @@ impl WindowState {
         }
     }
 
+    /// Espelha `handle_context_menu_key`, sobre `group_context_menu`.
+    fn handle_group_menu_key(&mut self, event: &KeyEvent) -> Option<GroupAction> {
+        if event.state != ElementState::Pressed {
+            return None;
+        }
+        let Some(menu) = &mut self.group_context_menu else {
+            return None;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.group_context_menu = None;
+                None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                menu.move_highlight(-1);
+                None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                menu.move_highlight(1);
+                None
+            }
+            Key::Named(NamedKey::Enter) => {
+                let action = menu.selected();
+                self.group_context_menu = None;
+                Some(action)
+            }
+            _ => None,
+        }
+    }
+
+    /// Cadeia de teclado do editor de grupo (espec. §2.10, ADR-0023 §2):
+    /// `Tab`/`Shift+Tab` trocam de região, setas movem o realce dentro da
+    /// faixa/lista, `Enter` confirma o campo ou aciona o realçado, `Esc`
+    /// fecha -- sem restaurar nada porque o modelo nunca mudou (nota do
+    /// módulo `group_editor.rs`). `Rename`/`SetColor` nunca aparecem em
+    /// `selected_action()` (`EDITOR_ACTION_ORDER` é o subconjunto de três
+    /// -- ver `group_menu.rs`), então só a região `Actions` pode devolver
+    /// `Action`; o campo e a faixa se resolvem aqui dentro.
+    fn handle_group_editor_key(&mut self, event: &KeyEvent) -> GroupEditorOutcome {
+        if event.state != ElementState::Pressed {
+            return GroupEditorOutcome::None;
+        }
+        let shift = self.modifiers.shift;
+        let Some(editor) = &mut self.group_editor else {
+            return GroupEditorOutcome::None;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.group_editor = None;
+                GroupEditorOutcome::None
+            }
+            Key::Named(NamedKey::Tab) => {
+                editor.cycle_focus(!shift);
+                GroupEditorOutcome::None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                editor.move_highlight(-1);
+                GroupEditorOutcome::None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                editor.move_highlight(1);
+                GroupEditorOutcome::None
+            }
+            Key::Named(NamedKey::Backspace) => {
+                editor.backspace();
+                GroupEditorOutcome::None
+            }
+            Key::Named(NamedKey::Enter) => match editor.focus() {
+                EditorRegion::Name => {
+                    let group = editor.group;
+                    let name = editor.name_buffer().to_string();
+                    self.workspace.rename_group(group, name);
+                    self.group_editor = None;
+                    GroupEditorOutcome::None
+                }
+                EditorRegion::Swatches => {
+                    let group = editor.group;
+                    let color = GroupColor::ALL[editor.swatch_highlight()];
+                    self.workspace.set_group_color(group, color);
+                    GroupEditorOutcome::None
+                }
+                EditorRegion::Actions => {
+                    GroupEditorOutcome::Action(editor.group, editor.selected_action())
+                }
+            },
+            _ => {
+                if editor.focus() == EditorRegion::Name
+                    && let Some(text) = &event.text
+                {
+                    for c in text.chars().filter(|c| !c.is_control()) {
+                        editor.push_char(c);
+                    }
+                }
+                GroupEditorOutcome::None
+            }
+        }
+    }
+
+    /// Espelha `handle_context_menu_key`, sobre `move_to_group`.
+    fn handle_move_to_group_key(&mut self, event: &KeyEvent) -> Option<MoveTarget> {
+        if event.state != ElementState::Pressed {
+            return None;
+        }
+        let Some(popover) = &mut self.move_to_group else {
+            return None;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.move_to_group = None;
+                None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                popover.move_highlight(-1);
+                None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                popover.move_highlight(1);
+                None
+            }
+            Key::Named(NamedKey::Enter) => {
+                let target = popover.selected();
+                self.move_to_group = None;
+                Some(target)
+            }
+            _ => None,
+        }
+    }
+
+    /// Executa o destino escolhido no popover do RF-2.20.
+    fn run_move_target(&mut self, tab: TabId, target: MoveTarget) {
+        match target {
+            MoveTarget::Group(group) => {
+                self.workspace.move_tab_to_group(tab, group);
+            }
+            MoveTarget::NewGroup => {
+                let color = self.workspace.next_auto_color();
+                self.workspace.group_tabs(&[tab], "", color);
+            }
+        }
+    }
+
     /// Passo 2 do ADR-0008 para as ações de aba/janela -- defaults fixos
     /// de Windows/Linux (não há parser de `[keybindings]` até a F4,
     /// docs/reference/acoes.md). `window.new`/`window.close` (ADR-0015)
@@ -711,9 +936,18 @@ impl WindowState {
         };
 
         if right_click {
-            if let TabBarHit::Tab(id) | TabBarHit::CloseButton(id) = hit {
-                self.context_menu = Some(ContextMenu::new(id, logical_point));
-                self.hover.dismiss();
+            match hit {
+                TabBarHit::Tab(id) | TabBarHit::CloseButton(id) => {
+                    self.close_all_popovers();
+                    self.context_menu = Some(ContextMenu::new(id, logical_point));
+                    self.hover.dismiss();
+                }
+                TabBarHit::Pill(id) => {
+                    self.close_all_popovers();
+                    self.group_context_menu = Some(GroupContextMenu::new(id, logical_point));
+                    self.hover.dismiss();
+                }
+                TabBarHit::NewTabButton => {}
             }
             return false;
         }
@@ -768,7 +1002,20 @@ impl WindowState {
                 false
             }
             TabBarHit::Pill(id) => {
-                self.toggle_group_collapse(id, gpu);
+                // RF-2.22: duplo clique no rótulo abre o editor, no lugar
+                // do colapso que um clique simples faria (evita o
+                // flicker de colapsar-e-reabrir no segundo clique).
+                let now = Instant::now();
+                let is_double_click = self.last_pill_click.is_some_and(|(last_id, at)| {
+                    last_id == id && now.duration_since(at) <= PILL_DOUBLE_CLICK_THRESHOLD
+                });
+                self.last_pill_click = Some((id, now));
+                if is_double_click {
+                    self.last_pill_click = None;
+                    self.open_group_editor(id, EditorRegion::Name);
+                } else {
+                    self.toggle_group_collapse(id, gpu);
+                }
                 false
             }
             TabBarHit::NewTabButton => true,
@@ -820,6 +1067,127 @@ impl WindowState {
         self.workspace.collapse_group(id, collapsing);
         self.sync_window_title();
         self.ensure_active_tab_visible(gpu);
+    }
+
+    /// RF-2.9/RF-2.10/RF-2.22: abre o editor de grupo (ADR-0023) com o
+    /// foco dado -- `group.rename` foca o nome, `group.set_color` a
+    /// faixa, duplo clique na pílula o nome (mesmo default de
+    /// `group.rename`). Sem efeito sobre grupo implícito ou `id`
+    /// inexistente (`docs/reference/acoes.md`: "indisponível").
+    fn open_group_editor(&mut self, group: GroupId, focus: EditorRegion) {
+        let Some(g) = self.workspace.group(group) else {
+            return;
+        };
+        if !g.is_explicit() {
+            return;
+        }
+        let name = g.name().unwrap_or_default().to_string();
+        let color_index = g.color().map(GroupColor::index).unwrap_or(0);
+        self.close_all_popovers();
+        self.group_editor = Some(GroupEditor::new(group, &name, color_index, focus));
+    }
+
+    /// Executa uma ação da lista única de grupo (RF-10.21,
+    /// `group_menu::group_action_items`) -- chamado tanto pelo menu de
+    /// contexto do grupo quanto pela lista de ações do editor
+    /// (`EDITOR_ACTION_ORDER` é subconjunto, mas os dois caem aqui).
+    /// `Rename`/`SetColor` abrem o editor em vez de executar direto
+    /// (ADR-0023 §4); os demais tocam o `Workspace` na hora. `CloseAll`
+    /// devolve o diálogo de confirmação pra `App` montar -- RF-2.23 exige
+    /// confirmação sempre, e o diálogo é `Option<ConfirmDialog>` por
+    /// janela, resolvido por quem já tem `self.dialog` em mãos.
+    fn run_group_action(
+        &mut self,
+        group: GroupId,
+        action: GroupAction,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+    ) {
+        match action {
+            GroupAction::Rename => self.open_group_editor(group, EditorRegion::Name),
+            GroupAction::SetColor => self.open_group_editor(group, EditorRegion::Swatches),
+            GroupAction::ToggleCollapse => {
+                // `toggle_group_collapse` precisa de `GpuContext` só pra
+                // `ensure_active_tab_visible` -- inatingível aqui (esta
+                // função não recebe `gpu`, e o colapso por menu/editor não
+                // precisa de medição de texto pra decidir rolagem: a
+                // trilha já cabe o que cabia antes). Duplicata mínima em
+                // vez de replumbar `gpu` por uma chamada indireta.
+                let Some(g) = self.workspace.group(group) else {
+                    return;
+                };
+                let collapsing = !g.is_collapsed();
+                if collapsing {
+                    let order: Vec<TabId> = self.workspace.visual_order().collect();
+                    let group_tabs: Vec<TabId> = g.tabs().to_vec();
+                    self.selection.invalidate_group(&group_tabs, &order);
+                }
+                self.workspace.collapse_group(group, collapsing);
+                self.sync_window_title();
+            }
+            GroupAction::NewTab => {
+                self.action_new_tab_in_group(group, cell_metrics, proxy, startup_directory, now);
+            }
+            GroupAction::CloseAll => {
+                let count = self
+                    .workspace
+                    .group(group)
+                    .map(|g| g.tabs().len())
+                    .unwrap_or(0);
+                let plural = if count == 1 { "" } else { "s" };
+                self.dialog = Some(ConfirmDialog::new(
+                    "Fechar grupo?",
+                    format!("Isso fecha {count} aba{plural}."),
+                    format!("Fechar grupo ({count} aba{plural})"),
+                    DialogAction::CloseGroup(group),
+                ));
+            }
+            GroupAction::Dissolve => {
+                self.workspace.ungroup(group);
+                if self.group_editor.as_ref().is_some_and(|e| e.group == group) {
+                    self.group_editor = None;
+                }
+            }
+        }
+    }
+
+    /// Conveniência de `group.new_tab` (RF-2.8/RF-2.22): sempre no fim de
+    /// `group`, mesmo que a aba ativa esteja em outro grupo -- diferente
+    /// de `action_new_tab`, que segue o grupo da aba ativa.
+    fn action_new_tab_in_group(
+        &mut self,
+        group: GroupId,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+    ) {
+        if self.rename.editing_tab().is_some() {
+            self.commit_rename();
+        }
+        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        self.open_tab(cell_metrics, proxy, cwd, now, Some(group));
+    }
+
+    /// `group.close_all` (RF-2.22/RF-2.23), já confirmado: fecha cada aba
+    /// do grupo pelo mesmo caminho de `close_tab_via_button`/`tab.close`
+    /// (sinaliza sem bloquear, remove do `Workspace`). Devolve `true` se a
+    /// janela ficou sem abas -- mesmo contrato de `close_tab_unconditionally`.
+    fn close_group_unconditionally(&mut self, group: GroupId) -> bool {
+        let Some(g) = self.workspace.group(group) else {
+            return false;
+        };
+        let tabs: Vec<TabId> = g.tabs().to_vec();
+        let mut window_empty = false;
+        for id in tabs {
+            window_empty = self.close_tab_unconditionally(id);
+        }
+        if self.group_editor.as_ref().is_some_and(|e| e.group == group) {
+            self.group_editor = None;
+        }
+        window_empty
     }
 
     /// Solta o botão do mouse com um arraste em andamento (espec §2.19):
@@ -900,6 +1268,9 @@ impl WindowState {
         let target = if self.in_bar(self.cursor_position.1)
             && self.dialog.is_none()
             && self.context_menu.is_none()
+            && self.group_context_menu.is_none()
+            && self.group_editor.is_none()
+            && self.move_to_group.is_none()
             && matches!(self.drag, TabDrag::Idle)
         {
             let style = TabBarStyle::DEFAULT;
@@ -1071,7 +1442,7 @@ impl App {
 
         let window_id = window.id();
         let mut state = WindowState::new(window, window_surface, scale);
-        state.open_tab(self.cell_metrics, &self.proxy, cwd, Instant::now());
+        state.open_tab(self.cell_metrics, &self.proxy, cwd, Instant::now(), None);
         self.windows.insert(window_id, state);
     }
 
@@ -1149,14 +1520,25 @@ impl App {
             DialogAction::CloseWindow => {
                 self.close_window_unconditionally(window_id, event_loop);
             }
+            DialogAction::CloseGroup(id) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    let empty = state.close_group_unconditionally(id);
+                    if empty {
+                        self.close_window_unconditionally(window_id, event_loop);
+                    } else {
+                        state.window.request_redraw();
+                    }
+                }
+            }
         }
     }
 
-    /// Executa um item do menu de contexto de aba (RF-1.1, RF-1.2, RF-2.20
-    /// -- este último sempre desabilitado em F2, `MenuAction::MoveToGroup`
-    /// não tem braço porque `ContextMenu::selected` nunca devolve um item
-    /// desabilitado).
-    fn run_menu_action(&mut self, window_id: WindowId, tab: TabId, action: MenuAction) {
+    /// Executa um item do menu de contexto de aba (RF-1.1, RF-1.2, RF-2.20).
+    /// `menu` (não só `tab`) porque `MoveToGroup` precisa do `anchor` do
+    /// menu que o abriu -- o popover de destino nasce no mesmo ponto, sem
+    /// virar submenu (ADR-0023 §4).
+    fn run_menu_action(&mut self, window_id: WindowId, menu: ContextMenu, action: MenuAction) {
+        let tab = menu.tab;
         match action {
             MenuAction::NewTab => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
@@ -1177,7 +1559,21 @@ impl App {
                     state.window.request_redraw();
                 }
             }
-            MenuAction::MoveToGroup => {}
+            MenuAction::MoveToGroup => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    let current_group = state.workspace.group_of_tab(tab);
+                    let targets: Vec<GroupId> = state
+                        .workspace
+                        .groups()
+                        .iter()
+                        .filter(|g| g.is_explicit() && Some(g.id()) != current_group)
+                        .map(|g| g.id())
+                        .collect();
+                    state.close_all_popovers();
+                    state.move_to_group = Some(MoveToGroupPopover::new(tab, menu.anchor, targets));
+                    state.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -1343,12 +1739,12 @@ impl ApplicationHandler<Wakeup> for App {
                 }
             }
             WindowEvent::Focused(false) => {
-                // ADR-0019: tooltip some ao perder foco a janela. Menu de
-                // contexto: mesma regra do ADR-0014 ("perda de foco
-                // fecha").
+                // ADR-0019: tooltip some ao perder foco a janela. Menus,
+                // editor de grupo e popover de destino: mesma regra do
+                // ADR-0014/ADR-0023 ("perda de foco fecha").
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.hover.dismiss();
-                    state.context_menu = None;
+                    state.close_all_popovers();
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -1421,11 +1817,59 @@ impl App {
             return;
         }
         if state.context_menu.is_some() {
-            let tab = state.context_menu.map(|m| m.tab);
+            let menu = state.context_menu;
             if let Some(action) = state.handle_context_menu_key(&key)
+                && let Some(menu) = menu
+            {
+                self.run_menu_action(window_id, menu, action);
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+        if state.group_context_menu.is_some() {
+            let group = state.group_context_menu.map(|m| m.group);
+            if let Some(action) = state.handle_group_menu_key(&key)
+                && let Some(group) = group
+            {
+                state.run_group_action(
+                    group,
+                    action,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
+                );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+        if state.group_editor.is_some() {
+            let outcome = state.handle_group_editor_key(&key);
+            if let GroupEditorOutcome::Action(group, action) = outcome {
+                state.run_group_action(
+                    group,
+                    action,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
+                );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+        if state.move_to_group.is_some() {
+            let tab = state.move_to_group.as_ref().map(|p| p.tab);
+            if let Some(target) = state.handle_move_to_group_key(&key)
                 && let Some(tab) = tab
             {
-                self.run_menu_action(window_id, tab, action);
+                state.run_move_target(tab, target);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -1505,11 +1949,86 @@ impl App {
         }
     }
 
+    /// Clique com o editor de grupo aberto: campo foca, swatch foca e
+    /// **aplica** a cor (clique não segue a semântica "realça, `Enter`
+    /// aciona" do teclado -- um clique num color picker já é a escolha,
+    /// mesmo padrão de clicar um item do menu de contexto), ação foca e
+    /// **executa**. Fora de tudo isso, ou botão que não é o esquerdo,
+    /// fecha.
+    fn dispatch_group_editor_click(
+        &mut self,
+        window_id: WindowId,
+        logical_point: (f32, f32),
+        button: MouseButton,
+    ) {
+        let Some(gpu) = &mut self.gpu else {
+            return;
+        };
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let Some(group) = state.group_editor.as_ref().map(|e| e.group) else {
+            return;
+        };
+        let anchor_x = state.group_pill_screen_x(group, gpu);
+        let layout = overlay::layout_group_editor(
+            anchor_x,
+            bar_height(),
+            state.logical_width,
+            state.logical_height,
+        );
+        let hit = overlay::group_editor_hit(&layout, logical_point);
+
+        if button != MouseButton::Left {
+            state.group_editor = None;
+            return;
+        }
+        match hit {
+            Some(overlay::GroupEditorHit::NameField) => {
+                if let Some(editor) = &mut state.group_editor {
+                    editor.set_focus(EditorRegion::Name);
+                }
+            }
+            Some(overlay::GroupEditorHit::Swatch(index)) => {
+                if let Some(editor) = &mut state.group_editor {
+                    editor.set_focus(EditorRegion::Swatches);
+                    editor.set_swatch_highlight(index);
+                }
+                state
+                    .workspace
+                    .set_group_color(group, GroupColor::ALL[index]);
+            }
+            Some(overlay::GroupEditorHit::Action(index)) => {
+                if let Some(editor) = &mut state.group_editor {
+                    editor.set_focus(EditorRegion::Actions);
+                    editor.set_action_highlight(index);
+                }
+                let action = group_menu::EDITOR_ACTION_ORDER[index];
+                state.run_group_action(
+                    group,
+                    action,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
+                );
+            }
+            None => {
+                state.group_editor = None;
+            }
+        }
+    }
+
     fn dispatch_mouse_wheel(&mut self, window_id: WindowId, delta: MouseScrollDelta) {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        if state.dialog.is_some() || state.context_menu.is_some() {
+        if state.dialog.is_some()
+            || state.context_menu.is_some()
+            || state.group_context_menu.is_some()
+            || state.group_editor.is_some()
+            || state.move_to_group.is_some()
+        {
             return;
         }
         if state.in_bar(state.cursor_position.1) {
@@ -1559,6 +2078,83 @@ impl App {
                 overlay::layout_context_menu(menu, state.logical_width, state.logical_height);
             if let Some(index) = overlay::context_menu_hit(&layout, logical_point) {
                 menu.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+        // Menu de contexto de grupo: mesmo tratamento do menu de aba acima.
+        if let Some(menu) = &mut state.group_context_menu {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let is_collapsed = state
+                .workspace
+                .group(menu.group)
+                .is_some_and(|g| g.is_collapsed());
+            let tab_count = state
+                .workspace
+                .group(menu.group)
+                .map(|g| g.tabs().len())
+                .unwrap_or(0);
+            let item_count = group_menu::group_action_items(is_collapsed, tab_count).len();
+            let layout = overlay::layout_group_menu(
+                menu,
+                item_count,
+                state.logical_width,
+                state.logical_height,
+            );
+            if let Some(index) = overlay::group_menu_hit(&layout, logical_point) {
+                menu.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+        // Editor de grupo: hover move o realce dentro da faixa de
+        // swatches/lista de ações -- o campo de nome não tem realce
+        // próprio (espec. §2.10: só faixa e lista navegam por realce).
+        if let Some(group) = state.group_editor.as_ref().map(|e| e.group) {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            if let Some(gpu) = &mut self.gpu {
+                let anchor_x = state.group_pill_screen_x(group, gpu);
+                if let Some(editor) = &mut state.group_editor {
+                    let layout = overlay::layout_group_editor(
+                        anchor_x,
+                        bar_height(),
+                        state.logical_width,
+                        state.logical_height,
+                    );
+                    match overlay::group_editor_hit(&layout, logical_point) {
+                        Some(overlay::GroupEditorHit::Swatch(i)) => {
+                            editor.set_focus(EditorRegion::Swatches);
+                            editor.set_swatch_highlight(i);
+                        }
+                        Some(overlay::GroupEditorHit::Action(i)) => {
+                            editor.set_focus(EditorRegion::Actions);
+                            editor.set_action_highlight(i);
+                        }
+                        Some(overlay::GroupEditorHit::NameField) | None => {}
+                    }
+                }
+            }
+            state.window.request_redraw();
+            return;
+        }
+        // Popover de destino: hover move o realce entre as linhas
+        // visíveis -- sem rolar por hover, só o realce por teclado arrasta
+        // a janela visível (nota de `overlay.rs`).
+        if let Some(popover) = &mut state.move_to_group {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let layout =
+                overlay::layout_move_to_group(popover, state.logical_width, state.logical_height);
+            if let Some(index) = overlay::move_to_group_hit(&layout, logical_point) {
+                popover.set_highlight(index);
             }
             state.window.request_redraw();
             return;
@@ -1701,11 +2297,78 @@ impl App {
                 && let Some(index) = hit
                 && context_menu::TAB_MENU_ITEMS[index].enabled
             {
-                self.run_menu_action(
-                    window_id,
-                    menu.tab,
-                    context_menu::TAB_MENU_ITEMS[index].action,
+                self.run_menu_action(window_id, menu, context_menu::TAB_MENU_ITEMS[index].action);
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
+        // Menu de contexto de grupo: mesmo padrão do menu de aba acima,
+        // sem item desabilitado (`group_menu.rs`, nota do módulo).
+        if let Some(menu) = state.group_context_menu {
+            let is_collapsed = state
+                .workspace
+                .group(menu.group)
+                .is_some_and(|g| g.is_collapsed());
+            let tab_count = state
+                .workspace
+                .group(menu.group)
+                .map(|g| g.tabs().len())
+                .unwrap_or(0);
+            let items = group_menu::group_action_items(is_collapsed, tab_count);
+            let layout = overlay::layout_group_menu(
+                &menu,
+                items.len(),
+                state.logical_width,
+                state.logical_height,
+            );
+            let hit = overlay::group_menu_hit(&layout, logical_point);
+            state.group_context_menu = None;
+            if button == MouseButton::Left
+                && let Some(index) = hit
+            {
+                state.run_group_action(
+                    menu.group,
+                    items[index].action,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
                 );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
+        // Editor de grupo: clique no campo/swatch/ação; fora fecha.
+        if state.group_editor.is_some() {
+            self.dispatch_group_editor_click(window_id, logical_point, button);
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
+        // Popover de destino do `tab.move_to_group`: clique numa linha
+        // move, qualquer outro fecha.
+        if let Some(popover) = &state.move_to_group {
+            let layout =
+                overlay::layout_move_to_group(popover, state.logical_width, state.logical_height);
+            let hit = overlay::move_to_group_hit(&layout, logical_point);
+            let tab = popover.tab;
+            if button == MouseButton::Left
+                && let Some(index) = hit
+            {
+                let mut popover_at_index = state.move_to_group.take().expect("checado acima");
+                popover_at_index.set_highlight(index);
+                let target = popover_at_index.selected();
+                state.run_move_target(tab, target);
+            } else {
+                state.move_to_group = None;
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -1827,6 +2490,7 @@ impl App {
             state.workspace.active_tab(),
             &state.rename,
             &state.selection,
+            state.group_editor.as_ref(),
             &style,
             bar_width,
             overflow,
@@ -1866,6 +2530,71 @@ impl App {
             let layout =
                 overlay::layout_context_menu(menu, state.logical_width, state.logical_height);
             popover.extend(overlay::paint_context_menu(&layout, menu));
+        }
+        if let Some(menu) = &state.group_context_menu {
+            let is_collapsed = state
+                .workspace
+                .group(menu.group)
+                .is_some_and(|g| g.is_collapsed());
+            let tab_count = state
+                .workspace
+                .group(menu.group)
+                .map(|g| g.tabs().len())
+                .unwrap_or(0);
+            let items = group_menu::group_action_items(is_collapsed, tab_count);
+            let layout = overlay::layout_group_menu(
+                menu,
+                items.len(),
+                state.logical_width,
+                state.logical_height,
+            );
+            popover.extend(overlay::paint_group_menu(
+                &layout,
+                &items,
+                menu.highlighted(),
+            ));
+        }
+        if let Some(editor) = &state.group_editor {
+            let anchor_x = state.group_pill_screen_x(editor.group, gpu);
+            let layout = overlay::layout_group_editor(
+                anchor_x,
+                h,
+                state.logical_width,
+                state.logical_height,
+            );
+            let current_color_index = state
+                .workspace
+                .group(editor.group)
+                .and_then(|g| g.color())
+                .map(GroupColor::index)
+                .unwrap_or(0);
+            let is_collapsed = state
+                .workspace
+                .group(editor.group)
+                .is_some_and(|g| g.is_collapsed());
+            let tab_count = state
+                .workspace
+                .group(editor.group)
+                .map(|g| g.tabs().len())
+                .unwrap_or(0);
+            popover.extend(overlay::paint_group_editor(
+                &layout,
+                editor,
+                current_color_index,
+                is_collapsed,
+                tab_count,
+                gpu.text_measurer(),
+            ));
+        }
+        if let Some(mv) = &state.move_to_group {
+            let layout =
+                overlay::layout_move_to_group(mv, state.logical_width, state.logical_height);
+            popover.extend(overlay::paint_move_to_group(
+                &layout,
+                mv,
+                &state.workspace,
+                gpu.text_measurer(),
+            ));
         }
         if !popover.is_empty() {
             frame.set_layer(Layer::Popover, popover);

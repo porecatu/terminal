@@ -7,7 +7,7 @@
 //! `action` é um enum fechado, não uma closure: o diálogo é dado puro, sem
 //! capturar estado de `App` dentro dele.
 
-use porecatu_core::TabId;
+use porecatu_core::{GroupId, TabId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogButton {
@@ -16,7 +16,10 @@ pub enum DialogButton {
 }
 
 /// O que confirmar faz de verdade -- resolvido por `lib.rs`, que já tem
-/// acesso ao `WindowState`/`App` que o diálogo não carrega.
+/// acesso ao `WindowState`/`App` que o diálogo não carrega. Os três
+/// diálogos do v1 (RF-10.19) são todos de fechamento -- o prefixo comum
+/// não é redundância, é coincidência de escopo.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogAction {
     /// RF-1.6 (ADR-0017): fechar aba com tela alternativa ou reporte de
@@ -24,6 +27,10 @@ pub enum DialogAction {
     CloseTab(TabId),
     /// RF-10.23 (ADR-0015): fechar janela com mais de uma aba.
     CloseWindow,
+    /// RF-2.22/RF-2.23 (`group.close_all`): fecha todas as abas do grupo.
+    /// Confirmação **sempre**, não configurável -- "a ação mais destrutiva
+    /// da interface" (ADR-0023).
+    CloseGroup(GroupId),
 }
 
 #[derive(Debug, Clone, PartialEq)]

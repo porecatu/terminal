@@ -448,6 +448,35 @@ impl Workspace {
         Some(new_group_id)
     }
 
+    /// RF-2.20 (`tab.move_to_group`): move `tab` pro fim de `group`, um
+    /// grupo já existente. Diferente de `move_tab` -- que só reordena
+    /// **dentro** do mesmo grupo, de propósito (ADR-0006) --, este cruza
+    /// fronteira de grupo: o grupo de origem some se ficar vazio e dois
+    /// runs implícitos adjacentes se fundem, mesma limpeza de `close_tab`
+    /// (`normalize_groups`). `false` se `tab` ou `group` não existem, ou se
+    /// `tab` já está em `group` (no-op, não erro).
+    pub fn move_tab_to_group(&mut self, tab: TabId, group: GroupId) -> bool {
+        if self.tab(tab).is_none() || self.group(group).is_none() {
+            return false;
+        }
+        let Some(from_index) = self
+            .groups
+            .iter()
+            .position(|g| g.position_of(tab).is_some())
+        else {
+            return false;
+        };
+        if self.groups[from_index].id() == group {
+            return false;
+        }
+        self.groups[from_index].remove(tab);
+        let to_index = self.group_index(group).expect("checado acima");
+        let pos = self.groups[to_index].tabs().len();
+        self.groups[to_index].insert(pos, tab);
+        self.normalize_groups();
+        true
+    }
+
     /// RF-2.6: desagrupa. As abas voltam a um run implícito na posição
     /// onde o grupo estava, fundido com vizinhos implícitos se houver
     /// (ADR-0020 §1, "Fusão"). `false` sobre grupo implícito ou `id`
@@ -853,6 +882,38 @@ mod tests {
         }
         assert_eq!(counts.iter().filter(|&&c| c == 2).count(), 1);
         assert_eq!(counts.iter().filter(|&&c| c == 1).count(), 5);
+    }
+
+    // Cenário de aceite (RF-2.20): mover aba pra outro grupo cruza
+    // fronteira e limpa o run implícito de origem se ele ficar vazio.
+    #[test]
+    fn move_tab_to_group_crosses_group_boundary() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let dest = ws.group_tabs(&[b], "dest", GroupColor::Blue).unwrap();
+
+        assert!(ws.move_tab_to_group(a, dest));
+        assert_eq!(ws.group(dest).unwrap().tabs(), [b, a]);
+        // o run implícito de origem ficou vazio e some.
+        assert_eq!(ws.groups().len(), 1);
+    }
+
+    #[test]
+    fn move_tab_to_group_is_noop_for_own_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_of_tab(a).unwrap();
+        assert!(!ws.move_tab_to_group(a, group));
+    }
+
+    #[test]
+    fn move_tab_to_group_fails_for_unknown_ids() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "g", GroupColor::Blue).unwrap();
+        assert!(!ws.move_tab_to_group(TabId::new(999), group));
+        assert!(!ws.move_tab_to_group(a, GroupId::new(999)));
     }
 
     // Cenário de aceite: desagrupar preserva ordem e posição.
