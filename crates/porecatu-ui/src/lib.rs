@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use porecatu_core::TabId;
-use porecatu_render::Renderer;
+use porecatu_render::{Frame, GpuContext, Layer, WindowSurface};
 use porecatu_term::{
     GridSnapshot, Modifiers, PtySize, SpawnConfig, TermEvent, TermParams, Terminal,
 };
@@ -45,7 +45,12 @@ struct Wakeup {
 
 struct App {
     window: Option<Arc<Window>>,
-    renderer: Option<Renderer>,
+    gpu: Option<GpuContext>,
+    window_surface: Option<WindowSurface>,
+    /// Pixels físicos por pixel lógico (`window.scale_factor()`). A grade
+    /// e o `Frame` trabalham em lógico; só `WindowSurface` converte para
+    /// físico, no único ponto que o ADR-0018 permite.
+    scale: f32,
     proxy: EventLoopProxy<Wakeup>,
     tab: TabId,
     terminal: Option<Terminal>,
@@ -67,13 +72,15 @@ impl App {
     fn new(proxy: EventLoopProxy<Wakeup>) -> Self {
         Self {
             window: None,
-            renderer: None,
+            gpu: None,
+            window_surface: None,
+            scale: 1.0,
             proxy,
             tab: TabId::new(0),
             terminal: None,
             snapshot: GridSnapshot::default(),
             // Substituído antes de qualquer render real, assim que o
-            // `Renderer` existe e a métrica de fonte pode ser medida.
+            // `GpuContext` existe e a métrica de fonte pode ser medida.
             cell_metrics: CellMetrics {
                 width: 1.0,
                 height: 1.0,
@@ -123,16 +130,19 @@ impl App {
         }
     }
 
-    /// Recalcula linhas/colunas a partir do tamanho físico (px) e da
-    /// métrica de célula já medida, e propaga pro `Renderer` e pro
-    /// terminal (motor + PTY) -- Etapa 5: "recalcular grade e propagar
-    /// para o PTY".
+    /// Recalcula linhas/colunas a partir do tamanho lógico (px físico /
+    /// escala) e da métrica de célula já medida (também lógica), e
+    /// propaga pra `WindowSurface` e pro terminal (motor + PTY) -- Etapa
+    /// 5: "recalcular grade e propagar para o PTY". `WindowSurface` é quem
+    /// converte de volta para físico (ADR-0018).
     fn resize_to(&mut self, width: u32, height: u32) {
-        if let Some(renderer) = &mut self.renderer {
-            renderer.resize(width, height);
+        if let (Some(gpu), Some(window_surface)) = (&self.gpu, &mut self.window_surface) {
+            window_surface.resize(gpu, width, height, self.scale);
         }
-        let cols = ((width as f32 / self.cell_metrics.width) as usize).max(MIN_GRID);
-        let rows = ((height as f32 / self.cell_metrics.height) as usize).max(MIN_GRID);
+        let logical_width = width as f32 / self.scale;
+        let logical_height = height as f32 / self.scale;
+        let cols = ((logical_width / self.cell_metrics.width) as usize).max(MIN_GRID);
+        let rows = ((logical_height / self.cell_metrics.height) as usize).max(MIN_GRID);
         if let Some(terminal) = &self.terminal {
             terminal.resize(rows, cols);
         }
@@ -169,21 +179,33 @@ impl ApplicationHandler<Wakeup> for App {
         // nada e a tecla morta chega crua (ADR-0008).
         window.set_ime_allowed(true);
 
+        // `inner_size()` do `winit` é físico; `scale_factor()` converte
+        // pra lógico, que é o que a grade e o `Frame` usam daqui em diante
+        // -- só `WindowSurface` volta a físico (ADR-0018).
         let size = window.inner_size();
-        let mut renderer = Renderer::new(Arc::clone(&window), size.width, size.height);
+        let scale = window.scale_factor() as f32;
+        let (mut gpu, mut window_surface) =
+            GpuContext::new(Arc::clone(&window), size.width, size.height);
+        window_surface.resize(&gpu, size.width, size.height, scale);
 
-        let (cell_width, cell_height) =
-            renderer.measure_mono_cell(FONT_SIZE_PX, FONT_SIZE_PX * LINE_HEIGHT_MULTIPLIER);
+        let (cell_width, cell_height) = gpu
+            .text_measurer()
+            .measure_mono_cell(FONT_SIZE_PX, FONT_SIZE_PX * LINE_HEIGHT_MULTIPLIER);
         self.cell_metrics = CellMetrics {
             width: cell_width,
             height: cell_height,
         };
-        let cols = ((size.width as f32 / cell_width) as usize).max(MIN_GRID);
-        let rows = ((size.height as f32 / cell_height) as usize).max(MIN_GRID);
+        self.scale = scale;
+
+        let logical_width = size.width as f32 / scale;
+        let logical_height = size.height as f32 / scale;
+        let cols = ((logical_width / cell_width) as usize).max(MIN_GRID);
+        let rows = ((logical_height / cell_height) as usize).max(MIN_GRID);
 
         self.spawn_terminal(&window, rows, cols);
         self.window = Some(window);
-        self.renderer = Some(renderer);
+        self.gpu = Some(gpu);
+        self.window_surface = Some(window_surface);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
@@ -256,7 +278,8 @@ impl ApplicationHandler<Wakeup> for App {
             WindowEvent::Resized(size) => {
                 self.resize_to(size.width, size.height);
             }
-            WindowEvent::ScaleFactorChanged { .. } => {
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.scale = scale_factor as f32;
                 // O novo tamanho físico só é conhecido após o resize aplicado
                 // pelo SO; reler `inner_size()` cobre o caso de plataformas que
                 // não emitem `Resized` em seguida.
@@ -344,10 +367,13 @@ impl ApplicationHandler<Wakeup> for App {
                 if let Some(terminal) = &self.terminal {
                     terminal.snapshot_into(&mut self.snapshot);
                 }
-                if let Some(renderer) = &mut self.renderer {
+                if let (Some(gpu), Some(window_surface)) = (&mut self.gpu, &mut self.window_surface)
+                {
                     let primitives =
                         paint::build_primitives(&self.snapshot, self.cell_metrics, FONT_SIZE_PX);
-                    renderer.render(palette::TERM_BACKGROUND, &primitives);
+                    let mut frame = Frame::new();
+                    frame.set_layer(Layer::Grid, primitives);
+                    window_surface.render(gpu, palette::TERM_BACKGROUND, &frame);
                 }
             }
             _ => {}

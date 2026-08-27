@@ -1,44 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Pipeline de texto: `glyphon`, atlas de glyphs em cache entre frames
-//! (docs/arquitetura.md seção 5). Fontes do design embutidas no binário
-//! (ADR-0016) -- nenhuma delas depende do sistema, e vencem qualquer cópia
-//! instalada porque o `fontdb` deste crate nunca chama
-//! `load_system_fonts`: só existem as cinco faces abaixo.
+//! (docs/arquitetura.md seção 5). Dividido pelo ADR-0018: `TextAtlas`,
+//! `Cache` e `SwashCache` são recursos compartilhados de `GpuContext`, um
+//! por processo; este módulo é o estado por janela -- um `TextRenderer`
+//! por camada, reusado entre frames, que **empresta** o `FontSystem` de
+//! [`crate::TextMeasurer`] em vez de possuir o seu próprio -- um só
+//! `FontSystem` carregando as cinco faces embutidas (ADR-0016), nunca
+//! dois.
 
 use glyphon::{
-    Attrs, Buffer, Cache, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport, Weight, fontdb,
+    Buffer, FontSystem, Metrics, Shaping, SwashCache, TextArea, TextAtlas, TextBounds,
+    TextRenderer, Viewport,
 };
 
-use crate::primitives::{FontFace, SansWeight, TextRun};
-
-const MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexMono-Regular.ttf");
-const MONO_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexMono-Medium.ttf");
-const SANS_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexSans-Regular.ttf");
-const SANS_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexSans-Medium.ttf");
-const SANS_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexSans-SemiBold.ttf");
-
-const MONO_FAMILY: &str = "IBM Plex Mono";
-const SANS_FAMILY: &str = "IBM Plex Sans";
-
-fn attrs_for(font: FontFace) -> Attrs<'static> {
-    match font {
-        FontFace::Mono { bold } => Attrs::new()
-            .family(Family::Name(MONO_FAMILY))
-            .weight(if bold { Weight::MEDIUM } else { Weight::NORMAL }),
-        FontFace::Sans { weight } => {
-            let weight = match weight {
-                SansWeight::Regular => Weight::NORMAL,
-                SansWeight::Medium => Weight::MEDIUM,
-                SansWeight::SemiBold => Weight::SEMIBOLD,
-            };
-            Attrs::new()
-                .family(Family::Name(SANS_FAMILY))
-                .weight(weight)
-        }
-    }
-}
+use crate::frame::{Layer, ResolvedText};
+use crate::primitives::scale_rect;
+use crate::text_measurer::attrs_for;
 
 fn color_to_cosmic(color: wgpu::Color) -> glyphon::Color {
     glyphon::Color::rgba(
@@ -49,122 +27,142 @@ fn color_to_cosmic(color: wgpu::Color) -> glyphon::Color {
     )
 }
 
-pub struct TextPipeline {
-    font_system: FontSystem,
-    swash_cache: SwashCache,
-    atlas: TextAtlas,
+/// Recorte da camada, já em pixels físicos, na forma que o `glyphon`
+/// espera. Ausência de clip usa `TextBounds::default()` -- área
+/// (praticamente) irrestrita, sem custo de conversão.
+fn to_text_bounds(clip: Option<crate::primitives::Rect>, scale: f32) -> TextBounds {
+    let Some(rect) = clip else {
+        return TextBounds::default();
+    };
+    let physical = scale_rect(rect, scale);
+    TextBounds {
+        left: physical.x as i32,
+        top: physical.y as i32,
+        right: (physical.x + physical.width) as i32,
+        bottom: (physical.y + physical.height) as i32,
+    }
+}
+
+/// Um `TextRenderer` e os `Buffer`s shapados do frame corrente de uma
+/// camada -- mantidos vivos até `render` usar as `TextArea`s que apontam
+/// para eles.
+struct TextLayerState {
     renderer: TextRenderer,
-    viewport: Viewport,
-    // Um `Buffer` por `TextRun` do frame, reconstruído a cada `prepare` --
-    // mantido vivo até `render` usar as `TextArea`s que apontam para eles.
-    // Reuso de buffer entre frames (só re-shape quando o texto muda) fica
-    // para uma otimização futura; por ora, corretude primeiro.
     buffers: Vec<Buffer>,
 }
 
-impl TextPipeline {
-    pub fn new(
+/// Estado por janela: um [`TextLayerState`] por camada.
+pub(crate) struct TextWindowState {
+    layers: [TextLayerState; 5],
+}
+
+impl TextWindowState {
+    pub(crate) fn new(device: &wgpu::Device, atlas: &mut TextAtlas) -> Self {
+        let layers = std::array::from_fn(|_| TextLayerState {
+            renderer: TextRenderer::new(atlas, device, wgpu::MultisampleState::default(), None),
+            buffers: Vec::new(),
+        });
+        Self { layers }
+    }
+
+    /// Shapa e prepara o texto de `layer` para o frame corrente. `scale`
+    /// converte de pixels lógicos para físicos -- shapado direto no
+    /// tamanho físico, nunca escalado depois de rasterizado (ADR-0018:
+    /// glyph escalado depois de rasterizado sai borrado em HiDPI).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_layer(
+        &mut self,
+        layer: Layer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        cache: &Cache,
-        format: wgpu::TextureFormat,
-    ) -> Self {
-        let mut db = fontdb::Database::new();
-        for bytes in [
-            MONO_REGULAR,
-            MONO_MEDIUM,
-            SANS_REGULAR,
-            SANS_MEDIUM,
-            SANS_SEMIBOLD,
-        ] {
-            db.load_font_data(bytes.to_vec());
-        }
-        let font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+        font_system: &mut FontSystem,
+        atlas: &mut TextAtlas,
+        swash_cache: &mut SwashCache,
+        viewport: &Viewport,
+        resolved: &[ResolvedText],
+        scale: f32,
+    ) {
+        let state = &mut self.layers[layer.index()];
+        state.buffers.clear();
+        state.buffers.reserve(resolved.len());
 
-        let swash_cache = SwashCache::new();
-        let mut atlas = TextAtlas::new(device, queue, cache, format);
-        let renderer =
-            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
-        let viewport = Viewport::new(device, cache);
-
-        Self {
-            font_system,
-            swash_cache,
-            atlas,
-            renderer,
-            viewport,
-            buffers: Vec::new(),
-        }
-    }
-
-    pub fn resize(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
-        self.viewport.update(queue, Resolution { width, height });
-    }
-
-    /// Largura de avanço de `M` na mono e altura de linha pedida -- é o que
-    /// define a largura/altura de célula da grade (cuidado do roadmap da
-    /// Etapa 4: a grade é derivada da métrica de fonte, não o contrário).
-    pub fn measure_mono_cell(&mut self, size_px: f32, line_height_px: f32) -> (f32, f32) {
-        let metrics = Metrics::new(size_px, line_height_px.max(1.0));
-        let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(Some(size_px * 4.0), Some(line_height_px * 2.0));
-        let attrs = attrs_for(FontFace::Mono { bold: false });
-        buffer.set_text("M", &attrs, Shaping::Advanced, None);
-        buffer.shape_until_scroll(&mut self.font_system, false);
-
-        let width = buffer
-            .layout_runs()
-            .next()
-            .and_then(|run| run.glyphs.first())
-            .map(|glyph| glyph.w)
-            .unwrap_or(size_px * 0.6);
-
-        (width, line_height_px)
-    }
-
-    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, runs: &[TextRun]) {
-        self.buffers.clear();
-        self.buffers.reserve(runs.len());
-
-        for run in runs {
-            let line_height = run.size_px * 1.2;
-            let metrics = Metrics::new(run.size_px, line_height);
-            let mut buffer = Buffer::new(&mut self.font_system, metrics);
-            buffer.set_size(
-                Some(run.text.len() as f32 * run.size_px * 2.0 + 1.0),
-                Some(line_height),
-            );
-            let attrs = attrs_for(run.font);
-            buffer.set_text(&run.text, &attrs, Shaping::Advanced, None);
-            buffer.shape_until_scroll(&mut self.font_system, false);
-            self.buffers.push(buffer);
+        for item in resolved {
+            let size_px = item.run.size_px * scale;
+            let metrics = Metrics::new(size_px, size_px * 1.2);
+            let mut buffer = Buffer::new(font_system, metrics);
+            // Sem limite de largura: cada `TextRun` é um trecho de mesmo
+            // estilo numa linha só, não algo que deva quebrar.
+            buffer.set_size(None, None);
+            let attrs = attrs_for(item.run.font);
+            buffer.set_text(&item.run.text, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(font_system, false);
+            state.buffers.push(buffer);
         }
 
-        let areas = runs
+        let areas = resolved
             .iter()
-            .zip(self.buffers.iter())
-            .map(|(run, buffer)| TextArea {
+            .zip(state.buffers.iter())
+            .map(|(item, buffer)| TextArea {
                 buffer,
-                left: run.origin.0,
-                top: run.origin.1,
+                left: item.run.origin.0 * scale,
+                top: item.run.origin.1 * scale,
                 scale: 1.0,
-                bounds: TextBounds::default(),
-                default_color: color_to_cosmic(run.color),
+                bounds: to_text_bounds(item.clip, scale),
+                default_color: color_to_cosmic(item.run.color),
                 custom_glyphs: &[],
             });
 
-        let _ = self.renderer.prepare(
+        let _ = state.renderer.prepare(
             device,
             queue,
-            &mut self.font_system,
-            &mut self.atlas,
-            &self.viewport,
+            font_system,
+            atlas,
+            viewport,
             areas,
-            &mut self.swash_cache,
+            swash_cache,
         );
     }
 
-    pub fn render<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
-        let _ = self.renderer.render(&self.atlas, &self.viewport, pass);
+    pub(crate) fn render_layer<'pass>(
+        &'pass self,
+        layer: Layer,
+        atlas: &'pass TextAtlas,
+        viewport: &'pass Viewport,
+        pass: &mut wgpu::RenderPass<'pass>,
+    ) {
+        let _ = self.layers[layer.index()]
+            .renderer
+            .render(atlas, viewport, pass);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::primitives::Rect;
+
+    #[test]
+    fn no_clip_uses_default_bounds() {
+        assert_eq!(to_text_bounds(None, 1.0), TextBounds::default());
+    }
+
+    #[test]
+    fn clip_scales_and_converts_to_bounds() {
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let bounds = to_text_bounds(Some(rect), 2.0);
+        assert_eq!(
+            bounds,
+            TextBounds {
+                left: 20,
+                top: 40,
+                right: 80,
+                bottom: 120,
+            }
+        );
     }
 }

@@ -73,3 +73,15 @@ pub enum Primitive {
     PushClip(Rect),
     PopClip,
 }
+
+/// Converte de pixels lógicos (contrato deste módulo) para físicos --
+/// usado só na fronteira `WindowSurface`, o único ponto de conversão que o
+/// ADR-0018 exige.
+pub(crate) fn scale_rect(rect: Rect, scale: f32) -> Rect {
+    Rect {
+        x: rect.x * scale,
+        y: rect.y * scale,
+        width: rect.width * scale,
+        height: rect.height * scale,
+    }
+}
