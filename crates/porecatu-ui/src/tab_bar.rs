@@ -3,11 +3,13 @@
 //! Layout e hit-testing da barra de abas -- função pura, sem `wgpu` e sem
 //! janela (docs/arquitetura.md seção 7): `(Workspace, TabBarStyle,
 //! TextMeasurer) -> TabBarLayout`. Cobre a geometria de trilha da espec.
-//! visual §2.2, §2.3, §2.5, §2.6 e, desde a Etapa 5, o encolhimento de
+//! visual §2.2, §2.3, §2.5, §2.6 e, desde a Etapa 5 da F2, o encolhimento de
 //! rótulo e a rolagem do §2.18 (`fit_width`/`overflow_state`) e a geometria
-//! de arraste do §2.19 (`drag_target_index`). Pintura (`chrome.rs`) e
-//! wiring de clique/rename/arraste (`lib.rs`) ficam do outro lado da
-//! fronteira -- este módulo não sabe de `wgpu` nem de `winit`.
+//! de arraste do §2.19 (`drag_target_index`). Desde a F3 etapa 3, também a
+//! geometria da pílula de grupo (§2.4) e a participação dela na ordem de
+//! cedência do overflow. Pintura (`chrome.rs`) e wiring de clique/rename/
+//! arraste (`lib.rs`) ficam do outro lado da fronteira -- este módulo não
+//! sabe de `wgpu` nem de `winit`.
 //!
 //! `porecatu-config` ainda não existe: os valores de [`TabBarStyle`] são
 //! constantes com a chave TOML de origem no comentário, no mesmo padrão de
@@ -21,6 +23,16 @@ use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer};
 const LABEL_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
+
+/// Espec. §2.4, `[appearance.groups] label_font_size = 12.0`, peso 500
+/// (item 2 da pílula: "Nome 12px/500").
+pub(crate) const PILL_NAME_FONT: FontFace = FontFace::Sans {
+    weight: SansWeight::Medium,
+};
+/// Espec. §2.4, item 3: "contador mono 10px". Sem chave própria de fonte no
+/// TOML -- só cor/fundo/raio (`count_*`) têm chave.
+pub(crate) const PILL_COUNT_FONT: FontFace = FontFace::Mono { bold: false };
+pub(crate) const PILL_COUNT_FONT_SIZE: f32 = 10.0;
 
 /// Espec. §2.17: "ponto circular 6×6". Consome largura do rótulo (mais o
 /// `internal_gap` reaproveitado como o `gap: 8` da mesma seção) -- não é
@@ -82,6 +94,34 @@ pub struct TabBarStyle {
     /// gap + botão de fechar) sobram `49px` de rótulo no piso, calculado
     /// por [`fit_width`] a partir deste valor, não hardcoded direto.
     pub min_width: f32,
+    /// `[appearance.groups] label_padding_left` -- pílula (espec. §2.4).
+    pub pill_padding_left: f32,
+    /// `[appearance.groups] label_padding_right`
+    pub pill_padding_right: f32,
+    /// Espec. §2.4: "gap: 7" entre swatch/nome/contador/caret da pílula.
+    /// Sem chave própria no TOML (mesmo padrão de `internal_gap`).
+    pub pill_gap: f32,
+    /// `[appearance.groups] swatch_size`
+    pub pill_swatch_size: f32,
+    /// `[appearance.groups] label_font_size` -- fonte do nome da pílula.
+    pub pill_font_size: f32,
+    /// `[appearance.groups] label_max_width` -- teto do nome (RF-2.12): o
+    /// da aba (180) menos os 41px de cromo da §2.18, valor citado direto da
+    /// espec, não recalculado (a nota do TOML já registra a derivação).
+    pub pill_name_max_width: f32,
+    /// `[appearance.groups] label_min_width` -- piso do nome, segundo
+    /// degrau da ordem de cedência do §2.18 (depois do rótulo da aba,
+    /// antes da rolagem da trilha).
+    pub pill_name_min_width: f32,
+    /// Espec. §2.4, item 3: "padding: 1px 6px" do contador. Sem chave
+    /// própria (só cor/raio do contador têm chave no TOML).
+    pub pill_count_padding_x: f32,
+    pub pill_count_padding_y: f32,
+    /// Espec. §2.4, item 4: "▶ 8px". Usado como largura reservada no flex
+    /// da pílula e como tamanho de fonte do glyph -- o caret não tem caixa
+    /// de acerto própria distinta do glyph (diferente do botão de fechar da
+    /// aba). Sem chave própria no TOML.
+    pub pill_caret_size: f32,
 }
 
 impl TabBarStyle {
@@ -101,6 +141,16 @@ impl TabBarStyle {
         show_new_tab_button: true,
         font_size: 12.5,
         min_width: 90.0,
+        pill_padding_left: 8.0,
+        pill_padding_right: 9.0,
+        pill_gap: 7.0,
+        pill_swatch_size: 8.0,
+        pill_font_size: 12.0,
+        pill_name_max_width: 140.0,
+        pill_name_min_width: 60.0,
+        pill_count_padding_x: 6.0,
+        pill_count_padding_y: 1.0,
+        pill_caret_size: 8.0,
     };
 }
 
@@ -142,14 +192,37 @@ pub struct TabRect {
 }
 
 /// Abas de um grupo, com o retângulo do wrapper que as envolve (espec.
-/// §2.3). Na F2 só existe o grupo implícito -- sem pílula, sem nome, sem
-/// cor -- mas a estrutura já suporta múltiplos grupos porque
-/// `Workspace::groups()` já suporta (F3 os preenche).
+/// §2.3). `pill` é `None` para o grupo implícito -- "abas sem grupo usam um
+/// wrapper sem pílula" (espec. §2.3) -- e `Some` para grupo explícito.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupWrapperRect {
     pub id: GroupId,
     pub rect: Rect,
+    pub pill: Option<GroupPillRect>,
     pub tabs: Vec<TabRect>,
+}
+
+/// Geometria da pílula de grupo (espec. §2.4): swatch, nome (já truncado),
+/// contador de abas e caret de colapso. A cor resolvida (swatch, tingimento
+/// do wrapper) não mora aqui -- só geometria; `chrome.rs` resolve
+/// `GroupColor` via `palette::group_color` no momento de pintar, no mesmo
+/// padrão de `TabRect` (que também não carrega cor).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupPillRect {
+    pub rect: Rect,
+    pub swatch: Rect,
+    /// Origem do texto do nome (já truncado com reticências, RF-2.12) --
+    /// sem retângulo próprio, mesmo padrão do rótulo da aba.
+    pub name_origin: (f32, f32),
+    pub name: String,
+    /// Decide o tooltip do ADR-0019 (nome completo), mesmo padrão de
+    /// `TabRect::label_truncated`.
+    pub name_truncated: bool,
+    pub count_rect: Rect,
+    /// Contagem de abas do grupo, já formatada (espec. §2.4: "sempre
+    /// desenhado, conteúdo idêntico" -- não some quando expandido).
+    pub count_text: String,
+    pub caret_rect: Rect,
 }
 
 /// O layout inteiro da trilha: um por redraw da barra, construído por
@@ -196,6 +269,82 @@ pub fn layout(
         }
         let group_start_x = x;
         let mut inner_x = x + style.wrapper_padding;
+
+        // Pílula (espec. §2.3/§2.4): só grupo explícito -- "abas sem grupo
+        // usam um wrapper sem pílula". Fica antes das abas no flex do
+        // wrapper, com o mesmo `gap` que separa as abas entre si (§2.3:
+        // "gap: 4" é o único gap do wrapper, aplicado a todo filho direto).
+        let pill = if group.is_explicit() {
+            let pill_y = style.wrapper_padding;
+            let pill_height = style.tab_height;
+            let mut px = inner_x + style.pill_padding_left;
+
+            let swatch = Rect {
+                x: px,
+                y: pill_y + (pill_height - style.pill_swatch_size) / 2.0,
+                width: style.pill_swatch_size,
+                height: style.pill_swatch_size,
+            };
+            px += style.pill_swatch_size + style.pill_gap;
+
+            let (name, name_truncated) = measurer.truncate(
+                group.name().unwrap_or_default(),
+                PILL_NAME_FONT,
+                style.pill_font_size,
+                style.pill_name_max_width,
+            );
+            let name_width = measurer.measure_width(&name, PILL_NAME_FONT, style.pill_font_size);
+            let name_origin = (px, pill_y + (pill_height - style.pill_font_size) / 2.0);
+            px += name_width + style.pill_gap;
+
+            // Espec. §2.4: "sempre desenhado, conteúdo idêntico" -- a
+            // contagem não muda com colapso, `show_tab_count_when_collapsed`
+            // só existiria a partir de `porecatu-config` (F4).
+            let count_text = group.tabs().len().to_string();
+            let count_text_width =
+                measurer.measure_width(&count_text, PILL_COUNT_FONT, PILL_COUNT_FONT_SIZE);
+            let count_width = count_text_width + style.pill_count_padding_x * 2.0;
+            let count_height = PILL_COUNT_FONT_SIZE + style.pill_count_padding_y * 2.0;
+            let count_rect = Rect {
+                x: px,
+                y: pill_y + (pill_height - count_height) / 2.0,
+                width: count_width,
+                height: count_height,
+            };
+            px += count_width + style.pill_gap;
+
+            let caret_rect = Rect {
+                x: px,
+                y: pill_y + (pill_height - style.pill_caret_size) / 2.0,
+                width: style.pill_caret_size,
+                height: style.pill_caret_size,
+            };
+            px += style.pill_caret_size + style.pill_padding_right;
+
+            let pill_rect = Rect {
+                x: inner_x,
+                y: pill_y,
+                width: px - inner_x,
+                height: pill_height,
+            };
+            inner_x = px;
+            Some(GroupPillRect {
+                rect: pill_rect,
+                swatch,
+                name_origin,
+                name,
+                name_truncated,
+                count_rect,
+                count_text,
+                caret_rect,
+            })
+        } else {
+            None
+        };
+        if pill.is_some() {
+            inner_x += style.tab_gap;
+        }
+
         let mut tabs = Vec::with_capacity(group.tabs().len());
 
         for (index, &tab_id) in group.tabs().iter().enumerate() {
@@ -295,6 +444,7 @@ pub fn layout(
         groups.push(GroupWrapperRect {
             id: group.id(),
             rect: wrapper_rect,
+            pill,
             tabs,
         });
         x = inner_x;
@@ -335,17 +485,54 @@ fn label_floor(style: &TabBarStyle) -> f32 {
         .max(0.0)
 }
 
-/// Encolhe o teto do rótulo até caber em `available_width`, sem passar do
-/// piso (espec. §2.18: "quem encolhe é só o rótulo... nada mais cede").
-/// Abaixo do piso a trilha continua largando o mesmo `content_width` de
-/// antes -- é o sinal para [`overflow_state`] ativar a rolagem, não
-/// responsabilidade desta função (que permanece pura e sem estado de
-/// scroll, como o resto do módulo).
-///
-/// Busca binária sobre `label_max_width`: o `content_width` resultante de
-/// [`layout`] é não decrescente nesse parâmetro (nenhuma aba fica mais
-/// estreita ao aumentar o teto), então a busca converge para o maior teto
-/// que ainda cabe.
+/// Busca binária: o maior valor de um teto em `[floor, ceiling]` cujo
+/// `layout` resultante ainda cabe em `available_width`. Extraída de
+/// [`fit_width`] porque a ordem de cedência do §2.18 aplica o mesmo
+/// algoritmo duas vezes -- primeiro no rótulo da aba, depois no nome da
+/// pílula -- sobre parâmetros diferentes de [`TabBarStyle`]. `apply` recebe
+/// o teto candidato e devolve o `TabBarStyle` com ele aplicado; `content_width`
+/// de [`layout`] é não decrescente nesse parâmetro em ambos os casos
+/// (nenhum elemento fica mais estreito ao aumentar o próprio teto), então a
+/// busca converge para o maior teto que ainda cabe.
+fn shrink_to_fit(
+    workspace: &Workspace,
+    available_width: f32,
+    measurer: &mut TextMeasurer,
+    floor: f32,
+    ceiling: f32,
+    apply: impl Fn(f32) -> TabBarStyle,
+) -> TabBarLayout {
+    let mut lo = floor;
+    let mut hi = ceiling;
+    let mut best = layout(workspace, &apply(floor), measurer);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        let mid_layout = layout(workspace, &apply(mid), measurer);
+        if mid_layout.content_width <= available_width {
+            lo = mid;
+            best = mid_layout;
+        } else {
+            hi = mid;
+        }
+    }
+    best
+}
+
+/// Piso do nome da pílula (espec. §2.4, `[appearance.groups]
+/// label_min_width`): ao contrário de [`label_floor`], já é o valor final --
+/// a espec dá o piso do nome direto, não um piso de pílula inteira a
+/// decompor.
+fn pill_name_floor(style: &TabBarStyle) -> f32 {
+    style.pill_name_min_width.max(0.0)
+}
+
+/// Encolhe a trilha para caber em `available_width`, na ordem de cedência
+/// do §2.18: primeiro o rótulo da aba (teto 180, piso [`label_floor`]),
+/// depois -- só se o piso do rótulo ainda não bastar -- o nome da pílula de
+/// grupo (teto `pill_name_max_width`, piso [`pill_name_floor`]). Abaixo dos
+/// dois pisos a trilha continua largando o mesmo `content_width` de antes --
+/// é o sinal para [`overflow_state`] ativar a rolagem, não responsabilidade
+/// desta função (que permanece pura e sem estado de scroll).
 pub fn fit_width(
     workspace: &Workspace,
     style: &TabBarStyle,
@@ -357,35 +544,55 @@ pub fn fit_width(
         return full;
     }
 
-    let floor = label_floor(style);
-    let floor_style = TabBarStyle {
-        label_max_width: floor,
+    let label_floor = label_floor(style);
+    let labels_at_floor_style = TabBarStyle {
+        label_max_width: label_floor,
         ..*style
     };
-    let mut best = layout(workspace, &floor_style, measurer);
-    if best.content_width >= available_width {
-        // Nem no piso cabe -- devolve o layout do piso; rolar é com
-        // `overflow_state`.
-        return best;
+    let labels_at_floor = layout(workspace, &labels_at_floor_style, measurer);
+    if labels_at_floor.content_width <= available_width {
+        // Estágio 1 sozinho resolve: o rótulo cede em algum ponto entre o
+        // teto (180) e o piso, nome da pílula fica no teto o tempo todo.
+        return shrink_to_fit(
+            workspace,
+            available_width,
+            measurer,
+            label_floor,
+            style.label_max_width,
+            |label_max_width| TabBarStyle {
+                label_max_width,
+                ..*style
+            },
+        );
     }
 
-    let mut lo = floor;
-    let mut hi = style.label_max_width;
-    for _ in 0..12 {
-        let mid = (lo + hi) / 2.0;
-        let mid_style = TabBarStyle {
-            label_max_width: mid,
-            ..*style
-        };
-        let mid_layout = layout(workspace, &mid_style, measurer);
-        if mid_layout.content_width <= available_width {
-            lo = mid;
-            best = mid_layout;
-        } else {
-            hi = mid;
-        }
+    // Rótulo no piso ainda não basta -- pinado lá, o nome da pílula cede em
+    // seguida (espec §2.18: segundo degrau da ordem de cedência).
+    let pill_floor = pill_name_floor(style);
+    let both_at_floor_style = TabBarStyle {
+        label_max_width: label_floor,
+        pill_name_max_width: pill_floor,
+        ..*style
+    };
+    let both_at_floor = layout(workspace, &both_at_floor_style, measurer);
+    if both_at_floor.content_width > available_width {
+        // Nem nos dois pisos cabe -- devolve o layout no fundo da ordem de
+        // cedência; rolar é com `overflow_state`.
+        return both_at_floor;
     }
-    best
+
+    shrink_to_fit(
+        workspace,
+        available_width,
+        measurer,
+        pill_floor,
+        style.pill_name_max_width,
+        |pill_name_max_width| TabBarStyle {
+            label_max_width: label_floor,
+            pill_name_max_width,
+            ..*style
+        },
+    )
 }
 
 /// Estado de rolagem da trilha (espec. §2.18) para um `content_width` e uma
@@ -546,6 +753,8 @@ pub(crate) fn rect_contains(rect: Rect, point: (f32, f32)) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use porecatu_core::GroupColor;
+
     use super::*;
 
     fn measurer() -> TextMeasurer {
@@ -889,5 +1098,153 @@ mod tests {
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         assert_eq!(hit_test(&layout, (-100.0, -100.0)), None);
         assert_eq!(hit_test(&layout, (100_000.0, 100_000.0)), None);
+    }
+
+    #[test]
+    fn implicit_group_wrapper_has_no_pill() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert!(layout.groups[0].pill.is_none());
+    }
+
+    #[test]
+    fn explicit_group_wrapper_has_pill_before_first_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        ws.group_tabs(&[a, b], "trabalho", GroupColor::Blue);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let wrapper = &layout.groups[0];
+        let pill = wrapper.pill.as_ref().expect("grupo explícito tem pílula");
+        assert_eq!(pill.name, "trabalho");
+        assert!(!pill.name_truncated);
+        assert_eq!(pill.count_text, "2");
+        assert_eq!(
+            pill.rect.x,
+            wrapper.rect.x + TabBarStyle::DEFAULT.wrapper_padding
+        );
+        // primeira aba começa depois da pílula + o mesmo gap das abas entre
+        // si (espec. §2.3: "gap: 4" é o único gap do wrapper).
+        let first_tab = &wrapper.tabs[0];
+        assert_eq!(
+            first_tab.rect.x,
+            pill.rect.x + pill.rect.width + TabBarStyle::DEFAULT.tab_gap
+        );
+    }
+
+    #[test]
+    fn pill_elements_are_ordered_left_to_right_within_bounds() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "x", GroupColor::Red);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let pill = layout.groups[0].pill.as_ref().unwrap();
+        assert!(pill.swatch.x < pill.name_origin.0);
+        assert!(pill.name_origin.0 < pill.count_rect.x);
+        assert!(pill.count_rect.x < pill.caret_rect.x);
+        assert!(pill.caret_rect.x + pill.caret_rect.width <= pill.rect.x + pill.rect.width);
+    }
+
+    #[test]
+    fn long_group_name_is_truncated_with_ellipsis() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(
+            &[a],
+            "um nome de grupo bem comprido que estoura o teto de 140px da pilula",
+            GroupColor::Green,
+        );
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let pill = layout.groups[0].pill.as_ref().unwrap();
+        assert!(pill.name_truncated);
+        assert!(pill.name.ends_with('…'));
+        let width = m.measure_width(
+            &pill.name,
+            PILL_NAME_FONT,
+            TabBarStyle::DEFAULT.pill_font_size,
+        );
+        assert!(width <= TabBarStyle::DEFAULT.pill_name_max_width);
+    }
+
+    #[test]
+    fn pill_group_and_implicit_group_coexist_with_trilha_gap_between() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "g1", GroupColor::Red);
+        ws.new_tab(None, "bash", None, 0); // força um segundo run implícito
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(layout.groups.len(), 2);
+        assert!(layout.groups[0].pill.is_some());
+        assert!(layout.groups[1].pill.is_none());
+        let g0_end = layout.groups[0].rect.x + layout.groups[0].rect.width;
+        assert_eq!(
+            layout.groups[1].rect.x,
+            g0_end + TabBarStyle::DEFAULT.trilha_gap
+        );
+    }
+
+    #[test]
+    fn fit_width_shrinks_pill_name_after_label_floor_is_reached() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(
+            &[a],
+            "um nome de grupo razoavelmente longo",
+            GroupColor::Purple,
+        );
+        let mut m = measurer();
+
+        let full = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        // Piso duplo (rótulo da aba E nome da pílula no piso): descobre
+        // pedindo um `available_width` que nem ele cabe, mesma técnica de
+        // `fit_width_shrinks_labels_to_fit_before_scrolling`.
+        let both_floors_total = fit_width(&ws, &TabBarStyle::DEFAULT, 1.0, &mut m).content_width;
+        let available = both_floors_total + 20.0;
+        assert!(
+            full.content_width > available,
+            "nome do grupo precisa estourar `available` pra este teste fazer sentido"
+        );
+
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, available, &mut m);
+        assert!(fitted.content_width <= available + 1.0);
+        let pill = fitted.groups[0].pill.as_ref().unwrap();
+        let name_width = m.measure_width(
+            &pill.name,
+            PILL_NAME_FONT,
+            TabBarStyle::DEFAULT.pill_font_size,
+        );
+        assert!(name_width < TabBarStyle::DEFAULT.pill_name_max_width);
+    }
+
+    #[test]
+    fn fit_width_stays_at_pill_name_floor_when_it_still_does_not_fit() {
+        let mut ws = Workspace::new();
+        for i in 0..8 {
+            let a = ws.append_tab("zsh", None);
+            ws.group_tabs(
+                &[a],
+                format!("grupo numero {i} com nome bem longo"),
+                GroupColor::Yellow,
+            );
+        }
+        let mut m = measurer();
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
+        assert!(fitted.content_width > 300.0);
+        for group in &fitted.groups {
+            let pill = group.pill.as_ref().unwrap();
+            let width = m.measure_width(
+                &pill.name,
+                PILL_NAME_FONT,
+                TabBarStyle::DEFAULT.pill_font_size,
+            );
+            assert!(width <= TabBarStyle::DEFAULT.pill_name_min_width + 0.5);
+        }
     }
 }

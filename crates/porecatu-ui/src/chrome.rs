@@ -4,8 +4,9 @@
 //! não conhece: aba ativa, aba `Exited`, edição de rename em andamento,
 //! rolagem e arraste desde a Etapa 5, seleção múltipla desde a F3 etapa 2)
 //! em `Primitive`s da camada `Chrome` (ADR-0018). Cores e dimensões: espec.
-//! visual §1.2, §1.3, §2.5, §2.6, §2.17, §2.18, §2.19, como constantes em
-//! `palette.rs`/`tab_bar.rs`, mesmo padrão de `paint.rs` para a grade.
+//! visual §1.2, §1.3, §2.3, §2.4, §2.5, §2.6, §2.17, §2.18, §2.19, como
+//! constantes em `palette.rs`/`tab_bar.rs`, mesmo padrão de `paint.rs` para
+//! a grade.
 //!
 //! Sem hover nesta etapa -- a barra não rastreia posição do mouse fora de
 //! clique/arraste (`App::cursor_position` é da área do terminal); o estado
@@ -16,6 +17,15 @@
 //! `porecatu-render` -- nenhuma primitiva de filtro ou sombra existe ainda
 //! (nenhum hover em lugar nenhum do chrome usa isso hoje); o fantasma
 //! reaproveita as cores normais da aba, sem o realce.
+//!
+//! Desde a F3 etapa 3, pílula e wrapper tingido (§2.3/§2.4) também entram
+//! aqui -- mas só a geometria e a cor que já existem em `porecatu-core`
+//! desde a etapa 1 (`Group::color`/`is_collapsed`). Indicador agregado
+//! (RF-2.16), esconder abas de grupo colapsado da trilha e a interação de
+//! clique/duplo clique na pílula são F3 etapa 4/5 -- fora do escopo daqui.
+//! O caret também não gira: `RoundedQuad`/`TextRun` não têm transform, então
+//! a troca de glyph (`▶`/`▼`) é o equivalente estático, mesma lacuna já
+//! registrada acima para `brightness`/sombra.
 
 use porecatu_core::{TabId, Workspace};
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
@@ -24,7 +34,8 @@ use crate::palette;
 use crate::rename::RenameState;
 use crate::selection::Selection;
 use crate::tab_bar::{
-    self, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, TabBarLayout, TabBarStyle,
+    self, GroupPillRect, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, PILL_COUNT_FONT,
+    PILL_COUNT_FONT_SIZE, PILL_NAME_FONT, TabBarLayout, TabBarStyle,
 };
 
 /// Fonte dos ícones da barra (fechar, nova aba) -- mesma família do
@@ -42,6 +53,21 @@ const BAR_SEPARATOR_HEIGHT: f32 = 1.0;
 // sobre a borda de 1px do estado de base (`Primitive::RoundedQuad` não soma
 // largura ao rect por causa da borda, então isto não reflui a aba).
 const SELECTED_BORDER_WIDTH: f32 = 2.0;
+
+// Wrapper de grupo (espec §2.3, `[appearance.groups]`).
+const WRAPPER_CORNER_RADIUS: f32 = 8.0; // wrapper_corner_radius
+const WRAPPER_TINT_STRENGTH: f64 = 0.07; // tint_strength, RF-4.19
+
+// Pílula de grupo (espec §2.4, `[appearance.groups]`).
+const PILL_CORNER_RADIUS: f32 = 6.0; // label_corner_radius
+const PILL_BORDER_WIDTH: f32 = 1.0; // espec §2.4: "borda 1px" -- sem chave própria
+const PILL_SWATCH_CORNER_RADIUS: f32 = 2.0; // swatch_corner_radius
+const PILL_COUNT_CORNER_RADIUS: f32 = 9.0; // count_corner_radius
+// Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
+// expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
+// glyph usa o mesmo tamanho reservado no layout (`style.pill_caret_size`).
+const PILL_CARET_COLLAPSED: &str = "\u{25B6}"; // ▶
+const PILL_CARET_EXPANDED: &str = "\u{25BC}"; // ▼
 
 // Campo de rename: espec §2.5 dá largura (120), padding (2px 5px) e fonte
 // (12px), mas não a altura da caixa. Valor de trabalho: texto 12px +
@@ -129,6 +155,39 @@ pub fn paint(
     let dx = -overflow.scroll_offset;
 
     for group in &layout.groups {
+        let core_group = workspace.group(group.id);
+        let is_collapsed = core_group.is_some_and(|g| g.is_collapsed());
+        // Espec §2.5: "sublinhado de aba sem grupo" usa `ungrouped_color`;
+        // grupo explícito usa a cor do grupo -- mesma resolução para o
+        // tingimento do wrapper e o swatch da pílula abaixo.
+        let group_color = core_group
+            .and_then(|g| g.color())
+            .map(palette::group_color)
+            .unwrap_or(palette::UNGROUPED_UNDERLINE);
+
+        if let Some(pill) = &group.pill {
+            // Espec §2.3: fundo tingido só expandido -- "colapsado fica
+            // transparente". Abas sem grupo (pill == None) nunca tingem.
+            if !is_collapsed {
+                out.push(Primitive::RoundedQuad(RoundedQuad {
+                    rect: shift(group.rect, dx),
+                    radius: WRAPPER_CORNER_RADIUS,
+                    color: with_alpha(group_color, WRAPPER_TINT_STRENGTH),
+                    border_color: palette::TRANSPARENT,
+                    border_width: 0.0,
+                }));
+            }
+            paint_group_pill(
+                pill,
+                group_color,
+                is_collapsed,
+                style.pill_font_size,
+                dx,
+                measurer,
+                &mut out,
+            );
+        }
+
         for tab in &group.tabs {
             let is_ghost = drag.is_some_and(|g| g.tab == tab.id);
             let tab_rect = shift(tab.rect, dx);
@@ -160,8 +219,9 @@ pub fn paint(
                 border_width,
             }));
 
-            // Sublinhado de grupo (espec §2.5): F2 só tem o grupo implícito,
-            // então é sempre `ungrouped_color` -- grupo de verdade é F3.
+            // Sublinhado de grupo (espec §2.5): cor do grupo, ou
+            // `ungrouped_color` pras abas do grupo implícito -- resolvido
+            // uma vez por grupo acima (`group_color`).
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
                     x: tab_rect.x,
@@ -169,7 +229,7 @@ pub fn paint(
                     width: tab_rect.width,
                     height: TAB_UNDERLINE_HEIGHT,
                 },
-                color: palette::UNGROUPED_UNDERLINE,
+                color: group_color,
             }));
 
             let dot_reserve = if tab.indicator.is_some() {
@@ -333,6 +393,78 @@ fn shift(rect: Rect, dx: f32) -> Rect {
         x: rect.x + dx,
         ..rect
     }
+}
+
+fn with_alpha(color: Color, alpha: f64) -> Color {
+    Color { a: alpha, ..color }
+}
+
+/// Pílula de grupo (espec §2.4): fundo/borda, swatch, nome, contador e
+/// caret, na cor do grupo já resolvida por quem chama (`group_color` em
+/// [`paint`]). Contador desenhado sempre, colapsado ou não (§2.4: "sempre
+/// desenhado, conteúdo idêntico").
+fn paint_group_pill(
+    pill: &GroupPillRect,
+    color: Color,
+    is_collapsed: bool,
+    name_font_size: f32,
+    dx: f32,
+    measurer: &mut porecatu_render::TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: shift(pill.rect, dx),
+        radius: PILL_CORNER_RADIUS,
+        color: palette::PILL_BACKGROUND,
+        border_color: palette::PILL_BORDER,
+        border_width: PILL_BORDER_WIDTH,
+    }));
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: shift(pill.swatch, dx),
+        radius: PILL_SWATCH_CORNER_RADIUS,
+        color,
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+    out.push(Primitive::Text(TextRun {
+        origin: (pill.name_origin.0 + dx, pill.name_origin.1),
+        text: pill.name.clone(),
+        font: PILL_NAME_FONT,
+        size_px: name_font_size,
+        color: palette::PILL_TEXT,
+    }));
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: shift(pill.count_rect, dx),
+        radius: PILL_COUNT_CORNER_RADIUS,
+        color: palette::PILL_COUNT_BACKGROUND,
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+    let count_rect = shift(pill.count_rect, dx);
+    let count_width =
+        measurer.measure_width(&pill.count_text, PILL_COUNT_FONT, PILL_COUNT_FONT_SIZE);
+    out.push(Primitive::Text(TextRun {
+        origin: (
+            count_rect.x + (count_rect.width - count_width) / 2.0,
+            count_rect.y + (count_rect.height - PILL_COUNT_FONT_SIZE) / 2.0,
+        ),
+        text: pill.count_text.clone(),
+        font: PILL_COUNT_FONT,
+        size_px: PILL_COUNT_FONT_SIZE,
+        color: palette::PILL_COUNT_TEXT,
+    }));
+    let caret_glyph = if is_collapsed {
+        PILL_CARET_COLLAPSED
+    } else {
+        PILL_CARET_EXPANDED
+    };
+    out.push(centered_glyph(
+        caret_glyph,
+        shift(pill.caret_rect, dx),
+        pill.caret_rect.height,
+        palette::PILL_CARET,
+        measurer,
+    ));
 }
 
 /// Indicador de abas fora da vista (espec §2.18, RF-1.19): chevron + a
