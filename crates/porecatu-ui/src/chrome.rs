@@ -37,9 +37,14 @@
 //! reaproveitando `paint_group_pill` deslocada pelo `dx` certo, e o
 //! wrapper de origem inteiro pulado enquanto arrasta (`continue` no laço
 //! principal, abrindo o "vão" que a espec pede); e a interpolação do
-//! relógio de animação (`animations`, ADR-0022) -- todo o wrapper de um
-//! grupo (pílula + abas juntas, como unidade rígida) desliza da posição
-//! antiga até a que `layout` calculou, quando há uma reflui ativa pra ele.
+//! relógio de animação (`animations`, ADR-0022) -- a pílula e as abas de
+//! um grupo deslizam (só posição, `dx`) da posição antiga até a que
+//! `layout` calculou, quando há uma reflui ativa pra ele; a **cápsula**
+//! por trás delas interpola posição **e largura** (`capsule_rect`), o que
+//! é o que faz o próprio grupo encolher/crescer suave ao colapsar/
+//! expandir, não só deslizar os vizinhos -- continua desenhada enquanto o
+//! progresso não chega em 1, mesmo já colapsado no modelo (senão a
+//! cápsula sumiria na hora e só as abas esmaeceriam por cima do nada).
 //! `DragGhost` carrega o `TabRect` de origem (`base_layout`, não o
 //! preview) desde esta etapa: soltar sobre um grupo colapsado faz o
 //! preview não gerar `TabRect` nenhum pra aba arrastada, e o fantasma
@@ -47,14 +52,11 @@
 //!
 //! Colapsar/expandir também esmaece as abas do próprio grupo em vez de
 //! picá-las (espec §2.4: "o que anima de fato é o resto do colapso: as
-//! abas desaparecendo da trilha") -- sem isso, um grupo sem nenhum outro
-//! depois dele na trilha (ex.: o último) não tinha *nada* pra animar, e a
-//! reflui do wrapper (parágrafo acima) só desliza quem está depois. Abas
-//! que sumiram do `layout` corrente mas existiam em `old_layout`
-//! (`AnimationClock::old_tabs`) continuam desenhadas na posição antiga,
-//! opacidade caindo; as que são novas ali (`AnimationClock::had_tab`
-//! devolve falso) entram com opacidade subindo, junto com o progresso da
-//! reflui do próprio wrapper delas.
+//! abas desaparecendo da trilha"). Abas que sumiram do `layout` corrente
+//! mas existiam em `old_layout` (`AnimationClock::old_tabs`) continuam
+//! desenhadas na posição antiga, opacidade caindo; as que são novas ali
+//! (`AnimationClock::had_tab` devolve falso) entram com opacidade
+//! subindo, junto com o progresso da reflui do próprio wrapper delas.
 
 use std::collections::HashSet;
 use std::time::Instant;
@@ -238,16 +240,27 @@ pub fn paint(
         }
 
         // ADR-0022: enquanto o grupo tem uma reflui ativa (RF-2.5, ou o
-        // colapso/expansão de um grupo depois/antes deste na trilha), o
-        // wrapper inteiro -- pílula e abas juntas, como uma unidade rígida
-        // -- desliza da posição antiga até a que `layout` já calculou,
-        // interpolado linearmente. Fora de animação, `anim_dx` é zero e
-        // isto pinta exatamente onde sempre pintou.
-        let anim_dx = animations
-            .wrapper_progress(group.id, now)
-            .map(|(old_x, progress)| (old_x - group.rect.x) * (1.0 - progress))
+        // colapso/expansão deste grupo ou de um vizinho antes/depois dele
+        // na trilha), o retângulo do wrapper inteiro -- posição **e**
+        // largura -- interpola do que era em `old_layout` pro que `layout`
+        // já calculou. Pílula e abas dentro dele só deslizam (`dx`, sem
+        // esticar) -- é a cápsula em volta delas que encolhe/cresce. Fora
+        // de animação, `wrapper_progress` devolve `None` e isto pinta
+        // exatamente onde sempre pintou.
+        let wrapper_progress = animations.wrapper_progress(group.id, now);
+        let anim_dx = wrapper_progress
+            .map(|(old_rect, progress)| (old_rect.x - group.rect.x) * (1.0 - progress))
             .unwrap_or(0.0);
         let dx = scroll_dx + anim_dx;
+        let capsule_rect = match wrapper_progress {
+            Some((old_rect, progress)) => Rect {
+                x: group.rect.x + anim_dx + scroll_dx,
+                y: group.rect.y,
+                width: old_rect.width + (group.rect.width - old_rect.width) * progress,
+                height: group.rect.height,
+            },
+            None => shift(group.rect, dx),
+        };
 
         let core_group = workspace.group(group.id);
         let is_collapsed = core_group.is_some_and(|g| g.is_collapsed());
@@ -264,12 +277,16 @@ pub fn paint(
         // 7% da espec §2.3, que ficava quase invisível atrás do fundo
         // opaco das abas. `TAB_ACTIVE_BACKGROUND`/`TAB_INACTIVE_BACKGROUND`
         // (`palette.rs`) agora têm alfa .85 pra deixar passar um indício
-        // dela por cima. Só pílula (grupo explícito) e expandido --
-        // "colapsado fica transparente" continua valendo, e abas sem
-        // grupo (`pill == None`) nunca pintam cápsula.
-        if group.pill.is_some() && !is_collapsed {
+        // dela por cima. Fora de animação, "colapsado fica transparente"
+        // continua valendo (RF-4.19); durante a animação, a cápsula segue
+        // desenhada (encolhendo/crescendo) até o progresso chegar em 1 --
+        // senão o colapso sumiria a cápsula na hora e só as abas
+        // esmaeceriam por cima do nada. Abas sem grupo (`pill == None`)
+        // nunca pintam cápsula.
+        let mid_collapse_animation = wrapper_progress.is_some_and(|(_, progress)| progress < 1.0);
+        if group.pill.is_some() && (!is_collapsed || mid_collapse_animation) {
             out.push(Primitive::RoundedQuad(RoundedQuad {
-                rect: shift(group.rect, dx),
+                rect: capsule_rect,
                 radius: WRAPPER_CORNER_RADIUS,
                 color: with_alpha(group_color, GROUP_CAPSULE_FILL_STRENGTH),
                 border_color: palette::TRANSPARENT,

@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use porecatu_core::{GroupId, TabId};
+use porecatu_render::Rect;
 
 use crate::tab_bar::{TabBarLayout, TabRect};
 
@@ -40,12 +41,18 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 struct Reflow {
     started_at: Instant,
     duration: Duration,
-    /// Posição X (coordenadas de conteúdo, pré-rolagem) do wrapper de cada
-    /// grupo, capturada em `old_layout` antes da operação que disparou a
-    /// animação. Só os grupos que existiam nesse layout entram aqui --
-    /// um grupo recém-criado pela própria operação não tem "posição
-    /// antiga" e não anima (nasce direto na posição final).
-    wrapper_x: HashMap<GroupId, f32>,
+    /// Retângulo do wrapper de cada grupo (coordenadas de conteúdo,
+    /// pré-rolagem), capturado em `old_layout` antes da operação que
+    /// disparou a animação. Guarda o retângulo inteiro, não só a posição
+    /// X: o grupo que está colapsando/expandindo muda de **largura**, não
+    /// de posição (nada antes dele se move) -- é a largura que precisa
+    /// interpolar pra cápsula encolher/crescer suave em vez de saltar pro
+    /// tamanho final na hora, que é o que faz os vizinhos deslizarem
+    /// parecer suave mas o próprio grupo, não. Só os grupos que existiam
+    /// nesse layout entram aqui -- um grupo recém-criado pela própria
+    /// operação não tem "geometria antiga" e não anima (nasce direto na
+    /// posição final).
+    wrapper_rect: HashMap<GroupId, Rect>,
     /// Todas as abas de `old_layout`, com a geometria de antes. É o que
     /// permite desenhar esmaecendo, em vez de sumir/aparecer na hora, as
     /// abas do grupo que está colapsando (existiam antes, não existem no
@@ -84,7 +91,7 @@ impl AnimationClock {
     /// operação) calcular. `duration`: `.18s` pro RF-2.5, `.15s` pro
     /// colapso/expansão (ADR-0022, lista fechada de dois consumidores).
     pub fn start_reflow(&mut self, old_layout: &TabBarLayout, duration: Duration, now: Instant) {
-        let wrapper_x = old_layout.groups.iter().map(|g| (g.id, g.rect.x)).collect();
+        let wrapper_rect = old_layout.groups.iter().map(|g| (g.id, g.rect)).collect();
         let old_tabs = old_layout
             .groups
             .iter()
@@ -94,7 +101,7 @@ impl AnimationClock {
         self.active.push(Reflow {
             started_at: now,
             duration,
-            wrapper_x,
+            wrapper_rect,
             old_tabs,
         });
     }
@@ -115,16 +122,16 @@ impl AnimationClock {
         self.active.is_empty()
     }
 
-    /// `(x_antigo, progresso)` do wrapper de `group`, se alguma animação
-    /// ativa o carrega -- `None` fora de animação, caso em que quem pinta
-    /// usa a posição normal do layout corrente. Quando mais de uma
-    /// animação ativa carrega o mesmo grupo (raro -- colapsar de novo
-    /// antes da anterior terminar), vale a mais recente.
-    pub fn wrapper_progress(&self, id: GroupId, now: Instant) -> Option<(f32, f32)> {
+    /// `(retângulo_antigo, progresso)` do wrapper de `group`, se alguma
+    /// animação ativa o carrega -- `None` fora de animação, caso em que
+    /// quem pinta usa a geometria normal do layout corrente. Quando mais
+    /// de uma animação ativa carrega o mesmo grupo (raro -- colapsar de
+    /// novo antes da anterior terminar), vale a mais recente.
+    pub fn wrapper_progress(&self, id: GroupId, now: Instant) -> Option<(Rect, f32)> {
         self.active
             .iter()
             .rev()
-            .find_map(|r| r.wrapper_x.get(&id).map(|&x| (x, r.progress(now))))
+            .find_map(|r| r.wrapper_rect.get(&id).map(|&rect| (rect, r.progress(now))))
     }
 
     /// Todas as abas de "antes" de qualquer animação ativa, com o
@@ -208,12 +215,12 @@ mod tests {
         let now = Instant::now();
         clock.start_reflow(&old_layout, Duration::from_millis(150), now);
 
-        let (g1_old_x, _) = clock.wrapper_progress(g1, now).unwrap();
-        let (g2_old_x, _) = clock.wrapper_progress(g2, now).unwrap();
-        let (g3_old_x, _) = clock.wrapper_progress(g3, now).unwrap();
-        assert_eq!(g1_old_x, old_layout.groups[0].rect.x);
-        assert_eq!(g2_old_x, old_layout.groups[1].rect.x);
-        assert_eq!(g3_old_x, old_layout.groups[2].rect.x);
+        let (g1_old_rect, _) = clock.wrapper_progress(g1, now).unwrap();
+        let (g2_old_rect, _) = clock.wrapper_progress(g2, now).unwrap();
+        let (g3_old_rect, _) = clock.wrapper_progress(g3, now).unwrap();
+        assert_eq!(g1_old_rect, old_layout.groups[0].rect);
+        assert_eq!(g2_old_rect, old_layout.groups[1].rect);
+        assert_eq!(g3_old_rect, old_layout.groups[2].rect);
 
         // g1 não se move (nada muda antes dele); g3 se move (g2 encolheu).
         assert_eq!(old_layout.groups[0].rect.x, new_layout.groups[0].rect.x);
@@ -252,6 +259,36 @@ mod tests {
         assert!(!clock.had_tab(TabId::new(999)));
     }
 
+    // Cenário de aceite (o próprio grupo tem que encolher/crescer suave,
+    // não só deslizar quem vem depois): a largura do wrapper capturada em
+    // `old_layout` difere da largura final, e é o que `chrome.rs`
+    // interpola pra desenhar a cápsula encolhendo/crescendo em vez de
+    // saltar direto pro tamanho final.
+    #[test]
+    fn wrapper_progress_captures_the_width_change_of_the_toggled_group_itself() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let g1 = ws.group_tabs(&[a, b], "g1", GroupColor::Red).unwrap();
+
+        let mut m = TextMeasurer::new();
+        let old_layout = tab_bar::layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        ws.collapse_group(g1, true);
+        let new_layout = tab_bar::layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+
+        let mut clock = AnimationClock::default();
+        let now = Instant::now();
+        clock.start_reflow(&old_layout, Duration::from_millis(150), now);
+
+        let (old_rect, progress) = clock.wrapper_progress(g1, now).unwrap();
+        assert_eq!(progress, 0.0);
+        assert_eq!(old_rect.x, new_layout.groups[0].rect.x, "posição não muda");
+        assert!(
+            old_rect.width > new_layout.groups[0].rect.width,
+            "largura antiga (com abas) precisa ser maior que a nova (só a pílula)"
+        );
+    }
+
     #[test]
     fn starts_empty() {
         let clock = AnimationClock::default();
@@ -260,15 +297,15 @@ mod tests {
     }
 
     #[test]
-    fn start_reflow_captures_wrapper_positions() {
+    fn start_reflow_captures_wrapper_geometry() {
         let (layout, g1, g2) = layout_with_two_groups();
-        let g1_x = layout.groups[0].rect.x;
+        let g1_rect = layout.groups[0].rect;
         let mut clock = AnimationClock::default();
         let now = Instant::now();
         clock.start_reflow(&layout, Duration::from_millis(150), now);
         assert!(!clock.is_empty());
-        let (old_x, progress) = clock.wrapper_progress(g1, now).unwrap();
-        assert_eq!(old_x, g1_x);
+        let (old_rect, progress) = clock.wrapper_progress(g1, now).unwrap();
+        assert_eq!(old_rect, g1_rect);
         assert_eq!(progress, 0.0);
         assert!(clock.wrapper_progress(GroupId::new(999), now).is_none());
         let _ = g2;
