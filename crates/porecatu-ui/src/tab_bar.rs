@@ -1,18 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Nada aqui é chamado fora dos testes ainda -- a Etapa 3 entrega só o
-// layout puro (arquitetura.md seção 7); pintura e wiring no event loop
-// chegam com a Etapa 4 (rename) ou a Etapa 6 (widgets de chrome).
-#![allow(dead_code)]
-
 //! Layout e hit-testing da barra de abas -- função pura, sem `wgpu` e sem
 //! janela (docs/arquitetura.md seção 7): `(Workspace, TabBarStyle,
 //! TextMeasurer) -> TabBarLayout`. Cobre só o que a espec. visual §2.2,
 //! §2.3, §2.5 e §2.6 descrevem como geometria de trilha -- nada de
-//! encolhimento/rolagem (Etapa 5), indicadores (Etapa 5), arraste (Etapa
-//! 5) nem pintura real (`Primitive`), que entra quando alguma etapa
-//! seguinte precisar da barra visível de verdade (rename inline na Etapa
-//! 4, ou os widgets de chrome na Etapa 6).
+//! encolhimento/rolagem (Etapa 5), indicadores (Etapa 5) nem arraste
+//! (Etapa 5). Pintura (`chrome.rs`) e wiring de clique/rename (`lib.rs`)
+//! chegam na Etapa 4.
 //!
 //! `porecatu-config` ainda não existe: os valores de [`TabBarStyle`] são
 //! constantes com a chave TOML de origem no comentário, no mesmo padrão de

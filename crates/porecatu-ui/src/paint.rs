@@ -23,16 +23,20 @@ pub struct CellMetrics {
     pub height: f32,
 }
 
+/// `y_offset`: onde a grade começa verticalmente na janela -- `0.0` até a
+/// Etapa 3, e a altura da barra de abas a partir da Etapa 4 (a barra ocupa
+/// o topo, a grade fica abaixo dela).
 pub fn build_primitives(
     snapshot: &GridSnapshot,
     metrics: CellMetrics,
     font_size_px: f32,
+    y_offset: f32,
 ) -> Vec<Primitive> {
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
 
     for row in 0..snapshot.rows {
-        let row_y = row as f32 * metrics.height;
+        let row_y = y_offset + row as f32 * metrics.height;
         paint_row_backgrounds(snapshot, row, cols, row_y, metrics, &mut primitives);
         paint_row_text(
             snapshot,
@@ -51,7 +55,7 @@ pub fn build_primitives(
         primitives.push(Primitive::Quad(Quad {
             rect: Rect {
                 x: col as f32 * metrics.width,
-                y: row as f32 * metrics.height,
+                y: y_offset + row as f32 * metrics.height,
                 width: metrics.width,
                 height: metrics.height,
             },

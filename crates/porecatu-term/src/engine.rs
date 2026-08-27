@@ -15,6 +15,7 @@ use alacritty_terminal::term::{
 use alacritty_terminal::vte::ansi::{CursorShape as AnsiCursorShape, Processor, Rgb as AnsiRgb};
 
 use crate::event::{ClipboardResponder, ColorQueryResponder, TermEvent};
+use crate::osc7::Osc7Watcher;
 use crate::params::TermParams;
 use crate::scroll::TermScroll;
 use crate::selection::{SelectionKind, SelectionSide};
@@ -125,6 +126,12 @@ fn osc52_mode(read: bool, write: bool) -> Osc52 {
 pub struct TermEngine {
     term: Term<EventProxy>,
     parser: Processor,
+    /// Segundo parser, independente do de `term` -- ver `crate::osc7`.
+    osc7: Osc7Watcher,
+    /// Cópia do canal de eventos: `TermEvent::Cwd` não vem do motor (OSC 7
+    /// não é despachado a nenhum método de `Handler`, ver `crate::osc7`),
+    /// então `advance` manda direto por aqui, fora de `EventProxy`.
+    events: mpsc::Sender<TermEvent>,
 }
 
 impl TermEngine {
@@ -150,7 +157,7 @@ impl TermEngine {
             ..Default::default()
         };
         let proxy = EventProxy {
-            sender: events,
+            sender: events.clone(),
             pty_writer,
             clipboard_write_max_bytes: params.clipboard_write_max_bytes,
         };
@@ -159,12 +166,28 @@ impl TermEngine {
         Self {
             term,
             parser: Processor::new(),
+            osc7: Osc7Watcher::new(),
+            events,
         }
     }
 
-    /// Alimenta o parser VT com bytes crus do PTY.
+    /// Alimenta o parser VT com bytes crus do PTY, e em paralelo o scanner
+    /// de OSC 7 (`crate::osc7`) sobre o mesmo lote.
     pub fn advance(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+        if let Some(cwd) = self.osc7.advance(bytes) {
+            let _ = self.events.send(TermEvent::Cwd(cwd));
+        }
+    }
+
+    /// Injeta uma nota estilizada no grid, como se fosse saída do programa
+    /// -- passa pelo mesmo parser, nunca escreve na grade por fora dele
+    /// (ADR-0017 item 5). `rgb` é resolvido por quem chama: este motor não
+    /// conhece paleta nem tema.
+    pub fn inject_note(&mut self, text: &str, rgb: (u8, u8, u8)) {
+        let (r, g, b) = rgb;
+        let styled = format!("\r\n\x1b[38;2;{r};{g};{b}m{text}\x1b[0m\r\n");
+        self.parser.advance(&mut self.term, styled.as_bytes());
     }
 
     /// Redimensiona a grade.

@@ -128,8 +128,12 @@ impl Terminal {
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
         let (killed_tx, killed_rx) = mpsc::channel::<()>();
         let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>();
-        let watch_thread =
-            thread::spawn(move || watch_loop(pty, events_tx, shutdown_rx, killed_tx, resize_rx));
+        let watch_thread = {
+            let on_wakeup = Arc::clone(&on_wakeup);
+            thread::spawn(move || {
+                watch_loop(pty, events_tx, shutdown_rx, killed_tx, resize_rx, on_wakeup)
+            })
+        };
 
         Ok(Self {
             engine,
@@ -216,11 +220,20 @@ impl Terminal {
         let _ = self.resize.send((rows as u16, cols as u16));
     }
 
-    /// Encerra o terminal: mata o processo e só devolve depois que a
-    /// thread de observação confirmou isso -- ao contrário de simplesmente
-    /// dropar (que dispara o mesmo sinal mas não espera por ele). Chamar
-    /// explicitamente antes do processo do Porecatu sair de vez (ex.: ao
-    /// fechar a janela), para não deixar o processo filho órfão.
+    /// Injeta uma nota estilizada no grid, como se fosse saída do programa
+    /// (RF-1.3, ADR-0017 item 5) -- ex.: código de saída de um processo que
+    /// terminou com erro. `rgb` normalmente é o destaque do ADR-0014.
+    pub fn inject_note(&self, text: &str, rgb: (u8, u8, u8)) {
+        lock(&self.engine).inject_note(text, rgb);
+    }
+
+    /// Sinaliza o processo para morrer e devolve **na hora**, sem esperar
+    /// confirmação -- é o caminho de `tab.close` (ADR-0017 item 4: fechar
+    /// aba não bloqueia a main thread). Dropar `self` sem chamar nada
+    /// teria o mesmo efeito de sinalização (é a queda do `_shutdown`
+    /// dentro que `watch_loop` nota), mas `close` deixa a intenção
+    /// explícita e devolve o [`ShutdownWait`] para quem eventualmente
+    /// precisar da confirmação (ex.: fechamento de janela).
     ///
     /// Não dá `join` em nenhuma das três threads: nenhuma tem retorno
     /// garantido. A de leitura nunca mais desbloqueia sozinha depois disso
@@ -228,10 +241,39 @@ impl Terminal {
     /// desistiu de fechar o pseudo-console -- e ela mantém viva a cópia do
     /// canal de escrita que `TermEngine` usa para respostas automáticas
     /// (DSR/DA/CPR), o que por sua vez faria a thread de escrita nunca ver
-    /// o canal fechar. A confirmação de que o processo morreu vem por um
-    /// canal dedicado (`killed`), não de esperar threads retornarem.
+    /// o canal fechar.
+    pub fn close(self) -> ShutdownWait {
+        // `self._shutdown` (e o resto de `self`) dropam ao fim desta
+        // função -- é essa queda do sender que `watch_loop` nota como
+        // sinal de desligamento, no braço `Err(RecvTimeoutError::Disconnected)`.
+        ShutdownWait {
+            killed: self.killed,
+        }
+    }
+
+    /// Encerra o terminal e só devolve depois que a thread de observação
+    /// confirmou o processo morto (ou o timeout de segurança vencer) --
+    /// equivalente a `self.close().wait()`. Usar só quando o chamador
+    /// precisa garantir o processo morto antes de seguir -- ex.: fechar a
+    /// janela, onde bloquear por uma volta de sinalização é aceitável e
+    /// necessário para não deixar o filho órfão. `tab.close` (caminho
+    /// interativo, alta frequência) usa [`Terminal::close`] sem esperar.
     pub fn shutdown(self) {
-        drop(self._shutdown);
+        self.close().wait();
+    }
+}
+
+/// Confirmação pendente de [`Terminal::close`] de que o processo morreu.
+/// Aguardar é opcional -- o processo morre de qualquer jeito, quem não
+/// chama [`ShutdownWait::wait`] simplesmente não sabe quando isso
+/// aconteceu.
+pub struct ShutdownWait {
+    killed: mpsc::Receiver<()>,
+}
+
+impl ShutdownWait {
+    /// Bloqueia até a confirmação chegar ou o timeout de segurança vencer.
+    pub fn wait(self) {
         let _ = self.killed.recv_timeout(SHUTDOWN_TIMEOUT);
     }
 }
@@ -297,6 +339,7 @@ fn watch_loop(
     shutdown: mpsc::Receiver<()>,
     killed: mpsc::Sender<()>,
     resize: mpsc::Receiver<(u16, u16)>,
+    on_wakeup: Arc<dyn Fn() + Send + Sync>,
 ) {
     loop {
         match shutdown.recv_timeout(WATCH_POLL_INTERVAL) {
@@ -327,6 +370,12 @@ fn watch_loop(
                         success: status.success,
                         code: status.code,
                     });
+                    // Diferente do `read_loop`, nada mais vai chamar
+                    // `on_wakeup` depois disto -- a thread de leitura já
+                    // pode estar parada num `read()` que nunca retorna
+                    // (`leak_pty`). Sem isto, `TermEvent::Exit` fica no
+                    // canal sem ninguém ser avisado para ir buscá-lo.
+                    on_wakeup();
                     leak_pty(pty);
                     return;
                 }
