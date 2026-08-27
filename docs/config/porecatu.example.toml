@@ -114,7 +114,6 @@ animation_reflow_ms = 180
 # Design: aba h30 + padding 6px da barra = 42px de altura total da barra.
 height = 42                # altura da barra, em px lógicos
 tab_height = 30            # altura da aba dentro da barra
-min_width = 90             # piso do encolhimento antes de a barra rolar RF-4.5
 max_width = 260            # rótulo trunca em 180px de texto
 padding_left = 10          # design usa padding assimétrico: 0 6px 0 10px
 padding_right = 6          # menor à direita por causa do botão de fechar
@@ -184,17 +183,15 @@ label_foreground = "#c3cad3"
 label_hover_brightness = 1.25
 swatch_size = 8               # quadrado de cor à esquerda do nome
 swatch_corner_radius = 2
-# Teto e piso do nome do grupo (RF-2.12). O teto de 140 é o da aba (180)
-# menos os 41px de cromo da seção 2.18: uma pílula não deve ficar mais
-# larga que a aba que ela rotula. Nome além do teto trunca com reticências
-# e aparece inteiro no tooltip.
-#
-# O piso é o segundo degrau da ordem de cedência do overflow -- primeiro
-# encolhe o rótulo da aba, depois o nome do grupo, e só então a trilha
-# rola. Dez grupos no piso somam 600px, que é o que sustenta a métrica de
-# dez grupos do PRD-002.
+# Teto do nome do grupo (RF-2.12). O teto de 140 é o da aba (180) menos os
+# 41px de cromo da seção 2.18: uma pílula não deve ficar mais larga que a
+# aba que ela rotula. Nome além do teto trunca com reticências e aparece
+# inteiro no tooltip. Sem piso: o nome nunca encolhe abaixo do teto -- a
+# trilha inteira rola quando não cabe, em vez de ceder rótulo/nome antes
+# disso (mudança de performance pós-F3, ver a nota de `tab_bar::fit_width`
+# no código; a métrica de dez grupos do PRD-002 segue valendo, só que via
+# rolagem em vez de encolhimento).
 label_max_width = 140
-label_min_width = 60
 count_background = "#12151a"  # contador de abas no rótulo
 count_foreground = "#7b838f"
 count_corner_radius = 9

@@ -179,6 +179,16 @@ enum GroupEditorOutcome {
     Action(GroupId, GroupAction),
 }
 
+/// O que `WindowState::handle_bar_click` não pode resolver sozinho: os dois
+/// botões "+" da barra (global e por grupo, pedido do usuário fora da
+/// espec.) pedem `open_tab`, que precisa de `cell_metrics`/`proxy`/
+/// `startup_directory` -- só `App` tem.
+enum NewTabRequest {
+    None,
+    Global,
+    InGroup(GroupId),
+}
+
 /// Estado por janela (ADR-0015: "um `Workspace` independente por janela").
 /// `App` guarda um `HashMap<WindowId, WindowState>`; o que não varia por
 /// janela (GPU do processo, diretório de início, métricas de célula --
@@ -334,12 +344,13 @@ impl WindowState {
         let Some(rect) = tab_bar::tab_rect(&layout, active) else {
             return;
         };
+        let trilha_width = tab_bar::trilha_width(&style, self.logical_width);
         let window_start = self.scroll_offset;
-        let window_end = self.scroll_offset + self.logical_width;
+        let window_end = self.scroll_offset + trilha_width;
         if rect.x < window_start {
             self.scroll_offset = rect.x;
         } else if rect.x + rect.width > window_end {
-            self.scroll_offset = rect.x + rect.width - self.logical_width;
+            self.scroll_offset = rect.x + rect.width - trilha_width;
         }
     }
 
@@ -932,8 +943,10 @@ impl WindowState {
     /// alterna a seleção e `Shift`+clique estende a partir da âncora
     /// (ADR-0021 §1/§2) -- nenhum dos dois ativa a aba nem arma arraste.
     /// `right_click` abre o menu de contexto (RF-1.1, RF-1.2, RF-2.20) em
-    /// vez de ativar/arrastar. Devolve `true` só quando o botão de nova
-    /// aba foi clicado -- `open_tab` precisa de `cell_metrics`/`proxy`/
+    /// vez de ativar/arrastar. Devolve `NewTabRequest::None` na maioria dos
+    /// casos -- só `Global` (botão de nova aba da zona fixa) ou
+    /// `InGroup(id)` (botão "+" ao final de um grupo) pedem que se abra
+    /// aba nova: `open_tab` precisa de `cell_metrics`/`proxy`/
     /// `startup_directory`, que são de `App`, não de `WindowState`, então
     /// quem chama (`App::dispatch_mouse_input`) é que abre a aba de
     /// verdade.
@@ -942,32 +955,50 @@ impl WindowState {
         logical_point: (f32, f32),
         gpu: &mut GpuContext,
         right_click: bool,
-    ) -> bool {
+    ) -> NewTabRequest {
         let style = TabBarStyle::DEFAULT;
         let bar_width = self.logical_width;
+        let trilha_width = tab_bar::trilha_width(&style, bar_width);
         let h = bar_height();
-        let layout = tab_bar::fit_width(&self.workspace, &style, bar_width, gpu.text_measurer());
-        let overflow = tab_bar::overflow_state(&layout, bar_width, self.scroll_offset);
+        let layout = tab_bar::fit_width(&self.workspace, &style, trilha_width, gpu.text_measurer());
+        let overflow = tab_bar::overflow_state(&layout, trilha_width, self.scroll_offset);
         self.scroll_offset = overflow.scroll_offset;
 
         if !right_click {
+            // Botão de nova aba global: zona fixa à direita, fora da
+            // trilha que rola -- resolvido em coordenadas de tela, como as
+            // pílulas de overflow logo abaixo, não pelo hit-test de
+            // conteúdo (pedido do usuário, fora da espec.).
+            if tab_bar::point_in_global_new_tab_button(&style, bar_width, h, logical_point) {
+                return NewTabRequest::Global;
+            }
             if overflow.hidden_left > 0
-                && tab_bar::point_in_overflow_pill(OverflowSide::Left, bar_width, h, logical_point)
+                && tab_bar::point_in_overflow_pill(
+                    OverflowSide::Left,
+                    trilha_width,
+                    h,
+                    logical_point,
+                )
             {
                 self.scroll_offset = (self.scroll_offset - tab_bar::OVERFLOW_SCROLL_STEP).max(0.0);
-                return false;
+                return NewTabRequest::None;
             }
             if overflow.hidden_right > 0
-                && tab_bar::point_in_overflow_pill(OverflowSide::Right, bar_width, h, logical_point)
+                && tab_bar::point_in_overflow_pill(
+                    OverflowSide::Right,
+                    trilha_width,
+                    h,
+                    logical_point,
+                )
             {
                 self.scroll_offset += tab_bar::OVERFLOW_SCROLL_STEP;
-                return false;
+                return NewTabRequest::None;
             }
         }
 
         let content_point = (logical_point.0 + self.scroll_offset, logical_point.1);
         let Some(hit) = tab_bar::hit_test(&layout, content_point) else {
-            return false;
+            return NewTabRequest::None;
         };
 
         if right_click {
@@ -982,9 +1013,9 @@ impl WindowState {
                     self.group_context_menu = Some(GroupContextMenu::new(id, logical_point));
                     self.hover.dismiss();
                 }
-                TabBarHit::NewTabButton => {}
+                TabBarHit::GroupNewTab(_) => {}
             }
-            return false;
+            return NewTabRequest::None;
         }
 
         match hit {
@@ -1028,13 +1059,13 @@ impl WindowState {
                         };
                     }
                 }
-                false
+                NewTabRequest::None
             }
             TabBarHit::CloseButton(id) => {
                 if let Some(dialog) = self.close_tab_via_button(id) {
                     self.dialog = Some(dialog);
                 }
-                false
+                NewTabRequest::None
             }
             TabBarHit::Pill(id) => {
                 // Espec §2.19.1/RF-2.19: arma o possível arraste do
@@ -1049,9 +1080,9 @@ impl WindowState {
                         grab_offset: logical_point.0 - screen_x,
                     };
                 }
-                false
+                NewTabRequest::None
             }
-            TabBarHit::NewTabButton => true,
+            TabBarHit::GroupNewTab(id) => NewTabRequest::InGroup(id),
         }
     }
 
@@ -2323,9 +2354,11 @@ impl App {
             }
             Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {
                 let logical_x = position.x as f32 / state.scale;
+                let trilha_width =
+                    tab_bar::trilha_width(&TabBarStyle::DEFAULT, state.logical_width);
                 if logical_x < DRAG_EDGE_ZONE_PX {
                     state.scroll_offset = (state.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
-                } else if logical_x > state.logical_width - DRAG_EDGE_ZONE_PX {
+                } else if logical_x > trilha_width - DRAG_EDGE_ZONE_PX {
                     state.scroll_offset += DRAG_AUTOSCROLL_STEP_PX;
                 }
                 true
@@ -2569,14 +2602,25 @@ impl App {
             let Some(gpu) = &mut self.gpu else {
                 return;
             };
-            let new_tab_requested = state.handle_bar_click(logical_point, gpu, false);
-            if new_tab_requested {
-                state.action_new_tab(
-                    self.cell_metrics,
-                    &self.proxy,
-                    &self.startup_directory,
-                    Instant::now(),
-                );
+            match state.handle_bar_click(logical_point, gpu, false) {
+                NewTabRequest::Global => {
+                    state.action_new_tab(
+                        self.cell_metrics,
+                        &self.proxy,
+                        &self.startup_directory,
+                        Instant::now(),
+                    );
+                }
+                NewTabRequest::InGroup(group) => {
+                    state.action_new_tab_in_group(
+                        group,
+                        self.cell_metrics,
+                        &self.proxy,
+                        &self.startup_directory,
+                        Instant::now(),
+                    );
+                }
+                NewTabRequest::None => {}
             }
             state.window.request_redraw();
             return;
@@ -2612,9 +2656,10 @@ impl App {
 
         let style = TabBarStyle::DEFAULT;
         let bar_width = state.logical_width;
+        let trilha_width = tab_bar::trilha_width(&style, bar_width);
         let base_layout =
             tab_bar::fit_width(&state.workspace, &style, bar_width, gpu.text_measurer());
-        let overflow = tab_bar::overflow_state(&base_layout, bar_width, state.scroll_offset);
+        let overflow = tab_bar::overflow_state(&base_layout, trilha_width, state.scroll_offset);
         state.scroll_offset = overflow.scroll_offset;
 
         // Durante um arraste, o `Workspace` de verdade não é tocado -- só
