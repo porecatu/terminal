@@ -210,6 +210,27 @@ pub const MENU_ITEM_HOVER: Color = hex(0x24, 0x2a, 0x33);
 // Espec. §2.20 -- tooltip.
 pub const TOOLTIP_TEXT: Color = hex(0xd7, 0xdc, 0xe3);
 
+// `[appearance.context_menu] destructive_foreground` -- item destrutivo do
+// menu (só "Fechar grupo", RF-2.22/RF-2.23). `destructive_hover_background`
+// não tem chave própria em `[appearance.context_menu]` -- só em
+// `[appearance.dialog]`/`[appearance.group_editor]`, mesmo valor; citado
+// direto da espec. §2.16 ("Item destrutivo #e08585, hover #2e2224").
+pub const MENU_ITEM_DESTRUCTIVE_TEXT: Color = hex(0xe0, 0x85, 0x85);
+pub const MENU_ITEM_DESTRUCTIVE_HOVER: Color = hex(0x2e, 0x22, 0x24);
+
+// `[appearance.group_editor]` -- editor de grupo (ADR-0023, espec. §2.10).
+// Fundo/borda reaproveitam `POPOVER_BACKGROUND`/`POPOVER_BORDER` (mesmos
+// valores no TOML); item/hover da lista de ações reaproveitam
+// `MENU_ITEM_TEXT`/`MENU_ITEM_HOVER` -- só os tokens exclusivos do editor
+// (campo, swatches, divisor) ganham const própria aqui.
+pub const EDITOR_SECTION_TEXT: Color = hex(0x5c, 0x64, 0x6f); // section_foreground
+pub const EDITOR_INPUT_BACKGROUND: Color = hex(0x0f, 0x12, 0x16); // input_background
+pub const EDITOR_INPUT_BORDER: Color = hex(0x33, 0x3a, 0x45); // input_border
+pub const EDITOR_INPUT_BORDER_FOCUS: Color = hex(0x5e, 0xd3, 0xbc); // input_border_focus
+pub const EDITOR_INPUT_TEXT: Color = hex(0xe4, 0xe8, 0xee); // input_foreground
+pub const EDITOR_SWATCH_RING: Color = hex(0xee, 0xf2, 0xf4); // swatch_ring_selected
+pub const EDITOR_DIVIDER: Color = hex(0x2a, 0x2f, 0x38); // divider
+
 fn resolve_indexed(index: u8) -> Color {
     match index {
         0..=7 => ANSI_NORMAL[index as usize],

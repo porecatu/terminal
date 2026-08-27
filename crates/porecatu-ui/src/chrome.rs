@@ -34,6 +34,7 @@
 use porecatu_core::{TabId, Workspace};
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
 
+use crate::group_editor::GroupEditor;
 use crate::palette;
 use crate::rename::RenameState;
 use crate::selection::Selection;
@@ -118,6 +119,7 @@ pub fn paint(
     active: Option<TabId>,
     rename: &RenameState,
     selection: &Selection,
+    group_editor: Option<&GroupEditor>,
     style: &TabBarStyle,
     bar_width: f32,
     overflow: Overflow,
@@ -181,10 +183,20 @@ pub fn paint(
                     border_width: 0.0,
                 }));
             }
+            // Espec §2.10: "o nome muda na barra enquanto se digita" --
+            // enquanto o editor deste grupo está aberto, a pílula mostra o
+            // buffer ao vivo (`GroupEditor::name_buffer`) no lugar do nome
+            // já commitado que `pill.name` carrega, mesmo truque do campo
+            // de rename de aba (buffer preferido ao modelo na hora de
+            // pintar, nunca escrito nele até confirmar).
+            let live_name = group_editor
+                .filter(|e| e.group == group.id)
+                .map(GroupEditor::name_buffer);
             paint_group_pill(
                 pill,
                 group_color,
                 is_collapsed,
+                live_name,
                 style.pill_font_size,
                 dx,
                 measurer,
@@ -407,10 +419,12 @@ fn with_alpha(color: Color, alpha: f64) -> Color {
 /// caret, na cor do grupo já resolvida por quem chama (`group_color` em
 /// [`paint`]). Contador desenhado sempre, colapsado ou não (§2.4: "sempre
 /// desenhado, conteúdo idêntico").
+#[allow(clippy::too_many_arguments)]
 fn paint_group_pill(
     pill: &GroupPillRect,
     color: Color,
     is_collapsed: bool,
+    live_name: Option<&str>,
     name_font_size: f32,
     dx: f32,
     measurer: &mut porecatu_render::TextMeasurer,
@@ -451,9 +465,21 @@ fn paint_group_pill(
             border_width: 0.0,
         }));
     }
+    let name_text = match live_name {
+        // Cap aproximado: o espaço que o nome já ocupava no layout
+        // committed (`name_origin` até `count_rect`) -- não recalcula o
+        // orçamento exato do indicador agregado (nota do módulo,
+        // simplificação enquanto o editor está aberto).
+        Some(buffer) => {
+            let cap = (pill.count_rect.x - pill.name_origin.0).max(0.0);
+            let (truncated, _) = measurer.truncate(buffer, PILL_NAME_FONT, name_font_size, cap);
+            truncated
+        }
+        None => pill.name.clone(),
+    };
     out.push(Primitive::Text(TextRun {
         origin: (pill.name_origin.0 + dx, pill.name_origin.1),
-        text: pill.name.clone(),
+        text: name_text,
         font: PILL_NAME_FONT,
         size_px: name_font_size,
         color: palette::PILL_TEXT,
