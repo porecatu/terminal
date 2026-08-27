@@ -14,6 +14,7 @@ mod engine;
 mod event;
 mod keys;
 mod mouse;
+mod osc7;
 mod params;
 mod scroll;
 mod selection;
@@ -32,10 +33,15 @@ pub use snapshot::{
     Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, MouseReporting, SelectionSpan,
     TermModes,
 };
-pub use terminal::{Terminal, TerminalSpawnError};
+pub use terminal::{ShutdownWait, Terminal, TerminalSpawnError};
 
 // `porecatu-ui` monta `SpawnConfig` para chamar `Terminal::spawn`, mas não
 // pode depender de `porecatu-pty` diretamente (tabela de dependências do
 // CLAUDE.md: só `porecatu-term` depende de `pty`). Re-exportar aqui é o
 // único caminho permitido para esses tipos chegarem em `ui`.
-pub use porecatu_pty::{PtyError, PtySize, SpawnConfig};
+//
+// `resolve_default_shell`/`search_path` entram na Etapa 4: `ui` precisa do
+// mesmo nome de shell que `porecatu_pty::spawn` vai de fato spawnar
+// (`SpawnConfig.program = None` cai nessa mesma resolução), pra popular o
+// `shell_name` do `Tab` -- último nível da precedência de título do RF-1.7.
+pub use porecatu_pty::{PtyError, PtySize, SpawnConfig, resolve_default_shell, search_path};

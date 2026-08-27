@@ -27,6 +27,48 @@ pub const TERM_CURSOR_TEXT: Color = hex(0x0f, 0x12, 0x16); // cursor_text
 pub const TERM_SELECTION_BACKGROUND: Color = hex(0x2e, 0x6b, 0x62); // selection_background, RF-5.14
 pub const TERM_SELECTION_FOREGROUND: Color = hex(0xee, 0xf2, 0xf4); // selection_foreground
 
+// Nota no grid (RF-1.3, ADR-0017 item 5): "#5ed3bc, nunca imitando prompt"
+// -- destaque fixo do ADR-0014, independente de tema. `porecatu-term` não
+// resolve cor (seção 4 da arquitetura); passado cru como RGB pro motor.
+pub const NOTE_ACCENT_RGB: (u8, u8, u8) = (0x5e, 0xd3, 0xbc);
+
+// Espec. visual §1.2/§1.3 -- barra de abas.
+pub const BAR_BACKGROUND: Color = hex(0x1b, 0x1f, 0x26); // Barras
+pub const BAR_SEPARATOR: Color = hex(0x23, 0x27, 0x2f); // Separador de barra
+
+// Espec. visual §2.5 -- aba.
+pub const TAB_ACTIVE_BACKGROUND: Color = hex(0x28, 0x2e, 0x37);
+pub const TAB_ACTIVE_BORDER: Color = hex(0x39, 0x40, 0x4b);
+pub const TAB_ACTIVE_TEXT: Color = hex(0xea, 0xee, 0xf3);
+pub const TAB_INACTIVE_BACKGROUND: Color = hex(0x19, 0x1d, 0x23);
+pub const TAB_INACTIVE_BORDER: Color = hex(0x22, 0x26, 0x2e);
+pub const TAB_INACTIVE_TEXT: Color = hex(0x98, 0xa0, 0xab);
+// Aba `Exited` (ADR-0017): fundo/borda de inativa, texto no tom do botão
+// de fechar -- "o token de inerte da barra".
+pub const TAB_EXITED_TEXT: Color = hex(0x72, 0x7a, 0x86);
+pub const CLOSE_BUTTON_ICON: Color = hex(0x72, 0x7a, 0x86);
+// `[appearance.groups] ungrouped_color` -- sublinhado das abas do grupo
+// implícito (F2 só tem esse grupo).
+pub const UNGROUPED_UNDERLINE: Color = hex(0x7b, 0x83, 0x8f);
+
+// Espec. visual §2.5 -- campo de rename.
+pub const RENAME_BACKGROUND: Color = hex(0x0e, 0x11, 0x16);
+pub const RENAME_BORDER: Color = hex(0x5e, 0xd3, 0xbc);
+pub const RENAME_TEXT: Color = hex(0xe4, 0xe8, 0xee);
+
+// Espec. visual §2.6 -- botão de nova aba.
+pub const NEW_TAB_ICON: Color = hex(0x9a, 0xa2, 0xae);
+pub const NEW_TAB_BORDER: Color = hex(0x26, 0x2b, 0x34);
+
+/// Transparente -- usado como preenchimento de um `RoundedQuad` que só
+/// desenha borda (botão de nova aba, espec. §2.6, sem "fundo" listado).
+pub const TRANSPARENT: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.0,
+};
+
 // [terminal.colors.normal], RF-5.11 -- indices 0..8
 const ANSI_NORMAL: [Color; 8] = [
     hex(0x3b, 0x43, 0x4f), // black

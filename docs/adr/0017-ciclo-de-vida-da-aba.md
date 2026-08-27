@@ -41,7 +41,9 @@ Todos os sete pontos atravessam a fronteira de `porecatu-term`, e três deles mu
 
 ### 1. `cwd` vem de OSC 7, capturado a partir da F2
 
-`porecatu-term` ganha um `Handler` próprio que intercepta OSC 7 e delega todo o resto ao `Term` do `alacritty_terminal`, emitindo `TermEvent::Cwd`. Isso **antecipa** o que a seção 4.3 da arquitetura havia deferido para a F5; a F5 passa a consumir um evento que já existe, em vez de introduzi-lo.
+`porecatu-term` ganha uma captura de OSC 7 própria, emitindo `TermEvent::Cwd`. Isso **antecipa** o que a seção 4.3 da arquitetura havia deferido para a F5; a F5 passa a consumir um evento que já existe, em vez de introduzi-lo.
+
+*Correção de implementação (F2): o `osc_dispatch` do `vte` descarta OSC 7 antes de chamar qualquer método de `Handler` — não existe gancho de `Handler` para interceptar essa sequência específica sem forkar o crate. A captura roda como um segundo parser `vte::Perform`, independente e sem efeito colateral no motor, sobre os mesmos bytes — não um `Handler` que envolve o `Term`. O resultado observável é o mesmo desta decisão: `Term` segue intocado, `TermEvent::Cwd` sai capturado. Ver docs/arquitetura.md seção 4.3.*
 
 `porecatu-ui` guarda o último `cwd` conhecido por aba. `tab.new` e `window.new` herdam dele. Sem OSC 7 — shell sem integração, típico do Windows —, o fallback é `startup_directory`, que o [ADR-0005](0005-persistencia-de-sessao.md) já documenta como **comportamento esperado, não bug**.
 

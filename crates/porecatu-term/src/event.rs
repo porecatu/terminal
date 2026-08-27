@@ -3,15 +3,9 @@
 //! O que sai do terminal além de pixels (docs/arquitetura.md seção 4.3).
 //! `porecatu-term` nunca age sobre estes eventos -- só traduz e repassa;
 //! `porecatu-ui` decide o que fazer com cada um.
-//!
-//! Fora daqui por enquanto: `Cwd` (OSC 7) exigiria um `Handler` próprio
-//! interceptando essa sequência específica antes de delegar o resto para
-//! `alacritty_terminal::Term` -- `alacritty_terminal` não trata OSC 7 (não é
-//! xterm-padrão), e `porecatu-session`, o único consumidor real do cwd, só
-//! existe na F5. Construir a interceptação agora, sem quem leia o evento,
-//! é complexidade sem uso; entra junto com a F5.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Evento traduzido de `alacritty_terminal::event::Event` -- nenhum tipo do
@@ -37,6 +31,11 @@ pub enum TermEvent {
     /// `porecatu-pty::PtyHandle::try_wait`, detectado por `Terminal`
     /// (Etapa 3) e injetado neste mesmo canal.
     Exit { success: bool, code: u32 },
+    /// OSC 7 (ADR-0017 item 1). Captura própria de `porecatu-term`, fora do
+    /// motor -- ver `crate::osc7`. Herdado por `tab.new`/`window.new`;
+    /// `None` continua sendo o fallback de `startup_directory` até o
+    /// primeiro OSC 7 chegar.
+    Cwd(PathBuf),
 }
 
 /// Formata o conteúdo do clipboard (fornecido por quem responde, via

@@ -166,3 +166,45 @@ fn terminal_shutdown_nao_trava_com_processo_de_longa_duracao() {
         .recv_timeout(Duration::from_secs(5))
         .expect("Terminal::shutdown travou com um processo de longa duracao rodando");
 }
+
+/// ADR-0017 item 4: fechar aba não bloqueia a main thread. `close` devolve
+/// bem antes de `SHUTDOWN_TIMEOUT` (2s) mesmo com o processo ainda vivo --
+/// ao contrário de `shutdown`, que espera a confirmação.
+#[test]
+fn terminal_close_devolve_na_hora_sem_esperar_confirmacao() {
+    let terminal = spawn_long_running();
+    std::thread::sleep(Duration::from_millis(200));
+
+    let start = Instant::now();
+    let wait = terminal.close();
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "close() bloqueou esperando confirmacao"
+    );
+
+    // A confirmação ainda chega, pra quem quiser esperar por ela.
+    wait.wait();
+}
+
+#[test]
+fn inject_note_escreve_no_grid_como_saida_do_programa() {
+    let (program, args) = trivial_command();
+    let terminal = Terminal::spawn(
+        SpawnConfig {
+            program,
+            args,
+            env: Vec::new(),
+            cwd: None,
+            size: default_size(),
+        },
+        TermParams::default(),
+        || {},
+    )
+    .expect("spawn falhou");
+
+    terminal.inject_note("processo encerrado (codigo 1)", (0x5e, 0xd3, 0xbc));
+
+    let mut snap = GridSnapshot::default();
+    terminal.snapshot_into(&mut snap);
+    assert!(snapshot_text(&snap).contains("processo encerrado (codigo 1)"));
+}
