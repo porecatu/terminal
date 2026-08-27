@@ -32,8 +32,8 @@ impl Selection {
 
     /// RF-2.3 (literal): clique sem modificador limpa seleção e âncora.
     /// Também usado por `Esc` (ADR-0021 §2, mesma tecla que dispensa aviso e
-    /// cancela rename). `group.create` (F3 etapa 3+) também limpa ao criar o
-    /// grupo -- fora do escopo desta etapa, que ainda não wireia a ação.
+    /// cancela rename) e por `group.create` (ADR-0021 §2: "criar o grupo
+    /// limpa a seleção" -- `WindowState::action_group_create`).
     pub fn clear(&mut self) {
         self.tabs.clear();
         self.anchor = None;

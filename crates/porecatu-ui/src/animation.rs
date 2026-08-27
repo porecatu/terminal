@@ -20,11 +20,9 @@
 //! final desde o primeiro frame, só a posição de **desenho** anima --
 //! `tab_bar::layout` continua alheio a isto, quem interpola é `chrome.rs`.
 //!
-//! Nesta etapa, só o colapso/expansão tem gatilho de UI (clique na
-//! pílula, menu, editor) -- `group.create` continua sem gesto que o
-//! dispare (mesmo padrão "core à frente da UI" das etapas 2 a 5), então a
-//! reordenação do RF-2.5 usa o mesmo mecanismo mas só é exercida por
-//! quem chamar `start_reflow` diretamente (teste, ou uma UI futura).
+//! Os dois têm gatilho de UI: colapso/expansão (clique na pílula, menu,
+//! editor) e `group.create` (`Ctrl+Shift+G`, `WindowState::
+//! action_group_create`).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -143,6 +141,50 @@ mod tests {
         let mut m = TextMeasurer::new();
         let layout = tab_bar::layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         (layout, g1, g2)
+    }
+
+    // Cenário de aceite (bug real, F3 etapa 6): colapsar um grupo do meio
+    // tinha que animar o grupo depois dele -- `Workspace::group_tabs`
+    // invertia a ordem de `groups` quando o grupo novo saía de um grupo
+    // explícito (não implícito) já existente, o que fazia
+    // `wrapper_progress` devolver a posição antiga do grupo ERRADO pra
+    // cada um. Consertado em `group_tabs` (ver comentário lá); este teste
+    // fecha a lacuna que deixou passar.
+    #[test]
+    fn collapsing_middle_group_animates_the_group_after_it() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let g1 = ws.group_tabs(&[a], "g1", GroupColor::Red).unwrap();
+        let b = ws.new_tab(Some(g1), "bash", None, 1);
+        let g2 = ws.group_tabs(&[b], "g2", GroupColor::Blue).unwrap();
+        let c = ws.new_tab(Some(g2), "fish", None, 1);
+        let g3 = ws.group_tabs(&[c], "g3", GroupColor::Green).unwrap();
+        assert_eq!(
+            ws.groups().iter().map(|g| g.id()).collect::<Vec<_>>(),
+            [g1, g2, g3],
+            "ordem dos grupos precisa ficar na ordem de criação"
+        );
+
+        let mut m = TextMeasurer::new();
+        let old_layout = tab_bar::layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+
+        ws.collapse_group(g2, true);
+        let new_layout = tab_bar::layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+
+        let mut clock = AnimationClock::default();
+        let now = Instant::now();
+        clock.start_reflow(&old_layout, Duration::from_millis(150), now);
+
+        let (g1_old_x, _) = clock.wrapper_progress(g1, now).unwrap();
+        let (g2_old_x, _) = clock.wrapper_progress(g2, now).unwrap();
+        let (g3_old_x, _) = clock.wrapper_progress(g3, now).unwrap();
+        assert_eq!(g1_old_x, old_layout.groups[0].rect.x);
+        assert_eq!(g2_old_x, old_layout.groups[1].rect.x);
+        assert_eq!(g3_old_x, old_layout.groups[2].rect.x);
+
+        // g1 não se move (nada muda antes dele); g3 se move (g2 encolheu).
+        assert_eq!(old_layout.groups[0].rect.x, new_layout.groups[0].rect.x);
+        assert_ne!(old_layout.groups[2].rect.x, new_layout.groups[2].rect.x);
     }
 
     #[test]

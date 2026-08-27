@@ -77,7 +77,6 @@ const NEW_WINDOW_CASCADE_PX: i32 = 30;
 /// ADR-0022, tabela de consumidores -- as únicas duas durações que o
 /// relógio de animação usa.
 const COLLAPSE_REFLOW_DURATION: std::time::Duration = std::time::Duration::from_millis(150);
-#[allow(dead_code)] // group.create ainda sem gesto que dispare isto (nota do módulo `animation.rs`)
 const GROUP_CREATE_REFLOW_DURATION: std::time::Duration = std::time::Duration::from_millis(180);
 
 /// Estado do arraste na barra (espec §2.19/§2.19.1, RF-1.15/RF-1.16/
@@ -213,9 +212,8 @@ struct WindowState {
     /// Arraste de reordenação em andamento (espec §2.19), se algum.
     drag: Drag,
     /// Relógio de animação (ADR-0022) -- reflui da trilha ao colapsar/
-    /// expandir (`.15s`, único gatilho de UI desta etapa) e, pelo mesmo
-    /// mecanismo, a reordenação do RF-2.5 (`.18s`, sem gatilho ainda --
-    /// `group.create` continua sem gesto, nota do módulo `animation.rs`).
+    /// expandir (`.15s`, `toggle_group_collapse`) e ao formar grupo
+    /// (RF-2.5, `.18s`, `action_group_create`).
     animations: AnimationClock,
     /// Hover/tooltip do ADR-0019 -- RF-1.10, título truncado da aba.
     hover: Hover,
@@ -832,7 +830,7 @@ impl WindowState {
             }
             MoveTarget::NewGroup => {
                 let color = self.workspace.next_auto_color();
-                self.workspace.group_tabs(&[tab], "", color);
+                self.workspace.group_tabs(&[tab], "Novo grupo", color);
             }
         }
     }
@@ -869,6 +867,12 @@ impl WindowState {
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("r") => {
                     self.action_rename_start();
+                    return ActionOutcome::Handled;
+                }
+                // `docs/config/porecatu.example.toml` `[keybindings]`:
+                // "ctrl+shift+g" = "group.create".
+                Key::Character(s) if s.eq_ignore_ascii_case("g") => {
+                    self.action_group_create(gpu);
                     return ActionOutcome::Handled;
                 }
                 // ADR-0015: `window.new`/`window.close`.
@@ -1102,6 +1106,50 @@ impl WindowState {
     /// entrar em vista. `collapse_group` pode mover o foco (RF-2.14) --
     /// título da janela e posição de rolagem seguem a aba ativa, mesmo
     /// tratamento do clique que ativa uma aba.
+    /// `group.create` (RF-2.4/RF-2.5): agrupa a seleção corrente, ou a aba
+    /// ativa se nada estiver selecionado (ADR-0021 §1: "seleção vazia não
+    /// é caso especial"). Nome default "Novo grupo" (não vazio -- o corpo
+    /// do RF-2.4 só exige "nome em edição", que o editor aberto em seguida
+    /// já cobre) e cor automática (`next_auto_color`). Captura o layout de
+    /// antes pra animar a reordenação das abas que ficam contíguas
+    /// (ADR-0022, `.18s`) -- primeiro gatilho de UI deste consumidor, que
+    /// até aqui só existia testado direto no `AnimationClock`. Criar
+    /// limpa a seleção (ADR-0021 §2) e abre o editor com foco no nome
+    /// (RF-2.4: "nasce... em modo de edição").
+    fn action_group_create(&mut self, gpu: &mut GpuContext) {
+        if self.rename.editing_tab().is_some() {
+            self.commit_rename();
+        }
+        let ids: Vec<TabId> = if self.selection.is_empty() {
+            self.workspace.active_tab().into_iter().collect()
+        } else {
+            self.workspace
+                .visual_order()
+                .filter(|id| self.selection.is_selected(*id))
+                .collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+
+        let style = TabBarStyle::DEFAULT;
+        let old_layout = tab_bar::fit_width(
+            &self.workspace,
+            &style,
+            self.logical_width,
+            gpu.text_measurer(),
+        );
+        let color = self.workspace.next_auto_color();
+        let Some(group) = self.workspace.group_tabs(&ids, "Novo grupo", color) else {
+            return;
+        };
+        self.animations
+            .start_reflow(&old_layout, GROUP_CREATE_REFLOW_DURATION, Instant::now());
+        self.selection.clear();
+        self.open_group_editor(group, EditorRegion::Name);
+        self.sync_window_title();
+    }
+
     fn toggle_group_collapse(&mut self, id: GroupId, gpu: &mut GpuContext) {
         let Some(group) = self.workspace.group(id) else {
             return;
