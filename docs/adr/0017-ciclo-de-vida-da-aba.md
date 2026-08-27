@@ -136,7 +136,7 @@ Uniforme, trivial, e sem inspeção nenhuma. Descartada porque a aba **sempre** 
 
 ### Adiar OSC 7 para a F5 e abrir toda aba em `startup_directory`
 
-Mantém a F2 fora de `porecatu-term`. Descartada porque o RF-1.1 é cenário de aceite da F2 e o `window.new` do [ADR-0015](0015-multiplas-janelas.md) repete a herança pela mesma razão: *"herdar o diretório é o comportamento que economiza mais digitação no dia a dia"*. Abrir toda aba no mesmo lugar é a limitação que o usuário percebe na primeira hora. O custo real é um `Handler` intermediário, não um motor novo.
+Mantém a F2 fora de `porecatu-term`. Descartada porque o RF-1.1 é cenário de aceite da F2 e o `window.new` do [ADR-0015](0015-multiplas-janelas.md) repete a herança pela mesma razão: *"herdar o diretório é o comportamento que economiza mais digitação no dia a dia"*. Abrir toda aba no mesmo lugar é a limitação que o usuário percebe na primeira hora. O custo real é um parser auxiliar sobre os mesmos bytes, não um motor novo.
 
 ### Nota do RF-1.3 na primeira linha, como o ADR-0014 escreveu
 
@@ -161,7 +161,7 @@ O caminho intuitivo. Descartada pelo mesmo motivo que a seção 2 da arquitetura
 
 - RF-1.6 cobre menos que o texto original prometia: comando não interativo de longa duração e `ssh` em prompt remoto fecham sem perguntar.
 - RF-1.7 perde um nível de precedência. Aba rodando comando que não emite título mostra o nome do shell.
-- `porecatu-term` ganha um `Handler` intermediário, que é código a mais na fronteira mais crítica do projeto e mais uma coisa a reescrever se o motor VT for trocado.
+- `porecatu-term` ganha um parser auxiliar de OSC 7, que é código a mais na fronteira mais crítica do projeto e mais uma coisa a reescrever se o motor VT for trocado. *(Correção de implementação, F2: é um segundo `vte::Perform` sobre os mesmos bytes, não um `Handler` envolvendo o `Term` — ver a nota da decisão.)*
 - O estado `Exited` é um caso especial em toda operação de aba — input, indicadores, sessão —, e cada um precisa de teste.
 - Encerramento assíncrono significa que a aba desaparece da barra antes de o processo estar comprovadamente morto. Se a confirmação nunca vier, o app carrega um processo órfão até sair.
 
@@ -172,7 +172,7 @@ O caminho intuitivo. Descartada pelo mesmo motivo que a seção 2 da arquitetura
 | Usuário fechar aba com `cargo build` rodando e não ser avisado | Alta | Baixo | RF-1.3 mantém a aba aberta quando o processo morre com código ≠ 0; indicador de atividade do RF-1.20 sinaliza que há saída nova |
 | `alt_screen` dar falso positivo e confirmar sem necessidade | Média | Baixo | `confirm_close_with_process = false` desliga; o falso positivo é o lado seguro do erro |
 | Shell sem OSC 7 fazer toda aba abrir em `startup_directory` no Windows | Alta | Médio | Convite à integração de shell do RF-3.1, já previsto no ADR-0014 e no ADR-0005 |
-| `Handler` próprio engolir OSC que o `Term` deveria tratar | Média | Alto | O `Handler` intercepta **só** OSC 7 e delega todo o resto; teste golden com OSC 0, 2, 4, 8, 52 atravessando |
+| Captura própria engolir OSC que o `Term` deveria tratar | Média | Alto | Risco eliminado pela implementação: o parser auxiliar **não** fica no caminho do motor, ele só observa os mesmos bytes, então nada pode ser engolido. Teste golden com OSC 0, 2, 4, 8 e 52 atravessando cobre isso |
 | Confirmação de morte não chegar e vazar processo | Baixa | Médio | `SHUTDOWN_TIMEOUT` volta a ser rede de segurança; o SO reclama as handles quando o Porecatu sai, como a seção 2 da arquitetura já registra |
 | Aba `Exited` aceitar input por esquecimento em algum caminho | Média | Baixo | O estado é verificado num ponto só, na entrada do roteamento de input; teste unitário |
 | Alguém reintroduzir o nível 3 do RF-1.7 lendo o PRD-001 ao pé da letra | Média | Médio | Nota de reconciliação no próprio RF-1.7 apontando para este ADR |

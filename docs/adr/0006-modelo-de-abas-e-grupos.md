@@ -51,17 +51,35 @@ Todas em `porecatu-core`, puras, sem I/O, testáveis:
 | `new_tab(group, pos)` | Cria aba no grupo, na posição |
 | `close_tab(id)` | Remove; se o grupo ficar vazio e for explícito, remove o grupo |
 | `move_tab(id, group, pos)` | Move entre grupos ou dentro do grupo |
-| `group_tabs(ids, nome, cor)` | Cria grupo com as abas; as abas passam a ser contíguas na ordem em que foram selecionadas |
+| `group_tabs(ids, nome, cor)` | Cria grupo com as abas; as abas passam a ser contíguas na ordem em que aparecem **na barra** |
 | `ungroup(group)` | Abas voltam ao grupo implícito, na posição do grupo dissolvido |
 | `rename_group(id, nome)` / `set_group_color` | Metadados |
-| `collapse_group(id, bool)` | Só afeta o desenho, não a estrutura |
+| `collapse_group(id, bool)` | Afeta o desenho **e a ordem navegável** (ver nota) |
 | `activate_tab(id)` | Define a aba ativa |
+
+> **Correções de fato (2026-08-27), decididas no [ADR-0020](0020-grupos-explicitos.md).**
+>
+> - `group_tabs` dizia *"na ordem em que foram selecionadas"*. O RF-2.5 e o
+>   cenário de aceite do [PRD-002](../prd/prd-002-grupos-de-abas.md) pedem a
+>   ordem **da barra** (*"Dado abas nas posições 1, 3 e 5 selecionadas … então as
+>   três ficam contíguas na barra, na ordem 1, 3, 5"*), que é o que vale. Ordem
+>   de seleção produziria `5, 1, 3` para quem clicou de trás para a frente.
+> - `collapse_group` dizia *"só afeta o desenho, não a estrutura"*. O RF-2.15
+>   remove as abas colapsadas da navegação sequencial **e do acesso por índice**,
+>   o que é a definição de uma ordem, não uma questão de pintura: o ADR-0020
+>   separa `visual_order()` de `navigable_order()`, e colapso age na segunda.
+> - **O grupo implícito não é único.** A seção "Decisão" o descreve no singular,
+>   o que colide com a restrição de contiguidade quando um grupo explícito nasce
+>   no meio de abas soltas. Há um grupo implícito por trecho contíguo de abas sem
+>   grupo. A promessa que motivava o singular — *"o resto da aplicação nunca lida
+>   com `Option<GroupId>`"* — continua valendo: o que muda é a cardinalidade, não
+>   a existência.
 
 ### Invariantes verificadas em teste
 
 - Todo `TabId` está em exatamente um grupo.
 - A ordem dos grupos e das abas é total e sem lacunas.
-- Fechar a aba ativa move o foco para a vizinha do mesmo grupo; se não houver, para a vizinha do grupo adjacente.
+- Fechar a aba ativa move o foco para a vizinha do mesmo grupo; se não houver, para a vizinha do grupo adjacente — **seguinte antes de anterior em todos os níveis, e grupo colapsado é pulado**, como o [ADR-0020](0020-grupos-explicitos.md) desambigua.
 - Colapsar um grupo que contém a aba ativa move o foco para fora dele.
 - Round-trip `Workspace -> JSON -> Workspace` preserva IDs, ordem e metadados.
 

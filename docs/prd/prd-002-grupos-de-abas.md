@@ -5,6 +5,34 @@
 **Requisito de origem:** 2 — agrupamento de tabs, para selecionar e agrupar terminais abertos, incluindo atribuir um nome ao grupo
 **Relacionados:** [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), [PRD-001](prd-001-abas.md), [PRD-004](prd-004-aparencia-do-chrome.md)
 
+> **Nota de reconciliação (2026-08-27).** Ao preparar a F3, quatro ADRs novos
+> decidiram *como* atender requisitos deste PRD que, lidos ao pé da letra, eram
+> ambíguos, contraditórios entre si, ou pediam mecanismo que não existe. **O
+> texto original é preservado — quem decide é sempre o ADR novo.**
+>
+> - [**ADR-0020**](../adr/0020-grupos-explicitos.md) governa **RF-2.7 e RF-2.8**
+>   (que se contradiziam: grupo vazio é removido, e o usuário cria grupo vazio),
+>   **RF-2.13 a RF-2.15** (colapso passa a ser estrutura, com ordem navegável
+>   própria), **RF-2.4** (a paleta tem seis cores e a métrica deste PRD é dez
+>   grupos, então "a próxima cor ainda não usada" nem sempre existe) e
+>   **RF-2.21** (a "última aba visitada" é estado novo, não persistido).
+> - [**ADR-0021**](../adr/0021-selecao-multipla-e-gestos-da-barra.md) governa
+>   **RF-2.1 a RF-2.3**: a seleção é estado efêmero de janela, e no macOS o
+>   modificador é `Cmd`, não `Ctrl` — lá `Ctrl`+clique é o clique secundário e
+>   abre o menu de contexto (RF-10.19). Governa também **RF-2.18**, a fronteira
+>   do arraste.
+> - [**ADR-0022**](../adr/0022-animacao-de-interface.md) governa **RF-2.5**: a
+>   animação exigida aqui é a única exceção à regra do ADR-0007 de que terminal
+>   ocioso não gera frame, e é desligável na config.
+> - [**ADR-0023**](../adr/0023-editor-de-grupo.md) governa **RF-2.9** (edição ao
+>   vivo com valor anterior guardado, reconciliando "`Esc` cancela" com o que a
+>   seção 2.10 do design especifica), **RF-2.10** (a entrada por valor
+>   hexadecimal fica **diferida**: a superfície de cor do v1 são os seis
+>   swatches, e quem quer outra cor a coloca na `palette` da config),
+>   **RF-2.20** (o destino é escolhido num popover próprio, não em submenu) e
+>   **RF-2.22** (o editor é o quinto widget de chrome, com camada e captura de
+>   teclado próprias).
+
 ## Problema
 
 Abas resolvem "muitas janelas". Não resolvem "muitas abas".
@@ -24,7 +52,7 @@ Definido em [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), resumido aqui po
 - Uma aba pertence a **exatamente um** grupo.
 - Grupos **não aninham**.
 - Grupos são **contíguos** na barra.
-- Abas "sem grupo" existem e são normais — pertencem a um grupo implícito que não é desenhado.
+- Abas "sem grupo" existem e são normais — pertencem a um grupo implícito que não é desenhado. *(O [ADR-0020](../adr/0020-grupos-explicitos.md) precisa isso: há **um por trecho contíguo** de abas sem grupo, não um só por janela. Nada muda para o usuário; muda para quem lê o modelo.)*
 
 ## Requisitos funcionais
 

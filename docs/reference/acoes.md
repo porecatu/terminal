@@ -49,6 +49,21 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > primeiro plano. `tab.new` herda o `cwd` capturado por OSC 7, que passa a
 > existir na F2; sem OSC 7, cai em `startup_directory`.
 
+> **Estado na F3.** As nove `group.*` e a `tab.move_to_group` passam a existir,
+> ainda com defaults fixos no código — o parser de `[keybindings]` continua
+> sendo F4. O **nível de grupo** da cadeia do ADR-0008, que a F2 deixou vazio,
+> é preenchido aqui.
+>
+> `tab.goto_N` passa a numerar sobre a ordem **navegável**, não a visual: aba de
+> grupo colapsado sai da numeração, e colapsar um grupo renumera `Alt+1..9`. É a
+> leitura consistente de RF-1.12 com RF-2.15, decidida no
+> [ADR-0020](../adr/0020-grupos-explicitos.md).
+>
+> `group.set_color` e `tab.move_to_group` **abrem uma superfície de escolha** em
+> vez de executar direto — editor e popover de destino, respectivamente
+> ([ADR-0023](../adr/0023-editor-de-grupo.md)). Continuam `Arg` e continuam não
+> vinculáveis; o item "Mover para grupo" do menu de aba deixa de ser esmaecido.
+
 ---
 
 ## `group.*` — grupos
@@ -57,9 +72,9 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 |---|---|---|---|---|
 | `group.create` | Cria grupo com as abas selecionadas, cor automática, nome em edição | RF-2.4, RF-2.5 | F3 | |
 | `group.dissolve` | Desagrupa: abas voltam ao grupo implícito na mesma posição | RF-2.6 | F3 | |
-| `group.rename` | Abre a edição inline do nome do grupo | RF-2.9 | F3 | |
-| `group.set_color` | Define a cor do grupo | RF-2.10 | F3 | sim |
-| `group.toggle_collapse` | Colapsa ou expande o grupo da aba ativa | RF-2.13, RF-2.14 | F3 | |
+| `group.rename` | Abre o editor de grupo com o foco no nome | RF-2.9 | F3 | |
+| `group.set_color` | Abre o editor de grupo com o foco na faixa de cores | RF-2.10 | F3 | sim |
+| `group.toggle_collapse` | Colapsa ou expande o grupo | RF-2.13, RF-2.14 | F3 | |
 | `group.next` | Próximo grupo, ativando sua última aba visitada | RF-2.21 | F3 | |
 | `group.prev` | Grupo anterior, ativando sua última aba visitada | RF-2.21 | F3 | |
 | `group.new_tab` | Cria aba dentro do grupo | RF-2.8, RF-2.22 | F3 | |
@@ -68,6 +83,36 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 `group.close_all` é a única ação cuja confirmação não é configurável — o RF-2.23 chama isso de *"a ação mais destrutiva da interface"*.
 
 O menu de contexto do grupo e o editor de grupo invocam **esta mesma lista**, por decisão do [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md): duas listas divergiriam na primeira mudança.
+
+### Qual grupo cada uma dessas ações afeta
+
+Sete das nove operam sobre **um** grupo, e o alvo depende de como foram
+invocadas — o que precisa estar escrito aqui, e não ser decidido na
+implementação, porque o conjunto é fechado:
+
+- **Por tecla:** o grupo da **aba ativa**. Sempre existe, porque toda aba
+  pertence a exatamente um grupo, inclusive um run implícito
+  ([ADR-0020](../adr/0020-grupos-explicitos.md)).
+- **Por menu de contexto de grupo ou pelo editor:** o grupo **clicado**, que
+  pode não conter a aba ativa.
+
+As ações **não** ganham argumento por isso: o alvo é o contexto de invocação, do
+mesmo jeito que `tab.close` fecha a aba ativa por tecla e a aba clicada por
+menu. Só `group.set_color` e `tab.move_to_group` seguem marcadas `Arg`, porque
+precisam de um valor — cor e grupo de destino — que nem a tecla nem o alvo
+implícito fornecem.
+
+Duas ações são vinculáveis e **não têm default de tecla**, de propósito:
+
+- `group.close_all` — atalho para a ação mais destrutiva da interface é risco
+  desproporcional ao ganho. Quem quiser, vincula.
+- `group.new_tab` — conveniência de menu de grupo; `tab.new` já cria aba no
+  grupo da aba ativa, que é o caso comum.
+
+Sobre um grupo implícito, `group.rename`, `group.set_color`, `group.dissolve` e
+`group.toggle_collapse` ficam **indisponíveis** — esmaecidas no menu, nunca
+ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
+(ADR-0006, ADR-0020).
 
 ---
 
@@ -174,7 +219,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Seis comportamentos da F2 têm requisito aprovado e **não recebem nome de ação**. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Doze comportamentos das F2 e F3 têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os seis últimos da F3. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -184,5 +229,11 @@ Seis comportamentos da F2 têm requisito aprovado e **não recebem nome de açã
 | Dispensar aviso | RF-10.16 | `Esc` sobre o aviso do topo é modo de captura, não binding — passo 1 da cadeia do [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) |
 | Confirmar ou cancelar diálogo | RF-10.18 | idem: `Enter` e `Esc` dentro de modal, consumidos antes da tabela de keybindings |
 | Reordenar aba por arraste | RF-1.15 | posição de queda é contínua; `tab.move_left`/`tab.move_right` são o equivalente de teclado, uma posição por vez |
+| Selecionar múltiplas abas | RF-2.1 | `Ctrl`/`Cmd`+clique alterna, `Shift`+clique estende a partir da âncora; o alvo é o pixel clicado, e nenhum RF pede equivalente de teclado (ver `group.select_all_tabs` acima) |
+| Limpar a seleção por clique simples | RF-2.3 | é a ausência de modificador sobre "ativar aba por clique", não um comando próprio |
+| Colapsar por clique no rótulo do grupo | RF-2.13 | o alvo é a pílula clicada; `group.toggle_collapse` é o equivalente de teclado |
+| Abrir o editor por duplo clique no rótulo | RF-2.22 | idem; `group.rename` e `group.set_color` abrem o mesmo editor por outro caminho |
+| Arrastar aba para dentro ou fora de um grupo | RF-1.16, RF-2.18 | o grupo de destino vem dos limites visuais sob o cursor; `tab.move_to_group` é o equivalente sem mouse, e por isso é `Arg` |
+| Arrastar o rótulo do grupo | RF-2.19 | move o grupo inteiro para uma fronteira contínua; nenhum RF pede equivalente de teclado |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

@@ -23,6 +23,10 @@
 | [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Aceito |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
 | [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
+| [0020](0020-grupos-explicitos.md) | Grupos explícitos: multiplicidade do implícito, colapso e foco | Aceito |
+| [0021](0021-selecao-multipla-e-gestos-da-barra.md) | Seleção múltipla e gestos da barra de abas | Aceito |
+| [0022](0022-animacao-de-interface.md) | Animação de interface sob render damage-driven | Aceito |
+| [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Aceito |
 
 ## Convenção
 

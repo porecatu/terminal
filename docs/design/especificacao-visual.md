@@ -197,9 +197,24 @@ Só as oito brilhantes de cor (`red` a `cyan`) são valores novos; `black`, `whi
 | `pop` | `.13s ease-out`, de `opacity 0` + `translateY(-4px)` | popovers; `.14s` no modal da paleta |
 | `slidein` | `.16s ease-out`, de `translateX(24px)` + `opacity 0` | drawer de configurações |
 | Transições | `.15s` | rotação do caret, cor do trilho e posição do botão do toggle |
+| `reflow` | `.18s` linear | reordenação das abas ao formar grupo (RF-2.5) e ao arrastar grupo |
 | Hover por brilho | `filter: brightness(1.25)` na pílula, `1.18` na aba | evita definir uma cor de hover por grupo |
 
 O hover por `brightness` é uma decisão relevante: com seis cores de grupo, definir hover por cor exigiria doze tokens. O filtro resolve com um.
+
+**`reflow` é a única animação de movimento do v1**, e é interpolação **linear**,
+sem curva: 180 ms de deslocamento horizontal não distingue easing, e o projeto
+não tem primitiva de curva. Ela existe porque o RF-2.5 a exige como cenário de
+aceite — abas selecionadas em três pontos distantes da barra aparecendo juntas
+noutro lugar, sem nada na tela explicando o quê, é a surpresa que o
+[ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md) registrou como risco. É
+animação **explicativa**, não decorativa, e é por isso que ela entra onde o
+indicador que pisca e o easing de rolagem foram recusados (§2.17, §2.18).
+
+Qualquer interação durante o `reflow` aplica o estado final na hora e descarta o
+movimento: animação não enfileira input. E `animations = false` na config aplica
+todo `reflow` instantaneamente — as abas ficam contíguas, só não se vê o
+caminho. Ver [ADR-0022](../adr/0022-animacao-de-interface.md).
 
 ---
 
@@ -243,11 +258,36 @@ Altura 30, `padding: 0 9px 0 8px`, raio 6, `gap: 7`, fundo `#1f242c`, borda `1px
 Da esquerda para a direita:
 
 1. **Swatch** 8×8, raio 2, na cor do grupo.
-2. **Nome** 12px/500 `#c3cad3`, sem quebra.
+2. **Nome** 12px/500 `#c3cad3`, sem quebra, `max-width: 140px`, truncado com reticências (RF-2.12). Nome completo em tooltip (seção 2.20), pelo mesmo caminho da aba.
 3. **Contador** mono 10px `#7b838f` sobre `#12151a`, raio 9, `padding: 1px 6px`.
 4. **Caret** `▶` 8px `#6b737e`, `rotate(0deg)` colapsado e `rotate(90deg)` expandido, transição `.15s`.
 
 Interação: clique alterna colapso; duplo clique abre o editor.
+
+**Teto e piso do nome.** O teto de 140 px é o da aba (180) menos os 41 px de
+cromo que a §2.18 contabiliza — uma pílula não deve poder ficar mais larga que a
+aba que ela rotula. O piso é **60 px**, e a pílula é o **segundo** a ceder na
+ordem da §2.18, depois do rótulo da aba e antes da rolagem da trilha: dez grupos
+no piso somam 600 px de pílula, o que caberia numa janela de largura usual, e é o
+que sustenta a métrica de dez grupos do [PRD-002](../prd/prd-002-grupos-de-abas.md).
+
+**Indicador agregado de grupo colapsado (RF-2.16).** Ponto de 6×6, raio 50%,
+entre o swatch e o nome, com o mesmo `gap: 7` dos demais elementos — as cores são
+as da seção 2.17 (`#86c56a` atividade, `#ef8a8a` campainha), e vale a mesma regra
+de **um ponto só, campainha vence**. Só aparece com o grupo **colapsado**: com o
+grupo expandido, cada aba mostra o seu próprio ponto e um agregado seria
+redundante. Como a §2.17, **não pisca**, e o ponto consome largura do nome, não
+da pílula.
+
+**Contador: sempre desenhado, conteúdo idêntico.** A `show_tab_count_when_collapsed`
+do arquivo de exemplo (RF-4.17) governa só o caso colapsado, que é o que o
+requisito nomeia; com o grupo expandido o contador segue visível, como o mockup
+desenha. Não são dois comportamentos: é uma chave que desliga metade de um.
+
+**Grupo colapsado** muda três coisas e nada mais: o caret gira, o wrapper perde o
+tingimento (§2.3) e o indicador agregado pode aparecer. A pílula mantém altura,
+paddings e piso. O sublinhado de grupo (§2.5) desaparece junto com as abas, que é
+consequência de elas não estarem na trilha, não uma regra própria.
 
 ### 2.5 Aba `[v1]`
 
@@ -257,6 +297,20 @@ Altura 30, `padding: 0 6px 0 10px`, raio 6, `gap: 8`, borda 1px. Hover `brightne
 |---|---|---|---|
 | Ativa | `#282e37` | `#39404b` | `#eaeef3` |
 | Inativa | `#191d23` | `#22262e` | `#98a0ab` |
+| Selecionada (RF-2.2) | o do estado de base | `#5ed3bc`, 2px **por dentro** | o do estado de base |
+
+**Selecionada é um modificador, não um quarto estado.** Uma aba pode estar
+selecionada e ativa ao mesmo tempo (RF-2.2 é explícito: *"uma aba pode estar
+selecionada sem estar ativa"*), então o fundo e o texto continuam vindo de
+"Ativa" ou "Inativa" e só a borda muda. O valor é o `selected_border` do arquivo
+de exemplo, que é o acento `#5ed3bc` da seção 1.5 — o mesmo do campo de rename e
+do anel de foco do diálogo, aqui no seu terceiro papel de "isto está sob a ação
+do usuário".
+
+A borda de 2 px é desenhada **para dentro**, sobre a borda de 1 px do estado de
+base, e não soma largura: a aba **não muda de tamanho ao ser selecionada**, pela
+mesma razão que não muda ao entrar em rename e que a §2.18 dá para nada ceder
+além do rótulo. Selecionar cinco abas não pode refluir a barra.
 
 **Sublinhado de grupo**: `box-shadow: inset 0 -2px 0 <cor do grupo>`, ou `transparent` quando desligado. Aparece **junto** com a pílula — os dois indicadores coexistem, não são alternativos. É a origem do `indicator_style` combinável do [PRD-004](../prd/prd-004-aparencia-do-chrome.md) RF-4.14.
 
@@ -306,7 +360,21 @@ Rótulo "Perfis" 10px uppercase `#5c646f`, `letter-spacing: .7px`. Itens: `paddi
 
 ### 2.10 Editor de grupo `[v1]`
 
-Popover `top: 76px`, largura 286, `padding: 14`, `gap: 13`. Mesmo fundo, borda, raio, sombra e animação do menu de perfis. Posicionado horizontalmente sobre o grupo que está sendo editado.
+Popover largura 286, `padding: 14`, `gap: 13`. Mesmo fundo, borda, raio, sombra e animação do menu de perfis. Posicionado horizontalmente sobre o grupo que está sendo editado.
+
+**Posição vertical: 8 px abaixo da borda inferior da barra de abas**, não o
+`top: 76px` que o canvas usa. Aquele valor pressupõe a barra de título `[v2]` de
+36 px somada à barra de abas; no v1 o default é `decorations = true`, a barra de
+abas começa em `y = 0` e o valor fixo desenharia o popover flutuando sobre a
+grade com uma folga arbitrária. Os 8 px são o mesmo respiro da pilha de avisos
+(§2.14). Com `tab_bar_position = "bottom"`, o editor abre **acima** da barra, com
+a mesma folga.
+
+**Flip nos dois eixos**, como o menu de contexto (§2.16): a borda direita nunca
+passa da janela, e se não couber abaixo da barra o popover vira para cima. Camada
+**popover** do [ADR-0018](../adr/0018-composicao-de-frame.md), compartilhada com
+o menu de contexto e o tooltip — e o editor **nunca** coexiste com o menu de
+contexto ([ADR-0023](../adr/0023-editor-de-grupo.md)).
 
 1. **Rótulo do grupo** — seção 10px uppercase `#5c646f` + input largura total, fundo `#0f1216`, borda `#333a45` (foco `#5ed3bc`), raio 5, 13px `#e4e8ee`, `padding: 7px 9px`, foco automático. Edição ao vivo: o nome muda na barra enquanto se digita.
 2. **Cor** — seis swatches 28×28, raio 6, `gap: 8`, borda `2px`. O selecionado ganha anel `#eef2f4`; os demais, `transparent`.
@@ -314,6 +382,20 @@ Popover `top: 76px`, largura 286, `padding: 14`, `gap: 13`. Mesmo fundo, borda, 
 4. **Ações** — "Colapsar/Expandir grupo" com chip de tecla à direita; "Desagrupar abas"; "Fechar grupo (N abas)" em `#e08585`, hover `#2e2224`.
 
 O rótulo do botão alterna entre "Colapsar grupo" e "Expandir grupo" conforme o estado.
+
+**Fecha em clique fora, `Esc` ou perda de foco da janela** — e não tem overlay: overlay é da camada modal e é a marca do diálogo destrutivo (§2.15). "Fechar grupo (N abas)" abre o diálogo de confirmação **por cima** do editor, que permanece atrás; cancelar volta para ele.
+
+**Navegação por teclado.** `Tab` e `Shift+Tab` percorrem as três regiões — campo, faixa de swatches, lista de ações. Dentro da faixa e da lista, as setas movem o realce; `Enter` aciona o realçado. No campo, `Enter` confirma e fecha. `Esc` restaura o nome anterior e fecha, mesmo com a edição ao vivo tendo mudado a barra. Hover e foco por teclado são o **mesmo** realce `#242a33` e são mutuamente exclusivos, como em §2.16.
+
+**Os seis swatches são a única superfície de cor do v1.** A entrada por valor hexadecimal do RF-2.10 fica diferida: quem quer outra cor a coloca na `palette` da config (RF-4.18). Ver [ADR-0023](../adr/0023-editor-de-grupo.md).
+
+### 2.10.1 Campo de nome inline na pílula `[v1]`
+
+Sem representação no canvas. É o que o RF-2.4 exige no nascimento do grupo — *"nome vazio, em modo de edição inline"* — e é o **mesmo componente** do input do item 1 acima, renderizado no lugar da pílula em vez de dentro do popover.
+
+Largura 140 — o teto do nome da §2.4 —, ou o que couber se a barra estiver em overflow, no mesmo `min()` que o campo de rename da aba usa. Altura 30 e raio 6, os da pílula, para que **a pílula não mude de tamanho ao entrar em edição**: o swatch e o contador continuam onde estão, e só o nome vira campo. Fundo `#0f1216`, borda `1px #5ed3bc`, texto 12px `#e4e8ee`, `padding: 2px 6px`, foco automático.
+
+Semântica idêntica à do editor: edição ao vivo, `Enter` confirma, `Esc` restaura o valor anterior. Nome vazio é válido e deixa o grupo como marcador colorido (RF-2.9). Ao criar o grupo, o valor anterior é a string vazia — `Esc` deixa o grupo criado e sem nome, e **não** desfaz a criação.
 
 ### 2.11 Paleta de comandos `[v2]`
 
@@ -433,7 +515,7 @@ O botão de fechar **não desaparece por falta de espaço**. `show_close_button`
 
 ### 2.19 Arraste de aba `[v1]`
 
-Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15; o realce de fronteira de grupo do RF-1.16 é `[v1]` mas pertence à F3, quando existe grupo explícito para onde arrastar.
+Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15 e, desde a F3, o RF-1.16 (arraste entre grupos) e o RF-2.19 (arraste do grupo inteiro).
 
 - **Limiar de 4 px** de movimento com o botão apertado — o `gap` entre abas. Abaixo disso o gesto é clique, e ativa a aba (RF-1.13). Sem limiar, todo clique com micro-tremor vira arraste.
 - **Aba fantasma:** a aba arrastada continua desenhada, seguindo o cursor no eixo X e presa ao Y da barra, com `filter: brightness(1.18)` — o hover da aba — e sombra de popover `0 18px 44px rgba(0,0,0,.55)` para separá-la da trilha. Não sai da barra: arrastar aba entre janelas não é gesto do v1 (RF-10.24).
@@ -441,6 +523,41 @@ Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15; o realce
 - **Auto-scroll:** cursor a menos de 30 px de uma ponta da trilha rola naquela direção, uma aba a cada `.15s`.
 - `Esc` cancela e a aba volta à origem; soltar fora da trilha cancela também.
 - Cursor `Grabbing` durante o arraste. É o único elemento do gesto que vem do sistema, e não há alternativa desenhável — o ponteiro não é superfície nossa.
+
+**Realce da fronteira do grupo (RF-1.16).** O wrapper que receberia a aba sobe o
+tingimento de `.07` para `.16` — o mesmo `badge_tint_strength` que o arquivo de
+exemplo já usa para tingir na cor do grupo — e ganha borda `1px` na cor do grupo
+com alfa `.45`. Nada de cor nova: é a própria cor do grupo, em duas intensidades
+que o arquivo já contém.
+
+O **run implícito** também recebe realce, e é justamente o caso que não pode
+faltar: sem ele, "arrastar para fora de todos os grupos" (RF-1.16, segunda frase)
+não teria feedback nenhum. Como o wrapper implícito é transparente (§2.3), o
+realce dele usa o `ungrouped_color` `#7b838f` nas mesmas duas intensidades.
+
+Um wrapper realçado por vez. O destino é o que a regra de fronteira do
+[ADR-0021](../adr/0021-selecao-multipla-e-gestos-da-barra.md) resolve: o `gap`
+entre wrappers pertence ao grupo da esquerda, e soltar sobre a pílula entra no
+início do grupo. Soltar sobre grupo **colapsado** realça a pílula, não um wrapper
+— não há trilha para realçar —, e o contador incrementa ao soltar.
+
+### 2.19.1 Arraste do rótulo do grupo `[v1]`
+
+Sem representação no canvas. Cobre RF-2.19: arrastar a pílula move o grupo
+inteiro, com suas abas.
+
+- **Mesmo limiar de 4 px** do arraste de aba, e mesmo cursor `Grabbing`.
+- **O fantasma é a pílula sozinha**, não o wrapper com as N abas. Um wrapper de
+  oito abas é mais largo que a janela e o fantasma cobriria a barra que o usuário
+  precisa ver para escolher o destino. A pílula carrega swatch, nome e contador —
+  identidade suficiente para saber o que se está movendo.
+- **O buraco é o marcador**, como no arraste de aba: o wrapper de origem colapsa
+  para largura zero e os wrappers vizinhos deslizam, abrindo o vão onde o grupo
+  vai cair. O destino é sempre uma **fronteira entre grupos**, nunca o interior de
+  outro grupo — grupos não aninham ([ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md)).
+- **Nenhum wrapper é realçado.** Realce significa "a aba entra aqui", e um grupo
+  nunca entra em outro; o vão que se abre é o feedback.
+- Auto-scroll, `Esc` e soltar fora da trilha: idênticos ao arraste de aba.
 
 ### 2.20 Tooltip `[v1]`
 
@@ -484,6 +601,13 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Overflow da trilha e indicador de abas fora da vista | `[v1]` | PRD-001 RF-1.18, RF-1.19 — sem representação no canvas |
 | Arraste de aba: fantasma, buraco, auto-scroll | `[v1]` | PRD-001 RF-1.15 — sem representação no canvas |
 | Tooltip de texto truncado | `[v1]` | [ADR-0019](../adr/0019-tooltip.md); PRD-001 RF-1.10, PRD-002 RF-2.12 — sem representação no canvas |
+| Aba selecionada (seleção múltipla) | `[v1]` | PRD-002 RF-2.2, PRD-004 RF-4.7; [ADR-0021](../adr/0021-selecao-multipla-e-gestos-da-barra.md) — sem representação no canvas |
+| Campo de nome inline na pílula | `[v1]` | PRD-002 RF-2.4, RF-2.9; [ADR-0023](../adr/0023-editor-de-grupo.md) — sem representação no canvas |
+| Indicador agregado de grupo colapsado | `[v1]` | PRD-002 RF-2.16 — sem representação no canvas |
+| Realce da fronteira do grupo no arraste | `[v1]` | PRD-001 RF-1.16, PRD-002 RF-2.18 — sem representação no canvas |
+| Arraste do rótulo do grupo | `[v1]` | PRD-002 RF-2.19 — sem representação no canvas |
+| Popover de grupo de destino | `[v1]` | PRD-002 RF-2.20; ADR-0023 — sem representação no canvas |
+| Reordenação animada ao formar grupo | `[v1]` | PRD-002 RF-2.5; [ADR-0022](../adr/0022-animacao-de-interface.md) — sem representação no canvas |
 | **Painéis divididos** | `[v2]` | [PRD-006](../prd/prd-006-paineis-divididos.md) *(rascunho)* |
 | **Cabeçalho e botões do painel** | `[v2]` | PRD-006 *(rascunho)* |
 | **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md) *(rascunho)* |
@@ -520,16 +644,15 @@ Precisam de decisão de desenho na implementação. Listados para não passarem 
 
 | Requisito | O que falta |
 |---|---|
-| PRD-001 RF-1.16 | realce da fronteira do grupo ao arrastar uma aba para dentro dele (F3) |
-| PRD-002 RF-2.2 | aba selecionada (seleção múltipla) — distinta da aba ativa |
-| PRD-002 RF-2.5 | animação da reordenação ao formar grupo |
-| PRD-002 RF-2.16 | indicador agregado de atividade em grupo colapsado |
-| PRD-003 RF-3.9 | aba restaurada ainda sem shell iniciado |
-| PRD-005 RF-5.14 | cores de seleção de texto no terminal — o valor da seção 1.5 vem do `::selection` do canvas, não de decisão deliberada |
+| PRD-004 RF-4.14 | os estilos `left-bar` e `outline` do indicador de grupo — o design só desenha `pill` e `underline`, que são o default combinado (F4) |
+| PRD-003 RF-3.9 | aba restaurada ainda sem shell iniciado (F5) |
+| PRD-005 RF-5.14 | cores de seleção de texto no terminal — o valor da seção 1.5 vem do `::selection` do canvas, não de decisão deliberada (F4) |
 
 Enquanto não houver desenho aprovado para esses, valem os tokens da seção 1 e o julgamento de quem implementa — nunca cores ou dimensões novas fora da tabela.
 
 **Resolvidos depois da primeira versão desta lista.** O RF-4.21 (como o erro de configuração é exibido) estava aqui e saiu: o [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) definiu a superfície de aviso, e a anatomia está na seção 2.14. O mesmo ADR cobriu sete requisitos que não constavam nem desta lista nem da 4.1 — RF-1.6, RF-2.23, RF-3.1, RF-3.10, RF-3.14, RF-3.16 e RF-5.8 —, além do menu de contexto exigido por RF-1.1, RF-1.2, RF-2.20 e RF-2.22. Nenhum deles introduziu cor nova: todos saem dos tokens de popover da seção 1.
+
+**Terceira rodada, ao abrir a F3.** A lista ficou com três itens. Saíram os quatro que eram da F3: o realce de fronteira de grupo do RF-1.16 (seção 2.19), a aba selecionada do RF-2.2 (seção 2.5, onde é modificador de borda e não um quarto estado), a animação de reordenação do RF-2.5 (token `reflow` na seção 1.10, sob a decisão do [ADR-0022](../adr/0022-animacao-de-interface.md)) e o indicador agregado do RF-2.16 (seção 2.4). Entraram três requisitos que **não constavam de nenhuma das duas listas** — mesma descoberta que o RF-1.10 e o tooltip foram na rodada anterior: o RF-2.19 pede arrastar o grupo inteiro e a seção 2.19 só cobria arraste de aba (agora 2.19.1); o RF-2.4 pede edição de nome inline no nascimento do grupo e os valores do campo eram só do editor (agora 2.10.1); e o RF-2.12 pede truncamento do nome do grupo, que não tinha teto nem piso (agora na seção 2.4). Também aqui, **nenhuma cor nova**: a borda da aba selecionada é o acento que o campo de rename já usa, o realce de fronteira é a própria cor do grupo em duas intensidades que o arquivo de exemplo já contém, e o indicador agregado reusa as duas cores da seção 2.17.
 
 **Segunda rodada, ao abrir a F2.** Saíram desta lista os RF-1.20 e RF-1.21 (seção 2.17), o RF-1.19 (seção 2.18) e o RF-1.15 (seção 2.19); do RF-1.16 sobrou só o realce de fronteira de grupo, que é da F3. Entrou um requisito que **não constava de nenhuma das duas listas**: o RF-1.10 pede tooltip para o título truncado, e o ADR-0014 havia decidido três widgets de chrome quando o v1 precisa de quatro — o [ADR-0019](../adr/0019-tooltip.md) fecha isso, e a anatomia está na seção 2.20. Também aqui, nenhuma cor nova.
 
@@ -551,3 +674,16 @@ Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis 
 | Design diz "guias"; docs dizem "abas" | Projeto padroniza **"abas"**; rótulos do mockup ajustados | ADR-0009 |
 | Paleta do design tem 6 cores; exemplo tinha 8 | Seis cores do design viram a paleta padrão | ADR-0009 |
 | Fontes e cores do design vs. catppuccin/JetBrains | Design vira o default; catppuccin sobra como tema nomeado | ADR-0009 |
+| Design pede `filter: brightness()` no hover da aba e da pílula | `porecatu-render` não tem primitiva de filtro. Resolvido **em CPU** dentro de `porecatu-ui`: multiplicar os canais da cor e clampar produz o mesmo resultado, sem primitiva nova. Não implementado na F2 — nenhum hover do chrome desenhava realce ainda | F2 |
+| Design pede sombra de popover nos widgets de chrome e no fantasma de arraste | **Não há sombra.** `porecatu-render` tem quad, quad arredondado, texto e clip; sombra exigiria primitiva nova, e a borda de 1 px já separa o popover do fundo. Reavaliar se algum widget ficar ilegível na prática | F2 |
+| Aviso e diálogo especificam corpo em **três linhas** com reticências | `TextRun` é sempre uma linha: o corpo trunca em **uma** linha. Quebra de linha exige medição por palavra e um `TextRun` por linha, que é trabalho de `porecatu-ui` sobre o `TextMeasurer` do [ADR-0018](../adr/0018-composicao-de-frame.md) | F2 |
+| Auto-scroll do arraste especifica uma aba a cada `.15s` | Rola por evento de `CursorMoved` dentro da zona de 30 px, não por intervalo. O temporizador de UI só apareceu na etapa 6; com o [ADR-0022](../adr/0022-animacao-de-interface.md) passa a ser possível, mas fica fora do v1 — o comportamento atual funciona | F2 |
+| Caret da pílula especifica `rotate(0deg)` / `rotate(90deg)` | Não há transformação afim em `porecatu-render`, e o caret é um glifo. A rotação vira **troca de glifo** `▶` / `▼`; o que anima nos `.15s` é o resto do colapso | ADR-0022 |
+| Editor de grupo em `top: 76px` | Aquele valor pressupõe a barra de título `[v2]`. No v1, 8 px abaixo da barra de abas, com flip nos dois eixos — ver seção 2.10 | [ADR-0023](../adr/0023-editor-de-grupo.md) |
+| Menu de contexto **não rola** (seção 2.16) | Vale para listas de ação, cujo tamanho é conhecido em tempo de escrita. O popover de grupo de destino do RF-2.20 **rola**, porque a lista é do tamanho do número de grupos do usuário | ADR-0023 |
+| RF-2.10 permite cor por valor hexadecimal direto | O editor tem seis swatches e nada mais. A entrada por hex fica **diferida**: quem quer outra cor a coloca na `palette` da config (RF-4.18) | ADR-0023 |
+
+As quatro primeiras linhas são **dívida de primitiva**, não decisão de desenho:
+a especificação continua descrevendo o alvo, e o binário fica atrás dele. Onde
+isso for cobrado é no critério de saída da F4 — *"o binário com a config padrão
+bate com o mockup"* —, e a lista acima é o que precisa estar fechado até lá.

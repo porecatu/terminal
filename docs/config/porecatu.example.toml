@@ -95,6 +95,19 @@ corner_radius = 8
 decorations = true                                                     # RF-4.1
 tab_bar_position = "top"   # "top" | "bottom"                            RF-4.1
 
+# Animação de interface. O v1 tem duas, e as duas são explicativas, não
+# decorativas: a reordenação das abas ao formar grupo (RF-2.5) e o colapso
+# da pílula. `false` aplica o estado final no primeiro frame -- as abas
+# ficam contíguas do mesmo jeito, só não se vê o caminho.
+#
+# Existe por acessibilidade (movimento na tela é gatilho), por máquina
+# remota (RDP/VNC gastam banda com isso) e porque nada de aparência fica
+# fora do alcance desta config. Ver ADR-0022.
+animations = true
+# Duração do `reflow` da seção 1.10 da especificação visual. Interpolação
+# linear, sem curva de easing.
+animation_reflow_ms = 180
+
 
 [appearance.tabs]
 # --- dimensões ------------------------------------------------------- RF-4.3
@@ -171,6 +184,17 @@ label_foreground = "#c3cad3"
 label_hover_brightness = 1.25
 swatch_size = 8               # quadrado de cor à esquerda do nome
 swatch_corner_radius = 2
+# Teto e piso do nome do grupo (RF-2.12). O teto de 140 é o da aba (180)
+# menos os 41px de cromo da seção 2.18: uma pílula não deve ficar mais
+# larga que a aba que ela rotula. Nome além do teto trunca com reticências
+# e aparece inteiro no tooltip.
+#
+# O piso é o segundo degrau da ordem de cedência do overflow -- primeiro
+# encolhe o rótulo da aba, depois o nome do grupo, e só então a trilha
+# rola. Dez grupos no piso somam 600px, que é o que sustenta a métrica de
+# dez grupos do PRD-002.
+label_max_width = 140
+label_min_width = 60
 count_background = "#12151a"  # contador de abas no rótulo
 count_foreground = "#7b838f"
 count_corner_radius = 9
@@ -199,7 +223,18 @@ wrapper_corner_radius = 8
 tint_strength = 0.07
 
 # Grupo colapsado exibe a contagem de abas no rótulo.                    RF-4.17
+# O contador é desenhado também com o grupo expandido, como no mockup;
+# esta chave governa só o caso colapsado, que é o que o requisito nomeia.
 show_tab_count_when_collapsed = true
+
+# Indicador agregado de atividade em grupo colapsado.                   RF-2.16
+# Ponto de 6px entre o swatch e o nome, com as mesmas duas cores dos
+# indicadores da aba ([appearance.tabs.colors]) e a mesma regra: um ponto
+# só, campainha vence. Só aparece colapsado -- expandido, cada aba mostra
+# o seu, e um agregado seria redundante. Não pisca, pela regra do ADR-0007.
+# Ver seção 2.4 da especificação visual.
+collapsed_indicator = true
+collapsed_indicator_size = 6
 
 # Paleta oferecida na troca manual de cor e usada para atribuir cor
 # automaticamente a grupos novos, sem repetir na mesma janela.  RF-4.18, RF-2.4
@@ -309,6 +344,51 @@ delay_ms = 600
 # Aparece SÓ quando o texto do alvo foi efetivamente truncado. Desligar aqui
 # remove o tooltip por completo.
 enabled = true
+
+
+# Editor de grupo: o quinto widget de chrome (ADR-0023). Popover ancorado
+# no grupo que está sendo editado, 8px abaixo da barra de abas -- não o
+# `top: 76px` do canvas, que pressupõe a barra de título [v2]. Vira nos dois
+# eixos para caber na janela, fecha em clique fora / Esc / perda de foco, e
+# nunca coexiste com o menu de contexto.
+#
+# É a única superfície de escolha de cor do v1: a entrada por hexadecimal
+# do RF-2.10 fica diferida, e quem quer outra cor a coloca na `palette`
+# acima. Anatomia na seção 2.10 da especificação visual.
+[appearance.group_editor]
+background = "#1a1e25"
+border = "#2e343e"
+corner_radius = 8
+padding = 14
+gap = 13
+width = 286
+# Folga entre a borda da barra de abas e o topo do popover -- o mesmo
+# respiro da pilha de avisos.
+offset_y = 8
+# Rótulo de seção ("GRUPO", "COR"): 10px maiúsculas.
+section_foreground = "#5c646f"
+section_font_size = 10.0
+# Campo de nome. Também usado inline sobre a pílula, no nascimento do grupo
+# (RF-2.4): é o mesmo componente, renderizado em outro lugar.
+input_background = "#0f1216"
+input_border = "#333a45"
+input_border_focus = "#5ed3bc"
+input_corner_radius = 5
+input_foreground = "#e4e8ee"
+input_font_size = 13.0
+# Faixa de cores: seis quadrados, um por cor da `palette`.
+swatch_size = 28
+swatch_corner_radius = 6
+swatch_gap = 8
+swatch_border_width = 2
+swatch_ring_selected = "#eef2f4"
+# Lista de ações, com os mesmos tokens do menu de contexto.
+item_foreground = "#d7dce3"
+item_hover_background = "#242a33"
+divider = "#2a2f38"
+# "Fechar grupo (N abas)" -- a ação destrutiva.
+destructive_foreground = "#e08585"
+destructive_hover_background = "#2e2224"
 
 
 ##############################################################################
@@ -555,6 +635,12 @@ white   = "#ebdbb2"
 "ctrl+shift+pagedown" = "group.next"
 "ctrl+shift+pageup"   = "group.prev"
 
+# group.new_tab e group.close_all são vinculáveis e ficam SEM default, de
+# propósito: atalho para a ação mais destrutiva da interface (RF-2.23) é
+# risco desproporcional, e `tab.new` já cria aba no grupo da aba ativa.
+# Quem quiser, vincula:
+# "ctrl+shift+insert" = "group.new_tab"
+
 # Janelas. Cada janela tem seu próprio conjunto de abas e grupos.  RF-10.22
 "ctrl+shift+n"        = "window.new"
 "ctrl+shift+q"        = "window.close"   # não é ctrl+shift+w: essa é tab.close
@@ -588,7 +674,12 @@ white   = "#ebdbb2"
 # "ctrl+shift+a" = "selection.select_all"
 
 # Ações que aceitam argumento (group.set_color, tab.move_to_group) não são
-# vinculáveis a tecla: são invocadas por menu, onde o alvo é implícito.
+# vinculáveis a tecla: são invocadas por menu, onde o alvo é implícito. As
+# duas abrem uma superfície de escolha -- o editor de grupo e o popover de
+# grupo de destino -- em vez de executar direto. Ver ADR-0023.
+#
+# Por tecla, as ações de grupo operam sobre o grupo da ABA ATIVA; por menu
+# ou pelo editor, sobre o grupo clicado. Ver docs/reference/acoes.md.
 
 # Libera uma tecla para o terminal:
 # "ctrl+shift+k" = "none"

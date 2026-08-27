@@ -11,7 +11,8 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F0 — Esqueleto | **implementada** |
 | F1 — Terminal único | **implementada**, com verificação interativa pendente (ver a fase) |
 | F2 — Abas | **implementada**, com verificação interativa pendente (ver a fase) |
-| F3 a F6 | não iniciadas |
+| F3 — Grupos | **próxima**; decisões fechadas nos ADR-0020 a 0023 |
+| F4 a F6 | não iniciadas |
 
 ---
 
@@ -136,26 +137,45 @@ O código está escrito e o CI está verde nas três plataformas, com testes aut
 - **Segunda janela** (`Ctrl+Shift+N`/`Ctrl+Shift+Q`, ADR-0015): a cascata de geometria e a superfície `wgpu` compartilhada nunca foram exercitadas com duas janelas de verdade, muito menos em dois monitores com DPI diferente.
 - **Diálogo de confirmação de RF-1.6**: a condição (tela alternativa ou reporte de mouse ligado) depende de abrir `vim`/`htop`/`fzf` de verdade dentro do Porecatu, que segue bloqueado pela mesma proteção de foco.
 
-Duas simplificações conscientes, documentadas no código (`overlay.rs`, `lib.rs`):
+Quatro simplificações conscientes, documentadas no código (`chrome.rs`, `overlay.rs`, `lib.rs`) e registradas na seção 4.4 da [especificação visual](design/especificacao-visual.md):
 
 - Nenhuma sombra nos quatro widgets de chrome — `porecatu-render` não tem primitiva de sombra; e o corpo de aviso/diálogo não quebra linha (`TextRun` é sempre uma linha), truncando com reticências em vez do "três linhas" da espec.
 - A cascata da janela nova prende aos limites físicos do monitor, não à área útil (descontada a barra de tarefas/dock) que o parágrafo acima descreve — `winit::monitor::MonitorHandle` não expõe área útil em nenhuma plataforma.
+- **A barra não tem hover visual.** O item "hover" da lista acima ficou entregue pela metade: o hover **existe** como hit-test, e é o que dispara o tooltip do RF-1.10, mas nenhum elemento muda de aparência sob o cursor. A espec. pede `filter: brightness(1.18)` na aba e `1.25` na pílula, e `porecatu-render` não tem primitiva de filtro — o realce e a sombra do fantasma de arraste (espec. §2.19) caíram pelo mesmo motivo. É resolvível em CPU dentro de `porecatu-ui`, multiplicando canais e clampando, e não precisa de primitiva nova; ficou para quando houver o primeiro hover que **dependa** dele.
+- O auto-scroll durante o arraste acontece por evento de `CursorMoved` dentro da zona de 30 px, não pelo intervalo de `.15s` da espec., que exigiria o temporizador de UI que só a etapa 6 introduziu.
 
 ---
 
-## F3 — Grupos
+## F3 — Grupos — próxima
 
 Implementa [PRD-002](prd/prd-002-grupos-de-abas.md). É o diferencial do produto.
 
-- `Group` em `porecatu-core`, grupo implícito, invariantes de contiguidade — inclui desambiguar o RF-1.5 e o invariante correspondente do [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md): "a aba mais próxima do grupo adjacente" não diz a direção nem o que fazer se o grupo adjacente estiver colapsado (RF-1.13). Inerte na F2, onde só existe o grupo implícito
-- Seleção múltipla de abas
-- Criar, dissolver, renomear, recolorir; atribuição automática de cor sem repetir
-- Colapso, com efeito sobre navegação e foco
-- Drag de aba entre grupos e drag de grupo inteiro — inclui o cenário de aceite "arrastar para dentro de um grupo" (PRD-001 RF-1.16), que veio da F2 porque exige grupo explícito, e o realce da fronteira do grupo, que é a última linha do RF-1.16 na seção 4.2 da [especificação visual](design/especificacao-visual.md)
-- Menu de contexto do grupo, incluindo fechar todas com confirmação
-- Animação da reordenação ao formar grupo
+Antes de a fase abrir, quatro ADRs fecharam as decisões que faltavam — mesmo movimento que os ADR-0017 a 0019 fizeram entre a F1 e a F2, e pela mesma razão: foi a fase anterior que expôs as lacunas. **Não é preâmbulo opcional**; dois deles mudam código que a F2 acabou de estabilizar.
 
-**Critério de saída:** todos os cenários de aceite de PRD-002 passam; **pílula, tingimento do wrapper, sublinhado da aba e editor de grupo conferem com o mockup**; 10 grupos numa janela sem quebra de layout; processos seguem vivos em grupo colapsado.
+- [**ADR-0020**](adr/0020-grupos-explicitos.md) — modelo de grupos explícitos. Resolve cinco pontos em que o [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md) era ambíguo ou insuficiente, sendo o primeiro uma contradição interna dele: o grupo implícito era declarado **único**, mas o cenário de aceite *"grupo na posição central da barra"* exige abas soltas dos dois lados, o que um nó implícito só não representa sem quebrar a contiguidade. Passa a haver **N runs implícitos**, cada um com `GroupId` de sessão. Também: colapso deixa de ser "só desenho" e ganha uma **ordem navegável** separada da visual (o que renumera `Alt+1..9`, deliberadamente); o terceiro nível do RF-1.5 ganha direção e regra para grupo colapsado; RF-2.7 e RF-2.8 param de se contradizer; e a paleta de seis cores ganha regra para os dez grupos que a métrica exige.
+- [**ADR-0021**](adr/0021-selecao-multipla-e-gestos-da-barra.md) — seleção múltipla e gestos da barra. A seleção é estado **efêmero de janela**, não persistido, com âncora explícita para o `Shift`+clique. Fecha o conflito de modificador que o RF-2.1 não viu: no macOS `Ctrl`+clique é o clique secundário e abre o menu, então o modificador de seleção lá é `Cmd`. Decide também a quem pertencem os 6 px entre wrappers durante o arraste, e o que é soltar sobre uma pílula ou sobre um grupo colapsado.
+- [**ADR-0022**](adr/0022-animacao-de-interface.md) — animação sob render damage-driven. O RF-2.5 exige movimento animado como cenário de aceite, e o [ADR-0007](adr/0007-modelo-de-threading.md) decidiu que terminal ocioso não gera frame — a F2 recusou animação três vezes por causa disso. Passa a existir um relógio por janela, dirigido pelo `ControlFlow::WaitUntil` que a F2 já usa para tooltip e aviso, ativo só enquanto há movimento pendente. Lista de consumidores **fechada** em dois, e desligável na config.
+- [**ADR-0023**](adr/0023-editor-de-grupo.md) — o editor de grupo, quinto widget de chrome. O ADR-0014 o mencionava só para descartá-lo como substituto de menu, sem decidir o que ele é. Ganha camada, captura de teclado própria, e vira a **única** superfície de escolha de cor e de destino do v1 — sem submenu, que não existe em documento nenhum.
+
+Itens:
+
+- `porecatu-core`: `Group` com discriminante implícito/explícito, nome, cor e colapso; manutenção dos runs implícitos (divisão ao agrupar, fusão ao dissolver); `group_tabs`, `ungroup`, `rename_group`, `set_group_color`, `collapse_group`; `navigable_order()` ao lado de `visual_order()`; MRU por grupo; a escada de foco do RF-1.5 numa função só, usada por `close_tab` e por `collapse_group`. `new_tab` deixa de escrever em `groups[0]`
+- Seleção múltipla em `WindowState`, com invalidação e âncora, e os gestos da barra por plataforma (ADR-0021)
+- Criar, dissolver, renomear, recolorir; atribuição automática de cor com a regra de repetição do ADR-0020
+- Colapso ponta a ponta: navegação, foco, acesso por índice, overflow e indicador agregado na pílula
+- Pílula, wrapper tingido na cor do grupo e sublinhado da aba por grupo — o layout já é multi-grupo desde a F2 (`GroupWrapperRect`), o que falta é a pílula na geometria e a cedência dela no overflow
+- Arraste de aba entre grupos e arraste do grupo inteiro, com o realce de fronteira — inclui o cenário de aceite *"arrastar para dentro de um grupo"* (PRD-001 RF-1.16), que veio da F2 porque exige grupo explícito
+- Menu de contexto do grupo e editor de grupo, lendo a **mesma** lista de ações (RF-10.21), incluindo fechar todas com confirmação e contagem
+- Popover de grupo de destino para `tab.move_to_group`, que sai de esmaecido no menu de aba
+- Animação da reordenação ao formar grupo, pelo relógio do ADR-0022
+
+**Aparência:** o que a F3 precisava e não tinha desenho está escrito. Saíram da seção 4.2 da [especificação visual](design/especificacao-visual.md) os quatro itens que eram desta fase — realce de fronteira (§2.19), aba selecionada (§2.5, como modificador de borda), animação de reordenação (token `reflow`, §1.10) e indicador agregado (§2.4) — e entraram três que não constavam de nenhuma lista: arraste do rótulo do grupo (§2.19.1), campo de nome inline na pílula (§2.10.1) e truncamento do nome do grupo (§2.4). A lista de pendências de desenho fica com **três** itens, todos de F4/F5 — nenhum bloqueia esta fase. Nenhuma cor nova.
+
+**Divisão sugerida**, no padrão das seis etapas da F1 e da F2, uma por PR: (1) modelo em `core` — grupos explícitos, runs implícitos, colapso, duas ordens, MRU, escada de foco; (2) seleção múltipla e gestos da barra; (3) pílula, wrapper tingido e sublinhado por cor de grupo, no layout e na pintura; (4) colapso ponta a ponta, incluindo overflow, navegação e indicador agregado; (5) editor de grupo, menu de contexto de grupo e popover de destino; (6) arraste entre grupos, arraste de grupo e a animação do RF-2.5.
+
+**Critério de saída:** todos os cenários de aceite de PRD-002 passam; **pílula, tingimento do wrapper, sublinhado da aba e editor de grupo conferem com o mockup**; 10 grupos numa janela sem quebra de layout, com a ordem de cedência do §2.18 respeitada; processos seguem vivos em grupo colapsado; as invariantes de run implícito — nenhum vazio, nenhum par adjacente — verificadas em teste depois de sequências de operações, não só de operações isoladas; `navigable_order()` sempre subsequência de `visual_order()`; o event loop volta a dormir depois de toda animação.
+
+O RF-2.17 (*"ativar uma aba de grupo colapsado expande o grupo"*) fica **parcialmente verificável** nesta fase: as duas fontes que o requisito cita são busca (F6) e restauração de sessão (F5), e na F3 não há caminho que ative uma aba oculta. A regra entra no modelo e no teste unitário; o cenário de ponta a ponta espera a F5.
 
 ---
 

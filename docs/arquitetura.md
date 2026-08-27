@@ -2,7 +2,7 @@
 
 Documento técnico central. Os ADRs justificam *por que* cada peça foi escolhida; este documento descreve *como* elas se encaixam.
 
-As seções 2 e 4 estão implementadas (F0 e F1 do [roadmap](roadmap.md)); a seção 5 está implementada na forma da F1 e é revista pelo [ADR-0018](adr/0018-composicao-de-frame.md) na F2; as seções 3 (parte de chrome), 6 e a metade de `core`/`config`/`session` da seção 1 ainda são projeto. Onde o código divergiu do escrito, há um bloco **Na implementação** dizendo o quê e por quê.
+As seções 2, 3, 4, 5 e 7 estão implementadas (F0, F1 e F2 do [roadmap](roadmap.md)) — a seção 5 na forma final do [ADR-0018](adr/0018-composicao-de-frame.md), com camadas e recorte de verdade, e a seção 7 com as duas funções puras da barra de abas. Da seção 1, só `config` e `session` seguem projeto, e com eles a seção 6 inteira. Onde o código divergiu do escrito, há um bloco **Na implementação** dizendo o quê e por quê.
 
 ---
 
@@ -44,7 +44,9 @@ O [ADR-0018](adr/0018-composicao-de-frame.md) acrescenta duas coisas a esse crat
 
 **`porecatu-core` não depende de nada.** É o modelo de domínio puro: `Workspace`, `Group`, `Tab`, IDs, tipos geométricos. Serializável, testável sem GPU e sem PTY. É por isso que `porecatu-session` consegue ser um crate trivial: ele serializa `core` e mais nada.
 
-> **Na implementação.** Na F1 o crate tem só `TabId`, para que o `Wakeup { window, tab }` do [ADR-0015](adr/0015-multiplas-janelas.md) nascesse com o formato certo. `Workspace`, `Group` e `Tab` entram na F2, com `serde` derivado já ali — o round-trip que o [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md) lista como invariante é testável na fase que o exige, mesmo com `porecatu-session` ainda vazio. `Tab` carrega o estado `Exited` do [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md).
+> **Na implementação.** Na F1 o crate tinha só `TabId`, para que o `Wakeup { window, tab }` do [ADR-0015](adr/0015-multiplas-janelas.md) nascesse com o formato certo. `Workspace`, `Group` e `Tab` entraram na F2, com `serde` derivado já ali — o round-trip que o [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md) lista como invariante é testável mesmo com `porecatu-session` vazio, e há teste para ele. `Tab` carrega o estado `Exited` do [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md), o título com precedência, o `cwd` de OSC 7 e os indicadores de atividade e campainha.
+>
+> Na F2 existe **um grupo só**, o implícito, e as operações de grupo da tabela do ADR-0006 (`group_tabs`, `ungroup`, `rename_group`, `set_group_color`, `collapse_group`) ficaram de fora de propósito: nada nesta fase as chamava. O [ADR-0020](adr/0020-grupos-explicitos.md) revisa duas coisas que a F3 precisa e que o ADR-0006 não resolvia — o grupo implícito deixa de ser único, e colapso deixa de ser "só desenho".
 
 ---
 
@@ -80,7 +82,9 @@ Input do teclado vira bytes no `porecatu-ui` e é enviado por `mpsc::Sender` par
 
 > **Na implementação.** São **três** threads por terminal, não duas: leitura, escrita e observação do processo (`try_wait` em intervalo curto). A de observação é a dona do `PtyHandle`, e por isso é ela quem aplica o resize do lado do PTY — o lado do motor é síncrono. Quem spawna as três é `porecatu-term::Terminal`; `porecatu-ui` nunca vê `PtyHandle` nem thread nenhuma, só `spawn`, `write`, `snapshot_into`, `try_recv_event`, `scroll`, `modes`, `resize` e as operações de seleção. A notificação de sujeira sai por um closure genérico (`on_wakeup`), para o crate não precisar conhecer `winit`; quem fecha esse closure sobre `EventLoopProxy` e `Wakeup` é a `ui`.
 >
-> **Encerramento de uma aba (F2).** O [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) decide o que o RF-1.2 chamava de "aguardar EOF": o ConPTY não emite EOF, então a espera é pela confirmação de morte da thread de observação, **fora da main thread**. A aba sai da barra imediatamente. Sem isso, fechar uma janela com 50 abas custaria 50 × `SHUTDOWN_TIMEOUT` na main thread, contra a métrica de 50 abas do PRD-001.
+> **Encerramento de uma aba.** O [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) decidiu o que o RF-1.2 chamava de "aguardar EOF": o ConPTY não emite EOF, então a espera é pela confirmação de morte da thread de observação, **fora da main thread**. A aba sai da barra imediatamente. Sem isso, fechar uma janela com 50 abas custaria 50 × `SHUTDOWN_TIMEOUT` na main thread, contra a métrica de 50 abas do PRD-001.
+>
+> **Implementado na F2:** `Terminal::close` sinaliza o processo e devolve na hora; `Terminal::shutdown` virou `close().wait()`, para quem precisa da confirmação. Fechar a janela sinaliza todas as abas primeiro e espera depois, não uma a uma. Há teste de integração cobrindo que `close` devolve antes do `SHUTDOWN_TIMEOUT` mesmo com processo vivo.
 >
 > **Encerramento (Windows).** `Terminal::shutdown` não dá `join` em nenhuma das três threads e **não fecha o pseudo-console**. `ClosePseudoConsole` bloqueia até o pipe de leitura clonado ser liberado, e a thread de leitura está parada num `read()` síncrono nele — as duas esperam uma pela outra e o app trava. O que se faz é matar o processo e `mem::forget` no handle: o SO reclama tudo quando o Porecatu sai. A confirmação de "processo morto" vem de um canal dedicado que a thread de observação sinaliza, com timeout de segurança. Dar `join` na thread de leitura violaria a regra de que a main thread nunca bloqueia, justamente no fechamento da janela.
 
@@ -104,11 +108,13 @@ O mesmo vale para o chrome: mudança de hover, foco ou config marca a barra de a
 | Dado | Dono | Compartilhamento |
 |---|---|---|
 | `Term` (grid, scrollback) | thread de leitura + render | `Arc<Mutex<Term>>` |
-| `Workspace` (abas, grupos) | main thread | exclusivo, sem lock |
+| `Workspace` (abas, grupos) | main thread | exclusivo, sem lock — um por janela |
 | `Config` | main thread | `Arc<Config>`, trocado inteiro no reload |
 | Handle de escrita do PTY | `mpsc` | clonável |
 
 `Workspace` só é tocado pela main thread, então não precisa de lock. `Config` é imutável e trocado por inteiro no hot reload — nenhum lock, só uma troca de `Arc`.
+
+> **Na implementação (F2, etapa 6).** Há **um `Workspace` por janela**, dentro de `WindowState`, e as janelas vivem num `HashMap<WindowId, WindowState>` em `App` ([ADR-0015](adr/0015-multiplas-janelas.md)). Junto com o workspace, migrou para `WindowState` tudo o que varia por janela: abas, rename em curso, arraste, deslocamento de rolagem da barra, hover, avisos, diálogo e menu. O que não varia — `GpuContext`, `cell_metrics` (em pixels lógicos, DPI-independente) e `startup_directory` — continua em `App`, um por processo.
 
 ---
 
@@ -126,6 +132,8 @@ winit WindowEvent::KeyboardInput
                              modificadores, bracketed paste)
                              -> mpsc -> PTY write
 ```
+
+> **Na implementação (F2, etapa 4).** O passo 1 da cadeia do [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md) existe: `porecatu-ui/input.rs` resolve **modo de captura** antes de qualquer keybind — rename de aba, diálogo aberto e menu de contexto consomem a tecla e nada desce ao terminal —, depois a tabela de ações da app, depois o terminal. O nível de **grupo** da cadeia continua vazio (é F3), e não há parser de `[keybindings]` até a F4: os defaults são fixos no código, com o nome da ação do [catálogo](reference/acoes.md) no comentário. `Ime::Commit` vai direto ao terminal sem consultar keybind — tecla morta do ABNT2 e composição de CJK dependem disso.
 
 ### Do PTY até o pixel
 
@@ -150,7 +158,7 @@ O snapshot existe para que o `Mutex` seja liberado antes do trabalho de GPU. Ren
 
 ## 4. Fronteira de `porecatu-term`
 
-É a fronteira mais crítica do projeto: separa a F1 da F2, contém o
+É a fronteira mais crítica do projeto: separa o motor VT do resto, contém o
 `alacritty_terminal` ([ADR-0002](adr/0002-motor-vte.md)) e é atravessada a cada frame.
 Três regras a governam, e as três derivam da mesma restrição — **`porecatu-term` não
 conhece `Config` nem GUI**.
@@ -219,7 +227,7 @@ Sequências de escape que **não** são desenho viram eventos, consumidos por
 | `ClipboardRead` | OSC 52 | `ui`, **negado por default** ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md)) |
 | `ColorSet` / `ColorQuery` | OSC 4 / 10 / 11 | `ui`, com escopo de sessão ([ADR-0012](adr/0012-identificacao-do-terminal.md)) |
 | `Bell` | BEL | `ui` (RF-1.21) |
-| `Exit` | EOF do PTY | `ui` (RF-1.3) |
+| `Exit` | `try_wait` da thread de observação, **não** EOF do PTY (ver nota) | `ui` (RF-1.3) |
 
 O clipboard é o caso que mais tenta o atalho errado: o OSC 52 chega **do PTY**, dentro
 do `term`, mas o `arboard` vive do lado da GUI. O caminho é `term` → evento → `ui` →
@@ -306,7 +314,7 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 | `porecatu-session` | round-trip de serialização, migração de `schema_version`, recuperação de arquivo corrompido |
 | `porecatu-term` | golden files: sequência de escape na entrada, dump de grid esperado na saída |
 | `porecatu-pty` | teste de integração por plataforma: spawn de `echo`, resize, encerramento |
-| `porecatu-render` | sem teste automatizado no v1 — verificação manual e screenshot |
+| `porecatu-render` | geometria e resolução de camada são puras e testadas sem GPU; pipeline e pintura, verificação manual e screenshot |
 | `porecatu-ui` | hit-testing e layout são funções puras sobre geometria, testáveis sem janela |
 
 O layout da barra de abas é deliberadamente uma função pura `(Workspace, Config, largura) -> Vec<TabRect>`. Isso permite testar overflow, colapso de grupo e truncamento de título sem abrir uma janela.
@@ -325,4 +333,4 @@ Isso só é cumprível porque o medidor de texto do [ADR-0018](adr/0018-composic
 >
 > RF-1.6 (confirmar fechar aba com processo em primeiro plano), adiado desde a Etapa 4, fecha aqui: a condição do ADR-0017 (tela alternativa ou reporte de mouse ligado) já estava disponível via `Terminal::modes()`, só faltava o diálogo pra perguntar.
 >
-> **Na implementação (F1).** 51 testes no workspace. `porecatu-term` tem 43 deles: golden-style alimentando o parser com sequência VT crua (sem PTY real — o [ADR-0004](adr/0004-pty-cross-platform.md) avisa que o ConPTY reemite bytes de um jeito não portável), mais unitários puros de codificação de tecla e de reporte de mouse, que não dependem de `winit` nem do motor rodando, só de `TermModes`. `porecatu-pty` tem 8, incluindo integração de spawn/kill. Um teste de regressão cobre o deadlock de fechamento da seção 2: fecha um terminal com processo de longa duração numa thread separada com timeout, e falha se `shutdown` travar.
+> **Na implementação.** 145 testes no workspace ao fim da F2, contra 51 ao fim da F1: `porecatu-term` 51, `porecatu-ui` 43, `porecatu-core` 23, `porecatu-render` 20, `porecatu-pty` 10 — os três últimos crates não tinham teste nenhum na F1. `porecatu-ui` deixou de ser um crate sem teste porque a F2 extraiu o estado puro dos widgets e o layout da barra para módulos que não dependem de `winit` nem de `wgpu`. Da F1: golden-style alimentando o parser com sequência VT crua (sem PTY real — o [ADR-0004](adr/0004-pty-cross-platform.md) avisa que o ConPTY reemite bytes de um jeito não portável), mais unitários puros de codificação de tecla e de reporte de mouse, que não dependem de `winit` nem do motor rodando, só de `TermModes`. `porecatu-pty` tem 8, incluindo integração de spawn/kill. Um teste de regressão cobre o deadlock de fechamento da seção 2: fecha um terminal com processo de longa duração numa thread separada com timeout, e falha se `shutdown` travar.

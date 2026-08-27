@@ -6,7 +6,7 @@
 
 Emulador de terminal cross-platform escrito em Rust, com foco em **organização de múltiplos terminais**: abas, grupos de abas nomeados e restauração de sessão.
 
-> Status: **em implementação**. As fases F0 (esqueleto) e F1 (terminal único) do [roadmap](docs/roadmap.md) estão implementadas: `cargo run` abre uma janela com um terminal funcional — motor VT, PTY, render por GPU, teclado, mouse, seleção e clipboard. Ainda não há abas, grupos, configuração nem sessão persistente; a próxima fase é a **F2 (abas)**.
+> Status: **em implementação**. As fases F0 (esqueleto), F1 (terminal único) e F2 (abas) do [roadmap](docs/roadmap.md) estão implementadas: `cargo run` abre uma janela com abas de terminal funcionais — motor VT, PTY, render por GPU, teclado, mouse, seleção, clipboard, ciclo de vida de aba, overflow da barra, menu de contexto, tooltip, aviso, diálogo de confirmação e uma segunda janela. Ainda não há grupos nomeados, arquivo de configuração nem sessão persistente; a próxima fase é a **F3 (grupos)**.
 
 ---
 
@@ -38,8 +38,9 @@ Visão de produto completa: [PRD-000](docs/prd/prd-000-visao-de-produto.md).
 |---|---|---|
 | F0 | Workspace Cargo, janela `winit` + surface `wgpu`, CI nas três plataformas | implementada |
 | F1 | Terminal único: PTY, motor VT, threading, render de texto, teclado, mouse, seleção, clipboard | implementada |
-| F2 | Abas | próxima |
-| F3–F6 | Grupos, configuração, sessão, polimento | não iniciadas |
+| F2 | Abas: modelo de workspace, barra de abas, ciclo de vida, overflow, arraste, widgets de chrome, segunda janela | implementada |
+| F3 | Grupos de abas nomeados e coloridos | próxima |
+| F4–F6 | Configuração, sessão, polimento | não iniciadas |
 
 O que já roda hoje:
 
@@ -50,10 +51,15 @@ O que já roda hoje:
 - Teclado com codificação xterm, `Ctrl`/`Alt`, DECCKM, bracketed paste e IME (tecla morta do ABNT2)
 - Mouse reportado ao programa (modos 1000/1002/1003, encoding SGR 1006), seleção nos quatro modos com `Shift` forçando seleção local, cópia/cola via `arboard` e OSC 52 com leitura negada por default
 - Rolagem de scrollback por teclado e por roda, com tela alternativa tratada
+- Abas com ciclo de vida completo: criar herdando o `cwd` (OSC 7), fechar com confirmação quando há programa de tela cheia, navegar por sequência e por índice, renomear inline, e estado `Exited` para aba cujo shell saiu
+- Título com precedência — customizado, depois OSC 0/2, depois nome do shell — sincronizado com o título da janela
+- Barra de abas com layout e hit-testing como funções puras, testáveis sem GPU e sem janela; reordenação por arraste e por teclado; overflow que encolhe o rótulo até o piso e depois rola a trilha, com indicador de abas fora da vista; indicadores de atividade e de campainha
+- Quatro widgets de chrome próprios, desenhados por cima do terminal: aviso do app, diálogo de confirmação, menu de contexto de aba e tooltip. Nenhum diálogo nativo do sistema
+- Múltiplas janelas: cada uma com seu conjunto de abas e sua surface, nascendo em cascata a partir da que a criou
 
-Ainda **não** existe: `porecatu-config` e `porecatu-session` são stubs, e `porecatu-core` tem só o `TabId`. Múltiplas abas, grupos, arquivo de configuração e restauração de sessão chegam nas fases seguintes.
+Ainda **não** existe: `porecatu-config` e `porecatu-session` são stubs (só o cabeçalho SPDX). Grupos nomeados, arquivo de configuração e restauração de sessão chegam nas fases seguintes — enquanto `porecatu-config` não existe, os valores de aparência entram como constantes citando no comentário a chave TOML de origem.
 
-O código da F1 está completo e o CI passa nas três plataformas (51 testes, `clippy -D warnings` limpo), mas o **critério de saída da fase ainda não foi fechado**: ele é interativo — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2 — e a verificação manual aconteceu só em parte, e só no Windows. Lista do que falta em [docs/roadmap.md](docs/roadmap.md).
+O código da F1 e da F2 está completo e o CI passa nas três plataformas (145 testes, `clippy -D warnings` limpo), mas o **critério de saída das duas fases não foi fechado na parte interativa**: ele exige gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba, menu de contexto, duas janelas em monitores de DPI diferente — e a proteção de foco do Windows bloqueia input sintético, então a verificação aconteceu só em parte, e só no Windows. Lista do que falta em [docs/roadmap.md](docs/roadmap.md).
 
 ## Design
 
@@ -143,6 +149,6 @@ git clone https://github.com/porecatu/terminal.git
 cd terminal
 
 cargo run                    # abre a janela com um terminal
-cargo test --workspace       # 51 testes
+cargo test --workspace       # 145 testes
 python scripts/verify-docs.py
 ```
