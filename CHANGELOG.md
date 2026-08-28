@@ -84,7 +84,12 @@ gravado, falta a operação que anda de grupo em grupo.
   especificação cita o traço fica sub-pixel e esmaece contra o fundo
 - Acabamento da barra pedido pelo usuário: o sublinhado de grupo sai da base
   da aba (redundante desde que a cápsula virou cor cheia), a borda da aba vai
-  a 2px (1px não se lia contra a cápsula), a aba sobe para 34px de altura e a
+  a 2px (1px não se lia contra a cápsula), o nome do grupo passa a usar a
+  mesma fonte do rótulo da aba (12.5px/400, contra os 12px/500 da espec.), os
+  ícones passam a usar em repouso o `#e4e8ee` que a espec. reservava ao hover
+  (o traço fino do Lucide sumia num cinza médio) — exceto o "+" de dentro do
+  grupo, que vai para `#12151a` por ser o único sobre a cápsula de cor —, a
+  aba sobe para 34px de altura e a
   trilha ganha 6px de respiro das bordas da barra (`trilha_padding`) — os
   mesmos 6px que a espec. §2.5 já dava à barra. Aba solta passa a ocupar a
   caixa inteira do wrapper, alinhando topo e base com o bloco de um grupo;

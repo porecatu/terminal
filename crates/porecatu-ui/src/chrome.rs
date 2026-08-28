@@ -478,7 +478,7 @@ pub fn paint(
             icon::PLUS,
             group_button,
             NEW_TAB_ICON_SIZE,
-            palette::NEW_TAB_ICON,
+            palette::GROUP_NEW_TAB_ICON,
         ));
     }
 
