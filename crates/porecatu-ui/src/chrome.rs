@@ -545,6 +545,27 @@ pub fn paint(
         }));
     }
 
+    // "+" de aba solta, ao fim da trilha e **fora** de qualquer wrapper.
+    // Rola com o conteúdo, como tudo aqui dentro. Cor clara: ele fica
+    // sobre o fundo da barra, nunca sobre a cápsula de um grupo -- e é
+    // isso, à vista, que o distingue do "+" que cria dentro de um grupo.
+    if let Some(rect) = layout.ungrouped_new_tab_button {
+        let button = shift(rect, scroll_dx);
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: button,
+            radius: 6.0,
+            color: palette::TRANSPARENT,
+            border_color: palette::NEW_TAB_BORDER,
+            border_width: 1.0,
+        }));
+        out.push(centered_glyph(
+            icon::PLUS,
+            button,
+            NEW_TAB_ICON_SIZE,
+            palette::NEW_TAB_ICON,
+        ));
+    }
+
     out.push(Primitive::PopClip);
 
     // Zona fixa à direita da barra, fora do recorte da trilha -- não rola

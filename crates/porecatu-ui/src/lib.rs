@@ -186,14 +186,13 @@ enum GroupEditorOutcome {
 enum NewTabRequest {
     None,
     InGroup(GroupId),
+    /// "+" ao fim da trilha, fora de qualquer wrapper.
+    Ungrouped,
 }
 
-/// Onde uma aba nova nasce. Já houve uma terceira origem -- `Ungrouped`,
-/// do botão de nova aba global, que criava fora de qualquer grupo. O
-/// botão saiu (era um segundo botão para a mesma ação, a um palmo do "+"
-/// do grupo), e com ele o único gesto que alcançava
-/// `Workspace::append_ungrouped_tab`. O método continua no core, à espera
-/// de uma ação própria na F4.
+/// Onde uma aba nova nasce. As três origens querem coisas diferentes:
+/// seguir a aba ativa levaria a aba nova para dentro do grupo dela, que é
+/// certo para `tab.new` e errado para os dois botões da trilha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NewTabTarget {
     /// `tab.new`/`window.new` (RF-1.1, ADR-0020 §1): o grupo da aba ativa.
@@ -201,6 +200,9 @@ enum NewTabTarget {
     /// `group.new_tab` (RF-2.8/RF-2.22): fim de um grupo específico -- o
     /// "+" que fica dentro do wrapper do grupo.
     Group(GroupId),
+    /// "+" ao fim da trilha: fim da barra, fora de qualquer grupo
+    /// explícito.
+    Ungrouped,
 }
 
 /// Estado por janela (ADR-0015: "um `Workspace` independente por janela").
@@ -422,6 +424,7 @@ impl WindowState {
                 None => self.workspace.append_tab(shell_name, cwd.clone()),
             },
             NewTabTarget::ActiveGroup => self.workspace.append_tab(shell_name, cwd.clone()),
+            NewTabTarget::Ungrouped => self.workspace.append_ungrouped_tab(shell_name, cwd.clone()),
         };
 
         let window_id = self.window.id();
@@ -1034,7 +1037,7 @@ impl WindowState {
                     self.group_context_menu = Some(GroupContextMenu::new(id, logical_point));
                     self.hover.dismiss();
                 }
-                TabBarHit::GroupNewTab(_) => {}
+                TabBarHit::GroupNewTab(_) | TabBarHit::UngroupedNewTab => {}
             }
             return NewTabRequest::None;
         }
@@ -1104,6 +1107,7 @@ impl WindowState {
                 NewTabRequest::None
             }
             TabBarHit::GroupNewTab(id) => NewTabRequest::InGroup(id),
+            TabBarHit::UngroupedNewTab => NewTabRequest::Ungrouped,
         }
     }
 
@@ -1302,6 +1306,24 @@ impl WindowState {
     /// Conveniência de `group.new_tab` (RF-2.8/RF-2.22): sempre no fim de
     /// `group`, mesmo que a aba ativa esteja em outro grupo -- diferente
     /// de `action_new_tab`, que segue o grupo da aba ativa.
+    /// "+" ao fim da trilha: aba **sem grupo**, no fim da barra.
+    /// Separado de [`Self::action_new_tab`] de propósito -- o atalho
+    /// `tab.new` continua seguindo o grupo da aba ativa (RF-1.1), que é o
+    /// que o ADR-0020 §1 manda.
+    fn action_new_tab_ungrouped(
+        &mut self,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+    ) {
+        if self.rename.editing_tab().is_some() {
+            self.commit_rename();
+        }
+        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::Ungrouped);
+    }
+
     fn action_new_tab_in_group(
         &mut self,
         group: GroupId,
@@ -2630,6 +2652,14 @@ impl App {
                 return;
             };
             match state.handle_bar_click(logical_point, gpu, false) {
+                NewTabRequest::Ungrouped => {
+                    state.action_new_tab_ungrouped(
+                        self.cell_metrics,
+                        &self.proxy,
+                        &self.startup_directory,
+                        Instant::now(),
+                    );
+                }
                 NewTabRequest::InGroup(group) => {
                     state.action_new_tab_in_group(
                         group,

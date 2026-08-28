@@ -70,7 +70,10 @@ gravado, falta a operação que anda de grupo em grupo.
   `show_new_tab_button`, com a cor do ícone decidida pelo que está atrás dele:
   escuro sobre a cápsula de cor de um grupo, claro sobre a barra num run de
   abas soltas, e sumindo quando o grupo está colapsado — o wrapper colapsado é
-  a pílula e mais nada. O botão de nova aba **global** chegou a existir numa zona fixa
+  a pílula e mais nada. Ao fim da trilha, um "+" que cria aba **fora de todo
+  grupo**, presente só quando o último grupo é explícito (senão duplicaria o do
+  run solto): é ele que cobre o caso de toda aba estar em grupo. O botão de
+  nova aba **global** chegou a existir numa zona fixa
   à direita e foi removido — era um segundo botão para a mesma ação a um palmo
   do primeiro. A zona ficou, com o botão de configurações, inerte até a F4
 - Botão de nova aba global cria a aba **fora de qualquer grupo explícito**, no

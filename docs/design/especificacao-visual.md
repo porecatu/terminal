@@ -364,6 +364,13 @@ abas dele sumiram da barra (§2.4), e um "+" ao lado da pílula criaria aba num 
 cujas abas não estão à vista. O wrapper encolhe para caber só a pílula, que é o que
 faz o colapso parecer colapso.
 
+**Mais um, ao fim da trilha, para a aba solta.** Fica **fora** de qualquer wrapper,
+sobre o fundo da barra, e cria uma aba fora de todo grupo. Só aparece quando o último
+grupo da barra é **explícito**: se a barra já termina num run de abas soltas, o "+"
+daquele run cria exatamente isso, no mesmo lugar. É ele que cobre o caso em que toda
+aba está em grupo — sem ele, um workspace com um único grupo colapsado não tem gesto
+nenhum que crie uma aba solta.
+
 **A cor do ícone depende do que está atrás dele**, e é o único lugar do chrome que
 decide cor assim: `#12151a` sobre a cápsula de cor cheia de um grupo explícito,
 `#e4e8ee` sobre a barra escura de um run de abas soltas, que não tem cápsula.
@@ -737,7 +744,7 @@ Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis 
 | Menu de contexto **não rola** (seção 2.16) | Vale para listas de ação, cujo tamanho é conhecido em tempo de escrita. O popover de grupo de destino do RF-2.20 **rola**, porque a lista é do tamanho do número de grupos do usuário | ADR-0023 |
 | RF-2.10 permite cor por valor hexadecimal direto | O editor tem seis swatches e nada mais. A entrada por hex fica **diferida**: quem quer outra cor a coloca na `palette` da config (RF-4.18) | ADR-0023 |
 | Wrapper de grupo tingido com alfa `.07` (§2.3, RF-4.19) | Atrás do fundo **opaco** das abas, 7% da cor não se vê. O wrapper passa a ser **cápsula de cor cheia** e o fundo da aba ganha alfa `.85` (§2.3, §2.5). Pedido direto do usuário; `tint_strength` continua no arquivo e volta a governar o valor na F4 | F3 |
-| Um botão de nova aba só, ao final da trilha rolável (§2.6) | **Um por grupo**, executando `group.new_tab` — inclusive no run implícito, que é o que dá "+" às abas soltas. Houve um botão **global** numa zona fixa à direita (§2.2), porque com a trilha rolando um botão ao fim dela sai de vista; ele foi removido depois, por ser um segundo botão para a mesma ação a um palmo do primeiro. `show_new_tab_button` passa a governar o botão do grupo, que é o único que restou. Pedido do usuário | F3 |
+| Um botão de nova aba só, ao final da trilha rolável (§2.6) | **Um por grupo** (`group.new_tab`, inclusive no run implícito), escondido quando o grupo está colapsado, **mais um ao fim da trilha** que cria aba fora de todo grupo — este só quando o último grupo é explícito, senão duplicaria o "+" do run solto. Houve um botão **global** numa zona fixa à direita (§2.2), removido por ser um segundo botão para a mesma ação a um palmo do primeiro. `show_new_tab_button` governa os dois que restaram. Pedido do usuário | F3 |
 | A zona fixa à direita da barra é do botão de nova aba (§2.2) | É do **botão de configurações**, que herdou o bloco quando o botão de nova aba global saiu — e que está **inerte**: desenha, consome o clique para ele não atravessar até a aba de baixo, e não faz nada (`config` é F4). O bloco fica reservado para o que a barra ganhar à direita daqui em diante. Pedido do usuário | F3 |
 | Um tom só para o ícone do "+" (§2.6) | A cor depende do que está **atrás** dele: `#12151a` sobre a cápsula de cor cheia de um grupo explícito, `#e4e8ee` sobre a barra escura de um run de abas soltas. Com um tom só, o "+" ficava preto no fundo preto sempre que a barra não tinha grupo nenhum | F3 |
 | Ordem de cedência do overflow: rótulo, depois nome da pílula, só então rolagem (§2.18, §2.4) | **Nada cede.** Encolher exige busca binária sobre o layout (até 24 recálculos por frame, cada um remedindo texto sem cache) e era a lentidão da barra em overflow. Rótulo e nome ficam no teto e a trilha rola; `min_width` e `label_min_width` saem do arquivo de exemplo | F3 |

@@ -324,6 +324,17 @@ pub struct TabBarLayout {
     /// Largura total ocupada pela trilha, sem clamping à largura
     /// disponível da janela -- overflow (encolher, rolar) é a Etapa 5.
     pub content_width: f32,
+    /// "+" ao fim da trilha, que cria uma aba **fora de todo grupo**.
+    ///
+    /// Só existe quando o último grupo da barra é **explícito**. Se a
+    /// barra termina num run de abas soltas, o "+" daquele run já cria
+    /// exatamente isso, no mesmo lugar -- dois botões idênticos lado a
+    /// lado foi o que condenou o antigo botão global.
+    ///
+    /// É ele que cobre o caso em que **toda** aba está em grupo: sem
+    /// isso, um workspace com um único grupo (colapsado, ainda por cima)
+    /// não tem nenhum gesto que crie uma aba solta.
+    pub ungrouped_new_tab_button: Option<Rect>,
 }
 
 /// O que um ponto da trilha atinge, em prioridade: botão de fechar antes
@@ -338,9 +349,11 @@ pub enum TabBarHit {
     /// (RF-2.13, `docs/reference/acoes.md`: "o alvo é a pílula clicada").
     Pill(GroupId),
     /// Botão "+" ao final de um grupo -- `group.new_tab` nesse grupo
-    /// específico. O botão global (fora da trilha) é resolvido à parte,
-    /// em coordenadas de tela, não por este hit-test de conteúdo.
+    /// específico.
     GroupNewTab(GroupId),
+    /// "+" ao fim da trilha -- cria aba fora de todo grupo. Ver
+    /// [`TabBarLayout::ungrouped_new_tab_button`].
+    UngroupedNewTab,
 }
 
 /// Constrói a geometria da trilha: um wrapper por grupo não-vazio, abas
@@ -629,6 +642,32 @@ pub fn layout(
         x = inner_x;
     }
 
+    // "+" de aba solta, ao fim da trilha. Só quando o último grupo é
+    // explícito: se a barra já termina num run de abas soltas, o "+"
+    // daquele run cria a mesma coisa, no mesmo lugar. Fica **fora** de
+    // qualquer wrapper, sobre o fundo da barra -- é o que o distingue,
+    // à vista, do "+" que cria dentro de um grupo.
+    let ungrouped_new_tab_button = if style.show_new_tab_button
+        && workspace
+            .groups()
+            .iter()
+            .rfind(|g| !g.tabs().is_empty())
+            .is_some_and(|g| g.is_explicit())
+    {
+        x += style.trilha_gap;
+        let rect = Rect {
+            x,
+            y: track_top
+                + (style.tab_height + style.wrapper_padding * 2.0 - style.close_button_size) / 2.0,
+            width: style.close_button_size,
+            height: style.close_button_size,
+        };
+        x += style.close_button_size;
+        Some(rect)
+    } else {
+        None
+    };
+
     // O respiro também fecha a trilha à direita, senão o último wrapper
     // encostaria na zona fixa ao rolar até o fim. Barra sem grupo nenhum
     // não tem conteúdo a padear: largura zero, senão o `overflow_state`
@@ -642,6 +681,7 @@ pub fn layout(
     TabBarLayout {
         groups,
         content_width,
+        ungrouped_new_tab_button,
     }
 }
 
@@ -989,6 +1029,12 @@ pub fn hit_test(layout: &TabBarLayout, point: (f32, f32)) -> Option<TabBarHit> {
         {
             return Some(TabBarHit::GroupNewTab(group.id));
         }
+    }
+    if layout
+        .ungrouped_new_tab_button
+        .is_some_and(|rect| rect_contains(rect, point))
+    {
+        return Some(TabBarHit::UngroupedNewTab);
     }
     None
 }
@@ -1882,6 +1928,80 @@ mod tests {
             wrapper.rect.width,
             pill.rect.width + style.wrapper_padding * 2.0
         );
+    }
+
+    /// O caso do relato: um único grupo, colapsado, sem aba solta
+    /// nenhuma. Sem este botão não sobra gesto nenhum que crie uma aba
+    /// fora do grupo -- o "+" do grupo está escondido pelo colapso, e o
+    /// atalho `tab.new` cria dentro do grupo da aba ativa.
+    #[test]
+    fn lone_collapsed_group_still_offers_an_ungrouped_new_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "col", GroupColor::Cyan).unwrap();
+        ws.collapse_group(group, true);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert!(layout.groups[0].new_tab_button.is_none(), "grupo colapsado");
+        let button = layout
+            .ungrouped_new_tab_button
+            .expect("sem este botão não há como criar aba solta");
+        assert!(
+            button.x > layout.groups[0].rect.x + layout.groups[0].rect.width,
+            "deveria ficar depois do wrapper, fora dele"
+        );
+        assert_eq!(
+            hit_test(&layout, (button.x + 1.0, button.y + 1.0)),
+            Some(TabBarHit::UngroupedNewTab)
+        );
+    }
+
+    /// E ele não aparece quando a barra já termina num run de abas
+    /// soltas: o "+" daquele run cria exatamente a mesma coisa, no mesmo
+    /// lugar. Dois botões idênticos lado a lado foi o que condenou o
+    /// antigo botão global.
+    #[test]
+    fn no_ungrouped_button_when_the_bar_already_ends_in_loose_tabs() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "servidor", GroupColor::Red).unwrap();
+        ws.append_ungrouped_tab("bash", None);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert!(layout.ungrouped_new_tab_button.is_none());
+        // O run solto, esse, tem o dele.
+        assert!(layout.groups[1].new_tab_button.is_some());
+    }
+
+    /// Barra sem grupo explícito nenhum também não precisa dele.
+    #[test]
+    fn no_ungrouped_button_on_a_bar_without_explicit_groups() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert!(layout.ungrouped_new_tab_button.is_none());
+    }
+
+    /// `show_new_tab_button` desliga os dois botões, não só o do grupo.
+    #[test]
+    fn show_new_tab_button_also_disables_the_ungrouped_button() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "servidor", GroupColor::Red).unwrap();
+        let mut m = measurer();
+        let layout = layout(
+            &ws,
+            &TabBarStyle {
+                show_new_tab_button: false,
+                ..TabBarStyle::DEFAULT
+            },
+            &mut m,
+        );
+        assert!(layout.ungrouped_new_tab_button.is_none());
+        assert!(layout.groups[0].new_tab_button.is_none());
     }
 
     /// Expandir devolve o botão -- o colapso esconde, não desliga.

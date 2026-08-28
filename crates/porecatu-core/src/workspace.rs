@@ -157,13 +157,10 @@ impl Workspace {
     /// caso contrário. Ao contrário de [`Self::append_tab`], ignora o
     /// grupo da aba ativa.
     ///
-    /// **Sem gesto que chegue aqui hoje.** Era o caminho do botão de nova
-    /// aba global, removido por ser um segundo botão para a mesma ação a
-    /// um palmo do "+" do grupo. Enquanto houver um run de abas soltas na
-    /// barra, o "+" dele cria lá e o efeito é o mesmo; o que ficou sem
-    /// caminho é criar uma aba solta quando **toda** aba está em grupo
-    /// explícito. Uma ação própria (`tab.new_ungrouped`) resolve isso na
-    /// F4, e é para ela que este método continua aqui.
+    /// É o caminho do "+" que fecha a trilha, que existe justamente para
+    /// o caso em que **toda** aba está em grupo explícito -- aí não há
+    /// run de abas soltas cujo "+" pudesse criar aqui. Quando há um, o
+    /// botão do fim da trilha não aparece e é o do run que chama isto.
     pub fn append_ungrouped_tab(
         &mut self,
         shell_name: impl Into<String>,
