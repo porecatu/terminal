@@ -291,6 +291,9 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Alterado
 
+- `[appearance.tabs] font_size` de 12.5 para 13 — rótulo da aba e nome da
+  pílula do grupo (que segue o mesmo tamanho, pedido do usuário). Itens de
+  menu continuam em 12.5, token separado (`overlay.rs::MENU_ITEM_TEXT_SIZE`)
 - Actions do GitHub pinadas por SHA de commit em vez de tag major flutuante,
   com a versão legível no comentário. Tag pode ser reapontada e uma release
   menor muda comportamento sem PR do Dependabot — mesma disciplina que o
@@ -298,6 +301,28 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Corrigido
 
+- Cursor do terminal invisível: `frame::GeometryBatch` guardava `Quad` e
+  `RoundedQuad` em dois `Vec` separados, e a montagem de instâncias sempre
+  desenhava todo `rounded` depois de todo `quads` do batch — não importa a
+  ordem de chegada. O quadro arredondado do terminal (`RoundedQuad`, mesmo
+  clip do cursor) acabava sempre por cima dele. `geometry` agora é um só
+  `Vec<GeometryPrimitive>` ordenado, e a mesma armadilha valeria para
+  qualquer fundo de célula colorido (seleção, `ls --color`), não só o
+  cursor
+- Cursor do terminal alto e baixo demais: desenhava com a altura de
+  `metrics.height` (a altura de **linha**, com os 1.75 de
+  `LINE_HEIGHT_MULTIPLIER` de folga) a partir do topo dela, sobrando bem
+  abaixo do glyph — visível assim que parou de ficar escondido atrás do
+  quadro do terminal (item acima). Altura passa a ser
+  `font_size_px * 1.2`, a mesma proporção do `.caret-blk` do mockup
+  (15/12.5) e do line-height que `text.rs` usa pra montar a caixa do
+  glyph (`Metrics::new(size_px, size_px * 1.2)`), colado no topo da linha
+  como o glyph também está
+- Janela abrindo um console junto no Windows: faltava
+  `#![windows_subsystem = "windows"]` em `src/main.rs`, então o binário
+  ficava no subsistema `console` default e o Windows abria um terminal ao
+  lado da janela. Sem efeito nos outros alvos — a diretiva é ignorada fora
+  de `windows`
 - Render do terminal e troca de aba ficaram lentos: `fits_the_grid` (o teste que
   decide se um caractere pode viajar num `TextRun` compartilhado) comparava o
   avanço **natural** do caractere contra a largura de célula já **arredondada ao

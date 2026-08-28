@@ -33,6 +33,23 @@ pub struct CellMetrics {
     pub height: f32,
 }
 
+/// Altura do cursor bloco, em fração de `font_size_px` -- **não**
+/// `metrics.height` (a altura de linha, com `LINE_HEIGHT_MULTIPLIER` de
+/// 1.75 embutido pra dar respiro entre linhas). Um cursor do tamanho da
+/// linha inteira sobra bem abaixo do glyph, na folga que o line-height
+/// reserva pra próxima linha -- visível assim que o quadro do terminal
+/// parou de escondê-lo atrás de si (`frame::GeometryPrimitive`).
+///
+/// Vem do mockup (`docs/design/mockup-estatico.html`, `.caret-blk`):
+/// 15px de cursor sobre 12.5px de fonte -- a proporção 15/12.5, não os
+/// 15px em si (o mockup ainda é IBM Plex, seção 4.4 da espec. visual). E
+/// bate com o `1.2` que `text.rs` usa como line-height do **glyph**
+/// (`Metrics::new(size_px, size_px * 1.2)`) -- não coincidência, é a
+/// mesma caixa. Por isso o cursor fica colado no topo da linha (`row_y`),
+/// não centralizado em `metrics.height`: a caixa do glyph também começa
+/// ali, não no meio da folga que o line-height de 1.75 reserva embaixo.
+const CURSOR_HEIGHT_RATIO: f32 = 1.2;
+
 /// Respiro entre a borda do quadro (janela) e o box arredondado do
 /// terminal -- pedido do usuário, "mesmo espaço que tem entre as abas e a
 /// borda da trilha do topo do app", ou seja o mesmo `trilha_padding` da
@@ -131,12 +148,20 @@ pub fn build_primitives(
     if let Some((row, col)) = snapshot.cursor.position
         && snapshot.cursor.visible
     {
+        let cursor_height = font_size_px * CURSOR_HEIGHT_RATIO;
+        let row_y = y_offset + row as f32 * metrics.height;
         primitives.push(Primitive::Quad(Quad {
             rect: Rect {
                 x: x_offset + col as f32 * metrics.width,
-                y: y_offset + row as f32 * metrics.height,
+                // Sem centralizar em `metrics.height`: o glyph não ocupa a
+                // linha inteira (ela tem `LINE_HEIGHT_MULTIPLIER` de folga,
+                // toda embaixo). `text.rs` monta o buffer do glyph com
+                // `Metrics::new(size_px, size_px * 1.2)` -- a caixa do
+                // texto começa em `row_y`, não no meio da linha -- e é
+                // esse `1.2` que `CURSOR_HEIGHT_RATIO` replica.
+                y: row_y,
                 width: metrics.width,
-                height: metrics.height,
+                height: cursor_height,
             },
             color: palette::TERM_CURSOR,
         }));

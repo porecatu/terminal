@@ -16,7 +16,7 @@ use std::ops::Range;
 
 use wgpu::util::DeviceExt;
 
-use crate::frame::{GeometryBatch, Layer};
+use crate::frame::{GeometryBatch, GeometryPrimitive, Layer};
 use crate::primitives::{Quad, Rect, RoundedQuad, scale_rect};
 
 const SHADER: &str = include_str!("quad.wgsl");
@@ -336,7 +336,7 @@ impl QuadWindowState {
         let mut instances: Vec<Instance> = Vec::new();
 
         for batch in batches {
-            if batch.quads.is_empty() && batch.rounded.is_empty() {
+            if batch.geometry.is_empty() {
                 continue;
             }
             let scissor = match batch.clip {
@@ -346,13 +346,15 @@ impl QuadWindowState {
                 None => ScissorRect::full(surface_width, surface_height),
             };
             let start = instances.len() as u32;
-            instances.extend(batch.quads.iter().map(|q| Instance::from_quad(q, scale)));
-            instances.extend(
-                batch
-                    .rounded
-                    .iter()
-                    .map(|q| Instance::from_rounded_quad(q, scale)),
-            );
+            // Na ordem de chegada -- não por tipo. Separar quad e
+            // arredondado em dois `extend` desenhava todo arredondado por
+            // cima de todo quad do batch, não importa quem foi pushado
+            // primeiro (era o que escondia o cursor atrás do quadro do
+            // terminal).
+            instances.extend(batch.geometry.iter().map(|g| match g {
+                GeometryPrimitive::Quad(q) => Instance::from_quad(q, scale),
+                GeometryPrimitive::Rounded(q) => Instance::from_rounded_quad(q, scale),
+            }));
             let end = instances.len() as u32;
             if !scissor.is_empty() {
                 state.draws.push((scissor, start..end));
