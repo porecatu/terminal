@@ -18,22 +18,26 @@ use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight, fontd
 
 use crate::primitives::{FontFace, SansWeight};
 
-// Faces do design (ADR-0025): Iosevka Fixed no terminal, Iosevka Aile no
-// chrome. Recortadas por `scripts/subset-fonts.py` -- os arquivos
-// originais têm ~9 MB cada, e o recorte os leva a ~410 KB sem perder
-// nenhum bloco que o projeto desenha. O recorte é permitido porque a OFL
-// da Iosevka **não** tem cláusula de Reserved Font Name.
+// Face do design (ADR-0026, supersede ADR-0025): **Iosevka Fixed** para
+// terminal e chrome -- uma família só. O ADR-0025 tinha introduzido a
+// Iosevka Aile para o chrome; ela e a Fixed são variantes desenhadas
+// diferente dentro da mesma superfamília (Aile é a proporcional/humanista,
+// Fixed é a monoespaçada sem ligadura), e lado a lado na barra a diferença
+// de desenho lia como duas fontes, não como uma identidade só -- pedido do
+// usuário para unificar. Recortada por `scripts/subset-fonts.py`; o
+// recorte é permitido porque a OFL da Iosevka **não** tem cláusula de
+// Reserved Font Name.
 const MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IosevkaFixed-Regular.ttf");
 const MONO_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IosevkaFixed-Medium.ttf");
-const SANS_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IosevkaAile-Regular.ttf");
-const SANS_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IosevkaAile-Medium.ttf");
-const SANS_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/IosevkaAile-SemiBold.ttf");
 /// Sexta face: os ícones do chrome (ver [`crate::icon`]). Licença ISC,
 /// compatível com a GPLv3.
 const ICONS: &[u8] = include_bytes!("../../../assets/fonts/Lucide.ttf");
 
 const MONO_FAMILY: &str = "Iosevka Fixed";
-const SANS_FAMILY: &str = "Iosevka Aile";
+/// Chrome usa a mesma família do terminal (ADR-0026): `Sans` aqui é o nome
+/// do papel (título de aba, rótulo de grupo, menu), não de uma família
+/// proporcional separada -- a face por trás é `MONO_FAMILY`.
+const SANS_FAMILY: &str = MONO_FAMILY;
 /// Nome interno (`name` ID 1) do `Lucide.ttf` -- minúsculo, como o arquivo
 /// declara; `Family::Name` é o que casa a face no `fontdb`.
 const ICON_FAMILY: &str = "lucide";
@@ -50,6 +54,12 @@ pub(crate) fn attrs_for(font: FontFace) -> Attrs<'static> {
             let weight = match weight {
                 SansWeight::Regular => Weight::NORMAL,
                 SansWeight::Medium => Weight::MEDIUM,
+                // A Iosevka Fixed só embute 400/500 (ADR-0026); sem um
+                // arquivo 600 próprio, o `fontdb` casa pelo peso
+                // registrado mais próximo (Medium). Ninguém pede
+                // `SemiBold` hoje -- se um widget vier a precisar de um
+                // 600 de verdade, `scripts/subset-fonts.py` precisa de
+                // `IosevkaFixed-SemiBold.ttf` na lista de faces.
                 SansWeight::SemiBold => Weight::SEMIBOLD,
             };
             Attrs::new()
@@ -98,14 +108,7 @@ impl TextMeasurer {
     /// continua sendo o que segura o resto do Unicode.
     pub fn new() -> Self {
         let mut db = fontdb::Database::new();
-        for bytes in [
-            MONO_REGULAR,
-            MONO_MEDIUM,
-            SANS_REGULAR,
-            SANS_MEDIUM,
-            SANS_SEMIBOLD,
-            ICONS,
-        ] {
+        for bytes in [MONO_REGULAR, MONO_MEDIUM, ICONS] {
             db.load_font_data(bytes.to_vec());
         }
         db.load_system_fonts();

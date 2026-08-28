@@ -144,8 +144,9 @@ const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
 
 // Pílula de grupo (espec §2.4, `[appearance.groups]`).
 const PILL_CORNER_RADIUS: f32 = 6.0; // label_corner_radius
-const PILL_BORDER_WIDTH: f32 = 1.0; // espec §2.4: "borda 1px" -- sem chave própria
-const PILL_SWATCH_CORNER_RADIUS: f32 = 2.0; // swatch_corner_radius
+// Espec §2.4 pede borda 1px (`label_border`); removida a pedido do
+// usuário -- a pílula já é a cor cheia do grupo, e a borda neutra por
+// cima virava um contorno cinza sem função contra ela.
 // Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
 // expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
 // ícone é o equivalente estático. A em é a mesma dos outros ícones; o que
@@ -305,7 +306,7 @@ pub fn paint(
         let is_collapsed = core_group.is_some_and(|g| g.is_collapsed());
         // Espec §2.5: "sublinhado de aba sem grupo" usa `ungrouped_color`;
         // grupo explícito usa a cor do grupo -- mesma resolução para o
-        // tingimento do wrapper e o swatch da pílula abaixo.
+        // tingimento do wrapper e o fundo da pílula abaixo.
         let group_color = core_group
             .and_then(|g| g.color())
             .map(palette::group_color)
@@ -735,9 +736,14 @@ fn scale_alpha(color: Color, mult: f32) -> Color {
     }
 }
 
-/// Pílula de grupo (espec §2.4): fundo/borda, swatch, nome e caret, na cor
-/// do grupo já resolvida por quem chama (`group_color` em [`paint`]).
-/// Sem contador de abas -- pedido do usuário, divergência da espec §2.4.
+/// Pílula de grupo (espec §2.4, divergente): fundo, nome e caret, na cor
+/// do grupo já resolvida por quem chama (`group_color` em [`paint`]). Sem
+/// contador de abas -- pedido do usuário. Sem swatch tampouco -- também
+/// pedido do usuário: a pílula inteira é pintada com `color`, no lugar do
+/// pequeno quadrado que a marcava antes (o fundo era `palette::PILL_BACKGROUND`,
+/// neutro). Texto e caret usam `palette::GROUP_NEW_TAB_ICON` -- o mesmo
+/// escuro do "+" do grupo, pela mesma razão: sobre a cor cheia do grupo o
+/// claro perde contraste.
 #[allow(clippy::too_many_arguments)]
 fn paint_group_pill(
     pill: &GroupPillRect,
@@ -752,13 +758,6 @@ fn paint_group_pill(
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: shift(pill.rect, dx),
         radius: PILL_CORNER_RADIUS,
-        color: palette::PILL_BACKGROUND,
-        border_color: palette::PILL_BORDER,
-        border_width: PILL_BORDER_WIDTH,
-    }));
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect: shift(pill.swatch, dx),
-        radius: PILL_SWATCH_CORNER_RADIUS,
         color,
         border_color: palette::TRANSPARENT,
         border_width: 0.0,
@@ -801,7 +800,7 @@ fn paint_group_pill(
         text: name_text,
         font: PILL_NAME_FONT,
         size_px: name_font_size,
-        color: palette::PILL_TEXT,
+        color: palette::GROUP_NEW_TAB_ICON,
     }));
     let caret_glyph = if is_collapsed {
         PILL_CARET_COLLAPSED
@@ -812,7 +811,7 @@ fn paint_group_pill(
         caret_glyph,
         shift(pill.caret_rect, dx),
         PILL_CARET_ICON_SIZE,
-        palette::PILL_CARET,
+        palette::GROUP_NEW_TAB_ICON,
     ));
 }
 

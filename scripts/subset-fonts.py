@@ -5,11 +5,11 @@ Gera as faces embutidas do Porecatu a partir dos TTF originais da Iosevka.
 
     python scripts/subset-fonts.py <dir-com-os-ttf-originais>
 
-As faces da Iosevka vêm com ~8.7 MB (mono) e ~10.7 MB (sans) cada, porque
-o pacote traz todos os conjuntos estilísticos alternativos. Cinco faces
-assim somariam ~50 MB de binário — o mesmo custo que o ADR-0016 recusou
-para emoji e CJK. Este script recorta cada face para os blocos que o
-projeto realmente desenha, o que as leva à casa de 1 MB.
+Terminal e chrome usam a mesma família, Iosevka Fixed (ADR-0026, que
+unificou o que o ADR-0025 tinha dividido entre Fixed e Aile). As faces da
+Iosevka vêm com ~8.7 MB cada, porque o pacote traz todos os conjuntos
+estilísticos alternativos. Este script recorta cada face para os blocos
+que o projeto realmente desenha, o que as leva à casa de 200 KB.
 
 O recorte é **permitido**: a Iosevka é SIL OFL 1.1 **sem** cláusula de
 Reserved Font Name (ao contrário da IBM Plex, que a proibia — ver
@@ -65,9 +65,6 @@ FAIXAS = [
 FACES = [
     "IosevkaFixed-Regular.ttf",
     "IosevkaFixed-Medium.ttf",
-    "IosevkaAile-Regular.ttf",
-    "IosevkaAile-Medium.ttf",
-    "IosevkaAile-SemiBold.ttf",
 ]
 
 DESTINO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "fonts")

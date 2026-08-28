@@ -122,7 +122,7 @@ gap = 4                    # espaço entre abas do mesmo grupo
 corner_radius = 6          # 0 = abas retangulares                       RF-4.4
 
 # --- fonte do título -------------------------------------------------- RF-4.10
-font_family = "Iosevka Aile"
+font_family = "Iosevka Fixed" # unificada com o terminal (ADR-0026)
 font_size = 13 # era 12.5; também governa o nome da pílula do grupo, pedido do usuário
 
 # --- elementos visíveis ------------------------------------- RF-4.11, RF-4.12
@@ -174,16 +174,16 @@ rename_border = "#5ed3bc"
 
 [appearance.groups]
 # --- pílula do grupo -------------------------------------------------- RF-4.13
-label_padding_left = 8
+label_padding_left = 10       # era 8; +2px, pedido do usuário
 label_padding_right = 9
 label_font_size = 12.0
 label_corner_radius = 6
-label_background = "#1f242c"
-label_border = "#2b313b"
-label_foreground = "#c3cad3"
 label_hover_brightness = 1.25
-swatch_size = 8               # quadrado de cor à esquerda do nome
-swatch_corner_radius = 2
+# Sem `label_background`/`label_foreground`/`label_border`, sem swatch.
+# Pedido do usuário: a pílula inteira é pintada com a cor do grupo (a
+# mesma cápsula do wrapper), sem borda e sem um quadrado de cor à parte --
+# e nome/caret usam `count_background` (abaixo) pelo mesmo motivo do "+"
+# do grupo: sobre a cor cheia, o claro perde contraste.
 # Teto do nome do grupo (RF-2.12). O teto de 140 é o da aba (180) menos os
 # 41px de cromo da seção 2.18: uma pílula não deve ficar mais larga que a
 # aba que ela rotula. Nome além do teto trunca com reticências e aparece
@@ -193,10 +193,15 @@ swatch_corner_radius = 2
 # no código; a métrica de dez grupos do PRD-002 segue valendo, só que via
 # rolagem em vez de encolhimento).
 label_max_width = 140
-count_background = "#12151a"  # contador de abas no rótulo
+# `count_background`: contador de abas no popover de destino e no
+# indicador de overflow (a pílula da barra não tem mais contador nem
+# swatch); também a cor de nome/caret da pílula e do "+" do grupo, sobre a
+# cápsula cheia -- pedido do usuário, ver nota acima.
+count_background = "#12151a"
 count_foreground = "#7b838f"
 count_corner_radius = 9
-caret_foreground = "#e4e8ee"  # era #6b737e; ver espec. seção 4.4
+# Sem `caret_foreground`: o caret da pílula usa `count_background` (acima),
+# não um tom próprio -- mesma nota.
 
 # --- indicador -------------------------------------------- RF-4.14, RF-4.15
 # Lista combinável, não escolha exclusiva. O design usa pílula E
