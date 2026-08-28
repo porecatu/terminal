@@ -143,8 +143,9 @@ pub struct TabBarStyle {
     pub pill_swatch_size: f32,
     /// `[appearance.groups] label_font_size` -- fonte do nome da pílula.
     /// Igual a `font_size` (o rótulo da aba) por pedido do usuário; a
-    /// espec. §2.4 pede 12.0 contra os 12.5 da aba, e meio pixel de
-    /// diferença lado a lado só faz o nome parecer de outra fonte. Ver
+    /// espec. §2.4 pede 12.0 contra os 13 da aba (12.5 originalmente,
+    /// depois 13 -- também pedido do usuário), e meio pixel de diferença
+    /// lado a lado só faz o nome parecer de outra fonte. Ver
     /// [`PILL_NAME_FONT`].
     pub pill_font_size: f32,
     /// `[appearance.groups] label_max_width` -- teto do nome (RF-2.12): o
@@ -178,12 +179,12 @@ impl TabBarStyle {
         trilha_padding: 6.0,
         right_zone_button_size: 30.0,
         show_new_tab_button: true,
-        font_size: 12.5,
+        font_size: 13.0, // era 12.5, pedido do usuário
         pill_padding_left: 8.0,
         pill_padding_right: 9.0,
         pill_gap: 7.0,
         pill_swatch_size: 8.0,
-        pill_font_size: 12.5, // = `font_size`
+        pill_font_size: 13.0, // = `font_size`
         pill_name_max_width: 140.0,
         // `icon::WIDEST_CARET_INK_EM * chrome::PILL_CARET_ICON_SIZE`,
         // fixado aqui porque `TabBarStyle::DEFAULT` é `const` e o

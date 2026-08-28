@@ -29,9 +29,9 @@ Fallback de UI: `system-ui, sans-serif`. Fallback mono: `monospace`.
 | 19px / 500 | título da tela de nova aba |
 | 15px / 500 | título do painel de configurações |
 | 14.5px | campo de busca da paleta de comandos |
-| 13px | nome de perfil, item de resultado, campo de nome de grupo |
-| 12.5px | **rótulo da aba**, itens de menu |
-| 12px | nome do app, rótulo do grupo, campo de rename |
+| 13px | **rótulo da aba e nome da pílula do grupo** (12.5px originalmente; pedido do usuário, ver seção 4.4), nome de perfil, item de resultado, campo de nome de grupo |
+| 12.5px | itens de menu |
+| 12px | nome do app, campo de rename |
 | 11px | subtítulo da barra de título, título do painel, descrição de toggle |
 | 10.5px | barra de status, comando do perfil |
 | 10px | contador do grupo, rótulo de seção (uppercase, `letter-spacing: .7px`) |
@@ -339,7 +339,7 @@ além do rótulo. Selecionar cinco abas não pode refluir a barra.
 Conteúdo:
 
 1. **Badge de perfil** `[v2]` — mono 9px/500, raio 3, `padding: 2px 4px`, `letter-spacing: .4px`. Texto na cor do grupo, fundo na cor do grupo com alfa `.14`.
-2. **Rótulo** 12.5px, `max-width: 180px`, truncado com reticências.
+2. **Rótulo** 13px (12.5px originalmente; pedido do usuário, ver seção 4.4), `max-width: 180px`, truncado com reticências.
 3. **Botão de fechar** 17×17, raio 4, `✕` 10px `#727a86`. Hover: fundo `#39404b`, ícone `#e4e8ee`.
 
 **Campo de rename** `[v1]` — substitui o rótulo no lugar. Largura 120, fundo `#0e1116`, borda `1px #5ed3bc`, raio 4, texto `#e4e8ee` 12px, `padding: 2px 5px`, `outline: none`, foco automático. Confirma em `Enter` e no blur; cancela em `Esc`.
@@ -751,7 +751,7 @@ Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis 
 | Interpolação do `reflow` descrita como deslocamento horizontal (§1.10, ADR-0022) | Deslocar só a posição faz os **vizinhos** parecerem suaves e o grupo tocado saltar. A cápsula interpola **posição e largura**, e as abas que entram ou saem da trilha ao expandir/colapsar interpolam **opacidade** — leitura literal do §2.4 ("o que anima de fato é o resto do colapso: as abas desaparecendo da trilha"). Nenhuma animação nova: mesmo relógio, mesmos dois consumidores | F3 |
 | Ícones do chrome em cinza médio em repouso, `#e4e8ee` só no hover (§2.5, §2.6, §2.4) | **`#e4e8ee` em repouso.** O traço do Lucide é fino (`2/24` da em) e, num cinza médio contra a barra `#1b1f26`, some. O tom de hover vira o tom de base — nenhuma cor nova, é o token da própria espec. promovido de estado. Vale para fechar da aba, fechar do aviso, caret do grupo, chevron de overflow e o "+" global | F3 |
 | Botões de ícone quadrados (§1.7: fechar 17×17; §2.6: "+" 30×30) | Ganham **respiro horizontal** (`icon_button_padding_x`, 4px de cada lado): ficam mais largos que altos, com o desenho ainda centrado no quadrado original. Vale para fechar da aba, os dois "+", o caret da pílula e o botão da zona fixa. A altura não muda — senão o botão de fechar deixaria de caber na aba. Pedido do usuário, sem origem na espec. | F3 |
-| Nome do grupo em 12px/500 (§2.4, `label_font_size`) contra o rótulo da aba em 12.5px/400 (§1.1, §2.5) | **A mesma fonte da aba**: 12.5px/400 nos dois. Lado a lado na barra, meio pixel e um passo de peso não leem como hierarquia, leem como duas fontes diferentes — e o que separa o grupo da aba já são a cápsula de cor, o swatch e o contador. Pedido do usuário. `label_font_size` continua no arquivo e volta a governar o valor na F4 | F3 |
+| Nome do grupo em 12px/500 (§2.4, `label_font_size`) contra o rótulo da aba em 12.5px/400 (§1.1, §2.5) | **A mesma fonte da aba**: 13px/400 nos dois (12.5px originalmente, foi a 13 depois — pedido do usuário). Lado a lado na barra, meio pixel e um passo de peso não leem como hierarquia, leem como duas fontes diferentes — e o que separa o grupo da aba já são a cápsula de cor, o swatch e o contador. `label_font_size` continua no arquivo e volta a governar o valor na F4 | F3 |
 | Famílias de texto do mockup e da tabela de tokens (IBM Plex Sans/Mono) | **Iosevka Aile** e **Iosevka Fixed** no binário ([ADR-0025](../adr/0025-iosevka-no-lugar-da-ibm-plex.md)). A Plex Mono não tem um só dos 256 braille (os gráficos do `btop`), nem powerline, nem formas geométricas. A Iosevka é bem mais estreita, então a célula do terminal encolhe e cabe mais coluna na mesma largura — o mockup não foi regerado. Dimensões da barra em px não mudam; o que muda é a métrica de texto dentro delas | [ADR-0025](../adr/0025-iosevka-no-lugar-da-ibm-plex.md) |
 | Ícones do chrome escritos como glyphs Unicode: `✕ 10px` (§2.5, §2.15), `▶ 8px` (§2.4), chevrons de overflow (§2.18) | **Nenhum deles desenhava.** U+2715, U+25B6 e U+25BC não estão na IBM Plex Sans e o `fontdb` do projeto não carrega fonte do sistema ([ADR-0016](../adr/0016-fontes-embutidas.md)) — sem fallback, sem desenho. Entra uma **face de ícones** (Lucide, ISC): o binário desenha o ícone equivalente do catálogo, não aquele codepoint. Tamanhos e caixas da especificação valem sem mudança | [ADR-0024](../adr/0024-face-de-icones.md) |
 | Tamanhos de ícone da §2.5/§2.6/§2.4/§2.18 (`✕ 10px`, `+ 15px`, `▶ 8px`, `chevron 10px`) | Lidos como tamanho de **desenho**, e o binário desenha **maior** que eles: a em dos ícones é 20 px (`chrome::ICON_EM_SIZE`), o que dá ✕ de 11.8 px. Nos tamanhos da prosa o traço do Lucide (`2/24` da em) fica em 0.83 px, e o antialiasing o mistura com o fundo — o ícone some, sem a cor ter mudado. Pedido do usuário depois de ver os tamanhos originais em tela | [ADR-0024](../adr/0024-face-de-icones.md) |

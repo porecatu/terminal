@@ -93,17 +93,33 @@ pub(crate) struct ResolvedText {
     pub clip: Option<Rect>,
 }
 
+/// Um quad reto ou arredondado, na ordem em que chegou no stream --
+/// [`GeometryBatch`] precisa dessa ordem para desenhar por cima
+/// corretamente, já que os dois tipos podem se sobrepor (o quadro do
+/// terminal, um `RoundedQuad`, e o cursor, um `Quad`, disputam o mesmo
+/// clip).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum GeometryPrimitive {
+    Quad(Quad),
+    Rounded(RoundedQuad),
+}
+
 /// Quads e retângulos arredondados que compartilham o mesmo clip e são
 /// contíguos no stream original -- o suficiente para desenhar num só
 /// `set_scissor_rect` (ADR-0018: "quebrando o batch quando o clip muda").
 /// Duas execuções não-adjacentes com o mesmo clip **não** são mescladas: a
 /// ordem do stream é o que preserva "por cima", e mesclar exigiria provar
 /// que nada entre elas se sobrepõe.
+///
+/// `geometry` guarda os dois tipos misturados **na ordem de chegada** --
+/// separá-los em dois `Vec` (um por tipo) foi o bug que escondia o cursor:
+/// o quadro arredondado do terminal, mesmo pushado antes do cursor,
+/// desenhava por cima dele porque todo `Vec<RoundedQuad>` saía depois de
+/// todo `Vec<Quad>`, não importa a ordem original.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct GeometryBatch {
     pub clip: Option<Rect>,
-    pub quads: Vec<Quad>,
-    pub rounded: Vec<RoundedQuad>,
+    pub geometry: Vec<GeometryPrimitive>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -139,13 +155,13 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
             }
             Primitive::Quad(quad) => {
                 batch_for(&mut resolved.batches, clip_stack.last().copied())
-                    .quads
-                    .push(*quad);
+                    .geometry
+                    .push(GeometryPrimitive::Quad(*quad));
             }
             Primitive::RoundedQuad(quad) => {
                 batch_for(&mut resolved.batches, clip_stack.last().copied())
-                    .rounded
-                    .push(*quad);
+                    .geometry
+                    .push(GeometryPrimitive::Rounded(*quad));
             }
             Primitive::Text(run) => resolved.text.push(ResolvedText {
                 run: run.clone(),
@@ -198,12 +214,59 @@ mod tests {
         })
     }
 
+    /// Regressão: `RoundedQuad` pushado antes de um `Quad`, mesmo clip
+    /// (o quadro do terminal e o cursor) -- `geometry` precisa manter a
+    /// ordem de chegada, senão o quadro desenha por cima do cursor.
+    #[test]
+    fn quad_and_rounded_quad_keep_stream_order_in_same_batch() {
+        let rounded = Primitive::RoundedQuad(RoundedQuad {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            radius: 6.0,
+            color: Color::BLACK,
+            border_color: Color::BLACK,
+            border_width: 0.0,
+        });
+        let resolved = resolve_layer(&[rounded, quad(0.0)]);
+        assert_eq!(resolved.batches.len(), 1);
+        assert_eq!(
+            resolved.batches[0].geometry,
+            vec![
+                GeometryPrimitive::Rounded(RoundedQuad {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                    radius: 6.0,
+                    color: Color::BLACK,
+                    border_color: Color::BLACK,
+                    border_width: 0.0,
+                }),
+                GeometryPrimitive::Quad(Quad {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
+                    color: Color::BLACK,
+                }),
+            ]
+        );
+    }
+
     #[test]
     fn no_clip_is_one_batch() {
         let resolved = resolve_layer(&[quad(0.0), quad(1.0), quad(2.0)]);
         assert_eq!(resolved.batches.len(), 1);
         assert_eq!(resolved.batches[0].clip, None);
-        assert_eq!(resolved.batches[0].quads.len(), 3);
+        assert_eq!(resolved.batches[0].geometry.len(), 3);
     }
 
     #[test]
@@ -228,9 +291,9 @@ mod tests {
         assert_eq!(resolved.batches[0].clip, None);
         assert_eq!(resolved.batches[1].clip, Some(clip));
         assert_eq!(resolved.batches[2].clip, None);
-        assert_eq!(resolved.batches[0].quads.len(), 1);
-        assert_eq!(resolved.batches[1].quads.len(), 1);
-        assert_eq!(resolved.batches[2].quads.len(), 1);
+        assert_eq!(resolved.batches[0].geometry.len(), 1);
+        assert_eq!(resolved.batches[1].geometry.len(), 1);
+        assert_eq!(resolved.batches[2].geometry.len(), 1);
     }
 
     #[test]

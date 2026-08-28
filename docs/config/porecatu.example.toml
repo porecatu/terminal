@@ -123,7 +123,7 @@ corner_radius = 6          # 0 = abas retangulares                       RF-4.4
 
 # --- fonte do título -------------------------------------------------- RF-4.10
 font_family = "Iosevka Aile"
-font_size = 12.5
+font_size = 13 # era 12.5; também governa o nome da pílula do grupo, pedido do usuário
 
 # --- elementos visíveis ------------------------------------- RF-4.11, RF-4.12
 show_close_button = "always" # "always" | "hover" | "never"; design usa always
