@@ -44,7 +44,11 @@ pub const NOTE_ACCENT_RGB: (u8, u8, u8) = (0x5e, 0xd3, 0xbc);
 
 // Espec. visual §1.2/§1.3 -- barra de abas.
 pub const BAR_BACKGROUND: Color = hex(0x1b, 0x1f, 0x26); // Barras
-pub const BAR_SEPARATOR: Color = hex(0x23, 0x27, 0x2f); // Separador de barra
+// `BAR_SEPARATOR` (`#23272f`, espec §2.2) não é mais pintado: o separador
+// de 1px na base da barra virava a linha contra o box do terminal que o
+// usuário pediu pra tirar (`chrome::paint`). Cor documentada aqui caso o
+// separador volte a fazer sentido noutro estado (ex.: `tab_bar_position =
+// "bottom"`, RF-4.1, que a espec já prevê mudando de aresta).
 
 // Espec. visual §2.5 -- aba. Fundo em `hex_alpha` (F3 etapa 6, ajuste
 // pedido pelo usuário -- não vem da espec.): o grupo é uma "cápsula"
@@ -103,7 +107,9 @@ pub const fn group_color(color: GroupColor) -> Color {
 pub const PILL_BACKGROUND: Color = hex(0x1f, 0x24, 0x2c); // label_background
 pub const PILL_BORDER: Color = hex(0x2b, 0x31, 0x3b); // label_border
 pub const PILL_TEXT: Color = hex(0xc3, 0xca, 0xd3); // label_foreground
-pub const PILL_COUNT_BACKGROUND: Color = hex(0x12, 0x15, 0x1a); // count_background
+// `PILL_COUNT_TEXT`: usado pelo contador do popover de destino (overlay.rs)
+// e pelo contador de overflow (chrome.rs) -- não pela pílula da barra, que
+// não tem mais contador (pedido do usuário).
 pub const PILL_COUNT_TEXT: Color = hex(0x7b, 0x83, 0x8f); // count_foreground
 pub const PILL_CARET: Color = CHROME_ICON; // era caret_foreground
 

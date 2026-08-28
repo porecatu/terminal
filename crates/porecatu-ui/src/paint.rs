@@ -21,10 +21,11 @@
 //! A quebra é por caractere que precisa dela, não por célula: uma linha de
 //! ASCII continua sendo um run só.
 
-use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, TextMeasurer, TextRun};
+use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun};
 use porecatu_term::{Cell, CellFlags, CellText, GridSnapshot, SelectionSpan};
 
 use crate::palette;
+use crate::tab_bar::TabBarStyle;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CellMetrics {
@@ -32,26 +33,93 @@ pub struct CellMetrics {
     pub height: f32,
 }
 
-/// `y_offset`: onde a grade começa verticalmente na janela -- `0.0` até a
-/// Etapa 3, e a altura da barra de abas a partir da Etapa 4 (a barra ocupa
-/// o topo, a grade fica abaixo dela).
+/// Respiro entre a borda do quadro (janela) e o box arredondado do
+/// terminal -- pedido do usuário, "mesmo espaço que tem entre as abas e a
+/// borda da trilha do topo do app", ou seja o mesmo `trilha_padding` da
+/// barra (§2.2/§2.5), não um valor novo. **Só nos três lados que não
+/// encostam na barra** (esquerda, direita, base): em cima o box começa
+/// colado em `bar_height`, sem gap -- um gap ali é uma linha visível entre
+/// a trilha e o terminal, pedido do usuário para eliminar (antes desenhava
+/// a margem nos quatro lados).
+pub const TERMINAL_BOX_MARGIN: f32 = TabBarStyle::DEFAULT.trilha_padding;
+/// Padding extra **dentro** do box, entre a borda dele e a grade em si, nos
+/// quatro lados -- pedido do usuário ("mais um padding antes do bloco
+/// interno"), dobrado a pedido do usuário na revisão seguinte. Base:
+/// `wrapper_padding` (§2.3), no mesmo espírito de `TERMINAL_BOX_MARGIN`:
+/// nada de valor novo, só multiplicado pelo fator que o usuário pediu.
+pub const TERMINAL_BOX_PADDING: f32 = TabBarStyle::DEFAULT.wrapper_padding * 2.0;
+/// Espec §2.5: "raio 6" -- o mesmo raio das abas ("os blocos das abas"),
+/// pedido do usuário para o box do terminal.
+pub const TERMINAL_BOX_CORNER_RADIUS: f32 = 6.0;
+
+/// Retângulo do box arredondado do terminal: a área abaixo da barra
+/// (`bar_height`), colado nela em cima e recuado por [`TERMINAL_BOX_MARGIN`]
+/// nos outros três lados.
+pub fn terminal_box_rect(bar_height: f32, logical_width: f32, logical_height: f32) -> Rect {
+    Rect {
+        x: TERMINAL_BOX_MARGIN,
+        y: bar_height,
+        width: (logical_width - TERMINAL_BOX_MARGIN * 2.0).max(0.0),
+        height: (logical_height - bar_height - TERMINAL_BOX_MARGIN).max(0.0),
+    }
+}
+
+/// Retângulo onde a grade em si é desenhada: [`terminal_box_rect`] recuado
+/// por [`TERMINAL_BOX_PADDING`] nos quatro lados -- fonte única para
+/// `build_primitives` e para quem precisa saber onde a grade começa/termina
+/// fora dele (`grid_size`/`cell_at_cursor` em `lib.rs`), pra não duplicar a
+/// conta em dois lugares (a mesma fórmula copiada em dois lugares é a
+/// armadilha registrada em `chrome::bar_height`).
+pub fn terminal_content_rect(bar_height: f32, logical_width: f32, logical_height: f32) -> Rect {
+    let box_rect = terminal_box_rect(bar_height, logical_width, logical_height);
+    Rect {
+        x: box_rect.x + TERMINAL_BOX_PADDING,
+        y: box_rect.y + TERMINAL_BOX_PADDING,
+        width: (box_rect.width - TERMINAL_BOX_PADDING * 2.0).max(0.0),
+        height: (box_rect.height - TERMINAL_BOX_PADDING * 2.0).max(0.0),
+    }
+}
+
+/// Constrói as primitivas do box arredondado do terminal e da grade lá
+/// dentro. `box_rect`: [`terminal_box_rect`] -- a grade começa
+/// [`TERMINAL_BOX_PADDING`] adiante da borda do box, nos dois eixos.
 pub fn build_primitives(
     snapshot: &GridSnapshot,
     metrics: CellMetrics,
     font_size_px: f32,
-    y_offset: f32,
+    box_rect: Rect,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
 
+    primitives.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: box_rect,
+        radius: TERMINAL_BOX_CORNER_RADIUS,
+        color: palette::TERM_BACKGROUND,
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+
+    let x_offset = box_rect.x + TERMINAL_BOX_PADDING;
+    let y_offset = box_rect.y + TERMINAL_BOX_PADDING;
+
     for row in 0..snapshot.rows {
         let row_y = y_offset + row as f32 * metrics.height;
-        paint_row_backgrounds(snapshot, row, cols, row_y, metrics, &mut primitives);
+        paint_row_backgrounds(
+            snapshot,
+            row,
+            cols,
+            x_offset,
+            row_y,
+            metrics,
+            &mut primitives,
+        );
         paint_row_text(
             snapshot,
             row,
             cols,
+            x_offset,
             row_y,
             metrics,
             font_size_px,
@@ -65,7 +133,7 @@ pub fn build_primitives(
     {
         primitives.push(Primitive::Quad(Quad {
             rect: Rect {
-                x: col as f32 * metrics.width,
+                x: x_offset + col as f32 * metrics.width,
                 y: y_offset + row as f32 * metrics.height,
                 width: metrics.width,
                 height: metrics.height,
@@ -81,6 +149,7 @@ fn paint_row_backgrounds(
     snapshot: &GridSnapshot,
     row: usize,
     cols: usize,
+    x_offset: f32,
     row_y: f32,
     metrics: CellMetrics,
     out: &mut Vec<Primitive>,
@@ -92,7 +161,7 @@ fn paint_row_backgrounds(
         if bg != palette::TERM_BACKGROUND {
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
-                    x: col as f32 * metrics.width,
+                    x: x_offset + col as f32 * metrics.width,
                     y: row_y,
                     width: metrics.width,
                     height: metrics.height,
@@ -144,6 +213,7 @@ fn paint_row_text(
     snapshot: &GridSnapshot,
     row: usize,
     cols: usize,
+    x_offset: f32,
     row_y: f32,
     metrics: CellMetrics,
     font_size_px: f32,
@@ -173,7 +243,7 @@ fn paint_row_text(
                 let target = metrics.width * cell_span(cell);
                 let size_px = fitted_size(&text, bold, font_size_px, target, measurer);
                 out.push(Primitive::Text(TextRun {
-                    origin: (col as f32 * metrics.width, row_y),
+                    origin: (x_offset + col as f32 * metrics.width, row_y),
                     text,
                     font: FontFace::Mono { bold },
                     size_px,
@@ -208,7 +278,7 @@ fn paint_row_text(
 
         if !text.trim().is_empty() {
             out.push(Primitive::Text(TextRun {
-                origin: (start_col as f32 * metrics.width, row_y),
+                origin: (x_offset + start_col as f32 * metrics.width, row_y),
                 text,
                 font: FontFace::Mono { bold },
                 size_px: font_size_px,
@@ -341,11 +411,30 @@ mod tests {
     /// Linha de ASCII continua sendo um run só -- a quebra por caractere
     /// existe para o que sai da face mono, e não pode custar um run por
     /// célula no caso comum.
+    /// Retângulo de teste do box do terminal -- grande o bastante para não
+    /// recortar nada, com origem em (0, 0) para que o `x_offset`/`y_offset`
+    /// resultante seja só [`TERMINAL_BOX_PADDING`], sem o `TERMINAL_BOX_MARGIN`
+    /// (já descontado por quem monta `box_rect` em runtime).
+    fn test_box_rect() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        }
+    }
+
     #[test]
     fn plain_ascii_line_stays_a_single_run() {
         let mut m = porecatu_render::TextMeasurer::new();
         let cell = cell(&mut m);
-        let out = build_primitives(&snapshot("cargo build"), cell, SIZE, 0.0, &mut m);
+        let out = build_primitives(
+            &snapshot("cargo build"),
+            cell,
+            SIZE,
+            test_box_rect(),
+            &mut m,
+        );
         let runs = runs(&out);
         assert_eq!(runs.len(), 1, "esperava um run só, veio {runs:?}");
         assert_eq!(runs[0].1, "cargo build");
@@ -363,7 +452,7 @@ mod tests {
             &snapshot("\u{250C}\u{2500}\u{2510}\u{2588}\u{283F}\u{28FF}"),
             cell(&mut porecatu_render::TextMeasurer::new()),
             SIZE,
-            0.0,
+            test_box_rect(),
             &mut m,
         );
         assert_eq!(runs(&out).len(), 1);
@@ -379,24 +468,30 @@ mod tests {
     fn fallback_char_gets_its_own_run_anchored_to_its_cell() {
         let mut m = porecatu_render::TextMeasurer::new();
         let cell = cell(&mut m);
-        let out = build_primitives(&snapshot("ab\u{1F600}cd"), cell, SIZE, 0.0, &mut m);
+        let out = build_primitives(
+            &snapshot("ab\u{1F600}cd"),
+            cell,
+            SIZE,
+            test_box_rect(),
+            &mut m,
+        );
         let runs = runs(&out);
         assert_eq!(runs.len(), 3, "esperava tres runs, veio {runs:?}");
 
         assert_eq!(runs[0].1, "ab");
-        assert_eq!(runs[0].0, 0.0);
+        assert_eq!(runs[0].0, TERMINAL_BOX_PADDING);
 
         assert_eq!(runs[1].1, "\u{1F600}");
         assert_eq!(
             runs[1].0,
-            2.0 * cell.width,
+            TERMINAL_BOX_PADDING + 2.0 * cell.width,
             "glyph de fallback fora da celula dele"
         );
 
         assert_eq!(runs[2].1, "cd");
         assert_eq!(
             runs[2].0,
-            3.0 * cell.width,
+            TERMINAL_BOX_PADDING + 3.0 * cell.width,
             "texto depois do fallback saiu da grade"
         );
     }
@@ -408,7 +503,7 @@ mod tests {
     fn fallback_char_is_shrunk_to_fit_its_cell() {
         let mut m = porecatu_render::TextMeasurer::new();
         let cell = cell(&mut m);
-        let out = build_primitives(&snapshot("\u{1F600}"), cell, SIZE, 0.0, &mut m);
+        let out = build_primitives(&snapshot("\u{1F600}"), cell, SIZE, test_box_rect(), &mut m);
         let runs = runs(&out);
         assert_eq!(runs.len(), 1);
         let size = runs[0].2;

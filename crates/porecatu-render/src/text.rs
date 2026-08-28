@@ -104,8 +104,18 @@ impl TextWindowState {
             .zip(state.buffers.iter())
             .map(|(item, buffer)| TextArea {
                 buffer,
-                left: item.run.origin.0 * scale,
-                top: item.run.origin.1 * scale,
+                // Arredondado ao pixel físico: origem fracionária faz
+                // `cosmic-text`/`swash` rasterizar cada glyph num bin de
+                // subpixel diferente, e numa grade monoespaçada (célula do
+                // terminal) isso descasa o encaixe de caractere a
+                // caractere -- a "costura" fica visível em qualquer app que
+                // desenhe grade cheia (`btop`, `claude`). Ver
+                // `snap_cell_metrics_to_pixel_grid` em `porecatu-ui`, que
+                // garante que o avanço entre colunas já seja um número
+                // inteiro de pixels físicos; isto fecha a mesma garantia na
+                // origem do run.
+                left: (item.run.origin.0 * scale).round(),
+                top: (item.run.origin.1 * scale).round(),
                 scale: 1.0,
                 bounds: to_text_bounds(item.clip, scale),
                 default_color: color_to_cosmic(item.run.color),

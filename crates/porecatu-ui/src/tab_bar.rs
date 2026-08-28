@@ -116,7 +116,9 @@ pub struct TabBarStyle {
     /// implementação nunca teve. Uma tentativa com 4px pareceu não ter
     /// respiro nenhum embaixo, mas o valor não era a causa -- o recorte da
     /// trilha em `chrome::paint` vinha de uma cópia velha da altura da
-    /// barra e cortava as abas antes do respiro.
+    /// barra e cortava as abas antes do respiro. Uma tentativa de reduzir
+    /// só o horizontal em 2px (campo à parte do vertical) não ficou bem em
+    /// tela -- revertida, os dois eixos voltam a compartilhar este valor.
     pub trilha_padding: f32,
     /// Lado do botão da zona fixa à direita. Herda o "30×30" que a espec.
     /// §2.6 dava ao botão de nova aba global, que ocupava esta zona antes
@@ -149,10 +151,6 @@ pub struct TabBarStyle {
     /// da aba (180) menos os 41px de cromo da §2.18, valor citado direto da
     /// espec, não recalculado (a nota do TOML já registra a derivação).
     pub pill_name_max_width: f32,
-    /// Espec. §2.4, item 3: "padding: 1px 6px" do contador. Sem chave
-    /// própria (só cor/raio do contador têm chave no TOML).
-    pub pill_count_padding_x: f32,
-    pub pill_count_padding_y: f32,
     /// Largura reservada ao caret no flex da pílula. **Não** é o tamanho
     /// de fonte com que ele é desenhado: a face de ícones avança 1 em e
     /// desenha menos que isso, então quem pinta usa uma em maior (ver
@@ -187,8 +185,6 @@ impl TabBarStyle {
         pill_swatch_size: 8.0,
         pill_font_size: 12.5, // = `font_size`
         pill_name_max_width: 140.0,
-        pill_count_padding_x: 6.0,
-        pill_count_padding_y: 1.0,
         // `icon::WIDEST_CARET_INK_EM * chrome::PILL_CARET_ICON_SIZE`,
         // fixado aqui porque `TabBarStyle::DEFAULT` é `const` e o
         // tamanho vive do outro lado, em `chrome.rs`; o teste
@@ -320,10 +316,6 @@ pub struct GroupPillRect {
     /// Decide o tooltip do ADR-0019 (nome completo), mesmo padrão de
     /// `TabRect::label_truncated`.
     pub name_truncated: bool,
-    pub count_rect: Rect,
-    /// Contagem de abas do grupo, já formatada (espec. §2.4: "sempre
-    /// desenhado, conteúdo idêntico" -- não some quando expandido).
-    pub count_text: String,
     pub caret_rect: Rect,
 }
 
@@ -472,22 +464,6 @@ pub fn layout(
             let name_origin = (px, pill_y + (pill_height - style.pill_font_size) / 2.0);
             px += name_width + style.pill_gap;
 
-            // Espec. §2.4: "sempre desenhado, conteúdo idêntico" -- a
-            // contagem não muda com colapso, `show_tab_count_when_collapsed`
-            // só existiria a partir de `porecatu-config` (F4).
-            let count_text = group.tabs().len().to_string();
-            let count_text_width =
-                measurer.measure_width(&count_text, PILL_COUNT_FONT, PILL_COUNT_FONT_SIZE);
-            let count_width = count_text_width + style.pill_count_padding_x * 2.0;
-            let count_height = PILL_COUNT_FONT_SIZE + style.pill_count_padding_y * 2.0;
-            let count_rect = Rect {
-                x: px,
-                y: pill_y + (pill_height - count_height) / 2.0,
-                width: count_width,
-                height: count_height,
-            };
-            px += count_width + style.pill_gap;
-
             let caret_width = style.icon_button_width(style.pill_caret_size);
             let caret_rect = Rect {
                 x: px,
@@ -512,8 +488,6 @@ pub fn layout(
                 name_origin,
                 name,
                 name_truncated,
-                count_rect,
-                count_text,
                 caret_rect,
             })
         } else {
@@ -1853,7 +1827,6 @@ mod tests {
         let pill = wrapper.pill.as_ref().expect("grupo explícito tem pílula");
         assert_eq!(pill.name, "trabalho");
         assert!(!pill.name_truncated);
-        assert_eq!(pill.count_text, "2");
         assert_eq!(
             pill.rect.x,
             wrapper.rect.x + TabBarStyle::DEFAULT.wrapper_padding
@@ -1876,8 +1849,7 @@ mod tests {
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let pill = layout.groups[0].pill.as_ref().unwrap();
         assert!(pill.swatch.x < pill.name_origin.0);
-        assert!(pill.name_origin.0 < pill.count_rect.x);
-        assert!(pill.count_rect.x < pill.caret_rect.x);
+        assert!(pill.name_origin.0 < pill.caret_rect.x);
         assert!(pill.caret_rect.x + pill.caret_rect.width <= pill.rect.x + pill.rect.width);
     }
 

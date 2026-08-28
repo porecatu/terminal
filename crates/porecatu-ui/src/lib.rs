@@ -121,12 +121,13 @@ enum Drag {
     },
 }
 
-// docs/config/porecatu.example.toml [terminal.font]: size = 12.5 (RF-5.3),
-// line_height = 1.75 (RF-5.6, "multiplicador das métricas naturais da
-// fonte"). Simplificação desta etapa: aplicado direto sobre `size` em vez
-// da métrica natural da fonte (ascent+descent+lineGap), que exigiria ler
-// hhea/OS2 da face -- ajustar quando isso importar na prática.
-const FONT_SIZE_PX: f32 = 12.5;
+// docs/config/porecatu.example.toml [terminal.font]: size = 13.0 (RF-5.3,
+// 12.5 originalmente, +2px numa revisão e depois recalibrado a 13 -- pedido
+// do usuário), line_height = 1.75 (RF-5.6, "multiplicador das métricas
+// naturais da fonte"). Simplificação desta etapa: aplicado direto sobre
+// `size` em vez da métrica natural da fonte (ascent+descent+lineGap), que
+// exigiria ler hhea/OS2 da face -- ajustar quando isso importar na prática.
+const FONT_SIZE_PX: f32 = 13.0;
 const LINE_HEIGHT_MULTIPLIER: f32 = 1.75;
 
 /// Grade mínima -- uma célula em cada direção, no pior caso de janela
@@ -159,14 +160,51 @@ fn bar_height() -> f32 {
     chrome::bar_height(&TabBarStyle::DEFAULT)
 }
 
+/// Arredonda a métrica de célula para que a origem de toda coluna
+/// (`col as f32 * width`) caia num pixel **físico** inteiro depois da
+/// conversão de `WindowSurface` (que multiplica por `scale`, ADR-0018).
+///
+/// Sem isto, `width`/`height` saem fracionários da medição em ponto
+/// flutuante (`measure_mono_cell`) -- a Iosevka Fixed a 14.5px não bate
+/// pixel inteiro -- e cada coluna começa numa fração de pixel física
+/// diferente. O `glyphon`/`cosmic-text` cacheia glyph rasterizado por
+/// posição subpixel; posições fracionárias distintas por coluna produzem
+/// caixas delimitadoras que não se encostam perfeitamente, e a
+/// antialiasing de cada glyph deixa uma costura de 1px entre caracteres --
+/// visível em qualquer programa que desenhe grade cheia (`btop`, o
+/// `claude` CLI). Arredondar a célula para o pixel físico garante que toda
+/// coluna comece exatamente onde a anterior termina, sem resto.
+fn snap_cell_metrics_to_pixel_grid(width: f32, height: f32, scale: f32) -> CellMetrics {
+    let physical_width = (width * scale).round().max(1.0);
+    let physical_height = (height * scale).round().max(1.0);
+    CellMetrics {
+        width: physical_width / scale,
+        height: physical_height / scale,
+    }
+}
+
 /// O que `WindowState::handle_tab_action_key` não pode resolver sozinho --
 /// `window.new`/`window.close` (ADR-0015) tocam outras janelas, então
-/// precisam voltar pra `App`.
+/// precisam voltar pra `App`. `WindowEmptied` é o mesmo caso: fechar a
+/// última aba sem grupo nenhum e sem aba solta nenhuma sobrando fecha a
+/// janela sozinha (pedido do usuário) -- `close_window_unconditionally`
+/// só `App` tem.
 enum ActionOutcome {
     Handled,
     OpenWindow,
     CloseWindowRequested,
+    WindowEmptied,
     Unhandled,
+}
+
+/// Resultado de fechar uma aba por um caminho que pode ou não precisar de
+/// confirmação (RF-1.6: tela alternativa ou reporte de mouse ligado pede
+/// diálogo antes). `Closed { window_empty }` usa o mesmo contrato de
+/// `WindowState::close_tab_unconditionally`: `true` quando não sobrou
+/// grupo nenhum nem aba solta nenhuma, e quem chama fecha a janela.
+enum TabCloseOutcome {
+    Dialog(ConfirmDialog),
+    Closed { window_empty: bool },
 }
 
 /// O que `WindowState::handle_group_editor_key` não pode resolver sozinho:
@@ -182,12 +220,14 @@ enum GroupEditorOutcome {
 /// O que `WindowState::handle_bar_click` não pode resolver sozinho: o
 /// botão "+" de um grupo (pedido do usuário, fora da espec.) pede
 /// `open_tab`, que precisa de `cell_metrics`/`proxy`/`startup_directory`
-/// -- só `App` tem.
+/// -- só `App` tem. `WindowEmptied`: mesmo caso de `ActionOutcome`, pelo
+/// botão de fechar da aba em vez do atalho de teclado.
 enum NewTabRequest {
     None,
     InGroup(GroupId),
     /// "+" ao fim da trilha, fora de qualquer wrapper.
     Ungrouped,
+    WindowEmptied,
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -320,12 +360,32 @@ impl WindowState {
             .or_else(|| startup_directory.clone())
     }
 
+    /// `cwd` herdado por `group.new_tab` (RF-2.8): a última aba **do grupo
+    /// alvo**, não a aba ativa da janela -- diferente de
+    /// [`Self::resolve_new_tab_cwd`], porque `group.new_tab` sempre agrega
+    /// em `group`, mesmo com a aba ativa em outro grupo (mesma regra de
+    /// `open_tab`/`NewTabTarget::Group`). Pedido do usuário. Cai para a
+    /// resolução de `tab.new` se o grupo não tiver aba com `cwd` conhecido.
+    fn resolve_group_new_tab_cwd(
+        &self,
+        group: GroupId,
+        startup_directory: &Option<PathBuf>,
+    ) -> Option<PathBuf> {
+        self.workspace
+            .group(group)
+            .and_then(|g| g.tabs().last())
+            .and_then(|&id| self.workspace.tab(id))
+            .and_then(|tab| tab.cwd().cloned())
+            .or_else(|| self.resolve_new_tab_cwd(startup_directory))
+    }
+
     /// Linhas/colunas atuais a partir do tamanho lógico da janela (descontada
     /// a barra de abas) e da métrica de célula já medida.
     fn grid_size(&self, cell_metrics: CellMetrics) -> (usize, usize) {
-        let content_height = (self.logical_height - bar_height()).max(0.0);
-        let cols = ((self.logical_width / cell_metrics.width) as usize).max(MIN_GRID);
-        let rows = ((content_height / cell_metrics.height) as usize).max(MIN_GRID);
+        let content =
+            paint::terminal_content_rect(bar_height(), self.logical_width, self.logical_height);
+        let cols = ((content.width / cell_metrics.width) as usize).max(MIN_GRID);
+        let rows = ((content.height / cell_metrics.height) as usize).max(MIN_GRID);
         (rows, cols)
     }
 
@@ -551,8 +611,9 @@ impl WindowState {
     /// RF-1.6 (ADR-0017): fechar a aba ativa pede confirmação quando ela
     /// tem tela alternativa ou reporte de mouse ligado -- o proxy de
     /// "processo em primeiro plano" que o app pode observar sem varrer a
-    /// árvore de processos. Sem isso, fecha direto.
-    fn action_close_tab(&mut self) -> Option<ConfirmDialog> {
+    /// árvore de processos. Sem isso, fecha direto -- e se isso esvaziou a
+    /// janela (pedido do usuário), quem chama fecha a janela.
+    fn action_close_tab(&mut self) -> Option<TabCloseOutcome> {
         let id = self.workspace.active_tab()?;
         let runtime = self.tabs.get(&id)?;
         let modes = runtime.terminal.modes();
@@ -562,15 +623,15 @@ impl WindowState {
                 .tab(id)
                 .map(|t| t.title().to_string())
                 .unwrap_or_default();
-            return Some(ConfirmDialog::new(
+            return Some(TabCloseOutcome::Dialog(ConfirmDialog::new(
                 "Fechar aba?",
                 format!("\"{title}\" tem um programa em primeiro plano. Fechar mesmo assim?"),
                 "Fechar aba",
                 DialogAction::CloseTab(id),
-            ));
+            )));
         }
-        self.close_tab_unconditionally(id);
-        None
+        let window_empty = self.close_tab_unconditionally(id);
+        Some(TabCloseOutcome::Closed { window_empty })
     }
 
     fn action_rename_start(&mut self) {
@@ -890,10 +951,16 @@ impl WindowState {
                     return ActionOutcome::Handled;
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("w") => {
-                    if let Some(dialog) = self.action_close_tab() {
-                        self.dialog = Some(dialog);
-                    }
-                    return ActionOutcome::Handled;
+                    return match self.action_close_tab() {
+                        Some(TabCloseOutcome::Dialog(dialog)) => {
+                            self.dialog = Some(dialog);
+                            ActionOutcome::Handled
+                        }
+                        Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                            ActionOutcome::WindowEmptied
+                        }
+                        _ => ActionOutcome::Handled,
+                    };
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("r") => {
                     self.action_rename_start();
@@ -1085,12 +1152,16 @@ impl WindowState {
                 }
                 NewTabRequest::None
             }
-            TabBarHit::CloseButton(id) => {
-                if let Some(dialog) = self.close_tab_via_button(id) {
+            TabBarHit::CloseButton(id) => match self.close_tab_via_button(id) {
+                Some(TabCloseOutcome::Dialog(dialog)) => {
                     self.dialog = Some(dialog);
+                    NewTabRequest::None
                 }
-                NewTabRequest::None
-            }
+                Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                    NewTabRequest::WindowEmptied
+                }
+                _ => NewTabRequest::None,
+            },
             TabBarHit::Pill(id) => {
                 // Espec §2.19.1/RF-2.19: arma o possível arraste do
                 // rótulo -- se o gesto nunca passar do limiar de 4px,
@@ -1134,7 +1205,7 @@ impl WindowState {
     /// necessariamente a ativa (o clique pode ser em qualquer aba da
     /// trilha) -- mesma condição de `action_close_tab`, mas sobre `id`
     /// explícito.
-    fn close_tab_via_button(&mut self, id: TabId) -> Option<ConfirmDialog> {
+    fn close_tab_via_button(&mut self, id: TabId) -> Option<TabCloseOutcome> {
         let runtime = self.tabs.get(&id)?;
         let modes = runtime.terminal.modes();
         if modes.alt_screen || modes.mouse_reporting != MouseReporting::None {
@@ -1143,15 +1214,15 @@ impl WindowState {
                 .tab(id)
                 .map(|t| t.title().to_string())
                 .unwrap_or_default();
-            return Some(ConfirmDialog::new(
+            return Some(TabCloseOutcome::Dialog(ConfirmDialog::new(
                 "Fechar aba?",
                 format!("\"{title}\" tem um programa em primeiro plano. Fechar mesmo assim?"),
                 "Fechar aba",
                 DialogAction::CloseTab(id),
-            ));
+            )));
         }
-        self.close_tab_unconditionally(id);
-        None
+        let window_empty = self.close_tab_unconditionally(id);
+        Some(TabCloseOutcome::Closed { window_empty })
     }
 
     /// RF-2.13: clique na pílula alterna colapso. Ao **colapsar**, a
@@ -1335,7 +1406,7 @@ impl WindowState {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
-        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        let cwd = self.resolve_group_new_tab_cwd(group, startup_directory);
         self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::Group(group));
     }
 
@@ -1426,7 +1497,10 @@ impl WindowState {
     }
 
     fn cell_at_cursor(&self, cell_metrics: CellMetrics) -> input::CellPosition {
-        let content_y = self.cursor_position.1 - (bar_height() * self.scale) as f64;
+        let content =
+            paint::terminal_content_rect(bar_height(), self.logical_width, self.logical_height);
+        let content_x = self.cursor_position.0 - (content.x * self.scale) as f64;
+        let content_y = self.cursor_position.1 - (content.y * self.scale) as f64;
         let (rows, cols) = self.active_runtime().map_or((MIN_GRID, MIN_GRID), |rt| {
             (
                 rt.snapshot.rows.max(MIN_GRID),
@@ -1434,7 +1508,7 @@ impl WindowState {
             )
         });
         input::cell_at(
-            self.cursor_position.0,
+            content_x.max(0.0),
             content_y.max(0.0),
             cell_metrics,
             rows,
@@ -1620,10 +1694,7 @@ impl App {
             let (cell_width, cell_height) = gpu
                 .text_measurer()
                 .measure_mono_cell(FONT_SIZE_PX, FONT_SIZE_PX * LINE_HEIGHT_MULTIPLIER);
-            self.cell_metrics = CellMetrics {
-                width: cell_width,
-                height: cell_height,
-            };
+            self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
         }
 
         // ADR-0015: "a janela nova abre com uma aba no cwd da aba ativa no
@@ -1736,7 +1807,13 @@ impl App {
     /// `menu` (não só `tab`) porque `MoveToGroup` precisa do `anchor` do
     /// menu que o abriu -- o popover de destino nasce no mesmo ponto, sem
     /// virar submenu (ADR-0023 §4).
-    fn run_menu_action(&mut self, window_id: WindowId, menu: ContextMenu, action: MenuAction) {
+    fn run_menu_action(
+        &mut self,
+        window_id: WindowId,
+        menu: ContextMenu,
+        action: MenuAction,
+        event_loop: &ActiveEventLoop,
+    ) {
         let tab = menu.tab;
         match action {
             MenuAction::NewTab => {
@@ -1752,10 +1829,22 @@ impl App {
             }
             MenuAction::CloseTab => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
-                    if let Some(dialog) = state.close_tab_via_button(tab) {
-                        state.dialog = Some(dialog);
+                    match state.close_tab_via_button(tab) {
+                        Some(TabCloseOutcome::Dialog(dialog)) => {
+                            state.dialog = Some(dialog);
+                            state.window.request_redraw();
+                        }
+                        // Pedido do usuário: fechar a última aba (sem
+                        // grupo, sem solta) pelo menu de contexto fecha a
+                        // janela sozinha, mesmo caminho do atalho e do
+                        // botão de fechar.
+                        Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                            self.close_window_unconditionally(window_id, event_loop);
+                        }
+                        _ => {
+                            state.window.request_redraw();
+                        }
                     }
-                    state.window.request_redraw();
                 }
             }
             MenuAction::MoveToGroup => {
@@ -2028,7 +2117,7 @@ impl App {
             if let Some(action) = state.handle_context_menu_key(&key)
                 && let Some(menu) = menu
             {
-                self.run_menu_action(window_id, menu, action);
+                self.run_menu_action(window_id, menu, action, event_loop);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -2147,6 +2236,9 @@ impl App {
             }
             ActionOutcome::OpenWindow => self.open_window(event_loop, Some(window_id)),
             ActionOutcome::CloseWindowRequested => self.request_close_window(window_id, event_loop),
+            ActionOutcome::WindowEmptied => {
+                self.close_window_unconditionally(window_id, event_loop);
+            }
             ActionOutcome::Unhandled => {
                 if let Some(runtime) = state.active_runtime() {
                     // Modos lidos agora, não do snapshot do último frame
@@ -2544,7 +2636,12 @@ impl App {
                 && let Some(index) = hit
                 && context_menu::TAB_MENU_ITEMS[index].enabled
             {
-                self.run_menu_action(window_id, menu, context_menu::TAB_MENU_ITEMS[index].action);
+                self.run_menu_action(
+                    window_id,
+                    menu,
+                    context_menu::TAB_MENU_ITEMS[index].action,
+                    event_loop,
+                );
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -2659,6 +2756,7 @@ impl App {
                         &self.startup_directory,
                         Instant::now(),
                     );
+                    state.window.request_redraw();
                 }
                 NewTabRequest::InGroup(group) => {
                     state.action_new_tab_in_group(
@@ -2668,10 +2766,18 @@ impl App {
                         &self.startup_directory,
                         Instant::now(),
                     );
+                    state.window.request_redraw();
                 }
-                NewTabRequest::None => {}
+                // Pedido do usuário: fechar a última aba (sem grupo, sem
+                // solta) fecha a janela sozinha -- `state` não é mais
+                // válido depois disto, então nada de `request_redraw`.
+                NewTabRequest::WindowEmptied => {
+                    self.close_window_unconditionally(window_id, event_loop);
+                }
+                NewTabRequest::None => {
+                    state.window.request_redraw();
+                }
             }
-            state.window.request_redraw();
             return;
         }
 
@@ -2817,11 +2923,12 @@ impl App {
             && let Some(runtime) = state.tabs.get_mut(&id)
         {
             runtime.terminal.snapshot_into(&mut runtime.snapshot);
+            let box_rect = paint::terminal_box_rect(h, state.logical_width, state.logical_height);
             let primitives = paint::build_primitives(
                 &runtime.snapshot,
                 self.cell_metrics,
                 FONT_SIZE_PX,
-                h,
+                box_rect,
                 gpu.text_measurer(),
             );
             frame.set_layer(Layer::Grid, primitives);
@@ -2935,9 +3042,13 @@ impl App {
             frame.set_layer(Layer::Modal, primitives);
         }
 
+        // `BAR_BACKGROUND`, não `TERM_BACKGROUND`: a margem entre a borda da
+        // janela e o box arredondado do terminal (`paint::TERMINAL_BOX_MARGIN`)
+        // precisa de uma cor diferente da do box para o quadro aparecer --
+        // a mesma da barra de abas, já que os dois formam o "quadro" do app.
         state
             .window_surface
-            .render(gpu, palette::TERM_BACKGROUND, &frame);
+            .render(gpu, palette::BAR_BACKGROUND, &frame);
     }
 }
 
