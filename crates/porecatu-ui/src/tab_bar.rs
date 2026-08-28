@@ -88,6 +88,15 @@ pub struct TabBarStyle {
     /// Espec. §2.2: "hit-testing dá 2px de folga em volta do botão de
     /// fechar". Sem chave própria.
     pub close_button_hit_slop: f32,
+    /// Respiro horizontal **dentro** de cada botão de ícone -- fechar da
+    /// aba, "+" (do grupo e o de aba solta), caret da pílula e o botão da
+    /// zona fixa à direita. Some de cada lado, deixando o botão mais
+    /// largo que alto; a altura não muda.
+    ///
+    /// Sem origem na espec., que desenha esses botões quadrados: pedido
+    /// do usuário. Valor de trabalho, no mesmo espírito de
+    /// `RENAME_FIELD_HEIGHT` -- ajustar se ficar visualmente errado.
+    pub icon_button_padding_x: f32,
     /// `[appearance.groups] wrapper_padding`
     pub wrapper_padding: f32,
     /// `[appearance.groups] gap` -- entre grupos, e também o gap da
@@ -165,6 +174,7 @@ impl TabBarStyle {
         internal_gap: 8.0,
         close_button_size: 17.0,
         close_button_hit_slop: 2.0,
+        icon_button_padding_x: 4.0,
         wrapper_padding: 3.0,
         trilha_gap: 6.0,
         trilha_padding: 6.0,
@@ -188,6 +198,12 @@ impl TabBarStyle {
 }
 
 impl TabBarStyle {
+    /// Largura de um botão de ícone de lado `size`: o desenho continua
+    /// centrado num quadrado desse lado, e o respiro entra só na largura.
+    pub fn icon_button_width(&self, size: f32) -> f32 {
+        size + self.icon_button_padding_x * 2.0
+    }
+
     /// Largura **fixa** de toda aba (pedido do usuário, fora da espec.):
     /// o teto de rótulo mais o cromo que sempre o acompanha, saturado em
     /// `max_width`. Não depende do título, do indicador nem de quantas
@@ -203,7 +219,7 @@ impl TabBarStyle {
         (self.padding_left
             + self.label_max_width
             + self.internal_gap
-            + self.close_button_size
+            + self.icon_button_width(self.close_button_size)
             + self.padding_right)
             .min(self.max_width)
     }
@@ -217,7 +233,7 @@ impl TabBarStyle {
             - self.padding_left
             - dot_reserve
             - self.internal_gap
-            - self.close_button_size
+            - self.icon_button_width(self.close_button_size)
             - self.padding_right)
             .max(0.0)
     }
@@ -472,13 +488,14 @@ pub fn layout(
             };
             px += count_width + style.pill_gap;
 
+            let caret_width = style.icon_button_width(style.pill_caret_size);
             let caret_rect = Rect {
                 x: px,
                 y: pill_y + (pill_height - style.pill_caret_size) / 2.0,
-                width: style.pill_caret_size,
+                width: caret_width,
                 height: style.pill_caret_size,
             };
-            px += style.pill_caret_size + style.pill_padding_right;
+            px += caret_width + style.pill_padding_right;
 
             let pill_rect = Rect {
                 x: inner_x,
@@ -558,10 +575,11 @@ pub fn layout(
                 width: tab_width,
                 height: tab_h,
             };
+            let close_width = style.icon_button_width(style.close_button_size);
             let close_button = Rect {
-                x: inner_x + tab_width - style.padding_right - style.close_button_size,
+                x: inner_x + tab_width - style.padding_right - close_width,
                 y: tab_top + (tab_h - style.close_button_size) / 2.0,
-                width: style.close_button_size,
+                width: close_width,
                 height: style.close_button_size,
             };
             let close_hit_rect = expand(close_button, style.close_button_hit_slop);
@@ -616,10 +634,10 @@ pub fn layout(
             let rect = Rect {
                 x: inner_x,
                 y: tab_top + (tab_h - style.close_button_size) / 2.0,
-                width: style.close_button_size,
+                width: style.icon_button_width(style.close_button_size),
                 height: style.close_button_size,
             };
-            inner_x += style.close_button_size;
+            inner_x += rect.width;
             Some(rect)
         } else {
             None
@@ -659,10 +677,10 @@ pub fn layout(
             x,
             y: track_top
                 + (style.tab_height + style.wrapper_padding * 2.0 - style.close_button_size) / 2.0,
-            width: style.close_button_size,
+            width: style.icon_button_width(style.close_button_size),
             height: style.close_button_size,
         };
-        x += style.close_button_size;
+        x += rect.width;
         Some(rect)
     } else {
         None
@@ -827,7 +845,7 @@ pub fn point_in_overflow_pill(
 /// com a trilha rolando), e sobreviveu a ele -- é o bloco reservado para
 /// o que a barra ganhar à direita daqui em diante.
 pub fn right_zone_width(style: &TabBarStyle) -> f32 {
-    style.trilha_gap * 2.0 + style.right_zone_button_size
+    style.trilha_gap * 2.0 + style.icon_button_width(style.right_zone_button_size)
 }
 
 /// Largura da trilha rolável: a barra inteira menos a zona fixa da
@@ -844,7 +862,7 @@ pub fn settings_button_rect(style: &TabBarStyle, bar_width: f32, bar_height: f32
     Rect {
         x: bar_width - right_zone_width(style) + style.trilha_gap,
         y: (bar_height - style.right_zone_button_size) / 2.0,
-        width: style.right_zone_button_size,
+        width: style.icon_button_width(style.right_zone_button_size),
         height: style.right_zone_button_size,
     }
 }
@@ -1222,11 +1240,13 @@ mod tests {
         let bar_width = 400.0;
         let bar_height = crate::chrome::bar_height(&style);
         let button = settings_button_rect(&style, bar_width, bar_height);
+        let width = style.icon_button_width(style.right_zone_button_size);
+        assert_eq!(button.x, bar_width - style.trilha_gap - width);
+        assert_eq!(button.width, width);
         assert_eq!(
-            button.x,
-            bar_width - style.trilha_gap - style.right_zone_button_size
+            button.height, style.right_zone_button_size,
+            "o respiro entra só na largura"
         );
-        assert_eq!(button.width, style.right_zone_button_size);
         assert_eq!(
             trilha_width(&style, bar_width),
             bar_width - right_zone_width(&style)
@@ -1317,12 +1337,16 @@ mod tests {
     }
 
     /// A largura fixa sai dos tokens da espec. (§2.5: rótulo 180px,
-    /// padding 10/6, gap 8, botão de fechar 17), nunca de um número
-    /// inventado -- e continua saturada em `max_width`.
+    /// padding 10/6, gap 8, botão de fechar 17 mais o respiro horizontal
+    /// dele), nunca de um número inventado -- e continua saturada em
+    /// `max_width`.
     #[test]
     fn fixed_tab_width_is_derived_from_the_spec_tokens() {
         let style = TabBarStyle::DEFAULT;
-        assert_eq!(style.tab_width(), 10.0 + 180.0 + 8.0 + 17.0 + 6.0);
+        assert_eq!(
+            style.tab_width(),
+            10.0 + 180.0 + 8.0 + style.icon_button_width(17.0) + 6.0
+        );
         let tight = TabBarStyle {
             max_width: 100.0,
             ..style
@@ -1348,6 +1372,38 @@ mod tests {
         assert!(
             slot <= needed + 1.0,
             "slot do caret ({slot}) folgado demais para o desenho ({needed})"
+        );
+    }
+
+    /// Pedido do usuário: os botões de ícone ganham respiro **só na
+    /// largura**. A altura continua a do quadrado da espec., senão o
+    /// botão de fechar deixaria de caber na aba.
+    #[test]
+    fn icon_buttons_are_wider_than_tall() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "servidor", GroupColor::Green).unwrap();
+
+        let style = TabBarStyle::DEFAULT;
+        assert!(style.icon_button_padding_x > 0.0);
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        let group = &layout.groups[0];
+
+        for (nome, rect) in [
+            ("fechar", group.tabs[0].close_button),
+            ("+ do grupo", group.new_tab_button.unwrap()),
+            ("+ de aba solta", layout.ungrouped_new_tab_button.unwrap()),
+            ("caret", group.pill.as_ref().unwrap().caret_rect),
+        ] {
+            assert!(
+                rect.width > rect.height,
+                "{nome} deveria ter respiro horizontal: {rect:?}"
+            );
+        }
+        assert_eq!(
+            group.tabs[0].close_button.height, style.close_button_size,
+            "a altura do botão de fechar não muda"
         );
     }
 
