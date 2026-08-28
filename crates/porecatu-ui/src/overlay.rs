@@ -32,7 +32,7 @@
 
 use porecatu_core::{GroupColor, Workspace};
 use porecatu_render::{
-    Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextMeasurer, TextRun,
+    Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextMeasurer, TextRun, icon,
 };
 
 use crate::chrome::centered_glyph;
@@ -77,7 +77,9 @@ const WARNING_SEVERITY_BAR_WIDTH: f32 = 2.0;
 const WARNING_TITLE_SIZE: f32 = 12.5;
 const WARNING_BODY_SIZE: f32 = 11.0;
 const WARNING_CLOSE_SIZE: f32 = 17.0;
-const WARNING_CLOSE_ICON_SIZE: f32 = 10.0;
+// Em, não desenho -- mesmo tamanho do botão de fechar da aba, que a
+// espec. §2.15 diz ser "o mesmo botão". Ver `porecatu_render::icon`.
+const WARNING_CLOSE_ICON_SIZE: f32 = crate::chrome::ICON_EM_SIZE;
 /// Sem métrica natural de linha (mesma simplificação de `FONT_SIZE_PX`/
 /// `LINE_HEIGHT_MULTIPLIER` em `lib.rs`): valor de trabalho pra separar
 /// título e corpo.
@@ -197,11 +199,10 @@ pub fn paint_warnings(
         }));
 
         out.push(centered_glyph(
-            "\u{2715}",
+            icon::X,
             entry.close_button,
             WARNING_CLOSE_ICON_SIZE,
             palette::CLOSE_BUTTON_ICON,
-            measurer,
         ));
     }
     out

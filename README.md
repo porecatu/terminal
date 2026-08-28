@@ -47,7 +47,7 @@ O que já roda hoje:
 - PTY cross-platform (`portable-pty`, ConPTY no Windows) com spawn, leitura, escrita, resize e encerramento
 - `alacritty_terminal` encapsulado, com snapshot de grade de tipos próprios e cor não resolvida
 - Três threads por terminal (leitura, escrita, observação do processo) e render **damage-driven**: terminal ocioso não gera frame
-- Pipelines `wgpu` de quads (com cantos arredondados via SDF) e de texto (`glyphon`, atlas em cache), com as cinco faces do IBM Plex embutidas no binário
+- Pipelines `wgpu` de quads (com cantos arredondados via SDF) e de texto (`glyphon`, atlas em cache), com as cinco faces da Iosevka e a de ícones embutidas no binário
 - Teclado com codificação xterm, `Ctrl`/`Alt`, DECCKM, bracketed paste e IME (tecla morta do ABNT2)
 - Mouse reportado ao programa (modos 1000/1002/1003, encoding SGR 1006), seleção nos quatro modos com `Shift` forçando seleção local, cópia/cola via `arboard` e OSC 52 com leitura negada por default
 - Rolagem de scrollback por teclado e por roda, com tela alternativa tratada
@@ -88,7 +88,7 @@ Os valores default do [`porecatu.example.toml`](docs/config/porecatu.example.tom
 | PTY | `portable-pty` (ConPTY no Windows) | [ADR-0004](docs/adr/0004-pty-cross-platform.md) |
 | Persistência de sessão | JSON versionado em state dir | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md) |
 | Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
-| Fontes | IBM Plex embutida (OFL-1.1) | [ADR-0016](docs/adr/0016-fontes-embutidas.md) |
+| Fontes | Iosevka (OFL-1.1) + Lucide (ISC), embutidas | [ADR-0025](docs/adr/0025-iosevka-no-lugar-da-ibm-plex.md) |
 | Referência visual | design canvas importado | [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md) |
 | Toolchain | stable pinada, edition 2024 | [ADR-0011](docs/adr/0011-toolchain-rust.md) |
 | Licença | GPL-3.0-or-later | [ADR-0010](docs/adr/0010-licenciamento.md) |
@@ -110,7 +110,7 @@ porecatu/
 │   ├── porecatu-render/    # wgpu: pipelines de quad, texto, arredondamento
 │   ├── porecatu-ui/        # event loop winit, layout, hit-testing, roteamento de input
 │   └── porecatu-session/   # serialização/restauração de sessão
-├── assets/fonts/           # IBM Plex embutida no binário (OFL-1.1)
+├── assets/fonts/           # Iosevka + Lucide embutidas no binário
 └── docs/
 ```
 
@@ -141,7 +141,9 @@ A escolha da versão 3 não é estética: `winit` e `alacritty_terminal` são Ap
 
 ### Fontes embutidas
 
-O binário embute cinco faces de **IBM Plex** (IBM Plex Mono 400/500, IBM Plex Sans 400/500/600), Copyright © 2017 IBM Corp. com Reserved Font Name "Plex", sob a [SIL Open Font License 1.1](assets/fonts/LICENSE-OFL.txt). Sem subsetting — decisão e motivo em [ADR-0016](docs/adr/0016-fontes-embutidas.md).
+O binário embute cinco faces de texto da **[Iosevka](https://typeof.net/Iosevka/)** (Iosevka Fixed 400/500 no terminal, Iosevka Aile 400/500/600 no chrome), Copyright © 2015-2026 Renzhi Li, sob a [SIL Open Font License 1.1](assets/fonts/LICENSE-OFL-iosevka.txt). São recortadas por [`scripts/subset-fonts.py`](scripts/subset-fonts.py) — 48 MB viram 2.1 MB —, o que a OFL da Iosevka permite por não ter cláusula de Reserved Font Name. Decisão e medições em [ADR-0025](docs/adr/0025-iosevka-no-lugar-da-ibm-plex.md).
+
+Embute também uma face de ícones, **[Lucide](https://lucide.dev)**, Copyright © Lucide Contributors, sob a [licença ISC](assets/fonts/LICENSE-ISC-lucide.txt) — é ela que desenha o botão de fechar, o caret do grupo e os chevrons de overflow, que nenhuma das faces de texto cobre. Decisão em [ADR-0024](docs/adr/0024-face-de-icones.md).
 
 ## Contribuindo
 

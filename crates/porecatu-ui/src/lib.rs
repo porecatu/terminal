@@ -189,6 +189,21 @@ enum NewTabRequest {
     InGroup(GroupId),
 }
 
+/// Onde uma aba nova nasce. As três origens querem coisas diferentes, e a
+/// diferença entre as duas primeiras é o que o botão global existe para
+/// dar: seguir a aba ativa levaria a aba nova para dentro do grupo dela.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewTabTarget {
+    /// `tab.new`/`window.new` (RF-1.1, ADR-0020 §1): o grupo da aba ativa.
+    ActiveGroup,
+    /// `group.new_tab` (RF-2.8/RF-2.22): fim de um grupo específico -- o
+    /// "+" que fica dentro do wrapper do grupo.
+    Group(GroupId),
+    /// Botão "+" global (zona fixa à direita da barra): fim da barra,
+    /// fora de qualquer grupo explícito.
+    Ungrouped,
+}
+
 /// Estado por janela (ADR-0015: "um `Workspace` independente por janela").
 /// `App` guarda um `HashMap<WindowId, WindowState>`; o que não varia por
 /// janela (GPU do processo, diretório de início, métricas de célula --
@@ -383,29 +398,32 @@ impl WindowState {
     }
 
     /// Cria uma aba, herdando `cwd` (RF-1.1, ADR-0017), e spawna a
-    /// `Terminal` dela. `target_group`: `None` segue o grupo da aba ativa
-    /// (`Workspace::append_tab`, ADR-0020 §1) -- o caminho de `tab.new`/
-    /// `window.new`; `Some(id)` cria no fim de um grupo específico
-    /// (`group.new_tab`, RF-2.8/RF-2.22). Erro de spawn desfaz a criação e
-    /// vira aviso do app (canal 1, ADR-0014) -- sem isso o `Workspace`
-    /// acumularia abas sem `Terminal` nenhum atrás.
+    /// `Terminal` dela. Erro de spawn desfaz a criação e vira aviso do app
+    /// (canal 1, ADR-0014) -- sem isso o `Workspace` acumularia abas sem
+    /// `Terminal` nenhum atrás.
     fn open_tab(
         &mut self,
         cell_metrics: CellMetrics,
         proxy: &EventLoopProxy<Wakeup>,
         cwd: Option<PathBuf>,
         now: Instant,
-        target_group: Option<GroupId>,
+        target: NewTabTarget,
     ) {
         let (rows, cols) = self.grid_size(cell_metrics);
         let shell_name = Self::shell_display_name();
-        let tab_id = match target_group.and_then(|g| self.workspace.group(g)) {
-            Some(group) => {
-                let pos = group.tabs().len();
-                self.workspace
-                    .new_tab(target_group, shell_name, cwd.clone(), pos)
-            }
-            None => self.workspace.append_tab(shell_name, cwd.clone()),
+        let tab_id = match target {
+            NewTabTarget::Group(id) => match self.workspace.group(id) {
+                Some(g) => {
+                    let pos = g.tabs().len();
+                    self.workspace
+                        .new_tab(Some(id), shell_name, cwd.clone(), pos)
+                }
+                // Grupo que sumiu entre o clique e aqui: cai no caminho
+                // de `tab.new`, não num run implícito novo no fim.
+                None => self.workspace.append_tab(shell_name, cwd.clone()),
+            },
+            NewTabTarget::ActiveGroup => self.workspace.append_tab(shell_name, cwd.clone()),
+            NewTabTarget::Ungrouped => self.workspace.append_ungrouped_tab(shell_name, cwd.clone()),
         };
 
         let window_id = self.window.id();
@@ -526,7 +544,26 @@ impl WindowState {
             self.commit_rename();
         }
         let cwd = self.resolve_new_tab_cwd(startup_directory);
-        self.open_tab(cell_metrics, proxy, cwd, now, None);
+        self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::ActiveGroup);
+    }
+
+    /// Botão "+" global (zona fixa à direita da barra): aba **sem grupo**,
+    /// no fim da barra. Separado de [`Self::action_new_tab`] de propósito
+    /// -- o atalho `tab.new` continua seguindo o grupo da aba ativa
+    /// (RF-1.1), que é o que o ADR-0020 §1 manda; quem quer uma aba dentro
+    /// de um grupo tem o "+" daquele grupo.
+    fn action_new_tab_ungrouped(
+        &mut self,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+    ) {
+        if self.rename.editing_tab().is_some() {
+            self.commit_rename();
+        }
+        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::Ungrouped);
     }
 
     /// RF-1.6 (ADR-0017): fechar a aba ativa pede confirmação quando ela
@@ -1293,7 +1330,7 @@ impl WindowState {
             self.commit_rename();
         }
         let cwd = self.resolve_new_tab_cwd(startup_directory);
-        self.open_tab(cell_metrics, proxy, cwd, now, Some(group));
+        self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::Group(group));
     }
 
     /// `group.close_all` (RF-2.22/RF-2.23), já confirmado: fecha cada aba
@@ -1592,7 +1629,13 @@ impl App {
 
         let window_id = window.id();
         let mut state = WindowState::new(window, window_surface, scale);
-        state.open_tab(self.cell_metrics, &self.proxy, cwd, Instant::now(), None);
+        state.open_tab(
+            self.cell_metrics,
+            &self.proxy,
+            cwd,
+            Instant::now(),
+            NewTabTarget::ActiveGroup,
+        );
         self.windows.insert(window_id, state);
     }
 
@@ -2604,7 +2647,7 @@ impl App {
             };
             match state.handle_bar_click(logical_point, gpu, false) {
                 NewTabRequest::Global => {
-                    state.action_new_tab(
+                    state.action_new_tab_ungrouped(
                         self.cell_metrics,
                         &self.proxy,
                         &self.startup_directory,
@@ -2768,8 +2811,13 @@ impl App {
             && let Some(runtime) = state.tabs.get_mut(&id)
         {
             runtime.terminal.snapshot_into(&mut runtime.snapshot);
-            let primitives =
-                paint::build_primitives(&runtime.snapshot, self.cell_metrics, FONT_SIZE_PX, h);
+            let primitives = paint::build_primitives(
+                &runtime.snapshot,
+                self.cell_metrics,
+                FONT_SIZE_PX,
+                h,
+                gpu.text_measurer(),
+            );
             frame.set_layer(Layer::Grid, primitives);
         }
 

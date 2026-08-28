@@ -152,6 +152,30 @@ impl Workspace {
         self.new_tab(group, shell_name, cwd, pos)
     }
 
+    /// Cria uma aba **sem grupo**, no fim da barra: no último run
+    /// implícito se a barra já terminar em um, num run implícito novo
+    /// caso contrário. Ao contrário de [`Self::append_tab`], ignora o
+    /// grupo da aba ativa -- é o caminho do botão de nova aba global
+    /// (zona fixa à direita da barra), que existe justamente para dar
+    /// uma aba fora de qualquer grupo explícito. O "+" de dentro de um
+    /// grupo continua sendo o caminho de criar lá (`group.new_tab`).
+    pub fn append_ungrouped_tab(
+        &mut self,
+        shell_name: impl Into<String>,
+        cwd: Option<PathBuf>,
+    ) -> TabId {
+        let trailing_implicit = self
+            .groups
+            .last()
+            .filter(|g| !g.is_explicit())
+            .map(|g| (g.id(), g.tabs().len()));
+        let (group, pos) = match trailing_implicit {
+            Some((id, len)) => (Some(id), len),
+            None => (None, 0),
+        };
+        self.new_tab(group, shell_name, cwd, pos)
+    }
+
     /// Escada de foco do RF-1.5/RF-2.14 (ADR-0020 §3), numa função só,
     /// usada por `close_tab` e `collapse_group`. `group_index` é o grupo
     /// de origem (ainda presente em `self.groups`, possivelmente vazio);
@@ -654,6 +678,50 @@ mod tests {
         let a = ws.append_tab("zsh", None);
         let b = ws.append_tab("zsh", None);
         assert_eq!(ws.active_tab(), Some(b));
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [a, b]);
+    }
+
+    /// Bug relatado: o botão "+" global criava a aba dentro do grupo da
+    /// aba ativa, porque ele passava por `append_tab`. A aba tem de
+    /// nascer fora de qualquer grupo explícito, no fim da barra.
+    #[test]
+    fn append_ungrouped_tab_escapes_the_active_tabs_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "servidor", GroupColor::Red).unwrap();
+        assert_eq!(ws.group_of_tab(a), Some(group));
+
+        let b = ws.append_ungrouped_tab("zsh", None);
+        assert_eq!(ws.active_tab(), Some(b));
+        assert_ne!(ws.group_of_tab(b), Some(group));
+        let b_group = ws.group_of_tab(b).unwrap();
+        assert!(ws.group(b_group).unwrap().is_implicit());
+        // Fim da barra, depois do grupo -- não antes dele.
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [a, b]);
+    }
+
+    /// Duas abas do botão global seguidas ficam no **mesmo** run
+    /// implícito, não em um run novo cada -- senão a barra acumularia
+    /// grupos vazios de sentido a cada clique.
+    #[test]
+    fn append_ungrouped_tab_reuses_the_trailing_implicit_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "servidor", GroupColor::Red).unwrap();
+        let b = ws.append_ungrouped_tab("zsh", None);
+        let c = ws.append_ungrouped_tab("zsh", None);
+        assert_eq!(ws.group_of_tab(b), ws.group_of_tab(c));
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), [a, b, c]);
+    }
+
+    /// Sem grupo explícito nenhum, o botão global não deve fatiar o run
+    /// implícito que já existe: a aba entra nele, no fim.
+    #[test]
+    fn append_ungrouped_tab_on_a_plain_workspace_stays_in_one_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_ungrouped_tab("zsh", None);
+        assert_eq!(ws.group_of_tab(a), ws.group_of_tab(b));
         assert_eq!(ws.visual_order().collect::<Vec<_>>(), [a, b]);
     }
 

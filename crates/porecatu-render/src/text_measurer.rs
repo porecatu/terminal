@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Medição de texto sem GPU (ADR-0018). `TextMeasurer` é dono do
-//! `FontSystem` e do `fontdb` com as cinco faces embutidas (ADR-0016),
+//! `FontSystem` e do `fontdb` com as faces embutidas (ADR-0025),
 //! construível sem `wgpu::Device` nem `wgpu::Queue` -- é o que torna o
 //! layout da barra de abas a função pura que a seção 7 da arquitetura
 //! promete: um teste constrói o seu próprio `TextMeasurer` sem abrir
@@ -10,20 +10,33 @@
 //! Em runtime, `porecatu-ui` guarda **um** `TextMeasurer` por processo
 //! (dentro de [`crate::GpuContext`]) e empresta o `FontSystem` dele ao
 //! pipeline de texto no `prepare` -- um `FontSystem` só, nunca dois
-//! carregando as mesmas cinco faces em paralelo.
+//! carregando as mesmas faces em paralelo.
+
+use std::collections::HashMap;
 
 use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight, fontdb};
 
 use crate::primitives::{FontFace, SansWeight};
 
-const MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexMono-Regular.ttf");
-const MONO_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexMono-Medium.ttf");
-const SANS_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexSans-Regular.ttf");
-const SANS_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexSans-Medium.ttf");
-const SANS_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/IBMPlexSans-SemiBold.ttf");
+// Faces do design (ADR-0025): Iosevka Fixed no terminal, Iosevka Aile no
+// chrome. Recortadas por `scripts/subset-fonts.py` -- os arquivos
+// originais têm ~9 MB cada, e o recorte os leva a ~410 KB sem perder
+// nenhum bloco que o projeto desenha. O recorte é permitido porque a OFL
+// da Iosevka **não** tem cláusula de Reserved Font Name.
+const MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IosevkaFixed-Regular.ttf");
+const MONO_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IosevkaFixed-Medium.ttf");
+const SANS_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/IosevkaAile-Regular.ttf");
+const SANS_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IosevkaAile-Medium.ttf");
+const SANS_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/IosevkaAile-SemiBold.ttf");
+/// Sexta face: os ícones do chrome (ver [`crate::icon`]). Licença ISC,
+/// compatível com a GPLv3.
+const ICONS: &[u8] = include_bytes!("../../../assets/fonts/Lucide.ttf");
 
-const MONO_FAMILY: &str = "IBM Plex Mono";
-const SANS_FAMILY: &str = "IBM Plex Sans";
+const MONO_FAMILY: &str = "Iosevka Fixed";
+const SANS_FAMILY: &str = "Iosevka Aile";
+/// Nome interno (`name` ID 1) do `Lucide.ttf` -- minúsculo, como o arquivo
+/// declara; `Family::Name` é o que casa a face no `fontdb`.
+const ICON_FAMILY: &str = "lucide";
 
 /// Reticências usadas pelo truncamento (RF-1.10).
 const ELLIPSIS: char = '…';
@@ -43,17 +56,46 @@ pub(crate) fn attrs_for(font: FontFace) -> Attrs<'static> {
                 .family(Family::Name(SANS_FAMILY))
                 .weight(weight)
         }
+        FontFace::Icon => Attrs::new()
+            .family(Family::Name(ICON_FAMILY))
+            .weight(Weight::NORMAL),
     }
 }
 
+/// Tamanho em que [`TextMeasurer::advance_em`] mede, antes de normalizar
+/// pela em. Grande de propósito: o avanço vem do shaping em ponto
+/// flutuante, e medir num tamanho de tela deixaria o arredondamento
+/// grande perto da tolerância de quem compara com a largura da célula.
+const ADVANCE_PROBE_SIZE: f32 = 64.0;
+
 pub struct TextMeasurer {
     font_system: FontSystem,
+    /// Avanço por caractere, em múltiplos da em. Existe porque a grade
+    /// consulta isto **por célula desenhada**, e shapar um caractere por
+    /// célula por frame é exatamente a armadilha de performance que o
+    /// CLAUDE.md registra. O conjunto de caracteres distintos numa sessão
+    /// é pequeno e estável, então o cache satura rápido.
+    advance_cache: HashMap<(char, FontFace), f32>,
 }
 
 impl TextMeasurer {
-    /// Registra as cinco faces embutidas num `fontdb` que **nunca** chama
-    /// `load_system_fonts` -- é o que garante a precedência do ADR-0016
-    /// sem lógica de desempate: não existe cópia do sistema para competir.
+    /// Registra as faces embutidas e **depois** as do sistema.
+    ///
+    /// A ordem é a decisão inteira. O ADR-0016 quer as duas coisas ao
+    /// mesmo tempo: as faces do design vencem para as famílias que ele
+    /// declara, *e* a cadeia de fallback do RF-5.2 continua vindo do
+    /// sistema ("permanece fora do binário"). Carregar as embutidas
+    /// primeiro entrega as duas -- o `fontdb` resolve empate de família
+    /// pela ordem de registro, então uma cópia do sistema da Iosevka
+    /// nunca ganha, e todo o resto do sistema fica disponível para o que
+    /// nenhuma face embutida cobre (emoji e CJK, hoje).
+    ///
+    /// Sem a segunda metade não há fallback **nenhum**: um codepoint fora
+    /// das faces embutidas não desenha, sem erro nem tofu. Foi o que
+    /// aconteceu na época da IBM Plex com o braille dos gráficos do `btop`
+    /// (ela não tinha um só dos 256), com os geométricos e com os
+    /// dingbats. A Iosevka cobre os três (ADR-0025), mas a cadeia
+    /// continua sendo o que segura o resto do Unicode.
     pub fn new() -> Self {
         let mut db = fontdb::Database::new();
         for bytes in [
@@ -62,11 +104,36 @@ impl TextMeasurer {
             SANS_REGULAR,
             SANS_MEDIUM,
             SANS_SEMIBOLD,
+            ICONS,
         ] {
             db.load_font_data(bytes.to_vec());
         }
+        db.load_system_fonts();
         let font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
-        Self { font_system }
+        Self {
+            font_system,
+            advance_cache: HashMap::new(),
+        }
+    }
+
+    /// Avanço de `ch` na face `font`, em múltiplos de `size_px`.
+    ///
+    /// Serve à grade do terminal para saber se um caractere é desenhado
+    /// pela face mono pedida ou por uma de fallback: na mono, todo
+    /// caractere avança exatamente uma célula; um glyph que veio do
+    /// sistema avança o que a fonte dele mandar -- 1.26 célula num
+    /// braille, 2.29 num triângulo geométrico. Sem essa informação, um
+    /// caractere de fallback empurra todo o resto da linha para a
+    /// direita, e a grade deixa de ser grade.
+    pub fn advance_em(&mut self, ch: char, font: FontFace) -> f32 {
+        if let Some(&cached) = self.advance_cache.get(&(ch, font)) {
+            return cached;
+        }
+        let mut buffer = [0u8; 4];
+        let advance = self.measure_width(ch.encode_utf8(&mut buffer), font, ADVANCE_PROBE_SIZE)
+            / ADVANCE_PROBE_SIZE;
+        self.advance_cache.insert((ch, font), advance);
+        advance
     }
 
     pub(crate) fn font_system_mut(&mut self) -> &mut FontSystem {
@@ -210,6 +277,121 @@ mod tests {
         assert!(text.ends_with('…'));
         assert!(text.len() < "vim: a very long file name.rs".len());
         assert!(m.measure_width(&text, font, SIZE) <= full_width / 2.0);
+    }
+
+    /// Pina `BASELINE_FROM_TOP` na metrica real da face: shapa um icone,
+    /// le onde o `cosmic-text` pos a baseline e refaz a conta que a
+    /// constante documenta. Quebra se a face de icones trocar de metrica
+    /// vertical ou se a altura de linha do projeto sair de `1.2`.
+    #[test]
+    fn icon_baseline_matches_the_shaped_metrics() {
+        let mut m = TextMeasurer::new();
+        let size = 10.0_f32;
+        let metrics = Metrics::new(size, size * 1.2);
+        let mut buffer = Buffer::new(&mut m.font_system, metrics);
+        buffer.set_size(None, None);
+        let attrs = attrs_for(FontFace::Icon);
+        buffer.set_text(crate::icon::X.glyph, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut m.font_system, false);
+
+        let run = buffer.layout_runs().next().expect("icone deveria shapar");
+        let baseline = (run.line_y - run.line_top) / size;
+        assert!(
+            (baseline - 1.1).abs() < 0.001,
+            "BASELINE_FROM_TOP desatualizado: medido {baseline}"
+        );
+    }
+
+    /// Regressao: os icones do chrome eram glyphs Unicode (U+2715, U+25B6,
+    /// U+25BC) que a IBM Plex Sans nao tem no `cmap`. Como o `fontdb`
+    /// nunca carrega fonte do sistema, nao havia fallback e eles nao
+    /// desenhavam nada. Medir cada codepoint e o que pega a face sumindo
+    /// do binario ou o codepoint mudando de valor.
+    #[test]
+    fn every_named_icon_has_a_glyph_in_the_icon_face() {
+        let mut m = TextMeasurer::new();
+        for (name, icon) in crate::icon::ALL {
+            let width = m.measure_width(icon.glyph, FontFace::Icon, SIZE);
+            assert!(width > 0.0, "icone `{name}` nao tem glyph na face");
+        }
+    }
+
+    /// Toda glyph desta face avanca 1 em, largura de tinta a parte -- e a
+    /// premissa de `Icon::centered_origin` nao medir texto. Se cair, o
+    /// centramento horizontal do chrome sai errado em silencio.
+    #[test]
+    fn every_icon_advances_exactly_one_em() {
+        let mut m = TextMeasurer::new();
+        for (name, icon) in crate::icon::ALL {
+            let advance = m.measure_width(icon.glyph, FontFace::Icon, SIZE);
+            assert!(
+                (advance - SIZE).abs() < 0.01,
+                "icone `{name}` avanca {advance}, nao 1 em ({SIZE})"
+            );
+        }
+    }
+
+    /// Pina a caixa de tinta de cada icone contra a rasterizacao real: o
+    /// `swash` devolve onde os pixels de fato caem em volta da origem, e e
+    /// dai que saem `ink_width_em`/`ink_height_em`. Sem isto as duas
+    /// constantes seriam numero escolhido a olho -- exatamente o que o
+    /// CLAUDE.md proibe.
+    #[test]
+    fn ink_box_of_every_icon_matches_the_rasterized_glyph() {
+        use glyphon::{SwashCache, SwashContent};
+
+        let mut m = TextMeasurer::new();
+        let mut swash = SwashCache::new();
+        // Grande o bastante para o erro de arredondamento do rasterizador
+        // (~1px) ficar abaixo da tolerancia de 0.02 em.
+        let size = 200.0_f32;
+
+        for (name, icon) in crate::icon::ALL {
+            let metrics = Metrics::new(size, size * 1.2);
+            let mut buffer = Buffer::new(&mut m.font_system, metrics);
+            buffer.set_size(None, None);
+            let attrs = attrs_for(FontFace::Icon);
+            buffer.set_text(icon.glyph, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut m.font_system, false);
+
+            let run = buffer.layout_runs().next().expect("icone deveria shapar");
+            let glyph = run.glyphs.first().expect("um glyph");
+            let physical = glyph.physical((0.0, 0.0), 1.0);
+            let image = swash
+                .get_image_uncached(&mut m.font_system, physical.cache_key)
+                .expect("icone deveria rasterizar");
+            assert_ne!(
+                image.content,
+                SwashContent::Color,
+                "icone `{name}` deveria ser mascara, nao bitmap colorido"
+            );
+            let placement = image.placement;
+
+            let width_em = placement.width as f32 / size;
+            let height_em = placement.height as f32 / size;
+            assert!(
+                (width_em - icon.ink_width_em).abs() < 0.02,
+                "ink_width_em de `{name}` desatualizado: medido {width_em}"
+            );
+            assert!(
+                (height_em - icon.ink_height_em).abs() < 0.02,
+                "ink_height_em de `{name}` desatualizado: medido {height_em}"
+            );
+            // O desenho e centrado na em nos dois eixos -- e o que
+            // permite `centered_origin` centrar a em e acertar o desenho
+            // com uma constante so, sem dado por icone.
+            let center_x = (placement.left as f32 + placement.width as f32 / 2.0) / size;
+            let center_y_above_baseline =
+                (placement.top as f32 - placement.height as f32 / 2.0) / size;
+            assert!(
+                (center_x - 0.5).abs() < 0.02,
+                "desenho de `{name}` nao e centrado na em em X: {center_x}"
+            );
+            assert!(
+                (center_y_above_baseline - 0.5).abs() < 0.02,
+                "desenho de `{name}` nao e centrado na em em Y: {center_y_above_baseline}"
+            );
+        }
     }
 
     #[test]

@@ -68,7 +68,54 @@ gravado, falta a operação que anda de grupo em grupo.
   seleção, com cor automática e o editor aberto no nome
 - Botão "+" ao final de cada grupo (`group.new_tab`) e o botão de nova aba
   global numa **zona fixa** à direita da barra, que não rola com a trilha
-- 241 testes no workspace, contra os 145 da F2
+- Botão de nova aba global cria a aba **fora de qualquer grupo explícito**, no
+  fim da barra (`Workspace::append_ungrouped_tab`) — antes ele seguia o grupo
+  da aba ativa, que é o comportamento de `tab.new` (RF-1.1) e deixava o botão
+  sem jeito de criar aba desagrupada. O atalho não mudou
+- Aba com **largura fixa** (`TabBarStyle::tab_width`), derivada dos mesmos
+  tokens da §2.5 da especificação: título, indicador e renomeação deixam de
+  refluir a trilha
+- **Face de ícones embutida** ([ADR-0024](docs/adr/0024-face-de-icones.md)):
+  Lucide sob licença ISC, em `FontFace::Icon`, com os codepoints em uso
+  nomeados em `porecatu_render::icon`. Corrige os ícones do chrome, que não
+  desenhavam — `✕`, `▶` e `▼` não existem na IBM Plex Sans e o `fontdb` do
+  projeto não carrega fonte do sistema, então não havia fallback nenhum.
+  A em dos ícones é 20 px: o Lucide desenha ~0.6 dela, e nos tamanhos que a
+  especificação cita o traço fica sub-pixel e esmaece contra o fundo
+- Acabamento da barra pedido pelo usuário: o sublinhado de grupo sai da base
+  da aba (redundante desde que a cápsula virou cor cheia), a borda da aba vai
+  a 2px (1px não se lia contra a cápsula), a aba sobe para 34px de altura e a
+  trilha ganha 6px de respiro das bordas da barra (`trilha_padding`) — os
+  mesmos 6px que a espec. §2.5 já dava à barra. Aba solta passa a ocupar a
+  caixa inteira do wrapper, alinhando topo e base com o bloco de um grupo;
+  dentro de um grupo ela continua cedendo `wrapper_padding` ao bloco. Junto,
+  um bug que só o respiro revelou: `chrome::paint` recalculava a altura da
+  barra por conta própria, e o recorte da trilha, curto, cortava as abas
+  antes do respiro de baixo aparecer
+- **Cadeia de fallback de fonte ligada** — o `fontdb` passa a carregar as
+  faces do sistema **depois** das embutidas, que é o que o ADR-0016 sempre
+  exigiu e a implementação nunca teve. Sem ela, todo codepoint fora das
+  faces embutidas simplesmente não desenhava: era o caso do braille dos
+  gráficos do `btop` (a IBM Plex Mono não cobre um só dos 256), dos
+  geométricos e dos dingbats. A ordem preserva a precedência do design
+  para "IBM Plex Mono"/"IBM Plex Sans"
+- A grade quebra o `TextRun` em qualquer caractere cujo avanço não seja o da
+  célula e o desenha ancorado no `x` dela, encolhido para caber: glyph de
+  fallback avança o que a fonte dele mandar (1.26 célula num braille) e num
+  run compartilhado empurrava o resto da linha. Linha de ASCII continua
+  sendo um run só; o avanço por caractere é cacheado
+- **Iosevka no lugar da IBM Plex** ([ADR-0025](docs/adr/0025-iosevka-no-lugar-da-ibm-plex.md)):
+  Iosevka Fixed 400/500 no terminal, Iosevka Aile 400/500/600 no chrome. A
+  Plex Mono não cobre braille (0/256 — os gráficos do `btop`), formas
+  geométricas (1/96), dingbats nem powerline; a Iosevka cobre os quatro
+  inteiros, no avanço da célula. Escolhida a variante **Fixed** por não ter
+  ligaduras: substituição de dois glyphs por um sairia da grade, e a
+  verificação de avanço do `paint.rs` é por caractere, não pegaria.
+  Google Sans Code foi medida e descartada — cobre menos que a Plex Mono
+- `scripts/subset-fonts.py` recorta as faces para os blocos que o projeto
+  desenha: 48 MB viram 2.1 MB. Permitido porque a OFL da Iosevka não tem
+  cláusula de Reserved Font Name, ao contrário da IBM Plex
+- 261 testes no workspace, contra os 145 da F2
 
 #### F2 — Abas
 
@@ -150,7 +197,8 @@ configuração nem sessão: tudo isso vem das fases seguintes.
   entre frames. Primitivas são o único contrato público — o crate não conhece
   aba nem grupo
 - Cinco faces do IBM Plex embutidas no binário sem subsetting
-  ([ADR-0016](docs/adr/0016-fontes-embutidas.md)), com a OFL e a atribuição em
+  ([ADR-0016](docs/adr/0016-fontes-embutidas.md), hoje superado pelo
+  [ADR-0024](docs/adr/0024-face-de-icones.md)), com a OFL e a atribuição em
   `assets/fonts/`. A grade do terminal deriva da métrica de fonte medida
 - Teclado: codificação xterm de setas, navegação e F1–F12 com modificador,
   DECCKM, `Ctrl`+letra, `Alt` prefixando ESC, bracketed paste e IME

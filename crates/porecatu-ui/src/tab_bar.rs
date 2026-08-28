@@ -92,8 +92,24 @@ pub struct TabBarStyle {
     /// trilha antes do botão de nova aba (espec. §2.2: "Trilha ...
     /// gap: 6" é o mesmo valor, aplicado aos mesmos filhos diretos).
     pub trilha_gap: f32,
-    /// Espec. §2.6: "30×30". Sem chave própria -- usa o mesmo valor de
-    /// `tab_height`.
+    /// Respiro entre o conteúdo da trilha e as bordas da barra, nos
+    /// quatro lados. A espec. §2.2 não dá padding à trilha: o primeiro
+    /// wrapper encosta na esquerda e todos encostam no topo e na base da
+    /// barra. Pedido do usuário ("deixe-os um pouco afastados das
+    /// bordas"). Entra na altura da barra ([`bar_height`]) e desloca todo
+    /// o conteúdo do layout -- inclusive o hit-testing, que trabalha nas
+    /// mesmas coordenadas.
+    ///
+    /// O valor é o **da própria espec. §2.5**, que descreve a barra como
+    /// "aba h30 + padding 6px da barra": os 6px que ela dá à barra e a
+    /// implementação nunca teve. Uma tentativa com 4px pareceu não ter
+    /// respiro nenhum embaixo, mas o valor não era a causa -- o recorte da
+    /// trilha em `chrome::paint` vinha de uma cópia velha da altura da
+    /// barra e cortava as abas antes do respiro.
+    pub trilha_padding: f32,
+    /// Espec. §2.6: "30×30". Sem chave própria no TOML. Já foi o mesmo
+    /// valor de `tab_height`; deixou de ser quando a aba subiu para 34 --
+    /// o botão global é centrado na barra, não colado à altura da aba.
     pub new_tab_button_size: f32,
     /// `[appearance.tabs] show_new_tab_button`
     pub show_new_tab_button: bool,
@@ -118,16 +134,19 @@ pub struct TabBarStyle {
     /// própria (só cor/raio do contador têm chave no TOML).
     pub pill_count_padding_x: f32,
     pub pill_count_padding_y: f32,
-    /// Espec. §2.4, item 4: "▶ 8px". Usado como largura reservada no flex
-    /// da pílula e como tamanho de fonte do glyph -- o caret não tem caixa
-    /// de acerto própria distinta do glyph (diferente do botão de fechar da
-    /// aba). Sem chave própria no TOML.
+    /// Largura reservada ao caret no flex da pílula. **Não** é o tamanho
+    /// de fonte com que ele é desenhado: a face de ícones avança 1 em e
+    /// desenha menos que isso, então quem pinta usa uma em maior (ver
+    /// `chrome::PILL_CARET_ICON_SIZE`) e este valor cobre só o desenho.
+    /// Vem do caret mais largo dos dois, para a pílula não mudar de
+    /// largura ao colapsar. Espec. §2.4, item 4: "▶ 8px" -- o desenho de
+    /// hoje é maior, junto com o resto dos ícones. Sem chave no TOML.
     pub pill_caret_size: f32,
 }
 
 impl TabBarStyle {
     pub const DEFAULT: Self = Self {
-        tab_height: 30.0,
+        tab_height: 34.0,
         max_width: 260.0,
         label_max_width: 180.0,
         padding_left: 10.0,
@@ -138,6 +157,7 @@ impl TabBarStyle {
         close_button_hit_slop: 2.0,
         wrapper_padding: 3.0,
         trilha_gap: 6.0,
+        trilha_padding: 6.0,
         new_tab_button_size: 30.0,
         show_new_tab_button: true,
         font_size: 12.5,
@@ -149,8 +169,48 @@ impl TabBarStyle {
         pill_name_max_width: 140.0,
         pill_count_padding_x: 6.0,
         pill_count_padding_y: 1.0,
-        pill_caret_size: 8.0,
+        // `icon::WIDEST_CARET_INK_EM * chrome::PILL_CARET_ICON_SIZE`,
+        // fixado aqui porque `TabBarStyle::DEFAULT` é `const` e o
+        // tamanho vive do outro lado, em `chrome.rs`; o teste
+        // `pill_caret_slot_fits_the_widest_caret` amarra os dois.
+        pill_caret_size: 11.8,
     };
+}
+
+impl TabBarStyle {
+    /// Largura **fixa** de toda aba (pedido do usuário, fora da espec.):
+    /// o teto de rótulo mais o cromo que sempre o acompanha, saturado em
+    /// `max_width`. Não depende do título, do indicador nem de quantas
+    /// abas existem -- aba não muda de largura por nada.
+    ///
+    /// Antes disso a largura era `conteúdo.min(max_width)`, então cada
+    /// aba tinha a largura do próprio título; trocar de aba, renomear ou
+    /// abrir um programa que muda o título refluía a trilha inteira. Com
+    /// largura fixa, o rótulo trunca dentro de uma caixa que já estava no
+    /// teto -- é o mesmo teto de 180px da espec. §2.5, só que agora ele
+    /// também é o piso.
+    pub fn tab_width(&self) -> f32 {
+        (self.padding_left
+            + self.label_max_width
+            + self.internal_gap
+            + self.close_button_size
+            + self.padding_right)
+            .min(self.max_width)
+    }
+
+    /// Quanto de `tab_width` sobra para o rótulo depois do cromo fixo da
+    /// aba e de `dot_reserve` (espec. §2.17: o indicador consome largura
+    /// do rótulo, não soma largura à aba -- invariante que a largura fixa
+    /// agora garante sozinha).
+    fn label_cap(&self, dot_reserve: f32) -> f32 {
+        (self.tab_width()
+            - self.padding_left
+            - dot_reserve
+            - self.internal_gap
+            - self.close_button_size
+            - self.padding_right)
+            .max(0.0)
+    }
 }
 
 impl Default for TabBarStyle {
@@ -281,7 +341,10 @@ pub fn layout(
     measurer: &mut TextMeasurer,
 ) -> TabBarLayout {
     let mut groups = Vec::new();
-    let mut x = 0.0f32;
+    // Todo o conteúdo da trilha nasce deslocado pelo respiro das bordas
+    // (`trilha_padding`), não em (0, 0).
+    let mut x = style.trilha_padding;
+    let track_top = style.trilha_padding;
 
     for group in workspace.groups() {
         if group.tabs().is_empty() {
@@ -298,8 +361,28 @@ pub fn layout(
         // usam um wrapper sem pílula". Fica antes das abas no flex do
         // wrapper, com o mesmo `gap` que separa as abas entre si (§2.3:
         // "gap: 4" é o único gap do wrapper, aplicado a todo filho direto).
+        // Aba solta ocupa a **caixa inteira** do wrapper, e não a altura
+        // de aba com o respiro do wrapper sobrando em volta (pedido do
+        // usuário). Dentro de um grupo a aba é menor de propósito: o que
+        // a encolhe é o bloco do grupo em volta dela. Sem grupo não há
+        // bloco, então não há o que ceder -- e as duas ficam com o mesmo
+        // topo e a mesma base na barra, que é o alinhamento que se quer.
+        // `pill.is_none()` é o mesmo teste de "run implícito" que decide
+        // a cápsula em `chrome.rs`.
+        let loose = !group.is_explicit();
+        let tab_top = if loose {
+            track_top
+        } else {
+            track_top + style.wrapper_padding
+        };
+        let tab_h = if loose {
+            style.tab_height + style.wrapper_padding * 2.0
+        } else {
+            style.tab_height
+        };
+
         let pill = if group.is_explicit() {
-            let pill_y = style.wrapper_padding;
+            let pill_y = track_top + style.wrapper_padding;
             let pill_height = style.tab_height;
             let mut px = inner_x + style.pill_padding_left;
 
@@ -434,28 +517,24 @@ pub fn layout(
             } else {
                 0.0
             };
-            let label_cap = (style.label_max_width - dot_reserve).max(0.0);
+            let label_cap = style.label_cap(dot_reserve);
 
             let (label, label_truncated) =
                 measurer.truncate(tab.title(), LABEL_FONT, style.font_size, label_cap);
-            let label_width = measurer.measure_width(&label, LABEL_FONT, style.font_size);
-            let content_width = style.padding_left
-                + dot_reserve
-                + label_width
-                + style.internal_gap
-                + style.close_button_size
-                + style.padding_right;
-            let tab_width = content_width.min(style.max_width);
+            // Largura fixa: o título já não entra na conta (ver
+            // `TabBarStyle::tab_width`). O `label` acima só decide o que
+            // cabe *dentro* dela.
+            let tab_width = style.tab_width();
 
             let rect = Rect {
                 x: inner_x,
-                y: style.wrapper_padding,
+                y: tab_top,
                 width: tab_width,
-                height: style.tab_height,
+                height: tab_h,
             };
             let close_button = Rect {
                 x: inner_x + tab_width - style.padding_right - style.close_button_size,
-                y: style.wrapper_padding + (style.tab_height - style.close_button_size) / 2.0,
+                y: tab_top + (tab_h - style.close_button_size) / 2.0,
                 width: style.close_button_size,
                 height: style.close_button_size,
             };
@@ -499,9 +578,11 @@ pub fn layout(
         if pill.is_some() || !tabs.is_empty() {
             inner_x += style.tab_gap;
         }
+        // Centrado na mesma caixa que as abas do grupo -- a do wrapper
+        // quando o run é solto, a da aba quando há bloco.
         let new_tab_button = Rect {
             x: inner_x,
-            y: style.wrapper_padding + (style.tab_height - style.close_button_size) / 2.0,
+            y: tab_top + (tab_h - style.close_button_size) / 2.0,
             width: style.close_button_size,
             height: style.close_button_size,
         };
@@ -510,7 +591,7 @@ pub fn layout(
         inner_x += style.wrapper_padding;
         let wrapper_rect = Rect {
             x: group_start_x,
-            y: 0.0,
+            y: track_top,
             width: inner_x - group_start_x,
             height: style.tab_height + style.wrapper_padding * 2.0,
         };
@@ -524,9 +605,19 @@ pub fn layout(
         x = inner_x;
     }
 
+    // O respiro também fecha a trilha à direita, senão o último wrapper
+    // encostaria na zona fixa ao rolar até o fim. Barra sem grupo nenhum
+    // não tem conteúdo a padear: largura zero, senão o `overflow_state`
+    // passaria a ver conteúdo onde não há.
+    let content_width = if groups.is_empty() {
+        0.0
+    } else {
+        x + style.trilha_padding
+    };
+
     TabBarLayout {
         groups,
-        content_width: x,
+        content_width,
     }
 }
 
@@ -913,6 +1004,120 @@ mod tests {
         assert_eq!(layout.content_width, 0.0);
     }
 
+    /// Pedido do usuário: a trilha não encosta nas bordas da barra. Vale
+    /// nos quatro lados -- o wrapper é o que o usuário vê tocando o topo e
+    /// a base, não a aba dentro dele.
+    #[test]
+    fn track_content_never_touches_the_bar_edges() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "servidor", GroupColor::Cyan).unwrap();
+        ws.append_ungrouped_tab("bash", None);
+
+        let style = TabBarStyle::DEFAULT;
+        let pad = style.trilha_padding;
+        assert!(pad > 0.0);
+        let bar = crate::chrome::bar_height(&style);
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+
+        assert_eq!(layout.groups[0].rect.x, pad, "primeiro wrapper na borda");
+        for group in &layout.groups {
+            assert_eq!(group.rect.y, pad, "wrapper encostando no topo");
+            assert_eq!(
+                group.rect.y + group.rect.height,
+                bar - pad,
+                "wrapper encostando na base"
+            );
+        }
+        let last = layout.groups.last().unwrap();
+        assert_eq!(
+            layout.content_width,
+            last.rect.x + last.rect.width + pad,
+            "trilha sem respiro à direita"
+        );
+    }
+
+    /// Pedido do usuário: aba solta ocupa a caixa inteira do wrapper, a
+    /// mesma que a cápsula de um grupo ocuparia; aba dentro de um grupo
+    /// fica menor, porque o bloco do grupo é que a encolhe. As duas
+    /// alinham topo e base na barra.
+    #[test]
+    fn loose_tab_is_as_tall_as_a_group_block() {
+        let mut ws = Workspace::new();
+        let grouped = ws.append_tab("zsh", None);
+        ws.group_tabs(&[grouped], "servidor", GroupColor::Blue)
+            .unwrap();
+        let loose = ws.append_ungrouped_tab("bash", None);
+
+        let style = TabBarStyle::DEFAULT;
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+
+        let find = |id| {
+            layout
+                .groups
+                .iter()
+                .flat_map(|g| &g.tabs)
+                .find(|t| t.id == id)
+                .unwrap()
+                .rect
+        };
+        let inside = find(grouped);
+        let outside = find(loose);
+
+        assert_eq!(inside.height, style.tab_height);
+        assert_eq!(
+            outside.height,
+            style.tab_height + style.wrapper_padding * 2.0,
+            "aba solta deveria ocupar a caixa do wrapper"
+        );
+        // O wrapper de cada uma é a mesma caixa -- é isso que faz as duas
+        // lerem como "um bloco" na barra.
+        for group in &layout.groups {
+            assert_eq!(group.rect.y, style.trilha_padding);
+            assert_eq!(
+                group.rect.height,
+                style.tab_height + style.wrapper_padding * 2.0
+            );
+        }
+        assert_eq!(outside.y, layout.groups[1].rect.y);
+        assert_eq!(
+            outside.y + outside.height,
+            layout.groups[1].rect.y + layout.groups[1].rect.height
+        );
+        // A aba agrupada fica centrada dentro do bloco dela.
+        assert_eq!(inside.y, layout.groups[0].rect.y + style.wrapper_padding);
+    }
+
+    /// O botão "+" do grupo acompanha a caixa das abas dele -- senão ele
+    /// ficaria descentrado justo no run solto, que é o mais alto.
+    #[test]
+    fn group_new_tab_button_is_centered_on_the_same_box_as_its_tabs() {
+        let mut ws = Workspace::new();
+        ws.append_ungrouped_tab("bash", None);
+        let style = TabBarStyle::DEFAULT;
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+
+        let group = &layout.groups[0];
+        let tab = &group.tabs[0];
+        let button_mid = group.new_tab_button.y + group.new_tab_button.height / 2.0;
+        assert_eq!(button_mid, tab.rect.y + tab.rect.height / 2.0);
+    }
+
+    /// A altura da barra tem de acompanhar os dois respiros, senão o
+    /// conteúdo deslocado vaza por baixo dela -- e é `bar_height` que
+    /// `lib.rs` usa para deslocar a grade e converter clique.
+    #[test]
+    fn bar_height_accounts_for_both_paddings() {
+        let style = TabBarStyle::DEFAULT;
+        assert_eq!(
+            crate::chrome::bar_height(&style),
+            style.tab_height + style.wrapper_padding * 2.0 + style.trilha_padding * 2.0
+        );
+    }
+
     #[test]
     fn global_new_tab_button_rect_none_when_disabled() {
         let style = TabBarStyle {
@@ -927,7 +1132,7 @@ mod tests {
     fn global_new_tab_button_sits_in_the_fixed_right_zone() {
         let style = TabBarStyle::DEFAULT;
         let bar_width = 400.0;
-        let bar_height = style.tab_height + style.wrapper_padding * 2.0;
+        let bar_height = crate::chrome::bar_height(&style);
         let button = new_tab_button_rect(&style, bar_width, bar_height).unwrap();
         assert_eq!(
             button.x,
@@ -953,14 +1158,20 @@ mod tests {
         let tab = &group.tabs[0];
         assert_eq!(tab.label, "zsh");
         assert!(!tab.label_truncated);
-        assert_eq!(tab.rect.x, TabBarStyle::DEFAULT.wrapper_padding);
+        assert_eq!(
+            tab.rect.x,
+            TabBarStyle::DEFAULT.trilha_padding + TabBarStyle::DEFAULT.wrapper_padding
+        );
 
         // botão de nova aba do grupo vem depois da aba, com o tab_gap
         assert_eq!(
             group.new_tab_button.x,
             tab.rect.x + tab.rect.width + TabBarStyle::DEFAULT.tab_gap
         );
-        assert_eq!(layout.content_width, group.rect.x + group.rect.width);
+        assert_eq!(
+            layout.content_width,
+            group.rect.x + group.rect.width + TabBarStyle::DEFAULT.trilha_padding
+        );
     }
 
     #[test]
@@ -977,6 +1188,81 @@ mod tests {
         assert!(tab.label.ends_with('…'));
         let width = m.measure_width(&tab.label, LABEL_FONT, TabBarStyle::DEFAULT.font_size);
         assert!(width <= TabBarStyle::DEFAULT.label_max_width);
+    }
+
+    /// Pedido do usuário: aba tem largura fixa. Título curto, título
+    /// longo truncado e aba com indicador (que rouba orçamento do
+    /// rótulo, espec. §2.17) precisam todos dar a mesma largura.
+    #[test]
+    fn every_tab_has_the_same_fixed_width() {
+        let mut ws = Workspace::new();
+        let short = ws.append_tab("a", None);
+        let long = ws.append_tab("zsh", None);
+        ws.tab_mut(long).unwrap().set_custom_title(Some(
+            "um titulo bem comprido que estoura o teto do rotulo".to_string(),
+        ));
+        let with_dot = ws.append_tab("bash", None);
+        ws.tab_mut(with_dot).unwrap().mark_activity();
+
+        let style = TabBarStyle::DEFAULT;
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        for tab in &layout.groups[0].tabs {
+            assert_eq!(
+                tab.rect.width,
+                style.tab_width(),
+                "aba {:?} fugiu da largura fixa",
+                tab.id
+            );
+        }
+        assert_eq!(layout.groups[0].tabs[0].id, short);
+    }
+
+    /// A largura fixa sai dos tokens da espec. (§2.5: rótulo 180px,
+    /// padding 10/6, gap 8, botão de fechar 17), nunca de um número
+    /// inventado -- e continua saturada em `max_width`.
+    #[test]
+    fn fixed_tab_width_is_derived_from_the_spec_tokens() {
+        let style = TabBarStyle::DEFAULT;
+        assert_eq!(style.tab_width(), 10.0 + 180.0 + 8.0 + 17.0 + 6.0);
+        let tight = TabBarStyle {
+            max_width: 100.0,
+            ..style
+        };
+        assert_eq!(tight.tab_width(), 100.0);
+    }
+
+    /// O slot do caret na pílula tem de caber o **desenho** do caret mais
+    /// largo dos dois, na em com que `chrome.rs` o pinta. Os dois valores
+    /// vivem em módulos diferentes (`const` de `TabBarStyle` não alcança
+    /// `chrome`), e é este teste que os mantém casados: se a em dos ícones
+    /// mudar, ele reprova em vez de o caret vazar por cima do contador.
+    #[test]
+    fn pill_caret_slot_fits_the_widest_caret() {
+        let needed =
+            porecatu_render::icon::WIDEST_CARET_INK_EM * crate::chrome::PILL_CARET_ICON_SIZE;
+        let slot = TabBarStyle::DEFAULT.pill_caret_size;
+        assert!(
+            slot >= needed - 0.05,
+            "slot do caret ({slot}) menor que o desenho ({needed})"
+        );
+        // E não folgado a ponto de virar buraco na pílula.
+        assert!(
+            slot <= needed + 1.0,
+            "slot do caret ({slot}) folgado demais para o desenho ({needed})"
+        );
+    }
+
+    /// Espec. §2.17: "a aba não muda de largura por causa do indicador" --
+    /// o ponto sai do orçamento do rótulo.
+    #[test]
+    fn indicator_shrinks_the_label_cap_not_the_tab() {
+        let style = TabBarStyle::DEFAULT;
+        assert_eq!(style.label_cap(0.0), style.label_max_width);
+        assert_eq!(
+            style.label_cap(INDICATOR_DOT_SIZE + style.internal_gap),
+            style.label_max_width - INDICATOR_DOT_SIZE - style.internal_gap
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@
 
 mod frame;
 mod gpu;
+pub mod icon;
 mod primitives;
 mod quad;
 mod text;
