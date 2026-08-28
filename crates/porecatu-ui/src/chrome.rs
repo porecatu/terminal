@@ -73,7 +73,7 @@ use crate::rename::RenameState;
 use crate::selection::Selection;
 use crate::tab_bar::{
     self, GroupPillRect, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, PILL_COUNT_FONT,
-    PILL_COUNT_FONT_SIZE, PILL_NAME_FONT, TabBarLayout, TabBarStyle,
+    PILL_NAME_FONT, TabBarLayout, TabBarStyle,
 };
 
 /// Fonte dos ícones da barra (fechar, nova aba, chevron): a face Lucide
@@ -107,7 +107,6 @@ const SETTINGS_ICON_SIZE: f32 = ICON_EM_SIZE * 0.8;
 // da aba inteira e o traço virou ruído na base dela. Divergência na
 // seção 4.4 da especificação; quando `config` existir (F4), o default de
 // `indicator_style` é a chave que governa isto.
-const BAR_SEPARATOR_HEIGHT: f32 = 1.0;
 // Borda da aba em todo estado. A espec. §2.5 desenha 1px; contra a cápsula
 // de cor cheia (F3 etapa 6) 1px de `#22262e` não se lê, e o pedido do
 // usuário foi "coloca um border nas abas". 2px é a espessura que o próprio
@@ -147,7 +146,6 @@ const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
 const PILL_CORNER_RADIUS: f32 = 6.0; // label_corner_radius
 const PILL_BORDER_WIDTH: f32 = 1.0; // espec §2.4: "borda 1px" -- sem chave própria
 const PILL_SWATCH_CORNER_RADIUS: f32 = 2.0; // swatch_corner_radius
-const PILL_COUNT_CORNER_RADIUS: f32 = 9.0; // count_corner_radius
 // Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
 // expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
 // ícone é o equivalente estático. A em é a mesma dos outros ícones; o que
@@ -248,15 +246,12 @@ pub fn paint(
         },
         color: palette::BAR_BACKGROUND,
     }));
-    out.push(Primitive::Quad(Quad {
-        rect: Rect {
-            x: 0.0,
-            y: bar_height - BAR_SEPARATOR_HEIGHT,
-            width: bar_width,
-            height: BAR_SEPARATOR_HEIGHT,
-        },
-        color: palette::BAR_SEPARATOR,
-    }));
+    // Sem separador de 1px na base da barra (espec §2.2: "borda #23272f").
+    // Pedido do usuário: o box arredondado do terminal (`paint.rs`) começa
+    // colado em `bar_height` para ficar seamless contra a barra, e um
+    // separador ali desenharia de volta a linha que a colagem existe pra
+    // tirar. Divergência da espec, mesma classe das já registradas na
+    // seção 4.4 dela.
 
     // Recorte de verdade da trilha (ADR-0018, espec §2.18: "um recorte só,
     // na camada de chrome; as abas fora da vista desaparecem pelo clip").
@@ -740,10 +735,9 @@ fn scale_alpha(color: Color, mult: f32) -> Color {
     }
 }
 
-/// Pílula de grupo (espec §2.4): fundo/borda, swatch, nome, contador e
-/// caret, na cor do grupo já resolvida por quem chama (`group_color` em
-/// [`paint`]). Contador desenhado sempre, colapsado ou não (§2.4: "sempre
-/// desenhado, conteúdo idêntico").
+/// Pílula de grupo (espec §2.4): fundo/borda, swatch, nome e caret, na cor
+/// do grupo já resolvida por quem chama (`group_color` em [`paint`]).
+/// Sem contador de abas -- pedido do usuário, divergência da espec §2.4.
 #[allow(clippy::too_many_arguments)]
 fn paint_group_pill(
     pill: &GroupPillRect,
@@ -792,11 +786,11 @@ fn paint_group_pill(
     }
     let name_text = match live_name {
         // Cap aproximado: o espaço que o nome já ocupava no layout
-        // committed (`name_origin` até `count_rect`) -- não recalcula o
+        // committed (`name_origin` até `caret_rect`) -- não recalcula o
         // orçamento exato do indicador agregado (nota do módulo,
         // simplificação enquanto o editor está aberto).
         Some(buffer) => {
-            let cap = (pill.count_rect.x - pill.name_origin.0).max(0.0);
+            let cap = (pill.caret_rect.x - pill.name_origin.0).max(0.0);
             let (truncated, _) = measurer.truncate(buffer, PILL_NAME_FONT, name_font_size, cap);
             truncated
         }
@@ -808,26 +802,6 @@ fn paint_group_pill(
         font: PILL_NAME_FONT,
         size_px: name_font_size,
         color: palette::PILL_TEXT,
-    }));
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect: shift(pill.count_rect, dx),
-        radius: PILL_COUNT_CORNER_RADIUS,
-        color: palette::PILL_COUNT_BACKGROUND,
-        border_color: palette::TRANSPARENT,
-        border_width: 0.0,
-    }));
-    let count_rect = shift(pill.count_rect, dx);
-    let count_width =
-        measurer.measure_width(&pill.count_text, PILL_COUNT_FONT, PILL_COUNT_FONT_SIZE);
-    out.push(Primitive::Text(TextRun {
-        origin: (
-            count_rect.x + (count_rect.width - count_width) / 2.0,
-            count_rect.y + (count_rect.height - PILL_COUNT_FONT_SIZE) / 2.0,
-        ),
-        text: pill.count_text.clone(),
-        font: PILL_COUNT_FONT,
-        size_px: PILL_COUNT_FONT_SIZE,
-        color: palette::PILL_COUNT_TEXT,
     }));
     let caret_glyph = if is_collapsed {
         PILL_CARET_COLLAPSED
