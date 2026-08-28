@@ -19,7 +19,7 @@
 | [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
-| [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Aceito |
+| [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 |
 | [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Aceito |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
 | [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
@@ -27,6 +27,8 @@
 | [0021](0021-selecao-multipla-e-gestos-da-barra.md) | Seleção múltipla e gestos da barra de abas | Aceito |
 | [0022](0022-animacao-de-interface.md) | Animação de interface sob render damage-driven | Aceito |
 | [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Aceito |
+| [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
+| [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Aceito |
 
 ## Convenção
 

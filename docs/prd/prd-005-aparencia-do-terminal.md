@@ -5,7 +5,7 @@
 **Requisito de origem:** 5 — as cores e fontes dos terminais devem ser customizáveis
 **Relacionados:** [ADR-0003](../adr/0003-formato-de-configuracao.md), [ADR-0002](../adr/0002-motor-vte.md), [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md), [PRD-004](prd-004-aparencia-do-chrome.md)
 
-> **Valores default vêm do design.** A fonte padrão é IBM Plex Mono 12.5 com `line-height` 1.75; o fundo é `#0f1216` e a cor de texto `#c7ccd6`. As 16 cores ANSI derivam das seis cores semânticas de saída que o design define. Tudo está na [especificação visual](../design/especificacao-visual.md), seções 1.1, 1.4, 1.5 e 1.9, e já no [`porecatu.example.toml`](../config/porecatu.example.toml).
+> **Valores default vêm do design.** A fonte padrão é Iosevka Fixed 12.5 com `line-height` 1.75 ([ADR-0025](../adr/0025-iosevka-no-lugar-da-ibm-plex.md) a trocou pela IBM Plex Mono, que não cobre braille, powerline nem formas geométricas); o fundo é `#0f1216` e a cor de texto `#c7ccd6`. As 16 cores ANSI derivam das seis cores semânticas de saída que o design define. Tudo está na [especificação visual](../design/especificacao-visual.md), seções 1.1, 1.4, 1.5 e 1.9, e já no [`porecatu.example.toml`](../config/porecatu.example.toml).
 
 ## Problema
 

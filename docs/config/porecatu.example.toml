@@ -114,14 +114,15 @@ animation_reflow_ms = 180
 # Design: aba h30 + padding 6px da barra = 42px de altura total da barra.
 height = 42                # altura da barra, em px lógicos
 tab_height = 30            # altura da aba dentro da barra
-max_width = 260            # rótulo trunca em 180px de texto
+max_width = 260            # teto: a aba tem largura fixa (padding + 180px de
+                           # rótulo + gap + botão de fechar), saturada aqui
 padding_left = 10          # design usa padding assimétrico: 0 6px 0 10px
 padding_right = 6          # menor à direita por causa do botão de fechar
 gap = 4                    # espaço entre abas do mesmo grupo
 corner_radius = 6          # 0 = abas retangulares                       RF-4.4
 
 # --- fonte do título -------------------------------------------------- RF-4.10
-font_family = "IBM Plex Sans"
+font_family = "Iosevka Aile"
 font_size = 12.5
 
 # --- elementos visíveis ------------------------------------- RF-4.11, RF-4.12
@@ -401,7 +402,7 @@ background_opacity = 1.0
 
 
 [terminal.font]
-family = "IBM Plex Mono"                                              # RF-5.1
+family = "Iosevka Fixed"                                              # RF-5.1
 # Cadeia de fallback, em ordem. Glyph ausente na família principal é
 # procurado aqui antes de virar retângulo vazio.                        RF-5.2
 fallback = ["Symbols Nerd Font Mono", "Noto Color Emoji", "Noto Sans CJK"]

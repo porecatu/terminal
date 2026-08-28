@@ -1,6 +1,6 @@
 # ADR-0016 — Fontes do design embutidas no binário
 
-**Status:** Aceito
+**Status:** Superseded by [ADR-0024](0024-face-de-icones.md)
 **Data:** 2026-08-26
 **Relacionados:** ADR-0009, ADR-0010, PRD-004, PRD-005
 
