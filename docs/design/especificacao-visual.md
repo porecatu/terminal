@@ -39,7 +39,7 @@ Fallback de UI: `system-ui, sans-serif`. Fallback mono: `monospace`.
 | 9px | badge de perfil (`letter-spacing: .4px`) |
 | 8px | caret do grupo, glyph do logotipo |
 
-Terminal: **13px** (pedido do usuário, F3 -- espec. original pedia 12.5px), `line-height: 1.75`.
+Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuário na F3 e a 14 depois, para o avanço cair em pixel inteiro -- a Iosevka Fixed avança 0.5 em em todo glyph, então `size / 2 * scale` precisa ser inteiro para a célula não ser arredondada), `line-height: 1.75`.
 
 ### 1.2 Superfícies
 

@@ -172,6 +172,21 @@ impl TextMeasurer {
     /// caractere e acrescentando reticências. Devolve o texto (truncado ou
     /// não) e se houve corte -- o booleano é o que decide se a aba mostra
     /// tooltip.
+    ///
+    /// **Um shaping**, não um por caractere. A versão anterior remedia o
+    /// prefixo a cada caractere (`Buffer` novo + `shape_until_scroll` por
+    /// candidato, mais um `String::clone`), e isso roda por aba a cada
+    /// layout da barra -- que acontece por frame e por `CursorMoved`. Como
+    /// a largura de aba virou fixa, todo título mais longo que o teto caía
+    /// nesse laço. Aqui o texto é shapado uma vez e o corte sai do avanço
+    /// acumulado dos glyphs.
+    ///
+    /// Cortar por glyph difere de remedir o prefixo só se houver ligadura
+    /// ou kerning entre o último caractere mantido e o primeiro
+    /// descartado. As faces do projeto são recortadas mantendo apenas
+    /// `ccmp,locl,mark,mkmk` (`scripts/subset-fonts.py`) -- sem `liga`,
+    /// `calt` ou `kern`, o avanço é aditivo. Mesma garantia por construção
+    /// que o ADR-0025 usa para a variante Fixed.
     pub fn truncate(
         &mut self,
         text: &str,
@@ -179,22 +194,47 @@ impl TextMeasurer {
         size_px: f32,
         max_width: f32,
     ) -> (String, bool) {
-        if self.measure_width(text, font, size_px) <= max_width {
+        if text.is_empty() {
+            return (String::new(), false);
+        }
+
+        let metrics = Metrics::new(size_px, size_px * 1.2);
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(None, None);
+        let attrs = attrs_for(font);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let glyphs: Vec<(usize, f32)> = buffer
+            .layout_runs()
+            .next()
+            .map(|run| run.glyphs.iter().map(|g| (g.start, g.w)).collect())
+            .unwrap_or_default();
+
+        let total: f32 = glyphs.iter().map(|&(_, w)| w).sum();
+        if total <= max_width {
             return (text.to_string(), false);
         }
 
         let ellipsis_width = self.measure_width(&ELLIPSIS.to_string(), font, size_px);
         let budget = (max_width - ellipsis_width).max(0.0);
 
-        let mut result = String::new();
-        for ch in text.chars() {
-            let mut candidate = result.clone();
-            candidate.push(ch);
-            if self.measure_width(&candidate, font, size_px) > budget {
-                break;
+        // O corte é o menor `start` entre os glyphs descartados, não o
+        // `start` do primeiro deles: sob BiDi a ordem visual dos glyphs não
+        // é a ordem de byte do texto, e o mínimo é o único ponto que não
+        // deixa para trás um trecho já orçado.
+        let mut used = 0.0;
+        let mut cut = text.len();
+        for &(start, w) in &glyphs {
+            if used + w > budget {
+                cut = cut.min(start);
+            } else {
+                used += w;
             }
-            result = candidate;
         }
+
+        let mut result = String::with_capacity(cut + ELLIPSIS.len_utf8());
+        result.push_str(&text[..cut]);
         result.push(ELLIPSIS);
         (result, true)
     }
@@ -277,6 +317,64 @@ mod tests {
         assert!(text.ends_with('…'));
         assert!(text.len() < "vim: a very long file name.rs".len());
         assert!(m.measure_width(&text, font, SIZE) <= full_width / 2.0);
+    }
+
+    /// A troca do laço por prefixo pelo caminho de um shaping só não pode
+    /// mudar onde o corte cai. A referência aqui é a implementação
+    /// anterior, escrita à mão: mede cada prefixo e para no primeiro que
+    /// estoura o orçamento.
+    #[test]
+    fn truncate_cuts_where_the_per_prefix_loop_would() {
+        let mut m = TextMeasurer::new();
+        let font = FontFace::Sans {
+            weight: SansWeight::Regular,
+        };
+        let titles = [
+            "cargo build --workspace",
+            "vim: a very long file name.rs",
+            r"C:\Projetos\_study\porecatu -- powershell",
+            "acentuação e cedilha não podem cortar no meio do byte",
+        ];
+        for title in titles {
+            let full = m.measure_width(title, font, SIZE);
+            for divisor in [1.5_f32, 2.0, 3.0, 6.0] {
+                let cap = full / divisor;
+
+                let ellipsis_width = m.measure_width(&ELLIPSIS.to_string(), font, SIZE);
+                let budget = (cap - ellipsis_width).max(0.0);
+                let mut reference = String::new();
+                for ch in title.chars() {
+                    let mut candidate = reference.clone();
+                    candidate.push(ch);
+                    if m.measure_width(&candidate, font, SIZE) > budget {
+                        break;
+                    }
+                    reference = candidate;
+                }
+                reference.push(ELLIPSIS);
+
+                let (got, truncated) = m.truncate(title, font, SIZE, cap);
+                assert!(truncated, "{title:?} em {cap} deveria cortar");
+                assert_eq!(got, reference, "{title:?} em {cap}");
+            }
+        }
+    }
+
+    /// Corte que cai dentro de um caractere multibyte tem de sair num
+    /// limite de caractere -- `LayoutGlyph::start` é indice de byte, e
+    /// fatiar no lugar errado é panic, não texto torto.
+    #[test]
+    fn truncate_respects_char_boundaries() {
+        let mut m = TextMeasurer::new();
+        let font = FontFace::Sans {
+            weight: SansWeight::Regular,
+        };
+        let text = "áéíóú çãõ ünïcödé";
+        let full = m.measure_width(text, font, SIZE);
+        for steps in 1..=20 {
+            let (got, _) = m.truncate(text, font, SIZE, full * steps as f32 / 20.0);
+            assert!(got.ends_with(ELLIPSIS) || got == text);
+        }
     }
 
     /// Pina `BASELINE_FROM_TOP` na metrica real da face: shapa um icone,
