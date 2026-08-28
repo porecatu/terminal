@@ -127,12 +127,13 @@ pub const CHEVRON_LEFT: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 5] = [
+pub const ALL: [(&str, Icon); 6] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
     ("chevron-down", CHEVRON_DOWN),
     ("chevron-left", CHEVRON_LEFT),
+    ("settings", SETTINGS),
 ];
 
 /// A maior largura de desenho entre os dois carets da pílula de grupo. Um
@@ -141,3 +142,10 @@ pub const ALL: [(&str, Icon); 5] = [
 /// `chevron-right`, e reservar pelo menor faria a pílula mudar de largura
 /// ao colapsar -- justo no gesto que já está animando.
 pub const WIDEST_CARET_INK_EM: f32 = CHEVRON_DOWN.ink_width_em;
+
+/// `settings` -- botão de configurações da zona fixa à direita da barra.
+pub const SETTINGS: Icon = Icon {
+    glyph: "\u{e154}",
+    ink_width_em: 0.840,
+    ink_height_em: 0.920,
+};

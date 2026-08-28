@@ -354,13 +354,31 @@ A largura é `min(120, largura disponível do rótulo)` — a cláusula sobreviv
 
 30×30, raio 6, `+` 15px `#9aa2ae`, borda `1px #262b34`. Hover: fundo `#262b34`, ícone `#e4e8ee`.
 
-**Dois lugares, não um.** O botão global fica na **zona fixa à direita** da barra
-(§2.2) e não rola com a trilha. E **cada grupo tem o seu**, logo depois do último
-elemento do wrapper — a última aba, ou a pílula sozinha se o grupo estiver colapsado
-—, com as mesmas dimensões e cores, para ler como "o mesmo botão, num segundo lugar".
-O global executa `tab.new`; o do grupo executa `group.new_tab` naquele grupo
-(RF-2.8), inclusive num run implícito. Os dois lugares entraram na F3; ver a seção
-4.4.
+**Um por grupo, e só.** O botão fica logo depois da última aba do wrapper e executa
+`group.new_tab` naquele grupo (RF-2.8), inclusive num run implícito, que é o que dá
+um "+" às abas soltas. `show_new_tab_button = false` desliga o botão e devolve a
+largura dele ao wrapper.
+
+**Grupo colapsado não tem botão.** O wrapper colapsado é a pílula e mais nada: as
+abas dele sumiram da barra (§2.4), e um "+" ao lado da pílula criaria aba num grupo
+cujas abas não estão à vista. O wrapper encolhe para caber só a pílula, que é o que
+faz o colapso parecer colapso.
+
+**Mais um, ao fim da trilha, para a aba solta.** Fica **fora** de qualquer wrapper,
+sobre o fundo da barra, e cria uma aba fora de todo grupo. Só aparece quando o último
+grupo da barra é **explícito**: se a barra já termina num run de abas soltas, o "+"
+daquele run cria exatamente isso, no mesmo lugar. É ele que cobre o caso em que toda
+aba está em grupo — sem ele, um workspace com um único grupo colapsado não tem gesto
+nenhum que crie uma aba solta.
+
+**A cor do ícone depende do que está atrás dele**, e é o único lugar do chrome que
+decide cor assim: `#12151a` sobre a cápsula de cor cheia de um grupo explícito,
+`#e4e8ee` sobre a barra escura de um run de abas soltas, que não tem cápsula.
+
+Houve também um botão **global**, numa zona fixa à direita da barra (§2.2), entre a
+F3 e o fim dela. Foi removido: com um "+" por grupo, e todo run de abas soltas sendo
+um grupo implícito, ele era um segundo botão para a mesma ação a um palmo do
+primeiro. A zona ficou, e hoje carrega o botão de configurações. Ver a seção 4.4.
 
 ### 2.7 Área de terminal `[v1]`
 
@@ -726,11 +744,12 @@ Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis 
 | Menu de contexto **não rola** (seção 2.16) | Vale para listas de ação, cujo tamanho é conhecido em tempo de escrita. O popover de grupo de destino do RF-2.20 **rola**, porque a lista é do tamanho do número de grupos do usuário | ADR-0023 |
 | RF-2.10 permite cor por valor hexadecimal direto | O editor tem seis swatches e nada mais. A entrada por hex fica **diferida**: quem quer outra cor a coloca na `palette` da config (RF-4.18) | ADR-0023 |
 | Wrapper de grupo tingido com alfa `.07` (§2.3, RF-4.19) | Atrás do fundo **opaco** das abas, 7% da cor não se vê. O wrapper passa a ser **cápsula de cor cheia** e o fundo da aba ganha alfa `.85` (§2.3, §2.5). Pedido direto do usuário; `tint_strength` continua no arquivo e volta a governar o valor na F4 | F3 |
-| Um botão de nova aba só, ao final da trilha rolável (§2.6) | **Dois lugares**: o global sai da trilha para uma zona fixa à direita (§2.2) — com a trilha rolando, botão que sai de vista é botão inalcançável — e **cada grupo ganha o seu**, executando `group.new_tab`. Pedido do usuário. `show_new_tab_button = false` ainda não desliga o do grupo (F4) | F3 |
+| Um botão de nova aba só, ao final da trilha rolável (§2.6) | **Um por grupo** (`group.new_tab`, inclusive no run implícito), escondido quando o grupo está colapsado, **mais um ao fim da trilha** que cria aba fora de todo grupo — este só quando o último grupo é explícito, senão duplicaria o "+" do run solto. Houve um botão **global** numa zona fixa à direita (§2.2), removido por ser um segundo botão para a mesma ação a um palmo do primeiro. `show_new_tab_button` governa os dois que restaram. Pedido do usuário | F3 |
+| A zona fixa à direita da barra é do botão de nova aba (§2.2) | É do **botão de configurações**, que herdou o bloco quando o botão de nova aba global saiu — e que está **inerte**: desenha, consome o clique para ele não atravessar até a aba de baixo, e não faz nada (`config` é F4). O bloco fica reservado para o que a barra ganhar à direita daqui em diante. Pedido do usuário | F3 |
+| Um tom só para o ícone do "+" (§2.6) | A cor depende do que está **atrás** dele: `#12151a` sobre a cápsula de cor cheia de um grupo explícito, `#e4e8ee` sobre a barra escura de um run de abas soltas. Com um tom só, o "+" ficava preto no fundo preto sempre que a barra não tinha grupo nenhum | F3 |
 | Ordem de cedência do overflow: rótulo, depois nome da pílula, só então rolagem (§2.18, §2.4) | **Nada cede.** Encolher exige busca binária sobre o layout (até 24 recálculos por frame, cada um remedindo texto sem cache) e era a lentidão da barra em overflow. Rótulo e nome ficam no teto e a trilha rola; `min_width` e `label_min_width` saem do arquivo de exemplo | F3 |
 | Interpolação do `reflow` descrita como deslocamento horizontal (§1.10, ADR-0022) | Deslocar só a posição faz os **vizinhos** parecerem suaves e o grupo tocado saltar. A cápsula interpola **posição e largura**, e as abas que entram ou saem da trilha ao expandir/colapsar interpolam **opacidade** — leitura literal do §2.4 ("o que anima de fato é o resto do colapso: as abas desaparecendo da trilha"). Nenhuma animação nova: mesmo relógio, mesmos dois consumidores | F3 |
 | Ícones do chrome em cinza médio em repouso, `#e4e8ee` só no hover (§2.5, §2.6, §2.4) | **`#e4e8ee` em repouso.** O traço do Lucide é fino (`2/24` da em) e, num cinza médio contra a barra `#1b1f26`, some. O tom de hover vira o tom de base — nenhuma cor nova, é o token da própria espec. promovido de estado. Vale para fechar da aba, fechar do aviso, caret do grupo, chevron de overflow e o "+" global | F3 |
-| Um único tom para o "+" de nova aba (§2.6) | O "+" **de dentro de um grupo** usa `#12151a` (o `count_background` da §2.4), não o claro dos demais: é o único ícone de chrome que não fica sobre fundo escuro — cai sobre a cápsula pintada com a cor cheia do grupo, onde claro sobre claro perde contraste. Pedido do usuário | F3 |
 | Nome do grupo em 12px/500 (§2.4, `label_font_size`) contra o rótulo da aba em 12.5px/400 (§1.1, §2.5) | **A mesma fonte da aba**: 12.5px/400 nos dois. Lado a lado na barra, meio pixel e um passo de peso não leem como hierarquia, leem como duas fontes diferentes — e o que separa o grupo da aba já são a cápsula de cor, o swatch e o contador. Pedido do usuário. `label_font_size` continua no arquivo e volta a governar o valor na F4 | F3 |
 | Famílias de texto do mockup e da tabela de tokens (IBM Plex Sans/Mono) | **Iosevka Aile** e **Iosevka Fixed** no binário ([ADR-0025](../adr/0025-iosevka-no-lugar-da-ibm-plex.md)). A Plex Mono não tem um só dos 256 braille (os gráficos do `btop`), nem powerline, nem formas geométricas. A Iosevka é bem mais estreita, então a célula do terminal encolhe e cabe mais coluna na mesma largura — o mockup não foi regerado. Dimensões da barra em px não mudam; o que muda é a métrica de texto dentro delas | [ADR-0025](../adr/0025-iosevka-no-lugar-da-ibm-plex.md) |
 | Ícones do chrome escritos como glyphs Unicode: `✕ 10px` (§2.5, §2.15), `▶ 8px` (§2.4), chevrons de overflow (§2.18) | **Nenhum deles desenhava.** U+2715, U+25B6 e U+25BC não estão na IBM Plex Sans e o `fontdb` do projeto não carrega fonte do sistema ([ADR-0016](../adr/0016-fontes-embutidas.md)) — sem fallback, sem desenho. Entra uma **face de ícones** (Lucide, ISC): o binário desenha o ícone equivalente do catálogo, não aquele codepoint. Tamanhos e caixas da especificação valem sem mudança | [ADR-0024](../adr/0024-face-de-icones.md) |
