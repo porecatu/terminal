@@ -95,6 +95,10 @@ const LABEL_FONT: FontFace = FontFace::Sans {
 pub(crate) const ICON_EM_SIZE: f32 = 20.0;
 const CLOSE_ICON_SIZE: f32 = ICON_EM_SIZE; // espec §2.5: "✕ 10px" de desenho
 const NEW_TAB_ICON_SIZE: f32 = ICON_EM_SIZE; // espec §2.6: "+ 15px" de desenho
+// A engrenagem preenche 0.84 em contra 0.68 do "+", então a mesma em a
+// desenharia bem maior que os outros ícones. Reduzida para o desenho
+// bater com o do "+" -- ver `porecatu_render::icon`.
+const SETTINGS_ICON_SIZE: f32 = ICON_EM_SIZE * 0.8;
 // Espec §2.5 pede um sublinhado de 2px na cor do grupo na base de cada
 // aba (`indicator_style = ["pill", "underline"]`, RF-4.19) -- removido a
 // pedido do usuário. Ele nasceu para dizer a que grupo a aba pertence
@@ -464,22 +468,37 @@ pub fn paint(
 
         // Botão "+" do próprio grupo (pedido do usuário, fora da espec.):
         // desliza com o wrapper (`dx`) igual à pílula e às abas dele --
-        // sem esticar, sem fade próprio -- mesmas cores do botão global
-        // pra ler como "o mesmo botão, num segundo lugar".
-        let group_button = shift(group.new_tab_button, dx);
-        out.push(Primitive::RoundedQuad(RoundedQuad {
-            rect: group_button,
-            radius: 6.0,
-            color: palette::TRANSPARENT,
-            border_color: palette::NEW_TAB_BORDER,
-            border_width: 1.0,
-        }));
-        out.push(centered_glyph(
-            icon::PLUS,
-            group_button,
-            NEW_TAB_ICON_SIZE,
-            palette::GROUP_NEW_TAB_ICON,
-        ));
+        // sem esticar, sem fade próprio.
+        //
+        // A cor do ícone depende do que está **atrás** dele, e é a única
+        // coisa no chrome que decide cor assim. Num grupo explícito ele
+        // cai sobre a cápsula pintada com a cor cheia, onde o claro
+        // perde contraste; num run de abas soltas não há cápsula
+        // (`pill == None`, mesma condição que decide pintá-la acima) e
+        // ele fica sobre a barra escura, onde o escuro é que some. Ter um
+        // tom só deixava o "+" preto no fundo preto sempre que a barra
+        // não tinha grupo nenhum.
+        if let Some(rect) = group.new_tab_button {
+            let group_button = shift(rect, dx);
+            let icon_color = if group.pill.is_some() {
+                palette::GROUP_NEW_TAB_ICON
+            } else {
+                palette::NEW_TAB_ICON
+            };
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect: group_button,
+                radius: 6.0,
+                color: palette::TRANSPARENT,
+                border_color: palette::NEW_TAB_BORDER,
+                border_width: 1.0,
+            }));
+            out.push(centered_glyph(
+                icon::PLUS,
+                group_button,
+                NEW_TAB_ICON_SIZE,
+                icon_color,
+            ));
+        }
     }
 
     // ADR-0022: abas que existiam em `old_layout` mas sumiram do layout
@@ -528,28 +547,34 @@ pub fn paint(
 
     out.push(Primitive::PopClip);
 
-    // Botão de nova aba global (pedido do usuário): zona fixa à direita da
-    // barra, fora do recorte da trilha -- não rola com o conteúdo, ao
-    // contrário do botão por grupo pintado acima.
-    if let Some(button) = tab_bar::new_tab_button_rect(style, bar_width, bar_height) {
-        out.push(Primitive::RoundedQuad(RoundedQuad {
-            rect: button,
-            radius: 6.0,
-            color: palette::TRANSPARENT,
-            border_color: palette::NEW_TAB_BORDER,
-            border_width: 1.0,
-        }));
-        out.push(centered_glyph(
-            icon::PLUS,
-            button,
-            NEW_TAB_ICON_SIZE,
-            palette::NEW_TAB_ICON,
-        ));
-    }
+    // Zona fixa à direita da barra, fora do recorte da trilha -- não rola
+    // com o conteúdo, ao contrário do botão por grupo pintado acima.
+    //
+    // Ela existia para o botão de nova aba **global**, que foi removido:
+    // com um "+" por grupo, e todo run de abas soltas sendo um grupo
+    // implícito, o global era um segundo botão para a mesma ação, a um
+    // palmo do primeiro. O bloco fica, reservado para o que a barra
+    // ganhar à direita daqui em diante, e por ora carrega o botão de
+    // configurações -- **inerte de propósito** (`config` é F4): ele
+    // desenha e não responde a clique nenhum, ver `handle_bar_click`.
+    let settings = tab_bar::settings_button_rect(style, bar_width, bar_height);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: settings,
+        radius: 6.0,
+        color: palette::TRANSPARENT,
+        border_color: palette::NEW_TAB_BORDER,
+        border_width: 1.0,
+    }));
+    out.push(centered_glyph(
+        icon::SETTINGS,
+        settings,
+        SETTINGS_ICON_SIZE,
+        palette::NEW_TAB_ICON,
+    ));
 
     // Pílulas de overflow (espec §2.18) ficam dentro da trilha rolável, não
     // da barra inteira -- senão a da direita cairia por cima da zona fixa
-    // do botão global.
+    // da direita.
     let trilha_width = tab_bar::trilha_width(style, bar_width);
     if overflow.hidden_left > 0 {
         paint_overflow_pill(

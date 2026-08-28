@@ -109,11 +109,15 @@ pub struct TabBarStyle {
     /// trilha em `chrome::paint` vinha de uma cópia velha da altura da
     /// barra e cortava as abas antes do respiro.
     pub trilha_padding: f32,
-    /// Espec. §2.6: "30×30". Sem chave própria no TOML. Já foi o mesmo
-    /// valor de `tab_height`; deixou de ser quando a aba subiu para 34 --
-    /// o botão global é centrado na barra, não colado à altura da aba.
-    pub new_tab_button_size: f32,
-    /// `[appearance.tabs] show_new_tab_button`
+    /// Lado do botão da zona fixa à direita. Herda o "30×30" que a espec.
+    /// §2.6 dava ao botão de nova aba global, que ocupava esta zona antes
+    /// -- hoje quem mora aqui é o botão de configurações. Sem chave
+    /// própria no TOML. O botão é centrado na barra, não colado à altura
+    /// da aba.
+    pub right_zone_button_size: f32,
+    /// `[appearance.tabs] show_new_tab_button` -- governa o "+" de cada
+    /// grupo, que desde a remoção do botão global é o único botão de nova
+    /// aba da barra.
     pub show_new_tab_button: bool,
     /// `[appearance.tabs] font_size`
     pub font_size: f32,
@@ -164,7 +168,7 @@ impl TabBarStyle {
         wrapper_padding: 3.0,
         trilha_gap: 6.0,
         trilha_padding: 6.0,
-        new_tab_button_size: 30.0,
+        right_zone_button_size: 30.0,
         show_new_tab_button: true,
         font_size: 12.5,
         pill_padding_left: 8.0,
@@ -269,7 +273,10 @@ pub struct GroupWrapperRect {
     /// fora da espec.: nenhum grupo (implícito ou explícito) fica sem um,
     /// sempre logo depois do último elemento do wrapper (pílula sozinha
     /// se colapsado, última aba se não).
-    pub new_tab_button: Rect,
+    /// `None` quando `show_new_tab_button` está desligado. Desde a
+    /// remoção do botão global, é este o botão que a chave governa -- e a
+    /// largura dele sai do wrapper junto, senão sobraria um vão.
+    pub new_tab_button: Option<Rect>,
 }
 
 /// Geometria da pílula de grupo (espec. §2.4): swatch, nome (já truncado),
@@ -306,7 +313,7 @@ pub struct GroupPillRect {
 
 /// O layout inteiro da trilha: um por redraw da barra, construído por
 /// [`layout`]. Sem o botão de nova aba global -- ele mora numa zona fixa
-/// à direita da barra, fora do componente que rola (`new_tab_button_rect`),
+/// à direita da barra, fora do componente que rola (`settings_button_rect`),
 /// pedido do usuário; só o botão **por grupo** (`GroupWrapperRect::
 /// new_tab_button`) faz parte da trilha.
 #[derive(Debug, Clone, PartialEq)]
@@ -578,21 +585,32 @@ pub fn layout(
         }
 
         // Botão "+" do próprio grupo (pedido do usuário, fora da espec.):
-        // logo depois do último elemento do wrapper -- pílula sozinha se
-        // colapsado, última aba se não -- separado pelo mesmo `tab_gap`
-        // que já separa abas entre si.
-        if pill.is_some() || !tabs.is_empty() {
-            inner_x += style.tab_gap;
-        }
-        // Centrado na mesma caixa que as abas do grupo -- a do wrapper
-        // quando o run é solto, a da aba quando há bloco.
-        let new_tab_button = Rect {
-            x: inner_x,
-            y: tab_top + (tab_h - style.close_button_size) / 2.0,
-            width: style.close_button_size,
-            height: style.close_button_size,
+        // logo depois da última aba, separado pelo mesmo `tab_gap` que já
+        // separa abas entre si. Centrado na mesma caixa que as abas do
+        // grupo: a do wrapper quando o run é solto, a da aba quando há
+        // bloco.
+        //
+        // **Grupo colapsado não tem botão** (pedido do usuário): o
+        // wrapper colapsado é a pílula e mais nada (§2.4: "suas abas
+        // somem da barra"), e um "+" ao lado dela criaria aba num grupo
+        // cujas abas não estão à vista -- sem contar que o wrapper
+        // encolhe para caber só a pílula, que é o que faz o colapso
+        // parecer colapso.
+        let new_tab_button = if style.show_new_tab_button && !collapsed {
+            if pill.is_some() || !tabs.is_empty() {
+                inner_x += style.tab_gap;
+            }
+            let rect = Rect {
+                x: inner_x,
+                y: tab_top + (tab_h - style.close_button_size) / 2.0,
+                width: style.close_button_size,
+                height: style.close_button_size,
+            };
+            inner_x += style.close_button_size;
+            Some(rect)
+        } else {
+            None
         };
-        inner_x += style.close_button_size;
 
         inner_x += style.wrapper_padding;
         let wrapper_rect = Rect {
@@ -764,14 +782,12 @@ pub fn point_in_overflow_pill(
 /// espec.): só o suficiente pra sempre caber o botão de nova aba global,
 /// com o mesmo `trilha_gap` que separa grupos como respiro nas duas
 /// pontas -- reaproveitado em vez de inventar um padding próprio. Zero
-/// quando o botão está desligado (`show_new_tab_button = false`): sem
-/// botão, não há zona a reservar.
+/// Não depende de config: a zona é do botão de configurações, que existe
+/// sempre. Ela nasceu para o botão de nova aba global (que saía de vista
+/// com a trilha rolando), e sobreviveu a ele -- é o bloco reservado para
+/// o que a barra ganhar à direita daqui em diante.
 pub fn right_zone_width(style: &TabBarStyle) -> f32 {
-    if style.show_new_tab_button {
-        style.trilha_gap * 2.0 + style.new_tab_button_size
-    } else {
-        0.0
-    }
+    style.trilha_gap * 2.0 + style.right_zone_button_size
 }
 
 /// Largura da trilha rolável: a barra inteira menos a zona fixa da
@@ -784,25 +800,22 @@ pub fn trilha_width(style: &TabBarStyle, bar_width: f32) -> f32 {
 /// Retângulo do botão de nova aba global, em coordenadas de tela da barra
 /// (zona fixa à direita -- não rola com a trilha, ao contrário do botão
 /// por grupo dentro de [`GroupWrapperRect::new_tab_button`]).
-pub fn new_tab_button_rect(style: &TabBarStyle, bar_width: f32, bar_height: f32) -> Option<Rect> {
-    if !style.show_new_tab_button {
-        return None;
-    }
-    Some(Rect {
+pub fn settings_button_rect(style: &TabBarStyle, bar_width: f32, bar_height: f32) -> Rect {
+    Rect {
         x: bar_width - right_zone_width(style) + style.trilha_gap,
-        y: (bar_height - style.new_tab_button_size) / 2.0,
-        width: style.new_tab_button_size,
-        height: style.new_tab_button_size,
-    })
+        y: (bar_height - style.right_zone_button_size) / 2.0,
+        width: style.right_zone_button_size,
+        height: style.right_zone_button_size,
+    }
 }
 
-pub fn point_in_global_new_tab_button(
+pub fn point_in_settings_button(
     style: &TabBarStyle,
     bar_width: f32,
     bar_height: f32,
     point: (f32, f32),
 ) -> bool {
-    new_tab_button_rect(style, bar_width, bar_height).is_some_and(|rect| rect_contains(rect, point))
+    rect_contains(settings_button_rect(style, bar_width, bar_height), point)
 }
 
 /// Acha o retângulo (coordenadas de conteúdo, sem rolagem) de uma aba pelo
@@ -970,7 +983,10 @@ pub fn hit_test(layout: &TabBarLayout, point: (f32, f32)) -> Option<TabBarHit> {
         }
     }
     for group in &layout.groups {
-        if rect_contains(group.new_tab_button, point) {
+        if group
+            .new_tab_button
+            .is_some_and(|rect| rect_contains(rect, point))
+        {
             return Some(TabBarHit::GroupNewTab(group.id));
         }
     }
@@ -1108,7 +1124,8 @@ mod tests {
 
         let group = &layout.groups[0];
         let tab = &group.tabs[0];
-        let button_mid = group.new_tab_button.y + group.new_tab_button.height / 2.0;
+        let button = group.new_tab_button.expect("botão ligado no default");
+        let button_mid = button.y + button.height / 2.0;
         assert_eq!(button_mid, tab.rect.y + tab.rect.height / 2.0);
     }
 
@@ -1124,30 +1141,59 @@ mod tests {
         );
     }
 
+    /// Desde a remoção do botão global, `show_new_tab_button` governa o
+    /// "+" **de cada grupo** -- e a largura dele sai do wrapper junto,
+    /// senão a chave deixaria um vão no lugar do botão.
     #[test]
-    fn global_new_tab_button_rect_none_when_disabled() {
-        let style = TabBarStyle {
-            show_new_tab_button: false,
-            ..TabBarStyle::DEFAULT
-        };
-        assert_eq!(new_tab_button_rect(&style, 400.0, 36.0), None);
-        assert_eq!(right_zone_width(&style), 0.0);
+    fn show_new_tab_button_disables_the_per_group_button() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = measurer();
+
+        let ligado = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let desligado = layout(
+            &ws,
+            &TabBarStyle {
+                show_new_tab_button: false,
+                ..TabBarStyle::DEFAULT
+            },
+            &mut m,
+        );
+        assert!(ligado.groups[0].new_tab_button.is_some());
+        assert!(desligado.groups[0].new_tab_button.is_none());
+        assert!(
+            desligado.groups[0].rect.width < ligado.groups[0].rect.width,
+            "wrapper deveria encolher sem o botão"
+        );
     }
 
+    /// A zona fixa da direita **não** depende de config: ela é do botão de
+    /// configurações, que existe sempre. Nasceu para o botão de nova aba
+    /// global e sobreviveu a ele.
     #[test]
-    fn global_new_tab_button_sits_in_the_fixed_right_zone() {
+    fn settings_button_sits_in_the_fixed_right_zone() {
         let style = TabBarStyle::DEFAULT;
         let bar_width = 400.0;
         let bar_height = crate::chrome::bar_height(&style);
-        let button = new_tab_button_rect(&style, bar_width, bar_height).unwrap();
+        let button = settings_button_rect(&style, bar_width, bar_height);
         assert_eq!(
             button.x,
-            bar_width - style.trilha_gap - style.new_tab_button_size
+            bar_width - style.trilha_gap - style.right_zone_button_size
         );
-        assert_eq!(button.width, style.new_tab_button_size);
+        assert_eq!(button.width, style.right_zone_button_size);
         assert_eq!(
             trilha_width(&style, bar_width),
             bar_width - right_zone_width(&style)
+        );
+
+        let sem_botao_de_aba = TabBarStyle {
+            show_new_tab_button: false,
+            ..style
+        };
+        assert_eq!(
+            right_zone_width(&sem_botao_de_aba),
+            right_zone_width(&style),
+            "a zona da direita não é do botão de nova aba"
         );
     }
 
@@ -1171,7 +1217,7 @@ mod tests {
 
         // botão de nova aba do grupo vem depois da aba, com o tab_gap
         assert_eq!(
-            group.new_tab_button.x,
+            group.new_tab_button.unwrap().x,
             tab.rect.x + tab.rect.width + TabBarStyle::DEFAULT.tab_gap
         );
         assert_eq!(
@@ -1360,7 +1406,7 @@ mod tests {
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let group = &layout.groups[0];
-        let button = group.new_tab_button;
+        let button = group.new_tab_button.expect("botão ligado no default");
         let center = (
             button.x + button.width / 2.0,
             button.y + button.height / 2.0,
@@ -1818,7 +1864,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_group_wrapper_hugs_the_pill_and_its_new_tab_button() {
+    fn collapsed_group_wrapper_hugs_the_pill_alone() {
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
         let group = ws.group_tabs(&[a], "col", GroupColor::Cyan).unwrap();
@@ -1829,13 +1875,35 @@ mod tests {
         let wrapper = &layout.groups[0];
         let pill = wrapper.pill.as_ref().unwrap();
         let style = TabBarStyle::DEFAULT;
+        // Pedido do usuário: colapsado não tem "+", então o wrapper é a
+        // pílula e o respiro dele, e nada mais.
+        assert!(wrapper.new_tab_button.is_none());
         assert_eq!(
             wrapper.rect.width,
-            pill.rect.width + style.wrapper_padding * 2.0 + style.tab_gap + style.close_button_size
+            pill.rect.width + style.wrapper_padding * 2.0
         );
-        assert_eq!(
-            wrapper.new_tab_button.x,
-            pill.rect.x + pill.rect.width + style.tab_gap
+    }
+
+    /// Expandir devolve o botão -- o colapso esconde, não desliga.
+    #[test]
+    fn expanding_brings_the_group_new_tab_button_back() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "col", GroupColor::Cyan).unwrap();
+        let mut m = measurer();
+
+        ws.collapse_group(group, true);
+        assert!(
+            layout(&ws, &TabBarStyle::DEFAULT, &mut m).groups[0]
+                .new_tab_button
+                .is_none()
+        );
+
+        ws.collapse_group(group, false);
+        assert!(
+            layout(&ws, &TabBarStyle::DEFAULT, &mut m).groups[0]
+                .new_tab_button
+                .is_some()
         );
     }
 

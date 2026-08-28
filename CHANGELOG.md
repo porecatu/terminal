@@ -66,8 +66,13 @@ gravado, falta a operação que anda de grupo em grupo.
   ou saem da trilha; o `Workspace` nunca é interpolado
 - `Ctrl+Shift+G` agrupa a seleção corrente, ou a aba ativa quando não há
   seleção, com cor automática e o editor aberto no nome
-- Botão "+" ao final de cada grupo (`group.new_tab`) e o botão de nova aba
-  global numa **zona fixa** à direita da barra, que não rola com a trilha
+- Botão "+" ao final de cada grupo (`group.new_tab`), governado por
+  `show_new_tab_button`, com a cor do ícone decidida pelo que está atrás dele:
+  escuro sobre a cápsula de cor de um grupo, claro sobre a barra num run de
+  abas soltas, e sumindo quando o grupo está colapsado — o wrapper colapsado é
+  a pílula e mais nada. O botão de nova aba **global** chegou a existir numa zona fixa
+  à direita e foi removido — era um segundo botão para a mesma ação a um palmo
+  do primeiro. A zona ficou, com o botão de configurações, inerte até a F4
 - Botão de nova aba global cria a aba **fora de qualquer grupo explícito**, no
   fim da barra (`Workspace::append_ungrouped_tab`) — antes ele seguia o grupo
   da aba ativa, que é o comportamento de `tab.new` (RF-1.1) e deixava o botão
