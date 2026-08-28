@@ -121,13 +121,27 @@ enum Drag {
     },
 }
 
-// docs/config/porecatu.example.toml [terminal.font]: size = 13.0 (RF-5.3,
-// 12.5 originalmente, +2px numa revisão e depois recalibrado a 13 -- pedido
-// do usuário), line_height = 1.75 (RF-5.6, "multiplicador das métricas
-// naturais da fonte"). Simplificação desta etapa: aplicado direto sobre
-// `size` em vez da métrica natural da fonte (ascent+descent+lineGap), que
-// exigiria ler hhea/OS2 da face -- ajustar quando isso importar na prática.
-const FONT_SIZE_PX: f32 = 13.0;
+// docs/config/porecatu.example.toml [terminal.font]: size = 14.0 (RF-5.3,
+// 12.5 originalmente, +2px numa revisão, recalibrado a 13 -- pedido do
+// usuário -- e por fim a 14 pelo motivo abaixo), line_height = 1.75
+// (RF-5.6, "multiplicador das métricas naturais da fonte"). Simplificação
+// desta etapa: aplicado direto sobre `size` em vez da métrica natural da
+// fonte (ascent+descent+lineGap), que exigiria ler hhea/OS2 da face --
+// ajustar quando isso importar na prática.
+//
+// Por que par: a Iosevka Fixed tem `unitsPerEm = 1000` e avanço 500 em
+// **todo** glyph, ou seja avanço lógico = `size / 2`. Para
+// `snap_cell_metrics_to_pixel_grid` ser no-op, `size / 2 * scale` tem de
+// cair em pixel inteiro -- em escala 1.0 isso quer dizer `size` par. A 13
+// o avanço era 6.5 e a célula arredondava para 7.0, deixando meio pixel de
+// folga por célula; a 14 o glyph preenche a célula e a largura dela não
+// muda (7.0 nos dois casos), então a contagem de colunas é a mesma.
+//
+// Isto é conforto, não correção: em 125% nenhum tamanho perto deste fecha,
+// e `terminal.font.size` vira chave do usuário na F4. Quem garante que a
+// grade continua sendo grade em qualquer tamanho e qualquer escala é o
+// teste em em de `paint::fits_the_grid`, não esta constante.
+const FONT_SIZE_PX: f32 = 14.0;
 const LINE_HEIGHT_MULTIPLIER: f32 = 1.75;
 
 /// Grade mínima -- uma célula em cada direção, no pior caso de janela
@@ -174,7 +188,7 @@ fn bar_height() -> f32 {
 /// visível em qualquer programa que desenhe grade cheia (`btop`, o
 /// `claude` CLI). Arredondar a célula para o pixel físico garante que toda
 /// coluna comece exatamente onde a anterior termina, sem resto.
-fn snap_cell_metrics_to_pixel_grid(width: f32, height: f32, scale: f32) -> CellMetrics {
+pub(crate) fn snap_cell_metrics_to_pixel_grid(width: f32, height: f32, scale: f32) -> CellMetrics {
     let physical_width = (width * scale).round().max(1.0);
     let physical_height = (height * scale).round().max(1.0);
     CellMetrics {

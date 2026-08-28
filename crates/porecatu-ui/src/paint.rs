@@ -172,11 +172,25 @@ fn paint_row_backgrounds(
     }
 }
 
-/// Folga na comparação entre o avanço de um caractere e a largura da
-/// célula. O avanço vem do shaping em ponto flutuante; um caractere da
-/// própria face mono bate na casa do centésimo, um de fallback erra por
-/// muito mais que isto.
+/// Folga na comparação de avanço, **em fração da em** -- não em pixels.
+/// O avanço vem do shaping em ponto flutuante; um caractere da própria
+/// face mono bate na casa do centésimo, um de fallback erra por muito
+/// mais que isto.
+///
+/// A unidade importa: comparar em pixels obriga a escolher entre a
+/// largura de célula **natural** e a **arredondada ao pixel físico** por
+/// `snap_cell_metrics_to_pixel_grid` (`lib.rs`), e as duas diferem por até
+/// meio pixel -- dez vezes esta folga. Foi o que aconteceu quando o
+/// snapping entrou: toda célula passou a reprovar, cada caractere virou um
+/// `TextRun` próprio e a grade inteira foi re-shapada por frame. Em em a
+/// pergunta não depende de tamanho de fonte nem de escala de janela.
 const ADVANCE_TOLERANCE: f32 = 0.05;
+
+/// Caractere de referência da grade: o mesmo que
+/// `TextMeasurer::measure_mono_cell` usa para derivar a largura de célula.
+/// Comparar contra o avanço **dele** é o que torna o teste independente do
+/// arredondamento aplicado depois à célula.
+const GRID_REFERENCE_CHAR: char = 'M';
 
 /// Quantas células este caractere deveria ocupar segundo a grade -- duas
 /// para largura dupla (a segunda vem como `WIDE_SPACER`, decisão 4 da
@@ -193,19 +207,15 @@ fn cell_span(cell: &Cell) -> f32 {
 /// de ser o que a grade reservou para ele. Cluster (grafema composto)
 /// nunca pode -- o avanço dele não é o de um caractere só, e o cache de
 /// `advance_em` é por caractere.
-fn fits_the_grid(
-    cell: &Cell,
-    bold: bool,
-    metrics: CellMetrics,
-    font_size_px: f32,
-    measurer: &mut TextMeasurer,
-) -> bool {
+fn fits_the_grid(cell: &Cell, bold: bool, measurer: &mut TextMeasurer) -> bool {
     let CellText::Char(ch) = cell.text else {
         return false;
     };
-    let expected = metrics.width * cell_span(cell);
-    let advance = measurer.advance_em(ch, FontFace::Mono { bold }) * font_size_px;
-    (advance - expected).abs() <= ADVANCE_TOLERANCE
+    let font = FontFace::Mono { bold };
+    // Os dois lados saem do cache de `advance_em`: depois do warmup isto
+    // não shapa nada, e é o caminho percorrido uma vez por célula.
+    let expected = measurer.advance_em(GRID_REFERENCE_CHAR, font) * cell_span(cell);
+    (measurer.advance_em(ch, font) - expected).abs() <= ADVANCE_TOLERANCE
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -236,12 +246,12 @@ fn paint_row_text(
         // ancorado no `x` da célula e encolhido para caber nela -- senão
         // empurraria o resto do run e transbordaria para a célula
         // seguinte.
-        if !fits_the_grid(cell, bold, metrics, font_size_px, measurer) {
+        if !fits_the_grid(cell, bold, measurer) {
             let mut text = String::new();
             push_cell_text(cell, &snapshot.clusters, &mut text);
             if !text.trim().is_empty() {
                 let target = metrics.width * cell_span(cell);
-                let size_px = fitted_size(&text, bold, font_size_px, target, measurer);
+                let size_px = fitted_size(cell, &text, bold, font_size_px, target, measurer);
                 out.push(Primitive::Text(TextRun {
                     origin: (x_offset + col as f32 * metrics.width, row_y),
                     text,
@@ -269,7 +279,7 @@ fn paint_row_text(
             if cell_fg != fg || cell_bold != bold {
                 break;
             }
-            if !fits_the_grid(cell, bold, metrics, font_size_px, measurer) {
+            if !fits_the_grid(cell, bold, measurer) {
                 break;
             }
             push_cell_text(cell, &snapshot.clusters, &mut text);
@@ -292,7 +302,18 @@ fn paint_row_text(
 /// fallback mais estreito que a célula fica onde está, porque esticá-lo
 /// deformaria o desenho sem ganhar alinhamento nenhum -- o `x` da próxima
 /// célula não depende dele.
+///
+/// `target_width` é a largura de célula **arredondada ao pixel físico**
+/// (`snap_cell_metrics_to_pixel_grid` em `lib.rs`), ao contrário do teste
+/// de `fits_the_grid`: aqui a pergunta é "cabe na célula desenhada?", e a
+/// célula desenhada é a arredondada.
+///
+/// Caractere único resolve pelo cache de `advance_em`; só cluster (grafema
+/// composto, raro) paga um shaping -- este caminho roda por célula de
+/// fallback por frame, e uma tela de braille do `btop` é feita inteira
+/// dele.
 fn fitted_size(
+    cell: &Cell,
     text: &str,
     bold: bool,
     font_size_px: f32,
@@ -300,7 +321,10 @@ fn fitted_size(
     measurer: &mut TextMeasurer,
 ) -> f32 {
     let font = FontFace::Mono { bold };
-    let advance = measurer.measure_width(text, font, font_size_px);
+    let advance = match cell.text {
+        CellText::Char(ch) => measurer.advance_em(ch, font) * font_size_px,
+        CellText::Cluster { .. } => measurer.measure_width(text, font, font_size_px),
+    };
     if advance <= target_width || advance <= f32::EPSILON {
         return font_size_px;
     }
@@ -441,6 +465,41 @@ mod tests {
         assert_eq!(runs[0].2, SIZE);
     }
 
+    /// A regressão que esta correção desfaz. `metrics.width` chega à
+    /// pintura **arredondado ao pixel físico**
+    /// (`snap_cell_metrics_to_pixel_grid`), e o teste de grade comparava
+    /// contra ele: em escala 1.0 a diferença é meio pixel, dez vezes a
+    /// tolerância, então toda célula reprovava. Cada caractere virava um
+    /// `TextRun` próprio, com um shaping sem cache cada -- ~4000 por frame
+    /// numa grade 80x24, contra ~24. O helper `cell` acima não arredonda,
+    /// e foi por isso que os testes existentes não pegaram nada.
+    ///
+    /// Toda escala aqui, não só a do desenvolvedor: é justamente onde o
+    /// arredondamento cai que o bug aparecia ou não.
+    #[test]
+    fn snapped_cell_metrics_still_yield_one_run_per_line() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let (width, height) = m.measure_mono_cell(SIZE, SIZE * 1.75);
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let cell = crate::snap_cell_metrics_to_pixel_grid(width, height, scale);
+            let out = build_primitives(
+                &snapshot("cargo build --workspace"),
+                cell,
+                SIZE,
+                test_box_rect(),
+                &mut m,
+            );
+            let runs = runs(&out);
+            assert_eq!(
+                runs.len(),
+                1,
+                "escala {scale}: celula {} contra avanco natural {width},                  a linha quebrou em {} runs",
+                cell.width,
+                runs.len()
+            );
+        }
+    }
+
     /// Box drawing, blocos e **braille** a Iosevka cobre inteiros, no
     /// avanço da célula (ADR-0025) -- nenhum deles pode disparar a
     /// quebra, senão as molduras do Claude Code e os gráficos do `btop`
@@ -508,8 +567,11 @@ mod tests {
         assert_eq!(runs.len(), 1);
         let size = runs[0].2;
         let width = m.measure_width(&runs[0].1, FontFace::Mono { bold: false }, size);
+        // Folga em pixels, não `ADVANCE_TOLERANCE` -- essa constante é em
+        // fração da em, e aqui se compara largura desenhada com largura de
+        // célula. Meio pixel cobre o arredondamento do shaping.
         assert!(
-            width <= cell.width + ADVANCE_TOLERANCE,
+            width <= cell.width + 0.5,
             "glyph de fallback com {width} numa celula de {}",
             cell.width
         );

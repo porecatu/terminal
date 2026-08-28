@@ -298,6 +298,31 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Corrigido
 
+- Render do terminal e troca de aba ficaram lentos: `fits_the_grid` (o teste que
+  decide se um caractere pode viajar num `TextRun` compartilhado) comparava o
+  avanço **natural** do caractere contra a largura de célula já **arredondada ao
+  pixel físico** por `snap_cell_metrics_to_pixel_grid`. As duas diferem por até
+  meio pixel, dez vezes a tolerância, então toda célula reprovava: cada
+  caractere virava um `TextRun` próprio com um shaping sem cache cada, e a grade
+  inteira era re-shapada por frame — ~4000 operações de `cosmic-text` numa grade
+  80x24, contra ~24. O teste agora é em **em**, contra o avanço do `'M'` da
+  própria face mono, e não depende mais de tamanho de fonte nem de escala de
+  janela. Os testes de `paint.rs` não pegaram porque montavam a célula sem o
+  arredondamento do runtime; há um teste novo que exercita as cinco escalas
+- `TextMeasurer::truncate` media cada prefixo candidato — um `Buffer` novo e um
+  `shape_until_scroll` por caractere, mais um `String::clone` — e roda por aba a
+  cada layout da barra, isto é por frame e a cada movimento do mouse. Passou a
+  ser **um shaping**, com o corte saindo do avanço acumulado dos glyphs. O
+  caminho ficou latente até a largura de aba virar fixa, quando todo título mais
+  longo que o teto passou a cair nele
+- `fitted_size` chamava `measure_width` sem cache para cada caractere de
+  fallback, por frame — uma tela de braille do `btop` são centenas de shapings.
+  Caractere único agora resolve pelo cache de `advance_em`; só cluster mede
+- `terminal.font.size` de 13.0 para 14.0. A Iosevka Fixed avança 0.5 em em todo
+  glyph, então `size / 2 * scale` precisa cair em pixel inteiro para a célula
+  não ser arredondada; a 13 o avanço era 6.5 numa célula de 7.0. A largura de
+  célula não muda (a contagem de colunas é a mesma), o glyph é que passa a
+  preencher a célula
 - `Workspace::group_tabs` invertia a ordem visual ao agrupar a partir de um
   grupo explícito quando a aba extraída não era a primeira dele. Bagunçava
   `self.groups` em silêncio, e era a causa real do relato de que a animação de

@@ -406,7 +406,10 @@ family = "Iosevka Fixed"                                              # RF-5.1
 # Cadeia de fallback, em ordem. Glyph ausente na família principal é
 # procurado aqui antes de virar retângulo vazio.                        RF-5.2
 fallback = ["Symbols Nerd Font Mono", "Noto Color Emoji", "Noto Sans CJK"]
-size = 13.0                                                           # RF-5.3
+# Par de propósito: a Iosevka Fixed avança 0.5 em em todo glyph, então
+# `size / 2 * scale` precisa cair em pixel inteiro para a célula não ser
+# arredondada.                                                          RF-5.3
+size = 14.0
 
 # Variantes. Vazio = deriva da família principal.                       RF-5.4
 bold_family = ""
