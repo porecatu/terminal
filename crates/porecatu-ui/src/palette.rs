@@ -60,7 +60,15 @@ pub const TAB_INACTIVE_TEXT: Color = hex(0x98, 0xa0, 0xab);
 // Aba `Exited` (ADR-0017): fundo/borda de inativa, texto no tom do botão
 // de fechar -- "o token de inerte da barra".
 pub const TAB_EXITED_TEXT: Color = hex(0x72, 0x7a, 0x86);
-pub const CLOSE_BUTTON_ICON: Color = hex(0x72, 0x7a, 0x86);
+// Ícone de chrome sobre fundo escuro. A espec. §2.5/§2.6 dá a estes
+// ícones um cinza médio em repouso (`#727a86` no fechar, `#9aa2ae` no
+// "+", `#6b737e` no caret) e reserva o `#e4e8ee` para o hover -- mas em
+// repouso, contra a barra `#1b1f26`, o traço fino do Lucide some. Por
+// pedido do usuário, o tom de hover vira o tom **de base**: nenhuma cor
+// nova, é o mesmo token da espec. promovido de estado. Divergência na
+// seção 4.4.
+pub const CHROME_ICON: Color = hex(0xe4, 0xe8, 0xee); // *_hover_foreground
+pub const CLOSE_BUTTON_ICON: Color = CHROME_ICON;
 // `[appearance.groups] ungrouped_color` -- a cor de grupo das abas de um
 // run implícito (ADR-0006). O sublinhado que dava nome ao token saiu da
 // base da aba (ver `chrome.rs`); o que resta usando-o é o realce de
@@ -97,7 +105,7 @@ pub const PILL_BORDER: Color = hex(0x2b, 0x31, 0x3b); // label_border
 pub const PILL_TEXT: Color = hex(0xc3, 0xca, 0xd3); // label_foreground
 pub const PILL_COUNT_BACKGROUND: Color = hex(0x12, 0x15, 0x1a); // count_background
 pub const PILL_COUNT_TEXT: Color = hex(0x7b, 0x83, 0x8f); // count_foreground
-pub const PILL_CARET: Color = hex(0x6b, 0x73, 0x7e); // caret_foreground
+pub const PILL_CARET: Color = CHROME_ICON; // era caret_foreground
 
 // `[appearance.tabs] selected_border` -- ADR-0021, RF-2.2: aba em seleção
 // múltipla. Modificador sobre o estado de base (não é um quarto estado,
@@ -110,7 +118,13 @@ pub const RENAME_BORDER: Color = hex(0x5e, 0xd3, 0xbc);
 pub const RENAME_TEXT: Color = hex(0xe4, 0xe8, 0xee);
 
 // Espec. visual §2.6 -- botão de nova aba.
-pub const NEW_TAB_ICON: Color = hex(0x9a, 0xa2, 0xae);
+pub const NEW_TAB_ICON: Color = CHROME_ICON;
+// O "+" **de dentro de um grupo** é o único ícone de chrome que não fica
+// sobre fundo escuro: ele cai em cima da cápsula pintada com a cor cheia
+// do grupo. Lá o claro some, e o contraste vem do tom mais escuro do
+// chrome -- o mesmo `count_background` do contador da pílula (§2.4), não
+// uma cor nova. Pedido do usuário junto com o clareamento dos demais.
+pub const GROUP_NEW_TAB_ICON: Color = hex(0x12, 0x15, 0x1a); // count_background
 pub const NEW_TAB_BORDER: Color = hex(0x26, 0x2b, 0x34);
 
 // `[appearance.tabs] activity_indicator` / `bell_indicator` -- espec §2.17,

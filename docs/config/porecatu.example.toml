@@ -149,7 +149,7 @@ active_foreground = "#eaeef3"
 inactive_background = "#191d23"
 inactive_foreground = "#98a0ab"
 hover_brightness = 1.18       # multiplicador aplicado no hover da aba
-close_button_foreground = "#727a86"
+close_button_foreground = "#e4e8ee"  # era #727a86; ver espec. seção 4.4
 close_button_hover_background = "#39404b"
 close_button_hover_foreground = "#e4e8ee"
 
@@ -196,7 +196,7 @@ label_max_width = 140
 count_background = "#12151a"  # contador de abas no rótulo
 count_foreground = "#7b838f"
 count_corner_radius = 9
-caret_foreground = "#6b737e"
+caret_foreground = "#e4e8ee"  # era #6b737e; ver espec. seção 4.4
 
 # --- indicador -------------------------------------------- RF-4.14, RF-4.15
 # Lista combinável, não escolha exclusiva. O design usa pílula E

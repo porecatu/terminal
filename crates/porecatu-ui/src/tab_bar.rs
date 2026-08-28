@@ -34,11 +34,13 @@ const LABEL_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
 
-/// Espec. §2.4, `[appearance.groups] label_font_size = 12.0`, peso 500
-/// (item 2 da pílula: "Nome 12px/500").
-pub(crate) const PILL_NAME_FONT: FontFace = FontFace::Sans {
-    weight: SansWeight::Medium,
-};
+/// **A mesma do rótulo da aba**, por pedido do usuário: a espec. §2.4 dá
+/// ao nome do grupo peso 500 contra o 400 da aba (§1.1), e a diferença de
+/// peso lado a lado na barra lê como duas fontes diferentes, não como
+/// hierarquia. O que separa o grupo da aba já são a cápsula de cor, o
+/// swatch e o contador. O tamanho acompanha pelo mesmo motivo -- ver
+/// `TabBarStyle::pill_font_size`.
+pub(crate) const PILL_NAME_FONT: FontFace = LABEL_FONT;
 /// Espec. §2.4, item 3: "contador mono 10px". Sem chave própria de fonte no
 /// TOML -- só cor/fundo/raio (`count_*`) têm chave.
 pub(crate) const PILL_COUNT_FONT: FontFace = FontFace::Mono { bold: false };
@@ -125,6 +127,10 @@ pub struct TabBarStyle {
     /// `[appearance.groups] swatch_size`
     pub pill_swatch_size: f32,
     /// `[appearance.groups] label_font_size` -- fonte do nome da pílula.
+    /// Igual a `font_size` (o rótulo da aba) por pedido do usuário; a
+    /// espec. §2.4 pede 12.0 contra os 12.5 da aba, e meio pixel de
+    /// diferença lado a lado só faz o nome parecer de outra fonte. Ver
+    /// [`PILL_NAME_FONT`].
     pub pill_font_size: f32,
     /// `[appearance.groups] label_max_width` -- teto do nome (RF-2.12): o
     /// da aba (180) menos os 41px de cromo da §2.18, valor citado direto da
@@ -165,7 +171,7 @@ impl TabBarStyle {
         pill_padding_right: 9.0,
         pill_gap: 7.0,
         pill_swatch_size: 8.0,
-        pill_font_size: 12.0,
+        pill_font_size: 12.5, // = `font_size`
         pill_name_max_width: 140.0,
         pill_count_padding_x: 6.0,
         pill_count_padding_y: 1.0,
