@@ -62,7 +62,9 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use porecatu_core::{GroupId, TabId, Workspace};
-use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
+use porecatu_render::{
+    Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun, icon,
+};
 
 use crate::animation::AnimationClock;
 use crate::group_editor::GroupEditor;
@@ -74,21 +76,46 @@ use crate::tab_bar::{
     PILL_COUNT_FONT_SIZE, PILL_NAME_FONT, TabBarLayout, TabBarStyle,
 };
 
-/// Fonte dos ícones da barra (fechar, nova aba) -- mesma família do
-/// rótulo, peso regular (espec. não distingue peso pra glyphs de ícone).
-pub(crate) const ICON_FONT: FontFace = FontFace::Sans {
+/// Fonte dos ícones da barra (fechar, nova aba, chevron): a face Lucide
+/// embutida, não a IBM Plex Sans do rótulo. Os glyphs Unicode que a espec.
+/// usa para desenhar esses ícones no papel (✕ U+2715, ▶ U+25B6, ▼ U+25BC)
+/// **não existem** na Plex Sans, e o `fontdb` do projeto não carrega fonte
+/// do sistema (ADR-0016): sem face própria eles não desenhavam nada. Ver
+/// `porecatu_render::icon`.
+pub(crate) const ICON_FONT: FontFace = FontFace::Icon;
+const LABEL_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
-const LABEL_FONT: FontFace = ICON_FONT;
 
-const CLOSE_ICON_SIZE: f32 = 10.0; // espec §2.5: "✕ 10px"
-const NEW_TAB_ICON_SIZE: f32 = 15.0; // espec §2.6: "+ 15px"
-const TAB_UNDERLINE_HEIGHT: f32 = 2.0; // espec §2.5: "inset 0 -2px 0"
+// Tamanhos de **em**, não de desenho: o Lucide preenche ~0.6 em, então a
+// em tem de ser cerca do dobro do número da especificação para o desenho
+// sair no tamanho que ela pede -- e para o traço (`2/24` da em) render
+// sólido em vez de esmaecer contra o fundo. Ver `porecatu_render::icon`.
+// Pedido do usuário depois de ver os 10px em tela.
+pub(crate) const ICON_EM_SIZE: f32 = 20.0;
+const CLOSE_ICON_SIZE: f32 = ICON_EM_SIZE; // espec §2.5: "✕ 10px" de desenho
+const NEW_TAB_ICON_SIZE: f32 = ICON_EM_SIZE; // espec §2.6: "+ 15px" de desenho
+// Espec §2.5 pede um sublinhado de 2px na cor do grupo na base de cada
+// aba (`indicator_style = ["pill", "underline"]`, RF-4.19) -- removido a
+// pedido do usuário. Ele nasceu para dizer a que grupo a aba pertence
+// quando a pílula sai da vista por rolagem; desde que a cápsula passou a
+// ser pintada com a cor cheia (F3 etapa 6), a cor do grupo já está atrás
+// da aba inteira e o traço virou ruído na base dela. Divergência na
+// seção 4.4 da especificação; quando `config` existir (F4), o default de
+// `indicator_style` é a chave que governa isto.
 const BAR_SEPARATOR_HEIGHT: f32 = 1.0;
-// `[appearance.tabs] selected_border_width` -- espec §2.5: "2px por dentro",
-// sobre a borda de 1px do estado de base (`Primitive::RoundedQuad` não soma
-// largura ao rect por causa da borda, então isto não reflui a aba).
-const SELECTED_BORDER_WIDTH: f32 = 2.0;
+// Borda da aba em todo estado. A espec. §2.5 desenha 1px; contra a cápsula
+// de cor cheia (F3 etapa 6) 1px de `#22262e` não se lê, e o pedido do
+// usuário foi "coloca um border nas abas". 2px é a espessura que o próprio
+// arquivo de exemplo já usa para linha de chrome (`indicator_thickness`,
+// `selected_border_width`) -- não um número novo. Cada estado mantém a cor
+// dele, que é o que continua separando ativa de inativa.
+const TAB_BORDER_WIDTH: f32 = 2.0;
+// `[appearance.tabs] selected_border_width` -- espec §2.5: "2px por dentro"
+// (`Primitive::RoundedQuad` não soma largura ao rect por causa da borda,
+// então isto não reflui a aba). Mesma espessura da borda de base desde o
+// ajuste acima: o que marca a seleção é a **cor**, o verde-água do token.
+const SELECTED_BORDER_WIDTH: f32 = TAB_BORDER_WIDTH;
 
 // Wrapper de grupo (espec §2.3, `[appearance.groups]`).
 const WRAPPER_CORNER_RADIUS: f32 = 8.0; // wrapper_corner_radius
@@ -119,9 +146,12 @@ const PILL_SWATCH_CORNER_RADIUS: f32 = 2.0; // swatch_corner_radius
 const PILL_COUNT_CORNER_RADIUS: f32 = 9.0; // count_corner_radius
 // Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
 // expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
-// glyph usa o mesmo tamanho reservado no layout (`style.pill_caret_size`).
-const PILL_CARET_COLLAPSED: &str = "\u{25B6}"; // ▶
-const PILL_CARET_EXPANDED: &str = "\u{25BC}"; // ▼
+// ícone é o equivalente estático. A em é a mesma dos outros ícones; o que
+// o layout reserva (`style.pill_caret_size`) é a largura do **desenho**,
+// que é menor -- ver `porecatu_render::icon`.
+const PILL_CARET_COLLAPSED: icon::Icon = icon::CHEVRON_RIGHT;
+const PILL_CARET_EXPANDED: icon::Icon = icon::CHEVRON_DOWN;
+pub(crate) const PILL_CARET_ICON_SIZE: f32 = ICON_EM_SIZE;
 
 // Campo de rename: espec §2.5 dá largura (120), padding (2px 5px) e fonte
 // (12px), mas não a altura da caixa. Valor de trabalho: texto 12px +
@@ -133,7 +163,7 @@ const RENAME_FIELD_MAX_WIDTH: f32 = 120.0;
 const RENAME_FONT_SIZE: f32 = 12.0;
 const RENAME_PADDING_X: f32 = 5.0;
 
-const OVERFLOW_CHEVRON_SIZE: f32 = 10.0; // espec §2.18: "chevron ‹/› 10px"
+const OVERFLOW_CHEVRON_SIZE: f32 = ICON_EM_SIZE; // espec §2.18: "chevron ‹/› 10px"
 const OVERFLOW_COUNT_FONT_SIZE: f32 = 10.0; // espec §2.18: "contagem em mono 10px"
 const OVERFLOW_COUNT_RADIUS: f32 = 9.0; // espec §2.4 (mesmo contador da pílula)
 const OVERFLOW_INNER_GAP: f32 = 3.0; // folga de trabalho entre chevron e contagem
@@ -196,7 +226,13 @@ pub fn paint(
     now: Instant,
     measurer: &mut porecatu_render::TextMeasurer,
 ) -> Vec<Primitive> {
-    let bar_height = style.tab_height + style.wrapper_padding * 2.0;
+    // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
+    // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
+    // local dela ficou para trás quando `trilha_padding` entrou na conta,
+    // e o efeito foi o fundo da barra e o recorte da trilha pararem 12px
+    // acima do fim dela -- o respiro de baixo simplesmente não podia
+    // aparecer, porque o clip cortava as abas antes.
+    let bar_height = bar_height(style);
     let mut out = Vec::new();
 
     out.push(Primitive::Quad(Quad {
@@ -370,7 +406,7 @@ pub fn paint(
             let (border, border_width) = if selection.is_selected(tab.id) {
                 (palette::SELECTED_BORDER, SELECTED_BORDER_WIDTH)
             } else {
-                (border, 1.0)
+                (border, TAB_BORDER_WIDTH)
             };
 
             out.push(Primitive::RoundedQuad(RoundedQuad {
@@ -379,19 +415,6 @@ pub fn paint(
                 color: scale_alpha(bg, fade_in),
                 border_color: scale_alpha(border, fade_in),
                 border_width,
-            }));
-
-            // Sublinhado de grupo (espec §2.5): cor do grupo, ou
-            // `ungrouped_color` pras abas do grupo implícito -- resolvido
-            // uma vez por grupo acima (`group_color`).
-            out.push(Primitive::Quad(Quad {
-                rect: Rect {
-                    x: tab_rect.x,
-                    y: tab_rect.y + tab_rect.height - TAB_UNDERLINE_HEIGHT,
-                    width: tab_rect.width,
-                    height: TAB_UNDERLINE_HEIGHT,
-                },
-                color: scale_alpha(group_color, fade_in),
             }));
 
             let dot_reserve = if tab.indicator.is_some() {
@@ -432,11 +455,10 @@ pub fn paint(
             }
 
             out.push(centered_glyph(
-                "\u{2715}",
+                icon::X,
                 shift(tab.close_button, dx),
                 CLOSE_ICON_SIZE,
                 scale_alpha(palette::CLOSE_BUTTON_ICON, fade_in),
-                measurer,
             ));
         }
 
@@ -453,11 +475,10 @@ pub fn paint(
             border_width: 1.0,
         }));
         out.push(centered_glyph(
-            "+",
+            icon::PLUS,
             group_button,
             NEW_TAB_ICON_SIZE,
             palette::NEW_TAB_ICON,
-            measurer,
         ));
     }
 
@@ -519,11 +540,10 @@ pub fn paint(
             border_width: 1.0,
         }));
         out.push(centered_glyph(
-            "+",
+            icon::PLUS,
             button,
             NEW_TAB_ICON_SIZE,
             palette::NEW_TAB_ICON,
-            measurer,
         ));
     }
 
@@ -767,9 +787,8 @@ fn paint_group_pill(
     out.push(centered_glyph(
         caret_glyph,
         shift(pill.caret_rect, dx),
-        pill.caret_rect.height,
+        PILL_CARET_ICON_SIZE,
         palette::PILL_CARET,
-        measurer,
     ));
 }
 
@@ -794,30 +813,40 @@ fn paint_overflow_pill(
     }));
 
     let chevron = match side {
-        OverflowSide::Left => "\u{2039}",
-        OverflowSide::Right => "\u{203a}",
+        OverflowSide::Left => icon::CHEVRON_LEFT,
+        OverflowSide::Right => icon::CHEVRON_RIGHT,
     };
     let count_text = count.to_string();
-    let chevron_width = measurer.measure_width(chevron, ICON_FONT, OVERFLOW_CHEVRON_SIZE);
-    let count_width = measurer.measure_width(&count_text, ICON_FONT, OVERFLOW_COUNT_FONT_SIZE);
+    // Largura do desenho, não o avanço de 1 em: o chevron preenche um
+    // terço da em, e reservar a em inteira estouraria a pílula de 34px.
+    let chevron_width = chevron.ink_width(OVERFLOW_CHEVRON_SIZE);
+    // Espec §2.18: "contagem em mono 10px" -- a mesma face do contador da
+    // pílula (§2.4), nunca a de ícones, que só tem ícone: dígito pedido a
+    // ela não desenha nada.
+    let count_width =
+        measurer.measure_width(&count_text, PILL_COUNT_FONT, OVERFLOW_COUNT_FONT_SIZE);
     let content_width = chevron_width + OVERFLOW_INNER_GAP + count_width;
     let start_x = rect.x + (rect.width - content_width) / 2.0;
     let mid_y = rect.y + rect.height / 2.0;
 
-    out.push(Primitive::Text(TextRun {
-        origin: (start_x, mid_y - OVERFLOW_CHEVRON_SIZE / 2.0),
-        text: chevron.to_string(),
-        font: ICON_FONT,
-        size_px: OVERFLOW_CHEVRON_SIZE,
-        color: palette::NEW_TAB_ICON,
-    }));
+    out.push(centered_glyph(
+        chevron,
+        Rect {
+            x: start_x,
+            y: rect.y,
+            width: chevron_width,
+            height: rect.height,
+        },
+        OVERFLOW_CHEVRON_SIZE,
+        palette::NEW_TAB_ICON,
+    ));
     out.push(Primitive::Text(TextRun {
         origin: (
             start_x + chevron_width + OVERFLOW_INNER_GAP,
             mid_y - OVERFLOW_COUNT_FONT_SIZE / 2.0,
         ),
         text: count_text,
-        font: ICON_FONT,
+        font: PILL_COUNT_FONT,
         size_px: OVERFLOW_COUNT_FONT_SIZE,
         color: palette::OVERFLOW_COUNT_TEXT,
     }));
@@ -881,24 +910,18 @@ fn paint_rename_field(
     out.push(Primitive::PopClip);
 }
 
-/// Centraliza um glyph de ícone dentro de `rect`, medindo a largura real
-/// pra não depender de estimativa (`TextMeasurer` já está em mãos de quem
-/// pinta a barra).
+/// Centraliza um ícone dentro de `rect`. `size_px` é a **em**, não o
+/// tamanho do desenho -- ver `porecatu_render::icon`, que também explica
+/// por que isto não mede texto.
 pub(crate) fn centered_glyph(
-    glyph: &str,
+    what: icon::Icon,
     rect: Rect,
     size_px: f32,
     color: Color,
-    measurer: &mut porecatu_render::TextMeasurer,
 ) -> Primitive {
-    let width = measurer.measure_width(glyph, ICON_FONT, size_px);
-    let origin = (
-        rect.x + (rect.width - width) / 2.0,
-        rect.y + (rect.height - size_px) / 2.0,
-    );
     Primitive::Text(TextRun {
-        origin,
-        text: glyph.to_string(),
+        origin: what.centered_origin(rect, size_px),
+        text: what.glyph.to_string(),
         font: ICON_FONT,
         size_px,
         color,
@@ -909,5 +932,78 @@ pub(crate) fn centered_glyph(
 /// acima e abaixo. Usado por `lib.rs` para deslocar a grade do terminal e
 /// converter posição de clique.
 pub fn bar_height(style: &TabBarStyle) -> f32 {
-    style.tab_height + style.wrapper_padding * 2.0
+    style.tab_height + style.wrapper_padding * 2.0 + style.trilha_padding * 2.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use porecatu_render::TextMeasurer;
+
+    /// Regressão: `paint` tinha uma cópia local da fórmula da altura da
+    /// barra, que ficou para trás quando `trilha_padding` entrou na conta.
+    /// O fundo e o recorte da trilha paravam 12px acima do fim da barra --
+    /// o respiro de baixo não podia aparecer, porque o clip cortava as
+    /// abas antes dele. Este teste amarra o que `paint` desenha ao que
+    /// `bar_height` promete, que é o valor que `lib.rs` usa para deslocar
+    /// a grade e converter clique.
+    #[test]
+    fn painted_background_and_clip_span_the_whole_bar() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+        let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m);
+        let overflow = Overflow {
+            scroll_offset: 0.0,
+            hidden_left: 0,
+            hidden_right: 0,
+        };
+
+        let out = paint(
+            &layout,
+            &ws,
+            ws.active_tab(),
+            &RenameState::Idle,
+            &Selection::default(),
+            None,
+            &style,
+            bar_width,
+            overflow,
+            None,
+            None,
+            None,
+            &AnimationClock::default(),
+            Instant::now(),
+            &mut m,
+        );
+
+        let expected = bar_height(&style);
+        let background = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::Quad(q) if q.color == palette::BAR_BACKGROUND => Some(q.rect),
+                _ => None,
+            })
+            .expect("fundo da barra");
+        assert_eq!(background.height, expected, "fundo mais curto que a barra");
+
+        let clip = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::PushClip(rect) => Some(*rect),
+                _ => None,
+            })
+            .expect("recorte da trilha");
+        assert_eq!(clip.height, expected, "recorte mais curto que a barra");
+
+        // E o conteúdo tem de caber dentro dele com o respiro de baixo
+        // sobrando -- senão o clip corta o padding em vez de mostrá-lo.
+        let tab = &layout.groups[0].tabs[0];
+        assert!(
+            tab.rect.y + tab.rect.height + style.trilha_padding <= expected,
+            "aba sem respiro até o fim da barra"
+        );
+    }
 }

@@ -37,16 +37,22 @@ pub struct RoundedQuad {
     pub border_width: f32,
 }
 
-/// Qual das cinco faces embutidas usar (ADR-0016) e com que peso sintético.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Qual das faces embutidas usar (ADR-0016) e com que peso sintético.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FontFace {
     /// Conteúdo do terminal.
     Mono { bold: bool },
     /// Chrome: título de aba, rótulo, menu.
     Sans { weight: SansWeight },
+    /// Glyphs de ícone (Lucide) -- fechar, nova aba, chevron. Face
+    /// própria para que o desenho do chrome não dependa da fonte de
+    /// texto: quando ele era feito de glyphs Unicode (U+2715, U+25B6,
+    /// U+25BC), a IBM Plex Sans de então não os tinha no `cmap` e nada
+    /// desenhava. Codepoints em [`icon`].
+    Icon,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SansWeight {
     Regular,
     Medium,
