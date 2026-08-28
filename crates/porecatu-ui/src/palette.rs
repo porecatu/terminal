@@ -103,15 +103,15 @@ pub const fn group_color(color: GroupColor) -> Color {
     }
 }
 
-// Pílula de grupo (espec §2.4, `[appearance.groups]`).
-pub const PILL_BACKGROUND: Color = hex(0x1f, 0x24, 0x2c); // label_background
-pub const PILL_BORDER: Color = hex(0x2b, 0x31, 0x3b); // label_border
-pub const PILL_TEXT: Color = hex(0xc3, 0xca, 0xd3); // label_foreground
+// Pílula de grupo (espec §2.4, `[appearance.groups]`). `label_background`,
+// `label_foreground`/`caret_foreground` e `label_border` saíram de uso: a
+// pílula inteira é pintada com a cor do grupo (`palette::group_color`),
+// sem borda, texto e caret em `GROUP_NEW_TAB_ICON` -- pedido do usuário,
+// ver `chrome::paint_group_pill`.
 // `PILL_COUNT_TEXT`: usado pelo contador do popover de destino (overlay.rs)
 // e pelo contador de overflow (chrome.rs) -- não pela pílula da barra, que
 // não tem mais contador (pedido do usuário).
 pub const PILL_COUNT_TEXT: Color = hex(0x7b, 0x83, 0x8f); // count_foreground
-pub const PILL_CARET: Color = CHROME_ICON; // era caret_foreground
 
 // `[appearance.tabs] selected_border` -- ADR-0021, RF-2.2: aba em seleção
 // múltipla. Modificador sobre o estado de base (não é um quarto estado,
@@ -125,11 +125,14 @@ pub const RENAME_TEXT: Color = hex(0xe4, 0xe8, 0xee);
 
 // Espec. visual §2.6 -- botão de nova aba.
 pub const NEW_TAB_ICON: Color = CHROME_ICON;
-// O "+" **de dentro de um grupo** é o único ícone de chrome que não fica
-// sobre fundo escuro: ele cai em cima da cápsula pintada com a cor cheia
-// do grupo. Lá o claro some, e o contraste vem do tom mais escuro do
-// chrome -- o mesmo `count_background` do contador da pílula (§2.4), não
+// O "+" **de dentro de um grupo** cai em cima da cápsula pintada com a cor
+// cheia do grupo -- lá o claro some, e o contraste vem do tom mais escuro
+// do chrome, o mesmo `count_background` do contador antigo da pílula, não
 // uma cor nova. Pedido do usuário junto com o clareamento dos demais.
+// Reusada em `chrome::paint_group_pill` para nome e caret, pelo mesmo
+// motivo: a pílula inteira passou a ser pintada com a cor cheia do grupo
+// (sem o swatch que a marcava antes), então nome e caret caem sobre a
+// mesma cor cheia que o "+" já cai.
 pub const GROUP_NEW_TAB_ICON: Color = hex(0x12, 0x15, 0x1a); // count_background
 pub const NEW_TAB_BORDER: Color = hex(0x26, 0x2b, 0x34);
 

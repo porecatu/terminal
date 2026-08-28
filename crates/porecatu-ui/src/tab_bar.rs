@@ -34,13 +34,13 @@ const LABEL_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
 
-/// **A mesma do rótulo da aba**, por pedido do usuário: a espec. §2.4 dá
-/// ao nome do grupo peso 500 contra o 400 da aba (§1.1), e a diferença de
-/// peso lado a lado na barra lê como duas fontes diferentes, não como
-/// hierarquia. O que separa o grupo da aba já são a cápsula de cor, o
-/// swatch e o contador. O tamanho acompanha pelo mesmo motivo -- ver
-/// `TabBarStyle::pill_font_size`.
-pub(crate) const PILL_NAME_FONT: FontFace = LABEL_FONT;
+/// **Bold**, por pedido do usuário -- reverte a decisão anterior de igualar
+/// ao peso do rótulo da aba (§1.1, 400). `SansWeight::Medium` é o peso mais
+/// pesado que a face embute hoje (ADR-0026: Iosevka Fixed só tem 400/500).
+/// O tamanho continua igual ao da aba -- ver `TabBarStyle::pill_font_size`.
+pub(crate) const PILL_NAME_FONT: FontFace = FontFace::Sans {
+    weight: SansWeight::Medium,
+};
 /// Espec. §2.4, item 3: "contador mono 10px". Sem chave própria de fonte no
 /// TOML -- só cor/fundo/raio (`count_*`) têm chave.
 pub(crate) const PILL_COUNT_FONT: FontFace = FontFace::Mono { bold: false };
@@ -133,20 +133,21 @@ pub struct TabBarStyle {
     /// `[appearance.tabs] font_size`
     pub font_size: f32,
     /// `[appearance.groups] label_padding_left` -- pílula (espec. §2.4).
+    /// 10px, 2px a mais que o `label_padding_left` da espec (8) -- pedido
+    /// do usuário.
     pub pill_padding_left: f32,
     /// `[appearance.groups] label_padding_right`
     pub pill_padding_right: f32,
-    /// Espec. §2.4: "gap: 7" entre swatch/nome/contador/caret da pílula.
-    /// Sem chave própria no TOML (mesmo padrão de `internal_gap`).
+    /// Espec. §2.4: "gap: 7" entre nome/contador/caret da pílula (o swatch
+    /// que a espec também intercala saiu -- ver [`GroupPillRect`]). Sem
+    /// chave própria no TOML (mesmo padrão de `internal_gap`).
     pub pill_gap: f32,
-    /// `[appearance.groups] swatch_size`
-    pub pill_swatch_size: f32,
-    /// `[appearance.groups] label_font_size` -- fonte do nome da pílula.
+    /// `[appearance.groups] label_font_size` -- tamanho do nome da pílula.
     /// Igual a `font_size` (o rótulo da aba) por pedido do usuário; a
     /// espec. §2.4 pede 12.0 contra os 13 da aba (12.5 originalmente,
     /// depois 13 -- também pedido do usuário), e meio pixel de diferença
-    /// lado a lado só faz o nome parecer de outra fonte. Ver
-    /// [`PILL_NAME_FONT`].
+    /// lado a lado só faz o nome parecer de outra fonte. O **peso**, no
+    /// entanto, diverge da aba -- ver [`PILL_NAME_FONT`].
     pub pill_font_size: f32,
     /// `[appearance.groups] label_max_width` -- teto do nome (RF-2.12): o
     /// da aba (180) menos os 41px de cromo da §2.18, valor citado direto da
@@ -180,10 +181,9 @@ impl TabBarStyle {
         right_zone_button_size: 30.0,
         show_new_tab_button: true,
         font_size: 13.0, // era 12.5, pedido do usuário
-        pill_padding_left: 8.0,
+        pill_padding_left: 10.0,
         pill_padding_right: 9.0,
         pill_gap: 7.0,
-        pill_swatch_size: 8.0,
         pill_font_size: 13.0, // = `font_size`
         pill_name_max_width: 140.0,
         // `icon::WIDEST_CARET_INK_EM * chrome::PILL_CARET_ICON_SIZE`,
@@ -292,15 +292,17 @@ pub struct GroupWrapperRect {
     pub new_tab_button: Option<Rect>,
 }
 
-/// Geometria da pílula de grupo (espec. §2.4): swatch, nome (já truncado),
-/// contador de abas e caret de colapso. A cor resolvida (swatch, tingimento
-/// do wrapper) não mora aqui -- só geometria; `chrome.rs` resolve
-/// `GroupColor` via `palette::group_color` no momento de pintar, no mesmo
-/// padrão de `TabRect` (que também não carrega cor).
+/// Geometria da pílula de grupo (espec. §2.4, divergente): nome (já
+/// truncado) e caret de colapso. A cor resolvida (fundo da pílula,
+/// tingimento do wrapper) não mora aqui -- só geometria; `chrome.rs`
+/// resolve `GroupColor` via `palette::group_color` no momento de pintar, no
+/// mesmo padrão de `TabRect` (que também não carrega cor). Sem swatch --
+/// removido a pedido do usuário: a pílula inteira é pintada com a cor do
+/// grupo (ver `paint_group_pill` em `chrome.rs`), então um quadrado à parte
+/// pra mostrar a mesma cor virou redundante.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupPillRect {
     pub rect: Rect,
-    pub swatch: Rect,
     /// Indicador agregado (espec. §2.4, RF-2.16): só `Some` com o grupo
     /// **colapsado** e alguma aba dele com atividade/campainha pendente --
     /// "com o grupo expandido, cada aba mostra o seu próprio ponto e um
@@ -421,14 +423,6 @@ pub fn layout(
             let pill_height = style.tab_height;
             let mut px = inner_x + style.pill_padding_left;
 
-            let swatch = Rect {
-                x: px,
-                y: pill_y + (pill_height - style.pill_swatch_size) / 2.0,
-                width: style.pill_swatch_size,
-                height: style.pill_swatch_size,
-            };
-            px += style.pill_swatch_size + style.pill_gap;
-
             // Indicador agregado (espec. §2.4, RF-2.16): só colapsado, e só
             // se houver atividade/campainha pendente entre as abas do
             // grupo -- que continuam existindo em `group.tabs()` mesmo sem
@@ -483,7 +477,6 @@ pub fn layout(
             inner_x = px;
             Some(GroupPillRect {
                 rect: pill_rect,
-                swatch,
                 aggregate_indicator,
                 aggregate_indicator_origin,
                 name_origin,
@@ -1849,7 +1842,6 @@ mod tests {
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let pill = layout.groups[0].pill.as_ref().unwrap();
-        assert!(pill.swatch.x < pill.name_origin.0);
         assert!(pill.name_origin.0 < pill.caret_rect.x);
         assert!(pill.caret_rect.x + pill.caret_rect.width <= pill.rect.x + pill.rect.width);
     }

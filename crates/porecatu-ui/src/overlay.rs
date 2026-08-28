@@ -957,9 +957,10 @@ const MOVE_ROW_HEIGHT: f32 = MENU_ITEM_HEIGHT;
 /// tamanho típico de lista do v1.
 const MOVE_MAX_VISIBLE_ROWS: usize = 6;
 const MOVE_ROW_PADDING_X: f32 = MENU_ITEM_PADDING_X;
-/// Menor que o swatch da pílula (8px, §2.4) -- a linha do popover é mais
-/// apertada que a pílula; sem valor de design próprio, escolha de
-/// implementação.
+/// Menor que a pílula (§2.4) -- a linha do popover é mais apertada; sem
+/// valor de design próprio, escolha de implementação. A pílula da barra
+/// não tem mais um swatch para comparar (pintada com a cor cheia do
+/// grupo, pedido do usuário); este é o único swatch pequeno que restou.
 const MOVE_SWATCH_SIZE: f32 = 8.0;
 const MOVE_SWATCH_GAP: f32 = 8.0;
 const MOVE_NEW_GROUP_LABEL: &str = "Novo grupo";

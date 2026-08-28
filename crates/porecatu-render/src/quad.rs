@@ -171,7 +171,16 @@ impl QuadShared {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // O fragment shader devolve cor premultiplicada
+                    // (`color.rgb * alpha, alpha`, quad.wgsl) -- o blend
+                    // tem que ser o par certo, não `ALPHA_BLENDING`
+                    // (straight). Com o par errado o alpha era aplicado em
+                    // dobro na faixa de antialiasing do SDF, escurecendo um
+                    // anel exatamente no contorno de todo canto arredondado
+                    // -- mascarado enquanto havia borda ali, visível assim
+                    // que a pílula do grupo (cor cheia, sem borda) passou a
+                    // ficar sobre a cápsula da mesma cor.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),

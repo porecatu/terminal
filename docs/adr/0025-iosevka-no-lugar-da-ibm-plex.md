@@ -1,6 +1,6 @@
 # ADR-0025 — Iosevka no lugar da IBM Plex
 
-**Status:** Aceito
+**Status:** Superseded by ADR-0026 (só a escolha de família para o chrome; a Fixed no terminal e o recorte continuam valendo)
 **Data:** 2026-08-28
 **Supersedes:** ADR-0024
 **Relacionados:** ADR-0009, ADR-0010, ADR-0016, ADR-0018, PRD-004, PRD-005

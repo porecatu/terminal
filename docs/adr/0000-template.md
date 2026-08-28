@@ -28,7 +28,8 @@
 | [0022](0022-animacao-de-interface.md) | Animação de interface sob render damage-driven | Aceito |
 | [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Aceito |
 | [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
-| [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Aceito |
+| [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Superseded by ADR-0026 |
+| [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito |
 
 ## Convenção
 
