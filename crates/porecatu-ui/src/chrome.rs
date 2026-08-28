@@ -42,9 +42,9 @@
 //! `layout` calculou, quando há uma reflui ativa pra ele; a **cápsula**
 //! por trás delas interpola posição **e largura** (`capsule_rect`), o que
 //! é o que faz o próprio grupo encolher/crescer suave ao colapsar/
-//! expandir, não só deslizar os vizinhos -- continua desenhada enquanto o
-//! progresso não chega em 1, mesmo já colapsado no modelo (senão a
-//! cápsula sumiria na hora e só as abas esmaeceriam por cima do nada).
+//! expandir, não só deslizar os vizinhos. A cápsula é desenhada em
+//! qualquer estado, colapsado inclusive (pedido do usuário), o que
+//! dispensa o caso especial que a segurava até o fim da animação.
 //! `DragGhost` carrega o `TabRect` de origem (`base_layout`, não o
 //! preview) desde esta etapa: soltar sobre um grupo colapsado faz o
 //! preview não gerar `TabRect` nenhum pra aba arrastada, e o fantasma
@@ -321,14 +321,18 @@ pub fn paint(
         // 7% da espec §2.3, que ficava quase invisível atrás do fundo
         // opaco das abas. `TAB_ACTIVE_BACKGROUND`/`TAB_INACTIVE_BACKGROUND`
         // (`palette.rs`) agora têm alfa .85 pra deixar passar um indício
-        // dela por cima. Fora de animação, "colapsado fica transparente"
-        // continua valendo (RF-4.19); durante a animação, a cápsula segue
-        // desenhada (encolhendo/crescendo) até o progresso chegar em 1 --
-        // senão o colapso sumiria a cápsula na hora e só as abas
-        // esmaeceriam por cima do nada. Abas sem grupo (`pill == None`)
-        // nunca pintam cápsula.
-        let mid_collapse_animation = wrapper_progress.is_some_and(|(_, progress)| progress < 1.0);
-        if group.pill.is_some() && (!is_collapsed || mid_collapse_animation) {
+        // dela por cima. Abas sem grupo (`pill == None`) nunca pintam
+        // cápsula.
+        //
+        // **Colapsado também pinta** (pedido do usuário), contra o
+        // "colapsado fica transparente" do RF-4.19: é a cápsula que
+        // aparece em volta do conteúdo e diz de que cor o grupo é, e
+        // fazê-la sumir no colapso tirava a única marca de cor do grupo
+        // justo quando o nome dele é tudo o que resta na barra. Ela passa
+        // a abraçar a pílula sozinha. De quebra, some o caso especial de
+        // "continua desenhada durante a animação para não sumir na hora":
+        // agora ela nunca some, então não há o que segurar.
+        if group.pill.is_some() {
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: capsule_rect,
                 radius: WRAPPER_CORNER_RADIUS,
@@ -984,7 +988,61 @@ pub fn bar_height(style: &TabBarStyle) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use porecatu_core::GroupColor;
     use porecatu_render::TextMeasurer;
+
+    /// Pedido do usuário, contra o "colapsado fica transparente" do
+    /// RF-4.19: a cápsula é o que diz de que cor o grupo é, e sumir com
+    /// ela no colapso tirava a única marca de cor justo quando o nome do
+    /// grupo é tudo o que resta na barra.
+    #[test]
+    fn collapsed_group_still_paints_its_colored_capsule() {
+        let style = TabBarStyle::DEFAULT;
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+
+        let paint_capsules = |ws: &Workspace, m: &mut TextMeasurer| {
+            let layout = tab_bar::fit_width(ws, &style, bar_width, m);
+            let out = paint(
+                &layout,
+                ws,
+                ws.active_tab(),
+                &RenameState::Idle,
+                &Selection::default(),
+                None,
+                &style,
+                bar_width,
+                Overflow {
+                    scroll_offset: 0.0,
+                    hidden_left: 0,
+                    hidden_right: 0,
+                },
+                None,
+                None,
+                None,
+                &AnimationClock::default(),
+                Instant::now(),
+                m,
+            );
+            let cor = palette::group_color(GroupColor::Cyan);
+            out.iter()
+                .filter(|p| match p {
+                    Primitive::RoundedQuad(q) => {
+                        q.radius == WRAPPER_CORNER_RADIUS && q.color == cor
+                    }
+                    _ => false,
+                })
+                .count()
+        };
+
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "col", GroupColor::Cyan).unwrap();
+        assert_eq!(paint_capsules(&ws, &mut m), 1, "expandido");
+
+        ws.collapse_group(group, true);
+        assert_eq!(paint_capsules(&ws, &mut m), 1, "colapsado");
+    }
 
     /// Regressão: `paint` tinha uma cópia local da fórmula da altura da
     /// barra, que ficou para trás quando `trilha_padding` entrou na conta.

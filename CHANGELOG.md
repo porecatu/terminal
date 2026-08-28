@@ -70,7 +70,10 @@ gravado, falta a operação que anda de grupo em grupo.
   `show_new_tab_button`, com a cor do ícone decidida pelo que está atrás dele:
   escuro sobre a cápsula de cor de um grupo, claro sobre a barra num run de
   abas soltas, e sumindo quando o grupo está colapsado — o wrapper colapsado é
-  a pílula e mais nada. Ao fim da trilha, um "+" que cria aba **fora de todo
+  a pílula e mais nada — mas a cápsula de cor do grupo continua desenhada
+  colapsada, abraçando a pílula. Os botões de ícone ganham respiro horizontal
+  (`icon_button_padding_x`), ficando mais largos que altos. Ao fim da trilha,
+  um "+" que cria aba **fora de todo
   grupo**, presente só quando o último grupo é explícito (senão duplicaria o do
   run solto): é ele que cobre o caso de toda aba estar em grupo. O botão de
   nova aba **global** chegou a existir numa zona fixa
