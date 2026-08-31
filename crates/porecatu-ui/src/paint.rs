@@ -24,6 +24,7 @@
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun};
 use porecatu_term::{Cell, CellFlags, CellText, GridSnapshot, SelectionSpan};
 
+use crate::chrome::push_shadow;
 use crate::palette;
 use crate::tab_bar::TabBarStyle;
 
@@ -110,6 +111,7 @@ pub fn build_primitives(
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
 
+    push_shadow(&mut primitives, box_rect, TERMINAL_BOX_CORNER_RADIUS);
     primitives.push(Primitive::RoundedQuad(RoundedQuad {
         rect: box_rect,
         radius: TERMINAL_BOX_CORNER_RADIUS,

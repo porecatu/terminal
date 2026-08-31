@@ -141,7 +141,7 @@ const CAPSULE_BORDER_WIDTH: f32 = 1.0;
 // Suficiente para o respiro visual que o pedido descreve; não é o
 // `box-shadow` de popover da espec (`0 18px 44px rgba(0,0,0,.55)`), que
 // precisaria de blur real para não aliasear numa mancha desse tamanho.
-const SHADOW_LAYERS: [(f32, f32, f64); 3] = [
+pub(crate) const SHADOW_LAYERS: [(f32, f32, f64); 3] = [
     // (spread, offset_y, alpha)
     (1.0, 1.0, 0.16),
     (2.5, 2.0, 0.10),
@@ -740,7 +740,7 @@ fn tab_colors(exited: bool, is_active: bool) -> (Color, Color, Color) {
 
 /// Empilha as camadas de `SHADOW_LAYERS` atrás de `rect` (raio `radius`).
 /// Ver nota em `SHADOW_LAYERS`.
-fn push_shadow(out: &mut Vec<Primitive>, rect: Rect, radius: f32) {
+pub(crate) fn push_shadow(out: &mut Vec<Primitive>, rect: Rect, radius: f32) {
     for (spread, offset_y, alpha) in SHADOW_LAYERS {
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: Rect {
