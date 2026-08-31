@@ -129,6 +129,24 @@ const WRAPPER_CORNER_RADIUS: f32 = 8.0; // wrapper_corner_radius
 // o v1 "de livro"; ver seção 4.4 dela pro registro formal de divergências
 // já conhecidas -- esta é nova e ainda não está lá).
 const GROUP_CAPSULE_FILL_STRENGTH: f64 = 1.0;
+// Borda fina da cápsula de grupo e da aba solta (pedido do usuário). Mesmo
+// tom neutro do botão de nova aba (`NEW_TAB_BORDER`) -- não uma cor nova.
+const CAPSULE_BORDER_WIDTH: f32 = 1.0;
+
+// Sombra da cápsula de grupo e da aba solta (pedido do usuário).
+// `porecatu-render` não tem primitiva de sombra (nota do módulo, espec
+// §4.4) -- aproximada aqui com `RoundedQuad`s pretos semitransparentes
+// empilhados, crescendo de raio e caindo de alfa, a mesma técnica de
+// "drop shadow em camadas" usada fora de um passo de blur de verdade.
+// Suficiente para o respiro visual que o pedido descreve; não é o
+// `box-shadow` de popover da espec (`0 18px 44px rgba(0,0,0,.55)`), que
+// precisaria de blur real para não aliasear numa mancha desse tamanho.
+const SHADOW_LAYERS: [(f32, f32, f64); 3] = [
+    // (spread, offset_y, alpha)
+    (1.0, 1.0, 0.16),
+    (2.5, 2.0, 0.10),
+    (4.5, 3.0, 0.06),
+];
 
 // Realce de fronteira do arraste de aba (espec §2.19, ADR-0021 §4).
 // "Sobe o tingimento de .07 para .16 -- o mesmo badge_tint_strength que o
@@ -329,12 +347,13 @@ pub fn paint(
         // "continua desenhada durante a animação para não sumir na hora":
         // agora ela nunca some, então não há o que segurar.
         if group.pill.is_some() {
+            push_shadow(&mut out, capsule_rect, WRAPPER_CORNER_RADIUS);
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: capsule_rect,
                 radius: WRAPPER_CORNER_RADIUS,
                 color: with_alpha(group_color, GROUP_CAPSULE_FILL_STRENGTH),
-                border_color: palette::TRANSPARENT,
-                border_width: 0.0,
+                border_color: palette::NEW_TAB_BORDER,
+                border_width: CAPSULE_BORDER_WIDTH,
             }));
         }
         // Espec §2.19, ADR-0021 §4: "o wrapper que receberia a aba sobe o
@@ -413,6 +432,12 @@ pub fn paint(
                 (border, TAB_BORDER_WIDTH)
             };
 
+            // Sombra só na aba solta (sem cápsula atrás) -- aba de dentro
+            // de um grupo já leva o respiro da cápsula, e pedido do
+            // usuário foi sombra na cápsula e na aba solta, não nas duas.
+            if group.pill.is_none() {
+                push_shadow(&mut out, tab_rect, 6.0);
+            }
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: tab_rect,
                 radius: 6.0,
@@ -710,6 +735,30 @@ fn tab_colors(exited: bool, is_active: bool) -> (Color, Color, Color) {
             palette::TAB_INACTIVE_BORDER,
             palette::TAB_INACTIVE_TEXT,
         )
+    }
+}
+
+/// Empilha as camadas de `SHADOW_LAYERS` atrás de `rect` (raio `radius`).
+/// Ver nota em `SHADOW_LAYERS`.
+fn push_shadow(out: &mut Vec<Primitive>, rect: Rect, radius: f32) {
+    for (spread, offset_y, alpha) in SHADOW_LAYERS {
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: Rect {
+                x: rect.x - spread,
+                y: rect.y - spread + offset_y,
+                width: rect.width + spread * 2.0,
+                height: rect.height + spread * 2.0,
+            },
+            radius: radius + spread,
+            color: Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: alpha,
+            },
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
     }
 }
 
