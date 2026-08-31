@@ -20,6 +20,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 mod animation;
+mod app_icon;
 mod chrome;
 mod clipboard;
 mod context_menu;
@@ -1647,7 +1648,9 @@ impl App {
     /// roadmap descreve.
     fn open_window(&mut self, event_loop: &ActiveEventLoop, origin: Option<WindowId>) {
         let origin_state = origin.and_then(|id| self.windows.get(&id));
-        let mut attributes = Window::default_attributes().with_title("Porecatu");
+        let mut attributes = Window::default_attributes()
+            .with_title("Porecatu")
+            .with_window_icon(Some(app_icon::load()));
         if let Some(origin_window) = origin_state.map(|s| &s.window)
             && let Ok(origin_position) = origin_window.outer_position()
         {
