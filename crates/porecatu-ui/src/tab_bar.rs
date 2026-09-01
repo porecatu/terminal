@@ -377,10 +377,27 @@ pub fn layout(
     style: &TabBarStyle,
     measurer: &mut TextMeasurer,
 ) -> TabBarLayout {
+    layout_inset(workspace, style, measurer, 0.0)
+}
+
+/// Como [`layout`], com um deslocamento extra à esquerda do início da
+/// trilha -- o inset do semáforo nativo do macOS (ADR-0027,
+/// [`left_inset`]). `layout` é o caso comum (`left_inset = 0.0`); esta
+/// função existe separada pra não obrigar toda chamada interna de
+/// `layout` (inclusive os testes deste arquivo, que testam geometria
+/// independente de plataforma) a passar um parâmetro que quase nunca
+/// muda.
+fn layout_inset(
+    workspace: &Workspace,
+    style: &TabBarStyle,
+    measurer: &mut TextMeasurer,
+    left_inset: f32,
+) -> TabBarLayout {
     let mut groups = Vec::new();
     // Todo o conteúdo da trilha nasce deslocado pelo respiro das bordas
-    // (`trilha_padding`), não em (0, 0).
-    let mut x = style.trilha_padding;
+    // (`trilha_padding`), mais o inset do semáforo do macOS quando houver
+    // -- não em (0, 0).
+    let mut x = style.trilha_padding + left_inset;
     let track_top = style.trilha_padding;
 
     for group in workspace.groups() {
@@ -714,13 +731,23 @@ fn aggregate_indicator(workspace: &Workspace, tabs: &[TabId]) -> Option<Indicato
 /// registrada aqui, não nela -- a barra ainda cabe tudo, só que rolando em
 /// vez de encolhendo. `available_width` continua no parâmetro pra não mudar
 /// a assinatura que todo chamador já tem em mãos, mesmo sem uso aqui dentro.
+///
+/// `is_macos` decide o inset do semáforo nativo (ADR-0027,
+/// [`left_inset`]) -- é o único efeito que esta função tem sobre
+/// [`layout_inset`] além de repassar `workspace`/`style`/`measurer`.
 pub fn fit_width(
     workspace: &Workspace,
     style: &TabBarStyle,
     _available_width: f32,
     measurer: &mut TextMeasurer,
+    is_macos: bool,
 ) -> TabBarLayout {
-    layout(workspace, style, measurer)
+    if is_macos {
+        layout_inset(workspace, style, measurer, left_inset(true))
+    } else {
+        // Caso comum, sem inset -- `layout` já é exatamente isto.
+        layout(workspace, style, measurer)
+    }
 }
 
 /// Estado de rolagem da trilha (espec. §2.18) para um `content_width` e uma
@@ -810,23 +837,38 @@ pub fn point_in_overflow_pill(
 /// sempre. Ela nasceu para o botão de nova aba global (que saía de vista
 /// com a trilha rolando), e sobreviveu a ele -- é o bloco reservado para
 /// o que a barra ganhar à direita daqui em diante.
-pub fn right_zone_width(style: &TabBarStyle) -> f32 {
-    style.trilha_gap * 2.0 + style.icon_button_width(style.right_zone_button_size)
+///
+/// Desde o ADR-0027, soma a zona dos 3 botões de janela quando
+/// `is_macos` é falso -- no macOS eles não existem aqui (semáforo nativo,
+/// ver [`left_inset`]).
+pub fn right_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
+    let settings_zone =
+        style.trilha_gap * 2.0 + style.icon_button_width(style.right_zone_button_size);
+    if is_macos {
+        settings_zone
+    } else {
+        settings_zone + WINDOW_CONTROLS_GAP + window_controls_width(is_macos)
+    }
 }
 
 /// Largura da trilha rolável: a barra inteira menos a zona fixa da
 /// direita -- é o `available_width` que [`overflow_state`] e o cálculo de
 /// arraste na borda devem usar, não a largura total da janela.
-pub fn trilha_width(style: &TabBarStyle, bar_width: f32) -> f32 {
-    (bar_width - right_zone_width(style)).max(0.0)
+pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool) -> f32 {
+    (bar_width - right_zone_width(style, is_macos)).max(0.0)
 }
 
 /// Retângulo do botão de nova aba global, em coordenadas de tela da barra
 /// (zona fixa à direita -- não rola com a trilha, ao contrário do botão
 /// por grupo dentro de [`GroupWrapperRect::new_tab_button`]).
-pub fn settings_button_rect(style: &TabBarStyle, bar_width: f32, bar_height: f32) -> Rect {
+pub fn settings_button_rect(
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+) -> Rect {
     Rect {
-        x: bar_width - right_zone_width(style) + style.trilha_gap,
+        x: bar_width - right_zone_width(style, is_macos) + style.trilha_gap,
         y: (bar_height - style.right_zone_button_size) / 2.0,
         width: style.icon_button_width(style.right_zone_button_size),
         height: style.right_zone_button_size,
@@ -837,9 +879,99 @@ pub fn point_in_settings_button(
     style: &TabBarStyle,
     bar_width: f32,
     bar_height: f32,
+    is_macos: bool,
     point: (f32, f32),
 ) -> bool {
-    rect_contains(settings_button_rect(style, bar_width, bar_height), point)
+    rect_contains(
+        settings_button_rect(style, bar_width, bar_height, is_macos),
+        point,
+    )
+}
+
+/// Largura de cada botão de janela (convenção Windows/Firefox: retângulo
+/// colado na borda da tela, mais largo que alto, alvo de Fitts's-law no
+/// canto -- ao contrário do "chip flutuante" do botão de configurações).
+/// ADR-0027, valor de partida sem token de design (a espec nunca cobriu
+/// isto sem decoração nativa).
+pub const WINDOW_BUTTON_WIDTH: f32 = 46.0;
+/// Respiro entre a zona de configurações e a zona de botões de janela --
+/// mesmo valor de `trilha_gap`, reaproveitado.
+pub const WINDOW_CONTROLS_GAP: f32 = 6.0;
+/// Espaço reservado à esquerda da trilha para o semáforo nativo do macOS
+/// (traffic lights) -- ADR-0027. Fora do macOS, zero: abas coladas na
+/// borda esquerda (pedido do usuário). Valor de partida, mesma ordem de
+/// grandeza do que Firefox/Chrome reservam no Mac -- **não medido contra
+/// `NSWindow` real neste repositório**, conferir na implementação.
+pub const MACOS_TRAFFIC_LIGHT_INSET: f32 = 78.0;
+
+/// Qual botão de janela um clique atingiu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowButtonHit {
+    Minimize,
+    MaximizeRestore,
+    Close,
+}
+
+/// Largura total da zona de botões de janela -- zero no macOS (semáforo
+/// nativo, sem botão nosso).
+pub fn window_controls_width(is_macos: bool) -> f32 {
+    if is_macos {
+        0.0
+    } else {
+        WINDOW_BUTTON_WIDTH * 3.0
+    }
+}
+
+/// Retângulo de um dos 3 botões de janela, em coordenadas de tela da
+/// barra. `index` 0 = minimizar, 1 = maximizar/restaurar, 2 = fechar --
+/// fechar fica colado na borda direita da janela, a convenção universal.
+/// Altura cheia da barra, sem padding vertical (diferente do botão de
+/// configurações).
+pub fn window_button_rect(index: u8, bar_width: f32, bar_height: f32) -> Rect {
+    let from_right = (3 - index) as f32 * WINDOW_BUTTON_WIDTH;
+    Rect {
+        x: bar_width - from_right,
+        y: 0.0,
+        width: WINDOW_BUTTON_WIDTH,
+        height: bar_height,
+    }
+}
+
+/// Testa um ponto contra os 3 botões de janela. Sempre `None` no macOS --
+/// lá o clique nunca chega ao nosso código, a `NSWindow` intercepta antes
+/// (semáforo nativo).
+pub fn point_in_window_button(
+    is_macos: bool,
+    bar_width: f32,
+    bar_height: f32,
+    point: (f32, f32),
+) -> Option<WindowButtonHit> {
+    if is_macos {
+        return None;
+    }
+    for (i, hit) in [
+        WindowButtonHit::Minimize,
+        WindowButtonHit::MaximizeRestore,
+        WindowButtonHit::Close,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if rect_contains(window_button_rect(i as u8, bar_width, bar_height), point) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+/// Inset à esquerda do início da trilha (`x` inicial de [`layout`]) --
+/// espaço do semáforo nativo no macOS, zero nas outras plataformas.
+pub fn left_inset(is_macos: bool) -> f32 {
+    if is_macos {
+        MACOS_TRAFFIC_LIGHT_INSET
+    } else {
+        0.0
+    }
 }
 
 /// Acha o retângulo (coordenadas de conteúdo, sem rolagem) de uma aba pelo
@@ -1205,17 +1337,22 @@ mod tests {
         let style = TabBarStyle::DEFAULT;
         let bar_width = 400.0;
         let bar_height = crate::chrome::bar_height(&style);
-        let button = settings_button_rect(&style, bar_width, bar_height);
+        let button = settings_button_rect(&style, bar_width, bar_height, false);
         let width = style.icon_button_width(style.right_zone_button_size);
-        assert_eq!(button.x, bar_width - style.trilha_gap - width);
+        let window_controls = WINDOW_CONTROLS_GAP + window_controls_width(false);
+        assert_eq!(
+            button.x,
+            bar_width - style.trilha_gap - width - window_controls,
+            "a zona de botões de janela (ADR-0027) empurra o botão de configurações"
+        );
         assert_eq!(button.width, width);
         assert_eq!(
             button.height, style.right_zone_button_size,
             "o respiro entra só na largura"
         );
         assert_eq!(
-            trilha_width(&style, bar_width),
-            bar_width - right_zone_width(&style)
+            trilha_width(&style, bar_width, false),
+            bar_width - right_zone_width(&style, false)
         );
 
         let sem_botao_de_aba = TabBarStyle {
@@ -1223,10 +1360,15 @@ mod tests {
             ..style
         };
         assert_eq!(
-            right_zone_width(&sem_botao_de_aba),
-            right_zone_width(&style),
+            right_zone_width(&sem_botao_de_aba, false),
+            right_zone_width(&style, false),
             "a zona da direita não é do botão de nova aba"
         );
+
+        // macOS: sem botões de janela na zona direita (semáforo nativo,
+        // ADR-0027) -- o botão de configurações volta a colar na borda.
+        let mac_button = settings_button_rect(&style, bar_width, bar_height, true);
+        assert_eq!(mac_button.x, bar_width - style.trilha_gap - width);
     }
 
     #[test]
@@ -1557,7 +1699,7 @@ mod tests {
         ws.append_tab("zsh", None);
         let mut m = measurer();
         let unfit = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
-        let fit = fit_width(&ws, &TabBarStyle::DEFAULT, 2000.0, &mut m);
+        let fit = fit_width(&ws, &TabBarStyle::DEFAULT, 2000.0, &mut m, false);
         assert_eq!(unfit, fit);
     }
 
@@ -1580,7 +1722,7 @@ mod tests {
         }
         let mut m = measurer();
         let full = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
-        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m, false);
         assert_eq!(full, fitted, "available_width não deve mudar o resultado");
         for tab in &fitted.groups[0].tabs {
             let width = m.measure_width(&tab.label, LABEL_FONT, TabBarStyle::DEFAULT.font_size);
@@ -1597,7 +1739,7 @@ mod tests {
             ws.append_tab("zsh", None);
         }
         let mut m = measurer();
-        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m, false);
         assert!(fitted.content_width > 300.0);
 
         let none = overflow_state(&fitted, 300.0, 0.0);
@@ -1899,7 +2041,7 @@ mod tests {
         let mut m = measurer();
 
         let full = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
-        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 1.0, &mut m);
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 1.0, &mut m, false);
         assert_eq!(full, fitted);
         let pill = fitted.groups[0].pill.as_ref().unwrap();
         let name_width = m.measure_width(
@@ -2145,7 +2287,7 @@ mod tests {
         }
         let mut m = measurer();
         let full = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
-        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m);
+        let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m, false);
         assert_eq!(full, fitted);
         for group in &fitted.groups {
             let pill = group.pill.as_ref().unwrap();

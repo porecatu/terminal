@@ -35,6 +35,7 @@ mod palette;
 mod rename;
 mod selection;
 mod tab_bar;
+mod titlebar;
 mod tooltip;
 mod warning;
 
@@ -54,12 +55,22 @@ use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
 use tooltip::Hover;
 use warning::{Severity, WarningStack};
 
-/// Janela de tempo entre o clique que colapsa/expande a pílula e um
-/// segundo clique no mesmo grupo pra contar como duplo clique (RF-2.22:
-/// "abrir o editor por duplo clique no rótulo"). Mesmo valor e mesma nota
-/// de procedência de `input::MULTI_CLICK_THRESHOLD` -- convenção comum de
-/// SO, não token de design.
-const PILL_DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(500);
+/// Janela de tempo entre um clique e o próximo pra contar como duplo
+/// clique. Nasceu só para a pílula (RF-2.22: "abrir o editor por duplo
+/// clique no rótulo"), e desde o ADR-0027 serve também a drag region da
+/// barra (duplo clique maximiza/restaura a janela, `WindowState::
+/// resolve_titlebar_click_or_drag`) -- por isso o nome neutro. Mesmo
+/// valor e mesma nota de procedência de `input::MULTI_CLICK_THRESHOLD` --
+/// convenção comum de SO, não token de design.
+const DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// `cfg!(target_os = "macos")` como valor comum, não atributo -- mesmo
+/// padrão de `WindowState::is_secondary_bar_click`. Centraliza a
+/// checagem de plataforma que o ADR-0027 espalha por `tab_bar`/`chrome`/
+/// `titlebar` (semáforo nativo vs. botões de janela nossos).
+fn is_macos() -> bool {
+    cfg!(target_os = "macos")
+}
 
 /// Espec. §2.19: "limiar de 4px de movimento" -- abaixo disso o gesto é
 /// clique (RF-1.13), não arraste.
@@ -243,6 +254,11 @@ enum NewTabRequest {
     /// "+" ao fim da trilha, fora de qualquer wrapper.
     Ungrouped,
     WindowEmptied,
+    /// Botão de fechar da janela (ADR-0027): precisa do diálogo de
+    /// confirmação com múltiplas abas (`App::request_close_window`), que
+    /// vive em `App` -- `WindowState` não pode resolver isto sozinho, mesmo
+    /// motivo de `WindowEmptied`.
+    CloseWindowRequested,
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -320,6 +336,14 @@ struct WindowState {
     /// Seleção múltipla da barra (ADR-0021) -- efêmera como `rename`,
     /// `drag` e `hover`, ao lado dos quais fica; não persistida.
     selection: Selection,
+    /// Último clique na drag region da barra (ADR-0027), pra detectar o
+    /// duplo clique que maximiza/restaura -- mesmo padrão de
+    /// `last_pill_click`, mas sem `GroupId`: a drag region não tem alvo,
+    /// só posição no tempo. Resolvido no *press*, não no *release* --
+    /// `Window::drag_window()` entrega o gesto ao loop modal não-client
+    /// do SO assim que chamado, sem garantia de vermos o
+    /// `MouseInput::Released` de volta depois.
+    last_titlebar_click: Option<Instant>,
 }
 
 impl WindowState {
@@ -350,6 +374,7 @@ impl WindowState {
             move_to_group: None,
             last_pill_click: None,
             selection: Selection::default(),
+            last_titlebar_click: None,
         }
     }
 
@@ -431,11 +456,12 @@ impl WindowState {
             &style,
             self.logical_width,
             gpu.text_measurer(),
+            is_macos(),
         );
         let Some(rect) = tab_bar::tab_rect(&layout, active) else {
             return;
         };
-        let trilha_width = tab_bar::trilha_width(&style, self.logical_width);
+        let trilha_width = tab_bar::trilha_width(&style, self.logical_width, is_macos());
         let window_start = self.scroll_offset;
         let window_end = self.scroll_offset + trilha_width;
         if rect.x < window_start {
@@ -458,6 +484,7 @@ impl WindowState {
             &style,
             self.logical_width,
             gpu.text_measurer(),
+            is_macos(),
         );
         layout
             .groups
@@ -1059,13 +1086,42 @@ impl WindowState {
     ) -> NewTabRequest {
         let style = TabBarStyle::DEFAULT;
         let bar_width = self.logical_width;
-        let trilha_width = tab_bar::trilha_width(&style, bar_width);
+        let trilha_width = tab_bar::trilha_width(&style, bar_width, is_macos());
         let h = bar_height();
-        let layout = tab_bar::fit_width(&self.workspace, &style, trilha_width, gpu.text_measurer());
+        let layout = tab_bar::fit_width(
+            &self.workspace,
+            &style,
+            trilha_width,
+            gpu.text_measurer(),
+            is_macos(),
+        );
         let overflow = tab_bar::overflow_state(&layout, trilha_width, self.scroll_offset);
         self.scroll_offset = overflow.scroll_offset;
 
         if !right_click {
+            // Botões de janela (ADR-0027): zona fixa à direita, ainda mais
+            // à direita que a de configurações. Sempre `None` no macOS
+            // (semáforo nativo, o clique nunca chega até aqui).
+            // Minimizar/maximizar-restaurar são síncronos, sem diálogo --
+            // resolvidos aqui mesmo. Fechar precisa do diálogo de
+            // confirmação com múltiplas abas, que só `App` sabe montar
+            // (`request_close_window`), então sobe como `NewTabRequest`.
+            if let Some(hit) =
+                tab_bar::point_in_window_button(is_macos(), bar_width, h, logical_point)
+            {
+                return match hit {
+                    tab_bar::WindowButtonHit::Minimize => {
+                        self.window.set_minimized(true);
+                        NewTabRequest::None
+                    }
+                    tab_bar::WindowButtonHit::MaximizeRestore => {
+                        let maximized = self.window.is_maximized();
+                        self.window.set_maximized(!maximized);
+                        NewTabRequest::None
+                    }
+                    tab_bar::WindowButtonHit::Close => NewTabRequest::CloseWindowRequested,
+                };
+            }
             // Botão de configurações: zona fixa à direita, fora da
             // trilha que rola -- resolvido em coordenadas de tela, como as
             // pílulas de overflow logo abaixo, não pelo hit-test de
@@ -1075,7 +1131,7 @@ impl WindowState {
             // consumido aqui em vez de cair na trilha: o botão está
             // desenhado, e deixar o clique atravessar até a aba de baixo
             // seria pior que não responder.
-            if tab_bar::point_in_settings_button(&style, bar_width, h, logical_point) {
+            if tab_bar::point_in_settings_button(&style, bar_width, h, is_macos(), logical_point) {
                 return NewTabRequest::None;
             }
             if overflow.hidden_left > 0
@@ -1104,6 +1160,15 @@ impl WindowState {
 
         let content_point = (logical_point.0 + self.scroll_offset, logical_point.1);
         let Some(hit) = tab_bar::hit_test(&layout, content_point) else {
+            // Nem aba, nem pílula, nem botão de "+", nem (verificado acima)
+            // botão de janela ou de configurações: o resto da barra é a
+            // drag region (ADR-0027, estilo Firefox -- o mesmo "clicar no
+            // vazio da barra move a janela"). Só no clique primário: botão
+            // secundário aqui não abre menu nenhum (nenhum alvo sob o
+            // cursor) nem arrasta.
+            if !right_click {
+                self.resolve_titlebar_drag();
+            }
             return NewTabRequest::None;
         };
 
@@ -1197,6 +1262,29 @@ impl WindowState {
         }
     }
 
+    /// ADR-0027: clique na drag region (nada sob o cursor na barra).
+    /// Duplo clique maximiza/restaura, resolvido no *press* -- mesmo
+    /// padrão de `handle_pill_click`/`last_pill_click`, mas sem
+    /// `GroupId`, e sem passar por `finish_drag`: diferente do arraste de
+    /// aba/pílula (que arma no press e só resolve no release),
+    /// `Window::drag_window()` entrega o gesto ao loop modal não-client
+    /// do SO assim que chamado, então não há garantia de ver o
+    /// `MouseInput::Released` de volta -- resolver "foi duplo clique?"
+    /// **antes** de chamar `drag_window` é o único jeito seguro.
+    fn resolve_titlebar_drag(&mut self) {
+        let now = Instant::now();
+        let is_double_click = self
+            .last_titlebar_click
+            .is_some_and(|at| now.duration_since(at) <= DOUBLE_CLICK_THRESHOLD);
+        self.last_titlebar_click = if is_double_click { None } else { Some(now) };
+        if is_double_click {
+            let maximized = self.window.is_maximized();
+            self.window.set_maximized(!maximized);
+        } else {
+            let _ = self.window.drag_window();
+        }
+    }
+
     /// RF-2.13/RF-2.22: o que um clique **de verdade** (sem cruzar o
     /// limiar de arraste) na pílula faz -- duplo clique abre o editor, no
     /// lugar do colapso que um clique simples faria (evita o flicker de
@@ -1205,7 +1293,7 @@ impl WindowState {
     fn handle_pill_click(&mut self, id: GroupId, gpu: &mut GpuContext) {
         let now = Instant::now();
         let is_double_click = self.last_pill_click.is_some_and(|(last_id, at)| {
-            last_id == id && now.duration_since(at) <= PILL_DOUBLE_CLICK_THRESHOLD
+            last_id == id && now.duration_since(at) <= DOUBLE_CLICK_THRESHOLD
         });
         self.last_pill_click = Some((id, now));
         if is_double_click {
@@ -1280,6 +1368,7 @@ impl WindowState {
             &style,
             self.logical_width,
             gpu.text_measurer(),
+            is_macos(),
         );
         let color = self.workspace.next_auto_color();
         let Some(group) = self.workspace.group_tabs(&ids, "Novo grupo", color) else {
@@ -1313,6 +1402,7 @@ impl WindowState {
             &style,
             self.logical_width,
             gpu.text_measurer(),
+            is_macos(),
         );
         self.workspace.collapse_group(id, collapsing);
         self.animations
@@ -1556,6 +1646,7 @@ impl WindowState {
                 &style,
                 self.logical_width,
                 gpu.text_measurer(),
+                is_macos(),
             );
             let content_point = (bar_point.0 + self.scroll_offset, bar_point.1);
             layout
@@ -1649,7 +1740,25 @@ impl App {
         let origin_state = origin.and_then(|id| self.windows.get(&id));
         let mut attributes = Window::default_attributes()
             .with_title("Porecatu")
-            .with_window_icon(Some(app_icon::load()));
+            .with_window_icon(Some(app_icon::load()))
+            .with_decorations(false);
+        // macOS: decorations volta a `true` -- o semáforo nativo
+        // (traffic lights) é o controle de janela do ADR-0027 lá, não
+        // botões nossos (ver `chrome::paint`/`tab_bar::left_inset`).
+        // `with_titlebar_transparent`/`with_title_hidden`/
+        // `with_fullsize_content_view` estendem nosso conteúdo por baixo
+        // da titlebar nativa (que fica invisível, exceto o semáforo) --
+        // é o mesmo truque de app nativo "sem titlebar visível, com
+        // semáforo", não decorations=false.
+        #[cfg(target_os = "macos")]
+        {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attributes = attributes
+                .with_decorations(true)
+                .with_titlebar_transparent(true)
+                .with_title_hidden(true)
+                .with_fullsize_content_view(true);
+        }
         if let Some(origin_window) = origin_state.map(|s| &s.window)
             && let Ok(origin_position) = origin_window.outer_position()
         {
@@ -2512,7 +2621,7 @@ impl App {
             Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {
                 let logical_x = position.x as f32 / state.scale;
                 let trilha_width =
-                    tab_bar::trilha_width(&TabBarStyle::DEFAULT, state.logical_width);
+                    tab_bar::trilha_width(&TabBarStyle::DEFAULT, state.logical_width, is_macos());
                 if logical_x < DRAG_EDGE_ZONE_PX {
                     state.scroll_offset = (state.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
                 } else if logical_x > trilha_width - DRAG_EDGE_ZONE_PX {
@@ -2549,6 +2658,28 @@ impl App {
             state.window.request_redraw();
             return;
         }
+
+        // Cursor de resize por borda (ADR-0027): a janela inteira, não só
+        // a barra -- `titlebar::resize_direction_at` já desliga sozinho
+        // com a janela maximizada. Resolvido a cada `CursorMoved`, sempre
+        // pro estado certo (ícone de resize ou `Default`): nada aqui
+        // guarda "estava em resize antes", porque não há outro cursor
+        // continuamente gerenciado no app pra colidir com isto (o resto
+        // só muda cursor em transição de estado -- `Grabbing`/`Default` no
+        // arraste).
+        let resize_direction = titlebar::resize_direction_at(
+            (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            ),
+            state.logical_width,
+            state.logical_height,
+            state.window.is_maximized(),
+        );
+        state.window.set_cursor(match resize_direction {
+            Some(direction) => CursorIcon::from(direction),
+            None => CursorIcon::Default,
+        });
 
         if let Some(gpu) = &mut self.gpu {
             state.update_hover(gpu, Instant::now());
@@ -2750,6 +2881,37 @@ impl App {
             return;
         }
 
+        // Resize por borda (ADR-0027): janela inteira, fora de qualquer
+        // popover/diálogo/menu (já resolvidos acima -- todos retornam
+        // antes de chegar aqui). Mesma natureza bloqueante/modal de
+        // `drag_window` (ver `WindowState::resolve_titlebar_drag`):
+        // entrega o gesto ao loop não-client do SO, sem retorno síncrono.
+        //
+        // O canto onde o botão "fechar" encosta na borda direita
+        // coincide com a zona de resize `NorthEast`/`East` -- o botão
+        // vence: só considera resize se o ponto não está em cima de um
+        // botão de janela (`handle_bar_click`, mais abaixo, resolve o
+        // clique no botão do jeito de sempre).
+        let over_window_button = tab_bar::point_in_window_button(
+            is_macos(),
+            state.logical_width,
+            bar_height(),
+            logical_point,
+        )
+        .is_some();
+        if button == MouseButton::Left
+            && !over_window_button
+            && let Some(direction) = titlebar::resize_direction_at(
+                logical_point,
+                state.logical_width,
+                state.logical_height,
+                state.window.is_maximized(),
+            )
+        {
+            let _ = state.window.drag_resize_window(direction);
+            return;
+        }
+
         if state.is_secondary_bar_click(button) && state.in_bar(state.cursor_position.1) {
             state.hover.dismiss();
             if let Some(gpu) = &mut self.gpu {
@@ -2790,6 +2952,11 @@ impl App {
                 NewTabRequest::WindowEmptied => {
                     self.close_window_unconditionally(window_id, event_loop);
                 }
+                // ADR-0027: botão de fechar da janela -- mesmo caminho do
+                // atalho/menu, com diálogo se houver mais de uma aba.
+                NewTabRequest::CloseWindowRequested => {
+                    self.request_close_window(window_id, event_loop);
+                }
                 NewTabRequest::None => {
                     state.window.request_redraw();
                 }
@@ -2827,11 +2994,31 @@ impl App {
 
         let style = TabBarStyle::DEFAULT;
         let bar_width = state.logical_width;
-        let trilha_width = tab_bar::trilha_width(&style, bar_width);
-        let base_layout =
-            tab_bar::fit_width(&state.workspace, &style, bar_width, gpu.text_measurer());
+        let is_mac = is_macos();
+        let trilha_width = tab_bar::trilha_width(&style, bar_width, is_mac);
+        let base_layout = tab_bar::fit_width(
+            &state.workspace,
+            &style,
+            bar_width,
+            gpu.text_measurer(),
+            is_mac,
+        );
         let overflow = tab_bar::overflow_state(&base_layout, trilha_width, state.scroll_offset);
         state.scroll_offset = overflow.scroll_offset;
+
+        // Hover dos botões de janela (ADR-0027): calculado do zero a cada
+        // frame a partir da posição do cursor, mesmo padrão do resto do
+        // hit-test da barra -- não é estado guardado, só a leitura de
+        // `cursor_position` de sempre.
+        let hover_window_button = if state.in_bar(state.cursor_position.1) {
+            let cursor_logical = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            tab_bar::point_in_window_button(is_mac, bar_width, bar_height(), cursor_logical)
+        } else {
+            None
+        };
 
         // Durante um arraste, o `Workspace` de verdade não é tocado -- só
         // um clone com o preview aplicado é usado pra desenhar (espec
@@ -2884,7 +3071,7 @@ impl App {
                         preview.move_tab_to_new_run(tab, group_index);
                     }
                 }
-                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer())
+                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer(), is_mac)
             }
             Drag::GroupDragging {
                 group, grab_offset, ..
@@ -2910,7 +3097,7 @@ impl App {
 
                 let mut preview = state.workspace.clone();
                 preview.move_group(group, preview_index);
-                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer())
+                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer(), is_mac)
             }
             _ => base_layout,
         };
@@ -2931,6 +3118,9 @@ impl App {
             &state.animations,
             now,
             gpu.text_measurer(),
+            is_mac,
+            state.window.is_maximized(),
+            hover_window_button,
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 

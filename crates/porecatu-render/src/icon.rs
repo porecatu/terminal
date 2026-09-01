@@ -127,14 +127,40 @@ pub const CHEVRON_LEFT: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 6] = [
+pub const ALL: [(&str, Icon); 9] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
     ("chevron-down", CHEVRON_DOWN),
     ("chevron-left", CHEVRON_LEFT),
     ("settings", SETTINGS),
+    ("minus", MINUS),
+    ("square", MAXIMIZE),
+    ("copy", RESTORE),
 ];
+
+/// `minus` -- botão de minimizar a janela (ADR-0027).
+pub const MINUS: Icon = Icon {
+    glyph: "\u{e11c}",
+    ink_width_em: 0.675,
+    ink_height_em: 0.09,
+};
+/// `square` -- botão de maximizar a janela, estado não-maximizado
+/// (ADR-0027).
+pub const MAXIMIZE: Icon = Icon {
+    glyph: "\u{e167}",
+    ink_width_em: 0.83,
+    ink_height_em: 0.84,
+};
+/// `copy` -- botão de restaurar a janela, estado maximizado (ADR-0027).
+/// Lucide não tem um ícone dedicado "restore window"; dois quadrados
+/// sobrepostos é a aproximação que outras suítes de ícone usam para o
+/// mesmo conceito.
+pub const RESTORE: Icon = Icon {
+    glyph: "\u{e09e}",
+    ink_width_em: 0.92,
+    ink_height_em: 0.92,
+};
 
 /// A maior largura de desenho entre os dois carets da pílula de grupo. Um
 /// layout que reserve espaço para "o caret" precisa deste valor, e não do

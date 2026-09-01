@@ -99,6 +99,9 @@ const NEW_TAB_ICON_SIZE: f32 = ICON_EM_SIZE; // espec §2.6: "+ 15px" de desenho
 // desenharia bem maior que os outros ícones. Reduzida para o desenho
 // bater com o do "+" -- ver `porecatu_render::icon`.
 const SETTINGS_ICON_SIZE: f32 = ICON_EM_SIZE * 0.8;
+// Menor que o "+"/configurações -- convenção Windows: glyphs finos de
+// minimizar/maximizar/fechar (ADR-0027).
+const WINDOW_BUTTON_ICON_SIZE: f32 = ICON_EM_SIZE * 0.7;
 // Espec §2.5 pede um sublinhado de 2px na cor do grupo na base de cada
 // aba (`indicator_style = ["pill", "underline"]`, RF-4.19) -- removido a
 // pedido do usuário. Ele nasceu para dizer a que grupo a aba pertence
@@ -243,6 +246,9 @@ pub fn paint(
     animations: &AnimationClock,
     now: Instant,
     measurer: &mut porecatu_render::TextMeasurer,
+    is_macos: bool,
+    is_maximized: bool,
+    hover_window_button: Option<tab_bar::WindowButtonHit>,
 ) -> Vec<Primitive> {
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
@@ -279,7 +285,7 @@ pub fn paint(
     out.push(Primitive::PushClip(Rect {
         x: 0.0,
         y: 0.0,
-        width: tab_bar::trilha_width(style, bar_width),
+        width: tab_bar::trilha_width(style, bar_width, is_macos),
         height: bar_height,
     }));
     let scroll_dx = -overflow.scroll_offset;
@@ -600,7 +606,7 @@ pub fn paint(
     // ganhar à direita daqui em diante, e por ora carrega o botão de
     // configurações -- **inerte de propósito** (`config` é F4): ele
     // desenha e não responde a clique nenhum, ver `handle_bar_click`.
-    let settings = tab_bar::settings_button_rect(style, bar_width, bar_height);
+    let settings = tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: settings,
         radius: 6.0,
@@ -615,10 +621,51 @@ pub fn paint(
         palette::NEW_TAB_ICON,
     ));
 
+    // Botões de janela (ADR-0027): minimizar/maximizar-restaurar/fechar,
+    // colados na borda direita. Não existem no macOS -- lá é o semáforo
+    // nativo (`left_inset` na trilha, não zona de botão aqui).
+    if !is_macos {
+        let buttons = [
+            (0u8, tab_bar::WindowButtonHit::Minimize, icon::MINUS, false),
+            (
+                1u8,
+                tab_bar::WindowButtonHit::MaximizeRestore,
+                if is_maximized {
+                    icon::RESTORE
+                } else {
+                    icon::MAXIMIZE
+                },
+                false,
+            ),
+            (2u8, tab_bar::WindowButtonHit::Close, icon::X, true),
+        ];
+        for (index, hit, glyph, is_close) in buttons {
+            let rect = tab_bar::window_button_rect(index, bar_width, bar_height);
+            let hovered = hover_window_button == Some(hit);
+            let bg = match (is_close, hovered) {
+                (true, true) => palette::WINDOW_CLOSE_HOVER_BG,
+                (false, true) => palette::WINDOW_BUTTON_HOVER_BG,
+                (_, false) => palette::TRANSPARENT,
+            };
+            out.push(Primitive::Quad(Quad { rect, color: bg }));
+            let icon_color = if is_close && hovered {
+                palette::WINDOW_CLOSE_HOVER_ICON
+            } else {
+                palette::NEW_TAB_ICON
+            };
+            out.push(centered_glyph(
+                glyph,
+                rect,
+                WINDOW_BUTTON_ICON_SIZE,
+                icon_color,
+            ));
+        }
+    }
+
     // Pílulas de overflow (espec §2.18) ficam dentro da trilha rolável, não
     // da barra inteira -- senão a da direita cairia por cima da zona fixa
     // da direita.
-    let trilha_width = tab_bar::trilha_width(style, bar_width);
+    let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos);
     if overflow.hidden_left > 0 {
         paint_overflow_pill(OverflowSide::Left, trilha_width, bar_height, &mut out);
     }
@@ -980,7 +1027,7 @@ mod tests {
         let bar_width = 800.0;
 
         let paint_capsules = |ws: &Workspace, m: &mut TextMeasurer| {
-            let layout = tab_bar::fit_width(ws, &style, bar_width, m);
+            let layout = tab_bar::fit_width(ws, &style, bar_width, m, false);
             let out = paint(
                 &layout,
                 ws,
@@ -1001,6 +1048,9 @@ mod tests {
                 &AnimationClock::default(),
                 Instant::now(),
                 m,
+                false,
+                false,
+                None,
             );
             let cor = palette::group_color(GroupColor::Cyan);
             out.iter()
@@ -1036,7 +1086,7 @@ mod tests {
         ws.append_tab("zsh", None);
         let mut m = TextMeasurer::new();
         let bar_width = 800.0;
-        let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m);
+        let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m, false);
         let overflow = Overflow {
             scroll_offset: 0.0,
             hidden_left: 0,
@@ -1059,6 +1109,9 @@ mod tests {
             &AnimationClock::default(),
             Instant::now(),
             &mut m,
+            false,
+            false,
+            None,
         );
 
         let expected = bar_height(&style);

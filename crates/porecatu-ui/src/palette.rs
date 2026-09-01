@@ -146,6 +146,13 @@ pub const BELL_INDICATOR: Color = hex(0xef, 0x8a, 0x8a);
 // chevron -- a contagem (e o token de cor do texto dela) saiu.
 pub const OVERFLOW_COUNT_BACKGROUND: Color = hex(0x12, 0x15, 0x1a);
 
+// Botões de janela (ADR-0027). A espec §2.1 (titlebar `[v2]`, hoje
+// superseded) já descrevia estes dois tons antes de a seção virar
+// descartada por escopo, não por cor errada -- reaproveitados aqui.
+pub const WINDOW_BUTTON_HOVER_BG: Color = hex(0x25, 0x2a, 0x33);
+pub const WINDOW_CLOSE_HOVER_BG: Color = hex(0xc4, 0x41, 0x3f);
+pub const WINDOW_CLOSE_HOVER_ICON: Color = hex(0xff, 0xff, 0xff);
+
 /// Transparente -- usado como preenchimento de um `RoundedQuad` que só
 /// desenha borda (botão de nova aba, espec. §2.6, sem "fundo" listado).
 pub const TRANSPARENT: Color = Color {
