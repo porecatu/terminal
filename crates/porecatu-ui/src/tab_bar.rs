@@ -767,12 +767,10 @@ pub enum OverflowSide {
     Right,
 }
 
-/// Largura de trabalho da pílula de overflow: a espec. não fixa um valor --
-/// o contador da pílula de grupo (§2.4) é largura variável -- então este é
-/// um valor fixo generoso o bastante para chevron + contagem de até dois
-/// dígitos com o padding `1px 6px` da mesma pílula. Mesmo tipo de nota que
-/// `RENAME_FIELD_HEIGHT` em `chrome.rs`.
-pub const OVERFLOW_PILL_WIDTH: f32 = 34.0;
+/// Largura de trabalho do indicador de overflow. Pedido do usuário: círculo
+/// (largura = altura, raio = metade dos dois), só o chevron -- a contagem
+/// saiu. Mesmo tipo de nota que `RENAME_FIELD_HEIGHT` em `chrome.rs`.
+pub const OVERFLOW_PILL_WIDTH: f32 = 18.0;
 pub const OVERFLOW_PILL_HEIGHT: f32 = 18.0;
 /// "Nas duas pontas da trilha, por dentro" (espec. §2.18).
 pub const OVERFLOW_EDGE_INSET: f32 = 4.0;

@@ -72,8 +72,8 @@ use crate::palette;
 use crate::rename::RenameState;
 use crate::selection::Selection;
 use crate::tab_bar::{
-    self, GroupPillRect, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, PILL_COUNT_FONT,
-    PILL_NAME_FONT, TabBarLayout, TabBarStyle,
+    self, GroupPillRect, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, PILL_NAME_FONT,
+    TabBarLayout, TabBarStyle,
 };
 
 /// Fonte dos ícones da barra (fechar, nova aba, chevron): a face Lucide
@@ -185,9 +185,6 @@ const RENAME_FONT_SIZE: f32 = 12.0;
 const RENAME_PADDING_X: f32 = 5.0;
 
 const OVERFLOW_CHEVRON_SIZE: f32 = ICON_EM_SIZE; // espec §2.18: "chevron ‹/› 10px"
-const OVERFLOW_COUNT_FONT_SIZE: f32 = 10.0; // espec §2.18: "contagem em mono 10px"
-const OVERFLOW_COUNT_RADIUS: f32 = 9.0; // espec §2.4 (mesmo contador da pílula)
-const OVERFLOW_INNER_GAP: f32 = 3.0; // folga de trabalho entre chevron e contagem
 
 /// A aba sendo arrastada (espec §2.19): desenhada como fantasma seguindo o
 /// cursor no eixo X, presa ao Y da barra -- em vez de na posição que o
@@ -623,24 +620,10 @@ pub fn paint(
     // da direita.
     let trilha_width = tab_bar::trilha_width(style, bar_width);
     if overflow.hidden_left > 0 {
-        paint_overflow_pill(
-            OverflowSide::Left,
-            overflow.hidden_left,
-            trilha_width,
-            bar_height,
-            measurer,
-            &mut out,
-        );
+        paint_overflow_pill(OverflowSide::Left, trilha_width, bar_height, &mut out);
     }
     if overflow.hidden_right > 0 {
-        paint_overflow_pill(
-            OverflowSide::Right,
-            overflow.hidden_right,
-            trilha_width,
-            bar_height,
-            measurer,
-            &mut out,
-        );
+        paint_overflow_pill(OverflowSide::Right, trilha_width, bar_height, &mut out);
     }
 
     if let Some(ghost) = &drag {
@@ -864,21 +847,22 @@ fn paint_group_pill(
     ));
 }
 
-/// Indicador de abas fora da vista (espec §2.18, RF-1.19): chevron + a
-/// mesma pílula de contagem da §2.4, ancorado por dentro da ponta da
-/// trilha, fora do recorte de rolagem.
+/// Indicador de abas fora da vista (espec §2.18, RF-1.19): círculo com
+/// chevron, ancorado por dentro da ponta da trilha, fora do recorte de
+/// rolagem. Divergência da espec (que pedia cápsula com contagem, §2.18),
+/// a pedido do usuário -- registrar na seção 4.4.
 fn paint_overflow_pill(
     side: OverflowSide,
-    count: usize,
     bar_width: f32,
     bar_height: f32,
-    measurer: &mut porecatu_render::TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
     let rect = tab_bar::overflow_pill_rect(side, bar_width, bar_height);
+    // Pedido do usuário: círculo (raio = metade da largura = metade da
+    // altura), só o chevron -- a contagem saiu.
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect,
-        radius: OVERFLOW_COUNT_RADIUS,
+        radius: rect.width / 2.0,
         color: palette::OVERFLOW_COUNT_BACKGROUND,
         border_color: palette::TRANSPARENT,
         border_width: 0.0,
@@ -888,40 +872,12 @@ fn paint_overflow_pill(
         OverflowSide::Left => icon::CHEVRON_LEFT,
         OverflowSide::Right => icon::CHEVRON_RIGHT,
     };
-    let count_text = count.to_string();
-    // Largura do desenho, não o avanço de 1 em: o chevron preenche um
-    // terço da em, e reservar a em inteira estouraria a pílula de 34px.
-    let chevron_width = chevron.ink_width(OVERFLOW_CHEVRON_SIZE);
-    // Espec §2.18: "contagem em mono 10px" -- a mesma face do contador da
-    // pílula (§2.4), nunca a de ícones, que só tem ícone: dígito pedido a
-    // ela não desenha nada.
-    let count_width =
-        measurer.measure_width(&count_text, PILL_COUNT_FONT, OVERFLOW_COUNT_FONT_SIZE);
-    let content_width = chevron_width + OVERFLOW_INNER_GAP + count_width;
-    let start_x = rect.x + (rect.width - content_width) / 2.0;
-    let mid_y = rect.y + rect.height / 2.0;
-
     out.push(centered_glyph(
         chevron,
-        Rect {
-            x: start_x,
-            y: rect.y,
-            width: chevron_width,
-            height: rect.height,
-        },
+        rect,
         OVERFLOW_CHEVRON_SIZE,
         palette::NEW_TAB_ICON,
     ));
-    out.push(Primitive::Text(TextRun {
-        origin: (
-            start_x + chevron_width + OVERFLOW_INNER_GAP,
-            mid_y - OVERFLOW_COUNT_FONT_SIZE / 2.0,
-        ),
-        text: count_text,
-        font: PILL_COUNT_FONT,
-        size_px: OVERFLOW_COUNT_FONT_SIZE,
-        color: palette::OVERFLOW_COUNT_TEXT,
-    }));
 }
 
 /// Campo de rename (espec §2.5): substitui o rótulo no lugar, largura
