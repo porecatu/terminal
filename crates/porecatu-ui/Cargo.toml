@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 arboard = "3"
+dirs = "5"
 png = "0.17"
 porecatu-core = { path = "../porecatu-core" }
 porecatu-render = { path = "../porecatu-render" }

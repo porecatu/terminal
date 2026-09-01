@@ -1607,10 +1607,9 @@ fn tab_bar_rect_contains(rect: Rect, point: (f32, f32)) -> bool {
 struct App {
     gpu: Option<GpuContext>,
     proxy: EventLoopProxy<Wakeup>,
-    /// `cwd` do processo do Porecatu no momento em que ele iniciou --
-    /// fallback de `tab.new`/`window.new` quando a aba ativa ainda não tem
-    /// `cwd` capturado por OSC 7 (ADR-0017 item 1). `None` só se
-    /// `current_dir` falhar.
+    /// Home do usuário -- fallback de `tab.new`/`window.new` quando a aba
+    /// ativa ainda não tem `cwd` capturado por OSC 7 (ADR-0017 item 1).
+    /// `None` só se `dirs::home_dir` falhar em resolvê-la.
     startup_directory: Option<PathBuf>,
     /// Métricas de célula em pixels lógicos -- DPI-independentes por
     /// definição (só `WindowSurface` converte pra físico), então uma só
@@ -1624,7 +1623,7 @@ impl App {
         Self {
             gpu: None,
             proxy,
-            startup_directory: std::env::current_dir().ok(),
+            startup_directory: dirs::home_dir(),
             cell_metrics: CellMetrics {
                 width: 1.0,
                 height: 1.0,
