@@ -408,7 +408,6 @@ fn layout_inset(
             x += style.trilha_gap;
         }
         let group_start_x = x;
-        let mut inner_x = x + style.wrapper_padding;
         let collapsed = group.is_collapsed();
 
         // Pílula (espec. §2.3/§2.4): só grupo explícito -- "abas sem grupo
@@ -424,6 +423,17 @@ fn layout_inset(
         // `pill.is_none()` é o mesmo teste de "run implícito" que decide
         // a cápsula em `chrome.rs`.
         let loose = !group.is_explicit();
+        // `wrapper_padding` só existe pra dar respiro entre a cápsula
+        // colorida e a aba dentro dela -- sem cápsula (run implícito) não
+        // há nada a afastar, e reservar o respiro mesmo assim abria um
+        // vão sem cor entre grupos e abas soltas (relato do usuário: o
+        // gap à esquerda de uma aba solta, ou entre o último grupo e a
+        // primeira aba solta, parecia maior que o gap entre grupos).
+        let mut inner_x = if loose {
+            group_start_x
+        } else {
+            group_start_x + style.wrapper_padding
+        };
         let tab_top = if loose {
             track_top
         } else {
@@ -628,7 +638,9 @@ fn layout_inset(
             None
         };
 
-        inner_x += style.wrapper_padding;
+        if !loose {
+            inner_x += style.wrapper_padding;
+        }
         let wrapper_rect = Rect {
             x: group_start_x,
             y: track_top,
@@ -1384,10 +1396,9 @@ mod tests {
         let tab = &group.tabs[0];
         assert_eq!(tab.label, "zsh");
         assert!(!tab.label_truncated);
-        assert_eq!(
-            tab.rect.x,
-            TabBarStyle::DEFAULT.trilha_padding + TabBarStyle::DEFAULT.wrapper_padding
-        );
+        // Aba solta (run implícito): sem cápsula, sem `wrapper_padding` --
+        // encosta direto no respiro da trilha.
+        assert_eq!(tab.rect.x, TabBarStyle::DEFAULT.trilha_padding);
 
         // botão de nova aba do grupo vem depois da aba, com o tab_gap
         assert_eq!(
