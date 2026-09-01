@@ -136,6 +136,12 @@ pub const NEW_TAB_ICON: Color = CHROME_ICON;
 pub const GROUP_NEW_TAB_ICON: Color = hex(0x12, 0x15, 0x1a); // count_background
 pub const NEW_TAB_BORDER: Color = hex(0x26, 0x2b, 0x34);
 
+// Efeito de vidro da cápsula/pílula de grupo (`chrome.rs`, pedido do
+// usuário, fora da espec.). Sem cor nova de verdade -- branco translúcido,
+// o "rim light" universal de painel de vidro, não um tom do tema. Alfa
+// baixo de propósito: é borda de 1px, não preenchimento.
+pub const GLASS_BORDER: Color = hex_alpha(0xff, 0xff, 0xff, 0.16);
+
 // `[appearance.tabs] activity_indicator` / `bell_indicator` -- espec §2.17,
 // RF-1.20/RF-1.21. Mesmos tons de sucesso/erro da seção 1.5.
 pub const ACTIVITY_INDICATOR: Color = hex(0x86, 0xc5, 0x6a);

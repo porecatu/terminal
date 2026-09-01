@@ -131,9 +131,21 @@ const WRAPPER_CORNER_RADIUS: f32 = 8.0; // wrapper_corner_radius
 // registrada aqui, não na especificação visual (que continua descrevendo
 // o v1 "de livro"; ver seção 4.4 dela pro registro formal de divergências
 // já conhecidas -- esta é nova e ainda não está lá).
-const GROUP_CAPSULE_FILL_STRENGTH: f64 = 1.0;
-// Borda fina da cápsula de grupo e da aba solta (pedido do usuário). Mesmo
-// tom neutro do botão de nova aba (`NEW_TAB_BORDER`) -- não uma cor nova.
+// Efeito de vidro (pedido do usuário, fora da espec.: "muito chapada"):
+// deixa passar um traço do que está atrás -- `BAR_BACKGROUND` no espaço
+// entre pílula/abas e a borda da cápsula, a própria cápsula onde a pílula
+// fica por cima. Sem primitiva de blur em `porecatu-render` (nota do
+// módulo) -- não há como turvar o que passa por trás, só deixar passar
+// menos dele; ainda assim já lê como painel translúcido, não como o
+// tingimento de .07 que a espec original pedia e o usuário rejeitou na F3
+// (aquele desaparecia contra o fundo da aba; este fica atrás dela, contra
+// `BAR_BACKGROUND`, sólido e escuro, então não some do mesmo jeito). Valor
+// de trabalho -- ajustar se ficar fraco ou forte demais em tela.
+const GROUP_CAPSULE_FILL_STRENGTH: f64 = 0.85;
+// Borda clara e translúcida (`GLASS_BORDER`) no lugar do tom neutro escuro
+// de antes -- é o "rim light" que lê como borda de vidro; um traço escuro
+// contra uma cápsula agora semitransparente ficava opaco demais e quebrava
+// o efeito. Pedido do usuário, mesmo valor de trabalho.
 const CAPSULE_BORDER_WIDTH: f32 = 1.0;
 
 // Sombra da cápsula de grupo e da aba solta (pedido do usuário).
@@ -166,8 +178,18 @@ const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
 // Pílula de grupo (espec §2.4, `[appearance.groups]`).
 const PILL_CORNER_RADIUS: f32 = 6.0; // label_corner_radius
 // Espec §2.4 pede borda 1px (`label_border`); removida a pedido do
-// usuário -- a pílula já é a cor cheia do grupo, e a borda neutra por
-// cima virava um contorno cinza sem função contra ela.
+// usuário na F3 -- a pílula já era a cor cheia do grupo, e a borda neutra
+// por cima virava um contorno cinza sem função contra ela. **Volta** com o
+// efeito de vidro (pedido do usuário, fora da espec.): não é mais neutra,
+// é `GLASS_BORDER` -- o mesmo rim translúcido da cápsula, propósito
+// diferente do que foi removido (ali era contorno sem função; aqui é a
+// borda que lê como vidro). Preenchimento também ganha leve
+// transparência, mesma lógica de `GROUP_CAPSULE_FILL_STRENGTH` -- a
+// pílula fica por cima da cápsula (mesmo tom), então o que passa por trás
+// dela é a própria cápsula, não `BAR_BACKGROUND`: duas camadas
+// translúcidas empilhadas, a leitura de "vidro sobre vidro".
+const PILL_GLASS_FILL_STRENGTH: f64 = 0.92;
+const PILL_BORDER_WIDTH: f32 = 1.0;
 // Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
 // expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
 // ícone é o equivalente estático. A em é a mesma dos outros ícones; o que
@@ -355,7 +377,7 @@ pub fn paint(
                 rect: capsule_rect,
                 radius: WRAPPER_CORNER_RADIUS,
                 color: with_alpha(group_color, GROUP_CAPSULE_FILL_STRENGTH),
-                border_color: palette::NEW_TAB_BORDER,
+                border_color: palette::GLASS_BORDER,
                 border_width: CAPSULE_BORDER_WIDTH,
             }));
         }
@@ -837,9 +859,9 @@ fn paint_group_pill(
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: shift(pill.rect, dx),
         radius: PILL_CORNER_RADIUS,
-        color,
-        border_color: palette::TRANSPARENT,
-        border_width: 0.0,
+        color: with_alpha(color, PILL_GLASS_FILL_STRENGTH),
+        border_color: palette::GLASS_BORDER,
+        border_width: PILL_BORDER_WIDTH,
     }));
     if let Some(indicator) = pill.aggregate_indicator {
         let dot_color = match indicator {
@@ -1052,7 +1074,10 @@ mod tests {
                 false,
                 None,
             );
-            let cor = palette::group_color(GroupColor::Cyan);
+            // `with_alpha` -- efeito de vidro (`GROUP_CAPSULE_FILL_STRENGTH`)
+            // não pinta mais a cor cheia do grupo, e sim ela com o alfa da
+            // cápsula.
+            let cor = with_alpha(palette::group_color(GroupColor::Cyan), GROUP_CAPSULE_FILL_STRENGTH);
             out.iter()
                 .filter(|p| match p {
                     Primitive::RoundedQuad(q) => {
