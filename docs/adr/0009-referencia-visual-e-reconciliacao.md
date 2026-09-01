@@ -1,6 +1,6 @@
 # ADR-0009 — Referência visual e reconciliação com o design canvas
 
-**Status:** Aceito
+**Status:** Superseded by [ADR-0027](0027-controles-de-janela-e-resize-proprios.md) (parcial: só a linha "Barra de título customizada" da tabela de escopo faseado na seção 2 da decisão, e a divergência equivalente da especificação visual §4.4 — as demais sete linhas e as outras três seções desta decisão continuam valendo)
 **Data:** 2026-08-26
 **Relacionados:** ADR-0003, ADR-0006, ADR-0008, PRD-000, PRD-004, PRD-005
 

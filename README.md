@@ -74,7 +74,7 @@ O alvo visual está desenhado e importado em [`docs/design/`](docs/design/README
 
 Os valores default do [`porecatu.example.toml`](docs/config/porecatu.example.toml) vêm dessa especificação: o binário com a configuração padrão deve bater com o mockup.
 
-> O mockup mostra o produto **completo**, não o v1. Painéis divididos, perfis, paleta de comandos, painel de configurações, barra de status e barra de título customizada são `[v2]`. Consulte a tabela de fases antes de implementar. Ver [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md).
+> O mockup mostra o produto **completo**, não o v1. Painéis divididos, perfis, paleta de comandos, painel de configurações e barra de status são `[v2]`. A faixa de identidade da barra de título (logo, nome do app, título da aba ativa) também segue `[v2]`; os controles de janela e o resize sem decoração nativa já são `[v1]` fora do macOS ([ADR-0027](docs/adr/0027-controles-de-janela-e-resize-proprios.md)). Consulte a tabela de fases antes de implementar. Ver [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md).
 
 ## Stack
 

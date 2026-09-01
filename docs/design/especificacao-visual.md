@@ -231,6 +231,8 @@ Altura 36, fundo `#1b1f26`, borda inferior `#23272f`, `padding-left: 12px`.
 
 **Direita**: três botões de 44px de largura, altura cheia, `#8b929e`. Minimizar 11px, maximizar 10px, fechar 11px. Hover `#252a33`; o de fechar vira `#c4413f` com texto `#ffffff`.
 
+**Ainda `[v2]` só nesta faixa própria** (logo, nome do app, travessão, título da aba ativa) — é identidade de app, não controle de janela. O [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) tirou os três botões e o resize dela e os deu à barra de abas existente, sem empilhar uma segunda barra: ver §2.2.1, que já é `[v1]` fora do macOS. As cores de hover acima (`#252a33`, `#c4413f`, `#ffffff`) são as que §2.2.1 reaproveita.
+
 ### 2.2 Barra de abas `[v1]`
 
 Fundo `#1b1f26`, borda inferior `#23272f`, `padding: 6px 10px`, `gap: 8`. Quatro zonas:
@@ -239,6 +241,7 @@ Fundo `#1b1f26`, borda inferior `#23272f`, `padding: 6px 10px`, `gap: 8`. Quatro
 2. **Zona fixa à direita** `[v1]` — o botão de nova aba global (§2.6), com o mesmo `gap: 6` da trilha como respiro nas duas pontas. **Não rola**: a largura disponível para a trilha é a da barra menos esta zona. Decidido na F3 — com a trilha rolando como um componente só, um botão de nova aba que sai de vista é um botão que o usuário não alcança.
 3. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
 4. **Botão de configurações** `[v2]` — 30×30, raio 6, borda `#262b34`, engrenagem 13px `#9aa2ae`. Hover: fundo `#262b34`, ícone `#e4e8ee`.
+5. **Zona de botões de janela** `[v1]` — minimizar, maximizar/restaurar, fechar (ADR-0027; anatomia em §2.2.1). Ausente no macOS: lá o semáforo nativo faz esse papel, e a trilha reserva espaço à **esquerda** (§2.2.1) em vez de perder espaço à direita.
 
 Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
@@ -248,6 +251,18 @@ Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 - **Janela sem foco:** a barra **não muda**. É omissão deliberada, não pendência: o `unfocused_hollow` do cursor (seção 2.7) já diz qual janela tem o foco, e no lugar onde o usuário está olhando. Esmaecer a barra inteira de cada janela inativa é ruído maior que a informação que carrega.
 
 **Folga de acerto:** o botão de fechar de 17×17 e o `gap: 4` entre abas são alvos pequenos. O hit-testing dá 2 px de folga em volta do botão de fechar, e a fronteira entre abas vizinhas parte o `gap` ao meio — nenhum pixel da barra fica sem dono.
+
+### 2.2.1 Controles de janela e resize `[v1]`
+
+[ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md): fora do macOS a janela perde a decoração nativa (`decorations = false`), e a própria barra de abas assume o que a decoração fazia — sem token de design próprio, a espec. nunca cobriu janela sem decoração nativa antes deste ADR.
+
+**Drag region** — a área vazia da barra (fora de aba, pílula, "+", botão de configurações e botões de janela) arrasta a janela. Duplo clique nela maximiza/restaura.
+
+**Botões de janela** — três, **46px** de largura cada, altura cheia da barra (52px), colados na borda direita: minimizar, maximizar/restaurar, fechar. Ícones Lucide 14px (`ICON_EM_SIZE * 0.7`): `minus`, `square`, `copy` (sem ícone dedicado de "restore" no Lucide; dois quadrados sobrepostos, aproximação comum de outras suítes) para minimizar/maximizar/restaurar, `x` para fechar — mesmo ícone da aba. Cor de repouso `#8b929e`, hover `#252a33`; fechar em hover vira `#c4413f` com ícone `#ffffff` — os três tons são os que §2.1 já descrevia para a faixa `[v2]`, sem cor nova.
+
+**Resize por borda** — 6px em toda borda da janela (não só a barra), desligado com a janela maximizada. Sem token de design.
+
+**macOS**: nenhum botão nosso — decoração nativa (semáforo) continua. A trilha reserva **78px** à esquerda (`MACOS_TRAFFIC_LIGHT_INSET`, não medido contra `NSWindow` real) para não desenhar sob ele.
 
 ### 2.3 Wrapper de grupo `[v1]`
 
@@ -669,6 +684,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Arraste do rótulo do grupo | `[v1]` | PRD-002 RF-2.19 — sem representação no canvas |
 | Popover de grupo de destino | `[v1]` | PRD-002 RF-2.20; ADR-0023 — sem representação no canvas |
 | Reordenação animada ao formar grupo | `[v1]` | PRD-002 RF-2.5; [ADR-0022](../adr/0022-animacao-de-interface.md) — sem representação no canvas |
+| Controles de janela e resize sem decoração nativa | `[v1]` | [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) — sem PRD, sem representação no canvas |
 | **Painéis divididos** | `[v2]` | [PRD-006](../prd/prd-006-paineis-divididos.md) *(rascunho)* |
 | **Cabeçalho e botões do painel** | `[v2]` | PRD-006 *(rascunho)* |
 | **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md) *(rascunho)* |
@@ -677,7 +693,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | **Paleta de comandos e botão de busca** | `[v2]` | [PRD-008](../prd/prd-008-paleta-de-comandos.md) *(rascunho)* |
 | **Barra de status** | `[v2]` | [PRD-009](../prd/prd-009-barra-de-status.md) *(rascunho)* |
 | **Painel de configurações GUI** | `[v2]` | [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) — sem PRD |
-| **Barra de título customizada** | `[v2]` | ADR-0009 — sem PRD |
+| **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa) | `[v2]` | ADR-0009 (parcial; controles de janela e resize já são `[v1]`, ver [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) e §2.2.1) — sem PRD |
 
 ---
 
@@ -721,7 +737,7 @@ O comportamento da seleção de texto — gesto, semântica de palavra, recorte 
 
 ### 4.3 Elementos do design **sem** requisito no v1
 
-Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis e badge, tela de nova aba, paleta de comandos, barra de status, painel de configurações, barra de título customizada.
+Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis e badge, tela de nova aba, paleta de comandos, barra de status, painel de configurações, faixa de identidade da barra de título.
 
 ### 4.4 Divergências resolvidas
 
@@ -731,7 +747,7 @@ Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis 
 | Design usa `Ctrl+T`, `Ctrl+G`, `Ctrl+,`, `Ctrl+1..6` | ADR-0008 vence: nada de `Ctrl+<letra>` sozinho. Chips de tecla do mockup são ilustrativos | ADR-0009 |
 | `Ctrl+Shift+P` é paleta no design, `theme.cycle` no ADR-0008 | Paleta fica com `Ctrl+Shift+P`; `theme.cycle` migra para `Ctrl+Shift+Y` | ADR-0009 |
 | Design tem configurações por GUI; ADR-0003 decidiu só TOML | Painel é `[v2]` e, quando existir, **escreve no TOML** — o arquivo continua sendo a única fonte de verdade | ADR-0009 |
-| Design tem barra de título própria; default é `decorations = true` | Barra customizada é `[v2]`; o default do v1 permanece nas decorações do sistema | ADR-0009 |
+| Design tem barra de título própria; default era `decorations = true` | A faixa de identidade (logo, nome do app, título da aba) segue `[v2]`. Os controles de janela e o resize, não: saem da barra de abas existente, sem decoração nativa fora do macOS — pedido do usuário, fora de fase | ADR-0009, [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) |
 | Design diz "guias"; docs dizem "abas" | Projeto padroniza **"abas"**; rótulos do mockup ajustados | ADR-0009 |
 | Paleta do design tem 6 cores; exemplo tinha 8 | Seis cores do design viram a paleta padrão | ADR-0009 |
 | Fontes e cores do design vs. catppuccin/JetBrains | Design vira o default; catppuccin sobra como tema nomeado | ADR-0009 |

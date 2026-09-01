@@ -153,7 +153,7 @@ Cenário: chave desconhecida não quebra
 
 ## Fora de escopo
 
-- **Barra de título customizada** — desenhada no canvas, fase `[v2]`. O default do v1 usa as decorações do sistema ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))
+- **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa em faixa própria) — desenhada no canvas, fase `[v2]`. Decorações nativas continuam só no macOS; Windows/Linux já têm controles de janela e resize próprios, resolvidos na barra de abas existente, não numa faixa nova ([ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md), que supersede parcialmente [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) nisso)
 - **Painel de configurações por GUI** — desenhado no canvas, fase `[v2]`. Quando existir, escreverá no TOML, sem introduzir segunda fonte de verdade ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))
 - Temas visuais de chrome distribuídos como arquivo separado e importável (v2)
 - Aparência definida por script ou lógica ([ADR-0003](../adr/0003-formato-de-configuracao.md))

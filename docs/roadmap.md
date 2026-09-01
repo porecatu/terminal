@@ -319,7 +319,7 @@ A coluna **Desenhado** marca o que já tem alvo visual aprovado no canvas. Estar
 | Paleta de comandos | [PRD-008](prd/prd-008-paleta-de-comandos.md) *(rascunho)* | sim, `[v2]` |
 | Barra de status | [PRD-009](prd/prd-009-barra-de-status.md) *(rascunho)* | sim, `[v2]` |
 | Configuração por GUI | [ADR-0003](adr/0003-formato-de-configuracao.md), [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) | sim, `[v2]` |
-| Barra de título customizada | [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md), [PRD-004](prd/prd-004-aparencia-do-chrome.md) | sim, `[v2]` |
+| Faixa de identidade da barra de título (logo, nome do app, título da aba ativa) | [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) (parcial, ver [ADR-0027](adr/0027-controles-de-janela-e-resize-proprios.md)), [PRD-004](prd/prd-004-aparencia-do-chrome.md) | sim, `[v2]` |
 | Multiplexação remota | [PRD-000](prd/prd-000-visao-de-produto.md) | não |
 | Plugins e config programável | [ADR-0003](adr/0003-formato-de-configuracao.md) | não |
 | Persistir scrollback | [PRD-003](prd/prd-003-persistencia-de-sessao.md) | não |
