@@ -1077,7 +1077,10 @@ mod tests {
             // `with_alpha` -- efeito de vidro (`GROUP_CAPSULE_FILL_STRENGTH`)
             // não pinta mais a cor cheia do grupo, e sim ela com o alfa da
             // cápsula.
-            let cor = with_alpha(palette::group_color(GroupColor::Cyan), GROUP_CAPSULE_FILL_STRENGTH);
+            let cor = with_alpha(
+                palette::group_color(GroupColor::Cyan),
+                GROUP_CAPSULE_FILL_STRENGTH,
+            );
             out.iter()
                 .filter(|p| match p {
                     Primitive::RoundedQuad(q) => {
