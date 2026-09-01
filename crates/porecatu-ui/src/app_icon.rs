@@ -8,6 +8,8 @@
 //! abrir -- esse é um recurso PE separado, embutido pelo `build.rs` do
 //! bin `porecatu` a partir do mesmo desenho (`assets/icon/porecatu.ico`).
 
+use std::io::Cursor;
+
 use winit::window::Icon;
 
 const PNG_BYTES: &[u8] = include_bytes!("../../../assets/icon/porecatu.png");
@@ -17,11 +19,16 @@ const PNG_BYTES: &[u8] = include_bytes!("../../../assets/icon/porecatu.png");
 /// `assets/icon/porecatu.png` corrompido é bug de build, não algo a
 /// degradar silenciosamente.
 pub fn load() -> Icon {
-    let decoder = png::Decoder::new(PNG_BYTES);
+    let decoder = png::Decoder::new(Cursor::new(PNG_BYTES));
     let mut reader = decoder
         .read_info()
         .expect("assets/icon/porecatu.png deveria decodificar");
-    let mut buf = vec![0; reader.output_buffer_size()];
+    let mut buf = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .expect("assets/icon/porecatu.png deveria ter dimensões conhecidas")
+    ];
     let info = reader
         .next_frame(&mut buf)
         .expect("assets/icon/porecatu.png deveria decodificar");
