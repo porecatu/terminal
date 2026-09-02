@@ -55,7 +55,7 @@ Todo usuário, com defaults que funcionam sem configuração alguma. A profundid
 
 **RF-4.6** — Configuráveis por estado — ativa, inativa, hover — as cores de fundo e de texto.
 
-*Emendado.* O **hover não tem cores próprias**: é um multiplicador de brilho sobre o estado atual (`hover_brightness`, `label_hover_brightness`). Com seis cores de grupo, cor de hover por estado exigiria doze tokens para dizer o que um multiplicador diz. O realce em si **ainda não é desenhado** — o hover existe como hit-test e alimenta o tooltip —, e entra na F4 com aval do dono do produto (ADR-0028 §4). O fundo da aba ganhou um alfa (`background_alpha`, `0.85`) para deixar passar a cor da cápsula do grupo por baixo.
+*Emendado.* O **hover não tem cores próprias**: é um multiplicador de brilho sobre o estado atual (`hover_brightness`, `label_hover_brightness`). Com seis cores de grupo, cor de hover por estado exigiria doze tokens para dizer o que um multiplicador diz. O realce em si é uma das **duas** mudanças visuais aprovadas para o v1 ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2) e entra na etapa 6 da F4; hoje o hover existe como hit-test e alimenta o tooltip, sem mudar aparência. O fundo da aba ganhou um alfa (`background_alpha`, `0.85`) para deixar passar a cor da cápsula do grupo por baixo.
 
 **RF-4.7** — Configuráveis: cor de fundo da barra (atrás das abas), cor e espessura da borda da aba ativa, e cor da borda de aba selecionada ([PRD-002](prd-002-grupos-de-abas.md), RF-2.2).
 

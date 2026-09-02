@@ -149,7 +149,7 @@ O código está escrito e o CI está verde nas três plataformas, com testes aut
 - **Segunda janela** (`Ctrl+Shift+N`/`Ctrl+Shift+Q`, ADR-0015): a cascata de geometria e a superfície `wgpu` compartilhada nunca foram exercitadas com duas janelas de verdade, muito menos em dois monitores com DPI diferente.
 - **Diálogo de confirmação de RF-1.6**: a condição (tela alternativa ou reporte de mouse ligado) depende de abrir `vim`/`htop`/`fzf` de verdade dentro do Porecatu, que segue bloqueado pela mesma proteção de foco.
 
-Quatro simplificações conscientes, documentadas no código (`chrome.rs`, `overlay.rs`, `lib.rs`) e registradas na seção 4.4 da [especificação visual](design/especificacao-visual.md). **As quatro foram decididas depois, no [ADR-0028](adr/0028-o-binario-como-referencia-visual.md) §4** — duas entram na F4, duas viram decisão de não fazer:
+Quatro simplificações conscientes, documentadas no código (`chrome.rs`, `overlay.rs`, `lib.rs`) e registradas na seção 4.4 da [especificação visual](design/especificacao-visual.md). **Nenhuma delas é pendência**: as quatro foram decididas no [ADR-0028](adr/0028-o-binario-como-referencia-visual.md) §4 — duas aprovadas para a F4, duas fechadas como decisão de não fazer — e o [ADR-0032](adr/0032-interface-do-v1-fechada.md) §2 fechou a lista das que ainda mudam de pixel no v1 exatamente nessas duas.
 
 - Nenhuma sombra nos quatro widgets de chrome — `porecatu-render` não tem primitiva de sombra. *Depois da fase apareceu uma sombra **em camadas** (três `RoundedQuad` empilhados, `chrome::push_shadow`), aplicada à cápsula de grupo, à aba solta e ao quadro do terminal; os cinco widgets e o fantasma de arraste seguem sem ela, e é para eles que a F4 leva a mesma técnica.* O corpo de aviso/diálogo não quebra linha (`TextRun` é sempre uma linha), truncando com reticências em vez do "três linhas" da espec. — **decidido não fazer**, o truncamento em uma linha é o comportamento aprovado.
 - A cascata da janela nova prende aos limites físicos do monitor, não à área útil (descontada a barra de tarefas/dock) que o parágrafo acima descreve — `winit::monitor::MonitorHandle` não expõe área útil em nenhuma plataforma.
@@ -339,11 +339,44 @@ Itens:
 - Toda a superfície de [porecatu.example.toml](config/porecatu.example.toml) ligada de fato ao que o binário desenha
 - Fallback de fonte, temas nomeados com override (ADR-0031), zoom por atalho
 - Recálculo de grade e resize de todos os PTYs ao mudar métricas de fonte (classe B do ADR-0030)
-- **As duas dívidas de primitiva aprovadas** ([ADR-0028](adr/0028-o-binario-como-referencia-visual.md) §4): hover por brilho resolvido em CPU (aba, pílula e fantasma de arraste) e a sombra em camadas nos **cinco widgets de chrome** e no fantasma — a técnica já existe em `chrome::push_shadow`, aplicada hoje à cápsula, à aba solta e ao quadro do terminal
+- **As duas mudanças visuais aprovadas** — e a lista é **fechada nessas duas** ([ADR-0032](adr/0032-interface-do-v1-fechada.md)): hover por brilho resolvido em CPU (aba, pílula e fantasma de arraste) e a sombra em camadas nos **cinco widgets de chrome** e no fantasma. A técnica da sombra já existe em `chrome::push_shadow`, aplicada hoje à cápsula, à aba solta e ao quadro do terminal. Fora dessas duas, **nada nesta fase mexe em pixel**
 - `animations = false` aplicando o reflui instantâneo ([ADR-0022](adr/0022-animacao-de-interface.md)), com as **duas** durações do arquivo de exemplo governando as duas constantes de hoje
 - Roda do mouse no popover de destino, e as chaves que a F3 deixou como constante
 
-**O que a F4 não faz:** desfazer aparência. O critério de saída inverteu com o ADR-0028 — a configuração padrão reproduz o binário, não o contrário —, e as decisões visuais da seção 4.4 da [especificação visual](design/especificacao-visual.md) são o alvo. Duas ex-dívidas foram fechadas como **decisão de não fazer**: corpo de aviso em três linhas e auto-scroll do arraste por intervalo.
+**O que a F4 não faz:** mexer na interface. O critério de saída inverteu com o ADR-0028 — a configuração padrão reproduz o binário, não o contrário —, e o [ADR-0032](adr/0032-interface-do-v1-fechada.md) fechou a lista do que ainda muda de pixel no v1: as duas do item acima, e nada mais. A **trilha de grupos e abas só é tocada quando um recurso novo exigir**, não por acabamento. Quatro itens que já foram dívida estão fechados como **decisão de não fazer**: corpo de aviso em três linhas, auto-scroll do arraste por intervalo, e os estilos `underline`/`left-bar`/`outline` do indicador de grupo, que saíram de escopo junto com a chave `indicator_style`.
+
+**Divisão sugerida**, no padrão das seis etapas da F1, da F2 e da F3, uma por PR:
+
+1. **`porecatu-config` nasce.** Structs `serde` com defaults completos, resolução de
+   caminho (`--config` → `PORECATU_CONFIG` → caminho de plataforma via `dirs`), erro
+   com linha e chave, chave desconhecida como aviso ([ADR-0003](adr/0003-formato-de-configuracao.md)).
+   **Sem consumidor ainda:** a etapa entrega `Config` carregado e testado, não
+   aparência mudada — e é isso que a torna testável sem GPU e sem janela.
+2. **`porecatu-ui` lê `Config`.** As ~30 constantes que já citam a chave TOML de
+   origem, mais a geometria da barra (`TabBarStyle`) e dos cinco widgets, saem de
+   `const` e passam a vir de um `Arc<Config>`. É a etapa que cobra o critério de
+   saída: com a config padrão, o binário tem de continuar desenhando **exatamente** o
+   que desenha hoje.
+3. **Terminal.** Fonte (família, tamanho, `line_height`, fallback), cores, cursor,
+   scrollback, seleção e clipboard saem do `TermParams` fixo que `ui` monta hoje.
+   Inclui o **recálculo de grade e o resize de todos os PTYs** quando a métrica de
+   fonte muda — a classe B do [ADR-0030](adr/0030-escopo-do-hot-reload.md).
+4. **Hot reload.** `notify`, parse fora da main thread, debounce, e as **três classes**
+   do ADR-0030, com o aviso de escopo da classe C. Depende de 2 e 3 existirem: sem
+   nada lendo `Config`, não há o que recarregar.
+5. **`enum Action` em `porecatu-core` + parser de `[keybindings]`**
+   ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)), com o teste
+   bidirecional contra o [catálogo](reference/acoes.md) e os **defaults de macOS**, que
+   hoje não existem em código.
+6. **Temas nomeados** ([ADR-0031](adr/0031-temas-nomeados.md)), zoom por atalho,
+   `animations = false`, a roda do mouse no popover de destino, a entrada de cor por
+   hexadecimal do RF-2.10 — e as **duas mudanças visuais aprovadas**: hover por brilho
+   e sombra nos cinco widgets e no fantasma de arraste.
+
+A ordem não é arbitrária: 1 e 2 destravam todo o resto (sem `Config` carregado e sem a
+UI lendo dele, nada é verificável de ponta a ponta); 4 depende de 2 e 3; 5 e 6 são
+independentes entre si e podem trocar de posição. As etapas 1 a 3 já entregam o que a
+fase promete — o arquivo passa a governar a aparência — antes de a fase acabar.
 
 **Critério de saída:** **todo valor de aparência com procedência declarada** — vira chave o que se vê, fica fixo o que é mecânica de interação (limiar de clique e de arraste, cascata de janela, intervalo de frame), e a lista do que fica fixo está no cabeçalho do arquivo de exemplo; verificação por revisão dirigida. Todos os cenários de aceite de PRD-004 e PRD-005 passam. **A config padrão reproduz o binário** — se divergir, o errado é o default, não a interface (ADR-0028). Auditoria de rastreabilidade nas duas direções: nenhuma chave do exemplo sem requisito, nenhum requisito sem chave — com a metade das ações automatizada pelo teste bidirecional do ADR-0029.
 

@@ -180,7 +180,7 @@ Cor de aba sem grupo: `#7b838f`.
 
 Sombras. O binário desenha sombra **em camadas** (§1.2): três `RoundedQuad` pretos empilhados, crescendo de spread (1 / 2.5 / 4.5) e caindo de alfa (`.16` / `.10` / `.06`), com offset Y de 1 / 2 / 3. É a aproximação possível sem passo de blur, e está em três lugares — cápsula de grupo, aba solta e quadro do terminal (`chrome::push_shadow`).
 
-Os valores CSS do mockup — janela `0 32px 80px rgba(0,0,0,.6)`, popover `0 18px 44px rgba(0,0,0,.55)`, modal `0 28px 70px rgba(0,0,0,.6)` — descrevem manchas grandes, que aliaseariam nessa técnica. Os cinco widgets de chrome e o fantasma de arraste seguem **sem sombra**; ganham a de camadas na F4 (ADR-0028 §4).
+Os valores CSS do mockup — janela `0 32px 80px rgba(0,0,0,.6)`, popover `0 18px 44px rgba(0,0,0,.55)`, modal `0 28px 70px rgba(0,0,0,.6)` — descrevem manchas grandes, que aliaseariam nessa técnica. Nos cinco widgets de chrome e no fantasma de arraste, a sombra em camadas é **uma das duas mudanças visuais aprovadas** do v1, agendada para a F4 ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2, lista exaustiva).
 
 Overlays: diálogo de confirmação `rgba(6,7,9,.45)`; paleta de comandos `[v2]` `rgba(6,7,9,.55)`.
 
@@ -227,7 +227,7 @@ Só as oito brilhantes de cor (`red` a `cyan`) são valores novos; `black`, `whi
 | `slidein` | `.16s ease-out`, de `translateX(24px)` + `opacity 0` | drawer de configurações |
 | Transições | `.15s` | rotação do caret, cor do trilho e posição do botão do toggle |
 | `reflow` | `.18s` linear ao formar grupo; **`.15s`** no colapso e na expansão | reordenação das abas ao formar grupo (RF-2.5) e ao arrastar grupo; colapso e expansão de grupo. São duas durações, uma por consumidor (`GROUP_CREATE_REFLOW_DURATION`, `COLLAPSE_REFLOW_DURATION`) |
-| Hover por brilho | `filter: brightness(1.25)` na pílula, `1.18` na aba | evita definir uma cor de hover por grupo. **Ainda não desenhado** — entra na F4 (ADR-0028 §4); os botões de janela do ADR-0027 são o único hover que já troca fundo e ícone |
+| Hover por brilho | `filter: brightness(1.25)` na pílula, `1.18` na aba | evita definir uma cor de hover por grupo. É a **segunda das duas mudanças visuais aprovadas** do v1, agendada para a F4 ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2); hoje o único hover que troca fundo e ícone é o dos botões de janela (ADR-0027) |
 
 O hover por `brightness` é uma decisão relevante: com seis cores de grupo, definir hover por cor exigiria doze tokens. O filtro resolve com um.
 
@@ -331,7 +331,7 @@ Registro na seção 4.4.
 Altura **34** (a mesma da aba), `padding: 0 9px 0 10px`, raio 6, `gap: 7`.
 **Fundo: a cor cheia do grupo a `.92`** (§1.8), com o mesmo rim de vidro de 1px da
 cápsula (§1.2). Ela fica por cima da cápsula, do mesmo tom — duas camadas
-translúcidas empilhadas. Hover `brightness(1.25)` **ainda não desenhado** (§1.10).
+translúcidas empilhadas. Hover `brightness(1.25)`: aprovado para a F4 (§1.10).
 
 Da esquerda para a direita:
 
@@ -384,7 +384,7 @@ e o que anima nesse movimento é a largura da cápsula mais a opacidade delas
 
 Altura **34** dentro de um grupo e **40** solta (§1.7), `padding: 0 6px 0 10px`,
 raio 6, `gap: 8`, **borda 2px** em todo estado, **largura fixa de 229px**. Hover
-`brightness(1.18)` **ainda não desenhado** (§1.10).
+`brightness(1.18)`: aprovado para a F4 (§1.10).
 
 **A aba solta é mais alta.** Dentro de um grupo ela cede o `wrapper_padding` ao bloco
 do grupo; solta não há bloco a que ceder, então ocupa a caixa inteira do wrapper.
@@ -525,7 +525,7 @@ Rótulo "Perfis" 10px uppercase `#5c646f`, `letter-spacing: .7px`. Itens: `paddi
 
 Popover largura 286, `padding: 14`, `gap: 13`. Mesmo fundo, borda e raio do menu de perfis. Posicionado horizontalmente sobre o grupo que está sendo editado.
 
-> **Sombra e `pop` não são desenhados** em nenhum dos cinco widgets de chrome: o que separa o popover do fundo hoje é a borda de 1px, e a sombra em camadas da §1.7 entra na F4 (ADR-0028 §4). A única animação do v1 é o `reflow` (§1.10).
+> **A borda de 1px é o que separa o popover do fundo hoje**, nos cinco widgets de chrome. A sombra em camadas da §1.7 é uma das duas mudanças visuais aprovadas e entra na F4 ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2). O `pop .13s` **não entra**: a única animação do v1 é o `reflow` (§1.10, ADR-0022, com a lista de consumidores fechada em dois).
 
 **Posição vertical: 8 px abaixo da borda inferior da barra de abas**, não o
 `top: 76px` que o canvas usa. Aquele valor pressupõe a barra de título `[v2]` de
@@ -708,7 +708,7 @@ Cada ponta só aparece se houver aba oculta naquele lado. Clique rola uma aba (9
 Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15 e, desde a F3, o RF-1.16 (arraste entre grupos) e o RF-2.19 (arraste do grupo inteiro).
 
 - **Limiar de 4 px** de movimento com o botão apertado — o `gap` entre abas. Abaixo disso o gesto é clique, e ativa a aba (RF-1.13). Sem limiar, todo clique com micro-tremor vira arraste.
-- **Aba fantasma:** a aba arrastada continua desenhada, seguindo o cursor no eixo X e presa ao Y da barra. Não sai da barra: arrastar aba entre janelas não é gesto do v1 (RF-10.24). O `filter: brightness(1.18)` e a sombra de popover que esta seção pede para separá-la da trilha **ainda não são desenhados** — o fantasma sai no mesmo tom da aba parada (§1.7, §1.10); os dois entram na F4.
+- **Aba fantasma:** a aba arrastada continua desenhada, seguindo o cursor no eixo X e presa ao Y da barra. Não sai da barra: arrastar aba entre janelas não é gesto do v1 (RF-10.24). Hoje o fantasma sai no mesmo tom da aba parada; o `filter: brightness(1.18)` e a sombra que esta seção pede para separá-la da trilha estão nas duas mudanças aprovadas para a F4 (§1.7, §1.10).
 - **O buraco é o marcador.** A posição de origem fica vazia, mostrando o fundo da barra `#1b1f26`, e as vizinhas deslizam com a transição `.15s` da seção 1.10. Não há caret de inserção separado: ele diria a mesma coisa que o buraco.
 - **Auto-scroll:** cursor a menos de 30 px de uma ponta da trilha rola naquela direção, uma aba a cada `.15s`.
 - `Esc` cancela e a aba volta à origem; soltar fora da trilha cancela também.
@@ -756,7 +756,7 @@ Definido em [ADR-0019](../adr/0019-tooltip.md), que também não tem representa�
 
 Aparece **só quando o texto do alvo foi truncado**, após 600 ms de hover parado. Uma linha, largura máxima 320 — a do aviso —, texto além disso truncado com reticências.
 
-Fundo `#1a1e25`, borda `1px #2e343e`, raio **6** (não o 8 de popover: num retângulo de uma linha o 8 pesa, e o 6 é a classe dos elementos de altura de aba da barra). Texto 11px `#d7dce3`, `padding: 7px 8px` — o espaçamento do item de menu. A sombra `0 18px 44px rgba(0,0,0,.55)` e a animação `pop .13s` **não são desenhadas**: a borda de 1px é o que separa o tooltip do fundo hoje, e a sombra em camadas (§1.7) entra na F4 junto com a dos outros quatro widgets.
+Fundo `#1a1e25`, borda `1px #2e343e`, raio **6** (não o 8 de popover: num retângulo de uma linha o 8 pesa, e o 6 é a classe dos elementos de altura de aba da barra). Texto 11px `#d7dce3`, `padding: 7px 8px` — o espaçamento do item de menu. A borda de 1px é o que separa o tooltip do fundo hoje; a sombra em camadas (§1.7) entra na F4 junto com a dos outros quatro widgets, e a animação `pop .13s` não entra (§2.10).
 
 Ancorado no **alvo**, não no cursor: abaixo dele, alinhado à borda esquerda, a 6 px. Vira nos dois eixos para caber no monitor da janela. Some ao sair do alvo, clicar, digitar, começar arraste, a janela perder foco ou o alvo deixar de existir.
 
@@ -874,8 +874,8 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Design diz "guias"; docs dizem "abas" | Projeto padroniza **"abas"**; rótulos do mockup ajustados | ADR-0009 |
 | Paleta do design tem 6 cores; exemplo tinha 8 | Seis cores do design viram a paleta padrão | ADR-0009 |
 | Fontes e cores do design vs. catppuccin/JetBrains | Design vira o default; catppuccin sobra como tema nomeado | ADR-0009 |
-| `filter: brightness()` no hover da aba e da pílula | `porecatu-render` não tem primitiva de filtro, e a solução é **em CPU** dentro de `porecatu-ui`: multiplicar os canais da cor e clampar dá o mesmo resultado, sem primitiva nova. **Ainda não desenhado** — o hover existe como hit-test e alimenta o tooltip, mas nada muda de aparência sob o cursor, exceto os botões de janela do ADR-0027. **Aprovado para a F4** (ADR-0028 §4) | F2, aprovado para F4 |
-| Sombra de popover (`0 18px 44px rgba(0,0,0,.55)`) nos widgets de chrome, no fantasma de arraste e na janela | **Há sombra, em camadas, e em três lugares.** `porecatu-render` não tem primitiva de sombra nem passo de blur, então `chrome::push_shadow` empilha três `RoundedQuad` pretos (spread 1/2.5/4.5, alfa `.16`/`.10`/`.06`, offset Y 1/2/3) — pedido do usuário, aplicado à **cápsula de grupo**, à **aba solta** e ao **quadro do terminal** (§1.7). Os **cinco widgets de chrome e o fantasma de arraste seguem sem sombra**, e é para eles que a F4 leva a mesma técnica (ADR-0028 §4). A mancha grande do CSS não é reproduzível assim: aliaseia em anéis visíveis | F3 e depois, aprovado para F4 |
+| `filter: brightness()` no hover da aba e da pílula | `porecatu-render` não tem primitiva de filtro, e a solução é **em CPU** dentro de `porecatu-ui`: multiplicar os canais da cor e clampar dá o mesmo resultado, sem primitiva nova. Hoje o hover existe como hit-test e alimenta o tooltip, sem mudar aparência — exceto nos botões de janela do ADR-0027. **Aprovado para a F4**, e é a outra das duas do ADR-0032 §2 | F2, aprovado para F4 |
+| Sombra de popover (`0 18px 44px rgba(0,0,0,.55)`) nos widgets de chrome, no fantasma de arraste e na janela | **Há sombra, em camadas, e em três lugares.** `porecatu-render` não tem primitiva de sombra nem passo de blur, então `chrome::push_shadow` empilha três `RoundedQuad` pretos (spread 1/2.5/4.5, alfa `.16`/`.10`/`.06`, offset Y 1/2/3) — pedido do usuário, aplicado à **cápsula de grupo**, à **aba solta** e ao **quadro do terminal** (§1.7). Nos **cinco widgets de chrome e no fantasma de arraste** a mesma técnica entra na F4 — uma das **duas** mudanças visuais que o [ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2 deixa em aberto no v1, e a lista é exaustiva. A mancha grande do CSS não é reproduzível assim: aliaseia em anéis visíveis | F3 e depois, aprovado para F4 |
 | Corpo do aviso e do diálogo em **três linhas** com reticências | **Uma linha, truncada.** `TextRun` é sempre uma linha, e quebrar por palavra é trabalho de `porecatu-ui` sobre o `TextMeasurer` do [ADR-0018](../adr/0018-composicao-de-frame.md). **Decidido não fazer** (ADR-0028 §4): o truncamento em uma linha é o comportamento aprovado, e mudar a altura desses dois widgets mudaria a interface sem ninguém ter pedido | F2, fechado no ADR-0028 |
 | Auto-scroll do arraste a uma aba a cada `.15s` | Rola **por evento de `CursorMoved`** dentro da zona de 30 px, não por intervalo. O relógio do [ADR-0022](../adr/0022-animacao-de-interface.md) tornaria o intervalo possível, mas o gesto atual funciona e mudá-lo mudaria a sensação do arraste: **decidido não fazer** (ADR-0028 §4) | F2, fechado no ADR-0028 |
 | Caret da pílula especifica `rotate(0deg)` / `rotate(90deg)` | Não há transformação afim em `porecatu-render`, e o caret é um glifo. A rotação vira **troca de ícone** — `chevron-right` / `chevron-down` do Lucide, no lugar dos `▶`/`▼` da prosa (ver a linha da face de ícones abaixo); o que anima nos `.15s` é o resto do colapso | ADR-0022, [ADR-0024](../adr/0024-face-de-icones.md) |
