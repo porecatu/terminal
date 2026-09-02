@@ -78,6 +78,8 @@ Documentação:
 python scripts/verify-docs.py
 ```
 
+Cinco checagens, e a quinta é a que mais importa depois do [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md): os **valores estruturais de aparência têm de bater entre código, `porecatu.example.toml` e especificação visual** (`VALORES`, em `scripts/verify-docs.py`) — altura de barra e de aba, paddings, alfas de vidro, em de ícone, botão de janela, raio do quadro do terminal, mais a altura de barra e a largura de aba **derivadas**. Mudou uma dessas constantes? Atualize os três lados no mesmo PR, senão o CI reprova. Constante renomeada também reprova, em vez de passar como "não encontrada".
+
 CI roda os quatro comandos de código nas três plataformas, mais a verificação de documentação. Warning de clippy é erro. A matriz Rust do `.github/workflows/ci.yml` acordou junto com o `Cargo.toml` da F0 (o job `detect` já vê o workspace) e o job canário semanal contra a stable do dia está ativo.
 
 ## Convenções

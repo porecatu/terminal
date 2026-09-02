@@ -18,6 +18,10 @@ script consegue manter honestas ao longo do tempo:
      na especificação visual — nenhuma cor inventada (CLAUDE.md, ADR-0009).
   3. Todo elemento do design está classificado [v1] ou [v2] — nenhum
      implementador fica sem saber se algo é escopo de agora.
+  4. Os valores de aparência que o binário desenha são os mesmos que o
+     example.toml traz como default e que a especificação registra —
+     porque o binário é a referência visual (ADR-0028) e uma
+     especificação que descreve o código defasa em silêncio.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ for fluxo in (sys.stdout, sys.stderr):
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = "docs/design/especificacao-visual.md"
 CONFIG = "docs/config/porecatu.example.toml"
+UI = "crates/porecatu-ui/src"
 
 falhas: list[str] = []
 
@@ -191,6 +196,185 @@ def verificar_fases() -> None:
         ok("nenhuma seção de anatomia sem etiqueta")
 
 
+# ---------------------------------------------------------------------------
+# 5. Valores: código, TOML e especificação
+#
+# O ADR-0028 fez do binário a referência visual, e a especificação passou a
+# descrevê-lo. Isso cria um risco que os outros checks não cobrem: mudar uma
+# constante em porecatu-ui e deixar documento e arquivo de exemplo para trás,
+# sem nada quebrar. Esta checagem amarra os três lados dos valores que definem
+# a forma da barra.
+#
+# A lista é EXPLÍCITA e cresce à mão. Não é um extrator genérico de constante
+# — seriam ~210 delas, a maioria sem chave nem prosa correspondente (ver o
+# cabeçalho do example.toml sobre o que não é configurável). O que ela garante
+# é que os valores estruturais listados aqui nunca divergem em silêncio; e
+# constante renomeada reprova, em vez de passar como "não encontrada".
+# ---------------------------------------------------------------------------
+
+# (rótulo, arquivo em UI, constante, chave do TOML, trecho esperado na espec)
+VALORES = [
+    ("tab_height", "tab_bar.rs", "tab_height", "appearance.tabs.tab_height",
+     "**34px** (`tab_height`)"),
+    ("trilha_padding", "tab_bar.rs", "trilha_padding",
+     "appearance.tabs.trilha_padding", "`trilha_padding` **6px nos quatro lados**"),
+    ("max_width", "tab_bar.rs", "max_width", "appearance.tabs.max_width",
+     "`max_width` 260"),
+    ("padding_left", "tab_bar.rs", "padding_left",
+     "appearance.tabs.padding_left", "`padding: 0 6px 0 10px`"),
+    ("gap entre abas", "tab_bar.rs", "tab_gap", "appearance.tabs.gap", "`gap: 4`"),
+    ("icon_button_padding_x", "tab_bar.rs", "icon_button_padding_x",
+     "appearance.tabs.icon_button_padding_x",
+     "`icon_button_padding_x` **4px de cada lado**"),
+    ("font_size da aba", "tab_bar.rs", "font_size", "appearance.tabs.font_size",
+     "13px"),
+    ("label_font_size", "tab_bar.rs", "pill_font_size",
+     "appearance.groups.label_font_size", "13px/**500**"),
+    ("label_max_width", "tab_bar.rs", "pill_name_max_width",
+     "appearance.groups.label_max_width", "**140px** (`pill_name_max_width`)"),
+    ("wrapper_padding", "tab_bar.rs", "wrapper_padding",
+     "appearance.groups.wrapper_padding", "`padding: 3` (`wrapper_padding`)"),
+    ("gap entre grupos", "tab_bar.rs", "trilha_gap", "appearance.groups.gap",
+     "`gap: 6` (`trilha_gap`)"),
+    ("indicador de overflow", "tab_bar.rs", "OVERFLOW_PILL_WIDTH",
+     "appearance.tabs.overflow.indicator_size", "**18×18**"),
+    ("recuo do overflow", "tab_bar.rs", "OVERFLOW_EDGE_INSET",
+     "appearance.tabs.overflow.edge_inset", None),
+    ("passo do overflow", "tab_bar.rs", "OVERFLOW_SCROLL_STEP",
+     "appearance.tabs.overflow.scroll_step", "90 px"),
+    ("botão de janela", "tab_bar.rs", "WINDOW_BUTTON_WIDTH",
+     "appearance.window_controls.button_width", "**46px**"),
+    ("semáforo do macOS", "tab_bar.rs", "MACOS_TRAFFIC_LIGHT_INSET",
+     "appearance.window_controls.macos_traffic_light_inset", "78px"),
+    ("em dos ícones", "chrome.rs", "ICON_EM_SIZE",
+     "appearance.tabs.icon_em_size", "**20px de em**"),
+    ("alfa da cápsula", "chrome.rs", "GROUP_CAPSULE_FILL_STRENGTH",
+     "appearance.groups.capsule_alpha", "`.85` da cor cheia"),
+    ("alfa da pílula", "chrome.rs", "PILL_GLASS_FILL_STRENGTH",
+     "appearance.groups.label_alpha", "`.92` da cor cheia"),
+    ("borda da aba", "chrome.rs", "TAB_BORDER_WIDTH",
+     "appearance.tabs.colors.active_border_width", "**borda 2px**"),
+    ("raio da cápsula", "chrome.rs", "WRAPPER_CORNER_RADIUS",
+     "appearance.groups.wrapper_corner_radius", None),
+    ("altura do rename", "chrome.rs", "RENAME_FIELD_HEIGHT",
+     "appearance.tabs.rename.height", None),
+    ("largura do rename", "chrome.rs", "RENAME_FIELD_MAX_WIDTH",
+     "appearance.tabs.rename.width", None),
+    ("raio do quadro do terminal", "paint.rs", "TERMINAL_BOX_CORNER_RADIUS",
+     "appearance.terminal_frame.corner_radius", "raio 6"),
+    ("resize da janela", "titlebar.rs", "RESIZE_BORDER_PX",
+     "appearance.window_controls.resize_border", "**6px** em toda borda"),
+]
+
+
+def constante_rust(fonte: str, nome: str) -> float | None:
+    """Valor numérico de um `const NOME: T = v;` ou de um campo `nome: v,`."""
+    for padrao in (
+        rf"\bconst\s+{nome}\s*:\s*[^=]+=\s*([0-9]+(?:\.[0-9]+)?)",
+        rf"\b{nome}\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*,",
+    ):
+        m = re.search(padrao, fonte)
+        if m:
+            return float(m.group(1))
+    return None
+
+
+def valor_toml(config: dict, caminho: str) -> float | None:
+    atual = config
+    for parte in caminho.split("."):
+        if not isinstance(atual, dict) or parte not in atual:
+            return None
+        atual = atual[parte]
+    return float(atual) if isinstance(atual, (int, float)) else None
+
+
+def verificar_valores(config: dict | None) -> None:
+    secao("Valores: código, TOML e especificação")
+    if config is None:
+        erro("pulado — configuração não carregou")
+        return
+    if not os.path.exists(SPEC):
+        erro(f"{SPEC} não encontrado")
+        return
+
+    spec = ler(SPEC)
+    fontes: dict[str, str] = {}
+    for arquivo in {v[1] for v in VALORES}:
+        caminho = os.path.join(UI, arquivo)
+        if not os.path.exists(caminho):
+            erro(f"{caminho} não encontrado")
+            return
+        fontes[arquivo] = ler(caminho)
+
+    conferidos = 0
+    for rotulo, arquivo, nome, chave, trecho in VALORES:
+        codigo = constante_rust(fontes[arquivo], nome)
+        if codigo is None:
+            erro(f"{rotulo}: `{nome}` não existe em {arquivo} — renomeada?")
+            continue
+        esperado = valor_toml(config, chave)
+        if esperado is None:
+            erro(f"{rotulo}: chave `{chave}` ausente (ou não numérica) em {CONFIG}")
+            continue
+        if esperado != codigo:
+            erro(
+                f"{rotulo}: código {codigo} != TOML {esperado} "
+                f"(`{nome}` em {arquivo} vs `{chave}`)"
+            )
+            continue
+        if trecho is not None and trecho not in spec:
+            erro(f'{rotulo}: {SPEC} não menciona "{trecho}"')
+            continue
+        conferidos += 1
+
+    # Duas geometrias derivadas, e são justamente as que já divergiram por
+    # cópia: a altura da barra vinha de duas fórmulas em dois lugares
+    # (`chrome::bar_height` é a única fonte hoje), e a largura de aba virou
+    # fixa, com o teto do rótulo servindo também de piso.
+    tb = fontes["tab_bar.rs"]
+
+    def campo(nome: str) -> float | None:
+        return constante_rust(tb, nome)
+
+    partes_barra = [campo(n) for n in ("tab_height", "wrapper_padding", "trilha_padding")]
+    if all(v is not None for v in partes_barra):
+        barra = partes_barra[0] + partes_barra[1] * 2 + partes_barra[2] * 2
+        declarada = valor_toml(config, "appearance.tabs.height")
+        if declarada != barra:
+            erro(
+                f"altura da barra: chrome::bar_height dá {barra}, "
+                f"`appearance.tabs.height` diz {declarada}"
+            )
+        else:
+            conferidos += 1
+
+    partes_aba = [
+        campo(n)
+        for n in (
+            "padding_left",
+            "label_max_width",
+            "internal_gap",
+            "close_button_size",
+            "icon_button_padding_x",
+            "padding_right",
+        )
+    ]
+    if all(v is not None for v in partes_aba):
+        pl, rotulo_max, gap, fechar, pad_x, pr = partes_aba
+        largura = pl + rotulo_max + gap + (fechar + pad_x * 2) + pr
+        piso = valor_toml(config, "appearance.tabs.min_width")
+        if piso != largura:
+            erro(
+                f"largura de aba: TabBarStyle::tab_width dá {largura}, "
+                f"`appearance.tabs.min_width` diz {piso}"
+            )
+        else:
+            conferidos += 1
+
+    if conferidos == len(VALORES) + 2:
+        ok(f"{conferidos} valores batem entre código, {CONFIG} e {SPEC}")
+
+
 def main() -> int:
     os.chdir(ROOT)
     print(f"Porecatu — verificação de documentação\nraiz: {ROOT}")
@@ -199,6 +383,7 @@ def main() -> int:
     config = carregar_config()
     verificar_tokens(config)
     verificar_fases()
+    verificar_valores(config)
 
     print()
     if falhas:

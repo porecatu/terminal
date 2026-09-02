@@ -105,8 +105,17 @@ Documentação:
 python scripts/verify-docs.py
 ```
 
-Checa links relativos, o TOML de exemplo, cores sem origem na especificação
-visual e a cobertura da tabela de fases. É o mesmo que o CI roda.
+Cinco checagens: links relativos, o TOML de exemplo parseando, cores sem
+origem na especificação visual, a cobertura da tabela de fases e — desde o
+[ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) — os **valores
+estruturais de aparência batendo entre código, `porecatu.example.toml` e
+especificação**. É o mesmo que o CI roda.
+
+Essa última existe porque o binário é a referência visual: mexer numa
+constante de `porecatu-ui` e esquecer o documento não quebrava nada antes. A
+lista de valores é explícita, em `VALORES` no script — mudou uma constante que
+está lá, atualize os três lados; acrescentou uma que devia estar, some à
+lista. Constante renomeada reprova em vez de passar batido.
 
 **Verificação interativa não é opcional.** Boa parte do comportamento do
 terminal — teclado, mouse, seleção, clipboard, resize com TUI aberta — não é
