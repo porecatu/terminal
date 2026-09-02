@@ -62,7 +62,7 @@ O que já roda hoje:
 
 Ainda **não** existe: `porecatu-config` e `porecatu-session` são stubs (só o cabeçalho SPDX). Arquivo de configuração e restauração de sessão chegam nas fases seguintes — enquanto `porecatu-config` não existe, os valores de aparência entram como constantes citando no comentário a chave TOML de origem. As três decisões que a F4 precisava já estão escritas: [ADR-0029](docs/adr/0029-enum-de-acao-e-gramatica-de-tecla.md) (enum de ação e gramática de tecla), [ADR-0030](docs/adr/0030-escopo-do-hot-reload.md) (o que aplica a quente e o que exige reinício) e [ADR-0031](docs/adr/0031-temas-nomeados.md) (temas nomeados).
 
-O CI passa nas três plataformas (**241 testes**, `clippy -D warnings` limpo). A **verificação interativa é dívida assumida**: o critério de saída das três fases exigia gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de DPI diferente —, e a proteção de foco do Windows bloqueia input sintético. As fases fecharam com cobertura automatizada mais smoke test, e o que não foi confirmado está escrito por fase em [docs/roadmap.md](docs/roadmap.md). Falta um PR de código para fechar a F3: o RF-2.21 (`group.next`/`group.prev`), a regra do RF-2.17 e os atalhos que faltaram no nível de grupo.
+O CI passa nas três plataformas (**277 testes**, `clippy -D warnings` limpo). A **verificação interativa é dívida assumida**: o critério de saída das três fases exigia gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de DPI diferente —, e a proteção de foco do Windows bloqueia input sintético. As fases fecharam com cobertura automatizada mais smoke test, e o que não foi confirmado está escrito por fase em [docs/roadmap.md](docs/roadmap.md). Falta um PR de código para fechar a F3: o RF-2.21 (`group.next`/`group.prev`), a regra do RF-2.17 e os atalhos que faltaram no nível de grupo.
 
 ## Design
 
@@ -159,6 +159,6 @@ git clone https://github.com/porecatu/terminal.git
 cd terminal
 
 cargo run                    # abre a janela com um terminal
-cargo test --workspace       # 241 testes
+cargo test --workspace       # 277 testes
 python scripts/verify-docs.py
 ```

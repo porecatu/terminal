@@ -224,8 +224,9 @@ O RF-2.17 (*"ativar uma aba de grupo colapsado expande o grupo"*) fica **parcial
 ### O PR de fechamento da F3
 
 O código dos itens acima está escrito, o CI está verde nas três plataformas e o
-workspace tem **241 testes** (contra 145 ao fim da F2): `porecatu-ui` 108,
-`porecatu-core` 54, `porecatu-term` 51, `porecatu-render` 20, `porecatu-pty` 8.
+workspace tem **277 testes** (241 ao fim da fase, mais os PRs de correção
+posteriores; contra 145 ao fim da F2): `porecatu-ui` 134, `porecatu-core` 57,
+`porecatu-term` 51, `porecatu-render` 27, `porecatu-pty` 8.
 
 Um PR fecha a fase, com três coisas que são a mesma conversa — o nível de grupo
 do [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md) e a navegação que ele
