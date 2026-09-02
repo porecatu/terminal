@@ -307,22 +307,19 @@ count_corner_radius = 9
 # não um tom próprio -- mesma nota.
 
 # --- indicador -------------------------------------------- RF-4.14, RF-4.15
-# Lista combinável, não escolha exclusiva. O design usa pílula E
-# sublinhado juntos: a pílula identifica o grupo na barra, o sublinhado
-# diz a que grupo a aba pertence quando a pílula sai da vista por rolagem.
-#   "pill"      pílula colorida em volta do rótulo do grupo
-#   "underline" linha colorida na base de cada aba do grupo
-#   "left-bar"  barra vertical antes da primeira aba do grupo
-#   "outline"   contorno em volta do rótulo e das abas
+# NÃO HÁ CHAVE DE ESTILO. O indicador de grupo é a pílula (nome e caret na
+# cor cheia do grupo) mais a cápsula atrás das abas, e é a única forma --
+# ADR-0032, que supersede o ADR-0009 §5. O `indicator_style` que vivia aqui
+# oferecia quatro estilos: "pill" (o que ficou), "underline" (desenhado na
+# F3 e removido -- virou ruído depois que a cápsula passou a ser cor cheia)
+# e "left-bar"/"outline", que nunca tiveram anatomia e saíram de escopo.
 #
-# O default era ["pill", "underline"]. O sublinhado SAIU, por pedido do
-# usuário: ele existia para dizer a que grupo a aba pertence quando a
-# pílula sai da vista, e desde que a cápsula passou a ser pintada com a cor
-# cheia a cor do grupo já está atrás da aba inteira -- o traço na base
-# virou ruído. "left-bar" e "outline" continuam sem anatomia desenhada
-# (seção 4.2 da espec.). Ver ADR-0009 e a seção 4.4.
-indicator_style = ["pill"]
-indicator_thickness = 2
+# `indicator_thickness` também saiu: o valor 2 que ela carregava governa a
+# borda da aba, que tem chave própria em [appearance.tabs.colors]
+# (`active_border_width`/`inactive_border_width`). Nada mudou de valor.
+#
+# A cápsula continua governada por `tint_strength` e pelos alfas de vidro,
+# abaixo; a geometria da pílula, pelas chaves `label_*` acima.
 
 # Espaço entre grupos, maior que o espaço entre abas do mesmo grupo.
 # É o que torna a fronteira do grupo perceptível sem depender de cor.    RF-4.16

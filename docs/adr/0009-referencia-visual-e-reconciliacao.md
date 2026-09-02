@@ -1,11 +1,13 @@
 # ADR-0009 — Referência visual e reconciliação com o design canvas
 
-**Status:** Superseded by [ADR-0027](0027-controles-de-janela-e-resize-proprios.md) e [ADR-0028](0028-o-binario-como-referencia-visual.md), os dois **parcialmente**:
+**Status:** Superseded by [ADR-0027](0027-controles-de-janela-e-resize-proprios.md), [ADR-0028](0028-o-binario-como-referencia-visual.md) e [ADR-0032](0032-interface-do-v1-fechada.md), os três **parcialmente**:
 
 - **ADR-0027** — só a linha "Barra de título customizada" da tabela de escopo faseado na seção 2 da decisão, e a divergência equivalente da especificação visual §4.4; as demais sete linhas daquela tabela continuam valendo.
 - **ADR-0028** — a seção 1 ("Autoridade dividida") na metade que faz o **design** normativo para a aparência, e a razão operacional da seção 4 (*"o binário recém-compilado bate com o mockup, e qualquer diferença visível é um bug de implementação"*). A autoridade se inverte: o binário é o alvo visual, e a especificação passa a descrevê-lo. A outra metade da seção 1 — os PRDs normativos para **comportamento** — e o tema do design como **default** do projeto (seção 4) continuam valendo.
 
-As seções 2, 3, 5, 6, 7 e 8 seguem em vigor, com a ressalva do ADR-0027 acima.
+- **ADR-0032** — a seção 5 ("Indicador de grupo combinável") por inteiro. `indicator_style` deixa de ser lista combinável e deixa de existir: o indicador do v1 é a pílula mais a cápsula, e `underline`, `left-bar` e `outline` saem de escopo.
+
+As seções 2, 3, 6, 7 e 8 seguem em vigor, com a ressalva do ADR-0027 acima.
 **Data:** 2026-08-26
 **Relacionados:** ADR-0003, ADR-0006, ADR-0008, PRD-000, PRD-004, PRD-005
 

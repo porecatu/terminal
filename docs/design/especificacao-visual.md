@@ -425,12 +425,13 @@ e a espessura vem do `indicator_thickness`/`selected_border_width` que o arquivo
 exemplo já usava. Como a espessura é a mesma em todo estado, o que distingue a aba
 selecionada é só a **cor** do token.
 
-**Não há sublinhado de grupo.** O `box-shadow: inset 0 -2px 0 <cor do grupo>` na base
-da aba existia para dizer a que grupo ela pertence quando a pílula sai da vista por
-rolagem; desde que a cápsula passou a ser pintada com a cor cheia (§2.3), a cor do
-grupo já está atrás da aba inteira, e o traço virou ruído. `indicator_style`
-(RF-4.14) continua sendo uma lista combinável, e o default passa a ser `["pill"]`.
-Registro na seção 4.4.
+**Não há sublinhado de grupo, e não há como ligá-lo.** O `box-shadow: inset 0 -2px 0
+<cor do grupo>` na base da aba existia para dizer a que grupo ela pertence quando a
+pílula sai da vista por rolagem; desde que a cápsula passou a ser pintada com a cor
+cheia (§2.3), a cor do grupo já está atrás da aba inteira, e o traço virou ruído. O
+indicador de grupo é a pílula mais a cápsula, e a chave `indicator_style` **deixou de
+existir** — junto com os estilos `left-bar` e `outline`, que nunca tiveram anatomia
+([ADR-0032](../adr/0032-interface-do-v1-fechada.md)). Registro na seção 4.4.
 
 Conteúdo:
 
@@ -776,7 +777,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Botão de nova aba | `[v1]` | PRD-001 RF-1.1, PRD-004 RF-4.11 |
 | Cápsula de grupo (cor cheia, vidro, sombra) | `[v1]` | [PRD-002](../prd/prd-002-grupos-de-abas.md), PRD-004 RF-4.19 |
 | Pílula: nome e caret, na cor cheia do grupo | `[v1]` | PRD-002 RF-2.9 a RF-2.13, RF-2.17 |
-| Indicador de grupo na aba (`indicator_style`) | `[v1]` | PRD-004 RF-4.14 — só `pill` é desenhado; ver §2.5 |
+| Indicador de grupo: pílula e cápsula | `[v1]` | PRD-004 RF-4.14 — forma única, sem chave de estilo ([ADR-0032](../adr/0032-interface-do-v1-fechada.md)) |
 | Grupo colapsado (só pílula) | `[v1]` | PRD-002 RF-2.13 |
 | Abas sem grupo (wrapper sem pílula) | `[v1]` | [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md) |
 | Editor de grupo: nome, swatches, ações | `[v1]` | PRD-002 RF-2.9 a RF-2.11, RF-2.22 |
@@ -837,12 +838,13 @@ Precisam de decisão de desenho na implementação. Listados para não passarem 
 
 | Requisito | O que falta |
 |---|---|
-| PRD-004 RF-4.14 | os estilos `left-bar` e `outline` do indicador de grupo — o design desenhava `pill` e `underline`, e o binário desenha só `pill` (§2.5); os outros dois nunca tiveram anatomia (F4) |
 | PRD-003 RF-3.9 | aba restaurada ainda sem shell iniciado (F5) |
 
 Enquanto não houver desenho aprovado para esses, valem os tokens da seção 1 e o julgamento de quem implementa — nunca cores ou dimensões novas fora da tabela.
 
 > **Quarta rodada, com o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md).** O RF-5.14 (cores de seleção de texto no terminal) saiu desta lista: o valor da seção 1.5 nasceu do `::selection` do canvas, e é o que o binário desenha — logo, é o valor deliberado, e não há desenho faltando. O que falta é a chave de configuração, que é trabalho normal da F4.
+
+> **Quinta rodada, com o [ADR-0032](../adr/0032-interface-do-v1-fechada.md).** Saiu o RF-4.14, e com ele o último item desta lista que falava do chrome **atual**: `left-bar` e `outline` deixaram de ser escopo do v1, em vez de ganharem anatomia. Sobra um item, e ele é de **recurso** que ainda não existe — a aba restaurada da F5 —, não de desenho pendente na interface de hoje. É a diferença que o ADR-0032 §2 fixa: falta de comportamento se registra; falta de aparência não existe.
 
 **Resolvidos depois da primeira versão desta lista.** O RF-4.21 (como o erro de configuração é exibido) estava aqui e saiu: o [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) definiu a superfície de aviso, e a anatomia está na seção 2.14. O mesmo ADR cobriu sete requisitos que não constavam nem desta lista nem da 4.1 — RF-1.6, RF-2.23, RF-3.1, RF-3.10, RF-3.14, RF-3.16 e RF-5.8 —, além do menu de contexto exigido por RF-1.1, RF-1.2, RF-2.20 e RF-2.22. Nenhum deles introduziu cor nova: todos saem dos tokens de popover da seção 1.
 
@@ -864,7 +866,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 
 | O que o desenho pedia | O que vale, e por quê | Onde |
 |---|---|---|
-| Design combina pílula **e** sublinhado; PRD-004 modelava enum exclusivo | `indicator_style` vira lista combinável, default `["pill", "underline"]` | ADR-0009 |
+| Design combina pílula **e** sublinhado; PRD-004 modelava enum exclusivo | `indicator_style` virou lista combinável, default `["pill", "underline"]` — e **a chave depois saiu por inteiro**: o indicador é a pílula mais a cápsula, forma única (linha do ADR-0032, abaixo) | ADR-0009, superado pelo [ADR-0032](../adr/0032-interface-do-v1-fechada.md) |
 | Design usa `Ctrl+T`, `Ctrl+G`, `Ctrl+,`, `Ctrl+1..6` | ADR-0008 vence: nada de `Ctrl+<letra>` sozinho. Chips de tecla do mockup são ilustrativos | ADR-0009 |
 | `Ctrl+Shift+P` é paleta no design, `theme.cycle` no ADR-0008 | Paleta fica com `Ctrl+Shift+P`; `theme.cycle` migra para `Ctrl+Shift+Y` | ADR-0009 |
 | Design tem configurações por GUI; ADR-0003 decidiu só TOML | Painel é `[v2]` e, quando existir, **escreve no TOML** — o arquivo continua sendo a única fonte de verdade | ADR-0009 |
@@ -893,7 +895,8 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Swatch de cor 8×8 na pílula, fundo `#1f242c` neutro em volta, borda `1px #2b313b` (§2.4, `swatch_size`/`label_background`/`label_border`) | **Sem swatch, sem borda.** A pílula inteira (fundo, não só um quadrado) é pintada com a cor cheia do grupo — a mesma cápsula do wrapper por trás dela, então o quadrado virou redundante e a borda neutra virou um contorno cinza sem função sobre a cor cheia. Nome e caret passam de `#c3cad3`/`#e4e8ee` para **`#12151a`** (`count_background`), o mesmo escuro do "+" do grupo: sobre a cor cheia o claro perde contraste. `label_background`/`label_border`/`label_foreground`/`caret_foreground`/`swatch_size`/`swatch_corner_radius` saem do arquivo de exemplo. `label_padding_left` sobe de 8 para **10**. Tudo pedido do usuário | F3, revisto |
 | Ícones do chrome escritos como glyphs Unicode: `✕ 10px` (§2.5, §2.15), `▶ 8px` (§2.4), chevrons de overflow (§2.18) | **Nenhum deles desenhava.** U+2715, U+25B6 e U+25BC não estão na IBM Plex Sans e o `fontdb` do projeto não carrega fonte do sistema ([ADR-0016](../adr/0016-fontes-embutidas.md)) — sem fallback, sem desenho. Entra uma **face de ícones** (Lucide, ISC): o binário desenha o ícone equivalente do catálogo, não aquele codepoint. Tamanhos e caixas da especificação valem sem mudança | [ADR-0024](../adr/0024-face-de-icones.md) |
 | Tamanhos de ícone da §2.5/§2.6/§2.4/§2.18 (`✕ 10px`, `+ 15px`, `▶ 8px`, `chevron 10px`) | Lidos como tamanho de **desenho**, e o binário desenha **maior** que eles: a em dos ícones é 20 px (`chrome::ICON_EM_SIZE`), o que dá ✕ de 11.8 px. Nos tamanhos da prosa o traço do Lucide (`2/24` da em) fica em 0.83 px, e o antialiasing o mistura com o fundo — o ícone some, sem a cor ter mudado. Pedido do usuário depois de ver os tamanhos originais em tela | [ADR-0024](../adr/0024-face-de-icones.md) |
-| Sublinhado de 2px na cor do grupo na base de cada aba (§2.5, `indicator_style = ["pill", "underline"]`, RF-4.19) | **Removido.** Ele existia para dizer a que grupo a aba pertence quando a pílula sai da vista; desde que a cápsula passou a ser pintada com a cor cheia (linha acima), a cor do grupo já está atrás da aba inteira e o traço virou ruído na base dela. Pedido do usuário. Quando `config` existir (F4), o default de `indicator_style` é a chave que governa isto — hoje é constante | F3 |
+| Sublinhado de 2px na cor do grupo na base de cada aba (§2.5, `indicator_style = ["pill", "underline"]`, RF-4.19) | **Removido.** Ele existia para dizer a que grupo a aba pertence quando a pílula sai da vista; desde que a cápsula passou a ser pintada com a cor cheia (linha acima), a cor do grupo já está atrás da aba inteira e o traço virou ruído na base dela. Pedido do usuário. Não volta por configuração: a chave que o governaria saiu (linha abaixo) | F3, fechado no ADR-0032 |
+| Quatro estilos de indicador de grupo numa lista combinável — `pill`, `underline`, `left-bar`, `outline` (§2.3, §2.5, RF-4.14) | **Um só: a pílula mais a cápsula.** `underline` foi desenhado e removido; `left-bar` e `outline` nunca tiveram anatomia e saíram de escopo — nasceram como alternativas ao wrapper tingido a `.07` e, contra a cápsula de cor cheia, seriam versões mais discretas de uma marca que o produto quer forte. `indicator_style` e `indicator_thickness` saem do arquivo de exemplo; a espessura de 2px que a segunda carregava é a da borda da aba, que já tem chave própria. Os dois estilos eram **desenháveis** hoje (um `Quad` fino e um `RoundedQuad` sem preenchimento) — a recusa é de produto, não de capacidade | [ADR-0032](../adr/0032-interface-do-v1-fechada.md) |
 | Borda da aba de 1px (§2.5, §1.7) | **2px**, em todo estado — 1px do `#22262e` da aba inativa não se lê contra a cápsula de cor cheia. Espessura reaproveitada de `indicator_thickness`/`selected_border_width`, não inventada; cada estado mantém a cor dele. A seleção deixa de se distinguir por espessura e passa a se distinguir só pelo verde-água do token. Pedido do usuário | F3 |
 | Aba de 30px de altura, trilha colada nas bordas da barra (§2.2, §2.5) | Aba de **34px** e trilha com **6px** de respiro nos quatro lados (`trilha_padding`) — os mesmos 6px que a §2.5 já dá à barra ("aba h30 + padding 6px da barra") e que a implementação nunca teve. A barra vai de 36 para **52px**, acima dos 42 que a §2.5 e o `height` do arquivo de exemplo declaram, porque a aba cresceu junto. Pedidos do usuário, calibrados em tela; os dois números ficam num lugar só | F3 |
 | Aba tem a mesma altura dentro e fora de grupo (§2.3, §2.5: o wrapper apenas envolve abas de altura `tab_height`) | **Aba solta é mais alta.** Dentro de um grupo ela cede `wrapper_padding` acima e abaixo para o bloco do grupo; solta não há bloco a que ceder, então ela ocupa a caixa inteira do wrapper (`tab_height + wrapper_padding * 2`). Efeito: agrupada e solta alinham topo e base na barra, em vez de a solta parecer encolhida no meio de um vão vazio. Pedido do usuário | F3 |

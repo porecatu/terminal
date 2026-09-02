@@ -75,18 +75,19 @@ Todo usuário, com defaults que funcionam sem configuração alguma. A profundid
 
 **RF-4.13** — Configuráveis para o rótulo do grupo: espaçamento interno horizontal, tamanho da fonte, raio dos cantos.
 
-**RF-4.14** — Configurável: o **estilo do indicador de grupo**, como **lista combinável** — não escolha exclusiva. Quatro formas:
+**RF-4.14** — O **indicador de grupo** é a **pílula** — nome e caret na cor cheia do grupo — mais a **cápsula** atrás das abas. Não é configurável, e é a única forma.
 
-| Estilo | Desenho |
-|---|---|
-| `pill` | Pílula colorida em volta do rótulo, mais a **cápsula** do grupo atrás das abas |
-| `underline` | Linha colorida na base de cada aba do grupo |
-| `left-bar` | Barra vertical colorida antes da primeira aba do grupo |
-| `outline` | Contorno colorido envolvendo rótulo e abas |
+*Emendado em 2026-09-02* ([ADR-0032](../adr/0032-interface-do-v1-fechada.md), que supersede o [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) §5). Este requisito oferecia quatro estilos numa lista combinável — `pill`, `underline`, `left-bar`, `outline` — e sobrou um:
 
-Default: **`["pill"]`**. *Emendado* — era `["pill", "underline"]`, como no design. O sublinhado existia para dizer a que grupo uma aba pertence quando a pílula sai da vista por rolagem; desde que a cápsula do grupo passou a ser pintada com a cor cheia (RF-4.19), a cor do grupo está atrás da aba inteira e o traço na base virou ruído. A lista continua **combinável**, e `underline` continua válido para quem quiser ligá-lo. `left-bar` e `outline` seguem sem anatomia desenhada (especificação visual §4.2). Ver [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) e [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md).
+- `underline` foi desenhado na F3 e **removido**: o traço na base da aba virou ruído depois que a cápsula passou a ser pintada com a cor cheia (RF-4.19), porque a cor do grupo já está atrás da aba inteira.
+- `left-bar` e `outline` **nunca tiveram anatomia** e saíram de escopo: nasceram como alternativas ao wrapper tingido a `.07` e, contra a cápsula de cor cheia, são versões mais discretas de uma marca que o produto quer forte.
+- A chave `indicator_style` **sai** do arquivo de configuração. Com um valor só ela não escolhe nada, e a lista vazia criaria um grupo sem pílula — logo, sem lugar para o nome.
 
-**RF-4.15** — Configurável: espessura do indicador de grupo.
+O que a decisão preserva: a cápsula continua governada por RF-4.19 (`tint_strength`, cor cheia, desenhada também no colapso) e a geometria da pílula por RF-4.13.
+
+**RF-4.15** — Configurável: a espessura da **borda da aba**, em todo estado.
+
+*Emendado em 2026-09-02* (ADR-0032). Era "espessura do indicador de grupo", quando o indicador tinha formas de traço (`underline`, `left-bar`, `outline`). Sem elas, o valor `2` que a chave carregava é o que governa a borda da aba (§2.5 da especificação visual) — e essa borda já tem chave própria: `active_border_width` e `inactive_border_width` em `[appearance.tabs.colors]`. `indicator_thickness` sai de `[appearance.groups]`; nenhum valor muda.
 
 **RF-4.16** — Configurável: espaço horizontal entre grupos, distinto do espaço entre abas do mesmo grupo. *(É o que faz a fronteira do grupo ser percebida sem depender só da cor.)*
 
