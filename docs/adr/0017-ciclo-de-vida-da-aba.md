@@ -49,6 +49,10 @@ Todos os sete pontos atravessam a fronteira de `porecatu-term`, e três deles mu
 
 A precedência é: `cwd` da aba ativa → `startup_directory` → home. Nenhum nível consulta o SO.
 
+> **Correção factual, 2026-09-02.** Os dois últimos níveis colapsaram na implementação: `startup_directory` é o **diretório home do usuário** (`dirs::home_dir()`). Antes era `std::env::current_dir()`, o diretório de onde o Porecatu foi lançado — o que fazia toda aba nova abrir na pasta do binário quando não havia `cwd` conhecido por OSC 7. Quando `porecatu-config` existir (F4), a chave passa a poder apontar outro lugar, e a precedência volta a ter três níveis distintos.
+>
+> No mesmo movimento: **`group.new_tab` herda o `cwd` da última aba do grupo de destino**, não o da aba ativa. Criar aba num grupo pelo "+" dele, estando com outra aba em foco, herdaria um diretório sem relação com o grupo em que a aba nasce.
+
 ### 2. RF-1.7 perde o nível do processo em primeiro plano
 
 A precedência de título passa a ser, em definitivo:

@@ -18,6 +18,18 @@ Nenhuma das duas vem instalada no Windows, no macOS ou na maioria das distribui�
 
 Isso torna o critério de saída da F2 (*"barra de abas confere com o mockup"*) e o da F4 (*"o binário com a config padrão bate com o mockup"*) inalcançáveis como estão escritos — não por bug, por premissa faltando.
 
+> **Nota de clareza (2026-09-02), sem mudança de decisão.** O critério que este
+> ADR cita — *"o binário com a config padrão bate com o mockup"* — **não existe
+> mais nessa forma**: o [ADR-0028](0028-o-binario-como-referencia-visual.md)
+> inverteu a autoridade visual, e é o binário que define a aparência, com a
+> especificação passando a descrevê-lo. A decisão tomada aqui não muda por isso,
+> e o argumento dela fica mais forte, não mais fraco: a razão de embutir a fonte
+> é que **métrica de fonte é invariante de layout** — ela decide largura de
+> célula, de aba e onde o título trunca. Com o binário como referência, uma face
+> vinda do sistema faria a referência mudar de máquina para máquina, que é
+> exatamente o que não pode acontecer.
+
+
 A decisão precisa sair antes da F1, porque é a F1 que constrói o caminho de carregamento de fonte.
 
 ## Decisão

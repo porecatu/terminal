@@ -88,7 +88,9 @@ Definido em [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), resumido aqui po
 
 ### Colapso
 
-**RF-2.13** — O usuário colapsa e expande um grupo por clique no rótulo ou por atalho. Colapsado, o grupo mostra apenas o rótulo e a contagem de abas; suas abas somem da barra.
+**RF-2.13** — O usuário colapsa e expande um grupo por clique no rótulo ou por atalho. Colapsado, o grupo mostra apenas o rótulo; suas abas somem da barra.
+
+*Emendado em 2026-09-02* ([ADR-0028](../adr/0028-o-binario-como-referencia-visual.md) §3): **a contagem de abas na pílula não é desenhada**, colapsada nem expandida — o contador saiu por pedido do usuário, e a cápsula de cor cheia continua pintada em volta da pílula para dizer de que cor o grupo é. A chave `show_tab_count_when_collapsed` (PRD-004 RF-4.17) fica no arquivo de configuração. O que sobrevive no rótulo colapsado é o **indicador agregado** do RF-2.16, que é outro elemento — um ponto de 6 px, não um número.
 
 **RF-2.14** — Colapsar um grupo que contém a aba ativa move o foco para a aba visível mais próxima fora dele.
 

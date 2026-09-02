@@ -5,22 +5,78 @@ Versionamento seguirá [SemVer](https://semver.org/lang/pt-BR/) a partir do
 primeiro release.
 
 > **Nenhuma versão foi publicada ainda.** As fases F0, F1, F2 e F3 do
-> [roadmap](docs/roadmap.md) estão implementadas — a F3 exceto o RF-2.21
-> (`group.next`/`group.prev`), que a mantém aberta. `cargo run` abre uma janela
-> com abas e grupos de terminal funcionais, e `Ctrl+Shift+N` abre uma segunda
-> janela; artefatos de release só aparecem na F6.
+> [roadmap](docs/roadmap.md) estão **fechadas**; a próxima é a F4
+> (configuração). `cargo run` abre uma janela com abas e grupos de terminal
+> funcionais, sem decoração nativa fora do macOS, e `Ctrl+Shift+N` abre uma
+> segunda janela; artefatos de release só aparecem na F6.
 
 ## [Não publicado]
 
 ### Adicionado
 
+#### Fechamento da F3 — navegação de grupo
+
+- **`group.next` / `group.prev` (RF-2.21)**, o item que mantinha a fase aberta.
+  `Workspace::step_group` anda de grupo em grupo na ordem visual, circulando, e
+  ativa **a última aba visitada** do destino — o `Group::last_active` que estava
+  gravado desde a primeira etapa da fase e não tinha nenhum consumidor fora dos
+  testes. Grupo colapsado é pulado (navegar não expande nada) e grupo vazio
+  também; sem `last_active`, cai na primeira aba do grupo
+  ([ADR-0020](docs/adr/0020-grupos-explicitos.md) §6). Run implícito conta como
+  destino, senão "voltar para as abas soltas" não teria gesto. Teclas
+  `Ctrl+Shift+PageDown` / `Ctrl+Shift+PageUp`, exigindo `Ctrl` **e** `Shift`
+  para não colidir com a rolagem de scrollback
+- **Atalhos do nível de grupo** que faltavam na cadeia do
+  [ADR-0008](docs/adr/0008-teclas-e-roteamento-de-input.md): `Ctrl+Shift+U`
+  (`group.dissolve`), `Ctrl+Shift+E` (`group.rename`) e `Ctrl+Shift+K`
+  (`group.toggle_collapse`) — antes só existiam por menu, editor ou clique na
+  pílula. Despacham pelo mesmo `run_group_action` do menu, então tecla e menu
+  não divergem. O alvo é o grupo da aba ativa, resolvido por
+  `group_menu::keyboard_target`, que devolve `None` sobre um run implícito: o
+  que o menu mostra esmaecido (RF-10.20), a tecla trata como no-op
+- **RF-2.17: ativar aba de grupo colapsado expande o grupo.** Em
+  `Workspace::activate_tab` — o roadmap afirmava que a regra estava no modelo, e
+  não estava. Nenhum caminho da F3 ativa aba oculta (as duas fontes que o
+  requisito cita são busca, F6, e restauração de sessão, F5), então isto entra
+  como invariante para que o primeiro desses caminhos não tenha de redescobri-la
+
+#### Depois da F3
+
+Ajustes de interface e de infraestrutura pedidos com o app em tela, fora do
+recorte de fase. A interface resultante é o alvo desde o
+[ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md).
+
+- **Janela sem decoração nativa fora do macOS**
+  ([ADR-0027](docs/adr/0027-controles-de-janela-e-resize-proprios.md)): drag
+  region na área vazia da barra de abas com duplo clique maximizando, três
+  botões de janela de 46px colados na borda direita (Lucide `minus`/`square`/
+  `copy`/`x`, com hover e o destrutivo do fechar) e resize de 6px em toda borda,
+  desligado com a janela maximizada. Fechar continua passando pelo diálogo de
+  confirmação. No macOS a decoração nativa fica, e a trilha reserva 78px à
+  esquerda para o semáforo
+- **Ícone do app**: PNG embutido decodificado em runtime para toda janela
+  (`app_icon.rs`, crate `png`) e o `.ico` embutido como recurso PE no Windows
+  por um `build.rs` com `winres`. Era item da F6; entregou-se antes
+- **Efeito de vidro** na cápsula e na pílula de grupo: alfa de `.85` e `.92` na
+  cor cheia, mais um rim translúcido de 1px em branco a `.16` (`GLASS_BORDER`).
+  Sem primitiva de blur, não há como turvar o que passa por trás — só deixar
+  passar menos dele, e ainda assim lê como painel translúcido em vez de chapado.
+  Custo zero de render: troca de cor e alfa nos quads que já eram desenhados
+- **Sombra em camadas** (`chrome::push_shadow`): três `RoundedQuad` pretos
+  empilhados, spread crescente e alfa decrescente, na cápsula de grupo, na aba
+  solta e no quadro do terminal. É a aproximação possível sem passo de blur; os
+  cinco widgets de chrome e o fantasma de arraste seguem sem sombra
+- **Borda de 1px** na cápsula de grupo e na aba solta; aba dentro de um grupo
+  fica só com a borda dela, porque a cápsula carrega a sombra por ela
+
 #### F3 — Grupos
 
 O diferencial do produto. Entregue em seis etapas, uma por PR, mais quatro PRs
-de correção. Ainda não há configuração nem sessão: os valores de aparência
-seguem como constantes citando a chave TOML de origem. **O RF-2.21
-(`group.next`/`group.prev`) não foi implementado** — o MRU por grupo está
-gravado, falta a operação que anda de grupo em grupo.
+de correção e o PR de fechamento (acima). Ainda não há configuração nem sessão:
+os valores de aparência seguem como constantes citando a chave TOML de origem.
+O RF-2.21 (`group.next`/`group.prev`) atravessou as seis etapas **sem
+implementação** — o MRU por grupo ficou gravado sem consumidor — e foi o
+primeiro item do PR de fechamento.
 
 - **Decisões que a fase exigia**, escritas antes de ela abrir:
   [ADR-0020](docs/adr/0020-grupos-explicitos.md) (grupos explícitos — grupo
@@ -291,8 +347,11 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Alterado
 
+- `png` de 0.17 para 0.18, com a adaptação de `app_icon.rs`: `Decoder::new`
+  passou a exigir `BufRead + Seek` e `output_buffer_size` devolve `Option`
 - `[appearance.tabs] font_size` de 12.5 para 13 — rótulo da aba e nome da
-  pílula do grupo (que segue o mesmo tamanho, pedido do usuário). Itens de
+  pílula do grupo, que segue o mesmo **tamanho** mas diverge no **peso** (500,
+  para o rótulo do grupo ler como bold; pedido do usuário). Itens de
   menu continuam em 12.5, token separado (`overlay.rs::MENU_ITEM_TEXT_SIZE`)
 - Actions do GitHub pinadas por SHA de commit em vez de tag major flutuante,
   com a versão legível no comentário. Tag pode ser reapontada e uma release
@@ -301,6 +360,28 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Corrigido
 
+- Colapsar um grupo poderia ter passado a ser no-op com a regra do RF-2.17: a
+  escada de foco do RF-1.5 move o foco para fora ao colapsar, e se ela
+  devolvesse uma aba do **próprio** grupo, `activate_tab` o expandiria de volta.
+  Ela não devolve — pula grupo colapsado e começa depois do índice dele —, e há
+  teste de regressão fixando isso
+- **Clique preso em qualquer app que peça mouse tracking** (`btop4win`, o
+  Claude Code CLI): `dispatch_mouse_input` retornava cedo em todo release, então
+  `input::handle_mouse_button` nunca era chamado com `pressed = false` — o
+  programa recebia o `M` do press (SGR) e nunca o `m` do release, em modo nenhum.
+  Regressão introduzida na etapa 6 da F2. O estado de botão apertado passa a ser
+  zerado sempre no release e em `Focused(false)`, para alt-tab com o botão
+  físico apertado não deixá-lo preso
+- **Aba nova abria no diretório do binário**: `startup_directory` usava
+  `std::env::current_dir()`, que é de onde o Porecatu foi lançado, não o
+  diretório do usuário. Passa a ser `dirs::home_dir()` quando não há `cwd`
+  conhecido por OSC 7 ([ADR-0017](docs/adr/0017-ciclo-de-vida-da-aba.md))
+- **Vão maior, e sem cor, entre um grupo e as abas soltas ao lado do que entre
+  dois grupos**: o `wrapper_padding` entrava também no run implícito, que não
+  tem cápsula para absorvê-lo. Agora só entra onde há cápsula
+- **Indicador de abas fora da vista** virou círculo de 18×18 com só o chevron,
+  no lugar da cápsula de 34×18 com chevron e contagem — a cápsula lia como
+  comprida demais para o que informa (pedido do usuário)
 - Cursor do terminal invisível: `frame::GeometryBatch` guardava `Quad` e
   `RoundedQuad` em dois `Vec` separados, e a montagem de instâncias sempre
   desenhava todo `rounded` depois de todo `quads` do batch — não importa a

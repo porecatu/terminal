@@ -25,7 +25,7 @@ Esta é a enumeração. É o insumo direto do parser de `[keybindings]` na F4 e 
 | Ação | O que faz | Origem | Fase | Arg |
 |---|---|---|---|---|
 | `tab.new` | Cria aba no grupo da aba ativa, herdando o `cwd` | [PRD-001](../prd/prd-001-abas.md) RF-1.1 | F2 | |
-| `tab.close` | Fecha a aba ativa; confirma se houver processo em primeiro plano | RF-1.2, RF-1.6 | F2 | |
+| `tab.close` | Fecha a aba ativa; confirma se houver processo em primeiro plano. Fechar a **última** aba fecha a janela | RF-1.2, RF-1.6, RF-1.4 | F2 | |
 | `tab.next` | Próxima aba na ordem visual, circulando | RF-1.11 | F2 | |
 | `tab.prev` | Aba anterior na ordem visual, circulando | RF-1.11 | F2 | |
 | `tab.goto_1` … `tab.goto_9` | Ativa a N-ésima aba visível da janela | RF-1.12 | F2 | |
@@ -47,20 +47,36 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > `tab.close` confirma conforme o [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md):
 > a condição é tela alternativa ou reporte de mouse ligado, não o processo em
 > primeiro plano. `tab.new` herda o `cwd` capturado por OSC 7, que passa a
-> existir na F2; sem OSC 7, cai em `startup_directory`.
-
-> **Estado na F3, como ficou implementado.** Sete das nove `group.*` e a
-> `tab.move_to_group` existem: `group.create`, `group.dissolve`, `group.rename`,
-> `group.set_color`, `group.toggle_collapse`, `group.new_tab` e
-> `group.close_all`. **`group.next` e `group.prev` (RF-2.21) não foram
-> implementadas** — o MRU por grupo está gravado (`Group::last_active`), mas não
-> há operação que ande de grupo em grupo, e é isso que mantém a fase aberta.
+> existir na F2; sem OSC 7, cai em `startup_directory`, que hoje é o **home do
+> usuário** (correção factual no ADR-0017).
 >
-> O **nível de grupo** da cadeia do ADR-0008 ficou pela metade: só
-> `group.create` tem tecla (`Ctrl+Shift+G`, default fixo no código). O
-> `Ctrl+Shift+U` que o ADR dá a `group.dissolve` não foi ligado, e
-> `group.toggle_collapse` só existe por clique na pílula, menu ou editor. Fecha
-> com o parser de `[keybindings]`, na F4.
+> **Fechar a última aba fecha a janela**, e fechar a última janela encerra o app
+> (RF-1.4) — decidido depois da F2, pela mesma razão que uma janela sem aba não
+> tem estado que valha manter na tela. O caminho é o mesmo do
+> `window.close`: sobe como pedido de fechamento e passa pelo diálogo de
+> confirmação quando há mais de uma aba.
+
+> **Estado ao fim da F3.** As nove `group.*` e a `tab.move_to_group` existem.
+> `group.next`/`group.prev` (RF-2.21) foram as últimas, no PR que fechou a fase:
+> `Workspace::step_group` anda na ordem visual, circulando, e ativa a última aba
+> visitada do destino (`Group::last_active`, gravado desde a primeira etapa e até
+> ali sem consumidor). Pula grupo **colapsado** — navegar não expande nada — e
+> grupo vazio; sem `last_active`, cai na primeira aba do grupo
+> ([ADR-0020](../adr/0020-grupos-explicitos.md) §6). Run implícito conta como
+> destino: sem isso, "voltar para as abas soltas" não teria gesto.
+>
+> **Teclas ligadas** (defaults de Windows/Linux fixos no código, sem parser de
+> `[keybindings]` até a F4): `group.create` `Ctrl+Shift+G`, `group.dissolve`
+> `Ctrl+Shift+U`, `group.rename` `Ctrl+Shift+E`, `group.toggle_collapse`
+> `Ctrl+Shift+K`, `group.next`/`group.prev` `Ctrl+Shift+PageDown`/`PageUp`. As
+> duas últimas exigem `Ctrl` **e** `Shift`, porque `Shift+PageUp`/`PageDown`
+> sozinhos são a rolagem de scrollback. `group.new_tab` e `group.close_all`
+> seguem sem default, de propósito (ver abaixo), e `group.set_color` não é
+> vinculável.
+>
+> Os **defaults de macOS** da tabela do ADR-0008 (`Cmd+…`, incluindo
+> `Cmd+Alt+Right`/`Left` para navegar entre grupos) não existem em código: nada
+> disso responde no Mac até o parser da F4.
 >
 > `group.new_tab` ganhou um segundo caminho que nenhum documento previa: um
 > botão "+" ao final de cada grupo na barra, inclusive de um run implícito
@@ -89,7 +105,7 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 | `group.toggle_collapse` | Colapsa ou expande o grupo | RF-2.13, RF-2.14 | F3 | |
 | `group.next` | Próximo grupo, ativando sua última aba visitada | RF-2.21 | F3 | |
 | `group.prev` | Grupo anterior, ativando sua última aba visitada | RF-2.21 | F3 | |
-| `group.new_tab` | Cria aba dentro do grupo | RF-2.8, RF-2.22 | F3 | |
+| `group.new_tab` | Cria aba dentro do grupo, herdando o `cwd` da **última aba daquele grupo** | RF-2.8, RF-2.22 | F3 | |
 | `group.close_all` | Fecha todas as abas do grupo; confirmação com contagem, **sempre** | RF-2.22, RF-2.23 | F3 | |
 
 `group.close_all` é a única ação cuja confirmação não é configurável — o RF-2.23 chama isso de *"a ação mais destrutiva da interface"*.
@@ -128,9 +144,11 @@ ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 
 > **Na implementação (F3).** O menu de grupo só abre a partir da pílula, e
 > pílula só existe para grupo explícito: nenhum item nasce esmaecido ali, porque
-> o menu nunca abre sobre um run implícito. A regra acima continua valendo como
-> contrato — quando houver outro caminho de invocação (tecla, na F4), é ela que
-> decide o que fica indisponível.
+> o menu nunca abre sobre um run implícito. **Por tecla, o caminho existe** desde
+> o PR de fechamento da fase, e é `group_menu::keyboard_target` quem aplica a
+> regra: ele resolve o grupo da aba ativa e devolve `None` sobre um run
+> implícito, então as quatro ações acima são no-op ali. Função pura, testada sem
+> GPU — o "esmaecido" do menu e o "no-op" da tecla são a mesma regra, não duas.
 
 ---
 

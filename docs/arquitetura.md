@@ -36,6 +36,8 @@ As seções 2, 3, 4, 5 e 7 estão implementadas (F0, F1, F2 e a F3 do [roadmap](
         +-----------------+      +------------------+
 ```
 
+Fora dos crates, três coisas moram na raiz e valem registro, porque nenhuma delas cabia no diagrama: `src/main.rs` carrega `#![windows_subsystem = "windows"]` (sem isso o binário fica no subsistema `console` e o Windows abre um terminal ao lado da janela); `build.rs` embute o `.ico` de `assets/icon/` como recurso PE no Windows, via `winres`, sob `cfg(windows)`; e `porecatu-ui/src/app_icon.rs` decodifica um PNG embutido em runtime (crate `png`) para dar ícone a toda janela criada — os dois caminhos existem porque o ícone da barra de tarefas e o ícone da janela não vêm do mesmo lugar no Windows.
+
 O grafo de dependências permitido está tabelado em [CLAUDE.md](../CLAUDE.md). Duas regras merecem destaque:
 
 **`porecatu-render` não conhece o domínio.** Ele expõe um punhado de primitivas — retângulo, retângulo arredondado, run de texto, clip rect — e nada mais. Não sabe o que é uma aba. Isso mantém o renderer testável e substituível, e força a aparência configurável a viver onde ela pertence: em `config` (o que o usuário pediu) + `ui` (como isso vira geometria).
@@ -260,6 +262,8 @@ barato para eles, além de estampá-los no snapshot.
 
 ## 5. Fronteira de render
 
+> **Depois da F3.** Duas coisas entraram na pintura da grade e valem nota aqui, porque são invariantes de layout e não escolha de desenho. (1) A grade é desenhada dentro de um **quadro arredondado** (`paint::terminal_box_rect`), colado na barra de abas em cima e recuado nos outros três lados; a área útil do terminal é a de dentro do quadro menos o padding interno, e é dela que saem colunas e linhas. (2) A célula e a origem de cada `TextRun` são **arredondadas ao pixel físico** (`snap_cell_metrics_to_pixel_grid`), o que mata a costura de 1px entre glyphs — mas esse valor arredondado **não** serve para decidir se um caractere pode viajar num run compartilhado: essa decisão é em **em**, contra o avanço natural do `'M'` da face mono. Comparar um contra o outro erra por até meio pixel, reprova toda célula e re-shapa a grade inteira por frame.
+
 `porecatu-render` recebe uma **sequência de camadas** por frame ([ADR-0018](adr/0018-composicao-de-frame.md)), cada uma com sua lista de primitivas:
 
 - `Quad { rect, color }`
@@ -307,6 +311,12 @@ notify (watcher) -> arquivo mudou
 
 Config inválida **nunca** derruba o app nem limpa a tela. O usuário está editando o arquivo enquanto o app roda; estados intermediários inválidos são normais.
 
+> **Escopo, decidido no [ADR-0030](adr/0030-escopo-do-hot-reload.md).** "Recalcula métricas + redraw" acima é só uma das três classes de chave. **A**: cor, fonte de chrome, dimensão, geometria de widget, `animations`, tema — troca o `Arc`, recalcula o layout da barra (que é função pura desde a F2) e redesenha. **B**: métrica de fonte do terminal e as alturas que mudam a área útil — recalcula a célula, deriva colunas e linhas e **redimensiona todos os PTYs**, um resize por recarga, coalescido pelo debounce. **C**: `decorations`, `tab_bar_position`, `opacity` de janela, `[shell]`, `[session]` — não aplica a quente e **avisa** qual é o escopo real, porque ignorar em silêncio produz o relato "mudei e não aconteceu nada", que é indistinguível de bug.
+>
+> A classe fica escrita ao lado da chave no arquivo de exemplo. O evento de `notify` chega por `EventLoopProxy`, como o `Wakeup` de PTY: uma recarga é um evento e um frame, e o loop volta a dormir ([ADR-0007](adr/0007-modelo-de-threading.md)). O `Arc<Config>` é **do processo**, não da janela — uma recarga redesenha todas as janelas, e o recálculo da classe B roda por janela, porque a métrica é a mesma e as dimensões não.
+>
+> Duas decisões vizinhas: o enum `Action` que o parser de `[keybindings]` produz nasce em `porecatu-core`, porque `config` não pode depender de `ui` ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)); e um tema nomeado só declara **cor**, nunca fonte ou dimensão, o que mantém `theme.cycle` na classe A ([ADR-0031](adr/0031-temas-nomeados.md)).
+
 ---
 
 ## 7. Estratégia de teste
@@ -353,6 +363,6 @@ Isso só é cumprível porque o medidor de texto do [ADR-0018](adr/0018-composic
 >
 > **Na implementação (F3 — fim da ordem de cedência do overflow).** `fit_width` deixou de encolher qualquer coisa e virou sinônimo de `layout`: a busca binária sobre o teto do rótulo (nota da etapa 5 da F2, abaixo) fazia até 24 recálculos completos da trilha **por frame**, cada um remedindo o texto de toda aba com `cosmic-text` sem cache — custo que cresce com o número de abas, justamente no caso de overflow que a motivava. Rótulo e nome de pílula ficam no teto e a trilha rola como um componente só (`trilha_width`/`right_zone_width` separam a trilha rolável da zona fixa do botão global). `available_width` continua na assinatura, sem uso dentro da função, para não mexer em todos os chamadores. Divergência registrada na seção 4.4 da [especificação visual](design/especificacao-visual.md), com a prosa da §2.18 já atualizada.
 >
-> **Na implementação.** 241 testes no workspace ao fim da F3, contra 145 ao fim da F2: `porecatu-ui` 108, `porecatu-core` 54, `porecatu-term` 51, `porecatu-render` 20, `porecatu-pty` 8. O crescimento é quase todo de `porecatu-ui` e `porecatu-core`, pelo mesmo motivo que na F2: cada estado novo da F3 (seleção, editor, menu de grupo, popover de destino, relógio de animação) nasceu como módulo puro, sem `winit` nem `wgpu`.
+> **Na implementação.** 292 testes no workspace, contra 145 ao fim da F2: `porecatu-ui` 137, `porecatu-core` 69, `porecatu-term` 51, `porecatu-render` 27, `porecatu-pty` 8. (Eram 241 ao fim das seis etapas da F3; o resto veio dos PRs de correção — grade, medição de texto, ícones, largura de aba — e do PR de fechamento, que trouxe a navegação de grupo.) O crescimento é quase todo de `porecatu-ui` e `porecatu-core`, pelo mesmo motivo que na F2: cada estado novo da F3 (seleção, editor, menu de grupo, popover de destino, relógio de animação) nasceu como módulo puro, sem `winit` nem `wgpu`.
 >
 > **Na implementação.** 145 testes no workspace ao fim da F2, contra 51 ao fim da F1: `porecatu-term` 51, `porecatu-ui` 43, `porecatu-core` 23, `porecatu-render` 20, `porecatu-pty` 10 — os três últimos crates não tinham teste nenhum na F1. `porecatu-ui` deixou de ser um crate sem teste porque a F2 extraiu o estado puro dos widgets e o layout da barra para módulos que não dependem de `winit` nem de `wgpu`. Da F1: golden-style alimentando o parser com sequência VT crua (sem PTY real — o [ADR-0004](adr/0004-pty-cross-platform.md) avisa que o ConPTY reemite bytes de um jeito não portável), mais unitários puros de codificação de tecla e de reporte de mouse, que não dependem de `winit` nem do motor rodando, só de `TermModes`. `porecatu-pty` tem 8, incluindo integração de spawn/kill. Um teste de regressão cobre o deadlock de fechamento da seção 2: fecha um terminal com processo de longa duração numa thread separada com timeout, e falha se `shutdown` travar.

@@ -12,7 +12,7 @@
 //! sobre um grupo explícito (`docs/reference/acoes.md`: "sobre um grupo
 //! implícito... ficam indisponíveis" -- mas o menu nunca abre sobre um).
 
-use porecatu_core::GroupId;
+use porecatu_core::{GroupId, Workspace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupAction {
@@ -138,12 +138,72 @@ impl GroupContextMenu {
     }
 }
 
+/// Alvo de uma `group.*` acionada **por tecla**: o grupo da aba ativa
+/// (`docs/reference/acoes.md`, "qual grupo cada uma dessas ações afeta").
+///
+/// `None` quando a aba ativa está num **run implícito**, porque
+/// `group.rename`, `group.set_color`, `group.dissolve` e
+/// `group.toggle_collapse` são indisponíveis ali -- grupo implícito não tem
+/// nome, cor nem colapso ([ADR-0006], ADR-0020). Pelo menu isso aparece
+/// como item esmaecido (RF-10.20); por tecla, o gesto é no-op.
+///
+/// Vive aqui, e não em `lib.rs`, porque é regra de produto e não depende de
+/// `winit` nem de `wgpu` -- mesma divisão do resto do crate.
+///
+/// [ADR-0006]: ../../../docs/adr/0006-modelo-de-abas-e-grupos.md
+pub fn keyboard_target(workspace: &Workspace) -> Option<GroupId> {
+    let active = workspace.active_tab()?;
+    let id = workspace.group_of_tab(active)?;
+    workspace.group(id).filter(|g| g.is_explicit()).map(|_| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn g(n: u32) -> GroupId {
         GroupId::new(n)
+    }
+
+    /// Por tecla, o alvo é o grupo da aba ativa -- não o último grupo
+    /// clicado, nem o primeiro da barra.
+    #[test]
+    fn keyboard_target_is_the_active_tabs_group() {
+        use porecatu_core::GroupColor;
+
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let ga = ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        let gb = ws.group_tabs(&[b], "web", GroupColor::Blue).unwrap();
+
+        ws.activate_tab(a);
+        assert_eq!(keyboard_target(&ws), Some(ga));
+        ws.activate_tab(b);
+        assert_eq!(keyboard_target(&ws), Some(gb));
+    }
+
+    /// Sobre um run implícito não há alvo: as `group.*` de nome, cor,
+    /// colapso e dissolução são indisponíveis ali (RF-10.20).
+    #[test]
+    fn keyboard_target_is_none_over_an_implicit_run() {
+        let mut ws = Workspace::new();
+        let solta = ws.append_tab("zsh", None);
+        ws.activate_tab(solta);
+        assert!(
+            ws.group(ws.group_of_tab(solta).unwrap())
+                .unwrap()
+                .is_implicit()
+        );
+        assert_eq!(keyboard_target(&ws), None);
+    }
+
+    /// Workspace sem aba ativa não tem alvo, e a consulta não entra em
+    /// pânico -- é o estado em que a janela fica ao colapsar o único grupo.
+    #[test]
+    fn keyboard_target_is_none_without_an_active_tab() {
+        let ws = Workspace::new();
+        assert_eq!(keyboard_target(&ws), None);
     }
 
     #[test]

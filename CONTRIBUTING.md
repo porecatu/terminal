@@ -3,8 +3,8 @@
 Obrigado pelo interesse. Este documento reúne as convenções que já estão
 decididas, para que ninguém precise garimpá-las nos ADRs.
 
-> **Estado atual: F0, F1, F2 e F3 implementadas — a F3 exceto o RF-2.21**
-> (`group.next`/`group.prev`), que a mantém aberta. `cargo run` abre uma janela
+> **Estado atual: F0, F1, F2 e F3 fechadas**; a próxima é a F4
+> (configuração), com os ADR-0029 a 0031 já escritos. `cargo run` abre uma janela
 > com abas e grupos de terminal funcionais, seleção múltipla, editor de grupo,
 > arraste entre grupos, menu de contexto, tooltip, aviso, diálogo de confirmação
 > e uma segunda janela por atalho. Não há arquivo de configuração nem sessão
@@ -105,8 +105,17 @@ Documentação:
 python scripts/verify-docs.py
 ```
 
-Checa links relativos, o TOML de exemplo, cores sem origem na especificação
-visual e a cobertura da tabela de fases. É o mesmo que o CI roda.
+Cinco checagens: links relativos, o TOML de exemplo parseando, cores sem
+origem na especificação visual, a cobertura da tabela de fases e — desde o
+[ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) — os **valores
+estruturais de aparência batendo entre código, `porecatu.example.toml` e
+especificação**. É o mesmo que o CI roda.
+
+Essa última existe porque o binário é a referência visual: mexer numa
+constante de `porecatu-ui` e esquecer o documento não quebrava nada antes. A
+lista de valores é explícita, em `VALORES` no script — mudou uma constante que
+está lá, atualize os três lados; acrescentou uma que devia estar, some à
+lista. Constante renomeada reprova em vez de passar batido.
 
 **Verificação interativa não é opcional.** Boa parte do comportamento do
 terminal — teclado, mouse, seleção, clipboard, resize com TUI aberta — não é

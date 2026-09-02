@@ -12,7 +12,7 @@
 | [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito |
 | [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito |
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
-| [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Superseded by ADR-0027 (parcial) |
+| [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Superseded by ADR-0027 e ADR-0028 (parcial) |
 | [0010](0010-licenciamento.md) | Licenciamento sob GPL-3.0-or-later | Aceito |
 | [0011](0011-toolchain-rust.md) | Toolchain Rust pinada e política de versão | Aceito |
 | [0012](0012-identificacao-do-terminal.md) | Identificação do terminal: `TERM` e capacidades anunciadas | Aceito |
@@ -31,6 +31,10 @@
 | [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Superseded by ADR-0026 |
 | [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito |
 | [0027](0027-controles-de-janela-e-resize-proprios.md) | Controles de janela e resize próprios (Windows/Linux) | Aceito |
+| [0028](0028-o-binario-como-referencia-visual.md) | O binário como referência visual | Aceito |
+| [0029](0029-enum-de-acao-e-gramatica-de-tecla.md) | Enum de ação e gramática de tecla | Aceito |
+| [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito |
+| [0031](0031-temas-nomeados.md) | Temas nomeados: escopo, merge e ciclo | Aceito |
 
 ## Convenção
 
