@@ -12,7 +12,8 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F1 — Terminal único | **fechada** |
 | F2 — Abas | **fechada** |
 | F3 — Grupos | **fechada** |
-| F4 a F6 | não iniciadas |
+| F4 — Configuração | **em andamento** (etapas 1-2 fechadas, etapa 3 em revisão) |
+| F5 a F6 | não iniciadas |
 
 > **A verificação interativa é dívida assumida, não critério pendente.** Os
 > critérios de saída da F1, da F2 e da F3 exigiam gesto de verdade — `vim`,
@@ -347,16 +348,17 @@ Itens:
 
 **Divisão sugerida**, no padrão das seis etapas da F1, da F2 e da F3, uma por PR:
 
-1. **`porecatu-config` nasce.** Structs `serde` com defaults completos, resolução de
-   caminho (`--config` → `PORECATU_CONFIG` → caminho de plataforma via `dirs`), erro
-   com linha e chave, chave desconhecida como aviso ([ADR-0003](adr/0003-formato-de-configuracao.md)).
-   **Sem consumidor ainda:** a etapa entrega `Config` carregado e testado, não
-   aparência mudada — e é isso que a torna testável sem GPU e sem janela.
-2. **`porecatu-ui` lê `Config`.** As ~30 constantes que já citam a chave TOML de
-   origem, mais a geometria da barra (`TabBarStyle`) e dos cinco widgets, saem de
-   `const` e passam a vir de um `Arc<Config>`. É a etapa que cobra o critério de
-   saída: com a config padrão, o binário tem de continuar desenhando **exatamente** o
-   que desenha hoje.
+1. **`porecatu-config` nasce — fechada.** Structs `serde` com defaults completos,
+   resolução de caminho (`--config` → `PORECATU_CONFIG` → caminho de plataforma via
+   `dirs`), erro com linha e chave, chave desconhecida como aviso
+   ([ADR-0003](adr/0003-formato-de-configuracao.md)). **Sem consumidor ainda:** a
+   etapa entrega `Config` carregado e testado, não aparência mudada — e é isso que a
+   torna testável sem GPU e sem janela.
+2. **`porecatu-ui` lê `Config` — fechada.** As ~30 constantes que já citavam a chave
+   TOML de origem, mais a geometria da barra (`TabBarStyle`) e dos cinco widgets,
+   saíram de `const` e passaram a vir de um `Arc<Config>`. Critério de saída
+   verificado: com a config padrão, o binário continua desenhando exatamente o que
+   desenhava antes.
 3. **Terminal.** Fonte (família, tamanho, `line_height`, fallback), cores, cursor,
    scrollback, seleção e clipboard saem do `TermParams` fixo que `ui` monta hoje.
    Inclui o **recálculo de grade e o resize de todos os PTYs** quando a métrica de

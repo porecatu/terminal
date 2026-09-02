@@ -43,6 +43,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = "docs/design/especificacao-visual.md"
 CONFIG = "docs/config/porecatu.example.toml"
 UI = "crates/porecatu-ui/src"
+# F4 etapa 2 moveu ~30 constantes de `porecatu-ui` para defaults de
+# `porecatu-config`; os arquivos de origem passaram a viver aqui também.
+CONFIG_APPEARANCE = "crates/porecatu-config/src/appearance"
 
 falhas: list[str] = []
 
@@ -236,39 +239,54 @@ VALORES = [
      "appearance.groups.wrapper_padding", "`padding: 3` (`wrapper_padding`)"),
     ("gap entre grupos", "tab_bar.rs", "trilha_gap", "appearance.groups.gap",
      "`gap: 6` (`trilha_gap`)"),
-    ("indicador de overflow", "tab_bar.rs", "OVERFLOW_PILL_WIDTH",
+    ("indicador de overflow", "tabs.rs", "indicator_size",
      "appearance.tabs.overflow.indicator_size", "**18×18**"),
-    ("recuo do overflow", "tab_bar.rs", "OVERFLOW_EDGE_INSET",
+    ("recuo do overflow", "tabs.rs", "edge_inset",
      "appearance.tabs.overflow.edge_inset", None),
-    ("passo do overflow", "tab_bar.rs", "OVERFLOW_SCROLL_STEP",
+    ("passo do overflow", "tabs.rs", "scroll_step",
      "appearance.tabs.overflow.scroll_step", "90 px"),
-    ("botão de janela", "tab_bar.rs", "WINDOW_BUTTON_WIDTH",
+    ("botão de janela", "window_controls.rs", "button_width",
      "appearance.window_controls.button_width", "**46px**"),
-    ("semáforo do macOS", "tab_bar.rs", "MACOS_TRAFFIC_LIGHT_INSET",
+    ("semáforo do macOS", "window_controls.rs", "macos_traffic_light_inset",
      "appearance.window_controls.macos_traffic_light_inset", "78px"),
-    ("em dos ícones", "chrome.rs", "ICON_EM_SIZE",
+    ("em dos ícones", "tabs.rs", "icon_em_size",
      "appearance.tabs.icon_em_size", "**20px de em**"),
-    ("alfa da cápsula", "chrome.rs", "GROUP_CAPSULE_FILL_STRENGTH",
+    ("alfa da cápsula", "groups.rs", "capsule_alpha",
      "appearance.groups.capsule_alpha", "`.85` da cor cheia"),
-    ("alfa da pílula", "chrome.rs", "PILL_GLASS_FILL_STRENGTH",
+    ("alfa da pílula", "groups.rs", "label_alpha",
      "appearance.groups.label_alpha", "`.92` da cor cheia"),
-    ("borda da aba", "chrome.rs", "TAB_BORDER_WIDTH",
+    ("borda da aba", "tabs.rs", "active_border_width",
      "appearance.tabs.colors.active_border_width", "**borda 2px**"),
-    ("raio da cápsula", "chrome.rs", "WRAPPER_CORNER_RADIUS",
+    ("raio da cápsula", "groups.rs", "wrapper_corner_radius",
      "appearance.groups.wrapper_corner_radius", None),
-    ("altura do rename", "chrome.rs", "RENAME_FIELD_HEIGHT",
+    ("altura do rename", "tabs.rs", "height",
      "appearance.tabs.rename.height", None),
-    ("largura do rename", "chrome.rs", "RENAME_FIELD_MAX_WIDTH",
+    ("largura do rename", "tabs.rs", "width",
      "appearance.tabs.rename.width", None),
-    ("raio do quadro do terminal", "paint.rs", "TERMINAL_BOX_CORNER_RADIUS",
+    ("raio do quadro do terminal", "terminal_frame.rs", "corner_radius",
      "appearance.terminal_frame.corner_radius", "raio 6"),
-    ("resize da janela", "titlebar.rs", "RESIZE_BORDER_PX",
+    ("resize da janela", "window_controls.rs", "resize_border",
      "appearance.window_controls.resize_border", "**6px** em toda borda"),
 ]
 
+# `height`/`width` de `TabsRename` colidem, no mesmo arquivo, com `height`
+# de `Tabs` (altura da barra) e não têm homônimo de `width` -- só `height`
+# precisa de escopo pra não casar com o primeiro `height:` do arquivo.
+ESCOPOS = {"altura do rename": "struct TabsRename"}
 
-def constante_rust(fonte: str, nome: str) -> float | None:
-    """Valor numérico de um `const NOME: T = v;` ou de um campo `nome: v,`."""
+
+def constante_rust(fonte: str, nome: str, escopo: str | None = None) -> float | None:
+    """Valor numérico de um `const NOME: T = v;` ou de um campo `nome: v,`.
+
+    `escopo`, se dado, é uma substring que precisa aparecer antes do campo
+    -- usa-se quando o mesmo nome de campo se repete em mais de um struct
+    do arquivo (ex.: `height` em `Tabs` e em `TabsRename`).
+    """
+    if escopo is not None:
+        pos = fonte.find(escopo)
+        if pos == -1:
+            return None
+        fonte = fonte[pos:]
     for padrao in (
         rf"\bconst\s+{nome}\s*:\s*[^=]+=\s*([0-9]+(?:\.[0-9]+)?)",
         rf"\b{nome}\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*,",
@@ -300,15 +318,16 @@ def verificar_valores(config: dict | None) -> None:
     spec = ler(SPEC)
     fontes: dict[str, str] = {}
     for arquivo in {v[1] for v in VALORES}:
-        caminho = os.path.join(UI, arquivo)
-        if not os.path.exists(caminho):
-            erro(f"{caminho} não encontrado")
+        candidatos = [os.path.join(UI, arquivo), os.path.join(CONFIG_APPEARANCE, arquivo)]
+        caminho = next((c for c in candidatos if os.path.exists(c)), None)
+        if caminho is None:
+            erro(f"{arquivo} não encontrado em nenhum de {candidatos}")
             return
         fontes[arquivo] = ler(caminho)
 
     conferidos = 0
     for rotulo, arquivo, nome, chave, trecho in VALORES:
-        codigo = constante_rust(fontes[arquivo], nome)
+        codigo = constante_rust(fontes[arquivo], nome, ESCOPOS.get(rotulo))
         if codigo is None:
             erro(f"{rotulo}: `{nome}` não existe em {arquivo} — renomeada?")
             continue
