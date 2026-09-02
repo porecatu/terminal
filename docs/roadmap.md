@@ -11,7 +11,7 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F0 — Esqueleto | **fechada** |
 | F1 — Terminal único | **fechada** |
 | F2 — Abas | **fechada** |
-| F3 — Grupos | **fechada exceto o PR de RF-2.21 + RF-2.17 + atalhos `group.*`** (ver a fase) |
+| F3 — Grupos | **fechada** |
 | F4 a F6 | não iniciadas |
 
 > **A verificação interativa é dívida assumida, não critério pendente.** Os
@@ -158,7 +158,7 @@ Quatro simplificações conscientes, documentadas no código (`chrome.rs`, `over
 
 ---
 
-## F3 — Grupos — fechada exceto um PR
+## F3 — Grupos — fechada
 
 Implementa [PRD-002](prd/prd-002-grupos-de-abas.md). É o diferencial do produto.
 
@@ -171,9 +171,9 @@ quatro PRs de correção — bug de ordem em `group_tabs` mais o wiring de
 mesmo sintoma ("o colapso só anima no primeiro grupo"), a última delas a lentidão
 da barra em overflow.
 
-**Falta um PR para fechar:** o RF-2.21 (`group.next`/`group.prev`), a regra do
-RF-2.17 e os atalhos que faltaram no nível de grupo — ver
-[o PR de fechamento](#o-pr-de-fechamento-da-f3).
+**A fase fechou** com um PR final de três itens: o RF-2.21
+(`group.next`/`group.prev`), a regra do RF-2.17 e os atalhos que faltavam no
+nível de grupo — ver [o PR de fechamento](#o-pr-de-fechamento-da-f3).
 
 Antes de a fase abrir, quatro ADRs fecharam as decisões que faltavam — mesmo movimento que os ADR-0017 a 0019 fizeram entre a F1 e a F2, e pela mesma razão: foi a fase anterior que expôs as lacunas. **Não é preâmbulo opcional**; dois deles mudam código que a F2 acabou de estabilizar.
 
@@ -213,43 +213,55 @@ Itens:
 
 O RF-2.17 (*"ativar uma aba de grupo colapsado expande o grupo"*) fica **parcialmente verificável** nesta fase: as duas fontes que o requisito cita são busca (F6) e restauração de sessão (F5), e na F3 não há caminho que ative uma aba oculta.
 
-> **Correção.** Esta seção afirmava que "a regra entra no modelo e no teste
-> unitário". **Não entrou:** `Workspace::activate_tab` não expande grupo
-> colapsado, não há chamada implícita de `collapse_group(id, false)` em
-> `porecatu-ui` (só toggles explícitos) e não há teste do cenário. A regra entra
-> no PR de fechamento abaixo, onde é uma linha em `activate_tab` mais um teste —
-> e é melhor que entre agora do que na F5, quando o primeiro caminho que ativa
-> aba oculta aparecer e o bug for atribuído à restauração de sessão.
+> **Correção, e como ficou.** Esta seção afirmava que "a regra entra no modelo
+> e no teste unitário" quando ela **não havia entrado**: `activate_tab` não
+> expandia grupo colapsado e não havia teste do cenário. O PR de fechamento
+> corrigiu isso — a regra está em `Workspace::activate_tab`, com dois testes,
+> um deles de regressão para o laço que ela poderia criar com
+> `collapse_group` (a escada de foco do RF-1.5 nunca devolve aba do grupo que
+> está colapsando, senão o colapso viraria no-op). Continua sem cenário de
+> ponta a ponta: nenhum caminho da F3 ativa aba oculta, e as duas fontes que o
+> requisito cita são F5 e F6.
 
 ### O PR de fechamento da F3
 
 O código dos itens acima está escrito, o CI está verde nas três plataformas e o
-workspace tem **277 testes** (241 ao fim da fase, mais os PRs de correção
-posteriores; contra 145 ao fim da F2): `porecatu-ui` 134, `porecatu-core` 57,
-`porecatu-term` 51, `porecatu-render` 27, `porecatu-pty` 8.
+workspace tem **292 testes** (241 ao fim das seis etapas, mais os PRs de
+correção e o de fechamento; contra 145 ao fim da F2): `porecatu-ui` 137,
+`porecatu-core` 69, `porecatu-term` 51, `porecatu-render` 27, `porecatu-pty` 8.
 
-Um PR fecha a fase, com três coisas que são a mesma conversa — o nível de grupo
+Um PR fechou a fase, com três coisas que são a mesma conversa — o nível de grupo
 do [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md) e a navegação que ele
 aciona:
 
-1. **RF-2.21 — `group.next`/`group.prev`.** O MRU está no modelo desde a etapa 1
-   (`Group::last_active`, atualizado por `Workspace::activate_tab`,
-   [ADR-0020](adr/0020-grupos-explicitos.md) §6) e **nenhum consumidor existe fora
-   dos testes**. Falta a operação em `Workspace`, ao lado de `step_tab`: anda sobre
-   `navigable_order()`, pula grupo colapsado e, quando `last_active` é `None`, ativa
-   a primeira aba do grupo (ADR-0020 §6). Mais o gesto:
-   `Ctrl+Shift+PageDown`/`PageUp` (`Cmd+Alt+Right/Left` no macOS). Atenção ao
-   vizinho: `Shift+PageUp/PageDown` já é scrollback, e o binding novo precisa exigir
-   `Ctrl` **e** `Shift` para não colidir.
-2. **Os atalhos que faltaram no nível de grupo.** `group.dissolve` (`Ctrl+Shift+U`),
-   `group.rename` (`Ctrl+Shift+E`) e `group.toggle_collapse` (`Ctrl+Shift+K`) só
-   existem por menu, editor ou clique na pílula. Entram como defaults fixos no
-   código, sem esperar o parser da F4 — a lição da própria F3 é que **ação sem gesto
-   no fim da etapa que a nomeia é dívida, não escopo adiado**, e foi um gesto que
-   revelou o bug de ordem do `group_tabs`. O alvo por tecla é o grupo da aba ativa
-   (`Workspace::group_of_tab`), como o catálogo já especifica.
-3. **RF-2.17 — ativar aba de grupo colapsado expande o grupo.** Uma linha em
-   `activate_tab` mais um teste; ver a correção acima.
+1. **RF-2.21 — `group.next`/`group.prev`.** `Workspace::step_group` anda de grupo
+   em grupo na ordem visual, circulando, e ativa **a última aba visitada** do
+   destino (`Group::last_active`, gravado desde a etapa 1 e até aqui sem nenhum
+   consumidor fora dos testes). Três regras do
+   [ADR-0020](adr/0020-grupos-explicitos.md) §6: grupo colapsado é pulado —
+   navegar não expande nada —, grupo vazio também, e `last_active` ausente cai na
+   **primeira** aba do grupo. Sem grupo de origem navegável, entra pela ponta. Run
+   implícito conta como destino: sem isso, "voltar para as abas soltas" não teria
+   gesto. Teclas `Ctrl+Shift+PageDown`/`PageUp`, exigindo `Ctrl` **e** `Shift` para
+   não colidir com o `Shift+PageUp`/`PageDown` do scrollback.
+2. **Os atalhos que faltavam no nível de grupo.** `group.dissolve`
+   (`Ctrl+Shift+U`), `group.rename` (`Ctrl+Shift+E`) e `group.toggle_collapse`
+   (`Ctrl+Shift+K`) existiam só por menu, editor ou clique na pílula. Entraram como
+   defaults fixos no código, sem esperar o parser da F4 — a lição da própria F3 é
+   que **ação sem gesto no fim da etapa que a nomeia é dívida, não escopo
+   adiado**, e foi um gesto que revelou o bug de ordem do `group_tabs`. As três
+   despacham pelo mesmo `run_group_action` do menu, então tecla e menu não podem
+   divergir. O alvo por tecla é o grupo da aba ativa, resolvido por
+   `group_menu::keyboard_target` — função pura, testada sem GPU, que devolve `None`
+   sobre run implícito: o que o menu mostra esmaecido (RF-10.20), a tecla trata
+   como no-op.
+3. **RF-2.17 — ativar aba de grupo colapsado expande o grupo.** Em
+   `Workspace::activate_tab`, com o teste de regressão do laço com
+   `collapse_group`; ver a correção acima.
+
+**Como ficou:** +15 testes (12 em `porecatu-core`, 3 em `porecatu-ui`), `clippy
+-D warnings` limpo, `cargo run` sobe e roda sem `panic`. Os gestos em si entram
+na dívida de verificação interativa das três fases (nota no topo).
 
 ### Dívida da F3
 
@@ -271,8 +283,9 @@ aciona:
   chaves no arquivo de exemplo, uma por consumidor, não uma arredondada.
 - **Defaults de macOS não existem em código.** `handle_tab_action_key` traz os
   defaults de Windows/Linux; a tabela do ADR-0008 define `Cmd+…` para todas as
-  ações de F2 e F3, e nenhuma delas responde no Mac. Fecha com o parser da F4, que
-  precisa saber expressar defaults por plataforma ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)).
+  ações de F2 e F3 — inclusive o `Cmd+Alt+Right`/`Left` do RF-2.21 —, e nenhuma
+  delas responde no Mac. Fecha com o parser da F4, que precisa saber expressar
+  defaults por plataforma ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)).
 - **`app.quit` e `scrollback.to_top`/`to_bottom` seguem sem gesto**, embora
   catalogadas com default no arquivo de exemplo. A operação de scrollback existe em
   `porecatu-term`; falta a tecla.

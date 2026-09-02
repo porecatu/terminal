@@ -701,6 +701,27 @@ impl WindowState {
         self.ensure_active_tab_visible(gpu);
     }
 
+    /// RF-2.21 (`group.next`/`group.prev`): anda de grupo em grupo,
+    /// caindo na última aba visitada do destino. O modelo faz o trabalho
+    /// (`Workspace::next_group`, ADR-0020 §6); aqui só sobra o que é de
+    /// janela -- título e trazer a aba nova para a vista, como em
+    /// `tab.next`/`tab.prev`.
+    ///
+    /// Não há animação: grupo colapsado é pulado, então nada expande nem
+    /// colapsa, e a trilha não reflui (ADR-0022 fecha a lista de
+    /// consumidores do relógio em dois).
+    fn action_group_step(&mut self, delta: isize, gpu: &mut GpuContext) {
+        let moved = if delta >= 0 {
+            self.workspace.next_group()
+        } else {
+            self.workspace.prev_group()
+        };
+        if moved.is_some() {
+            self.sync_window_title();
+            self.ensure_active_tab_visible(gpu);
+        }
+    }
+
     /// `tab.goto_N`: índice sobre a ordem **navegável**, não a visual --
     /// aba de grupo colapsado sai da numeração, e colapsar renumera
     /// `Alt+1..9` (deliberado, ADR-0020 §2).
@@ -1012,6 +1033,70 @@ impl WindowState {
                 // "ctrl+shift+g" = "group.create".
                 Key::Character(s) if s.eq_ignore_ascii_case("g") => {
                     self.action_group_create(gpu);
+                    return ActionOutcome::Handled;
+                }
+                // O resto do nível de grupo da cadeia do ADR-0008, com o
+                // alvo resolvido por `active_explicit_group` -- sobre um
+                // run implícito as três são no-op, como o menu as mostra
+                // esmaecidas. `group.rename` abre o editor no nome
+                // (RF-2.9) em vez de um campo inline próprio: é a mesma
+                // ação que o menu de grupo dispara.
+                //   "ctrl+shift+u" = "group.dissolve"
+                //   "ctrl+shift+e" = "group.rename"
+                //   "ctrl+shift+k" = "group.toggle_collapse"
+                Key::Character(s) if s.eq_ignore_ascii_case("u") => {
+                    if let Some(group) = group_menu::keyboard_target(&self.workspace) {
+                        self.run_group_action(
+                            group,
+                            GroupAction::Dissolve,
+                            gpu,
+                            cell_metrics,
+                            proxy,
+                            startup_directory,
+                            now,
+                        );
+                    }
+                    return ActionOutcome::Handled;
+                }
+                Key::Character(s) if s.eq_ignore_ascii_case("e") => {
+                    if let Some(group) = group_menu::keyboard_target(&self.workspace) {
+                        self.run_group_action(
+                            group,
+                            GroupAction::Rename,
+                            gpu,
+                            cell_metrics,
+                            proxy,
+                            startup_directory,
+                            now,
+                        );
+                    }
+                    return ActionOutcome::Handled;
+                }
+                Key::Character(s) if s.eq_ignore_ascii_case("k") => {
+                    if let Some(group) = group_menu::keyboard_target(&self.workspace) {
+                        self.run_group_action(
+                            group,
+                            GroupAction::ToggleCollapse,
+                            gpu,
+                            cell_metrics,
+                            proxy,
+                            startup_directory,
+                            now,
+                        );
+                    }
+                    return ActionOutcome::Handled;
+                }
+                // RF-2.21, `[keybindings]`: "ctrl+shift+pagedown" =
+                // "group.next", "ctrl+shift+pageup" = "group.prev". Exigem
+                // `ctrl` **e** `shift`: `Shift+PageUp`/`PageDown` sozinhos
+                // são a rolagem de scrollback (`input.rs`), e este ramo
+                // roda antes dela na cadeia de captura.
+                Key::Named(NamedKey::PageDown) => {
+                    self.action_group_step(1, gpu);
+                    return ActionOutcome::Handled;
+                }
+                Key::Named(NamedKey::PageUp) => {
+                    self.action_group_step(-1, gpu);
                     return ActionOutcome::Handled;
                 }
                 // ADR-0015: `window.new`/`window.close`.

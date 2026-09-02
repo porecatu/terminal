@@ -272,6 +272,20 @@ impl Workspace {
     /// RF-1.22: visitar a aba limpa seus indicadores de atividade e
     /// campainha. Atualiza o MRU (`last_active`) do grupo da aba
     /// (ADR-0020 §6).
+    ///
+    /// **RF-2.17: se o grupo da aba estiver colapsado, ele expande.** A aba
+    /// ativa não pode ficar fora da trilha -- é o único estado em que a
+    /// barra não mostraria onde o usuário está. As duas fontes que o
+    /// requisito cita (busca, F6; restauração de sessão, F5) não existem
+    /// ainda, e nenhum caminho da F3 ativa aba oculta: `next_tab`/`prev_tab`
+    /// e o goto-índice andam sobre [`Self::navigable_order`], e
+    /// `next_group`/`prev_group` pulam grupo colapsado. A regra entra no
+    /// modelo agora para que o primeiro desses caminhos a aparecer não
+    /// tenha de descobri-la de novo.
+    ///
+    /// Não há laço com [`Self::collapse_group`]: a escada de foco dele
+    /// nunca devolve aba do grupo que está colapsando (ela pula grupo
+    /// colapsado e começa **depois** do índice dele).
     pub fn activate_tab(&mut self, id: TabId) -> bool {
         if self.tab(id).is_none() {
             return false;
@@ -280,6 +294,9 @@ impl Workspace {
         self.tab_mut(id).expect("checado acima").clear_indicators();
         if let Some(group) = self.groups.iter_mut().find(|g| g.position_of(id).is_some()) {
             group.set_last_active(id);
+            if group.is_collapsed() {
+                group.set_collapsed(false);
+            }
         }
         true
     }
@@ -308,6 +325,67 @@ impl Workspace {
         let next = order[next_idx];
         self.activate_tab(next);
         Some(next)
+    }
+
+    /// RF-2.21: próximo grupo, ativando **a última aba visitada dele**
+    /// (ADR-0020 §6). Devolve a aba ativada.
+    pub fn next_group(&mut self) -> Option<TabId> {
+        self.step_group(1)
+    }
+
+    /// RF-2.21: grupo anterior, ativando a última aba visitada dele.
+    pub fn prev_group(&mut self) -> Option<TabId> {
+        self.step_group(-1)
+    }
+
+    /// Anda de grupo em grupo na ordem visual (a ordem do `Vec`),
+    /// circulando. Três regras, todas do ADR-0020 §6:
+    ///
+    /// - **Grupo colapsado é pulado.** Entrar nele exigiria expandi-lo, e
+    ///   `group.next` é navegação, não uma operação que muda a barra.
+    /// - Grupo **vazio** também é pulado: não há aba para ativar. Um run
+    ///   implícito vazio não sobrevive a `normalize_groups`, mas um
+    ///   `GroupId` explícito recém-criado pode passar por aqui antes de
+    ///   receber abas.
+    /// - O destino é `last_active` do grupo; se ele for `None` -- grupo
+    ///   nunca visitado, ou a aba registrada foi fechada -- vale a
+    ///   **primeira** aba dele.
+    ///
+    /// Sem grupo de origem navegável (nenhuma aba ativa, ou a ativa está
+    /// num grupo que acabou de colapsar) o gesto entra pela ponta: o
+    /// primeiro candidato indo para frente, o último indo para trás.
+    fn step_group(&mut self, delta: isize) -> Option<TabId> {
+        let candidates: Vec<usize> = self
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| !g.is_collapsed() && !g.tabs().is_empty())
+            .map(|(index, _)| index)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let current = self
+            .active_tab
+            .and_then(|tab| self.group_of_tab(tab))
+            .and_then(|group| self.group_index(group))
+            .and_then(|index| candidates.iter().position(|&c| c == index));
+
+        let len = candidates.len() as isize;
+        let target = match current {
+            Some(pos) => candidates[(pos as isize + delta).rem_euclid(len) as usize],
+            None if delta >= 0 => candidates[0],
+            None => candidates[candidates.len() - 1],
+        };
+
+        let group = &self.groups[target];
+        let tab = group
+            .last_active()
+            .filter(|id| group.position_of(*id).is_some())
+            .or_else(|| group.tabs().first().copied())?;
+        self.activate_tab(tab);
+        Some(tab)
     }
 
     /// RF-1.12: acesso direto por índice na ordem **navegável** da janela
@@ -672,6 +750,246 @@ mod tests {
 
     fn tab_ids(ws: &Workspace) -> Vec<TabId> {
         ws.tabs.iter().map(Tab::id).collect()
+    }
+
+    // ---------------------------------------------------------------
+    // RF-2.21: group.next / group.prev
+    // ---------------------------------------------------------------
+
+    /// Cenário base do requisito: dois grupos, e o gesto vai para o outro
+    /// ativando **a última aba visitada dele**, não a primeira.
+    #[test]
+    fn next_group_activates_the_groups_last_visited_tab() {
+        let mut ws = Workspace::new();
+        let a1 = ws.append_tab("zsh", None);
+        let a2 = ws.append_tab("zsh", None);
+        let b1 = ws.append_tab("zsh", None);
+        let b2 = ws.append_tab("zsh", None);
+        let a = ws.group_tabs(&[a1, a2], "api", GroupColor::Red).unwrap();
+        let b = ws.group_tabs(&[b1, b2], "web", GroupColor::Blue).unwrap();
+
+        // Visita b2, depois volta para o grupo "api".
+        ws.activate_tab(b2);
+        ws.activate_tab(a1);
+        assert_eq!(ws.group_of_tab(a1), Some(a));
+
+        assert_eq!(ws.next_group(), Some(b2));
+        assert_eq!(ws.active_tab(), Some(b2));
+        assert_eq!(ws.group_of_tab(b2), Some(b));
+    }
+
+    /// `last_active` `None` -- grupo nunca visitado -- cai na primeira aba
+    /// dele (ADR-0020 §6).
+    #[test]
+    fn next_group_falls_back_to_the_first_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b1 = ws.append_tab("zsh", None);
+        let b2 = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        let b = ws.group_tabs(&[b1, b2], "web", GroupColor::Blue).unwrap();
+
+        // Grupo recém-criado nasce sem MRU (`group_tabs` não visita nada):
+        // o gesto tem de cair na primeira aba dele.
+        ws.activate_tab(a);
+        assert_eq!(ws.group(b).unwrap().last_active(), None);
+        assert_eq!(ws.next_group(), Some(b1));
+
+        // Segundo caso do requisito: MRU gravado e depois **fechado**. O
+        // campo cai para `None` e o gesto volta à primeira aba.
+        ws.activate_tab(b2);
+        ws.activate_tab(a);
+        assert_eq!(ws.group(b).unwrap().last_active(), Some(b2));
+        ws.close_tab(b2);
+        ws.activate_tab(a);
+        assert_eq!(ws.group(b).unwrap().last_active(), None);
+        assert_eq!(ws.next_group(), Some(b1));
+    }
+
+    /// Grupo colapsado é **pulado**: navegar não expande nada (ADR-0020 §6).
+    #[test]
+    fn group_navigation_skips_a_collapsed_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let ga = ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        let gb = ws.group_tabs(&[b], "web", GroupColor::Blue).unwrap();
+        let gc = ws.group_tabs(&[c], "db", GroupColor::Green).unwrap();
+        ws.collapse_group(gb, true);
+        ws.activate_tab(a);
+
+        assert_eq!(ws.next_group(), Some(c));
+        assert_eq!(ws.group_of_tab(c), Some(gc));
+        assert!(ws.group(gb).unwrap().is_collapsed());
+
+        // E de volta, circulando por cima do colapsado outra vez.
+        assert_eq!(ws.next_group(), Some(a));
+        assert_eq!(ws.group_of_tab(a), Some(ga));
+    }
+
+    /// Circula nas duas direções, e `prev_group` é o inverso exato de
+    /// `next_group` com três grupos.
+    #[test]
+    fn group_navigation_wraps_both_ways() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        ws.group_tabs(&[b], "web", GroupColor::Blue).unwrap();
+        ws.group_tabs(&[c], "db", GroupColor::Green).unwrap();
+
+        ws.activate_tab(a);
+        assert_eq!(ws.next_group(), Some(b));
+        assert_eq!(ws.next_group(), Some(c));
+        assert_eq!(ws.next_group(), Some(a));
+
+        assert_eq!(ws.prev_group(), Some(c));
+        assert_eq!(ws.prev_group(), Some(b));
+        assert_eq!(ws.prev_group(), Some(a));
+    }
+
+    /// Abas soltas contam como grupo: o run implícito do ADR-0006 é um
+    /// destino de `group.next` como qualquer outro -- senão "voltar para as
+    /// abas soltas" não teria gesto.
+    #[test]
+    fn group_navigation_includes_the_implicit_run() {
+        let mut ws = Workspace::new();
+        let solta = ws.append_tab("zsh", None);
+        let agrupada = ws.append_tab("zsh", None);
+        let grupo = ws.group_tabs(&[agrupada], "api", GroupColor::Red).unwrap();
+        ws.activate_tab(agrupada);
+
+        assert_eq!(ws.next_group(), Some(solta));
+        assert!(
+            ws.group(ws.group_of_tab(solta).unwrap())
+                .unwrap()
+                .is_implicit()
+        );
+        assert_eq!(ws.next_group(), Some(agrupada));
+        assert_eq!(ws.group_of_tab(agrupada), Some(grupo));
+    }
+
+    /// Workspace vazio e workspace com todo grupo colapsado não têm
+    /// destino: o gesto é no-op, não pânico.
+    #[test]
+    fn group_navigation_without_a_destination_is_a_noop() {
+        let mut vazio = Workspace::new();
+        assert_eq!(vazio.next_group(), None);
+        assert_eq!(vazio.prev_group(), None);
+
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let grupo = ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        ws.collapse_group(grupo, true);
+        assert_eq!(ws.next_group(), None);
+        assert_eq!(ws.prev_group(), None);
+    }
+
+    /// Com um único grupo navegável, circular volta para ele mesmo e a aba
+    /// ativa não muda -- o gesto não pode, por exemplo, cair na primeira
+    /// aba do grupo e perder o lugar do usuário.
+    #[test]
+    fn group_navigation_with_a_single_group_keeps_the_active_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a, b], "api", GroupColor::Red).unwrap();
+        ws.activate_tab(b);
+
+        assert_eq!(ws.next_group(), Some(b));
+        assert_eq!(ws.active_tab(), Some(b));
+    }
+
+    /// Sem aba ativa, o gesto entra pela ponta -- primeiro grupo indo para
+    /// frente, último indo para trás.
+    #[test]
+    fn group_navigation_without_an_active_tab_enters_from_the_edge() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        ws.group_tabs(&[b], "web", GroupColor::Blue).unwrap();
+
+        let mut indo = ws.clone();
+        indo.active_tab = None;
+        assert_eq!(indo.next_group(), Some(a));
+
+        let mut voltando = ws.clone();
+        voltando.active_tab = None;
+        assert_eq!(voltando.prev_group(), Some(b));
+    }
+
+    /// A navegação atualiza o MRU do grupo de destino, então voltar para
+    /// ele depois cai onde o usuário estava -- e não na primeira aba.
+    #[test]
+    fn group_navigation_updates_the_destination_mru() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b1 = ws.append_tab("zsh", None);
+        let b2 = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        let b = ws.group_tabs(&[b1, b2], "web", GroupColor::Blue).unwrap();
+
+        ws.activate_tab(b2);
+        ws.activate_tab(a);
+        ws.next_group();
+        assert_eq!(ws.group(b).unwrap().last_active(), Some(b2));
+    }
+
+    // ---------------------------------------------------------------
+    // RF-2.17: ativar aba de grupo colapsado expande o grupo
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn activating_a_hidden_tab_expands_its_group() {
+        let mut ws = Workspace::new();
+        let fora = ws.append_tab("zsh", None);
+        let dentro = ws.append_tab("zsh", None);
+        let grupo = ws.group_tabs(&[dentro], "api", GroupColor::Red).unwrap();
+        ws.activate_tab(fora);
+        ws.collapse_group(grupo, true);
+        assert!(ws.group(grupo).unwrap().is_collapsed());
+        assert!(!ws.navigable_order().any(|id| id == dentro));
+
+        assert!(ws.activate_tab(dentro));
+        assert!(!ws.group(grupo).unwrap().is_collapsed());
+        assert_eq!(ws.active_tab(), Some(dentro));
+        // Expandido, a aba volta à ordem navegável -- que é a invariante
+        // que o requisito protege: a aba ativa nunca fica fora da trilha.
+        assert!(ws.navigable_order().any(|id| id == dentro));
+    }
+
+    /// Regressão do laço que a regra do RF-2.17 poderia criar: colapsar um
+    /// grupo move o foco (escada do RF-1.5), e se essa escada devolvesse
+    /// uma aba do próprio grupo, `activate_tab` o expandiria de volta --
+    /// colapso viraria no-op.
+    #[test]
+    fn collapsing_the_active_group_does_not_expand_it_back() {
+        let mut ws = Workspace::new();
+        let dentro = ws.append_tab("zsh", None);
+        let fora = ws.append_tab("zsh", None);
+        let grupo = ws.group_tabs(&[dentro], "api", GroupColor::Red).unwrap();
+        ws.activate_tab(dentro);
+
+        assert!(ws.collapse_group(grupo, true));
+        assert!(ws.group(grupo).unwrap().is_collapsed());
+        assert_eq!(ws.active_tab(), Some(fora));
+    }
+
+    /// Colapsar o único grupo com abas deixa o workspace sem aba
+    /// alcançável, e isso também não pode expandir nada.
+    #[test]
+    fn collapsing_the_only_group_leaves_no_active_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let grupo = ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        ws.activate_tab(a);
+
+        assert!(ws.collapse_group(grupo, true));
+        assert!(ws.group(grupo).unwrap().is_collapsed());
+        assert_eq!(ws.active_tab(), None);
     }
 
     #[test]

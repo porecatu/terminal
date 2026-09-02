@@ -4,16 +4,41 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento seguirá [SemVer](https://semver.org/lang/pt-BR/) a partir do
 primeiro release.
 
-> **Nenhuma versão foi publicada ainda.** As fases F0, F1 e F2 do
-> [roadmap](docs/roadmap.md) estão fechadas, e a F3 fechada exceto um PR —
-> RF-2.21 (`group.next`/`group.prev`), a regra do RF-2.17 e os atalhos que
-> faltaram no nível de grupo. `cargo run` abre uma janela com abas e grupos de
-> terminal funcionais, sem decoração nativa fora do macOS, e `Ctrl+Shift+N` abre
-> uma segunda janela; artefatos de release só aparecem na F6.
+> **Nenhuma versão foi publicada ainda.** As fases F0, F1, F2 e F3 do
+> [roadmap](docs/roadmap.md) estão **fechadas**; a próxima é a F4
+> (configuração). `cargo run` abre uma janela com abas e grupos de terminal
+> funcionais, sem decoração nativa fora do macOS, e `Ctrl+Shift+N` abre uma
+> segunda janela; artefatos de release só aparecem na F6.
 
 ## [Não publicado]
 
 ### Adicionado
+
+#### Fechamento da F3 — navegação de grupo
+
+- **`group.next` / `group.prev` (RF-2.21)**, o item que mantinha a fase aberta.
+  `Workspace::step_group` anda de grupo em grupo na ordem visual, circulando, e
+  ativa **a última aba visitada** do destino — o `Group::last_active` que estava
+  gravado desde a primeira etapa da fase e não tinha nenhum consumidor fora dos
+  testes. Grupo colapsado é pulado (navegar não expande nada) e grupo vazio
+  também; sem `last_active`, cai na primeira aba do grupo
+  ([ADR-0020](docs/adr/0020-grupos-explicitos.md) §6). Run implícito conta como
+  destino, senão "voltar para as abas soltas" não teria gesto. Teclas
+  `Ctrl+Shift+PageDown` / `Ctrl+Shift+PageUp`, exigindo `Ctrl` **e** `Shift`
+  para não colidir com a rolagem de scrollback
+- **Atalhos do nível de grupo** que faltavam na cadeia do
+  [ADR-0008](docs/adr/0008-teclas-e-roteamento-de-input.md): `Ctrl+Shift+U`
+  (`group.dissolve`), `Ctrl+Shift+E` (`group.rename`) e `Ctrl+Shift+K`
+  (`group.toggle_collapse`) — antes só existiam por menu, editor ou clique na
+  pílula. Despacham pelo mesmo `run_group_action` do menu, então tecla e menu
+  não divergem. O alvo é o grupo da aba ativa, resolvido por
+  `group_menu::keyboard_target`, que devolve `None` sobre um run implícito: o
+  que o menu mostra esmaecido (RF-10.20), a tecla trata como no-op
+- **RF-2.17: ativar aba de grupo colapsado expande o grupo.** Em
+  `Workspace::activate_tab` — o roadmap afirmava que a regra estava no modelo, e
+  não estava. Nenhum caminho da F3 ativa aba oculta (as duas fontes que o
+  requisito cita são busca, F6, e restauração de sessão, F5), então isto entra
+  como invariante para que o primeiro desses caminhos não tenha de redescobri-la
 
 #### Depois da F3
 
@@ -47,10 +72,11 @@ recorte de fase. A interface resultante é o alvo desde o
 #### F3 — Grupos
 
 O diferencial do produto. Entregue em seis etapas, uma por PR, mais quatro PRs
-de correção. Ainda não há configuração nem sessão: os valores de aparência
-seguem como constantes citando a chave TOML de origem. **O RF-2.21
-(`group.next`/`group.prev`) não foi implementado** — o MRU por grupo está
-gravado, falta a operação que anda de grupo em grupo.
+de correção e o PR de fechamento (acima). Ainda não há configuração nem sessão:
+os valores de aparência seguem como constantes citando a chave TOML de origem.
+O RF-2.21 (`group.next`/`group.prev`) atravessou as seis etapas **sem
+implementação** — o MRU por grupo ficou gravado sem consumidor — e foi o
+primeiro item do PR de fechamento.
 
 - **Decisões que a fase exigia**, escritas antes de ela abrir:
   [ADR-0020](docs/adr/0020-grupos-explicitos.md) (grupos explícitos — grupo
@@ -334,6 +360,11 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Corrigido
 
+- Colapsar um grupo poderia ter passado a ser no-op com a regra do RF-2.17: a
+  escada de foco do RF-1.5 move o foco para fora ao colapsar, e se ela
+  devolvesse uma aba do **próprio** grupo, `activate_tab` o expandiria de volta.
+  Ela não devolve — pula grupo colapsado e começa depois do índice dele —, e há
+  teste de regressão fixando isso
 - **Clique preso em qualquer app que peça mouse tracking** (`btop4win`, o
   Claude Code CLI): `dispatch_mouse_input` retornava cedo em todo release, então
   `input::handle_mouse_button` nunca era chamado com `pressed = false` — o

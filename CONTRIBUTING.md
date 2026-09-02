@@ -3,8 +3,8 @@
 Obrigado pelo interesse. Este documento reúne as convenções que já estão
 decididas, para que ninguém precise garimpá-las nos ADRs.
 
-> **Estado atual: F0, F1, F2 e F3 implementadas — a F3 exceto o RF-2.21**
-> (`group.next`/`group.prev`), que a mantém aberta. `cargo run` abre uma janela
+> **Estado atual: F0, F1, F2 e F3 fechadas**; a próxima é a F4
+> (configuração), com os ADR-0029 a 0031 já escritos. `cargo run` abre uma janela
 > com abas e grupos de terminal funcionais, seleção múltipla, editor de grupo,
 > arraste entre grupos, menu de contexto, tooltip, aviso, diálogo de confirmação
 > e uma segunda janela por atalho. Não há arquivo de configuração nem sessão

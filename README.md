@@ -6,7 +6,7 @@
 
 Emulador de terminal cross-platform escrito em Rust, com foco em **organização de múltiplos terminais**: abas, grupos de abas nomeados e restauração de sessão.
 
-> Status: **em implementação**. As fases F0 (esqueleto), F1 (terminal único), F2 (abas) e F3 (grupos) do [roadmap](docs/roadmap.md) estão implementadas — a F3 **exceto o RF-2.21** (`group.next`/`group.prev`), que a mantém aberta. `cargo run` abre uma janela com abas e grupos de terminal funcionais: motor VT, PTY, render por GPU, teclado, mouse, seleção, clipboard, ciclo de vida de aba, overflow da barra, seleção múltipla, grupos nomeados e coloridos com colapso, editor de grupo, arraste entre grupos, animação de reflui, menu de contexto, tooltip, aviso, diálogo de confirmação e uma segunda janela. Ainda não há arquivo de configuração nem sessão persistente.
+> Status: **em implementação**. As fases F0 (esqueleto), F1 (terminal único), F2 (abas) e F3 (grupos) do [roadmap](docs/roadmap.md) estão **fechadas**; a próxima é a F4 (configuração). `cargo run` abre uma janela com abas e grupos de terminal funcionais: motor VT, PTY, render por GPU, teclado, mouse, seleção, clipboard, ciclo de vida de aba, overflow da barra, seleção múltipla, grupos nomeados e coloridos com colapso, navegação entre grupos pela última aba visitada de cada um, editor de grupo, arraste entre grupos, animação de reflui, menu de contexto, tooltip, aviso, diálogo de confirmação e uma segunda janela. Ainda não há arquivo de configuração nem sessão persistente.
 
 ---
 
@@ -62,7 +62,7 @@ O que já roda hoje:
 
 Ainda **não** existe: `porecatu-config` e `porecatu-session` são stubs (só o cabeçalho SPDX). Arquivo de configuração e restauração de sessão chegam nas fases seguintes — enquanto `porecatu-config` não existe, os valores de aparência entram como constantes citando no comentário a chave TOML de origem. As três decisões que a F4 precisava já estão escritas: [ADR-0029](docs/adr/0029-enum-de-acao-e-gramatica-de-tecla.md) (enum de ação e gramática de tecla), [ADR-0030](docs/adr/0030-escopo-do-hot-reload.md) (o que aplica a quente e o que exige reinício) e [ADR-0031](docs/adr/0031-temas-nomeados.md) (temas nomeados).
 
-O CI passa nas três plataformas (**277 testes**, `clippy -D warnings` limpo). A **verificação interativa é dívida assumida**: o critério de saída das três fases exigia gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de DPI diferente —, e a proteção de foco do Windows bloqueia input sintético. As fases fecharam com cobertura automatizada mais smoke test, e o que não foi confirmado está escrito por fase em [docs/roadmap.md](docs/roadmap.md). Falta um PR de código para fechar a F3: o RF-2.21 (`group.next`/`group.prev`), a regra do RF-2.17 e os atalhos que faltaram no nível de grupo.
+O CI passa nas três plataformas (**292 testes**, `clippy -D warnings` limpo). A **verificação interativa é dívida assumida**: o critério de saída das três fases exigia gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de DPI diferente —, e a proteção de foco do Windows bloqueia input sintético. As fases fecharam com cobertura automatizada mais smoke test, e o que não foi confirmado está escrito por fase em [docs/roadmap.md](docs/roadmap.md). A **F3 fechou** com o PR de navegação de grupo (RF-2.21, RF-2.17 e os atalhos do nível de grupo); a próxima fase é a F4.
 
 ## Design
 
@@ -159,6 +159,6 @@ git clone https://github.com/porecatu/terminal.git
 cd terminal
 
 cargo run                    # abre a janela com um terminal
-cargo test --workspace       # 277 testes
+cargo test --workspace       # 292 testes
 python scripts/verify-docs.py
 ```
