@@ -36,6 +36,8 @@ As seções 2, 3, 4, 5 e 7 estão implementadas (F0, F1, F2 e a F3 do [roadmap](
         +-----------------+      +------------------+
 ```
 
+Fora dos crates, três coisas moram na raiz e valem registro, porque nenhuma delas cabia no diagrama: `src/main.rs` carrega `#![windows_subsystem = "windows"]` (sem isso o binário fica no subsistema `console` e o Windows abre um terminal ao lado da janela); `build.rs` embute o `.ico` de `assets/icon/` como recurso PE no Windows, via `winres`, sob `cfg(windows)`; e `porecatu-ui/src/app_icon.rs` decodifica um PNG embutido em runtime (crate `png`) para dar ícone a toda janela criada — os dois caminhos existem porque o ícone da barra de tarefas e o ícone da janela não vêm do mesmo lugar no Windows.
+
 O grafo de dependências permitido está tabelado em [CLAUDE.md](../CLAUDE.md). Duas regras merecem destaque:
 
 **`porecatu-render` não conhece o domínio.** Ele expõe um punhado de primitivas — retângulo, retângulo arredondado, run de texto, clip rect — e nada mais. Não sabe o que é uma aba. Isso mantém o renderer testável e substituível, e força a aparência configurável a viver onde ela pertence: em `config` (o que o usuário pediu) + `ui` (como isso vira geometria).
@@ -260,6 +262,8 @@ barato para eles, além de estampá-los no snapshot.
 
 ## 5. Fronteira de render
 
+> **Depois da F3.** Duas coisas entraram na pintura da grade e valem nota aqui, porque são invariantes de layout e não escolha de desenho. (1) A grade é desenhada dentro de um **quadro arredondado** (`paint::terminal_box_rect`), colado na barra de abas em cima e recuado nos outros três lados; a área útil do terminal é a de dentro do quadro menos o padding interno, e é dela que saem colunas e linhas. (2) A célula e a origem de cada `TextRun` são **arredondadas ao pixel físico** (`snap_cell_metrics_to_pixel_grid`), o que mata a costura de 1px entre glyphs — mas esse valor arredondado **não** serve para decidir se um caractere pode viajar num run compartilhado: essa decisão é em **em**, contra o avanço natural do `'M'` da face mono. Comparar um contra o outro erra por até meio pixel, reprova toda célula e re-shapa a grade inteira por frame.
+
 `porecatu-render` recebe uma **sequência de camadas** por frame ([ADR-0018](adr/0018-composicao-de-frame.md)), cada uma com sua lista de primitivas:
 
 - `Quad { rect, color }`
@@ -306,6 +310,12 @@ notify (watcher) -> arquivo mudou
 ```
 
 Config inválida **nunca** derruba o app nem limpa a tela. O usuário está editando o arquivo enquanto o app roda; estados intermediários inválidos são normais.
+
+> **Escopo, decidido no [ADR-0030](adr/0030-escopo-do-hot-reload.md).** "Recalcula métricas + redraw" acima é só uma das três classes de chave. **A**: cor, fonte de chrome, dimensão, geometria de widget, `animations`, tema — troca o `Arc`, recalcula o layout da barra (que é função pura desde a F2) e redesenha. **B**: métrica de fonte do terminal e as alturas que mudam a área útil — recalcula a célula, deriva colunas e linhas e **redimensiona todos os PTYs**, um resize por recarga, coalescido pelo debounce. **C**: `decorations`, `tab_bar_position`, `opacity` de janela, `[shell]`, `[session]` — não aplica a quente e **avisa** qual é o escopo real, porque ignorar em silêncio produz o relato "mudei e não aconteceu nada", que é indistinguível de bug.
+>
+> A classe fica escrita ao lado da chave no arquivo de exemplo. O evento de `notify` chega por `EventLoopProxy`, como o `Wakeup` de PTY: uma recarga é um evento e um frame, e o loop volta a dormir ([ADR-0007](adr/0007-modelo-de-threading.md)). O `Arc<Config>` é **do processo**, não da janela — uma recarga redesenha todas as janelas, e o recálculo da classe B roda por janela, porque a métrica é a mesma e as dimensões não.
+>
+> Duas decisões vizinhas: o enum `Action` que o parser de `[keybindings]` produz nasce em `porecatu-core`, porque `config` não pode depender de `ui` ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)); e um tema nomeado só declara **cor**, nunca fonte ou dimensão, o que mantém `theme.cycle` na classe A ([ADR-0031](adr/0031-temas-nomeados.md)).
 
 ---
 

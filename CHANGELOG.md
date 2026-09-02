@@ -4,15 +4,45 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento seguirá [SemVer](https://semver.org/lang/pt-BR/) a partir do
 primeiro release.
 
-> **Nenhuma versão foi publicada ainda.** As fases F0, F1, F2 e F3 do
-> [roadmap](docs/roadmap.md) estão implementadas — a F3 exceto o RF-2.21
-> (`group.next`/`group.prev`), que a mantém aberta. `cargo run` abre uma janela
-> com abas e grupos de terminal funcionais, e `Ctrl+Shift+N` abre uma segunda
-> janela; artefatos de release só aparecem na F6.
+> **Nenhuma versão foi publicada ainda.** As fases F0, F1 e F2 do
+> [roadmap](docs/roadmap.md) estão fechadas, e a F3 fechada exceto um PR —
+> RF-2.21 (`group.next`/`group.prev`), a regra do RF-2.17 e os atalhos que
+> faltaram no nível de grupo. `cargo run` abre uma janela com abas e grupos de
+> terminal funcionais, sem decoração nativa fora do macOS, e `Ctrl+Shift+N` abre
+> uma segunda janela; artefatos de release só aparecem na F6.
 
 ## [Não publicado]
 
 ### Adicionado
+
+#### Depois da F3
+
+Ajustes de interface e de infraestrutura pedidos com o app em tela, fora do
+recorte de fase. A interface resultante é o alvo desde o
+[ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md).
+
+- **Janela sem decoração nativa fora do macOS**
+  ([ADR-0027](docs/adr/0027-controles-de-janela-e-resize-proprios.md)): drag
+  region na área vazia da barra de abas com duplo clique maximizando, três
+  botões de janela de 46px colados na borda direita (Lucide `minus`/`square`/
+  `copy`/`x`, com hover e o destrutivo do fechar) e resize de 6px em toda borda,
+  desligado com a janela maximizada. Fechar continua passando pelo diálogo de
+  confirmação. No macOS a decoração nativa fica, e a trilha reserva 78px à
+  esquerda para o semáforo
+- **Ícone do app**: PNG embutido decodificado em runtime para toda janela
+  (`app_icon.rs`, crate `png`) e o `.ico` embutido como recurso PE no Windows
+  por um `build.rs` com `winres`. Era item da F6; entregou-se antes
+- **Efeito de vidro** na cápsula e na pílula de grupo: alfa de `.85` e `.92` na
+  cor cheia, mais um rim translúcido de 1px em branco a `.16` (`GLASS_BORDER`).
+  Sem primitiva de blur, não há como turvar o que passa por trás — só deixar
+  passar menos dele, e ainda assim lê como painel translúcido em vez de chapado.
+  Custo zero de render: troca de cor e alfa nos quads que já eram desenhados
+- **Sombra em camadas** (`chrome::push_shadow`): três `RoundedQuad` pretos
+  empilhados, spread crescente e alfa decrescente, na cápsula de grupo, na aba
+  solta e no quadro do terminal. É a aproximação possível sem passo de blur; os
+  cinco widgets de chrome e o fantasma de arraste seguem sem sombra
+- **Borda de 1px** na cápsula de grupo e na aba solta; aba dentro de um grupo
+  fica só com a borda dela, porque a cápsula carrega a sombra por ela
 
 #### F3 — Grupos
 
@@ -291,8 +321,11 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Alterado
 
+- `png` de 0.17 para 0.18, com a adaptação de `app_icon.rs`: `Decoder::new`
+  passou a exigir `BufRead + Seek` e `output_buffer_size` devolve `Option`
 - `[appearance.tabs] font_size` de 12.5 para 13 — rótulo da aba e nome da
-  pílula do grupo (que segue o mesmo tamanho, pedido do usuário). Itens de
+  pílula do grupo, que segue o mesmo **tamanho** mas diverge no **peso** (500,
+  para o rótulo do grupo ler como bold; pedido do usuário). Itens de
   menu continuam em 12.5, token separado (`overlay.rs::MENU_ITEM_TEXT_SIZE`)
 - Actions do GitHub pinadas por SHA de commit em vez de tag major flutuante,
   com a versão legível no comentário. Tag pode ser reapontada e uma release
@@ -301,6 +334,23 @@ configuração nem sessão: tudo isso vem das fases seguintes.
 
 ### Corrigido
 
+- **Clique preso em qualquer app que peça mouse tracking** (`btop4win`, o
+  Claude Code CLI): `dispatch_mouse_input` retornava cedo em todo release, então
+  `input::handle_mouse_button` nunca era chamado com `pressed = false` — o
+  programa recebia o `M` do press (SGR) e nunca o `m` do release, em modo nenhum.
+  Regressão introduzida na etapa 6 da F2. O estado de botão apertado passa a ser
+  zerado sempre no release e em `Focused(false)`, para alt-tab com o botão
+  físico apertado não deixá-lo preso
+- **Aba nova abria no diretório do binário**: `startup_directory` usava
+  `std::env::current_dir()`, que é de onde o Porecatu foi lançado, não o
+  diretório do usuário. Passa a ser `dirs::home_dir()` quando não há `cwd`
+  conhecido por OSC 7 ([ADR-0017](docs/adr/0017-ciclo-de-vida-da-aba.md))
+- **Vão maior, e sem cor, entre um grupo e as abas soltas ao lado do que entre
+  dois grupos**: o `wrapper_padding` entrava também no run implícito, que não
+  tem cápsula para absorvê-lo. Agora só entra onde há cápsula
+- **Indicador de abas fora da vista** virou círculo de 18×18 com só o chevron,
+  no lugar da cápsula de 34×18 com chevron e contagem — a cápsula lia como
+  comprida demais para o que informa (pedido do usuário)
 - Cursor do terminal invisível: `frame::GeometryBatch` guardava `Quad` e
   `RoundedQuad` em dois `Vec` separados, e a montagem de instâncias sempre
   desenhava todo `rounded` depois de todo `quads` do batch — não importa a

@@ -8,11 +8,23 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 
 | Fase | Status |
 |---|---|
-| F0 — Esqueleto | **implementada** |
-| F1 — Terminal único | **implementada**, com verificação interativa pendente (ver a fase) |
-| F2 — Abas | **implementada**, com verificação interativa pendente (ver a fase) |
-| F3 — Grupos | **implementada exceto RF-2.21** (`group.next`/`group.prev`); fase **não fechada** |
+| F0 — Esqueleto | **fechada** |
+| F1 — Terminal único | **fechada** |
+| F2 — Abas | **fechada** |
+| F3 — Grupos | **fechada exceto o PR de RF-2.21 + RF-2.17 + atalhos `group.*`** (ver a fase) |
 | F4 a F6 | não iniciadas |
+
+> **A verificação interativa é dívida assumida, não critério pendente.** Os
+> critérios de saída da F1, da F2 e da F3 exigiam gesto de verdade — `vim`,
+> `htop` e `fzf` usáveis, mouse dentro deles, `Shift`+arraste, ABNT2, arraste de
+> aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de
+> DPI diferente. Nada disso foi exercitado com input sintético, e não vai ser: a
+> proteção de foco do Windows bloqueia `SetForegroundWindow`/`AppActivate` de
+> processo em segundo plano, e não há ambiente Linux/macOS no fluxo. As três
+> fases foram **fechadas com cobertura automatizada mais smoke test do
+> `cargo run`**, por decisão registrada. O que cada uma não confirmou continua
+> escrito na seção dela, agora como dívida — não como tarefa que impede a
+> próxima fase. Risco aceito: regressão de gesto não aparece em CI.
 
 ---
 
@@ -53,7 +65,7 @@ Uma ficou em aberto, sem impedir a fase: os comandos do CI ainda não usam `--lo
 
 ---
 
-## F1 — Terminal único — implementada
+## F1 — Terminal único — fechada
 
 O maior salto de risco técnico. Ao fim desta fase o projeto é um emulador de terminal.
 
@@ -78,9 +90,9 @@ Todos os itens abaixo estão implementados:
 
 **Critério de saída:** `vim`, `htop` e `fzf` usáveis sem artefatos nas três plataformas; **mouse funciona dentro do `htop` e do `fzf`, e `Shift`+arraste seleciona texto mesmo com o programa pedindo o mouse**; roda do mouse rola `less` e `man`; copiar e colar funciona nas três plataformas, incluindo Wayland; resize funciona com TUI aberta; acentuação por tecla morta em teclado ABNT2 funciona; CPU em ~0% com o terminal ocioso; verificação de que a última linha de saída não se perde ao encerrar o shell.
 
-### O que ficou pendente da F1
+### Dívida da F1
 
-O código está escrito e o CI está verde nas três plataformas — 51 testes automatizados, `clippy -D warnings` limpo. O que **não** foi confirmado é o critério de saída na parte interativa:
+O código está escrito e o CI está verde nas três plataformas — 51 testes automatizados, `clippy -D warnings` limpo. O que **não** foi confirmado é o critério de saída na parte interativa, e a fase fechou assim (ver a nota no topo):
 
 - Toda a verificação manual aconteceu no **Windows**. Linux e macOS têm build e teste verdes no CI, nada além disso.
 - Teclado real, arraste de mouse, seleção, copiar/colar e mouse dentro do `htop`/`fzf` **não foram exercitados**: a proteção de foco do Windows bloqueia `SetForegroundWindow`/`AppActivate` de processo em segundo plano, e input sintético não é caminho viável. Precisa de uma sessão desktop de verdade.
@@ -95,7 +107,7 @@ Duas simplificações conscientes, documentadas no código:
 
 ---
 
-## F2 — Abas — implementada, com verificação interativa pendente
+## F2 — Abas — fechada
 
 Implementa [PRD-001](prd/prd-001-abas.md).
 
@@ -128,7 +140,7 @@ Divisão sugerida, no padrão das seis etapas da F1, uma por PR: (1) `core` e as
 
 `app.quit` e o fechamento da última janela **não gravam sessão** nesta fase; o ponto de chamada existe como no-op documentado e a F5 o preenche (ADR-0017).
 
-### O que ficou pendente da F2
+### Dívida da F2
 
 O código está escrito e o CI está verde nas três plataformas, com testes automatizados cobrindo `porecatu-core` (invariantes de `Workspace`/`Group`), `porecatu-term` (OSC 7, ciclo de vida) e `porecatu-ui` (layout, overflow, indicadores, arraste, os quatro widgets de chrome — tudo o que é função pura, sem GPU nem janela). O que **não** foi confirmado, mesma limitação da F1:
 
@@ -137,16 +149,16 @@ O código está escrito e o CI está verde nas três plataformas, com testes aut
 - **Segunda janela** (`Ctrl+Shift+N`/`Ctrl+Shift+Q`, ADR-0015): a cascata de geometria e a superfície `wgpu` compartilhada nunca foram exercitadas com duas janelas de verdade, muito menos em dois monitores com DPI diferente.
 - **Diálogo de confirmação de RF-1.6**: a condição (tela alternativa ou reporte de mouse ligado) depende de abrir `vim`/`htop`/`fzf` de verdade dentro do Porecatu, que segue bloqueado pela mesma proteção de foco.
 
-Quatro simplificações conscientes, documentadas no código (`chrome.rs`, `overlay.rs`, `lib.rs`) e registradas na seção 4.4 da [especificação visual](design/especificacao-visual.md):
+Quatro simplificações conscientes, documentadas no código (`chrome.rs`, `overlay.rs`, `lib.rs`) e registradas na seção 4.4 da [especificação visual](design/especificacao-visual.md). **As quatro foram decididas depois, no [ADR-0028](adr/0028-o-binario-como-referencia-visual.md) §4** — duas entram na F4, duas viram decisão de não fazer:
 
-- Nenhuma sombra nos quatro widgets de chrome — `porecatu-render` não tem primitiva de sombra; e o corpo de aviso/diálogo não quebra linha (`TextRun` é sempre uma linha), truncando com reticências em vez do "três linhas" da espec.
+- Nenhuma sombra nos quatro widgets de chrome — `porecatu-render` não tem primitiva de sombra. *Depois da fase apareceu uma sombra **em camadas** (três `RoundedQuad` empilhados, `chrome::push_shadow`), aplicada à cápsula de grupo, à aba solta e ao quadro do terminal; os cinco widgets e o fantasma de arraste seguem sem ela, e é para eles que a F4 leva a mesma técnica.* O corpo de aviso/diálogo não quebra linha (`TextRun` é sempre uma linha), truncando com reticências em vez do "três linhas" da espec. — **decidido não fazer**, o truncamento em uma linha é o comportamento aprovado.
 - A cascata da janela nova prende aos limites físicos do monitor, não à área útil (descontada a barra de tarefas/dock) que o parágrafo acima descreve — `winit::monitor::MonitorHandle` não expõe área útil em nenhuma plataforma.
-- **A barra não tem hover visual.** O item "hover" da lista acima ficou entregue pela metade: o hover **existe** como hit-test, e é o que dispara o tooltip do RF-1.10, mas nenhum elemento muda de aparência sob o cursor. A espec. pede `filter: brightness(1.18)` na aba e `1.25` na pílula, e `porecatu-render` não tem primitiva de filtro — o realce e a sombra do fantasma de arraste (espec. §2.19) caíram pelo mesmo motivo. É resolvível em CPU dentro de `porecatu-ui`, multiplicando canais e clampando, e não precisa de primitiva nova; ficou para quando houver o primeiro hover que **dependa** dele.
-- O auto-scroll durante o arraste acontece por evento de `CursorMoved` dentro da zona de 30 px, não pelo intervalo de `.15s` da espec., que exigiria o temporizador de UI que só a etapa 6 introduziu.
+- **A barra não tem hover visual.** O item "hover" da lista acima ficou entregue pela metade: o hover **existe** como hit-test, e é o que dispara o tooltip do RF-1.10, mas nenhum elemento muda de aparência sob o cursor — exceto os botões de janela do [ADR-0027](adr/0027-controles-de-janela-e-resize-proprios.md), que trocam fundo e ícone. A espec. pede `filter: brightness(1.18)` na aba e `1.25` na pílula, e `porecatu-render` não tem primitiva de filtro; é resolvível em CPU dentro de `porecatu-ui`, multiplicando canais e clampando. **Aprovado para a F4**, junto com o realce e a sombra do fantasma de arraste (espec. §2.19).
+- O auto-scroll durante o arraste acontece por evento de `CursorMoved` dentro da zona de 30 px, não pelo intervalo de `.15s` da espec. **Decidido não fazer:** o gesto atual funciona, e mudá-lo mudaria a sensação do arraste sem ninguém ter pedido.
 
 ---
 
-## F3 — Grupos — implementada exceto RF-2.21
+## F3 — Grupos — fechada exceto um PR
 
 Implementa [PRD-002](prd/prd-002-grupos-de-abas.md). É o diferencial do produto.
 
@@ -159,8 +171,9 @@ quatro PRs de correção — bug de ordem em `group_tabs` mais o wiring de
 mesmo sintoma ("o colapso só anima no primeiro grupo"), a última delas a lentidão
 da barra em overflow.
 
-**A fase não está fechada:** o RF-2.21 (`group.next`/`group.prev`) não foi
-implementado — ver [o que ficou pendente](#o-que-ficou-pendente-da-f3).
+**Falta um PR para fechar:** o RF-2.21 (`group.next`/`group.prev`), a regra do
+RF-2.17 e os atalhos que faltaram no nível de grupo — ver
+[o PR de fechamento](#o-pr-de-fechamento-da-f3).
 
 Antes de a fase abrir, quatro ADRs fecharam as decisões que faltavam — mesmo movimento que os ADR-0017 a 0019 fizeram entre a F1 e a F2, e pela mesma razão: foi a fase anterior que expôs as lacunas. **Não é preâmbulo opcional**; dois deles mudam código que a F2 acabou de estabilizar.
 
@@ -198,50 +211,83 @@ Itens:
 > na seção 4.4 da especificação visual, e é a F4 que cobra o casamento com o
 > mockup.
 
-O RF-2.17 (*"ativar uma aba de grupo colapsado expande o grupo"*) fica **parcialmente verificável** nesta fase: as duas fontes que o requisito cita são busca (F6) e restauração de sessão (F5), e na F3 não há caminho que ative uma aba oculta. A regra entra no modelo e no teste unitário; o cenário de ponta a ponta espera a F5.
+O RF-2.17 (*"ativar uma aba de grupo colapsado expande o grupo"*) fica **parcialmente verificável** nesta fase: as duas fontes que o requisito cita são busca (F6) e restauração de sessão (F5), e na F3 não há caminho que ative uma aba oculta.
 
-### O que ficou pendente da F3
+> **Correção.** Esta seção afirmava que "a regra entra no modelo e no teste
+> unitário". **Não entrou:** `Workspace::activate_tab` não expande grupo
+> colapsado, não há chamada implícita de `collapse_group(id, false)` em
+> `porecatu-ui` (só toggles explícitos) e não há teste do cenário. A regra entra
+> no PR de fechamento abaixo, onde é uma linha em `activate_tab` mais um teste —
+> e é melhor que entre agora do que na F5, quando o primeiro caminho que ativa
+> aba oculta aparecer e o bug for atribuído à restauração de sessão.
+
+### O PR de fechamento da F3
 
 O código dos itens acima está escrito, o CI está verde nas três plataformas e o
 workspace tem **241 testes** (contra 145 ao fim da F2): `porecatu-ui` 108,
 `porecatu-core` 54, `porecatu-term` 51, `porecatu-render` 20, `porecatu-pty` 8.
-O que falta:
 
-- **RF-2.21 (`group.next`/`group.prev`) não existe** — e é por isso que a fase não
-  fecha. O MRU está no modelo desde a etapa 1 (`Group::last_active`, atualizado por
-  `Workspace::activate_tab`, [ADR-0020](adr/0020-grupos-explicitos.md) §6), mas não
-  há operação em `Workspace` que ande de grupo em grupo nem gesto que a acione. É o
-  próximo PR desta fase, não trabalho da F4.
-- **O nível de grupo da cadeia do [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md)
-  ficou pela metade.** Só `group.create` tem tecla (`Ctrl+Shift+G`, default fixo no
-  código). `group.dissolve` (o `Ctrl+Shift+U` do ADR) e `group.toggle_collapse` só
-  existem por menu, editor ou clique na pílula; as demais `group.*` são de menu por
-  natureza. Fecha com o parser de `[keybindings]`, na F4.
-- **Verificação interativa**, mesma limitação da F1 e da F2: build/teste automatizado
-  e um smoke test não-interativo do `cargo run`. Nenhum cenário de aceite de PRD-002
-  foi exercitado com gesto de verdade — seleção múltipla por `Ctrl`/`Shift`+clique,
-  arraste de aba entre grupos, arraste da pílula, duplo clique na pílula, editor de
-  grupo por teclado, e a animação de reflui vista com olho humano. Dez grupos numa
-  janela e a métrica do PRD-002 idem.
+Um PR fecha a fase, com três coisas que são a mesma conversa — o nível de grupo
+do [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md) e a navegação que ele
+aciona:
+
+1. **RF-2.21 — `group.next`/`group.prev`.** O MRU está no modelo desde a etapa 1
+   (`Group::last_active`, atualizado por `Workspace::activate_tab`,
+   [ADR-0020](adr/0020-grupos-explicitos.md) §6) e **nenhum consumidor existe fora
+   dos testes**. Falta a operação em `Workspace`, ao lado de `step_tab`: anda sobre
+   `navigable_order()`, pula grupo colapsado e, quando `last_active` é `None`, ativa
+   a primeira aba do grupo (ADR-0020 §6). Mais o gesto:
+   `Ctrl+Shift+PageDown`/`PageUp` (`Cmd+Alt+Right/Left` no macOS). Atenção ao
+   vizinho: `Shift+PageUp/PageDown` já é scrollback, e o binding novo precisa exigir
+   `Ctrl` **e** `Shift` para não colidir.
+2. **Os atalhos que faltaram no nível de grupo.** `group.dissolve` (`Ctrl+Shift+U`),
+   `group.rename` (`Ctrl+Shift+E`) e `group.toggle_collapse` (`Ctrl+Shift+K`) só
+   existem por menu, editor ou clique na pílula. Entram como defaults fixos no
+   código, sem esperar o parser da F4 — a lição da própria F3 é que **ação sem gesto
+   no fim da etapa que a nomeia é dívida, não escopo adiado**, e foi um gesto que
+   revelou o bug de ordem do `group_tabs`. O alvo por tecla é o grupo da aba ativa
+   (`Workspace::group_of_tab`), como o catálogo já especifica.
+3. **RF-2.17 — ativar aba de grupo colapsado expande o grupo.** Uma linha em
+   `activate_tab` mais um teste; ver a correção acima.
+
+### Dívida da F3
+
+- **Verificação interativa**, mesma limitação da F1 e da F2 — a fase fechou assim
+  (nota no topo). Nenhum cenário de aceite de PRD-002 foi exercitado com gesto de
+  verdade: seleção múltipla por `Ctrl`/`Shift`+clique, arraste de aba entre grupos,
+  arraste da pílula, duplo clique na pílula, editor de grupo por teclado, e a
+  animação de reflui vista com olho humano. Dez grupos numa janela e a métrica do
+  PRD-002 idem.
 - **Entrada de cor por hexadecimal** (RF-2.10) segue diferida pelo próprio
   [ADR-0023](adr/0023-editor-de-grupo.md): o editor tem os seis swatches e nada mais.
 - **Roda do mouse no popover de destino.** A primeira lista rolável do chrome rola
-  por realce de teclado e por clique, não por roda — o ADR-0023 pediu lista rolável,
-  não disse por qual gesto.
-- **`show_new_tab_button = false` não desliga o botão "+" por grupo.** A zona fixa da
-  direita respeita a chave (largura zero, sem botão global); o botão ao final de cada
-  wrapper é desenhado sempre. Fica para a F4, quando a chave existir de verdade em
-  `porecatu-config`.
+  por realce de teclado e por clique, não por roda — `dispatch_mouse_wheel` retorna
+  cedo com qualquer popover aberto. O ADR-0023 pediu lista rolável, não disse por
+  qual gesto.
 - **`animations = false` (ADR-0022) não existe.** As durações são constantes
   (`COLLAPSE_REFLOW_DURATION` 150 ms, `GROUP_CREATE_REFLOW_DURATION` 180 ms) com a
-  chave TOML citada no comentário, como o resto da aparência até a F4.
-- **Sem hover e sem sombra** — as duas dívidas de primitiva da F2 continuam, e a F3
-  acrescentou superfícies que a especificação também quer com realce
-  (`brightness(1.25)` na pílula). Nada no chrome desenha hover ainda.
+  chave TOML citada no comentário, como o resto da aparência até a F4. São **duas**
+  chaves no arquivo de exemplo, uma por consumidor, não uma arredondada.
+- **Defaults de macOS não existem em código.** `handle_tab_action_key` traz os
+  defaults de Windows/Linux; a tabela do ADR-0008 define `Cmd+…` para todas as
+  ações de F2 e F3, e nenhuma delas responde no Mac. Fecha com o parser da F4, que
+  precisa saber expressar defaults por plataforma ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)).
+- **`app.quit` e `scrollback.to_top`/`to_bottom` seguem sem gesto**, embora
+  catalogadas com default no arquivo de exemplo. A operação de scrollback existe em
+  `porecatu-term`; falta a tecla.
 
-Quatro divergências entre desenho e binário, todas registradas na seção 4.4 da
-[especificação visual](design/especificacao-visual.md) e com a prosa das seções de
-anatomia já atualizada para o comportamento real:
+> `show_new_tab_button = false` **saiu** desta lista: a chave desliga hoje tanto o
+> "+" de cada grupo quanto o de aba solta, com teste dedicado em `tab_bar.rs`. E
+> "sem hover e sem sombra" foi reescrito: a sombra existe em três lugares e o hover
+> está aprovado para a F4 — ver a dívida da F2 acima.
+
+Quatro decisões visuais da fase, registradas na seção 4.4 da
+[especificação visual](design/especificacao-visual.md), com a prosa das seções de
+anatomia atualizada para o comportamento real. Desde o
+[ADR-0028](adr/0028-o-binario-como-referencia-visual.md) elas **não são
+divergências a cobrar**: são o alvo, e a F4 não as desfaz. Depois da fase vieram
+outras nove, no mesmo registro — vidro, sombra, quadro do terminal, indicador de
+overflow em círculo, contador fora da pílula, entre elas.
 
 - **A cápsula do grupo é pintada com a cor cheia**, não com o tingimento de `.07` do
   §2.3, e o fundo da aba passou a ter alfa `.85` para deixar passar um indício dela.
@@ -263,16 +309,29 @@ anatomia já atualizada para o comportamento real:
 
 Implementa [PRD-004](prd/prd-004-aparencia-do-chrome.md) e [PRD-005](prd/prd-005-aparencia-do-terminal.md).
 
-- `porecatu-config`: structs `serde`, defaults completos, resolução de caminho, `PORECATU_CONFIG`, `--config`
-- Hot reload com `notify`, parse fora da main thread, debounce
-- Erro com linha e chave; chave desconhecida como aviso; config inválida preserva a anterior
-- Parser de `[keybindings]` contra o [catálogo fechado de ações](reference/acoes.md): ação desconhecida é erro com sugestão do nome mais próximo, binding duplicado cita as duas linhas ([ADR-0008](adr/0008-teclas-e-roteamento-de-input.md))
-- Toda a superfície de [porecatu.example.toml](config/porecatu.example.toml) ligada de fato ao desenho, com os valores default vindos da [tabela de tokens](design/especificacao-visual.md)
-- Fallback de fonte, temas nomeados com override, zoom por atalho
-- Recálculo de grade e resize de todos os PTYs ao mudar métricas de fonte
-- **Cobranças que a F2 e a F3 deixaram** (seção 4.4 da [especificação visual](design/especificacao-visual.md)): hover por brilho resolvido em CPU, sombra de popover ou decisão registrada de não tê-la, corpo de aviso em três linhas, `show_new_tab_button` desligando também o botão por grupo, `animations = false` aplicando o reflui instantâneo ([ADR-0022](adr/0022-animacao-de-interface.md)) e `tint_strength` voltando a governar a cápsula do grupo
+Antes de a fase abrir, **três ADRs fecharam as decisões que faltavam** — mesmo movimento dos ADR-0017 a 0019 entre a F1 e a F2 e dos ADR-0020 a 0023 entre a F2 e a F3, e pela mesma razão: sem eles, três respostas seriam inventadas durante a implementação.
 
-**Critério de saída:** zero valores de aparência hardcoded (verificação por revisão dirigida); todos os cenários de aceite de PRD-004 e PRD-005 passam; **o binário com a config padrão bate com o mockup** — divergência visível é bug, não configuração ([ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md)); auditoria de rastreabilidade — nenhuma chave do exemplo sem requisito, nenhum requisito sem chave.
+- [**ADR-0029**](adr/0029-enum-de-acao-e-gramatica-de-tecla.md) — o enum `Action` nasce em `porecatu-core` (é o único crate que `config` e `ui` ambos veem, e `config` não pode depender de `ui`), com um teste bidirecional contra o [catálogo](reference/acoes.md). Mais a gramática que o [ADR-0008](adr/0008-teclas-e-roteamento-de-input.md) não deu: grafia das teclas, canonicalização dos modificadores — sem ela "binding duplicado é erro" é indetectável —, `cmd` como nome do modificador de macOS, e `[keybindings.<plataforma>]` para um dotfile só expressar defaults por SO.
+- [**ADR-0030**](adr/0030-escopo-do-hot-reload.md) — três classes de chave: aplica a quente; aplica a quente com recálculo de grade e resize dos PTYs; exige reinício e **avisa**. A classe fica escrita ao lado da chave no arquivo de exemplo. Ignorar em silêncio o que não aplica produz o relato "mudei e não aconteceu nada", indistinguível de bug.
+- [**ADR-0031**](adr/0031-temas-nomeados.md) — tema é conjunto de **cores** (de terminal e de chrome), nunca de fonte ou dimensão, o que mantém `theme.cycle` em uma classe barata; merge por folha com a `palette` substituída inteira; ciclo na ordem do arquivo, com o estado "sem tema" participando; e ciclar **não escreve** no arquivo.
+
+Itens:
+
+- `porecatu-config`: structs `serde`, defaults completos, resolução de caminho, `PORECATU_CONFIG`, `--config`
+- Hot reload com `notify`, parse fora da main thread, debounce, nas três classes do ADR-0030
+- Erro com linha e chave; chave desconhecida como aviso; config inválida preserva a anterior — com a exceção fina do ADR-0029 §4, em que erro numa linha de `[keybindings]` descarta **aquela linha** e mantém o default embutido, em vez de reverter a gravação inteira
+- Parser de `[keybindings]` contra o [catálogo fechado de ações](reference/acoes.md): ação desconhecida é erro com sugestão do nome mais próximo, binding duplicado cita as duas linhas (ADR-0008, ADR-0029)
+- **Os defaults de macOS**, que não existem em código: `handle_tab_action_key` só traz Windows/Linux, e a tabela do ADR-0008 define `Cmd+…` para toda ação de F2 e F3
+- Toda a superfície de [porecatu.example.toml](config/porecatu.example.toml) ligada de fato ao que o binário desenha
+- Fallback de fonte, temas nomeados com override (ADR-0031), zoom por atalho
+- Recálculo de grade e resize de todos os PTYs ao mudar métricas de fonte (classe B do ADR-0030)
+- **As duas dívidas de primitiva aprovadas** ([ADR-0028](adr/0028-o-binario-como-referencia-visual.md) §4): hover por brilho resolvido em CPU (aba, pílula e fantasma de arraste) e a sombra em camadas nos **cinco widgets de chrome** e no fantasma — a técnica já existe em `chrome::push_shadow`, aplicada hoje à cápsula, à aba solta e ao quadro do terminal
+- `animations = false` aplicando o reflui instantâneo ([ADR-0022](adr/0022-animacao-de-interface.md)), com as **duas** durações do arquivo de exemplo governando as duas constantes de hoje
+- Roda do mouse no popover de destino, e as chaves que a F3 deixou como constante
+
+**O que a F4 não faz:** desfazer aparência. O critério de saída inverteu com o ADR-0028 — a configuração padrão reproduz o binário, não o contrário —, e as decisões visuais da seção 4.4 da [especificação visual](design/especificacao-visual.md) são o alvo. Duas ex-dívidas foram fechadas como **decisão de não fazer**: corpo de aviso em três linhas e auto-scroll do arraste por intervalo.
+
+**Critério de saída:** **todo valor de aparência com procedência declarada** — vira chave o que se vê, fica fixo o que é mecânica de interação (limiar de clique e de arraste, cascata de janela, intervalo de frame), e a lista do que fica fixo está no cabeçalho do arquivo de exemplo; verificação por revisão dirigida. Todos os cenários de aceite de PRD-004 e PRD-005 passam. **A config padrão reproduz o binário** — se divergir, o errado é o default, não a interface (ADR-0028). Auditoria de rastreabilidade nas duas direções: nenhuma chave do exemplo sem requisito, nenhum requisito sem chave — com a metade das ações automatizada pelo teste bidirecional do ADR-0029.
 
 ---
 
@@ -299,7 +358,7 @@ O que separa "funciona" de "usável o dia inteiro".
 - **Acessibilidade via `accesskit`** — dívida assumida em [ADR-0001](adr/0001-stack-de-gui.md), não esquecimento. Precisa cobrir também os três widgets do [ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md): diálogo modal, menu e notificação são justamente os papéis que leitor de tela trata de forma especial
 - Menu de contexto do terminal, com `selection.select_all`
 - Notificação de desktop opcional na campainha
-- Ícone e empacotamento por plataforma
+- Empacotamento por plataforma. **O ícone já existe**, entregue fora de fase: PNG embutido decodificado em runtime para toda janela (`app_icon.rs`) e o `.ico` embutido como recurso PE no Windows por um `build.rs` com `winres`
 - Documentação de usuário e página de release
 
 **Critério de saída:** leitor de tela consegue navegar a barra de abas; métricas de [PRD-000](prd/prd-000-visao-de-produto.md) medidas e atingidas; artefatos de release para as três plataformas.

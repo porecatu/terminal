@@ -32,6 +32,9 @@
 | [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito |
 | [0027](0027-controles-de-janela-e-resize-proprios.md) | Controles de janela e resize próprios (Windows/Linux) | Aceito |
 | [0028](0028-o-binario-como-referencia-visual.md) | O binário como referência visual | Aceito |
+| [0029](0029-enum-de-acao-e-gramatica-de-tecla.md) | Enum de ação e gramática de tecla | Aceito |
+| [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito |
+| [0031](0031-temas-nomeados.md) | Temas nomeados: escopo, merge e ciclo | Aceito |
 
 ## Convenção
 
