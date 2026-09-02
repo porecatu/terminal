@@ -36,11 +36,13 @@ Visão de produto completa: [PRD-000](docs/prd/prd-000-visao-de-produto.md).
 
 | Fase | O que entrega | Status |
 |---|---|---|
-| F0 | Workspace Cargo, janela `winit` + surface `wgpu`, CI nas três plataformas | implementada |
-| F1 | Terminal único: PTY, motor VT, threading, render de texto, teclado, mouse, seleção, clipboard | implementada |
-| F2 | Abas: modelo de workspace, barra de abas, ciclo de vida, overflow, arraste, widgets de chrome, segunda janela | implementada |
-| F3 | Grupos: modelo explícito, seleção múltipla, pílula e cápsula de cor, colapso, editor de grupo, arraste entre grupos, animação | implementada exceto RF-2.21 |
+| F0 | Workspace Cargo, janela `winit` + surface `wgpu`, CI nas três plataformas | **fechada** |
+| F1 | Terminal único: PTY, motor VT, threading, render de texto, teclado, mouse, seleção, clipboard | **fechada** |
+| F2 | Abas: modelo de workspace, barra de abas, ciclo de vida, overflow, arraste, widgets de chrome, segunda janela | **fechada** |
+| F3 | Grupos: modelo explícito, seleção múltipla, pílula e cápsula de cor, colapso, editor de grupo, arraste entre grupos, animação, navegação entre grupos | **fechada** |
 | F4–F6 | Configuração, sessão, polimento | não iniciadas |
+
+As três primeiras fecharam com **dívida de verificação interativa** — ver o parágrafo do CI abaixo.
 
 O que já roda hoje:
 
@@ -53,9 +55,10 @@ O que já roda hoje:
 - Rolagem de scrollback por teclado e por roda, com tela alternativa tratada
 - Abas com ciclo de vida completo: criar herdando o `cwd` (OSC 7), fechar com confirmação quando há programa de tela cheia, navegar por sequência e por índice, renomear inline, e estado `Exited` para aba cujo shell saiu
 - Título com precedência — customizado, depois OSC 0/2, depois nome do shell — sincronizado com o título da janela
-- Barra de abas com layout e hit-testing como funções puras, testáveis sem GPU e sem janela; reordenação por arraste e por teclado; overflow por rolagem da trilha, com indicador de abas fora da vista e o botão de nova aba numa zona fixa que não rola; indicadores de atividade e de campainha
-- Grupos de abas: nomeados, coloridos por uma paleta de seis, colapsáveis (as abas saem da barra e da navegação sequencial, os processos seguem vivos), com contador e indicador agregado na pílula, cápsula de cor por trás das abas e sublinhado por grupo
-- Seleção múltipla de abas (`Ctrl`/`Cmd`+clique alterna, `Shift`+clique estende), `Ctrl+Shift+G` para agrupar, arraste de aba entre grupos e arraste da pílula para mover o grupo inteiro
+- Barra de abas com layout e hit-testing como funções puras, testáveis sem GPU e sem janela; reordenação por arraste e por teclado; overflow por rolagem da trilha, com indicador de abas fora da vista e uma zona fixa à direita que não rola (hoje o botão de configurações, inerte até a F4); indicadores de atividade e de campainha
+- Grupos de abas: nomeados, coloridos por uma paleta de seis, colapsáveis (as abas saem da barra e da navegação sequencial, os processos seguem vivos), com indicador agregado na pílula e a cápsula de cor cheia por trás das abas — que continua desenhada com o grupo colapsado, porque é ela que diz de que cor o grupo é. Um "+" por grupo cria aba dentro dele
+- Seleção múltipla de abas (`Ctrl`/`Cmd`+clique alterna, `Shift`+clique estende), arraste de aba entre grupos e arraste da pílula para mover o grupo inteiro
+- Navegação **entre grupos** (`Ctrl+Shift+PageDown`/`PageUp`), caindo na última aba visitada de cada um e pulando grupo colapsado; mais `Ctrl+Shift+G` para agrupar, `Ctrl+Shift+U` para desagrupar, `Ctrl+Shift+E` para renomear e `Ctrl+Shift+K` para colapsar. Defaults de Windows/Linux fixos no código — os de macOS chegam com o parser de `[keybindings]` na F4
 - Animação de reflui da trilha ao formar grupo e ao colapsar/expandir, dirigida pelo event loop — sem thread de timer e sem loop de render contínuo
 - Cinco widgets de chrome próprios, desenhados por cima do terminal: aviso do app, diálogo de confirmação, menu de contexto (de aba e de grupo), tooltip e editor de grupo. Nenhum diálogo nativo do sistema
 - Múltiplas janelas: cada uma com seu conjunto de abas e sua surface, nascendo em cascata a partir da que a criou
@@ -66,7 +69,7 @@ O CI passa nas três plataformas (**292 testes**, `clippy -D warnings` limpo). A
 
 ## Design
 
-O alvo visual está desenhado e importado em [`docs/design/`](docs/design/README.md).
+O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alvo é o binário**, não o desenho (ver abaixo).
 
 - [**Mockup estático**](docs/design/mockup-estatico.html) — o ponto de partida do desenho, abre com duplo clique e sem dependências. Referência **histórica**: onde ele e o binário divergem, o binário é o alvo ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
 - [**Especificação visual**](docs/design/especificacao-visual.md) — tokens, anatomia por componente, tabela de fases, rastreabilidade design ↔ requisito. Descreve o que o binário desenha hoje, e é atualizada quando ele muda
@@ -74,7 +77,7 @@ O alvo visual está desenhado e importado em [`docs/design/`](docs/design/README
 
 **A interface como está é o alvo.** O que o binário desenha com a configuração padrão é normativo para a aparência; a especificação registra esses valores e o [`porecatu.example.toml`](docs/config/porecatu.example.toml) os carrega como default. Nenhuma mudança de aparência é feita sem aval do dono do produto — inclusive as que a documentação já chamou de "dívida a pagar" ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md), que supersede em parte o [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md)). Isso não afrouxa a regra de procedência: valor de aparência sem origem declarada na especificação continua sendo erro.
 
-> O mockup mostra o produto **completo**, não o v1. Painéis divididos, perfis, paleta de comandos, painel de configurações e barra de status são `[v2]`. A faixa de identidade da barra de título (logo, nome do app, título da aba ativa) também segue `[v2]`; os controles de janela e o resize sem decoração nativa já são `[v1]` fora do macOS ([ADR-0027](docs/adr/0027-controles-de-janela-e-resize-proprios.md)). Consulte a tabela de fases antes de implementar. Ver [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md).
+> O mockup mostra o produto **completo**, não o v1. Painéis divididos, perfis, paleta de comandos, painel de configurações e barra de status são `[v2]`. A faixa de identidade da barra de título (logo, nome do app, título da aba ativa) também segue `[v2]`; os controles de janela e o resize sem decoração nativa já são `[v1]` fora do macOS ([ADR-0027](docs/adr/0027-controles-de-janela-e-resize-proprios.md)). Consulte a tabela de fases antes de implementar. Ver [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md) e [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md).
 
 ## Stack
 
