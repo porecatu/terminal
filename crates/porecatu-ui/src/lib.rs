@@ -2163,6 +2163,10 @@ impl ApplicationHandler<Wakeup> for App {
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.hover.dismiss();
                     state.close_all_popovers();
+                    // Alt-tab com botão físico pressionado nunca gera o
+                    // Released correspondente -- sem isto, o estado ficava
+                    // preso até o próximo evento de mouse.
+                    state.mouse_button_down = None;
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -2726,12 +2730,28 @@ impl App {
         }
 
         if !pressed {
+            state.mouse_button_down = None;
             if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
                 if let Some(gpu) = &mut self.gpu {
                     state.finish_drag(gpu);
                 }
             } else if !state.in_bar(state.cursor_position.1) {
-                state.mouse_button_down = None;
+                // Solta o botão sobre o terminal: repassa ao programa (SGR/X10
+                // release) se ele pediu mouse reporting, senão é o fim de uma
+                // seleção local -- mesmo caminho do press, ver lib.rs:2967+.
+                let cell = state.cell_at_cursor(self.cell_metrics);
+                let active_id = state.workspace.active_tab();
+                if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
+                    input::handle_mouse_button(
+                        &runtime.terminal,
+                        &runtime.terminal.modes(),
+                        button,
+                        pressed,
+                        cell,
+                        state.modifiers,
+                        &mut state.click_tracker,
+                    );
+                }
             }
             state.window.request_redraw();
             return;
