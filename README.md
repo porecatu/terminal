@@ -68,11 +68,11 @@ O CI passa nas três plataformas (**241 testes**, `clippy -D warnings` limpo), m
 
 O alvo visual está desenhado e importado em [`docs/design/`](docs/design/README.md).
 
-- [**Mockup estático**](docs/design/mockup-estatico.html) — abre com duplo clique, sem dependências. É o que se deixa aberto ao lado do editor
-- [**Especificação visual**](docs/design/especificacao-visual.md) — tokens, anatomia por componente, tabela de fases, rastreabilidade design ↔ requisito
+- [**Mockup estático**](docs/design/mockup-estatico.html) — o ponto de partida do desenho, abre com duplo clique e sem dependências. Referência **histórica**: onde ele e o binário divergem, o binário é o alvo ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
+- [**Especificação visual**](docs/design/especificacao-visual.md) — tokens, anatomia por componente, tabela de fases, rastreabilidade design ↔ requisito. Descreve o que o binário desenha hoje, e é atualizada quando ele muda
 - [Canvas original](https://claude.ai/design/p/b0bc7589-f967-40cb-98ab-caef4070a95a?file=Terminal+Multiplataforma.dc.html) — interativo, em claude.ai
 
-Os valores default do [`porecatu.example.toml`](docs/config/porecatu.example.toml) vêm dessa especificação: o binário com a configuração padrão deve bater com o mockup.
+**A interface como está é o alvo.** O que o binário desenha com a configuração padrão é normativo para a aparência; a especificação registra esses valores e o [`porecatu.example.toml`](docs/config/porecatu.example.toml) os carrega como default. Nenhuma mudança de aparência é feita sem aval do dono do produto — inclusive as que a documentação já chamou de "dívida a pagar" ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md), que supersede em parte o [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md)). Isso não afrouxa a regra de procedência: valor de aparência sem origem declarada na especificação continua sendo erro.
 
 > O mockup mostra o produto **completo**, não o v1. Painéis divididos, perfis, paleta de comandos, painel de configurações e barra de status são `[v2]`. A faixa de identidade da barra de título (logo, nome do app, título da aba ativa) também segue `[v2]`; os controles de janela e o resize sem decoração nativa já são `[v1]` fora do macOS ([ADR-0027](docs/adr/0027-controles-de-janela-e-resize-proprios.md)). Consulte a tabela de fases antes de implementar. Ver [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md).
 
@@ -89,7 +89,7 @@ Os valores default do [`porecatu.example.toml`](docs/config/porecatu.example.tom
 | Persistência de sessão | JSON versionado em state dir | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md) |
 | Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
 | Fontes | Iosevka Fixed (OFL-1.1, terminal e chrome) + Lucide (ISC), embutidas | [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md) |
-| Referência visual | design canvas importado | [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md) |
+| Referência visual | o binário; design canvas como histórico | [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) |
 | Toolchain | stable pinada, edition 2024 | [ADR-0011](docs/adr/0011-toolchain-rust.md) |
 | Licença | GPL-3.0-or-later | [ADR-0010](docs/adr/0010-licenciamento.md) |
 
