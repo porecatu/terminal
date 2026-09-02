@@ -52,7 +52,7 @@ Todo usuário. Defaults com boa legibilidade e contraste adequado, sem exigir ne
 
 **RF-5.13** — Configuráveis: cor do cursor e cor do texto sob o cursor.
 
-**RF-5.14** — Configuráveis: cor de fundo e cor de texto da seleção.
+**RF-5.14** — Configuráveis: cor de fundo e cor de texto da seleção. Os defaults (`#2e6b62` e `#eef2f4`) nasceram do `::selection` do canvas e são os que o binário desenha — logo, os valores deliberados ([ADR-0028](../adr/0028-o-binario-como-referencia-visual.md)). O requisito saiu da lista de "sem desenho aprovado" da especificação visual §4.2: não falta desenho, faltava só a chave.
 
 **RF-5.15** — Configurável: opacidade do fundo do terminal, independente da opacidade da janela.
 

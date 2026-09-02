@@ -27,10 +27,21 @@
 #   [session]                PRD-003
 #
 # ORIGEM DOS VALORES DE APARÊNCIA
-# Cores, dimensões, raios e espaçamentos vêm do design canvas, via
-# docs/design/especificacao-visual.md (seção 1, Tokens). Não são arbitrários:
-# o binário com estes defaults deve bater com docs/design/mockup-estatico.html.
-# Divergência visível entre os dois é bug de implementação. Ver ADR-0009.
+# Cores, dimensões, raios e espaçamentos estão registrados em
+# docs/design/especificacao-visual.md (seção 1, Tokens), e não são
+# arbitrários. A direção da conferência mudou com o ADR-0028: o BINÁRIO é a
+# referência visual, e estes defaults têm de reproduzir o que ele desenha.
+# O mockup (docs/design/mockup-estatico.html) é histórico -- divergência
+# entre ele e a build não é bug. Nenhuma mudança de aparência sem aval do
+# dono do produto, inclusive nas chaves abaixo.
+#
+# O QUE NÃO É CONFIGURÁVEL, E POR QUÊ
+# Vira chave o que se VÊ. Fica fixo no binário o que se SENTE -- mecânica de
+# interação, não aparência: limiar de duplo/triplo clique (500 ms), limiar
+# de arraste (4 px), zona de auto-scroll na borda da trilha (30 px) e passo
+# dela (12 px), cascata da janela nova (30 px, ADR-0015) e intervalo de
+# frame do relógio de animação. Não são tokens de design: são convenções de
+# SO ou consequências do modelo de threading (ADR-0007, ADR-0022).
 #
 # Chaves marcadas [v2] descrevem elementos desenhados no canvas mas fora do
 # escopo do v1. Estão aqui para reserva de nome; não implementar ainda.
@@ -89,10 +100,16 @@ opacity = 1.0              # 0.0 a 1.0; opacidade da janela inteira      RF-4.1
 background = "#15181d"     # corpo da janela, atrás das barras
 border = "#2a2f38"
 corner_radius = 8
-# Decorações do sistema. O design mostra uma barra de título própria,
-# mas ela é [v2]: reimplementar arrasto, snap e maximização nas três
-# plataformas é caro e arriscado. Default do v1 = nativo. Ver ADR-0009.
-decorations = true                                                     # RF-4.1
+# Decorações do sistema. Fora do macOS o default é `false` (ADR-0027): a
+# barra de abas assume drag region, botões de janela e resize por borda,
+# para que nem a borda da janela escape da paleta do design. No macOS o
+# default é `true` -- a decoração nativa continua, com o semáforo, e a
+# trilha reserva espaço à esquerda dele.
+#
+# A faixa de identidade do mockup (logo, nome do app, título da aba ativa)
+# segue [v2]: os controles saíram dela para a barra de abas existente, sem
+# empilhar uma segunda barra. Ver ADR-0027 e a seção 2.2.1 da espec.
+decorations = false        # macOS: true                                 RF-4.1
 tab_bar_position = "top"   # "top" | "bottom"                            RF-4.1
 
 # Animação de interface. O v1 tem duas, e as duas são explicativas, não
@@ -105,25 +122,73 @@ tab_bar_position = "top"   # "top" | "bottom"                            RF-4.1
 # fora do alcance desta config. Ver ADR-0022.
 animations = true
 # Duração do `reflow` da seção 1.10 da especificação visual. Interpolação
-# linear, sem curva de easing.
-animation_reflow_ms = 180
+# linear, sem curva de easing. São DUAS durações, uma por consumidor do
+# relógio (ADR-0022): formar/arrastar grupo e colapsar/expandir. O binário
+# usa 180 e 150 -- valores calibrados em tela, não um só arredondado.
+animation_reflow_ms = 180          # formar grupo e arrastar grupo (RF-2.5)
+animation_collapse_ms = 150        # colapso e expansão de grupo (RF-2.13)
+
+
+# Controles de janela e resize, quando `decorations = false` (ADR-0027,
+# seção 2.2.1 da espec. visual). Nenhum destes tem RF próprio em PRD-004: o
+# ADR-0027 veio depois do PRD, e a emenda está registrada na seção 4.4.
+[appearance.window_controls]
+button_width = 46             # largura de cada botão; altura = a da barra
+gap = 6                       # respiro entre a zona de configurações e esta
+hover_background = "#252a33"  # tom da seção 2.1, reaproveitado
+close_hover_background = "#c4413f"
+close_hover_foreground = "#ffffff"
+# Espessura da zona de resize em cada borda da janela. Desliga sozinha com
+# a janela maximizada.
+resize_border = 6
+# Espaço reservado à ESQUERDA da trilha para o semáforo nativo do macOS.
+# Fora do macOS, zero. Valor de partida, não medido contra NSWindow real.
+macos_traffic_light_inset = 78
 
 
 [appearance.tabs]
 # --- dimensões ------------------------------------------------------- RF-4.3
-# Design: aba h30 + padding 6px da barra = 42px de altura total da barra.
-height = 42                # altura da barra, em px lógicos
-tab_height = 30            # altura da aba dentro da barra
+# A altura da barra NÃO é livre: é derivada (`chrome::bar_height`) de
+#   tab_height + wrapper_padding * 2 + trilha_padding * 2 = 34 + 6 + 12 = 52
+# A chave `height` fica como o valor esperado dessa conta -- serve de
+# verificação, não de entrada. O 42 do design pressupunha aba de 30 e
+# trilha colada nas bordas; as duas coisas mudaram, a pedido do usuário.
+height = 52                # altura da barra, em px lógicos (derivada)
+tab_height = 34            # altura da aba DENTRO de um grupo
+                           # aba solta: tab_height + wrapper_padding * 2 = 40
+trilha_padding = 6         # respiro entre a trilha e as bordas da barra,
+                           # nos quatro lados; entra na conta de `height`
 max_width = 260            # teto: a aba tem largura fixa (padding + 180px de
-                           # rótulo + gap + botão de fechar), saturada aqui
+                           # rótulo + gap + botão de fechar = 229), saturada aqui
+min_width = 229            # piso = a largura fixa: nada encolhe (ver abaixo)
 padding_left = 10          # design usa padding assimétrico: 0 6px 0 10px
 padding_right = 6          # menor à direita por causa do botão de fechar
 gap = 4                    # espaço entre abas do mesmo grupo
 corner_radius = 6          # 0 = abas retangulares                       RF-4.4
+# Respiro horizontal DENTRO de cada botão de ícone (fechar da aba, os dois
+# "+", caret da pílula, botão da zona fixa): eles ficam mais largos que
+# altos, com o desenho ainda centrado no quadrado original. A altura não
+# muda -- senão o botão de fechar deixaria de caber na aba.
+icon_button_padding_x = 4
+# Tamanho de EM dos ícones do chrome, não do desenho: a face Lucide avança
+# 1 em e preenche ~0.6 dela, então um ✕ "de 10px" pedido como em de 10px sai
+# com 5.9px de desenho e traço de 0.83px, que o antialiasing dilui até
+# desaparecer. Ver ADR-0024 e a seção 1.1 da espec.
+icon_em_size = 20
+# LARGURA DA ABA É FIXA (RF-4.3, RF-4.5 emendados). `min_width` e
+# `max_width` existem, mas hoje descrevem a mesma largura: o teto de 180px
+# do rótulo virou também o piso. Largura por conteúdo refluía a trilha
+# inteira a cada título novo -- trocar de aba, renomear ou abrir um
+# programa que muda o título mexia na posição de todas as outras. Em
+# overflow, nada cede: a trilha rola (seção 2.18 da espec.). Encolhimento
+# por busca binária foi implementado na F2/F3 e descartado por custo (até
+# 24 relayouts por frame, cada um remedindo texto sem cache); voltar a
+# aceitar `min_width < max_width` exige cache de medição primeiro.
 
 # --- fonte do título -------------------------------------------------- RF-4.10
 font_family = "Iosevka Fixed" # unificada com o terminal (ADR-0026)
-font_size = 13 # era 12.5; também governa o nome da pílula do grupo, pedido do usuário
+font_size = 13 # era 12.5, pedido do usuário; o nome da pílula usa o mesmo
+               # tamanho, mas peso próprio -- ver [appearance.groups]
 
 # --- elementos visíveis ------------------------------------- RF-4.11, RF-4.12
 show_close_button = "always" # "always" | "hover" | "never"; design usa always
@@ -139,7 +204,15 @@ hide_when_single_tab = false
 [appearance.tabs.colors]
 # --- barra ------------------------------------------------------------ RF-4.7
 bar_background = "#1b1f26"
-bar_border = "#23272f"        # separador na base da barra
+# Separador na base da barra. NÃO é pintado com `tab_bar_position = "top"`:
+# o traço de 1px virava uma linha contra o quadro do terminal, que o
+# usuário pediu para eliminar. Continua governando a aresta oposta quando a
+# barra vai para baixo. Ver seção 4.4 da espec.
+bar_border = "#23272f"
+# Alfa do fundo da aba, sobre a cápsula do grupo: 15% da cor do grupo passa
+# por baixo de cada aba. Sobre a barra, fora de um grupo, o resultado é
+# indistinguível do opaco.
+background_alpha = 0.85
 
 # --- estados da aba --------------------------------------------------- RF-4.6
 # O design não define hover por cor: aplica filtro de brilho sobre o
@@ -158,7 +231,13 @@ close_button_hover_foreground = "#e4e8ee"
 # por matiz.                                                            RF-4.21
 active_border = "#39404b"
 inactive_border = "#22262e"
-active_border_width = 1
+# 2px em TODO estado: 1px do `#22262e` da inativa não se lê contra a
+# cápsula de cor cheia. A espessura vem de `indicator_thickness`/
+# `selected_border_width`, não é número novo. Efeito colateral aceito: a
+# aba selecionada deixa de se distinguir por espessura e passa a se
+# distinguir só pela cor do token.
+active_border_width = 2
+inactive_border_width = 2
 selected_border = "#5ed3bc"   # aba em seleção múltipla; sem desenho     RF-2.2
 selected_border_width = 2
 
@@ -170,15 +249,39 @@ bell_indicator = "#ef8a8a"
 # --- campo de rename inline ------------------------------------------- RF-1.8
 rename_background = "#0e1116"
 rename_border = "#5ed3bc"
+rename_foreground = "#e4e8ee"
+
+
+# Geometria do campo de rename (espec. 2.5). Cores acima, em .colors.
+[appearance.tabs.rename]
+width = 120                  # largura máxima; min(120, largura do rótulo)
+height = 20                  # a espec. dá padding e fonte, não a altura
+font_size = 12
+padding_x = 5
+
+
+# --- indicador de abas fora da vista --------------------------- RF-1.19
+# Círculo com o chevron, ancorado por dentro de cada ponta da trilha, fora
+# do recorte de rolagem. Era uma cápsula de 34x18 com chevron + contagem;
+# virou círculo só com o chevron, a pedido do usuário (seção 4.4).
+[appearance.tabs.overflow]
+indicator_size = 18          # largura = altura; o raio é a metade
+indicator_background = "#12151a"
+edge_inset = 4               # recuo por dentro de cada ponta da trilha
+scroll_step = 90             # px por notch da roda e por clique no indicador
 
 
 [appearance.groups]
 # --- pílula do grupo -------------------------------------------------- RF-4.13
 label_padding_left = 10       # era 8; +2px, pedido do usuário
 label_padding_right = 9
-label_font_size = 12.0
+# Mesmo TAMANHO do rótulo da aba (13): meio pixel de diferença lado a lado
+# lê como fonte trocada, não como hierarquia. O PESO diverge -- 500
+# (`Medium`), pedido do usuário para o rótulo do grupo ler como bold.
+label_font_size = 13.0
+label_font_weight = 500       # 400 | 500 -- a face Fixed só embute os dois
 label_corner_radius = 6
-label_hover_brightness = 1.25
+label_hover_brightness = 1.25 # ainda não desenhado; entra na F4
 # Sem `label_background`/`label_foreground`/`label_border`, sem swatch.
 # Pedido do usuário: a pílula inteira é pintada com a cor do grupo (a
 # mesma cápsula do wrapper), sem borda e sem um quadrado de cor à parte --
@@ -211,27 +314,61 @@ count_corner_radius = 9
 #   "underline" linha colorida na base de cada aba do grupo
 #   "left-bar"  barra vertical antes da primeira aba do grupo
 #   "outline"   contorno em volta do rótulo e das abas
-# Ver ADR-0009.
-indicator_style = ["pill", "underline"]
+#
+# O default era ["pill", "underline"]. O sublinhado SAIU, por pedido do
+# usuário: ele existia para dizer a que grupo a aba pertence quando a
+# pílula sai da vista, e desde que a cápsula passou a ser pintada com a cor
+# cheia a cor do grupo já está atrás da aba inteira -- o traço na base
+# virou ruído. "left-bar" e "outline" continuam sem anatomia desenhada
+# (seção 4.2 da espec.). Ver ADR-0009 e a seção 4.4.
+indicator_style = ["pill"]
 indicator_thickness = 2
 
 # Espaço entre grupos, maior que o espaço entre abas do mesmo grupo.
 # É o que torna a fronteira do grupo perceptível sem depender de cor.    RF-4.16
 gap = 6
-wrapper_padding = 3           # respiro entre o tingimento e o conteúdo
+# Respiro entre a cápsula e o conteúdo. Só se aplica onde HÁ cápsula: num
+# run implícito (abas soltas) ele não entra, senão abriria entre grupo e
+# aba solta um vão maior -- e sem cor -- do que entre dois grupos. É também
+# por causa dele que a aba solta é mais alta que a agrupada: solta, ela
+# ocupa a caixa inteira do wrapper.
+wrapper_padding = 3
 wrapper_corner_radius = 8
 
-# Quanto a cor do grupo tinge o fundo do wrapper: 0.0 a 1.0.             RF-4.19
-# Só se aplica ao grupo expandido; colapsado fica transparente.
-tint_strength = 0.07
+# Quanto a cor do grupo tinge o fundo da cápsula: 0.0 a 1.0.             RF-4.19
+# Default 1.0 -- COR CHEIA, não o tingimento de 0.07 que o design pedia:
+# atrás do fundo das abas, 7% da cor não se via, e o indicador de grupo
+# mais visível da barra não podia ser o menos legível dela. Pedido direto
+# do usuário. A cápsula é desenhada também com o grupo COLAPSADO, abraçando
+# a pílula sozinha -- é ela que diz de que cor o grupo é.
+tint_strength = 1.0
+# Efeito de vidro (pedido do usuário: "aparência chapada demais"). Sem
+# primitiva de blur em porecatu-render, não há como turvar o que passa por
+# trás -- só deixar passar menos dele. Alfa da cápsula e da pílula, mais um
+# rim translúcido de 1px nas duas.
+capsule_alpha = 0.85
+label_alpha = 0.92
+glass_border = "#ffffff"
+glass_border_alpha = 0.16
+glass_border_width = 1
+# Sombra da cápsula e da aba solta (a aba dentro de um grupo fica só com a
+# borda -- a cápsula carrega a sombra por ela). Três RoundedQuad pretos
+# empilhados, já que não há primitiva de sombra: os spreads, alfas e
+# offsets estão na seção 1.7 da espec. Liga e desliga; não são seis chaves.
+shadow = true
+border = "#262b34"            # borda de 1px da cápsula e da aba solta
 
 # Grupo colapsado exibe a contagem de abas no rótulo.                    RF-4.17
-# O contador é desenhado também com o grupo expandido, como no mockup;
-# esta chave governa só o caso colapsado, que é o que o requisito nomeia.
+# HOJE A PÍLULA NÃO TEM CONTADOR: ele saiu por pedido do usuário, expandido
+# e colapsado (seção 2.4 da espec., registro na 4.4). A chave fica com
+# default `true` porque é o comportamento que o requisito nomeia e o que
+# volta a valer se o contador voltar; os tokens `count_*` continuam em uso
+# noutros lugares -- ver a nota deles acima.
 show_tab_count_when_collapsed = true
 
 # Indicador agregado de atividade em grupo colapsado.                   RF-2.16
-# Ponto de 6px entre o swatch e o nome, com as mesmas duas cores dos
+# Ponto de 6px antes do nome (o swatch que ficava à esquerda dele saiu),
+# com as mesmas duas cores dos
 # indicadores da aba ([appearance.tabs.colors]) e a mesma regra: um ponto
 # só, campainha vence. Só aparece colapsado -- expandido, cada aba mostra
 # o seu, e um agregado seria redundante. Não pisca, pela regra do ADR-0007.
@@ -281,7 +418,23 @@ border = "#2e343e"
 corner_radius = 8
 foreground = "#dfe4ea"        # título
 body_foreground = "#6b737e"   # corpo
-font_size = 12.5
+font_size = 12.5              # título
+body_font_size = 11.0
+# Geometria da pilha e do cartão.
+width = 320
+padding_x = 12
+padding_y = 11
+gap = 8                       # entre avisos empilhados
+stack_margin_top = 8          # da borda da área de conteúdo
+stack_margin_right = 10
+# Sem métrica natural de linha (mesma simplificação do line-height do
+# terminal): valor de trabalho para separar título e corpo.
+line_height = 16
+close_button_size = 17        # o mesmo botão de fechar da aba
+severity_bar_width = 2
+# O CORPO É DE UMA LINHA, truncado com reticências. A espec. pedia três; o
+# TextRun é sempre uma linha, e quebrar por palavra mudaria a altura do
+# widget. Decidido não fazer (ADR-0028); registro na seção 4.4 da espec.
 # Barra de severidade de 2px à esquerda.
 error = "#ef8a8a"
 warning = "#e0b060"
@@ -303,8 +456,16 @@ background = "#1a1e25"
 border = "#2e343e"
 corner_radius = 10
 width = 380
+padding = 16
+gap = 14                      # entre título, corpo e a fila de botões
 title_foreground = "#e6eaef"
+title_font_size = 13.0
 foreground = "#d7dce3"
+font_size = 12.5              # corpo, de uma linha como no aviso
+button_height = 30
+button_gap = 8
+button_padding_x = 12
+button_corner_radius = 5
 button_border = "#262b34"
 destructive_foreground = "#e08585"
 destructive_hover_background = "#2e2224"
@@ -317,6 +478,10 @@ destructive_hover_background = "#2e2224"
 background = "#1a1e25"
 border = "#2e343e"
 corner_radius = 8
+width = 200                   # largura mínima
+padding = 6
+item_height = 28              # sem métrica natural de linha; ver notices
+item_padding_x = 8
 item_corner_radius = 5
 item_hover_background = "#242a33"
 separator = "#2a2f38"
@@ -341,6 +506,10 @@ foreground = "#d7dce3"
 font_size = 11.0
 # Largura máxima; texto além disso trunca com reticências.
 max_width = 320
+padding_x = 8
+padding_y = 7
+# Folga entre o alvo e o tooltip, no eixo em que ele ancora.
+gap = 6
 # Atraso de hover parado antes de aparecer. Comportamento, não token de
 # design — a seção 1.10 não define atraso.
 delay_ms = 600
@@ -379,19 +548,61 @@ input_border_focus = "#5ed3bc"
 input_corner_radius = 5
 input_foreground = "#e4e8ee"
 input_font_size = 13.0
+input_height = 30             # a espec. dá padding e fonte, não a altura
+input_padding_x = 9
+# Espaço entre a legenda de seção ("GRUPO"/"COR") e o conteúdo abaixo.
+section_caption_gap = 6
 # Faixa de cores: seis quadrados, um por cor da `palette`.
 swatch_size = 28
 swatch_corner_radius = 6
 swatch_gap = 8
 swatch_border_width = 2
 swatch_ring_selected = "#eef2f4"
+# Halo do realce de foco por teclado / hover do swatch -- a espec. diz que
+# os dois são o mesmo realce, mas não dá o tamanho dele.
+swatch_highlight_pad = 3
 # Lista de ações, com os mesmos tokens do menu de contexto.
 item_foreground = "#d7dce3"
 item_hover_background = "#242a33"
+item_height = 28
 divider = "#2a2f38"
+divider_height = 1
 # "Fechar grupo (N abas)" -- a ação destrutiva.
 destructive_foreground = "#e08585"
 destructive_hover_background = "#2e2224"
+
+
+# Popover de grupo de destino do `tab.move_to_group` (RF-2.20, ADR-0023).
+# Única lista ROLÁVEL do chrome: o tamanho dela é o número de grupos do
+# usuário, ao contrário das listas de ação, cujo tamanho é conhecido em
+# tempo de escrita. Cores e tipografia vêm de [appearance.context_menu] --
+# é o mesmo popover, com linhas em vez de itens de ação.
+[appearance.move_to_group]
+width = 200                   # = context_menu.width
+row_height = 28               # = context_menu.item_height
+row_padding_x = 8
+# Teto de linhas visíveis de uma vez; acima disso a lista rola. Rola por
+# realce de teclado e por clique -- não por roda do mouse (pendência
+# registrada no roadmap).
+max_visible_rows = 6
+# Swatch da linha, menor que o da faixa de cores do editor.
+swatch_size = 8
+swatch_gap = 8
+
+
+# Quadro arredondado em volta da grade do terminal -- pedido do usuário,
+# sem origem no design (a seção 2.7 da espec. descrevia um retângulo pleno).
+# A margem é o `trilha_padding` da barra e o padding é o `wrapper_padding`
+# dobrado: nenhum número novo. Registro na seção 4.4 da espec.
+[appearance.terminal_frame]
+# Margem entre a borda da janela e o quadro, nos três lados que NÃO
+# encostam na barra de abas. Em cima o quadro encosta na barra sem gap: um
+# vão ali desenha uma linha entre a trilha e o terminal.
+margin = 6
+# Padding entre a borda do quadro e a grade, nos quatro lados.
+padding = 6
+corner_radius = 6
+shadow = true                 # mesma sombra em camadas da cápsula
 
 
 ##############################################################################
