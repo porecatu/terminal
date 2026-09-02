@@ -249,6 +249,13 @@ hover_brightness = 1.18       # multiplicador aplicado no hover da aba
 close_button_foreground = "#e4e8ee"  # era #727a86; ver espec. seção 4.4
 close_button_hover_background = "#39404b"
 close_button_hover_foreground = "#e4e8ee"
+# Rótulo da aba `Exited` (ADR-0017): o binário já desenhava este tom antes
+# desta chave existir -- é o `#727a86` que `close_button_foreground` citava
+# como o valor anterior à promoção acima, reaproveitado aqui como o "tom de
+# inerte" que a espec. §2.5 continua descrevendo para este estado. Chave
+# nova nesta etapa (F4 etapa 2): faltava procedência declarada para um
+# valor que o binário já pintava (ADR-0028).
+exited_foreground = "#727a86"
 
 # --- bordas ----------------------------------------------------------- RF-4.7
 # A aba ativa é distinguível por fundo, borda E cor de texto — nunca só

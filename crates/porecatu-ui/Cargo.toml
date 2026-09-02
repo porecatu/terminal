@@ -13,6 +13,7 @@ workspace = true
 arboard = "3"
 dirs = "5"
 png = "0.18"
+porecatu-config = { path = "../porecatu-config" }
 porecatu-core = { path = "../porecatu-core" }
 porecatu-render = { path = "../porecatu-render" }
 porecatu-term = { path = "../porecatu-term" }

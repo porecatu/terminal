@@ -5,8 +5,10 @@
 //! rolagem e arraste desde a Etapa 5, seleção múltipla desde a F3 etapa 2)
 //! em `Primitive`s da camada `Chrome` (ADR-0018). Cores e dimensões: espec.
 //! visual §1.2, §1.3, §2.3, §2.4, §2.5, §2.6, §2.17, §2.18, §2.19, como
-//! constantes em `palette.rs`/`tab_bar.rs`, mesmo padrão de `paint.rs` para
-//! a grade.
+//! campos de `palette::ResolvedPalette`/`tab_bar::TabBarStyle`, resolvidos
+//! de `Config` (F4 etapa 2) e passados por `paint` -- mesmo padrão de
+//! `paint.rs` para a grade (que continua com `[terminal.*]` fixo até a
+//! etapa 3).
 //!
 //! Sem hover nesta etapa -- a barra não rastreia posição do mouse fora de
 //! clique/arraste (`App::cursor_position` é da área do terminal); o estado
@@ -47,8 +49,8 @@
 //! dispensa o caso especial que a segurava até o fim da animação.
 //! `DragGhost` carrega o `TabRect` de origem (`base_layout`, não o
 //! preview) desde esta etapa: soltar sobre um grupo colapsado faz o
-//! preview não gerar `TabRect` nenhum pra aba arrastada, e o fantasma
-//! precisa do conteúdo mesmo assim.
+//! preview não gerar `TabRect` nenhum pra essa aba, e o fantasma precisa do
+//! conteúdo mesmo assim.
 //!
 //! Colapsar/expandir também esmaece as abas do próprio grupo em vez de
 //! picá-las (espec §2.4: "o que anima de fato é o resto do colapso: as
@@ -68,12 +70,12 @@ use porecatu_render::{
 
 use crate::animation::AnimationClock;
 use crate::group_editor::GroupEditor;
-use crate::palette;
+use crate::palette::{self, ResolvedPalette};
 use crate::rename::RenameState;
 use crate::selection::Selection;
 use crate::tab_bar::{
-    self, GroupPillRect, INDICATOR_DOT_SIZE, Indicator, Overflow, OverflowSide, PILL_NAME_FONT,
-    TabBarLayout, TabBarStyle,
+    self, GroupPillRect, Indicator, Overflow, OverflowSide, PILL_NAME_FONT, TabBarLayout,
+    TabBarStyle,
 };
 
 /// Fonte dos ícones da barra (fechar, nova aba, chevron): a face Lucide
@@ -87,21 +89,6 @@ const LABEL_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
 
-// Tamanhos de **em**, não de desenho: o Lucide preenche ~0.6 em, então a
-// em tem de ser cerca do dobro do número da especificação para o desenho
-// sair no tamanho que ela pede -- e para o traço (`2/24` da em) render
-// sólido em vez de esmaecer contra o fundo. Ver `porecatu_render::icon`.
-// Pedido do usuário depois de ver os 10px em tela.
-pub(crate) const ICON_EM_SIZE: f32 = 20.0;
-const CLOSE_ICON_SIZE: f32 = ICON_EM_SIZE; // espec §2.5: "✕ 10px" de desenho
-const NEW_TAB_ICON_SIZE: f32 = ICON_EM_SIZE; // espec §2.6: "+ 15px" de desenho
-// A engrenagem preenche 0.84 em contra 0.68 do "+", então a mesma em a
-// desenharia bem maior que os outros ícones. Reduzida para o desenho
-// bater com o do "+" -- ver `porecatu_render::icon`.
-const SETTINGS_ICON_SIZE: f32 = ICON_EM_SIZE * 0.8;
-// Menor que o "+"/configurações -- convenção Windows: glyphs finos de
-// minimizar/maximizar/fechar (ADR-0027).
-const WINDOW_BUTTON_ICON_SIZE: f32 = ICON_EM_SIZE * 0.7;
 // Não há sublinhado de grupo na base da aba, e não há como ligá-lo. Ele
 // nasceu para dizer a que grupo a aba pertence quando a pílula sai da
 // vista por rolagem; desde que a cápsula passou a ser pintada com a cor
@@ -109,107 +96,38 @@ const WINDOW_BUTTON_ICON_SIZE: f32 = ICON_EM_SIZE * 0.7;
 // traço virou ruído. O indicador de grupo é a pílula mais a cápsula, e a
 // chave `indicator_style` deixou de existir junto com os estilos
 // `left-bar` e `outline` -- ADR-0032, seção 4.4 da especificação.
-// Borda da aba em todo estado. A espec. §2.5 desenha 1px; contra a cápsula
-// de cor cheia (F3 etapa 6) 1px de `#22262e` não se lê, e o pedido do
-// usuário foi "coloca um border nas abas". 2px é a espessura que o próprio
-// arquivo de exemplo já usa para linha de chrome
-// (`active_border_width`/`selected_border_width`) -- não um número novo.
-// Cada estado mantém a cor dele, que é o que continua separando ativa de
-// inativa.
-const TAB_BORDER_WIDTH: f32 = 2.0;
-// `[appearance.tabs] selected_border_width` -- espec §2.5: "2px por dentro"
-// (`Primitive::RoundedQuad` não soma largura ao rect por causa da borda,
-// então isto não reflui a aba). Mesma espessura da borda de base desde o
-// ajuste acima: o que marca a seleção é a **cor**, o verde-água do token.
-const SELECTED_BORDER_WIDTH: f32 = TAB_BORDER_WIDTH;
 
-// Wrapper de grupo (espec §2.3, `[appearance.groups]`).
-const WRAPPER_CORNER_RADIUS: f32 = 8.0; // wrapper_corner_radius
-// Espec §2.3/RF-4.19 pede `tint_strength = 0.07` pro fundo do wrapper --
-// superado por pedido direto do usuário (F3 etapa 6): o grupo é uma
-// "cápsula" pintada com a cor cheia, não um tingimento sutil. Divergência
-// registrada aqui, não na especificação visual (que continua descrevendo
-// o v1 "de livro"; ver seção 4.4 dela pro registro formal de divergências
-// já conhecidas -- esta é nova e ainda não está lá).
-// Efeito de vidro (pedido do usuário, fora da espec.: "muito chapada"):
-// deixa passar um traço do que está atrás -- `BAR_BACKGROUND` no espaço
-// entre pílula/abas e a borda da cápsula, a própria cápsula onde a pílula
-// fica por cima. Sem primitiva de blur em `porecatu-render` (nota do
-// módulo) -- não há como turvar o que passa por trás, só deixar passar
-// menos dele; ainda assim já lê como painel translúcido, não como o
-// tingimento de .07 que a espec original pedia e o usuário rejeitou na F3
-// (aquele desaparecia contra o fundo da aba; este fica atrás dela, contra
-// `BAR_BACKGROUND`, sólido e escuro, então não some do mesmo jeito). Valor
-// de trabalho -- ajustar se ficar fraco ou forte demais em tela.
-const GROUP_CAPSULE_FILL_STRENGTH: f64 = 0.85;
-// Borda clara e translúcida (`GLASS_BORDER`) no lugar do tom neutro escuro
-// de antes -- é o "rim light" que lê como borda de vidro; um traço escuro
-// contra uma cápsula agora semitransparente ficava opaco demais e quebrava
-// o efeito. Pedido do usuário, mesmo valor de trabalho.
-const CAPSULE_BORDER_WIDTH: f32 = 1.0;
+// Realce de fronteira do arraste de aba (espec §2.19, ADR-0021 §4):
+// "borda 1px na cor do grupo com alfa .45" -- sem chave própria no TOML
+// (o tingimento em si é `[appearance.groups] badge_tint_strength`, ver
+// `TabBarStyle::drag_highlight_tint_strength`).
+const DRAG_HIGHLIGHT_BORDER_ALPHA: f64 = 0.45;
+const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
 
-// Sombra da cápsula de grupo e da aba solta (pedido do usuário).
-// `porecatu-render` não tem primitiva de sombra (nota do módulo, espec
-// §4.4) -- aproximada aqui com `RoundedQuad`s pretos semitransparentes
-// empilhados, crescendo de raio e caindo de alfa, a mesma técnica de
-// "drop shadow em camadas" usada fora de um passo de blur de verdade.
-// Suficiente para o respiro visual que o pedido descreve; não é o
-// `box-shadow` de popover da espec (`0 18px 44px rgba(0,0,0,.55)`), que
-// precisaria de blur real para não aliasear numa mancha desse tamanho.
+// Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
+// expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
+// ícone é o equivalente estático.
+const PILL_CARET_COLLAPSED: icon::Icon = icon::CHEVRON_RIGHT;
+const PILL_CARET_EXPANDED: icon::Icon = icon::CHEVRON_DOWN;
+
+/// Sombra da cápsula de grupo e da aba solta (pedido do usuário,
+/// `[appearance.groups] shadow` liga/desliga -- ver `TabBarStyle::
+/// group_shadow_enabled`). `porecatu-render` não tem primitiva de sombra
+/// (nota do módulo, espec §4.4) -- aproximada aqui com `RoundedQuad`s
+/// pretos semitransparentes empilhados, crescendo de raio e caindo de
+/// alfa, a mesma técnica de "drop shadow em camadas" usada fora de um
+/// passo de blur de verdade. Suficiente para o respiro visual que o
+/// pedido descreve; não é o `box-shadow` de popover da espec
+/// (`0 18px 44px rgba(0,0,0,.55)`), que precisaria de blur real para não
+/// aliasear numa mancha desse tamanho. Sem chave individual por camada no
+/// TOML -- é a técnica documentada na espec §1.7, não um valor de design
+/// por si.
 pub(crate) const SHADOW_LAYERS: [(f32, f32, f64); 3] = [
     // (spread, offset_y, alpha)
     (1.0, 1.0, 0.16),
     (2.5, 2.0, 0.10),
     (4.5, 3.0, 0.06),
 ];
-
-// Realce de fronteira do arraste de aba (espec §2.19, ADR-0021 §4).
-// "Sobe o tingimento de .07 para .16 -- o mesmo badge_tint_strength que o
-// arquivo de exemplo já usa" -- mas `badge_tint_strength` no TOML vale
-// 0.14 (seção do badge de perfil, [v2]), não .16: a prosa da espec.
-// arredonda, o TOML é a fonte numérica canônica deste projeto. Usa-se o
-// valor do TOML, com a divergência registrada aqui em vez de inventar um
-// terceiro número.
-const DRAG_HIGHLIGHT_TINT_STRENGTH: f64 = 0.14; // badge_tint_strength
-// "Borda 1px na cor do grupo com alfa .45" -- sem chave própria no TOML.
-const DRAG_HIGHLIGHT_BORDER_ALPHA: f64 = 0.45;
-const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
-
-// Pílula de grupo (espec §2.4, `[appearance.groups]`).
-const PILL_CORNER_RADIUS: f32 = 6.0; // label_corner_radius
-// Espec §2.4 pede borda 1px (`label_border`); removida a pedido do
-// usuário na F3 -- a pílula já era a cor cheia do grupo, e a borda neutra
-// por cima virava um contorno cinza sem função contra ela. **Volta** com o
-// efeito de vidro (pedido do usuário, fora da espec.): não é mais neutra,
-// é `GLASS_BORDER` -- o mesmo rim translúcido da cápsula, propósito
-// diferente do que foi removido (ali era contorno sem função; aqui é a
-// borda que lê como vidro). Preenchimento também ganha leve
-// transparência, mesma lógica de `GROUP_CAPSULE_FILL_STRENGTH` -- a
-// pílula fica por cima da cápsula (mesmo tom), então o que passa por trás
-// dela é a própria cápsula, não `BAR_BACKGROUND`: duas camadas
-// translúcidas empilhadas, a leitura de "vidro sobre vidro".
-const PILL_GLASS_FILL_STRENGTH: f64 = 0.92;
-const PILL_BORDER_WIDTH: f32 = 1.0;
-// Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
-// expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
-// ícone é o equivalente estático. A em é a mesma dos outros ícones; o que
-// o layout reserva (`style.pill_caret_size`) é a largura do **desenho**,
-// que é menor -- ver `porecatu_render::icon`.
-const PILL_CARET_COLLAPSED: icon::Icon = icon::CHEVRON_RIGHT;
-const PILL_CARET_EXPANDED: icon::Icon = icon::CHEVRON_DOWN;
-pub(crate) const PILL_CARET_ICON_SIZE: f32 = ICON_EM_SIZE;
-
-// Campo de rename: espec §2.5 dá largura (120), padding (2px 5px) e fonte
-// (12px), mas não a altura da caixa. Valor de trabalho: texto 12px +
-// padding vertical 2px de cada lado + folga -- ajustar se ficar
-// visualmente errado na prática (mesmo tipo de nota que F1 deixou em
-// `FONT_SIZE_PX`/`LINE_HEIGHT_MULTIPLIER`).
-const RENAME_FIELD_HEIGHT: f32 = 20.0;
-const RENAME_FIELD_MAX_WIDTH: f32 = 120.0;
-const RENAME_FONT_SIZE: f32 = 12.0;
-const RENAME_PADDING_X: f32 = 5.0;
-
-const OVERFLOW_CHEVRON_SIZE: f32 = ICON_EM_SIZE; // espec §2.18: "chevron ‹/› 10px"
 
 /// A aba sendo arrastada (espec §2.19): desenhada como fantasma seguindo o
 /// cursor no eixo X, presa ao Y da barra -- em vez de na posição que o
@@ -260,6 +178,7 @@ pub fn paint(
     selection: &Selection,
     group_editor: Option<&GroupEditor>,
     style: &TabBarStyle,
+    pal: &ResolvedPalette,
     bar_width: f32,
     overflow: Overflow,
     drag: Option<DragGhost>,
@@ -281,6 +200,21 @@ pub fn paint(
     let bar_height = bar_height(style);
     let mut out = Vec::new();
 
+    // Tamanhos de **em**, não de desenho: o Lucide preenche ~0.6 em, então a
+    // em tem de ser cerca do dobro do número da especificação para o
+    // desenho sair no tamanho que ela pede -- e para o traço (`2/24` da em)
+    // render sólido em vez de esmaecer contra o fundo. Ver
+    // `porecatu_render::icon`. `[appearance.tabs] icon_em_size`.
+    let close_icon_size = style.icon_em_size; // espec §2.5: "✕ 10px" de desenho
+    let new_tab_icon_size = style.icon_em_size; // espec §2.6: "+ 15px" de desenho
+    // A engrenagem preenche 0.84 em contra 0.68 do "+", então a mesma em a
+    // desenharia bem maior que os outros ícones. Reduzida para o desenho
+    // bater com o do "+" -- ver `porecatu_render::icon`. Sem chave própria.
+    let settings_icon_size = style.icon_em_size * 0.8;
+    // Menor que o "+"/configurações -- convenção Windows: glyphs finos de
+    // minimizar/maximizar/fechar (ADR-0027). Sem chave própria.
+    let window_button_icon_size = style.icon_em_size * 0.7;
+
     out.push(Primitive::Quad(Quad {
         rect: Rect {
             x: 0.0,
@@ -288,7 +222,7 @@ pub fn paint(
             width: bar_width,
             height: bar_height,
         },
-        color: palette::BAR_BACKGROUND,
+        color: pal.bar_background,
     }));
     // Sem separador de 1px na base da barra (espec §2.2: "borda #23272f").
     // Pedido do usuário: o box arredondado do terminal (`paint.rs`) começa
@@ -352,16 +286,16 @@ pub fn paint(
         // fundo da pílula e o realce de fronteira do arraste.
         let group_color = core_group
             .and_then(|g| g.color())
-            .map(palette::group_color)
-            .unwrap_or(palette::UNGROUPED_GROUP_COLOR);
+            .map(|c| pal.group_color(c))
+            .unwrap_or_else(|| pal.ungrouped_group_color());
 
         // Ajuste pedido pelo usuário (F3 etapa 6, fora da espec.): o grupo
         // é uma "cápsula" pintada com a cor cheia -- não o tingimento de
         // 7% da espec §2.3, que ficava quase invisível atrás do fundo
-        // opaco das abas. `TAB_ACTIVE_BACKGROUND`/`TAB_INACTIVE_BACKGROUND`
-        // (`palette.rs`) agora têm alfa .85 pra deixar passar um indício
-        // dela por cima. Abas sem grupo (`pill == None`) nunca pintam
-        // cápsula.
+        // opaco das abas. `tab_active_background`/`tab_inactive_background`
+        // (`palette.rs`) agora têm alfa `background_alpha` pra deixar
+        // passar um indício dela por cima. Abas sem grupo (`pill == None`)
+        // nunca pintam cápsula.
         //
         // **Colapsado também pinta** (pedido do usuário), contra o
         // "colapsado fica transparente" do RF-4.19: é a cápsula que
@@ -372,13 +306,15 @@ pub fn paint(
         // "continua desenhada durante a animação para não sumir na hora":
         // agora ela nunca some, então não há o que segurar.
         if group.pill.is_some() {
-            push_shadow(&mut out, capsule_rect, WRAPPER_CORNER_RADIUS);
+            if style.group_shadow_enabled {
+                push_shadow(&mut out, capsule_rect, style.wrapper_corner_radius);
+            }
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: capsule_rect,
-                radius: WRAPPER_CORNER_RADIUS,
-                color: with_alpha(group_color, GROUP_CAPSULE_FILL_STRENGTH),
-                border_color: palette::GLASS_BORDER,
-                border_width: CAPSULE_BORDER_WIDTH,
+                radius: style.wrapper_corner_radius,
+                color: with_alpha(group_color, style.capsule_alpha),
+                border_color: pal.glass_border,
+                border_width: style.glass_border_width,
             }));
         }
         // Espec §2.19, ADR-0021 §4: "o wrapper que receberia a aba sobe o
@@ -391,8 +327,8 @@ pub fn paint(
             let highlight_rect = drag_highlight.map(|(_, rect)| rect).expect("checado acima");
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: shift(highlight_rect, dx),
-                radius: WRAPPER_CORNER_RADIUS,
-                color: with_alpha(group_color, DRAG_HIGHLIGHT_TINT_STRENGTH),
+                radius: style.wrapper_corner_radius,
+                color: with_alpha(group_color, style.drag_highlight_tint_strength),
                 border_color: with_alpha(group_color, DRAG_HIGHLIGHT_BORDER_ALPHA),
                 border_width: DRAG_HIGHLIGHT_BORDER_WIDTH,
             }));
@@ -410,6 +346,8 @@ pub fn paint(
                 .map(GroupEditor::name_buffer);
             paint_group_pill(
                 pill,
+                pal,
+                style,
                 group_color,
                 is_collapsed,
                 live_name,
@@ -447,48 +385,48 @@ pub fn paint(
 
             let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
             let is_active = active == Some(tab.id);
-            let (bg, border, text_color) = tab_colors(exited, is_active);
+            let (bg, border, border_width, text_color) = tab_colors(pal, style, exited, is_active);
             // RF-2.2/espec §2.5: selecionada é um modificador de borda, não
             // um quarto estado -- fundo e texto continuam vindo de
             // Ativa/Inativa acima.
             let (border, border_width) = if selection.is_selected(tab.id) {
-                (palette::SELECTED_BORDER, SELECTED_BORDER_WIDTH)
+                (pal.selected_border, style.selected_border_width)
             } else {
-                (border, TAB_BORDER_WIDTH)
+                (border, border_width)
             };
 
             // Sombra só na aba solta (sem cápsula atrás) -- aba de dentro
             // de um grupo já leva o respiro da cápsula, e pedido do
             // usuário foi sombra na cápsula e na aba solta, não nas duas.
-            if group.pill.is_none() {
-                push_shadow(&mut out, tab_rect, 6.0);
+            if group.pill.is_none() && style.group_shadow_enabled {
+                push_shadow(&mut out, tab_rect, style.tab_corner_radius);
             }
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: tab_rect,
-                radius: 6.0,
+                radius: style.tab_corner_radius,
                 color: scale_alpha(bg, fade_in),
                 border_color: scale_alpha(border, fade_in),
                 border_width,
             }));
 
             let dot_reserve = if tab.indicator.is_some() {
-                INDICATOR_DOT_SIZE + style.internal_gap
+                style.indicator_dot_size + style.internal_gap
             } else {
                 0.0
             };
             if let Some(indicator) = tab.indicator {
                 let color = match indicator {
-                    Indicator::Activity => palette::ACTIVITY_INDICATOR,
-                    Indicator::Bell => palette::BELL_INDICATOR,
+                    Indicator::Activity => pal.activity_indicator,
+                    Indicator::Bell => pal.bell_indicator,
                 };
                 out.push(Primitive::RoundedQuad(RoundedQuad {
                     rect: Rect {
                         x: tab_rect.x + style.padding_left,
-                        y: tab_rect.y + (tab_rect.height - INDICATOR_DOT_SIZE) / 2.0,
-                        width: INDICATOR_DOT_SIZE,
-                        height: INDICATOR_DOT_SIZE,
+                        y: tab_rect.y + (tab_rect.height - style.indicator_dot_size) / 2.0,
+                        width: style.indicator_dot_size,
+                        height: style.indicator_dot_size,
                     },
-                    radius: INDICATOR_DOT_SIZE / 2.0,
+                    radius: style.indicator_dot_size / 2.0,
                     color: scale_alpha(color, fade_in),
                     border_color: palette::TRANSPARENT,
                     border_width: 0.0,
@@ -496,7 +434,7 @@ pub fn paint(
             }
 
             if rename.editing_tab() == Some(tab.id) {
-                paint_rename_field(tab_rect, style, rename.buffer(), measurer, &mut out);
+                paint_rename_field(tab_rect, style, pal, rename.buffer(), measurer, &mut out);
             } else {
                 let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
                 out.push(Primitive::Text(TextRun {
@@ -511,8 +449,8 @@ pub fn paint(
             out.push(centered_glyph(
                 icon::X,
                 shift(tab.close_button, dx),
-                CLOSE_ICON_SIZE,
-                scale_alpha(palette::CLOSE_BUTTON_ICON, fade_in),
+                close_icon_size,
+                scale_alpha(pal.chrome_icon, fade_in),
             ));
         }
 
@@ -531,21 +469,21 @@ pub fn paint(
         if let Some(rect) = group.new_tab_button {
             let group_button = shift(rect, dx);
             let icon_color = if group.pill.is_some() {
-                palette::GROUP_NEW_TAB_ICON
+                pal.group_new_tab_icon
             } else {
-                palette::NEW_TAB_ICON
+                pal.chrome_icon
             };
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: group_button,
-                radius: 6.0,
+                radius: style.tab_corner_radius,
                 color: palette::TRANSPARENT,
-                border_color: palette::NEW_TAB_BORDER,
+                border_color: pal.new_tab_border,
                 border_width: 1.0,
             }));
             out.push(centered_glyph(
                 icon::PLUS,
                 group_button,
-                NEW_TAB_ICON_SIZE,
+                new_tab_icon_size,
                 icon_color,
             ));
         }
@@ -572,16 +510,16 @@ pub fn paint(
         let tab_rect = shift(old_tab.rect, scroll_dx);
         let exited = workspace.tab(old_tab.id).is_some_and(|t| t.is_exited());
         let is_active = active == Some(old_tab.id);
-        let (bg, border, text_color) = tab_colors(exited, is_active);
+        let (bg, border, _border_width, text_color) = tab_colors(pal, style, exited, is_active);
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: tab_rect,
-            radius: 6.0,
+            radius: style.tab_corner_radius,
             color: scale_alpha(bg, fade_out),
             border_color: scale_alpha(border, fade_out),
             border_width: 1.0,
         }));
         let dot_reserve = if old_tab.indicator.is_some() {
-            INDICATOR_DOT_SIZE + style.internal_gap
+            style.indicator_dot_size + style.internal_gap
         } else {
             0.0
         };
@@ -603,16 +541,16 @@ pub fn paint(
         let button = shift(rect, scroll_dx);
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: button,
-            radius: 6.0,
+            radius: style.tab_corner_radius,
             color: palette::TRANSPARENT,
-            border_color: palette::NEW_TAB_BORDER,
+            border_color: pal.new_tab_border,
             border_width: 1.0,
         }));
         out.push(centered_glyph(
             icon::PLUS,
             button,
-            NEW_TAB_ICON_SIZE,
-            palette::NEW_TAB_ICON,
+            new_tab_icon_size,
+            pal.chrome_icon,
         ));
     }
 
@@ -631,16 +569,16 @@ pub fn paint(
     let settings = tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: settings,
-        radius: 6.0,
+        radius: style.tab_corner_radius,
         color: palette::TRANSPARENT,
-        border_color: palette::NEW_TAB_BORDER,
+        border_color: pal.new_tab_border,
         border_width: 1.0,
     }));
     out.push(centered_glyph(
         icon::SETTINGS,
         settings,
-        SETTINGS_ICON_SIZE,
-        palette::NEW_TAB_ICON,
+        settings_icon_size,
+        pal.chrome_icon,
     ));
 
     // Botões de janela (ADR-0027): minimizar/maximizar-restaurar/fechar,
@@ -662,23 +600,23 @@ pub fn paint(
             (2u8, tab_bar::WindowButtonHit::Close, icon::X, true),
         ];
         for (index, hit, glyph, is_close) in buttons {
-            let rect = tab_bar::window_button_rect(index, bar_width, bar_height);
+            let rect = tab_bar::window_button_rect(style, index, bar_width, bar_height);
             let hovered = hover_window_button == Some(hit);
             let bg = match (is_close, hovered) {
-                (true, true) => palette::WINDOW_CLOSE_HOVER_BG,
-                (false, true) => palette::WINDOW_BUTTON_HOVER_BG,
+                (true, true) => pal.window_close_hover_bg,
+                (false, true) => pal.window_button_hover_bg,
                 (_, false) => palette::TRANSPARENT,
             };
             out.push(Primitive::Quad(Quad { rect, color: bg }));
             let icon_color = if is_close && hovered {
-                palette::WINDOW_CLOSE_HOVER_ICON
+                pal.window_close_hover_icon
             } else {
-                palette::NEW_TAB_ICON
+                pal.chrome_icon
             };
             out.push(centered_glyph(
                 glyph,
                 rect,
-                WINDOW_BUTTON_ICON_SIZE,
+                window_button_icon_size,
                 icon_color,
             ));
         }
@@ -689,19 +627,33 @@ pub fn paint(
     // da direita.
     let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos);
     if overflow.hidden_left > 0 {
-        paint_overflow_pill(OverflowSide::Left, trilha_width, bar_height, &mut out);
+        paint_overflow_pill(
+            style,
+            pal,
+            OverflowSide::Left,
+            trilha_width,
+            bar_height,
+            &mut out,
+        );
     }
     if overflow.hidden_right > 0 {
-        paint_overflow_pill(OverflowSide::Right, trilha_width, bar_height, &mut out);
+        paint_overflow_pill(
+            style,
+            pal,
+            OverflowSide::Right,
+            trilha_width,
+            bar_height,
+            &mut out,
+        );
     }
 
     if let Some(ghost) = &drag {
         let tab = &ghost.source;
         let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
         let is_active = active == Some(tab.id);
-        let (bg, border, text_color) = tab_colors(exited, is_active);
+        let (bg, border, _border_width, text_color) = tab_colors(pal, style, exited, is_active);
         let (border, border_width) = if selection.is_selected(tab.id) {
-            (palette::SELECTED_BORDER, SELECTED_BORDER_WIDTH)
+            (pal.selected_border, style.selected_border_width)
         } else {
             (border, 1.0)
         };
@@ -713,13 +665,13 @@ pub fn paint(
         };
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: ghost_rect,
-            radius: 6.0,
+            radius: style.tab_corner_radius,
             color: bg,
             border_color: border,
             border_width,
         }));
         let dot_reserve = if tab.indicator.is_some() {
-            INDICATOR_DOT_SIZE + style.internal_gap
+            style.indicator_dot_size + style.internal_gap
         } else {
             0.0
         };
@@ -747,14 +699,16 @@ pub fn paint(
         let color = workspace
             .group(ghost.group)
             .and_then(|g| g.color())
-            .map(palette::group_color)
-            .unwrap_or(palette::UNGROUPED_GROUP_COLOR);
+            .map(|c| pal.group_color(c))
+            .unwrap_or_else(|| pal.ungrouped_group_color());
         let is_collapsed = workspace
             .group(ghost.group)
             .is_some_and(|g| g.is_collapsed());
         let ghost_dx = ghost.screen_x - pill.rect.x;
         paint_group_pill(
             pill,
+            pal,
+            style,
             color,
             is_collapsed,
             None,
@@ -768,30 +722,43 @@ pub fn paint(
     out
 }
 
-fn tab_colors(exited: bool, is_active: bool) -> (Color, Color, Color) {
+/// Cor de fundo/borda/texto de uma aba, conforme o estado -- e a largura de
+/// borda correspondente (`[appearance.tabs.colors] active_border_width`/
+/// `inactive_border_width`; hoje o mesmo valor no arquivo de exemplo, mas
+/// chaves distintas, então mantidas distintas aqui).
+fn tab_colors(
+    pal: &ResolvedPalette,
+    style: &TabBarStyle,
+    exited: bool,
+    is_active: bool,
+) -> (Color, Color, f32, Color) {
     if exited {
         (
-            palette::TAB_INACTIVE_BACKGROUND,
-            palette::TAB_INACTIVE_BORDER,
-            palette::TAB_EXITED_TEXT,
+            pal.tab_inactive_background,
+            pal.tab_inactive_border,
+            style.inactive_border_width,
+            pal.tab_exited_text,
         )
     } else if is_active {
         (
-            palette::TAB_ACTIVE_BACKGROUND,
-            palette::TAB_ACTIVE_BORDER,
-            palette::TAB_ACTIVE_TEXT,
+            pal.tab_active_background,
+            pal.tab_active_border,
+            style.active_border_width,
+            pal.tab_active_text,
         )
     } else {
         (
-            palette::TAB_INACTIVE_BACKGROUND,
-            palette::TAB_INACTIVE_BORDER,
-            palette::TAB_INACTIVE_TEXT,
+            pal.tab_inactive_background,
+            pal.tab_inactive_border,
+            style.inactive_border_width,
+            pal.tab_inactive_text,
         )
     }
 }
 
 /// Empilha as camadas de `SHADOW_LAYERS` atrás de `rect` (raio `radius`).
-/// Ver nota em `SHADOW_LAYERS`.
+/// Ver nota em `SHADOW_LAYERS`. Chamado só quando `style.group_shadow_enabled`
+/// (`[appearance.groups] shadow`).
 pub(crate) fn push_shadow(out: &mut Vec<Primitive>, rect: Rect, radius: f32) {
     for (spread, offset_y, alpha) in SHADOW_LAYERS {
         out.push(Primitive::RoundedQuad(RoundedQuad {
@@ -827,9 +794,10 @@ fn with_alpha(color: Color, alpha: f64) -> Color {
 
 /// Multiplica o alfa que a cor já tem por `mult` -- diferente de
 /// `with_alpha`, que substitui. É o que faz a aba esmaecer em cima do
-/// alfa `.85` que `TAB_ACTIVE_BACKGROUND`/`TAB_INACTIVE_BACKGROUND` já
-/// carregam (ADR-0022, fade de entrada/saída do colapso), sem perder o
-/// "indício da cápsula" que esse `.85` existe pra deixar passar.
+/// alfa `background_alpha` que `tab_active_background`/
+/// `tab_inactive_background` já carregam (ADR-0022, fade de entrada/saída
+/// do colapso), sem perder o "indício da cápsula" que esse alfa existe pra
+/// deixar passar.
 fn scale_alpha(color: Color, mult: f32) -> Color {
     Color {
         a: color.a * mult as f64,
@@ -841,13 +809,14 @@ fn scale_alpha(color: Color, mult: f32) -> Color {
 /// do grupo já resolvida por quem chama (`group_color` em [`paint`]). Sem
 /// contador de abas -- pedido do usuário. Sem swatch tampouco -- também
 /// pedido do usuário: a pílula inteira é pintada com `color`, no lugar do
-/// pequeno quadrado que a marcava antes (o fundo era `palette::PILL_BACKGROUND`,
-/// neutro). Texto e caret usam `palette::GROUP_NEW_TAB_ICON` -- o mesmo
-/// escuro do "+" do grupo, pela mesma razão: sobre a cor cheia do grupo o
-/// claro perde contraste.
+/// pequeno quadrado que a marcava antes. Texto e caret usam
+/// `pal.group_new_tab_icon` -- o mesmo escuro do "+" do grupo, pela mesma
+/// razão: sobre a cor cheia do grupo o claro perde contraste.
 #[allow(clippy::too_many_arguments)]
 fn paint_group_pill(
     pill: &GroupPillRect,
+    pal: &ResolvedPalette,
+    style: &TabBarStyle,
     color: Color,
     is_collapsed: bool,
     live_name: Option<&str>,
@@ -858,27 +827,27 @@ fn paint_group_pill(
 ) {
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: shift(pill.rect, dx),
-        radius: PILL_CORNER_RADIUS,
-        color: with_alpha(color, PILL_GLASS_FILL_STRENGTH),
-        border_color: palette::GLASS_BORDER,
-        border_width: PILL_BORDER_WIDTH,
+        radius: style.pill_corner_radius,
+        color: with_alpha(color, style.pill_glass_alpha),
+        border_color: pal.glass_border,
+        border_width: style.glass_border_width,
     }));
     if let Some(indicator) = pill.aggregate_indicator {
         let dot_color = match indicator {
-            Indicator::Activity => palette::ACTIVITY_INDICATOR,
-            Indicator::Bell => palette::BELL_INDICATOR,
+            Indicator::Activity => pal.activity_indicator,
+            Indicator::Bell => pal.bell_indicator,
         };
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: shift(
                 Rect {
                     x: pill.aggregate_indicator_origin.0,
                     y: pill.aggregate_indicator_origin.1,
-                    width: INDICATOR_DOT_SIZE,
-                    height: INDICATOR_DOT_SIZE,
+                    width: style.indicator_dot_size,
+                    height: style.indicator_dot_size,
                 },
                 dx,
             ),
-            radius: INDICATOR_DOT_SIZE / 2.0,
+            radius: style.indicator_dot_size / 2.0,
             color: dot_color,
             border_color: palette::TRANSPARENT,
             border_width: 0.0,
@@ -901,7 +870,7 @@ fn paint_group_pill(
         text: name_text,
         font: PILL_NAME_FONT,
         size_px: name_font_size,
-        color: palette::GROUP_NEW_TAB_ICON,
+        color: pal.group_new_tab_icon,
     }));
     let caret_glyph = if is_collapsed {
         PILL_CARET_COLLAPSED
@@ -911,8 +880,8 @@ fn paint_group_pill(
     out.push(centered_glyph(
         caret_glyph,
         shift(pill.caret_rect, dx),
-        PILL_CARET_ICON_SIZE,
-        palette::GROUP_NEW_TAB_ICON,
+        style.icon_em_size,
+        pal.group_new_tab_icon,
     ));
 }
 
@@ -921,18 +890,21 @@ fn paint_group_pill(
 /// rolagem. Divergência da espec (que pedia cápsula com contagem, §2.18),
 /// a pedido do usuário -- registrar na seção 4.4.
 fn paint_overflow_pill(
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
     side: OverflowSide,
     bar_width: f32,
     bar_height: f32,
     out: &mut Vec<Primitive>,
 ) {
-    let rect = tab_bar::overflow_pill_rect(side, bar_width, bar_height);
+    let rect = tab_bar::overflow_pill_rect(style, side, bar_width, bar_height);
     // Pedido do usuário: círculo (raio = metade da largura = metade da
-    // altura), só o chevron -- a contagem saiu.
+    // altura), só o chevron -- a contagem saiu. Raio derivado da
+    // geometria, não uma chave própria.
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect,
         radius: rect.width / 2.0,
-        color: palette::OVERFLOW_COUNT_BACKGROUND,
+        color: pal.overflow_count_background,
         border_color: palette::TRANSPARENT,
         border_width: 0.0,
     }));
@@ -944,8 +916,8 @@ fn paint_overflow_pill(
     out.push(centered_glyph(
         chevron,
         rect,
-        OVERFLOW_CHEVRON_SIZE,
-        palette::NEW_TAB_ICON,
+        style.icon_em_size,
+        pal.chrome_icon,
     ));
 }
 
@@ -957,42 +929,45 @@ fn paint_overflow_pill(
 fn paint_rename_field(
     tab_rect: Rect,
     style: &TabBarStyle,
+    pal: &ResolvedPalette,
     buffer: &str,
     measurer: &mut porecatu_render::TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
     let available_width = (tab_rect.width - style.padding_left - style.padding_right).max(0.0);
-    let field_width = RENAME_FIELD_MAX_WIDTH.min(available_width);
+    let field_width = style.rename_field_width.min(available_width);
     let field_rect = Rect {
         x: tab_rect.x + style.padding_left,
-        y: tab_rect.y + (tab_rect.height - RENAME_FIELD_HEIGHT) / 2.0,
+        y: tab_rect.y + (tab_rect.height - style.rename_field_height) / 2.0,
         width: field_width,
-        height: RENAME_FIELD_HEIGHT,
+        height: style.rename_field_height,
     };
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: field_rect,
+        // Espec. sem chave de raio para o campo de rename -- valor de
+        // trabalho, mesma nota histórica de `RENAME_FIELD_HEIGHT`.
         radius: 4.0,
-        color: palette::RENAME_BACKGROUND,
-        border_color: palette::RENAME_BORDER,
+        color: pal.rename_background,
+        border_color: pal.rename_border,
         border_width: 1.0,
     }));
 
-    let text_area = (field_width - RENAME_PADDING_X * 2.0).max(0.0);
-    let text_width = measurer.measure_width(buffer, LABEL_FONT, RENAME_FONT_SIZE);
+    let text_area = (field_width - style.rename_padding_x * 2.0).max(0.0);
+    let text_width = measurer.measure_width(buffer, LABEL_FONT, style.rename_font_size);
     let text_x = if text_width > text_area {
-        field_rect.x + RENAME_PADDING_X - (text_width - text_area)
+        field_rect.x + style.rename_padding_x - (text_width - text_area)
     } else {
-        field_rect.x + RENAME_PADDING_X
+        field_rect.x + style.rename_padding_x
     };
-    let text_y = field_rect.y + (RENAME_FIELD_HEIGHT - RENAME_FONT_SIZE) / 2.0;
+    let text_y = field_rect.y + (style.rename_field_height - style.rename_font_size) / 2.0;
 
     out.push(Primitive::PushClip(field_rect));
     out.push(Primitive::Text(TextRun {
         origin: (text_x, text_y),
         text: buffer.to_string(),
         font: LABEL_FONT,
-        size_px: RENAME_FONT_SIZE,
-        color: palette::RENAME_TEXT,
+        size_px: style.rename_font_size,
+        color: pal.rename_text,
     }));
     let caret_x = (text_x + text_width).min(field_rect.x + field_width - 1.0);
     out.push(Primitive::Quad(Quad {
@@ -1000,9 +975,9 @@ fn paint_rename_field(
             x: caret_x,
             y: field_rect.y + 3.0,
             width: 1.0,
-            height: RENAME_FIELD_HEIGHT - 6.0,
+            height: style.rename_field_height - 6.0,
         },
-        color: palette::RENAME_TEXT,
+        color: pal.rename_text,
     }));
     out.push(Primitive::PopClip);
 }
@@ -1038,6 +1013,10 @@ mod tests {
     use porecatu_core::GroupColor;
     use porecatu_render::TextMeasurer;
 
+    fn default_palette() -> ResolvedPalette {
+        ResolvedPalette::from_config(&porecatu_config::Config::default())
+    }
+
     /// Pedido do usuário, contra o "colapsado fica transparente" do
     /// RF-4.19: a cápsula é o que diz de que cor o grupo é, e sumir com
     /// ela no colapso tirava a única marca de cor justo quando o nome do
@@ -1045,6 +1024,7 @@ mod tests {
     #[test]
     fn collapsed_group_still_paints_its_colored_capsule() {
         let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
         let mut m = TextMeasurer::new();
         let bar_width = 800.0;
 
@@ -1058,6 +1038,7 @@ mod tests {
                 &Selection::default(),
                 None,
                 &style,
+                &pal,
                 bar_width,
                 Overflow {
                     scroll_offset: 0.0,
@@ -1074,17 +1055,14 @@ mod tests {
                 false,
                 None,
             );
-            // `with_alpha` -- efeito de vidro (`GROUP_CAPSULE_FILL_STRENGTH`)
-            // não pinta mais a cor cheia do grupo, e sim ela com o alfa da
+            // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
+            // pinta mais a cor cheia do grupo, e sim ela com o alfa da
             // cápsula.
-            let cor = with_alpha(
-                palette::group_color(GroupColor::Cyan),
-                GROUP_CAPSULE_FILL_STRENGTH,
-            );
+            let cor = with_alpha(pal.group_color(GroupColor::Cyan), style.capsule_alpha);
             out.iter()
                 .filter(|p| match p {
                     Primitive::RoundedQuad(q) => {
-                        q.radius == WRAPPER_CORNER_RADIUS && q.color == cor
+                        q.radius == style.wrapper_corner_radius && q.color == cor
                     }
                     _ => false,
                 })
@@ -1110,6 +1088,7 @@ mod tests {
     #[test]
     fn painted_background_and_clip_span_the_whole_bar() {
         let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
         let mut ws = Workspace::new();
         ws.append_tab("zsh", None);
         let mut m = TextMeasurer::new();
@@ -1129,6 +1108,7 @@ mod tests {
             &Selection::default(),
             None,
             &style,
+            &pal,
             bar_width,
             overflow,
             None,
@@ -1146,7 +1126,7 @@ mod tests {
         let background = out
             .iter()
             .find_map(|p| match p {
-                Primitive::Quad(q) if q.color == palette::BAR_BACKGROUND => Some(q.rect),
+                Primitive::Quad(q) if q.color == pal.bar_background => Some(q.rect),
                 _ => None,
             })
             .expect("fundo da barra");

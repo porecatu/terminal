@@ -100,6 +100,9 @@ pub struct TabsColors {
     pub close_button_foreground: Color,
     pub close_button_hover_background: Color,
     pub close_button_hover_foreground: Color,
+    /// Rótulo da aba `Exited` (ADR-0017, espec. §2.5) -- o binário já
+    /// desenhava este tom antes de esta chave existir.
+    pub exited_foreground: Color,
     pub active_border: Color,
     pub inactive_border: Color,
     pub active_border_width: i32,
@@ -127,6 +130,7 @@ impl Default for TabsColors {
             close_button_foreground: Color::hex("#e4e8ee"),
             close_button_hover_background: Color::hex("#39404b"),
             close_button_hover_foreground: Color::hex("#e4e8ee"),
+            exited_foreground: Color::hex("#727a86"),
             active_border: Color::hex("#39404b"),
             inactive_border: Color::hex("#22262e"),
             active_border_width: 2,

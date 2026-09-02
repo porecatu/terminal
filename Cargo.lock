@@ -1762,6 +1762,7 @@ dependencies = [
  "arboard",
  "dirs",
  "png",
+ "porecatu-config",
  "porecatu-core",
  "porecatu-render",
  "porecatu-term",

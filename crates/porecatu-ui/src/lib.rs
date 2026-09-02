@@ -180,10 +180,10 @@ struct TabRuntime {
 }
 
 /// Altura da barra de abas, em pixels lógicos -- não depende de estado de
-/// janela nenhum, só do estilo default (`porecatu-config` não existe
-/// ainda).
-fn bar_height() -> f32 {
-    chrome::bar_height(&TabBarStyle::DEFAULT)
+/// janela nenhum, só do estilo (`TabBarStyle::from_config`, um por
+/// processo em `App::style`).
+fn bar_height(style: &TabBarStyle) -> f32 {
+    chrome::bar_height(style)
 }
 
 /// Arredonda a métrica de célula para que a origem de toda coluna
@@ -421,9 +421,13 @@ impl WindowState {
 
     /// Linhas/colunas atuais a partir do tamanho lógico da janela (descontada
     /// a barra de abas) e da métrica de célula já medida.
-    fn grid_size(&self, cell_metrics: CellMetrics) -> (usize, usize) {
-        let content =
-            paint::terminal_content_rect(bar_height(), self.logical_width, self.logical_height);
+    fn grid_size(&self, cell_metrics: CellMetrics, style: &TabBarStyle) -> (usize, usize) {
+        let content = paint::terminal_content_rect(
+            style,
+            bar_height(style),
+            self.logical_width,
+            self.logical_height,
+        );
         let cols = ((content.width / cell_metrics.width) as usize).max(MIN_GRID);
         let rows = ((content.height / cell_metrics.height) as usize).max(MIN_GRID);
         (rows, cols)
@@ -446,14 +450,13 @@ impl WindowState {
     /// fique visível -- alinha à borda esquerda se ela está à esquerda da
     /// janela visível, à direita se está à direita, nunca centraliza
     /// (espec §2.18: "centralizar move mais que o necessário").
-    fn ensure_active_tab_visible(&mut self, gpu: &mut GpuContext) {
+    fn ensure_active_tab_visible(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
         let Some(active) = self.workspace.active_tab() else {
             return;
         };
-        let style = TabBarStyle::DEFAULT;
         let layout = tab_bar::fit_width(
             &self.workspace,
-            &style,
+            style,
             self.logical_width,
             gpu.text_measurer(),
             is_macos(),
@@ -461,7 +464,7 @@ impl WindowState {
         let Some(rect) = tab_bar::tab_rect(&layout, active) else {
             return;
         };
-        let trilha_width = tab_bar::trilha_width(&style, self.logical_width, is_macos());
+        let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
         let window_start = self.scroll_offset;
         let window_end = self.scroll_offset + trilha_width;
         if rect.x < window_start {
@@ -477,11 +480,15 @@ impl WindowState {
     /// grupo não existe mais (editor prestes a fechar) ou não tem pílula
     /// (grupo implícito -- inatingível aqui, o editor nunca abre sobre
     /// um).
-    fn group_pill_screen_x(&self, group: GroupId, gpu: &mut GpuContext) -> f32 {
-        let style = TabBarStyle::DEFAULT;
+    fn group_pill_screen_x(
+        &self,
+        group: GroupId,
+        gpu: &mut GpuContext,
+        style: &TabBarStyle,
+    ) -> f32 {
         let layout = tab_bar::fit_width(
             &self.workspace,
-            &style,
+            style,
             self.logical_width,
             gpu.text_measurer(),
             is_macos(),
@@ -511,8 +518,9 @@ impl WindowState {
         cwd: Option<PathBuf>,
         now: Instant,
         target: NewTabTarget,
+        style: &TabBarStyle,
     ) {
-        let (rows, cols) = self.grid_size(cell_metrics);
+        let (rows, cols) = self.grid_size(cell_metrics, style);
         let shell_name = Self::shell_display_name();
         let tab_id = match target {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
@@ -642,12 +650,20 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         startup_directory: &Option<PathBuf>,
         now: Instant,
+        style: &TabBarStyle,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
         let cwd = self.resolve_new_tab_cwd(startup_directory);
-        self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::ActiveGroup);
+        self.open_tab(
+            cell_metrics,
+            proxy,
+            cwd,
+            now,
+            NewTabTarget::ActiveGroup,
+            style,
+        );
     }
 
     /// RF-1.6 (ADR-0017): fechar a aba ativa pede confirmação quando ela
@@ -689,16 +705,16 @@ impl WindowState {
         };
     }
 
-    fn action_next_tab(&mut self, gpu: &mut GpuContext) {
+    fn action_next_tab(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
         self.workspace.next_tab();
         self.sync_window_title();
-        self.ensure_active_tab_visible(gpu);
+        self.ensure_active_tab_visible(gpu, style);
     }
 
-    fn action_prev_tab(&mut self, gpu: &mut GpuContext) {
+    fn action_prev_tab(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
         self.workspace.prev_tab();
         self.sync_window_title();
-        self.ensure_active_tab_visible(gpu);
+        self.ensure_active_tab_visible(gpu, style);
     }
 
     /// RF-2.21 (`group.next`/`group.prev`): anda de grupo em grupo,
@@ -710,7 +726,7 @@ impl WindowState {
     /// Não há animação: grupo colapsado é pulado, então nada expande nem
     /// colapsa, e a trilha não reflui (ADR-0022 fecha a lista de
     /// consumidores do relógio em dois).
-    fn action_group_step(&mut self, delta: isize, gpu: &mut GpuContext) {
+    fn action_group_step(&mut self, delta: isize, gpu: &mut GpuContext, style: &TabBarStyle) {
         let moved = if delta >= 0 {
             self.workspace.next_group()
         } else {
@@ -718,17 +734,17 @@ impl WindowState {
         };
         if moved.is_some() {
             self.sync_window_title();
-            self.ensure_active_tab_visible(gpu);
+            self.ensure_active_tab_visible(gpu, style);
         }
     }
 
     /// `tab.goto_N`: índice sobre a ordem **navegável**, não a visual --
     /// aba de grupo colapsado sai da numeração, e colapsar renumera
     /// `Alt+1..9` (deliberado, ADR-0020 §2).
-    fn action_goto(&mut self, navigable_index: usize, gpu: &mut GpuContext) {
+    fn action_goto(&mut self, navigable_index: usize, gpu: &mut GpuContext, style: &TabBarStyle) {
         self.workspace.activate_navigable_index(navigable_index);
         self.sync_window_title();
-        self.ensure_active_tab_visible(gpu);
+        self.ensure_active_tab_visible(gpu, style);
     }
 
     /// RF-1.17: reordenação por teclado, uma posição por vez, dentro do
@@ -737,7 +753,7 @@ impl WindowState {
     /// posição-alvo vem da ordem *dentro do grupo* da aba ativa, não da
     /// ordem visual da janela inteira -- com mais de um grupo (F3) as duas
     /// divergem.
-    fn action_move_tab(&mut self, delta: isize, gpu: &mut GpuContext) {
+    fn action_move_tab(&mut self, delta: isize, gpu: &mut GpuContext, style: &TabBarStyle) {
         let Some(active) = self.workspace.active_tab() else {
             return;
         };
@@ -758,7 +774,7 @@ impl WindowState {
             return;
         }
         self.workspace.move_tab(active, target);
-        self.ensure_active_tab_visible(gpu);
+        self.ensure_active_tab_visible(gpu, style);
     }
 
     /// Passo 1 do ADR-0008 (modo de captura): consome tudo, exceto `Esc` e
@@ -994,6 +1010,7 @@ impl WindowState {
     /// docs/reference/acoes.md). `window.new`/`window.close` (ADR-0015)
     /// devolvem `ActionOutcome` distinto porque tocam outras janelas, algo
     /// que só `App` resolve.
+    #[allow(clippy::too_many_arguments)]
     fn handle_tab_action_key(
         &mut self,
         event: &KeyEvent,
@@ -1002,6 +1019,7 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         startup_directory: &Option<PathBuf>,
         now: Instant,
+        style: &TabBarStyle,
     ) -> ActionOutcome {
         if event.state != ElementState::Pressed {
             return ActionOutcome::Unhandled;
@@ -1010,7 +1028,7 @@ impl WindowState {
         if m.ctrl && m.shift && !m.alt {
             match &event.logical_key {
                 Key::Character(s) if s.eq_ignore_ascii_case("t") => {
-                    self.action_new_tab(cell_metrics, proxy, startup_directory, now);
+                    self.action_new_tab(cell_metrics, proxy, startup_directory, now, style);
                     return ActionOutcome::Handled;
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("w") => {
@@ -1032,7 +1050,7 @@ impl WindowState {
                 // `docs/config/porecatu.example.toml` `[keybindings]`:
                 // "ctrl+shift+g" = "group.create".
                 Key::Character(s) if s.eq_ignore_ascii_case("g") => {
-                    self.action_group_create(gpu);
+                    self.action_group_create(gpu, style);
                     return ActionOutcome::Handled;
                 }
                 // O resto do nível de grupo da cadeia do ADR-0008, com o
@@ -1054,6 +1072,7 @@ impl WindowState {
                             proxy,
                             startup_directory,
                             now,
+                            style,
                         );
                     }
                     return ActionOutcome::Handled;
@@ -1068,6 +1087,7 @@ impl WindowState {
                             proxy,
                             startup_directory,
                             now,
+                            style,
                         );
                     }
                     return ActionOutcome::Handled;
@@ -1082,6 +1102,7 @@ impl WindowState {
                             proxy,
                             startup_directory,
                             now,
+                            style,
                         );
                     }
                     return ActionOutcome::Handled;
@@ -1092,11 +1113,11 @@ impl WindowState {
                 // são a rolagem de scrollback (`input.rs`), e este ramo
                 // roda antes dela na cadeia de captura.
                 Key::Named(NamedKey::PageDown) => {
-                    self.action_group_step(1, gpu);
+                    self.action_group_step(1, gpu, style);
                     return ActionOutcome::Handled;
                 }
                 Key::Named(NamedKey::PageUp) => {
-                    self.action_group_step(-1, gpu);
+                    self.action_group_step(-1, gpu, style);
                     return ActionOutcome::Handled;
                 }
                 // ADR-0015: `window.new`/`window.close`.
@@ -1109,24 +1130,24 @@ impl WindowState {
                 // `Ctrl+Shift+Tab`: única exceção ao padrão `Ctrl+Shift`
                 // (ADR-0008), convenção universal de troca de aba.
                 Key::Named(NamedKey::Tab) => {
-                    self.action_prev_tab(gpu);
+                    self.action_prev_tab(gpu, style);
                     return ActionOutcome::Handled;
                 }
                 // RF-1.17, `docs/config/porecatu.example.toml`
                 // `[keybindings]`: "ctrl+shift+left" = "tab.move_left".
                 Key::Named(NamedKey::ArrowLeft) => {
-                    self.action_move_tab(-1, gpu);
+                    self.action_move_tab(-1, gpu, style);
                     return ActionOutcome::Handled;
                 }
                 Key::Named(NamedKey::ArrowRight) => {
-                    self.action_move_tab(1, gpu);
+                    self.action_move_tab(1, gpu, style);
                     return ActionOutcome::Handled;
                 }
                 _ => {}
             }
         }
         if m.ctrl && !m.shift && !m.alt && matches!(event.logical_key, Key::Named(NamedKey::Tab)) {
-            self.action_next_tab(gpu);
+            self.action_next_tab(gpu, style);
             return ActionOutcome::Handled;
         }
         if m.alt
@@ -1136,7 +1157,7 @@ impl WindowState {
             && let Some(digit) = s.chars().next().and_then(|c| c.to_digit(10))
             && (1..=9).contains(&digit)
         {
-            self.action_goto((digit - 1) as usize, gpu);
+            self.action_goto((digit - 1) as usize, gpu, style);
             return ActionOutcome::Handled;
         }
         ActionOutcome::Unhandled
@@ -1168,14 +1189,14 @@ impl WindowState {
         logical_point: (f32, f32),
         gpu: &mut GpuContext,
         right_click: bool,
+        style: &TabBarStyle,
     ) -> NewTabRequest {
-        let style = TabBarStyle::DEFAULT;
         let bar_width = self.logical_width;
-        let trilha_width = tab_bar::trilha_width(&style, bar_width, is_macos());
-        let h = bar_height();
+        let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos());
+        let h = bar_height(style);
         let layout = tab_bar::fit_width(
             &self.workspace,
-            &style,
+            style,
             trilha_width,
             gpu.text_measurer(),
             is_macos(),
@@ -1192,7 +1213,7 @@ impl WindowState {
             // confirmação com múltiplas abas, que só `App` sabe montar
             // (`request_close_window`), então sobe como `NewTabRequest`.
             if let Some(hit) =
-                tab_bar::point_in_window_button(is_macos(), bar_width, h, logical_point)
+                tab_bar::point_in_window_button(style, is_macos(), bar_width, h, logical_point)
             {
                 return match hit {
                     tab_bar::WindowButtonHit::Minimize => {
@@ -1216,29 +1237,31 @@ impl WindowState {
             // consumido aqui em vez de cair na trilha: o botão está
             // desenhado, e deixar o clique atravessar até a aba de baixo
             // seria pior que não responder.
-            if tab_bar::point_in_settings_button(&style, bar_width, h, is_macos(), logical_point) {
+            if tab_bar::point_in_settings_button(style, bar_width, h, is_macos(), logical_point) {
                 return NewTabRequest::None;
             }
             if overflow.hidden_left > 0
                 && tab_bar::point_in_overflow_pill(
+                    style,
                     OverflowSide::Left,
                     trilha_width,
                     h,
                     logical_point,
                 )
             {
-                self.scroll_offset = (self.scroll_offset - tab_bar::OVERFLOW_SCROLL_STEP).max(0.0);
+                self.scroll_offset = (self.scroll_offset - style.overflow_scroll_step).max(0.0);
                 return NewTabRequest::None;
             }
             if overflow.hidden_right > 0
                 && tab_bar::point_in_overflow_pill(
+                    style,
                     OverflowSide::Right,
                     trilha_width,
                     h,
                     logical_point,
                 )
             {
-                self.scroll_offset += tab_bar::OVERFLOW_SCROLL_STEP;
+                self.scroll_offset += style.overflow_scroll_step;
                 return NewTabRequest::None;
             }
         }
@@ -1305,7 +1328,7 @@ impl WindowState {
                     self.selection.clear();
                     self.workspace.activate_tab(id);
                     self.sync_window_title();
-                    self.ensure_active_tab_visible(gpu);
+                    self.ensure_active_tab_visible(gpu, style);
                     if let Some(rect) = tab_bar::tab_rect(&layout, id) {
                         let screen_x = rect.x - self.scroll_offset;
                         self.drag = Drag::TabPressed {
@@ -1375,7 +1398,7 @@ impl WindowState {
     /// lugar do colapso que um clique simples faria (evita o flicker de
     /// colapsar-e-reabrir no segundo clique). Chamado por `finish_drag`
     /// quando o `Drag::GroupPressed` armado nunca virou `GroupDragging`.
-    fn handle_pill_click(&mut self, id: GroupId, gpu: &mut GpuContext) {
+    fn handle_pill_click(&mut self, id: GroupId, gpu: &mut GpuContext, style: &TabBarStyle) {
         let now = Instant::now();
         let is_double_click = self.last_pill_click.is_some_and(|(last_id, at)| {
             last_id == id && now.duration_since(at) <= DOUBLE_CLICK_THRESHOLD
@@ -1385,7 +1408,7 @@ impl WindowState {
             self.last_pill_click = None;
             self.open_group_editor(id, EditorRegion::Name);
         } else {
-            self.toggle_group_collapse(id, gpu);
+            self.toggle_group_collapse(id, gpu, style);
         }
     }
 
@@ -1431,7 +1454,7 @@ impl WindowState {
     /// até aqui só existia testado direto no `AnimationClock`. Criar
     /// limpa a seleção (ADR-0021 §2) e abre o editor com foco no nome
     /// (RF-2.4: "nasce... em modo de edição").
-    fn action_group_create(&mut self, gpu: &mut GpuContext) {
+    fn action_group_create(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
@@ -1447,10 +1470,9 @@ impl WindowState {
             return;
         }
 
-        let style = TabBarStyle::DEFAULT;
         let old_layout = tab_bar::fit_width(
             &self.workspace,
-            &style,
+            style,
             self.logical_width,
             gpu.text_measurer(),
             is_macos(),
@@ -1466,7 +1488,7 @@ impl WindowState {
         self.sync_window_title();
     }
 
-    fn toggle_group_collapse(&mut self, id: GroupId, gpu: &mut GpuContext) {
+    fn toggle_group_collapse(&mut self, id: GroupId, gpu: &mut GpuContext, style: &TabBarStyle) {
         let Some(group) = self.workspace.group(id) else {
             return;
         };
@@ -1481,10 +1503,9 @@ impl WindowState {
         // depois deste (ou antes, se expandindo) deslizam em vez de
         // saltar; o sublinhado/caret não têm equivalente animado (nota do
         // módulo `animation.rs`).
-        let style = TabBarStyle::DEFAULT;
         let old_layout = tab_bar::fit_width(
             &self.workspace,
-            &style,
+            style,
             self.logical_width,
             gpu.text_measurer(),
             is_macos(),
@@ -1493,7 +1514,7 @@ impl WindowState {
         self.animations
             .start_reflow(&old_layout, COLLAPSE_REFLOW_DURATION, Instant::now());
         self.sync_window_title();
-        self.ensure_active_tab_visible(gpu);
+        self.ensure_active_tab_visible(gpu, style);
     }
 
     /// RF-2.9/RF-2.10/RF-2.22: abre o editor de grupo (ADR-0023) com o
@@ -1533,13 +1554,21 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         startup_directory: &Option<PathBuf>,
         now: Instant,
+        style: &TabBarStyle,
     ) {
         match action {
             GroupAction::Rename => self.open_group_editor(group, EditorRegion::Name),
             GroupAction::SetColor => self.open_group_editor(group, EditorRegion::Swatches),
-            GroupAction::ToggleCollapse => self.toggle_group_collapse(group, gpu),
+            GroupAction::ToggleCollapse => self.toggle_group_collapse(group, gpu, style),
             GroupAction::NewTab => {
-                self.action_new_tab_in_group(group, cell_metrics, proxy, startup_directory, now);
+                self.action_new_tab_in_group(
+                    group,
+                    cell_metrics,
+                    proxy,
+                    startup_directory,
+                    now,
+                    style,
+                );
             }
             GroupAction::CloseAll => {
                 let count = self
@@ -1577,12 +1606,20 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         startup_directory: &Option<PathBuf>,
         now: Instant,
+        style: &TabBarStyle,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
         let cwd = self.resolve_new_tab_cwd(startup_directory);
-        self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::Ungrouped);
+        self.open_tab(
+            cell_metrics,
+            proxy,
+            cwd,
+            now,
+            NewTabTarget::Ungrouped,
+            style,
+        );
     }
 
     fn action_new_tab_in_group(
@@ -1592,12 +1629,20 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         startup_directory: &Option<PathBuf>,
         now: Instant,
+        style: &TabBarStyle,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
         let cwd = self.resolve_group_new_tab_cwd(group, startup_directory);
-        self.open_tab(cell_metrics, proxy, cwd, now, NewTabTarget::Group(group));
+        self.open_tab(
+            cell_metrics,
+            proxy,
+            cwd,
+            now,
+            NewTabTarget::Group(group),
+            style,
+        );
     }
 
     /// `group.close_all` (RF-2.22/RF-2.23), já confirmado: fecha cada aba
@@ -1630,10 +1675,10 @@ impl WindowState {
     /// `press`, porque só agora se sabe que não foi arraste. `TabPressed`
     /// sem `TabDragging` não precisa de nada: o clique já ativou a aba na
     /// hora do `press`.
-    fn finish_drag(&mut self, gpu: &mut GpuContext) {
+    fn finish_drag(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
         let drag = std::mem::replace(&mut self.drag, Drag::Idle);
         match drag {
-            Drag::TabDragging { tab, target, .. } if self.in_bar(self.cursor_position.1) => {
+            Drag::TabDragging { tab, target, .. } if self.in_bar(self.cursor_position.1, style) => {
                 match target {
                     DragDrop::IntoGroup { group, pos } => {
                         self.workspace.move_tab_to_group_at(tab, group, pos);
@@ -1647,11 +1692,11 @@ impl WindowState {
                 group,
                 preview_index,
                 ..
-            } if self.in_bar(self.cursor_position.1) => {
+            } if self.in_bar(self.cursor_position.1, style) => {
                 self.workspace.move_group(group, preview_index);
             }
             Drag::GroupPressed { group, .. } => {
-                self.handle_pill_click(group, gpu);
+                self.handle_pill_click(group, gpu, style);
             }
             Drag::TabPressed { .. } | Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {}
             Drag::Idle => {}
@@ -1660,8 +1705,8 @@ impl WindowState {
     }
 
     /// `y` físico está dentro da faixa da barra de abas (topo da janela).
-    fn in_bar(&self, physical_y: f64) -> bool {
-        physical_y < (bar_height() * self.scale) as f64
+    fn in_bar(&self, physical_y: f64, style: &TabBarStyle) -> bool {
+        physical_y < (bar_height(style) * self.scale) as f64
     }
 
     /// O que abre o menu de contexto da barra (ADR-0021 §3): botão direito
@@ -1675,20 +1720,35 @@ impl WindowState {
     /// Recalcula linhas/colunas a partir do tamanho lógico e propaga pra
     /// `WindowSurface` e pro terminal da aba ativa (motor + PTY).
     /// `WindowSurface` é quem converte de volta para físico (ADR-0018).
-    fn resize_to(&mut self, width: u32, height: u32, gpu: &GpuContext, cell_metrics: CellMetrics) {
+    fn resize_to(
+        &mut self,
+        width: u32,
+        height: u32,
+        gpu: &GpuContext,
+        cell_metrics: CellMetrics,
+        style: &TabBarStyle,
+    ) {
         self.window_surface.resize(gpu, width, height, self.scale);
         self.logical_width = width as f32 / self.scale;
         self.logical_height = height as f32 / self.scale;
-        let (rows, cols) = self.grid_size(cell_metrics);
+        let (rows, cols) = self.grid_size(cell_metrics, style);
         if let Some(runtime) = self.active_runtime() {
             runtime.terminal.resize(rows, cols);
         }
         self.window.request_redraw();
     }
 
-    fn cell_at_cursor(&self, cell_metrics: CellMetrics) -> input::CellPosition {
-        let content =
-            paint::terminal_content_rect(bar_height(), self.logical_width, self.logical_height);
+    fn cell_at_cursor(
+        &self,
+        cell_metrics: CellMetrics,
+        style: &TabBarStyle,
+    ) -> input::CellPosition {
+        let content = paint::terminal_content_rect(
+            style,
+            bar_height(style),
+            self.logical_width,
+            self.logical_height,
+        );
         let content_x = self.cursor_position.0 - (content.x * self.scale) as f64;
         let content_y = self.cursor_position.1 - (content.y * self.scale) as f64;
         let (rows, cols) = self.active_runtime().map_or((MIN_GRID, MIN_GRID), |rt| {
@@ -1712,12 +1772,18 @@ impl WindowState {
     /// (pausa do temporizador da informação, espec §2.14): os dois vivem
     /// no mesmo evento de `CursorMoved` porque os dois dependem de "onde
     /// está o cursor agora".
-    fn update_hover(&mut self, gpu: &mut GpuContext, now: Instant) {
+    fn update_hover(
+        &mut self,
+        gpu: &mut GpuContext,
+        now: Instant,
+        config: &porecatu_config::Config,
+        style: &TabBarStyle,
+    ) {
         let bar_point = (
             self.cursor_position.0 as f32 / self.scale,
             self.cursor_position.1 as f32 / self.scale,
         );
-        let target = if self.in_bar(self.cursor_position.1)
+        let target = if self.in_bar(self.cursor_position.1, style)
             && self.dialog.is_none()
             && self.context_menu.is_none()
             && self.group_context_menu.is_none()
@@ -1725,10 +1791,9 @@ impl WindowState {
             && self.move_to_group.is_none()
             && matches!(self.drag, Drag::Idle)
         {
-            let style = TabBarStyle::DEFAULT;
             let layout = tab_bar::fit_width(
                 &self.workspace,
-                &style,
+                style,
                 self.logical_width,
                 gpu.text_measurer(),
                 is_macos(),
@@ -1752,8 +1817,12 @@ impl WindowState {
         };
         self.hover.update(target, now);
 
-        let warning_layout =
-            overlay::layout_warnings(&self.warnings, bar_height(), self.logical_width);
+        let warning_layout = overlay::layout_warnings(
+            &self.warnings,
+            config,
+            bar_height(style),
+            self.logical_width,
+        );
         let over_warnings = tab_bar::rect_contains(warning_layout.stack_rect, bar_point);
         self.warnings.set_hovered(over_warnings, now);
     }
@@ -1791,11 +1860,36 @@ struct App {
     /// definição (só `WindowSurface` converte pra físico), então uma só
     /// medição serve todas as janelas (ADR-0015).
     cell_metrics: CellMetrics,
+    /// Config carregada uma vez por processo (docs/arquitetura.md, "Na
+    /// implementação (F2, etapa 6)": `GpuContext`/`cell_metrics`/
+    /// `startup_directory` são as coisas que não variam por janela --
+    /// `config` entra na mesma lista nesta etapa). `Arc` porque o hot
+    /// reload (F4 etapa 4) troca o valor inteiro por um novo `Arc`, sem
+    /// lock (docs/arquitetura.md linha 118).
+    config: Arc<porecatu_config::Config>,
+    /// `TabBarStyle::from_config(&config)`, calculado uma vez -- evita
+    /// reconstruir a cada frame só para ler campos de `Config`.
+    style: TabBarStyle,
+    /// `palette::ResolvedPalette::from_config(&config)`, mesma razão.
+    pal: palette::ResolvedPalette,
     windows: HashMap<WindowId, WindowState>,
 }
 
 impl App {
     fn new(proxy: EventLoopProxy<Wakeup>) -> Self {
+        // TODO F4 etapa 4/5: `--config`/`PORECATU_CONFIG` chegam via CLI;
+        // por ora só o caminho de plataforma (`porecatu_config::load(None)`)
+        // é resolvido. Erro de parse não tem widget de aviso ainda (isso é
+        // decisão da etapa de hot reload/config inválida) -- só um log em
+        // stderr, e os defaults seguem valendo (`LoadResult::config()`
+        // nunca falta).
+        let load_result = porecatu_config::load(None);
+        if let porecatu_config::LoadResult::Invalid { error, .. } = &load_result {
+            eprintln!("config inválida, usando defaults: {error}");
+        }
+        let config = Arc::new(load_result.config().clone());
+        let style = TabBarStyle::from_config(&config);
+        let pal = palette::ResolvedPalette::from_config(&config);
         Self {
             gpu: None,
             proxy,
@@ -1804,6 +1898,9 @@ impl App {
                 width: 1.0,
                 height: 1.0,
             },
+            config,
+            style,
+            pal,
             windows: HashMap::new(),
         }
     }
@@ -1922,6 +2019,7 @@ impl App {
             cwd,
             Instant::now(),
             NewTabTarget::ActiveGroup,
+            &self.style,
         );
         self.windows.insert(window_id, state);
     }
@@ -2033,6 +2131,7 @@ impl App {
                         &self.proxy,
                         &self.startup_directory,
                         Instant::now(),
+                        &self.style,
                     );
                     state.window.request_redraw();
                 }
@@ -2229,7 +2328,7 @@ impl ApplicationHandler<Wakeup> for App {
             }
             WindowEvent::Resized(size) => {
                 if let (Some(state), Some(gpu)) = (self.windows.get_mut(&window_id), &self.gpu) {
-                    state.resize_to(size.width, size.height, gpu, self.cell_metrics);
+                    state.resize_to(size.width, size.height, gpu, self.cell_metrics, &self.style);
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -2237,7 +2336,13 @@ impl ApplicationHandler<Wakeup> for App {
                     state.scale = scale_factor as f32;
                     let size = state.window.inner_size();
                     if let Some(gpu) = &self.gpu {
-                        state.resize_to(size.width, size.height, gpu, self.cell_metrics);
+                        state.resize_to(
+                            size.width,
+                            size.height,
+                            gpu,
+                            self.cell_metrics,
+                            &self.style,
+                        );
                     }
                 }
             }
@@ -2352,6 +2457,7 @@ impl App {
                     &self.proxy,
                     &self.startup_directory,
                     Instant::now(),
+                    &self.style,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -2372,6 +2478,7 @@ impl App {
                     &self.proxy,
                     &self.startup_directory,
                     Instant::now(),
+                    &self.style,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -2441,6 +2548,7 @@ impl App {
             &self.proxy,
             &self.startup_directory,
             Instant::now(),
+            &self.style,
         );
         match outcome {
             ActionOutcome::Handled => {
@@ -2490,10 +2598,11 @@ impl App {
         let Some(group) = state.group_editor.as_ref().map(|e| e.group) else {
             return;
         };
-        let anchor_x = state.group_pill_screen_x(group, gpu);
+        let anchor_x = state.group_pill_screen_x(group, gpu, &self.style);
         let layout = overlay::layout_group_editor(
             anchor_x,
-            bar_height(),
+            bar_height(&self.style),
+            &self.config,
             state.logical_width,
             state.logical_height,
         );
@@ -2532,6 +2641,7 @@ impl App {
                     &self.proxy,
                     &self.startup_directory,
                     Instant::now(),
+                    &self.style,
                 );
             }
             None => {
@@ -2552,7 +2662,7 @@ impl App {
         {
             return;
         }
-        if state.in_bar(state.cursor_position.1) {
+        if state.in_bar(state.cursor_position.1, &self.style) {
             // Espec §2.18: "roda do mouse sobre a barra rola a trilha na
             // horizontal, com ou sem Shift... passo de 90px por notch".
             let notches = match delta {
@@ -2560,12 +2670,12 @@ impl App {
                 MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
             };
             if notches != 0.0 {
-                state.scroll_offset -= notches.signum() * tab_bar::OVERFLOW_SCROLL_STEP;
+                state.scroll_offset -= notches.signum() * self.style.overflow_scroll_step;
                 state.scroll_offset = state.scroll_offset.max(0.0);
                 state.window.request_redraw();
             }
         } else if let Some(runtime) = state.active_runtime() {
-            let cell = state.cell_at_cursor(self.cell_metrics);
+            let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
             input::handle_mouse_wheel(
                 &runtime.terminal,
                 &runtime.terminal.modes(),
@@ -2595,8 +2705,12 @@ impl App {
                 position.x as f32 / state.scale,
                 position.y as f32 / state.scale,
             );
-            let layout =
-                overlay::layout_context_menu(menu, state.logical_width, state.logical_height);
+            let layout = overlay::layout_context_menu(
+                menu,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
             if let Some(index) = overlay::context_menu_hit(&layout, logical_point) {
                 menu.set_highlight(index);
             }
@@ -2622,6 +2736,7 @@ impl App {
             let layout = overlay::layout_group_menu(
                 menu,
                 item_count,
+                &self.config,
                 state.logical_width,
                 state.logical_height,
             );
@@ -2640,11 +2755,12 @@ impl App {
                 position.y as f32 / state.scale,
             );
             if let Some(gpu) = &mut self.gpu {
-                let anchor_x = state.group_pill_screen_x(group, gpu);
+                let anchor_x = state.group_pill_screen_x(group, gpu, &self.style);
                 if let Some(editor) = &mut state.group_editor {
                     let layout = overlay::layout_group_editor(
                         anchor_x,
-                        bar_height(),
+                        bar_height(&self.style),
+                        &self.config,
                         state.logical_width,
                         state.logical_height,
                     );
@@ -2672,8 +2788,12 @@ impl App {
                 position.x as f32 / state.scale,
                 position.y as f32 / state.scale,
             );
-            let layout =
-                overlay::layout_move_to_group(popover, state.logical_width, state.logical_height);
+            let layout = overlay::layout_move_to_group(
+                popover,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
             if let Some(index) = overlay::move_to_group_hit(&layout, logical_point) {
                 popover.set_highlight(index);
             }
@@ -2710,7 +2830,7 @@ impl App {
             Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {
                 let logical_x = position.x as f32 / state.scale;
                 let trilha_width =
-                    tab_bar::trilha_width(&TabBarStyle::DEFAULT, state.logical_width, is_macos());
+                    tab_bar::trilha_width(&self.style, state.logical_width, is_macos());
                 if logical_x < DRAG_EDGE_ZONE_PX {
                     state.scroll_offset = (state.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
                 } else if logical_x > trilha_width - DRAG_EDGE_ZONE_PX {
@@ -2764,6 +2884,7 @@ impl App {
             state.logical_width,
             state.logical_height,
             state.window.is_maximized(),
+            self.config.appearance.window_controls.resize_border as f32,
         );
         state.window.set_cursor(match resize_direction {
             Some(direction) => CursorIcon::from(direction),
@@ -2771,17 +2892,17 @@ impl App {
         });
 
         if let Some(gpu) = &mut self.gpu {
-            state.update_hover(gpu, Instant::now());
+            state.update_hover(gpu, Instant::now(), &self.config, &self.style);
         }
 
         if state.dialog.is_some() || state.context_menu.is_some() {
             return;
         }
 
-        if !state.in_bar(position.y)
+        if !state.in_bar(position.y, &self.style)
             && let Some(runtime) = state.active_runtime()
         {
-            let cell = state.cell_at_cursor(self.cell_metrics);
+            let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
             input::handle_mouse_motion(
                 &runtime.terminal,
                 &runtime.terminal.modes(),
@@ -2818,13 +2939,13 @@ impl App {
             state.mouse_button_down = None;
             if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
                 if let Some(gpu) = &mut self.gpu {
-                    state.finish_drag(gpu);
+                    state.finish_drag(gpu, &self.style);
                 }
-            } else if !state.in_bar(state.cursor_position.1) {
+            } else if !state.in_bar(state.cursor_position.1, &self.style) {
                 // Solta o botão sobre o terminal: repassa ao programa (SGR/X10
                 // release) se ele pediu mouse reporting, senão é o fim de uma
                 // seleção local -- mesmo caminho do press, ver lib.rs:2967+.
-                let cell = state.cell_at_cursor(self.cell_metrics);
+                let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
                 let active_id = state.workspace.active_tab();
                 if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
                     input::handle_mouse_button(
@@ -2854,6 +2975,7 @@ impl App {
                 state.logical_width,
                 state.logical_height,
                 dialog,
+                &self.config,
                 gpu.text_measurer(),
             ))
         }) {
@@ -2880,8 +3002,12 @@ impl App {
 
         // Menu de contexto: clique em item aciona, qualquer outro fecha.
         if let Some(menu) = state.context_menu {
-            let layout =
-                overlay::layout_context_menu(&menu, state.logical_width, state.logical_height);
+            let layout = overlay::layout_context_menu(
+                &menu,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
             let hit = overlay::context_menu_hit(&layout, logical_point);
             state.context_menu = None;
             if button == MouseButton::Left
@@ -2917,6 +3043,7 @@ impl App {
             let layout = overlay::layout_group_menu(
                 &menu,
                 items.len(),
+                &self.config,
                 state.logical_width,
                 state.logical_height,
             );
@@ -2934,6 +3061,7 @@ impl App {
                     &self.proxy,
                     &self.startup_directory,
                     Instant::now(),
+                    &self.style,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -2954,8 +3082,12 @@ impl App {
         // Popover de destino do `tab.move_to_group`: clique numa linha
         // move, qualquer outro fecha.
         if let Some(popover) = &state.move_to_group {
-            let layout =
-                overlay::layout_move_to_group(popover, state.logical_width, state.logical_height);
+            let layout = overlay::layout_move_to_group(
+                popover,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
             let hit = overlay::move_to_group_hit(&layout, logical_point);
             let tab = popover.tab;
             if button == MouseButton::Left
@@ -2976,8 +3108,12 @@ impl App {
 
         // Aviso: botão de fechar dispensa; corpo não faz nada além de
         // consumir o clique (não deixa passar pro que está atrás).
-        let warning_layout =
-            overlay::layout_warnings(&state.warnings, bar_height(), state.logical_width);
+        let warning_layout = overlay::layout_warnings(
+            &state.warnings,
+            &self.config,
+            bar_height(&self.style),
+            state.logical_width,
+        );
         if let Some(hit) = overlay::hit_test_warnings(&warning_layout, logical_point) {
             if let overlay::WarningHit::Close(index) = hit {
                 state.warnings.dismiss(index);
@@ -2998,9 +3134,10 @@ impl App {
         // botão de janela (`handle_bar_click`, mais abaixo, resolve o
         // clique no botão do jeito de sempre).
         let over_window_button = tab_bar::point_in_window_button(
+            &self.style,
             is_macos(),
             state.logical_width,
-            bar_height(),
+            bar_height(&self.style),
             logical_point,
         )
         .is_some();
@@ -3011,33 +3148,37 @@ impl App {
                 state.logical_width,
                 state.logical_height,
                 state.window.is_maximized(),
+                self.config.appearance.window_controls.resize_border as f32,
             )
         {
             let _ = state.window.drag_resize_window(direction);
             return;
         }
 
-        if state.is_secondary_bar_click(button) && state.in_bar(state.cursor_position.1) {
+        if state.is_secondary_bar_click(button)
+            && state.in_bar(state.cursor_position.1, &self.style)
+        {
             state.hover.dismiss();
             if let Some(gpu) = &mut self.gpu {
-                state.handle_bar_click(logical_point, gpu, true);
+                state.handle_bar_click(logical_point, gpu, true, &self.style);
             }
             state.window.request_redraw();
             return;
         }
 
-        if button == MouseButton::Left && state.in_bar(state.cursor_position.1) {
+        if button == MouseButton::Left && state.in_bar(state.cursor_position.1, &self.style) {
             state.hover.dismiss();
             let Some(gpu) = &mut self.gpu else {
                 return;
             };
-            match state.handle_bar_click(logical_point, gpu, false) {
+            match state.handle_bar_click(logical_point, gpu, false, &self.style) {
                 NewTabRequest::Ungrouped => {
                     state.action_new_tab_ungrouped(
                         self.cell_metrics,
                         &self.proxy,
                         &self.startup_directory,
                         Instant::now(),
+                        &self.style,
                     );
                     state.window.request_redraw();
                 }
@@ -3048,6 +3189,7 @@ impl App {
                         &self.proxy,
                         &self.startup_directory,
                         Instant::now(),
+                        &self.style,
                     );
                     state.window.request_redraw();
                 }
@@ -3070,8 +3212,8 @@ impl App {
         }
 
         state.mouse_button_down = Some(button);
-        if !state.in_bar(state.cursor_position.1) {
-            let cell = state.cell_at_cursor(self.cell_metrics);
+        if !state.in_bar(state.cursor_position.1, &self.style) {
+            let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
             let active_id = state.workspace.active_tab();
             if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
                 input::handle_mouse_button(
@@ -3097,13 +3239,15 @@ impl App {
         };
         let mut frame = Frame::new();
 
-        let style = TabBarStyle::DEFAULT;
+        let style = &self.style;
+        let pal = &self.pal;
+        let config = &self.config;
         let bar_width = state.logical_width;
         let is_mac = is_macos();
-        let trilha_width = tab_bar::trilha_width(&style, bar_width, is_mac);
+        let trilha_width = tab_bar::trilha_width(style, bar_width, is_mac);
         let base_layout = tab_bar::fit_width(
             &state.workspace,
-            &style,
+            style,
             bar_width,
             gpu.text_measurer(),
             is_mac,
@@ -3115,12 +3259,18 @@ impl App {
         // frame a partir da posição do cursor, mesmo padrão do resto do
         // hit-test da barra -- não é estado guardado, só a leitura de
         // `cursor_position` de sempre.
-        let hover_window_button = if state.in_bar(state.cursor_position.1) {
+        let hover_window_button = if state.in_bar(state.cursor_position.1, style) {
             let cursor_logical = (
                 state.cursor_position.0 as f32 / state.scale,
                 state.cursor_position.1 as f32 / state.scale,
             );
-            tab_bar::point_in_window_button(is_mac, bar_width, bar_height(), cursor_logical)
+            tab_bar::point_in_window_button(
+                style,
+                is_mac,
+                bar_width,
+                bar_height(style),
+                cursor_logical,
+            )
         } else {
             None
         };
@@ -3176,7 +3326,7 @@ impl App {
                         preview.move_tab_to_new_run(tab, group_index);
                     }
                 }
-                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer(), is_mac)
+                tab_bar::fit_width(&preview, style, bar_width, gpu.text_measurer(), is_mac)
             }
             Drag::GroupDragging {
                 group, grab_offset, ..
@@ -3202,7 +3352,7 @@ impl App {
 
                 let mut preview = state.workspace.clone();
                 preview.move_group(group, preview_index);
-                tab_bar::fit_width(&preview, &style, bar_width, gpu.text_measurer(), is_mac)
+                tab_bar::fit_width(&preview, style, bar_width, gpu.text_measurer(), is_mac)
             }
             _ => base_layout,
         };
@@ -3214,7 +3364,8 @@ impl App {
             &state.rename,
             &state.selection,
             state.group_editor.as_ref(),
-            &style,
+            style,
+            pal,
             bar_width,
             overflow,
             drag_ghost,
@@ -3229,26 +3380,34 @@ impl App {
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
-        let h = bar_height();
+        let h = bar_height(style);
         if let Some(id) = state.workspace.active_tab()
             && let Some(runtime) = state.tabs.get_mut(&id)
         {
             runtime.terminal.snapshot_into(&mut runtime.snapshot);
-            let box_rect = paint::terminal_box_rect(h, state.logical_width, state.logical_height);
+            let box_rect =
+                paint::terminal_box_rect(style, h, state.logical_width, state.logical_height);
             let primitives = paint::build_primitives(
                 &runtime.snapshot,
                 self.cell_metrics,
                 FONT_SIZE_PX,
                 box_rect,
+                style,
                 gpu.text_measurer(),
             );
             frame.set_layer(Layer::Grid, primitives);
         }
 
         if !state.warnings.is_empty() {
-            let warning_layout = overlay::layout_warnings(&state.warnings, h, bar_width);
-            let primitives =
-                overlay::paint_warnings(&warning_layout, &state.warnings, gpu.text_measurer());
+            let warning_layout = overlay::layout_warnings(&state.warnings, config, h, bar_width);
+            let primitives = overlay::paint_warnings(
+                &warning_layout,
+                &state.warnings,
+                config,
+                style,
+                pal,
+                gpu.text_measurer(),
+            );
             frame.set_layer(Layer::Warning, primitives);
         }
 
@@ -3257,15 +3416,21 @@ impl App {
             popover.extend(overlay::paint_tooltip(
                 anchor,
                 text,
+                config,
+                pal,
                 state.logical_width,
                 state.logical_height,
                 gpu.text_measurer(),
             ));
         }
         if let Some(menu) = &state.context_menu {
-            let layout =
-                overlay::layout_context_menu(menu, state.logical_width, state.logical_height);
-            popover.extend(overlay::paint_context_menu(&layout, menu));
+            let layout = overlay::layout_context_menu(
+                menu,
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            popover.extend(overlay::paint_context_menu(&layout, menu, config, pal));
         }
         if let Some(menu) = &state.group_context_menu {
             let is_collapsed = state
@@ -3281,6 +3446,7 @@ impl App {
             let layout = overlay::layout_group_menu(
                 menu,
                 items.len(),
+                config,
                 state.logical_width,
                 state.logical_height,
             );
@@ -3288,13 +3454,16 @@ impl App {
                 &layout,
                 &items,
                 menu.highlighted(),
+                config,
+                pal,
             ));
         }
         if let Some(editor) = &state.group_editor {
-            let anchor_x = state.group_pill_screen_x(editor.group, gpu);
+            let anchor_x = state.group_pill_screen_x(editor.group, gpu, style);
             let layout = overlay::layout_group_editor(
                 anchor_x,
                 h,
+                config,
                 state.logical_width,
                 state.logical_height,
             );
@@ -3319,16 +3488,24 @@ impl App {
                 current_color_index,
                 is_collapsed,
                 tab_count,
+                config,
+                pal,
                 gpu.text_measurer(),
             ));
         }
         if let Some(mv) = &state.move_to_group {
-            let layout =
-                overlay::layout_move_to_group(mv, state.logical_width, state.logical_height);
+            let layout = overlay::layout_move_to_group(
+                mv,
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
             popover.extend(overlay::paint_move_to_group(
                 &layout,
                 mv,
                 &state.workspace,
+                config,
+                pal,
                 gpu.text_measurer(),
             ));
         }
@@ -3341,11 +3518,14 @@ impl App {
                 state.logical_width,
                 state.logical_height,
                 dialog,
+                config,
                 gpu.text_measurer(),
             );
             let primitives = overlay::paint_dialog(
                 &layout,
                 dialog,
+                config,
+                pal,
                 state.logical_width,
                 state.logical_height,
                 gpu.text_measurer(),
@@ -3353,13 +3533,11 @@ impl App {
             frame.set_layer(Layer::Modal, primitives);
         }
 
-        // `BAR_BACKGROUND`, não `TERM_BACKGROUND`: a margem entre a borda da
-        // janela e o box arredondado do terminal (`paint::TERMINAL_BOX_MARGIN`)
-        // precisa de uma cor diferente da do box para o quadro aparecer --
-        // a mesma da barra de abas, já que os dois formam o "quadro" do app.
-        state
-            .window_surface
-            .render(gpu, palette::BAR_BACKGROUND, &frame);
+        // Fundo da margem entre a borda da janela e o box arredondado do
+        // terminal (`style.terminal_frame_margin`): precisa de uma cor
+        // diferente da do box para o quadro aparecer -- a mesma da barra de
+        // abas, já que os dois formam o "quadro" do app.
+        state.window_surface.render(gpu, pal.bar_background, &frame);
     }
 }
 

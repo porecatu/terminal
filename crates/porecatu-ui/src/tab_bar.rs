@@ -46,14 +46,12 @@ pub(crate) const PILL_NAME_FONT: FontFace = FontFace::Sans {
 pub(crate) const PILL_COUNT_FONT: FontFace = FontFace::Mono { bold: false };
 pub(crate) const PILL_COUNT_FONT_SIZE: f32 = 10.0;
 
-/// Espec. §2.17: "ponto circular 6×6". Consome largura do rótulo (mais o
-/// `internal_gap` reaproveitado como o `gap: 8` da mesma seção) -- não é
-/// chrome extra somado ao teto de 180px, é orçamento tirado dele. Visível a
-/// `chrome.rs` para desenhar o ponto na mesma posição que este módulo
-/// reservou.
-pub(crate) const INDICATOR_DOT_SIZE: f32 = 6.0;
-
 /// Qual dos dois indicadores da aba (espec. §2.17, RF-1.20/RF-1.21) mostrar.
+/// Espec. §2.17: "ponto circular 6×6" (`style.indicator_dot_size`, chave
+/// `[appearance.groups] collapsed_indicator_size`). Consome largura do
+/// rótulo (mais o `internal_gap` reaproveitado como o `gap: 8` da mesma
+/// seção) -- não é chrome extra somado ao teto de 180px, é orçamento
+/// tirado dele.
 /// Só um por vez -- campainha vence atividade quando os dois são
 /// verdadeiros (a regra "um ponto só" da espec.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +159,78 @@ pub struct TabBarStyle {
     /// largura ao colapsar. Espec. §2.4, item 4: "▶ 8px" -- o desenho de
     /// hoje é maior, junto com o resto dos ícones. Sem chave no TOML.
     pub pill_caret_size: f32,
+    /// `[appearance.tabs.overflow] indicator_size` -- largura = altura do
+    /// círculo do indicador de abas fora da vista (espec. §2.18).
+    pub overflow_indicator_size: f32,
+    /// `[appearance.tabs.overflow] edge_inset`.
+    pub overflow_edge_inset: f32,
+    /// `[appearance.tabs.overflow] scroll_step`.
+    pub overflow_scroll_step: f32,
+    /// `[appearance.window_controls] button_width` -- ADR-0027.
+    pub window_button_width: f32,
+    /// `[appearance.window_controls] gap` -- entre a zona de configurações
+    /// e a zona de botões de janela.
+    pub window_controls_gap: f32,
+    /// `[appearance.window_controls] macos_traffic_light_inset`.
+    pub macos_traffic_light_inset: f32,
+    /// `[appearance.tabs] icon_em_size` -- em dos ícones do chrome
+    /// (`chrome::ICON_EM_SIZE`); a barra só precisa dele para reservar a
+    /// zona fixa (o `icon_button_width` do botão de configurações), a
+    /// pintura em si mora em `chrome.rs`.
+    pub icon_em_size: f32,
+    /// `[appearance.tabs] corner_radius` -- também usado por `chrome.rs`
+    /// para o botão de nova aba e o de configurações (mesmo token de 6px
+    /// da espec. §1.7, RF-4.4).
+    pub tab_corner_radius: f32,
+    /// `[appearance.tabs.colors] active_border_width`.
+    pub active_border_width: f32,
+    /// `[appearance.tabs.colors] inactive_border_width`.
+    pub inactive_border_width: f32,
+    /// `[appearance.tabs.colors] selected_border_width`.
+    pub selected_border_width: f32,
+    /// `[appearance.groups] wrapper_corner_radius`.
+    pub wrapper_corner_radius: f32,
+    /// `[appearance.groups] capsule_alpha`.
+    pub capsule_alpha: f64,
+    /// `[appearance.groups] glass_border_width` -- rim de 1px da cápsula
+    /// **e** da pílula (mesma chave, `[appearance.groups]`).
+    pub glass_border_width: f32,
+    /// `[appearance.groups] label_corner_radius` -- raio da pílula.
+    pub pill_corner_radius: f32,
+    /// `[appearance.groups] label_alpha`.
+    pub pill_glass_alpha: f64,
+    /// `[appearance.groups] shadow` -- liga/desliga a sombra em camadas da
+    /// cápsula e da aba solta.
+    pub group_shadow_enabled: bool,
+    /// `[appearance.groups] badge_tint_strength` -- realce de fronteira do
+    /// arraste (espec. §2.19; a prosa da espec. cita .16, o TOML é a fonte
+    /// numérica, ver `chrome.rs`).
+    pub drag_highlight_tint_strength: f64,
+    /// Ponto de status (espec. §2.17): indicador de atividade/campainha da
+    /// aba. Sem chave própria em `[appearance.tabs]` -- reaproveita
+    /// `[appearance.groups] collapsed_indicator_size`, o mesmo token de 6px
+    /// de "ponto de status" da espec. (§1.7), já declarado para o
+    /// indicador agregado do grupo colapsado.
+    pub indicator_dot_size: f32,
+    /// `[appearance.tabs.rename] height`.
+    pub rename_field_height: f32,
+    /// `[appearance.tabs.rename] width`.
+    pub rename_field_width: f32,
+    /// `[appearance.tabs.rename] font_size`.
+    pub rename_font_size: f32,
+    /// `[appearance.tabs.rename] padding_x`.
+    pub rename_padding_x: f32,
+    /// `[appearance.terminal_frame] margin` -- respiro entre a borda da
+    /// janela e o quadro do terminal, nos três lados que não encostam na
+    /// barra (`paint::terminal_box_rect`).
+    pub terminal_frame_margin: f32,
+    /// `[appearance.terminal_frame] padding` -- entre a borda do quadro e a
+    /// grade, nos quatro lados.
+    pub terminal_frame_padding: f32,
+    /// `[appearance.terminal_frame] corner_radius`.
+    pub terminal_frame_corner_radius: f32,
+    /// `[appearance.terminal_frame] shadow`.
+    pub terminal_frame_shadow_enabled: bool,
 }
 
 impl TabBarStyle {
@@ -191,7 +261,97 @@ impl TabBarStyle {
         // tamanho vive do outro lado, em `chrome.rs`; o teste
         // `pill_caret_slot_fits_the_widest_caret` amarra os dois.
         pill_caret_size: 11.8,
+        overflow_indicator_size: 18.0,
+        overflow_edge_inset: 4.0,
+        overflow_scroll_step: 90.0,
+        window_button_width: 46.0,
+        window_controls_gap: 6.0,
+        macos_traffic_light_inset: 78.0,
+        icon_em_size: 20.0,
+        tab_corner_radius: 6.0,
+        active_border_width: 2.0,
+        inactive_border_width: 2.0,
+        selected_border_width: 2.0,
+        wrapper_corner_radius: 8.0,
+        capsule_alpha: 0.85,
+        glass_border_width: 1.0,
+        pill_corner_radius: 6.0,
+        pill_glass_alpha: 0.92,
+        group_shadow_enabled: true,
+        drag_highlight_tint_strength: 0.14,
+        indicator_dot_size: 6.0,
+        rename_field_height: 20.0,
+        rename_field_width: 120.0,
+        rename_font_size: 12.0,
+        rename_padding_x: 5.0,
+        terminal_frame_margin: 6.0,
+        terminal_frame_padding: 6.0,
+        terminal_frame_corner_radius: 6.0,
+        terminal_frame_shadow_enabled: true,
     };
+
+    /// Constrói o estilo a partir da config carregada (F4 etapa 2) --
+    /// `TabBarStyle::DEFAULT` continua existindo para os testes de layout
+    /// puro desta unidade, que não precisam montar um `Config` inteiro.
+    /// `TabBarStyle::from_config(&Config::default())` é, campo a campo, o
+    /// mesmo valor de `TabBarStyle::DEFAULT` -- amarrado por teste abaixo.
+    pub fn from_config(config: &porecatu_config::Config) -> Self {
+        let tabs = &config.appearance.tabs;
+        let groups = &config.appearance.groups;
+        let window_controls = &config.appearance.window_controls;
+        let terminal_frame = &config.appearance.terminal_frame;
+        Self {
+            tab_height: tabs.tab_height as f32,
+            max_width: tabs.max_width as f32,
+            label_max_width: Self::DEFAULT.label_max_width,
+            padding_left: tabs.padding_left as f32,
+            padding_right: tabs.padding_right as f32,
+            tab_gap: tabs.gap as f32,
+            internal_gap: Self::DEFAULT.internal_gap,
+            close_button_size: Self::DEFAULT.close_button_size,
+            close_button_hit_slop: Self::DEFAULT.close_button_hit_slop,
+            icon_button_padding_x: tabs.icon_button_padding_x as f32,
+            wrapper_padding: groups.wrapper_padding as f32,
+            trilha_gap: groups.gap as f32,
+            trilha_padding: tabs.trilha_padding as f32,
+            right_zone_button_size: Self::DEFAULT.right_zone_button_size,
+            show_new_tab_button: tabs.show_new_tab_button,
+            font_size: tabs.font_size as f32,
+            pill_padding_left: groups.label_padding_left as f32,
+            pill_padding_right: groups.label_padding_right as f32,
+            pill_gap: Self::DEFAULT.pill_gap,
+            pill_font_size: groups.label_font_size as f32,
+            pill_name_max_width: groups.label_max_width as f32,
+            pill_caret_size: Self::DEFAULT.pill_caret_size,
+            overflow_indicator_size: tabs.overflow.indicator_size as f32,
+            overflow_edge_inset: tabs.overflow.edge_inset as f32,
+            overflow_scroll_step: tabs.overflow.scroll_step as f32,
+            window_button_width: window_controls.button_width as f32,
+            window_controls_gap: window_controls.gap as f32,
+            macos_traffic_light_inset: window_controls.macos_traffic_light_inset as f32,
+            icon_em_size: tabs.icon_em_size as f32,
+            tab_corner_radius: tabs.corner_radius as f32,
+            active_border_width: tabs.colors.active_border_width as f32,
+            inactive_border_width: tabs.colors.inactive_border_width as f32,
+            selected_border_width: tabs.colors.selected_border_width as f32,
+            wrapper_corner_radius: groups.wrapper_corner_radius as f32,
+            capsule_alpha: groups.capsule_alpha,
+            glass_border_width: groups.glass_border_width as f32,
+            pill_corner_radius: groups.label_corner_radius as f32,
+            pill_glass_alpha: groups.label_alpha,
+            group_shadow_enabled: groups.shadow,
+            drag_highlight_tint_strength: groups.badge_tint_strength,
+            indicator_dot_size: groups.collapsed_indicator_size as f32,
+            rename_field_height: tabs.rename.height as f32,
+            rename_field_width: tabs.rename.width as f32,
+            rename_font_size: tabs.rename.font_size as f32,
+            rename_padding_x: tabs.rename.padding_x as f32,
+            terminal_frame_margin: terminal_frame.margin as f32,
+            terminal_frame_padding: terminal_frame.padding as f32,
+            terminal_frame_corner_radius: terminal_frame.corner_radius as f32,
+            terminal_frame_shadow_enabled: terminal_frame.shadow,
+        }
+    }
 }
 
 impl TabBarStyle {
@@ -463,14 +623,14 @@ fn layout_inset(
                 None
             };
             let aggregate_indicator_origin = if aggregate_indicator.is_some() {
-                let origin = (px, pill_y + (pill_height - INDICATOR_DOT_SIZE) / 2.0);
-                px += INDICATOR_DOT_SIZE + style.pill_gap;
+                let origin = (px, pill_y + (pill_height - style.indicator_dot_size) / 2.0);
+                px += style.indicator_dot_size + style.pill_gap;
                 origin
             } else {
                 (0.0, 0.0)
             };
             let name_dot_reserve = if aggregate_indicator.is_some() {
-                INDICATOR_DOT_SIZE + style.pill_gap
+                style.indicator_dot_size + style.pill_gap
             } else {
                 0.0
             };
@@ -551,7 +711,7 @@ fn layout_inset(
             // ponto mais o mesmo `gap: 8` que já separa rótulo e botão de
             // fechar.
             let dot_reserve = if indicator.is_some() {
-                INDICATOR_DOT_SIZE + style.internal_gap
+                style.indicator_dot_size + style.internal_gap
             } else {
                 0.0
             };
@@ -755,7 +915,7 @@ pub fn fit_width(
     is_macos: bool,
 ) -> TabBarLayout {
     if is_macos {
-        layout_inset(workspace, style, measurer, left_inset(true))
+        layout_inset(workspace, style, measurer, left_inset(style, true))
     } else {
         // Caso comum, sem inset -- `layout` já é exatamente isto.
         layout(workspace, style, measurer)
@@ -806,39 +966,41 @@ pub enum OverflowSide {
     Right,
 }
 
-/// Largura de trabalho do indicador de overflow. Pedido do usuário: círculo
-/// (largura = altura, raio = metade dos dois), só o chevron -- a contagem
-/// saiu. Mesmo tipo de nota que `RENAME_FIELD_HEIGHT` em `chrome.rs`.
-pub const OVERFLOW_PILL_WIDTH: f32 = 18.0;
-pub const OVERFLOW_PILL_HEIGHT: f32 = 18.0;
-/// "Nas duas pontas da trilha, por dentro" (espec. §2.18).
-pub const OVERFLOW_EDGE_INSET: f32 = 4.0;
-/// "Passo de 90px -- uma aba no piso -- por notch" (espec. §2.18); também o
-/// passo do clique no indicador ("clique rola uma aba").
-pub const OVERFLOW_SCROLL_STEP: f32 = 90.0;
-
 /// Retângulo da pílula de overflow, em coordenadas de tela da barra (não
 /// rolam com a trilha -- ficam "por dentro" das pontas, sempre visíveis).
-pub fn overflow_pill_rect(side: OverflowSide, bar_width: f32, bar_height: f32) -> Rect {
+/// `[appearance.tabs.overflow]`: círculo (largura = altura, raio = metade),
+/// só o chevron -- a contagem saiu (pedido do usuário, espec. §2.18).
+pub fn overflow_pill_rect(
+    style: &TabBarStyle,
+    side: OverflowSide,
+    bar_width: f32,
+    bar_height: f32,
+) -> Rect {
+    let size = style.overflow_indicator_size;
+    let inset = style.overflow_edge_inset;
     let x = match side {
-        OverflowSide::Left => OVERFLOW_EDGE_INSET,
-        OverflowSide::Right => bar_width - OVERFLOW_EDGE_INSET - OVERFLOW_PILL_WIDTH,
+        OverflowSide::Left => inset,
+        OverflowSide::Right => bar_width - inset - size,
     };
     Rect {
         x,
-        y: (bar_height - OVERFLOW_PILL_HEIGHT) / 2.0,
-        width: OVERFLOW_PILL_WIDTH,
-        height: OVERFLOW_PILL_HEIGHT,
+        y: (bar_height - size) / 2.0,
+        width: size,
+        height: size,
     }
 }
 
 pub fn point_in_overflow_pill(
+    style: &TabBarStyle,
     side: OverflowSide,
     bar_width: f32,
     bar_height: f32,
     point: (f32, f32),
 ) -> bool {
-    rect_contains(overflow_pill_rect(side, bar_width, bar_height), point)
+    rect_contains(
+        overflow_pill_rect(style, side, bar_width, bar_height),
+        point,
+    )
 }
 
 /// Largura da zona fixa à direita da barra (pedido do usuário, fora da
@@ -859,7 +1021,7 @@ pub fn right_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
     if is_macos {
         settings_zone
     } else {
-        settings_zone + WINDOW_CONTROLS_GAP + window_controls_width(is_macos)
+        settings_zone + style.window_controls_gap + window_controls_width(style, is_macos)
     }
 }
 
@@ -900,22 +1062,6 @@ pub fn point_in_settings_button(
     )
 }
 
-/// Largura de cada botão de janela (convenção Windows/Firefox: retângulo
-/// colado na borda da tela, mais largo que alto, alvo de Fitts's-law no
-/// canto -- ao contrário do "chip flutuante" do botão de configurações).
-/// ADR-0027, valor de partida sem token de design (a espec nunca cobriu
-/// isto sem decoração nativa).
-pub const WINDOW_BUTTON_WIDTH: f32 = 46.0;
-/// Respiro entre a zona de configurações e a zona de botões de janela --
-/// mesmo valor de `trilha_gap`, reaproveitado.
-pub const WINDOW_CONTROLS_GAP: f32 = 6.0;
-/// Espaço reservado à esquerda da trilha para o semáforo nativo do macOS
-/// (traffic lights) -- ADR-0027. Fora do macOS, zero: abas coladas na
-/// borda esquerda (pedido do usuário). Valor de partida, mesma ordem de
-/// grandeza do que Firefox/Chrome reservam no Mac -- **não medido contra
-/// `NSWindow` real neste repositório**, conferir na implementação.
-pub const MACOS_TRAFFIC_LIGHT_INSET: f32 = 78.0;
-
 /// Qual botão de janela um clique atingiu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowButtonHit {
@@ -925,12 +1071,12 @@ pub enum WindowButtonHit {
 }
 
 /// Largura total da zona de botões de janela -- zero no macOS (semáforo
-/// nativo, sem botão nosso).
-pub fn window_controls_width(is_macos: bool) -> f32 {
+/// nativo, sem botão nosso). `[appearance.window_controls] button_width`.
+pub fn window_controls_width(style: &TabBarStyle, is_macos: bool) -> f32 {
     if is_macos {
         0.0
     } else {
-        WINDOW_BUTTON_WIDTH * 3.0
+        style.window_button_width * 3.0
     }
 }
 
@@ -939,12 +1085,12 @@ pub fn window_controls_width(is_macos: bool) -> f32 {
 /// fechar fica colado na borda direita da janela, a convenção universal.
 /// Altura cheia da barra, sem padding vertical (diferente do botão de
 /// configurações).
-pub fn window_button_rect(index: u8, bar_width: f32, bar_height: f32) -> Rect {
-    let from_right = (3 - index) as f32 * WINDOW_BUTTON_WIDTH;
+pub fn window_button_rect(style: &TabBarStyle, index: u8, bar_width: f32, bar_height: f32) -> Rect {
+    let from_right = (3 - index) as f32 * style.window_button_width;
     Rect {
         x: bar_width - from_right,
         y: 0.0,
-        width: WINDOW_BUTTON_WIDTH,
+        width: style.window_button_width,
         height: bar_height,
     }
 }
@@ -953,6 +1099,7 @@ pub fn window_button_rect(index: u8, bar_width: f32, bar_height: f32) -> Rect {
 /// lá o clique nunca chega ao nosso código, a `NSWindow` intercepta antes
 /// (semáforo nativo).
 pub fn point_in_window_button(
+    style: &TabBarStyle,
     is_macos: bool,
     bar_width: f32,
     bar_height: f32,
@@ -969,7 +1116,10 @@ pub fn point_in_window_button(
     .into_iter()
     .enumerate()
     {
-        if rect_contains(window_button_rect(i as u8, bar_width, bar_height), point) {
+        if rect_contains(
+            window_button_rect(style, i as u8, bar_width, bar_height),
+            point,
+        ) {
             return Some(hit);
         }
     }
@@ -977,10 +1127,11 @@ pub fn point_in_window_button(
 }
 
 /// Inset à esquerda do início da trilha (`x` inicial de [`layout`]) --
-/// espaço do semáforo nativo no macOS, zero nas outras plataformas.
-pub fn left_inset(is_macos: bool) -> f32 {
+/// espaço do semáforo nativo no macOS (`[appearance.window_controls]
+/// macos_traffic_light_inset`), zero nas outras plataformas.
+pub fn left_inset(style: &TabBarStyle, is_macos: bool) -> f32 {
     if is_macos {
-        MACOS_TRAFFIC_LIGHT_INSET
+        style.macos_traffic_light_inset
     } else {
         0.0
     }
@@ -1191,6 +1342,15 @@ mod tests {
         TextMeasurer::new()
     }
 
+    /// F4 etapa 2: a config padrão tem de reproduzir exatamente o estilo
+    /// que o binário já desenhava com `TabBarStyle::DEFAULT` (ADR-0028) --
+    /// campo a campo, não só na composição.
+    #[test]
+    fn from_config_matches_default_style() {
+        let style = TabBarStyle::from_config(&porecatu_config::Config::default());
+        assert_eq!(style, TabBarStyle::DEFAULT);
+    }
+
     #[test]
     fn empty_workspace_has_no_wrapper() {
         let ws = Workspace::new();
@@ -1351,7 +1511,7 @@ mod tests {
         let bar_height = crate::chrome::bar_height(&style);
         let button = settings_button_rect(&style, bar_width, bar_height, false);
         let width = style.icon_button_width(style.right_zone_button_size);
-        let window_controls = WINDOW_CONTROLS_GAP + window_controls_width(false);
+        let window_controls = style.window_controls_gap + window_controls_width(&style, false);
         assert_eq!(
             button.x,
             bar_width - style.trilha_gap - width - window_controls,
@@ -1480,8 +1640,7 @@ mod tests {
     /// mudar, ele reprova em vez de o caret vazar por cima do contador.
     #[test]
     fn pill_caret_slot_fits_the_widest_caret() {
-        let needed =
-            porecatu_render::icon::WIDEST_CARET_INK_EM * crate::chrome::PILL_CARET_ICON_SIZE;
+        let needed = porecatu_render::icon::WIDEST_CARET_INK_EM * TabBarStyle::DEFAULT.icon_em_size;
         let slot = TabBarStyle::DEFAULT.pill_caret_size;
         assert!(
             slot >= needed - 0.05,
@@ -1533,8 +1692,8 @@ mod tests {
         let style = TabBarStyle::DEFAULT;
         assert_eq!(style.label_cap(0.0), style.label_max_width);
         assert_eq!(
-            style.label_cap(INDICATOR_DOT_SIZE + style.internal_gap),
-            style.label_max_width - INDICATOR_DOT_SIZE - style.internal_gap
+            style.label_cap(style.indicator_dot_size + style.internal_gap),
+            style.label_max_width - style.indicator_dot_size - style.internal_gap
         );
     }
 
