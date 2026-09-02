@@ -421,7 +421,7 @@ do usuário".
 A borda é desenhada **para dentro** e não soma largura: a aba **não muda de tamanho
 ao ser selecionada**, pela mesma razão que não muda ao entrar em rename. Ela tem 2px
 em todo estado — 1px do `#22262e` da inativa não se lê contra a cápsula de cor cheia,
-e a espessura vem do `indicator_thickness`/`selected_border_width` que o arquivo de
+e a espessura é a do `selected_border_width` que o arquivo de
 exemplo já usava. Como a espessura é a mesma em todo estado, o que distingue a aba
 selecionada é só a **cor** do token.
 

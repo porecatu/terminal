@@ -15,11 +15,13 @@ O canvas é editado em claude.ai; esta pasta é uma cópia de leitura.
 
 ## Autoridade
 
-O design é **normativo para a aparência** do chrome — cores, dimensões, raios, espaçamentos, estados.
+O **binário** é normativo para a aparência do chrome — cores, dimensões, raios, espaçamentos, estados ([ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), que inverteu a autoridade que o ADR-0009 §1 tinha dado ao design). A [especificação visual](especificacao-visual.md) **descreve** o que a build desenha, e é atualizada no mesmo PR que a muda.
 
-Os PRDs continuam **normativos para o comportamento** — o que acontece ao clicar, o que persiste, o que é configurável.
+O mockup e o canvas são referência **histórica**: registram o ponto de partida e o desenho aprovado dos elementos `[v2]`, que ainda não existem em código. Divergência entre eles e o binário **não é bug**, e não se conserta — nem no mockup, nem no código.
 
-Onde os dois divergirem, [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) registra o conflito e quem venceu. A seção 4.4 da especificação visual lista todas as divergências já resolvidas.
+Os PRDs continuam **normativos para o comportamento** — o que acontece ao clicar, o que persiste, o que é configurável. Requisito que descrevia aparência mudada é **emendado**, não deixado em contradição.
+
+**Nenhuma mudança de aparência sem aval do dono do produto**, e a lista do que ainda muda de pixel no v1 está fechada em duas — hover por brilho e sombra nos cinco widgets de chrome ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2). A seção 4.4 da especificação é o **histórico** dessas decisões, não uma lista de tarefas.
 
 **Regra prática:** nenhum valor de aparência é inventado. Sai da tabela de tokens da especificação visual ou do [porecatu.example.toml](../config/porecatu.example.toml) — que já traz esses mesmos valores como default.
 

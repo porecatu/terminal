@@ -74,11 +74,12 @@ pub const TAB_EXITED_TEXT: Color = hex(0x72, 0x7a, 0x86);
 pub const CHROME_ICON: Color = hex(0xe4, 0xe8, 0xee); // *_hover_foreground
 pub const CLOSE_BUTTON_ICON: Color = CHROME_ICON;
 // `[appearance.groups] ungrouped_color` -- a cor de grupo das abas de um
-// run implícito (ADR-0006). O sublinhado que dava nome ao token saiu da
-// base da aba (ver `chrome.rs`); o que resta usando-o é o realce de
-// fronteira do arraste sobre um run implícito e o fantasma do arraste de
-// grupo. Run implícito não pinta cápsula.
-pub const UNGROUPED_UNDERLINE: Color = hex(0x7b, 0x83, 0x8f);
+// run implícito (ADR-0006). Run implícito não pinta cápsula, então quem usa
+// esta cor é o realce de fronteira do arraste sobre ele, o fantasma do
+// arraste de grupo e a linha do popover de destino. O nome antigo era
+// `UNGROUPED_UNDERLINE`, herdado do sublinhado de grupo, que saiu da base
+// da aba na F3 e não volta (ADR-0032).
+pub const UNGROUPED_GROUP_COLOR: Color = hex(0x7b, 0x83, 0x8f);
 
 // `[appearance.groups] palette` -- RF-2.4, RF-4.18. Seis cores, na mesma
 // ordem de `GroupColor::ALL` (`porecatu-core`) -- é a ordem de atribuição

@@ -102,20 +102,20 @@ const SETTINGS_ICON_SIZE: f32 = ICON_EM_SIZE * 0.8;
 // Menor que o "+"/configurações -- convenção Windows: glyphs finos de
 // minimizar/maximizar/fechar (ADR-0027).
 const WINDOW_BUTTON_ICON_SIZE: f32 = ICON_EM_SIZE * 0.7;
-// Espec §2.5 pede um sublinhado de 2px na cor do grupo na base de cada
-// aba (`indicator_style = ["pill", "underline"]`, RF-4.19) -- removido a
-// pedido do usuário. Ele nasceu para dizer a que grupo a aba pertence
-// quando a pílula sai da vista por rolagem; desde que a cápsula passou a
-// ser pintada com a cor cheia (F3 etapa 6), a cor do grupo já está atrás
-// da aba inteira e o traço virou ruído na base dela. Divergência na
-// seção 4.4 da especificação; quando `config` existir (F4), o default de
-// `indicator_style` é a chave que governa isto.
+// Não há sublinhado de grupo na base da aba, e não há como ligá-lo. Ele
+// nasceu para dizer a que grupo a aba pertence quando a pílula sai da
+// vista por rolagem; desde que a cápsula passou a ser pintada com a cor
+// cheia (F3 etapa 6), a cor do grupo já está atrás da aba inteira e o
+// traço virou ruído. O indicador de grupo é a pílula mais a cápsula, e a
+// chave `indicator_style` deixou de existir junto com os estilos
+// `left-bar` e `outline` -- ADR-0032, seção 4.4 da especificação.
 // Borda da aba em todo estado. A espec. §2.5 desenha 1px; contra a cápsula
 // de cor cheia (F3 etapa 6) 1px de `#22262e` não se lê, e o pedido do
 // usuário foi "coloca um border nas abas". 2px é a espessura que o próprio
-// arquivo de exemplo já usa para linha de chrome (`indicator_thickness`,
-// `selected_border_width`) -- não um número novo. Cada estado mantém a cor
-// dele, que é o que continua separando ativa de inativa.
+// arquivo de exemplo já usa para linha de chrome
+// (`active_border_width`/`selected_border_width`) -- não um número novo.
+// Cada estado mantém a cor dele, que é o que continua separando ativa de
+// inativa.
 const TAB_BORDER_WIDTH: f32 = 2.0;
 // `[appearance.tabs] selected_border_width` -- espec §2.5: "2px por dentro"
 // (`Primitive::RoundedQuad` não soma largura ao rect por causa da borda,
@@ -347,13 +347,13 @@ pub fn paint(
 
         let core_group = workspace.group(group.id);
         let is_collapsed = core_group.is_some_and(|g| g.is_collapsed());
-        // Espec §2.5: "sublinhado de aba sem grupo" usa `ungrouped_color`;
-        // grupo explícito usa a cor do grupo -- mesma resolução para o
-        // tingimento do wrapper e o fundo da pílula abaixo.
+        // Cor de grupo: `ungrouped_color` para run implícito (ADR-0006),
+        // a cor do grupo para explícito. Mesma resolução para a cápsula, o
+        // fundo da pílula e o realce de fronteira do arraste.
         let group_color = core_group
             .and_then(|g| g.color())
             .map(palette::group_color)
-            .unwrap_or(palette::UNGROUPED_UNDERLINE);
+            .unwrap_or(palette::UNGROUPED_GROUP_COLOR);
 
         // Ajuste pedido pelo usuário (F3 etapa 6, fora da espec.): o grupo
         // é uma "cápsula" pintada com a cor cheia -- não o tingimento de
@@ -748,7 +748,7 @@ pub fn paint(
             .group(ghost.group)
             .and_then(|g| g.color())
             .map(palette::group_color)
-            .unwrap_or(palette::UNGROUPED_UNDERLINE);
+            .unwrap_or(palette::UNGROUPED_GROUP_COLOR);
         let is_collapsed = workspace
             .group(ghost.group)
             .is_some_and(|g| g.is_collapsed());

@@ -1055,7 +1055,7 @@ pub fn paint_move_to_group(
             let color = group
                 .color()
                 .map(palette::group_color)
-                .unwrap_or(palette::UNGROUPED_UNDERLINE);
+                .unwrap_or(palette::UNGROUPED_GROUP_COLOR);
             let swatch_rect = Rect {
                 x: rect.x,
                 y: rect.y + (rect.height - MOVE_SWATCH_SIZE) / 2.0,

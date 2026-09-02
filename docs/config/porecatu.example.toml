@@ -256,8 +256,8 @@ close_button_hover_foreground = "#e4e8ee"
 active_border = "#39404b"
 inactive_border = "#22262e"
 # 2px em TODO estado: 1px do `#22262e` da inativa não se lê contra a
-# cápsula de cor cheia. A espessura vem de `indicator_thickness`/
-# `selected_border_width`, não é número novo. Efeito colateral aceito: a
+# cápsula de cor cheia. A espessura é a mesma de `selected_border_width`,
+# abaixo -- não é número novo. Efeito colateral aceito: a
 # aba selecionada deixa de se distinguir por espessura e passa a se
 # distinguir só pela cor do token.
 active_border_width = 2
