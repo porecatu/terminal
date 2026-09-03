@@ -432,7 +432,13 @@ fn watch_loop(
                     // fechada de verdade), a contagem nunca alcança zero
                     // por causa desta, e o Job nunca fecha -- um processo
                     // que o shell tenha deliberadamente destacado (`start
-                    // /b algo & exit`) sobrevive, como hoje.
+                    // /b algo & exit`) sobrevive, como hoje. Fora do
+                    // Windows `ProcessGroup` não carrega nada que precise
+                    // de `Drop` ainda (dívida Unix do ADR-0033), então o
+                    // clippy vê este `forget` como não-operação nessa
+                    // plataforma -- `allow` deliberado, para o dia em que
+                    // a dívida for paga sem precisar lembrar de tirá-lo.
+                    #[allow(clippy::forget_non_drop)]
                     std::mem::forget(process_group);
                     return;
                 }

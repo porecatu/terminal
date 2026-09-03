@@ -280,6 +280,21 @@ mod tests {
         }
     }
 
+    /// O modificador "primário" que `apply_text_field_key` de fato lê pra
+    /// `Ctrl+A`/`Cmd+A` -- `Ctrl` em Windows/Linux, `Cmd` (`super_`) no
+    /// macOS. Testar sempre com `ctrl: true` fixo passava em duas das três
+    /// plataformas e falhava silenciosamente no CI do macOS -- o próprio
+    /// `cfg!(target_os = "macos")` que o código usa é o que o teste precisa
+    /// espelhar, não um valor fixo.
+    fn primary_mods(shift: bool) -> Modifiers {
+        Modifiers {
+            shift,
+            ctrl: !cfg!(target_os = "macos"),
+            alt: false,
+            super_: cfg!(target_os = "macos"),
+        }
+    }
+
     #[test]
     fn new_starts_with_cursor_at_end_and_no_selection() {
         let field = TextFieldState::new("olá");
@@ -426,7 +441,7 @@ mod tests {
             &mut field,
             &logical_key,
             Some("a"),
-            mods(true, false)
+            primary_mods(false)
         ));
         assert_eq!(field.selection_range(), Some((0, 3)));
     }
