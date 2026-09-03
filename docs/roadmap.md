@@ -12,7 +12,7 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F1 — Terminal único | **fechada** |
 | F2 — Abas | **fechada** |
 | F3 — Grupos | **fechada** |
-| F4 — Configuração | **em andamento** (etapas 1-2 fechadas, etapa 3 em revisão) |
+| F4 — Configuração | **em andamento** (etapas 1-3 fechadas, etapa 4 em revisão) |
 | F5 a F6 | não iniciadas |
 
 > **A verificação interativa é dívida assumida, não critério pendente.** Os
@@ -359,13 +359,19 @@ Itens:
    saíram de `const` e passaram a vir de um `Arc<Config>`. Critério de saída
    verificado: com a config padrão, o binário continua desenhando exatamente o que
    desenhava antes.
-3. **Terminal.** Fonte (família, tamanho, `line_height`, fallback), cores, cursor,
-   scrollback, seleção e clipboard saem do `TermParams` fixo que `ui` monta hoje.
-   Inclui o **recálculo de grade e o resize de todos os PTYs** quando a métrica de
-   fonte muda — a classe B do [ADR-0030](adr/0030-escopo-do-hot-reload.md).
-4. **Hot reload.** `notify`, parse fora da main thread, debounce, e as **três classes**
-   do ADR-0030, com o aviso de escopo da classe C. Depende de 2 e 3 existirem: sem
-   nada lendo `Config`, não há o que recarregar.
+3. **Terminal — fechada.** Fonte (família, tamanho, `line_height`, fallback), cores,
+   cursor, scrollback, seleção e clipboard saíram do `TermParams` fixo que `ui`
+   montava. Inclui o recálculo de grade e o resize de todos os PTYs quando a métrica
+   de fonte muda — a classe B do [ADR-0030](adr/0030-escopo-do-hot-reload.md),
+   acionado na carga inicial.
+4. **Hot reload — fechada.** `notify` assistindo o diretório do arquivo (não só ele,
+   por causa de write-then-rename), parse fora da main thread, debounce de ~200ms, e
+   as três classes do ADR-0030 aplicadas comparando config antiga e nova: A troca o
+   `Arc` e redesenha, B soma recálculo de grade e resize de todos os PTYs da janela,
+   C avisa o escopo real (severidade informação) e aplica o resto da gravação mesmo
+   assim. Erro de config mostra linha/coluna/mensagem e mantém a config anterior
+   (ADR-0003 regra 2); chave desconhecida vira aviso (RF-4.22). `config.reload`
+   existe e é chamável, sem tecla ainda (etapa 5).
 5. **`enum Action` em `porecatu-core` + parser de `[keybindings]`**
    ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)), com o teste
    bidirecional contra o [catálogo](reference/acoes.md) e os **defaults de macOS**, que

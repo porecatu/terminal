@@ -32,6 +32,7 @@ mod move_to_group;
 mod overlay;
 mod paint;
 mod palette;
+mod reload;
 mod rename;
 mod selection;
 mod tab_bar;
@@ -49,6 +50,7 @@ use input::ClickTracker;
 use move_to_group::{MoveTarget, MoveToGroupPopover};
 use paint::CellMetrics;
 use porecatu_core::GroupColor;
+use reload::ConfigReload;
 use rename::RenameState;
 use selection::Selection;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
@@ -137,14 +139,20 @@ enum Drag {
 /// minúscula ou métrica de fonte falhando.
 const MIN_GRID: usize = 1;
 
-/// Evento de usuário do event loop: uma aba ficou suja (ADR-0007) e precisa
-/// de redraw. Carrega `(WindowId, TabId)` desde a F1 (ADR-0015): com mais
-/// de uma janela, `TabId` sozinho não diz qual `Workspace` sujou -- os
-/// contadores são por janela.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Wakeup {
-    window: WindowId,
-    tab: TabId,
+/// Evento de usuário do event loop -- o mesmo caminho serve os dois fatos
+/// que só podem chegar de fora da main thread (ADR-0007): aba suja e
+/// recarga de config pronta.
+#[derive(Debug, Clone, PartialEq)]
+enum Wakeup {
+    /// Uma aba ficou suja e precisa de redraw. Carrega `(WindowId, TabId)`
+    /// desde a F1 (ADR-0015): com mais de uma janela, `TabId` sozinho não
+    /// diz qual `Workspace` sujou -- os contadores são por janela.
+    TabDirty { window: WindowId, tab: TabId },
+    /// A thread do watcher (F4 etapa 4, ADR-0030) já leu e parseou o
+    /// arquivo -- nunca um caminho para a main thread abrir. `Box` porque
+    /// `ConfigReload::Loaded` carrega uma `Config` inteira, bem maior que
+    /// `TabDirty`.
+    ConfigReloaded(Box<ConfigReload>),
 }
 
 /// Estado de execução de uma aba: o `Terminal` (motor+PTY+threads) e o
@@ -627,7 +635,7 @@ impl WindowState {
         };
 
         match Terminal::spawn(pty_config, term_params.clone(), move || {
-            let _ = proxy.send_event(Wakeup {
+            let _ = proxy.send_event(Wakeup::TabDirty {
                 window: window_id,
                 tab,
             });
@@ -1827,8 +1835,13 @@ impl WindowState {
     }
 
     /// Recalcula linhas/colunas a partir do tamanho lógico e propaga pra
-    /// `WindowSurface` e pro terminal da aba ativa (motor + PTY).
-    /// `WindowSurface` é quem converte de volta para físico (ADR-0018).
+    /// `WindowSurface` e pro terminal de **todas** as abas da janela
+    /// (motor + PTY) -- não só a ativa: uma aba em segundo plano cujo PTY
+    /// nunca foi redimensionado mostra a métrica errada assim que
+    /// ativada. `WindowSurface` é quem converte de volta para físico
+    /// (ADR-0018). `Terminal::resize` é barato de chamar em rajada -- o
+    /// lado do PTY é assíncrono, perder um em trânsito não é grave (ver o
+    /// comentário do método).
     fn resize_to(
         &mut self,
         width: u32,
@@ -1841,7 +1854,7 @@ impl WindowState {
         self.logical_width = width as f32 / self.scale;
         self.logical_height = height as f32 / self.scale;
         let (rows, cols) = self.grid_size(cell_metrics, style);
-        if let Some(runtime) = self.active_runtime() {
+        for runtime in self.tabs.values() {
             runtime.terminal.resize(rows, cols);
         }
         self.window.request_redraw();
@@ -1961,6 +1974,12 @@ fn tab_bar_rect_contains(rect: Rect, point: (f32, f32)) -> bool {
 struct App {
     gpu: Option<GpuContext>,
     proxy: EventLoopProxy<Wakeup>,
+    /// Caminho resolvido no start (ADR-0003), o mesmo que o watcher do
+    /// hot reload assiste -- `config.reload` (catálogo de ações) relê
+    /// este caminho na hora, sem esperar o `notify`. `None` só se
+    /// `dirs::config_dir` também falhar (mesma condição rara de
+    /// `resolve_config_path`).
+    config_path: Option<PathBuf>,
     /// Home do usuário -- fallback de `tab.new`/`window.new` quando a aba
     /// ativa ainda não tem `cwd` capturado por OSC 7 (ADR-0017 item 1).
     /// `None` só se `dirs::home_dir` falhar em resolvê-la.
@@ -1995,11 +2014,12 @@ struct App {
 
 impl App {
     fn new(proxy: EventLoopProxy<Wakeup>) -> Self {
-        // TODO F4 etapa 4/5: `--config`/`PORECATU_CONFIG` chegam via CLI;
-        // por ora só o caminho de plataforma (`porecatu_config::load(None)`)
-        // é resolvido. Erro de parse não tem widget de aviso ainda (isso é
-        // decisão da etapa de hot reload/config inválida) -- só um log em
-        // stderr, e os defaults seguem valendo (`LoadResult::config()`
+        // TODO F4 etapa 5: `--config` chega via CLI; por ora só
+        // `PORECATU_CONFIG`/caminho de plataforma são resolvidos
+        // (`porecatu_config::load(None)`). Erro de parse no start não tem
+        // widget de aviso ainda -- só um log em stderr, porque a `App`
+        // (dona da pilha de avisos, uma por janela) ainda não existe
+        // neste ponto; os defaults seguem valendo (`LoadResult::config()`
         // nunca falta).
         let load_result = porecatu_config::load(None);
         if let porecatu_config::LoadResult::Invalid { error, .. } = &load_result {
@@ -2010,9 +2030,23 @@ impl App {
         let pal = palette::ResolvedPalette::from_config(&config);
         let term_pal = palette::ResolvedTermPalette::from_config(&config);
         let term_params = term_params_from_config(&config);
+
+        // Hot reload (F4 etapa 4, ADR-0030): mesma precedência do start,
+        // pra assistir o arquivo que `load` de fato leu. `None` (sem
+        // diretório resolvido, ou ele ainda não existe) degrada para "sem
+        // hot reload" -- não falha o start (ADR-0003 regra 1).
+        let config_path = porecatu_config::resolve_config_path(None);
+        if let Some(path) = config_path.clone() {
+            let watcher_proxy = proxy.clone();
+            reload::watch(path, move |reload| {
+                let _ = watcher_proxy.send_event(Wakeup::ConfigReloaded(Box::new(reload)));
+            });
+        }
+
         Self {
             gpu: None,
             proxy,
+            config_path,
             startup_directory: resolve_startup_directory(&config.general.startup_directory),
             cell_metrics: CellMetrics {
                 width: 1.0,
@@ -2339,6 +2373,101 @@ impl App {
             }
         }
     }
+
+    /// Aplica o resultado de uma recarga de config (F4 etapa 4,
+    /// ADR-0030). Erro mantém a config anterior e só avisa (ADR-0003
+    /// regra 2) -- sucesso troca o `Arc` inteiro (dono é o processo, não
+    /// a janela) e aplica as classes A/B/C em todas as janelas.
+    fn apply_config_reload(&mut self, outcome: ConfigReload, now: Instant) {
+        let (new_config, unknown_keys) = match outcome {
+            ConfigReload::Invalid { error } => {
+                for state in self.windows.values_mut() {
+                    state
+                        .warnings
+                        .push(Severity::Error, "Config inválida", error.to_string(), now);
+                    state.window.request_redraw();
+                }
+                return;
+            }
+            ConfigReload::Loaded {
+                config,
+                unknown_keys,
+            } => (config, unknown_keys),
+        };
+
+        let effects = reload::diff(&self.config, &new_config);
+        self.config = Arc::new(*new_config);
+        self.style = TabBarStyle::from_config(&self.config);
+        self.pal = palette::ResolvedPalette::from_config(&self.config);
+        self.term_pal = palette::ResolvedTermPalette::from_config(&self.config);
+        self.term_params = term_params_from_config(&self.config);
+
+        // Classe B: recalcula a métrica de célula uma vez (ADR-0030: "a
+        // métrica é a mesma [para toda janela]") -- a escala vem de uma
+        // janela qualquer, mesma simplificação de `create_window`.
+        if effects.grid_changed
+            && let Some(gpu) = &mut self.gpu
+        {
+            let font = &self.config.terminal.font;
+            let font_size_px = font.size as f32;
+            let line_height_px = font_size_px * font.line_height as f32;
+            let (cell_width, cell_height) = gpu
+                .text_measurer()
+                .measure_mono_cell(font_size_px, line_height_px);
+            let scale = self.windows.values().next().map_or(1.0, |w| w.scale);
+            self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
+        }
+
+        let cell_metrics = self.cell_metrics;
+        let style = self.style;
+        let gpu = self.gpu.as_ref();
+        for state in self.windows.values_mut() {
+            // Classe B: colunas/linhas dependem da métrica nova e do
+            // tamanho (por janela) -- resize de todos os PTYs da janela,
+            // um por recarga (o debounce já coalesceu a rajada).
+            if effects.grid_changed
+                && let Some(gpu) = gpu
+            {
+                let size = state.window.inner_size();
+                state.resize_to(size.width, size.height, gpu, cell_metrics, &style);
+            }
+            // Classe C: "mudei e não aconteceu nada" seria indistinguível
+            // de bug (ADR-0030) -- por isso o aviso, severidade
+            // informação, some sozinho.
+            for message in &effects.deferred {
+                state
+                    .warnings
+                    .push(Severity::Info, "Não aplicado agora", message.clone(), now);
+            }
+            // RF-4.22: chave desconhecida é aviso, não erro.
+            for key in &unknown_keys {
+                state.warnings.push(
+                    Severity::Warning,
+                    "Chave desconhecida na config",
+                    key.clone(),
+                    now,
+                );
+            }
+            // Classe A: o layout da barra é função pura de
+            // `(Workspace, Config, largura)` -- só redesenhar já aplica.
+            state.window.request_redraw();
+        }
+    }
+
+    /// `config.reload` do catálogo (`docs/reference/acoes.md`, ADR-0003):
+    /// relê o arquivo na hora, sem esperar o `notify` -- útil quando o
+    /// watcher não disparou (editor que grava por outro caminho, arquivo
+    /// em rede). A tecla vem na etapa 5 do parser de `[keybindings]`; por
+    /// ora a ação só precisa existir e ser chamável.
+    #[allow(dead_code)]
+    fn reload_config_now(&mut self, now: Instant) {
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+        if let Some(outcome) = reload::read_and_parse(&path) {
+            self.apply_config_reload(outcome, now);
+        }
+    }
 }
 
 impl ApplicationHandler<Wakeup> for App {
@@ -2356,8 +2485,14 @@ impl ApplicationHandler<Wakeup> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
-        let tab_id = event.tab;
-        let Some(state) = self.windows.get_mut(&event.window) else {
+        let (window, tab_id) = match event {
+            Wakeup::TabDirty { window, tab } => (window, tab),
+            Wakeup::ConfigReloaded(outcome) => {
+                self.apply_config_reload(*outcome, Instant::now());
+                return;
+            }
+        };
+        let Some(state) = self.windows.get_mut(&window) else {
             return;
         };
 
@@ -2433,11 +2568,11 @@ impl ApplicationHandler<Wakeup> for App {
         }
 
         if window_should_close {
-            self.close_window_unconditionally(event.window, event_loop);
+            self.close_window_unconditionally(window, event_loop);
             return;
         }
 
-        let Some(state) = self.windows.get(&event.window) else {
+        let Some(state) = self.windows.get(&window) else {
             return;
         };
         state.sync_window_title();
