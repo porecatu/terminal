@@ -41,12 +41,14 @@ primeiro release.
   brilho (`1.18` na aba, `1.25` na pílula) e sombra em camadas nos cinco
   widgets de chrome e no fantasma de arraste, ambos resolvidos em CPU sem
   primitiva nova em `porecatu-render`
+- **Merge de tema cobre toda a superfície do ADR-0031 §1** (fora de fase,
+  depois do fechamento da etapa 6): `[appearance.groups]` (`palette` inclusa,
+  substituída inteira pelo caso especial do ADR-0031 §2) e as cores dos cinco
+  widgets de chrome entram no merge junto das 16 ANSI e dos dez campos
+  nomeados de terminal/abas
 
 ### Dívida da F4
 
-- Merge de tema cobre só os campos que `Theme` já tinha desde a etapa 1 (16
-  ANSI + 10 nomeados); cores de `[appearance.groups]` e dos cinco widgets de
-  chrome ainda não são mescláveis por tema
 - `zoom_scope = "active"` não tem efeito -- o zoom por atalho é sempre do
   processo inteiro, nunca só da aba ativa
 - Entrada de cor por hexadecimal no editor de grupo (RF-2.10) não foi
