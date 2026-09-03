@@ -4,15 +4,53 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento seguirá [SemVer](https://semver.org/lang/pt-BR/) a partir do
 primeiro release.
 
-> **Nenhuma versão foi publicada ainda.** As fases F0, F1, F2 e F3 do
-> [roadmap](docs/roadmap.md) estão **fechadas**; a próxima é a F4
-> (configuração). `cargo run` abre uma janela com abas e grupos de terminal
-> funcionais, sem decoração nativa fora do macOS, e `Ctrl+Shift+N` abre uma
-> segunda janela; artefatos de release só aparecem na F6.
+> **Nenhuma versão foi publicada ainda.** As fases F0 a F4 do
+> [roadmap](docs/roadmap.md) estão **fechadas**; a próxima é a F5
+> (sessão). `cargo run` abre uma janela com abas e grupos de terminal
+> funcionais, sem decoração nativa fora do macOS, `Ctrl+Shift+N` abre uma
+> segunda janela, e o arquivo de config (`porecatu.toml`) governa aparência,
+> teclas e temas com recarga a quente; artefatos de release só aparecem na F6.
 
 ## [Não publicado]
 
 ### Adicionado
+
+#### Fechamento da F4 — configuração
+
+- **`porecatu-config`** (etapa 1): structs `serde`, defaults completos batendo
+  com [`porecatu.example.toml`](docs/config/porecatu.example.toml), resolução
+  de caminho (`--config` → `PORECATU_CONFIG` → padrão da plataforma), erro
+  localizado (linha/coluna), chave desconhecida como aviso
+- **`porecatu-ui` lê `Config`** (etapa 2): chrome e barra de abas saem de
+  `const`, com a config padrão reproduzindo exatamente o binário de antes
+- **Terminal lê `Config`** (etapa 3): fonte, cores, cursor, scrollback,
+  seleção, clipboard, `[general] startup_directory`, `[shell]`
+- **Hot reload** (etapa 4, [ADR-0030](docs/adr/0030-escopo-do-hot-reload.md)):
+  `notify` assistindo o diretório do arquivo, debounce de ~200ms, três classes
+  de chave (aplica a quente / aplica com recálculo de grade e resize de PTY /
+  exige reinício e avisa)
+- **`enum Action` + parser de `[keybindings]`** (etapa 5,
+  [ADR-0029](docs/adr/0029-enum-de-acao-e-gramatica-de-tecla.md)): 46 ações do
+  [catálogo fechado](docs/reference/acoes.md), gramática de tecla com
+  canonicalização, resolução em três níveis (embutido → comum → plataforma) —
+  os defaults de macOS respondem pela primeira vez
+- **Temas nomeados, zoom por atalho, `animations = false`, roda do mouse no
+  popover de destino, e as duas mudanças visuais aprovadas**
+  ([ADR-0031](docs/adr/0031-temas-nomeados.md),
+  [ADR-0032](docs/adr/0032-interface-do-v1-fechada.md), etapa 6): hover por
+  brilho (`1.18` na aba, `1.25` na pílula) e sombra em camadas nos cinco
+  widgets de chrome e no fantasma de arraste, ambos resolvidos em CPU sem
+  primitiva nova em `porecatu-render`
+
+### Dívida da F4
+
+- Merge de tema cobre só os campos que `Theme` já tinha desde a etapa 1 (16
+  ANSI + 10 nomeados); cores de `[appearance.groups]` e dos cinco widgets de
+  chrome ainda não são mescláveis por tema
+- `zoom_scope = "active"` não tem efeito -- o zoom por atalho é sempre do
+  processo inteiro, nunca só da aba ativa
+- Entrada de cor por hexadecimal no editor de grupo (RF-2.10) não foi
+  implementada
 
 #### Fechamento da F3 — navegação de grupo
 

@@ -12,7 +12,8 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F1 — Terminal único | **fechada** |
 | F2 — Abas | **fechada** |
 | F3 — Grupos | **fechada** |
-| F4 a F6 | não iniciadas |
+| F4 — Configuração | **fechada** (dívida na etapa 6, ver seção dela) |
+| F5 a F6 | não iniciadas |
 
 > **A verificação interativa é dívida assumida, não critério pendente.** Os
 > critérios de saída da F1, da F2 e da F3 exigiam gesto de verdade — `vim`,
@@ -347,38 +348,66 @@ Itens:
 
 **Divisão sugerida**, no padrão das seis etapas da F1, da F2 e da F3, uma por PR:
 
-1. **`porecatu-config` nasce.** Structs `serde` com defaults completos, resolução de
-   caminho (`--config` → `PORECATU_CONFIG` → caminho de plataforma via `dirs`), erro
-   com linha e chave, chave desconhecida como aviso ([ADR-0003](adr/0003-formato-de-configuracao.md)).
-   **Sem consumidor ainda:** a etapa entrega `Config` carregado e testado, não
-   aparência mudada — e é isso que a torna testável sem GPU e sem janela.
-2. **`porecatu-ui` lê `Config`.** As ~30 constantes que já citam a chave TOML de
-   origem, mais a geometria da barra (`TabBarStyle`) e dos cinco widgets, saem de
-   `const` e passam a vir de um `Arc<Config>`. É a etapa que cobra o critério de
-   saída: com a config padrão, o binário tem de continuar desenhando **exatamente** o
-   que desenha hoje.
-3. **Terminal.** Fonte (família, tamanho, `line_height`, fallback), cores, cursor,
-   scrollback, seleção e clipboard saem do `TermParams` fixo que `ui` monta hoje.
-   Inclui o **recálculo de grade e o resize de todos os PTYs** quando a métrica de
-   fonte muda — a classe B do [ADR-0030](adr/0030-escopo-do-hot-reload.md).
-4. **Hot reload.** `notify`, parse fora da main thread, debounce, e as **três classes**
-   do ADR-0030, com o aviso de escopo da classe C. Depende de 2 e 3 existirem: sem
-   nada lendo `Config`, não há o que recarregar.
-5. **`enum Action` em `porecatu-core` + parser de `[keybindings]`**
+1. **`porecatu-config` nasce — fechada.** Structs `serde` com defaults completos,
+   resolução de caminho (`--config` → `PORECATU_CONFIG` → caminho de plataforma via
+   `dirs`), erro com linha e chave, chave desconhecida como aviso
+   ([ADR-0003](adr/0003-formato-de-configuracao.md)). **Sem consumidor ainda:** a
+   etapa entrega `Config` carregado e testado, não aparência mudada — e é isso que a
+   torna testável sem GPU e sem janela.
+2. **`porecatu-ui` lê `Config` — fechada.** As ~30 constantes que já citavam a chave
+   TOML de origem, mais a geometria da barra (`TabBarStyle`) e dos cinco widgets,
+   saíram de `const` e passaram a vir de um `Arc<Config>`. Critério de saída
+   verificado: com a config padrão, o binário continua desenhando exatamente o que
+   desenhava antes.
+3. **Terminal — fechada.** Fonte (família, tamanho, `line_height`, fallback), cores,
+   cursor, scrollback, seleção e clipboard saíram do `TermParams` fixo que `ui`
+   montava. Inclui o recálculo de grade e o resize de todos os PTYs quando a métrica
+   de fonte muda — a classe B do [ADR-0030](adr/0030-escopo-do-hot-reload.md),
+   acionado na carga inicial.
+4. **Hot reload — fechada.** `notify` assistindo o diretório do arquivo (não só ele,
+   por causa de write-then-rename), parse fora da main thread, debounce de ~200ms, e
+   as três classes do ADR-0030 aplicadas comparando config antiga e nova: A troca o
+   `Arc` e redesenha, B soma recálculo de grade e resize de todos os PTYs da janela,
+   C avisa o escopo real (severidade informação) e aplica o resto da gravação mesmo
+   assim. Erro de config mostra linha/coluna/mensagem e mantém a config anterior
+   (ADR-0003 regra 2); chave desconhecida vira aviso (RF-4.22). `config.reload`
+   existe e é chamável, sem tecla ainda (etapa 5).
+5. **`enum Action` em `porecatu-core` + parser de `[keybindings]` — fechada.**
    ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)), com o teste
-   bidirecional contra o [catálogo](reference/acoes.md) e os **defaults de macOS**, que
-   hoje não existem em código.
-6. **Temas nomeados** ([ADR-0031](adr/0031-temas-nomeados.md)), zoom por atalho,
-   `animations = false`, a roda do mouse no popover de destino, a entrada de cor por
-   hexadecimal do RF-2.10 — e as **duas mudanças visuais aprovadas**: hover por brilho
-   e sombra nos cinco widgets e no fantasma de arraste.
+   bidirecional contra o [catálogo](reference/acoes.md) e os **defaults de macOS**,
+   que antes existiam só como dado embutido em `porecatu-config` e agora respondem
+   de fato: `Chord`/a resolução dos três níveis (embutido da plataforma -> comum ->
+   plataforma) vivem em `porecatu-ui`, que é quem conhece `winit`.
+   `handle_tab_action_key` consulta o mapa resolvido em vez do `match` fixo que
+   existia até aqui. `scrollback.*`/`clipboard.*` continuam num caminho hardcoded
+   em `input.rs`, de propósito (armadilha registrada no código): mover os dois pro
+   mapa não era escopo desta etapa.
+6. **Temas nomeados, zoom, visual — fechada, com dívida registrada.**
+   [ADR-0031](adr/0031-temas-nomeados.md), `animations = false`, a roda do mouse no
+   popover de destino, e as **duas mudanças visuais aprovadas**
+   ([ADR-0032](adr/0032-interface-do-v1-fechada.md)): hover por brilho (`chrome::
+   brighten`, CPU, `1.18`/`1.25`, calculado por frame a partir de `tab_bar::hit_test`)
+   e sombra em camadas (`chrome::push_shadow`) nos **cinco widgets de chrome** e no
+   fantasma de arraste, sempre ligada nele. Três itens ficaram de fora, registrados
+   como dívida, não como decisão de não fazer:
+   - **Merge de tema cobre só os campos que `Theme` já tinha desde a etapa 1** (16
+     ANSI + 10 nomeados de terminal/abas). `[appearance.groups]`
+     (`palette`/`ungrouped_color` inclusos) e as cores dos cinco widgets de chrome,
+     que o ADR-0031 §1 também lista, ainda não entram no merge.
+   - **Zoom de sessão é sempre do processo inteiro.** `zoom_scope = "active"`
+     (RF-5.10) não tem efeito -- zoom por aba pediria métrica de célula por
+     `TabRuntime`, não só por processo (`App::cell_metrics`), mudança maior que caberia
+     nesta etapa com segurança.
+   - **Entrada de cor por hexadecimal no editor de grupo (RF-2.10) não foi
+     implementada.** Os tokens `input_*` de `[appearance.group_editor]` já existem
+     (reaproveitáveis, o campo de nome já os usa) para quando alguém fizer o campo.
 
 A ordem não é arbitrária: 1 e 2 destravam todo o resto (sem `Config` carregado e sem a
 UI lendo dele, nada é verificável de ponta a ponta); 4 depende de 2 e 3; 5 e 6 são
 independentes entre si e podem trocar de posição. As etapas 1 a 3 já entregam o que a
 fase promete — o arquivo passa a governar a aparência — antes de a fase acabar.
 
-**Critério de saída:** **todo valor de aparência com procedência declarada** — vira chave o que se vê, fica fixo o que é mecânica de interação (limiar de clique e de arraste, cascata de janela, intervalo de frame), e a lista do que fica fixo está no cabeçalho do arquivo de exemplo; verificação por revisão dirigida. Todos os cenários de aceite de PRD-004 e PRD-005 passam. **A config padrão reproduz o binário** — se divergir, o errado é o default, não a interface (ADR-0028). Auditoria de rastreabilidade nas duas direções: nenhuma chave do exemplo sem requisito, nenhum requisito sem chave — com a metade das ações automatizada pelo teste bidirecional do ADR-0029.
+**Critério de saída:** **todo valor de aparência com procedência declarada** — vira chave o que se vê, fica fixo o que é mecânica de interação (limiar de clique e de arraste, cascata de janela, intervalo de frame), e a lista do que fica fixo está no cabeçalho do arquivo de exemplo; verificação por revisão dirigida. Todos os cenários de aceite de PRD-004 e PRD-005 passam, **exceto os três itens de dívida da etapa 6 acima** (zoom por aba, cor hex no editor, tema cobrindo grupos/widgets). **A config padrão reproduz o binário** — se divergir, o errado é o default, não a interface (ADR-0028). Auditoria de rastreabilidade nas duas direções: nenhuma chave do exemplo sem requisito, nenhum requisito sem chave — com a metade das ações automatizada pelo teste bidirecional do ADR-0029.
 
 ---
 

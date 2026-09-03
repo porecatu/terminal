@@ -22,27 +22,40 @@
 //! como o campo de rename da aba, rola dentro de si mesmo mantendo o caret
 //! visível, sem quebrar linha.
 //!
-//! Nenhuma sombra: `porecatu-render` não tem primitiva de sombra (só quad,
-//! arredondado, texto e clip), e os widgets pedem uma na espec. Ausência
-//! documentada, não esquecida -- mesma classe de simplificação do
-//! `brightness` do fantasma de arraste (`chrome.rs`, Etapa 5). Corpo de
-//! aviso e diálogo também não quebra linha (`TextRun` é sempre uma linha);
+//! **Sombra em camadas nos cinco widgets** (F4 etapa 6, ADR-0032 §2):
+//! `chrome::push_shadow` -- a mesma técnica de três `RoundedQuad` pretos
+//! empilhados que já sombreia a cápsula de grupo, a aba solta e o quadro
+//! do terminal, sem primitiva nova em `porecatu-render`. Sem chave de
+//! config própria (nenhuma seção `[appearance.*]` destes widgets tem
+//! `shadow`, ao contrário de `[appearance.groups]`/`[appearance.
+//! terminal_frame]`): a decisão do ADR-0032 é fixa, não alternável.
+//! Corpo de aviso e diálogo também não quebra linha (`TextRun` é sempre uma linha);
 //! onde a espec pede várias linhas, o texto trunca em uma só com o
 //! `TextMeasurer`, em vez do "três linhas com reticências" literal.
+//!
+//! F4 etapa 2: toda geometria e cor daqui vem de `&porecatu_config::Config`
+//! (parâmetro `config`) e `&palette::ResolvedPalette` (parâmetro `pal`),
+//! passados por `lib.rs` -- não há um "OverlayStyle" próprio análogo a
+//! `TabBarStyle`, porque nenhuma destas funções corre no caminho quente
+//! (popover pinta no máximo uma vez por frame, quando visível): ler os
+//! sub-structs de `Config` direto é suficiente, sem precisar de um cache
+//! de campos "achatados". `style: &TabBarStyle` entra só onde o valor é
+//! `icon_em_size` (`[appearance.tabs]`) -- o mesmo token de em de ícone que
+//! `chrome.rs` usa, não duplicado aqui.
 
 use porecatu_core::{GroupColor, Workspace};
 use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextMeasurer, TextRun, icon,
 };
 
-use crate::chrome::centered_glyph;
+use crate::chrome::{centered_glyph, push_shadow};
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
 use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
 use crate::move_to_group::MoveToGroupPopover;
-use crate::palette;
-use crate::tab_bar::{self, rect_contains};
+use crate::palette::{self, ResolvedPalette};
+use crate::tab_bar::{self, TabBarStyle, rect_contains};
 use crate::warning::{Severity, WarningStack};
 
 const TITLE_FONT: FontFace = FontFace::Sans {
@@ -65,25 +78,7 @@ fn union(a: Rect, b: Rect) -> Rect {
     }
 }
 
-// ---- aviso do app (espec §2.14, ADR-0014 canal 1) ----
-
-const WARNING_WIDTH: f32 = 320.0;
-const WARNING_PADDING_X: f32 = 12.0;
-const WARNING_PADDING_Y: f32 = 11.0;
-const WARNING_GAP: f32 = 8.0;
-const WARNING_STACK_MARGIN_RIGHT: f32 = 10.0;
-const WARNING_STACK_MARGIN_TOP: f32 = 8.0;
-const WARNING_SEVERITY_BAR_WIDTH: f32 = 2.0;
-const WARNING_TITLE_SIZE: f32 = 12.5;
-const WARNING_BODY_SIZE: f32 = 11.0;
-const WARNING_CLOSE_SIZE: f32 = 17.0;
-// Em, não desenho -- mesmo tamanho do botão de fechar da aba, que a
-// espec. §2.15 diz ser "o mesmo botão". Ver `porecatu_render::icon`.
-const WARNING_CLOSE_ICON_SIZE: f32 = crate::chrome::ICON_EM_SIZE;
-/// Sem métrica natural de linha (mesma simplificação de `FONT_SIZE_PX`/
-/// `LINE_HEIGHT_MULTIPLIER` em `lib.rs`): valor de trabalho pra separar
-/// título e corpo.
-const WARNING_LINE_HEIGHT: f32 = 16.0;
+// ---- aviso do app (espec §2.14, ADR-0014 canal 1, `[appearance.notices]`) ----
 
 pub struct WarningEntry {
     /// Índice em `WarningStack::items()` -- é o que `App::dismiss` precisa
@@ -101,30 +96,46 @@ pub struct WarningLayout {
     pub stack_rect: Rect,
 }
 
-pub fn layout_warnings(stack: &WarningStack, bar_height: f32, content_width: f32) -> WarningLayout {
-    let x = content_width - WARNING_STACK_MARGIN_RIGHT - WARNING_WIDTH;
-    let mut y = bar_height + WARNING_STACK_MARGIN_TOP;
+pub fn layout_warnings(
+    stack: &WarningStack,
+    config: &porecatu_config::Config,
+    bar_height: f32,
+    content_width: f32,
+) -> WarningLayout {
+    let notices = &config.appearance.notices;
+    let width = notices.width as f32;
+    let padding_x = notices.padding_x as f32;
+    let padding_y = notices.padding_y as f32;
+    let gap = notices.gap as f32;
+    let margin_right = notices.stack_margin_right as f32;
+    let margin_top = notices.stack_margin_top as f32;
+    let title_size = notices.font_size as f32;
+    let line_height = notices.line_height as f32;
+    let close_size = notices.close_button_size as f32;
+
+    let x = content_width - margin_right - width;
+    let mut y = bar_height + margin_top;
     let mut entries = Vec::new();
     for (index, _) in stack.items().iter().enumerate().rev() {
-        let height = WARNING_PADDING_Y * 2.0 + WARNING_TITLE_SIZE.max(WARNING_LINE_HEIGHT);
+        let height = padding_y * 2.0 + title_size.max(line_height);
         let rect = Rect {
             x,
             y,
-            width: WARNING_WIDTH,
+            width,
             height,
         };
         let close_button = Rect {
-            x: rect.x + rect.width - WARNING_PADDING_X - WARNING_CLOSE_SIZE + 4.0,
-            y: rect.y + WARNING_PADDING_Y - 2.0,
-            width: WARNING_CLOSE_SIZE,
-            height: WARNING_CLOSE_SIZE,
+            x: rect.x + rect.width - padding_x - close_size + 4.0,
+            y: rect.y + padding_y - 2.0,
+            width: close_size,
+            height: close_size,
         };
         entries.push(WarningEntry {
             index,
             rect,
             close_button,
         });
-        y += height + WARNING_GAP;
+        y += height + gap;
     }
     let stack_rect = entries
         .iter()
@@ -133,7 +144,7 @@ pub fn layout_warnings(stack: &WarningStack, bar_height: f32, content_width: f32
         })
         .unwrap_or(Rect {
             x,
-            y: bar_height + WARNING_STACK_MARGIN_TOP,
+            y: bar_height + margin_top,
             width: 0.0,
             height: 0.0,
         });
@@ -146,63 +157,75 @@ pub fn layout_warnings(stack: &WarningStack, bar_height: f32, content_width: f32
 pub fn paint_warnings(
     layout: &WarningLayout,
     stack: &WarningStack,
+    config: &porecatu_config::Config,
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
+    let notices = &config.appearance.notices;
+    let corner_radius = notices.corner_radius as f32;
+    let severity_bar_width = notices.severity_bar_width as f32;
+    let padding_x = notices.padding_x as f32;
+    let title_size = notices.font_size as f32;
+    let body_size = notices.body_font_size as f32;
+    let close_size = notices.close_button_size as f32;
+    let line_height = notices.line_height as f32;
+    // Em, não desenho -- mesmo tamanho do botão de fechar da aba, que a
+    // espec. §2.15 diz ser "o mesmo botão". Ver `porecatu_render::icon`.
+    let close_icon_size = style.icon_em_size;
+
     let mut out = Vec::new();
     for entry in &layout.entries {
         let warning = &stack.items()[entry.index];
+        push_shadow(&mut out, entry.rect, corner_radius);
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: entry.rect,
-            radius: 8.0,
-            color: palette::POPOVER_BACKGROUND,
-            border_color: palette::POPOVER_BORDER,
+            radius: corner_radius,
+            color: pal.popover_background,
+            border_color: pal.popover_border,
             border_width: 1.0,
         }));
         let severity_color = match warning.severity {
-            Severity::Error => palette::WARNING_SEVERITY_ERROR,
-            Severity::Warning => palette::WARNING_SEVERITY_WARNING,
-            Severity::Info => palette::WARNING_SEVERITY_INFO,
+            Severity::Error => pal.warning_severity_error,
+            Severity::Warning => pal.warning_severity_warning,
+            Severity::Info => pal.warning_severity_info,
         };
         out.push(Primitive::Quad(Quad {
             rect: Rect {
                 x: entry.rect.x,
                 y: entry.rect.y,
-                width: WARNING_SEVERITY_BAR_WIDTH,
+                width: severity_bar_width,
                 height: entry.rect.height,
             },
             color: severity_color,
         }));
 
-        let text_x = entry.rect.x + WARNING_SEVERITY_BAR_WIDTH + WARNING_PADDING_X;
-        let title_y = entry.rect.y + WARNING_PADDING_Y;
+        let text_x = entry.rect.x + severity_bar_width + padding_x;
+        let title_y = entry.rect.y + notices.padding_y as f32;
         out.push(Primitive::Text(TextRun {
             origin: (text_x, title_y),
             text: warning.title.clone(),
             font: TITLE_FONT,
-            size_px: WARNING_TITLE_SIZE,
-            color: palette::WARNING_TITLE_TEXT,
+            size_px: title_size,
+            color: pal.warning_title_text,
         }));
 
-        let body_max_width = (entry.rect.width
-            - WARNING_SEVERITY_BAR_WIDTH
-            - WARNING_PADDING_X * 2.0
-            - WARNING_CLOSE_SIZE)
-            .max(0.0);
-        let (body, _) =
-            measurer.truncate(&warning.body, BODY_FONT, WARNING_BODY_SIZE, body_max_width);
+        let body_max_width =
+            (entry.rect.width - severity_bar_width - padding_x * 2.0 - close_size).max(0.0);
+        let (body, _) = measurer.truncate(&warning.body, BODY_FONT, body_size, body_max_width);
         out.push(Primitive::Text(TextRun {
-            origin: (text_x, title_y + WARNING_LINE_HEIGHT),
+            origin: (text_x, title_y + line_height),
             text: body,
             font: BODY_FONT,
-            size_px: WARNING_BODY_SIZE,
-            color: palette::WARNING_BODY_TEXT,
+            size_px: body_size,
+            color: pal.warning_body_text,
         }));
 
         out.push(centered_glyph(
             icon::X,
             entry.close_button,
-            WARNING_CLOSE_ICON_SIZE,
-            palette::CLOSE_BUTTON_ICON,
+            close_icon_size,
+            pal.chrome_icon,
         ));
     }
     out
@@ -230,16 +253,8 @@ pub fn hit_test_warnings(layout: &WarningLayout, point: (f32, f32)) -> Option<Wa
     None
 }
 
-// ---- diálogo de confirmação (espec §2.15, ADR-0014) ----
+// ---- diálogo de confirmação (espec §2.15, ADR-0014, `[appearance.dialog]`) ----
 
-const DIALOG_WIDTH: f32 = 380.0;
-const DIALOG_PADDING: f32 = 16.0;
-const DIALOG_TITLE_SIZE: f32 = 13.0;
-const DIALOG_BODY_SIZE: f32 = 12.5;
-const DIALOG_GAP: f32 = 14.0;
-const DIALOG_BUTTON_HEIGHT: f32 = 30.0;
-const DIALOG_BUTTON_GAP: f32 = 8.0;
-const DIALOG_BUTTON_PADDING_X: f32 = 12.0;
 const DIALOG_CANCEL_LABEL: &str = "Cancelar";
 
 pub struct DialogLayout {
@@ -252,35 +267,45 @@ pub fn layout_dialog(
     window_width: f32,
     window_height: f32,
     dialog: &ConfirmDialog,
+    config: &porecatu_config::Config,
     measurer: &mut TextMeasurer,
 ) -> DialogLayout {
-    let cancel_width = measurer.measure_width(DIALOG_CANCEL_LABEL, BODY_FONT, DIALOG_BODY_SIZE)
-        + DIALOG_BUTTON_PADDING_X * 2.0;
-    let confirm_width = measurer.measure_width(&dialog.confirm_label, BODY_FONT, DIALOG_BODY_SIZE)
-        + DIALOG_BUTTON_PADDING_X * 2.0;
+    let cfg = &config.appearance.dialog;
+    let width = cfg.width as f32;
+    let padding = cfg.padding as f32;
+    let title_size = cfg.title_font_size as f32;
+    let body_size = cfg.font_size as f32;
+    let gap = cfg.gap as f32;
+    let button_height = cfg.button_height as f32;
+    let button_gap = cfg.button_gap as f32;
+    let button_padding_x = cfg.button_padding_x as f32;
 
-    let content_height =
-        DIALOG_TITLE_SIZE + DIALOG_GAP + DIALOG_BODY_SIZE + DIALOG_GAP + DIALOG_BUTTON_HEIGHT;
-    let modal_height = DIALOG_PADDING * 2.0 + content_height;
+    let cancel_width =
+        measurer.measure_width(DIALOG_CANCEL_LABEL, BODY_FONT, body_size) + button_padding_x * 2.0;
+    let confirm_width = measurer.measure_width(&dialog.confirm_label, BODY_FONT, body_size)
+        + button_padding_x * 2.0;
+
+    let content_height = title_size + gap + body_size + gap + button_height;
+    let modal_height = padding * 2.0 + content_height;
     let modal_rect = Rect {
-        x: (window_width - DIALOG_WIDTH) / 2.0,
+        x: (window_width - width) / 2.0,
         y: (window_height - modal_height) / 2.0,
-        width: DIALOG_WIDTH,
+        width,
         height: modal_height,
     };
 
-    let buttons_y = modal_rect.y + modal_rect.height - DIALOG_PADDING - DIALOG_BUTTON_HEIGHT;
+    let buttons_y = modal_rect.y + modal_rect.height - padding - button_height;
     let confirm_rect = Rect {
-        x: modal_rect.x + modal_rect.width - DIALOG_PADDING - confirm_width,
+        x: modal_rect.x + modal_rect.width - padding - confirm_width,
         y: buttons_y,
         width: confirm_width,
-        height: DIALOG_BUTTON_HEIGHT,
+        height: button_height,
     };
     let cancel_rect = Rect {
-        x: confirm_rect.x - DIALOG_BUTTON_GAP - cancel_width,
+        x: confirm_rect.x - button_gap - cancel_width,
         y: buttons_y,
         width: cancel_width,
-        height: DIALOG_BUTTON_HEIGHT,
+        height: button_height,
     };
 
     DialogLayout {
@@ -293,10 +318,20 @@ pub fn layout_dialog(
 pub fn paint_dialog(
     layout: &DialogLayout,
     dialog: &ConfirmDialog,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
     window_width: f32,
     window_height: f32,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
+    let cfg = &config.appearance.dialog;
+    let padding = cfg.padding as f32;
+    let title_size = cfg.title_font_size as f32;
+    let body_size = cfg.font_size as f32;
+    let gap = cfg.gap as f32;
+    let corner_radius = cfg.corner_radius as f32;
+    let button_corner_radius = cfg.button_corner_radius as f32;
+
     let mut out = Vec::new();
     out.push(Primitive::Quad(Quad {
         rect: Rect {
@@ -305,59 +340,64 @@ pub fn paint_dialog(
             width: window_width,
             height: window_height,
         },
-        color: palette::DIALOG_OVERLAY,
+        color: pal.dialog_overlay,
     }));
+    push_shadow(&mut out, layout.modal_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.modal_rect,
-        radius: 10.0,
-        color: palette::POPOVER_BACKGROUND,
-        border_color: palette::POPOVER_BORDER,
+        radius: corner_radius,
+        color: pal.dialog_background,
+        border_color: pal.dialog_border,
         border_width: 1.0,
     }));
 
-    let text_x = layout.modal_rect.x + DIALOG_PADDING;
-    let mut y = layout.modal_rect.y + DIALOG_PADDING;
+    let text_x = layout.modal_rect.x + padding;
+    let mut y = layout.modal_rect.y + padding;
     out.push(Primitive::Text(TextRun {
         origin: (text_x, y),
         text: dialog.title.clone(),
         font: TITLE_FONT,
-        size_px: DIALOG_TITLE_SIZE,
-        color: palette::DIALOG_TITLE_TEXT,
+        size_px: title_size,
+        color: pal.dialog_title_text,
     }));
-    y += DIALOG_TITLE_SIZE + DIALOG_GAP;
-    let body_max_width = layout.modal_rect.width - DIALOG_PADDING * 2.0;
-    let (body, _) = measurer.truncate(&dialog.body, BODY_FONT, DIALOG_BODY_SIZE, body_max_width);
+    y += title_size + gap;
+    let body_max_width = layout.modal_rect.width - padding * 2.0;
+    let (body, _) = measurer.truncate(&dialog.body, BODY_FONT, body_size, body_max_width);
     out.push(Primitive::Text(TextRun {
         origin: (text_x, y),
         text: body,
         font: BODY_FONT,
-        size_px: DIALOG_BODY_SIZE,
-        color: palette::DIALOG_BODY_TEXT,
+        size_px: body_size,
+        color: pal.dialog_body_text,
     }));
 
     paint_dialog_button(
         layout.cancel_rect,
         DIALOG_CANCEL_LABEL,
         palette::TRANSPARENT,
-        palette::DIALOG_CANCEL_TEXT,
+        pal.dialog_cancel_text,
         if dialog.focused() == DialogButton::Cancel {
-            palette::DIALOG_FOCUS_RING
+            pal.dialog_focus_ring
         } else {
-            palette::DIALOG_CANCEL_BORDER
+            pal.dialog_cancel_border
         },
+        body_size,
+        button_corner_radius,
         measurer,
         &mut out,
     );
     paint_dialog_button(
         layout.confirm_rect,
         &dialog.confirm_label,
-        palette::DIALOG_CONFIRM_BACKGROUND,
-        palette::DIALOG_CONFIRM_TEXT,
+        pal.dialog_confirm_background,
+        pal.dialog_confirm_text,
         if dialog.focused() == DialogButton::Confirm {
-            palette::DIALOG_FOCUS_RING
+            pal.dialog_focus_ring
         } else {
             palette::TRANSPARENT
         },
+        body_size,
+        button_corner_radius,
         measurer,
         &mut out,
     );
@@ -372,25 +412,27 @@ fn paint_dialog_button(
     background: Color,
     text_color: Color,
     border_color: Color,
+    font_size: f32,
+    corner_radius: f32,
     measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect,
-        radius: 5.0,
+        radius: corner_radius,
         color: background,
         border_color,
         border_width: 1.0,
     }));
-    let width = measurer.measure_width(label, BODY_FONT, DIALOG_BODY_SIZE);
+    let width = measurer.measure_width(label, BODY_FONT, font_size);
     out.push(Primitive::Text(TextRun {
         origin: (
             rect.x + (rect.width - width) / 2.0,
-            rect.y + (rect.height - DIALOG_BODY_SIZE) / 2.0,
+            rect.y + (rect.height - font_size) / 2.0,
         ),
         text: label.to_string(),
         font: BODY_FONT,
-        size_px: DIALOG_BODY_SIZE,
+        size_px: font_size,
         color: text_color,
     }));
 }
@@ -405,15 +447,7 @@ pub fn dialog_hit(layout: &DialogLayout, point: (f32, f32)) -> Option<DialogButt
     }
 }
 
-// ---- menu de contexto (espec §2.16, ADR-0014) ----
-
-const MENU_WIDTH: f32 = 200.0;
-const MENU_PADDING: f32 = 6.0;
-/// Sem métrica natural de linha, mesma nota de `WARNING_LINE_HEIGHT`.
-const MENU_ITEM_HEIGHT: f32 = 28.0;
-const MENU_ITEM_TEXT_SIZE: f32 = 12.5;
-const MENU_ITEM_RADIUS: f32 = 5.0;
-const MENU_ITEM_PADDING_X: f32 = 8.0;
+// ---- menu de contexto (espec §2.16, ADR-0014, `[appearance.context_menu]`) ----
 
 pub struct MenuLayout {
     pub menu_rect: Rect,
@@ -423,18 +457,24 @@ pub struct MenuLayout {
 
 pub fn layout_context_menu(
     menu: &ContextMenu,
+    config: &porecatu_config::Config,
     window_width: f32,
     window_height: f32,
 ) -> MenuLayout {
-    let height = MENU_PADDING * 2.0 + MENU_ITEM_HEIGHT * TAB_MENU_ITEMS.len() as f32;
+    let cfg = &config.appearance.context_menu;
+    let width = cfg.width as f32;
+    let padding = cfg.padding as f32;
+    let item_height = cfg.item_height as f32;
+
+    let height = padding * 2.0 + item_height * TAB_MENU_ITEMS.len() as f32;
     let mut x = menu.anchor.0;
     let mut y = menu.anchor.1;
     // "Vira nos dois eixos para caber na tela" (espec §2.16) -- contra a
     // janela, não o monitor: multi-monitor físico é responsabilidade de
     // `winit`/SO posicionar a própria janela, isto só evita estourar a
     // borda da janela atual.
-    if x + MENU_WIDTH > window_width {
-        x = (window_width - MENU_WIDTH).max(0.0);
+    if x + width > window_width {
+        x = (window_width - width).max(0.0);
     }
     if y + height > window_height {
         y = (window_height - height).max(0.0);
@@ -442,15 +482,15 @@ pub fn layout_context_menu(
     let menu_rect = Rect {
         x,
         y,
-        width: MENU_WIDTH,
+        width,
         height,
     };
     let item_rects = (0..TAB_MENU_ITEMS.len())
         .map(|i| Rect {
-            x: menu_rect.x + MENU_PADDING,
-            y: menu_rect.y + MENU_PADDING + MENU_ITEM_HEIGHT * i as f32,
-            width: menu_rect.width - MENU_PADDING * 2.0,
-            height: MENU_ITEM_HEIGHT,
+            x: menu_rect.x + padding,
+            y: menu_rect.y + padding + item_height * i as f32,
+            width: menu_rect.width - padding * 2.0,
+            height: item_height,
         })
         .collect();
     MenuLayout {
@@ -459,13 +499,25 @@ pub fn layout_context_menu(
     }
 }
 
-pub fn paint_context_menu(layout: &MenuLayout, menu: &ContextMenu) -> Vec<Primitive> {
+pub fn paint_context_menu(
+    layout: &MenuLayout,
+    menu: &ContextMenu,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+) -> Vec<Primitive> {
+    let cfg = &config.appearance.context_menu;
+    let corner_radius = cfg.corner_radius as f32;
+    let item_radius = cfg.item_corner_radius as f32;
+    let item_padding_x = cfg.item_padding_x as f32;
+    let font_size = cfg.font_size as f32;
+
     let mut out = Vec::new();
+    push_shadow(&mut out, layout.menu_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.menu_rect,
-        radius: 8.0,
-        color: palette::POPOVER_BACKGROUND,
-        border_color: palette::POPOVER_BORDER,
+        radius: corner_radius,
+        color: pal.context_menu_background,
+        border_color: pal.context_menu_border,
         border_width: 1.0,
     }));
     for (index, item) in TAB_MENU_ITEMS.iter().enumerate() {
@@ -473,25 +525,25 @@ pub fn paint_context_menu(layout: &MenuLayout, menu: &ContextMenu) -> Vec<Primit
         if index == menu.highlighted() {
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect,
-                radius: MENU_ITEM_RADIUS,
-                color: palette::MENU_ITEM_HOVER,
+                radius: item_radius,
+                color: pal.menu_item_hover,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
             }));
         }
         let color = if item.enabled {
-            palette::MENU_ITEM_TEXT
+            pal.menu_item_text
         } else {
-            palette::MENU_ITEM_DISABLED_TEXT
+            pal.menu_item_disabled_text
         };
         out.push(Primitive::Text(TextRun {
             origin: (
-                rect.x + MENU_ITEM_PADDING_X,
-                rect.y + (rect.height - MENU_ITEM_TEXT_SIZE) / 2.0,
+                rect.x + item_padding_x,
+                rect.y + (rect.height - font_size) / 2.0,
             ),
             text: item.label.to_string(),
             font: BODY_FONT,
-            size_px: MENU_ITEM_TEXT_SIZE,
+            size_px: font_size,
             color,
         }));
     }
@@ -514,7 +566,7 @@ pub fn context_menu_hit(layout: &MenuLayout, point: (f32, f32)) -> Option<usize>
 /// `GroupActionItem` (rótulo dinâmico, possivelmente destrutivo), não o
 /// `MenuItem` estático de `TAB_MENU_ITEMS`, e a lista não é uma constante
 /// global (`group_menu::group_action_items` resolve na hora, a partir do
-/// estado do grupo).
+/// estado do grupo). Mesmas chaves de `[appearance.context_menu]`.
 pub struct GroupMenuLayout {
     pub menu_rect: Rect,
     pub item_rects: Vec<Rect>,
@@ -523,14 +575,20 @@ pub struct GroupMenuLayout {
 pub fn layout_group_menu(
     menu: &GroupContextMenu,
     item_count: usize,
+    config: &porecatu_config::Config,
     window_width: f32,
     window_height: f32,
 ) -> GroupMenuLayout {
-    let height = MENU_PADDING * 2.0 + MENU_ITEM_HEIGHT * item_count as f32;
+    let cfg = &config.appearance.context_menu;
+    let width = cfg.width as f32;
+    let padding = cfg.padding as f32;
+    let item_height = cfg.item_height as f32;
+
+    let height = padding * 2.0 + item_height * item_count as f32;
     let mut x = menu.anchor.0;
     let mut y = menu.anchor.1;
-    if x + MENU_WIDTH > window_width {
-        x = (window_width - MENU_WIDTH).max(0.0);
+    if x + width > window_width {
+        x = (window_width - width).max(0.0);
     }
     if y + height > window_height {
         y = (window_height - height).max(0.0);
@@ -538,15 +596,15 @@ pub fn layout_group_menu(
     let menu_rect = Rect {
         x,
         y,
-        width: MENU_WIDTH,
+        width,
         height,
     };
     let item_rects = (0..item_count)
         .map(|i| Rect {
-            x: menu_rect.x + MENU_PADDING,
-            y: menu_rect.y + MENU_PADDING + MENU_ITEM_HEIGHT * i as f32,
-            width: menu_rect.width - MENU_PADDING * 2.0,
-            height: MENU_ITEM_HEIGHT,
+            x: menu_rect.x + padding,
+            y: menu_rect.y + padding + item_height * i as f32,
+            width: menu_rect.width - padding * 2.0,
+            height: item_height,
         })
         .collect();
     GroupMenuLayout {
@@ -559,44 +617,53 @@ pub fn paint_group_menu(
     layout: &GroupMenuLayout,
     items: &[GroupActionItem],
     highlighted: usize,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
 ) -> Vec<Primitive> {
+    let cfg = &config.appearance.context_menu;
+    let corner_radius = cfg.corner_radius as f32;
+    let item_radius = cfg.item_corner_radius as f32;
+    let item_padding_x = cfg.item_padding_x as f32;
+    let font_size = cfg.font_size as f32;
+
     let mut out = Vec::new();
+    push_shadow(&mut out, layout.menu_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.menu_rect,
-        radius: 8.0,
-        color: palette::POPOVER_BACKGROUND,
-        border_color: palette::POPOVER_BORDER,
+        radius: corner_radius,
+        color: pal.context_menu_background,
+        border_color: pal.context_menu_border,
         border_width: 1.0,
     }));
     for (index, item) in items.iter().enumerate() {
         let rect = layout.item_rects[index];
         if index == highlighted {
             let hover_color = if item.destructive {
-                palette::MENU_ITEM_DESTRUCTIVE_HOVER
+                pal.menu_item_destructive_hover
             } else {
-                palette::MENU_ITEM_HOVER
+                pal.menu_item_hover
             };
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect,
-                radius: MENU_ITEM_RADIUS,
+                radius: item_radius,
                 color: hover_color,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
             }));
         }
         let text_color = if item.destructive {
-            palette::MENU_ITEM_DESTRUCTIVE_TEXT
+            pal.menu_item_destructive_text
         } else {
-            palette::MENU_ITEM_TEXT
+            pal.menu_item_text
         };
         out.push(Primitive::Text(TextRun {
             origin: (
-                rect.x + MENU_ITEM_PADDING_X,
-                rect.y + (rect.height - MENU_ITEM_TEXT_SIZE) / 2.0,
+                rect.x + item_padding_x,
+                rect.y + (rect.height - font_size) / 2.0,
             ),
             text: item.label.clone(),
             font: BODY_FONT,
-            size_px: MENU_ITEM_TEXT_SIZE,
+            size_px: font_size,
             color: text_color,
         }));
     }
@@ -610,37 +677,8 @@ pub fn group_menu_hit(layout: &GroupMenuLayout, point: (f32, f32)) -> Option<usi
         .position(|&rect| rect_contains(rect, point))
 }
 
-// ---- editor de grupo (espec §2.10, ADR-0023) ----
+// ---- editor de grupo (espec §2.10, ADR-0023, `[appearance.group_editor]`) ----
 
-const EDITOR_WIDTH: f32 = 286.0; // [appearance.group_editor] width
-const EDITOR_PADDING: f32 = 14.0; // padding
-const EDITOR_GAP: f32 = 13.0; // gap
-const EDITOR_CORNER_RADIUS: f32 = 8.0; // corner_radius
-const EDITOR_OFFSET_Y: f32 = 8.0; // offset_y
-const EDITOR_SECTION_FONT_SIZE: f32 = 10.0; // section_font_size
-/// Espaço entre a legenda de seção ("GRUPO"/"COR") e o conteúdo abaixo --
-/// sem chave própria no TOML, mesma nota de `RENAME_FIELD_HEIGHT` em
-/// `chrome.rs`.
-const EDITOR_SECTION_CAPTION_GAP: f32 = 6.0;
-/// Altura do campo de nome -- a espec. dá padding (7px 9px) e fonte (13px)
-/// mas não a altura da caixa; valor de trabalho, mesma nota.
-const EDITOR_INPUT_HEIGHT: f32 = 30.0;
-const EDITOR_INPUT_CORNER_RADIUS: f32 = 5.0; // input_corner_radius
-const EDITOR_INPUT_FONT_SIZE: f32 = 13.0; // input_font_size
-const EDITOR_INPUT_PADDING_X: f32 = 9.0; // espec §2.10 item 1: "padding: 7px 9px"
-const EDITOR_SWATCH_SIZE: f32 = 28.0; // swatch_size
-const EDITOR_SWATCH_CORNER_RADIUS: f32 = 6.0; // swatch_corner_radius
-const EDITOR_SWATCH_GAP: f32 = 8.0; // swatch_gap
-const EDITOR_SWATCH_BORDER_WIDTH: f32 = 2.0; // swatch_border_width
-/// Realce de foco por teclado/hover do swatch (espec: "hover e foco por
-/// teclado são o mesmo realce", mesma regra do §2.16) -- sem tamanho
-/// próprio na espec.; valor de trabalho, halo de 3px ao redor do swatch.
-const EDITOR_SWATCH_HIGHLIGHT_PAD: f32 = 3.0;
-const EDITOR_DIVIDER_HEIGHT: f32 = 1.0; // divider (espessura)
-const EDITOR_ITEM_HEIGHT: f32 = MENU_ITEM_HEIGHT;
-const EDITOR_ITEM_RADIUS: f32 = MENU_ITEM_RADIUS;
-const EDITOR_ITEM_PADDING_X: f32 = MENU_ITEM_PADDING_X;
-const EDITOR_ITEM_TEXT_SIZE: f32 = MENU_ITEM_TEXT_SIZE;
 const EDITOR_SECTION_GROUP_LABEL: &str = "GRUPO";
 const EDITOR_SECTION_COLOR_LABEL: &str = "COR";
 
@@ -659,89 +697,102 @@ pub struct GroupEditorLayout {
 /// `anchor_x`: canto esquerdo da pílula do grupo, em coordenadas de tela
 /// (espec: "posicionado horizontalmente sobre o grupo que está sendo
 /// editado"). `bar_bottom_y`: borda inferior da barra de abas -- o popover
-/// nasce 8px abaixo dela (`EDITOR_OFFSET_Y`); com `tab_bar_position =
-/// "bottom"` ele abriria acima, mas a config não existe ainda (F4), então
-/// só o caso `top` (único alcançável) é implementado -- mesmo tipo de
-/// simplificação que outras chaves de `[appearance]` já assumem enquanto
-/// não há como configurá-las.
+/// nasce `offset_y` abaixo dela; com `tab_bar_position = "bottom"` ele
+/// abriria acima, mas essa chave é lida por `chrome.rs`/`lib.rs`, não
+/// aqui -- só o caso `top` (o único que `layout_group_editor` recebe hoje)
+/// está implementado.
 pub fn layout_group_editor(
     anchor_x: f32,
     bar_bottom_y: f32,
+    config: &porecatu_config::Config,
     window_width: f32,
     window_height: f32,
 ) -> GroupEditorLayout {
+    let cfg = &config.appearance.group_editor;
+    let width = cfg.width as f32;
+    let padding = cfg.padding as f32;
+    let gap = cfg.gap as f32;
+    let offset_y = cfg.offset_y as f32;
+    let section_font_size = cfg.section_font_size as f32;
+    let section_caption_gap = cfg.section_caption_gap as f32;
+    let input_height = cfg.input_height as f32;
+    let swatch_size = cfg.swatch_size as f32;
+    let swatch_gap = cfg.swatch_gap as f32;
+    let divider_height = cfg.divider_height as f32;
+    let item_height = cfg.item_height as f32;
+
     let action_count = EDITOR_ACTION_ORDER.len();
-    let content_height = EDITOR_SECTION_FONT_SIZE
-        + EDITOR_SECTION_CAPTION_GAP
-        + EDITOR_INPUT_HEIGHT
-        + EDITOR_GAP
-        + EDITOR_SECTION_FONT_SIZE
-        + EDITOR_SECTION_CAPTION_GAP
-        + EDITOR_SWATCH_SIZE
-        + EDITOR_GAP
-        + EDITOR_DIVIDER_HEIGHT
-        + EDITOR_GAP
-        + EDITOR_ITEM_HEIGHT * action_count as f32;
-    let popover_height = EDITOR_PADDING * 2.0 + content_height;
+    let content_height = section_font_size
+        + section_caption_gap
+        + input_height
+        + gap
+        + section_font_size
+        + section_caption_gap
+        + swatch_size
+        + gap
+        + divider_height
+        + gap
+        + item_height * action_count as f32;
+    let popover_height = padding * 2.0 + content_height;
 
     let mut x = anchor_x;
-    if x + EDITOR_WIDTH > window_width {
-        x = (window_width - EDITOR_WIDTH).max(0.0);
+    if x + width > window_width {
+        x = (window_width - width).max(0.0);
     }
-    let mut y = bar_bottom_y + EDITOR_OFFSET_Y;
+    let mut y = bar_bottom_y + offset_y;
     if y + popover_height > window_height {
         y = (window_height - popover_height).max(0.0);
     }
     let popover_rect = Rect {
         x,
         y,
-        width: EDITOR_WIDTH,
+        width,
         height: popover_height,
     };
 
-    let inner_x = popover_rect.x + EDITOR_PADDING;
-    let inner_width = popover_rect.width - EDITOR_PADDING * 2.0;
-    let mut cursor_y = popover_rect.y + EDITOR_PADDING;
+    let inner_x = popover_rect.x + padding;
+    let inner_width = popover_rect.width - padding * 2.0;
+    let mut cursor_y = popover_rect.y + padding;
 
     let name_caption_origin = (inner_x, cursor_y);
-    cursor_y += EDITOR_SECTION_FONT_SIZE + EDITOR_SECTION_CAPTION_GAP;
+    cursor_y += section_font_size + section_caption_gap;
     let name_input_rect = Rect {
         x: inner_x,
         y: cursor_y,
         width: inner_width,
-        height: EDITOR_INPUT_HEIGHT,
+        height: input_height,
     };
-    cursor_y += EDITOR_INPUT_HEIGHT + EDITOR_GAP;
+    cursor_y += input_height + gap;
 
     let color_caption_origin = (inner_x, cursor_y);
-    cursor_y += EDITOR_SECTION_FONT_SIZE + EDITOR_SECTION_CAPTION_GAP;
+    cursor_y += section_font_size + section_caption_gap;
     let mut swatch_rects = Vec::with_capacity(GroupColor::ALL.len());
     let mut sx = inner_x;
     for _ in GroupColor::ALL {
         swatch_rects.push(Rect {
             x: sx,
             y: cursor_y,
-            width: EDITOR_SWATCH_SIZE,
-            height: EDITOR_SWATCH_SIZE,
+            width: swatch_size,
+            height: swatch_size,
         });
-        sx += EDITOR_SWATCH_SIZE + EDITOR_SWATCH_GAP;
+        sx += swatch_size + swatch_gap;
     }
-    cursor_y += EDITOR_SWATCH_SIZE + EDITOR_GAP;
+    cursor_y += swatch_size + gap;
 
     let divider_rect = Rect {
         x: inner_x,
         y: cursor_y,
         width: inner_width,
-        height: EDITOR_DIVIDER_HEIGHT,
+        height: divider_height,
     };
-    cursor_y += EDITOR_DIVIDER_HEIGHT + EDITOR_GAP;
+    cursor_y += divider_height + gap;
 
     let action_rects = (0..action_count)
         .map(|i| Rect {
             x: inner_x,
-            y: cursor_y + EDITOR_ITEM_HEIGHT * i as f32,
+            y: cursor_y + item_height * i as f32,
             width: inner_width,
-            height: EDITOR_ITEM_HEIGHT,
+            height: item_height,
         })
         .collect();
 
@@ -771,6 +822,10 @@ fn expand(rect: Rect, amount: f32) -> Rect {
 /// vivo** (`editor.name_buffer()`), não o nome real do grupo: é o mesmo
 /// truque do campo de rename de aba (`chrome::paint_rename_field`) --
 /// texto rola dentro do campo mantendo o caret visível, sem quebrar linha.
+/// A largura/raio dos itens de ação e o tamanho de fonte deles reaproveitam
+/// `[appearance.context_menu]` (`item_corner_radius`/`item_padding_x`/
+/// `font_size`) -- `GroupEditor` não tem chave própria pra isso, mesma
+/// anatomia de lista que o menu de contexto.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_group_editor(
     layout: &GroupEditorLayout,
@@ -778,14 +833,31 @@ pub fn paint_group_editor(
     current_color_index: usize,
     is_collapsed: bool,
     tab_count: usize,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
+    let cfg = &config.appearance.group_editor;
+    let menu_cfg = &config.appearance.context_menu;
+    let corner_radius = cfg.corner_radius as f32;
+    let section_font_size = cfg.section_font_size as f32;
+    let input_corner_radius = cfg.input_corner_radius as f32;
+    let input_font_size = cfg.input_font_size as f32;
+    let input_padding_x = cfg.input_padding_x as f32;
+    let swatch_corner_radius = cfg.swatch_corner_radius as f32;
+    let swatch_border_width = cfg.swatch_border_width as f32;
+    let swatch_highlight_pad = cfg.swatch_highlight_pad as f32;
+    let item_radius = menu_cfg.item_corner_radius as f32;
+    let item_padding_x = menu_cfg.item_padding_x as f32;
+    let item_text_size = menu_cfg.font_size as f32;
+
     let mut out = Vec::new();
+    push_shadow(&mut out, layout.popover_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.popover_rect,
-        radius: EDITOR_CORNER_RADIUS,
-        color: palette::POPOVER_BACKGROUND,
-        border_color: palette::POPOVER_BORDER,
+        radius: corner_radius,
+        color: pal.editor_background,
+        border_color: pal.editor_border,
         border_width: 1.0,
     }));
 
@@ -793,39 +865,37 @@ pub fn paint_group_editor(
         origin: layout.name_caption_origin,
         text: EDITOR_SECTION_GROUP_LABEL.to_string(),
         font: TITLE_FONT,
-        size_px: EDITOR_SECTION_FONT_SIZE,
-        color: palette::EDITOR_SECTION_TEXT,
+        size_px: section_font_size,
+        color: pal.editor_section_text,
     }));
     let focused_name = editor.focus() == EditorRegion::Name;
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.name_input_rect,
-        radius: EDITOR_INPUT_CORNER_RADIUS,
-        color: palette::EDITOR_INPUT_BACKGROUND,
+        radius: input_corner_radius,
+        color: pal.editor_input_background,
         border_color: if focused_name {
-            palette::EDITOR_INPUT_BORDER_FOCUS
+            pal.editor_input_border_focus
         } else {
-            palette::EDITOR_INPUT_BORDER
+            pal.editor_input_border
         },
         border_width: 1.0,
     }));
     let buffer = editor.name_buffer();
-    let available_text_width =
-        (layout.name_input_rect.width - EDITOR_INPUT_PADDING_X * 2.0).max(0.0);
-    let text_width = measurer.measure_width(buffer, BODY_FONT, EDITOR_INPUT_FONT_SIZE);
+    let available_text_width = (layout.name_input_rect.width - input_padding_x * 2.0).max(0.0);
+    let text_width = measurer.measure_width(buffer, BODY_FONT, input_font_size);
     let text_x = if text_width > available_text_width {
-        layout.name_input_rect.x + EDITOR_INPUT_PADDING_X - (text_width - available_text_width)
+        layout.name_input_rect.x + input_padding_x - (text_width - available_text_width)
     } else {
-        layout.name_input_rect.x + EDITOR_INPUT_PADDING_X
+        layout.name_input_rect.x + input_padding_x
     };
-    let text_y =
-        layout.name_input_rect.y + (layout.name_input_rect.height - EDITOR_INPUT_FONT_SIZE) / 2.0;
+    let text_y = layout.name_input_rect.y + (layout.name_input_rect.height - input_font_size) / 2.0;
     out.push(Primitive::PushClip(layout.name_input_rect));
     out.push(Primitive::Text(TextRun {
         origin: (text_x, text_y),
         text: buffer.to_string(),
         font: BODY_FONT,
-        size_px: EDITOR_INPUT_FONT_SIZE,
-        color: palette::EDITOR_INPUT_TEXT,
+        size_px: input_font_size,
+        color: pal.editor_input_text,
     }));
     if focused_name {
         let caret_x = (text_x + text_width)
@@ -837,7 +907,7 @@ pub fn paint_group_editor(
                 width: 1.0,
                 height: layout.name_input_rect.height - 8.0,
             },
-            color: palette::EDITOR_INPUT_TEXT,
+            color: pal.editor_input_text,
         }));
     }
     out.push(Primitive::PopClip);
@@ -846,8 +916,8 @@ pub fn paint_group_editor(
         origin: layout.color_caption_origin,
         text: EDITOR_SECTION_COLOR_LABEL.to_string(),
         font: TITLE_FONT,
-        size_px: EDITOR_SECTION_FONT_SIZE,
-        color: palette::EDITOR_SECTION_TEXT,
+        size_px: section_font_size,
+        color: pal.editor_section_text,
     }));
     for (index, color) in GroupColor::ALL.iter().enumerate() {
         let rect = layout.swatch_rects[index];
@@ -855,9 +925,9 @@ pub fn paint_group_editor(
             editor.focus() == EditorRegion::Swatches && editor.swatch_highlight() == index;
         if is_highlighted {
             out.push(Primitive::RoundedQuad(RoundedQuad {
-                rect: expand(rect, EDITOR_SWATCH_HIGHLIGHT_PAD),
-                radius: EDITOR_SWATCH_CORNER_RADIUS + EDITOR_SWATCH_HIGHLIGHT_PAD,
-                color: palette::MENU_ITEM_HOVER,
+                rect: expand(rect, swatch_highlight_pad),
+                radius: swatch_corner_radius + swatch_highlight_pad,
+                color: pal.editor_item_hover_background,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
             }));
@@ -865,20 +935,20 @@ pub fn paint_group_editor(
         let is_current = index == current_color_index;
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect,
-            radius: EDITOR_SWATCH_CORNER_RADIUS,
-            color: palette::group_color(*color),
+            radius: swatch_corner_radius,
+            color: pal.group_color(*color),
             border_color: if is_current {
-                palette::EDITOR_SWATCH_RING
+                pal.editor_swatch_ring
             } else {
                 palette::TRANSPARENT
             },
-            border_width: EDITOR_SWATCH_BORDER_WIDTH,
+            border_width: swatch_border_width,
         }));
     }
 
     out.push(Primitive::Quad(Quad {
         rect: layout.divider_rect,
-        color: palette::EDITOR_DIVIDER,
+        color: pal.editor_divider,
     }));
 
     let items = group_menu::group_action_items(is_collapsed, tab_count);
@@ -892,31 +962,31 @@ pub fn paint_group_editor(
             editor.focus() == EditorRegion::Actions && editor.action_highlight() == i;
         if is_highlighted {
             let hover = if item.destructive {
-                palette::MENU_ITEM_DESTRUCTIVE_HOVER
+                pal.editor_destructive_hover_background
             } else {
-                palette::MENU_ITEM_HOVER
+                pal.editor_item_hover_background
             };
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect,
-                radius: EDITOR_ITEM_RADIUS,
+                radius: item_radius,
                 color: hover,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
             }));
         }
         let text_color = if item.destructive {
-            palette::MENU_ITEM_DESTRUCTIVE_TEXT
+            pal.editor_destructive_foreground
         } else {
-            palette::MENU_ITEM_TEXT
+            pal.editor_item_foreground
         };
         out.push(Primitive::Text(TextRun {
             origin: (
-                rect.x + EDITOR_ITEM_PADDING_X,
-                rect.y + (rect.height - EDITOR_ITEM_TEXT_SIZE) / 2.0,
+                rect.x + item_padding_x,
+                rect.y + (rect.height - item_text_size) / 2.0,
             ),
             text: item.label.clone(),
             font: BODY_FONT,
-            size_px: EDITOR_ITEM_TEXT_SIZE,
+            size_px: item_text_size,
             color: text_color,
         }));
     }
@@ -948,22 +1018,15 @@ pub fn group_editor_hit(layout: &GroupEditorLayout, point: (f32, f32)) -> Option
 }
 
 // ---- popover de destino do tab.move_to_group (RF-2.20, ADR-0023 §4) ----
+// `[appearance.move_to_group]` -- só geometria; cor reaproveita
+// `[appearance.context_menu]` (comentário do TOML: "width = context_menu.
+// width", "row_height = context_menu.item_height").
 
-const MOVE_POPOVER_WIDTH: f32 = MENU_WIDTH;
-const MOVE_ROW_HEIGHT: f32 = MENU_ITEM_HEIGHT;
-/// Teto de linhas visíveis de uma vez -- sem valor de design pra altura
-/// máxima do popover (a espec só fixa isso pro menu comum, que não rola);
-/// 6 é o mesmo "meia dúzia de itens" que a §2.16 usa como referência de
-/// tamanho típico de lista do v1.
-const MOVE_MAX_VISIBLE_ROWS: usize = 6;
-const MOVE_ROW_PADDING_X: f32 = MENU_ITEM_PADDING_X;
-/// Menor que a pílula (§2.4) -- a linha do popover é mais apertada; sem
-/// valor de design próprio, escolha de implementação. A pílula da barra
-/// não tem mais um swatch para comparar (pintada com a cor cheia do
-/// grupo, pedido do usuário); este é o único swatch pequeno que restou.
-const MOVE_SWATCH_SIZE: f32 = 8.0;
-const MOVE_SWATCH_GAP: f32 = 8.0;
 const MOVE_NEW_GROUP_LABEL: &str = "Novo grupo";
+/// Raio do swatch pequeno do popover -- menor que o das outras superfícies
+/// de cor (28px no editor, 6px de raio); sem chave própria, valor de
+/// trabalho já existente antes desta etapa.
+const MOVE_SWATCH_RADIUS: f32 = 2.0;
 
 pub struct MoveToGroupLayout {
     pub popover_rect: Rect,
@@ -979,22 +1042,29 @@ pub struct MoveToGroupLayout {
 /// princípio de `WindowState::ensure_active_tab_visible`.
 pub fn layout_move_to_group(
     popover: &MoveToGroupPopover,
+    config: &porecatu_config::Config,
     window_width: f32,
     window_height: f32,
 ) -> MoveToGroupLayout {
+    let cfg = &config.appearance.move_to_group;
+    let width = cfg.width as f32;
+    let row_height = cfg.row_height as f32;
+    let max_visible_rows = cfg.max_visible_rows as usize;
+    let padding = config.appearance.context_menu.padding as f32;
+
     let total_rows = popover.row_count();
-    let visible_rows = total_rows.min(MOVE_MAX_VISIBLE_ROWS);
+    let visible_rows = total_rows.min(max_visible_rows);
     let max_first = total_rows.saturating_sub(visible_rows);
     let highlighted = popover.highlighted();
     let first_visible_index = highlighted
         .saturating_sub(visible_rows.saturating_sub(1))
         .min(max_first);
 
-    let height = MENU_PADDING * 2.0 + MOVE_ROW_HEIGHT * visible_rows as f32;
+    let height = padding * 2.0 + row_height * visible_rows as f32;
     let mut x = popover.anchor.0;
     let mut y = popover.anchor.1;
-    if x + MOVE_POPOVER_WIDTH > window_width {
-        x = (window_width - MOVE_POPOVER_WIDTH).max(0.0);
+    if x + width > window_width {
+        x = (window_width - width).max(0.0);
     }
     if y + height > window_height {
         y = (window_height - height).max(0.0);
@@ -1002,16 +1072,16 @@ pub fn layout_move_to_group(
     let popover_rect = Rect {
         x,
         y,
-        width: MOVE_POPOVER_WIDTH,
+        width,
         height,
     };
 
     let visible_row_rects = (0..visible_rows)
         .map(|i| Rect {
-            x: popover_rect.x + MENU_PADDING,
-            y: popover_rect.y + MENU_PADDING + MOVE_ROW_HEIGHT * i as f32,
-            width: popover_rect.width - MENU_PADDING * 2.0,
-            height: MOVE_ROW_HEIGHT,
+            x: popover_rect.x + padding,
+            y: popover_rect.y + padding + row_height * i as f32,
+            width: popover_rect.width - padding * 2.0,
+            height: row_height,
         })
         .collect();
 
@@ -1026,14 +1096,25 @@ pub fn paint_move_to_group(
     layout: &MoveToGroupLayout,
     popover: &MoveToGroupPopover,
     workspace: &Workspace,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
+    let move_cfg = &config.appearance.move_to_group;
+    let menu_cfg = &config.appearance.context_menu;
+    let corner_radius = menu_cfg.corner_radius as f32;
+    let item_radius = menu_cfg.item_corner_radius as f32;
+    let row_padding_x = move_cfg.row_padding_x as f32;
+    let swatch_size = move_cfg.swatch_size as f32;
+    let swatch_gap = move_cfg.swatch_gap as f32;
+    let item_text_size = menu_cfg.font_size as f32;
+
     let mut out = Vec::new();
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.popover_rect,
-        radius: 8.0,
-        color: palette::POPOVER_BACKGROUND,
-        border_color: palette::POPOVER_BORDER,
+        radius: corner_radius,
+        color: pal.context_menu_background,
+        border_color: pal.context_menu_border,
         border_width: 1.0,
     }));
     for (visible_i, &rect) in layout.visible_row_rects.iter().enumerate() {
@@ -1041,8 +1122,8 @@ pub fn paint_move_to_group(
         if row_index == popover.highlighted() {
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect,
-                radius: MENU_ITEM_RADIUS,
-                color: palette::MENU_ITEM_HOVER,
+                radius: item_radius,
+                color: pal.menu_item_hover,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
             }));
@@ -1054,17 +1135,17 @@ pub fn paint_move_to_group(
             };
             let color = group
                 .color()
-                .map(palette::group_color)
-                .unwrap_or(palette::UNGROUPED_GROUP_COLOR);
+                .map(|c| pal.group_color(c))
+                .unwrap_or_else(|| pal.ungrouped_group_color());
             let swatch_rect = Rect {
                 x: rect.x,
-                y: rect.y + (rect.height - MOVE_SWATCH_SIZE) / 2.0,
-                width: MOVE_SWATCH_SIZE,
-                height: MOVE_SWATCH_SIZE,
+                y: rect.y + (rect.height - swatch_size) / 2.0,
+                width: swatch_size,
+                height: swatch_size,
             };
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: swatch_rect,
-                radius: 2.0,
+                radius: MOVE_SWATCH_RADIUS,
                 color,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
@@ -1075,49 +1156,45 @@ pub fn paint_move_to_group(
                 tab_bar::PILL_COUNT_FONT,
                 tab_bar::PILL_COUNT_FONT_SIZE,
             );
-            let name_max_width = (rect.width
-                - MOVE_SWATCH_SIZE
-                - MOVE_SWATCH_GAP
-                - MOVE_ROW_PADDING_X
-                - count_width
-                - MOVE_SWATCH_GAP)
-                .max(0.0);
+            let name_max_width =
+                (rect.width - swatch_size - swatch_gap - row_padding_x - count_width - swatch_gap)
+                    .max(0.0);
             let (name, _) = measurer.truncate(
                 group.name().unwrap_or_default(),
                 BODY_FONT,
-                MENU_ITEM_TEXT_SIZE,
+                item_text_size,
                 name_max_width,
             );
             out.push(Primitive::Text(TextRun {
                 origin: (
-                    swatch_rect.x + MOVE_SWATCH_SIZE + MOVE_SWATCH_GAP,
-                    rect.y + (rect.height - MENU_ITEM_TEXT_SIZE) / 2.0,
+                    swatch_rect.x + swatch_size + swatch_gap,
+                    rect.y + (rect.height - item_text_size) / 2.0,
                 ),
                 text: name,
                 font: BODY_FONT,
-                size_px: MENU_ITEM_TEXT_SIZE,
-                color: palette::MENU_ITEM_TEXT,
+                size_px: item_text_size,
+                color: pal.menu_item_text,
             }));
             out.push(Primitive::Text(TextRun {
                 origin: (
-                    rect.x + rect.width - MOVE_ROW_PADDING_X - count_width,
+                    rect.x + rect.width - row_padding_x - count_width,
                     rect.y + (rect.height - tab_bar::PILL_COUNT_FONT_SIZE) / 2.0,
                 ),
                 text: count_text,
                 font: tab_bar::PILL_COUNT_FONT,
                 size_px: tab_bar::PILL_COUNT_FONT_SIZE,
-                color: palette::PILL_COUNT_TEXT,
+                color: pal.pill_count_text,
             }));
         } else {
             out.push(Primitive::Text(TextRun {
                 origin: (
-                    rect.x + MOVE_ROW_PADDING_X,
-                    rect.y + (rect.height - MENU_ITEM_TEXT_SIZE) / 2.0,
+                    rect.x + row_padding_x,
+                    rect.y + (rect.height - item_text_size) / 2.0,
                 ),
                 text: MOVE_NEW_GROUP_LABEL.to_string(),
                 font: BODY_FONT,
-                size_px: MENU_ITEM_TEXT_SIZE,
-                color: palette::MENU_ITEM_TEXT,
+                size_px: item_text_size,
+                color: pal.menu_item_text,
             }));
         }
     }
@@ -1135,34 +1212,38 @@ pub fn move_to_group_hit(layout: &MoveToGroupLayout, point: (f32, f32)) -> Optio
         .map(|i| layout.first_visible_index + i)
 }
 
-// ---- tooltip (espec §2.20, ADR-0019) ----
-
-const TOOLTIP_MAX_WIDTH: f32 = 320.0;
-const TOOLTIP_PADDING_X: f32 = 8.0;
-const TOOLTIP_PADDING_Y: f32 = 7.0;
-const TOOLTIP_TEXT_SIZE: f32 = 11.0;
-const TOOLTIP_GAP: f32 = 6.0;
+// ---- tooltip (espec §2.20, ADR-0019, `[appearance.tooltip]`) ----
 
 pub fn paint_tooltip(
     anchor: Rect,
     text: &str,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
     window_width: f32,
     window_height: f32,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
-    let available = (TOOLTIP_MAX_WIDTH - TOOLTIP_PADDING_X * 2.0).max(0.0);
-    let (label, _) = measurer.truncate(text, BODY_FONT, TOOLTIP_TEXT_SIZE, available);
-    let text_width = measurer.measure_width(&label, BODY_FONT, TOOLTIP_TEXT_SIZE);
-    let width = text_width + TOOLTIP_PADDING_X * 2.0;
-    let height = TOOLTIP_TEXT_SIZE + TOOLTIP_PADDING_Y * 2.0;
+    let cfg = &config.appearance.tooltip;
+    let max_width = cfg.max_width as f32;
+    let padding_x = cfg.padding_x as f32;
+    let padding_y = cfg.padding_y as f32;
+    let text_size = cfg.font_size as f32;
+    let gap = cfg.gap as f32;
+    let corner_radius = cfg.corner_radius as f32;
+
+    let available = (max_width - padding_x * 2.0).max(0.0);
+    let (label, _) = measurer.truncate(text, BODY_FONT, text_size, available);
+    let text_width = measurer.measure_width(&label, BODY_FONT, text_size);
+    let width = text_width + padding_x * 2.0;
+    let height = text_size + padding_y * 2.0;
 
     let mut x = anchor.x;
-    let mut y = anchor.y + anchor.height + TOOLTIP_GAP;
+    let mut y = anchor.y + anchor.height + gap;
     if x + width > window_width {
         x = (window_width - width).max(0.0);
     }
     if y + height > window_height {
-        y = anchor.y - TOOLTIP_GAP - height;
+        y = anchor.y - gap - height;
     }
     let rect = Rect {
         x,
@@ -1171,20 +1252,21 @@ pub fn paint_tooltip(
         height,
     };
 
-    vec![
-        Primitive::RoundedQuad(RoundedQuad {
-            rect,
-            radius: 6.0,
-            color: palette::POPOVER_BACKGROUND,
-            border_color: palette::POPOVER_BORDER,
-            border_width: 1.0,
-        }),
-        Primitive::Text(TextRun {
-            origin: (rect.x + TOOLTIP_PADDING_X, rect.y + TOOLTIP_PADDING_Y),
-            text: label,
-            font: BODY_FONT,
-            size_px: TOOLTIP_TEXT_SIZE,
-            color: palette::TOOLTIP_TEXT,
-        }),
-    ]
+    let mut out = Vec::new();
+    push_shadow(&mut out, rect, corner_radius);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: corner_radius,
+        color: pal.tooltip_background,
+        border_color: pal.tooltip_border,
+        border_width: 1.0,
+    }));
+    out.push(Primitive::Text(TextRun {
+        origin: (rect.x + padding_x, rect.y + padding_y),
+        text: label,
+        font: BODY_FONT,
+        size_px: text_size,
+        color: pal.tooltip_text,
+    }));
+    out
 }

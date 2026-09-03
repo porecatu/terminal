@@ -16,7 +16,7 @@ use glyphon::{
 
 use crate::frame::{Layer, ResolvedText};
 use crate::primitives::scale_rect;
-use crate::text_measurer::attrs_for;
+use crate::text_measurer::{FontFamilies, attrs_for};
 
 fn color_to_cosmic(color: wgpu::Color) -> glyphon::Color {
     glyphon::Color::rgba(
@@ -76,6 +76,7 @@ impl TextWindowState {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         font_system: &mut FontSystem,
+        families: &FontFamilies,
         atlas: &mut TextAtlas,
         swash_cache: &mut SwashCache,
         viewport: &Viewport,
@@ -93,7 +94,12 @@ impl TextWindowState {
             // Sem limite de largura: cada `TextRun` é um trecho de mesmo
             // estilo numa linha só, não algo que deva quebrar.
             buffer.set_size(None, None);
-            let attrs = attrs_for(item.run.font);
+            // `size_px` (físico, já escalado) -- a mesma unidade em que
+            // `attrs_for` espera `letter_spacing` (RF-5.6): tem de casar com
+            // o que rasteriza, não com o `size_px` lógico que mediu a
+            // célula (`WindowSurface` é a única fronteira lógico->físico,
+            // ADR-0018, e `letter_spacing` reescala linearmente com ela).
+            let attrs = attrs_for(item.run.font, families, size_px);
             buffer.set_text(&item.run.text, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(font_system, false);
             state.buffers.push(buffer);

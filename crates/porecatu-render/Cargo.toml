@@ -14,3 +14,8 @@ bytemuck = { version = "1", features = ["derive"] }
 glyphon = "0.12.0"
 pollster = "1.0.1"
 wgpu = "=30.0.1"
+# Só para nomear `Script` na assinatura de `cosmic_text::Fallback` (via
+# `glyphon::cosmic_text`) -- já é dependência transitiva de `glyphon`/
+# `cosmic-text`, então não puxa nada novo pra árvore. Licença MIT/Apache-2.0,
+# compatível com a GPLv3 (ADR-0010).
+unicode-script = "0.5"

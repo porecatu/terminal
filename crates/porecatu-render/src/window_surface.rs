@@ -91,11 +91,13 @@ impl WindowSurface {
                 self.config.width,
                 self.config.height,
             );
+            let (font_system, families) = gpu.text_measurer.font_system_and_families_mut();
             self.text_state.prepare_layer(
                 layer,
                 &gpu.device,
                 &gpu.queue,
-                gpu.text_measurer.font_system_mut(),
+                font_system,
+                families,
                 &mut gpu.text_atlas,
                 &mut gpu.swash_cache,
                 &self.viewport,

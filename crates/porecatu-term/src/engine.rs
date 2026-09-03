@@ -12,7 +12,9 @@ use alacritty_terminal::term::cell::Flags as AlacFlags;
 use alacritty_terminal::term::{
     ClipboardType, Config as AlacConfig, Osc52, point_to_viewport, viewport_to_point,
 };
-use alacritty_terminal::vte::ansi::{CursorShape as AnsiCursorShape, Processor, Rgb as AnsiRgb};
+use alacritty_terminal::vte::ansi::{
+    CursorShape as AnsiCursorShape, CursorStyle as AnsiCursorStyle, Processor, Rgb as AnsiRgb,
+};
 
 use crate::event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 use crate::osc7::Osc7Watcher;
@@ -153,6 +155,10 @@ impl TermEngine {
         let config = AlacConfig {
             scrolling_history: params.scrollback_lines,
             semantic_escape_chars: params.word_separators,
+            default_cursor_style: AnsiCursorStyle {
+                shape: ansi_cursor_shape(params.default_cursor_shape),
+                blinking: params.cursor_blinking,
+            },
             osc52: osc52_mode(params.osc52_read, params.osc52_write),
             ..Default::default()
         };
@@ -351,6 +357,20 @@ fn convert_cursor_shape(shape: AnsiCursorShape) -> CursorShape {
         AnsiCursorShape::Beam => CursorShape::Beam,
         AnsiCursorShape::HollowBlock => CursorShape::HollowBlock,
         AnsiCursorShape::Hidden => CursorShape::Hidden,
+    }
+}
+
+/// Sentido inverso de [`convert_cursor_shape`] -- `TermParams::
+/// default_cursor_shape` (RF-5.22) vira o `default_cursor_style.shape` que
+/// `Term::cursor_style()` devolve quando nenhum DECSCUSR está em vigor
+/// (`self.cursor_style` é `None`, ver `alacritty_terminal::Term`).
+fn ansi_cursor_shape(shape: CursorShape) -> AnsiCursorShape {
+    match shape {
+        CursorShape::Block => AnsiCursorShape::Block,
+        CursorShape::Underline => AnsiCursorShape::Underline,
+        CursorShape::Beam => AnsiCursorShape::Beam,
+        CursorShape::HollowBlock => AnsiCursorShape::HollowBlock,
+        CursorShape::Hidden => AnsiCursorShape::Hidden,
     }
 }
 

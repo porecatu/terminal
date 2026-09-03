@@ -12,18 +12,17 @@
 
 use winit::window::ResizeDirection;
 
-/// Espessura da zona de resize em cada borda da janela, em pixels lógicos.
-/// Não vem de nenhum token de design (a espec nunca cobriu resize sem
-/// decoração nativa, era `[v2]` até o ADR-0027) -- 6px é o valor comum em
-/// apps sem decoração (Electron/Chromium), ponto de partida razoável, não
-/// medido.
-pub const RESIZE_BORDER_PX: f32 = 6.0;
-
 /// Qual borda/canto da janela um ponto em coordenadas lógicas de janela
 /// atinge, se algum. `None` fora de toda borda -- inclusive dentro da
 /// barra de abas, mas isto não filtra por `y` da barra: quem chama decide
 /// se o ponto está numa região onde resize faz sentido (ex.: não checar
 /// isto para pontos dentro de um botão da barra).
+///
+/// `resize_border_px`: `[appearance.window_controls] resize_border` --
+/// espessura da zona de resize em cada borda, em pixels lógicos. Não vem
+/// de nenhum token de design (a espec nunca cobriu resize sem decoração
+/// nativa, era `[v2]` até o ADR-0027) -- 6px é o valor comum em apps sem
+/// decoração (Electron/Chromium), ponto de partida razoável, não medido.
 ///
 /// Janela maximizada nunca tem borda de resize, em nenhuma plataforma --
 /// `is_maximized` desliga a função inteira.
@@ -32,15 +31,16 @@ pub fn resize_direction_at(
     window_width: f32,
     window_height: f32,
     is_maximized: bool,
+    resize_border_px: f32,
 ) -> Option<ResizeDirection> {
     if is_maximized {
         return None;
     }
     let (x, y) = point;
-    let left = x < RESIZE_BORDER_PX;
-    let right = x > window_width - RESIZE_BORDER_PX;
-    let top = y < RESIZE_BORDER_PX;
-    let bottom = y > window_height - RESIZE_BORDER_PX;
+    let left = x < resize_border_px;
+    let right = x > window_width - resize_border_px;
+    let top = y < resize_border_px;
+    let bottom = y > window_height - resize_border_px;
     match (top, bottom, left, right) {
         (true, _, true, _) => Some(ResizeDirection::NorthWest),
         (true, _, _, true) => Some(ResizeDirection::NorthEast),
@@ -60,34 +60,39 @@ mod tests {
 
     const W: f32 = 800.0;
     const H: f32 = 600.0;
+    /// `[appearance.window_controls] resize_border`, default do TOML.
+    const BORDER: f32 = 6.0;
 
     #[test]
     fn point_away_from_every_border_is_none() {
-        assert_eq!(resize_direction_at((400.0, 300.0), W, H, false), None);
+        assert_eq!(
+            resize_direction_at((400.0, 300.0), W, H, false, BORDER),
+            None
+        );
     }
 
     #[test]
     fn maximized_window_has_no_resize_border() {
-        assert_eq!(resize_direction_at((0.0, 0.0), W, H, true), None);
-        assert_eq!(resize_direction_at((W, H), W, H, true), None);
+        assert_eq!(resize_direction_at((0.0, 0.0), W, H, true, BORDER), None);
+        assert_eq!(resize_direction_at((W, H), W, H, true, BORDER), None);
     }
 
     #[test]
     fn each_straight_edge_resolves_to_its_direction() {
         assert_eq!(
-            resize_direction_at((400.0, 0.0), W, H, false),
+            resize_direction_at((400.0, 0.0), W, H, false, BORDER),
             Some(ResizeDirection::North)
         );
         assert_eq!(
-            resize_direction_at((400.0, H), W, H, false),
+            resize_direction_at((400.0, H), W, H, false, BORDER),
             Some(ResizeDirection::South)
         );
         assert_eq!(
-            resize_direction_at((0.0, 300.0), W, H, false),
+            resize_direction_at((0.0, 300.0), W, H, false, BORDER),
             Some(ResizeDirection::West)
         );
         assert_eq!(
-            resize_direction_at((W, 300.0), W, H, false),
+            resize_direction_at((W, 300.0), W, H, false, BORDER),
             Some(ResizeDirection::East)
         );
     }
@@ -95,19 +100,19 @@ mod tests {
     #[test]
     fn corners_take_priority_over_the_straight_edge() {
         assert_eq!(
-            resize_direction_at((0.0, 0.0), W, H, false),
+            resize_direction_at((0.0, 0.0), W, H, false, BORDER),
             Some(ResizeDirection::NorthWest)
         );
         assert_eq!(
-            resize_direction_at((W, 0.0), W, H, false),
+            resize_direction_at((W, 0.0), W, H, false, BORDER),
             Some(ResizeDirection::NorthEast)
         );
         assert_eq!(
-            resize_direction_at((0.0, H), W, H, false),
+            resize_direction_at((0.0, H), W, H, false, BORDER),
             Some(ResizeDirection::SouthWest)
         );
         assert_eq!(
-            resize_direction_at((W, H), W, H, false),
+            resize_direction_at((W, H), W, H, false, BORDER),
             Some(ResizeDirection::SouthEast)
         );
     }
@@ -117,9 +122,9 @@ mod tests {
         // largura/altura menor que o dobro da borda -- as faixas de borda
         // se sobrepõem, mas a função não deve entrar em pânico nem
         // devolver algo fora do enum.
-        let tiny = RESIZE_BORDER_PX; // == largura/altura da janela
+        let tiny = BORDER; // == largura/altura da janela
         assert_eq!(
-            resize_direction_at((0.0, 0.0), tiny, tiny, false),
+            resize_direction_at((0.0, 0.0), tiny, tiny, false, BORDER),
             Some(ResizeDirection::NorthWest)
         );
     }

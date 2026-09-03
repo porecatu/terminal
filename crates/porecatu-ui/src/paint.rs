@@ -22,16 +22,30 @@
 //! ASCII continua sendo um run só.
 
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun};
-use porecatu_term::{Cell, CellFlags, CellText, GridSnapshot, SelectionSpan};
+use porecatu_term::{Cell, CellFlags, CellText, CursorShape, GridSnapshot, SelectionSpan};
 
 use crate::chrome::push_shadow;
-use crate::palette;
+use crate::palette::{ResolvedTermPalette, TRANSPARENT};
 use crate::tab_bar::TabBarStyle;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CellMetrics {
     pub width: f32,
     pub height: f32,
+}
+
+/// Cursor já resolvido por `lib.rs` -- cor (`[terminal.colors] cursor`, ou a
+/// cor do grupo da aba ativa se `follows_group_color`, RF-5.22 comentário),
+/// espessura de traço (`[terminal.cursor] width`, usada por beam/underline/
+/// contorno do bloco vazado) e se o formato bloco deve sair vazado
+/// (`unfocused_hollow`, RF-5.24: janela sem foco). `paint.rs` não conhece
+/// `Workspace` nem foco de janela -- por isso a decisão chega já tomada,
+/// não como `&Config`.
+#[derive(Debug, Clone, Copy)]
+pub struct CursorAppearance {
+    pub color: Color,
+    pub width: f32,
+    pub hollow: bool,
 }
 
 /// Altura do cursor bloco, em fração de `font_size_px` -- **não**
@@ -51,77 +65,86 @@ pub struct CellMetrics {
 /// ali, não no meio da folga que o line-height de 1.75 reserva embaixo.
 const CURSOR_HEIGHT_RATIO: f32 = 1.2;
 
-/// Respiro entre a borda do quadro (janela) e o box arredondado do
-/// terminal -- pedido do usuário, "mesmo espaço que tem entre as abas e a
-/// borda da trilha do topo do app", ou seja o mesmo `trilha_padding` da
-/// barra (§2.2/§2.5), não um valor novo. **Só nos três lados que não
+/// Retângulo do box arredondado do terminal: a área abaixo da barra
+/// (`bar_height`), colado nela em cima e recuado por
+/// `style.terminal_frame_margin` (`[appearance.terminal_frame] margin`) nos
+/// outros três lados -- pedido do usuário, "mesmo espaço que tem entre as
+/// abas e a borda da trilha do topo do app". **Só nos três lados que não
 /// encostam na barra** (esquerda, direita, base): em cima o box começa
 /// colado em `bar_height`, sem gap -- um gap ali é uma linha visível entre
-/// a trilha e o terminal, pedido do usuário para eliminar (antes desenhava
-/// a margem nos quatro lados).
-pub const TERMINAL_BOX_MARGIN: f32 = TabBarStyle::DEFAULT.trilha_padding;
-/// Padding extra **dentro** do box, entre a borda dele e a grade em si, nos
-/// quatro lados -- pedido do usuário ("mais um padding antes do bloco
-/// interno"), dobrado a pedido do usuário na revisão seguinte. Base:
-/// `wrapper_padding` (§2.3), no mesmo espírito de `TERMINAL_BOX_MARGIN`:
-/// nada de valor novo, só multiplicado pelo fator que o usuário pediu.
-pub const TERMINAL_BOX_PADDING: f32 = TabBarStyle::DEFAULT.wrapper_padding * 2.0;
-/// Espec §2.5: "raio 6" -- o mesmo raio das abas ("os blocos das abas"),
-/// pedido do usuário para o box do terminal.
-pub const TERMINAL_BOX_CORNER_RADIUS: f32 = 6.0;
-
-/// Retângulo do box arredondado do terminal: a área abaixo da barra
-/// (`bar_height`), colado nela em cima e recuado por [`TERMINAL_BOX_MARGIN`]
-/// nos outros três lados.
-pub fn terminal_box_rect(bar_height: f32, logical_width: f32, logical_height: f32) -> Rect {
+/// a trilha e o terminal, pedido do usuário para eliminar.
+pub fn terminal_box_rect(
+    style: &TabBarStyle,
+    bar_height: f32,
+    logical_width: f32,
+    logical_height: f32,
+) -> Rect {
+    let margin = style.terminal_frame_margin;
     Rect {
-        x: TERMINAL_BOX_MARGIN,
+        x: margin,
         y: bar_height,
-        width: (logical_width - TERMINAL_BOX_MARGIN * 2.0).max(0.0),
-        height: (logical_height - bar_height - TERMINAL_BOX_MARGIN).max(0.0),
+        width: (logical_width - margin * 2.0).max(0.0),
+        height: (logical_height - bar_height - margin).max(0.0),
     }
 }
 
 /// Retângulo onde a grade em si é desenhada: [`terminal_box_rect`] recuado
-/// por [`TERMINAL_BOX_PADDING`] nos quatro lados -- fonte única para
-/// `build_primitives` e para quem precisa saber onde a grade começa/termina
-/// fora dele (`grid_size`/`cell_at_cursor` em `lib.rs`), pra não duplicar a
-/// conta em dois lugares (a mesma fórmula copiada em dois lugares é a
-/// armadilha registrada em `chrome::bar_height`).
-pub fn terminal_content_rect(bar_height: f32, logical_width: f32, logical_height: f32) -> Rect {
-    let box_rect = terminal_box_rect(bar_height, logical_width, logical_height);
+/// por `style.terminal_frame_padding` (`[appearance.terminal_frame]
+/// padding`) nos quatro lados -- fonte única para `build_primitives` e para
+/// quem precisa saber onde a grade começa/termina fora dele
+/// (`grid_size`/`cell_at_cursor` em `lib.rs`), pra não duplicar a conta em
+/// dois lugares (a mesma fórmula copiada em dois lugares é a armadilha
+/// registrada em `chrome::bar_height`).
+pub fn terminal_content_rect(
+    style: &TabBarStyle,
+    bar_height: f32,
+    logical_width: f32,
+    logical_height: f32,
+) -> Rect {
+    let box_rect = terminal_box_rect(style, bar_height, logical_width, logical_height);
+    let padding = style.terminal_frame_padding;
     Rect {
-        x: box_rect.x + TERMINAL_BOX_PADDING,
-        y: box_rect.y + TERMINAL_BOX_PADDING,
-        width: (box_rect.width - TERMINAL_BOX_PADDING * 2.0).max(0.0),
-        height: (box_rect.height - TERMINAL_BOX_PADDING * 2.0).max(0.0),
+        x: box_rect.x + padding,
+        y: box_rect.y + padding,
+        width: (box_rect.width - padding * 2.0).max(0.0),
+        height: (box_rect.height - padding * 2.0).max(0.0),
     }
 }
 
 /// Constrói as primitivas do box arredondado do terminal e da grade lá
 /// dentro. `box_rect`: [`terminal_box_rect`] -- a grade começa
-/// [`TERMINAL_BOX_PADDING`] adiante da borda do box, nos dois eixos.
+/// `style.terminal_frame_padding` adiante da borda do box, nos dois eixos.
+#[allow(clippy::too_many_arguments)]
 pub fn build_primitives(
     snapshot: &GridSnapshot,
     metrics: CellMetrics,
     font_size_px: f32,
     box_rect: Rect,
+    style: &TabBarStyle,
+    term_pal: &ResolvedTermPalette,
+    cursor: CursorAppearance,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
 
-    push_shadow(&mut primitives, box_rect, TERMINAL_BOX_CORNER_RADIUS);
+    if style.terminal_frame_shadow_enabled {
+        push_shadow(
+            &mut primitives,
+            box_rect,
+            style.terminal_frame_corner_radius,
+        );
+    }
     primitives.push(Primitive::RoundedQuad(RoundedQuad {
         rect: box_rect,
-        radius: TERMINAL_BOX_CORNER_RADIUS,
-        color: palette::TERM_BACKGROUND,
-        border_color: palette::TRANSPARENT,
+        radius: style.terminal_frame_corner_radius,
+        color: term_pal.background,
+        border_color: TRANSPARENT,
         border_width: 0.0,
     }));
 
-    let x_offset = box_rect.x + TERMINAL_BOX_PADDING;
-    let y_offset = box_rect.y + TERMINAL_BOX_PADDING;
+    let x_offset = box_rect.x + style.terminal_frame_padding;
+    let y_offset = box_rect.y + style.terminal_frame_padding;
 
     for row in 0..snapshot.rows {
         let row_y = y_offset + row as f32 * metrics.height;
@@ -132,6 +155,7 @@ pub fn build_primitives(
             x_offset,
             row_y,
             metrics,
+            term_pal,
             &mut primitives,
         );
         paint_row_text(
@@ -142,6 +166,7 @@ pub fn build_primitives(
             row_y,
             metrics,
             font_size_px,
+            term_pal,
             measurer,
             &mut primitives,
         );
@@ -150,28 +175,70 @@ pub fn build_primitives(
     if let Some((row, col)) = snapshot.cursor.position
         && snapshot.cursor.visible
     {
+        // Sem centralizar em `metrics.height`: o glyph não ocupa a linha
+        // inteira (ela tem `line_height` de folga, toda embaixo). `text.rs`
+        // monta o buffer do glyph com `Metrics::new(size_px, size_px *
+        // 1.2)` -- a caixa do texto começa em `row_y`, não no meio da linha
+        // -- e é esse `1.2` que `CURSOR_HEIGHT_RATIO` replica.
         let cursor_height = font_size_px * CURSOR_HEIGHT_RATIO;
         let row_y = y_offset + row as f32 * metrics.height;
-        primitives.push(Primitive::Quad(Quad {
-            rect: Rect {
-                x: x_offset + col as f32 * metrics.width,
-                // Sem centralizar em `metrics.height`: o glyph não ocupa a
-                // linha inteira (ela tem `LINE_HEIGHT_MULTIPLIER` de folga,
-                // toda embaixo). `text.rs` monta o buffer do glyph com
-                // `Metrics::new(size_px, size_px * 1.2)` -- a caixa do
-                // texto começa em `row_y`, não no meio da linha -- e é
-                // esse `1.2` que `CURSOR_HEIGHT_RATIO` replica.
+        let cell_x = x_offset + col as f32 * metrics.width;
+        primitives.push(cursor_primitive(
+            snapshot.cursor.shape,
+            cursor,
+            Rect {
+                x: cell_x,
                 y: row_y,
                 width: metrics.width,
                 height: cursor_height,
             },
-            color: palette::TERM_CURSOR,
-        }));
+        ));
     }
 
     primitives
 }
 
+/// Formato do cursor (`snapshot.cursor.shape`, RF-5.22/RF-5.25 -- DECSCUSR
+/// do programa já venceu o default da config dentro do motor, ver
+/// `porecatu-term::TermEngine`) sobre a célula `cell_rect`. `Hidden` nunca
+/// chega aqui -- `build_primitives` só chama isto com `snapshot.cursor.
+/// visible`, e `visible` é `shape != Hidden` (`porecatu-term::engine`).
+fn cursor_primitive(shape: CursorShape, cursor: CursorAppearance, cell_rect: Rect) -> Primitive {
+    // `HollowBlock` é o que o próprio DECSCUSR pode pedir (motor completo,
+    // mesmo sem uso hoje) -- vazado independente de `cursor.hollow`
+    // (RF-5.24 é só o efeito de "sem foco" sobre a forma configurada).
+    match shape {
+        CursorShape::Hidden => unreachable!("chamado só com `visible == true`"),
+        CursorShape::Block if !cursor.hollow => Primitive::Quad(Quad {
+            rect: cell_rect,
+            color: cursor.color,
+        }),
+        CursorShape::Block | CursorShape::HollowBlock => Primitive::RoundedQuad(RoundedQuad {
+            rect: cell_rect,
+            radius: 0.0,
+            color: TRANSPARENT,
+            border_color: cursor.color,
+            border_width: cursor.width,
+        }),
+        CursorShape::Beam => Primitive::Quad(Quad {
+            rect: Rect {
+                width: cursor.width,
+                ..cell_rect
+            },
+            color: cursor.color,
+        }),
+        CursorShape::Underline => Primitive::Quad(Quad {
+            rect: Rect {
+                y: cell_rect.y + cell_rect.height - cursor.width,
+                height: cursor.width,
+                ..cell_rect
+            },
+            color: cursor.color,
+        }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn paint_row_backgrounds(
     snapshot: &GridSnapshot,
     row: usize,
@@ -179,13 +246,14 @@ fn paint_row_backgrounds(
     x_offset: f32,
     row_y: f32,
     metrics: CellMetrics,
+    term_pal: &ResolvedTermPalette,
     out: &mut Vec<Primitive>,
 ) {
     for col in 0..cols {
         let cell = &snapshot.cells[row * cols + col];
         let selected = is_selected(snapshot.selection, row, col);
-        let (_, bg) = resolved_colors(cell, selected);
-        if bg != palette::TERM_BACKGROUND {
+        let (_, bg) = resolved_colors(cell, selected, term_pal);
+        if bg != term_pal.background {
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
                     x: x_offset + col as f32 * metrics.width,
@@ -254,6 +322,7 @@ fn paint_row_text(
     row_y: f32,
     metrics: CellMetrics,
     font_size_px: f32,
+    term_pal: &ResolvedTermPalette,
     measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
@@ -266,7 +335,7 @@ fn paint_row_text(
         }
 
         let selected = is_selected(snapshot.selection, row, col);
-        let (fg, _) = resolved_colors(cell, selected);
+        let (fg, _) = resolved_colors(cell, selected, term_pal);
         let bold = cell.flags.contains(CellFlags::BOLD);
 
         // Caractere que não avança o que a grade reservou sai sozinho,
@@ -301,7 +370,7 @@ fn paint_row_text(
                 continue;
             }
             let cell_selected = is_selected(snapshot.selection, row, col);
-            let (cell_fg, _) = resolved_colors(cell, cell_selected);
+            let (cell_fg, _) = resolved_colors(cell, cell_selected, term_pal);
             let cell_bold = cell.flags.contains(CellFlags::BOLD);
             if cell_fg != fg || cell_bold != bold {
                 break;
@@ -386,30 +455,18 @@ fn is_selected(selection: Option<SelectionSpan>, row: usize, col: usize) -> bool
     true // linha inteira entre a primeira e a última da seleção
 }
 
-fn resolved_colors(cell: &Cell, selected: bool) -> (Color, Color) {
+fn resolved_colors(cell: &Cell, selected: bool, term_pal: &ResolvedTermPalette) -> (Color, Color) {
     if selected {
         // Seleção domina a cor da célula -- não combina com `INVERSE`
         // nem com a cor original; é o mesmo comportamento da maioria dos
         // terminais (destaque uniforme, independente do que estava sob
         // ele).
-        return (
-            palette::TERM_SELECTION_FOREGROUND,
-            palette::TERM_SELECTION_BACKGROUND,
-        );
+        return (term_pal.selection_foreground, term_pal.selection_background);
     }
 
-    let mut fg = palette::resolve(
-        cell.fg,
-        palette::TERM_FOREGROUND,
-        palette::TERM_BACKGROUND,
-        true,
-    );
-    let mut bg = palette::resolve(
-        cell.bg,
-        palette::TERM_FOREGROUND,
-        palette::TERM_BACKGROUND,
-        false,
-    );
+    let bold = cell.flags.contains(CellFlags::BOLD);
+    let mut fg = term_pal.resolve(cell.fg, true, bold);
+    let mut bg = term_pal.resolve(cell.bg, false, bold);
     if cell.flags.contains(CellFlags::INVERSE) {
         std::mem::swap(&mut fg, &mut bg);
     }
@@ -464,14 +521,26 @@ mod tests {
     /// célula no caso comum.
     /// Retângulo de teste do box do terminal -- grande o bastante para não
     /// recortar nada, com origem em (0, 0) para que o `x_offset`/`y_offset`
-    /// resultante seja só [`TERMINAL_BOX_PADDING`], sem o `TERMINAL_BOX_MARGIN`
-    /// (já descontado por quem monta `box_rect` em runtime).
+    /// resultante seja só `style.terminal_frame_padding`, sem a margem
+    /// (já descontada por quem monta `box_rect` em runtime).
     fn test_box_rect() -> Rect {
         Rect {
             x: 0.0,
             y: 0.0,
             width: 1000.0,
             height: 1000.0,
+        }
+    }
+
+    fn test_term_pal() -> ResolvedTermPalette {
+        ResolvedTermPalette::from_config(&porecatu_config::Config::default())
+    }
+
+    fn test_cursor() -> CursorAppearance {
+        CursorAppearance {
+            color: TRANSPARENT,
+            width: 7.0,
+            hollow: false,
         }
     }
 
@@ -484,6 +553,9 @@ mod tests {
             cell,
             SIZE,
             test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            test_cursor(),
             &mut m,
         );
         let runs = runs(&out);
@@ -514,6 +586,9 @@ mod tests {
                 cell,
                 SIZE,
                 test_box_rect(),
+                &TabBarStyle::DEFAULT,
+                &test_term_pal(),
+                test_cursor(),
                 &mut m,
             );
             let runs = runs(&out);
@@ -539,6 +614,9 @@ mod tests {
             cell(&mut porecatu_render::TextMeasurer::new()),
             SIZE,
             test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            test_cursor(),
             &mut m,
         );
         assert_eq!(runs(&out).len(), 1);
@@ -559,25 +637,29 @@ mod tests {
             cell,
             SIZE,
             test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            test_cursor(),
             &mut m,
         );
         let runs = runs(&out);
         assert_eq!(runs.len(), 3, "esperava tres runs, veio {runs:?}");
 
+        let padding = TabBarStyle::DEFAULT.terminal_frame_padding;
         assert_eq!(runs[0].1, "ab");
-        assert_eq!(runs[0].0, TERMINAL_BOX_PADDING);
+        assert_eq!(runs[0].0, padding);
 
         assert_eq!(runs[1].1, "\u{1F600}");
         assert_eq!(
             runs[1].0,
-            TERMINAL_BOX_PADDING + 2.0 * cell.width,
+            padding + 2.0 * cell.width,
             "glyph de fallback fora da celula dele"
         );
 
         assert_eq!(runs[2].1, "cd");
         assert_eq!(
             runs[2].0,
-            TERMINAL_BOX_PADDING + 3.0 * cell.width,
+            padding + 3.0 * cell.width,
             "texto depois do fallback saiu da grade"
         );
     }
@@ -589,7 +671,16 @@ mod tests {
     fn fallback_char_is_shrunk_to_fit_its_cell() {
         let mut m = porecatu_render::TextMeasurer::new();
         let cell = cell(&mut m);
-        let out = build_primitives(&snapshot("\u{1F600}"), cell, SIZE, test_box_rect(), &mut m);
+        let out = build_primitives(
+            &snapshot("\u{1F600}"),
+            cell,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            test_cursor(),
+            &mut m,
+        );
         let runs = runs(&out);
         assert_eq!(runs.len(), 1);
         let size = runs[0].2;
@@ -602,5 +693,132 @@ mod tests {
             "glyph de fallback com {width} numa celula de {}",
             cell.width
         );
+    }
+
+    fn snapshot_with_cursor(shape: CursorShape) -> GridSnapshot {
+        let mut snap = snapshot("x");
+        snap.cursor = porecatu_term::Cursor {
+            position: Some((0, 0)),
+            shape,
+            visible: true,
+        };
+        snap
+    }
+
+    fn cursor_primitives(snapshot: &GridSnapshot, cursor: CursorAppearance) -> Vec<Primitive> {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell = cell(&mut m);
+        build_primitives(
+            snapshot,
+            cell,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            cursor,
+            &mut m,
+        )
+    }
+
+    /// RF-5.22: formato bloco, com foco, é um `Quad` preenchido cobrindo a
+    /// célula inteira -- o desenho de sempre, sem regressão.
+    #[test]
+    fn block_cursor_focused_is_a_filled_quad() {
+        let out = cursor_primitives(
+            &snapshot_with_cursor(CursorShape::Block),
+            CursorAppearance {
+                color: TRANSPARENT,
+                width: 7.0,
+                hollow: false,
+            },
+        );
+        assert!(matches!(out.last(), Some(Primitive::Quad(_))));
+    }
+
+    /// RF-5.24: sem foco e `unfocused_hollow` ligado, o bloco sai vazado --
+    /// contorno, não preenchimento.
+    #[test]
+    fn block_cursor_hollow_is_an_outlined_rounded_quad() {
+        let out = cursor_primitives(
+            &snapshot_with_cursor(CursorShape::Block),
+            CursorAppearance {
+                color: TRANSPARENT,
+                width: 7.0,
+                hollow: true,
+            },
+        );
+        match out.last() {
+            Some(Primitive::RoundedQuad(q)) => {
+                assert_eq!(q.border_width, 7.0);
+                assert_eq!(q.color, TRANSPARENT);
+            }
+            other => panic!("esperava RoundedQuad vazado, veio {other:?}"),
+        }
+    }
+
+    /// RF-5.22: DECSCUSR pedindo `HollowBlock` sai vazado mesmo com a
+    /// janela em foco -- `hollow: false` não sobrepõe o formato do motor.
+    #[test]
+    fn decscusr_hollow_block_is_outlined_even_when_focused() {
+        let out = cursor_primitives(
+            &snapshot_with_cursor(CursorShape::HollowBlock),
+            CursorAppearance {
+                color: TRANSPARENT,
+                width: 7.0,
+                hollow: false,
+            },
+        );
+        assert!(matches!(out.last(), Some(Primitive::RoundedQuad(_))));
+    }
+
+    /// RF-5.22: barra vertical usa `cursor.width` como largura do traço, não
+    /// a largura da célula inteira.
+    #[test]
+    fn beam_cursor_uses_configured_stroke_width() {
+        let out = cursor_primitives(
+            &snapshot_with_cursor(CursorShape::Beam),
+            CursorAppearance {
+                color: TRANSPARENT,
+                width: 3.0,
+                hollow: false,
+            },
+        );
+        match out.last() {
+            Some(Primitive::Quad(q)) => assert_eq!(q.rect.width, 3.0),
+            other => panic!("esperava Quad da barra, veio {other:?}"),
+        }
+    }
+
+    /// RF-5.22: sublinhado usa `cursor.width` como altura do traço, colado
+    /// na base da célula.
+    #[test]
+    fn underline_cursor_sits_at_the_bottom_of_the_cell() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell = cell(&mut m);
+        let out = build_primitives(
+            &snapshot_with_cursor(CursorShape::Underline),
+            cell,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            CursorAppearance {
+                color: TRANSPARENT,
+                width: 2.0,
+                hollow: false,
+            },
+            &mut m,
+        );
+        let cursor_height = SIZE * CURSOR_HEIGHT_RATIO;
+        match out.last() {
+            Some(Primitive::Quad(q)) => {
+                assert_eq!(q.rect.height, 2.0);
+                assert_eq!(
+                    q.rect.y,
+                    TabBarStyle::DEFAULT.terminal_frame_padding + cursor_height - 2.0
+                );
+            }
+            other => panic!("esperava Quad do sublinhado, veio {other:?}"),
+        }
     }
 }

@@ -3,13 +3,13 @@
 Obrigado pelo interesse. Este documento reúne as convenções que já estão
 decididas, para que ninguém precise garimpá-las nos ADRs.
 
-> **Estado atual: F0, F1, F2 e F3 fechadas**; a próxima é a F4
-> (configuração), com os ADR-0029 a 0031 já escritos. `cargo run` abre uma janela
-> com abas e grupos de terminal funcionais, seleção múltipla, editor de grupo,
-> arraste entre grupos, menu de contexto, tooltip, aviso, diálogo de confirmação
-> e uma segunda janela por atalho. Não há arquivo de configuração nem sessão
-> persistente ainda. As decisões da F3 estão nos [ADR-0020 a 0023](docs/adr/).
-> Ver [docs/roadmap.md](docs/roadmap.md).
+> **Estado atual: F0 a F4 fechadas**; a próxima é a F5 (sessão). `cargo run`
+> abre uma janela com abas e grupos de terminal funcionais, seleção múltipla,
+> editor de grupo, arraste entre grupos, menu de contexto, tooltip, aviso,
+> diálogo de confirmação e uma segunda janela por atalho. O arquivo de
+> configuração (`porecatu.toml`) governa aparência, teclas e temas, com
+> recarga a quente — sessão persistente ainda não existe. As decisões da F4
+> estão nos [ADR-0029 a 0032](docs/adr/). Ver [docs/roadmap.md](docs/roadmap.md).
 
 ## Antes de abrir uma issue ou um PR
 

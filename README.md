@@ -58,14 +58,14 @@ O que já roda hoje:
 - Barra de abas com layout e hit-testing como funções puras, testáveis sem GPU e sem janela; reordenação por arraste e por teclado; overflow por rolagem da trilha, com indicador de abas fora da vista e uma zona fixa à direita que não rola (hoje o botão de configurações, inerte até a F4); indicadores de atividade e de campainha
 - Grupos de abas: nomeados, coloridos por uma paleta de seis, colapsáveis (as abas saem da barra e da navegação sequencial, os processos seguem vivos), com indicador agregado na pílula e a cápsula de cor cheia por trás das abas — que continua desenhada com o grupo colapsado, porque é ela que diz de que cor o grupo é. Um "+" por grupo cria aba dentro dele
 - Seleção múltipla de abas (`Ctrl`/`Cmd`+clique alterna, `Shift`+clique estende), arraste de aba entre grupos e arraste da pílula para mover o grupo inteiro
-- Navegação **entre grupos** (`Ctrl+Shift+PageDown`/`PageUp`), caindo na última aba visitada de cada um e pulando grupo colapsado; mais `Ctrl+Shift+G` para agrupar, `Ctrl+Shift+U` para desagrupar, `Ctrl+Shift+E` para renomear e `Ctrl+Shift+K` para colapsar. Defaults de Windows/Linux fixos no código — os de macOS chegam com o parser de `[keybindings]` na F4
+- Navegação **entre grupos** (`Ctrl+Shift+PageDown`/`PageUp`), caindo na última aba visitada de cada um e pulando grupo colapsado; mais `Ctrl+Shift+G` para agrupar, `Ctrl+Shift+U` para desagrupar, `Ctrl+Shift+E` para renomear e `Ctrl+Shift+K` para colapsar. Todos rebindáveis via `[keybindings]`, incluindo os defaults de macOS (F4 etapa 5)
 - Animação de reflui da trilha ao formar grupo e ao colapsar/expandir, dirigida pelo event loop — sem thread de timer e sem loop de render contínuo
 - Cinco widgets de chrome próprios, desenhados por cima do terminal: aviso do app, diálogo de confirmação, menu de contexto (de aba e de grupo), tooltip e editor de grupo. Nenhum diálogo nativo do sistema
 - Múltiplas janelas: cada uma com seu conjunto de abas e sua surface, nascendo em cascata a partir da que a criou
 
-Ainda **não** existe: `porecatu-config` e `porecatu-session` são stubs (só o cabeçalho SPDX). Arquivo de configuração e restauração de sessão chegam nas fases seguintes — enquanto `porecatu-config` não existe, os valores de aparência entram como constantes citando no comentário a chave TOML de origem. As três decisões que a F4 precisava já estão escritas: [ADR-0029](docs/adr/0029-enum-de-acao-e-gramatica-de-tecla.md) (enum de ação e gramática de tecla), [ADR-0030](docs/adr/0030-escopo-do-hot-reload.md) (o que aplica a quente e o que exige reinício) e [ADR-0031](docs/adr/0031-temas-nomeados.md) (temas nomeados).
+A **F4 (configuração) fechou** em seis etapas: `porecatu-config` (structs `serde`, defaults completos, `--config`/`PORECATU_CONFIG`), toda a barra e o terminal lendo `Config` em vez de constante, hot reload (`notify`, três classes de chave — aplica a quente, aplica com recálculo de grade, exige reinício), `enum Action` + parser de `[keybindings]` em três níveis (comum → plataforma, com os defaults de macOS finalmente respondendo), temas nomeados, zoom de fonte por atalho, `animations = false`, e as duas mudanças visuais aprovadas ([ADR-0032](docs/adr/0032-interface-do-v1-fechada.md)): hover por brilho e sombra em camadas nos cinco widgets de chrome. Dívida registrada em [docs/roadmap.md](docs/roadmap.md): merge de tema ainda não cobre cores de grupo/widgets, zoom por atalho é sempre do processo (não por aba), e a entrada de cor por hexadecimal do editor de grupo não foi implementada. `porecatu-session` continua stub (só o cabeçalho SPDX) — restauração de sessão é a F5.
 
-O CI passa nas três plataformas (**292 testes**, `clippy -D warnings` limpo). A **verificação interativa é dívida assumida**: o critério de saída das três fases exigia gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de DPI diferente —, e a proteção de foco do Windows bloqueia input sintético. As fases fecharam com cobertura automatizada mais smoke test, e o que não foi confirmado está escrito por fase em [docs/roadmap.md](docs/roadmap.md). A **F3 fechou** com o PR de navegação de grupo (RF-2.21, RF-2.17 e os atalhos do nível de grupo); a próxima fase é a F4.
+O CI passa nas três plataformas (**404 testes**, `clippy -D warnings` limpo). A **verificação interativa é dívida assumida**: o critério de saída das fases exigia gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de DPI diferente, teclado de verdade nos atalhos —, e a proteção de foco do Windows bloqueia input sintético de teclado (mouse sintético funciona e foi usado para confirmar hover/sombra por captura de tela). As fases fecharam com cobertura automatizada mais smoke test, e o que não foi confirmado está escrito por fase em [docs/roadmap.md](docs/roadmap.md). A próxima fase é a F5 (sessão).
 
 ## Design
 
@@ -93,7 +93,7 @@ O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alv
 | Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
 | Fontes | Iosevka Fixed (OFL-1.1, terminal e chrome) + Lucide (ISC), embutidas | [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md) |
 | Ícone do app | `png` (decodifica em runtime) + `winres` num `build.rs` (recurso PE no Windows) | — |
-| Caminhos do usuário | `dirs` (home como diretório inicial de aba; caminho de config na F4) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
+| Caminhos do usuário | `dirs` (home como diretório inicial de aba; caminho de config) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
 | Referência visual | o binário; design canvas como histórico | [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) |
 | Toolchain | stable pinada, edition 2024 | [ADR-0011](docs/adr/0011-toolchain-rust.md) |
 | Licença | GPL-3.0-or-later | [ADR-0010](docs/adr/0010-licenciamento.md) |
@@ -162,6 +162,6 @@ git clone https://github.com/porecatu/terminal.git
 cd terminal
 
 cargo run                    # abre a janela com um terminal
-cargo test --workspace       # 292 testes
+cargo test --workspace       # 404 testes
 python scripts/verify-docs.py
 ```
