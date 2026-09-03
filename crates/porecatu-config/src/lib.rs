@@ -42,7 +42,8 @@ pub use terminal::{
     Selection, Terminal, ZoomScope,
 };
 pub use theme::{
-    Theme, ThemeAnsiPalette, apply as apply_theme, overridden_keys as theme_overridden_keys,
+    Theme, ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeGroupEditor, ThemeGroups,
+    ThemeNotices, ThemeTooltip, apply as apply_theme, overridden_keys as theme_overridden_keys,
 };
 
 use std::path::Path;
