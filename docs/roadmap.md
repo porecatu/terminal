@@ -393,12 +393,12 @@ Itens:
    ([ADR-0032](adr/0032-interface-do-v1-fechada.md)): hover por brilho (`chrome::
    brighten`, CPU, `1.18`/`1.25`, calculado por frame a partir de `tab_bar::hit_test`)
    e sombra em camadas (`chrome::push_shadow`) nos **cinco widgets de chrome** e no
-   fantasma de arraste, sempre ligada nele. Três itens ficaram de fora, registrados
-   como dívida, não como decisão de não fazer:
-   - **Merge de tema cobre só os campos que `Theme` já tinha desde a etapa 1** (16
-     ANSI + 10 nomeados de terminal/abas). `[appearance.groups]`
-     (`palette`/`ungrouped_color` inclusos) e as cores dos cinco widgets de chrome,
-     que o ADR-0031 §1 também lista, ainda não entram no merge.
+   fantasma de arraste, sempre ligada nele. Dois itens ficaram de fora, registrados
+   como dívida, não como decisão de não fazer (a dívida do merge de tema cobrir só
+   os campos que `Theme` já tinha desde a etapa 1 foi paga depois, fora de fase —
+   `apply_theme` mescla hoje toda a superfície do ADR-0031 §1, `[appearance.groups]`
+   e os cinco widgets de chrome inclusos, com `palette` substituída inteira pelo
+   caso especial do ADR-0031 §2):
    - **Zoom de sessão é sempre do processo inteiro.** `zoom_scope = "active"`
      (RF-5.10) não tem efeito -- zoom por aba pediria métrica de célula por
      `TabRuntime`, não só por processo (`App::cell_metrics`), mudança maior que caberia
