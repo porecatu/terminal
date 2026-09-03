@@ -74,7 +74,10 @@ fn common_defaults() -> BTreeMap<String, String> {
         ("ctrl+0", "font.reset"),
         ("ctrl+shift+y", "theme.cycle"),
         ("ctrl+shift+comma", "config.reload"),
-        ("ctrl+shift+p", "command.palette"),
+        // "ctrl+shift+p" fica reservado pra `command.palette` (PRD-008,
+        // [v2]) no arquivo de exemplo, comentado -- a ação não existe no
+        // catálogo fechado da F4 (etapa 5, docs/reference/acoes.md), só o
+        // nome está reservado. Sem default embutido correspondente.
     ])
 }
 
@@ -109,7 +112,8 @@ fn macos_defaults() -> BTreeMap<String, String> {
         ("cmd+shift+y", "theme.cycle"),
         ("cmd+comma", "config.reload"),
         ("cmd+q", "app.quit"),
-        ("cmd+shift+p", "command.palette"),
+        // Mesma reserva de nome sem default embutido -- ver comentário em
+        // `common_defaults`.
     ])
 }
 
@@ -120,12 +124,12 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         let bindings = Keybindings::default();
-        assert_eq!(bindings.common.len(), 29);
+        assert_eq!(bindings.common.len(), 28);
         assert_eq!(
             bindings.common.get("ctrl+shift+t"),
             Some(&"tab.new".to_owned())
         );
-        assert_eq!(bindings.macos.len(), 30);
+        assert_eq!(bindings.macos.len(), 29);
         assert_eq!(bindings.macos.get("cmd+q"), Some(&"app.quit".to_owned()));
         assert!(bindings.windows.is_empty());
         assert!(bindings.linux.is_empty());

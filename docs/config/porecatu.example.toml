@@ -1023,8 +1023,10 @@ white   = "#ebdbb2"
 
 "ctrl+shift+comma"    = "config.reload"
 
-# [v2] O design abre a paleta de comandos com Ctrl+Shift+P. PRD-008.
-"ctrl+shift+p"        = "command.palette"
+# [v2] O design abre a paleta de comandos com Ctrl+Shift+P. PRD-008. Ação
+# fora do catálogo fechado da F4 (docs/reference/acoes.md) -- nome
+# reservado, sem default embutido, comentada como as duas de F6 abaixo.
+# "ctrl+shift+p"      = "command.palette"
 
 # Busca no scrollback e "selecionar tudo" são da F6 do roadmap. As ações
 # existem no catálogo; os defaults são decididos quando a fase começar.
@@ -1066,7 +1068,7 @@ white   = "#ebdbb2"
 "cmd+shift+y"         = "theme.cycle"
 "cmd+comma"           = "config.reload"
 "cmd+q"               = "app.quit"     # convenção de plataforma; RF-1.4
-"cmd+shift+p"         = "command.palette"   # [v2]
+# "cmd+shift+p"       = "command.palette"   # [v2], fora do catálogo -- ver nota acima
 
 # As duas tabelas abaixo existem pela mesma razão e ficam vazias por
 # default -- os defaults de Windows e Linux são os da tabela comum acima.

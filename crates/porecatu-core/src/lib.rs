@@ -12,11 +12,13 @@
 //! invariante seja testável nesta fase, mesmo com `porecatu-session` ainda
 //! vazio.
 
+mod action;
 mod group;
 mod id;
 mod tab;
 mod workspace;
 
+pub use action::{Action, ActionParseError, CATALOG, MoveDestination};
 pub use group::{Group, GroupColor, GroupKind, GroupMeta};
 pub use id::{GroupId, TabId};
 pub use tab::{Tab, TabState};

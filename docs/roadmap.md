@@ -12,7 +12,7 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F1 — Terminal único | **fechada** |
 | F2 — Abas | **fechada** |
 | F3 — Grupos | **fechada** |
-| F4 — Configuração | **em andamento** (etapas 1-3 fechadas, etapa 4 em revisão) |
+| F4 — Configuração | **em andamento** (etapas 1-4 fechadas, etapa 5 em revisão) |
 | F5 a F6 | não iniciadas |
 
 > **A verificação interativa é dívida assumida, não critério pendente.** Os
@@ -372,10 +372,16 @@ Itens:
    assim. Erro de config mostra linha/coluna/mensagem e mantém a config anterior
    (ADR-0003 regra 2); chave desconhecida vira aviso (RF-4.22). `config.reload`
    existe e é chamável, sem tecla ainda (etapa 5).
-5. **`enum Action` em `porecatu-core` + parser de `[keybindings]`**
+5. **`enum Action` em `porecatu-core` + parser de `[keybindings]` — fechada.**
    ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)), com o teste
-   bidirecional contra o [catálogo](reference/acoes.md) e os **defaults de macOS**, que
-   hoje não existem em código.
+   bidirecional contra o [catálogo](reference/acoes.md) e os **defaults de macOS**,
+   que antes existiam só como dado embutido em `porecatu-config` e agora respondem
+   de fato: `Chord`/a resolução dos três níveis (embutido da plataforma -> comum ->
+   plataforma) vivem em `porecatu-ui`, que é quem conhece `winit`.
+   `handle_tab_action_key` consulta o mapa resolvido em vez do `match` fixo que
+   existia até aqui. `scrollback.*`/`clipboard.*` continuam num caminho hardcoded
+   em `input.rs`, de propósito (armadilha registrada no código): mover os dois pro
+   mapa não era escopo desta etapa.
 6. **Temas nomeados** ([ADR-0031](adr/0031-temas-nomeados.md)), zoom por atalho,
    `animations = false`, a roda do mouse no popover de destino, a entrada de cor por
    hexadecimal do RF-2.10 — e as **duas mudanças visuais aprovadas**: hover por brilho

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use porecatu_core::{GroupId, TabId, Workspace};
+use porecatu_core::{Action, GroupId, TabId, Workspace};
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
 use porecatu_term::{
     GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermParams, Terminal,
@@ -28,6 +28,7 @@ mod dialog;
 mod group_editor;
 mod group_menu;
 mod input;
+mod keymap;
 mod move_to_group;
 mod overlay;
 mod paint;
@@ -47,6 +48,7 @@ use dialog::{ConfirmDialog, DialogAction, DialogButton};
 use group_editor::{EditorRegion, GroupEditor};
 use group_menu::{GroupAction, GroupContextMenu};
 use input::ClickTracker;
+use keymap::Chord;
 use move_to_group::{MoveTarget, MoveToGroupPopover};
 use paint::CellMetrics;
 use porecatu_core::GroupColor;
@@ -277,6 +279,9 @@ enum ActionOutcome {
     OpenWindow,
     CloseWindowRequested,
     WindowEmptied,
+    /// `config.reload` (ADR-0003, F4 etapa 5): o `Arc<Config>` e o watcher
+    /// são do processo, não da janela -- só `App` sabe relê-lo.
+    ReloadConfig,
     Unhandled,
 }
 
@@ -1098,6 +1103,23 @@ impl WindowState {
     /// que só `App` resolve.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
+    /// Consulta `keymap` (ADR-0029) em vez do `match` fixo que existia até
+    /// a F4 etapa 5 -- a cadeia de captura do `dispatch_keyboard_input`
+    /// não muda, só esta etapa dela. `Chord::from_key` devolve `None` para
+    /// o que não está no vocabulário da gramática (composição de IME
+    /// multi-caractere, teclas de mídia); nesse caso, como para qualquer
+    /// tecla sem binding, a tecla segue pro terminal (`ActionOutcome::
+    /// Unhandled`).
+    ///
+    /// `scrollback.*` e `clipboard.*`/`selection.*` resolvem no mapa (o
+    /// usuário pode remapeá-los e ver o resultado em `keymap`), mas quem
+    /// os executa continua sendo `input.rs`, sem mudança nesta etapa
+    /// (ver a nota do arquivo de exemplo). Devolver `Unhandled` para eles
+    /// aqui é o que deixa `input::handle_keyboard_input` rodar como
+    /// sempre rodou -- **não inverte** a ordem que a armadilha do
+    /// ADR-0008 exige entre `ctrl+shift+pagedown` (`group.next`, tratado
+    /// aqui) e `shift+pagedown` (`scrollback.page_down`, tratado lá).
+    #[allow(clippy::too_many_arguments)]
     fn handle_tab_action_key(
         &mut self,
         event: &KeyEvent,
@@ -1109,161 +1131,157 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        keymap: &HashMap<Chord, Action>,
     ) -> ActionOutcome {
         if event.state != ElementState::Pressed {
             return ActionOutcome::Unhandled;
         }
-        let m = self.modifiers;
-        if m.ctrl && m.shift && !m.alt {
-            match &event.logical_key {
-                Key::Character(s) if s.eq_ignore_ascii_case("t") => {
-                    self.action_new_tab(
-                        cell_metrics,
-                        proxy,
-                        startup_directory,
-                        now,
-                        style,
-                        term_params,
-                        shell,
-                    );
-                    return ActionOutcome::Handled;
-                }
-                Key::Character(s) if s.eq_ignore_ascii_case("w") => {
-                    return match self.action_close_tab() {
-                        Some(TabCloseOutcome::Dialog(dialog)) => {
-                            self.dialog = Some(dialog);
-                            ActionOutcome::Handled
-                        }
-                        Some(TabCloseOutcome::Closed { window_empty: true }) => {
-                            ActionOutcome::WindowEmptied
-                        }
-                        _ => ActionOutcome::Handled,
-                    };
-                }
-                Key::Character(s) if s.eq_ignore_ascii_case("r") => {
-                    self.action_rename_start();
-                    return ActionOutcome::Handled;
-                }
-                // `docs/config/porecatu.example.toml` `[keybindings]`:
-                // "ctrl+shift+g" = "group.create".
-                Key::Character(s) if s.eq_ignore_ascii_case("g") => {
-                    self.action_group_create(gpu, style);
-                    return ActionOutcome::Handled;
-                }
-                // O resto do nível de grupo da cadeia do ADR-0008, com o
-                // alvo resolvido por `active_explicit_group` -- sobre um
-                // run implícito as três são no-op, como o menu as mostra
-                // esmaecidas. `group.rename` abre o editor no nome
-                // (RF-2.9) em vez de um campo inline próprio: é a mesma
-                // ação que o menu de grupo dispara.
-                //   "ctrl+shift+u" = "group.dissolve"
-                //   "ctrl+shift+e" = "group.rename"
-                //   "ctrl+shift+k" = "group.toggle_collapse"
-                Key::Character(s) if s.eq_ignore_ascii_case("u") => {
-                    if let Some(group) = group_menu::keyboard_target(&self.workspace) {
-                        self.run_group_action(
-                            group,
-                            GroupAction::Dissolve,
-                            gpu,
-                            cell_metrics,
-                            proxy,
-                            startup_directory,
-                            now,
-                            style,
-                            term_params,
-                            shell,
-                        );
-                    }
-                    return ActionOutcome::Handled;
-                }
-                Key::Character(s) if s.eq_ignore_ascii_case("e") => {
-                    if let Some(group) = group_menu::keyboard_target(&self.workspace) {
-                        self.run_group_action(
-                            group,
-                            GroupAction::Rename,
-                            gpu,
-                            cell_metrics,
-                            proxy,
-                            startup_directory,
-                            now,
-                            style,
-                            term_params,
-                            shell,
-                        );
-                    }
-                    return ActionOutcome::Handled;
-                }
-                Key::Character(s) if s.eq_ignore_ascii_case("k") => {
-                    if let Some(group) = group_menu::keyboard_target(&self.workspace) {
-                        self.run_group_action(
-                            group,
-                            GroupAction::ToggleCollapse,
-                            gpu,
-                            cell_metrics,
-                            proxy,
-                            startup_directory,
-                            now,
-                            style,
-                            term_params,
-                            shell,
-                        );
-                    }
-                    return ActionOutcome::Handled;
-                }
-                // RF-2.21, `[keybindings]`: "ctrl+shift+pagedown" =
-                // "group.next", "ctrl+shift+pageup" = "group.prev". Exigem
-                // `ctrl` **e** `shift`: `Shift+PageUp`/`PageDown` sozinhos
-                // são a rolagem de scrollback (`input.rs`), e este ramo
-                // roda antes dela na cadeia de captura.
-                Key::Named(NamedKey::PageDown) => {
-                    self.action_group_step(1, gpu, style);
-                    return ActionOutcome::Handled;
-                }
-                Key::Named(NamedKey::PageUp) => {
-                    self.action_group_step(-1, gpu, style);
-                    return ActionOutcome::Handled;
-                }
-                // ADR-0015: `window.new`/`window.close`.
-                Key::Character(s) if s.eq_ignore_ascii_case("n") => {
-                    return ActionOutcome::OpenWindow;
-                }
-                Key::Character(s) if s.eq_ignore_ascii_case("q") => {
-                    return ActionOutcome::CloseWindowRequested;
-                }
-                // `Ctrl+Shift+Tab`: única exceção ao padrão `Ctrl+Shift`
-                // (ADR-0008), convenção universal de troca de aba.
-                Key::Named(NamedKey::Tab) => {
-                    self.action_prev_tab(gpu, style);
-                    return ActionOutcome::Handled;
-                }
-                // RF-1.17, `docs/config/porecatu.example.toml`
-                // `[keybindings]`: "ctrl+shift+left" = "tab.move_left".
-                Key::Named(NamedKey::ArrowLeft) => {
-                    self.action_move_tab(-1, gpu, style);
-                    return ActionOutcome::Handled;
-                }
-                Key::Named(NamedKey::ArrowRight) => {
-                    self.action_move_tab(1, gpu, style);
-                    return ActionOutcome::Handled;
-                }
-                _ => {}
+        let Some(chord) = Chord::from_key(&event.logical_key, self.modifiers) else {
+            return ActionOutcome::Unhandled;
+        };
+        let Some(action) = keymap.get(&chord).copied() else {
+            return ActionOutcome::Unhandled;
+        };
+
+        // As cinco ações de nível de grupo compartilham o mesmo alvo
+        // (`group_menu::keyboard_target`, ADR-0020/ADR-0023) e o mesmo
+        // executor (`run_group_action`, que também atende o menu de
+        // contexto e o editor -- uma lista de ações só, ADR-0014).
+        let group_action = match action {
+            Action::GroupDissolve => Some(GroupAction::Dissolve),
+            Action::GroupRename => Some(GroupAction::Rename),
+            Action::GroupToggleCollapse => Some(GroupAction::ToggleCollapse),
+            Action::GroupNewTab => Some(GroupAction::NewTab),
+            Action::GroupCloseAll => Some(GroupAction::CloseAll),
+            _ => None,
+        };
+        if let Some(group_action) = group_action {
+            if let Some(group) = group_menu::keyboard_target(&self.workspace) {
+                self.run_group_action(
+                    group,
+                    group_action,
+                    gpu,
+                    cell_metrics,
+                    proxy,
+                    startup_directory,
+                    now,
+                    style,
+                    term_params,
+                    shell,
+                );
             }
-        }
-        if m.ctrl && !m.shift && !m.alt && matches!(event.logical_key, Key::Named(NamedKey::Tab)) {
-            self.action_next_tab(gpu, style);
             return ActionOutcome::Handled;
         }
-        if m.alt
-            && !m.ctrl
-            && !m.shift
-            && let Key::Character(s) = &event.logical_key
-            && let Some(digit) = s.chars().next().and_then(|c| c.to_digit(10))
-            && (1..=9).contains(&digit)
-        {
-            self.action_goto((digit - 1) as usize, gpu, style);
-            return ActionOutcome::Handled;
+
+        match action {
+            Action::TabNew => {
+                self.action_new_tab(
+                    cell_metrics,
+                    proxy,
+                    startup_directory,
+                    now,
+                    style,
+                    term_params,
+                    shell,
+                );
+                ActionOutcome::Handled
+            }
+            Action::TabClose => match self.action_close_tab() {
+                Some(TabCloseOutcome::Dialog(dialog)) => {
+                    self.dialog = Some(dialog);
+                    ActionOutcome::Handled
+                }
+                Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                    ActionOutcome::WindowEmptied
+                }
+                _ => ActionOutcome::Handled,
+            },
+            Action::TabNext => {
+                self.action_next_tab(gpu, style);
+                ActionOutcome::Handled
+            }
+            Action::TabPrev => {
+                self.action_prev_tab(gpu, style);
+                ActionOutcome::Handled
+            }
+            // O catálogo garante `1..=9` (`Action::from_str` rejeita o
+            // resto) -- `action_goto` é 0-based.
+            Action::TabGoto(n) => {
+                self.action_goto((n - 1) as usize, gpu, style);
+                ActionOutcome::Handled
+            }
+            Action::TabRename => {
+                self.action_rename_start();
+                ActionOutcome::Handled
+            }
+            Action::TabMoveLeft => {
+                self.action_move_tab(-1, gpu, style);
+                ActionOutcome::Handled
+            }
+            Action::TabMoveRight => {
+                self.action_move_tab(1, gpu, style);
+                ActionOutcome::Handled
+            }
+            Action::GroupCreate => {
+                self.action_group_create(gpu, style);
+                ActionOutcome::Handled
+            }
+            Action::GroupNext => {
+                self.action_group_step(1, gpu, style);
+                ActionOutcome::Handled
+            }
+            Action::GroupPrev => {
+                self.action_group_step(-1, gpu, style);
+                ActionOutcome::Handled
+            }
+            Action::WindowNew => ActionOutcome::OpenWindow,
+            Action::WindowClose => ActionOutcome::CloseWindowRequested,
+            // Sem default fora do macOS (`docs/reference/acoes.md`); o
+            // efeito documentado é "o mesmo do RF-1.4 ao fechar a última
+            // janela" -- mesmo caminho de `window.close` na janela atual,
+            // que já cursa pelo diálogo de confirmação quando há mais de
+            // uma aba.
+            Action::AppQuit => ActionOutcome::CloseWindowRequested,
+            // `config.reload` (ADR-0003) mexe em `App` (o watcher e o
+            // `Arc<Config>` são do processo, não da janela) -- bubble
+            // igual a `OpenWindow`/`CloseWindowRequested`.
+            Action::ConfigReload => ActionOutcome::ReloadConfig,
+            // `font.*`/`theme.cycle`: zoom e temas nomeados são a etapa 6
+            // (roadmap F4). A ação existe no catálogo e é vinculável
+            // desde já, mas a tecla que casa é consumida sem efeito em
+            // vez de cair pro terminal -- "se o binding existe e a ação
+            // falha, a tecla foi consumida" (armadilha desta etapa).
+            Action::FontIncrease
+            | Action::FontDecrease
+            | Action::FontReset
+            | Action::ThemeCycle => ActionOutcome::Handled,
+            // `scrollback.*`, `clipboard.*`, `selection.select_all`:
+            // resolvidos no mapa, executados em `input.rs` (scrollback e
+            // clipboard) ou ainda não implementados (seleção, F6) -- ver
+            // o comentário do método. `search.*` é F6, mesma situação.
+            Action::ScrollbackLineUp
+            | Action::ScrollbackLineDown
+            | Action::ScrollbackPageUp
+            | Action::ScrollbackPageDown
+            | Action::ScrollbackToTop
+            | Action::ScrollbackToBottom
+            | Action::ClipboardCopy
+            | Action::ClipboardPaste
+            | Action::SelectionSelectAll
+            | Action::SearchOpen
+            | Action::SearchNext
+            | Action::SearchPrev => ActionOutcome::Unhandled,
+            // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
+            // resolvido -- inalcançável na prática, mas o `match` precisa
+            // ser exaustivo.
+            Action::TabMoveToGroup(_) | Action::GroupSetColor(_) => ActionOutcome::Unhandled,
+            // As cinco de grupo já retornaram acima.
+            Action::GroupDissolve
+            | Action::GroupRename
+            | Action::GroupToggleCollapse
+            | Action::GroupNewTab
+            | Action::GroupCloseAll => unreachable!("tratadas em group_action acima"),
         }
-        ActionOutcome::Unhandled
     }
 
     /// Resolve o que um clique na área da barra de abas atinge e dispara a
@@ -2009,6 +2027,12 @@ struct App {
     /// `Terminal::spawn` -- é uma `String` e alguns escalares, sem custo no
     /// caminho quente (spawn de aba não é por frame).
     term_params: TermParams,
+    /// Resolvido de `config.keybindings` (F4 etapa 5, ADR-0029): defaults
+    /// embutidos da plataforma atual -> tabela comum -> tabela da
+    /// plataforma atual. Recalculado inteiro a cada hot reload, junto do
+    /// resto (classe A) -- é barato e evita amarrar `diff` a mais uma
+    /// árvore de comparação.
+    keymap: HashMap<Chord, Action>,
     windows: HashMap<WindowId, WindowState>,
 }
 
@@ -2030,6 +2054,15 @@ impl App {
         let pal = palette::ResolvedPalette::from_config(&config);
         let term_pal = palette::ResolvedTermPalette::from_config(&config);
         let term_params = term_params_from_config(&config);
+        // ADR-0029: erro de `[keybindings]` no start tem a mesma limitação
+        // que erro de config acima -- sem `App` ainda, sem janela pra
+        // avisar. Log em stderr; o mapa resolvido nunca falta (uma chave
+        // malformada só descarta aquela linha).
+        let keymap_resolved = keymap::resolve(&config.keybindings, keymap::Platform::current());
+        for issue in &keymap_resolved.issues {
+            eprintln!("keybinding inválido, ignorado: {issue}");
+        }
+        let keymap = keymap_resolved.bindings;
 
         // Hot reload (F4 etapa 4, ADR-0030): mesma precedência do start,
         // pra assistir o arquivo que `load` de fato leu. `None` (sem
@@ -2057,6 +2090,7 @@ impl App {
             pal,
             term_pal,
             term_params,
+            keymap,
             windows: HashMap::new(),
         }
     }
@@ -2401,6 +2435,13 @@ impl App {
         self.pal = palette::ResolvedPalette::from_config(&self.config);
         self.term_pal = palette::ResolvedTermPalette::from_config(&self.config);
         self.term_params = term_params_from_config(&self.config);
+        // `[keybindings]` é classe A (ADR-0029 §3): o mapa novo vale
+        // imediatamente. Um modo de captura em curso (rename, diálogo,
+        // menu) não é afetado -- ele nem chega a consultar `keymap`,
+        // porque a cadeia de captura do ADR-0008 intercepta antes.
+        let keymap_resolved =
+            keymap::resolve(&self.config.keybindings, keymap::Platform::current());
+        self.keymap = keymap_resolved.bindings;
 
         // Classe B: recalcula a métrica de célula uma vez (ADR-0030: "a
         // métrica é a mesma [para toda janela]") -- a escala vem de uma
@@ -2448,6 +2489,15 @@ impl App {
                     now,
                 );
             }
+            // ADR-0029 §4: tecla malformada, ação desconhecida ou
+            // binding duplicado descartam só aquela linha de
+            // `[keybindings]` -- o default embutido continua valendo,
+            // e o resto do mapa aplica normalmente.
+            for issue in &keymap_resolved.issues {
+                state
+                    .warnings
+                    .push(Severity::Warning, "Keybinding inválido", issue.clone(), now);
+            }
             // Classe A: o layout da barra é função pura de
             // `(Workspace, Config, largura)` -- só redesenhar já aplica.
             state.window.request_redraw();
@@ -2457,9 +2507,8 @@ impl App {
     /// `config.reload` do catálogo (`docs/reference/acoes.md`, ADR-0003):
     /// relê o arquivo na hora, sem esperar o `notify` -- útil quando o
     /// watcher não disparou (editor que grava por outro caminho, arquivo
-    /// em rede). A tecla vem na etapa 5 do parser de `[keybindings]`; por
-    /// ora a ação só precisa existir e ser chamável.
-    #[allow(dead_code)]
+    /// em rede). Ligado a `ctrl+shift+comma`/`cmd+comma` desde a F4 etapa
+    /// 5, via `ActionOutcome::ReloadConfig`.
     fn reload_config_now(&mut self, now: Instant) {
         let Some(path) = self.config_path.clone() else {
             return;
@@ -2831,6 +2880,7 @@ impl App {
             &self.style,
             &self.term_params,
             &self.config.shell,
+            &self.keymap,
         );
         match outcome {
             ActionOutcome::Handled => {
@@ -2842,6 +2892,12 @@ impl App {
             ActionOutcome::CloseWindowRequested => self.request_close_window(window_id, event_loop),
             ActionOutcome::WindowEmptied => {
                 self.close_window_unconditionally(window_id, event_loop);
+            }
+            ActionOutcome::ReloadConfig => {
+                self.reload_config_now(Instant::now());
+                if let Some(state) = self.windows.get(&window_id) {
+                    state.window.request_redraw();
+                }
             }
             ActionOutcome::Unhandled => {
                 if let Some(runtime) = state.active_runtime() {
