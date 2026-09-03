@@ -332,7 +332,7 @@ Antes de a fase abrir, **três ADRs fecharam as decisões que faltavam** — mes
 
 Itens:
 
-- `porecatu-config`: structs `serde`, defaults completos, resolução de caminho, `PORECATU_CONFIG`, `--config`
+- `porecatu-config`: structs `serde`, defaults completos, resolução de caminho, `PORECATU_CONFIG` (`--config` tem a precedência pronta em `resolve_config_path`, mas nada no binário passa a flag pra ela -- dívida da etapa 1)
 - Hot reload com `notify`, parse fora da main thread, debounce, nas três classes do ADR-0030
 - Erro com linha e chave; chave desconhecida como aviso; config inválida preserva a anterior — com a exceção fina do ADR-0029 §4, em que erro numa linha de `[keybindings]` descarta **aquela linha** e mantém o default embutido, em vez de reverter a gravação inteira
 - Parser de `[keybindings]` contra o [catálogo fechado de ações](reference/acoes.md): ação desconhecida é erro com sugestão do nome mais próximo, binding duplicado cita as duas linhas (ADR-0008, ADR-0029)
@@ -349,11 +349,16 @@ Itens:
 **Divisão sugerida**, no padrão das seis etapas da F1, da F2 e da F3, uma por PR:
 
 1. **`porecatu-config` nasce — fechada.** Structs `serde` com defaults completos,
-   resolução de caminho (`--config` → `PORECATU_CONFIG` → caminho de plataforma via
-   `dirs`), erro com linha e chave, chave desconhecida como aviso
+   resolução de caminho com a precedência `--config` → `PORECATU_CONFIG` → caminho
+   de plataforma via `dirs` (`resolve_config_path`, testada com as três fontes),
+   erro com linha e chave, chave desconhecida como aviso
    ([ADR-0003](adr/0003-formato-de-configuracao.md)). **Sem consumidor ainda:** a
    etapa entrega `Config` carregado e testado, não aparência mudada — e é isso que a
-   torna testável sem GPU e sem janela.
+   torna testável sem GPU e sem janela. **Dívida:** nada em `main.rs`/`App::new` lê
+   `argv` e chama `load`/`resolve_config_path` com um valor -- a função aceita
+   `--config`, mas a flag não existe de fato até algo passar `Some(path)` pra ela;
+   hoje `App::new` chama `load(None)` fixo, e só `PORECATU_CONFIG`/o caminho padrão
+   respondem.
 2. **`porecatu-ui` lê `Config` — fechada.** As ~30 constantes que já citavam a chave
    TOML de origem, mais a geometria da barra (`TabBarStyle`) e dos cinco widgets,
    saíram de `const` e passaram a vir de um `Arc<Config>`. Critério de saída
