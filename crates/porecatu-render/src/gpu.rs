@@ -10,7 +10,7 @@ use std::sync::Arc;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::quad::QuadShared;
-use crate::text_measurer::TextMeasurer;
+use crate::text_measurer::{FontFamilies, TextMeasurer};
 use crate::window_surface::WindowSurface;
 
 /// Falha ao criar a surface de uma segunda janela contra o `Adapter` já
@@ -55,14 +55,24 @@ impl GpuContext {
     /// Cria o contexto do processo e a `WindowSurface` da primeira janela
     /// juntos -- o `Adapter` é escolhido compatível com a surface dela
     /// (ADR-0018) e reusado por qualquer janela seguinte.
-    pub fn new<W>(window: Arc<W>, width: u32, height: u32) -> (Self, WindowSurface)
+    pub fn new<W>(
+        window: Arc<W>,
+        width: u32,
+        height: u32,
+        fonts: FontFamilies,
+    ) -> (Self, WindowSurface)
     where
         W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
     {
-        pollster::block_on(Self::new_async(window, width, height))
+        pollster::block_on(Self::new_async(window, width, height, fonts))
     }
 
-    async fn new_async<W>(window: Arc<W>, width: u32, height: u32) -> (Self, WindowSurface)
+    async fn new_async<W>(
+        window: Arc<W>,
+        width: u32,
+        height: u32,
+        fonts: FontFamilies,
+    ) -> (Self, WindowSurface)
     where
         W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
     {
@@ -97,7 +107,7 @@ impl GpuContext {
         let text_cache = glyphon::Cache::new(&device);
         let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, &text_cache, format);
         let swash_cache = glyphon::SwashCache::new();
-        let text_measurer = TextMeasurer::new();
+        let text_measurer = TextMeasurer::with_families(fonts);
 
         let window_surface = WindowSurface::new(
             &device,

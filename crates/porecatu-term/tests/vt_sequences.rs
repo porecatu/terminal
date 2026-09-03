@@ -356,3 +356,45 @@ fn rolagem_preserva_selecao() {
         "rolagem pura preserva a selecao (ADR-0013, RF-10.7)"
     );
 }
+
+/// RF-5.22: `[terminal.cursor] shape` chega via `TermParams::
+/// default_cursor_shape` e aparece no snapshot sem nenhum DECSCUSR emitido
+/// -- é o default do motor, não uma sequência do programa.
+#[test]
+fn default_cursor_shape_vem_de_term_params() {
+    use porecatu_term::CursorShape;
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let (pty_writer, _pty_writer_rx) = std::sync::mpsc::channel();
+    let params = TermParams {
+        default_cursor_shape: CursorShape::Beam,
+        ..TermParams::default()
+    };
+    let mut term = TermEngine::new(params, TermSize { rows: 2, cols: 10 }, tx, pty_writer);
+    term.advance(b"x");
+
+    let mut snapshot = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snapshot);
+    assert_eq!(snapshot.cursor.shape, CursorShape::Beam);
+}
+
+/// RF-5.25: DECSCUSR emitido pelo programa tem precedência sobre o default
+/// da config enquanto durar.
+#[test]
+fn decscusr_do_programa_sobrepoe_o_default_da_config() {
+    use porecatu_term::CursorShape;
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let (pty_writer, _pty_writer_rx) = std::sync::mpsc::channel();
+    let params = TermParams {
+        default_cursor_shape: CursorShape::Block,
+        ..TermParams::default()
+    };
+    let mut term = TermEngine::new(params, TermSize { rows: 2, cols: 10 }, tx, pty_writer);
+    // DECSCUSR: barra piscante (CSI 5 SP q).
+    term.advance(b"\x1b[5 q");
+
+    let mut snapshot = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snapshot);
+    assert_eq!(snapshot.cursor.shape, CursorShape::Beam);
+}

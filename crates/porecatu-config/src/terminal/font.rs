@@ -22,7 +22,13 @@ pub struct Font {
     pub fallback: Vec<String>,
     /// A Iosevka Fixed avança 0.5 em em todo glyph -- ver a armadilha
     /// conhecida em CLAUDE.md sobre `size / 2 * scale` caindo em pixel
-    /// inteiro.
+    /// inteiro. O default é 14.0, não 13.0 (usado numa revisão anterior):
+    /// a 13 o avanço era 6.5 e a célula arredondava para 7.0, deixando meio
+    /// pixel de folga por célula; a 14 o glyph preenche a célula sem sobra.
+    /// Conforto de calibração, não correção -- em 125% nenhum tamanho perto
+    /// deste fecha do mesmo jeito, e é o teste em em de
+    /// `porecatu_ui::paint::fits_the_grid` que garante a grade em qualquer
+    /// tamanho e escala, não este valor.
     pub size: f64,
     /// Vazio = deriva da família principal. RF-5.4.
     pub bold_family: String,

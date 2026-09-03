@@ -4,15 +4,15 @@
 //! concreta, e de `GroupColor`/cor de chrome (`porecatu-config`) para
 //! `porecatu_render::Color`.
 //!
-//! `[terminal.colors]` e subseções continuam como constantes (F4 etapa 3:
-//! `porecatu-term` ainda recebe `TermParams` fixo, não `Config`) -- só as
-//! cores de **chrome** (`[appearance.*]`) saem de `const` nesta etapa e
-//! passam a vir de [`ResolvedPalette`], construído uma vez a partir de
-//! `Config` (`ResolvedPalette::from_config`) e guardado em `App`
-//! (`lib.rs`), no mesmo padrão de `TabBarStyle`. `resolve` e
-//! `ResolvedPalette::group_color` são chamados no caminho quente (`resolve`
-//! por célula da grade, `group_color` por grupo por frame) -- por isso
-//! recebem cor/paleta já resolvida, nunca um `&Config` a consultar ali.
+//! Duas paletas resolvidas, construídas **uma vez** a partir de `Config` e
+//! guardadas em `App` (`lib.rs`), no mesmo padrão de `TabBarStyle`:
+//! [`ResolvedPalette`] (`[appearance.*]`, chrome) e [`ResolvedTermPalette`]
+//! (`[terminal.colors]` e subseções, F4 etapa 3). `ResolvedTermPalette::
+//! resolve` e `ResolvedPalette::group_color` são chamados no caminho quente
+//! (`resolve` por célula da grade, `group_color` por grupo por frame) --
+//! por isso recebem paleta já resolvida, nunca um `&Config` a consultar
+//! ali. `[terminal.theme]`/`[[themes]]` ficam de fora (F4 etapa 6): vazio é
+//! o único valor tratado, e vazio já cai direto em `[terminal.colors]`.
 
 use porecatu_core::GroupColor;
 use porecatu_render::Color;
@@ -49,15 +49,6 @@ fn cvt_alpha(c: porecatu_config::Color, alpha: f64) -> Color {
     hex_alpha(c.r(), c.g(), c.b(), alpha)
 }
 
-// [terminal.colors]
-pub const TERM_FOREGROUND: Color = hex(0xc7, 0xcc, 0xd6); // foreground, RF-5.12
-pub const TERM_BACKGROUND: Color = hex(0x0f, 0x12, 0x16); // background
-pub const TERM_CURSOR: Color = hex(0x5e, 0xd3, 0xbc); // cursor, RF-5.13
-#[allow(dead_code)] // usado quando o glyph sob o cursor for repintado (F2+)
-pub const TERM_CURSOR_TEXT: Color = hex(0x0f, 0x12, 0x16); // cursor_text
-pub const TERM_SELECTION_BACKGROUND: Color = hex(0x2e, 0x6b, 0x62); // selection_background, RF-5.14
-pub const TERM_SELECTION_FOREGROUND: Color = hex(0xee, 0xf2, 0xf4); // selection_foreground
-
 // Nota no grid (RF-1.3, ADR-0017 item 5): "#5ed3bc, nunca imitando prompt"
 // -- destaque fixo do ADR-0014, independente de tema e sem chave no TOML.
 // `porecatu-term` não resolve cor (seção 4 da arquitetura); passado cru
@@ -74,74 +65,109 @@ pub const TRANSPARENT: Color = Color {
     a: 0.0,
 };
 
-// [terminal.colors.normal], RF-5.11 -- indices 0..8
-const ANSI_NORMAL: [Color; 8] = [
-    hex(0x3b, 0x43, 0x4f), // black
-    hex(0xef, 0x8a, 0x8a), // red
-    hex(0x86, 0xc5, 0x6a), // green
-    hex(0xe0, 0xb0, 0x60), // yellow
-    hex(0x6f, 0xa8, 0xf5), // blue
-    hex(0xa6, 0x8c, 0xf0), // magenta
-    hex(0x5e, 0xd3, 0xbc), // cyan
-    hex(0xc7, 0xcc, 0xd6), // white
-];
-
-// [terminal.colors.bright], RF-5.11 -- indices 8..16
-const ANSI_BRIGHT: [Color; 8] = [
-    hex(0x6f, 0x77, 0x83), // black
-    hex(0xf5, 0xa3, 0xa3), // red
-    hex(0x9b, 0xd4, 0x82), // green
-    hex(0xec, 0xc3, 0x7c), // yellow
-    hex(0x8d, 0xbc, 0xf8), // blue
-    hex(0xbd, 0xa6, 0xf5), // magenta
-    hex(0x7f, 0xdf, 0xcc), // cyan
-    hex(0xea, 0xee, 0xf3), // white
-];
-
-/// Resolve `Default` para `default_fg`/`default_bg` (frente ou fundo,
-/// conforme o campo da célula) e índices/RGB conforme a paleta acima.
-/// Índices 16..256: cubo 6x6x6 + rampa de cinza -- fórmula padrão xterm
-/// 256 cores, não é valor de design (não tem procedência no mockup, é
-/// convenção técnica universal do terminal).
-pub fn resolve(
-    color: TermColor,
-    default_fg: Color,
-    default_bg: Color,
-    is_foreground: bool,
-) -> Color {
-    match color {
-        TermColor::Default => {
-            if is_foreground {
-                default_fg
-            } else {
-                default_bg
-            }
-        }
-        TermColor::Indexed(index) => resolve_indexed(index),
-        TermColor::Rgb { r, g, b } => hex(r, g, b),
-    }
-}
-
-fn resolve_indexed(index: u8) -> Color {
-    match index {
-        0..=7 => ANSI_NORMAL[index as usize],
-        8..=15 => ANSI_BRIGHT[(index - 8) as usize],
-        16..=231 => {
-            let i = index - 16;
-            let r = i / 36;
-            let g = (i % 36) / 6;
-            let b = i % 6;
-            hex(cube_channel(r), cube_channel(g), cube_channel(b))
-        }
-        232..=255 => {
-            let level = 8 + 10 * (index - 232) as u16;
-            hex(level as u8, level as u8, level as u8)
-        }
-    }
-}
-
 fn cube_channel(n: u8) -> u8 {
     if n == 0 { 0 } else { 55 + 40 * n }
+}
+
+/// Cores de `[terminal.colors]` e subseções, resolvidas uma vez a partir de
+/// `Config` e guardadas em `App` -- mesmo padrão de [`ResolvedPalette`],
+/// nunca reconsultadas por célula pintada. Construído por
+/// [`ResolvedTermPalette::from_config`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTermPalette {
+    pub foreground: Color,
+    pub background: Color,
+    pub cursor: Color,
+    pub cursor_text: Color,
+    pub selection_background: Color,
+    pub selection_foreground: Color,
+    /// `[terminal.colors] prompt_secondary` -- segunda metade do prompt
+    /// (caminho, via OSC 7). Resolvido para não deixar a chave sem
+    /// procedência declarada, mas sem consumidor ainda: nenhum código deste
+    /// projeto pinta metade de prompt numa cor diferente da outra --
+    /// recurso à parte de PRD-005, não desta etapa (ver relato de fim de
+    /// etapa).
+    pub prompt_secondary: Color,
+    normal: [Color; 8],
+    bright: [Color; 8],
+    /// `[terminal.font] bold_is_bright` -- RF-5.5.
+    bold_is_bright: bool,
+}
+
+impl ResolvedTermPalette {
+    pub fn from_config(config: &porecatu_config::Config) -> Self {
+        let colors = &config.terminal.colors;
+        Self {
+            foreground: cvt(colors.foreground),
+            background: cvt(colors.background),
+            cursor: cvt(colors.cursor),
+            cursor_text: cvt(colors.cursor_text),
+            selection_background: cvt(colors.selection_background),
+            selection_foreground: cvt(colors.selection_foreground),
+            prompt_secondary: cvt(colors.prompt_secondary),
+            normal: ansi_octet(&colors.normal),
+            bright: ansi_octet(&colors.bright),
+            bold_is_bright: config.terminal.font.bold_is_bright,
+        }
+    }
+
+    /// Resolve `Default` para `foreground`/`background` (conforme
+    /// `is_foreground`), índice ANSI/256 e RGB direto -- índices 16..256
+    /// pelo cubo 6x6x6 + rampa de cinza (fórmula padrão xterm, não é valor
+    /// de design: RF-5.17, sem procedência no mockup, convenção técnica
+    /// universal do terminal). `bold` só importa para os oito primeiros
+    /// índices, e só quando `is_foreground` -- RF-5.5 é uma convenção de
+    /// **texto** ("negrito usa a versão brilhante"), nunca de fundo.
+    pub fn resolve(&self, color: TermColor, is_foreground: bool, bold: bool) -> Color {
+        match color {
+            TermColor::Default => {
+                if is_foreground {
+                    self.foreground
+                } else {
+                    self.background
+                }
+            }
+            TermColor::Indexed(index) => self.resolve_indexed(index, is_foreground && bold),
+            TermColor::Rgb { r, g, b } => hex(r, g, b),
+        }
+    }
+
+    fn resolve_indexed(&self, index: u8, promote_to_bright: bool) -> Color {
+        match index {
+            0..=7 => {
+                if promote_to_bright && self.bold_is_bright {
+                    self.bright[index as usize]
+                } else {
+                    self.normal[index as usize]
+                }
+            }
+            8..=15 => self.bright[(index - 8) as usize],
+            16..=231 => {
+                let i = index - 16;
+                let r = i / 36;
+                let g = (i % 36) / 6;
+                let b = i % 6;
+                hex(cube_channel(r), cube_channel(g), cube_channel(b))
+            }
+            232..=255 => {
+                let level = 8 + 10 * (index - 232) as u16;
+                hex(level as u8, level as u8, level as u8)
+            }
+        }
+    }
+}
+
+fn ansi_octet(p: &porecatu_config::AnsiPalette) -> [Color; 8] {
+    [
+        cvt(p.black),
+        cvt(p.red),
+        cvt(p.green),
+        cvt(p.yellow),
+        cvt(p.blue),
+        cvt(p.magenta),
+        cvt(p.cyan),
+        cvt(p.white),
+    ]
 }
 
 /// Cores de chrome (`[appearance.*]`), resolvidas uma vez a partir de
@@ -504,5 +530,129 @@ mod tests {
         assert_eq!(pal.group_color(GroupColor::Purple), hex(0xa6, 0x8c, 0xf0));
         assert_eq!(pal.group_color(GroupColor::Green), hex(0x86, 0xc5, 0x6a));
         assert_eq!(pal.ungrouped_group_color(), hex(0x7b, 0x83, 0x8f));
+    }
+
+    /// Auditoria da etapa (ADR-0028), mesmo espírito de
+    /// `from_config_matches_every_pre_etapa_constant`: `ResolvedTermPalette`
+    /// para a config padrão bate com cada `TERM_*`/`ANSI_*` que existia
+    /// aqui como `const` antes desta etapa.
+    #[test]
+    fn term_palette_from_config_matches_every_pre_etapa_constant() {
+        let pal = ResolvedTermPalette::from_config(&porecatu_config::Config::default());
+
+        assert_eq!(pal.foreground, hex(0xc7, 0xcc, 0xd6));
+        assert_eq!(pal.background, hex(0x0f, 0x12, 0x16));
+        assert_eq!(pal.cursor, hex(0x5e, 0xd3, 0xbc));
+        assert_eq!(pal.cursor_text, hex(0x0f, 0x12, 0x16));
+        assert_eq!(pal.selection_background, hex(0x2e, 0x6b, 0x62));
+        assert_eq!(pal.selection_foreground, hex(0xee, 0xf2, 0xf4));
+        assert_eq!(pal.prompt_secondary, hex(0x6b, 0x73, 0x7e));
+
+        let normal = [
+            hex(0x3b, 0x43, 0x4f),
+            hex(0xef, 0x8a, 0x8a),
+            hex(0x86, 0xc5, 0x6a),
+            hex(0xe0, 0xb0, 0x60),
+            hex(0x6f, 0xa8, 0xf5),
+            hex(0xa6, 0x8c, 0xf0),
+            hex(0x5e, 0xd3, 0xbc),
+            hex(0xc7, 0xcc, 0xd6),
+        ];
+        let bright = [
+            hex(0x6f, 0x77, 0x83),
+            hex(0xf5, 0xa3, 0xa3),
+            hex(0x9b, 0xd4, 0x82),
+            hex(0xec, 0xc3, 0x7c),
+            hex(0x8d, 0xbc, 0xf8),
+            hex(0xbd, 0xa6, 0xf5),
+            hex(0x7f, 0xdf, 0xcc),
+            hex(0xea, 0xee, 0xf3),
+        ];
+        for i in 0..8 {
+            assert_eq!(
+                pal.resolve(TermColor::Indexed(i), true, false),
+                normal[i as usize],
+                "normal[{i}]"
+            );
+            assert_eq!(
+                pal.resolve(TermColor::Indexed(8 + i), true, false),
+                bright[i as usize],
+                "bright[{i}]"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_default_picks_foreground_or_background() {
+        let pal = ResolvedTermPalette::from_config(&porecatu_config::Config::default());
+        assert_eq!(pal.resolve(TermColor::Default, true, false), pal.foreground);
+        assert_eq!(
+            pal.resolve(TermColor::Default, false, false),
+            pal.background
+        );
+    }
+
+    #[test]
+    fn resolve_rgb_passes_through_untouched() {
+        let pal = ResolvedTermPalette::from_config(&porecatu_config::Config::default());
+        assert_eq!(
+            pal.resolve(
+                TermColor::Rgb {
+                    r: 10,
+                    g: 20,
+                    b: 30
+                },
+                true,
+                false
+            ),
+            hex(10, 20, 30)
+        );
+    }
+
+    /// RF-5.17: cor de 256/true color emitida pelo programa não é afetada
+    /// pela paleta -- só os índices 0..16 podem virar brilhante por
+    /// `bold_is_bright`.
+    #[test]
+    fn resolve_256_cube_and_gray_ramp_are_not_bold_promoted() {
+        let pal = ResolvedTermPalette::from_config(&porecatu_config::Config::default());
+        // Índice 16: primeira célula do cubo 6x6x6, todos os canais no
+        // nível 0 -- preto.
+        assert_eq!(
+            pal.resolve(TermColor::Indexed(16), true, true),
+            hex(0, 0, 0)
+        );
+        // Índice 232: primeiro degrau da rampa de cinza (nível 8).
+        assert_eq!(
+            pal.resolve(TermColor::Indexed(232), true, true),
+            hex(8, 8, 8)
+        );
+    }
+
+    /// RF-5.5: negrito usa a versão brilhante da cor ANSI só quando
+    /// `bold_is_bright` está ligado -- desligado (default), negrito não
+    /// muda a cor.
+    #[test]
+    fn bold_is_bright_promotes_only_when_enabled_and_only_for_foreground() {
+        let mut config = porecatu_config::Config::default();
+        assert!(!config.terminal.font.bold_is_bright, "default é desligado");
+        let pal_off = ResolvedTermPalette::from_config(&config);
+        assert_eq!(
+            pal_off.resolve(TermColor::Indexed(1), true, true),
+            pal_off.resolve(TermColor::Indexed(1), true, false),
+            "desligado: negrito não promove"
+        );
+
+        config.terminal.font.bold_is_bright = true;
+        let pal_on = ResolvedTermPalette::from_config(&config);
+        assert_eq!(
+            pal_on.resolve(TermColor::Indexed(1), true, true),
+            hex(0xf5, 0xa3, 0xa3),
+            "ligado: vermelho negrito vira o vermelho brilhante"
+        );
+        assert_eq!(
+            pal_on.resolve(TermColor::Indexed(1), false, true),
+            hex(0xef, 0x8a, 0x8a),
+            "RF-5.5 é convenção de texto -- fundo nunca promove, mesmo com bold_is_bright"
+        );
     }
 }

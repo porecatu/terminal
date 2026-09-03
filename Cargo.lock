@@ -1739,6 +1739,7 @@ dependencies = [
  "bytemuck",
  "glyphon",
  "pollster",
+ "unicode-script",
  "wgpu",
 ]
 

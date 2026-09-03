@@ -14,7 +14,9 @@
 
 use std::collections::HashMap;
 
+use glyphon::cosmic_text::{Fallback, PlatformFallback};
 use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight, fontdb};
+use unicode_script::Script;
 
 use crate::primitives::{FontFace, SansWeight};
 
@@ -33,23 +35,118 @@ const MONO_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/IosevkaFixed-Me
 /// compatível com a GPLv3.
 const ICONS: &[u8] = include_bytes!("../../../assets/fonts/Lucide.ttf");
 
-const MONO_FAMILY: &str = "Iosevka Fixed";
-/// Chrome usa a mesma família do terminal (ADR-0026): `Sans` aqui é o nome
-/// do papel (título de aba, rótulo de grupo, menu), não de uma família
-/// proporcional separada -- a face por trás é `MONO_FAMILY`.
-const SANS_FAMILY: &str = MONO_FAMILY;
+/// Default de `FontFamilies` -- usado por [`TextMeasurer::new`] (todo teste
+/// de layout puro do workspace) e é o mesmo valor que
+/// `[terminal.font] family` / `[appearance.tabs] font_family` trazem por
+/// default em `porecatu.example.toml` (RF-5.1, RF-4.10): trocar a config não
+/// muda nada aqui, só o caminho de produção (`TextMeasurer::with_families`,
+/// via `GpuContext::new`).
+const DEFAULT_FAMILY: &str = "Iosevka Fixed";
 /// Nome interno (`name` ID 1) do `Lucide.ttf` -- minúsculo, como o arquivo
-/// declara; `Family::Name` é o que casa a face no `fontdb`.
+/// declara; `Family::Name` é o que casa a face no `fontdb`. Ícone não é
+/// configurável (ADR-0024): a face por trás do chrome nunca muda com a
+/// config do usuário.
 const ICON_FAMILY: &str = "lucide";
 
 /// Reticências usadas pelo truncamento (RF-1.10).
 const ELLIPSIS: char = '…';
 
-pub(crate) fn attrs_for(font: FontFace) -> Attrs<'static> {
+/// Famílias resolvidas da config, e o multiplicador de espaçamento entre
+/// caracteres do terminal -- o que desce como **parâmetro** em vez de
+/// constante (RF-5.1 `[terminal.font] family`, RF-5.2 `fallback`, RF-4.10
+/// `[appearance.tabs] font_family`, RF-5.6 `letter_spacing`), porque
+/// `porecatu-render` não pode depender de `porecatu-config` (regra de
+/// dependência, CLAUDE.md). Quem monta isto é `porecatu-ui`, a partir de
+/// `Config`; a face de ícones fica de fora -- não é configurável.
+#[derive(Debug, Clone)]
+pub struct FontFamilies {
+    /// `[terminal.font] family`.
+    pub mono: String,
+    /// `[terminal.font] fallback`, em ordem -- entra em
+    /// [`Fallback::common_fallback`], **depois** do fallback específico de
+    /// script (CJK etc.) que a plataforma já resolve, e **antes** do
+    /// fallback genérico da plataforma (não o substitui: RF-5.8 exige que
+    /// fonte ausente ainda caia numa monoespaçada do sistema, não em nada).
+    pub mono_fallback: Vec<String>,
+    /// `[appearance.tabs] font_family` -- chrome (título de aba, rótulo de
+    /// grupo, menu). `Sans` aqui é o nome do papel, não de uma família
+    /// proporcional separada (ADR-0026): por default é o mesmo valor de
+    /// `mono`, mas a config permite divergir.
+    pub sans: String,
+    /// `[terminal.font] letter_spacing` -- fração de `size_px` somada ao
+    /// avanço de cada glyph mono (RF-5.6). `0.0` é o default: idêntico ao
+    /// comportamento de antes desta etapa.
+    pub mono_letter_spacing_em: f32,
+}
+
+impl Default for FontFamilies {
+    fn default() -> Self {
+        Self {
+            mono: DEFAULT_FAMILY.to_owned(),
+            mono_fallback: Vec::new(),
+            sans: DEFAULT_FAMILY.to_owned(),
+            mono_letter_spacing_em: 0.0,
+        }
+    }
+}
+
+/// `cosmic_text::Fallback` customizado: a cadeia ordenada do usuário
+/// (`[terminal.font] fallback`, RF-5.2) tentada **antes** do fallback comum
+/// da plataforma, com fallback de script (CJK etc.) e proibido inalterados
+/// -- é o que preserva RF-5.8 ("cai para monoespaçada do sistema") mesmo com
+/// a cadeia do usuário exaurida, em vez de substituir a rede de segurança
+/// que já existia.
+///
+/// As strings do usuário precisam ser `&'static str` porque é a assinatura
+/// que `Fallback::common_fallback` exige -- `Box::leak` é aceitável aqui
+/// porque roda **uma vez**, na construção do `TextMeasurer` do processo
+/// (etapa 4/hot reload pode reconstruir isto por recarga de fonte; se
+/// virar recarga frequente, revisar).
+struct ConfiguredFallback {
+    common: Vec<&'static str>,
+}
+
+impl ConfiguredFallback {
+    fn new(user_chain: &[String]) -> Self {
+        let mut common: Vec<&'static str> = user_chain
+            .iter()
+            .map(|s| -> &'static str { Box::leak(s.clone().into_boxed_str()) })
+            .collect();
+        common.extend_from_slice(PlatformFallback.common_fallback());
+        Self { common }
+    }
+}
+
+impl Fallback for ConfiguredFallback {
+    fn common_fallback(&self) -> &[&'static str] {
+        &self.common
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        PlatformFallback.forbidden_fallback()
+    }
+
+    fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str] {
+        PlatformFallback.script_fallback(script, locale)
+    }
+}
+
+/// Monta os `Attrs` de shaping para `font`, na família resolvida de
+/// `families` e no tamanho `size_px` -- o tamanho só importa para
+/// `letter_spacing` (RF-5.6), que `cosmic-text` espera em pixels da
+/// própria camada de shaping, não em em (ver o comentário do campo).
+pub(crate) fn attrs_for<'a>(font: FontFace, families: &'a FontFamilies, size_px: f32) -> Attrs<'a> {
     match font {
-        FontFace::Mono { bold } => Attrs::new()
-            .family(Family::Name(MONO_FAMILY))
-            .weight(if bold { Weight::MEDIUM } else { Weight::NORMAL }),
+        FontFace::Mono { bold } => {
+            let attrs = Attrs::new()
+                .family(Family::Name(&families.mono))
+                .weight(if bold { Weight::MEDIUM } else { Weight::NORMAL });
+            if families.mono_letter_spacing_em != 0.0 {
+                attrs.letter_spacing(families.mono_letter_spacing_em * size_px)
+            } else {
+                attrs
+            }
+        }
         FontFace::Sans { weight } => {
             let weight = match weight {
                 SansWeight::Regular => Weight::NORMAL,
@@ -63,7 +160,7 @@ pub(crate) fn attrs_for(font: FontFace) -> Attrs<'static> {
                 SansWeight::SemiBold => Weight::SEMIBOLD,
             };
             Attrs::new()
-                .family(Family::Name(SANS_FAMILY))
+                .family(Family::Name(&families.sans))
                 .weight(weight)
         }
         FontFace::Icon => Attrs::new()
@@ -80,6 +177,13 @@ const ADVANCE_PROBE_SIZE: f32 = 64.0;
 
 pub struct TextMeasurer {
     font_system: FontSystem,
+    /// Famílias e espaçamento resolvidos (RF-5.1, RF-5.2, RF-5.6, RF-4.10) --
+    /// ver [`FontFamilies`]. Guardado aqui (não só passado por parâmetro)
+    /// porque o cache de `advance_em` abaixo depende deles: mudar de família
+    /// sem reconstruir o `TextMeasurer` deixaria o cache com avanços da
+    /// família antiga. Sem consumidor de troca em runtime nesta etapa (hot
+    /// reload é a etapa 4) -- quando existir, precisa limpar o cache junto.
+    families: FontFamilies,
     /// Avanço por caractere, em múltiplos da em. Existe porque a grade
     /// consulta isto **por célula desenhada**, e shapar um caractere por
     /// célula por frame é exatamente a armadilha de performance que o
@@ -89,11 +193,29 @@ pub struct TextMeasurer {
 }
 
 impl TextMeasurer {
-    /// Registra as faces embutidas e **depois** as do sistema.
+    fn build(families: FontFamilies) -> Self {
+        let mut db = fontdb::Database::new();
+        for bytes in [MONO_REGULAR, MONO_MEDIUM, ICONS] {
+            db.load_font_data(bytes.to_vec());
+        }
+        db.load_system_fonts();
+        let fallback = ConfiguredFallback::new(&families.mono_fallback);
+        let font_system =
+            FontSystem::new_with_locale_and_db_and_fallback("en-US".to_string(), db, fallback);
+        Self {
+            font_system,
+            families,
+            advance_cache: HashMap::new(),
+        }
+    }
+
+    /// Registra as faces embutidas e **depois** as do sistema, com as
+    /// famílias default (`FontFamilies::default()`) -- usado por todo teste
+    /// de layout puro do workspace, que não quer saber de config.
     ///
-    /// A ordem é a decisão inteira. O ADR-0016 quer as duas coisas ao
-    /// mesmo tempo: as faces do design vencem para as famílias que ele
-    /// declara, *e* a cadeia de fallback do RF-5.2 continua vindo do
+    /// A ordem de registro é a decisão inteira. O ADR-0016 quer as duas
+    /// coisas ao mesmo tempo: as faces do design vencem para as famílias que
+    /// ele declara, *e* a cadeia de fallback do RF-5.2 continua vindo do
     /// sistema ("permanece fora do binário"). Carregar as embutidas
     /// primeiro entrega as duas -- o `fontdb` resolve empate de família
     /// pela ordem de registro, então uma cópia do sistema da Iosevka
@@ -107,16 +229,15 @@ impl TextMeasurer {
     /// dingbats. A Iosevka cobre os três (ADR-0025), mas a cadeia
     /// continua sendo o que segura o resto do Unicode.
     pub fn new() -> Self {
-        let mut db = fontdb::Database::new();
-        for bytes in [MONO_REGULAR, MONO_MEDIUM, ICONS] {
-            db.load_font_data(bytes.to_vec());
-        }
-        db.load_system_fonts();
-        let font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
-        Self {
-            font_system,
-            advance_cache: HashMap::new(),
-        }
+        Self::build(FontFamilies::default())
+    }
+
+    /// Mesma construção, com famílias/fallback/espaçamento vindos da config
+    /// do usuário (RF-5.1, RF-5.2, RF-5.6, RF-4.10) -- caminho de produção,
+    /// usado por `GpuContext::new`. `porecatu-render` nunca lê `Config`; quem
+    /// resolve os campos é `porecatu-ui`.
+    pub fn with_families(families: FontFamilies) -> Self {
+        Self::build(families)
     }
 
     /// Avanço de `ch` na face `font`, em múltiplos de `size_px`.
@@ -139,8 +260,21 @@ impl TextMeasurer {
         advance
     }
 
-    pub(crate) fn font_system_mut(&mut self) -> &mut FontSystem {
-        &mut self.font_system
+    /// Famílias resolvidas -- usado por `WindowSurface::render` para montar
+    /// os `Attrs` do pipeline de texto (`text.rs`) com a mesma família que
+    /// mediu a grade, sem duplicar a resolução.
+    pub fn families(&self) -> &FontFamilies {
+        &self.families
+    }
+
+    /// `FontSystem` e `FontFamilies` emprestados **juntos**, sem clonar
+    /// `FontFamilies` a cada frame (que aloca -- `String`/`Vec<String>` --
+    /// no caminho quente do render, a armadilha de performance de sempre).
+    /// Um `&mut self` só, com os dois campos projetados aqui dentro: um
+    /// getter de cada um sozinho não compõe, porque por fora do `impl` cada
+    /// método enxerga `&mut self`/`&self` inteiro, não os campos.
+    pub(crate) fn font_system_and_families_mut(&mut self) -> (&mut FontSystem, &FontFamilies) {
+        (&mut self.font_system, &self.families)
     }
 
     /// Largura de avanço de `text` numa face e tamanho, numa linha só, sem
@@ -152,7 +286,7 @@ impl TextMeasurer {
         let metrics = Metrics::new(size_px, size_px * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(None, None);
-        let attrs = attrs_for(font);
+        let attrs = attrs_for(font, &self.families, size_px);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
@@ -204,7 +338,7 @@ impl TextMeasurer {
         let metrics = Metrics::new(size_px, size_px * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(None, None);
-        let attrs = attrs_for(font);
+        let attrs = attrs_for(font, &self.families, size_px);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
@@ -282,6 +416,44 @@ mod tests {
             SIZE,
         );
         assert!(long > short);
+    }
+
+    /// RF-5.1/RF-5.6: `with_families` é o caminho de produção
+    /// (`GpuContext::new`, a partir de `Config`) -- família e
+    /// `letter_spacing` diferentes do default precisam ter efeito
+    /// mensurável, senão a chave da config não tem consumidor de verdade.
+    #[test]
+    fn letter_spacing_widens_mono_measurement() {
+        let mut default_measurer = TextMeasurer::new();
+        let baseline = default_measurer.measure_width("MM", FontFace::Mono { bold: false }, SIZE);
+
+        let mut spaced = TextMeasurer::with_families(FontFamilies {
+            mono_letter_spacing_em: 0.5,
+            ..FontFamilies::default()
+        });
+        let spaced_width = spaced.measure_width("MM", FontFace::Mono { bold: false }, SIZE);
+
+        assert!(spaced_width > baseline);
+    }
+
+    /// `with_families(FontFamilies::default())` tem de medir exatamente
+    /// como `new()` -- é a garantia de que o caminho de produção com a
+    /// config default (`letter_spacing = 0.0`, famílias default) não muda
+    /// nada, só troca a fonte da medida (ADR-0028: sem mudança de
+    /// aparência com a config default).
+    #[test]
+    fn with_default_families_matches_new() {
+        let mut a = TextMeasurer::new();
+        let mut b = TextMeasurer::with_families(FontFamilies::default());
+        let font = FontFace::Mono { bold: false };
+        assert_eq!(
+            a.measure_width("porecatu", font, SIZE),
+            b.measure_width("porecatu", font, SIZE)
+        );
+        assert_eq!(
+            a.measure_mono_cell(SIZE, SIZE * 1.75),
+            b.measure_mono_cell(SIZE, SIZE * 1.75)
+        );
     }
 
     #[test]
@@ -391,7 +563,7 @@ mod tests {
         let metrics = Metrics::new(size, size * 1.2);
         let mut buffer = Buffer::new(&mut m.font_system, metrics);
         buffer.set_size(None, None);
-        let attrs = attrs_for(FontFace::Icon);
+        let attrs = attrs_for(FontFace::Icon, &m.families, size);
         buffer.set_text(crate::icon::X.glyph, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut m.font_system, false);
 
@@ -451,7 +623,7 @@ mod tests {
             let metrics = Metrics::new(size, size * 1.2);
             let mut buffer = Buffer::new(&mut m.font_system, metrics);
             buffer.set_size(None, None);
-            let attrs = attrs_for(FontFace::Icon);
+            let attrs = attrs_for(FontFace::Icon, &m.families, size);
             buffer.set_text(icon.glyph, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut m.font_system, false);
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use porecatu_core::{GroupId, TabId, Workspace};
-use porecatu_render::{Frame, GpuContext, Layer, Rect, WindowSurface};
+use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
 use porecatu_term::{
     GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermParams, Terminal,
     resolve_default_shell, search_path,
@@ -133,29 +133,6 @@ enum Drag {
     },
 }
 
-// docs/config/porecatu.example.toml [terminal.font]: size = 14.0 (RF-5.3,
-// 12.5 originalmente, +2px numa revisão, recalibrado a 13 -- pedido do
-// usuário -- e por fim a 14 pelo motivo abaixo), line_height = 1.75
-// (RF-5.6, "multiplicador das métricas naturais da fonte"). Simplificação
-// desta etapa: aplicado direto sobre `size` em vez da métrica natural da
-// fonte (ascent+descent+lineGap), que exigiria ler hhea/OS2 da face --
-// ajustar quando isso importar na prática.
-//
-// Por que par: a Iosevka Fixed tem `unitsPerEm = 1000` e avanço 500 em
-// **todo** glyph, ou seja avanço lógico = `size / 2`. Para
-// `snap_cell_metrics_to_pixel_grid` ser no-op, `size / 2 * scale` tem de
-// cair em pixel inteiro -- em escala 1.0 isso quer dizer `size` par. A 13
-// o avanço era 6.5 e a célula arredondava para 7.0, deixando meio pixel de
-// folga por célula; a 14 o glyph preenche a célula e a largura dela não
-// muda (7.0 nos dois casos), então a contagem de colunas é a mesma.
-//
-// Isto é conforto, não correção: em 125% nenhum tamanho perto deste fecha,
-// e `terminal.font.size` vira chave do usuário na F4. Quem garante que a
-// grade continua sendo grade em qualquer tamanho e qualquer escala é o
-// teste em em de `paint::fits_the_grid`, não esta constante.
-const FONT_SIZE_PX: f32 = 14.0;
-const LINE_HEIGHT_MULTIPLIER: f32 = 1.75;
-
 /// Grade mínima -- uma célula em cada direção, no pior caso de janela
 /// minúscula ou métrica de fonte falhando.
 const MIN_GRID: usize = 1;
@@ -206,6 +183,78 @@ pub(crate) fn snap_cell_metrics_to_pixel_grid(width: f32, height: f32, scale: f3
     CellMetrics {
         width: physical_width / scale,
         height: physical_height / scale,
+    }
+}
+
+/// `[general] startup_directory` (RF-1.1) -- `"home"` cai em
+/// `dirs::home_dir()` (mesmo fallback de antes desta etapa); qualquer outro
+/// valor é o caminho literal. Sem validação de existência/absolutidade
+/// aqui: um caminho ruim vira "aba nova sem `cwd`" no pior caso (o SO
+/// decide, tipicamente o diretório do processo), não um crash.
+fn resolve_startup_directory(value: &str) -> Option<PathBuf> {
+    if value == "home" {
+        dirs::home_dir()
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+/// Converte `[terminal.cursor] shape` (`porecatu_config::CursorShape`,
+/// RF-5.22) para o enum equivalente do snapshot (`porecatu_term::
+/// CursorShape`) -- a mesma tradução de "vocabulário da config" para
+/// "vocabulário do motor" que `TabBarStyle::from_config`/`ResolvedPalette::
+/// from_config` fazem para chrome.
+fn cursor_shape_from_config(shape: porecatu_config::CursorShape) -> porecatu_term::CursorShape {
+    match shape {
+        porecatu_config::CursorShape::Block => porecatu_term::CursorShape::Block,
+        porecatu_config::CursorShape::Beam => porecatu_term::CursorShape::Beam,
+        porecatu_config::CursorShape::Underline => porecatu_term::CursorShape::Underline,
+    }
+}
+
+/// Monta `TermParams` a partir de `Config` -- `porecatu-term` nunca importa
+/// `porecatu-config` (docs/arquitetura.md seção 4.2), então esta tradução
+/// mora aqui, não lá. Chamado uma vez em `App::new`; hot reload (F4 etapa 4)
+/// reconstrói e reaplica.
+fn term_params_from_config(config: &porecatu_config::Config) -> TermParams {
+    let scrollback = &config.terminal.scrollback;
+    let selection = &config.terminal.selection;
+    let cursor = &config.terminal.cursor;
+    let clipboard = &config.terminal.clipboard;
+    TermParams {
+        scrollback_lines: scrollback.lines as usize,
+        word_separators: selection.word_separators.clone(),
+        default_cursor_shape: cursor_shape_from_config(cursor.shape),
+        cursor_blinking: cursor.blink,
+        osc52_read: clipboard.osc52_read,
+        osc52_write: clipboard.osc52_write,
+        clipboard_write_max_bytes: clipboard.osc52_max_bytes as usize,
+    }
+}
+
+/// Cor do grupo da aba ativa, se ela tiver uma -- usado por `[terminal.
+/// cursor] follows_group_color` (RF-5.22 comentário do TOML: "cursor e
+/// prompt assumem a cor do grupo da aba"). `None` sobre run implícito (sem
+/// `GroupColor`) ou sem aba ativa -- quem chama cai para `term_pal.cursor`.
+fn active_group_color(workspace: &Workspace, pal: &palette::ResolvedPalette) -> Option<Color> {
+    let tab = workspace.active_tab()?;
+    let group_id = workspace.group_of_tab(tab)?;
+    let color = workspace.group(group_id)?.color()?;
+    Some(pal.group_color(color))
+}
+
+/// Monta `FontFamilies` a partir de `Config` -- `porecatu-render` não pode
+/// depender de `porecatu-config` (regra de dependência, CLAUDE.md), então a
+/// família desce como parâmetro simples. `mono` vem de `[terminal.font]`
+/// (RF-5.1/5.2/5.6); `sans` de `[appearance.tabs]` (RF-4.10) -- por default
+/// o mesmo valor (ADR-0026), mas a config permite divergir.
+fn font_families_from_config(config: &porecatu_config::Config) -> porecatu_render::FontFamilies {
+    let font = &config.terminal.font;
+    porecatu_render::FontFamilies {
+        mono: font.family.clone(),
+        mono_fallback: font.fallback.clone(),
+        sans: config.appearance.tabs.font_family.clone(),
+        mono_letter_spacing_em: font.letter_spacing as f32,
     }
 }
 
@@ -344,6 +393,11 @@ struct WindowState {
     /// do SO assim que chamado, sem garantia de vermos o
     /// `MouseInput::Released` de volta depois.
     last_titlebar_click: Option<Instant>,
+    /// `WindowEvent::Focused` -- RF-5.24 (`unfocused_hollow`): o cursor sai
+    /// vazado quando a janela não tem foco. `true` no nascimento: `winit`
+    /// não garante um `Focused(true)` inicial em toda plataforma, e a
+    /// janela recém-criada tipicamente já nasce em primeiro plano.
+    focused: bool,
 }
 
 impl WindowState {
@@ -353,6 +407,7 @@ impl WindowState {
             window,
             window_surface,
             scale,
+            focused: true,
             logical_width: size.width as f32 / scale,
             logical_height: size.height as f32 / scale,
             workspace: Workspace::new(),
@@ -434,11 +489,16 @@ impl WindowState {
     }
 
     /// Nome de exibição do shell (fallback de última instância da
-    /// precedência de título, RF-1.7/ADR-0017) -- a mesma resolução que
-    /// `porecatu_pty::spawn` usa quando `SpawnConfig.program` é `None`,
-    /// reduzida ao nome-base (sem caminho nem extensão).
-    fn shell_display_name() -> String {
-        let resolved = resolve_default_shell(std::env::var("SHELL").ok().as_deref(), search_path);
+    /// precedência de título, RF-1.7/ADR-0017) -- `[shell] program`
+    /// presente vence (mesma precedência de `SpawnConfig.program`); vazio
+    /// cai na mesma resolução que `porecatu_pty::spawn` usa. Reduzido ao
+    /// nome-base (sem caminho nem extensão) nos dois casos.
+    fn shell_display_name(shell: &porecatu_config::Shell) -> String {
+        let resolved = if shell.program.is_empty() {
+            resolve_default_shell(std::env::var("SHELL").ok().as_deref(), search_path)
+        } else {
+            shell.program.clone()
+        };
         std::path::Path::new(&resolved)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -511,6 +571,7 @@ impl WindowState {
     /// `Terminal` dela. Erro de spawn desfaz a criação e vira aviso do app
     /// (canal 1, ADR-0014) -- sem isso o `Workspace` acumularia abas sem
     /// `Terminal` nenhum atrás.
+    #[allow(clippy::too_many_arguments)]
     fn open_tab(
         &mut self,
         cell_metrics: CellMetrics,
@@ -519,9 +580,11 @@ impl WindowState {
         now: Instant,
         target: NewTabTarget,
         style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
     ) {
         let (rows, cols) = self.grid_size(cell_metrics, style);
-        let shell_name = Self::shell_display_name();
+        let shell_name = Self::shell_display_name(shell);
         let tab_id = match target {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
                 Some(g) => {
@@ -541,9 +604,19 @@ impl WindowState {
         let tab = tab_id;
         let proxy = proxy.clone();
         let pty_config = SpawnConfig {
-            program: None,
-            args: Vec::new(),
-            env: Vec::new(),
+            // Vazio = detecta automaticamente (`porecatu_pty::spawn` cai em
+            // `resolve_default_shell`) -- `[shell] program` presente tem
+            // precedência total (doc de `SpawnConfig`).
+            program: (!shell.program.is_empty()).then(|| shell.program.clone()),
+            args: shell.args.clone(),
+            // `[shell.env]` é aplicado **depois** do ambiente base
+            // (TERM/COLORTERM/...) por `porecatu_pty::spawn` -- a config do
+            // usuário pode sobrescrevê-lo (ADR-0012).
+            env: shell
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             cwd,
             size: PtySize {
                 rows: rows as u16,
@@ -553,7 +626,7 @@ impl WindowState {
             },
         };
 
-        match Terminal::spawn(pty_config, TermParams::default(), move || {
+        match Terminal::spawn(pty_config, term_params.clone(), move || {
             let _ = proxy.send_event(Wakeup {
                 window: window_id,
                 tab,
@@ -644,6 +717,7 @@ impl WindowState {
         self.sync_window_title();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn action_new_tab(
         &mut self,
         cell_metrics: CellMetrics,
@@ -651,6 +725,8 @@ impl WindowState {
         startup_directory: &Option<PathBuf>,
         now: Instant,
         style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
@@ -663,6 +739,8 @@ impl WindowState {
             now,
             NewTabTarget::ActiveGroup,
             style,
+            term_params,
+            shell,
         );
     }
 
@@ -1011,6 +1089,7 @@ impl WindowState {
     /// devolvem `ActionOutcome` distinto porque tocam outras janelas, algo
     /// que só `App` resolve.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn handle_tab_action_key(
         &mut self,
         event: &KeyEvent,
@@ -1020,6 +1099,8 @@ impl WindowState {
         startup_directory: &Option<PathBuf>,
         now: Instant,
         style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
     ) -> ActionOutcome {
         if event.state != ElementState::Pressed {
             return ActionOutcome::Unhandled;
@@ -1028,7 +1109,15 @@ impl WindowState {
         if m.ctrl && m.shift && !m.alt {
             match &event.logical_key {
                 Key::Character(s) if s.eq_ignore_ascii_case("t") => {
-                    self.action_new_tab(cell_metrics, proxy, startup_directory, now, style);
+                    self.action_new_tab(
+                        cell_metrics,
+                        proxy,
+                        startup_directory,
+                        now,
+                        style,
+                        term_params,
+                        shell,
+                    );
                     return ActionOutcome::Handled;
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("w") => {
@@ -1073,6 +1162,8 @@ impl WindowState {
                             startup_directory,
                             now,
                             style,
+                            term_params,
+                            shell,
                         );
                     }
                     return ActionOutcome::Handled;
@@ -1088,6 +1179,8 @@ impl WindowState {
                             startup_directory,
                             now,
                             style,
+                            term_params,
+                            shell,
                         );
                     }
                     return ActionOutcome::Handled;
@@ -1103,6 +1196,8 @@ impl WindowState {
                             startup_directory,
                             now,
                             style,
+                            term_params,
+                            shell,
                         );
                     }
                     return ActionOutcome::Handled;
@@ -1555,6 +1650,8 @@ impl WindowState {
         startup_directory: &Option<PathBuf>,
         now: Instant,
         style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
     ) {
         match action {
             GroupAction::Rename => self.open_group_editor(group, EditorRegion::Name),
@@ -1568,6 +1665,8 @@ impl WindowState {
                     startup_directory,
                     now,
                     style,
+                    term_params,
+                    shell,
                 );
             }
             GroupAction::CloseAll => {
@@ -1600,6 +1699,7 @@ impl WindowState {
     /// Separado de [`Self::action_new_tab`] de propósito -- o atalho
     /// `tab.new` continua seguindo o grupo da aba ativa (RF-1.1), que é o
     /// que o ADR-0020 §1 manda.
+    #[allow(clippy::too_many_arguments)]
     fn action_new_tab_ungrouped(
         &mut self,
         cell_metrics: CellMetrics,
@@ -1607,6 +1707,8 @@ impl WindowState {
         startup_directory: &Option<PathBuf>,
         now: Instant,
         style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
@@ -1619,9 +1721,12 @@ impl WindowState {
             now,
             NewTabTarget::Ungrouped,
             style,
+            term_params,
+            shell,
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn action_new_tab_in_group(
         &mut self,
         group: GroupId,
@@ -1630,6 +1735,8 @@ impl WindowState {
         startup_directory: &Option<PathBuf>,
         now: Instant,
         style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
@@ -1642,6 +1749,8 @@ impl WindowState {
             now,
             NewTabTarget::Group(group),
             style,
+            term_params,
+            shell,
         );
     }
 
@@ -1872,6 +1981,15 @@ struct App {
     style: TabBarStyle,
     /// `palette::ResolvedPalette::from_config(&config)`, mesma razão.
     pal: palette::ResolvedPalette,
+    /// `palette::ResolvedTermPalette::from_config(&config)` --
+    /// `[terminal.colors]` e subseções (F4 etapa 3).
+    term_pal: palette::ResolvedTermPalette,
+    /// `TermParams` montado a partir de `Config` (docs/arquitetura.md
+    /// seção 4.2: `porecatu-term` nunca importa `porecatu-config`, quem
+    /// preenche o struct de parâmetros dele é `ui`). Clonado a cada
+    /// `Terminal::spawn` -- é uma `String` e alguns escalares, sem custo no
+    /// caminho quente (spawn de aba não é por frame).
+    term_params: TermParams,
     windows: HashMap<WindowId, WindowState>,
 }
 
@@ -1890,10 +2008,12 @@ impl App {
         let config = Arc::new(load_result.config().clone());
         let style = TabBarStyle::from_config(&config);
         let pal = palette::ResolvedPalette::from_config(&config);
+        let term_pal = palette::ResolvedTermPalette::from_config(&config);
+        let term_params = term_params_from_config(&config);
         Self {
             gpu: None,
             proxy,
-            startup_directory: dirs::home_dir(),
+            startup_directory: resolve_startup_directory(&config.general.startup_directory),
             cell_metrics: CellMetrics {
                 width: 1.0,
                 height: 1.0,
@@ -1901,6 +2021,8 @@ impl App {
             config,
             style,
             pal,
+            term_pal,
+            term_params,
             windows: HashMap::new(),
         }
     }
@@ -1983,8 +2105,12 @@ impl App {
                 }
             }
         } else {
-            let (gpu, window_surface) =
-                GpuContext::new(Arc::clone(&window), size.width, size.height);
+            let (gpu, window_surface) = GpuContext::new(
+                Arc::clone(&window),
+                size.width,
+                size.height,
+                font_families_from_config(&self.config),
+            );
             self.gpu = Some(gpu);
             window_surface
         };
@@ -1998,9 +2124,11 @@ impl App {
         );
 
         if let Some(gpu) = &mut self.gpu {
+            let font_size_px = self.config.terminal.font.size as f32;
+            let line_height_px = font_size_px * self.config.terminal.font.line_height as f32;
             let (cell_width, cell_height) = gpu
                 .text_measurer()
-                .measure_mono_cell(FONT_SIZE_PX, FONT_SIZE_PX * LINE_HEIGHT_MULTIPLIER);
+                .measure_mono_cell(font_size_px, line_height_px);
             self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
         }
 
@@ -2020,6 +2148,8 @@ impl App {
             Instant::now(),
             NewTabTarget::ActiveGroup,
             &self.style,
+            &self.term_params,
+            &self.config.shell,
         );
         self.windows.insert(window_id, state);
     }
@@ -2132,6 +2262,8 @@ impl App {
                         &self.startup_directory,
                         Instant::now(),
                         &self.style,
+                        &self.term_params,
+                        &self.config.shell,
                     );
                     state.window.request_redraw();
                 }
@@ -2351,12 +2483,21 @@ impl ApplicationHandler<Wakeup> for App {
                 // editor de grupo e popover de destino: mesma regra do
                 // ADR-0014/ADR-0023 ("perda de foco fecha").
                 if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.focused = false;
                     state.hover.dismiss();
                     state.close_all_popovers();
                     // Alt-tab com botão físico pressionado nunca gera o
                     // Released correspondente -- sem isto, o estado ficava
                     // preso até o próximo evento de mouse.
                     state.mouse_button_down = None;
+                    state.window.request_redraw();
+                }
+            }
+            WindowEvent::Focused(true) => {
+                // RF-5.24: cursor volta de vazado para cheio ao ganhar foco.
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.focused = true;
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -2458,6 +2599,8 @@ impl App {
                     &self.startup_directory,
                     Instant::now(),
                     &self.style,
+                    &self.term_params,
+                    &self.config.shell,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -2479,6 +2622,8 @@ impl App {
                     &self.startup_directory,
                     Instant::now(),
                     &self.style,
+                    &self.term_params,
+                    &self.config.shell,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -2549,6 +2694,8 @@ impl App {
             &self.startup_directory,
             Instant::now(),
             &self.style,
+            &self.term_params,
+            &self.config.shell,
         );
         match outcome {
             ActionOutcome::Handled => {
@@ -2571,6 +2718,7 @@ impl App {
                         &runtime.terminal.modes(),
                         &key,
                         state.modifiers,
+                        self.config.terminal.scrollback.scroll_on_input,
                     );
                 }
             }
@@ -2642,6 +2790,8 @@ impl App {
                     &self.startup_directory,
                     Instant::now(),
                     &self.style,
+                    &self.term_params,
+                    &self.config.shell,
                 );
             }
             None => {
@@ -2682,6 +2832,8 @@ impl App {
                 delta,
                 state.modifiers,
                 cell,
+                self.config.terminal.scrollback.scroll_multiplier,
+                self.config.terminal.scrollback.alternate_scroll,
             );
         }
     }
@@ -2956,6 +3108,7 @@ impl App {
                         cell,
                         state.modifiers,
                         &mut state.click_tracker,
+                        self.config.terminal.selection.copy_on_select,
                     );
                 }
             }
@@ -3062,6 +3215,8 @@ impl App {
                     &self.startup_directory,
                     Instant::now(),
                     &self.style,
+                    &self.term_params,
+                    &self.config.shell,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -3179,6 +3334,8 @@ impl App {
                         &self.startup_directory,
                         Instant::now(),
                         &self.style,
+                        &self.term_params,
+                        &self.config.shell,
                     );
                     state.window.request_redraw();
                 }
@@ -3190,6 +3347,8 @@ impl App {
                         &self.startup_directory,
                         Instant::now(),
                         &self.style,
+                        &self.term_params,
+                        &self.config.shell,
                     );
                     state.window.request_redraw();
                 }
@@ -3224,6 +3383,7 @@ impl App {
                     cell,
                     state.modifiers,
                     &mut state.click_tracker,
+                    self.config.terminal.selection.copy_on_select,
                 );
             }
         }
@@ -3387,12 +3547,26 @@ impl App {
             runtime.terminal.snapshot_into(&mut runtime.snapshot);
             let box_rect =
                 paint::terminal_box_rect(style, h, state.logical_width, state.logical_height);
+            let cursor_config = &self.config.terminal.cursor;
+            let cursor_color = if cursor_config.follows_group_color {
+                active_group_color(&state.workspace, pal)
+            } else {
+                None
+            }
+            .unwrap_or(self.term_pal.cursor);
+            let cursor = paint::CursorAppearance {
+                color: cursor_color,
+                width: cursor_config.width as f32,
+                hollow: !state.focused && cursor_config.unfocused_hollow,
+            };
             let primitives = paint::build_primitives(
                 &runtime.snapshot,
                 self.cell_metrics,
-                FONT_SIZE_PX,
+                self.config.terminal.font.size as f32,
                 box_rect,
                 style,
+                &self.term_pal,
+                cursor,
                 gpu.text_measurer(),
             );
             frame.set_layer(Layer::Grid, primitives);

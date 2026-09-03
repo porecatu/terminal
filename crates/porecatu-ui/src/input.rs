@@ -28,10 +28,6 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use crate::clipboard;
 use crate::paint::CellMetrics;
 
-// docs/config/porecatu.example.toml [terminal.scrollback] scroll_multiplier
-// = 3 (RF-5.27, RF-10.13): linhas por notch da roda.
-const SCROLL_MULTIPLIER: i32 = 3;
-
 /// Janela de tempo entre cliques no mesmo lugar para contar como duplo/
 /// triplo clique. Sem procedência de design (não é valor de aparência) --
 /// é o mesmo tipo de constante de interação que o dobro-clique do próprio
@@ -89,10 +85,22 @@ pub fn handle_keyboard_input(
     modes: &TermModes,
     event: &KeyEvent,
     modifiers: Modifiers,
+    scroll_on_input: bool,
 ) {
     if event.state != ElementState::Pressed {
         return; // sem key-up reporting no v1
     }
+
+    // `[terminal.scrollback] scroll_on_input` (RF-10.13): digitar volta ao
+    // final, que é onde o prompt está. Só o passo 3 (bytes de verdade pro
+    // programa) conta como "digitar" -- copiar/colar e a navegação do
+    // scrollback (passo 2) não passam por aqui.
+    let write = |bytes: Vec<u8>| {
+        terminal.write(bytes);
+        if scroll_on_input {
+            terminal.scroll(TermScroll::Bottom);
+        }
+    };
 
     // Passo 2: keybind de aplicação.
     if modifiers.ctrl && modifiers.shift && !modifiers.alt {
@@ -138,7 +146,7 @@ pub fn handle_keyboard_input(
     if let Key::Named(named) = &event.logical_key
         && let Some(term_key) = named_term_key(*named)
     {
-        terminal.write(encode_key(term_key, modifiers, modes));
+        write(encode_key(term_key, modifiers, modes));
         return;
     }
 
@@ -148,26 +156,28 @@ pub fn handle_keyboard_input(
         && let Some(c) = s.chars().next()
         && let Some(byte) = encode_ctrl_char(c)
     {
-        terminal.write(vec![byte]);
+        write(vec![byte]);
         return;
     }
 
     if let Some(text) = &event.text {
-        terminal.write(encode_text(text, modifiers));
+        write(encode_text(text, modifiers));
     }
 }
 
 /// Roda do mouse: reporta ao programa se ele pediu o mouse (e `Shift` não
 /// estiver forçando local); senão rola o scrollback, ou -- na tela
-/// alternativa, sem scrollback -- vira setas (RF-10.14, `alternate_scroll`
-/// default `true`, sem chave pra desligar ainda por não existir
-/// `porecatu-config`).
+/// alternativa, sem scrollback -- vira setas quando `alternate_scroll`
+/// estiver ligado (RF-10.14); desligado, a roda não faz nada ali (não há
+/// scrollback pra rolar, e a tradução pra setas é o que ele desliga).
 pub fn handle_mouse_wheel(
     terminal: &Terminal,
     modes: &TermModes,
     delta: MouseScrollDelta,
     modifiers: Modifiers,
     cell: CellPosition,
+    scroll_multiplier: i32,
+    alternate_scroll: bool,
 ) {
     let notches = match delta {
         MouseScrollDelta::LineDelta(_, y) => y,
@@ -179,7 +189,7 @@ pub fn handle_mouse_wheel(
     if notches == 0.0 {
         return;
     }
-    let lines = (notches.signum() as i32) * SCROLL_MULTIPLIER;
+    let lines = (notches.signum() as i32) * scroll_multiplier;
 
     if !modifiers.shift && modes.mouse_reporting != porecatu_term::MouseReporting::None {
         let button = if lines > 0 {
@@ -207,6 +217,9 @@ pub fn handle_mouse_wheel(
     }
 
     if modes.alt_screen {
+        if !alternate_scroll {
+            return;
+        }
         let key = if lines > 0 {
             TermKey::ArrowUp
         } else {
@@ -292,6 +305,7 @@ fn selection_kind(click_count: u8, alt: bool) -> SelectionKind {
 }
 
 /// Clique/soltar do mouse na área do terminal.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_mouse_button(
     terminal: &Terminal,
     modes: &TermModes,
@@ -300,6 +314,7 @@ pub fn handle_mouse_button(
     cell: CellPosition,
     modifiers: Modifiers,
     click_tracker: &mut ClickTracker,
+    copy_on_select: bool,
 ) {
     let Some(term_button) = term_button(button) else {
         return;
@@ -332,10 +347,12 @@ pub fn handle_mouse_button(
         let count = click_tracker.register(cell.row, cell.col);
         let kind = selection_kind(count, modifiers.alt);
         terminal.start_selection(kind, cell.row, cell.col, cell.side);
+    } else if copy_on_select && let Some(text) = terminal.selection_text() {
+        // RF-10.8: `copy_on_select` copia ao **soltar**, não durante o
+        // arraste -- selecionar já é caro o bastante por frame sem também
+        // escrever no clipboard a cada `CursorMoved`.
+        clipboard::copy(&text);
     }
-    // Soltar não copia sozinho -- `copy_on_select` é `false` por default
-    // (ADR-0013): quem seleciona só pra ler não quer perder o que já tinha
-    // copiado.
 }
 
 /// Movimento do mouse na área do terminal -- reporta ao programa (modo
