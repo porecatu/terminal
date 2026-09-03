@@ -22,11 +22,14 @@
 //! como o campo de rename da aba, rola dentro de si mesmo mantendo o caret
 //! visível, sem quebrar linha.
 //!
-//! Nenhuma sombra: `porecatu-render` não tem primitiva de sombra (só quad,
-//! arredondado, texto e clip), e os widgets pedem uma na espec. Ausência
-//! documentada, não esquecida -- mesma classe de simplificação do
-//! `brightness` do fantasma de arraste (`chrome.rs`, Etapa 5). Corpo de
-//! aviso e diálogo também não quebra linha (`TextRun` é sempre uma linha);
+//! **Sombra em camadas nos cinco widgets** (F4 etapa 6, ADR-0032 §2):
+//! `chrome::push_shadow` -- a mesma técnica de três `RoundedQuad` pretos
+//! empilhados que já sombreia a cápsula de grupo, a aba solta e o quadro
+//! do terminal, sem primitiva nova em `porecatu-render`. Sem chave de
+//! config própria (nenhuma seção `[appearance.*]` destes widgets tem
+//! `shadow`, ao contrário de `[appearance.groups]`/`[appearance.
+//! terminal_frame]`): a decisão do ADR-0032 é fixa, não alternável.
+//! Corpo de aviso e diálogo também não quebra linha (`TextRun` é sempre uma linha);
 //! onde a espec pede várias linhas, o texto trunca em uma só com o
 //! `TextMeasurer`, em vez do "três linhas com reticências" literal.
 //!
@@ -45,7 +48,7 @@ use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextMeasurer, TextRun, icon,
 };
 
-use crate::chrome::centered_glyph;
+use crate::chrome::{centered_glyph, push_shadow};
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
 use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::group_editor::{EditorRegion, GroupEditor};
@@ -174,6 +177,7 @@ pub fn paint_warnings(
     let mut out = Vec::new();
     for entry in &layout.entries {
         let warning = &stack.items()[entry.index];
+        push_shadow(&mut out, entry.rect, corner_radius);
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: entry.rect,
             radius: corner_radius,
@@ -338,6 +342,7 @@ pub fn paint_dialog(
         },
         color: pal.dialog_overlay,
     }));
+    push_shadow(&mut out, layout.modal_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.modal_rect,
         radius: corner_radius,
@@ -507,6 +512,7 @@ pub fn paint_context_menu(
     let font_size = cfg.font_size as f32;
 
     let mut out = Vec::new();
+    push_shadow(&mut out, layout.menu_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.menu_rect,
         radius: corner_radius,
@@ -621,6 +627,7 @@ pub fn paint_group_menu(
     let font_size = cfg.font_size as f32;
 
     let mut out = Vec::new();
+    push_shadow(&mut out, layout.menu_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.menu_rect,
         radius: corner_radius,
@@ -845,6 +852,7 @@ pub fn paint_group_editor(
     let item_text_size = menu_cfg.font_size as f32;
 
     let mut out = Vec::new();
+    push_shadow(&mut out, layout.popover_rect, corner_radius);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: layout.popover_rect,
         radius: corner_radius,
@@ -1244,20 +1252,21 @@ pub fn paint_tooltip(
         height,
     };
 
-    vec![
-        Primitive::RoundedQuad(RoundedQuad {
-            rect,
-            radius: corner_radius,
-            color: pal.tooltip_background,
-            border_color: pal.tooltip_border,
-            border_width: 1.0,
-        }),
-        Primitive::Text(TextRun {
-            origin: (rect.x + padding_x, rect.y + padding_y),
-            text: label,
-            font: BODY_FONT,
-            size_px: text_size,
-            color: pal.tooltip_text,
-        }),
-    ]
+    let mut out = Vec::new();
+    push_shadow(&mut out, rect, corner_radius);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: corner_radius,
+        color: pal.tooltip_background,
+        border_color: pal.tooltip_border,
+        border_width: 1.0,
+    }));
+    out.push(Primitive::Text(TextRun {
+        origin: (rect.x + padding_x, rect.y + padding_y),
+        text: label,
+        font: BODY_FONT,
+        size_px: text_size,
+        color: pal.tooltip_text,
+    }));
+    out
 }

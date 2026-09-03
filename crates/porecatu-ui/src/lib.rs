@@ -282,7 +282,22 @@ enum ActionOutcome {
     /// `config.reload` (ADR-0003, F4 etapa 5): o `Arc<Config>` e o watcher
     /// são do processo, não da janela -- só `App` sabe relê-lo.
     ReloadConfig,
+    /// `font.increase`/`decrease`/`reset` (RF-5.9, F4 etapa 6): a métrica
+    /// de célula é do processo (ADR-0015), então só `App` recalcula e
+    /// redimensiona todos os PTYs.
+    Zoom(Zoom),
+    /// `theme.cycle` (RF-5.21, F4 etapa 6): o ciclo é do processo
+    /// (ADR-0031 §4), não da janela.
+    CycleTheme,
     Unhandled,
+}
+
+/// As três ações de zoom (RF-5.9) -- `font.increase`/`decrease`/`reset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Zoom {
+    Increase,
+    Decrease,
+    Reset,
 }
 
 /// Resultado de fechar uma aba por um caminho que pode ou não precisar de
@@ -1246,15 +1261,14 @@ impl WindowState {
             // `Arc<Config>` são do processo, não da janela) -- bubble
             // igual a `OpenWindow`/`CloseWindowRequested`.
             Action::ConfigReload => ActionOutcome::ReloadConfig,
-            // `font.*`/`theme.cycle`: zoom e temas nomeados são a etapa 6
-            // (roadmap F4). A ação existe no catálogo e é vinculável
-            // desde já, mas a tecla que casa é consumida sem efeito em
-            // vez de cair pro terminal -- "se o binding existe e a ação
-            // falha, a tecla foi consumida" (armadilha desta etapa).
-            Action::FontIncrease
-            | Action::FontDecrease
-            | Action::FontReset
-            | Action::ThemeCycle => ActionOutcome::Handled,
+            // RF-5.9: a métrica de célula é do processo (ADR-0015) --
+            // bubble pra `App`, mesmo caminho de `ReloadConfig`.
+            Action::FontIncrease => ActionOutcome::Zoom(Zoom::Increase),
+            Action::FontDecrease => ActionOutcome::Zoom(Zoom::Decrease),
+            Action::FontReset => ActionOutcome::Zoom(Zoom::Reset),
+            // `theme.cycle`: temas nomeados são a etapa 6 também, mas
+            // precisam do `Arc<Config>` de `App` -- mesmo caminho.
+            Action::ThemeCycle => ActionOutcome::CycleTheme,
             // `scrollback.*`, `clipboard.*`, `selection.select_all`:
             // resolvidos no mapa, executados em `input.rs` (scrollback e
             // clipboard) ou ainda não implementados (seleção, F6) -- ver
@@ -2006,6 +2020,23 @@ struct App {
     /// definição (só `WindowSurface` converte pra físico), então uma só
     /// medição serve todas as janelas (ADR-0015).
     cell_metrics: CellMetrics,
+    /// `font.increase`/`decrease`/`reset` (RF-5.9, F4 etapa 6): tamanho de
+    /// fonte da **sessão**, nunca escrito no arquivo. `None` = usa
+    /// `config.terminal.font.size`. Simplificação registrada: `zoom_scope`
+    /// (RF-5.10, "só a aba ativa ou todas") não tem efeito ainda -- o
+    /// zoom é sempre do processo inteiro, como se `zoom_scope = "all"`
+    /// sempre valesse. Zoom por aba exigiria métricas de célula por
+    /// `TabRuntime`, não só por processo -- fora do escopo desta etapa;
+    /// reportado ao usuário.
+    font_zoom_px: Option<f32>,
+    /// `theme.cycle` (RF-5.21, ADR-0031 §4): tema da **sessão**, nunca
+    /// escrito no arquivo. `None` = usa `config.terminal.theme`. `Some("")`
+    /// é o estado "sem tema" quando ele não é o primeiro do ciclo (por
+    /// exemplo, `config.terminal.theme` não vazio e o usuário ciclou de
+    /// volta ao início). Sobrevive a uma recarga enquanto o tema ainda
+    /// existir (ADR-0031 §4); se sumir, `apply_config_reload` o zera e
+    /// avisa.
+    session_theme: Option<String>,
     /// Config carregada uma vez por processo (docs/arquitetura.md, "Na
     /// implementação (F2, etapa 6)": `GpuContext`/`cell_metrics`/
     /// `startup_directory` são as coisas que não variam por janela --
@@ -2036,7 +2067,108 @@ struct App {
     windows: HashMap<WindowId, WindowState>,
 }
 
+/// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
+/// depois `declared` na ordem de declaração do arquivo -- nunca
+/// alfabética, é a única ordem que o usuário controla sem renomear nada.
+/// Função pura, testável sem `App`/GPU. `current` fora da lista (não
+/// deveria acontecer: `active_theme_name` só devolve `""` ou um nome de
+/// `config.themes`) cai no primeiro item, não trava.
+fn next_theme_name<'a>(declared: &[&'a str], current: &str) -> &'a str {
+    let mut names: Vec<&str> = vec![""];
+    names.extend_from_slice(declared);
+    let pos = names.iter().position(|&n| n == current).unwrap_or(0);
+    names[(pos + 1) % names.len()]
+}
+
+#[cfg(test)]
+mod theme_cycle_tests {
+    use super::next_theme_name;
+
+    #[test]
+    fn no_theme_starts_the_cycle() {
+        let declared = ["a", "b"];
+        assert_eq!(next_theme_name(&declared, ""), "a");
+    }
+
+    #[test]
+    fn cycle_advances_in_declaration_order() {
+        let declared = ["a", "b"];
+        assert_eq!(next_theme_name(&declared, "a"), "b");
+    }
+
+    #[test]
+    fn cycle_wraps_back_to_no_theme() {
+        let declared = ["a", "b"];
+        assert_eq!(next_theme_name(&declared, "b"), "");
+    }
+
+    #[test]
+    fn unknown_current_restarts_the_cycle() {
+        let declared = ["a", "b"];
+        assert_eq!(next_theme_name(&declared, "sumiu"), "a");
+    }
+}
+
+/// Passo de `font.increase`/`decrease` (RF-5.9) -- sem valor no design nem
+/// no PRD, escolhido para ficar perto do que outros terminais usam.
+const FONT_ZOOM_STEP_PX: f32 = 1.0;
+const FONT_ZOOM_MIN_PX: f32 = 6.0;
+const FONT_ZOOM_MAX_PX: f32 = 96.0;
+
 impl App {
+    /// Tamanho de fonte efetivo (RF-5.9): o da sessão, se `font.increase`/
+    /// `decrease` já mexeu nele, senão o do arquivo.
+    fn effective_font_size_px(&self) -> f32 {
+        self.font_zoom_px
+            .unwrap_or(self.config.terminal.font.size as f32)
+    }
+
+    /// Nome do tema efetivo (ADR-0031 §4): o da sessão, se `theme.cycle`
+    /// já mexeu nele, senão o declarado no arquivo. `""` é "sem tema".
+    fn active_theme_name(&self) -> &str {
+        self.session_theme
+            .as_deref()
+            .unwrap_or(&self.config.terminal.theme)
+    }
+
+    /// Recalcula as duas paletas resolvidas a partir do tema efetivo
+    /// (`active_theme_name`) e devolve as chaves que "venceram" o tema
+    /// (ADR-0031 §1) -- chamado por `cycle_theme` e por
+    /// `apply_config_reload`, que também precisam repetir isto.
+    fn recompute_palettes(&mut self) -> Vec<&'static str> {
+        let name = self.active_theme_name().to_owned();
+        let themed = porecatu_config::apply_theme(&self.config, &name);
+        self.pal = palette::ResolvedPalette::from_config(&themed);
+        self.term_pal = palette::ResolvedTermPalette::from_config(&themed);
+        porecatu_config::theme_overridden_keys(&self.config, &name)
+    }
+
+    /// `theme.cycle` (RF-5.21): anda na ordem de declaração dos
+    /// `[[themes]]`, com "sem tema" participando como primeiro item
+    /// (ADR-0031 §3). Não escreve no arquivo (§4) e é classe A -- troca
+    /// só as paletas resolvidas, sem tocar grade nem PTY.
+    fn cycle_theme(&mut self, now: Instant) {
+        if self.config.themes.is_empty() {
+            return; // "sem nenhum [[themes]] declarado, ciclar não faz nada"
+        }
+        let declared: Vec<&str> = self.config.themes.iter().map(|t| t.name.as_str()).collect();
+        let next = next_theme_name(&declared, self.active_theme_name());
+        self.session_theme = Some(next.to_owned());
+
+        let overridden = self.recompute_palettes();
+        for state in self.windows.values_mut() {
+            if !overridden.is_empty() {
+                state.warnings.push(
+                    Severity::Info,
+                    "Cor fora do tema vencendo",
+                    overridden.join(", "),
+                    now,
+                );
+            }
+            state.window.request_redraw();
+        }
+    }
+
     fn new(proxy: EventLoopProxy<Wakeup>) -> Self {
         // TODO F4 etapa 5: `--config` chega via CLI; por ora só
         // `PORECATU_CONFIG`/caminho de plataforma são resolvidos
@@ -2050,9 +2182,24 @@ impl App {
             eprintln!("config inválida, usando defaults: {error}");
         }
         let config = Arc::new(load_result.config().clone());
+        // RF-5.18/ADR-0031 §5: nome desconhecido em `[terminal] theme` é
+        // aviso -- mesma limitação de start que o erro de config acima
+        // (sem janela ainda pra avisar de verdade).
+        if !config.terminal.theme.is_empty()
+            && !config
+                .themes
+                .iter()
+                .any(|t| t.name == config.terminal.theme)
+        {
+            eprintln!(
+                "tema desconhecido \"{}\", usando defaults",
+                config.terminal.theme
+            );
+        }
         let style = TabBarStyle::from_config(&config);
-        let pal = palette::ResolvedPalette::from_config(&config);
-        let term_pal = palette::ResolvedTermPalette::from_config(&config);
+        let themed = porecatu_config::apply_theme(&config, &config.terminal.theme);
+        let pal = palette::ResolvedPalette::from_config(&themed);
+        let term_pal = palette::ResolvedTermPalette::from_config(&themed);
         let term_params = term_params_from_config(&config);
         // ADR-0029: erro de `[keybindings]` no start tem a mesma limitação
         // que erro de config acima -- sem `App` ainda, sem janela pra
@@ -2085,6 +2232,8 @@ impl App {
                 width: 1.0,
                 height: 1.0,
             },
+            font_zoom_px: None,
+            session_theme: None,
             config,
             style,
             pal,
@@ -2191,9 +2340,9 @@ impl App {
             scale,
         );
 
+        let font_size_px = self.effective_font_size_px();
+        let line_height_px = font_size_px * self.config.terminal.font.line_height as f32;
         if let Some(gpu) = &mut self.gpu {
-            let font_size_px = self.config.terminal.font.size as f32;
-            let line_height_px = font_size_px * self.config.terminal.font.line_height as f32;
             let (cell_width, cell_height) = gpu
                 .text_measurer()
                 .measure_mono_cell(font_size_px, line_height_px);
@@ -2209,6 +2358,9 @@ impl App {
 
         let window_id = window.id();
         let mut state = WindowState::new(window, window_surface, scale);
+        state
+            .animations
+            .set_enabled(self.config.appearance.window.animations);
         state.open_tab(
             self.cell_metrics,
             &self.proxy,
@@ -2432,8 +2584,29 @@ impl App {
         let effects = reload::diff(&self.config, &new_config);
         self.config = Arc::new(*new_config);
         self.style = TabBarStyle::from_config(&self.config);
-        self.pal = palette::ResolvedPalette::from_config(&self.config);
-        self.term_pal = palette::ResolvedTermPalette::from_config(&self.config);
+
+        // ADR-0031 §4: tema de sessão sobrevive à recarga enquanto
+        // existir; se sumiu do arquivo, volta ao `theme` declarado (ou a
+        // nenhum) e avisa qual sumiu -- mesmo raciocínio de "o arquivo é
+        // do usuário" que o zoom de sessão já segue.
+        let mut vanished_theme = None;
+        if let Some(name) = &self.session_theme
+            && !name.is_empty()
+            && !self.config.themes.iter().any(|t| t.name == *name)
+        {
+            vanished_theme = self.session_theme.take();
+        }
+        // RF-4.22-like (ADR-0031 §5): `[terminal] theme` desconhecido é
+        // aviso, não erro -- mesma severidade de chave desconhecida.
+        let unknown_static_theme = (!self.config.terminal.theme.is_empty()
+            && !self
+                .config
+                .themes
+                .iter()
+                .any(|t| t.name == self.config.terminal.theme))
+        .then(|| self.config.terminal.theme.clone());
+        let overridden = self.recompute_palettes();
+
         self.term_params = term_params_from_config(&self.config);
         // `[keybindings]` é classe A (ADR-0029 §3): o mapa novo vale
         // imediatamente. Um modo de captura em curso (rename, diálogo,
@@ -2446,12 +2619,14 @@ impl App {
         // Classe B: recalcula a métrica de célula uma vez (ADR-0030: "a
         // métrica é a mesma [para toda janela]") -- a escala vem de uma
         // janela qualquer, mesma simplificação de `create_window`.
+        // RF-5.9: o zoom da sessão sobrevive à recarga, como o tema
+        // ciclado (ADR-0031 §4) -- mesmo raciocínio, "o arquivo é do
+        // usuário, o app não desfaz uma escolha da sessão sozinho".
+        let font_size_px = self.effective_font_size_px();
+        let line_height_px = font_size_px * self.config.terminal.font.line_height as f32;
         if effects.grid_changed
             && let Some(gpu) = &mut self.gpu
         {
-            let font = &self.config.terminal.font;
-            let font_size_px = font.size as f32;
-            let line_height_px = font_size_px * font.line_height as f32;
             let (cell_width, cell_height) = gpu
                 .text_measurer()
                 .measure_mono_cell(font_size_px, line_height_px);
@@ -2462,7 +2637,11 @@ impl App {
         let cell_metrics = self.cell_metrics;
         let style = self.style;
         let gpu = self.gpu.as_ref();
+        let animations_enabled = self.config.appearance.window.animations;
         for state in self.windows.values_mut() {
+            // Classe A (ADR-0022): `animations = false` desligada/ligada
+            // na hora, sem esperar a próxima animação.
+            state.animations.set_enabled(animations_enabled);
             // Classe B: colunas/linhas dependem da métrica nova e do
             // tamanho (por janela) -- resize de todos os PTYs da janela,
             // um por recarga (o debounce já coalesceu a rajada).
@@ -2498,6 +2677,33 @@ impl App {
                     .warnings
                     .push(Severity::Warning, "Keybinding inválido", issue.clone(), now);
             }
+            // ADR-0031 §4/§5: tema de sessão que sumiu, tema declarado
+            // desconhecido, e a cor fora do tema que "venceu" o tema
+            // efetivo depois da recarga.
+            if let Some(name) = &vanished_theme {
+                state.warnings.push(
+                    Severity::Info,
+                    "Tema da sessão sumiu",
+                    format!("\"{name}\" não existe mais no arquivo; voltando ao tema declarado."),
+                    now,
+                );
+            }
+            if let Some(name) = &unknown_static_theme {
+                state.warnings.push(
+                    Severity::Warning,
+                    "Tema desconhecido",
+                    format!("\"{name}\" não está em [[themes]]; usando defaults."),
+                    now,
+                );
+            }
+            if !overridden.is_empty() {
+                state.warnings.push(
+                    Severity::Info,
+                    "Cor fora do tema vencendo",
+                    overridden.join(", "),
+                    now,
+                );
+            }
             // Classe A: o layout da barra é função pura de
             // `(Workspace, Config, largura)` -- só redesenhar já aplica.
             state.window.request_redraw();
@@ -2515,6 +2721,47 @@ impl App {
         };
         if let Some(outcome) = reload::read_and_parse(&path) {
             self.apply_config_reload(outcome, now);
+        }
+    }
+
+    /// `font.increase`/`decrease`/`reset` (RF-5.9): recalcula a métrica de
+    /// célula com o tamanho de sessão novo e redimensiona todos os PTYs
+    /// de todas as janelas -- a mesma máquina da classe B do ADR-0030
+    /// (etapas 3/4), acionada por atalho em vez de recarga. Nunca escreve
+    /// no arquivo: `self.config` não muda, só `self.font_zoom_px`.
+    fn apply_zoom(&mut self, delta: Zoom) {
+        let base = self.config.terminal.font.size as f32;
+        let current = self.effective_font_size_px();
+        let new_size = match delta {
+            Zoom::Increase => (current + FONT_ZOOM_STEP_PX).min(FONT_ZOOM_MAX_PX),
+            Zoom::Decrease => (current - FONT_ZOOM_STEP_PX).max(FONT_ZOOM_MIN_PX),
+            Zoom::Reset => base,
+        };
+        self.font_zoom_px = if new_size == base {
+            None
+        } else {
+            Some(new_size)
+        };
+
+        if let Some(gpu) = &mut self.gpu {
+            let font_size_px = self.font_zoom_px.unwrap_or(base);
+            let line_height_px = font_size_px * self.config.terminal.font.line_height as f32;
+            let (cell_width, cell_height) = gpu
+                .text_measurer()
+                .measure_mono_cell(font_size_px, line_height_px);
+            let scale = self.windows.values().next().map_or(1.0, |w| w.scale);
+            self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
+        }
+
+        let cell_metrics = self.cell_metrics;
+        let style = self.style;
+        let gpu = self.gpu.as_ref();
+        for state in self.windows.values_mut() {
+            if let Some(gpu) = gpu {
+                let size = state.window.inner_size();
+                state.resize_to(size.width, size.height, gpu, cell_metrics, &style);
+            }
+            state.window.request_redraw();
         }
     }
 }
@@ -2899,6 +3146,8 @@ impl App {
                     state.window.request_redraw();
                 }
             }
+            ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
+            ActionOutcome::CycleTheme => self.cycle_theme(Instant::now()),
             ActionOutcome::Unhandled => {
                 if let Some(runtime) = state.active_runtime() {
                     // Modos lidos agora, não do snapshot do último frame
@@ -2999,8 +3248,24 @@ impl App {
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
             || state.group_editor.is_some()
-            || state.move_to_group.is_some()
         {
+            return;
+        }
+        // ADR-0023: única lista rolável do chrome -- o tamanho é o número
+        // de grupos do usuário, não conhecido em tempo de escrita, ao
+        // contrário das listas de ação (que não rolam, §2.16). `overlay.rs`
+        // deriva o deslocamento a partir de `highlighted`, então rolar é
+        // só mover o realce -- mesmo efeito de `ArrowUp`/`ArrowDown`
+        // (`handle_move_to_group_key`).
+        if let Some(popover) = &mut state.move_to_group {
+            let notches = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if notches != 0.0 {
+                popover.move_highlight(-notches.signum() as isize);
+                state.window.request_redraw();
+            }
             return;
         }
         if state.in_bar(state.cursor_position.1, &self.style) {
@@ -3582,6 +3847,7 @@ impl App {
     }
 
     fn redraw(&mut self, window_id: WindowId) {
+        let font_size_px = self.effective_font_size_px();
         let Some(gpu) = &mut self.gpu else {
             return;
         };
@@ -3625,6 +3891,23 @@ impl App {
         } else {
             None
         };
+
+        // Hover por brilho (F4 etapa 6, espec §1.10): mesmo padrão do
+        // hover dos botões de janela acima -- calculado fresco a cada
+        // frame a partir do cursor, nunca guardado. `None` durante
+        // arraste: o alvo já tem o fantasma como feedback próprio, e a
+        // pílula/aba de origem não deveria brilhar por baixo dele.
+        let bar_hover =
+            if matches!(state.drag, Drag::Idle) && state.in_bar(state.cursor_position.1, style) {
+                let cursor_logical = (
+                    state.cursor_position.0 as f32 / state.scale,
+                    state.cursor_position.1 as f32 / state.scale,
+                );
+                let content_point = (cursor_logical.0 + state.scroll_offset, cursor_logical.1);
+                tab_bar::hit_test(&base_layout, content_point)
+            } else {
+                None
+            };
 
         // Durante um arraste, o `Workspace` de verdade não é tocado -- só
         // um clone com o preview aplicado é usado pra desenhar (espec
@@ -3728,6 +4011,7 @@ impl App {
             is_mac,
             state.window.is_maximized(),
             hover_window_button,
+            bar_hover,
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
@@ -3753,7 +4037,7 @@ impl App {
             let primitives = paint::build_primitives(
                 &runtime.snapshot,
                 self.cell_metrics,
-                self.config.terminal.font.size as f32,
+                font_size_px,
                 box_rect,
                 style,
                 &self.term_pal,

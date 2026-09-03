@@ -79,18 +79,45 @@ impl Reflow {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AnimationClock {
     active: Vec<Reflow>,
+    /// `[appearance.window] animations` (ADR-0022): `false` aplica o
+    /// `reflow` instantaneamente -- `start_reflow` não empilha nada, e a
+    /// pintura, sem animação em `active`, já desenha o layout final direto
+    /// (é o caminho comum de "nada animando"). Setado uma vez na criação
+    /// da janela e de novo a cada hot reload (classe A) -- `WindowState`
+    /// não guarda `Config`, então o campo mora aqui em vez de ser
+    /// recalculado por chamada.
+    enabled: bool,
+}
+
+impl Default for AnimationClock {
+    fn default() -> Self {
+        Self {
+            active: Vec::new(),
+            enabled: true,
+        }
+    }
 }
 
 impl AnimationClock {
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
     /// Captura `old_layout` (calculado **antes** da operação que muda o
     /// modelo -- `Workspace::collapse_group`/`group_tabs`) e começa a
     /// animar a diferença até a posição que o layout **novo** (pós-
     /// operação) calcular. `duration`: `.18s` pro RF-2.5, `.15s` pro
     /// colapso/expansão (ADR-0022, lista fechada de dois consumidores).
+    /// No-op com `animations = false` (ADR-0022): o chamador já aplicou a
+    /// mudança no modelo antes de chamar isto, então nada além do
+    /// movimento visual se perde.
     pub fn start_reflow(&mut self, old_layout: &TabBarLayout, duration: Duration, now: Instant) {
+        if !self.enabled {
+            return;
+        }
         let wrapper_rect = old_layout.groups.iter().map(|g| (g.id, g.rect)).collect();
         let old_tabs = old_layout
             .groups

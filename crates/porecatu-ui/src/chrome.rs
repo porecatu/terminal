@@ -10,22 +10,23 @@
 //! `paint.rs` para a grade (que continua com `[terminal.*]` fixo até a
 //! etapa 3).
 //!
-//! Sem hover nesta etapa -- a barra não rastreia posição do mouse fora de
-//! clique/arraste (`App::cursor_position` é da área do terminal); o estado
-//! default de cada elemento já é o que a espec. descreve fora de hover,
-//! então a barra fica correta sem ele -- é um refinamento, não uma etapa
-//! 4/5/6. Pelo mesmo motivo, o `filter: brightness(1.18)` e a sombra de
-//! popover do fantasma de arraste (espec. §2.19) não têm equivalente em
-//! `porecatu-render` -- nenhuma primitiva de filtro ou sombra existe ainda
-//! (nenhum hover em lugar nenhum do chrome usa isso hoje); o fantasma
-//! reaproveita as cores normais da aba, sem o realce.
+//! **Hover por brilho (F4 etapa 6, ADR-0032 §2, espec §1.10).** `paint`
+//! recebe `hover: Option<tab_bar::TabBarHit>`, calculado fresco a cada
+//! frame em `lib.rs` a partir do cursor -- mesmo padrão de
+//! `hover_window_button` -- e usado aqui só pra multiplicar (`brighten`)
+//! o fundo da aba (`1.18`) ou da pílula (`1.25`) sob o cursor, clampando
+//! em 1.0. Sem primitiva de filtro em `porecatu-render`: é CPU, de
+//! propósito (ADR-0032 §2 proíbe criar uma só pra isto). O fantasma de
+//! arraste usa a mesma técnica, sempre ligada (não condicionada a hover:
+//! o fantasma segue o cursor, não há "estar em cima dele").
 //!
 //! Desde a F3 etapa 3, pílula e wrapper tingido (§2.3/§2.4) também entram
 //! aqui -- mas só a geometria e a cor que já existem em `porecatu-core`
 //! desde a etapa 1 (`Group::color`/`is_collapsed`). O caret também não gira:
 //! `RoundedQuad`/`TextRun` não têm transform, então a troca de glyph
-//! (`▶`/`▼`) é o equivalente estático, mesma lacuna já registrada acima para
-//! `brightness`/sombra.
+//! (`▶`/`▼`) é o equivalente estático -- isso não muda na F4 etapa 6: só
+//! brilho e sombra são as duas mudanças aprovadas (ADR-0032 §2), rotação
+//! continua fora de escopo.
 //!
 //! Desde a F3 etapa 4, grupo colapsado não desenha abas (o layout já não as
 //! gera, ver `tab_bar.rs`) e a pílula ganha o indicador agregado (RF-2.16),
@@ -190,6 +191,11 @@ pub fn paint(
     is_macos: bool,
     is_maximized: bool,
     hover_window_button: Option<tab_bar::WindowButtonHit>,
+    // Hover por brilho (F4 etapa 6, ADR-0032 §2, espec §1.10) -- `None`
+    // durante arraste/rename/qualquer modo de captura, mesma regra do
+    // resto do hover da barra: calculado fresco por frame a partir do
+    // cursor, nunca por dentro de um modo que já consome o clique.
+    hover: Option<tab_bar::TabBarHit>,
 ) -> Vec<Primitive> {
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
@@ -288,6 +294,14 @@ pub fn paint(
             .and_then(|g| g.color())
             .map(|c| pal.group_color(c))
             .unwrap_or_else(|| pal.ungrouped_group_color());
+        // Hover por brilho na pílula (espec §1.10, `1.25`): a cápsula
+        // atrás **não** brilha, só a pílula -- é ela que tem hit-test de
+        // pílula (`TabBarHit::Pill`), a cápsula não é alvo de clique.
+        let pill_group_color = if hover == Some(tab_bar::TabBarHit::Pill(group.id)) {
+            brighten(group_color, style.pill_hover_brightness)
+        } else {
+            group_color
+        };
 
         // Ajuste pedido pelo usuário (F3 etapa 6, fora da espec.): o grupo
         // é uma "cápsula" pintada com a cor cheia -- não o tingimento de
@@ -348,7 +362,7 @@ pub fn paint(
                 pill,
                 pal,
                 style,
-                group_color,
+                pill_group_color,
                 is_collapsed,
                 live_name,
                 style.pill_font_size,
@@ -386,6 +400,12 @@ pub fn paint(
             let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
             let is_active = active == Some(tab.id);
             let (bg, border, border_width, text_color) = tab_colors(pal, style, exited, is_active);
+            // Hover por brilho no corpo da aba (espec §1.10, `1.18`).
+            let bg = if hover == Some(tab_bar::TabBarHit::Tab(tab.id)) {
+                brighten(bg, style.tab_hover_brightness)
+            } else {
+                bg
+            };
             // RF-2.2/espec §2.5: selecionada é um modificador de borda, não
             // um quarto estado -- fundo e texto continuam vindo de
             // Ativa/Inativa acima.
@@ -652,6 +672,12 @@ pub fn paint(
         let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
         let is_active = active == Some(tab.id);
         let (bg, border, _border_width, text_color) = tab_colors(pal, style, exited, is_active);
+        // Espec §2.19: "hoje o fantasma sai no mesmo tom da aba parada; o
+        // filter: brightness(1.18) e a sombra... estão nas duas mudanças
+        // aprovadas para a F4" -- sempre ligado durante o arraste, não
+        // condicionado a hover (o fantasma segue o cursor, não há "estar
+        // em cima dele").
+        let bg = brighten(bg, style.tab_hover_brightness);
         let (border, border_width) = if selection.is_selected(tab.id) {
             (pal.selected_border, style.selected_border_width)
         } else {
@@ -663,6 +689,9 @@ pub fn paint(
             width: tab.rect.width,
             height: tab.rect.height,
         };
+        if style.group_shadow_enabled {
+            push_shadow(&mut out, ghost_rect, style.tab_corner_radius);
+        }
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: ghost_rect,
             radius: style.tab_corner_radius,
@@ -705,6 +734,16 @@ pub fn paint(
             .group(ghost.group)
             .is_some_and(|g| g.is_collapsed());
         let ghost_dx = ghost.screen_x - pill.rect.x;
+        // ADR-0032 §2: sombra em camadas "nos cinco widgets de chrome e
+        // no fantasma de arraste" -- este é o fantasma do RF-2.19 (pílula
+        // sozinha, §2.19.1).
+        if style.group_shadow_enabled {
+            push_shadow(
+                &mut out,
+                shift(pill.rect, ghost_dx),
+                style.pill_corner_radius,
+            );
+        }
         paint_group_pill(
             pill,
             pal,
@@ -790,6 +829,18 @@ fn shift(rect: Rect, dx: f32) -> Rect {
 
 fn with_alpha(color: Color, alpha: f64) -> Color {
     Color { a: alpha, ..color }
+}
+
+/// `filter: brightness(mult)` (espec §1.10), resolvido em CPU: multiplica
+/// os três canais e clampa em 1.0 -- `porecatu-render` não tem primitiva
+/// de filtro (ADR-0032 §2), e não ganha uma só por isto. Alfa intocado.
+fn brighten(color: Color, mult: f64) -> Color {
+    Color {
+        r: (color.r * mult).min(1.0),
+        g: (color.g * mult).min(1.0),
+        b: (color.b * mult).min(1.0),
+        a: color.a,
+    }
 }
 
 /// Multiplica o alfa que a cor já tem por `mult` -- diferente de
@@ -1054,6 +1105,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -1119,6 +1171,7 @@ mod tests {
             &mut m,
             false,
             false,
+            None,
             None,
         );
 

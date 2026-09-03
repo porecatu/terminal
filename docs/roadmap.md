@@ -12,7 +12,7 @@ O alvo visual está em [`docs/design/`](design/README.md). O mockup mostra o pro
 | F1 — Terminal único | **fechada** |
 | F2 — Abas | **fechada** |
 | F3 — Grupos | **fechada** |
-| F4 — Configuração | **em andamento** (etapas 1-4 fechadas, etapa 5 em revisão) |
+| F4 — Configuração | **fechada** (dívida na etapa 6, ver seção dela) |
 | F5 a F6 | não iniciadas |
 
 > **A verificação interativa é dívida assumida, não critério pendente.** Os
@@ -382,17 +382,32 @@ Itens:
    existia até aqui. `scrollback.*`/`clipboard.*` continuam num caminho hardcoded
    em `input.rs`, de propósito (armadilha registrada no código): mover os dois pro
    mapa não era escopo desta etapa.
-6. **Temas nomeados** ([ADR-0031](adr/0031-temas-nomeados.md)), zoom por atalho,
-   `animations = false`, a roda do mouse no popover de destino, a entrada de cor por
-   hexadecimal do RF-2.10 — e as **duas mudanças visuais aprovadas**: hover por brilho
-   e sombra nos cinco widgets e no fantasma de arraste.
+6. **Temas nomeados, zoom, visual — fechada, com dívida registrada.**
+   [ADR-0031](adr/0031-temas-nomeados.md), `animations = false`, a roda do mouse no
+   popover de destino, e as **duas mudanças visuais aprovadas**
+   ([ADR-0032](adr/0032-interface-do-v1-fechada.md)): hover por brilho (`chrome::
+   brighten`, CPU, `1.18`/`1.25`, calculado por frame a partir de `tab_bar::hit_test`)
+   e sombra em camadas (`chrome::push_shadow`) nos **cinco widgets de chrome** e no
+   fantasma de arraste, sempre ligada nele. Três itens ficaram de fora, registrados
+   como dívida, não como decisão de não fazer:
+   - **Merge de tema cobre só os campos que `Theme` já tinha desde a etapa 1** (16
+     ANSI + 10 nomeados de terminal/abas). `[appearance.groups]`
+     (`palette`/`ungrouped_color` inclusos) e as cores dos cinco widgets de chrome,
+     que o ADR-0031 §1 também lista, ainda não entram no merge.
+   - **Zoom de sessão é sempre do processo inteiro.** `zoom_scope = "active"`
+     (RF-5.10) não tem efeito -- zoom por aba pediria métrica de célula por
+     `TabRuntime`, não só por processo (`App::cell_metrics`), mudança maior que caberia
+     nesta etapa com segurança.
+   - **Entrada de cor por hexadecimal no editor de grupo (RF-2.10) não foi
+     implementada.** Os tokens `input_*` de `[appearance.group_editor]` já existem
+     (reaproveitáveis, o campo de nome já os usa) para quando alguém fizer o campo.
 
 A ordem não é arbitrária: 1 e 2 destravam todo o resto (sem `Config` carregado e sem a
 UI lendo dele, nada é verificável de ponta a ponta); 4 depende de 2 e 3; 5 e 6 são
 independentes entre si e podem trocar de posição. As etapas 1 a 3 já entregam o que a
 fase promete — o arquivo passa a governar a aparência — antes de a fase acabar.
 
-**Critério de saída:** **todo valor de aparência com procedência declarada** — vira chave o que se vê, fica fixo o que é mecânica de interação (limiar de clique e de arraste, cascata de janela, intervalo de frame), e a lista do que fica fixo está no cabeçalho do arquivo de exemplo; verificação por revisão dirigida. Todos os cenários de aceite de PRD-004 e PRD-005 passam. **A config padrão reproduz o binário** — se divergir, o errado é o default, não a interface (ADR-0028). Auditoria de rastreabilidade nas duas direções: nenhuma chave do exemplo sem requisito, nenhum requisito sem chave — com a metade das ações automatizada pelo teste bidirecional do ADR-0029.
+**Critério de saída:** **todo valor de aparência com procedência declarada** — vira chave o que se vê, fica fixo o que é mecânica de interação (limiar de clique e de arraste, cascata de janela, intervalo de frame), e a lista do que fica fixo está no cabeçalho do arquivo de exemplo; verificação por revisão dirigida. Todos os cenários de aceite de PRD-004 e PRD-005 passam, **exceto os três itens de dívida da etapa 6 acima** (zoom por aba, cor hex no editor, tema cobrindo grupos/widgets). **A config padrão reproduz o binário** — se divergir, o errado é o default, não a interface (ADR-0028). Auditoria de rastreabilidade nas duas direções: nenhuma chave do exemplo sem requisito, nenhum requisito sem chave — com a metade das ações automatizada pelo teste bidirecional do ADR-0029.
 
 ---
 

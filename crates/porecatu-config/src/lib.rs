@@ -41,7 +41,9 @@ pub use terminal::{
     AnsiPalette, Clipboard, Colors as TerminalColors, Cursor, CursorShape, Font, Scrollback,
     Selection, Terminal, ZoomScope,
 };
-pub use theme::{Theme, ThemeAnsiPalette};
+pub use theme::{
+    Theme, ThemeAnsiPalette, apply as apply_theme, overridden_keys as theme_overridden_keys,
+};
 
 use std::path::Path;
 

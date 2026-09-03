@@ -182,6 +182,12 @@ pub struct TabBarStyle {
     /// para o botão de nova aba e o de configurações (mesmo token de 6px
     /// da espec. §1.7, RF-4.4).
     pub tab_corner_radius: f32,
+    /// `[appearance.tabs.colors] hover_brightness` -- `filter: brightness`
+    /// resolvido em CPU (F4 etapa 6, ADR-0032 §2): multiplica os canais
+    /// da cor de fundo e clampa, sem primitiva nova em `porecatu-render`.
+    pub tab_hover_brightness: f64,
+    /// `[appearance.groups] label_hover_brightness`, mesma técnica.
+    pub pill_hover_brightness: f64,
     /// `[appearance.tabs.colors] active_border_width`.
     pub active_border_width: f32,
     /// `[appearance.tabs.colors] inactive_border_width`.
@@ -269,6 +275,8 @@ impl TabBarStyle {
         macos_traffic_light_inset: 78.0,
         icon_em_size: 20.0,
         tab_corner_radius: 6.0,
+        tab_hover_brightness: 1.18,
+        pill_hover_brightness: 1.25,
         active_border_width: 2.0,
         inactive_border_width: 2.0,
         selected_border_width: 2.0,
@@ -331,6 +339,8 @@ impl TabBarStyle {
             macos_traffic_light_inset: window_controls.macos_traffic_light_inset as f32,
             icon_em_size: tabs.icon_em_size as f32,
             tab_corner_radius: tabs.corner_radius as f32,
+            tab_hover_brightness: tabs.colors.hover_brightness,
+            pill_hover_brightness: groups.label_hover_brightness,
             active_border_width: tabs.colors.active_border_width as f32,
             inactive_border_width: tabs.colors.inactive_border_width as f32,
             selected_border_width: tabs.colors.selected_border_width as f32,
