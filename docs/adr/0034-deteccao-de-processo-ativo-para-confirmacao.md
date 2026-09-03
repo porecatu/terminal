@@ -59,11 +59,14 @@ conseguiu ler, e o modo do terminal continua cobrindo o que sempre cobriu.
 fontes — lista de membros do Job **e** varredura de processo vivo por
 `sysinfo` a partir do PID raiz — porque nenhuma das duas sozinha basta: o
 achado da investigação (ver [ADR-0033](0033-job-object-encerramento-de-processo.md)
-seção "A primeira tentativa não bastou") é que **PowerShell 7 não propaga
-a associação ao Job para os filhos**, apesar de ser o shell default do
-Porecatu quando instalado. Contar só pelo Job teria deixado este ADR tão
-incompleto quanto o ADR-0033 original — o diálogo simplesmente não
-apareceria para o caso mais comum (`npm start` sob pwsh).
+seção "A primeira tentativa não bastou") é que **pelo menos uma instalação
+de PowerShell 7 (MSIX/Microsoft Store) não propaga a associação ao Job
+para os filhos**, apesar de pwsh ser o shell default do Porecatu quando
+instalado — e o mesmo teste num pwsh instalado por outro meio não
+reproduziu a brecha, então não é garantia universal do PowerShell 7.
+Contar só pelo Job teria deixado este ADR incompleto pra qualquer
+instalação que reproduza a brecha — o diálogo simplesmente não apareceria
+para o caso mais comum (`npm start` sob pwsh).
 
 Em `crates/porecatu-ui/src/lib.rs`, `action_close_tab`/`close_tab_via_button`
 passam a chamar uma função livre e pura,

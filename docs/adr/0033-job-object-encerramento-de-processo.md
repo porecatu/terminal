@@ -48,14 +48,25 @@ inteiramente correta.
 
 Testado em três shells para isolar a variável: `cmd.exe` e Windows
 PowerShell 5.1 propagam a associação ao Job para os filhos normalmente (o
-comportamento documentado da Microsoft); **PowerShell 7 (`pwsh`) não
-propaga** — nenhum filho, neto ou bisneto de um processo spawnado por pwsh
-jamais aparece na lista do Job, mesmo continuando descendente legítimo na
-árvore do SO. `pwsh` é justamente o shell que `resolve_default_shell`
-prefere quando instalado (`crates/porecatu-pty/src/shell.rs`) — ou seja, o
-Job sozinho falhava silenciosamente no caso mais comum, não num caso de
-borda. A causa exata a nível de syscall não foi fechada (exigiria
-rastreamento de API tipo Process Monitor); o fato empírico, reproduzido
+comportamento documentado da Microsoft); **naquela instalação de
+PowerShell 7 (`pwsh`, via MSIX/Microsoft Store, `C:\Program
+Files\WindowsApps\...`) a associação não propagou** — nenhum filho, neto ou
+bisneto do processo spawnado por pwsh apareceu na lista do Job, mesmo
+continuando descendente legítimo na árvore do SO. `pwsh` é justamente o
+shell que `resolve_default_shell` prefere quando instalado
+(`crates/porecatu-pty/src/shell.rs`).
+
+**Não é garantia universal de todo `pwsh`** — o mesmo teste rodado no
+runner Windows do CI (pwsh instalado por outro meio, não MSIX/Store) **não**
+reproduziu a brecha: a associação propagou normalmente nesse ambiente. O
+achado é uma característica de *como aquele pwsh específico foi instalado*,
+não do PowerShell 7 em geral — mas nenhuma versão empacotada garante nada
+sobre o mecanismo interno de spawn de processo entre instalações
+(MSIX/Store vs. winget/MSI vs. build própria), então a mitigação (seção 3)
+continua necessária: cobrir os dois casos é mais barato do que confiar em
+qual instalação de pwsh o usuário tem. A causa exata a nível de syscall não
+foi fechada (exigiria rastreamento de API tipo Process Monitor); o fato
+empírico, reproduzido
 duas vezes com métodos diferentes, é que o Job sozinho sub-conta e
 sub-mata sob esse shell.
 

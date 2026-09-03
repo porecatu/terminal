@@ -326,13 +326,19 @@ mod tests {
     /// A reprodução real do relato do usuário: PowerShell 7 (`pwsh.exe`)
     /// interativo rodando um comando de longa duração em primeiro plano
     /// (`ping`, aqui no lugar de `npm start`) -- exatamente como pwsh fica
-    /// bloqueado esperando um `npm start` interativo. Confirma que a
-    /// varredura por `sysinfo` mata o processo mesmo quando ele nunca
-    /// entrou no Job -- sem isso, este teste falharia exatamente como o
-    /// app falhava (o achado da investigação: subindo a cadeia via
+    /// bloqueado esperando um `npm start` interativo. Garante que
+    /// `kill_tree` mata o descendente **de qualquer jeito**, tenha ele
+    /// entrado no Job ou não -- é essa garantia (não uma reprodução exata
+    /// da brecha) que importa em qualquer ambiente. A brecha em si (Job
+    /// nunca vendo o descendente) foi reproduzida com pwsh instalado via
+    /// MSIX/Microsoft Store num Windows 11 local, subindo a cadeia via
     /// `Get-CimInstance Win32_Process` a partir do `node.exe` de um `npm
-    /// start`, cada elo de pai-filho até o `pwsh.exe` raiz estava
-    /// correto, mas nenhum desses processos aparecia na lista do Job).
+    /// start` real -- cada elo de pai-filho até o `pwsh.exe` raiz estava
+    /// correto, mas nenhum desses processos aparecia na lista do Job.
+    /// **Ambiente-dependente**: um pwsh instalado por outro meio (ex.
+    /// winget/MSI num runner de CI) pode propagar a associação
+    /// normalmente -- o teste registra isso via `eprintln!`, sem falhar
+    /// por causa disso.
     #[test]
     fn kill_tree_kills_descendants_that_never_joined_the_job() {
         // Requer `pwsh` instalado -- se não estiver, pula (mesmo padrão
@@ -354,8 +360,16 @@ mod tests {
             !descendants_before.is_empty(),
             "esperava o `ping` vivo como descendente antes de matar"
         );
-        // A prova do achado: nenhum desses descendentes está na lista do
-        // Job, apesar de estarem vivos e corretamente ligados ao PID raiz.
+        // Diagnóstico, não requisito: a investigação original (MSIX/Store
+        // pwsh 7.6.5 num Windows 11 local) achou o Job sempre cego a esse
+        // descendente. Runners de CI, com pwsh instalado por outro meio
+        // (winget/MSI, não a Store), podem propagar a associação
+        // normalmente -- o achado é uma característica **daquela**
+        // instalação de pwsh, não uma garantia universal do binário.
+        // O que este teste precisa garantir, em qualquer ambiente, é que
+        // `kill_tree` mata o descendente de qualquer jeito (a asserção
+        // logo abaixo) -- por isso a contagem une as duas fontes em vez
+        // de confiar só numa.
         let job_pids: Vec<u32> = group
             .job
             .as_ref()
@@ -364,13 +378,13 @@ mod tests {
             .into_iter()
             .map(|pid| pid as u32)
             .collect();
-        assert!(
-            descendants_before
-                .iter()
-                .any(|pid| !job_pids.contains(&pid.as_u32())),
-            "esperava achar um descendente vivo que o Job não vê -- \
-             se isto falhar, talvez o pwsh tenha passado a propagar a \
-             associação (o que seria ótimo, mas revisar a nota do módulo)"
+        let job_missed_someone = descendants_before
+            .iter()
+            .any(|pid| !job_pids.contains(&pid.as_u32()));
+        eprintln!(
+            "job_pids={job_pids:?} descendants_before={descendants_before:?} \
+             job_missed_someone={job_missed_someone} (achado original: true; \
+             `false` aqui só significa que este pwsh específico propaga)"
         );
 
         group.kill_tree();
