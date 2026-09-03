@@ -8,8 +8,8 @@ use std::time::Instant;
 use porecatu_core::{Action, GroupId, TabId, Workspace};
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
 use porecatu_term::{
-    GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermParams, Terminal,
-    resolve_default_shell, search_path,
+    GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermModes,
+    TermParams, Terminal, resolve_default_shell, search_path,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -37,6 +37,7 @@ mod reload;
 mod rename;
 mod selection;
 mod tab_bar;
+mod text_field;
 mod titlebar;
 mod tooltip;
 mod warning;
@@ -56,6 +57,7 @@ use reload::ConfigReload;
 use rename::RenameState;
 use selection::Selection;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
+use text_field::{TextFieldState, apply_text_field_key};
 use tooltip::Hover;
 use warning::{Severity, WarningStack};
 
@@ -428,6 +430,68 @@ struct WindowState {
     focused: bool,
 }
 
+/// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
+/// devem confirmar antes de fechar -- dois sinais em OU, ambos atrás da
+/// config `confirm_close_with_process`. Função livre e pura (sem
+/// `Terminal`/`WindowState`), testável isoladamente nos quatro
+/// quadrantes de `TermModes`/`has_extra_processes`.
+fn should_confirm_tab_close(
+    confirm_close_with_process: bool,
+    modes: TermModes,
+    has_extra_processes: bool,
+) -> bool {
+    confirm_close_with_process
+        && (modes.alt_screen
+            || modes.mouse_reporting != MouseReporting::None
+            || has_extra_processes)
+}
+
+#[cfg(test)]
+mod should_confirm_tab_close_tests {
+    use super::*;
+
+    fn quiet_modes() -> TermModes {
+        TermModes::default()
+    }
+
+    #[test]
+    fn quiet_terminal_without_extra_process_never_confirms() {
+        assert!(!should_confirm_tab_close(true, quiet_modes(), false));
+    }
+
+    #[test]
+    fn alt_screen_confirms() {
+        let modes = TermModes {
+            alt_screen: true,
+            ..quiet_modes()
+        };
+        assert!(should_confirm_tab_close(true, modes, false));
+    }
+
+    #[test]
+    fn extra_process_confirms_even_without_alt_screen() {
+        assert!(should_confirm_tab_close(true, quiet_modes(), true));
+    }
+
+    #[test]
+    fn both_signals_together_still_confirms_once() {
+        let modes = TermModes {
+            alt_screen: true,
+            ..quiet_modes()
+        };
+        assert!(should_confirm_tab_close(true, modes, true));
+    }
+
+    #[test]
+    fn config_disabled_suppresses_both_signals() {
+        let modes = TermModes {
+            alt_screen: true,
+            ..quiet_modes()
+        };
+        assert!(!should_confirm_tab_close(false, modes, true));
+    }
+}
+
 impl WindowState {
     fn new(window: Arc<Window>, window_surface: WindowSurface, scale: f32) -> Self {
         let size = window.inner_size();
@@ -730,10 +794,10 @@ impl WindowState {
     /// clicar em outra aba, ou fechar a que está sendo renomeada, também
     /// confirma (espec. §2.5: "Confirma em Enter e no blur").
     fn commit_rename(&mut self) {
-        let RenameState::Editing { tab, buffer } = std::mem::take(&mut self.rename) else {
+        let RenameState::Editing { tab, field } = std::mem::take(&mut self.rename) else {
             return;
         };
-        let trimmed = buffer.trim();
+        let trimmed = field.text().trim();
         let title = if trimmed.is_empty() {
             None
         } else {
@@ -772,16 +836,21 @@ impl WindowState {
         );
     }
 
-    /// RF-1.6 (ADR-0017): fechar a aba ativa pede confirmação quando ela
-    /// tem tela alternativa ou reporte de mouse ligado -- o proxy de
-    /// "processo em primeiro plano" que o app pode observar sem varrer a
-    /// árvore de processos. Sem isso, fecha direto -- e se isso esvaziou a
-    /// janela (pedido do usuário), quem chama fecha a janela.
-    fn action_close_tab(&mut self) -> Option<TabCloseOutcome> {
+    /// RF-1.6 (ADR-0017, ADR-0034): fechar a aba ativa pede confirmação
+    /// quando ela tem tela alternativa/reporte de mouse ligado, **ou**
+    /// (Windows, ADR-0034) mais de um processo no Job do shell -- os dois
+    /// sinais que o app observa sem varrer a árvore de processos. A chave
+    /// `confirm_close_with_process` governa os dois juntos. Sem
+    /// confirmação, fecha direto -- e se isso esvaziou a janela (pedido do
+    /// usuário), quem chama fecha a janela.
+    fn action_close_tab(&mut self, confirm_close_with_process: bool) -> Option<TabCloseOutcome> {
         let id = self.workspace.active_tab()?;
         let runtime = self.tabs.get(&id)?;
-        let modes = runtime.terminal.modes();
-        if modes.alt_screen || modes.mouse_reporting != MouseReporting::None {
+        if should_confirm_tab_close(
+            confirm_close_with_process,
+            runtime.terminal.modes(),
+            runtime.terminal.has_extra_processes(),
+        ) {
             let title = self
                 .workspace
                 .tab(id)
@@ -807,7 +876,7 @@ impl WindowState {
         };
         self.rename = RenameState::Editing {
             tab: id,
-            buffer: tab.title().to_string(),
+            field: TextFieldState::new(tab.title()),
         };
     }
 
@@ -885,7 +954,10 @@ impl WindowState {
 
     /// Passo 1 do ADR-0008 (modo de captura): consome tudo, exceto `Esc` e
     /// `Enter` (que confirmam/cancelam), sem repassar nem pro roteamento de
-    /// keybind nem pro terminal.
+    /// keybind nem pro terminal. `Ctrl+A`/`Cmd+A`, `Shift+seta`,
+    /// `Home`/`End` e o texto digitado (com substituição de seleção) vêm
+    /// de `apply_text_field_key` (ADR-0035), compartilhado com o editor de
+    /// grupo.
     fn handle_rename_key(&mut self, event: &KeyEvent) {
         if event.state != ElementState::Pressed {
             return;
@@ -895,10 +967,13 @@ impl WindowState {
             Key::Named(NamedKey::Escape) => self.rename = RenameState::Idle,
             Key::Named(NamedKey::Backspace) => self.rename.backspace(),
             _ => {
-                if let Some(text) = &event.text {
-                    for c in text.chars().filter(|c| !c.is_control()) {
-                        self.rename.push_char(c);
-                    }
+                if let RenameState::Editing { field, .. } = &mut self.rename {
+                    apply_text_field_key(
+                        field,
+                        &event.logical_key,
+                        event.text.as_deref(),
+                        self.modifiers,
+                    );
                 }
             }
         }
@@ -1012,7 +1087,7 @@ impl WindowState {
         if event.state != ElementState::Pressed {
             return GroupEditorOutcome::None;
         }
-        let shift = self.modifiers.shift;
+        let modifiers = self.modifiers;
         let Some(editor) = &mut self.group_editor else {
             return GroupEditorOutcome::None;
         };
@@ -1022,7 +1097,7 @@ impl WindowState {
                 GroupEditorOutcome::None
             }
             Key::Named(NamedKey::Tab) => {
-                editor.cycle_focus(!shift);
+                editor.cycle_focus(!modifiers.shift);
                 GroupEditorOutcome::None
             }
             Key::Named(NamedKey::ArrowUp) => {
@@ -1056,12 +1131,13 @@ impl WindowState {
                 }
             },
             _ => {
-                if editor.focus() == EditorRegion::Name
-                    && let Some(text) = &event.text
-                {
-                    for c in text.chars().filter(|c| !c.is_control()) {
-                        editor.push_char(c);
-                    }
+                if let Some(field) = editor.name_field_mut() {
+                    apply_text_field_key(
+                        field,
+                        &event.logical_key,
+                        event.text.as_deref(),
+                        modifiers,
+                    );
                 }
                 GroupEditorOutcome::None
             }
@@ -1147,6 +1223,7 @@ impl WindowState {
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
         keymap: &HashMap<Chord, Action>,
+        confirm_close_with_process: bool,
     ) -> ActionOutcome {
         if event.state != ElementState::Pressed {
             return ActionOutcome::Unhandled;
@@ -1201,7 +1278,7 @@ impl WindowState {
                 );
                 ActionOutcome::Handled
             }
-            Action::TabClose => match self.action_close_tab() {
+            Action::TabClose => match self.action_close_tab(confirm_close_with_process) {
                 Some(TabCloseOutcome::Dialog(dialog)) => {
                     self.dialog = Some(dialog);
                     ActionOutcome::Handled
@@ -1325,6 +1402,7 @@ impl WindowState {
         gpu: &mut GpuContext,
         right_click: bool,
         style: &TabBarStyle,
+        confirm_close_with_process: bool,
     ) -> NewTabRequest {
         let bar_width = self.logical_width;
         let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos());
@@ -1434,6 +1512,50 @@ impl WindowState {
 
         match hit {
             TabBarHit::Tab(id) => {
+                // Clique dentro do próprio campo de rename (ADR-0035):
+                // posiciona o cursor pelo caractere sob o ponto, sem
+                // ativar a aba de novo nem armar arraste -- ela já está
+                // ativa e em edição.
+                if self.rename.editing_tab() == Some(id)
+                    && let Some(tab_rect) = tab_bar::tab_rect(&layout, id)
+                {
+                    let field_content = chrome::rename_field_rect(tab_rect, style);
+                    let field_screen = Rect {
+                        x: field_content.x - self.scroll_offset,
+                        y: field_content.y,
+                        width: field_content.width,
+                        height: field_content.height,
+                    };
+                    if tab_bar::rect_contains(field_screen, logical_point) {
+                        if let Some(field) = self.rename.field() {
+                            let buffer = field.text().to_string();
+                            let text_area =
+                                (field_content.width - style.rename_padding_x * 2.0).max(0.0);
+                            let measurer = gpu.text_measurer();
+                            let text_width = measurer.measure_width(
+                                &buffer,
+                                chrome::LABEL_FONT,
+                                style.rename_font_size,
+                            );
+                            let text_x_screen = tab_bar::scrolled_text_x(
+                                field_screen.x,
+                                style.rename_padding_x,
+                                text_width,
+                                text_area,
+                            );
+                            let local_x = logical_point.0 - text_x_screen;
+                            let byte_index = measurer.index_at_offset(
+                                &buffer,
+                                chrome::LABEL_FONT,
+                                style.rename_font_size,
+                                local_x,
+                            );
+                            self.rename.click_at(byte_index);
+                        }
+                        self.mouse_button_down = Some(MouseButton::Left);
+                        return NewTabRequest::None;
+                    }
+                }
                 if self
                     .rename
                     .editing_tab()
@@ -1475,16 +1597,18 @@ impl WindowState {
                 }
                 NewTabRequest::None
             }
-            TabBarHit::CloseButton(id) => match self.close_tab_via_button(id) {
-                Some(TabCloseOutcome::Dialog(dialog)) => {
-                    self.dialog = Some(dialog);
-                    NewTabRequest::None
+            TabBarHit::CloseButton(id) => {
+                match self.close_tab_via_button(id, confirm_close_with_process) {
+                    Some(TabCloseOutcome::Dialog(dialog)) => {
+                        self.dialog = Some(dialog);
+                        NewTabRequest::None
+                    }
+                    Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                        NewTabRequest::WindowEmptied
+                    }
+                    _ => NewTabRequest::None,
                 }
-                Some(TabCloseOutcome::Closed { window_empty: true }) => {
-                    NewTabRequest::WindowEmptied
-                }
-                _ => NewTabRequest::None,
-            },
+            }
             TabBarHit::Pill(id) => {
                 // Espec §2.19.1/RF-2.19: arma o possível arraste do
                 // rótulo -- se o gesto nunca passar do limiar de 4px,
@@ -1551,10 +1675,17 @@ impl WindowState {
     /// necessariamente a ativa (o clique pode ser em qualquer aba da
     /// trilha) -- mesma condição de `action_close_tab`, mas sobre `id`
     /// explícito.
-    fn close_tab_via_button(&mut self, id: TabId) -> Option<TabCloseOutcome> {
+    fn close_tab_via_button(
+        &mut self,
+        id: TabId,
+        confirm_close_with_process: bool,
+    ) -> Option<TabCloseOutcome> {
         let runtime = self.tabs.get(&id)?;
-        let modes = runtime.terminal.modes();
-        if modes.alt_screen || modes.mouse_reporting != MouseReporting::None {
+        if should_confirm_tab_close(
+            confirm_close_with_process,
+            runtime.terminal.modes(),
+            runtime.terminal.has_extra_processes(),
+        ) {
             let title = self
                 .workspace
                 .tab(id)
@@ -2400,22 +2531,41 @@ impl App {
     }
 
     /// RF-10.23 (ADR-0015): fechar janela com mais de uma aba pede
-    /// confirmação. Com uma aba só (ou nenhuma), fecha direto.
+    /// confirmação -- incondicional, não olha `confirm_close_with_process`.
+    /// **Desde o ADR-0034**, também confirma com **uma aba só** se ela tiver
+    /// processo ativo (mesmo critério de `should_confirm_tab_close`: modo
+    /// do terminal ou contagem de processo na árvore) -- fechar a janela
+    /// mata a árvore igual a fechar a aba (`close_window_unconditionally`
+    /// chama `Terminal::close` para cada uma), e o usuário não tinha aviso
+    /// nenhum nesse caminho. Essa segunda checagem respeita
+    /// `confirm_close_with_process`, como o fechamento de aba.
     fn request_close_window(&mut self, window_id: WindowId, event_loop: &ActiveEventLoop) {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        if state
+        let tab_count = state
             .workspace
             .groups()
             .iter()
             .map(|g| g.tabs().len())
-            .sum::<usize>()
-            > 1
-        {
+            .sum::<usize>();
+        let confirm_close_with_process = self.config.general.confirm_close_with_process;
+        let any_tab_busy = state.tabs.values().any(|runtime| {
+            should_confirm_tab_close(
+                confirm_close_with_process,
+                runtime.terminal.modes(),
+                runtime.terminal.has_extra_processes(),
+            )
+        });
+        if tab_count > 1 || any_tab_busy {
+            let body = if tab_count > 1 {
+                "Esta janela tem mais de uma aba aberta."
+            } else {
+                "Esta janela tem um programa em primeiro plano."
+            };
             state.dialog = Some(ConfirmDialog::new(
                 "Fechar janela?",
-                "Esta janela tem mais de uma aba aberta.",
+                body,
                 "Fechar janela",
                 DialogAction::CloseWindow,
             ));
@@ -2490,7 +2640,9 @@ impl App {
             }
             MenuAction::CloseTab => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
-                    match state.close_tab_via_button(tab) {
+                    match state
+                        .close_tab_via_button(tab, self.config.general.confirm_close_with_process)
+                    {
                         Some(TabCloseOutcome::Dialog(dialog)) => {
                             state.dialog = Some(dialog);
                             state.window.request_redraw();
@@ -3128,6 +3280,7 @@ impl App {
             &self.term_params,
             &self.config.shell,
             &self.keymap,
+            self.config.general.confirm_close_with_process,
         );
         match outcome {
             ActionOutcome::Handled => {
@@ -3203,7 +3356,31 @@ impl App {
         match hit {
             Some(overlay::GroupEditorHit::NameField) => {
                 if let Some(editor) = &mut state.group_editor {
-                    editor.set_focus(EditorRegion::Name);
+                    let cfg = &self.config.appearance.group_editor;
+                    let input_padding_x = cfg.input_padding_x as f32;
+                    let input_font_size = cfg.input_font_size as f32;
+                    let name_input_rect = layout.name_input_rect;
+                    let buffer = editor.name_buffer().to_string();
+                    let measurer = gpu.text_measurer();
+                    let available_text_width =
+                        (name_input_rect.width - input_padding_x * 2.0).max(0.0);
+                    let text_width =
+                        measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
+                    let text_x = tab_bar::scrolled_text_x(
+                        name_input_rect.x,
+                        input_padding_x,
+                        text_width,
+                        available_text_width,
+                    );
+                    let local_x = logical_point.0 - text_x;
+                    let byte_index = measurer.index_at_offset(
+                        &buffer,
+                        overlay::BODY_FONT,
+                        input_font_size,
+                        local_x,
+                    );
+                    editor.click_name_at(byte_index);
+                    state.mouse_button_down = Some(button);
                 }
             }
             Some(overlay::GroupEditorHit::Swatch(index)) => {
@@ -3372,16 +3549,51 @@ impl App {
                         state.logical_width,
                         state.logical_height,
                     );
-                    match overlay::group_editor_hit(&layout, logical_point) {
-                        Some(overlay::GroupEditorHit::Swatch(i)) => {
-                            editor.set_focus(EditorRegion::Swatches);
-                            editor.set_swatch_highlight(i);
+                    // Arraste dentro do campo de nome (ADR-0035): só entra
+                    // aqui com o botão esquerdo já pressionado a partir de
+                    // um clique no próprio campo (é o único lugar que arma
+                    // `mouse_button_down` no editor de grupo, ver
+                    // `dispatch_group_editor_click`) -- não conflita com o
+                    // hover de swatch/ação abaixo, que não olha o botão.
+                    if state.mouse_button_down == Some(MouseButton::Left)
+                        && editor.focus() == EditorRegion::Name
+                    {
+                        let buffer = editor.name_buffer().to_string();
+                        let cfg = &self.config.appearance.group_editor;
+                        let input_padding_x = cfg.input_padding_x as f32;
+                        let input_font_size = cfg.input_font_size as f32;
+                        let name_input_rect = layout.name_input_rect;
+                        let measurer = gpu.text_measurer();
+                        let available_text_width =
+                            (name_input_rect.width - input_padding_x * 2.0).max(0.0);
+                        let text_width =
+                            measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
+                        let text_x = tab_bar::scrolled_text_x(
+                            name_input_rect.x,
+                            input_padding_x,
+                            text_width,
+                            available_text_width,
+                        );
+                        let local_x = logical_point.0 - text_x;
+                        let byte_index = measurer.index_at_offset(
+                            &buffer,
+                            overlay::BODY_FONT,
+                            input_font_size,
+                            local_x,
+                        );
+                        editor.drag_name_to(byte_index);
+                    } else {
+                        match overlay::group_editor_hit(&layout, logical_point) {
+                            Some(overlay::GroupEditorHit::Swatch(i)) => {
+                                editor.set_focus(EditorRegion::Swatches);
+                                editor.set_swatch_highlight(i);
+                            }
+                            Some(overlay::GroupEditorHit::Action(i)) => {
+                                editor.set_focus(EditorRegion::Actions);
+                                editor.set_action_highlight(i);
+                            }
+                            Some(overlay::GroupEditorHit::NameField) | None => {}
                         }
-                        Some(overlay::GroupEditorHit::Action(i)) => {
-                            editor.set_focus(EditorRegion::Actions);
-                            editor.set_action_highlight(i);
-                        }
-                        Some(overlay::GroupEditorHit::NameField) | None => {}
                     }
                 }
             }
@@ -3404,6 +3616,60 @@ impl App {
             );
             if let Some(index) = overlay::move_to_group_hit(&layout, logical_point) {
                 popover.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+
+        // Arraste dentro do campo de rename (ADR-0035): estende a seleção
+        // pelo caractere sob o cursor -- só quando o botão esquerdo já
+        // está pressionado a partir de um clique dentro do próprio campo
+        // (o único lugar que arma `mouse_button_down` durante o rename,
+        // `handle_bar_click`).
+        if state.mouse_button_down == Some(MouseButton::Left)
+            && let Some(id) = state.rename.editing_tab()
+            && let Some(gpu) = &mut self.gpu
+        {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let style = &self.style;
+            let bar_width = state.logical_width;
+            let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos());
+            let layout = tab_bar::fit_width(
+                &state.workspace,
+                style,
+                trilha_width,
+                gpu.text_measurer(),
+                is_macos(),
+            );
+            if let Some(tab_rect) = tab_bar::tab_rect(&layout, id) {
+                let field_content = chrome::rename_field_rect(tab_rect, style);
+                let field_screen_x = field_content.x - state.scroll_offset;
+                let buffer = state
+                    .rename
+                    .field()
+                    .map(|f| f.text().to_string())
+                    .unwrap_or_default();
+                let text_area = (field_content.width - style.rename_padding_x * 2.0).max(0.0);
+                let measurer = gpu.text_measurer();
+                let text_width =
+                    measurer.measure_width(&buffer, chrome::LABEL_FONT, style.rename_font_size);
+                let text_x_screen = tab_bar::scrolled_text_x(
+                    field_screen_x,
+                    style.rename_padding_x,
+                    text_width,
+                    text_area,
+                );
+                let local_x = logical_point.0 - text_x_screen;
+                let byte_index = measurer.index_at_offset(
+                    &buffer,
+                    chrome::LABEL_FONT,
+                    style.rename_font_size,
+                    local_x,
+                );
+                state.rename.drag_to(byte_index);
             }
             state.window.request_redraw();
             return;
@@ -3771,7 +4037,13 @@ impl App {
         {
             state.hover.dismiss();
             if let Some(gpu) = &mut self.gpu {
-                state.handle_bar_click(logical_point, gpu, true, &self.style);
+                state.handle_bar_click(
+                    logical_point,
+                    gpu,
+                    true,
+                    &self.style,
+                    self.config.general.confirm_close_with_process,
+                );
             }
             state.window.request_redraw();
             return;
@@ -3782,7 +4054,13 @@ impl App {
             let Some(gpu) = &mut self.gpu else {
                 return;
             };
-            match state.handle_bar_click(logical_point, gpu, false, &self.style) {
+            match state.handle_bar_click(
+                logical_point,
+                gpu,
+                false,
+                &self.style,
+                self.config.general.confirm_close_with_process,
+            ) {
                 NewTabRequest::Ungrouped => {
                     state.action_new_tab_ungrouped(
                         self.cell_metrics,
@@ -4000,6 +4278,7 @@ impl App {
             state.group_editor.as_ref(),
             style,
             pal,
+            &self.term_pal,
             bar_width,
             overflow,
             drag_ghost,
@@ -4139,6 +4418,7 @@ impl App {
                 tab_count,
                 config,
                 pal,
+                &self.term_pal,
                 gpu.text_measurer(),
             ));
         }

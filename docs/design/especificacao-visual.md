@@ -447,6 +447,8 @@ Conteúdo:
 
 A largura é `min(120, largura disponível do rótulo)` — a cláusula sobrevive à mudança da §2.18, que deixou o rótulo sempre no teto de 180 px, porque um título curto ainda dá uma aba mais estreita que o campo. **A aba não muda de largura ao entrar em rename**: mudar reflui a barra enquanto o usuário digita. Título mais longo que o campo rola dentro dele, com o caret sempre visível. OSC 0/2 que chegue com o campo aberto é registrado mas **não redesenha o campo**: o texto sob o cursor do usuário não muda sozinho.
 
+**Desde o [ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md)**, o cursor navega pelo texto (setas, `Home`/`End`) e o campo aceita seleção — clique posiciona o cursor no caractere sob o ponto, clique e arraste seleciona, `Ctrl+A`/`Cmd+A` seleciona tudo. O trecho selecionado pinta um retângulo opaco na cor `[terminal.colors] selection_background` por baixo do texto; o caret some enquanto há seleção ativa.
+
 **Aba no estado `Exited`** ([ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md)): fundo e borda de aba inativa, e o rótulo esmaecido para `#727a86` — o tom do botão de fechar, que é o token de "inerte" da barra. Nenhum indicador (seção 2.17) e nenhum estado novo: o **motivo** de a aba ter ficado aberta é o código de saída escrito no grid, que sobrevive à rolagem e continua lá quando o usuário voltar; um quarto estado de aba exigiria cor nova para dizer o que a nota já diz.
 
 **Cor de grupo das abas soltas:** para as abas do grupo implícito do
@@ -541,7 +543,7 @@ passa da janela, e se não couber abaixo da barra o popover vira para cima. Cama
 o menu de contexto e o tooltip — e o editor **nunca** coexiste com o menu de
 contexto ([ADR-0023](../adr/0023-editor-de-grupo.md)).
 
-1. **Rótulo do grupo** — seção 10px uppercase `#5c646f` + input largura total, fundo `#0f1216`, borda `#333a45` (foco `#5ed3bc`), raio 5, 13px `#e4e8ee`, `padding: 7px 9px`, foco automático. Edição ao vivo: o nome muda na barra enquanto se digita.
+1. **Rótulo do grupo** — seção 10px uppercase `#5c646f` + input largura total, fundo `#0f1216`, borda `#333a45` (foco `#5ed3bc`), raio 5, 13px `#e4e8ee`, `padding: 7px 9px`, foco automático. Edição ao vivo: o nome muda na barra enquanto se digita. **Desde o [ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md)**, cursor navegável (setas, `Home`/`End`) e seleção por clique/arraste/`Ctrl+A`, com o trecho selecionado pintado em `[terminal.colors] selection_background` por baixo do texto; o caret some enquanto há seleção.
 2. **Cor** — seis swatches 28×28, raio 6, `gap: 8`, borda `2px`. O selecionado ganha anel `#eef2f4`; os demais, `transparent`.
 3. **Divisor** `1px #2a2f38`.
 4. **Ações** — "Colapsar/Expandir grupo" com chip de tecla à direita; "Desagrupar abas"; "Fechar grupo (N abas)" em `#e08585`, hover `#2e2224`.
@@ -550,7 +552,7 @@ O rótulo do botão alterna entre "Colapsar grupo" e "Expandir grupo" conforme o
 
 **Fecha em clique fora, `Esc` ou perda de foco da janela** — e não tem overlay: overlay é da camada modal e é a marca do diálogo destrutivo (§2.15). "Fechar grupo (N abas)" abre o diálogo de confirmação **por cima** do editor, que permanece atrás; cancelar volta para ele.
 
-**Navegação por teclado.** `Tab` e `Shift+Tab` percorrem as três regiões — campo, faixa de swatches, lista de ações. Dentro da faixa e da lista, as setas movem o realce; `Enter` aciona o realçado. No campo, `Enter` confirma e fecha. `Esc` restaura o nome anterior e fecha, mesmo com a edição ao vivo tendo mudado a barra. Hover e foco por teclado são o **mesmo** realce `#242a33` e são mutuamente exclusivos, como em §2.16.
+**Navegação por teclado.** `Tab` e `Shift+Tab` percorrem as três regiões — campo, faixa de swatches, lista de ações. Dentro da faixa e da lista, as setas `Up`/`Down` movem o realce; `Enter` aciona o realçado. No campo, `Left`/`Right`/`Home`/`End` movem o cursor no texto ([ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md)) e `Enter` confirma e fecha. `Esc` restaura o nome anterior e fecha, mesmo com a edição ao vivo tendo mudado a barra. Hover e foco por teclado são o **mesmo** realce `#242a33` e são mutuamente exclusivos, como em §2.16.
 
 **Os seis swatches são a única superfície de cor do v1.** A entrada por valor hexadecimal do RF-2.10 fica diferida: quem quer outra cor a coloca na `palette` da config (RF-4.18). Ver [ADR-0023](../adr/0023-editor-de-grupo.md).
 
@@ -596,7 +598,7 @@ Definido em [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), que não t
 
 Empilhado no canto superior direito da área de conteúdo, sob a barra de abas. Largura 320, `padding: 11px 12px`, `gap: 8` entre avisos, no máximo **três** visíveis — o quarto substitui o mais antigo.
 
-Fundo `#1a1e25`, borda `1px #2e343e`, raio 8 (sem sombra e sem `pop`, ver §2.10).
+Fundo `#1a1e25`, borda `1px #2e343e`, raio 8. Desde a F4 etapa 6, sombra em camadas (§1.7), como os outros quatro widgets ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2); sem `pop` (ver §2.10).
 
 **O corpo é de uma linha**, truncado com reticências. Esta seção especificava até três linhas; `TextRun` é sempre uma linha, e quebrar por palavra é trabalho de `porecatu-ui` sobre o `TextMeasurer`. Fica como está: o truncamento em uma linha é o comportamento aprovado (ADR-0028 §4). Registro na seção 4.4.
 
@@ -614,7 +616,7 @@ Camada **aviso** do [ADR-0018](../adr/0018-composicao-de-frame.md): cobre o chro
 
 ### 2.15 Diálogo de confirmação `[v1]`
 
-Overlay `rgba(6,7,9,.45)` sobre a janela. Modal largura 380, `padding: 16`, raio 10, fundo `#1a1e25`, borda `1px #2e343e` (sem sombra e sem `pop`, ver §2.10). O corpo é de uma linha, como no aviso (§2.14).
+Overlay `rgba(6,7,9,.45)` sobre a janela. Modal largura 380, `padding: 16`, raio 10, fundo `#1a1e25`, borda `1px #2e343e`. Desde a F4 etapa 6, sombra em camadas (§1.7), como os outros quatro widgets ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2). O corpo é de uma linha, como no aviso (§2.14).
 
 Título 13px/500 `#e6eaef`, corpo 12.5px `#d7dce3`, `gap: 14`. Dois botões à direita, `gap: 8`, altura 30, `padding: 0 12`, raio 5: **cancelar** com borda `1px #262b34` e texto `#d7dce3`; **confirmar destrutivo** em `#e08585` com hover de fundo `#2e2224`.
 
@@ -632,7 +634,7 @@ Usado por RF-1.6 (aba com programa de tela cheia, conforme o [ADR-0017](../adr/0
 
 Mesmos tokens do menu de perfis (2.9), que é `[v2]` — o menu de contexto é `[v1]` e reaproveita a definição.
 
-Popover ancorado no cursor, largura mínima 200, fundo `#1a1e25`, borda `#2e343e`, raio 8, `padding: 6` (sem sombra e sem `pop`, ver §2.10). Vira nos dois eixos para caber no monitor da janela.
+Popover ancorado no cursor, largura mínima 200, fundo `#1a1e25`, borda `#2e343e`, raio 8, `padding: 6`. Desde a F4 etapa 6, sombra em camadas (§1.7), como os outros quatro widgets; a animação `pop .13s` não entra ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2, ver §2.10). Vira nos dois eixos para caber no monitor da janela.
 
 Itens: `padding: 7px 8px`, raio 5, `gap: 10`, texto 12.5px `#d7dce3`, hover `#242a33`. Chip de tecla à direita, mono 9.5px `#5c646f`. Divisor `1px #2a2f38` com `margin: 5px 4px`. Item destrutivo `#e08585`, hover `#2e2224`. **Item indisponível fica esmaecido em `#5c646f`, nunca ausente.**
 

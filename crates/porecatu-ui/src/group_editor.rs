@@ -12,8 +12,9 @@
 //! `Workspace` enquanto edita -- quem pinta prefere o buffer ao nome real
 //! (`chrome.rs`), e `Esc` só precisa descartar este estado, sem restaurar
 //! nada, porque o modelo nunca mudou. `Enter` confirma escrevendo o buffer
-//! de verdade (`lib.rs`). Sem posição de cursor no meio da string --
-//! sempre no fim --, a mesma simplificação do rename de aba.
+//! de verdade (`lib.rs`). **Desde o ADR-0035** o campo tem cursor navegável
+//! e seleção (`text_field::TextFieldState`), superando a simplificação
+//! "sempre no fim" que este ADR (§3) e o rename de aba assumiam.
 //!
 //! **Cor e ações não são ao vivo**: mover o realce entre swatches ou itens
 //! da lista não aplica nada -- mesma regra do menu de contexto, "`Enter`
@@ -24,6 +25,7 @@
 use porecatu_core::GroupId;
 
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupAction};
+use crate::text_field::TextFieldState;
 
 /// As três regiões navegáveis (espec. §2.10: "`Tab`/`Shift+Tab` percorrem
 /// as três regiões -- campo, faixa de swatches, lista de ações").
@@ -47,7 +49,7 @@ const SWATCH_COUNT: usize = 6;
 pub struct GroupEditor {
     pub group: GroupId,
     focus: EditorRegion,
-    name_buffer: String,
+    name_field: TextFieldState,
     swatch_highlight: usize,
     action_highlight: usize,
 }
@@ -67,7 +69,7 @@ impl GroupEditor {
         Self {
             group,
             focus: initial_focus,
-            name_buffer: current_name.to_string(),
+            name_field: TextFieldState::new(current_name),
             swatch_highlight: current_color_index.min(SWATCH_COUNT - 1),
             action_highlight: 0,
         }
@@ -78,7 +80,25 @@ impl GroupEditor {
     }
 
     pub fn name_buffer(&self) -> &str {
-        &self.name_buffer
+        self.name_field.text()
+    }
+
+    /// Estado completo do campo (cursor, seleção) -- usado por quem pinta
+    /// (`overlay.rs`) e por quem faz hit-test de caractere no clique.
+    pub const fn name_field(&self) -> &TextFieldState {
+        &self.name_field
+    }
+
+    /// `Some` só com o foco no campo -- usado por `lib.rs::handle_group_editor_key`
+    /// pra repassar `Ctrl+A`/`Shift+seta`/`Home`/`End` a `apply_text_field_key`
+    /// (ADR-0035), mesmo caminho que `RenameState::field`/`push_char`/
+    /// `backspace` já guardam internamente.
+    pub fn name_field_mut(&mut self) -> Option<&mut TextFieldState> {
+        if self.focus == EditorRegion::Name {
+            Some(&mut self.name_field)
+        } else {
+            None
+        }
     }
 
     pub const fn swatch_highlight(&self) -> usize {
@@ -89,15 +109,26 @@ impl GroupEditor {
         self.action_highlight
     }
 
-    pub fn push_char(&mut self, c: char) {
+    pub fn backspace(&mut self) {
         if self.focus == EditorRegion::Name {
-            self.name_buffer.push(c);
+            self.name_field.backspace();
         }
     }
 
-    pub fn backspace(&mut self) {
+    /// Clique no campo (`lib.rs::dispatch_group_editor_click`): sempre
+    /// move o foco pra `Name`, mesmo que já estivesse noutra região -- é
+    /// clicar no campo que o traz ao primeiro plano.
+    pub fn click_name_at(&mut self, byte_index: usize) {
+        self.focus = EditorRegion::Name;
+        self.name_field.click_at(byte_index);
+    }
+
+    /// Arraste dentro do campo (`lib.rs::dispatch_cursor_moved`) -- só tem
+    /// efeito com o foco já no campo (arma-se no `click_name_at`
+    /// anterior).
+    pub fn drag_name_to(&mut self, byte_index: usize) {
         if self.focus == EditorRegion::Name {
-            self.name_buffer.pop();
+            self.name_field.drag_to(byte_index);
         }
     }
 
@@ -116,9 +147,11 @@ impl GroupEditor {
         self.focus = focus;
     }
 
-    /// Setas: dentro da faixa movem `swatch_highlight`, dentro da lista
-    /// movem `action_highlight`. Sem efeito no campo -- nenhuma seta atua
-    /// no texto nesta etapa (sem cursor no meio da string).
+    /// `ArrowUp`/`ArrowDown`: dentro da faixa movem `swatch_highlight`,
+    /// dentro da lista movem `action_highlight`. Sem efeito no campo --
+    /// `ArrowLeft`/`ArrowRight`/`Home`/`End` são as setas do texto (ADR-0035,
+    /// `move_name_left`/`move_name_right`/`move_name_home`/`move_name_end`),
+    /// tratadas fora daqui.
     pub fn move_highlight(&mut self, delta: isize) {
         match self.focus {
             EditorRegion::Swatches => {
@@ -169,16 +202,21 @@ mod tests {
     }
 
     #[test]
-    fn push_char_and_backspace_only_affect_buffer_in_name_focus() {
-        let mut editor = GroupEditor::new(g(), "", 0, EditorRegion::Swatches);
-        editor.push_char('x');
-        assert_eq!(editor.name_buffer(), "");
-        editor.set_focus(EditorRegion::Name);
-        editor.push_char('x');
-        editor.push_char('y');
-        assert_eq!(editor.name_buffer(), "xy");
+    fn backspace_and_name_field_mut_only_affect_buffer_in_name_focus() {
+        let mut editor = GroupEditor::new(g(), "xy", 0, EditorRegion::Swatches);
+        assert!(editor.name_field_mut().is_none());
         editor.backspace();
-        assert_eq!(editor.name_buffer(), "x");
+        assert_eq!(
+            editor.name_buffer(),
+            "xy",
+            "backspace fora do foco do campo é no-op"
+        );
+
+        editor.set_focus(EditorRegion::Name);
+        editor.name_field_mut().unwrap().insert_char('!');
+        assert_eq!(editor.name_buffer(), "xy!");
+        editor.backspace();
+        assert_eq!(editor.name_buffer(), "xy");
     }
 
     #[test]

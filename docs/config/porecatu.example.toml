@@ -62,10 +62,14 @@
 
 # Classe de recarga: [A] -- as três valem no próximo gesto que as consulta.
 [general]
-# Pede confirmação ao fechar aba tomada por um programa de tela cheia —
-# tela alternativa ou reporte de mouse ligado (vim, htop, less, fzf, tmux).
-# Detectar o processo em primeiro plano exigiria varrer a árvore de
-# processos, que o ADR-0005 e o ADR-0008 descartaram.        RF-1.6, ADR-0017
+# Pede confirmação ao fechar aba com processo ativo — dois sinais em OU:
+# tela alternativa/reporte de mouse ligado (vim, htop, less, fzf, tmux), ou,
+# no Windows, mais de um processo vivo na árvore do shell (ADR-0033), ex. um
+# `node server.js` em primeiro plano. Nenhum dos dois é a varredura contínua
+# que o ADR-0005 e o ADR-0008 descartaram para decidir "processo em primeiro
+# plano" — a contagem aqui é disparada só pelo clique de fechar, sobre uma
+# raiz já conhecida (o shell desta aba), não uma heurística contínua.
+#                                           RF-1.6, ADR-0017, ADR-0033, ADR-0034
 confirm_close_with_process = true
 # Pede confirmação ao fechar uma janela com mais de uma aba.      RF-10.23
 confirm_close_window = true

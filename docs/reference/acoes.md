@@ -44,9 +44,13 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > **modo de captura** (passo 1 da cadeia do ADR-0008), que o rename inline
 > exige e que a F1 não tinha.
 >
-> `tab.close` confirma conforme o [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md):
-> a condição é tela alternativa ou reporte de mouse ligado, não o processo em
-> primeiro plano. `tab.new` herda o `cwd` capturado por OSC 7, que passa a
+> `tab.close` confirma conforme o [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md)
+> e o [ADR-0034](../adr/0034-deteccao-de-processo-ativo-para-confirmacao.md),
+> dois sinais em OU: tela alternativa/reporte de mouse ligado, **ou**, no
+> Windows, mais de um processo vivo na árvore do shell ([ADR-0033](../adr/0033-job-object-encerramento-de-processo.md))
+> — ex. um servidor de longa duração em primeiro plano. Os dois ficam atrás
+> da chave `general.confirm_close_with_process`. `tab.new` herda o `cwd`
+> capturado por OSC 7, que passa a
 > existir na F2; sem OSC 7, cai em `startup_directory`, que hoje é o **home do
 > usuário** (correção factual no ADR-0017).
 >
@@ -54,7 +58,10 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > (RF-1.4) — decidido depois da F2, pela mesma razão que uma janela sem aba não
 > tem estado que valha manter na tela. O caminho é o mesmo do
 > `window.close`: sobe como pedido de fechamento e passa pelo diálogo de
-> confirmação quando há mais de uma aba.
+> confirmação quando há mais de uma aba. **Desde o ADR-0034**, confirma
+> também com uma aba só se ela tiver processo ativo (mesmo critério do
+> `tab.close`) — fechar a janela mata a árvore de processo igual a fechar a
+> aba, então o aviso precisa valer nos dois caminhos.
 
 > **Estado ao fim da F3.** As nove `group.*` e a `tab.move_to_group` existem.
 > `group.next`/`group.prev` (RF-2.21) foram as últimas, no PR que fechou a fase:
@@ -157,7 +164,7 @@ ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 | Ação | O que faz | Origem | Fase | Arg |
 |---|---|---|---|---|
 | `window.new` | Abre janela nova com uma aba, herdando o `cwd` da aba ativa | [ADR-0015](../adr/0015-multiplas-janelas.md) | F2 | |
-| `window.close` | Fecha a janela; confirma se houver mais de uma aba | ADR-0015, RF-1.4 | F2 | |
+| `window.close` | Fecha a janela; confirma se houver mais de uma aba, ou uma só com processo ativo | ADR-0015, ADR-0034, RF-1.4 | F2 | |
 
 ---
 

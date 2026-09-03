@@ -1,6 +1,6 @@
 # ADR-0023 — Editor de grupo, o quinto widget de chrome
 
-**Status:** Aceito
+**Status:** Superseded by [ADR-0035](0035-selecao-de-texto-em-campo-de-nome.md) (parcial — só a frase da seção 3 sobre o buffer do campo de nome)
 **Data:** 2026-08-27
 **Relacionados:** [ADR-0008](0008-teclas-e-roteamento-de-input.md), [ADR-0014](0014-superficie-de-aviso-e-dialogo.md), [ADR-0018](0018-composicao-de-frame.md), [ADR-0019](0019-tooltip.md), [ADR-0020](0020-grupos-explicitos.md), [PRD-002](../prd/prd-002-grupos-de-abas.md), [PRD-010](../prd/prd-010-interacao-e-superficie-de-app.md)
 

@@ -19,7 +19,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use std::{fmt, io};
 
-use porecatu_pty::{PtyError, PtyHandle, SpawnConfig};
+use porecatu_pty::{ProcessGroup, PtyError, PtyHandle, SpawnConfig};
 
 use crate::engine::{TermEngine, TermSize};
 use crate::event::TermEvent;
@@ -69,6 +69,12 @@ pub struct Terminal {
     /// Confirmação de "processo morto", mandada pela thread de observação
     /// quando `shutdown` sinaliza desligamento -- ver o comentário lá.
     killed: mpsc::Receiver<()>,
+    /// Cópia deste lado (thread da UI) do mesmo grupo de processos que
+    /// `watch_loop` guarda (ADR-0033) -- `None` fora do Windows ou se o Job
+    /// não pôde ser criado/atribuído. Só para consulta (`has_extra_processes`,
+    /// ADR-0034): quem decide se droppa ou esquece a cópia de lá, matando
+    /// ou não a árvore, é sempre `watch_loop`, nunca este campo.
+    process_group: Option<ProcessGroup>,
     /// Novo tamanho para o PTY (linhas, colunas) -- a thread de
     /// observação, dona do `PtyHandle`, é quem aplica (ver `watch_loop`).
     /// O lado do motor (`engine`) é resizado direto e síncrono em
@@ -107,7 +113,7 @@ impl Terminal {
             cols: pty_config.size.cols as usize,
         };
 
-        let pty = porecatu_pty::spawn(pty_config)?;
+        let (pty, process_group) = porecatu_pty::spawn(pty_config)?;
         let reader = pty.reader()?;
         let writer_handle = pty.writer()?;
 
@@ -128,10 +134,23 @@ impl Terminal {
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
         let (killed_tx, killed_rx) = mpsc::channel::<()>();
         let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>();
+        // Cópia que se move para dentro de `watch_loop` -- a que decide,
+        // por caminho de saída, se dropa (mata a árvore) ou esquece
+        // (preserva processo destacado). A outra cópia (`process_group`,
+        // abaixo) fica só do lado da UI, para consulta (ADR-0034).
+        let process_group_for_watch = process_group.clone();
         let watch_thread = {
             let on_wakeup = Arc::clone(&on_wakeup);
             thread::spawn(move || {
-                watch_loop(pty, events_tx, shutdown_rx, killed_tx, resize_rx, on_wakeup)
+                watch_loop(
+                    pty,
+                    process_group_for_watch,
+                    events_tx,
+                    shutdown_rx,
+                    killed_tx,
+                    resize_rx,
+                    on_wakeup,
+                )
             })
         };
 
@@ -140,6 +159,7 @@ impl Terminal {
             events: events_rx,
             writer: write_tx,
             killed: killed_rx,
+            process_group,
             resize: resize_tx,
             _shutdown: shutdown_tx,
             _read_thread: read_thread,
@@ -179,6 +199,21 @@ impl Terminal {
     /// renderizado, que pode estar obsoleto.
     pub fn modes(&self) -> TermModes {
         lock(&self.engine).modes()
+    }
+
+    /// `true` se há mais processo vivo além do shell raiz na árvore
+    /// (ADR-0034) -- ex.: `node server.js` rodando em primeiro plano.
+    /// `false` também quando o grupo não existe (sem `process_id()`, ou
+    /// fora do Windows) -- lado seguro do erro é não confirmar por um
+    /// sinal que não se conseguiu ler; o modo do terminal (`modes()`)
+    /// continua cobrindo esse caso. A contagem em si é a união de duas
+    /// fontes (Job + varredura por `sysinfo`) -- ver `ProcessGroup::
+    /// process_count` em `porecatu-pty` para o porquê de nenhuma das duas
+    /// bastar sozinha.
+    pub fn has_extra_processes(&self) -> bool {
+        self.process_group
+            .as_ref()
+            .is_some_and(|group| group.process_count() > 1)
     }
 
     /// Inicia uma seleção (PRD-010 RF-10.4).
@@ -335,6 +370,7 @@ fn write_loop(mut writer: Box<dyn Write + Send>, rx: mpsc::Receiver<Vec<u8>>) {
 /// de verdade, não só lento.
 fn watch_loop(
     mut pty: PtyHandle,
+    process_group: Option<ProcessGroup>,
     events: mpsc::Sender<TermEvent>,
     shutdown: mpsc::Receiver<()>,
     killed: mpsc::Sender<()>,
@@ -349,6 +385,16 @@ fn watch_loop(
             // desligamento mata o processo.
             Ok(()) | Err(RecvTimeoutError::Disconnected) => {
                 let _ = pty.kill();
+                // ADR-0033: fechamento **pedido pelo usuário** -- mata a
+                // árvore inteira. `kill_tree` fecha o handle do Job (mata
+                // na hora quem propagou a associação, mesmo sobrevivendo
+                // ao próprio pai intermediário) e varre os descendentes
+                // vivos do PID raiz por `sysinfo` (cobre shells como
+                // PowerShell 7, que não propagam a associação ao Job --
+                // ver a nota do módulo `job.rs` em `porecatu-pty`).
+                if let Some(group) = process_group {
+                    group.kill_tree();
+                }
                 let _ = killed.send(());
                 leak_pty(pty);
                 return;
@@ -377,6 +423,17 @@ fn watch_loop(
                     // canal sem ninguém ser avisado para ir buscá-lo.
                     on_wakeup();
                     leak_pty(pty);
+                    // ADR-0033: saída **natural** do shell (ex. `exit`
+                    // digitado) -- ao contrário do fechamento pedido pelo
+                    // usuário, esta cópia é esquecida (`mem::forget`), não
+                    // dropada. Isso barra pra sempre esta referência de
+                    // decrementar o `Arc`: mesmo que a cópia do lado da UI
+                    // droppe depois (quando a aba `Exited` for finalmente
+                    // fechada de verdade), a contagem nunca alcança zero
+                    // por causa desta, e o Job nunca fecha -- um processo
+                    // que o shell tenha deliberadamente destacado (`start
+                    // /b algo & exit`) sobrevive, como hoje.
+                    std::mem::forget(process_group);
                     return;
                 }
             }

@@ -61,7 +61,10 @@ use crate::warning::{Severity, WarningStack};
 const TITLE_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Medium,
 };
-const BODY_FONT: FontFace = FontFace::Sans {
+// `pub(crate)`: `lib.rs::dispatch_group_editor_click` mede o mesmo texto
+// com a mesma face pra achar o índice de caractere sob o clique
+// (ADR-0035) -- tem que ser a mesma constante que pinta, nunca uma cópia.
+pub(crate) const BODY_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
 
@@ -190,15 +193,22 @@ pub fn paint_warnings(
             Severity::Warning => pal.warning_severity_warning,
             Severity::Info => pal.warning_severity_info,
         };
-        out.push(Primitive::Quad(Quad {
-            rect: Rect {
-                x: entry.rect.x,
-                y: entry.rect.y,
-                width: severity_bar_width,
-                height: entry.rect.height,
-            },
-            color: severity_color,
+        // Recortada com o mesmo raio do card (não um `Quad` reto), pra
+        // curvar junto com os dois cantos esquerdos em vez de cruzá-los.
+        out.push(Primitive::PushClip(Rect {
+            x: entry.rect.x,
+            y: entry.rect.y,
+            width: severity_bar_width,
+            height: entry.rect.height,
         }));
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: entry.rect,
+            radius: corner_radius,
+            color: severity_color,
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
+        out.push(Primitive::PopClip);
 
         let text_x = entry.rect.x + severity_bar_width + padding_x;
         let title_y = entry.rect.y + notices.padding_y as f32;
@@ -835,6 +845,7 @@ pub fn paint_group_editor(
     tab_count: usize,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
+    term_pal: &palette::ResolvedTermPalette,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.group_editor;
@@ -883,13 +894,28 @@ pub fn paint_group_editor(
     let buffer = editor.name_buffer();
     let available_text_width = (layout.name_input_rect.width - input_padding_x * 2.0).max(0.0);
     let text_width = measurer.measure_width(buffer, BODY_FONT, input_font_size);
-    let text_x = if text_width > available_text_width {
-        layout.name_input_rect.x + input_padding_x - (text_width - available_text_width)
-    } else {
-        layout.name_input_rect.x + input_padding_x
-    };
+    let text_x = tab_bar::scrolled_text_x(
+        layout.name_input_rect.x,
+        input_padding_x,
+        text_width,
+        available_text_width,
+    );
     let text_y = layout.name_input_rect.y + (layout.name_input_rect.height - input_font_size) / 2.0;
     out.push(Primitive::PushClip(layout.name_input_rect));
+    let selection_range = editor.name_field().selection_range();
+    if let Some((start, end)) = selection_range {
+        let sel_x0 = text_x + measurer.measure_width(&buffer[..start], BODY_FONT, input_font_size);
+        let sel_x1 = text_x + measurer.measure_width(&buffer[..end], BODY_FONT, input_font_size);
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: sel_x0,
+                y: layout.name_input_rect.y + 4.0,
+                width: sel_x1 - sel_x0,
+                height: layout.name_input_rect.height - 8.0,
+            },
+            color: term_pal.selection_background,
+        }));
+    }
     out.push(Primitive::Text(TextRun {
         origin: (text_x, text_y),
         text: buffer.to_string(),
@@ -897,8 +923,13 @@ pub fn paint_group_editor(
         size_px: input_font_size,
         color: pal.editor_input_text,
     }));
-    if focused_name {
-        let caret_x = (text_x + text_width)
+    if focused_name && selection_range.is_none() {
+        let cursor_width = measurer.measure_width(
+            &buffer[..editor.name_field().cursor()],
+            BODY_FONT,
+            input_font_size,
+        );
+        let caret_x = (text_x + cursor_width)
             .min(layout.name_input_rect.x + layout.name_input_rect.width - 1.0);
         out.push(Primitive::Quad(Quad {
             rect: Rect {

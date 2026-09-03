@@ -92,7 +92,7 @@ fn wait_for_exit(handle: &mut porecatu_pty::PtyHandle, timeout: Duration) {
 #[test]
 fn spawn_le_saida_e_encerra_sem_vazar_processo() {
     let (program, args) = trivial_command();
-    let mut handle = spawn(SpawnConfig {
+    let (mut handle, _process_group) = spawn(SpawnConfig {
         program,
         args,
         env: Vec::new(),
@@ -150,7 +150,7 @@ fn kill_encerra_processo_de_longa_duracao() {
         )
     };
 
-    let mut handle = spawn(SpawnConfig {
+    let (mut handle, _process_group) = spawn(SpawnConfig {
         program: Some(program),
         args,
         env: Vec::new(),

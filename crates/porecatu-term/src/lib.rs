@@ -44,4 +44,6 @@ pub use terminal::{ShutdownWait, Terminal, TerminalSpawnError};
 // mesmo nome de shell que `porecatu_pty::spawn` vai de fato spawnar
 // (`SpawnConfig.program = None` cai nessa mesma resolução), pra popular o
 // `shell_name` do `Tab` -- último nível da precedência de título do RF-1.7.
-pub use porecatu_pty::{PtyError, PtySize, SpawnConfig, resolve_default_shell, search_path};
+pub use porecatu_pty::{
+    ProcessGroup, PtyError, PtySize, SpawnConfig, resolve_default_shell, search_path,
+};
