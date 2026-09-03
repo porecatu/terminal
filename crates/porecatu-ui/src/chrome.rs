@@ -86,7 +86,10 @@ use crate::tab_bar::{
 /// do sistema (ADR-0016): sem face própria eles não desenhavam nada. Ver
 /// `porecatu_render::icon`.
 pub(crate) const ICON_FONT: FontFace = FontFace::Icon;
-const LABEL_FONT: FontFace = FontFace::Sans {
+// `pub(crate)`: `lib.rs::handle_bar_click` mede o mesmo texto com a mesma
+// face pra achar o índice de caractere sob o clique no campo de rename
+// (ADR-0035) -- tem que ser a mesma constante que pinta.
+pub(crate) const LABEL_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
 
@@ -180,6 +183,7 @@ pub fn paint(
     group_editor: Option<&GroupEditor>,
     style: &TabBarStyle,
     pal: &ResolvedPalette,
+    term_pal: &palette::ResolvedTermPalette,
     bar_width: f32,
     overflow: Overflow,
     drag: Option<DragGhost>,
@@ -453,8 +457,10 @@ pub fn paint(
                 }));
             }
 
-            if rename.editing_tab() == Some(tab.id) {
-                paint_rename_field(tab_rect, style, pal, rename.buffer(), measurer, &mut out);
+            if rename.editing_tab() == Some(tab.id)
+                && let Some(field) = rename.field()
+            {
+                paint_rename_field(tab_rect, style, pal, term_pal, field, measurer, &mut out);
             } else {
                 let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
                 out.push(Primitive::Text(TextRun {
@@ -972,27 +978,39 @@ fn paint_overflow_pill(
     ));
 }
 
-/// Campo de rename (espec §2.5): substitui o rótulo no lugar, largura
-/// `min(120, largura disponível)`. Texto rola dentro do campo mantendo o
-/// caret (sempre no fim do buffer nesta etapa -- sem edição no meio da
-/// string) visível: quando o texto não cabe, a origem desliza para a
-/// esquerda, e um `PushClip`/`PopClip` contém o transbordo.
-fn paint_rename_field(
-    tab_rect: Rect,
-    style: &TabBarStyle,
-    pal: &ResolvedPalette,
-    buffer: &str,
-    measurer: &mut porecatu_render::TextMeasurer,
-    out: &mut Vec<Primitive>,
-) {
+/// Retângulo do campo de rename dentro de `tab_rect` -- função pura,
+/// compartilhada pela pintura (`paint_rename_field`) e pelo hit-test de
+/// clique/arraste em `lib.rs` (ADR-0035). Mesma nota de `scrolled_text_x`:
+/// nunca duas cópias da mesma geometria.
+pub(crate) fn rename_field_rect(tab_rect: Rect, style: &TabBarStyle) -> Rect {
     let available_width = (tab_rect.width - style.padding_left - style.padding_right).max(0.0);
     let field_width = style.rename_field_width.min(available_width);
-    let field_rect = Rect {
+    Rect {
         x: tab_rect.x + style.padding_left,
         y: tab_rect.y + (tab_rect.height - style.rename_field_height) / 2.0,
         width: field_width,
         height: style.rename_field_height,
-    };
+    }
+}
+
+/// Campo de rename (espec §2.5): substitui o rótulo no lugar, largura
+/// `min(120, largura disponível)`. Texto rola dentro do campo mantendo o
+/// caret visível: quando o texto não cabe, a origem desliza para a
+/// esquerda, e um `PushClip`/`PopClip` contém o transbordo. **Desde o
+/// ADR-0035**, `field` carrega cursor navegável e seleção -- o caret usa a
+/// posição de `field.cursor()`, não mais sempre o fim do buffer, e uma
+/// seleção ativa pinta um destaque (`term_pal.selection_background`) em
+/// vez do caret.
+fn paint_rename_field(
+    tab_rect: Rect,
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    term_pal: &palette::ResolvedTermPalette,
+    field: &crate::text_field::TextFieldState,
+    measurer: &mut porecatu_render::TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    let field_rect = rename_field_rect(tab_rect, style);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: field_rect,
         // Espec. sem chave de raio para o campo de rename -- valor de
@@ -1003,16 +1021,30 @@ fn paint_rename_field(
         border_width: 1.0,
     }));
 
-    let text_area = (field_width - style.rename_padding_x * 2.0).max(0.0);
+    let buffer = field.text();
+    let text_area = (field_rect.width - style.rename_padding_x * 2.0).max(0.0);
     let text_width = measurer.measure_width(buffer, LABEL_FONT, style.rename_font_size);
-    let text_x = if text_width > text_area {
-        field_rect.x + style.rename_padding_x - (text_width - text_area)
-    } else {
-        field_rect.x + style.rename_padding_x
-    };
+    let text_x =
+        tab_bar::scrolled_text_x(field_rect.x, style.rename_padding_x, text_width, text_area);
     let text_y = field_rect.y + (style.rename_field_height - style.rename_font_size) / 2.0;
 
     out.push(Primitive::PushClip(field_rect));
+    let selection_range = field.selection_range();
+    if let Some((start, end)) = selection_range {
+        let sel_x0 =
+            text_x + measurer.measure_width(&buffer[..start], LABEL_FONT, style.rename_font_size);
+        let sel_x1 =
+            text_x + measurer.measure_width(&buffer[..end], LABEL_FONT, style.rename_font_size);
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: sel_x0,
+                y: field_rect.y + 3.0,
+                width: sel_x1 - sel_x0,
+                height: style.rename_field_height - 6.0,
+            },
+            color: term_pal.selection_background,
+        }));
+    }
     out.push(Primitive::Text(TextRun {
         origin: (text_x, text_y),
         text: buffer.to_string(),
@@ -1020,16 +1052,23 @@ fn paint_rename_field(
         size_px: style.rename_font_size,
         color: pal.rename_text,
     }));
-    let caret_x = (text_x + text_width).min(field_rect.x + field_width - 1.0);
-    out.push(Primitive::Quad(Quad {
-        rect: Rect {
-            x: caret_x,
-            y: field_rect.y + 3.0,
-            width: 1.0,
-            height: style.rename_field_height - 6.0,
-        },
-        color: pal.rename_text,
-    }));
+    if selection_range.is_none() {
+        let cursor_width = measurer.measure_width(
+            &buffer[..field.cursor()],
+            LABEL_FONT,
+            style.rename_font_size,
+        );
+        let caret_x = (text_x + cursor_width).min(field_rect.x + field_rect.width - 1.0);
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: caret_x,
+                y: field_rect.y + 3.0,
+                width: 1.0,
+                height: style.rename_field_height - 6.0,
+            },
+            color: pal.rename_text,
+        }));
+    }
     out.push(Primitive::PopClip);
 }
 
@@ -1068,6 +1107,10 @@ mod tests {
         ResolvedPalette::from_config(&porecatu_config::Config::default())
     }
 
+    fn default_term_palette() -> palette::ResolvedTermPalette {
+        palette::ResolvedTermPalette::from_config(&porecatu_config::Config::default())
+    }
+
     /// Pedido do usuário, contra o "colapsado fica transparente" do
     /// RF-4.19: a cápsula é o que diz de que cor o grupo é, e sumir com
     /// ela no colapso tirava a única marca de cor justo quando o nome do
@@ -1076,6 +1119,7 @@ mod tests {
     fn collapsed_group_still_paints_its_colored_capsule() {
         let style = TabBarStyle::DEFAULT;
         let pal = default_palette();
+        let term_pal = default_term_palette();
         let mut m = TextMeasurer::new();
         let bar_width = 800.0;
 
@@ -1090,6 +1134,7 @@ mod tests {
                 None,
                 &style,
                 &pal,
+                &term_pal,
                 bar_width,
                 Overflow {
                     scroll_offset: 0.0,
@@ -1141,6 +1186,7 @@ mod tests {
     fn painted_background_and_clip_span_the_whole_bar() {
         let style = TabBarStyle::DEFAULT;
         let pal = default_palette();
+        let term_pal = default_term_palette();
         let mut ws = Workspace::new();
         ws.append_tab("zsh", None);
         let mut m = TextMeasurer::new();
@@ -1161,6 +1207,7 @@ mod tests {
             None,
             &style,
             &pal,
+            &term_pal,
             bar_width,
             overflow,
             None,

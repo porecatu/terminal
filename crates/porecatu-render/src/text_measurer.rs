@@ -375,6 +375,58 @@ impl TextMeasurer {
         result.push(ELLIPSIS);
         (result, true)
     }
+
+    /// Índice de byte em `text` mais próximo de `local_x` (relativo à
+    /// origem do texto, mesma convenção de `origin.0` em `TextRun`) --
+    /// o problema inverso de `truncate`: em vez de "onde cortar pra
+    /// caber", "que índice está sob este x". Usado por clique/arraste do
+    /// mouse num campo de texto pra posicionar cursor/seleção (ADR-0035).
+    ///
+    /// **Um shaping**, mesma técnica de `truncate` -- sem cache próprio,
+    /// porque roda só quando há clique/arraste dentro do campo, não no
+    /// caminho quente de frame. Arredonda pro glyph mais próximo: corta na
+    /// metade dele, como qualquer editor de texto faz.
+    pub fn index_at_offset(
+        &mut self,
+        text: &str,
+        font: FontFace,
+        size_px: f32,
+        local_x: f32,
+    ) -> usize {
+        if text.is_empty() || local_x <= 0.0 {
+            return 0;
+        }
+
+        let metrics = Metrics::new(size_px, size_px * 1.2);
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(None, None);
+        let attrs = attrs_for(font, &self.families, size_px);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let mut x = 0.0;
+        let glyphs: Vec<(usize, f32, f32)> = buffer
+            .layout_runs()
+            .next()
+            .map(|run| {
+                run.glyphs
+                    .iter()
+                    .map(|g| {
+                        let entry = (g.start, x, g.w);
+                        x += g.w;
+                        entry
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for (start, glyph_x, w) in glyphs {
+            if local_x < glyph_x + w / 2.0 {
+                return start;
+            }
+        }
+        text.len()
+    }
 }
 
 impl Default for TextMeasurer {
@@ -676,5 +728,52 @@ mod tests {
         let (text, truncated) = m.truncate("qualquer coisa", font, SIZE, 0.0);
         assert!(truncated);
         assert_eq!(text, "…");
+    }
+
+    #[test]
+    fn index_at_offset_at_or_before_zero_is_zero() {
+        let mut m = TextMeasurer::new();
+        let font = FontFace::Sans {
+            weight: SansWeight::Regular,
+        };
+        assert_eq!(m.index_at_offset("abc", font, SIZE, 0.0), 0);
+        assert_eq!(m.index_at_offset("abc", font, SIZE, -5.0), 0);
+    }
+
+    #[test]
+    fn index_at_offset_past_the_end_is_the_full_length() {
+        let mut m = TextMeasurer::new();
+        let font = FontFace::Sans {
+            weight: SansWeight::Regular,
+        };
+        let width = m.measure_width("abc", font, SIZE);
+        assert_eq!(m.index_at_offset("abc", font, SIZE, width + 100.0), 3);
+    }
+
+    #[test]
+    fn index_at_offset_rounds_to_the_nearest_glyph_boundary() {
+        let mut m = TextMeasurer::new();
+        let font = FontFace::Sans {
+            weight: SansWeight::Regular,
+        };
+        // Repetir o mesmo caractere garante glyphs de largura igual --
+        // um pouco antes e um pouco depois do centro do glyph do meio
+        // devem arredondar para bordas diferentes.
+        let one = m.measure_width("a", font, SIZE);
+        assert_eq!(m.index_at_offset("aaa", font, SIZE, one * 1.4), 1);
+        assert_eq!(m.index_at_offset("aaa", font, SIZE, one * 1.6), 2);
+    }
+
+    #[test]
+    fn index_at_offset_never_lands_inside_a_multibyte_char() {
+        let mut m = TextMeasurer::new();
+        let font = FontFace::Sans {
+            weight: SansWeight::Regular,
+        };
+        // "á" é 2 bytes em UTF-8 -- o índice devolvido tem que ser 0 ou 2,
+        // nunca 1 (que fatiaria o caractere ao meio).
+        let width = m.measure_width("á", font, SIZE);
+        let idx = m.index_at_offset("á", font, SIZE, width / 2.0);
+        assert!(idx == 0 || idx == 2, "índice {idx} corta o caractere");
     }
 }

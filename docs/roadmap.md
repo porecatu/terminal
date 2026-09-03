@@ -99,7 +99,7 @@ O código está escrito e o CI está verde nas três plataformas — 51 testes a
 - Teclado real, arraste de mouse, seleção, copiar/colar e mouse dentro do `htop`/`fzf` **não foram exercitados**: a proteção de foco do Windows bloqueia `SetForegroundWindow`/`AppActivate` de processo em segundo plano, e input sintético não é caminho viável. Precisa de uma sessão desktop de verdade.
 - `vim`, `htop`, `fzf`, `less` e `man` não foram abertos de ponta a ponta; acentuação ABNT2 e resize com TUI aberta idem.
 - **Clipboard no Wayland** segue sem verificação (sem ambiente Linux na fase). O plano B `copypasta` do [ADR-0013](adr/0013-mouse-selecao-e-clipboard.md) continua de pé.
-- Confirmado no Windows: terminal spawna, CPU ~0% ocioso, título por OSC chega à janela, fechar a janela mata o processo filho sem órfão, cores ANSI do prompt batem com a paleta.
+- Confirmado no Windows: terminal spawna, CPU ~0% ocioso, título por OSC chega à janela, fechar a janela mata o processo filho sem órfão, cores ANSI do prompt batem com a paleta. *(Nota pós-F4: "sem órfão" era verdade só para o processo filho direto — o shell. Um neto que o shell tivesse spawnado (ex. um servidor de longa duração) sobrevivia; corrigido pelo Job Object do [ADR-0033](adr/0033-job-object-encerramento-de-processo.md).)*
 
 Duas simplificações conscientes, documentadas no código:
 

@@ -1342,6 +1342,27 @@ pub(crate) fn rect_contains(rect: Rect, point: (f32, f32)) -> bool {
     x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 }
 
+/// Origem X do texto dentro de um campo de uma linha só, deslocada pra
+/// esquerda quando o texto não cabe -- mantém o fim (e o cursor, quando
+/// está no fim) visível em vez de cortar por trás. Usada tanto por quem
+/// pinta (`chrome::paint_rename_field`, `overlay::paint_group_editor`)
+/// quanto por quem faz hit-test de clique/arraste sobre esse mesmo texto
+/// (ADR-0035) -- a mesma fórmula nos dois lugares, nunca duas cópias (a
+/// armadilha registrada no CLAUDE.md: "Fórmula de geometria copiada em
+/// dois lugares só diverge quando alguém mexe nela").
+pub(crate) fn scrolled_text_x(
+    field_x: f32,
+    padding_x: f32,
+    text_width: f32,
+    available_width: f32,
+) -> f32 {
+    if text_width > available_width {
+        field_x + padding_x - (text_width - available_width)
+    } else {
+        field_x + padding_x
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use porecatu_core::GroupColor;

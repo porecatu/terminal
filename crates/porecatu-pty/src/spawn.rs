@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use portable_pty::{Child, CommandBuilder, MasterPty, native_pty_system};
 
 use crate::error::PtyError;
+use crate::job::ProcessGroup;
 use crate::shell::{resolve_default_shell, search_path};
 
 /// Dimensão da viewport em células, mais o tamanho em pixels quando
@@ -161,7 +162,14 @@ impl PtyHandle {
 
 /// Spawna um shell num novo PTY. Ver [`SpawnConfig`] para a resolução de
 /// `program` e a precedência de ambiente.
-pub fn spawn(config: SpawnConfig) -> Result<PtyHandle, PtyError> {
+///
+/// O `ProcessGroup` (ADR-0033) vem **separado** do `PtyHandle` -- é
+/// `None` fora do Windows e em qualquer falha de criação/atribuição do
+/// Job Object (degradação silenciosa, ver `job.rs`). Quem chama decide
+/// sozinho se droppa (mata a árvore) ou esquece (`mem::forget`, preserva
+/// processo destacado) essa segunda peça, conforme o caminho de saída --
+/// ver `porecatu-term::terminal::watch_loop`.
+pub fn spawn(config: SpawnConfig) -> Result<(PtyHandle, Option<ProcessGroup>), PtyError> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(config.size.into())
@@ -191,8 +199,13 @@ pub fn spawn(config: SpawnConfig) -> Result<PtyHandle, PtyError> {
     // aberto neste processo; o filho já tem sua própria cópia.
     drop(pair.slave);
 
-    Ok(PtyHandle {
-        master: pair.master,
-        child,
-    })
+    let process_group = ProcessGroup::for_child(child.as_ref());
+
+    Ok((
+        PtyHandle {
+            master: pair.master,
+            child,
+        },
+        process_group,
+    ))
 }

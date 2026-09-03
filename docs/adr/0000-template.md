@@ -20,13 +20,13 @@
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 |
-| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Aceito |
+| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034 (parcial) |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
 | [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
 | [0020](0020-grupos-explicitos.md) | Grupos explícitos: multiplicidade do implícito, colapso e foco | Aceito |
 | [0021](0021-selecao-multipla-e-gestos-da-barra.md) | Seleção múltipla e gestos da barra de abas | Aceito |
 | [0022](0022-animacao-de-interface.md) | Animação de interface sob render damage-driven | Aceito |
-| [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Aceito |
+| [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Superseded by ADR-0035 (parcial) |
 | [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
 | [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Superseded by ADR-0026 |
 | [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito |
@@ -36,6 +36,9 @@
 | [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito |
 | [0031](0031-temas-nomeados.md) | Temas nomeados: escopo, merge e ciclo | Aceito |
 | [0032](0032-interface-do-v1-fechada.md) | A interface do v1 está fechada | Aceito |
+| [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
+| [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito |
+| [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
 
 ## Convenção
 
