@@ -3429,6 +3429,17 @@ impl App {
                 size.height,
                 font_families_from_config(&self.config),
             );
+            // RF-11.26/ADR-0001: ausência de aceleração detectada no
+            // primeiro adapter -- avisa uma vez, nunca `panic`.
+            if gpu.software_rendering() {
+                first_gpu_warnings.push((
+                    Severity::Warning,
+                    "Sem aceleração de GPU",
+                    "Nenhum adapter com aceleração de hardware foi encontrado; \
+                     desenhando por software (mais lento)."
+                        .to_owned(),
+                ));
+            }
             // RF-5.8/RF-11.25: família de `[terminal.font] family` ausente
             // no sistema -- o fallback já rodou sozinho, isto só nomeia o
             // que faltou.

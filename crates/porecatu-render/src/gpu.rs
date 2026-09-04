@@ -49,6 +49,14 @@ pub struct GpuContext {
     pub(crate) text_atlas: glyphon::TextAtlas,
     pub(crate) swash_cache: glyphon::SwashCache,
     pub(crate) text_measurer: TextMeasurer,
+    /// RF-11.26/ADR-0001: `true` quando o adapter escolhido não tem
+    /// aceleração de hardware -- ou porque a primeira tentativa não achou
+    /// nenhum adapter compatível e uma segunda, com
+    /// `force_fallback_adapter`, achou; ou porque a primeira já devolveu
+    /// direto um adapter `DeviceType::Cpu` (algumas VMs expõem só isso, sem
+    /// a primeira tentativa falhar). Consultado uma vez, no primeiro
+    /// `GpuContext::new` do processo.
+    software_rendering: bool,
 }
 
 impl GpuContext {
@@ -80,13 +88,40 @@ impl GpuContext {
         let surface = instance
             .create_surface(window)
             .expect("criação da surface wgpu falhou");
-        let adapter = instance
+        // RF-11.26/ADR-0001 (tabela de riscos: "driver GPU ruim / VM sem
+        // aceleração ... wgpu cai para backend software; detectar e avisar
+        // no primeiro start"): a primeira tentativa pede hardware; se ela
+        // não achar nenhum adapter compatível, uma segunda pede
+        // explicitamente o adapter de fallback (`force_fallback_adapter`,
+        // ex. WARP no Windows, llvmpipe/SwiftShader em Vulkan/GL) antes de
+        // desistir -- só essa segunda falhando é motivo de `panic`,
+        // equivalente a "sem GPU e sem software nenhum", cenário sem
+        // recuperação possível.
+        let (adapter, used_fallback_request) = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
                 ..Default::default()
             })
             .await
-            .expect("nenhum adapter wgpu compatível encontrado");
+        {
+            Ok(adapter) => (adapter, false),
+            Err(_) => {
+                let adapter = instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        compatible_surface: Some(&surface),
+                        force_fallback_adapter: true,
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("nenhum adapter wgpu, nem por hardware nem por fallback de software");
+                (adapter, true)
+            }
+        };
+        // Algumas VMs já devolvem um adapter `Cpu` na primeira tentativa,
+        // sem ela precisar falhar -- os dois caminhos contam como "sem
+        // aceleração" pro aviso do RF-11.26.
+        let software_rendering =
+            used_fallback_request || adapter.get_info().device_type == wgpu::DeviceType::Cpu;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
@@ -130,6 +165,7 @@ impl GpuContext {
             text_atlas,
             swash_cache,
             text_measurer,
+            software_rendering,
         };
         (gpu, window_surface)
     }
@@ -177,5 +213,12 @@ impl GpuContext {
     /// dele, para nunca existirem dois carregando as cinco faces.
     pub fn text_measurer(&mut self) -> &mut TextMeasurer {
         &mut self.text_measurer
+    }
+
+    /// RF-11.26: `true` quando o processo abriu sem aceleração de GPU
+    /// (ver o campo). Vale para a vida inteira do processo -- o adapter
+    /// nunca troca depois de escolhido.
+    pub fn software_rendering(&self) -> bool {
+        self.software_rendering
     }
 }
