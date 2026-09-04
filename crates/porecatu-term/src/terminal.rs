@@ -261,6 +261,12 @@ impl Terminal {
         lock(&self.engine).selection_text()
     }
 
+    /// Seleciona a tela visível inteira e o scrollback (RF-11.16). Ver
+    /// `TermEngine::select_all`.
+    pub fn select_all(&self) {
+        lock(&self.engine).select_all();
+    }
+
     /// Prepara uma busca no scrollback (ADR-0041). Ver
     /// `TermEngine::start_search`.
     pub fn start_search(

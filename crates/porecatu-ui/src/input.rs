@@ -138,6 +138,20 @@ pub fn handle_keyboard_input(
                 }
                 return;
             }
+            // RF-11.30: `scrollback.to_top`/`to_bottom` já tinham default
+            // embutido e já entravam no mapa resolvido -- faltava só isto.
+            Key::Named(NamedKey::Home) => {
+                if !modes.alt_screen {
+                    terminal.scroll(TermScroll::Top);
+                }
+                return;
+            }
+            Key::Named(NamedKey::End) => {
+                if !modes.alt_screen {
+                    terminal.scroll(TermScroll::Bottom);
+                }
+                return;
+            }
             _ => {}
         }
     }

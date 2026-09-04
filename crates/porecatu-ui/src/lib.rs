@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use porecatu_core::{Action, GroupId, TabId, Workspace};
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
 use porecatu_term::{
-    GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermModes,
-    TermParams, Terminal, resolve_default_shell, search_path,
+    DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig,
+    TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell, search_path,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -35,6 +35,7 @@ mod paint;
 mod palette;
 mod reload;
 mod rename;
+mod search_bar;
 mod selection;
 mod session_writer;
 mod shell_integration;
@@ -57,6 +58,7 @@ use paint::CellMetrics;
 use porecatu_core::GroupColor;
 use reload::ConfigReload;
 use rename::RenameState;
+use search_bar::{SearchBarHit, SearchBarState};
 use selection::Selection;
 use session_writer::SessionScheduler;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
@@ -487,6 +489,11 @@ struct WindowState {
     /// aquilo vira de fato um agendamento (RF-3.6, `enabled = false`
     /// nunca marca dirty no scheduler); esta janela só registra o fato.
     session_dirty: bool,
+    /// Barra de busca (ADR-0041), o sexto widget de chrome -- estado
+    /// efêmero de janela, amarrado à aba em que foi aberta (mesma
+    /// classificação de `selection`, ADR-0041 §8). `redraw` fecha sozinha
+    /// se a aba ativa mudar.
+    search: Option<search_bar::SearchBarState>,
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -846,6 +853,7 @@ impl WindowState {
             selection: Selection::default(),
             last_titlebar_click: None,
             session_dirty: false,
+            search: None,
         }
     }
 
@@ -1443,6 +1451,94 @@ impl WindowState {
         }
     }
 
+    /// Captura parcial da busca (ADR-0041 §3): `true` se a tecla foi
+    /// reivindicada (quem chama redesenha e para por aqui); `false` deixa
+    /// cair pro passo 2 da cadeia -- é o que mantém `F3`/`Ctrl+Shift+F`/
+    /// trocar de aba/fechar a janela funcionando com a busca aberta.
+    /// `Backspace` entra por fora de `apply_text_field_key` (que não o
+    /// trata -- mesma nota de `handle_rename_key`), mas ainda é uma das
+    /// "teclas de edição do ADR-0035" que o ADR-0041 §3 reivindica por
+    /// categoria.
+    fn handle_search_key(&mut self, event: &KeyEvent, cell_metrics: CellMetrics) -> bool {
+        if event.state != ElementState::Pressed {
+            return false;
+        }
+        let Some(tab) = self.search.as_ref().map(SearchBarState::tab) else {
+            return false;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.search = None;
+                true
+            }
+            Key::Named(NamedKey::Enter) => {
+                let forward = !self.modifiers.shift;
+                self.advance_search(tab, forward, cell_metrics);
+                true
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if let Some(search) = self.search.as_mut() {
+                    search.field_mut().backspace();
+                }
+                if let Some(rt) = self.tabs.get(&tab)
+                    && let Some(search) = self.search.as_mut()
+                {
+                    search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
+                }
+                true
+            }
+            _ => {
+                let modifiers = self.modifiers;
+                let mut consumed = false;
+                if let Some(search) = self.search.as_mut() {
+                    consumed = apply_text_field_key(
+                        search.field_mut(),
+                        &event.logical_key,
+                        event.text.as_deref(),
+                        modifiers,
+                    );
+                }
+                if consumed
+                    && let Some(rt) = self.tabs.get(&tab)
+                    && let Some(search) = self.search.as_mut()
+                {
+                    search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
+                }
+                consumed
+            }
+        }
+    }
+
+    /// `search.next`/`search.prev` (RF-11.5), e `Enter`/`Shift+Enter` que
+    /// fazem o mesmo sem binding (ADR-0041 §3/§10) -- avança a ocorrência
+    /// ativa e rola até ela, reservando a altura da barra (ADR-0041 §1) e
+    /// expandindo o grupo se a aba estiver num colapsado (RF-11.9/RF-2.17,
+    /// `Workspace::activate_tab` já carrega a regra).
+    fn advance_search(&mut self, tab: TabId, forward: bool, cell_metrics: CellMetrics) {
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let Some(occurrence) = search.advance(forward) else {
+            return;
+        };
+        let Some(rt) = self.tabs.get(&tab) else {
+            return;
+        };
+        let reserved = search_bar::reserved_rows(cell_metrics.height);
+        let delta = search_bar::scroll_delta_to_reveal(
+            occurrence.start.line,
+            rt.snapshot.scroll_offset,
+            rt.snapshot.rows,
+            reserved,
+        );
+        if delta != 0 {
+            rt.terminal.scroll(TermScroll::Lines(delta));
+        }
+        self.touch_workspace(|ws| {
+            ws.activate_tab(tab);
+        });
+    }
+
     /// `Enter` aciona o botão focado, `Esc` cancela (RF-10.18); `Left`/
     /// `Right`/`Tab` trocam o foco entre os dois botões. Devolve a ação
     /// resolvida se o usuário confirmou -- `lib.rs` executa de verdade,
@@ -1810,10 +1906,8 @@ impl WindowState {
             // `theme.cycle`: temas nomeados são a etapa 6 também, mas
             // precisam do `Arc<Config>` de `App` -- mesmo caminho.
             Action::ThemeCycle => ActionOutcome::CycleTheme,
-            // `scrollback.*`, `clipboard.*`, `selection.select_all`:
-            // resolvidos no mapa, executados em `input.rs` (scrollback e
-            // clipboard) ou ainda não implementados (seleção, F6) -- ver
-            // o comentário do método. `search.*` é F6, mesma situação.
+            // `scrollback.*`, `clipboard.*`: resolvidos no mapa,
+            // executados em `input.rs` -- ver o comentário do método.
             Action::ScrollbackLineUp
             | Action::ScrollbackLineDown
             | Action::ScrollbackPageUp
@@ -1821,11 +1915,49 @@ impl WindowState {
             | Action::ScrollbackToTop
             | Action::ScrollbackToBottom
             | Action::ClipboardCopy
-            | Action::ClipboardPaste
-            | Action::SelectionSelectAll
-            | Action::SearchOpen
-            | Action::SearchNext
-            | Action::SearchPrev => ActionOutcome::Unhandled,
+            | Action::ClipboardPaste => ActionOutcome::Unhandled,
+            // RF-11.16 (menu do terminal, ADR-0041 §10): mesmo mecanismo
+            // de `Terminal::start_selection`/`update_selection`, só com os
+            // extremos já na tela visível mais o scrollback inteiro.
+            Action::SelectionSelectAll => {
+                if let Some(id) = self.workspace.active_tab()
+                    && let Some(rt) = self.tabs.get(&id)
+                {
+                    rt.terminal.select_all();
+                }
+                ActionOutcome::Handled
+            }
+            // `search.open` (RF-11.1): abre na aba ativa com o campo já
+            // focado -- idempotente se já estiver aberta para ela. Abrir
+            // limpa a seleção de texto (ADR-0041 §5): sem isso, seleção e
+            // ocorrência ficam indistinguíveis, mesma cor.
+            Action::SearchOpen => {
+                if let Some(id) = self.workspace.active_tab() {
+                    if self.search.as_ref().map(SearchBarState::tab) != Some(id) {
+                        self.search = Some(SearchBarState::new(id));
+                    }
+                    if let Some(rt) = self.tabs.get(&id) {
+                        rt.terminal.clear_selection();
+                    }
+                }
+                ActionOutcome::Handled
+            }
+            // `search.next`/`search.prev` (RF-11.5): sem efeito se a busca
+            // não estiver aberta -- `F3` continua chegando aqui mesmo
+            // então (captura parcial, ADR-0041 §3), e não deve vazar pro
+            // terminal.
+            Action::SearchNext => {
+                if let Some(id) = self.search.as_ref().map(SearchBarState::tab) {
+                    self.advance_search(id, true, cell_metrics);
+                }
+                ActionOutcome::Handled
+            }
+            Action::SearchPrev => {
+                if let Some(id) = self.search.as_ref().map(SearchBarState::tab) {
+                    self.advance_search(id, false, cell_metrics);
+                }
+                ActionOutcome::Handled
+            }
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
             // resolvido -- inalcançável na prática, mas o `match` precisa
             // ser exaustivo.
@@ -4311,6 +4443,19 @@ impl App {
             return;
         }
 
+        // Barra de busca (ADR-0041 §3): captura **parcial**, a única não
+        // modal do app. Reivindica só texto imprimível, `Enter`/`Shift+
+        // Enter`/`Esc` e as teclas de edição do ADR-0035
+        // (`handle_search_key`/`apply_text_field_key`) -- tudo o mais
+        // (inclusive `F3`, que chega ao passo 2 abaixo) cai para a tabela
+        // de keybindings normalmente, diferente dos modos acima.
+        if state.search.is_some() && state.handle_search_key(&key, self.cell_metrics) {
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
         state.hover.dismiss();
         let Some(gpu) = &mut self.gpu else {
             return;
@@ -4662,6 +4807,54 @@ impl App {
             );
             if let Some(index) = overlay::move_to_group_hit(&layout, logical_point) {
                 popover.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+
+        // Arraste dentro do campo da busca (ADR-0035/ADR-0041 §3): mesmo
+        // padrão do editor de grupo -- só entra aqui com o botão esquerdo
+        // já pressionado a partir de um clique no próprio campo (o único
+        // lugar que arma `mouse_button_down` na busca).
+        if state.mouse_button_down == Some(MouseButton::Left)
+            && state.search.is_some()
+            && let Some(gpu) = &mut self.gpu
+        {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let box_rect = paint::terminal_box_rect(
+                &self.style,
+                bar_height(&self.style),
+                state.logical_width,
+                state.logical_height,
+            );
+            let layout = search_bar::layout_search_bar(box_rect, &self.style);
+            let measurer = gpu.text_measurer();
+            if let Some(search) = state.search.as_mut() {
+                let buffer = search.field().text().to_string();
+                let text_width = measurer.measure_width(
+                    &buffer,
+                    chrome::LABEL_FONT,
+                    search_bar::FIELD_FONT_SIZE,
+                );
+                let text_area =
+                    (layout.field_rect.width - search_bar::FIELD_PADDING_X * 2.0).max(0.0);
+                let text_x = tab_bar::scrolled_text_x(
+                    layout.field_rect.x,
+                    search_bar::FIELD_PADDING_X,
+                    text_width,
+                    text_area,
+                );
+                let local_x = logical_point.0 - text_x;
+                let byte_index = measurer.index_at_offset(
+                    &buffer,
+                    chrome::LABEL_FONT,
+                    search_bar::FIELD_FONT_SIZE,
+                    local_x,
+                );
+                search.field_mut().drag_to(byte_index);
             }
             state.window.request_redraw();
             return;
@@ -5045,6 +5238,79 @@ impl App {
             return;
         }
 
+        // Barra de busca (ADR-0041 §3): captura parcial -- clique **dentro**
+        // dela é dela (não é modal, mas a barra é opaca: o clique não vaza
+        // pra grade por baixo); fora, cai pra barra de abas/grade como
+        // sempre. Só o botão esquerdo age; qualquer outro é ignorado sem
+        // fechar nada (mesma régua do editor de grupo).
+        if let Some(search_tab) = state.search.as_ref().map(SearchBarState::tab) {
+            let box_rect = paint::terminal_box_rect(
+                &self.style,
+                bar_height(&self.style),
+                state.logical_width,
+                state.logical_height,
+            );
+            let layout = search_bar::layout_search_bar(box_rect, &self.style);
+            let inside_bar = logical_point.0 >= layout.bar_rect.x
+                && logical_point.0 < layout.bar_rect.x + layout.bar_rect.width
+                && logical_point.1 >= layout.bar_rect.y
+                && logical_point.1 < layout.bar_rect.y + layout.bar_rect.height;
+            if inside_bar {
+                if button == MouseButton::Left {
+                    match search_bar::search_bar_hit(&layout, logical_point) {
+                        Some(SearchBarHit::Close) => state.search = None,
+                        Some(SearchBarHit::Toggle) => {
+                            if let Some(rt) = state.tabs.get(&search_tab)
+                                && let Some(search) = state.search.as_mut()
+                            {
+                                search.toggle_regex(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
+                            }
+                        }
+                        Some(SearchBarHit::Prev) => {
+                            state.advance_search(search_tab, false, self.cell_metrics);
+                        }
+                        Some(SearchBarHit::Next) => {
+                            state.advance_search(search_tab, true, self.cell_metrics);
+                        }
+                        Some(SearchBarHit::Field) => {
+                            if let Some(gpu) = &mut self.gpu {
+                                let measurer = gpu.text_measurer();
+                                if let Some(search) = state.search.as_mut() {
+                                    let buffer = search.field().text().to_string();
+                                    let text_width = measurer.measure_width(
+                                        &buffer,
+                                        chrome::LABEL_FONT,
+                                        search_bar::FIELD_FONT_SIZE,
+                                    );
+                                    let text_area = (layout.field_rect.width
+                                        - search_bar::FIELD_PADDING_X * 2.0)
+                                        .max(0.0);
+                                    let text_x = tab_bar::scrolled_text_x(
+                                        layout.field_rect.x,
+                                        search_bar::FIELD_PADDING_X,
+                                        text_width,
+                                        text_area,
+                                    );
+                                    let local_x = logical_point.0 - text_x;
+                                    let byte_index = measurer.index_at_offset(
+                                        &buffer,
+                                        chrome::LABEL_FONT,
+                                        search_bar::FIELD_FONT_SIZE,
+                                        local_x,
+                                    );
+                                    search.field_mut().click_at(byte_index);
+                                    state.mouse_button_down = Some(button);
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                state.window.request_redraw();
+                return;
+            }
+        }
+
         // Resize por borda (ADR-0027): janela inteira, fora de qualquer
         // popover/diálogo/menu (já resolvidos acima -- todos retornam
         // antes de chegar aqui). Mesma natureza bloqueante/modal de
@@ -5341,10 +5607,43 @@ impl App {
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
         let h = bar_height(style);
+        // A busca é por aba (RF-11.1) -- trocar de aba fecha a que estava
+        // aberta, em vez de continuar mostrando o realce/estado de uma
+        // aba que não está mais em tela.
+        if let Some(search) = &state.search
+            && Some(search.tab()) != state.workspace.active_tab()
+        {
+            state.search = None;
+        }
         if let Some(id) = state.workspace.active_tab()
             && let Some(runtime) = state.tabs.get_mut(&id)
         {
             runtime.terminal.snapshot_into(&mut runtime.snapshot);
+
+            // Busca (ADR-0041): varre mais um lote por frame enquanto
+            // houver, sem travar a UI (item 5 da etapa 1) -- pede outro
+            // redraw imediatamente se ainda não terminou (não é o relógio
+            // de animação do ADR-0022, que a §9 fecha em dois consumidores;
+            // isto é o mesmo padrão de "saída do PTY continua chegando em
+            // frames seguintes"). Corta as ocorrências pela vista e limpa
+            // o buffer sem realocar (ADR-0007) -- `TermEngine::
+            // snapshot_into` só zera (já aconteceu na chamada acima); quem
+            // preenche é `porecatu-ui` (ADR-0041 §4).
+            if let Some(search) = state.search.as_mut() {
+                if search.step(&runtime.terminal) {
+                    state.window.request_redraw();
+                }
+                let scroll_offset = runtime.snapshot.scroll_offset;
+                let rows = runtime.snapshot.rows;
+                search_bar::occurrences_in_view(
+                    search.occurrences(),
+                    search.active_index(),
+                    scroll_offset,
+                    rows,
+                    &mut runtime.snapshot.occurrences,
+                );
+            }
+
             let box_rect =
                 paint::terminal_box_rect(style, h, state.logical_width, state.logical_height);
             let cursor_config = &self.config.terminal.cursor;
@@ -5370,6 +5669,27 @@ impl App {
                 gpu.text_measurer(),
             );
             frame.set_layer(Layer::Grid, primitives);
+
+            if let Some(search) = &state.search {
+                let search_layout = search_bar::layout_search_bar(box_rect, style);
+                let cursor_logical = (
+                    state.cursor_position.0 as f32 / state.scale,
+                    state.cursor_position.1 as f32 / state.scale,
+                );
+                let search_hover = search_bar::search_bar_hit(&search_layout, cursor_logical);
+                let search_primitives = search_bar::paint_search_bar(
+                    &search_layout,
+                    search,
+                    style,
+                    pal,
+                    &self.term_pal,
+                    search_hover,
+                    gpu.text_measurer(),
+                );
+                for primitive in search_primitives {
+                    frame.push(Layer::Chrome, primitive);
+                }
+            }
         }
 
         if !state.warnings.is_empty() {

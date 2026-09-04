@@ -267,6 +267,22 @@ impl TermEngine {
         self.term.selection_to_string()
     }
 
+    /// Seleciona a tela visível inteira e o scrollback (RF-11.16, menu de
+    /// contexto do terminal) -- mesmo `Selection` do motor que
+    /// `start_selection`/`update_selection` usam, só com os dois pontos já
+    /// nos extremos da grade em vez de vir do mouse.
+    pub fn select_all(&mut self) {
+        let start = Point::new(self.term.topmost_line(), Column(0));
+        let end = Point::new(self.term.bottommost_line(), self.term.last_column());
+        let mut selection = AlacSelection::new(
+            SelectionKind::Simple.into(),
+            start,
+            SelectionSide::Left.into(),
+        );
+        selection.update(end, SelectionSide::Right.into());
+        self.term.selection = Some(selection);
+    }
+
     /// Prepara uma busca no scrollback (ADR-0041, RF-11.1 a RF-11.9):
     /// literal ou regex (`mode`), sobre a tela visível mais o scrollback
     /// inteiro, reduzida à tela visível na tela alternativa. Nada é varrido

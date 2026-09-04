@@ -22,10 +22,12 @@
 //! ASCII continua sendo um run só.
 
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun};
-use porecatu_term::{Cell, CellFlags, CellText, CursorShape, GridSnapshot, SelectionSpan};
+use porecatu_term::{
+    Cell, CellFlags, CellText, CursorShape, GridSnapshot, OccurrenceSpan, SelectionSpan,
+};
 
 use crate::chrome::push_shadow;
-use crate::palette::{ResolvedTermPalette, TRANSPARENT};
+use crate::palette::{self, ResolvedTermPalette, TRANSPARENT};
 use crate::tab_bar::TabBarStyle;
 
 #[derive(Debug, Clone, Copy)]
@@ -252,7 +254,8 @@ fn paint_row_backgrounds(
     for col in 0..cols {
         let cell = &snapshot.cells[row * cols + col];
         let selected = is_selected(snapshot.selection, row, col);
-        let (_, bg) = resolved_colors(cell, selected, term_pal);
+        let occurrence = occurrence_at(&snapshot.occurrences, row, col);
+        let (_, bg) = resolved_colors(cell, selected, occurrence, term_pal);
         if bg != term_pal.background {
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
@@ -335,7 +338,8 @@ fn paint_row_text(
         }
 
         let selected = is_selected(snapshot.selection, row, col);
-        let (fg, _) = resolved_colors(cell, selected, term_pal);
+        let occurrence = occurrence_at(&snapshot.occurrences, row, col);
+        let (fg, _) = resolved_colors(cell, selected, occurrence, term_pal);
         let bold = cell.flags.contains(CellFlags::BOLD);
 
         // Caractere que não avança o que a grade reservou sai sozinho,
@@ -370,7 +374,8 @@ fn paint_row_text(
                 continue;
             }
             let cell_selected = is_selected(snapshot.selection, row, col);
-            let (cell_fg, _) = resolved_colors(cell, cell_selected, term_pal);
+            let cell_occurrence = occurrence_at(&snapshot.occurrences, row, col);
+            let (cell_fg, _) = resolved_colors(cell, cell_selected, cell_occurrence, term_pal);
             let cell_bold = cell.flags.contains(CellFlags::BOLD);
             if cell_fg != fg || cell_bold != bold {
                 break;
@@ -455,13 +460,45 @@ fn is_selected(selection: Option<SelectionSpan>, row: usize, col: usize) -> bool
     true // linha inteira entre a primeira e a última da seleção
 }
 
-fn resolved_colors(cell: &Cell, selected: bool, term_pal: &ResolvedTermPalette) -> (Color, Color) {
-    if selected {
-        // Seleção domina a cor da célula -- não combina com `INVERSE`
-        // nem com a cor original; é o mesmo comportamento da maioria dos
-        // terminais (destaque uniforme, independente do que estava sob
-        // ele).
+/// Se `(row, col)` cai numa ocorrência de busca (ADR-0041 §4/§5) --
+/// `Some(true)`/`Some(false)` conforme ela é a ativa ou não, `None` fora de
+/// qualquer ocorrência. Mesma lógica de `is_selected` (linha única vs.
+/// multi-linha), sem o caso `is_block` -- ocorrência nunca é retangular.
+fn occurrence_at(occurrences: &[OccurrenceSpan], row: usize, col: usize) -> Option<bool> {
+    occurrences.iter().find_map(|occ| {
+        if row < occ.start_row || row > occ.end_row {
+            return None;
+        }
+        let inside = if occ.start_row == occ.end_row {
+            col >= occ.start_col && col <= occ.end_col
+        } else if row == occ.start_row {
+            col >= occ.start_col
+        } else if row == occ.end_row {
+            col <= occ.end_col
+        } else {
+            true
+        };
+        inside.then_some(occ.active)
+    })
+}
+
+fn resolved_colors(
+    cell: &Cell,
+    selected: bool,
+    occurrence: Option<bool>,
+    term_pal: &ResolvedTermPalette,
+) -> (Color, Color) {
+    if selected || occurrence == Some(false) {
+        // Seleção (ou ocorrência não ativa, mesma cor -- ADR-0041 §5)
+        // domina a cor da célula -- não combina com `INVERSE` nem com a
+        // cor original; é o mesmo comportamento da maioria dos terminais
+        // (destaque uniforme, independente do que estava sob ele).
         return (term_pal.selection_foreground, term_pal.selection_background);
+    }
+    if occurrence == Some(true) {
+        // Ocorrência ativa (RF-11.7): acento e o escuro que a pílula de
+        // grupo já usa sobre cor cheia -- nenhuma cor nova.
+        return (palette::OCCURRENCE_ACTIVE_TEXT, term_pal.cursor);
     }
 
     let bold = cell.flags.contains(CellFlags::BOLD);
