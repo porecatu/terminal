@@ -95,6 +95,13 @@ impl Tab {
         self.cwd.as_ref()
     }
 
+    /// Nome do shell spawnado (ADR-0036 §3: `porecatu-session` grava isto
+    /// como `TabV1::spawn_program`, para diferenciar do shell padrão da
+    /// config na restauração).
+    pub fn shell_name(&self) -> &str {
+        &self.shell_name
+    }
+
     /// Captura de OSC 7 (ADR-0017 item 1).
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         self.cwd = Some(cwd);

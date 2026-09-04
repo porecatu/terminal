@@ -1855,6 +1855,12 @@ dependencies = [
 [[package]]
 name = "porecatu-session"
 version = "0.1.0"
+dependencies = [
+ "dirs",
+ "porecatu-core",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "porecatu-term"
