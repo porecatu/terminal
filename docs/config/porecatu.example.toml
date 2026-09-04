@@ -1096,8 +1096,11 @@ white   = "#ebdbb2"
 # SESSÃO — PRD-003
 ##############################################################################
 
-# Classe de recarga: [C] -- "reinicie o app". Gravação de sessão é F5, e
-# trocar o destino com sessão em memória pediria migração de arquivo.
+# Classe de recarga: [C] -- "reinicie o app". Não há chave de caminho: trocar o
+# destino com sessão em memória pediria migração de arquivo. Para testes existe
+# a variável PORECATU_SESSION (ADR-0036), que não é contrato público.
+# Tema e zoom de sessão são persistidos junto (ADR-0031, ADR-0036) e não têm
+# chave própria -- `enabled = false` desliga tudo de uma vez.
 [session]
 enabled = true                    # false = sempre abre com uma aba limpa  RF-3.6
 # Atraso do agrupamento de gravações. Fechar 10 abas gera 1 escrita.       RF-3.3

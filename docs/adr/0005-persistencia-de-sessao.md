@@ -1,6 +1,6 @@
 # ADR-0005 — Persistência de sessão em JSON versionado
 
-**Status:** Aceito
+**Status:** Superseded by [ADR-0036](0036-formato-do-arquivo-de-sessao.md) (parcial — a seção "O que é gravado", a linha "`porecatu-session` fica trivial: serializa `porecatu-core`" das consequências positivas, e a linha "JSON inválido / truncado" da tabela de recuperação) e por [ADR-0038](0038-fallbacks-de-cwd.md) (parcial — só a tabela "Fallbacks por plataforma", cujo mecanismo mudou; a rejeição do PEB no Windows continua de pé)
 **Data:** 2026-08-26
 **Relacionados:** PRD-003, ADR-0004, ADR-0006
 

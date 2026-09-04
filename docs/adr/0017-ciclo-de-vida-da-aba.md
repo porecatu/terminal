@@ -1,6 +1,6 @@
 # ADR-0017 — Ciclo de vida e identidade da aba
 
-**Status:** Superseded by [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) (parcial — só a seção 3, sobre o critério de confirmação do RF-1.6)
+**Status:** Superseded by [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) (parcial — só a seção 3, sobre o critério de confirmação do RF-1.6) e por [ADR-0037](0037-aba-nao-iniciada.md) (parcial — só a seção 6, que enumerava `Running` e `Exited` como os dois estados possíveis da aba)
 **Data:** 2026-08-27
 **Relacionados:** ADR-0004, ADR-0005, ADR-0007, ADR-0008, ADR-0012, ADR-0014, ADR-0015, PRD-001, PRD-003, PRD-010
 

@@ -403,6 +403,16 @@ todas as outras. `max_width` continua no arquivo de exemplo, agora como saturaç
 | Ativa | `#282e37` a `.85` | `#39404b`, 2px | `#eaeef3` |
 | Inativa | `#191d23` a `.85` | `#22262e`, 2px | `#98a0ab` |
 | Selecionada (RF-2.2) | o do estado de base | `#5ed3bc`, 2px **por dentro** | o do estado de base |
+| Não iniciada (RF-3.9) | o do estado de base | o do estado de base | o do estado de base, a `.45` |
+
+**Não iniciada é modificador, como selecionada** — e as duas se acumulam. Uma aba
+restaurada sem shell ([ADR-0037](../adr/0037-aba-nao-iniciada.md), a partir da F5)
+mantém fundo, borda e largura do estado de base; o que muda é só o **alfa do
+rótulo**, para `.45`. O valor não é novo: é o mesmo da borda do indicador agregado
+(§2.4). Nada de indicador próprio — o RF-3.9 pede "discretamente, sem poluir a
+barra", e com dez abas restauradas a barra fica com dez rótulos mais claros, não com
+dez marcas novas. O esmaecimento se apaga sozinho no instante em que o shell sobe,
+porque o estado mudou; não há nada a limpar.
 
 **O fundo da aba tem alfa `.85`.** Os dois valores da tabela são as cores do design;
 o que a F3 acrescentou foi a transparência, para que a cápsula do grupo (§2.3)
@@ -803,6 +813,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Reordenação animada ao formar grupo | `[v1]` | PRD-002 RF-2.5; [ADR-0022](../adr/0022-animacao-de-interface.md) — sem representação no canvas |
 | Controles de janela e resize sem decoração nativa | `[v1]` | [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) — sem PRD, sem representação no canvas |
 | Botão de configurações da zona fixa (inerte até a F4) | `[v1]` | PRD-004 — ver §2.2 |
+| Aba restaurada sem shell iniciado (rótulo esmaecido; existe a partir da F5) | `[v1]` | PRD-003 RF-3.9; [ADR-0037](../adr/0037-aba-nao-iniciada.md) — sem representação no canvas |
 | Ícone da janela e do executável | fora de fase | estava listado em F6 no roadmap; entregue antes, ver o roadmap |
 | **Painéis divididos** | `[v2]` | [PRD-006](../prd/prd-006-paineis-divididos.md) *(rascunho)* |
 | **Cabeçalho e botões do painel** | `[v2]` | PRD-006 *(rascunho)* |
@@ -840,13 +851,15 @@ Precisam de decisão de desenho na implementação. Listados para não passarem 
 
 | Requisito | O que falta |
 |---|---|
-| PRD-003 RF-3.9 | aba restaurada ainda sem shell iniciado (F5) |
+| — | **a lista está vazia** |
 
-Enquanto não houver desenho aprovado para esses, valem os tokens da seção 1 e o julgamento de quem implementa — nunca cores ou dimensões novas fora da tabela.
+Enquanto não houver desenho aprovado para algum requisito que entre aqui, valem os tokens da seção 1 e o julgamento de quem implementa — nunca cores ou dimensões novas fora da tabela.
 
 > **Quarta rodada, com o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md).** O RF-5.14 (cores de seleção de texto no terminal) saiu desta lista: o valor da seção 1.5 nasceu do `::selection` do canvas, e é o que o binário desenha — logo, é o valor deliberado, e não há desenho faltando. O que falta é a chave de configuração, que é trabalho normal da F4.
 
 > **Quinta rodada, com o [ADR-0032](../adr/0032-interface-do-v1-fechada.md).** Saiu o RF-4.14, e com ele o último item desta lista que falava do chrome **atual**: `left-bar` e `outline` deixaram de ser escopo do v1, em vez de ganharem anatomia. Sobra um item, e ele é de **recurso** que ainda não existe — a aba restaurada da F5 —, não de desenho pendente na interface de hoje. É a diferença que o ADR-0032 §2 fixa: falta de comportamento se registra; falta de aparência não existe.
+
+> **Sexta rodada, ao abrir a F5, com o [ADR-0037](../adr/0037-aba-nao-iniciada.md).** Saiu o RF-3.9, e a lista **fica vazia**. O desenho da aba restaurada sem shell é o rótulo com alfa `.45` (§2.5): nenhum elemento novo, nenhum valor novo — o `.45` já era a borda do indicador agregado. Foi a alternativa escolhida entre três levadas ao dono do produto; as outras duas (um ponto vazado na família da §2.17 e a aba sem preenchimento de fundo) estão registradas no ADR como recusadas, e por quê. Como o ADR-0032 fechou a interface, esta é uma mudança das seções 1/2 e **passou por ADR**, que é exatamente o processo que ele instituiu.
 
 **Resolvidos depois da primeira versão desta lista.** O RF-4.21 (como o erro de configuração é exibido) estava aqui e saiu: o [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) definiu a superfície de aviso, e a anatomia está na seção 2.14. O mesmo ADR cobriu sete requisitos que não constavam nem desta lista nem da 4.1 — RF-1.6, RF-2.23, RF-3.1, RF-3.10, RF-3.14, RF-3.16 e RF-5.8 —, além do menu de contexto exigido por RF-1.1, RF-1.2, RF-2.20 e RF-2.22. Nenhum deles introduziu cor nova: todos saem dos tokens de popover da seção 1.
 
@@ -868,6 +881,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 
 | O que o desenho pedia | O que vale, e por quê | Onde |
 |---|---|---|
+| Nada — o RF-3.9 (aba restaurada ainda sem shell) era o **último** item da lista da §4.2, sem desenho aprovado | **Rótulo com alfa `.45`**, sobre a cor de texto do estado de base (§2.5). Escolhido entre três alternativas levadas ao dono do produto; as recusadas foram um ponto vazado na família da §2.17 (acrescentaria um quarto significado ao mesmo slot, contra o "sem poluir a barra" do requisito) e a aba sem preenchimento de fundo (visível demais justo no caso comum do recurso, dez ou vinte abas restauradas). Nenhum elemento novo e **nenhum valor novo** — `.45` já era a borda do indicador agregado da §2.4. Primeira mudança de seção 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e passou pelo ADR que ele exige | F5, [ADR-0037](../adr/0037-aba-nao-iniciada.md) |
 | Design combina pílula **e** sublinhado; PRD-004 modelava enum exclusivo | `indicator_style` virou lista combinável, default `["pill", "underline"]` — e **a chave depois saiu por inteiro**: o indicador é a pílula mais a cápsula, forma única (linha do ADR-0032, abaixo) | ADR-0009, superado pelo [ADR-0032](../adr/0032-interface-do-v1-fechada.md) |
 | Design usa `Ctrl+T`, `Ctrl+G`, `Ctrl+,`, `Ctrl+1..6` | ADR-0008 vence: nada de `Ctrl+<letra>` sozinho. Chips de tecla do mockup são ilustrativos | ADR-0009 |
 | `Ctrl+Shift+P` é paleta no design, `theme.cycle` no ADR-0008 | Paleta fica com `Ctrl+Shift+P`; `theme.cycle` migra para `Ctrl+Shift+Y` | ADR-0009 |

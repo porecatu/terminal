@@ -44,7 +44,9 @@ O grafo de dependências permitido está tabelado em [CLAUDE.md](../CLAUDE.md). 
 
 O [ADR-0018](adr/0018-composicao-de-frame.md) acrescenta duas coisas a esse crate sem furar a regra: **camadas** (uma sequência ordenada de listas de primitivas, para que popover possa cobrir texto) e um **medidor de texto sem GPU**, que mede string, face e tamanho e continua não sabendo o que é uma aba. É o medidor que torna o layout da barra a função pura da seção 7.
 
-**`porecatu-core` não depende de nada.** É o modelo de domínio puro: `Workspace`, `Group`, `Tab`, IDs, tipos geométricos. Serializável, testável sem GPU e sem PTY. É por isso que `porecatu-session` consegue ser um crate trivial: ele serializa `core` e mais nada.
+**`porecatu-core` não depende de nada.** É o modelo de domínio puro: `Workspace`, `Group`, `Tab`, IDs, tipos geométricos. Serializável, testável sem GPU e sem PTY.
+
+> **Revisto pelo [ADR-0036](adr/0036-formato-do-arquivo-de-sessao.md), ao abrir a F5.** Esta frase terminava em "é por isso que `porecatu-session` consegue ser um crate trivial: ele serializa `core` e mais nada". Não é o que acontece: o crate define o **schema do arquivo em tipos próprios**, versionados por módulo, e converte de e para `core` explicitamente. O derive de `serde` no domínio continua (é o que torna o round-trip do ADR-0006 testável), mas ele não é mais o formato de disco. Dois motivos: campo novo em `Tab` vazaria para o arquivo sem ninguém decidir, e migração de `schema_version` precisa de um tipo **por versão**, que não existe quando só há o tipo de hoje. O envelope multi-janela do RF-3.17 mora lá pela mesma razão — geometria e monitor não podem entrar em `core`, que não conhece `winit`.
 
 > **Na implementação.** Na F1 o crate tinha só `TabId`, para que o `Wakeup { window, tab }` do [ADR-0015](adr/0015-multiplas-janelas.md) nascesse com o formato certo. `Workspace`, `Group` e `Tab` entraram na F2, com `serde` derivado já ali — o round-trip que o [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md) lista como invariante é testável mesmo com `porecatu-session` vazio, e há teste para ele. `Tab` carrega o estado `Exited` do [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md), o título com precedência, o `cwd` de OSC 7 e os indicadores de atividade e campainha.
 >
@@ -230,7 +232,7 @@ Sequências de escape que **não** são desenho viram eventos, consumidos por
 | Evento | Origem | Quem decide o que fazer |
 |---|---|---|
 | `Title` | OSC 0 / OSC 2 | `ui`, respeitando a precedência do RF-1.7 — customizado → OSC → shell, conforme o [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) |
-| `Cwd` | OSC 7 | `ui` → `tab.new`/`window.new` (F2, ADR-0017) e → `session` ([ADR-0005](adr/0005-persistencia-de-sessao.md), F5) |
+| `Cwd` | OSC 7 | `ui` → `tab.new`/`window.new` (F2, ADR-0017) e → `session` ([ADR-0005](adr/0005-persistencia-de-sessao.md), F5). Sem OSC 7, o fallback é `ProcessGroup::cwd()` por `sysinfo`, consultado só na gravação da sessão, e só no Linux e no macOS ([ADR-0038](adr/0038-fallbacks-de-cwd.md)) |
 | `ClipboardWrite` | OSC 52 | `ui`, sujeito a `osc52_write` e ao teto de tamanho |
 | `ClipboardRead` | OSC 52 | `ui`, **negado por default** ([ADR-0013](adr/0013-mouse-selecao-e-clipboard.md)) |
 | `ColorSet` / `ColorQuery` | OSC 4 / 10 / 11 | `ui`, com escopo de sessão ([ADR-0012](adr/0012-identificacao-do-terminal.md)) |
@@ -327,7 +329,7 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 |---|---|
 | `porecatu-core` | testes unitários puros: mover aba entre grupos, agrupar, desagrupar, invariantes de ordenação |
 | `porecatu-config` | round-trip TOML, defaults completos, rejeição de config inválida com erro legível |
-| `porecatu-session` | round-trip de serialização, migração de `schema_version`, recuperação de arquivo corrompido |
+| `porecatu-session` | round-trip **pelo DTO** (`Workspace` → `WindowV1` → JSON → `WindowV1` → `Workspace`), cobertura de campo do domínio no DTO, migração de `schema_version`, recuperação de arquivo corrompido e de schema mais novo ([ADR-0036](adr/0036-formato-do-arquivo-de-sessao.md)) |
 | `porecatu-term` | golden files: sequência de escape na entrada, dump de grid esperado na saída |
 | `porecatu-pty` | teste de integração por plataforma: spawn de `echo`, resize, encerramento |
 | `porecatu-render` | geometria e resolução de camada são puras e testadas sem GPU; pipeline e pintura, verificação manual e screenshot |

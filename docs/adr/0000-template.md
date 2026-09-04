@@ -8,7 +8,7 @@
 | [0002](0002-motor-vte.md) | Motor VT: crate alacritty_terminal | Aceito |
 | [0003](0003-formato-de-configuracao.md) | Configuração em TOML | Aceito |
 | [0004](0004-pty-cross-platform.md) | PTY cross-platform via portable-pty | Aceito |
-| [0005](0005-persistencia-de-sessao.md) | Persistência de sessão em JSON versionado | Aceito |
+| [0005](0005-persistencia-de-sessao.md) | Persistência de sessão em JSON versionado | Superseded by ADR-0036 e ADR-0038 (os dois **parcialmente**) |
 | [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito |
 | [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito |
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
@@ -20,7 +20,7 @@
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 |
-| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034 (parcial) |
+| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034 e ADR-0037 (os dois **parcialmente**) |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
 | [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
 | [0020](0020-grupos-explicitos.md) | Grupos explícitos: multiplicidade do implícito, colapso e foco | Aceito |
@@ -39,6 +39,11 @@
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito |
 | [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
+| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito |
+| [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito |
+| [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
+| [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito |
+| [0040](0040-superficie-de-linha-de-comando.md) | Superfície de linha de comando | Aceito |
 
 ## Convenção
 

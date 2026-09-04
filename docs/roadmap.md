@@ -222,7 +222,9 @@ O RF-2.17 (*"ativar uma aba de grupo colapsado expande o grupo"*) fica **parcial
 > `collapse_group` (a escada de foco do RF-1.5 nunca devolve aba do grupo que
 > está colapsando, senão o colapso viraria no-op). Continua sem cenário de
 > ponta a ponta: nenhum caminho da F3 ativa aba oculta, e as duas fontes que o
-> requisito cita são F5 e F6.
+> requisito cita são F5 e F6. **O cenário de ponta a ponta é a etapa 4 da F5**,
+> onde restaurar uma sessão cuja aba ativa está dentro de um grupo colapsado é
+> o primeiro caminho real do app a ativar aba oculta.
 
 ### O PR de fechamento da F3
 
@@ -418,15 +420,45 @@ fase promete — o arquivo passa a governar a aparência — antes de a fase aca
 
 ## F5 — Sessão
 
-Implementa [PRD-003](prd/prd-003-persistencia-de-sessao.md).
+Implementa [PRD-003](prd/prd-003-persistencia-de-sessao.md), os 17 requisitos RF-3.1 a RF-3.17.
 
-- `porecatu-session`: schema versionado, escrita atômica, debounce, save síncrono no exit
+Antes de a fase abrir, **cinco ADRs fecharam as decisões que faltavam** — mesmo movimento dos ADR-0017 a 0019 entre a F1 e a F2, dos ADR-0020 a 0023 entre a F2 e a F3 e dos ADR-0029 a 0031 entre a F3 e a F4. Aqui a razão é um pouco diferente das outras três: não foi a fase anterior que expôs as lacunas, foi o **ADR-0005** — aceito desde antes da F1 — decidir o formato em prosa e parar antes de nome de chave, mecanismo de migração e envelope de janela. Mais duas contradições vivas entre documento e código, que ficaram latentes só porque ninguém escrevia o arquivo ainda.
+
+- [**ADR-0036**](adr/0036-formato-do-arquivo-de-sessao.md) — o schema vira **tipos próprios em `porecatu-session`**, versionados por módulo, com conversão explícita de e para `porecatu-core`. Supersede parcialmente o ADR-0005: aquele prometia "serializa `porecatu-core` e mais nada", e o derive do domínio grava hoje cinco campos que a lista dele não inclui — `Group::last_active` (cujo próprio comentário diz "não persistido"), `activity`, `bell`, `process_title` e `state`, este último contradizendo o ADR-0017 §6, que decidiu que aba `Exited` **não é restaurada**. Fecha também o envelope multi-janela do RF-3.17 (que `Workspace` não pode carregar, por ser mono-janela desde o ADR-0015), a identidade de monitor, a colisão de `.corrupt` e `PORECATU_SESSION` como costura de teste.
+- [**ADR-0037**](adr/0037-aba-nao-iniciada.md) — `TabState::NotStarted`, o terceiro estado. A restauração preguiçosa do RF-3.8 pede um estado que não existe, e ele cruza com cinco decisões aceitas: confirmação de fechamento (ADR-0034), indicadores de atividade e campainha, tooltip, escada de foco e navegação. Decide também o **RF-3.9**, que era o último item da lista de pendências de desenho da especificação visual: rótulo com alfa `.45`, sem elemento novo e sem valor novo.
+- [**ADR-0038**](adr/0038-fallbacks-de-cwd.md) — o fallback de `cwd` sem OSC 7 é `sysinfo`, **que já está no workspace** desde o ADR-0033, consultado a partir do `root_pid` do `ProcessGroup` e só no momento da gravação. Substitui o par `/proc` à mão + crate `libproc` que o ADR-0005 nomeava: são os mesmos dois mecanismos, sem dependência nova e com um caminho de código em vez de dois. No Windows a rejeição do PEB continua de pé.
+- [**ADR-0039**](adr/0039-convite-a-integracao-de-shell.md) — o convite do RF-3.1 é **nota escrita no grid**, pelo `inject_note` que já existe: o snippet fica copiável pela seleção normal do terminal, nenhum widget novo entra e o ADR-0014 continua com cinco. Fecha o critério de detecção, a proeminência maior no Windows e onde mora a dispensa definitiva — em `session.json`, porque o app não escreve na config do usuário.
+- [**ADR-0040**](adr/0040-superficie-de-linha-de-comando.md) — o binário passa a ler `argv`, com uma superfície pequena de propósito e parsing à mão. É o RF-3.12 (caminho posicional cria sessão nova, sem restaurar e sem sobrescrever) e é a mesma engrenagem que paga a **dívida da etapa 1 da F4**: `resolve_config_path` aceita `--config` desde lá e nada nunca a chamou com um valor.
+
+Itens:
+
+- `porecatu-session`: schema versionado com tipos por versão, escrita atômica, debounce, save síncrono no exit
 - Restauração preguiçosa, geometria de janela, recuperação de monitor ausente
-- Captura de OSC 7; fallbacks `/proc` no Linux e `libproc` no macOS
+- Fallback de `cwd` por `sysinfo` no Linux e no macOS, sobre a captura de OSC 7 que existe desde a F2
 - Detecção de ausência de OSC 7 e convite à integração de shell, com snippets por shell
 - Recuperação: arquivo ausente, corrompido, schema antigo, schema mais novo
+- `argv` no binário: `--config`, caminho posicional, `--help`, `--version`
+- **Bug latente da F2, achado ao escrever os snippets:** `parse_file_uri` (`porecatu-term/src/osc7.rs`) devolve o caminho a partir da primeira `/` depois de `file://`, então `file:///C:/Users/ana` vira `/C:/Users/ana` — que não é caminho válido no Windows. Passou batido porque nenhum shell do fluxo emite OSC 7, e o efeito já existe hoje no `cwd` herdado por `tab.new`/`window.new`, não só na sessão. Corrigir na etapa 2, com teste do URI de letra de unidade
+- **Escopo extra aprovado**: tema e zoom de sessão persistidos (o [ADR-0031](adr/0031-temas-nomeados.md) já dizia que persistir o tema é F5, e a lista do ADR-0005 não o incluía), e o RF-2.17 fechado ponta a ponta
+
+**Divisão sugerida**, no padrão das seis etapas da F1, da F2, da F3 e da F4, uma por PR:
+
+1. **`porecatu-session` nasce.** Dependências (`serde`, `serde_json`, `dirs`, `porecatu-core`), `path.rs` com `PORECATU_SESSION` → caminho de plataforma via `dirs` (o diretório de **estado**, deliberadamente diferente do da config), `schema/v1.rs` com o DTO do [ADR-0036](adr/0036-formato-do-arquivo-de-sessao.md), conversão nos dois sentidos, escrita `tmp` → `fsync` → `rename`, e a tabela de recuperação inteira. **Sem consumidor ainda**, como a etapa 1 da F4: o crate carrega e grava, e é testável sem GPU e sem janela. Entrega RF-3.5, RF-3.13, RF-3.14, RF-3.15, RF-3.16. O teste que justifica ter escolhido o DTO entra aqui: reprova quando um campo novo de `porecatu-core` não foi classificado como gravado ou explicitamente descartado.
+2. **Gravação fiada na UI.** Debounce por `ControlFlow::WaitUntil`, entrando no `next_deadline()` da janela e recebendo `Instant` de fora — a regra que vale desde o `AnimationClock` da F3. A lista de mudanças estruturais do RF-3.2, a gravação síncrona preenchendo o **no-op documentado** que a F2 plantou (`porecatu-ui/src/lib.rs`, [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) §7), geometria e monitor capturados por janela, e `enabled = false` não gravando nada. Entrega RF-3.2, RF-3.3, RF-3.4, RF-3.6 e a metade de gravação do RF-3.17. Inclui a correção do `file:///C:/...` no `parse_file_uri` — é aqui que o `cwd` de OSC 7 passa a ir para o disco, e um caminho inválido gravado é pior que não gravado.
+3. **O terceiro estado da aba.** [ADR-0037](adr/0037-aba-nao-iniciada.md) em código: `TabState::NotStarted` em `porecatu-core`, shell subindo no primeiro foco, os cruzamentos com ADR-0034, indicadores, tooltip e fechamento, e o rótulo esmaecido. Entrega RF-3.8 e RF-3.9. Cuidado registrado: nenhum braço curinga novo em `match` sobre `TabState`, ou o estado novo passa a ser tratado como `Running` em silêncio.
+4. **Restauração no start.** N janelas como conjunto, geometria e recuperação de monitor ausente, aba ativa por janela, `cwd` inexistente abrindo no home com nota no grid, e **grupo colapsado contendo a aba ativa restaurada** — o primeiro caminho real do app que ativa aba oculta, e o que fecha o RF-2.17 ponta a ponta, pendente desde a F3. Entrega RF-3.7, RF-3.10, RF-3.11 e a metade de restauração do RF-3.17. É aqui que a métrica de 20 abas em menos de 1 s é medida.
+5. **Linha de comando e fallback de `cwd`.** [ADR-0040](adr/0040-superficie-de-linha-de-comando.md) (`argv` no binário, `--config` finalmente chamada com um valor, caminho posicional com a semântica do RF-3.12) e [ADR-0038](adr/0038-fallbacks-de-cwd.md) (`ProcessGroup::cwd()` por `sysinfo`, Linux e macOS). Entrega RF-3.12 e paga a dívida da etapa 1 da F4.
+6. **Convite à integração de shell, tema e zoom.** [ADR-0039](adr/0039-convite-a-integracao-de-shell.md): detecção, snippets por shell em `docs/reference/integracao-de-shell.md` e embutidos dali, nota no grid, dispensa definitiva em `session.json`, texto mais forte no Windows. Mais o escopo extra — tema e zoom de sessão persistidos — e a atualização da caixa "Estado na F2" do [catálogo de ações](reference/acoes.md), que deixa de valer quando `app.quit` passa a gravar de fato. Entrega RF-3.1.
+
+A ordem não é arbitrária: 1 destrava tudo; 2 e 4 são as duas metades do recurso e 4 depende de 2; 3 é pré-requisito de 4 (sem `NotStarted` não há restauração preguiçosa); 5 e 6 são independentes entre si e podem trocar de posição.
 
 **Critério de saída:** todos os cenários de aceite de PRD-003 passam; restauração de 20 abas em menos de 1 s; teste de crash durante a gravação preservando a sessão anterior; limitação do Windows sem OSC 7 verificada e documentada como comportamento esperado, não como bug.
+
+**O que a F5 não faz:** mexer na interface além do rótulo esmaecido do RF-3.9, que é a exceção decidida pelo [ADR-0037](adr/0037-aba-nao-iniciada.md) §5 — o [ADR-0032](adr/0032-interface-do-v1-fechada.md) continua de pé para todo o resto. Também não persiste scrollback (fora do v1) nem restaura processos (fora do requisito, por definição).
+
+**O que já não precisa nascer.** A configuração `[session]` está completa desde a F4 (cinco chaves, defaults alinhados ao arquivo de exemplo, classe de recarga C fiada no hot reload) e **sem nenhum consumidor**; o `serde` do domínio e o teste de round-trip estão em `porecatu-core` desde a F2; a captura de OSC 7 e o `TermEvent::Cwd` estão em `porecatu-term` desde a F2, antecipados pelo ADR-0017; o `inject_note` que o RF-3.10 e o RF-3.1 usam já é chamado em produção; e o `Wakeup` com `(WindowId, TabId)` foi resolvido antes da F1 justamente pensando na fase em que duas janelas seriam restauradas ([ADR-0015](adr/0015-multiplas-janelas.md)).
+
+**Dívida herdada de verificação.** Sete dos oito cenários de aceite do PRD-003 rodam sem gesto de teclado — fechar e reabrir, arquivo corrompido, schema mais novo, crash na gravação, diretório removido, argumento de linha de comando. Os dois pontos que puxam a dívida das fases anteriores são "o shell de uma aba inicia quando ela é focada" e dispensar o convite do RF-3.1: os dois pedem foco real. **Mouse sintético atravessa a proteção de foco do Windows** (descoberta da F4), então focar uma aba não iniciada com clique **é** verificável sem pedir gesto ao usuário; o resto continua sendo dívida assumida. O fallback do macOS entra verificado só por compilação e CI, e está registrado como tal no ADR-0038.
 
 ---
 

@@ -91,7 +91,8 @@ O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alv
 | Configuração | TOML (`serde` + `toml`) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
 | PTY | `portable-pty` (ConPTY no Windows) | [ADR-0004](docs/adr/0004-pty-cross-platform.md) |
 | Encerramento de árvore de processo (Windows) | `win32job` (Job Object) + `sysinfo` (varredura complementar) | [ADR-0033](docs/adr/0033-job-object-encerramento-de-processo.md) |
-| Persistência de sessão | JSON versionado em state dir | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md) |
+| Persistência de sessão | JSON versionado em state dir, com DTO próprio por versão de schema | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md), [ADR-0036](docs/adr/0036-formato-do-arquivo-de-sessao.md) |
+| Diretório de trabalho da aba | OSC 7, com fallback por `sysinfo` no Linux e macOS; sem fallback no Windows | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md), [ADR-0038](docs/adr/0038-fallbacks-de-cwd.md) |
 | Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
 | Fontes | Iosevka Fixed (OFL-1.1, terminal e chrome) + Lucide (ISC), embutidas | [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md) |
 | Ícone do app | `png` (decodifica em runtime) + `winres` num `build.rs` (recurso PE no Windows) | — |
