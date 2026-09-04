@@ -30,9 +30,12 @@
 //! são conhecidos sem ambiguidade; isto não é a varredura que o
 //! ADR-0005/ADR-0008/ADR-0017 rejeitaram para fins de *detecção*.
 //!
-//! Fora do Windows, `for_child` sempre devolve `None` -- dívida assumida,
-//! sem ambiente Unix disponível pra implementar `setsid`+`killpg` (mesmo
-//! padrão de outras verificações interativas registradas no CLAUDE.md).
+//! Fora do Windows, `for_child` guarda só o `root_pid` -- sem Job Object,
+//! `process_count`/`kill_tree` continuam degradados (`1`/no-op, dívida
+//! assumida, sem ambiente Unix disponível pra implementar `setsid`+
+//! `killpg`, mesmo padrão de outras verificações interativas registradas
+//! no CLAUDE.md). O PID em si já basta para [`ProcessGroup::cwd`]
+//! (ADR-0038), a única consulta que Linux/macOS precisam de verdade.
 //!
 //! **Não mora dentro de `PtyHandle`.** `PtyHandle` é vazado de propósito
 //! na saída natural do shell (`leak_pty`, em `porecatu-term`) pra não
@@ -47,6 +50,8 @@
 //! algo & exit`).
 
 use portable_pty::Child;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::path::PathBuf;
 #[cfg(windows)]
 use std::sync::Arc;
 
@@ -57,7 +62,6 @@ use std::sync::Arc;
 /// dos dois seja "dono único" do Job.
 #[derive(Debug, Clone)]
 pub struct ProcessGroup {
-    #[cfg_attr(not(windows), allow(dead_code))]
     root_pid: u32,
     #[cfg(windows)]
     job: Option<Arc<win32job::Job>>,
@@ -99,9 +103,34 @@ impl ProcessGroup {
         Some(Arc::new(job))
     }
 
+    /// Sem Job Object fora do Windows -- só o `root_pid`, que é o que
+    /// [`Self::cwd`] precisa. `process_count`/`kill_tree` continuam
+    /// degradados (dívida assumida, ver a nota do módulo).
     #[cfg(not(windows))]
-    pub fn for_child(_child: &dyn Child) -> Option<Self> {
-        None
+    pub fn for_child(child: &dyn Child) -> Option<Self> {
+        let root_pid = child.process_id()?;
+        Some(Self { root_pid })
+    }
+
+    /// RF-3.10/ADR-0038: fallback de `cwd` quando a aba nunca recebeu OSC 7
+    /// -- consulta **pontual** a este PID via `sysinfo`, nunca a lista
+    /// inteira de processos da máquina. Chamado só na gravação da sessão
+    /// (RF-3.3, já debounced), nunca por frame nem em laço -- com OSC 7
+    /// presente, o chamador nem chega a invocar isto.
+    ///
+    /// Não existe no Windows: a rejeição do PEB pelo ADR-0005 continua de
+    /// pé, e não muda por estar dentro de uma dependência -- ausência da
+    /// função é erro de compilação, não decisão em runtime.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn cwd(&self) -> Option<PathBuf> {
+        let mut system = sysinfo::System::new();
+        let pid = sysinfo::Pid::from_u32(self.root_pid);
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            false,
+            sysinfo::ProcessRefreshKind::nothing().with_cwd(sysinfo::UpdateKind::Always),
+        );
+        system.process(pid)?.cwd().map(PathBuf::from)
     }
 
     /// Quantos processos estão vivos na árvore agora -- inclui o shell

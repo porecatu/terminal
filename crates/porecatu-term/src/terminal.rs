@@ -13,6 +13,7 @@
 //! closure sobre o `EventLoopProxy` e o `Wakeup { window, tab }` dele.
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -214,6 +215,22 @@ impl Terminal {
         self.process_group
             .as_ref()
             .is_some_and(|group| group.process_count() > 1)
+    }
+
+    /// RF-3.10/ADR-0038, segundo degrau da precedência de `cwd` na
+    /// gravação de sessão (o primeiro, `Tab::cwd` por OSC 7, é decisão de
+    /// `porecatu-ui`, que não conhece `ProcessGroup`). Consulta pontual ao
+    /// PID raiz, só em Linux/macOS -- `ProcessGroup::cwd` não existe no
+    /// Windows (ADR-0038 §3), então esta função devolve sempre `None` lá
+    /// em vez de expor o `#[cfg]` para quem chama.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn cwd_fallback(&self) -> Option<PathBuf> {
+        self.process_group.as_ref().and_then(|group| group.cwd())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    pub fn cwd_fallback(&self) -> Option<PathBuf> {
+        None
     }
 
     /// Inicia uma seleção (PRD-010 RF-10.4).

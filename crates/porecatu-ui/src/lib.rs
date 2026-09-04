@@ -199,6 +199,13 @@ enum Wakeup {
 struct TabRuntime {
     terminal: Terminal,
     snapshot: GridSnapshot,
+    /// `cwd` já resolvido (RF-3.10) que foi de fato usado no `SpawnConfig`
+    /// desta aba -- terceiro degrau da precedência do ADR-0038 §2 (depois
+    /// de `Tab::cwd`/OSC 7 e de `Terminal::cwd_fallback`/`ProcessGroup`),
+    /// consultado só na gravação da sessão. Guardado aqui porque
+    /// `porecatu_core::Tab` não guarda o `cwd` de spawn -- só o que OSC 7
+    /// reporta.
+    spawn_cwd: Option<PathBuf>,
 }
 
 /// Altura da barra de abas, em pixels lógicos -- não depende de estado de
@@ -902,7 +909,7 @@ impl WindowState {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
-            cwd,
+            cwd: cwd.clone(),
             size: PtySize {
                 rows: rows as u16,
                 cols: cols as u16,
@@ -926,6 +933,7 @@ impl WindowState {
                     TabRuntime {
                         terminal,
                         snapshot: GridSnapshot::default(),
+                        spawn_cwd: cwd,
                     },
                 );
             }
@@ -2478,6 +2486,12 @@ struct App {
     /// de recuperação (ADR-0036 §5). `None` só depois de consumido, ou se
     /// `[session] enabled = false` (aí nem chega a carregar).
     pending_session: Option<porecatu_session::LoadOutcome>,
+    /// Caminho posicional da linha de comando (RF-3.12, ADR-0040 §2):
+    /// `Some` desliga a leitura e a gravação da sessão para o processo
+    /// inteiro (mesmo caminho de `[session] enabled = false`, ver
+    /// `Self::session_persistence_enabled`) e vence `startup_directory` na
+    /// única aba que a janela do arranque abre. `None` é o caso comum.
+    positional_directory: Option<PathBuf>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -2582,15 +2596,19 @@ impl App {
         }
     }
 
-    fn new(proxy: EventLoopProxy<Wakeup>) -> Self {
-        // TODO F4 etapa 5: `--config` chega via CLI; por ora só
-        // `PORECATU_CONFIG`/caminho de plataforma são resolvidos
-        // (`porecatu_config::load(None)`). Erro de parse no start não tem
-        // widget de aviso ainda -- só um log em stderr, porque a `App`
-        // (dona da pilha de avisos, uma por janela) ainda não existe
-        // neste ponto; os defaults seguem valendo (`LoadResult::config()`
-        // nunca falta).
-        let load_result = porecatu_config::load(None);
+    /// `cli_config`/`cli_directory` vêm do parse de `argv` em `src/main.rs`
+    /// (ADR-0040 §4) -- `argv` é do processo, então só o binário pode lê-lo
+    /// sem furar a regra de dependência; `run` só repassa.
+    fn new(
+        proxy: EventLoopProxy<Wakeup>,
+        cli_config: Option<PathBuf>,
+        cli_directory: Option<PathBuf>,
+    ) -> Self {
+        // Erro de parse no start não tem widget de aviso ainda -- só um
+        // log em stderr, porque a `App` (dona da pilha de avisos, uma por
+        // janela) ainda não existe neste ponto; os defaults seguem
+        // valendo (`LoadResult::config()` nunca falta).
+        let load_result = porecatu_config::load(cli_config.as_deref());
         if let porecatu_config::LoadResult::Invalid { error, .. } = &load_result {
             eprintln!("config inválida, usando defaults: {error}");
         }
@@ -2628,7 +2646,7 @@ impl App {
         // pra assistir o arquivo que `load` de fato leu. `None` (sem
         // diretório resolvido, ou ele ainda não existe) degrada para "sem
         // hot reload" -- não falha o start (ADR-0003 regra 1).
-        let config_path = porecatu_config::resolve_config_path(None);
+        let config_path = porecatu_config::resolve_config_path(cli_config.as_deref());
         if let Some(path) = config_path.clone() {
             let watcher_proxy = proxy.clone();
             reload::watch(path, move |reload| {
@@ -2639,8 +2657,11 @@ impl App {
         // RF-3.7 (ADR-0036 §5): carregado aqui porque `enabled` já está à
         // mão, mas só **consumido** em `resumed` -- não há `ActiveEventLoop`
         // nem janela ainda para restaurar nela ou mostrar o aviso de
-        // arquivo corrompido/schema mais novo (RF-3.14/RF-3.16).
-        let pending_session = config.session.enabled.then(porecatu_session::load);
+        // arquivo corrompido/schema mais novo (RF-3.14/RF-3.16). RF-3.12
+        // (ADR-0040 §2): modo posicional nunca lê a sessão gravada, então
+        // nem chega a carregar -- `cli_directory` vence `enabled` aqui.
+        let pending_session =
+            (config.session.enabled && cli_directory.is_none()).then(porecatu_session::load);
 
         Self {
             gpu: None,
@@ -2662,6 +2683,7 @@ impl App {
             windows: HashMap::new(),
             session: SessionScheduler::default(),
             pending_session,
+            positional_directory: cli_directory,
         }
     }
 
@@ -2708,7 +2730,20 @@ impl App {
         let cwd = origin_state
             .and_then(|s| s.resolve_new_tab_cwd(&self.startup_directory))
             .or_else(|| self.startup_directory.clone());
+        self.open_window_with(event_loop, attributes, cwd);
+    }
 
+    /// Núcleo comum a [`Self::open_window`] e ao arranque em modo
+    /// posicional (RF-3.12, ADR-0040 §2, em `resumed`): cria a janela e a
+    /// primeira aba com o `cwd` já resolvido por quem chama -- só ele sabe
+    /// se veio da janela de origem (cascata), de `startup_directory`, ou
+    /// do caminho posicional da linha de comando, que vence os dois.
+    fn open_window_with(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        attributes: WindowAttributes,
+        cwd: Option<PathBuf>,
+    ) {
         let Some(mut state) = self.create_window_with_attributes(event_loop, attributes) else {
             return;
         };
@@ -3068,10 +3103,11 @@ impl App {
 
     /// RF-3.6: único ponto que decide se a sessão persiste -- o debounce
     /// e a gravação síncrona do exit consultam isto, nunca a config
-    /// direto. A etapa 5 (ADR-0040 §2) estende isto para o modo de
-    /// caminho posicional do RF-3.12, sem mexer nos dois chamadores.
+    /// direto. RF-3.12/ADR-0040 §2: o modo de caminho posicional nunca
+    /// grava, mesmo com `[session] enabled = true` -- os dois chamadores
+    /// não mudaram.
     fn session_persistence_enabled(&self) -> bool {
-        self.config.session.enabled
+        self.config.session.enabled && self.positional_directory.is_none()
     }
 
     /// RF-5.9: passos de zoom de sessão a gravar (ADR-0036 §1,
@@ -3105,6 +3141,11 @@ impl App {
                         session_writer::window_monitor(&state.window),
                         theme.clone(),
                         zoom_steps,
+                        |tab_id| {
+                            state.tabs.get(&tab_id).and_then(|rt| {
+                                rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
+                            })
+                        },
                     )
                 })
                 .collect(),
@@ -3409,6 +3450,13 @@ impl ApplicationHandler<Wakeup> for App {
     /// sucedida, ver `porecatu_session::load_from`).
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.windows.is_empty() {
+            return;
+        }
+        // RF-3.12/ADR-0040 §2: uma janela, uma aba, `cwd` no diretório
+        // pedido -- vence `startup_directory` e nem consulta
+        // `pending_session` (que já não foi carregado, ver `App::new`).
+        if let Some(dir) = self.positional_directory.clone() {
+            self.open_window_with(event_loop, base_window_attributes(), Some(dir));
             return;
         }
         let outcome = self.pending_session.take().unwrap_or_default();
@@ -5003,13 +5051,16 @@ impl App {
 }
 
 /// Abre a janela principal do Porecatu e roda o event loop até todas as
-/// janelas fecharem (ADR-0015).
-pub fn run() {
+/// janelas fecharem (ADR-0015). `cli_config`/`cli_directory` vêm do parse
+/// de `argv` em `src/main.rs` (ADR-0040 §4) -- `--config` e o caminho
+/// posicional do RF-3.12, já validados lá (caminho posicional inexistente
+/// ou que não é diretório nunca chega até aqui).
+pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>) {
     let event_loop = EventLoop::<Wakeup>::with_user_event()
         .build()
         .expect("falha ao criar event loop");
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy);
+    let mut app = App::new(proxy, cli_config, cli_directory);
     event_loop
         .run_app(&mut app)
         .expect("event loop terminou com erro");
