@@ -10,6 +10,14 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# Árvore de acessibilidade sobre o chrome (ADR-0043): adaptador escolhido
+# pela versão do `winit` já pinado, não o contrário -- mesma disciplina do
+# `wgpu` (F0). `accesskit_winit 0.34` resolve contra o mesmo `winit
+# 0.30.13` do projeto, sem duplicar `winit` na árvore (conferido com
+# `cargo tree -p porecatu-ui -i winit`). MIT OR Apache-2.0 (`accesskit`) e
+# Apache-2.0 (`accesskit_winit`), compatíveis com GPLv3.
+accesskit = "0.25"
+accesskit_winit = "0.34"
 arboard = "3"
 dirs = "5"
 notify = "8.2.0"

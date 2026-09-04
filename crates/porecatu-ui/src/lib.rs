@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use porecatu_core::{Action, GroupId, TabId, Workspace};
-use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
+use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_term::{
     DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
     SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell,
@@ -20,6 +20,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 
+mod access;
 mod animation;
 mod app_icon;
 mod chrome;
@@ -150,7 +151,12 @@ fn base_window_attributes() -> WindowAttributes {
     let mut attributes = Window::default_attributes()
         .with_title("Porecatu")
         .with_window_icon(Some(app_icon::load()))
-        .with_decorations(false);
+        .with_decorations(false)
+        // ADR-0043 §1: o adaptador `accesskit_winit` tem de ser criado
+        // antes da primeira exibição da janela (`panic` se já visível) --
+        // `create_window_with_attributes` cria a janela invisível, monta o
+        // adaptador, e só então chama `window.set_visible(true)`.
+        .with_visible(false);
     // macOS: decorations volta a `true` -- o semáforo nativo (traffic
     // lights) é o controle de janela do ADR-0027 lá, não botões nossos
     // (ver `chrome::paint`/`tab_bar::left_inset`).
@@ -222,10 +228,12 @@ enum Drag {
 /// minúscula ou métrica de fonte falhando.
 const MIN_GRID: usize = 1;
 
-/// Evento de usuário do event loop -- o mesmo caminho serve os dois fatos
-/// que só podem chegar de fora da main thread (ADR-0007): aba suja e
-/// recarga de config pronta.
-#[derive(Debug, Clone, PartialEq)]
+/// Evento de usuário do event loop -- o mesmo caminho serve os fatos que
+/// só podem chegar de fora da main thread (ADR-0007): aba suja, recarga de
+/// config pronta, e evento do adaptador de acessibilidade (ADR-0043 §1).
+/// Sem `Clone`/`PartialEq`: `accesskit_winit::Event` não os implementa, e
+/// nada aqui precisava deles antes.
+#[derive(Debug)]
 enum Wakeup {
     /// Uma aba ficou suja e precisa de redraw. Carrega `(WindowId, TabId)`
     /// desde a F1 (ADR-0015): com mais de uma janela, `TabId` sozinho não
@@ -236,6 +244,17 @@ enum Wakeup {
     /// `ConfigReload::Loaded` carrega uma `Config` inteira, bem maior que
     /// `TabDirty`.
     ConfigReloaded(Box<ConfigReload>),
+    /// Evento do adaptador `accesskit_winit` (ADR-0043 §1): árvore inicial
+    /// pedida, ação de um leitor de tela, ou desativação -- roteado por
+    /// `App::handle_accesskit_event`. Chega pela mesma `EventLoopProxy`
+    /// porque `Adapter::with_event_loop_proxy` exige `T: From<Event>`.
+    AccessKit(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for Wakeup {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::AccessKit(event)
+    }
 }
 
 /// Estado de execução de uma aba: o `Terminal` (motor+PTY+threads) e o
@@ -645,6 +664,13 @@ struct WindowState {
     /// classificação de `selection`, ADR-0041 §8). `redraw` fecha sozinha
     /// se a aba ativa mudar.
     search: Option<search_bar::SearchBarState>,
+    /// Adaptador de acessibilidade (ADR-0043 §1) -- um por janela, sempre
+    /// presente (não `Option`: a construção não falha, só exige a janela
+    /// ainda invisível, garantido por `create_window_with_attributes`).
+    /// `update_if_active` só chama a função de montagem da árvore quando
+    /// há cliente de leitor de tela de fato conectado -- sem isso, custo
+    /// zero (§3).
+    access_adapter: accesskit_winit::Adapter,
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -974,7 +1000,12 @@ mod should_confirm_tab_close_tests {
 }
 
 impl WindowState {
-    fn new(window: Arc<Window>, window_surface: WindowSurface, scale: f32) -> Self {
+    fn new(
+        window: Arc<Window>,
+        window_surface: WindowSurface,
+        scale: f32,
+        access_adapter: accesskit_winit::Adapter,
+    ) -> Self {
         let size = window.inner_size();
         Self {
             window,
@@ -1006,7 +1037,48 @@ impl WindowState {
             last_titlebar_click: None,
             session_dirty: false,
             search: None,
+            access_adapter,
         }
+    }
+
+    /// ADR-0043 §2/§3: monta a árvore desta janela a partir das mesmas
+    /// funções puras de layout que produzem o desenho (`access::
+    /// build_tree`) e entrega via `update_if_active` -- a função de
+    /// montagem só roda se houver cliente de acessibilidade conectado
+    /// (o fechamento `move` é avaliado dentro de `update_if_active`,
+    /// nunca antes). Todos os campos de `self` que a árvore lê são
+    /// emprestados aqui, nunca `self` inteiro -- é o que permite
+    /// `self.access_adapter` (mutável) e o resto de `self` (imutável)
+    /// coexistirem no mesmo `match`/closure.
+    fn refresh_access_tree(&mut self, style: &TabBarStyle, measurer: &mut TextMeasurer) {
+        let workspace = &self.workspace;
+        let warnings = &self.warnings;
+        let dialog = &self.dialog;
+        let context_menu = &self.context_menu;
+        let group_context_menu = &self.group_context_menu;
+        let terminal_context_menu = &self.terminal_context_menu;
+        let group_editor = &self.group_editor;
+        let move_to_group = &self.move_to_group;
+        let search = &self.search;
+        let logical_width = self.logical_width;
+        let scroll_offset = self.scroll_offset;
+        self.access_adapter.update_if_active(move || {
+            access::build_tree(
+                workspace,
+                warnings,
+                dialog,
+                context_menu,
+                group_context_menu,
+                terminal_context_menu,
+                group_editor,
+                move_to_group,
+                search,
+                style,
+                logical_width,
+                scroll_offset,
+                measurer,
+            )
+        });
     }
 
     /// Ponto único de decisão de RF-3.2 para operações de `Workspace`: os
@@ -3503,6 +3575,17 @@ impl App {
         );
         window.set_ime_allowed(true);
 
+        // ADR-0043 §1: `Adapter::with_event_loop_proxy` exige a janela
+        // ainda invisível (`base_window_attributes` já garante isso,
+        // `panic` se não) -- criado antes de qualquer coisa que a torne
+        // visível, mostrada só depois.
+        let access_adapter = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        );
+        window.set_visible(true);
+
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
 
@@ -3573,7 +3656,7 @@ impl App {
             self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
         }
 
-        let mut state = WindowState::new(window, window_surface, scale);
+        let mut state = WindowState::new(window, window_surface, scale, access_adapter);
         state
             .animations
             .set_enabled(self.config.appearance.window.animations);
@@ -3945,6 +4028,12 @@ impl App {
     /// quando não há nada pendente em nenhuma janela, o event loop dorme
     /// de verdade (`ControlFlow::Wait`).
     fn schedule_next_wake(&mut self, event_loop: &ActiveEventLoop) {
+        // ADR-0043 §3: "a atualização acontece na volta do event loop que
+        // mudou o estado -- no mesmo ponto único onde `schedule_next_wake`
+        // já drena o que sujou". Nunca dentro do caminho de render, nunca
+        // pede frame -- `refresh_all_access_trees` só monta e entrega
+        // dados, ver o comentário de `WindowState::refresh_access_tree`.
+        self.refresh_all_access_trees();
         let now = Instant::now();
         // RF-3.2: qualquer janela suja (re)agenda o debounce único do
         // processo -- RF-3.17, um arquivo para todas. Drenado aqui, não
@@ -3969,6 +4058,24 @@ impl App {
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+
+    /// Chamado uma vez por volta do event loop (ver `schedule_next_wake`),
+    /// para toda janela -- não só a que mudou, porque esta função não sabe
+    /// (nem precisa saber) qual mudou: `update_if_active` já filtra pra
+    /// zero custo sem cliente de acessibilidade conectado naquela janela
+    /// específica. Sem `self.gpu` (nunca deveria acontecer depois da
+    /// primeira janela), não há `TextMeasurer` pra montar nada -- sai
+    /// cedo.
+    fn refresh_all_access_trees(&mut self) {
+        let Some(gpu) = &mut self.gpu else {
+            return;
+        };
+        let measurer = gpu.text_measurer();
+        let style = &self.style;
+        for state in self.windows.values_mut() {
+            state.refresh_access_tree(style, measurer);
         }
     }
 
@@ -4435,6 +4542,10 @@ impl ApplicationHandler<Wakeup> for App {
                 self.apply_config_reload(*outcome, Instant::now());
                 return;
             }
+            Wakeup::AccessKit(evt) => {
+                self.handle_accesskit_event(evt);
+                return;
+            }
         };
         let Some(state) = self.windows.get_mut(&window) else {
             return;
@@ -4562,6 +4673,13 @@ impl ApplicationHandler<Wakeup> for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // ADR-0043 §1: "deve ser chamado sempre que um evento de janela
+        // novo é recebido e antes dele ser tratado pela aplicação" -- o
+        // adaptador precisa ver todo `WindowEvent`, mesmo os que `App`
+        // ignora.
+        if let Some(state) = self.windows.get_mut(&window_id) {
+            state.access_adapter.process_event(&state.window, &event);
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.request_close_window(window_id, event_loop);
@@ -4699,6 +4817,42 @@ impl App {
             state.warnings.push(severity, title, body, now);
         }
         state.window.request_redraw();
+    }
+
+    /// ADR-0043 §1/§3: roteia o evento do adaptador de acessibilidade
+    /// daquela janela. `InitialTreeRequested` (o cliente acabou de
+    /// conectar) monta e entrega a árvore inteira -- `Adapter::update_if_
+    /// active` só chama a função se ele seguir ativo no instante da
+    /// chamada, então não há corrida com uma desativação que chegou entre
+    /// os dois eventos. `ActionRequested` não é despachado nesta etapa
+    /// (RF-11.17/18 pedem exposição, não interação via leitor de tela --
+    /// dívida registrada no roadmap), e `AccessibilityDeactivated` não
+    /// precisa de nada do lado de `App`: o adaptador já sabe que ficou
+    /// inativo, e a próxima `update_if_active` vira no-op sozinha.
+    fn handle_accesskit_event(&mut self, event: accesskit_winit::Event) {
+        if !matches!(
+            event.window_event,
+            accesskit_winit::WindowEvent::InitialTreeRequested
+        ) {
+            return;
+        }
+        self.refresh_access_tree(event.window_id);
+    }
+
+    /// Ponto único de atualização da árvore (ADR-0043 §3): chamado daqui
+    /// (árvore inicial) e de `schedule_next_wake` (na volta do event loop,
+    /// nunca dentro do caminho de render). `update_if_active` decide
+    /// sozinho se há cliente conectado -- sem leitor de tela, a função de
+    /// montagem nem roda, custo zero. Nunca chama `request_redraw`: a
+    /// árvore e o frame são consumidores independentes do mesmo estado.
+    fn refresh_access_tree(&mut self, window_id: WindowId) {
+        let Some(gpu) = &mut self.gpu else { return };
+        let measurer = gpu.text_measurer();
+        let style = &self.style;
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        state.refresh_access_tree(style, measurer);
     }
 
     fn dispatch_keyboard_input(

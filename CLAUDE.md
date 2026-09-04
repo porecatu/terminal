@@ -167,6 +167,7 @@ Anotadas aqui porque custam horas quando descobertas na marra:
 - **`winit`**: o event loop precisa rodar na main thread (obrigatório em macOS e Windows). Toda submissão de frame `wgpu` acontece lá. I/O de PTY na main thread trava a UI — nunca faça.
 - **`alacritty_terminal`**: não segue SemVer estável entre releases. **Pine a versão exata** (`=0.x.y`) e mantenha o uso isolado dentro de `porecatu-term`, para que uma troca de motor não vaze para o resto.
 - **`wgpu`**: quebra API a cada release. Pine a versão. Subir `wgpu` é uma tarefa própria, não um efeito colateral de outra.
+- **`accesskit_winit`** (ADR-0043): adaptador de uma versão específica de `winit`. Subir `winit` passa a exigir subir `accesskit_winit` no mesmo PR -- mesma disciplina do `wgpu` acima: crate acoplado sobe como tarefa própria, nunca como efeito colateral de "só atualizar o winit". Conferir com `cargo tree -p porecatu-ui -i winit` depois: `winit` tem de aparecer **uma** vez só.
 - **Render damage-driven**: 60 linhas de saída de `cargo build` não podem virar 60 frames. Wakeups do PTY são coalescidos por frame. Ver [ADR-0007](docs/adr/0007-modelo-de-threading.md).
 - **`cwd` no Windows**: não há API barata para ler o diretório atual de um processo filho. A restauração de sessão depende de OSC 7 emitido pelo shell. Ver [ADR-0005](docs/adr/0005-persistencia-de-sessao.md).
 - **ConPTY**: re-renderiza a tela e injeta sequências próprias; o comportamento não é idêntico a um PTY Unix. Ver [ADR-0004](docs/adr/0004-pty-cross-platform.md).
