@@ -10,6 +10,7 @@
 //! - Cor de célula não é resolvida aqui -- ver [`TermColor`].
 
 mod color;
+mod dismiss;
 mod engine;
 mod event;
 mod keys;
@@ -22,6 +23,7 @@ mod snapshot;
 mod terminal;
 
 pub use color::TermColor;
+pub use dismiss::DISMISS_MARKER as SHELL_INTEGRATION_DISMISS_MARKER;
 pub use engine::{TermEngine, TermSize};
 pub use event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 pub use keys::{Modifiers, TermKey, encode_ctrl_char, encode_key, encode_text, wrap_paste};

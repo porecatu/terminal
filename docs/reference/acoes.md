@@ -222,13 +222,6 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 
 `app.quit` existe por convenção de plataforma: `Cmd+Q` no macOS é esperado e o [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) já define defaults por plataforma. O efeito é o mesmo do RF-1.4 ao fechar a última janela, incluindo a gravação síncrona do RF-3.4.
 
-> **Estado na F2, e como a F5 o fecha.** `app.quit` e `window.close` da última
-> janela **não gravam sessão** — `porecatu-session` só existe na F5. O
-> [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md) decide que o ponto de
-> chamada da gravação síncrona existe desde a F2 como no-op documentado, para
-> que a F5 preencha em vez de procurar onde. É a **etapa 2 da F5** que o
-> preenche; esta caixa sai quando ela fechar.
-
 `config.reload` não substitui o hot reload automático (RF-4.20), que continua acontecendo a cada gravação do arquivo. Existe para o caso em que o watcher não disparou — editor que grava por `rename`, arquivo em rede.
 
 ---

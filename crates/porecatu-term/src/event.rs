@@ -36,6 +36,10 @@ pub enum TermEvent {
     /// `None` continua sendo o fallback de `startup_directory` até o
     /// primeiro OSC 7 chegar.
     Cwd(PathBuf),
+    /// Marcador de dispensa do convite de integração de shell digitado
+    /// pelo usuário (ADR-0039 §4). Captura própria, fora do motor -- ver
+    /// `crate::dismiss`.
+    ShellIntegrationDismiss,
 }
 
 /// Formata o conteúdo do clipboard (fornecido por quem responde, via

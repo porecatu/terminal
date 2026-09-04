@@ -131,6 +131,47 @@ pub fn zoom_px_to_steps(font_zoom_px: Option<f32>, base_size_px: f32, step_px: f
     font_zoom_px.map_or(0, |px| ((px - base_size_px) / step_px).round() as i32)
 }
 
+/// Inverso de [`zoom_px_to_steps`] (RF-5.9/RF-3.1, metade de restauração):
+/// `zoom_steps` gravado -> `font_zoom_px` de sessão. Zero passos é "sem
+/// override" (`None`), do mesmo jeito que zero é o resultado de nenhum
+/// `font.increase`/`decrease` ter rodado. `min_px`/`max_px` protegem
+/// contra um arquivo editado à mão com passos absurdos -- o mesmo clamp
+/// que `App::apply_zoom` já aplica ao vivo.
+pub fn steps_to_zoom_px(
+    steps: i32,
+    base_size_px: f32,
+    step_px: f32,
+    min_px: f32,
+    max_px: f32,
+) -> Option<f32> {
+    if steps == 0 {
+        return None;
+    }
+    Some((base_size_px + steps as f32 * step_px).clamp(min_px, max_px))
+}
+
+/// Tema de sessão restaurado (ADR-0031 §4, ADR-0036 §3): o arquivo é
+/// checado contra os temas **hoje** declarados na config -- um tema que
+/// existia quando a sessão foi gravada e sumiu do arquivo desde então
+/// recebe o mesmo tratamento que o hot reload já dá a um tema que some
+/// (zera e avisa), nunca aplicado calado. Nome vazio é "sem tema", nunca
+/// "vanished" (é o estado inicial do ciclo, ADR-0031 §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoredTheme {
+    Applied(Option<String>),
+    Vanished(String),
+}
+
+pub fn restore_theme(saved: Option<&str>, declared: &[&str]) -> RestoredTheme {
+    match saved {
+        Some(name) if !name.is_empty() && !declared.contains(&name) => {
+            RestoredTheme::Vanished(name.to_string())
+        }
+        Some(name) => RestoredTheme::Applied(Some(name.to_string())),
+        None => RestoredTheme::Applied(None),
+    }
+}
+
 /// Um monitor, na forma mínima que o casamento do ADR-0036 §4 precisa --
 /// testável sem `winit::monitor::MonitorHandle`, que não é construível em
 /// teste. [`monitor_info`] converte o `MonitorHandle` real na hora de
@@ -356,6 +397,58 @@ mod tests {
         assert_eq!(zoom_px_to_steps(Some(17.0), 14.0, 1.0), 3);
         assert_eq!(zoom_px_to_steps(Some(11.0), 14.0, 1.0), -3);
         assert_eq!(zoom_px_to_steps(Some(14.0), 14.0, 1.0), 0);
+    }
+
+    #[test]
+    fn steps_to_zoom_px_is_none_without_steps() {
+        assert_eq!(steps_to_zoom_px(0, 14.0, 1.0, 6.0, 96.0), None);
+    }
+
+    #[test]
+    fn steps_to_zoom_px_inverts_zoom_px_to_steps() {
+        assert_eq!(steps_to_zoom_px(3, 14.0, 1.0, 6.0, 96.0), Some(17.0));
+        assert_eq!(steps_to_zoom_px(-3, 14.0, 1.0, 6.0, 96.0), Some(11.0));
+    }
+
+    #[test]
+    fn steps_to_zoom_px_clamps_absurd_saved_steps() {
+        assert_eq!(steps_to_zoom_px(-9999, 14.0, 1.0, 6.0, 96.0), Some(6.0));
+        assert_eq!(steps_to_zoom_px(9999, 14.0, 1.0, 6.0, 96.0), Some(96.0));
+    }
+
+    #[test]
+    fn restore_theme_applies_a_known_name() {
+        assert_eq!(
+            restore_theme(Some("dracula"), &["dracula", "nord"]),
+            RestoredTheme::Applied(Some("dracula".to_string()))
+        );
+    }
+
+    #[test]
+    fn restore_theme_applies_no_theme() {
+        assert_eq!(
+            restore_theme(None, &["dracula"]),
+            RestoredTheme::Applied(None)
+        );
+    }
+
+    /// ADR-0031 §3: `""` é o estado "sem tema" do ciclo, distinto de
+    /// `None` ("nunca ciclou, usa o do arquivo") -- nunca cai no ramo de
+    /// "sumiu", porque não há nome nenhum para procurar na lista.
+    #[test]
+    fn restore_theme_keeps_the_explicit_no_theme_state_distinct_from_none() {
+        assert_eq!(
+            restore_theme(Some(""), &["dracula"]),
+            RestoredTheme::Applied(Some(String::new()))
+        );
+    }
+
+    #[test]
+    fn restore_theme_flags_a_name_that_is_no_longer_declared() {
+        assert_eq!(
+            restore_theme(Some("sumiu"), &["dracula"]),
+            RestoredTheme::Vanished("sumiu".to_string())
+        );
     }
 
     #[test]

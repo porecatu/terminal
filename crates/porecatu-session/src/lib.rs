@@ -212,6 +212,24 @@ mod tests {
         assert!(outcome.notices.is_empty());
     }
 
+    /// RF-3.1/ADR-0039 §4: a dispensa definitiva do convite de integração
+    /// de shell sobrevive a fechar e reabrir o app -- é exatamente o
+    /// campo que `app::apply_restored_session_state` lê de volta.
+    #[test]
+    fn shell_integration_dismissed_survives_a_round_trip() {
+        let dir = tempdir();
+        let path = dir.join("session.json");
+        let mut session = sample_session();
+        session.shell_integration_dismissed = true;
+        save_to(&path, &session).unwrap();
+
+        let outcome = load_from(&path);
+        assert_eq!(
+            outcome.session.map(|s| s.shell_integration_dismissed),
+            Some(true)
+        );
+    }
+
     #[test]
     fn corrupt_json_is_quarantined_without_overwrite() {
         let dir = tempdir();
