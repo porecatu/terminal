@@ -249,6 +249,7 @@ Anotadas aqui porque custam horas quando descobertas na marra:
 
 ## Índice
 
+- [docs/guia-do-usuario.md](docs/guia-do-usuario.md) — instalação, config, atalhos, integração de shell, a convenção do `Shift` (RF-11.22)
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, tabela de fases, histórico de decisões. Descreve o binário ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md)), não um alvo a perseguir
 - [docs/adr/](docs/adr/) — decisões arquiteturais
