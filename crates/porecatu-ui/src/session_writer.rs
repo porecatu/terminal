@@ -10,9 +10,10 @@
 //! `mark_dirty`/grava de fato consulta a config antes -- este módulo só
 //! sabe debounçar e converter geometria/monitor de `winit`.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use porecatu_core::Workspace;
+use porecatu_core::{TabId, Workspace};
 use porecatu_session::{GeometryV1, MonitorIdV1, WindowV1};
 use winit::dpi::PhysicalPosition;
 use winit::window::Window;
@@ -86,17 +87,31 @@ pub fn window_monitor(window: &Window) -> Option<MonitorIdV1> {
 }
 
 /// Monta o `WindowV1` de uma janela a partir das peças já extraídas --
-/// puro, testável sem um `winit::window::Window` real. `App::
+/// puro, testável sem um `winit::window::Window` real (`cwd_fallback` é
+/// injetado pelo mesmo motivo: `App::build_session_file` é quem tem
+/// acesso a `TabRuntime`/`Terminal`, este módulo não). `App::
 /// build_session_file` é quem drena `winit` (`window_geometry`/
 /// `window_monitor`) antes de chamar isto, uma janela por vez.
+///
+/// RF-3.10/ADR-0038 §2: o fallback só é consultado para a aba cujo `cwd`
+/// saiu `None` de [`porecatu_session::convert::window_from_workspace`] --
+/// ou seja, que nunca recebeu OSC 7. Com OSC 7 presente, a aba já tem
+/// `cwd` aqui e o closure nem é chamado para ela.
 pub fn window_v1(
     workspace: &Workspace,
     geometry: GeometryV1,
     monitor: Option<MonitorIdV1>,
     theme: Option<String>,
     zoom_steps: i32,
+    cwd_fallback: impl Fn(TabId) -> Option<PathBuf>,
 ) -> WindowV1 {
-    let (groups, tabs, active_tab) = porecatu_session::convert::window_from_workspace(workspace);
+    let (groups, mut tabs, active_tab) =
+        porecatu_session::convert::window_from_workspace(workspace);
+    for tab in &mut tabs {
+        if tab.cwd.is_none() {
+            tab.cwd = cwd_fallback(TabId::new(tab.id));
+        }
+    }
     WindowV1 {
         geometry,
         monitor,
@@ -270,8 +285,15 @@ mod tests {
         second.group_tabs(&[a], "api", GroupColor::Blue).unwrap();
 
         let windows = vec![
-            window_v1(&first, geometry(0), None, None, 0),
-            window_v1(&second, geometry(830), None, Some("dracula".to_string()), 2),
+            window_v1(&first, geometry(0), None, None, 0, |_| None),
+            window_v1(
+                &second,
+                geometry(830),
+                None,
+                Some("dracula".to_string()),
+                2,
+                |_| None,
+            ),
         ];
 
         assert_eq!(windows.len(), 2);
@@ -286,6 +308,42 @@ mod tests {
                 .iter()
                 .any(|g| g.name.as_deref() == Some("api"))
         );
+    }
+
+    /// ADR-0038 §2: `cwd` de OSC 7 vence -- o fallback nem precisa
+    /// devolver o valor certo, só não pode ser chamado (aqui ele erra de
+    /// propósito para provar que não entrou em jogo).
+    #[test]
+    fn osc7_cwd_wins_over_the_fallback() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", Some(PathBuf::from("/from/osc7")));
+        let window = window_v1(&ws, geometry(0), None, None, 0, |_| {
+            Some(PathBuf::from("/should/not/be/used"))
+        });
+        assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/from/osc7")));
+    }
+
+    /// Sem OSC 7 (`cwd` gravado como `None`), o fallback por `TabId`
+    /// preenche o valor -- é o degrau `ProcessGroup::cwd`/`cwd` de spawn
+    /// da precedência, resolvido por `App::build_session_file` antes de
+    /// chegar aqui.
+    #[test]
+    fn missing_cwd_falls_back_by_tab_id() {
+        let mut ws = Workspace::new();
+        let id = ws.append_tab("zsh", None);
+        let window = window_v1(&ws, geometry(0), None, None, 0, move |tab_id| {
+            (tab_id == id).then(|| PathBuf::from("/fallback"))
+        });
+        assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/fallback")));
+    }
+
+    /// Nenhuma das duas fontes tem valor -- fica `None`, não inventa nada.
+    #[test]
+    fn missing_cwd_without_fallback_stays_none() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let window = window_v1(&ws, geometry(0), None, None, 0, |_| None);
+        assert_eq!(window.tabs[0].cwd, None);
     }
 
     #[test]
