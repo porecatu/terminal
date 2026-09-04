@@ -2979,6 +2979,12 @@ struct App {
     /// consumido por `resumed` assim que a primeira janela existe (é
     /// quando há onde empilhar o aviso).
     vanished_restored_theme: Option<String>,
+    /// RF-11.24: avisos de config do **arranque** (RF-4.21 config
+    /// inválida, RF-4.22 chave desconhecida, RF-5.18 tema desconhecido),
+    /// montados em `App::new` -- que não tem janela nenhuma ainda para
+    /// empilhar um `Warning` -- e entregues à primeira janela criada em
+    /// `resumed`, mesmo padrão de `pending_session`/`Notice`.
+    pending_startup_warnings: Vec<(Severity, &'static str, String)>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -3101,28 +3107,53 @@ impl App {
         cli_config: Option<PathBuf>,
         cli_directory: Option<PathBuf>,
     ) -> Self {
-        // Erro de parse no start não tem widget de aviso ainda -- só um
-        // log em stderr, porque a `App` (dona da pilha de avisos, uma por
-        // janela) ainda não existe neste ponto; os defaults seguem
-        // valendo (`LoadResult::config()` nunca falta).
+        // RF-11.24: erro de parse/chave desconhecida/tema desconhecido no
+        // arranque viajam para `pending_startup_warnings` em vez de
+        // `stderr` -- a `App` (dona da pilha de avisos, uma por janela)
+        // ainda não existe neste ponto, então são entregues à primeira
+        // janela criada em `resumed` (mesmo caminho de `pending_session`,
+        // que a etapa 4 da F5 abriu). Os defaults seguem valendo
+        // (`LoadResult::config()` nunca falta).
+        let mut pending_startup_warnings = Vec::new();
         let load_result = porecatu_config::load(cli_config.as_deref());
-        if let porecatu_config::LoadResult::Invalid { error, .. } = &load_result {
-            eprintln!("config inválida, usando defaults: {error}");
+        match &load_result {
+            porecatu_config::LoadResult::Invalid { error, .. } => {
+                pending_startup_warnings.push((
+                    Severity::Error,
+                    "Config inválida",
+                    error.to_string(),
+                ));
+            }
+            porecatu_config::LoadResult::Loaded { unknown_keys, .. } => {
+                // RF-4.22: chave desconhecida é aviso, não erro -- mesma
+                // severidade/título do hot reload (`apply_config_reload`).
+                for key in unknown_keys {
+                    pending_startup_warnings.push((
+                        Severity::Warning,
+                        "Chave desconhecida na config",
+                        key.clone(),
+                    ));
+                }
+            }
+            porecatu_config::LoadResult::Missing { .. } => {}
         }
         let config = Arc::new(load_result.config().clone());
         // RF-5.18/ADR-0031 §5: nome desconhecido em `[terminal] theme` é
-        // aviso -- mesma limitação de start que o erro de config acima
-        // (sem janela ainda pra avisar de verdade).
+        // aviso.
         if !config.terminal.theme.is_empty()
             && !config
                 .themes
                 .iter()
                 .any(|t| t.name == config.terminal.theme)
         {
-            eprintln!(
-                "tema desconhecido \"{}\", usando defaults",
-                config.terminal.theme
-            );
+            pending_startup_warnings.push((
+                Severity::Warning,
+                "Tema desconhecido",
+                format!(
+                    "\"{}\" não está em [[themes]]; usando defaults.",
+                    config.terminal.theme
+                ),
+            ));
         }
         let style = TabBarStyle::from_config(&config);
         let themed = porecatu_config::apply_theme(&config, &config.terminal.theme);
@@ -3185,6 +3216,7 @@ impl App {
             shell_integration_invite_claimed: false,
             pending_shell_integration_note: None,
             vanished_restored_theme: None,
+            pending_startup_warnings,
         }
     }
 
@@ -4217,8 +4249,12 @@ impl ApplicationHandler<Wakeup> for App {
         // RF-3.12/ADR-0040 §2: uma janela, uma aba, `cwd` no diretório
         // pedido -- vence `startup_directory` e nem consulta
         // `pending_session` (que já não foi carregado, ver `App::new`).
+        // RF-11.24 é independente da sessão (a config é lida sempre, em
+        // `App::new`) -- os avisos de arranque continuam sendo entregues
+        // aqui, mesmo que a restauração de sessão nem rode neste modo.
         if let Some(dir) = self.positional_directory.clone() {
             self.open_window_with(event_loop, base_window_attributes(), Some(dir));
+            self.deliver_pending_startup_warnings();
             return;
         }
         let outcome = self.pending_session.take().unwrap_or_default();
@@ -4253,6 +4289,7 @@ impl ApplicationHandler<Wakeup> for App {
             }
             state.window.request_redraw();
         }
+        self.deliver_pending_startup_warnings();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
@@ -4507,6 +4544,27 @@ impl ApplicationHandler<Wakeup> for App {
 }
 
 impl App {
+    /// RF-11.24: entrega `pending_startup_warnings` (montados em
+    /// `App::new`, antes de qualquer janela existir) à primeira janela do
+    /// processo -- chamado nos dois caminhos de `resumed` (modo posicional
+    /// e modo normal), porque a config é lida sempre, independente de
+    /// sessão. Sem efeito se a lista já foi drenada (`resumed` só roda uma
+    /// vez de verdade: a guarda `!self.windows.is_empty()` no topo garante
+    /// isso).
+    fn deliver_pending_startup_warnings(&mut self) {
+        if self.pending_startup_warnings.is_empty() {
+            return;
+        }
+        let Some(state) = self.windows.values_mut().next() else {
+            return;
+        };
+        let now = Instant::now();
+        for (severity, title, body) in self.pending_startup_warnings.drain(..) {
+            state.warnings.push(severity, title, body, now);
+        }
+        state.window.request_redraw();
+    }
+
     fn dispatch_keyboard_input(
         &mut self,
         window_id: WindowId,
