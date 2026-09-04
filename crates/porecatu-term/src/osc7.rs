@@ -63,11 +63,28 @@ fn parse_file_uri(bytes: &[u8]) -> Option<PathBuf> {
     let s = std::str::from_utf8(bytes).ok()?;
     let rest = s.strip_prefix("file://")?;
     let path = rest.find('/').map(|idx| &rest[idx..])?;
+    let path = strip_windows_drive_leading_slash(path);
     let decoded = percent_decode(path);
     if decoded.is_empty() {
         None
     } else {
         Some(PathBuf::from(decoded))
+    }
+}
+
+/// Bug latente da F2 (achado ao escrever os snippets do ADR-0039):
+/// `file:///C:/Users/ana` chega aqui como `/C:/Users/ana` -- a barra que
+/// sobrou do corte do host, antes da letra de unidade, que não é caminho
+/// válido no Windows (`std::path::Path` não reconhece `\C:\...` como
+/// absoluto). RFC 8089 trata `/<letra>:/...` como o caso especial do
+/// caminho local do Windows; corta a barra inicial só quando o padrão
+/// bate -- `/home/user` (Unix) não bate e sai intocado.
+fn strip_windows_drive_leading_slash(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':' {
+        &path[1..]
+    } else {
+        path
     }
 }
 
@@ -143,5 +160,24 @@ mod tests {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file://semslashnenhum"));
         assert_eq!(cwd, None);
+    }
+
+    /// Bug latente da F2, corrigido na F5 etapa 2: sem a barra a mais
+    /// antes da letra de unidade, `/C:/Users/ana` não é caminho válido
+    /// no Windows.
+    #[test]
+    fn windows_drive_letter_uri_drops_the_extra_leading_slash() {
+        let mut w = Osc7Watcher::new();
+        let cwd = w.advance(&osc7("file:///C:/Users/ana"));
+        assert_eq!(cwd, Some(PathBuf::from("C:/Users/ana")));
+    }
+
+    /// Letra de unidade minúscula (`cmd.exe`/PowerShell podem emitir
+    /// qualquer caixa) também bate no padrão.
+    #[test]
+    fn windows_drive_letter_uri_matches_lowercase_letter_too() {
+        let mut w = Osc7Watcher::new();
+        let cwd = w.advance(&osc7("file:///d:/projetos/porecatu"));
+        assert_eq!(cwd, Some(PathBuf::from("d:/projetos/porecatu")));
     }
 }

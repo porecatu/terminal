@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use porecatu_core::{Action, GroupId, TabId, Workspace};
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
@@ -36,6 +36,7 @@ mod palette;
 mod reload;
 mod rename;
 mod selection;
+mod session_writer;
 mod tab_bar;
 mod text_field;
 mod titlebar;
@@ -56,6 +57,7 @@ use porecatu_core::GroupColor;
 use reload::ConfigReload;
 use rename::RenameState;
 use selection::Selection;
+use session_writer::SessionScheduler;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
 use text_field::{TextFieldState, apply_text_field_key};
 use tooltip::Hover;
@@ -428,6 +430,13 @@ struct WindowState {
     /// não garante um `Focused(true)` inicial em toda plataforma, e a
     /// janela recém-criada tipicamente já nasce em primeiro plano.
     focused: bool,
+    /// RF-3.2 (ADR-0036): `true` quando alguma mudança estrutural desta
+    /// janela ainda não entrou no debounce de gravação da sessão (`App::
+    /// session`). Drenado a cada volta do event loop em
+    /// `schedule_next_wake` -- nunca lido fora dali. `App` decide se
+    /// aquilo vira de fato um agendamento (RF-3.6, `enabled = false`
+    /// nunca marca dirty no scheduler); esta janela só registra o fato.
+    session_dirty: bool,
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -522,7 +531,29 @@ impl WindowState {
             last_pill_click: None,
             selection: Selection::default(),
             last_titlebar_click: None,
+            session_dirty: false,
         }
+    }
+
+    /// Ponto único de decisão de RF-3.2 para operações de `Workspace`: os
+    /// chamadores de método mutante passam por aqui em vez de cada um
+    /// decidir se a operação conta como mudança estrutural. Ativar aba
+    /// conta (RF-3.2, "trocar a aba ativa"), então até `next_tab`/
+    /// `prev_tab`/`activate_navigable_index` passam por cá -- não só
+    /// `close_tab`/`group_tabs` e afins.
+    fn touch_workspace<T>(&mut self, f: impl FnOnce(&mut Workspace) -> T) -> T {
+        let result = f(&mut self.workspace);
+        self.session_dirty = true;
+        result
+    }
+
+    /// Segundo (e último) ponto de entrada de RF-3.2, para o que muda a
+    /// sessão sem passar por um método de `Workspace`: título customizado
+    /// via `tab_mut` (`commit_rename`), `cwd`/`Exited` via `TermEvent`
+    /// (`App::user_event`), e geometria da janela (`WindowEvent::Moved`/
+    /// `Resized`, `App::window_event`).
+    fn mark_session_dirty(&mut self) {
+        self.session_dirty = true;
     }
 
     /// Fecha os quatro widgets da camada popover (ADR-0023: "abrir
@@ -681,15 +712,18 @@ impl WindowState {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
                 Some(g) => {
                     let pos = g.tabs().len();
-                    self.workspace
-                        .new_tab(Some(id), shell_name, cwd.clone(), pos)
+                    self.touch_workspace(|ws| ws.new_tab(Some(id), shell_name, cwd.clone(), pos))
                 }
                 // Grupo que sumiu entre o clique e aqui: cai no caminho
                 // de `tab.new`, não num run implícito novo no fim.
-                None => self.workspace.append_tab(shell_name, cwd.clone()),
+                None => self.touch_workspace(|ws| ws.append_tab(shell_name, cwd.clone())),
             },
-            NewTabTarget::ActiveGroup => self.workspace.append_tab(shell_name, cwd.clone()),
-            NewTabTarget::Ungrouped => self.workspace.append_ungrouped_tab(shell_name, cwd.clone()),
+            NewTabTarget::ActiveGroup => {
+                self.touch_workspace(|ws| ws.append_tab(shell_name, cwd.clone()))
+            }
+            NewTabTarget::Ungrouped => {
+                self.touch_workspace(|ws| ws.append_ungrouped_tab(shell_name, cwd.clone()))
+            }
         };
 
         let window_id = self.window.id();
@@ -740,7 +774,7 @@ impl WindowState {
                     err.to_string(),
                     now,
                 );
-                self.workspace.close_tab(tab_id);
+                self.touch_workspace(|ws| ws.close_tab(tab_id));
             }
         }
         self.sync_window_title();
@@ -768,7 +802,7 @@ impl WindowState {
         if let Some(runtime) = self.tabs.remove(&id) {
             let _ = runtime.terminal.close();
         }
-        self.workspace.close_tab(id);
+        self.touch_workspace(|ws| ws.close_tab(id));
         self.sync_window_title();
         self.workspace.active_tab().is_none()
     }
@@ -805,6 +839,7 @@ impl WindowState {
         };
         if let Some(t) = self.workspace.tab_mut(tab) {
             t.set_custom_title(title);
+            self.mark_session_dirty();
         }
         self.sync_window_title();
     }
@@ -881,13 +916,13 @@ impl WindowState {
     }
 
     fn action_next_tab(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
-        self.workspace.next_tab();
+        self.touch_workspace(|ws| ws.next_tab());
         self.sync_window_title();
         self.ensure_active_tab_visible(gpu, style);
     }
 
     fn action_prev_tab(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
-        self.workspace.prev_tab();
+        self.touch_workspace(|ws| ws.prev_tab());
         self.sync_window_title();
         self.ensure_active_tab_visible(gpu, style);
     }
@@ -903,9 +938,9 @@ impl WindowState {
     /// consumidores do relógio em dois).
     fn action_group_step(&mut self, delta: isize, gpu: &mut GpuContext, style: &TabBarStyle) {
         let moved = if delta >= 0 {
-            self.workspace.next_group()
+            self.touch_workspace(Workspace::next_group)
         } else {
-            self.workspace.prev_group()
+            self.touch_workspace(Workspace::prev_group)
         };
         if moved.is_some() {
             self.sync_window_title();
@@ -917,7 +952,7 @@ impl WindowState {
     /// aba de grupo colapsado sai da numeração, e colapsar renumera
     /// `Alt+1..9` (deliberado, ADR-0020 §2).
     fn action_goto(&mut self, navigable_index: usize, gpu: &mut GpuContext, style: &TabBarStyle) {
-        self.workspace.activate_navigable_index(navigable_index);
+        self.touch_workspace(|ws| ws.activate_navigable_index(navigable_index));
         self.sync_window_title();
         self.ensure_active_tab_visible(gpu, style);
     }
@@ -948,7 +983,7 @@ impl WindowState {
         if target >= order.len() {
             return;
         }
-        self.workspace.move_tab(active, target);
+        self.touch_workspace(|ws| ws.move_tab(active, target));
         self.ensure_active_tab_visible(gpu, style);
     }
 
@@ -1116,14 +1151,14 @@ impl WindowState {
                 EditorRegion::Name => {
                     let group = editor.group;
                     let name = editor.name_buffer().to_string();
-                    self.workspace.rename_group(group, name);
+                    self.touch_workspace(|ws| ws.rename_group(group, name));
                     self.group_editor = None;
                     GroupEditorOutcome::None
                 }
                 EditorRegion::Swatches => {
                     let group = editor.group;
                     let color = GroupColor::ALL[editor.swatch_highlight()];
-                    self.workspace.set_group_color(group, color);
+                    self.touch_workspace(|ws| ws.set_group_color(group, color));
                     GroupEditorOutcome::None
                 }
                 EditorRegion::Actions => {
@@ -1178,11 +1213,11 @@ impl WindowState {
     fn run_move_target(&mut self, tab: TabId, target: MoveTarget) {
         match target {
             MoveTarget::Group(group) => {
-                self.workspace.move_tab_to_group(tab, group);
+                self.touch_workspace(|ws| ws.move_tab_to_group(tab, group));
             }
             MoveTarget::NewGroup => {
                 let color = self.workspace.next_auto_color();
-                self.workspace.group_tabs(&[tab], "Novo grupo", color);
+                self.touch_workspace(|ws| ws.group_tabs(&[tab], "Novo grupo", color));
             }
         }
     }
@@ -1583,7 +1618,7 @@ impl WindowState {
                 } else {
                     // RF-2.3: clique sem modificador limpa a seleção e ativa.
                     self.selection.clear();
-                    self.workspace.activate_tab(id);
+                    self.touch_workspace(|ws| ws.activate_tab(id));
                     self.sync_window_title();
                     self.ensure_active_tab_visible(gpu, style);
                     if let Some(rect) = tab_bar::tab_rect(&layout, id) {
@@ -1744,7 +1779,8 @@ impl WindowState {
             is_macos(),
         );
         let color = self.workspace.next_auto_color();
-        let Some(group) = self.workspace.group_tabs(&ids, "Novo grupo", color) else {
+        let Some(group) = self.touch_workspace(|ws| ws.group_tabs(&ids, "Novo grupo", color))
+        else {
             return;
         };
         self.animations
@@ -1776,7 +1812,7 @@ impl WindowState {
             gpu.text_measurer(),
             is_macos(),
         );
-        self.workspace.collapse_group(id, collapsing);
+        self.touch_workspace(|ws| ws.collapse_group(id, collapsing));
         self.animations
             .start_reflow(&old_layout, COLLAPSE_REFLOW_DURATION, Instant::now());
         self.sync_window_title();
@@ -1855,7 +1891,7 @@ impl WindowState {
                 ));
             }
             GroupAction::Dissolve => {
-                self.workspace.ungroup(group);
+                self.touch_workspace(|ws| ws.ungroup(group));
                 if self.group_editor.as_ref().is_some_and(|e| e.group == group) {
                     self.group_editor = None;
                 }
@@ -1961,10 +1997,10 @@ impl WindowState {
             Drag::TabDragging { tab, target, .. } if self.in_bar(self.cursor_position.1, style) => {
                 match target {
                     DragDrop::IntoGroup { group, pos } => {
-                        self.workspace.move_tab_to_group_at(tab, group, pos);
+                        self.touch_workspace(|ws| ws.move_tab_to_group_at(tab, group, pos));
                     }
                     DragDrop::NewRun { group_index } => {
-                        self.workspace.move_tab_to_new_run(tab, group_index);
+                        self.touch_workspace(|ws| ws.move_tab_to_new_run(tab, group_index));
                     }
                 }
             }
@@ -1973,7 +2009,7 @@ impl WindowState {
                 preview_index,
                 ..
             } if self.in_bar(self.cursor_position.1, style) => {
-                self.workspace.move_group(group, preview_index);
+                self.touch_workspace(|ws| ws.move_group(group, preview_index));
             }
             Drag::GroupPressed { group, .. } => {
                 self.handle_pill_click(group, gpu, style);
@@ -2196,6 +2232,12 @@ struct App {
     /// árvore de comparação.
     keymap: HashMap<Chord, Action>,
     windows: HashMap<WindowId, WindowState>,
+    /// Debounce da gravação de sessão (RF-3.3, ADR-0036) -- por
+    /// **processo**, não por janela: o arquivo é um só para todas
+    /// (RF-3.17). Drenado em `schedule_next_wake`, disparado em
+    /// `tick_all`. `enabled = false` (RF-3.6) nunca marca isto sujo --
+    /// ver `Self::session_persistence_enabled`.
+    session: SessionScheduler,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -2372,6 +2414,7 @@ impl App {
             term_params,
             keymap,
             windows: HashMap::new(),
+            session: SessionScheduler::default(),
         }
     }
 
@@ -2514,6 +2557,16 @@ impl App {
         let Some(state) = self.windows.remove(&window_id) else {
             return;
         };
+        if self.windows.is_empty() {
+            // `app.quit`/RF-3.4: gravação síncrona da sessão, antes de
+            // sair -- fecha o no-op documentado desde a F2 (ADR-0017 §7).
+            // Captura `state` **antes** de `state.tabs` ser consumido
+            // abaixo: `write_session_now` precisa de uma referência à
+            // janela inteira (workspace + geometria), que um campo já
+            // movido não permite mais emprestar. Falha de gravação nunca
+            // trava a saída -- no máximo `eprintln!` (ver o método).
+            self.write_session_now(std::iter::once(&state));
+        }
         let waits: Vec<_> = state
             .tabs
             .into_values()
@@ -2523,9 +2576,7 @@ impl App {
             wait.wait();
         }
         if self.windows.is_empty() {
-            // `app.quit`/RF-3.4 (gravação síncrona da sessão): no-op
-            // documentado até a F5, que é quando `porecatu-session` passa
-            // a existir (ADR-0017, docs/reference/acoes.md).
+            self.session.clear();
             event_loop.exit();
         }
     }
@@ -2678,14 +2729,95 @@ impl App {
         }
     }
 
+    /// RF-3.6: único ponto que decide se a sessão persiste -- o debounce
+    /// e a gravação síncrona do exit consultam isto, nunca a config
+    /// direto. A etapa 5 (ADR-0040 §2) estende isto para o modo de
+    /// caminho posicional do RF-3.12, sem mexer nos dois chamadores.
+    fn session_persistence_enabled(&self) -> bool {
+        self.config.session.enabled
+    }
+
+    /// RF-5.9: passos de zoom de sessão a gravar (ADR-0036 §1,
+    /// `WindowV1::zoom_steps`) -- `font_zoom_px` guarda um tamanho
+    /// absoluto, não uma contagem; `FONT_ZOOM_STEP_PX` é `1.0`, então a
+    /// conversão é exata. Zoom é do processo inteiro hoje (dívida
+    /// registrada em `font_zoom_px`), então o mesmo valor entra em toda
+    /// janela do envelope.
+    fn session_zoom_steps(&self) -> i32 {
+        let base = self.config.terminal.font.size as f32;
+        session_writer::zoom_px_to_steps(self.font_zoom_px, base, FONT_ZOOM_STEP_PX)
+    }
+
+    /// Monta o envelope multi-janela (RF-3.17, metade de gravação) a
+    /// partir das janelas dadas -- `self.windows.values()` no caminho
+    /// comum (debounce), uma única janela no caminho de saída
+    /// (`close_window_unconditionally`, que já a removeu do mapa).
+    fn build_session_file<'a>(
+        &self,
+        windows: impl Iterator<Item = &'a WindowState>,
+    ) -> porecatu_session::SessionFileV1 {
+        let theme = self.session_theme.clone();
+        let zoom_steps = self.session_zoom_steps();
+        porecatu_session::SessionFileV1 {
+            schema_version: porecatu_session::CURRENT_SCHEMA_VERSION,
+            windows: windows
+                .map(|state| {
+                    session_writer::window_v1(
+                        &state.workspace,
+                        session_writer::window_geometry(&state.window),
+                        session_writer::window_monitor(&state.window),
+                        theme.clone(),
+                        zoom_steps,
+                    )
+                })
+                .collect(),
+            // RF-3.1/ADR-0039: o convite de integração de shell chega na
+            // etapa 6 -- sem consumidor ainda, sempre grava `false`.
+            shell_integration_dismissed: false,
+        }
+    }
+
+    /// Grava a sessão de verdade (debounce ou exit). RF-3.6: no-op se
+    /// desligado. Falha de I/O nunca propaga -- no máximo `eprintln!`,
+    /// nunca trava a saída nem abre diálogo (não há janela garantida
+    /// nesse ponto no caminho de exit).
+    fn write_session_now<'a>(&self, windows: impl Iterator<Item = &'a WindowState>) {
+        if !self.session_persistence_enabled() {
+            return;
+        }
+        let file = self.build_session_file(windows);
+        if let Err(err) = porecatu_session::save(&file) {
+            eprintln!("porecatu: falha ao gravar sessão: {err}");
+        }
+    }
+
     /// Agenda o próximo despertar via `ControlFlow::WaitUntil` -- o
     /// temporizador da informação (ADR-0014), o atraso do tooltip
-    /// (ADR-0019) e o relógio de animação (ADR-0022) marcam sujeira, não
-    /// rodam loop nenhum: quando não há nada pendente em nenhuma janela, o
-    /// event loop dorme de verdade (`ControlFlow::Wait`).
-    fn schedule_next_wake(&self, event_loop: &ActiveEventLoop) {
+    /// (ADR-0019), o relógio de animação (ADR-0022) e o debounce de
+    /// gravação de sessão (RF-3.3) marcam sujeira, não rodam loop nenhum:
+    /// quando não há nada pendente em nenhuma janela, o event loop dorme
+    /// de verdade (`ControlFlow::Wait`).
+    fn schedule_next_wake(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
-        let next = self.windows.values().filter_map(|w| w.next_wake(now)).min();
+        // RF-3.2: qualquer janela suja (re)agenda o debounce único do
+        // processo -- RF-3.17, um arquivo para todas. Drenado aqui, não
+        // no ponto de origem, porque é aqui que `Instant::now()` e
+        // `config.session.save_debounce_ms` já estão à mão (a regra do
+        // projeto: quem chama `Instant::now()` é `lib.rs`, nunca o
+        // estado).
+        if self.session_persistence_enabled() && self.windows.values().any(|w| w.session_dirty) {
+            for state in self.windows.values_mut() {
+                state.session_dirty = false;
+            }
+            let debounce = Duration::from_millis(self.config.session.save_debounce_ms);
+            self.session.mark_dirty(now, debounce);
+        }
+        let next = self
+            .windows
+            .values()
+            .filter_map(|w| w.next_wake(now))
+            .chain(self.session.next_deadline())
+            .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -2695,7 +2827,8 @@ impl App {
     /// Roda o `tick` (expira avisos, promove tooltip pendente, avança/
     /// remove animação) em todas as janelas e redesenha as que mudaram --
     /// ou que têm animação em curso, já que ela precisa de um frame por
-    /// intervalo enquanto ativa (ADR-0022).
+    /// intervalo enquanto ativa (ADR-0022). Também dispara a gravação de
+    /// sessão debounçada (RF-3.3), se o período de silêncio terminou.
     fn tick_all(&mut self) {
         let now = Instant::now();
         for state in self.windows.values_mut() {
@@ -2709,6 +2842,9 @@ impl App {
             {
                 state.window.request_redraw();
             }
+        }
+        if self.session.ready(now) {
+            self.write_session_now(self.windows.values());
         }
     }
 
@@ -2991,6 +3127,7 @@ impl ApplicationHandler<Wakeup> for App {
                 TermEvent::Cwd(cwd) => {
                     if let Some(tab) = state.workspace.tab_mut(tab_id) {
                         tab.set_cwd(cwd);
+                        state.mark_session_dirty();
                     }
                 }
                 TermEvent::Exit { success, code } => {
@@ -3009,6 +3146,10 @@ impl ApplicationHandler<Wakeup> for App {
                         }
                         if let Some(tab) = state.workspace.tab_mut(tab_id) {
                             tab.mark_exited(code as i32);
+                            // Aba `Exited` não é gravada (ADR-0036 §3): a
+                            // sessão precisa de uma escrita nova pra ela
+                            // parar de aparecer no arquivo.
+                            state.mark_session_dirty();
                         }
                     }
                 }
@@ -3042,8 +3183,19 @@ impl ApplicationHandler<Wakeup> for App {
                 self.request_close_window(window_id, event_loop);
             }
             WindowEvent::Resized(size) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.mark_session_dirty(); // RF-3.2: redimensionar a janela
+                }
                 if let (Some(state), Some(gpu)) = (self.windows.get_mut(&window_id), &self.gpu) {
                     state.resize_to(size.width, size.height, gpu, self.cell_metrics, &self.style);
+                }
+            }
+            WindowEvent::Moved(_) => {
+                // RF-3.2: mover a janela. A geometria em si não é lida
+                // daqui -- `session_writer::window_geometry` consulta
+                // `winit` de novo, fresca, no momento da gravação.
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.mark_session_dirty();
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
