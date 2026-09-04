@@ -37,6 +37,7 @@ mod reload;
 mod rename;
 mod selection;
 mod session_writer;
+mod shell_integration;
 mod tab_bar;
 mod text_field;
 mod titlebar;
@@ -206,6 +207,17 @@ struct TabRuntime {
     /// `porecatu_core::Tab` não guarda o `cwd` de spawn -- só o que OSC 7
     /// reporta.
     spawn_cwd: Option<PathBuf>,
+    /// `true` depois do primeiro `TermEvent::Cwd` desta instância (RF-3.1,
+    /// ADR-0039 §2). Diferente de `porecatu_core::Tab::cwd().is_some()`:
+    /// uma aba nova herda `cwd` do grupo (ADR-0017 item 1) sem nunca ter
+    /// recebido OSC 7 -- este campo só o sinal de verdade, nunca herdado.
+    received_osc7: bool,
+    /// Instante do spawn -- base do gatilho temporal do convite no Windows
+    /// (ADR-0039 §2: "não há fallback lá, então o gatilho é o tempo").
+    /// Só existe no Windows porque só lá o gatilho é temporal; fora dele o
+    /// gatilho é o fallback do ADR-0038, consultado na gravação.
+    #[cfg(windows)]
+    spawned_at: Instant,
 }
 
 /// Altura da barra de abas, em pixels lógicos -- não depende de estado de
@@ -576,6 +588,180 @@ mod window_close_needs_confirmation_tests {
     }
 }
 
+/// RF-3.1 (ADR-0039 §4): três desligamentos independentes decidem se vale
+/// a pena procurar o gatilho -- dispensa definitiva, convite já escolhido
+/// nesta execução ("uma vez"), ou a config desligando antes de qualquer
+/// detecção. Função livre e pura, testável sem `App`.
+fn shell_integration_invite_eligible(
+    dismissed: bool,
+    claimed: bool,
+    suggest_enabled: bool,
+) -> bool {
+    suggest_enabled && !dismissed && !claimed
+}
+
+/// RF-3.1 (ADR-0038 §5, ADR-0039 §2): gatilho fora do Windows. Uma aba
+/// que já recebeu OSC 7 nunca dispara, mesmo que o fallback (que quem
+/// chama já pode ter consultado) diga outra coisa -- o sinal de verdade é
+/// `received_osc7`, não o valor do fallback em si. Sem OSC 7, um
+/// fallback que devolve um `cwd` diferente do de spawn prova que o
+/// diretório mudou e o app só soube pelo caminho caro.
+fn fallback_reveals_missing_osc7(
+    received_osc7: bool,
+    fallback: Option<&std::path::Path>,
+    spawn_cwd: Option<&std::path::Path>,
+) -> bool {
+    !received_osc7 && fallback.is_some_and(|f| Some(f) != spawn_cwd)
+}
+
+/// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: a aba ficou
+/// interativa (`spawned_at`) por `interval` sem nenhum `TermEvent::Cwd`.
+fn windows_invite_timeout_due(
+    received_osc7: bool,
+    spawned_at: Instant,
+    now: Instant,
+    interval: Duration,
+) -> bool {
+    !received_osc7 && now >= spawned_at + interval
+}
+
+/// RF-3.1 (ADR-0039 §1): "não escrever com a tela alternativa ativa" --
+/// só essas duas saídas, sem meio-termo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellIntegrationNoteTiming {
+    WriteNow,
+    Defer,
+}
+
+fn shell_integration_note_timing(alt_screen_active: bool) -> ShellIntegrationNoteTiming {
+    if alt_screen_active {
+        ShellIntegrationNoteTiming::Defer
+    } else {
+        ShellIntegrationNoteTiming::WriteNow
+    }
+}
+
+#[cfg(test)]
+mod shell_integration_trigger_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn eligible_when_all_three_gates_are_open() {
+        assert!(shell_integration_invite_eligible(false, false, true));
+    }
+
+    #[test]
+    fn dismissed_forever_is_never_eligible_again() {
+        assert!(!shell_integration_invite_eligible(true, false, true));
+    }
+
+    /// RF-3.1: "uma vez por execução, não por aba" -- depois de escolhido,
+    /// nenhuma outra aba dispara de novo nesta execução.
+    #[test]
+    fn already_claimed_this_run_is_not_eligible_again() {
+        assert!(!shell_integration_invite_eligible(false, true, true));
+    }
+
+    #[test]
+    fn suggest_shell_integration_false_disables_before_any_detection() {
+        assert!(!shell_integration_invite_eligible(false, false, false));
+    }
+
+    /// Este é o teste mais importante da etapa: quem já tem OSC 7 nunca
+    /// dispara, mesmo que o fallback (chamado por quem quer que seja)
+    /// devolva outra coisa.
+    #[test]
+    fn a_tab_with_osc7_never_triggers_via_the_fallback() {
+        assert!(!fallback_reveals_missing_osc7(
+            true,
+            Some(Path::new("/outro")),
+            Some(Path::new("/spawn")),
+        ));
+    }
+
+    #[test]
+    fn fallback_matching_spawn_cwd_does_not_trigger() {
+        assert!(!fallback_reveals_missing_osc7(
+            false,
+            Some(Path::new("/home/ana")),
+            Some(Path::new("/home/ana")),
+        ));
+    }
+
+    #[test]
+    fn fallback_diverging_from_spawn_cwd_triggers() {
+        assert!(fallback_reveals_missing_osc7(
+            false,
+            Some(Path::new("/home/ana/projeto")),
+            Some(Path::new("/home/ana")),
+        ));
+    }
+
+    #[test]
+    fn no_fallback_available_does_not_trigger() {
+        assert!(!fallback_reveals_missing_osc7(
+            false,
+            None,
+            Some(Path::new("/home/ana"))
+        ));
+    }
+
+    #[test]
+    fn windows_timeout_does_not_fire_before_the_interval() {
+        let spawned_at = Instant::now();
+        let now = spawned_at + Duration::from_secs(1);
+        assert!(!windows_invite_timeout_due(
+            false,
+            spawned_at,
+            now,
+            Duration::from_secs(3)
+        ));
+    }
+
+    #[test]
+    fn windows_timeout_fires_once_the_interval_elapses() {
+        let spawned_at = Instant::now();
+        let now = spawned_at + Duration::from_secs(3);
+        assert!(windows_invite_timeout_due(
+            false,
+            spawned_at,
+            now,
+            Duration::from_secs(3)
+        ));
+    }
+
+    /// Aba que recebeu OSC 7 entre o agendamento e o despertar não
+    /// dispara mais, mesmo já vencido o intervalo.
+    #[test]
+    fn windows_timeout_never_fires_once_osc7_arrived() {
+        let spawned_at = Instant::now();
+        let now = spawned_at + Duration::from_secs(999);
+        assert!(!windows_invite_timeout_due(
+            true,
+            spawned_at,
+            now,
+            Duration::from_secs(3)
+        ));
+    }
+
+    #[test]
+    fn nothing_is_written_while_the_alternate_screen_is_active() {
+        assert_eq!(
+            shell_integration_note_timing(true),
+            ShellIntegrationNoteTiming::Defer
+        );
+    }
+
+    #[test]
+    fn the_note_writes_right_away_on_the_primary_screen() {
+        assert_eq!(
+            shell_integration_note_timing(false),
+            ShellIntegrationNoteTiming::WriteNow
+        );
+    }
+}
+
 #[cfg(test)]
 mod should_confirm_tab_close_tests {
     use super::*;
@@ -934,6 +1120,9 @@ impl WindowState {
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
+                        received_osc7: false,
+                        #[cfg(windows)]
+                        spawned_at: now,
                     },
                 );
             }
@@ -2492,6 +2681,28 @@ struct App {
     /// `Self::session_persistence_enabled`) e vence `startup_directory` na
     /// única aba que a janela do arranque abre. `None` é o caso comum.
     positional_directory: Option<PathBuf>,
+    /// Dispensa definitiva do convite de integração de shell (RF-3.1,
+    /// ADR-0039 §4) -- gravada em `session.json`, carregada em `resumed`.
+    /// `true` já basta para nunca detectar nem mostrar a nota, em
+    /// qualquer execução futura.
+    shell_integration_dismissed: bool,
+    /// `true` a partir do instante em que o convite é escolhido para
+    /// aparecer nesta execução (RF-3.1: "uma vez por execução, não por
+    /// aba") -- mesmo sem ter sido escrito ainda de fato (`pending_shell_
+    /// integration_note` cobre a tela alternativa). Reseta a cada
+    /// execução do processo, diferente do campo acima.
+    shell_integration_invite_claimed: bool,
+    /// Convite escolhido, mas adiado porque a aba estava em tela
+    /// alternativa no momento (ADR-0039 §1: "não escrever com a tela
+    /// alternativa ativa") -- resolvido no próximo `Wakeup::TabDirty`
+    /// desta mesma aba (`App::user_event`), quando ela pode ter voltado à
+    /// tela primária.
+    pending_shell_integration_note: Option<(WindowId, TabId)>,
+    /// Nome do tema de sessão restaurado que não existe mais no arquivo
+    /// (ADR-0031 §4) -- guardado por `apply_restored_session_state` e
+    /// consumido por `resumed` assim que a primeira janela existe (é
+    /// quando há onde empilhar o aviso).
+    vanished_restored_theme: Option<String>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -2541,6 +2752,16 @@ mod theme_cycle_tests {
 const FONT_ZOOM_STEP_PX: f32 = 1.0;
 const FONT_ZOOM_MIN_PX: f32 = 6.0;
 const FONT_ZOOM_MAX_PX: f32 = 96.0;
+
+/// RF-3.1 (ADR-0039 §2), gatilho temporal do convite no Windows: uma
+/// integração de shell configurada emite OSC 7 a cada prompt exibido, não
+/// só em `cd` (os snippets de `docs/reference/integracao-de-shell.md`
+/// disparam no `precmd`/`PROMPT_COMMAND`) -- então o primeiro prompt já
+/// emite, tipicamente em bem menos de um segundo. Três segundos cobrem
+/// shell lento pra subir (perfil grande, `oh-my-posh`) sem atrasar
+/// perceptivelmente o convite pra quem não tem OSC 7 nenhum.
+#[cfg(windows)]
+const WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL: Duration = Duration::from_secs(3);
 
 impl App {
     /// Tamanho de fonte efetivo (RF-5.9): o da sessão, se `font.increase`/
@@ -2684,6 +2905,10 @@ impl App {
             session: SessionScheduler::default(),
             pending_session,
             positional_directory: cli_directory,
+            shell_integration_dismissed: false,
+            shell_integration_invite_claimed: false,
+            pending_shell_integration_note: None,
+            vanished_restored_theme: None,
         }
     }
 
@@ -3121,6 +3346,44 @@ impl App {
         session_writer::zoom_px_to_steps(self.font_zoom_px, base, FONT_ZOOM_STEP_PX)
     }
 
+    /// RF-3.1/RF-5.9/RF-5.21 (ADR-0036 §3, metade de restauração): tema e
+    /// zoom de sessão são do processo (dívida registrada em
+    /// `font_zoom_px`), mas o DTO é por janela -- toma a **primeira**
+    /// janela do envelope como o estado do processo inteiro. Se duas
+    /// janelas gravaram valores diferentes (usuário ciclou/zoomou uma sem
+    /// tocar a outra antes de sair), a divergência não sobrevive à
+    /// próxima gravação, que já grava as duas iguais -- aceito, é a
+    /// mesma simplificação de `session_zoom_steps`. Chamado por
+    /// `resumed`, **antes** de qualquer janela ser criada: `font_zoom_px`
+    /// decide a métrica de célula que `create_window_with_attributes` usa
+    /// para todas.
+    fn apply_restored_session_state(&mut self, session: &porecatu_session::SessionFileV1) {
+        self.shell_integration_dismissed = session.shell_integration_dismissed;
+        let Some(first) = session.windows.first() else {
+            return;
+        };
+        let base = self.config.terminal.font.size as f32;
+        self.font_zoom_px = session_writer::steps_to_zoom_px(
+            first.zoom_steps,
+            base,
+            FONT_ZOOM_STEP_PX,
+            FONT_ZOOM_MIN_PX,
+            FONT_ZOOM_MAX_PX,
+        );
+        // ADR-0031 §4: mesmo tratamento que o hot reload já dá a um tema
+        // de sessão que sumiu -- zera e avisa, não aplica calado. O aviso
+        // em si só tem onde aparecer depois que a primeira janela existir
+        // (`resumed` o empilha ali, junto dos avisos de recuperação).
+        let declared: Vec<&str> = self.config.themes.iter().map(|t| t.name.as_str()).collect();
+        match session_writer::restore_theme(first.theme.as_deref(), &declared) {
+            session_writer::RestoredTheme::Applied(theme) => self.session_theme = theme,
+            session_writer::RestoredTheme::Vanished(name) => {
+                self.vanished_restored_theme = Some(name);
+            }
+        }
+        self.recompute_palettes();
+    }
+
     /// Monta o envelope multi-janela (RF-3.17, metade de gravação) a
     /// partir das janelas dadas -- `self.windows.values()` no caminho
     /// comum (debounce), uma única janela no caminho de saída
@@ -3149,9 +3412,7 @@ impl App {
                     )
                 })
                 .collect(),
-            // RF-3.1/ADR-0039: o convite de integração de shell chega na
-            // etapa 6 -- sem consumidor ainda, sempre grava `false`.
-            shell_integration_dismissed: false,
+            shell_integration_dismissed: self.shell_integration_dismissed,
         }
     }
 
@@ -3195,11 +3456,40 @@ impl App {
             .values()
             .filter_map(|w| w.next_wake(now))
             .chain(self.session.next_deadline())
+            .chain(self.shell_integration_invite_deadline())
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
+    }
+
+    /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: mais próxima
+    /// entre as abas ainda sem OSC 7 de `spawned_at + WINDOWS_SHELL_
+    /// INTEGRATION_INVITE_INTERVAL`. `None` fora do Windows (lá o gatilho
+    /// é o fallback do ADR-0038, consultado só na gravação -- ver
+    /// `check_shell_integration_fallback_trigger`) ou quando o convite já
+    /// foi escolhido/dispensado/desligado -- não há por que a janela
+    /// continuar despertando por isto depois disso.
+    #[cfg(windows)]
+    fn shell_integration_invite_deadline(&self) -> Option<Instant> {
+        if self.shell_integration_dismissed
+            || self.shell_integration_invite_claimed
+            || !self.config.session.suggest_shell_integration
+        {
+            return None;
+        }
+        self.windows
+            .values()
+            .flat_map(|w| w.tabs.values())
+            .filter(|rt| !rt.received_osc7)
+            .map(|rt| rt.spawned_at + WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL)
+            .min()
+    }
+
+    #[cfg(not(windows))]
+    fn shell_integration_invite_deadline(&self) -> Option<Instant> {
+        None
     }
 
     /// Roda o `tick` (expira avisos, promove tooltip pendente, avança/
@@ -3221,8 +3511,140 @@ impl App {
                 state.window.request_redraw();
             }
         }
+        self.check_shell_integration_invite_timeout(now);
         if self.session.ready(now) {
+            // RF-3.1 (ADR-0038 §5, ADR-0039 §2): fora do Windows, o
+            // gatilho do convite é o mesmo sinal que decide consultar o
+            // fallback -- roda só aqui, no momento da gravação, nunca por
+            // frame. Antes de montar o arquivo: se o convite disparar, a
+            // nota já entra no grid antes de `write_session_now` ler as
+            // abas, mas a gravação em si não depende da nota (o campo é
+            // `self.shell_integration_dismissed`, não o texto do grid).
+            self.check_shell_integration_fallback_trigger();
             self.write_session_now(self.windows.values());
+        }
+    }
+
+    /// RF-3.1 (ADR-0038 §5, ADR-0039 §2): gatilho não-Windows. Roda só na
+    /// gravação da sessão -- para cada aba sem OSC 7 ainda, consulta o
+    /// fallback do ADR-0038; se ele devolver um `cwd` diferente do de
+    /// spawn, o diretório mudou e o app só soube pelo caminho caro, prova
+    /// de que a aba não tem OSC 7. `cwd_fallback` devolve sempre `None`
+    /// fora de Linux/macOS, então isto nunca dispara no Windows -- lá o
+    /// gatilho é [`Self::shell_integration_invite_deadline`].
+    fn check_shell_integration_fallback_trigger(&mut self) {
+        if !shell_integration_invite_eligible(
+            self.shell_integration_dismissed,
+            self.shell_integration_invite_claimed,
+            self.config.session.suggest_shell_integration,
+        ) {
+            return;
+        }
+        let candidate = self.windows.iter().find_map(|(window_id, state)| {
+            state.tabs.iter().find_map(|(tab_id, rt)| {
+                let fallback = rt.terminal.cwd_fallback();
+                fallback_reveals_missing_osc7(
+                    rt.received_osc7,
+                    fallback.as_deref(),
+                    rt.spawn_cwd.as_deref(),
+                )
+                .then_some((*window_id, *tab_id))
+            })
+        });
+        if let Some((window_id, tab_id)) = candidate {
+            self.claim_shell_integration_invite(window_id, tab_id);
+        }
+    }
+
+    /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: tick-driven
+    /// (`schedule_next_wake` já agenda o `ControlFlow::WaitUntil` exato
+    /// via `shell_integration_invite_deadline`) -- aqui só confirma que o
+    /// critério ainda vale no instante em que o despertar chegou (a aba
+    /// pode ter recebido OSC 7 entre o agendamento e agora).
+    #[cfg(windows)]
+    fn check_shell_integration_invite_timeout(&mut self, now: Instant) {
+        if !shell_integration_invite_eligible(
+            self.shell_integration_dismissed,
+            self.shell_integration_invite_claimed,
+            self.config.session.suggest_shell_integration,
+        ) {
+            return;
+        }
+        let candidate = self.windows.iter().find_map(|(window_id, state)| {
+            state.tabs.iter().find_map(|(tab_id, rt)| {
+                windows_invite_timeout_due(
+                    rt.received_osc7,
+                    rt.spawned_at,
+                    now,
+                    WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL,
+                )
+                .then_some((*window_id, *tab_id))
+            })
+        });
+        if let Some((window_id, tab_id)) = candidate {
+            self.claim_shell_integration_invite(window_id, tab_id);
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn check_shell_integration_invite_timeout(&mut self, _now: Instant) {}
+
+    /// RF-3.1 (ADR-0039 §4, "uma vez por execução"): marca o convite como
+    /// escolhido -- a partir daqui nenhum outro gatilho tenta de novo,
+    /// mesmo que a escrita em si seja adiada pela tela alternativa
+    /// (ADR-0039 §1).
+    fn claim_shell_integration_invite(&mut self, window_id: WindowId, tab_id: TabId) {
+        self.shell_integration_invite_claimed = true;
+        let alt_screen_active = self
+            .windows
+            .get(&window_id)
+            .and_then(|s| s.tabs.get(&tab_id))
+            .is_some_and(|rt| rt.terminal.modes().alt_screen);
+        match shell_integration_note_timing(alt_screen_active) {
+            ShellIntegrationNoteTiming::Defer => {
+                self.pending_shell_integration_note = Some((window_id, tab_id));
+            }
+            ShellIntegrationNoteTiming::WriteNow => {
+                self.write_shell_integration_note(window_id, tab_id)
+            }
+        }
+    }
+
+    /// Escreve a nota de verdade (`Terminal::inject_note`, canal 2 do
+    /// ADR-0014) -- chamado só depois de confirmado que a aba não está em
+    /// tela alternativa, seja na hora (`claim_shell_integration_invite`)
+    /// seja depois, ao voltar dela (`try_write_pending_shell_integration_note`).
+    fn write_shell_integration_note(&mut self, window_id: WindowId, tab_id: TabId) {
+        self.pending_shell_integration_note = None;
+        let Some(state) = self.windows.get(&window_id) else {
+            return;
+        };
+        let Some(rt) = state.tabs.get(&tab_id) else {
+            return;
+        };
+        let shell_name = state
+            .workspace
+            .tab(tab_id)
+            .map(porecatu_core::Tab::shell_name)
+            .unwrap_or_default();
+        let text = shell_integration::invite_text(shell_name);
+        rt.terminal.inject_note(&text, palette::NOTE_ACCENT_RGB);
+    }
+
+    /// Resolve um convite adiado por tela alternativa (ADR-0039 §1) --
+    /// chamado a cada `Wakeup::TabDirty` da aba pendente, que é exatamente
+    /// quando ela pode ter mudado de estado (`App::user_event`).
+    fn try_write_pending_shell_integration_note(&mut self, window_id: WindowId, tab_id: TabId) {
+        if self.pending_shell_integration_note != Some((window_id, tab_id)) {
+            return;
+        }
+        let alt_screen_active = self
+            .windows
+            .get(&window_id)
+            .and_then(|s| s.tabs.get(&tab_id))
+            .is_some_and(|rt| rt.terminal.modes().alt_screen);
+        if !alt_screen_active {
+            self.write_shell_integration_note(window_id, tab_id);
         }
     }
 
@@ -3460,21 +3882,34 @@ impl ApplicationHandler<Wakeup> for App {
             return;
         }
         let outcome = self.pending_session.take().unwrap_or_default();
-        match outcome.session {
+        match &outcome.session {
             Some(session) if !session.windows.is_empty() => {
+                // RF-5.9/RF-5.21/RF-3.1 (ADR-0036 §3): tema, zoom e a
+                // dispensa do convite entram **antes** de abrir qualquer
+                // janela -- `font_zoom_px` decide a métrica de célula que
+                // todas elas vão usar (ver o comentário do método).
+                self.apply_restored_session_state(session);
                 for window_v1 in &session.windows {
                     self.open_window_from_session(event_loop, window_v1);
                 }
             }
             _ => self.open_window(event_loop, None),
         }
-        if !outcome.notices.is_empty()
+        if (!outcome.notices.is_empty() || self.vanished_restored_theme.is_some())
             && let Some(state) = self.windows.values_mut().next()
         {
             let now = Instant::now();
             for notice in &outcome.notices {
                 let (title, body) = session_notice_text(notice);
                 state.warnings.push(Severity::Error, title, body, now);
+            }
+            if let Some(name) = self.vanished_restored_theme.take() {
+                state.warnings.push(
+                    Severity::Info,
+                    "Tema da sessão sumiu",
+                    format!("\"{name}\" não existe mais no arquivo; usando o tema declarado."),
+                    now,
+                );
             }
             state.window.request_redraw();
         }
@@ -3537,8 +3972,27 @@ impl ApplicationHandler<Wakeup> for App {
                 // Depende de tema resolvido -- F4.
                 TermEvent::ColorQuery(_) => {}
                 TermEvent::Cwd(cwd) => {
+                    // RF-3.1 (ADR-0039 §2): sinal de verdade de que esta
+                    // instância tem OSC 7 -- diferente de `Tab::cwd()`,
+                    // que uma aba nova já pode ter por herança (ver o
+                    // comentário do campo em `TabRuntime`).
+                    if let Some(rt) = state.tabs.get_mut(&tab_id) {
+                        rt.received_osc7 = true;
+                    }
                     if let Some(tab) = state.workspace.tab_mut(tab_id) {
                         tab.set_cwd(cwd);
+                        state.mark_session_dirty();
+                    }
+                }
+                // RF-3.1 (ADR-0039 §4): marcador digitado pelo usuário.
+                // Só tem efeito depois do convite ter sido escolhido para
+                // aparecer nesta execução -- ver o campo em `TabRuntime`/
+                // `App`; um shell que por acaso emita a mesma string
+                // (extremamente improvável) não dispensa nada sem o
+                // convite ter chegado a existir.
+                TermEvent::ShellIntegrationDismiss => {
+                    if self.shell_integration_invite_claimed {
+                        self.shell_integration_dismissed = true;
                         state.mark_session_dirty();
                     }
                 }
@@ -3572,6 +4026,11 @@ impl ApplicationHandler<Wakeup> for App {
             self.close_window_unconditionally(window, event_loop);
             return;
         }
+
+        // ADR-0039 §1: qualquer atividade nesta aba é o momento certo de
+        // reconsiderar um convite adiado por tela alternativa -- é
+        // exatamente quando ela pode ter mudado de estado.
+        self.try_write_pending_shell_integration_note(window, tab_id);
 
         let Some(state) = self.windows.get(&window) else {
             return;

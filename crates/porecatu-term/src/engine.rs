@@ -16,6 +16,7 @@ use alacritty_terminal::vte::ansi::{
     CursorShape as AnsiCursorShape, CursorStyle as AnsiCursorStyle, Processor, Rgb as AnsiRgb,
 };
 
+use crate::dismiss::DismissWatcher;
 use crate::event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 use crate::osc7::Osc7Watcher;
 use crate::params::TermParams;
@@ -130,6 +131,9 @@ pub struct TermEngine {
     parser: Processor,
     /// Segundo parser, independente do de `term` -- ver `crate::osc7`.
     osc7: Osc7Watcher,
+    /// Observador do marcador de dispensa (ADR-0039 §4) -- ver
+    /// `crate::dismiss`. Roda sobre o mesmo lote, sem depender do motor.
+    dismiss: DismissWatcher,
     /// Cópia do canal de eventos: `TermEvent::Cwd` não vem do motor (OSC 7
     /// não é despachado a nenhum método de `Handler`, ver `crate::osc7`),
     /// então `advance` manda direto por aqui, fora de `EventProxy`.
@@ -173,16 +177,22 @@ impl TermEngine {
             term,
             parser: Processor::new(),
             osc7: Osc7Watcher::new(),
+            dismiss: DismissWatcher::new(),
             events,
         }
     }
 
-    /// Alimenta o parser VT com bytes crus do PTY, e em paralelo o scanner
-    /// de OSC 7 (`crate::osc7`) sobre o mesmo lote.
+    /// Alimenta o parser VT com bytes crus do PTY, e em paralelo os dois
+    /// scanners independentes que observam o mesmo lote: OSC 7
+    /// (`crate::osc7`) e o marcador de dispensa do convite de integração
+    /// de shell (`crate::dismiss`).
     pub fn advance(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
         if let Some(cwd) = self.osc7.advance(bytes) {
             let _ = self.events.send(TermEvent::Cwd(cwd));
+        }
+        if self.dismiss.advance(bytes) {
+            let _ = self.events.send(TermEvent::ShellIntegrationDismiss);
         }
     }
 
