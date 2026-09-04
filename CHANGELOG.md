@@ -43,7 +43,9 @@ primeiro release.
   registrada no ADR-0001 antes da F1, e corrige a conta: são **cinco** papéis de
   widget, não três. A grade do terminal fica declaradamente fora do v1
 - **[ADR-0044](docs/adr/0044-empacotamento-e-release.md)** — instalador nativo
-  por plataforma, primeira release **`1.0.0`**, sem assinatura de código. Traz
+  por plataforma, sem assinatura de código (o número da primeira release, § 3,
+  foi revisto pelo [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md): **`0.7.0`**,
+  não `1.0.0` — dívida de verificação ainda em aberto no fechamento da F6). Traz
   `x86_64-apple-darwin` para a matriz, `--locked` para o `ci.yml` (última
   pendência aberta da F0) e a **atribuição das fontes embutidas para dentro do
   artefato** — hoje o `release.yml` copia só `LICENSE` e `README.md`, e publicar

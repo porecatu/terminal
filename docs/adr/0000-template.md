@@ -47,7 +47,8 @@
 | [0041](0041-busca-no-scrollback.md) | Busca no scrollback: barra sobreposta no topo do quadro | Aceito |
 | [0042](0042-hyperlinks-osc-8.md) | Hyperlinks OSC 8: spans no snapshot, abertura sob modificador, esquemas fechados | Aceito |
 | [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito |
-| [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Aceito |
+| [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Superseded by ADR-0045 (**parcial**: só §3, o número da versão) |
+| [0045](0045-primeira-versao-0-7-0.md) | A primeira versão publicada é `0.7.0`, não `1.0.0` | Aceito |
 
 ## Convenção
 

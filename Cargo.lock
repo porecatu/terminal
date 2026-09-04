@@ -2406,7 +2406,7 @@ checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
 
 [[package]]
 name = "porecatu"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "porecatu-ui",
  "winres",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-config"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "dirs",
  "serde",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-core"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2432,7 +2432,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-pty"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "portable-pty",
  "sysinfo",
@@ -2441,7 +2441,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-render"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "glyphon",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-session"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "dirs",
  "porecatu-core",
@@ -2462,7 +2462,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-term"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "alacritty_terminal",
  "bitflags 2.13.1",
@@ -2471,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-ui"
-version = "0.1.0"
+version = "0.7.0"
 dependencies = [
  "accesskit",
  "accesskit_winit",

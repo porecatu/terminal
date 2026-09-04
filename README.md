@@ -103,7 +103,7 @@ O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alv
 | Ícone do app | `png` (decodifica em runtime) + `winres` num `build.rs` (recurso PE no Windows) | — |
 | Caminhos do usuário | `dirs` (home como diretório inicial de aba; caminho de config) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
 | Referência visual | o binário; design canvas como histórico | [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) |
-| Empacotamento e release | instalador nativo por plataforma, primeira versão `1.0.0`, sem assinatura de código | [ADR-0044](docs/adr/0044-empacotamento-e-release.md) |
+| Empacotamento e release | instalador nativo por plataforma, primeira versão `0.7.0`, sem assinatura de código | [ADR-0044](docs/adr/0044-empacotamento-e-release.md), [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md) |
 | Toolchain | stable pinada, edition 2024 | [ADR-0011](docs/adr/0011-toolchain-rust.md) |
 | Licença | GPL-3.0-or-later | [ADR-0010](docs/adr/0010-licenciamento.md) |
 

@@ -1,6 +1,6 @@
 # ADR-0044 — Empacotamento por plataforma e a primeira release
 
-**Status:** Aceito
+**Status:** Superseded by ADR-0045 (parcial — só §3, o número da primeira versão; instalador, `release.yml`, ausência de assinatura e conteúdo de artefato continuam valendo por inteiro)
 **Data:** 2026-09-04
 **Relacionados:** ADR-0010, ADR-0011, ADR-0016, ADR-0026, ADR-0027, ADR-0040, PRD-000, PRD-011
 
