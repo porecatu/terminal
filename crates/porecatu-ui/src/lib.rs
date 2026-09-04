@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -367,6 +367,107 @@ fn font_families_from_config(config: &porecatu_config::Config) -> porecatu_rende
     }
 }
 
+/// Conteúdo de referência do arquivo de config (RF-11.27) -- o mesmo que
+/// `docs/config/porecatu.example.toml`, embutido no binário para criar o
+/// arquivo do usuário quando ele ainda não existe. Mesmo padrão de
+/// `shell_integration::REFERENCE_MD` (`include_str!` de um documento em
+/// `docs/`, sem duplicar o conteúdo).
+const EXAMPLE_CONFIG_TOML: &str = include_str!("../../../docs/config/porecatu.example.toml");
+
+/// Garante que `path` existe, criando-o a partir do exemplo embutido se
+/// ainda não existir (RF-11.27: "decida e registre" -- criar a partir do
+/// exemplo é a opção óbvia, o usuário vê os defaults comentados em vez de
+/// um arquivo vazio ou um erro). Separada de `open_config_file` para ser
+/// testável sem `opener` -- testar a chamada real abriria um programa de
+/// verdade na máquina que roda `cargo test`.
+fn ensure_config_file_exists(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, EXAMPLE_CONFIG_TOML)
+}
+
+/// RF-11.27: abre o arquivo de config no editor padrão do sistema --
+/// `opener::open` (o mesmo wrapper que a etapa 3 do F6 adotou para URI),
+/// nunca um `unsafe` novo nem uma string de shell montada com o caminho.
+/// Sem `config_path` resolvido (rara: falha da API de diretórios da
+/// plataforma), avisa e desiste.
+fn open_config_file(config_path: Option<&Path>, warnings: &mut WarningStack, now: Instant) {
+    let Some(path) = config_path else {
+        warnings.push(
+            Severity::Warning,
+            "Sem arquivo de configuração",
+            "Não foi possível resolver um caminho de config nesta plataforma.",
+            now,
+        );
+        return;
+    };
+    if let Err(err) = ensure_config_file_exists(path) {
+        warnings.push(
+            Severity::Warning,
+            "Não foi possível criar a config",
+            err.to_string(),
+            now,
+        );
+        return;
+    }
+    if let Err(err) = opener::open(path) {
+        warnings.push(
+            Severity::Warning,
+            "Não foi possível abrir a config",
+            err.to_string(),
+            now,
+        );
+    }
+}
+
+#[cfg(test)]
+mod ensure_config_file_exists_tests {
+    use super::*;
+
+    fn scratch_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "porecatu-ui-test-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn missing_file_is_created_from_the_embedded_example() {
+        let path = scratch_path("missing.toml");
+        assert!(!path.exists());
+        ensure_config_file_exists(&path).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, EXAMPLE_CONFIG_TOML);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn existing_file_is_left_untouched() {
+        let path = scratch_path("existing.toml");
+        std::fs::write(&path, "conteúdo do usuário, não o exemplo").unwrap();
+        ensure_config_file_exists(&path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "conteúdo do usuário, não o exemplo");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn missing_parent_directory_is_created() {
+        let path = scratch_path("nested").join("porecatu.toml");
+        ensure_config_file_exists(&path).unwrap();
+        assert!(path.exists());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+}
+
 /// O que `WindowState::handle_tab_action_key` não pode resolver sozinho --
 /// `window.new`/`window.close` (ADR-0015) tocam outras janelas, então
 /// precisam voltar pra `App`. `WindowEmptied` é o mesmo caso: fechar a
@@ -435,6 +536,10 @@ enum NewTabRequest {
     /// vive em `App` -- `WindowState` não pode resolver isto sozinho, mesmo
     /// motivo de `WindowEmptied`.
     CloseWindowRequested,
+    /// Botão de configurações (RF-11.27): `self.config_path` (o caminho já
+    /// resolvido no arranque, ADR-0003) só existe em `App`, não em
+    /// `WindowState` -- mesmo motivo de `CloseWindowRequested`.
+    OpenConfigFile,
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -2174,17 +2279,13 @@ impl WindowState {
                     tab_bar::WindowButtonHit::Close => NewTabRequest::CloseWindowRequested,
                 };
             }
-            // Botão de configurações: zona fixa à direita, fora da
-            // trilha que rola -- resolvido em coordenadas de tela, como as
-            // pílulas de overflow logo abaixo, não pelo hit-test de
-            // conteúdo.
-            //
-            // **Inerte de propósito** (`config` é F4). O clique é
-            // consumido aqui em vez de cair na trilha: o botão está
-            // desenhado, e deixar o clique atravessar até a aba de baixo
-            // seria pior que não responder.
+            // Botão de configurações (RF-11.27): zona fixa à direita, fora
+            // da trilha que rola -- resolvido em coordenadas de tela, como
+            // as pílulas de overflow logo abaixo, não pelo hit-test de
+            // conteúdo. Abrir o arquivo é decisão de `App` (precisa de
+            // `config_path`), então só sobe o pedido.
             if tab_bar::point_in_settings_button(style, bar_width, h, is_macos(), logical_point) {
-                return NewTabRequest::None;
+                return NewTabRequest::OpenConfigFile;
             }
             if overflow.hidden_left > 0
                 && tab_bar::point_in_overflow_pill(
@@ -3405,10 +3506,11 @@ impl App {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
 
-        // RF-11.25: avisos que só existem no primeiro `GpuContext::new` do
-        // processo (o `else` abaixo) -- não há `WindowState` ainda pra
-        // empilhar, então esperam até `state` ser criado no fim desta
-        // função (a primeira janela do processo, sempre).
+        // RF-11.25/RF-11.26: avisos que só existem no primeiro
+        // `GpuContext::new` do processo (o `else` abaixo) -- não há
+        // `WindowState` ainda pra empilhar, então esperam até `state` ser
+        // criado no fim desta função (a primeira janela do processo,
+        // sempre).
         let mut first_gpu_warnings: Vec<(Severity, &'static str, String)> = Vec::new();
         let window_surface = if let Some(gpu) = &mut self.gpu {
             match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
@@ -5818,6 +5920,14 @@ impl App {
                 // atalho/menu, com diálogo se houver mais de uma aba.
                 NewTabRequest::CloseWindowRequested => {
                     self.request_close_window(window_id, event_loop);
+                }
+                NewTabRequest::OpenConfigFile => {
+                    open_config_file(
+                        self.config_path.as_deref(),
+                        &mut state.warnings,
+                        Instant::now(),
+                    );
+                    state.window.request_redraw();
                 }
                 NewTabRequest::None => {
                     state.window.request_redraw();

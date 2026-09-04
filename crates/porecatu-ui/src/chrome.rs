@@ -601,8 +601,8 @@ pub fn paint(
     // implícito, o global era um segundo botão para a mesma ação, a um
     // palmo do primeiro. O bloco fica, reservado para o que a barra
     // ganhar à direita daqui em diante, e por ora carrega o botão de
-    // configurações -- **inerte de propósito** (`config` é F4): ele
-    // desenha e não responde a clique nenhum, ver `handle_bar_click`.
+    // configurações (RF-11.27): abre o arquivo de config no editor padrão
+    // do sistema, ver `handle_bar_click`.
     let settings = tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: settings,
