@@ -455,6 +455,42 @@ fn should_confirm_tab_close(
             || has_extra_processes)
 }
 
+/// ADR-0034 §6, ADR-0037 §3: decide se `window.close`/`app.quit` devem
+/// confirmar. `significant_tab_count` já vem contado sem aba `NotStarted`
+/// (`request_close_window` conta `state.tabs`, o mapa de `TabRuntime` --
+/// função livre e pura, testável sem `WindowState`.
+fn window_close_needs_confirmation(significant_tab_count: usize, any_tab_busy: bool) -> bool {
+    significant_tab_count > 1 || any_tab_busy
+}
+
+#[cfg(test)]
+mod window_close_needs_confirmation_tests {
+    use super::*;
+
+    #[test]
+    fn single_quiet_tab_never_confirms() {
+        assert!(!window_close_needs_confirmation(1, false));
+    }
+
+    /// ADR-0037 §3: janela só com abas `NotStarted` tem contagem
+    /// significativa zero -- não confirma por "mais de uma aba", mesmo
+    /// que o `Workspace` tenha dez.
+    #[test]
+    fn zero_significant_tabs_never_confirms_by_count() {
+        assert!(!window_close_needs_confirmation(0, false));
+    }
+
+    #[test]
+    fn more_than_one_significant_tab_confirms() {
+        assert!(window_close_needs_confirmation(2, false));
+    }
+
+    #[test]
+    fn a_single_busy_tab_confirms() {
+        assert!(window_close_needs_confirmation(1, true));
+    }
+}
+
 #[cfg(test)]
 mod should_confirm_tab_close_tests {
     use super::*;
@@ -691,9 +727,9 @@ impl WindowState {
     }
 
     /// Cria uma aba, herdando `cwd` (RF-1.1, ADR-0017), e spawna a
-    /// `Terminal` dela. Erro de spawn desfaz a criação e vira aviso do app
-    /// (canal 1, ADR-0014) -- sem isso o `Workspace` acumularia abas sem
-    /// `Terminal` nenhum atrás.
+    /// `Terminal` dela via [`Self::spawn_tab_runtime`]. Aba nova nasce
+    /// sempre `Running` (ADR-0037 §1) -- `spawn_tab_runtime` não muda
+    /// estado nenhum, só cria o `TabRuntime`.
     #[allow(clippy::too_many_arguments)]
     fn open_tab(
         &mut self,
@@ -706,7 +742,6 @@ impl WindowState {
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
     ) {
-        let (rows, cols) = self.grid_size(cell_metrics, style);
         let shell_name = Self::shell_display_name(shell);
         let tab_id = match target {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
@@ -725,7 +760,38 @@ impl WindowState {
                 self.touch_workspace(|ws| ws.append_ungrouped_tab(shell_name, cwd.clone()))
             }
         };
+        self.spawn_tab_runtime(
+            tab_id,
+            cwd,
+            cell_metrics,
+            proxy,
+            now,
+            style,
+            term_params,
+            shell,
+        );
+    }
 
+    /// Spawna o `Terminal` de uma aba que já existe no `Workspace` --
+    /// extraído de `open_tab` (que a cria e spawna no mesmo gesto) para
+    /// servir também [`Self::ensure_active_tab_started`] (ADR-0037 §2),
+    /// que spawna uma aba `NotStarted` já existente no primeiro foco.
+    /// Erro de spawn desfaz a aba do `Workspace` e vira aviso do app
+    /// (canal 1, ADR-0014) -- sem isso ficaria uma aba sem `Terminal`
+    /// nenhum atrás.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_tab_runtime(
+        &mut self,
+        tab_id: TabId,
+        cwd: Option<PathBuf>,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
+    ) {
+        let (rows, cols) = self.grid_size(cell_metrics, style);
         let window_id = self.window.id();
         let tab = tab_id;
         let proxy = proxy.clone();
@@ -778,6 +844,48 @@ impl WindowState {
             }
         }
         self.sync_window_title();
+    }
+
+    /// ADR-0037 §2: o shell sobe no primeiro foco, por qualquer caminho de
+    /// ativação -- chamado uma vez por evento de janela, no fim de
+    /// [`App::window_event`], depois que qualquer clique/atalho já
+    /// ativou a aba no `Workspace`. Sem-op na maioria absoluta das
+    /// chamadas (aba ativa já `Running`, ou nenhuma aba ativa) -- só faz
+    /// algo quando encontra `NotStarted`, o que nesta etapa só acontece
+    /// à mão (não há restauração ainda, F5 etapa 4).
+    ///
+    /// Roda **antes** de qualquer tecla chegar ao terminal porque é
+    /// chamado no mesmo evento que ativou a aba, antes do próximo evento
+    /// (`KeyboardInput` seguinte) poder rotear uma tecla para ela -- não
+    /// existe janela de tempo em que a aba ativa esteja `NotStarted` e
+    /// receba tecla (ADR-0037 §2, risco da tabela).
+    #[allow(clippy::too_many_arguments)]
+    fn ensure_active_tab_started(
+        &mut self,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
+    ) {
+        let Some(id) = self.workspace.active_tab() else {
+            return;
+        };
+        let Some(tab) = self.workspace.tab(id) else {
+            return;
+        };
+        if !tab.is_not_started() {
+            return;
+        }
+        let cwd = tab.cwd().cloned();
+        self.spawn_tab_runtime(id, cwd, cell_metrics, proxy, now, style, term_params, shell);
+        // Formaliza a transição no modelo só depois do spawn de verdade --
+        // se `spawn_tab_runtime` desfez a aba (erro), `tab_mut` abaixo
+        // devolve `None` e não há nada a marcar.
+        if let Some(tab) = self.workspace.tab_mut(id) {
+            tab.start();
+        }
     }
 
     /// Fecha uma aba sem perguntar: sinaliza o processo sem bloquear
@@ -880,6 +988,14 @@ impl WindowState {
     /// usuário), quem chama fecha a janela.
     fn action_close_tab(&mut self, confirm_close_with_process: bool) -> Option<TabCloseOutcome> {
         let id = self.workspace.active_tab()?;
+        // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
+        // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup` --
+        // sem isto, `self.tabs.get(&id)?` abaixo (que só existe para aba
+        // já spawnada) devolveria `None` e o fechamento não faria nada.
+        if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
+            let window_empty = self.close_tab_unconditionally(id);
+            return Some(TabCloseOutcome::Closed { window_empty });
+        }
         let runtime = self.tabs.get(&id)?;
         if should_confirm_tab_close(
             confirm_close_with_process,
@@ -1715,6 +1831,12 @@ impl WindowState {
         id: TabId,
         confirm_close_with_process: bool,
     ) -> Option<TabCloseOutcome> {
+        // ADR-0037 §3 -- mesma checagem de `action_close_tab`, antes da
+        // detecção do ADR-0034.
+        if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
+            let window_empty = self.close_tab_unconditionally(id);
+            return Some(TabCloseOutcome::Closed { window_empty });
+        }
         let runtime = self.tabs.get(&id)?;
         if should_confirm_tab_close(
             confirm_close_with_process,
@@ -2590,16 +2712,17 @@ impl App {
     /// chama `Terminal::close` para cada uma), e o usuário não tinha aviso
     /// nenhum nesse caminho. Essa segunda checagem respeita
     /// `confirm_close_with_process`, como o fechamento de aba.
+    ///
+    /// ADR-0037 §3: a contagem que decide "mais de uma aba aberta" conta
+    /// `state.tabs` (o mapa de `TabRuntime`), não `workspace` -- aba
+    /// `NotStarted` nunca tem entrada ali (nada rodou, nada a perder), e
+    /// contar `workspace` faria uma janela só com abas `NotStarted`
+    /// confirmar por "mais de uma aba", o que o ADR proíbe.
     fn request_close_window(&mut self, window_id: WindowId, event_loop: &ActiveEventLoop) {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let tab_count = state
-            .workspace
-            .groups()
-            .iter()
-            .map(|g| g.tabs().len())
-            .sum::<usize>();
+        let significant_tab_count = state.tabs.len();
         let confirm_close_with_process = self.config.general.confirm_close_with_process;
         let any_tab_busy = state.tabs.values().any(|runtime| {
             should_confirm_tab_close(
@@ -2608,8 +2731,8 @@ impl App {
                 runtime.terminal.has_extra_processes(),
             )
         });
-        if tab_count > 1 || any_tab_busy {
-            let body = if tab_count > 1 {
+        if window_close_needs_confirmation(significant_tab_count, any_tab_busy) {
+            let body = if significant_tab_count > 1 {
                 "Esta janela tem mais de uma aba aberta."
             } else {
                 "Esta janela tem um programa em primeiro plano."
@@ -3270,6 +3393,21 @@ impl ApplicationHandler<Wakeup> for App {
                 self.redraw(window_id);
             }
             _ => {}
+        }
+        // ADR-0037 §2: roda uma vez por evento de janela, depois de
+        // qualquer clique/atalho que possa ter ativado uma aba `NotStarted`
+        // (clique na aba, `Ctrl+Tab`, `Ctrl+PageDown`, índice, passo de
+        // grupo, expansão de grupo colapsado) e antes do próximo evento --
+        // sem-op quando a aba ativa já está `Running`, o caso comum.
+        if let Some(state) = self.windows.get_mut(&window_id) {
+            state.ensure_active_tab_started(
+                self.cell_metrics,
+                &self.proxy,
+                Instant::now(),
+                &self.style,
+                &self.term_params,
+                &self.config.shell,
+            );
         }
         self.schedule_next_wake(event_loop);
     }
