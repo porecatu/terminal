@@ -74,10 +74,20 @@ pub fn window_from_workspace(ws: &Workspace) -> (Vec<GroupV1>, Vec<TabV1>, Optio
 /// correspondente, ou `active_tab` sem aba criada) é ignorada em vez de
 /// falhar -- defensivo contra arquivo editado à mão, que não é o caminho
 /// normal, mas não deve travar a restauração.
+///
+/// `lazy_restore` (RF-3.8, ADR-0037 §1/§6, F5 etapa 4): com `true`, toda
+/// aba que não é a `active_tab` da janela nasce `NotStarted` -- só a ativa
+/// nasce `Running`. Com `false`, todas nascem `Running`, e a chamada é
+/// idêntica ao comportamento de antes desta etapa. A decisão é por aba
+/// individual, não por lote: nenhuma verificação de disco (`cwd` inexistente,
+/// RF-3.10) acontece aqui -- essa checagem é de quem sobe o shell de
+/// verdade (`WindowState::spawn_tab_runtime`), no momento em que a aba sobe,
+/// não na reconstrução do modelo.
 pub fn workspace_from_window(
     groups: &[GroupV1],
     tabs: &[TabV1],
     active_tab: Option<u32>,
+    lazy_restore: bool,
 ) -> Workspace {
     let by_id: HashMap<u32, &TabV1> = tabs.iter().map(|t| (t.id, t)).collect();
     let mut ws = Workspace::new();
@@ -90,7 +100,12 @@ pub fn workspace_from_window(
                 continue;
             };
             let shell = tab.spawn_program.clone().unwrap_or_default();
-            let new_id = ws.new_tab(group_id, shell, tab.cwd.clone(), pos);
+            let is_active = active_tab == Some(file_tab_id);
+            let new_id = if lazy_restore && !is_active {
+                ws.new_tab_not_started(group_id, shell, tab.cwd.clone(), pos)
+            } else {
+                ws.new_tab(group_id, shell, tab.cwd.clone(), pos)
+            };
             if group_id.is_none() {
                 group_id = ws.group_of_tab(new_id);
             }
@@ -179,7 +194,7 @@ mod tests {
         let (groups2, tabs2, active_tab2): (Vec<GroupV1>, Vec<TabV1>, Option<u32>) =
             serde_json::from_str(&json).unwrap();
 
-        let rebuilt = workspace_from_window(&groups2, &tabs2, active_tab2);
+        let rebuilt = workspace_from_window(&groups2, &tabs2, active_tab2, false);
 
         // Ordem visual: uma aba solta seguida do grupo colapsado (que
         // continua gravado -- colapso não tira aba do arquivo).
@@ -200,6 +215,85 @@ mod tests {
         let backend_tab = rebuilt.tab(*g.tabs().first().unwrap()).unwrap();
         assert_eq!(backend_tab.title(), "backend");
         assert_eq!(backend_tab.cwd(), Some(&PathBuf::from("/srv/api")));
+    }
+
+    fn tab_v1(id: u32, shell: &str) -> TabV1 {
+        TabV1 {
+            id,
+            custom_title: None,
+            cwd: None,
+            spawn_program: Some(shell.to_string()),
+        }
+    }
+
+    /// RF-3.8/ADR-0037 §1 (F5 etapa 4): com `lazy_restore = true`, só a
+    /// aba ativa da janela nasce `Running` -- as outras, mesmo no mesmo
+    /// grupo dela, nascem `NotStarted`.
+    #[test]
+    fn lazy_restore_starts_only_the_active_tab() {
+        let groups = vec![GroupV1 {
+            id: 0,
+            name: None,
+            color: None,
+            collapsed: false,
+            tabs: vec![0, 1],
+        }];
+        let tabs = vec![tab_v1(0, "zsh"), tab_v1(1, "bash")];
+
+        let ws = workspace_from_window(&groups, &tabs, Some(1), true);
+
+        let ids: Vec<TabId> = ws.visual_order().collect();
+        assert_eq!(ws.tab(ids[0]).unwrap().state(), TabState::NotStarted);
+        assert_eq!(ws.tab(ids[1]).unwrap().state(), TabState::Running);
+        assert_eq!(ws.active_tab(), Some(ids[1]));
+    }
+
+    /// `lazy_restore = false`: nenhuma aba nasce `NotStarted`, nem a que
+    /// não é a ativa da janela.
+    #[test]
+    fn lazy_restore_false_starts_every_tab() {
+        let groups = vec![GroupV1 {
+            id: 0,
+            name: None,
+            color: None,
+            collapsed: false,
+            tabs: vec![0, 1],
+        }];
+        let tabs = vec![tab_v1(0, "zsh"), tab_v1(1, "bash")];
+
+        let ws = workspace_from_window(&groups, &tabs, Some(1), false);
+
+        assert!(
+            ws.visual_order()
+                .all(|id| ws.tab(id).unwrap().state() == TabState::Running)
+        );
+    }
+
+    /// RF-2.17 ponta a ponta (dívida registrada desde a F3): restaurar uma
+    /// sessão cuja aba ativa está dentro de um grupo gravado como
+    /// colapsado precisa expandir o grupo -- o primeiro caminho real do
+    /// app que ativa uma aba oculta. O mecanismo já está em
+    /// `Workspace::activate_tab`; este teste é o cenário que faltava.
+    #[test]
+    fn restoring_the_active_tab_inside_a_collapsed_group_expands_it() {
+        let groups = vec![GroupV1 {
+            id: 0,
+            name: Some("api".to_string()),
+            color: Some("blue".to_string()),
+            collapsed: true,
+            tabs: vec![0, 1],
+        }];
+        let tabs = vec![tab_v1(0, "zsh"), tab_v1(1, "bash")];
+
+        let ws = workspace_from_window(&groups, &tabs, Some(1), true);
+
+        let active = ws.active_tab().expect("aba ativa restaurada");
+        let group = ws.group_of_tab(active).expect("aba pertence ao grupo");
+        assert!(
+            !ws.group(group).unwrap().is_collapsed(),
+            "grupo colapsado que contém a aba ativa restaurada precisa expandir"
+        );
+        assert!(ws.navigable_order().any(|id| id == active));
     }
 
     /// Aba `Exited` não aparece no JSON gravado.

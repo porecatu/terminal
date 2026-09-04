@@ -68,6 +68,16 @@ impl Tab {
         }
     }
 
+    /// ADR-0037 §1: única forma de nascer `NotStarted` -- reservada à
+    /// restauração de sessão (F5 etapa 4). Todo outro caminho (`tab.new`,
+    /// `group.new_tab`, `window.new`) usa [`Tab::new`], que nasce `Running`.
+    pub fn new_not_started(id: TabId, shell_name: impl Into<String>) -> Self {
+        Self {
+            state: TabState::NotStarted,
+            ..Self::new(id, shell_name)
+        }
+    }
+
     pub const fn id(&self) -> TabId {
         self.id
     }
@@ -246,10 +256,17 @@ mod tests {
     }
 
     fn not_started_tab() -> Tab {
-        Tab {
-            state: TabState::NotStarted,
-            ..Tab::new(TabId::new(0), "zsh")
-        }
+        Tab::new_not_started(TabId::new(0), "zsh")
+    }
+
+    /// F5 etapa 4: agora existe um construtor público -- a restauração de
+    /// sessão é a única chamadora de verdade, mas o teste garante que ele
+    /// produz o mesmo shape que o literal de módulo que o testava até aqui.
+    #[test]
+    fn new_not_started_produces_the_not_started_state() {
+        let tab = Tab::new_not_started(TabId::new(0), "zsh");
+        assert_eq!(tab.state(), TabState::NotStarted);
+        assert_eq!(tab.title(), "zsh");
     }
 
     #[test]

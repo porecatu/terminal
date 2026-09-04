@@ -119,10 +119,50 @@ impl Workspace {
         cwd: Option<PathBuf>,
         pos: usize,
     ) -> TabId {
-        let id = TabId::new(self.next_tab_id);
-        self.next_tab_id += 1;
+        let id = self.insert_tab(
+            Tab::new(TabId::new(self.next_tab_id), shell_name),
+            group,
+            cwd,
+            pos,
+        );
+        self.activate_tab(id);
+        id
+    }
 
-        let mut tab = Tab::new(id, shell_name);
+    /// ADR-0037 §1: cria a aba já em `NotStarted` -- reservado à
+    /// restauração de sessão (F5 etapa 4), o único produtor desse estado.
+    /// Ao contrário de [`Self::new_tab`], **não ativa** a aba: uma aba
+    /// ainda sem shell não deveria se tornar a ativa como efeito colateral
+    /// da própria criação -- quem restaura decide separadamente, no fim,
+    /// qual aba de cada janela fica ativa (`Self::activate_tab`).
+    pub fn new_tab_not_started(
+        &mut self,
+        group: Option<GroupId>,
+        shell_name: impl Into<String>,
+        cwd: Option<PathBuf>,
+        pos: usize,
+    ) -> TabId {
+        self.insert_tab(
+            Tab::new_not_started(TabId::new(self.next_tab_id), shell_name),
+            group,
+            cwd,
+            pos,
+        )
+    }
+
+    /// Núcleo comum de [`Self::new_tab`]/[`Self::new_tab_not_started`]:
+    /// gera o `cwd`, insere no `Vec<Tab>` e posiciona no grupo (existente,
+    /// ou um run implícito novo no fim se `group` for `None`/inexistente).
+    /// Não ativa -- ativar é decisão de cada chamador.
+    fn insert_tab(
+        &mut self,
+        mut tab: Tab,
+        group: Option<GroupId>,
+        cwd: Option<PathBuf>,
+        pos: usize,
+    ) -> TabId {
+        self.next_tab_id += 1;
+        let id = tab.id();
         if let Some(cwd) = cwd {
             tab.set_cwd(cwd);
         }
@@ -137,7 +177,6 @@ impl Workspace {
             }
         };
         self.groups[group_index].insert(pos, id);
-        self.activate_tab(id);
         id
     }
 
@@ -758,6 +797,19 @@ mod tests {
         let b = ws.new_tab(None, "bash", None, 0);
         assert_eq!(ws.tab(a).unwrap().state(), TabState::Running);
         assert_eq!(ws.tab(b).unwrap().state(), TabState::Running);
+    }
+
+    /// ADR-0037 §1/F5 etapa 4: `new_tab_not_started` é o único caminho que
+    /// produz `NotStarted` -- e, ao contrário de `new_tab`, não ativa a
+    /// aba criada (a aba ativa da restauração é decidida separadamente).
+    #[test]
+    fn new_tab_not_started_creates_without_activating() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.new_tab_not_started(None, "bash", None, 1);
+        assert_eq!(ws.tab(b).unwrap().state(), TabState::NotStarted);
+        assert_eq!(ws.active_tab(), Some(a));
+        assert_eq!(ws.visual_order().collect::<Vec<_>>(), vec![a, b]);
     }
 
     fn tab_ids(ws: &Workspace) -> Vec<TabId> {

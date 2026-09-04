@@ -17,7 +17,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{CursorIcon, Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 
 mod animation;
 mod app_icon;
@@ -93,6 +93,37 @@ const DRAG_AUTOSCROLL_STEP_PX: f32 = 12.0;
 /// ADR-0015: deslocamento de cascata da janela nova em relação à que a
 /// criou, em pixels físicos.
 const NEW_WINDOW_CASCADE_PX: i32 = 30;
+
+/// Atributos comuns a toda janela do Porecatu (ADR-0027: sem decoração
+/// nativa fora do macOS, onde o semáforo continua nativo). Compartilhado
+/// por [`App::open_window`] e [`App::open_window_from_session`] -- cada
+/// um soma por cima só a geometria que decide sozinho (cascata da
+/// origem, ou a gravada na sessão).
+fn base_window_attributes() -> WindowAttributes {
+    #[allow(unused_mut)]
+    let mut attributes = Window::default_attributes()
+        .with_title("Porecatu")
+        .with_window_icon(Some(app_icon::load()))
+        .with_decorations(false);
+    // macOS: decorations volta a `true` -- o semáforo nativo (traffic
+    // lights) é o controle de janela do ADR-0027 lá, não botões nossos
+    // (ver `chrome::paint`/`tab_bar::left_inset`).
+    // `with_titlebar_transparent`/`with_title_hidden`/
+    // `with_fullsize_content_view` estendem nosso conteúdo por baixo da
+    // titlebar nativa (que fica invisível, exceto o semáforo) -- é o
+    // mesmo truque de app nativo "sem titlebar visível, com semáforo",
+    // não decorations=false.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::WindowAttributesExtMacOS;
+        attributes = attributes
+            .with_decorations(true)
+            .with_titlebar_transparent(true)
+            .with_title_hidden(true)
+            .with_fullsize_content_view(true);
+    }
+    attributes
+}
 
 /// ADR-0022, tabela de consumidores -- as únicas duas durações que o
 /// relógio de animação usa.
@@ -463,6 +494,53 @@ fn window_close_needs_confirmation(significant_tab_count: usize, any_tab_busy: b
     significant_tab_count > 1 || any_tab_busy
 }
 
+/// RF-3.14/RF-3.16 (ADR-0036 §5): texto do aviso de recuperação de sessão
+/// (canal 1, ADR-0014) para cada `Notice` que `porecatu_session::load`
+/// pode devolver -- puro, sem `WindowState`, só a tradução de dado para
+/// texto.
+fn session_notice_text(notice: &porecatu_session::Notice) -> (&'static str, String) {
+    match notice {
+        porecatu_session::Notice::Corrupt(path) => (
+            "Sessão anterior corrompida",
+            format!(
+                "O arquivo foi preservado em \"{}\". Uma sessão nova foi iniciada.",
+                path.display()
+            ),
+        ),
+        porecatu_session::Notice::NewerSchema { found, supported } => (
+            "Sessão de uma versão mais nova",
+            format!(
+                "O formato salvo (versão {found}) é mais novo que o suportado por esta versão do Porecatu (até {supported}). Uma sessão nova foi iniciada."
+            ),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod session_notice_text_tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_notice_names_the_preserved_path() {
+        let (title, body) = session_notice_text(&porecatu_session::Notice::Corrupt(
+            "session.json.corrupt".into(),
+        ));
+        assert_eq!(title, "Sessão anterior corrompida");
+        assert!(body.contains("session.json.corrupt"));
+    }
+
+    #[test]
+    fn newer_schema_notice_names_both_versions() {
+        let (title, body) = session_notice_text(&porecatu_session::Notice::NewerSchema {
+            found: 99,
+            supported: 1,
+        });
+        assert_eq!(title, "Sessão de uma versão mais nova");
+        assert!(body.contains("99"));
+        assert!(body.contains('1'));
+    }
+}
+
 #[cfg(test)]
 mod window_close_needs_confirmation_tests {
     use super::*;
@@ -741,6 +819,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        startup_directory: &Option<PathBuf>,
     ) {
         let shell_name = Self::shell_display_name(shell);
         let tab_id = match target {
@@ -769,16 +848,26 @@ impl WindowState {
             style,
             term_params,
             shell,
+            startup_directory,
         );
     }
 
     /// Spawna o `Terminal` de uma aba que já existe no `Workspace` --
     /// extraído de `open_tab` (que a cria e spawna no mesmo gesto) para
     /// servir também [`Self::ensure_active_tab_started`] (ADR-0037 §2),
-    /// que spawna uma aba `NotStarted` já existente no primeiro foco.
+    /// que spawna uma aba `NotStarted` já existente no primeiro foco, e a
+    /// restauração de sessão (F5 etapa 4, `App::open_window_from_session`).
     /// Erro de spawn desfaz a aba do `Workspace` e vira aviso do app
     /// (canal 1, ADR-0014) -- sem isso ficaria uma aba sem `Terminal`
     /// nenhum atrás.
+    ///
+    /// RF-3.10 (ADR-0017 §5): o `cwd` é verificado **aqui**, no momento em
+    /// que a aba sobe de verdade -- nunca adiantado para toda aba
+    /// `NotStarted` de uma restauração, que seria N chamadas de `exists()`
+    /// no caminho do start para abas que talvez nunca sejam focadas. Sem o
+    /// diretório, a nota entra **antes** de qualquer byte do PTY chegar
+    /// (grade ainda em branco: é o que garante "primeira linha", a
+    /// posição que o ADR-0017 §5 exige para este fato).
     #[allow(clippy::too_many_arguments)]
     fn spawn_tab_runtime(
         &mut self,
@@ -790,11 +879,15 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        startup_directory: &Option<PathBuf>,
     ) {
         let (rows, cols) = self.grid_size(cell_metrics, style);
         let window_id = self.window.id();
         let tab = tab_id;
         let proxy = proxy.clone();
+        let cwd_exists = cwd.as_ref().is_none_or(|p| p.is_dir());
+        let (cwd, missing_cwd_note) =
+            session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
             // Vazio = detecta automaticamente (`porecatu_pty::spawn` cai em
             // `resolve_default_shell`) -- `[shell] program` presente tem
@@ -825,6 +918,9 @@ impl WindowState {
             });
         }) {
             Ok(terminal) => {
+                if let Some(note) = &missing_cwd_note {
+                    terminal.inject_note(note, palette::NOTE_ACCENT_RGB);
+                }
                 self.tabs.insert(
                     tab_id,
                     TabRuntime {
@@ -851,8 +947,9 @@ impl WindowState {
     /// [`App::window_event`], depois que qualquer clique/atalho já
     /// ativou a aba no `Workspace`. Sem-op na maioria absoluta das
     /// chamadas (aba ativa já `Running`, ou nenhuma aba ativa) -- só faz
-    /// algo quando encontra `NotStarted`, o que nesta etapa só acontece
-    /// à mão (não há restauração ainda, F5 etapa 4).
+    /// algo quando encontra `NotStarted`, o que a restauração de sessão
+    /// (F5 etapa 4, `lazy_restore = true`) agora produz de verdade em toda
+    /// aba que não é a ativa de cada janela.
     ///
     /// Roda **antes** de qualquer tecla chegar ao terminal porque é
     /// chamado no mesmo evento que ativou a aba, antes do próximo evento
@@ -868,6 +965,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        startup_directory: &Option<PathBuf>,
     ) {
         let Some(id) = self.workspace.active_tab() else {
             return;
@@ -879,7 +977,17 @@ impl WindowState {
             return;
         }
         let cwd = tab.cwd().cloned();
-        self.spawn_tab_runtime(id, cwd, cell_metrics, proxy, now, style, term_params, shell);
+        self.spawn_tab_runtime(
+            id,
+            cwd,
+            cell_metrics,
+            proxy,
+            now,
+            style,
+            term_params,
+            shell,
+            startup_directory,
+        );
         // Formaliza a transição no modelo só depois do spawn de verdade --
         // se `spawn_tab_runtime` desfez a aba (erro), `tab_mut` abaixo
         // devolve `None` e não há nada a marcar.
@@ -976,6 +1084,7 @@ impl WindowState {
             style,
             term_params,
             shell,
+            startup_directory,
         );
     }
 
@@ -2052,6 +2161,7 @@ impl WindowState {
             style,
             term_params,
             shell,
+            startup_directory,
         );
     }
 
@@ -2080,6 +2190,7 @@ impl WindowState {
             style,
             term_params,
             shell,
+            startup_directory,
         );
     }
 
@@ -2360,6 +2471,13 @@ struct App {
     /// `tick_all`. `enabled = false` (RF-3.6) nunca marca isto sujo --
     /// ver `Self::session_persistence_enabled`.
     session: SessionScheduler,
+    /// Resultado de `porecatu_session::load()` (RF-3.7, F5 etapa 4),
+    /// carregado uma vez em `App::new` e consumido em `App::resumed` --
+    /// não pode ser lido antes, porque `resumed` é o primeiro ponto em que
+    /// há `ActiveEventLoop`/janela pra restaurar ou pra mostrar um aviso
+    /// de recuperação (ADR-0036 §5). `None` só depois de consumido, ou se
+    /// `[session] enabled = false` (aí nem chega a carregar).
+    pending_session: Option<porecatu_session::LoadOutcome>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -2518,6 +2636,12 @@ impl App {
             });
         }
 
+        // RF-3.7 (ADR-0036 §5): carregado aqui porque `enabled` já está à
+        // mão, mas só **consumido** em `resumed` -- não há `ActiveEventLoop`
+        // nem janela ainda para restaurar nela ou mostrar o aviso de
+        // arquivo corrompido/schema mais novo (RF-3.14/RF-3.16).
+        let pending_session = config.session.enabled.then(porecatu_session::load);
+
         Self {
             gpu: None,
             proxy,
@@ -2537,6 +2661,7 @@ impl App {
             keymap,
             windows: HashMap::new(),
             session: SessionScheduler::default(),
+            pending_session,
         }
     }
 
@@ -2555,27 +2680,7 @@ impl App {
     /// roadmap descreve.
     fn open_window(&mut self, event_loop: &ActiveEventLoop, origin: Option<WindowId>) {
         let origin_state = origin.and_then(|id| self.windows.get(&id));
-        let mut attributes = Window::default_attributes()
-            .with_title("Porecatu")
-            .with_window_icon(Some(app_icon::load()))
-            .with_decorations(false);
-        // macOS: decorations volta a `true` -- o semáforo nativo
-        // (traffic lights) é o controle de janela do ADR-0027 lá, não
-        // botões nossos (ver `chrome::paint`/`tab_bar::left_inset`).
-        // `with_titlebar_transparent`/`with_title_hidden`/
-        // `with_fullsize_content_view` estendem nosso conteúdo por baixo
-        // da titlebar nativa (que fica invisível, exceto o semáforo) --
-        // é o mesmo truque de app nativo "sem titlebar visível, com
-        // semáforo", não decorations=false.
-        #[cfg(target_os = "macos")]
-        {
-            use winit::platform::macos::WindowAttributesExtMacOS;
-            attributes = attributes
-                .with_decorations(true)
-                .with_titlebar_transparent(true)
-                .with_title_hidden(true)
-                .with_fullsize_content_view(true);
-        }
+        let mut attributes = base_window_attributes();
         if let Some(origin_window) = origin_state.map(|s| &s.window)
             && let Ok(origin_position) = origin_window.outer_position()
         {
@@ -2594,7 +2699,134 @@ impl App {
             }
             attributes = attributes.with_inner_size(size).with_position(position);
         }
+        // ADR-0015: "a janela nova abre com uma aba no cwd da aba ativa no
+        // momento da criação" -- da janela de ORIGEM, já que a nova ainda
+        // não tem nenhuma aba. Resolvido **antes** de criar a janela: o
+        // empréstimo de `origin_state` (que aponta para dentro de
+        // `self.windows`) precisa terminar antes do empréstimo mutável de
+        // `self` que `create_window_with_attributes` toma abaixo.
+        let cwd = origin_state
+            .and_then(|s| s.resolve_new_tab_cwd(&self.startup_directory))
+            .or_else(|| self.startup_directory.clone());
 
+        let Some(mut state) = self.create_window_with_attributes(event_loop, attributes) else {
+            return;
+        };
+
+        let window_id = state.window.id();
+        state.open_tab(
+            self.cell_metrics,
+            &self.proxy,
+            cwd,
+            Instant::now(),
+            NewTabTarget::ActiveGroup,
+            &self.style,
+            &self.term_params,
+            &self.config.shell,
+            &self.startup_directory,
+        );
+        self.windows.insert(window_id, state);
+    }
+
+    /// RF-3.7/RF-3.17 (metade de restauração, F5 etapa 4): recria uma
+    /// janela a partir de um `WindowV1` gravado -- geometria e monitor
+    /// (RF-3.11) quando `restore_window_geometry` estiver ligado, grupos e
+    /// abas via [`porecatu_session::convert::workspace_from_window`]
+    /// (RF-3.8, restauração preguiçosa), e o shell só da(s) aba(s) que
+    /// precisam subir no start (a ativa de cada janela, ou todas se
+    /// `lazy_restore = false`) -- as demais ficam `NotStarted`, subindo ao
+    /// primeiro foco pelo mesmo `Self::ensure_active_tab_started` de
+    /// sempre.
+    fn open_window_from_session(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_v1: &porecatu_session::WindowV1,
+    ) {
+        let mut attributes = base_window_attributes();
+        if self.config.session.restore_window_geometry {
+            let monitors: Vec<session_writer::MonitorInfo> = event_loop
+                .available_monitors()
+                .map(|m| session_writer::monitor_info(&m))
+                .collect();
+            let primary = event_loop
+                .primary_monitor()
+                .map(|m| session_writer::monitor_info(&m));
+            let resolved = session_writer::resolve_restored_geometry(
+                &window_v1.geometry,
+                window_v1.monitor.as_ref(),
+                &monitors,
+                primary.as_ref(),
+            );
+            // `winit` recusa tamanho zero -- geometria degenerada (arquivo
+            // editado à mão) cai no mínimo de 1px em vez de falhar a
+            // criação da janela inteira.
+            attributes = attributes
+                .with_inner_size(winit::dpi::PhysicalSize::new(
+                    resolved.size.0.max(1),
+                    resolved.size.1.max(1),
+                ))
+                .with_position(winit::dpi::PhysicalPosition::new(
+                    resolved.position.0,
+                    resolved.position.1,
+                ))
+                .with_maximized(resolved.maximized);
+        }
+
+        let Some(mut state) = self.create_window_with_attributes(event_loop, attributes) else {
+            return;
+        };
+        let window_id = state.window.id();
+
+        let lazy_restore = self.config.session.lazy_restore;
+        state.workspace = porecatu_session::convert::workspace_from_window(
+            &window_v1.groups,
+            &window_v1.tabs,
+            window_v1.active_tab,
+            lazy_restore,
+        );
+
+        // RF-3.8: só a aba ativa sobe agora; com `lazy_restore = false`,
+        // `workspace_from_window` já não produziu nenhuma `NotStarted`, e
+        // todas precisam de `TabRuntime` desde já.
+        let to_start: Vec<TabId> = if lazy_restore {
+            state.workspace.active_tab().into_iter().collect()
+        } else {
+            state.workspace.visual_order().collect()
+        };
+        let now = Instant::now();
+        for tab_id in to_start {
+            let cwd = state.workspace.tab(tab_id).and_then(|t| t.cwd().cloned());
+            state.spawn_tab_runtime(
+                tab_id,
+                cwd,
+                self.cell_metrics,
+                &self.proxy,
+                now,
+                &self.style,
+                &self.term_params,
+                &self.config.shell,
+                &self.startup_directory,
+            );
+            if let Some(tab) = state.workspace.tab_mut(tab_id) {
+                tab.start();
+            }
+        }
+        state.sync_window_title();
+        self.windows.insert(window_id, state);
+    }
+
+    /// Núcleo comum de [`Self::open_window`]/[`Self::open_window_from_session`]:
+    /// cria a janela do `winit`, a surface `wgpu` (a primeira também cria
+    /// o `GpuContext` do processo) e mede a célula -- tudo que não depende
+    /// de qual aba/workspace a janela vai receber. `None` só na falha rara
+    /// de criar a surface (GPU incompatível numa segunda tela, ADR-0018);
+    /// a primeira janela do processo continua um `.expect` (sem ela não há
+    /// app, igual a antes desta etapa).
+    fn create_window_with_attributes(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        attributes: WindowAttributes,
+    ) -> Option<WindowState> {
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -2614,7 +2846,7 @@ impl App {
                     // o canal disponível neste caso extremo (GPU
                     // incompatível numa segunda tela, ADR-0018).
                     eprintln!("porecatu: falha ao criar surface da janela nova: {err}");
-                    return;
+                    return None;
                 }
             }
         } else {
@@ -2645,29 +2877,11 @@ impl App {
             self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
         }
 
-        // ADR-0015: "a janela nova abre com uma aba no cwd da aba ativa no
-        // momento da criação" -- da janela de ORIGEM, já que a nova ainda
-        // não tem nenhuma aba.
-        let cwd = origin_state
-            .and_then(|s| s.resolve_new_tab_cwd(&self.startup_directory))
-            .or_else(|| self.startup_directory.clone());
-
-        let window_id = window.id();
         let mut state = WindowState::new(window, window_surface, scale);
         state
             .animations
             .set_enabled(self.config.appearance.window.animations);
-        state.open_tab(
-            self.cell_metrics,
-            &self.proxy,
-            cwd,
-            Instant::now(),
-            NewTabTarget::ActiveGroup,
-            &self.style,
-            &self.term_params,
-            &self.config.shell,
-        );
-        self.windows.insert(window_id, state);
+        Some(state)
     }
 
     /// Fecha uma janela sem perguntar: sinaliza todas as abas primeiro,
@@ -3184,11 +3398,38 @@ impl ApplicationHandler<Wakeup> for App {
         }
     }
 
+    /// RF-3.7/RF-3.17 (F5 etapa 4): sessão gravada com ao menos uma janela
+    /// restaura o conjunto inteiro; sem ela (arquivo ausente, `enabled =
+    /// false`, ou `windows` vazio) cai no comportamento de sempre -- uma
+    /// janela nova com uma aba no home. Os avisos de recuperação do
+    /// ADR-0036 §5 (RF-3.14/RF-3.16) só têm onde aparecer depois que
+    /// alguma janela existe -- por isso entram **depois** do bloco acima,
+    /// na primeira janela que sobrou (as duas coisas nunca coincidem de
+    /// verdade: `notices` não vem vazio junto com uma restauração bem
+    /// sucedida, ver `porecatu_session::load_from`).
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.windows.is_empty() {
             return;
         }
-        self.open_window(event_loop, None);
+        let outcome = self.pending_session.take().unwrap_or_default();
+        match outcome.session {
+            Some(session) if !session.windows.is_empty() => {
+                for window_v1 in &session.windows {
+                    self.open_window_from_session(event_loop, window_v1);
+                }
+            }
+            _ => self.open_window(event_loop, None),
+        }
+        if !outcome.notices.is_empty()
+            && let Some(state) = self.windows.values_mut().next()
+        {
+            let now = Instant::now();
+            for notice in &outcome.notices {
+                let (title, body) = session_notice_text(notice);
+                state.warnings.push(Severity::Error, title, body, now);
+            }
+            state.window.request_redraw();
+        }
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
@@ -3407,6 +3648,7 @@ impl ApplicationHandler<Wakeup> for App {
                 &self.style,
                 &self.term_params,
                 &self.config.shell,
+                &self.startup_directory,
             );
         }
         self.schedule_next_wake(event_loop);
