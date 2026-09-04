@@ -9,9 +9,11 @@ use bitflags::bitflags;
 use crate::color::TermColor;
 
 bitflags! {
-    /// Atributos de célula. Não inclui tudo que o motor rastreia (hyperlink,
-    /// cor de sublinhado) -- só o que a especificação visual e o roadmap de
-    /// F1 pedem; o resto entra quando tiver consumidor.
+    /// Atributos de célula. Não inclui tudo que o motor rastreia (cor de
+    /// sublinhado) -- só o que a especificação visual e o roadmap de F1
+    /// pedem; o resto entra quando tiver consumidor. Hyperlink saiu desta
+    /// lista na F6 (ADR-0042): tem consumidor agora, mas viaja como span ao
+    /// lado do snapshot, não como bit aqui -- ver [`HyperlinkSpan`].
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub struct CellFlags: u16 {
         const BOLD        = 1 << 0;
@@ -132,6 +134,27 @@ pub struct OccurrenceSpan {
     pub active: bool,
 }
 
+/// Trecho contíguo (numa única linha da vista) marcado por OSC 8
+/// (ADR-0042 §1) -- um link pode virar vários spans, por quebra de linha ou
+/// porque o programa reemitiu a sequência. `id_start`/`id_end` e
+/// `uri_start`/`uri_end` são pares de offset na arena
+/// [`GridSnapshot::hyperlinks`]: dois spans com o mesmo **id** (mesmo
+/// conteúdo em `id_start..id_end`) são o mesmo link partido -- é o que faz
+/// passar o cursor sobre um trecho sublinhar todos os trechos do mesmo id
+/// na vista (RF-11.11). `porecatu-term` já resolve isto por completo (ao
+/// contrário de [`OccurrenceSpan`]): o motor entrega `Cell::hyperlink()`
+/// direto pelo `Handler`, sem precisar de um segundo parser como o OSC 7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HyperlinkSpan {
+    pub row: usize,
+    pub start_col: usize,
+    pub end_col: usize,
+    pub id_start: u32,
+    pub id_end: u32,
+    pub uri_start: u32,
+    pub uri_end: u32,
+}
+
 /// Snapshot de grade de um frame -- tipo próprio de `porecatu-term`, seção
 /// 4.1 da arquitetura. Reusado entre frames: [`GridSnapshot::default`] uma
 /// vez, depois só `TermEngine::snapshot_into` sobre a mesma instância, sem
@@ -153,6 +176,15 @@ pub struct GridSnapshot {
     /// realocar, ADR-0007); é `porecatu-ui` quem o preenche a partir do
     /// resultado de `TermEngine::search` e da cor resolvida.
     pub occurrences: Vec<OccurrenceSpan>,
+    /// Arena de id+uri dos hyperlinks do frame (ADR-0042 §1), reusada como
+    /// `clusters`. Concatena id e uri de cada [`HyperlinkSpan`]; nenhum dos
+    /// dois tem tamanho fixo, e a maioria dos frames não tem link nenhum.
+    pub hyperlinks: String,
+    /// Spans de hyperlink já cortados pela vista -- `TermEngine::
+    /// snapshot_into` preenche isto sozinho (diferente de `occurrences`),
+    /// porque o motor já tem `Cell::hyperlink()` por célula durante a
+    /// mesma passada que monta `cells`.
+    pub hyperlink_spans: Vec<HyperlinkSpan>,
     pub modes: TermModes,
 }
 

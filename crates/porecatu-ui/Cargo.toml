@@ -13,6 +13,13 @@ workspace = true
 arboard = "3"
 dirs = "5"
 notify = "8.2.0"
+# Abre/revela hyperlinks OSC 8 (ADR-0042 §6): `unsafe` da chamada de
+# plataforma (ShellExecuteW/xdg-open/open) fica dentro do crate, como
+# arboard/portable-pty/png/win32job já fazem. MIT OR Apache-2.0, compatível
+# com GPLv3. `reveal` é a operação que decide `file` -- sem ela, `file`
+# cairia no handler por extensão como fallback, que é exatamente o que o
+# ADR proíbe.
+opener = { version = "0.8", features = ["reveal"] }
 png = "0.18"
 porecatu-config = { path = "../porecatu-config" }
 porecatu-core = { path = "../porecatu-core" }

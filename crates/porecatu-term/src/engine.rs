@@ -8,7 +8,7 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::selection::Selection as AlacSelection;
-use alacritty_terminal::term::cell::Flags as AlacFlags;
+use alacritty_terminal::term::cell::{Flags as AlacFlags, Hyperlink as AlacHyperlink};
 use alacritty_terminal::term::{
     ClipboardType, Config as AlacConfig, Osc52, point_to_viewport, viewport_to_point,
 };
@@ -24,8 +24,8 @@ use crate::scroll::TermScroll;
 use crate::search::{InvalidPattern, SearchJob, SearchMode, SearchStep};
 use crate::selection::{SelectionKind, SelectionSide};
 use crate::snapshot::{
-    Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, MouseReporting, SelectionSpan,
-    TermModes,
+    Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, HyperlinkSpan, MouseReporting,
+    SelectionSpan, TermModes,
 };
 
 /// Dimensões do terminal em células. Tipo próprio -- `Dimensions` do
@@ -329,11 +329,43 @@ impl TermEngine {
         // -- sem realocar aqui evita que um frame sem busca herde as
         // ocorrências do anterior.
         out.occurrences.clear();
+        out.hyperlinks.clear();
+        out.hyperlink_spans.clear();
+
+        // Span de hyperlink em aberto (ADR-0042 §1): nunca atravessa
+        // quebra de linha -- por isso é fechado à força a cada `col == 0`,
+        // mesmo que o link continue na célula seguinte (é justamente o
+        // caso que o `id` existe para amarrar de volta).
+        let mut open_link: Option<(usize, usize, AlacHyperlink)> = None;
 
         for (index, indexed) in content.display_iter.enumerate() {
+            let row = index / cols;
+            let col = index % cols;
+
+            if col == 0
+                && let Some((link_row, link_start, link)) = open_link.take()
+            {
+                push_hyperlink_span(out, link_row, link_start, cols.saturating_sub(1), &link);
+            }
+
+            let link = indexed.cell.hyperlink();
+            let continues =
+                matches!((&open_link, &link), (Some((_, _, cur)), Some(new)) if cur == new);
+            if !continues {
+                if let Some((link_row, link_start, cur)) = open_link.take() {
+                    push_hyperlink_span(out, link_row, link_start, col.saturating_sub(1), &cur);
+                }
+                if let Some(new) = link {
+                    open_link = Some((row, col, new));
+                }
+            }
+
             if let Some(slot) = out.cells.get_mut(index) {
                 *slot = convert_cell(indexed.cell, &mut out.clusters);
             }
+        }
+        if let Some((link_row, link_start, link)) = open_link.take() {
+            push_hyperlink_span(out, link_row, link_start, cols.saturating_sub(1), &link);
         }
 
         let shape = convert_cursor_shape(content.cursor.shape);
@@ -349,6 +381,32 @@ impl TermEngine {
             .map(|range| convert_selection(range, display_offset, rows, cols));
         out.modes = convert_modes(content.mode);
     }
+}
+
+/// Fecha um span de hyperlink em `row`, de `start_col` a `end_col`
+/// (inclusive), gravando id e uri na arena reusada (ADR-0042 §1).
+fn push_hyperlink_span(
+    out: &mut GridSnapshot,
+    row: usize,
+    start_col: usize,
+    end_col: usize,
+    link: &AlacHyperlink,
+) {
+    let id_start = out.hyperlinks.len() as u32;
+    out.hyperlinks.push_str(link.id());
+    let id_end = out.hyperlinks.len() as u32;
+    let uri_start = out.hyperlinks.len() as u32;
+    out.hyperlinks.push_str(link.uri());
+    let uri_end = out.hyperlinks.len() as u32;
+    out.hyperlink_spans.push(HyperlinkSpan {
+        row,
+        start_col,
+        end_col,
+        id_start,
+        id_end,
+        uri_start,
+        uri_end,
+    });
 }
 
 fn convert_cell(cell: &alacritty_terminal::term::cell::Cell, clusters: &mut String) -> Cell {

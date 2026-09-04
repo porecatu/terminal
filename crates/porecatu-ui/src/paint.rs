@@ -23,7 +23,8 @@
 
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun};
 use porecatu_term::{
-    Cell, CellFlags, CellText, CursorShape, GridSnapshot, OccurrenceSpan, SelectionSpan,
+    Cell, CellFlags, CellText, CursorShape, GridSnapshot, HyperlinkSpan, OccurrenceSpan,
+    SelectionSpan,
 };
 
 use crate::chrome::push_shadow;
@@ -126,6 +127,7 @@ pub fn build_primitives(
     term_pal: &ResolvedTermPalette,
     cursor: CursorAppearance,
     measurer: &mut TextMeasurer,
+    hyperlink_hover: &[HyperlinkSpan],
 ) -> Vec<Primitive> {
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
@@ -170,6 +172,18 @@ pub fn build_primitives(
             font_size_px,
             term_pal,
             measurer,
+            &mut primitives,
+        );
+        paint_row_underlines(
+            snapshot,
+            row,
+            cols,
+            x_offset,
+            row_y,
+            metrics,
+            term_pal,
+            cursor.width,
+            hyperlink_hover,
             &mut primitives,
         );
     }
@@ -482,6 +496,79 @@ fn occurrence_at(occurrences: &[OccurrenceSpan], row: usize, col: usize) -> Opti
     })
 }
 
+/// Sublinhado real (SGR, flag `UNDERLINE` -- nunca desenhado antes desta
+/// etapa, achado ao implementar a affordance do ADR-0042 §3: a espec
+/// citava "o pintor já desenha", e não havia primitiva nenhuma para isso)
+/// e a affordance de hyperlink sob o modificador de abertura (mesma flag
+/// visual, RF-11.11) -- um traço por trecho contíguo de mesma cor, sem
+/// valor de aparência novo: a espessura reusa `[terminal.cursor] width`
+/// (`cursor.width`, já o traço do beam/underline-cursor em `paint_row_
+/// text`'s vizinho `cursor_primitive`), e a cor é a do próprio texto.
+#[allow(clippy::too_many_arguments)]
+fn paint_row_underlines(
+    snapshot: &GridSnapshot,
+    row: usize,
+    cols: usize,
+    x_offset: f32,
+    row_y: f32,
+    metrics: CellMetrics,
+    term_pal: &ResolvedTermPalette,
+    thickness: f32,
+    hyperlink_hover: &[HyperlinkSpan],
+    out: &mut Vec<Primitive>,
+) {
+    let underlined_at = |col: usize| -> bool {
+        snapshot.cells[row * cols + col]
+            .flags
+            .contains(CellFlags::UNDERLINE)
+            || hyperlink_hover_at(hyperlink_hover, row, col)
+    };
+
+    let mut col = 0;
+    while col < cols {
+        if !underlined_at(col) {
+            col += 1;
+            continue;
+        }
+        let start_col = col;
+        let cell = &snapshot.cells[row * cols + col];
+        let selected = is_selected(snapshot.selection, row, col);
+        let occurrence = occurrence_at(&snapshot.occurrences, row, col);
+        let (fg, _) = resolved_colors(cell, selected, occurrence, term_pal);
+
+        while col < cols && underlined_at(col) {
+            let cell = &snapshot.cells[row * cols + col];
+            let cell_selected = is_selected(snapshot.selection, row, col);
+            let cell_occurrence = occurrence_at(&snapshot.occurrences, row, col);
+            let (cell_fg, _) = resolved_colors(cell, cell_selected, cell_occurrence, term_pal);
+            if cell_fg != fg {
+                break;
+            }
+            col += 1;
+        }
+
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: x_offset + start_col as f32 * metrics.width,
+                y: row_y + metrics.height - thickness,
+                width: (col - start_col) as f32 * metrics.width,
+                height: thickness,
+            },
+            color: fg,
+        }));
+    }
+}
+
+/// Se `(row, col)` cai num dos spans de hover (ADR-0042 §3): já é o
+/// subconjunto com o mesmo id do span sob o cursor, resolvido por
+/// `lib.rs` -- aqui só testa contenção, uma linha por span (hyperlink
+/// nunca cruza quebra de linha, diferente de seleção/ocorrência).
+fn hyperlink_hover_at(spans: &[HyperlinkSpan], row: usize, col: usize) -> bool {
+    spans
+        .iter()
+        .any(|s| s.row == row && col >= s.start_col && col <= s.end_col)
+}
+
 fn resolved_colors(
     cell: &Cell,
     selected: bool,
@@ -594,6 +681,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         let runs = runs(&out);
         assert_eq!(runs.len(), 1, "esperava um run só, veio {runs:?}");
@@ -627,6 +715,7 @@ mod tests {
                 &test_term_pal(),
                 test_cursor(),
                 &mut m,
+                &[],
             );
             let runs = runs(&out);
             assert_eq!(
@@ -655,6 +744,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         assert_eq!(runs(&out).len(), 1);
     }
@@ -678,6 +768,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         let runs = runs(&out);
         assert_eq!(runs.len(), 3, "esperava tres runs, veio {runs:?}");
@@ -717,6 +808,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         let runs = runs(&out);
         assert_eq!(runs.len(), 1);
@@ -754,6 +846,7 @@ mod tests {
             &test_term_pal(),
             cursor,
             &mut m,
+            &[],
         )
     }
 
@@ -845,6 +938,7 @@ mod tests {
                 hollow: false,
             },
             &mut m,
+            &[],
         );
         let cursor_height = SIZE * CURSOR_HEIGHT_RATIO;
         match out.last() {

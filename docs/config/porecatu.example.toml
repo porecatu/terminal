@@ -780,11 +780,9 @@ osc52_max_bytes = 102400                                           # RF-10.10
 # Uma chave configurável de esquemas seria escalada de privilégio embalada
 # como conveniência. Ver ADR-0042. O que se pode desligar é o recurso todo.
 #
-# COMENTADA porque `porecatu-config` ainda não a conhece: este arquivo tem de
-# bater chave por chave com `Config::default()`, e a struct nasce na etapa 3
-# da F6, no mesmo PR que descomenta isto. Classe de recarga prevista: [A].
-# [terminal.hyperlinks]
-# enabled = true
+# Classe de recarga: [A].
+[terminal.hyperlinks]
+enabled = true
 
 
 # Classe de recarga: [A].

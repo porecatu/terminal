@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 use porecatu_core::{Action, GroupId, TabId, Workspace};
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
 use porecatu_term::{
-    DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig,
-    TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell, search_path,
+    DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
+    SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell,
+    search_path,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -27,6 +28,7 @@ mod context_menu;
 mod dialog;
 mod group_editor;
 mod group_menu;
+mod hyperlink;
 mod input;
 mod keymap;
 mod move_to_group;
@@ -887,6 +889,45 @@ impl WindowState {
         self.group_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
+    }
+
+    /// Informa o resultado de agir sobre um hyperlink (RF-11.12/RF-11.13)
+    /// pelo canal 1 de aviso (ADR-0014) -- abrir/revelar com sucesso é
+    /// silencioso (o handler do sistema ou o gerenciador de arquivos já é
+    /// a confirmação visível); as três outras saídas precisam de aviso,
+    /// porque senão o clique parece não ter feito nada. Recusa e falha ao
+    /// revelar copiam o URI (ADR-0042 §4, mesma vala do esquema recusado
+    /// -- "nunca cai no handler por extensão como fallback").
+    fn report_link_outcome(&mut self, outcome: hyperlink::LinkOutcome, uri: &str, now: Instant) {
+        match outcome {
+            hyperlink::LinkOutcome::Opened | hyperlink::LinkOutcome::Revealed => {}
+            hyperlink::LinkOutcome::OpenFailed => {
+                self.warnings.push(
+                    Severity::Warning,
+                    "Não foi possível abrir o link",
+                    uri.to_string(),
+                    now,
+                );
+            }
+            hyperlink::LinkOutcome::RevealFailed => {
+                clipboard::copy(uri);
+                self.warnings.push(
+                    Severity::Warning,
+                    "Não foi possível revelar o arquivo",
+                    format!("URI copiado: {uri}"),
+                    now,
+                );
+            }
+            hyperlink::LinkOutcome::Refused { normalized_scheme } => {
+                clipboard::copy(uri);
+                self.warnings.push(
+                    Severity::Info,
+                    "Esquema recusado",
+                    format!("`{normalized_scheme}` não abre -- URI copiado"),
+                    now,
+                );
+            }
+        }
     }
 
     /// `cwd` herdado por `tab.new`/`window.new` (ADR-0017 item 1, ADR-0015):
@@ -4999,8 +5040,48 @@ impl App {
             state.window.is_maximized(),
             self.config.appearance.window_controls.resize_border as f32,
         );
+        // Affordance de hyperlink (ADR-0042 §3, RF-11.11): "o cursor do
+        // mouse muda de forma" -- resize de borda vence (não há como as
+        // duas zonas colidirem na prática, mas a ordem segue a mesma
+        // prioridade do `match` abaixo). Qualquer popover que capturaria o
+        // clique também suprime isto -- mesma lista de `redraw`.
+        let overlay_open = state.dialog.is_some()
+            || state.context_menu.is_some()
+            || state.group_context_menu.is_some()
+            || state.group_editor.is_some()
+            || state.move_to_group.is_some()
+            || state.rename.editing_tab().is_some();
+        let link_modifier = if is_macos() {
+            state.modifiers.super_
+        } else {
+            state.modifiers.ctrl
+        };
+        let over_link = self.config.terminal.hyperlinks.enabled
+            && link_modifier
+            && resize_direction.is_none()
+            && !overlay_open
+            && !state.in_bar(position.y, &self.style)
+            && state.active_runtime().is_some_and(|rt| {
+                let content = paint::terminal_content_rect(
+                    &self.style,
+                    bar_height(&self.style),
+                    state.logical_width,
+                    state.logical_height,
+                );
+                let content_x = position.x - (content.x * state.scale) as f64;
+                let content_y = position.y - (content.y * state.scale) as f64;
+                let cell = input::cell_at(
+                    content_x.max(0.0),
+                    content_y.max(0.0),
+                    self.cell_metrics,
+                    rt.snapshot.rows.max(MIN_GRID),
+                    rt.snapshot.cols.max(MIN_GRID),
+                );
+                hyperlink::uri_at(&rt.snapshot, cell.row, cell.col).is_some()
+            });
         state.window.set_cursor(match resize_direction {
             Some(direction) => CursorIcon::from(direction),
+            None if over_link => CursorIcon::Pointer,
             None => CursorIcon::Default,
         });
 
@@ -5420,6 +5501,33 @@ impl App {
         if !state.in_bar(state.cursor_position.1, &self.style) {
             let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
             let active_id = state.workspace.active_tab();
+
+            // Affordance de hyperlink (ADR-0042 §2/§3): o mesmo modificador
+            // que já desenha o sublinhado. Vence a prioridade do programa
+            // como o `Shift` já vence pra seleção (ADR-0013) -- é a razão
+            // de existir de um modificador dedicado: um clique com ele é
+            // sempre "abrir o link", nunca reportado ao programa.
+            let link_modifier = if is_macos() {
+                state.modifiers.super_
+            } else {
+                state.modifiers.ctrl
+            };
+            if button == MouseButton::Left
+                && self.config.terminal.hyperlinks.enabled
+                && link_modifier
+                && let Some(id) = active_id
+                && let Some(uri) = state
+                    .tabs
+                    .get(&id)
+                    .and_then(|rt| hyperlink::uri_at(&rt.snapshot, cell.row, cell.col))
+                    .map(str::to_string)
+            {
+                let outcome = hyperlink::open_hyperlink(&uri);
+                state.report_link_outcome(outcome, &uri, Instant::now());
+                state.window.request_redraw();
+                return;
+            }
+
             if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
                 input::handle_mouse_button(
                     &runtime.terminal,
@@ -5615,6 +5723,30 @@ impl App {
         {
             state.search = None;
         }
+
+        // Affordance de hyperlink (ADR-0042 §3): calculada do zero a cada
+        // frame a partir do cursor e do modificador, mesmo padrão de
+        // `bar_hover`/`hover_window_button` acima -- nada guardado, só
+        // recomputado. `enabled = false` desliga a affordance junto com o
+        // resto do recurso (ADR-0042 §5). Qualquer popover que capturaria
+        // o clique também suprime o hover -- ele não seria acionável ali.
+        let link_modifier = if is_mac {
+            state.modifiers.super_
+        } else {
+            state.modifiers.ctrl
+        };
+        let hyperlink_overlay_blocks_hover = state.dialog.is_some()
+            || state.context_menu.is_some()
+            || state.group_context_menu.is_some()
+            || state.group_editor.is_some()
+            || state.move_to_group.is_some()
+            || state.rename.editing_tab().is_some();
+        let hovering_grid = !state.in_bar(state.cursor_position.1, style);
+        let hover_content =
+            paint::terminal_content_rect(style, h, state.logical_width, state.logical_height);
+        let hover_content_x = state.cursor_position.0 - (hover_content.x * state.scale) as f64;
+        let hover_content_y = state.cursor_position.1 - (hover_content.y * state.scale) as f64;
+
         if let Some(id) = state.workspace.active_tab()
             && let Some(runtime) = state.tabs.get_mut(&id)
         {
@@ -5658,6 +5790,22 @@ impl App {
                 width: cursor_config.width as f32,
                 hollow: !state.focused && cursor_config.unfocused_hollow,
             };
+            let hyperlink_hover: Vec<HyperlinkSpan> = if self.config.terminal.hyperlinks.enabled
+                && link_modifier
+                && hovering_grid
+                && !hyperlink_overlay_blocks_hover
+            {
+                let cell = input::cell_at(
+                    hover_content_x.max(0.0),
+                    hover_content_y.max(0.0),
+                    self.cell_metrics,
+                    runtime.snapshot.rows.max(MIN_GRID),
+                    runtime.snapshot.cols.max(MIN_GRID),
+                );
+                hyperlink::spans_sharing_id_at(&runtime.snapshot, cell.row, cell.col)
+            } else {
+                Vec::new()
+            };
             let primitives = paint::build_primitives(
                 &runtime.snapshot,
                 self.cell_metrics,
@@ -5667,6 +5815,7 @@ impl App {
                 &self.term_pal,
                 cursor,
                 gpu.text_measurer(),
+                &hyperlink_hover,
             );
             frame.set_layer(Layer::Grid, primitives);
 

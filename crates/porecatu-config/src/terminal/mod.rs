@@ -8,6 +8,7 @@ mod clipboard;
 mod colors;
 mod cursor;
 mod font;
+mod hyperlinks;
 mod scrollback;
 mod selection;
 
@@ -15,6 +16,7 @@ pub use clipboard::Clipboard;
 pub use colors::{AnsiPalette, Colors};
 pub use cursor::{Cursor, CursorShape};
 pub use font::{Font, ZoomScope};
+pub use hyperlinks::Hyperlinks;
 pub use scrollback::Scrollback;
 pub use selection::Selection;
 
@@ -36,6 +38,7 @@ pub struct Terminal {
     pub selection: Selection,
     pub clipboard: Clipboard,
     pub colors: Colors,
+    pub hyperlinks: Hyperlinks,
 }
 
 impl Default for Terminal {
@@ -49,6 +52,7 @@ impl Default for Terminal {
             selection: Selection::default(),
             clipboard: Clipboard::default(),
             colors: Colors::default(),
+            hyperlinks: Hyperlinks::default(),
         }
     }
 }
