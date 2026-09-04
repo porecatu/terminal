@@ -42,9 +42,9 @@ Visão de produto completa: [PRD-000](docs/prd/prd-000-visao-de-produto.md).
 | F3 | Grupos: modelo explícito, seleção múltipla, pílula e cápsula de cor, colapso, editor de grupo, arraste entre grupos, animação, navegação entre grupos | **fechada** |
 | F4 | Configuração: `porecatu-config`, hot reload, `[keybindings]`, temas, zoom, hover e sombra aprovados | **fechada** (dívida na etapa 6, ver abaixo) |
 | F5 | Sessão: `porecatu-session`, restauração, `argv` (`--config`, caminho posicional), fallback de `cwd`, convite à integração de shell, tema/zoom persistidos | **fechada** (dívida de verificação, ver abaixo) |
-| F6 | Polimento | não iniciada |
+| F6 | Polimento: busca no scrollback, hyperlinks OSC 8, menu do terminal, acessibilidade, empacotamento e release | **aberta** ([PRD-011](docs/prd/prd-011-polimento.md) e ADR-0041 a 0044 escritos); implementação não iniciada |
 
-As quatro primeiras fecharam com **dívida de verificação interativa** — ver o parágrafo do CI abaixo.
+As cinco fechadas fecharam com **dívida de verificação interativa** — ver o parágrafo do CI abaixo.
 
 O que já roda hoje:
 
@@ -97,10 +97,13 @@ O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alv
 | Persistência de sessão | JSON versionado em state dir, com DTO próprio por versão de schema | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md), [ADR-0036](docs/adr/0036-formato-do-arquivo-de-sessao.md) |
 | Diretório de trabalho da aba | OSC 7, com fallback por `sysinfo` no Linux e macOS; sem fallback no Windows | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md), [ADR-0038](docs/adr/0038-fallbacks-de-cwd.md) |
 | Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
+| Acessibilidade | `accesskit_winit` sobre o chrome (barra de abas e os cinco widgets); grade fora do v1 | [ADR-0001](docs/adr/0001-stack-de-gui.md), [ADR-0043](docs/adr/0043-arvore-de-acessibilidade.md) |
+| Abrir/revelar URI do sistema | crate wrapper (o `unsafe` fica nele; a regra do workspace segue sem exceção) | [ADR-0042](docs/adr/0042-hyperlinks-osc-8.md) |
 | Fontes | Iosevka Fixed (OFL-1.1, terminal e chrome) + Lucide (ISC), embutidas | [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md) |
 | Ícone do app | `png` (decodifica em runtime) + `winres` num `build.rs` (recurso PE no Windows) | — |
 | Caminhos do usuário | `dirs` (home como diretório inicial de aba; caminho de config) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
 | Referência visual | o binário; design canvas como histórico | [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) |
+| Empacotamento e release | instalador nativo por plataforma, primeira versão `1.0.0`, sem assinatura de código | [ADR-0044](docs/adr/0044-empacotamento-e-release.md) |
 | Toolchain | stable pinada, edition 2024 | [ADR-0011](docs/adr/0011-toolchain-rust.md) |
 | Licença | GPL-3.0-or-later | [ADR-0010](docs/adr/0010-licenciamento.md) |
 

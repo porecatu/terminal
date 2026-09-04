@@ -49,6 +49,8 @@ Duas regras seguem daí:
 
 O que **continua** legitimamente registrado como pendência, porque é comportamento e não desenho: os defaults de macOS (nenhum atalho de app responde no Mac), `animations = false` ([ADR-0022](0022-animacao-de-interface.md)), a roda do mouse no popover de grupo de destino ([ADR-0023](0023-editor-de-grupo.md) pediu lista rolável sem dizer por qual gesto) e a entrada de cor por hexadecimal do RF-2.10, que acrescenta um campo ao editor de grupo. Os quatro seguem previstos.
 
+> **Correção factual, 2026-09-04 (abertura da F6).** Três dos quatro foram entregues na **F4**, e este parágrafo continuou dizendo "seguem previstos" depois disso: os defaults de macOS na etapa 5 (pelo parser do [ADR-0029](0029-enum-de-acao-e-gramatica-de-tecla.md)), `animations = false` e a roda do mouse no popover na etapa 6. **Sobra um**, a cor por hexadecimal do RF-2.10, que entra na F6 como RF-11.29 do [PRD-011](../prd/prd-011-polimento.md). A decisão deste ADR não muda — é correção de erro factual, o que a convenção do [template](0000-template.md) autoriza.
+
 ## Alternativas consideradas
 
 ### Manter `indicator_style` com `pill` como único valor válido

@@ -28,7 +28,7 @@
 | [0022](0022-animacao-de-interface.md) | Animação de interface sob render damage-driven | Aceito |
 | [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Superseded by ADR-0035 (parcial) |
 | [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
-| [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Superseded by ADR-0026 |
+| [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Superseded by [ADR-0026](0026-chrome-unificado-em-iosevka-fixed.md) (**parcial**: só a família do chrome; Fixed no terminal e o recorte continuam valendo) |
 | [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito |
 | [0027](0027-controles-de-janela-e-resize-proprios.md) | Controles de janela e resize próprios (Windows/Linux) | Aceito |
 | [0028](0028-o-binario-como-referencia-visual.md) | O binário como referência visual | Aceito |
@@ -44,6 +44,10 @@
 | [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
 | [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito |
 | [0040](0040-superficie-de-linha-de-comando.md) | Superfície de linha de comando | Aceito |
+| [0041](0041-busca-no-scrollback.md) | Busca no scrollback: barra sobreposta no topo do quadro | Aceito |
+| [0042](0042-hyperlinks-osc-8.md) | Hyperlinks OSC 8: spans no snapshot, abertura sob modificador, esquemas fechados | Aceito |
+| [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito |
+| [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Aceito |
 
 ## Convenção
 

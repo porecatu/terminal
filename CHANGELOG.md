@@ -4,16 +4,118 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento seguirá [SemVer](https://semver.org/lang/pt-BR/) a partir do
 primeiro release.
 
-> **Nenhuma versão foi publicada ainda.** As fases F0 a F4 do
-> [roadmap](docs/roadmap.md) estão **fechadas**; a próxima é a F5
-> (sessão). `cargo run` abre uma janela com abas e grupos de terminal
-> funcionais, sem decoração nativa fora do macOS, `Ctrl+Shift+N` abre uma
-> segunda janela, e o arquivo de config (`porecatu.toml`) governa aparência,
-> teclas e temas com recarga a quente; artefatos de release só aparecem na F6.
+> **Nenhuma versão foi publicada ainda.** As fases F0 a F5 do
+> [roadmap](docs/roadmap.md) estão **fechadas**; a F6 (polimento) está
+> **aberta** — [PRD-011](docs/prd/prd-011-polimento.md) e ADR-0041 a 0044
+> escritos, implementação não iniciada. `cargo run` abre uma janela com abas e
+> grupos de terminal funcionais, sem decoração nativa fora do macOS,
+> `Ctrl+Shift+N` abre uma segunda janela, o arquivo de config (`porecatu.toml`)
+> governa aparência, teclas e temas com recarga a quente, e a sessão volta como
+> estava ao reabrir. Artefatos de release saem na F6, na versão `1.0.0`
+> ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)).
 
 ## [Não publicado]
 
 ### Adicionado
+
+#### Abertura da F6 — polimento
+
+- **[PRD-011](docs/prd/prd-011-polimento.md)**, o requisito que a fase não tinha:
+  a F6 era a única fase do v1 sem PRD, e as ações `search.*` do catálogo tinham
+  origem "roadmap" — contra a métrica do PRD-010 (*"ações do catálogo sem origem
+  em RF ou ADR: zero"*). RF-11.1 a RF-11.30, e ao fechar a lacuna o PRD trouxe
+  para dentro da fase **sete requisitos aprovados de fases anteriores que nunca
+  foram entregues** e não estavam em lista nenhuma (RF-11.24 a RF-11.30)
+- **[ADR-0041](docs/adr/0041-busca-no-scrollback.md)** — busca no scrollback:
+  barra **sobreposta** ao topo do quadro do terminal (empurrar mandaria `resize`
+  ao PTY), camada `Chrome` sem camada nova (responde a pergunta que o ADR-0018
+  deixou escrita), captura de teclado **parcial** — a primeira superfície não
+  modal do app —, ocorrências como lista de ranges em vez de bit em `CellFlags`,
+  e a anatomia da §2.21 sem um valor ou ícone novo
+- **[ADR-0042](docs/adr/0042-hyperlinks-osc-8.md)** — hyperlinks OSC 8: o URI
+  viaja como span ao lado do snapshot, então `Cell` não muda um byte e continua
+  `Copy`; `Ctrl`+clique (`Cmd` no macOS, mesma razão do ADR-0021); quatro
+  esquemas aceitos, com **`file` revelado no gerenciador de arquivos e nunca
+  entregue ao handler por extensão** — o URI vem da saída de um programa
+- **[ADR-0043](docs/adr/0043-arvore-de-acessibilidade.md)** — `accesskit` sobre o
+  chrome, com a árvore como **projeção das funções puras de layout**, construída
+  só com leitor de tela ativo e nunca dentro do caminho de render. Paga a dívida
+  registrada no ADR-0001 antes da F1, e corrige a conta: são **cinco** papéis de
+  widget, não três. A grade do terminal fica declaradamente fora do v1
+- **[ADR-0044](docs/adr/0044-empacotamento-e-release.md)** — instalador nativo
+  por plataforma, primeira release **`1.0.0`**, sem assinatura de código. Traz
+  `x86_64-apple-darwin` para a matriz, `--locked` para o `ci.yml` (última
+  pendência aberta da F0) e a **atribuição das fontes embutidas para dentro do
+  artefato** — hoje o `release.yml` copia só `LICENSE` e `README.md`, e publicar
+  assim descumpriria a OFL e a ISC
+
+#### Fechamento da F5 — persistência de sessão
+
+Implementa [PRD-003](docs/prd/prd-003-persistencia-de-sessao.md) (RF-3.1 a
+RF-3.17), em seis etapas, atrás dos cinco ADRs que abriram a fase
+([ADR-0036](docs/adr/0036-formato-do-arquivo-de-sessao.md) a
+[ADR-0040](docs/adr/0040-superficie-de-linha-de-comando.md)).
+
+- **`porecatu-session` nasce** (etapa 1): `path.rs` com `PORECATU_SESSION` →
+  diretório de **estado** da plataforma (deliberadamente diferente do da
+  config), `schema/v1.rs` com o DTO versionado do ADR-0036, conversão nos dois
+  sentidos, escrita `tmp` → `fsync` → `rename` e a tabela de recuperação
+  inteira. Sem consumidor ainda, como a etapa 1 da F4. O teste que justifica ter
+  escolhido DTO em vez de serde do domínio reprova quando um campo novo de
+  `porecatu-core` não foi classificado como gravado ou descartado
+- **Gravação fiada na UI** (etapa 2): debounce por `ControlFlow::WaitUntil`
+  (`SessionScheduler`), por **processo** e não por janela (RF-3.17: um arquivo
+  para todas), com a janela marcada suja por dois pontos únicos em
+  `WindowState`. A gravação síncrona no exit preenche o no-op documentado que a
+  F2 plantou. Inclui a correção do `file:///C:/...` em `parse_file_uri`
+  (`strip_windows_drive_leading_slash`) — é aqui que o `cwd` de OSC 7 passa a ir
+  para o disco, e caminho inválido gravado é pior que não gravado
+- **`TabState::NotStarted`** (etapa 3, [ADR-0037](docs/adr/0037-aba-nao-iniciada.md)):
+  o terceiro estado que a restauração preguiçosa exige, com o shell subindo no
+  primeiro foco por um ponto único (`App::ensure_active_tab_started`). Rótulo
+  esmaecido do RF-3.9 com alfa `.45`, nenhum valor novo. Dois bugs reais achados
+  no cruzamento com o ADR-0034: fechar aba `NotStarted` não fazia nada, e
+  `request_close_window` confirmaria por contagem numa janela sem nada a perder
+- **Restauração no start** (etapa 4): `App::resumed` carrega a sessão e abre uma
+  janela por `WindowV1`; aba ativa nasce `Running`, as outras `NotStarted` com
+  `lazy_restore`. Geometria e monitor por nome → posição → primário
+  (RF-3.11), `cwd` inexistente com nota no grid (RF-3.10), avisos de recuperação
+  na barra do ADR-0014. **RF-2.17 fecha ponta a ponta** de graça: ativar a aba
+  certa no fim da reconstrução expande o grupo que a contém
+- **Linha de comando e fallback de `cwd`** (etapa 5,
+  [ADR-0040](docs/adr/0040-superficie-de-linha-de-comando.md) e
+  [ADR-0038](docs/adr/0038-fallbacks-de-cwd.md)): `src/cli.rs` com parsing à mão
+  sobre `OsString` — `--config`, `--help`, `--version` e caminho posicional, que
+  cria sessão nova sem ler nem sobrescrever a gravada (RF-3.12). Fecha a dívida
+  do `--config` da etapa 1 da F4. E `ProcessGroup::cwd()` por `sysinfo` no Linux
+  e no macOS, sem dependência nova; Windows segue sem fallback, por erro de
+  compilação e não por decisão em runtime
+- **Convite à integração de shell, tema e zoom** (etapa 6,
+  [ADR-0039](docs/adr/0039-convite-a-integracao-de-shell.md)): a nota do RF-3.1
+  entra por `inject_note`, com dois gatilhos de detecção que convergem num ponto
+  único — fallback de `cwd` fora do Windows, temporal de 3s no Windows. Snippets
+  embutidos de [integracao-de-shell.md](docs/reference/integracao-de-shell.md)
+  por `include_str!`. A **dispensa definitiva é digitada no terminal** e
+  reconhecida por um segundo parser sobre o eco do PTY, mesmo padrão do
+  `Osc7Watcher`. Tema e zoom de sessão passam a restaurar, não só gravar
+
+### Dívida da F5
+
+- **Verificação interativa**, mesma limitação de F1 a F4 (ver a nota no topo do
+  [roadmap](docs/roadmap.md)). Sete dos oito cenários de aceite do PRD-003 rodam
+  sem gesto de teclado; os dois que pedem foco real são "o shell de uma aba
+  inicia quando ela é focada" — verificado por **clique sintético**, que
+  atravessa a proteção de foco do Windows — e dispensar o convite do RF-3.1, que
+  é digitação e continua bloqueado
+- **Métrica de 20 abas em menos de 1 s não foi medida.** A verificação da etapa 4
+  foi interrompida a pedido do usuário. A etapa 6 da F6 instrumenta e mede
+- **Aparência da nota do convite** (posição, cor `#5ed3bc`, snippet renderizado)
+  não confirmada por captura de tela, e a dispensa digitada não exercitada ao
+  vivo — as duas cobertas só por teste automatizado
+- **Fallback de `cwd` no macOS** verificado por compilação e CI, nunca em máquina
+  real; no Linux o teste de integração passou de verdade no CI
+- **Dívida Unix do ADR-0033** segue: sem `setsid`/`killpg`,
+  `ProcessGroup::process_count`/`kill_tree` continuam degradados fora do Windows
 
 #### Fechamento da F4 — configuração
 
@@ -399,6 +501,30 @@ configuração nem sessão: tudo isso vem das fases seguintes.
   [ADR-0011](docs/adr/0011-toolchain-rust.md) aplica à toolchain Rust
 
 ### Corrigido
+
+#### Documentação, na abertura da F6
+
+Dívida **já paga** que continuava registrada como pendente, mais dois erros de
+contagem. Achado ao auditar a documentação contra o código:
+
+- `adr/0032` dizia "os quatro seguem previstos" sobre defaults de macOS,
+  `animations = false`, roda do mouse no popover e cor hexadecimal — **três dos
+  quatro** foram entregues na F4. Mesma correção na `Dívida da F3` do roadmap e
+  em três caixas de estado do catálogo de ações
+- `app.quit` estava listada como "sem gesto": está implementada e ligada a
+  `Cmd+Q` no macOS desde a etapa 5 da F4; não ter default em Windows/Linux é
+  deliberado. O que **realmente** não responde é `scrollback.to_top`/`to_bottom`
+  — elas têm default embutido e entram no mapa resolvido, mas o `match` de
+  despacho as devolve como não tratadas (agora RF-11.30)
+- `parse_file_uri` estava descrito em tempo futuro ("corrigir na etapa 2")
+  depois de corrigido
+- `roadmap` dizia que o `accesskit` cobre "os três widgets"; são cinco
+- `porecatu.example.toml` marcava RF-1.20/RF-1.21 como "sem desenho aprovado
+  ainda", desenhados desde a §2.17 — e o `adr/0032` §2 é explícito de que
+  documento assim *"está errado por definição"*
+- A tabela de ADRs não marcava como **parcial** o supersede do ADR-0025
+- `CLAUDE.md` dizia "mais de vinte entradas" na §4.4 da especificação visual;
+  são 47
 
 - Colapsar um grupo poderia ter passado a ser no-op com a regra do RF-2.17: a
   escada de foco do RF-1.5 move o foco para fora ao colapsar, e se ela

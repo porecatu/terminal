@@ -36,13 +36,11 @@ Esta é a enumeração. É o insumo direto do parser de `[keybindings]` na F4 e 
 
 As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: o conjunto é fechado, e `tab.goto_12` precisa ser erro de config, não uma ação silenciosamente inerte. O índice é sobre a ordem visual da janela inteira, não por grupo (RF-1.12), e abas de grupo colapsado não contam (RF-2.15).
 
-> **Estado na F2.** Não há parser de `[keybindings]` até a F4, então nenhuma
-> ação de aba é *vinculável* ainda: os defaults de plataforma do
-> [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) e do
-> [ADR-0015](../adr/0015-multiplas-janelas.md) entram fixos no código, como
-> `Ctrl+Shift+C`/`V` na F1. O que a F2 traz de novo é o **enum de ação** e o
-> **modo de captura** (passo 1 da cadeia do ADR-0008), que o rename inline
-> exige e que a F1 não tinha.
+> **Estado.** Todas as ações de aba são vinculáveis desde o parser de
+> `[keybindings]` da F4, nas três plataformas — os defaults de
+> [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) e
+> [ADR-0015](../adr/0015-multiplas-janelas.md) nasceram fixos no código na F2 e
+> hoje saem do arquivo.
 >
 > `tab.close` confirma conforme o [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md)
 > e o [ADR-0034](../adr/0034-deteccao-de-processo-ativo-para-confirmacao.md),
@@ -72,8 +70,8 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > ([ADR-0020](../adr/0020-grupos-explicitos.md) §6). Run implícito conta como
 > destino: sem isso, "voltar para as abas soltas" não teria gesto.
 >
-> **Teclas ligadas** (defaults de Windows/Linux fixos no código, sem parser de
-> `[keybindings]` até a F4): `group.create` `Ctrl+Shift+G`, `group.dissolve`
+> **Teclas ligadas** (hoje resolvidas pelo parser de `[keybindings]` da F4;
+> nasceram fixas no código na F3): `group.create` `Ctrl+Shift+G`, `group.dissolve`
 > `Ctrl+Shift+U`, `group.rename` `Ctrl+Shift+E`, `group.toggle_collapse`
 > `Ctrl+Shift+K`, `group.next`/`group.prev` `Ctrl+Shift+PageDown`/`PageUp`. As
 > duas últimas exigem `Ctrl` **e** `Shift`, porque `Shift+PageUp`/`PageDown`
@@ -82,8 +80,8 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > vinculável.
 >
 > Os **defaults de macOS** da tabela do ADR-0008 (`Cmd+…`, incluindo
-> `Cmd+Alt+Right`/`Left` para navegar entre grupos) não existem em código: nada
-> disso responde no Mac até o parser da F4.
+> `Cmd+Alt+Right`/`Left` para navegar entre grupos) entraram com o parser, na
+> etapa 5 da F4, e respondem no Mac.
 >
 > `group.new_tab` ganhou um segundo caminho que nenhum documento previa: um
 > botão "+" ao final de cada grupo na barra, inclusive de um run implícito
@@ -181,12 +179,12 @@ ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 
 Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md)).
 
-> **Estado na F1.** Não há parser de `[keybindings]` até a F4, então nenhuma
-> dessas ações é *vinculável* ainda — o que existe é a mecânica e alguns
-> defaults fixos no código. `page_up`/`page_down` respondem a
-> `Shift+PageUp`/`PageDown`; `line_up`/`line_down` acontecem pela roda do
-> mouse; `to_top`/`to_bottom` têm a operação implementada em `porecatu-term`,
-> sem tecla que a dispare.
+> **Estado.** As quatro são vinculáveis desde o parser da F4, e `to_top`/`to_bottom`
+> têm default embutido (`Shift+Home`/`Shift+End`). Mesmo assim **não respondem**: o
+> `match` de despacho as devolve como não tratadas, e `page_up`/`page_down` e
+> `line_up`/`line_down` funcionam por outro caminho (teclas fixas em `input.rs` e
+> roda do mouse). A operação existe em `porecatu-term` desde a F1 — falta o
+> despacho. É o RF-11.30 do [PRD-011](../prd/prd-011-polimento.md), na etapa 2 da F6.
 
 ---
 
@@ -196,11 +194,11 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 |---|---|---|---|---|
 | `clipboard.copy` | Copia a seleção, com espaço à direita cortado e `WRAPLINE` remontado | [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md), ADR-0013 | F1 | |
 | `clipboard.paste` | Cola, envolvido em bracketed paste quando o modo está ativo | ADR-0008 | F1 | |
-| `selection.select_all` | Seleciona a tela visível e o scrollback | [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) — menu do terminal | F6 | |
+| `selection.select_all` | Seleciona a tela visível e o scrollback | [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) — menu do terminal; [PRD-011](../prd/prd-011-polimento.md) RF-11.16 | F6 | |
 
-> **Estado na F1.** `clipboard.copy` e `clipboard.paste` estão ligados a
-> `Ctrl+Shift+C`/`V` fixos no código — os únicos defaults de app que não
-> dependem de `porecatu-config`. O caminho completo já existe: seleção pelo
+> **Estado.** `clipboard.copy` e `clipboard.paste` seguem ligados a
+> `Ctrl+Shift+C`/`V` fixos em `input.rs`, fora do mapa de `[keybindings]` — os
+> únicos defaults de app que não dependem de `porecatu-config`, e é deliberado. O caminho completo já existe: seleção pelo
 > motor, `arboard` de um lado só e bracketed paste na cola.
 
 ---
@@ -214,9 +212,9 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 | `font.reset` | Volta ao tamanho da config | RF-5.9 | F4 | |
 | `theme.cycle` | Cicla entre os temas nomeados definidos na config | RF-5.21 | F4 | |
 | `config.reload` | Relê o arquivo de config imediatamente | [ADR-0003](../adr/0003-formato-de-configuracao.md) | F4 | |
-| `search.open` | Abre a busca no scrollback | [roadmap](../roadmap.md) F6 | F6 | |
-| `search.next` | Próxima ocorrência | roadmap F6 | F6 | |
-| `search.prev` | Ocorrência anterior | roadmap F6 | F6 | |
+| `search.open` | Abre a busca no scrollback | [PRD-011](../prd/prd-011-polimento.md) RF-11.1, [ADR-0041](../adr/0041-busca-no-scrollback.md) | F6 | |
+| `search.next` | Próxima ocorrência | PRD-011 RF-11.5 | F6 | |
+| `search.prev` | Ocorrência anterior | PRD-011 RF-11.5 | F6 | |
 | `app.quit` | Encerra o app, gravando a sessão de forma síncrona | RF-1.4, RF-3.4 | F2 | |
 | `none` | Remove o binding; a tecla vai para o terminal | ADR-0008 | F4 | |
 

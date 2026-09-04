@@ -656,7 +656,7 @@ Largura máxima **320**, a do aviso; rótulo mais longo trunca com reticências.
 
 Camada **popover** do [ADR-0018](../adr/0018-composicao-de-frame.md), compartilhada com o tooltip da seção 2.20.
 
-Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal (F6). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md).
+Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal ([PRD-011](../prd/prd-011-polimento.md) RF-11.14, F6: copiar, colar, selecionar tudo, buscar, mais os itens de link quando o clique cai sobre um hyperlink). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md).
 
 ### 2.17 Indicadores da aba `[v1]`
 
@@ -774,6 +774,38 @@ Ancorado no **alvo**, não no cursor: abaixo dele, alinhado à borda esquerda, a
 
 Não recebe foco de teclado, **não participa do hit-testing** — o ponteiro atravessa — e não carrega ação. Diálogo aberto suprime tooltip.
 
+### 2.21 Barra de busca `[v1]`
+
+Sem representação no canvas — o único "campo de busca" desenhado lá é o da paleta de comandos, que é `[v2]` (§2.11). O sexto widget de chrome, decidido pelo [ADR-0041](../adr/0041-busca-no-scrollback.md), que também é o ADR que a §1/§2 exige desde o [ADR-0032](../adr/0032-interface-do-v1-fechada.md). **Nenhum valor novo:** tudo abaixo sai dos tokens da seção 1 e do editor de grupo (§2.10).
+
+Fica **dentro do quadro arredondado do terminal** (§2.7), encostada no topo, ocupando a largura interna dele. Altura **30** — a do `input_height` do editor —, fundo `#1a1e25` e borda inferior `1px #2e343e`, os do aviso e do popover. Os cantos superiores acompanham o raio do quadro; os inferiores são retos. **Sem sombra**: ela é encostada e opaca, não flutua sobre o terminal como os cinco widgets da lista do ADR-0032 §2.
+
+**Ela sobrepõe as primeiras linhas da grade, e não as empurra.** Empurrar mudaria o número de linhas da aba e mandaria `resize` ao PTY — um programa em execução veria a tela encolher ao abrir a busca. O que fica coberto é a saída mais antiga em vista, nunca a linha do prompt.
+
+Da esquerda para a direita, com o `gap: 8` da aba:
+
+1. **Campo de texto** — o **mesmo componente** do item 1 da §2.10 e da §2.10.1: fundo `#0f1216`, borda `1px #333a45` com foco `#5ed3bc`, raio 5, texto 13px `#e4e8ee`, `padding: 7px 9px`, foco automático. Cursor navegável e seleção pelo [ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md). Ocupa a largura restante.
+2. **Contador** — `3/17` em 11px `#6b737e`. Sem ocorrência, o mesmo lugar traz "nenhum resultado"; com padrão de expressão regular inválido, "padrão inválido" em `#ef8a8a`. Em tela alternativa, o contador vem acompanhado da razão do limite.
+3. **Alternador de expressão regular** — o toggle da §1.5: trilho 34×19 raio 10, `padding: 2`, ligado `#3f8f80` e desligado `#2a3038`; botão 15×15 circular `#f0f3f6`, `translateX(15px)` quando ligado. É a primeira vez que esse token desenha no v1 — ele já estava na tabela, sem consumidor fora do painel `[v2]`.
+4. **Três botões de ícone** — `‹`, `›` e `✕`, os `CHEVRON_LEFT`, `CHEVRON_RIGHT` e `X` de `porecatu_render::icon`, na em de ícone do chrome, tom de base `#e4e8ee`, com o `icon_button_padding_x` e o hover por brilho `1.18` dos demais botões da barra. **Não há lupa:** seria codepoint novo na face recortada, e o campo com foco automático já diz o que é.
+
+**Realce das ocorrências**, na grade e não na barra:
+
+| Estado | Fundo | Texto |
+|---|---|---|
+| Ocorrência | `#2e6b62` | `#eef2f4` |
+| Ocorrência ativa | `#5ed3bc` | `#12151a` |
+
+Os dois pares já existem: o primeiro é a seleção de texto do RF-5.14 (§1.5), o segundo é o acento com o mesmo tom escuro que o nome e o caret da pílula usam sobre cor cheia (§1.4, §2.4). Como a ocorrência usa a cor da seleção, **abrir a busca limpa a seleção de texto** — sem isso as duas seriam indistinguíveis.
+
+Rolar até a ocorrência ativa **reserva a altura da barra**: a ocorrência nunca para numa linha coberta.
+
+Camada **`Chrome`** do [ADR-0018](../adr/0018-composicao-de-frame.md) — acima da grade, abaixo de aviso, popover e modal, para que um menu de contexto aberto sobre ela desenhe por cima. Nenhuma camada nova.
+
+**Sem animação.** A lista de consumidores do relógio do [ADR-0022](../adr/0022-animacao-de-interface.md) é fechada em dois, e abrir busca é gesto que se quer imediato.
+
+`Esc` ou o `✕` fecham, limpam o realce e devolvem o teclado ao terminal. A captura de teclado é **parcial**: o campo consome o texto e as teclas que reivindica — `Enter`, `Shift+Enter`, `Esc` e as de edição do ADR-0035 —, e todo o resto continua chegando aos keybinds de aplicação. É o único modo de captura do app que não é modal, e a razão está no ADR-0041 §3.
+
 ---
 
 ## 3. Tabela de fases
@@ -812,8 +844,12 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Popover de grupo de destino | `[v1]` | PRD-002 RF-2.20; ADR-0023 — sem representação no canvas |
 | Reordenação animada ao formar grupo | `[v1]` | PRD-002 RF-2.5; [ADR-0022](../adr/0022-animacao-de-interface.md) — sem representação no canvas |
 | Controles de janela e resize sem decoração nativa | `[v1]` | [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) — sem PRD, sem representação no canvas |
-| Botão de configurações da zona fixa (inerte até a F4) | `[v1]` | PRD-004 — ver §2.2 |
+| Botão de configurações da zona fixa (inerte até a F6 lhe dar ação) | `[v1]` | PRD-004 — ver §2.2; [PRD-011](../prd/prd-011-polimento.md) RF-11.27 |
 | Aba restaurada sem shell iniciado (rótulo esmaecido; existe a partir da F5) | `[v1]` | PRD-003 RF-3.9; [ADR-0037](../adr/0037-aba-nao-iniciada.md) — sem representação no canvas |
+| Barra de busca (campo, contador, alternador de regex, navegação) | `[v1]` | [PRD-011](../prd/prd-011-polimento.md) RF-11.1 a RF-11.9; [ADR-0041](../adr/0041-busca-no-scrollback.md) — sem representação no canvas |
+| Realce de ocorrência da busca na grade | `[v1]` | PRD-011 RF-11.7; ADR-0041 — sem representação no canvas |
+| Affordance de hyperlink (sublinhado sob modificador) | `[v1]` | PRD-011 RF-11.11; [ADR-0042](../adr/0042-hyperlinks-osc-8.md) — sem representação no canvas |
+| Menu de contexto do terminal | `[v1]` | PRD-011 RF-11.14; ADR-0014 — mesma anatomia da §2.16 |
 | Ícone da janela e do executável | fora de fase | estava listado em F6 no roadmap; entregue antes, ver o roadmap |
 | **Painéis divididos** | `[v2]` | [PRD-006](../prd/prd-006-paineis-divididos.md) *(rascunho)* |
 | **Cabeçalho e botões do painel** | `[v2]` | PRD-006 *(rascunho)* |
@@ -881,6 +917,8 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 
 | O que o desenho pedia | O que vale, e por quê | Onde |
 |---|---|---|
+| Nada — o único "campo de busca" do canvas é o da paleta de comandos, `[v2]` (§2.11); a busca no scrollback nunca foi desenhada | **Barra sobreposta ao topo do quadro do terminal** (§2.21), na camada `Chrome`. Sobrepõe em vez de empurrar, porque empurrar mandaria `resize` ao PTY e um programa em execução veria a tela encolher. **Zero valor novo e zero ícone novo**: reusa o campo de texto do editor de grupo (§2.10, com a seleção do ADR-0035), o toggle que já estava na §1.5 sem consumidor no v1, os três ícones já recortados, e — no realce — a cor de seleção de texto e o acento. Segunda mudança de seção 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e passou pelo ADR que ele exige | F6, [ADR-0041](../adr/0041-busca-no-scrollback.md) |
+| Nada — hyperlink nunca teve representação, e o snapshot excluía o campo de propósito | **Sublinhado só sob o modificador de abertura**, na cor do próprio texto, pela flag `UNDERLINE` que o pintor já desenha. Sublinhado permanente foi recusado: marcaria de destaque qualquer coisa que um `curl` ecoasse, e o app não decide o que na saída do usuário merece atenção | F6, [ADR-0042](../adr/0042-hyperlinks-osc-8.md) |
 | Nada — o RF-3.9 (aba restaurada ainda sem shell) era o **último** item da lista da §4.2, sem desenho aprovado | **Rótulo com alfa `.45`**, sobre a cor de texto do estado de base (§2.5). Escolhido entre três alternativas levadas ao dono do produto; as recusadas foram um ponto vazado na família da §2.17 (acrescentaria um quarto significado ao mesmo slot, contra o "sem poluir a barra" do requisito) e a aba sem preenchimento de fundo (visível demais justo no caso comum do recurso, dez ou vinte abas restauradas). Nenhum elemento novo e **nenhum valor novo** — `.45` já era a borda do indicador agregado da §2.4. Primeira mudança de seção 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e passou pelo ADR que ele exige | F5, [ADR-0037](../adr/0037-aba-nao-iniciada.md) |
 | Design combina pílula **e** sublinhado; PRD-004 modelava enum exclusivo | `indicator_style` virou lista combinável, default `["pill", "underline"]` — e **a chave depois saiu por inteiro**: o indicador é a pílula mais a cápsula, forma única (linha do ADR-0032, abaixo) | ADR-0009, superado pelo [ADR-0032](../adr/0032-interface-do-v1-fechada.md) |
 | Design usa `Ctrl+T`, `Ctrl+G`, `Ctrl+,`, `Ctrl+1..6` | ADR-0008 vence: nada de `Ctrl+<letra>` sozinho. Chips de tecla do mockup são ilustrativos | ADR-0009 |

@@ -50,6 +50,8 @@ Anunciar `xterm-256color` é a escolha do Windows Terminal e do VS Code, pelo me
 
 Lista fechada. Sequência fora dela é consumida e descartada pelo parser, nunca desenhada como lixo na tela.
 
+> **Emenda, 2026-09-04.** A linha do OSC 8 dizia "não — F6". O [ADR-0042](0042-hyperlinks-osc-8.md) a virou na abertura da F6: a sequência passa a ser reconhecida, o URI viaja como span ao lado do snapshot, e **apenas quatro esquemas são aceitos** — `http`, `https`, `mailto` e `file`, este último revelado no gerenciador de arquivos e nunca entregue ao handler por extensão. A lista de sequências continua fechada; o que mudou foi o valor de uma linha dela.
+
 | Sequência | v1 | Origem da exigência |
 |---|---|---|
 | Bracketed paste (modo 2004) | sim | [ADR-0008](0008-teclas-e-roteamento-de-input.md) — obrigatório, não opcional |
@@ -62,7 +64,7 @@ Lista fechada. Sequência fora dela é consumida e descartada pelo parser, nunca
 | 256 cores e true color | sim | PRD-005 RF-5.17 |
 | Modo de cursor de aplicação (DECCKM), teclado numérico | sim | ADR-0008 |
 | Tela alternativa (1049) | sim | pré-requisito de `vim` e `htop`, critério de saída da F1 |
-| OSC 8 — hyperlinks | não — F6 | [roadmap](../roadmap.md) |
+| OSC 8 — hyperlinks | **sim, com esquemas fechados** — F6 | [ADR-0042](0042-hyperlinks-osc-8.md), [PRD-011](../prd/prd-011-polimento.md) RF-11.10 a RF-11.13 |
 | Sixel, kitty graphics | não | ADR-0002 |
 
 ### OSC 4 / 10 / 11: consulta e set
