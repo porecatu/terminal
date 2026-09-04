@@ -8,8 +8,12 @@ name: release
 # das três plataformas passam a ser construídos e anexados automaticamente,
 # sem editar este arquivo.
 #
-# Nenhuma release foi publicada ainda: o roadmap coloca artefatos na F6.
-# Ver docs/roadmap.md e CHANGELOG.md.
+# ADR-0044/ADR-0045 (F6 etapa 6): além do binário cru, cada plataforma ganha
+# um instalador nativo -- MSI (cargo-wix), .deb + AppImage (cargo-deb +
+# appimagetool), .app dentro de .dmg (script nativo, sem dependência nova).
+# Nenhum deles recompila o binário (critério 2 do ADR-0044 §2): todos
+# consomem o executável que o passo "Compilar" já produziu, via `--no-build`
+# (cargo-wix/cargo-deb) ou por só copiar arquivo (macOS).
 
 # Actions pinadas por SHA de commit, com a versão legível no comentário ao
 # lado. Tag major é ponteiro móvel: pode ser reapontada para outro commit, e
@@ -22,6 +26,13 @@ name: release
 # `toolchain:`, setado aqui para o mesmo valor do `channel` em
 # rust-toolchain.toml (ADR-0011) — sem isso, o rustup detectaria o arquivo na
 # primeira invocação de `cargo` e baixaria uma SEGUNDA toolchain no job.
+#
+# `cargo-wix` e `cargo-deb` são ferramentas de build (ADR-0044 §2: não
+# entram no binário distribuído), mas pinadas por versão exata mesmo assim,
+# mesma razão prática das actions -- reproduzir o mesmo artefato depende de
+# reproduzir a mesma ferramenta. `appimagetool` não é crate: baixado por URL
+# de uma tag real (`1.9.1`, não a tag móvel `continuous` do projeto) e
+# conferido por sha256 antes de rodar.
 
 on:
   push:
@@ -29,7 +40,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag a publicar (ex.: v0.1.0)'
+        description: 'Tag a publicar (ex.: v0.7.0)'
         required: true
 
 permissions:
@@ -70,6 +81,12 @@ jobs:
             alvo: x86_64-pc-windows-msvc
           - os: macos-latest
             alvo: aarch64-apple-darwin
+          # ADR-0044 (correção trazida junto): Mac Intel ficava de fora da
+          # matriz sem nenhuma decisão registrada. Cross-compilado no mesmo
+          # runner arm64 -- a Xcode toolchain que o `macos-latest` já traz
+          # cobre os dois alvos, sem precisar de um runner Intel à parte.
+          - os: macos-latest
+            alvo: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -92,11 +109,14 @@ jobs:
       - name: Compilar
         run: cargo build --release --locked --target ${{ matrix.alvo }}
 
-      # Checksum acompanha o binário: sem isso, quem baixa não tem como
-      # verificar o que recebeu.
-      - name: Empacotar
+      # RF-11.21: todo artefato carrega o binário, a licença do projeto, a
+      # atribuição das duas fontes embutidas e o `porecatu.example.toml`
+      # (ADR-0044 §4). O checksum sai num passo à parte, no fim do job,
+      # depois que os instaladores também tiverem entrado em `dist/`.
+      - name: Empacotar binário cru
         shell: bash
         run: |
+          set -e
           mkdir -p dist
           nome="porecatu-${{ github.ref_name }}-${{ matrix.alvo }}"
           if [ "${{ runner.os }}" = "Windows" ]; then
@@ -105,6 +125,175 @@ jobs:
             cp "target/${{ matrix.alvo }}/release/porecatu" "dist/$nome"
           fi
           cp LICENSE README.md dist/
+          cp assets/fonts/LICENSE-OFL-iosevka.txt assets/fonts/LICENSE-ISC-lucide.txt dist/
+          cp docs/config/porecatu.example.toml dist/
+
+      - name: Verificar atribuição das fontes (binário cru)
+        shell: bash
+        run: |
+          test -f dist/LICENSE-OFL-iosevka.txt || { echo "faltando LICENSE-OFL-iosevka.txt em dist/"; exit 1; }
+          test -f dist/LICENSE-ISC-lucide.txt || { echo "faltando LICENSE-ISC-lucide.txt em dist/"; exit 1; }
+
+      # Windows: instalador MSI. `--no-build` (critério 2 do ADR-0044 §2):
+      # não recompila, só empacota o que "Compilar" já produziu.
+      # `wix/main.wxs` (versionado, `cargo wix init` já rodado) declara os
+      # quatro componentes extras -- LICENSE e as duas atribuições e o
+      # exemplo de config -- ao lado do executável.
+      - name: Instalador MSI (cargo-wix)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -e
+          cargo install cargo-wix --version 0.3.9 --locked
+          cargo wix --no-build --target-bin-dir "target/${{ matrix.alvo }}/release" \
+            -p porecatu -o "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.msi"
+
+      # Instalação administrativa extrai a árvore inteira do MSI sem
+      # instalar de fato -- é como conferir o conteúdo sem `msitools`/
+      # `lessmsi`, ferramenta a mais nenhuma além do que o Windows já traz.
+      - name: Verificar atribuição das fontes (MSI)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.msi"
+          $out = "msi-extraido"
+          msiexec /a "$msi" /qn TARGETDIR="$PWD\$out"
+          $ofl = Get-ChildItem -Recurse -Filter "LICENSE-OFL-iosevka.txt" "$out" -ErrorAction SilentlyContinue
+          $isc = Get-ChildItem -Recurse -Filter "LICENSE-ISC-lucide.txt" "$out" -ErrorAction SilentlyContinue
+          if (-not $ofl -or -not $isc) {
+            Write-Error "MSI nao contem a atribuicao das duas fontes"
+            exit 1
+          }
+          Remove-Item -Recurse -Force "$out"
+
+      # Linux: .deb (via cargo-deb, --no-build/--target = mesmo critério 2)
+      # e AppImage (via appimagetool, montado à mão -- nenhum cargo
+      # subcommand cobre AppImage). As duas cobrem casos diferentes:
+      # `.deb` é o gerenciador de pacotes de quem usa Debian/Ubuntu;
+      # AppImage roda em qualquer distribuição sem instalar nada.
+      - name: Pacote .deb (cargo-deb)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          cargo install cargo-deb --version 3.8.0 --locked
+          cargo deb --no-build --target ${{ matrix.alvo }} \
+            -o "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.deb"
+
+      - name: Verificar atribuição das fontes (.deb)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          deb="dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.deb"
+          dpkg-deb -c "$deb" | grep -q "LICENSE-OFL-iosevka.txt" || { echo "faltando OFL no .deb"; exit 1; }
+          dpkg-deb -c "$deb" | grep -q "LICENSE-ISC-lucide.txt" || { echo "faltando ISC no .deb"; exit 1; }
+
+      - name: AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          appdir="appdir-porecatu"
+          mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
+            "$appdir/usr/share/icons/hicolor/512x512/apps" "$appdir/usr/share/doc/porecatu"
+          cp "target/${{ matrix.alvo }}/release/porecatu" "$appdir/usr/bin/porecatu"
+          cp packaging/linux/porecatu.desktop "$appdir/usr/share/applications/porecatu.desktop"
+          cp packaging/linux/porecatu.desktop "$appdir/porecatu.desktop"
+          cp assets/icon/porecatu.png "$appdir/usr/share/icons/hicolor/512x512/apps/porecatu.png"
+          cp assets/icon/porecatu.png "$appdir/porecatu.png"
+          cp LICENSE assets/fonts/LICENSE-OFL-iosevka.txt assets/fonts/LICENSE-ISC-lucide.txt \
+            docs/config/porecatu.example.toml "$appdir/usr/share/doc/porecatu/"
+          cat > "$appdir/AppRun" <<'APPRUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/porecatu" "$@"
+          APPRUN
+          chmod +x "$appdir/AppRun"
+
+          for f in LICENSE LICENSE-OFL-iosevka.txt LICENSE-ISC-lucide.txt porecatu.example.toml; do
+            test -f "$appdir/usr/share/doc/porecatu/$f" || { echo "faltando $f no AppDir"; exit 1; }
+          done
+
+          curl -fsSL -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c -
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract-and-run "$appdir" \
+            "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.AppImage"
+          rm -rf "$appdir" appimagetool squashfs-root
+
+      # macOS: .app dentro de .dmg, montado à mão -- sem `cargo-bundle`
+      # (recompilaria com flags próprias, violando o critério 2 do
+      # ADR-0044 §2; sem `--no-build` na versão corrente). `sips`/
+      # `iconutil`/`hdiutil` já vêm no runner, então nenhuma dependência
+      # nova entra, nem crate nem ferramenta externa.
+      - name: Bundle .app e .dmg (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          app="Porecatu.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "target/${{ matrix.alvo }}/release/porecatu" "$app/Contents/MacOS/porecatu"
+          chmod +x "$app/Contents/MacOS/porecatu"
+
+          iconset="porecatu.iconset"
+          mkdir -p "$iconset"
+          for size in 16 32 128 256 512; do
+            sips -z $size $size assets/icon/porecatu.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+            double=$((size * 2))
+            sips -z $double $double assets/icon/porecatu.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+          done
+          iconutil -c icns "$iconset" -o "$app/Contents/Resources/porecatu.icns"
+          rm -rf "$iconset"
+
+          version="${{ github.ref_name }}"
+          version="${version#v}"
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key><string>Porecatu</string>
+              <key>CFBundleDisplayName</key><string>Porecatu</string>
+              <key>CFBundleIdentifier</key><string>io.github.porecatu.terminal</string>
+              <key>CFBundleVersion</key><string>${version}</string>
+              <key>CFBundleShortVersionString</key><string>${version}</string>
+              <key>CFBundleExecutable</key><string>porecatu</string>
+              <key>CFBundleIconFile</key><string>porecatu.icns</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>LSMinimumSystemVersion</key><string>11.0</string>
+              <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          # RF-11.21: os quatro acompanhantes ficam ao lado do .app dentro
+          # do .dmg -- Contents/Resources não é lugar que um usuário de
+          # macOS abre, e o .dmg é o que ele de fato vê.
+          staging="staging-dmg"
+          mkdir -p "$staging"
+          mv "$app" "$staging/"
+          cp LICENSE assets/fonts/LICENSE-OFL-iosevka.txt assets/fonts/LICENSE-ISC-lucide.txt \
+            docs/config/porecatu.example.toml "$staging/"
+          ln -s /Applications "$staging/Applications"
+
+          for f in LICENSE LICENSE-OFL-iosevka.txt LICENSE-ISC-lucide.txt porecatu.example.toml; do
+            test -f "$staging/$f" || { echo "faltando $f no dmg"; exit 1; }
+          done
+
+          mkdir -p dist
+          nome="porecatu-${{ github.ref_name }}-${{ matrix.alvo }}"
+          hdiutil create -volname "Porecatu" -srcfolder "$staging" -ov -format UDZO "dist/$nome.dmg"
+          rm -rf "$staging"
+
+      # Checksum por cima de tudo que entrou em dist/ -- binário cru e
+      # todo instalador desta plataforma, cada um com sua própria linha.
+      - name: Checksums
+        shell: bash
+        run: |
+          nome="porecatu-${{ github.ref_name }}-${{ matrix.alvo }}"
           cd dist && sha256sum * > "$nome.sha256"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

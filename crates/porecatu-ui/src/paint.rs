@@ -22,10 +22,13 @@
 //! ASCII continua sendo um run só.
 
 use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun};
-use porecatu_term::{Cell, CellFlags, CellText, CursorShape, GridSnapshot, SelectionSpan};
+use porecatu_term::{
+    Cell, CellFlags, CellText, CursorShape, GridSnapshot, HyperlinkSpan, OccurrenceSpan,
+    SelectionSpan,
+};
 
 use crate::chrome::push_shadow;
-use crate::palette::{ResolvedTermPalette, TRANSPARENT};
+use crate::palette::{self, ResolvedTermPalette, TRANSPARENT};
 use crate::tab_bar::TabBarStyle;
 
 #[derive(Debug, Clone, Copy)]
@@ -124,6 +127,7 @@ pub fn build_primitives(
     term_pal: &ResolvedTermPalette,
     cursor: CursorAppearance,
     measurer: &mut TextMeasurer,
+    hyperlink_hover: &[HyperlinkSpan],
 ) -> Vec<Primitive> {
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
@@ -168,6 +172,18 @@ pub fn build_primitives(
             font_size_px,
             term_pal,
             measurer,
+            &mut primitives,
+        );
+        paint_row_underlines(
+            snapshot,
+            row,
+            cols,
+            x_offset,
+            row_y,
+            metrics,
+            term_pal,
+            cursor.width,
+            hyperlink_hover,
             &mut primitives,
         );
     }
@@ -252,7 +268,8 @@ fn paint_row_backgrounds(
     for col in 0..cols {
         let cell = &snapshot.cells[row * cols + col];
         let selected = is_selected(snapshot.selection, row, col);
-        let (_, bg) = resolved_colors(cell, selected, term_pal);
+        let occurrence = occurrence_at(&snapshot.occurrences, row, col);
+        let (_, bg) = resolved_colors(cell, selected, occurrence, term_pal);
         if bg != term_pal.background {
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
@@ -335,7 +352,8 @@ fn paint_row_text(
         }
 
         let selected = is_selected(snapshot.selection, row, col);
-        let (fg, _) = resolved_colors(cell, selected, term_pal);
+        let occurrence = occurrence_at(&snapshot.occurrences, row, col);
+        let (fg, _) = resolved_colors(cell, selected, occurrence, term_pal);
         let bold = cell.flags.contains(CellFlags::BOLD);
 
         // Caractere que não avança o que a grade reservou sai sozinho,
@@ -370,7 +388,8 @@ fn paint_row_text(
                 continue;
             }
             let cell_selected = is_selected(snapshot.selection, row, col);
-            let (cell_fg, _) = resolved_colors(cell, cell_selected, term_pal);
+            let cell_occurrence = occurrence_at(&snapshot.occurrences, row, col);
+            let (cell_fg, _) = resolved_colors(cell, cell_selected, cell_occurrence, term_pal);
             let cell_bold = cell.flags.contains(CellFlags::BOLD);
             if cell_fg != fg || cell_bold != bold {
                 break;
@@ -455,13 +474,118 @@ fn is_selected(selection: Option<SelectionSpan>, row: usize, col: usize) -> bool
     true // linha inteira entre a primeira e a última da seleção
 }
 
-fn resolved_colors(cell: &Cell, selected: bool, term_pal: &ResolvedTermPalette) -> (Color, Color) {
-    if selected {
-        // Seleção domina a cor da célula -- não combina com `INVERSE`
-        // nem com a cor original; é o mesmo comportamento da maioria dos
-        // terminais (destaque uniforme, independente do que estava sob
-        // ele).
+/// Se `(row, col)` cai numa ocorrência de busca (ADR-0041 §4/§5) --
+/// `Some(true)`/`Some(false)` conforme ela é a ativa ou não, `None` fora de
+/// qualquer ocorrência. Mesma lógica de `is_selected` (linha única vs.
+/// multi-linha), sem o caso `is_block` -- ocorrência nunca é retangular.
+fn occurrence_at(occurrences: &[OccurrenceSpan], row: usize, col: usize) -> Option<bool> {
+    occurrences.iter().find_map(|occ| {
+        if row < occ.start_row || row > occ.end_row {
+            return None;
+        }
+        let inside = if occ.start_row == occ.end_row {
+            col >= occ.start_col && col <= occ.end_col
+        } else if row == occ.start_row {
+            col >= occ.start_col
+        } else if row == occ.end_row {
+            col <= occ.end_col
+        } else {
+            true
+        };
+        inside.then_some(occ.active)
+    })
+}
+
+/// Sublinhado real (SGR, flag `UNDERLINE` -- nunca desenhado antes desta
+/// etapa, achado ao implementar a affordance do ADR-0042 §3: a espec
+/// citava "o pintor já desenha", e não havia primitiva nenhuma para isso)
+/// e a affordance de hyperlink sob o modificador de abertura (mesma flag
+/// visual, RF-11.11) -- um traço por trecho contíguo de mesma cor, sem
+/// valor de aparência novo: a espessura reusa `[terminal.cursor] width`
+/// (`cursor.width`, já o traço do beam/underline-cursor em `paint_row_
+/// text`'s vizinho `cursor_primitive`), e a cor é a do próprio texto.
+#[allow(clippy::too_many_arguments)]
+fn paint_row_underlines(
+    snapshot: &GridSnapshot,
+    row: usize,
+    cols: usize,
+    x_offset: f32,
+    row_y: f32,
+    metrics: CellMetrics,
+    term_pal: &ResolvedTermPalette,
+    thickness: f32,
+    hyperlink_hover: &[HyperlinkSpan],
+    out: &mut Vec<Primitive>,
+) {
+    let underlined_at = |col: usize| -> bool {
+        snapshot.cells[row * cols + col]
+            .flags
+            .contains(CellFlags::UNDERLINE)
+            || hyperlink_hover_at(hyperlink_hover, row, col)
+    };
+
+    let mut col = 0;
+    while col < cols {
+        if !underlined_at(col) {
+            col += 1;
+            continue;
+        }
+        let start_col = col;
+        let cell = &snapshot.cells[row * cols + col];
+        let selected = is_selected(snapshot.selection, row, col);
+        let occurrence = occurrence_at(&snapshot.occurrences, row, col);
+        let (fg, _) = resolved_colors(cell, selected, occurrence, term_pal);
+
+        while col < cols && underlined_at(col) {
+            let cell = &snapshot.cells[row * cols + col];
+            let cell_selected = is_selected(snapshot.selection, row, col);
+            let cell_occurrence = occurrence_at(&snapshot.occurrences, row, col);
+            let (cell_fg, _) = resolved_colors(cell, cell_selected, cell_occurrence, term_pal);
+            if cell_fg != fg {
+                break;
+            }
+            col += 1;
+        }
+
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: x_offset + start_col as f32 * metrics.width,
+                y: row_y + metrics.height - thickness,
+                width: (col - start_col) as f32 * metrics.width,
+                height: thickness,
+            },
+            color: fg,
+        }));
+    }
+}
+
+/// Se `(row, col)` cai num dos spans de hover (ADR-0042 §3): já é o
+/// subconjunto com o mesmo id do span sob o cursor, resolvido por
+/// `lib.rs` -- aqui só testa contenção, uma linha por span (hyperlink
+/// nunca cruza quebra de linha, diferente de seleção/ocorrência).
+fn hyperlink_hover_at(spans: &[HyperlinkSpan], row: usize, col: usize) -> bool {
+    spans
+        .iter()
+        .any(|s| s.row == row && col >= s.start_col && col <= s.end_col)
+}
+
+fn resolved_colors(
+    cell: &Cell,
+    selected: bool,
+    occurrence: Option<bool>,
+    term_pal: &ResolvedTermPalette,
+) -> (Color, Color) {
+    if selected || occurrence == Some(false) {
+        // Seleção (ou ocorrência não ativa, mesma cor -- ADR-0041 §5)
+        // domina a cor da célula -- não combina com `INVERSE` nem com a
+        // cor original; é o mesmo comportamento da maioria dos terminais
+        // (destaque uniforme, independente do que estava sob ele).
         return (term_pal.selection_foreground, term_pal.selection_background);
+    }
+    if occurrence == Some(true) {
+        // Ocorrência ativa (RF-11.7): acento e o escuro que a pílula de
+        // grupo já usa sobre cor cheia -- nenhuma cor nova.
+        return (palette::OCCURRENCE_ACTIVE_TEXT, term_pal.cursor);
     }
 
     let bold = cell.flags.contains(CellFlags::BOLD);
@@ -557,6 +681,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         let runs = runs(&out);
         assert_eq!(runs.len(), 1, "esperava um run só, veio {runs:?}");
@@ -590,6 +715,7 @@ mod tests {
                 &test_term_pal(),
                 test_cursor(),
                 &mut m,
+                &[],
             );
             let runs = runs(&out);
             assert_eq!(
@@ -618,6 +744,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         assert_eq!(runs(&out).len(), 1);
     }
@@ -641,6 +768,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         let runs = runs(&out);
         assert_eq!(runs.len(), 3, "esperava tres runs, veio {runs:?}");
@@ -680,6 +808,7 @@ mod tests {
             &test_term_pal(),
             test_cursor(),
             &mut m,
+            &[],
         );
         let runs = runs(&out);
         assert_eq!(runs.len(), 1);
@@ -717,6 +846,7 @@ mod tests {
             &test_term_pal(),
             cursor,
             &mut m,
+            &[],
         )
     }
 
@@ -808,6 +938,7 @@ mod tests {
                 hollow: false,
             },
             &mut m,
+            &[],
         );
         let cursor_height = SIZE * CURSOR_HEIGHT_RATIO;
         match out.last() {

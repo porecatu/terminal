@@ -780,11 +780,9 @@ osc52_max_bytes = 102400                                           # RF-10.10
 # Uma chave configurável de esquemas seria escalada de privilégio embalada
 # como conveniência. Ver ADR-0042. O que se pode desligar é o recurso todo.
 #
-# COMENTADA porque `porecatu-config` ainda não a conhece: este arquivo tem de
-# bater chave por chave com `Config::default()`, e a struct nasce na etapa 3
-# da F6, no mesmo PR que descomenta isto. Classe de recarga prevista: [A].
-# [terminal.hyperlinks]
-# enabled = true
+# Classe de recarga: [A].
+[terminal.hyperlinks]
+enabled = true
 
 
 # Classe de recarga: [A].
@@ -1060,13 +1058,10 @@ white   = "#ebdbb2"
 # default estabelecido para acomodar um recurso novo é pior negócio.
 # Dentro da busca, `Enter` e `Shift+Enter` fazem o mesmo sem binding: são
 # teclas que a captura parcial reivindica (ADR-0041 §3).
-# Ainda comentados: os defaults embutidos vivem no código, e ligar a tecla
-# antes de a ação ser despachada faria o app ENGOLIR `F3` e `Ctrl+Shift+A` sem
-# repassar ao terminal. Descomentam na etapa 2 da F6, junto com o despacho.
-# "ctrl+shift+f"      = "search.open"                        # RF-11.1
-# "f3"                = "search.next"                        # RF-11.5
-# "shift+f3"          = "search.prev"                        # RF-11.5
-# "ctrl+shift+a"      = "selection.select_all"               # RF-11.16
+"ctrl+shift+f"        = "search.open"                        # RF-11.1
+"f3"                  = "search.next"                        # RF-11.5
+"shift+f3"            = "search.prev"                        # RF-11.5
+"ctrl+shift+a"        = "selection.select_all"               # RF-11.16
 
 # --- defaults de macOS ---------------------------------- ADR-0008, ADR-0029
 # A tabela do ADR-0008 define Cmd para todas as ações de app; nada disso
@@ -1103,12 +1098,11 @@ white   = "#ebdbb2"
 "cmd+shift+y"         = "theme.cycle"
 "cmd+comma"           = "config.reload"
 "cmd+q"               = "app.quit"     # convenção de plataforma; RF-1.4
-# Busca e "selecionar tudo" no macOS -- comentados pela mesma razão do bloco
-# comum acima; descomentam na etapa 2 da F6.
-# "cmd+f"             = "search.open"                        # RF-11.1
-# "f3"                = "search.next"                        # RF-11.5
-# "shift+f3"          = "search.prev"                        # RF-11.5
-# "cmd+a"             = "selection.select_all"               # RF-11.16
+# Busca e "selecionar tudo" no macOS -- mesma razão do bloco comum acima.
+"cmd+f"               = "search.open"                        # RF-11.1
+"f3"                  = "search.next"                        # RF-11.5
+"shift+f3"            = "search.prev"                        # RF-11.5
+"cmd+a"               = "selection.select_all"               # RF-11.16
 # "cmd+shift+p"       = "command.palette"   # [v2], fora do catálogo -- ver nota acima
 
 # As duas tabelas abaixo existem pela mesma razão e ficam vazias por

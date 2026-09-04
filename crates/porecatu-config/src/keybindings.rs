@@ -78,6 +78,13 @@ fn common_defaults() -> BTreeMap<String, String> {
         // [v2]) no arquivo de exemplo, comentado -- a ação não existe no
         // catálogo fechado da F4 (etapa 5, docs/reference/acoes.md), só o
         // nome está reservado. Sem default embutido correspondente.
+        // Busca no scrollback e "selecionar tudo" (F6 etapa 2, ADR-0041
+        // §10). `f3`/`shift+f3` valem nas três plataformas -- ver a nota
+        // em `macos_defaults`.
+        ("ctrl+shift+f", "search.open"),
+        ("f3", "search.next"),
+        ("shift+f3", "search.prev"),
+        ("ctrl+shift+a", "selection.select_all"),
     ])
 }
 
@@ -114,6 +121,15 @@ fn macos_defaults() -> BTreeMap<String, String> {
         ("cmd+q", "app.quit"),
         // Mesma reserva de nome sem default embutido -- ver comentário em
         // `common_defaults`.
+        // `f3`/`shift+f3` valem nas três plataformas: no macOS a convenção
+        // seria `cmd+g`/`cmd+shift+g`, mas as duas já são `group.create`/
+        // `group.dissolve` (ADR-0008), e mover um default estabelecido de
+        // grupo para acomodar um recurso novo é o negócio errado
+        // (ADR-0041 §10).
+        ("cmd+f", "search.open"),
+        ("f3", "search.next"),
+        ("shift+f3", "search.prev"),
+        ("cmd+a", "selection.select_all"),
     ])
 }
 
@@ -124,12 +140,12 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         let bindings = Keybindings::default();
-        assert_eq!(bindings.common.len(), 28);
+        assert_eq!(bindings.common.len(), 32);
         assert_eq!(
             bindings.common.get("ctrl+shift+t"),
             Some(&"tab.new".to_owned())
         );
-        assert_eq!(bindings.macos.len(), 29);
+        assert_eq!(bindings.macos.len(), 33);
         assert_eq!(bindings.macos.get("cmd+q"), Some(&"app.quit".to_owned()));
         assert!(bindings.windows.is_empty());
         assert!(bindings.linux.is_empty());

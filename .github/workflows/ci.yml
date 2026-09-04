@@ -113,10 +113,10 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
 
       - name: Testes
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   # Canário do ADR-0011. A toolchain é pinada no rust-toolchain.toml; este job
   # é o que impede o pin de apodrecer, rodando a mesma matriz contra `stable`
@@ -175,4 +175,4 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Testes na stable do dia
-        run: cargo test --workspace
+        run: cargo test --workspace --locked

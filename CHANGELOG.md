@@ -4,19 +4,90 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento seguirá [SemVer](https://semver.org/lang/pt-BR/) a partir do
 primeiro release.
 
-> **Nenhuma versão foi publicada ainda.** As fases F0 a F5 do
-> [roadmap](docs/roadmap.md) estão **fechadas**; a F6 (polimento) está
-> **aberta** — [PRD-011](docs/prd/prd-011-polimento.md) e ADR-0041 a 0044
-> escritos, implementação não iniciada. `cargo run` abre uma janela com abas e
-> grupos de terminal funcionais, sem decoração nativa fora do macOS,
-> `Ctrl+Shift+N` abre uma segunda janela, o arquivo de config (`porecatu.toml`)
-> governa aparência, teclas e temas com recarga a quente, e a sessão volta como
-> estava ao reabrir. Artefatos de release saem na F6, na versão `1.0.0`
-> ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)).
+> **As sete fases do [roadmap](docs/roadmap.md) — F0 a F6 — estão fechadas.**
+> `cargo run` abre uma janela com abas e grupos de terminal funcionais, busca
+> no scrollback, hyperlinks OSC 8, árvore de acessibilidade (`accesskit`) e
+> uma segunda janela, sem decoração nativa fora do macOS. O arquivo de config
+> (`porecatu.toml`) governa aparência, teclas e temas com recarga a quente, e
+> a sessão volta como estava ao reabrir. Instalador nativo por plataforma e
+> binário cru publicados a partir desta versão
+> ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
+> verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
-## [Não publicado]
+## [0.7.0] - 2026-09-04
+
+A primeira versão publicada. Não `1.0.0`: decisão do dono do produto ao
+fechar o v1, com dívida de verificação real ainda em aberto —
+[ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md) revisa o § 3 do
+[ADR-0044](docs/adr/0044-empacotamento-e-release.md), que tinha decidido
+`1.0.0`.
 
 ### Adicionado
+
+#### Fechamento da F6 — polimento
+
+Implementa [PRD-011](docs/prd/prd-011-polimento.md) (RF-11.1 a RF-11.30) em
+seis etapas, atrás dos ADRs que abriram a fase (0041 a 0045).
+
+- **Busca no scrollback e barra de busca** (etapas 1-2,
+  [ADR-0041](docs/adr/0041-busca-no-scrollback.md)): `porecatu-term` ganha
+  `search.rs` (literal/regex, ocorrências como lista de ranges); a barra
+  sobrepõe o topo do quadro do terminal, captura de teclado **parcial**,
+  realce de ocorrência ativa/inativa reusando cores já existentes.
+  `selection.select_all` e `scrollback.to_top`/`to_bottom` (RF-11.30, tinham
+  default embutido sem despacho) saem do catálogo comentado junto
+- **Hyperlinks OSC 8 e menu de contexto do terminal** (etapa 3,
+  [ADR-0042](docs/adr/0042-hyperlinks-osc-8.md)): `HyperlinkSpan` no
+  snapshot, `Cell` não muda um byte; `Ctrl`/`Cmd`+clique abre, `file` é
+  revelado no gerenciador de arquivos, nunca entregue ao handler por extensão
+- **Quatro dos sete requisitos aprovados e não entregues** achados ao abrir a
+  F6 (etapa 4): avisos de config no arranque na barra (não só `stderr`);
+  aviso de fonte ausente (RF-5.8); fallback de GPU detectado e avisado, sem
+  `panic` (ADR-0001); botão de configurações abre o arquivo de config no
+  editor do sistema. Os outros dois (`zoom_scope = "active"`, cor hexadecimal
+  no editor de grupo) foram **cortados**, com o alcance investigado — decisão
+  do usuário, registrada no roadmap
+- **Árvore de acessibilidade** (etapa 5,
+  [ADR-0043](docs/adr/0043-arvore-de-acessibilidade.md)): `accesskit`
+  0.25/`accesskit_winit` 0.34 sobre o chrome, montada só a partir das mesmas
+  funções puras de layout que desenham a barra — nenhuma segunda fonte de
+  verdade —, só com cliente de leitor de tela ativo (`update_if_active`),
+  nunca no caminho de render. Cobre a barra de abas e os cinco widgets de
+  chrome; a grade do terminal fica declaradamente fora do v1
+- **Métricas, empacotamento, versão e documentação de usuário** (etapa 6):
+  instrumentação das cinco métricas do [PRD-000](docs/prd/prd-000-visao-de-produto.md)
+  por `Instant`, atrás de `PORECATU_TRACE` (variável de ambiente, sem crescer
+  o `argv`) — quatro bateram o alvo (CPU ocioso ~0.5%, restauração de 20 abas
+  em ~502ms, tecla-a-pixel ~16ms, reconstrução de contexto sem ação do
+  usuário por construção), uma não (tempo até o primeiro prompt, ~500ms
+  contra o alvo de 300ms — a fatia cara é anterior ao PTY existir, GPU e/ou
+  spawn do processo, não o código do app); instalador nativo por plataforma
+  sem recompilar o binário (MSI via `cargo-wix`, `.deb` via `cargo-deb`,
+  AppImage montado à mão, `.app`/`.dmg` via script próprio no macOS);
+  `x86_64-apple-darwin` na matriz; `--locked` no `ci.yml`
+  ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)); a primeira versão,
+  `0.7.0` ([ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md)); e
+  [`docs/guia-do-usuario.md`](docs/guia-do-usuario.md) (RF-11.22),
+  cobrindo instalação, config, atalhos e a convenção do `Shift`
+  ([ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md))
+
+### Dívida da F6
+
+- **Tempo até o primeiro prompt utilizável não bateu o alvo**: ~500ms
+  medidos contra `< 300ms`. Não corrigido nesta etapa — decisão do dono do
+  produto se e quando abrir trabalho para reduzir
+- **Leitor de tela confirmado só por `System.Windows.Automation` (UI
+  Automation)**, não pelo NVDA em si — não estava instalado na máquina do
+  teste, e instalá-lo sem perguntar seria mudança de sistema maior do que o
+  pedido autorizava. Editor de grupo, menu de grupo, popover e busca não
+  foram exercitados ao vivo (mesmo caminho estrutural do que passou)
+- **Instalação real só do MSI do Windows**, verificado de ponta a ponta
+  nesta máquina (WiX Toolset baixado à parte, `msiexec /a` confirmando o
+  conteúdo). `.deb`, AppImage e `.app`/`.dmg` não foram exercitados — sem
+  ambiente Linux/macOS local, e disparar o `release.yml` de verdade
+  publicaria uma release real
+- **macOS e Linux seguem só por compilação/CI**, mesma dívida herdada de
+  todas as fases anteriores
 
 #### Abertura da F6 — polimento
 
@@ -43,7 +114,9 @@ primeiro release.
   registrada no ADR-0001 antes da F1, e corrige a conta: são **cinco** papéis de
   widget, não três. A grade do terminal fica declaradamente fora do v1
 - **[ADR-0044](docs/adr/0044-empacotamento-e-release.md)** — instalador nativo
-  por plataforma, primeira release **`1.0.0`**, sem assinatura de código. Traz
+  por plataforma, sem assinatura de código (o número da primeira release, § 3,
+  foi revisto pelo [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md): **`0.7.0`**,
+  não `1.0.0` — dívida de verificação ainda em aberto no fechamento da F6). Traz
   `x86_64-apple-darwin` para a matriz, `--locked` para o `ci.yml` (última
   pendência aberta da F0) e a **atribuição das fontes embutidas para dentro do
   artefato** — hoje o `release.yml` copia só `LICENSE` e `README.md`, e publicar

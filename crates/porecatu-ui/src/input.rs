@@ -107,15 +107,11 @@ pub fn handle_keyboard_input(
         match &event.logical_key {
             // Copiar/colar (ADR-0008 default Windows/Linux: Ctrl+Shift+C/V).
             Key::Character(s) if s.eq_ignore_ascii_case("c") => {
-                if let Some(text) = terminal.selection_text() {
-                    clipboard::copy(&text);
-                }
+                clipboard_copy(terminal);
                 return;
             }
             Key::Character(s) if s.eq_ignore_ascii_case("v") => {
-                if let Some(text) = clipboard::paste() {
-                    terminal.write(wrap_paste(&text, modes));
-                }
+                clipboard_paste(terminal, modes);
                 return;
             }
             _ => {}
@@ -135,6 +131,20 @@ pub fn handle_keyboard_input(
             Key::Named(NamedKey::PageDown) => {
                 if !modes.alt_screen {
                     terminal.scroll(TermScroll::PageDown);
+                }
+                return;
+            }
+            // RF-11.30: `scrollback.to_top`/`to_bottom` já tinham default
+            // embutido e já entravam no mapa resolvido -- faltava só isto.
+            Key::Named(NamedKey::Home) => {
+                if !modes.alt_screen {
+                    terminal.scroll(TermScroll::Top);
+                }
+                return;
+            }
+            Key::Named(NamedKey::End) => {
+                if !modes.alt_screen {
+                    terminal.scroll(TermScroll::Bottom);
                 }
                 return;
             }
@@ -162,6 +172,25 @@ pub fn handle_keyboard_input(
 
     if let Some(text) = &event.text {
         write(encode_text(text, modifiers));
+    }
+}
+
+/// Copia a seleção corrente, se houver -- fatorado para ser chamado tanto
+/// daqui (`Ctrl+Shift+C`) quanto do item "Copiar" do menu de contexto do
+/// terminal (PRD-011 RF-11.14/RF-11.16, ADR-0041: tecla e menu não podem
+/// divergir).
+pub fn clipboard_copy(terminal: &Terminal) {
+    if let Some(text) = terminal.selection_text() {
+        clipboard::copy(&text);
+    }
+}
+
+/// Cola do clipboard, envolvido em bracketed paste quando o modo está
+/// ativo -- mesma fatoração de [`clipboard_copy`], para `Ctrl+Shift+V` e o
+/// item "Colar" do menu de contexto do terminal usarem a mesma função.
+pub fn clipboard_paste(terminal: &Terminal, modes: &TermModes) {
+    if let Some(text) = clipboard::paste() {
+        terminal.write(wrap_paste(&text, modes));
     }
 }
 

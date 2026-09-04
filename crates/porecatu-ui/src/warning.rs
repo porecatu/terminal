@@ -21,12 +21,6 @@ const INFO_TIMEOUT: Duration = Duration::from_secs(6);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
-    /// Sem gatilho nesta fase: os avisos de severidade "aviso" do ADR-0014
-    /// (chave desconhecida RF-4.22, fonte ausente RF-5.8) são F4. O widget
-    /// já suporta a severidade -- token, cor e teste de expiração --
-    /// porque criar o enum incompleto obrigaria a revisitar toda a pilha
-    /// quando o primeiro gatilho chegar.
-    #[allow(dead_code)]
     Warning,
     Info,
 }

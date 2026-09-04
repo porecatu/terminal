@@ -12,6 +12,10 @@ mod cli;
 /// vira mensagem em `stderr` e saída com código diferente de zero, também
 /// sem abrir janela -- o mesmo princípio nas duas formas de erro.
 fn main() {
+    // PRD-000/etapa 6 da F6: ponto de partida de "tempo até o primeiro
+    // prompt utilizável" -- capturado antes de qualquer parse, atrás de
+    // `PORECATU_TRACE` (ver `porecatu_ui::trace`).
+    let process_start = std::time::Instant::now();
     let args = std::env::args_os().skip(1);
     match cli::parse(args) {
         Ok(cli::Cli::Help) => print!("{}", cli::help_text()),
@@ -23,7 +27,7 @@ fn main() {
                 eprintln!("porecatu: {err}");
                 std::process::exit(2);
             }
-            porecatu_ui::run(config, directory);
+            porecatu_ui::run(config, directory, process_start);
         }
         Err(err) => {
             eprintln!("porecatu: {err}");

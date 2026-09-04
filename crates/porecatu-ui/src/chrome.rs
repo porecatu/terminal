@@ -601,8 +601,8 @@ pub fn paint(
     // implícito, o global era um segundo botão para a mesma ação, a um
     // palmo do primeiro. O bloco fica, reservado para o que a barra
     // ganhar à direita daqui em diante, e por ora carrega o botão de
-    // configurações -- **inerte de propósito** (`config` é F4): ele
-    // desenha e não responde a clique nenhum, ver `handle_bar_click`.
+    // configurações (RF-11.27): abre o arquivo de config no editor padrão
+    // do sistema, ver `handle_bar_click`.
     let settings = tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos);
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect: settings,
@@ -853,7 +853,9 @@ fn with_alpha(color: Color, alpha: f64) -> Color {
 /// `filter: brightness(mult)` (espec §1.10), resolvido em CPU: multiplica
 /// os três canais e clampa em 1.0 -- `porecatu-render` não tem primitiva
 /// de filtro (ADR-0032 §2), e não ganha uma só por isto. Alfa intocado.
-fn brighten(color: Color, mult: f64) -> Color {
+/// `pub(crate)`: `search_bar.rs` reusa para o hover dos três botões de
+/// ícone (ADR-0041 §6: "mesmo brilho `1.18` dos demais botões da barra").
+pub(crate) fn brighten(color: Color, mult: f64) -> Color {
     Color {
         r: (color.r * mult).min(1.0),
         g: (color.g * mult).min(1.0),

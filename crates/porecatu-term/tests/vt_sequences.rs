@@ -10,6 +10,20 @@ use porecatu_term::{
     TermSize,
 };
 
+fn span_id<'a>(
+    snap: &'a porecatu_term::GridSnapshot,
+    span: &porecatu_term::HyperlinkSpan,
+) -> &'a str {
+    &snap.hyperlinks[span.id_start as usize..span.id_end as usize]
+}
+
+fn span_uri<'a>(
+    snap: &'a porecatu_term::GridSnapshot,
+    span: &porecatu_term::HyperlinkSpan,
+) -> &'a str {
+    &snap.hyperlinks[span.uri_start as usize..span.uri_end as usize]
+}
+
 fn engine(rows: usize, cols: usize) -> (TermEngine, std::sync::mpsc::Receiver<TermEvent>) {
     let (tx, rx) = std::sync::mpsc::channel();
     // Respostas automáticas do motor (PtyWrite) não passam por `TermEvent`
@@ -397,4 +411,74 @@ fn decscusr_do_programa_sobrepoe_o_default_da_config() {
     let mut snapshot = porecatu_term::GridSnapshot::default();
     term.snapshot_into(&mut snapshot);
     assert_eq!(snapshot.cursor.shape, CursorShape::Beam);
+}
+
+/// ADR-0042 §1: OSC 8 vira um span ao lado do snapshot, não um bit em
+/// `Cell`. Sem link nenhum, a lista sai vazia.
+#[test]
+fn sem_osc_8_nao_ha_span_de_hyperlink() {
+    let (mut term, _rx) = engine(2, 10);
+    term.advance(b"sem link nenhum");
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+    assert!(snap.hyperlink_spans.is_empty());
+}
+
+/// Um único trecho contíguo: o span cobre exatamente as quatro células do
+/// texto, com a uri recuperável pelo par de offsets na arena.
+#[test]
+fn osc_8_marca_span_contiguo_com_a_uri_na_arena() {
+    let (mut term, _rx) = engine(2, 10);
+    term.advance(b"\x1b]8;;http://example.com\x07link\x1b]8;;\x07");
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+
+    assert_eq!(snap.hyperlink_spans.len(), 1);
+    let span = snap.hyperlink_spans[0];
+    assert_eq!(span.row, 0);
+    assert_eq!(span.start_col, 0);
+    assert_eq!(span.end_col, 3);
+    assert_eq!(span_uri(&snap, &span), "http://example.com");
+}
+
+/// O `id` explícito amarra dois trechos partidos por quebra de linha --
+/// mesmo link, mesmo id, spans diferentes (ADR-0042 §1: "passar o cursor
+/// sobre qualquer trecho sublinha todos os trechos do mesmo id na vista").
+#[test]
+fn mesmo_id_amarra_spans_partidos_por_quebra_de_linha() {
+    let (mut term, _rx) = engine(2, 10);
+    term.advance(b"\x1b]8;id=abc;http://example.com\x07AAA\r\n");
+    term.advance(b"BBB\x1b]8;;\x07");
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+
+    assert_eq!(snap.hyperlink_spans.len(), 2);
+    let first = snap.hyperlink_spans[0];
+    let second = snap.hyperlink_spans[1];
+    assert_eq!(first.row, 0);
+    assert_eq!(second.row, 1);
+    assert_eq!(span_id(&snap, &first), span_id(&snap, &second));
+    assert_eq!(span_uri(&snap, &first), "http://example.com");
+    assert_eq!(span_uri(&snap, &second), "http://example.com");
+}
+
+/// Dois links distintos e adjacentes na mesma linha não se fundem num
+/// span só -- o corte é por identidade do link (id/uri), não só por
+/// contiguidade de coluna.
+#[test]
+fn links_distintos_adjacentes_nao_se_fundem() {
+    let (mut term, _rx) = engine(2, 10);
+    term.advance(b"\x1b]8;;http://a\x07AA\x1b]8;;http://b\x07BB\x1b]8;;\x07");
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+
+    assert_eq!(snap.hyperlink_spans.len(), 2);
+    assert_eq!(span_uri(&snap, &snap.hyperlink_spans[0]), "http://a");
+    assert_eq!(span_uri(&snap, &snap.hyperlink_spans[1]), "http://b");
+    assert_eq!(snap.hyperlink_spans[0].end_col, 1);
+    assert_eq!(snap.hyperlink_spans[1].start_col, 2);
 }

@@ -26,6 +26,7 @@ use crate::engine::{TermEngine, TermSize};
 use crate::event::TermEvent;
 use crate::params::TermParams;
 use crate::scroll::TermScroll;
+use crate::search::{InvalidPattern, SearchJob, SearchMode, SearchStep};
 use crate::selection::{SelectionKind, SelectionSide};
 use crate::snapshot::{GridSnapshot, TermModes};
 
@@ -258,6 +259,29 @@ impl Terminal {
     /// seleção ativa.
     pub fn selection_text(&self) -> Option<String> {
         lock(&self.engine).selection_text()
+    }
+
+    /// Seleciona a tela visível inteira e o scrollback (RF-11.16). Ver
+    /// `TermEngine::select_all`.
+    pub fn select_all(&self) {
+        lock(&self.engine).select_all();
+    }
+
+    /// Prepara uma busca no scrollback (ADR-0041). Ver
+    /// `TermEngine::start_search`.
+    pub fn start_search(
+        &self,
+        pattern: &str,
+        mode: SearchMode,
+        lines_per_step: usize,
+    ) -> Result<SearchJob, InvalidPattern> {
+        lock(&self.engine).start_search(pattern, mode, lines_per_step)
+    }
+
+    /// Varre um lote de uma busca em andamento (ADR-0041). Ver
+    /// `TermEngine::step_search`.
+    pub fn step_search(&self, job: &mut SearchJob) -> SearchStep {
+        lock(&self.engine).step_search(job)
     }
 
     /// Redimensiona a grade. O lado do motor acontece agora, síncrono

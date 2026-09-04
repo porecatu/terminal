@@ -59,7 +59,11 @@ impl Default for Osc7Watcher {
 /// `file://host/caminho` ou `file:///caminho` (sem host) -> caminho local,
 /// percent-decodificado. `host` é descartado -- OSC 7 do shell local sempre
 /// aponta pro próprio host, e nada aqui valida isso.
-fn parse_file_uri(bytes: &[u8]) -> Option<PathBuf> {
+///
+/// `pub` e reexportado (`crate::lib`) porque o OSC 8 do ADR-0042 precisa da
+/// mesma conversão para revelar um `file://` -- inclusive a correção da
+/// letra de unidade do Windows abaixo, que só existe aqui uma vez.
+pub fn parse_file_uri(bytes: &[u8]) -> Option<PathBuf> {
     let s = std::str::from_utf8(bytes).ok()?;
     let rest = s.strip_prefix("file://")?;
     let path = rest.find('/').map(|idx| &rest[idx..])?;

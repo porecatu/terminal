@@ -325,7 +325,7 @@ mod tests {
         let a = second.append_tab("bash", None);
         second.group_tabs(&[a], "api", GroupColor::Blue).unwrap();
 
-        let windows = vec![
+        let windows = [
             window_v1(&first, geometry(0), None, None, 0, |_| None),
             window_v1(
                 &second,

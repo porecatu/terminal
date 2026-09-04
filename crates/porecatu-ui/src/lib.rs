@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use porecatu_core::{Action, GroupId, TabId, Workspace};
-use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, WindowSurface};
+use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_term::{
-    GridSnapshot, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermModes,
-    TermParams, Terminal, resolve_default_shell, search_path,
+    DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
+    SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell,
+    search_path,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -19,6 +20,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 
+mod access;
 mod animation;
 mod app_icon;
 mod chrome;
@@ -27,6 +29,7 @@ mod context_menu;
 mod dialog;
 mod group_editor;
 mod group_menu;
+mod hyperlink;
 mod input;
 mod keymap;
 mod move_to_group;
@@ -35,13 +38,16 @@ mod paint;
 mod palette;
 mod reload;
 mod rename;
+mod search_bar;
 mod selection;
 mod session_writer;
 mod shell_integration;
 mod tab_bar;
+mod terminal_menu;
 mod text_field;
 mod titlebar;
 mod tooltip;
+mod trace;
 mod warning;
 
 use animation::AnimationClock;
@@ -57,9 +63,13 @@ use paint::CellMetrics;
 use porecatu_core::GroupColor;
 use reload::ConfigReload;
 use rename::RenameState;
+use search_bar::{SearchBarHit, SearchBarState};
 use selection::Selection;
 use session_writer::SessionScheduler;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
+use terminal_menu::{
+    TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
+};
 use text_field::{TextFieldState, apply_text_field_key};
 use tooltip::Hover;
 use warning::{Severity, WarningStack};
@@ -79,6 +89,43 @@ const DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_mi
 /// `titlebar` (semáforo nativo vs. botões de janela nossos).
 fn is_macos() -> bool {
     cfg!(target_os = "macos")
+}
+
+/// Itens do menu de contexto do terminal, resolvidos do estado ao vivo da
+/// aba (`menu.tab`) e da célula sob `menu.anchor` (RF-11.14/RF-11.15) --
+/// mesmo padrão de `group_menu::group_action_items`: recomputado a cada
+/// abertura/navegação/pintura, nunca guardado no `TerminalContextMenu`
+/// (nota do módulo `terminal_menu.rs`). Função livre, não método de
+/// `App`/`WindowState`, porque os dois às vezes precisam ser chamados com
+/// `state.tabs` já emprestado por outro campo do mesmo `state`.
+#[allow(clippy::too_many_arguments)]
+fn terminal_menu_context_items(
+    tabs: &HashMap<TabId, TabRuntime>,
+    style: &TabBarStyle,
+    cell_metrics: CellMetrics,
+    logical_width: f32,
+    logical_height: f32,
+    scale: f32,
+    tab: TabId,
+    anchor: (f32, f32),
+) -> Vec<TerminalMenuItem> {
+    let Some(rt) = tabs.get(&tab) else {
+        return terminal_menu_items(false, false);
+    };
+    let has_selection = rt.terminal.selection_text().is_some();
+    let content =
+        paint::terminal_content_rect(style, bar_height(style), logical_width, logical_height);
+    let content_x = ((anchor.0 - content.x) * scale).max(0.0) as f64;
+    let content_y = ((anchor.1 - content.y) * scale).max(0.0) as f64;
+    let cell = input::cell_at(
+        content_x,
+        content_y,
+        cell_metrics,
+        rt.snapshot.rows.max(MIN_GRID),
+        rt.snapshot.cols.max(MIN_GRID),
+    );
+    let over_link = hyperlink::uri_at(&rt.snapshot, cell.row, cell.col).is_some();
+    terminal_menu_items(has_selection, over_link)
 }
 
 /// Espec. §2.19: "limiar de 4px de movimento" -- abaixo disso o gesto é
@@ -105,7 +152,12 @@ fn base_window_attributes() -> WindowAttributes {
     let mut attributes = Window::default_attributes()
         .with_title("Porecatu")
         .with_window_icon(Some(app_icon::load()))
-        .with_decorations(false);
+        .with_decorations(false)
+        // ADR-0043 §1: o adaptador `accesskit_winit` tem de ser criado
+        // antes da primeira exibição da janela (`panic` se já visível) --
+        // `create_window_with_attributes` cria a janela invisível, monta o
+        // adaptador, e só então chama `window.set_visible(true)`.
+        .with_visible(false);
     // macOS: decorations volta a `true` -- o semáforo nativo (traffic
     // lights) é o controle de janela do ADR-0027 lá, não botões nossos
     // (ver `chrome::paint`/`tab_bar::left_inset`).
@@ -177,10 +229,12 @@ enum Drag {
 /// minúscula ou métrica de fonte falhando.
 const MIN_GRID: usize = 1;
 
-/// Evento de usuário do event loop -- o mesmo caminho serve os dois fatos
-/// que só podem chegar de fora da main thread (ADR-0007): aba suja e
-/// recarga de config pronta.
-#[derive(Debug, Clone, PartialEq)]
+/// Evento de usuário do event loop -- o mesmo caminho serve os fatos que
+/// só podem chegar de fora da main thread (ADR-0007): aba suja, recarga de
+/// config pronta, e evento do adaptador de acessibilidade (ADR-0043 §1).
+/// Sem `Clone`/`PartialEq`: `accesskit_winit::Event` não os implementa, e
+/// nada aqui precisava deles antes.
+#[derive(Debug)]
 enum Wakeup {
     /// Uma aba ficou suja e precisa de redraw. Carrega `(WindowId, TabId)`
     /// desde a F1 (ADR-0015): com mais de uma janela, `TabId` sozinho não
@@ -191,6 +245,17 @@ enum Wakeup {
     /// `ConfigReload::Loaded` carrega uma `Config` inteira, bem maior que
     /// `TabDirty`.
     ConfigReloaded(Box<ConfigReload>),
+    /// Evento do adaptador `accesskit_winit` (ADR-0043 §1): árvore inicial
+    /// pedida, ação de um leitor de tela, ou desativação -- roteado por
+    /// `App::handle_accesskit_event`. Chega pela mesma `EventLoopProxy`
+    /// porque `Adapter::with_event_loop_proxy` exige `T: From<Event>`.
+    AccessKit(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for Wakeup {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::AccessKit(event)
+    }
 }
 
 /// Estado de execução de uma aba: o `Terminal` (motor+PTY+threads) e o
@@ -322,6 +387,107 @@ fn font_families_from_config(config: &porecatu_config::Config) -> porecatu_rende
     }
 }
 
+/// Conteúdo de referência do arquivo de config (RF-11.27) -- o mesmo que
+/// `docs/config/porecatu.example.toml`, embutido no binário para criar o
+/// arquivo do usuário quando ele ainda não existe. Mesmo padrão de
+/// `shell_integration::REFERENCE_MD` (`include_str!` de um documento em
+/// `docs/`, sem duplicar o conteúdo).
+const EXAMPLE_CONFIG_TOML: &str = include_str!("../../../docs/config/porecatu.example.toml");
+
+/// Garante que `path` existe, criando-o a partir do exemplo embutido se
+/// ainda não existir (RF-11.27: "decida e registre" -- criar a partir do
+/// exemplo é a opção óbvia, o usuário vê os defaults comentados em vez de
+/// um arquivo vazio ou um erro). Separada de `open_config_file` para ser
+/// testável sem `opener` -- testar a chamada real abriria um programa de
+/// verdade na máquina que roda `cargo test`.
+fn ensure_config_file_exists(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, EXAMPLE_CONFIG_TOML)
+}
+
+/// RF-11.27: abre o arquivo de config no editor padrão do sistema --
+/// `opener::open` (o mesmo wrapper que a etapa 3 do F6 adotou para URI),
+/// nunca um `unsafe` novo nem uma string de shell montada com o caminho.
+/// Sem `config_path` resolvido (rara: falha da API de diretórios da
+/// plataforma), avisa e desiste.
+fn open_config_file(config_path: Option<&Path>, warnings: &mut WarningStack, now: Instant) {
+    let Some(path) = config_path else {
+        warnings.push(
+            Severity::Warning,
+            "Sem arquivo de configuração",
+            "Não foi possível resolver um caminho de config nesta plataforma.",
+            now,
+        );
+        return;
+    };
+    if let Err(err) = ensure_config_file_exists(path) {
+        warnings.push(
+            Severity::Warning,
+            "Não foi possível criar a config",
+            err.to_string(),
+            now,
+        );
+        return;
+    }
+    if let Err(err) = opener::open(path) {
+        warnings.push(
+            Severity::Warning,
+            "Não foi possível abrir a config",
+            err.to_string(),
+            now,
+        );
+    }
+}
+
+#[cfg(test)]
+mod ensure_config_file_exists_tests {
+    use super::*;
+
+    fn scratch_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "porecatu-ui-test-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn missing_file_is_created_from_the_embedded_example() {
+        let path = scratch_path("missing.toml");
+        assert!(!path.exists());
+        ensure_config_file_exists(&path).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, EXAMPLE_CONFIG_TOML);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn existing_file_is_left_untouched() {
+        let path = scratch_path("existing.toml");
+        std::fs::write(&path, "conteúdo do usuário, não o exemplo").unwrap();
+        ensure_config_file_exists(&path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "conteúdo do usuário, não o exemplo");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn missing_parent_directory_is_created() {
+        let path = scratch_path("nested").join("porecatu.toml");
+        ensure_config_file_exists(&path).unwrap();
+        assert!(path.exists());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+}
+
 /// O que `WindowState::handle_tab_action_key` não pode resolver sozinho --
 /// `window.new`/`window.close` (ADR-0015) tocam outras janelas, então
 /// precisam voltar pra `App`. `WindowEmptied` é o mesmo caso: fechar a
@@ -390,6 +556,10 @@ enum NewTabRequest {
     /// vive em `App` -- `WindowState` não pode resolver isto sozinho, mesmo
     /// motivo de `WindowEmptied`.
     CloseWindowRequested,
+    /// Botão de configurações (RF-11.27): `self.config_path` (o caminho já
+    /// resolvido no arranque, ADR-0003) só existe em `App`, não em
+    /// `WindowState` -- mesmo motivo de `CloseWindowRequested`.
+    OpenConfigFile,
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -456,6 +626,9 @@ struct WindowState {
     /// exclusivo com `context_menu`/`group_editor`/`move_to_group`
     /// (`close_all_popovers`).
     group_context_menu: Option<GroupContextMenu>,
+    /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
+    /// mesma exclusão mútua de `close_all_popovers`.
+    terminal_context_menu: Option<TerminalContextMenu>,
     /// Editor de grupo (ADR-0023), o quinto widget de chrome.
     group_editor: Option<GroupEditor>,
     /// Popover de destino do `tab.move_to_group` (RF-2.20, ADR-0023 §4).
@@ -487,6 +660,24 @@ struct WindowState {
     /// aquilo vira de fato um agendamento (RF-3.6, `enabled = false`
     /// nunca marca dirty no scheduler); esta janela só registra o fato.
     session_dirty: bool,
+    /// Barra de busca (ADR-0041), o sexto widget de chrome -- estado
+    /// efêmero de janela, amarrado à aba em que foi aberta (mesma
+    /// classificação de `selection`, ADR-0041 §8). `redraw` fecha sozinha
+    /// se a aba ativa mudar.
+    search: Option<search_bar::SearchBarState>,
+    /// Adaptador de acessibilidade (ADR-0043 §1) -- um por janela, sempre
+    /// presente (não `Option`: a construção não falha, só exige a janela
+    /// ainda invisível, garantido por `create_window_with_attributes`).
+    /// `update_if_active` só chama a função de montagem da árvore quando
+    /// há cliente de leitor de tela de fato conectado -- sem isso, custo
+    /// zero (§3).
+    access_adapter: accesskit_winit::Adapter,
+    /// PRD-000/etapa 6 da F6: `Instant` do último `KeyboardInput` pressionado
+    /// nesta janela, atrás de `PORECATU_TRACE` -- `redraw` consome e reporta
+    /// o intervalo até a submissão do frame ("latência de tecla até
+    /// pixel"). `None` sempre que a variável não está setada (`dispatch_
+    /// keyboard_input` só escreve aqui depois de conferir `trace::enabled`).
+    key_trace_pending: Option<Instant>,
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -816,7 +1007,12 @@ mod should_confirm_tab_close_tests {
 }
 
 impl WindowState {
-    fn new(window: Arc<Window>, window_surface: WindowSurface, scale: f32) -> Self {
+    fn new(
+        window: Arc<Window>,
+        window_surface: WindowSurface,
+        scale: f32,
+        access_adapter: accesskit_winit::Adapter,
+    ) -> Self {
         let size = window.inner_size();
         Self {
             window,
@@ -840,13 +1036,57 @@ impl WindowState {
             dialog: None,
             context_menu: None,
             group_context_menu: None,
+            terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
             last_pill_click: None,
             selection: Selection::default(),
             last_titlebar_click: None,
             session_dirty: false,
+            search: None,
+            access_adapter,
+            key_trace_pending: None,
         }
+    }
+
+    /// ADR-0043 §2/§3: monta a árvore desta janela a partir das mesmas
+    /// funções puras de layout que produzem o desenho (`access::
+    /// build_tree`) e entrega via `update_if_active` -- a função de
+    /// montagem só roda se houver cliente de acessibilidade conectado
+    /// (o fechamento `move` é avaliado dentro de `update_if_active`,
+    /// nunca antes). Todos os campos de `self` que a árvore lê são
+    /// emprestados aqui, nunca `self` inteiro -- é o que permite
+    /// `self.access_adapter` (mutável) e o resto de `self` (imutável)
+    /// coexistirem no mesmo `match`/closure.
+    fn refresh_access_tree(&mut self, style: &TabBarStyle, measurer: &mut TextMeasurer) {
+        let workspace = &self.workspace;
+        let warnings = &self.warnings;
+        let dialog = &self.dialog;
+        let context_menu = &self.context_menu;
+        let group_context_menu = &self.group_context_menu;
+        let terminal_context_menu = &self.terminal_context_menu;
+        let group_editor = &self.group_editor;
+        let move_to_group = &self.move_to_group;
+        let search = &self.search;
+        let logical_width = self.logical_width;
+        let scroll_offset = self.scroll_offset;
+        self.access_adapter.update_if_active(move || {
+            access::build_tree(
+                workspace,
+                warnings,
+                dialog,
+                context_menu,
+                group_context_menu,
+                terminal_context_menu,
+                group_editor,
+                move_to_group,
+                search,
+                style,
+                logical_width,
+                scroll_offset,
+                measurer,
+            )
+        });
     }
 
     /// Ponto único de decisão de RF-3.2 para operações de `Workspace`: os
@@ -877,8 +1117,48 @@ impl WindowState {
     fn close_all_popovers(&mut self) {
         self.context_menu = None;
         self.group_context_menu = None;
+        self.terminal_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
+    }
+
+    /// Informa o resultado de agir sobre um hyperlink (RF-11.12/RF-11.13)
+    /// pelo canal 1 de aviso (ADR-0014) -- abrir/revelar com sucesso é
+    /// silencioso (o handler do sistema ou o gerenciador de arquivos já é
+    /// a confirmação visível); as três outras saídas precisam de aviso,
+    /// porque senão o clique parece não ter feito nada. Recusa e falha ao
+    /// revelar copiam o URI (ADR-0042 §4, mesma vala do esquema recusado
+    /// -- "nunca cai no handler por extensão como fallback").
+    fn report_link_outcome(&mut self, outcome: hyperlink::LinkOutcome, uri: &str, now: Instant) {
+        match outcome {
+            hyperlink::LinkOutcome::Opened | hyperlink::LinkOutcome::Revealed => {}
+            hyperlink::LinkOutcome::OpenFailed => {
+                self.warnings.push(
+                    Severity::Warning,
+                    "Não foi possível abrir o link",
+                    uri.to_string(),
+                    now,
+                );
+            }
+            hyperlink::LinkOutcome::RevealFailed => {
+                clipboard::copy(uri);
+                self.warnings.push(
+                    Severity::Warning,
+                    "Não foi possível revelar o arquivo",
+                    format!("URI copiado: {uri}"),
+                    now,
+                );
+            }
+            hyperlink::LinkOutcome::Refused { normalized_scheme } => {
+                clipboard::copy(uri);
+                self.warnings.push(
+                    Severity::Info,
+                    "Esquema recusado",
+                    format!("`{normalized_scheme}` não abre -- URI copiado"),
+                    now,
+                );
+            }
+        }
     }
 
     /// `cwd` herdado por `tab.new`/`window.new` (ADR-0017 item 1, ADR-0015):
@@ -1443,6 +1723,94 @@ impl WindowState {
         }
     }
 
+    /// Captura parcial da busca (ADR-0041 §3): `true` se a tecla foi
+    /// reivindicada (quem chama redesenha e para por aqui); `false` deixa
+    /// cair pro passo 2 da cadeia -- é o que mantém `F3`/`Ctrl+Shift+F`/
+    /// trocar de aba/fechar a janela funcionando com a busca aberta.
+    /// `Backspace` entra por fora de `apply_text_field_key` (que não o
+    /// trata -- mesma nota de `handle_rename_key`), mas ainda é uma das
+    /// "teclas de edição do ADR-0035" que o ADR-0041 §3 reivindica por
+    /// categoria.
+    fn handle_search_key(&mut self, event: &KeyEvent, cell_metrics: CellMetrics) -> bool {
+        if event.state != ElementState::Pressed {
+            return false;
+        }
+        let Some(tab) = self.search.as_ref().map(SearchBarState::tab) else {
+            return false;
+        };
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.search = None;
+                true
+            }
+            Key::Named(NamedKey::Enter) => {
+                let forward = !self.modifiers.shift;
+                self.advance_search(tab, forward, cell_metrics);
+                true
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if let Some(search) = self.search.as_mut() {
+                    search.field_mut().backspace();
+                }
+                if let Some(rt) = self.tabs.get(&tab)
+                    && let Some(search) = self.search.as_mut()
+                {
+                    search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
+                }
+                true
+            }
+            _ => {
+                let modifiers = self.modifiers;
+                let mut consumed = false;
+                if let Some(search) = self.search.as_mut() {
+                    consumed = apply_text_field_key(
+                        search.field_mut(),
+                        &event.logical_key,
+                        event.text.as_deref(),
+                        modifiers,
+                    );
+                }
+                if consumed
+                    && let Some(rt) = self.tabs.get(&tab)
+                    && let Some(search) = self.search.as_mut()
+                {
+                    search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
+                }
+                consumed
+            }
+        }
+    }
+
+    /// `search.next`/`search.prev` (RF-11.5), e `Enter`/`Shift+Enter` que
+    /// fazem o mesmo sem binding (ADR-0041 §3/§10) -- avança a ocorrência
+    /// ativa e rola até ela, reservando a altura da barra (ADR-0041 §1) e
+    /// expandindo o grupo se a aba estiver num colapsado (RF-11.9/RF-2.17,
+    /// `Workspace::activate_tab` já carrega a regra).
+    fn advance_search(&mut self, tab: TabId, forward: bool, cell_metrics: CellMetrics) {
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let Some(occurrence) = search.advance(forward) else {
+            return;
+        };
+        let Some(rt) = self.tabs.get(&tab) else {
+            return;
+        };
+        let reserved = search_bar::reserved_rows(cell_metrics.height);
+        let delta = search_bar::scroll_delta_to_reveal(
+            occurrence.start.line,
+            rt.snapshot.scroll_offset,
+            rt.snapshot.rows,
+            reserved,
+        );
+        if delta != 0 {
+            rt.terminal.scroll(TermScroll::Lines(delta));
+        }
+        self.touch_workspace(|ws| {
+            ws.activate_tab(tab);
+        });
+    }
+
     /// `Enter` aciona o botão focado, `Esc` cancela (RF-10.18); `Left`/
     /// `Right`/`Tab` trocam o foco entre os dois botões. Devolve a ação
     /// resolvida se o usuário confirmou -- `lib.rs` executa de verdade,
@@ -1534,6 +1902,56 @@ impl WindowState {
                 let action = menu.selected();
                 self.group_context_menu = None;
                 Some(action)
+            }
+            _ => None,
+        }
+    }
+
+    /// Espelha `handle_group_menu_key`, sobre `terminal_context_menu`.
+    /// Recebe `style`/`cell_metrics` de fora -- `WindowState` não os guarda
+    /// -- para recomputar a lista de itens a cada navegação
+    /// (`terminal_menu_context_items`, mesmo padrão de `group_action_items`
+    /// no clique/hover do menu de grupo).
+    fn handle_terminal_menu_key(
+        &mut self,
+        event: &KeyEvent,
+        style: &TabBarStyle,
+        cell_metrics: CellMetrics,
+    ) -> Option<TerminalMenuAction> {
+        if event.state != ElementState::Pressed {
+            return None;
+        }
+        let Some(menu) = &self.terminal_context_menu else {
+            return None;
+        };
+        let items = terminal_menu_context_items(
+            &self.tabs,
+            style,
+            cell_metrics,
+            self.logical_width,
+            self.logical_height,
+            self.scale,
+            menu.tab,
+            menu.anchor,
+        );
+        let menu = self.terminal_context_menu.as_mut()?;
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.terminal_context_menu = None;
+                None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                menu.move_highlight(-1, &items);
+                None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                menu.move_highlight(1, &items);
+                None
+            }
+            Key::Named(NamedKey::Enter) => {
+                let action = menu.selected(&items);
+                self.terminal_context_menu = None;
+                action
             }
             _ => None,
         }
@@ -1810,10 +2228,8 @@ impl WindowState {
             // `theme.cycle`: temas nomeados são a etapa 6 também, mas
             // precisam do `Arc<Config>` de `App` -- mesmo caminho.
             Action::ThemeCycle => ActionOutcome::CycleTheme,
-            // `scrollback.*`, `clipboard.*`, `selection.select_all`:
-            // resolvidos no mapa, executados em `input.rs` (scrollback e
-            // clipboard) ou ainda não implementados (seleção, F6) -- ver
-            // o comentário do método. `search.*` é F6, mesma situação.
+            // `scrollback.*`, `clipboard.*`: resolvidos no mapa,
+            // executados em `input.rs` -- ver o comentário do método.
             Action::ScrollbackLineUp
             | Action::ScrollbackLineDown
             | Action::ScrollbackPageUp
@@ -1821,11 +2237,49 @@ impl WindowState {
             | Action::ScrollbackToTop
             | Action::ScrollbackToBottom
             | Action::ClipboardCopy
-            | Action::ClipboardPaste
-            | Action::SelectionSelectAll
-            | Action::SearchOpen
-            | Action::SearchNext
-            | Action::SearchPrev => ActionOutcome::Unhandled,
+            | Action::ClipboardPaste => ActionOutcome::Unhandled,
+            // RF-11.16 (menu do terminal, ADR-0041 §10): mesmo mecanismo
+            // de `Terminal::start_selection`/`update_selection`, só com os
+            // extremos já na tela visível mais o scrollback inteiro.
+            Action::SelectionSelectAll => {
+                if let Some(id) = self.workspace.active_tab()
+                    && let Some(rt) = self.tabs.get(&id)
+                {
+                    rt.terminal.select_all();
+                }
+                ActionOutcome::Handled
+            }
+            // `search.open` (RF-11.1): abre na aba ativa com o campo já
+            // focado -- idempotente se já estiver aberta para ela. Abrir
+            // limpa a seleção de texto (ADR-0041 §5): sem isso, seleção e
+            // ocorrência ficam indistinguíveis, mesma cor.
+            Action::SearchOpen => {
+                if let Some(id) = self.workspace.active_tab() {
+                    if self.search.as_ref().map(SearchBarState::tab) != Some(id) {
+                        self.search = Some(SearchBarState::new(id));
+                    }
+                    if let Some(rt) = self.tabs.get(&id) {
+                        rt.terminal.clear_selection();
+                    }
+                }
+                ActionOutcome::Handled
+            }
+            // `search.next`/`search.prev` (RF-11.5): sem efeito se a busca
+            // não estiver aberta -- `F3` continua chegando aqui mesmo
+            // então (captura parcial, ADR-0041 §3), e não deve vazar pro
+            // terminal.
+            Action::SearchNext => {
+                if let Some(id) = self.search.as_ref().map(SearchBarState::tab) {
+                    self.advance_search(id, true, cell_metrics);
+                }
+                ActionOutcome::Handled
+            }
+            Action::SearchPrev => {
+                if let Some(id) = self.search.as_ref().map(SearchBarState::tab) {
+                    self.advance_search(id, false, cell_metrics);
+                }
+                ActionOutcome::Handled
+            }
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
             // resolvido -- inalcançável na prática, mas o `match` precisa
             // ser exaustivo.
@@ -1905,17 +2359,13 @@ impl WindowState {
                     tab_bar::WindowButtonHit::Close => NewTabRequest::CloseWindowRequested,
                 };
             }
-            // Botão de configurações: zona fixa à direita, fora da
-            // trilha que rola -- resolvido em coordenadas de tela, como as
-            // pílulas de overflow logo abaixo, não pelo hit-test de
-            // conteúdo.
-            //
-            // **Inerte de propósito** (`config` é F4). O clique é
-            // consumido aqui em vez de cair na trilha: o botão está
-            // desenhado, e deixar o clique atravessar até a aba de baixo
-            // seria pior que não responder.
+            // Botão de configurações (RF-11.27): zona fixa à direita, fora
+            // da trilha que rola -- resolvido em coordenadas de tela, como
+            // as pílulas de overflow logo abaixo, não pelo hit-test de
+            // conteúdo. Abrir o arquivo é decisão de `App` (precisa de
+            // `config_path`), então só sobe o pedido.
             if tab_bar::point_in_settings_button(style, bar_width, h, is_macos(), logical_point) {
-                return NewTabRequest::None;
+                return NewTabRequest::OpenConfigFile;
             }
             if overflow.hidden_left > 0
                 && tab_bar::point_in_overflow_pill(
@@ -2710,6 +3160,32 @@ struct App {
     /// consumido por `resumed` assim que a primeira janela existe (é
     /// quando há onde empilhar o aviso).
     vanished_restored_theme: Option<String>,
+    /// RF-11.24: avisos de config do **arranque** (RF-4.21 config
+    /// inválida, RF-4.22 chave desconhecida, RF-5.18 tema desconhecido),
+    /// montados em `App::new` -- que não tem janela nenhuma ainda para
+    /// empilhar um `Warning` -- e entregues à primeira janela criada em
+    /// `resumed`, mesmo padrão de `pending_session`/`Notice`.
+    pending_startup_warnings: Vec<(Severity, &'static str, String)>,
+    /// PRD-000/etapa 6 da F6: `Instant` do início de `main` (`src/main.rs`),
+    /// atrás de `PORECATU_TRACE` -- ponto de partida de "tempo até o
+    /// primeiro prompt utilizável". Sempre presente (o custo de guardar um
+    /// `Instant` é zero); só é lido quando `trace::enabled()`.
+    process_start: Instant,
+    /// `true` depois do primeiro `Wakeup::TabDirty` do processo já ter sido
+    /// reportado como "primeiro byte do PTY" -- garante que a métrica saia
+    /// uma vez só, não a cada wakeup de toda aba que sobe depois.
+    first_pty_output_reported: bool,
+    /// `Instant` do primeiro `Wakeup::TabDirty` do processo, aguardando o
+    /// próximo `redraw` pra fechar o segundo trecho ("primeiro byte do PTY
+    /// -> primeiro frame"). Consumido (`take`) no primeiro `redraw` que
+    /// rodar depois, de qualquer janela -- só há uma aba na janela de
+    /// arranque, então não há ambiguidade de qual janela é "a" medida.
+    pending_first_frame_since: Option<Instant>,
+    /// Janela e `Instant` do início de `resumed` quando ele restaura sessão
+    /// gravada -- ("restauração de sessão" até a janela ficar interativa).
+    /// `redraw` reporta e limpa no primeiro frame **daquela** janela
+    /// especificamente (uma sessão pode abrir mais de uma).
+    pending_resumed_metric: Option<(WindowId, Instant)>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -2831,29 +3307,55 @@ impl App {
         proxy: EventLoopProxy<Wakeup>,
         cli_config: Option<PathBuf>,
         cli_directory: Option<PathBuf>,
+        process_start: Instant,
     ) -> Self {
-        // Erro de parse no start não tem widget de aviso ainda -- só um
-        // log em stderr, porque a `App` (dona da pilha de avisos, uma por
-        // janela) ainda não existe neste ponto; os defaults seguem
-        // valendo (`LoadResult::config()` nunca falta).
+        // RF-11.24: erro de parse/chave desconhecida/tema desconhecido no
+        // arranque viajam para `pending_startup_warnings` em vez de
+        // `stderr` -- a `App` (dona da pilha de avisos, uma por janela)
+        // ainda não existe neste ponto, então são entregues à primeira
+        // janela criada em `resumed` (mesmo caminho de `pending_session`,
+        // que a etapa 4 da F5 abriu). Os defaults seguem valendo
+        // (`LoadResult::config()` nunca falta).
+        let mut pending_startup_warnings = Vec::new();
         let load_result = porecatu_config::load(cli_config.as_deref());
-        if let porecatu_config::LoadResult::Invalid { error, .. } = &load_result {
-            eprintln!("config inválida, usando defaults: {error}");
+        match &load_result {
+            porecatu_config::LoadResult::Invalid { error, .. } => {
+                pending_startup_warnings.push((
+                    Severity::Error,
+                    "Config inválida",
+                    error.to_string(),
+                ));
+            }
+            porecatu_config::LoadResult::Loaded { unknown_keys, .. } => {
+                // RF-4.22: chave desconhecida é aviso, não erro -- mesma
+                // severidade/título do hot reload (`apply_config_reload`).
+                for key in unknown_keys {
+                    pending_startup_warnings.push((
+                        Severity::Warning,
+                        "Chave desconhecida na config",
+                        key.clone(),
+                    ));
+                }
+            }
+            porecatu_config::LoadResult::Missing { .. } => {}
         }
         let config = Arc::new(load_result.config().clone());
         // RF-5.18/ADR-0031 §5: nome desconhecido em `[terminal] theme` é
-        // aviso -- mesma limitação de start que o erro de config acima
-        // (sem janela ainda pra avisar de verdade).
+        // aviso.
         if !config.terminal.theme.is_empty()
             && !config
                 .themes
                 .iter()
                 .any(|t| t.name == config.terminal.theme)
         {
-            eprintln!(
-                "tema desconhecido \"{}\", usando defaults",
-                config.terminal.theme
-            );
+            pending_startup_warnings.push((
+                Severity::Warning,
+                "Tema desconhecido",
+                format!(
+                    "\"{}\" não está em [[themes]]; usando defaults.",
+                    config.terminal.theme
+                ),
+            ));
         }
         let style = TabBarStyle::from_config(&config);
         let themed = porecatu_config::apply_theme(&config, &config.terminal.theme);
@@ -2916,6 +3418,11 @@ impl App {
             shell_integration_invite_claimed: false,
             pending_shell_integration_note: None,
             vanished_restored_theme: None,
+            pending_startup_warnings,
+            process_start,
+            first_pty_output_reported: false,
+            pending_first_frame_since: None,
+            pending_resumed_metric: None,
         }
     }
 
@@ -3004,11 +3511,16 @@ impl App {
     /// `lazy_restore = false`) -- as demais ficam `NotStarted`, subindo ao
     /// primeiro foco pelo mesmo `Self::ensure_active_tab_started` de
     /// sempre.
+    ///
+    /// Devolve o `WindowId` criado (`None` só na falha rara de
+    /// `create_window_with_attributes`) -- PRD-000/etapa 6 da F6 usa o da
+    /// primeira janela restaurada pra fechar a métrica de "restauração de
+    /// sessão até janela interativa" em `resumed`/`redraw`.
     fn open_window_from_session(
         &mut self,
         event_loop: &ActiveEventLoop,
         window_v1: &porecatu_session::WindowV1,
-    ) {
+    ) -> Option<WindowId> {
         let mut attributes = base_window_attributes();
         if self.config.session.restore_window_geometry {
             let monitors: Vec<session_writer::MonitorInfo> = event_loop
@@ -3039,9 +3551,7 @@ impl App {
                 .with_maximized(resolved.maximized);
         }
 
-        let Some(mut state) = self.create_window_with_attributes(event_loop, attributes) else {
-            return;
-        };
+        let mut state = self.create_window_with_attributes(event_loop, attributes)?;
         let window_id = state.window.id();
 
         let lazy_restore = self.config.session.lazy_restore;
@@ -3080,6 +3590,7 @@ impl App {
         }
         state.sync_window_title();
         self.windows.insert(window_id, state);
+        Some(window_id)
     }
 
     /// Núcleo comum de [`Self::open_window`]/[`Self::open_window_from_session`]:
@@ -3101,9 +3612,26 @@ impl App {
         );
         window.set_ime_allowed(true);
 
+        // ADR-0043 §1: `Adapter::with_event_loop_proxy` exige a janela
+        // ainda invisível (`base_window_attributes` já garante isso,
+        // `panic` se não) -- criado antes de qualquer coisa que a torne
+        // visível, mostrada só depois.
+        let access_adapter = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        );
+        window.set_visible(true);
+
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
 
+        // RF-11.25/RF-11.26: avisos que só existem no primeiro
+        // `GpuContext::new` do processo (o `else` abaixo) -- não há
+        // `WindowState` ainda pra empilhar, então esperam até `state` ser
+        // criado no fim desta função (a primeira janela do processo,
+        // sempre).
+        let mut first_gpu_warnings: Vec<(Severity, &'static str, String)> = Vec::new();
         let window_surface = if let Some(gpu) = &mut self.gpu {
             match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
                 Ok(surface) => surface,
@@ -3117,12 +3645,33 @@ impl App {
                 }
             }
         } else {
-            let (gpu, window_surface) = GpuContext::new(
+            let (mut gpu, window_surface) = GpuContext::new(
                 Arc::clone(&window),
                 size.width,
                 size.height,
                 font_families_from_config(&self.config),
             );
+            // RF-11.26/ADR-0001: ausência de aceleração detectada no
+            // primeiro adapter -- avisa uma vez, nunca `panic`.
+            if gpu.software_rendering() {
+                first_gpu_warnings.push((
+                    Severity::Warning,
+                    "Sem aceleração de GPU",
+                    "Nenhum adapter com aceleração de hardware foi encontrado; \
+                     desenhando por software (mais lento)."
+                        .to_owned(),
+                ));
+            }
+            // RF-5.8/RF-11.25: família de `[terminal.font] family` ausente
+            // no sistema -- o fallback já rodou sozinho, isto só nomeia o
+            // que faltou.
+            if let Some(family) = gpu.text_measurer().missing_mono_family() {
+                first_gpu_warnings.push((
+                    Severity::Warning,
+                    "Família de fonte não encontrada",
+                    format!("\"{family}\" não está instalada; usando uma monoespaçada do sistema."),
+                ));
+            }
             self.gpu = Some(gpu);
             window_surface
         };
@@ -3144,10 +3693,18 @@ impl App {
             self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
         }
 
-        let mut state = WindowState::new(window, window_surface, scale);
+        let mut state = WindowState::new(window, window_surface, scale, access_adapter);
         state
             .animations
             .set_enabled(self.config.appearance.window.animations);
+        // RF-11.25/RF-11.26: entregues aqui porque `state` (a primeira
+        // janela do processo, sempre que `first_gpu_warnings` não está
+        // vazio) acabou de nascer -- não existia antes, nos dois `if`
+        // acima.
+        let now = Instant::now();
+        for (severity, title, body) in first_gpu_warnings {
+            state.warnings.push(severity, title, body, now);
+        }
         Some(state)
     }
 
@@ -3333,6 +3890,70 @@ impl App {
         }
     }
 
+    /// Espelha `run_menu_action`, para o menu de contexto do terminal
+    /// (RF-11.14 a RF-11.16). Copiar/colar/selecionar tudo/buscar chamam
+    /// exatamente as mesmas funções que a tecla usa (`input::
+    /// clipboard_copy`/`clipboard_paste`, `Terminal::select_all`,
+    /// `Action::SearchOpen`'s dispatch) -- tecla e menu não podem divergir
+    /// (lição da F3, ADR-0042 §10). Abrir/copiar link reusam a mesma
+    /// célula do clique que abriu o menu (`menu.anchor`), não a posição
+    /// corrente do cursor -- o menu pode ter sido navegado por teclado.
+    fn run_terminal_menu_action(
+        &mut self,
+        window_id: WindowId,
+        menu: TerminalContextMenu,
+        action: TerminalMenuAction,
+    ) {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let Some(runtime) = state.tabs.get(&menu.tab) else {
+            return;
+        };
+        match action {
+            TerminalMenuAction::Copy => input::clipboard_copy(&runtime.terminal),
+            TerminalMenuAction::Paste => {
+                let modes = runtime.terminal.modes();
+                input::clipboard_paste(&runtime.terminal, &modes);
+            }
+            TerminalMenuAction::SelectAll => runtime.terminal.select_all(),
+            TerminalMenuAction::OpenSearch => {
+                runtime.terminal.clear_selection();
+                if state.search.as_ref().map(SearchBarState::tab) != Some(menu.tab) {
+                    state.search = Some(SearchBarState::new(menu.tab));
+                }
+            }
+            TerminalMenuAction::OpenLink | TerminalMenuAction::CopyLink => {
+                let content = paint::terminal_content_rect(
+                    &self.style,
+                    bar_height(&self.style),
+                    state.logical_width,
+                    state.logical_height,
+                );
+                let content_x = ((menu.anchor.0 - content.x) * state.scale).max(0.0) as f64;
+                let content_y = ((menu.anchor.1 - content.y) * state.scale).max(0.0) as f64;
+                let cell = input::cell_at(
+                    content_x,
+                    content_y,
+                    self.cell_metrics,
+                    runtime.snapshot.rows.max(MIN_GRID),
+                    runtime.snapshot.cols.max(MIN_GRID),
+                );
+                let uri =
+                    hyperlink::uri_at(&runtime.snapshot, cell.row, cell.col).map(str::to_string);
+                if let Some(uri) = uri {
+                    if action == TerminalMenuAction::CopyLink {
+                        clipboard::copy(&uri);
+                    } else {
+                        let outcome = hyperlink::open_hyperlink(&uri);
+                        state.report_link_outcome(outcome, &uri, Instant::now());
+                    }
+                }
+            }
+        }
+        state.window.request_redraw();
+    }
+
     /// RF-3.6: único ponto que decide se a sessão persiste -- o debounce
     /// e a gravação síncrona do exit consultam isto, nunca a config
     /// direto. RF-3.12/ADR-0040 §2: o modo de caminho posicional nunca
@@ -3444,6 +4065,12 @@ impl App {
     /// quando não há nada pendente em nenhuma janela, o event loop dorme
     /// de verdade (`ControlFlow::Wait`).
     fn schedule_next_wake(&mut self, event_loop: &ActiveEventLoop) {
+        // ADR-0043 §3: "a atualização acontece na volta do event loop que
+        // mudou o estado -- no mesmo ponto único onde `schedule_next_wake`
+        // já drena o que sujou". Nunca dentro do caminho de render, nunca
+        // pede frame -- `refresh_all_access_trees` só monta e entrega
+        // dados, ver o comentário de `WindowState::refresh_access_tree`.
+        self.refresh_all_access_trees();
         let now = Instant::now();
         // RF-3.2: qualquer janela suja (re)agenda o debounce único do
         // processo -- RF-3.17, um arquivo para todas. Drenado aqui, não
@@ -3468,6 +4095,24 @@ impl App {
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+
+    /// Chamado uma vez por volta do event loop (ver `schedule_next_wake`),
+    /// para toda janela -- não só a que mudou, porque esta função não sabe
+    /// (nem precisa saber) qual mudou: `update_if_active` já filtra pra
+    /// zero custo sem cliente de acessibilidade conectado naquela janela
+    /// específica. Sem `self.gpu` (nunca deveria acontecer depois da
+    /// primeira janela), não há `TextMeasurer` pra montar nada -- sai
+    /// cedo.
+    fn refresh_all_access_trees(&mut self) {
+        let Some(gpu) = &mut self.gpu else {
+            return;
+        };
+        let measurer = gpu.text_measurer();
+        let style = &self.style;
+        for state in self.windows.values_mut() {
+            state.refresh_access_tree(style, measurer);
         }
     }
 
@@ -3881,11 +4526,20 @@ impl ApplicationHandler<Wakeup> for App {
         if !self.windows.is_empty() {
             return;
         }
+        // PRD-000/etapa 6 da F6: início de "restauração de sessão até
+        // janela interativa" -- só vira métrica de fato se o `match`
+        // abaixo cair no ramo de restauração (arma `pending_resumed_metric`
+        // com o `WindowId` da primeira janela restaurada).
+        let resumed_start = Instant::now();
         // RF-3.12/ADR-0040 §2: uma janela, uma aba, `cwd` no diretório
         // pedido -- vence `startup_directory` e nem consulta
         // `pending_session` (que já não foi carregado, ver `App::new`).
+        // RF-11.24 é independente da sessão (a config é lida sempre, em
+        // `App::new`) -- os avisos de arranque continuam sendo entregues
+        // aqui, mesmo que a restauração de sessão nem rode neste modo.
         if let Some(dir) = self.positional_directory.clone() {
             self.open_window_with(event_loop, base_window_attributes(), Some(dir));
+            self.deliver_pending_startup_warnings();
             return;
         }
         let outcome = self.pending_session.take().unwrap_or_default();
@@ -3896,8 +4550,17 @@ impl ApplicationHandler<Wakeup> for App {
                 // janela -- `font_zoom_px` decide a métrica de célula que
                 // todas elas vão usar (ver o comentário do método).
                 self.apply_restored_session_state(session);
+                let mut restored_window_id = None;
                 for window_v1 in &session.windows {
-                    self.open_window_from_session(event_loop, window_v1);
+                    let window_id = self.open_window_from_session(event_loop, window_v1);
+                    if restored_window_id.is_none() {
+                        restored_window_id = window_id;
+                    }
+                }
+                if trace::enabled()
+                    && let Some(window_id) = restored_window_id
+                {
+                    self.pending_resumed_metric = Some((window_id, resumed_start));
                 }
             }
             _ => self.open_window(event_loop, None),
@@ -3920,13 +4583,21 @@ impl ApplicationHandler<Wakeup> for App {
             }
             state.window.request_redraw();
         }
+        self.deliver_pending_startup_warnings();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
         let (window, tab_id) = match event {
-            Wakeup::TabDirty { window, tab } => (window, tab),
+            Wakeup::TabDirty { window, tab } => {
+                self.mark_first_pty_output();
+                (window, tab)
+            }
             Wakeup::ConfigReloaded(outcome) => {
                 self.apply_config_reload(*outcome, Instant::now());
+                return;
+            }
+            Wakeup::AccessKit(evt) => {
+                self.handle_accesskit_event(evt);
                 return;
             }
         };
@@ -4056,6 +4727,13 @@ impl ApplicationHandler<Wakeup> for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // ADR-0043 §1: "deve ser chamado sempre que um evento de janela
+        // novo é recebido e antes dele ser tratado pela aplicação" -- o
+        // adaptador precisa ver todo `WindowEvent`, mesmo os que `App`
+        // ignora.
+        if let Some(state) = self.windows.get_mut(&window_id) {
+            state.access_adapter.process_event(&state.window, &event);
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.request_close_window(window_id, event_loop);
@@ -4174,6 +4852,78 @@ impl ApplicationHandler<Wakeup> for App {
 }
 
 impl App {
+    /// RF-11.24: entrega `pending_startup_warnings` (montados em
+    /// `App::new`, antes de qualquer janela existir) à primeira janela do
+    /// processo -- chamado nos dois caminhos de `resumed` (modo posicional
+    /// e modo normal), porque a config é lida sempre, independente de
+    /// sessão. Sem efeito se a lista já foi drenada (`resumed` só roda uma
+    /// vez de verdade: a guarda `!self.windows.is_empty()` no topo garante
+    /// isso).
+    fn deliver_pending_startup_warnings(&mut self) {
+        if self.pending_startup_warnings.is_empty() {
+            return;
+        }
+        let Some(state) = self.windows.values_mut().next() else {
+            return;
+        };
+        let now = Instant::now();
+        for (severity, title, body) in self.pending_startup_warnings.drain(..) {
+            state.warnings.push(severity, title, body, now);
+        }
+        state.window.request_redraw();
+    }
+
+    /// ADR-0043 §1/§3: roteia o evento do adaptador de acessibilidade
+    /// daquela janela. `InitialTreeRequested` (o cliente acabou de
+    /// conectar) monta e entrega a árvore inteira -- `Adapter::update_if_
+    /// active` só chama a função se ele seguir ativo no instante da
+    /// chamada, então não há corrida com uma desativação que chegou entre
+    /// os dois eventos. `ActionRequested` não é despachado nesta etapa
+    /// (RF-11.17/18 pedem exposição, não interação via leitor de tela --
+    /// dívida registrada no roadmap), e `AccessibilityDeactivated` não
+    /// precisa de nada do lado de `App`: o adaptador já sabe que ficou
+    /// inativo, e a próxima `update_if_active` vira no-op sozinha.
+    fn handle_accesskit_event(&mut self, event: accesskit_winit::Event) {
+        if !matches!(
+            event.window_event,
+            accesskit_winit::WindowEvent::InitialTreeRequested
+        ) {
+            return;
+        }
+        self.refresh_access_tree(event.window_id);
+    }
+
+    /// Ponto único de atualização da árvore (ADR-0043 §3): chamado daqui
+    /// (árvore inicial) e de `schedule_next_wake` (na volta do event loop,
+    /// nunca dentro do caminho de render). `update_if_active` decide
+    /// sozinho se há cliente conectado -- sem leitor de tela, a função de
+    /// montagem nem roda, custo zero. Nunca chama `request_redraw`: a
+    /// árvore e o frame são consumidores independentes do mesmo estado.
+    fn refresh_access_tree(&mut self, window_id: WindowId) {
+        let Some(gpu) = &mut self.gpu else { return };
+        let measurer = gpu.text_measurer();
+        let style = &self.style;
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        state.refresh_access_tree(style, measurer);
+    }
+
+    /// PRD-000/etapa 6 da F6: primeiro `Wakeup::TabDirty` do processo é a
+    /// aproximação de "primeiro byte do PTY" (o motor só acorda o wakeup
+    /// quando tem dado novo para desenhar) -- reporta o trecho desde `main`
+    /// e arma [`Self::pending_first_frame_since`] pro próximo `redraw`
+    /// fechar o segundo trecho. No-op (sem tocar `Instant::now()`) sem
+    /// `PORECATU_TRACE` ou depois da primeira vez.
+    fn mark_first_pty_output(&mut self) {
+        if !trace::enabled() || self.first_pty_output_reported {
+            return;
+        }
+        self.first_pty_output_reported = true;
+        trace::report("main -> primeiro byte do PTY", self.process_start);
+        self.pending_first_frame_since = Some(Instant::now());
+    }
+
     fn dispatch_keyboard_input(
         &mut self,
         window_id: WindowId,
@@ -4183,6 +4933,12 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
+        // PRD-000/etapa 6 da F6: início do trecho "tecla -> pixel" -- só no
+        // press (`Released` não desenha nada de novo), e só com
+        // `PORECATU_TRACE` setada. `redraw` consome e reporta.
+        if trace::enabled() && key.state == ElementState::Pressed {
+            state.key_trace_pending = Some(Instant::now());
+        }
         // ADR-0022: qualquer tecla descarta animação em curso e aplica o
         // estado final na hora -- a animação nunca bloqueia input.
         state.animations.clear();
@@ -4231,6 +4987,19 @@ impl App {
                     &self.term_params,
                     &self.config.shell,
                 );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+        if state.terminal_context_menu.is_some() {
+            let menu = state.terminal_context_menu;
+            if let Some(action) =
+                state.handle_terminal_menu_key(&key, &self.style, self.cell_metrics)
+                && let Some(menu) = menu
+            {
+                self.run_terminal_menu_action(window_id, menu, action);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -4308,6 +5077,19 @@ impl App {
         {
             state.selection.clear();
             state.window.request_redraw();
+            return;
+        }
+
+        // Barra de busca (ADR-0041 §3): captura **parcial**, a única não
+        // modal do app. Reivindica só texto imprimível, `Enter`/`Shift+
+        // Enter`/`Esc` e as teclas de edição do ADR-0035
+        // (`handle_search_key`/`apply_text_field_key`) -- tudo o mais
+        // (inclusive `F3`, que chega ao passo 2 abaixo) cai para a tabela
+        // de keybindings normalmente, diferente dos modos acima.
+        if state.search.is_some() && state.handle_search_key(&key, self.cell_metrics) {
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
             return;
         }
 
@@ -4470,6 +5252,7 @@ impl App {
         if state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
         {
             return;
@@ -4577,6 +5360,35 @@ impl App {
             state.window.request_redraw();
             return;
         }
+        // Menu de contexto do terminal: mesmo tratamento dos dois acima.
+        if let Some(menu) = &mut state.terminal_context_menu {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let items = terminal_menu_context_items(
+                &state.tabs,
+                &self.style,
+                self.cell_metrics,
+                state.logical_width,
+                state.logical_height,
+                state.scale,
+                menu.tab,
+                menu.anchor,
+            );
+            let layout = overlay::layout_terminal_menu(
+                menu,
+                items.len(),
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            if let Some(index) = overlay::terminal_menu_hit(&layout, logical_point) {
+                menu.set_highlight(index, &items);
+            }
+            state.window.request_redraw();
+            return;
+        }
         // Editor de grupo: hover move o realce dentro da faixa de
         // swatches/lista de ações -- o campo de nome não tem realce
         // próprio (espec. §2.10: só faixa e lista navegam por realce).
@@ -4662,6 +5474,54 @@ impl App {
             );
             if let Some(index) = overlay::move_to_group_hit(&layout, logical_point) {
                 popover.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+
+        // Arraste dentro do campo da busca (ADR-0035/ADR-0041 §3): mesmo
+        // padrão do editor de grupo -- só entra aqui com o botão esquerdo
+        // já pressionado a partir de um clique no próprio campo (o único
+        // lugar que arma `mouse_button_down` na busca).
+        if state.mouse_button_down == Some(MouseButton::Left)
+            && state.search.is_some()
+            && let Some(gpu) = &mut self.gpu
+        {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let box_rect = paint::terminal_box_rect(
+                &self.style,
+                bar_height(&self.style),
+                state.logical_width,
+                state.logical_height,
+            );
+            let layout = search_bar::layout_search_bar(box_rect, &self.style);
+            let measurer = gpu.text_measurer();
+            if let Some(search) = state.search.as_mut() {
+                let buffer = search.field().text().to_string();
+                let text_width = measurer.measure_width(
+                    &buffer,
+                    chrome::LABEL_FONT,
+                    search_bar::FIELD_FONT_SIZE,
+                );
+                let text_area =
+                    (layout.field_rect.width - search_bar::FIELD_PADDING_X * 2.0).max(0.0);
+                let text_x = tab_bar::scrolled_text_x(
+                    layout.field_rect.x,
+                    search_bar::FIELD_PADDING_X,
+                    text_width,
+                    text_area,
+                );
+                let local_x = logical_point.0 - text_x;
+                let byte_index = measurer.index_at_offset(
+                    &buffer,
+                    chrome::LABEL_FONT,
+                    search_bar::FIELD_FONT_SIZE,
+                    local_x,
+                );
+                search.field_mut().drag_to(byte_index);
             }
             state.window.request_redraw();
             return;
@@ -4806,8 +5666,49 @@ impl App {
             state.window.is_maximized(),
             self.config.appearance.window_controls.resize_border as f32,
         );
+        // Affordance de hyperlink (ADR-0042 §3, RF-11.11): "o cursor do
+        // mouse muda de forma" -- resize de borda vence (não há como as
+        // duas zonas colidirem na prática, mas a ordem segue a mesma
+        // prioridade do `match` abaixo). Qualquer popover que capturaria o
+        // clique também suprime isto -- mesma lista de `redraw`.
+        let overlay_open = state.dialog.is_some()
+            || state.context_menu.is_some()
+            || state.group_context_menu.is_some()
+            || state.terminal_context_menu.is_some()
+            || state.group_editor.is_some()
+            || state.move_to_group.is_some()
+            || state.rename.editing_tab().is_some();
+        let link_modifier = if is_macos() {
+            state.modifiers.super_
+        } else {
+            state.modifiers.ctrl
+        };
+        let over_link = self.config.terminal.hyperlinks.enabled
+            && link_modifier
+            && resize_direction.is_none()
+            && !overlay_open
+            && !state.in_bar(position.y, &self.style)
+            && state.active_runtime().is_some_and(|rt| {
+                let content = paint::terminal_content_rect(
+                    &self.style,
+                    bar_height(&self.style),
+                    state.logical_width,
+                    state.logical_height,
+                );
+                let content_x = position.x - (content.x * state.scale) as f64;
+                let content_y = position.y - (content.y * state.scale) as f64;
+                let cell = input::cell_at(
+                    content_x.max(0.0),
+                    content_y.max(0.0),
+                    self.cell_metrics,
+                    rt.snapshot.rows.max(MIN_GRID),
+                    rt.snapshot.cols.max(MIN_GRID),
+                );
+                hyperlink::uri_at(&rt.snapshot, cell.row, cell.col).is_some()
+            });
         state.window.set_cursor(match resize_direction {
             Some(direction) => CursorIcon::from(direction),
+            None if over_link => CursorIcon::Pointer,
             None => CursorIcon::Default,
         });
 
@@ -4993,6 +5894,39 @@ impl App {
             return;
         }
 
+        // Menu de contexto do terminal: mesmo padrão dos dois acima.
+        if let Some(menu) = state.terminal_context_menu {
+            let items = terminal_menu_context_items(
+                &state.tabs,
+                &self.style,
+                self.cell_metrics,
+                state.logical_width,
+                state.logical_height,
+                state.scale,
+                menu.tab,
+                menu.anchor,
+            );
+            let layout = overlay::layout_terminal_menu(
+                &menu,
+                items.len(),
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            let hit = overlay::terminal_menu_hit(&layout, logical_point);
+            state.terminal_context_menu = None;
+            if button == MouseButton::Left
+                && let Some(index) = hit
+                && items[index].enabled
+            {
+                self.run_terminal_menu_action(window_id, menu, items[index].action);
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
         // Editor de grupo: clique no campo/swatch/ação; fora fecha.
         if state.group_editor.is_some() {
             self.dispatch_group_editor_click(window_id, logical_point, button);
@@ -5043,6 +5977,79 @@ impl App {
             }
             state.window.request_redraw();
             return;
+        }
+
+        // Barra de busca (ADR-0041 §3): captura parcial -- clique **dentro**
+        // dela é dela (não é modal, mas a barra é opaca: o clique não vaza
+        // pra grade por baixo); fora, cai pra barra de abas/grade como
+        // sempre. Só o botão esquerdo age; qualquer outro é ignorado sem
+        // fechar nada (mesma régua do editor de grupo).
+        if let Some(search_tab) = state.search.as_ref().map(SearchBarState::tab) {
+            let box_rect = paint::terminal_box_rect(
+                &self.style,
+                bar_height(&self.style),
+                state.logical_width,
+                state.logical_height,
+            );
+            let layout = search_bar::layout_search_bar(box_rect, &self.style);
+            let inside_bar = logical_point.0 >= layout.bar_rect.x
+                && logical_point.0 < layout.bar_rect.x + layout.bar_rect.width
+                && logical_point.1 >= layout.bar_rect.y
+                && logical_point.1 < layout.bar_rect.y + layout.bar_rect.height;
+            if inside_bar {
+                if button == MouseButton::Left {
+                    match search_bar::search_bar_hit(&layout, logical_point) {
+                        Some(SearchBarHit::Close) => state.search = None,
+                        Some(SearchBarHit::Toggle) => {
+                            if let Some(rt) = state.tabs.get(&search_tab)
+                                && let Some(search) = state.search.as_mut()
+                            {
+                                search.toggle_regex(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
+                            }
+                        }
+                        Some(SearchBarHit::Prev) => {
+                            state.advance_search(search_tab, false, self.cell_metrics);
+                        }
+                        Some(SearchBarHit::Next) => {
+                            state.advance_search(search_tab, true, self.cell_metrics);
+                        }
+                        Some(SearchBarHit::Field) => {
+                            if let Some(gpu) = &mut self.gpu {
+                                let measurer = gpu.text_measurer();
+                                if let Some(search) = state.search.as_mut() {
+                                    let buffer = search.field().text().to_string();
+                                    let text_width = measurer.measure_width(
+                                        &buffer,
+                                        chrome::LABEL_FONT,
+                                        search_bar::FIELD_FONT_SIZE,
+                                    );
+                                    let text_area = (layout.field_rect.width
+                                        - search_bar::FIELD_PADDING_X * 2.0)
+                                        .max(0.0);
+                                    let text_x = tab_bar::scrolled_text_x(
+                                        layout.field_rect.x,
+                                        search_bar::FIELD_PADDING_X,
+                                        text_width,
+                                        text_area,
+                                    );
+                                    let local_x = logical_point.0 - text_x;
+                                    let byte_index = measurer.index_at_offset(
+                                        &buffer,
+                                        chrome::LABEL_FONT,
+                                        search_bar::FIELD_FONT_SIZE,
+                                        local_x,
+                                    );
+                                    search.field_mut().click_at(byte_index);
+                                    state.mouse_button_down = Some(button);
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                state.window.request_redraw();
+                return;
+            }
         }
 
         // Resize por borda (ADR-0027): janela inteira, fora de qualquer
@@ -5143,6 +6150,14 @@ impl App {
                 NewTabRequest::CloseWindowRequested => {
                     self.request_close_window(window_id, event_loop);
                 }
+                NewTabRequest::OpenConfigFile => {
+                    open_config_file(
+                        self.config_path.as_deref(),
+                        &mut state.warnings,
+                        Instant::now(),
+                    );
+                    state.window.request_redraw();
+                }
                 NewTabRequest::None => {
                     state.window.request_redraw();
                 }
@@ -5154,6 +6169,67 @@ impl App {
         if !state.in_bar(state.cursor_position.1, &self.style) {
             let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
             let active_id = state.workspace.active_tab();
+
+            // Affordance de hyperlink (ADR-0042 §2/§3): o mesmo modificador
+            // que já desenha o sublinhado. Vence a prioridade do programa
+            // como o `Shift` já vence pra seleção (ADR-0013) -- é a razão
+            // de existir de um modificador dedicado: um clique com ele é
+            // sempre "abrir o link", nunca reportado ao programa.
+            let link_modifier = if is_macos() {
+                state.modifiers.super_
+            } else {
+                state.modifiers.ctrl
+            };
+            if button == MouseButton::Left
+                && self.config.terminal.hyperlinks.enabled
+                && link_modifier
+                && let Some(id) = active_id
+                && let Some(uri) = state
+                    .tabs
+                    .get(&id)
+                    .and_then(|rt| hyperlink::uri_at(&rt.snapshot, cell.row, cell.col))
+                    .map(str::to_string)
+            {
+                let outcome = hyperlink::open_hyperlink(&uri);
+                state.report_link_outcome(outcome, &uri, Instant::now());
+                state.window.request_redraw();
+                return;
+            }
+
+            // Clique secundário (RF-11.14): só quando o terminal não faria
+            // nada com ele mesmo -- programa com mouse reporting pedido
+            // (sem `Shift`) continua ganhando a prioridade de sempre
+            // (ADR-0013), a mesma regra que `input::handle_mouse_button`
+            // já aplica pros outros botões.
+            let program_wants_mouse =
+                active_id
+                    .and_then(|id| state.tabs.get(&id))
+                    .is_some_and(|rt| {
+                        !state.modifiers.shift
+                            && rt.terminal.modes().mouse_reporting != MouseReporting::None
+                    });
+            if button == MouseButton::Right
+                && !program_wants_mouse
+                && let Some(id) = active_id
+            {
+                state.close_all_popovers();
+                let items = terminal_menu_context_items(
+                    &state.tabs,
+                    &self.style,
+                    self.cell_metrics,
+                    state.logical_width,
+                    state.logical_height,
+                    state.scale,
+                    id,
+                    logical_point,
+                );
+                state.terminal_context_menu =
+                    Some(TerminalContextMenu::new(id, logical_point, &items));
+                state.hover.dismiss();
+                state.window.request_redraw();
+                return;
+            }
+
             if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
                 input::handle_mouse_button(
                     &runtime.terminal,
@@ -5341,10 +6417,68 @@ impl App {
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
         let h = bar_height(style);
+        // A busca é por aba (RF-11.1) -- trocar de aba fecha a que estava
+        // aberta, em vez de continuar mostrando o realce/estado de uma
+        // aba que não está mais em tela.
+        if let Some(search) = &state.search
+            && Some(search.tab()) != state.workspace.active_tab()
+        {
+            state.search = None;
+        }
+
+        // Affordance de hyperlink (ADR-0042 §3): calculada do zero a cada
+        // frame a partir do cursor e do modificador, mesmo padrão de
+        // `bar_hover`/`hover_window_button` acima -- nada guardado, só
+        // recomputado. `enabled = false` desliga a affordance junto com o
+        // resto do recurso (ADR-0042 §5). Qualquer popover que capturaria
+        // o clique também suprime o hover -- ele não seria acionável ali.
+        let link_modifier = if is_mac {
+            state.modifiers.super_
+        } else {
+            state.modifiers.ctrl
+        };
+        let hyperlink_overlay_blocks_hover = state.dialog.is_some()
+            || state.context_menu.is_some()
+            || state.group_context_menu.is_some()
+            || state.terminal_context_menu.is_some()
+            || state.group_editor.is_some()
+            || state.move_to_group.is_some()
+            || state.rename.editing_tab().is_some();
+        let hovering_grid = !state.in_bar(state.cursor_position.1, style);
+        let hover_content =
+            paint::terminal_content_rect(style, h, state.logical_width, state.logical_height);
+        let hover_content_x = state.cursor_position.0 - (hover_content.x * state.scale) as f64;
+        let hover_content_y = state.cursor_position.1 - (hover_content.y * state.scale) as f64;
+
         if let Some(id) = state.workspace.active_tab()
             && let Some(runtime) = state.tabs.get_mut(&id)
         {
             runtime.terminal.snapshot_into(&mut runtime.snapshot);
+
+            // Busca (ADR-0041): varre mais um lote por frame enquanto
+            // houver, sem travar a UI (item 5 da etapa 1) -- pede outro
+            // redraw imediatamente se ainda não terminou (não é o relógio
+            // de animação do ADR-0022, que a §9 fecha em dois consumidores;
+            // isto é o mesmo padrão de "saída do PTY continua chegando em
+            // frames seguintes"). Corta as ocorrências pela vista e limpa
+            // o buffer sem realocar (ADR-0007) -- `TermEngine::
+            // snapshot_into` só zera (já aconteceu na chamada acima); quem
+            // preenche é `porecatu-ui` (ADR-0041 §4).
+            if let Some(search) = state.search.as_mut() {
+                if search.step(&runtime.terminal) {
+                    state.window.request_redraw();
+                }
+                let scroll_offset = runtime.snapshot.scroll_offset;
+                let rows = runtime.snapshot.rows;
+                search_bar::occurrences_in_view(
+                    search.occurrences(),
+                    search.active_index(),
+                    scroll_offset,
+                    rows,
+                    &mut runtime.snapshot.occurrences,
+                );
+            }
+
             let box_rect =
                 paint::terminal_box_rect(style, h, state.logical_width, state.logical_height);
             let cursor_config = &self.config.terminal.cursor;
@@ -5359,6 +6493,22 @@ impl App {
                 width: cursor_config.width as f32,
                 hollow: !state.focused && cursor_config.unfocused_hollow,
             };
+            let hyperlink_hover: Vec<HyperlinkSpan> = if self.config.terminal.hyperlinks.enabled
+                && link_modifier
+                && hovering_grid
+                && !hyperlink_overlay_blocks_hover
+            {
+                let cell = input::cell_at(
+                    hover_content_x.max(0.0),
+                    hover_content_y.max(0.0),
+                    self.cell_metrics,
+                    runtime.snapshot.rows.max(MIN_GRID),
+                    runtime.snapshot.cols.max(MIN_GRID),
+                );
+                hyperlink::spans_sharing_id_at(&runtime.snapshot, cell.row, cell.col)
+            } else {
+                Vec::new()
+            };
             let primitives = paint::build_primitives(
                 &runtime.snapshot,
                 self.cell_metrics,
@@ -5368,8 +6518,30 @@ impl App {
                 &self.term_pal,
                 cursor,
                 gpu.text_measurer(),
+                &hyperlink_hover,
             );
             frame.set_layer(Layer::Grid, primitives);
+
+            if let Some(search) = &state.search {
+                let search_layout = search_bar::layout_search_bar(box_rect, style);
+                let cursor_logical = (
+                    state.cursor_position.0 as f32 / state.scale,
+                    state.cursor_position.1 as f32 / state.scale,
+                );
+                let search_hover = search_bar::search_bar_hit(&search_layout, cursor_logical);
+                let search_primitives = search_bar::paint_search_bar(
+                    &search_layout,
+                    search,
+                    style,
+                    pal,
+                    &self.term_pal,
+                    search_hover,
+                    gpu.text_measurer(),
+                );
+                for primitive in search_primitives {
+                    frame.push(Layer::Chrome, primitive);
+                }
+            }
         }
 
         if !state.warnings.is_empty() {
@@ -5425,6 +6597,32 @@ impl App {
                 state.logical_height,
             );
             popover.extend(overlay::paint_group_menu(
+                &layout,
+                &items,
+                menu.highlighted(),
+                config,
+                pal,
+            ));
+        }
+        if let Some(menu) = &state.terminal_context_menu {
+            let items = terminal_menu_context_items(
+                &state.tabs,
+                style,
+                self.cell_metrics,
+                state.logical_width,
+                state.logical_height,
+                state.scale,
+                menu.tab,
+                menu.anchor,
+            );
+            let layout = overlay::layout_terminal_menu(
+                menu,
+                items.len(),
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            popover.extend(overlay::paint_terminal_menu(
                 &layout,
                 &items,
                 menu.highlighted(),
@@ -5513,6 +6711,29 @@ impl App {
         // diferente da do box para o quadro aparecer -- a mesma da barra de
         // abas, já que os dois formam o "quadro" do app.
         state.window_surface.render(gpu, pal.bar_background, &frame);
+
+        // PRD-000/etapa 6 da F6: os três trechos que fecham aqui, no
+        // primeiro `redraw` depois de cada armadilha -- nenhum consulta
+        // `trace::enabled()` mais de uma vez por trecho, e nenhum sobrevive
+        // além do primeiro relato (métrica é "primeiro X", não amostra
+        // contínua, exceto tecla -> pixel, que é por natureza repetida).
+        if trace::enabled() {
+            if let Some(since) = state.key_trace_pending.take() {
+                trace::report("tecla -> pixel", since);
+            }
+            if let Some(since) = self.pending_first_frame_since.take() {
+                trace::report("primeiro byte do PTY -> primeiro frame", since);
+            }
+            if let Some((metric_window, since)) = self.pending_resumed_metric
+                && metric_window == window_id
+            {
+                trace::report(
+                    "resumed -> janela interativa (restauração de sessão)",
+                    since,
+                );
+                self.pending_resumed_metric = None;
+            }
+        }
     }
 }
 
@@ -5520,13 +6741,15 @@ impl App {
 /// janelas fecharem (ADR-0015). `cli_config`/`cli_directory` vêm do parse
 /// de `argv` em `src/main.rs` (ADR-0040 §4) -- `--config` e o caminho
 /// posicional do RF-3.12, já validados lá (caminho posicional inexistente
-/// ou que não é diretório nunca chega até aqui).
-pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>) {
+/// ou que não é diretório nunca chega até aqui). `process_start` é o
+/// `Instant` do início de `main` -- ponto de partida de "tempo até o
+/// primeiro prompt utilizável" (PRD-000, `PORECATU_TRACE`, etapa 6 da F6).
+pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>, process_start: Instant) {
     let event_loop = EventLoop::<Wakeup>::with_user_event()
         .build()
         .expect("falha ao criar event loop");
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy, cli_config, cli_directory);
+    let mut app = App::new(proxy, cli_config, cli_directory, process_start);
     event_loop
         .run_app(&mut app)
         .expect("event loop terminou com erro");

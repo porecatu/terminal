@@ -18,7 +18,10 @@ use porecatu_core::GroupColor;
 use porecatu_render::Color;
 use porecatu_term::TermColor;
 
-const fn hex(r: u8, g: u8, b: u8) -> Color {
+// `pub(crate)`: `search_bar.rs` reusa para o toggle de regex (ADR-0041
+// §6) -- trilho/botão sem chave no TOML, mesmo padrão de `TRANSPARENT`
+// abaixo.
+pub(crate) const fn hex(r: u8, g: u8, b: u8) -> Color {
     Color {
         r: r as f64 / 255.0,
         g: g as f64 / 255.0,
@@ -27,7 +30,7 @@ const fn hex(r: u8, g: u8, b: u8) -> Color {
     }
 }
 
-const fn hex_alpha(r: u8, g: u8, b: u8, a: f64) -> Color {
+pub(crate) const fn hex_alpha(r: u8, g: u8, b: u8, a: f64) -> Color {
     Color {
         r: r as f64 / 255.0,
         g: g as f64 / 255.0,
@@ -64,6 +67,14 @@ pub const TRANSPARENT: Color = Color {
     b: 0.0,
     a: 0.0,
 };
+
+/// Texto da ocorrência ativa da busca (ADR-0041 §5): "o tom escuro que a
+/// pílula de grupo já usa sobre cor cheia" (`#12151a`, §1.4) -- o fundo é
+/// `ResolvedTermPalette::cursor` (mesmo acento, já `#5ed3bc`), sem par
+/// próprio em `ResolvedTermPalette` porque os dois já existem alhures;
+/// juntar os dois aqui evitaria alargar essa struct por duas constantes
+/// fixas que não variam por tema.
+pub const OCCURRENCE_ACTIVE_TEXT: Color = hex(0x12, 0x15, 0x1a);
 
 fn cube_channel(n: u8) -> u8 {
     if n == 0 { 0 } else { 55 + 40 * n }

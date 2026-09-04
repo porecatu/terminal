@@ -10,11 +10,16 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.98.0"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/porecatu/terminal"
+# ADR-0044/ADR-0045 (etapa 6 da F6): campos que os empacotadores (cargo-wix,
+# cargo-deb) leem do manifesto -- publisher do MSI, "Description" do .deb.
+# Nenhum crate os consome; existem só para o empacotamento.
+authors = ["Porecatu contributors"]
+description = "Cross-platform terminal emulator with tabs, named groups, and persistent sessions"
 
 [package]
 name = "porecatu"
@@ -23,6 +28,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+authors.workspace = true
+description.workspace = true
 
 [[bin]]
 name = "porecatu"
@@ -30,6 +37,38 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+# ADR-0044 §5: sem assinatura de código no v1, e sem diálogo de aceite de EULA
+# no instalador MSI -- o GPLv3 acompanha como arquivo (LICENSE, RF-11.21), não
+# como clique-para-aceitar. `false` silencia o aviso do cargo-wix; não é
+# ausência de licença, é a licença não ser um gate de instalação.
+[package.metadata.wix]
+eula = false
+
+# ADR-0044 (etapa 6 da F6): pacote .deb via cargo-deb --no-build (não
+# recompila -- critério 2 do ADR), consumindo o binário que o `release.yml`
+# já compilou. `target/release/<bin>` é o prefixo mágico que o próprio
+# cargo-deb reescreve para o diretório real do `--target` passado na CLI,
+# mesmo cruzando arquitetura -- não um caminho literal.
+[package.metadata.deb]
+maintainer = "Porecatu contributors"
+copyright = "2026, Porecatu contributors"
+depends = "$auto"
+section = "utils"
+priority = "optional"
+extended-description = """\
+Emulador de terminal com gestão de muitos terminais: abas, grupos nomeados \
+e sessão persistente. Não busca conformidade VT completa -- o diferencial \
+é gerenciar dezenas de terminais abertos, não reimplementar um."""
+assets = [
+    ["target/release/porecatu", "usr/bin/", "755"],
+    ["LICENSE", "usr/share/doc/porecatu/LICENSE", "644"],
+    ["assets/fonts/LICENSE-OFL-iosevka.txt", "usr/share/doc/porecatu/LICENSE-OFL-iosevka.txt", "644"],
+    ["assets/fonts/LICENSE-ISC-lucide.txt", "usr/share/doc/porecatu/LICENSE-ISC-lucide.txt", "644"],
+    ["docs/config/porecatu.example.toml", "usr/share/doc/porecatu/porecatu.example.toml", "644"],
+    ["assets/icon/porecatu.png", "usr/share/icons/hicolor/512x512/apps/porecatu.png", "644"],
+    ["packaging/linux/porecatu.desktop", "usr/share/applications/porecatu.desktop", "644"],
+]
 
 [dependencies]
 porecatu-ui = { path = "crates/porecatu-ui" }

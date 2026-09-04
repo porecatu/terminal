@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Porecatu
+Comment=Cross-platform terminal emulator with tabs, named groups, and persistent sessions
+Exec=porecatu
+Icon=porecatu
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupNotify=true
