@@ -56,6 +56,7 @@ use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContext
 use crate::move_to_group::MoveToGroupPopover;
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::{self, TabBarStyle, rect_contains};
+use crate::terminal_menu::{TerminalContextMenu, TerminalMenuItem};
 use crate::warning::{Severity, WarningStack};
 
 const TITLE_FONT: FontFace = FontFace::Sans {
@@ -681,6 +682,119 @@ pub fn paint_group_menu(
 }
 
 pub fn group_menu_hit(layout: &GroupMenuLayout, point: (f32, f32)) -> Option<usize> {
+    layout
+        .item_rects
+        .iter()
+        .position(|&rect| rect_contains(rect, point))
+}
+
+// ---- menu de contexto do terminal (espec §2.16, PRD-011 RF-11.14, ADR-0042 §9) ----
+
+/// Terceira cópia da mesma anatomia (`layout_context_menu`/
+/// `layout_group_menu`) -- `TerminalMenuItem` tem `enabled` como
+/// `context_menu::MenuItem`, não rótulo dinâmico/destrutivo como
+/// `GroupActionItem`, mas a contagem de itens varia (`terminal_menu.rs`,
+/// nota do módulo), então segue o padrão do menu de grupo: item count e
+/// lista vêm de fora, nunca de uma constante.
+pub struct TerminalMenuLayout {
+    pub menu_rect: Rect,
+    pub item_rects: Vec<Rect>,
+}
+
+pub fn layout_terminal_menu(
+    menu: &TerminalContextMenu,
+    item_count: usize,
+    config: &porecatu_config::Config,
+    window_width: f32,
+    window_height: f32,
+) -> TerminalMenuLayout {
+    let cfg = &config.appearance.context_menu;
+    let width = cfg.width as f32;
+    let padding = cfg.padding as f32;
+    let item_height = cfg.item_height as f32;
+
+    let height = padding * 2.0 + item_height * item_count as f32;
+    let mut x = menu.anchor.0;
+    let mut y = menu.anchor.1;
+    if x + width > window_width {
+        x = (window_width - width).max(0.0);
+    }
+    if y + height > window_height {
+        y = (window_height - height).max(0.0);
+    }
+    let menu_rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let item_rects = (0..item_count)
+        .map(|i| Rect {
+            x: menu_rect.x + padding,
+            y: menu_rect.y + padding + item_height * i as f32,
+            width: menu_rect.width - padding * 2.0,
+            height: item_height,
+        })
+        .collect();
+    TerminalMenuLayout {
+        menu_rect,
+        item_rects,
+    }
+}
+
+pub fn paint_terminal_menu(
+    layout: &TerminalMenuLayout,
+    items: &[TerminalMenuItem],
+    highlighted: usize,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+) -> Vec<Primitive> {
+    let cfg = &config.appearance.context_menu;
+    let corner_radius = cfg.corner_radius as f32;
+    let item_radius = cfg.item_corner_radius as f32;
+    let item_padding_x = cfg.item_padding_x as f32;
+    let font_size = cfg.font_size as f32;
+
+    let mut out = Vec::new();
+    push_shadow(&mut out, layout.menu_rect, corner_radius);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: layout.menu_rect,
+        radius: corner_radius,
+        color: pal.context_menu_background,
+        border_color: pal.context_menu_border,
+        border_width: 1.0,
+    }));
+    for (index, item) in items.iter().enumerate() {
+        let rect = layout.item_rects[index];
+        if index == highlighted {
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect,
+                radius: item_radius,
+                color: pal.menu_item_hover,
+                border_color: palette::TRANSPARENT,
+                border_width: 0.0,
+            }));
+        }
+        let color = if item.enabled {
+            pal.menu_item_text
+        } else {
+            pal.menu_item_disabled_text
+        };
+        out.push(Primitive::Text(TextRun {
+            origin: (
+                rect.x + item_padding_x,
+                rect.y + (rect.height - font_size) / 2.0,
+            ),
+            text: item.label.to_string(),
+            font: BODY_FONT,
+            size_px: font_size,
+            color,
+        }));
+    }
+    out
+}
+
+pub fn terminal_menu_hit(layout: &TerminalMenuLayout, point: (f32, f32)) -> Option<usize> {
     layout
         .item_rects
         .iter()

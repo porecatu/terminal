@@ -42,6 +42,7 @@ mod selection;
 mod session_writer;
 mod shell_integration;
 mod tab_bar;
+mod terminal_menu;
 mod text_field;
 mod titlebar;
 mod tooltip;
@@ -64,6 +65,9 @@ use search_bar::{SearchBarHit, SearchBarState};
 use selection::Selection;
 use session_writer::SessionScheduler;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
+use terminal_menu::{
+    TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
+};
 use text_field::{TextFieldState, apply_text_field_key};
 use tooltip::Hover;
 use warning::{Severity, WarningStack};
@@ -83,6 +87,43 @@ const DOUBLE_CLICK_THRESHOLD: std::time::Duration = std::time::Duration::from_mi
 /// `titlebar` (semáforo nativo vs. botões de janela nossos).
 fn is_macos() -> bool {
     cfg!(target_os = "macos")
+}
+
+/// Itens do menu de contexto do terminal, resolvidos do estado ao vivo da
+/// aba (`menu.tab`) e da célula sob `menu.anchor` (RF-11.14/RF-11.15) --
+/// mesmo padrão de `group_menu::group_action_items`: recomputado a cada
+/// abertura/navegação/pintura, nunca guardado no `TerminalContextMenu`
+/// (nota do módulo `terminal_menu.rs`). Função livre, não método de
+/// `App`/`WindowState`, porque os dois às vezes precisam ser chamados com
+/// `state.tabs` já emprestado por outro campo do mesmo `state`.
+#[allow(clippy::too_many_arguments)]
+fn terminal_menu_context_items(
+    tabs: &HashMap<TabId, TabRuntime>,
+    style: &TabBarStyle,
+    cell_metrics: CellMetrics,
+    logical_width: f32,
+    logical_height: f32,
+    scale: f32,
+    tab: TabId,
+    anchor: (f32, f32),
+) -> Vec<TerminalMenuItem> {
+    let Some(rt) = tabs.get(&tab) else {
+        return terminal_menu_items(false, false);
+    };
+    let has_selection = rt.terminal.selection_text().is_some();
+    let content =
+        paint::terminal_content_rect(style, bar_height(style), logical_width, logical_height);
+    let content_x = ((anchor.0 - content.x) * scale).max(0.0) as f64;
+    let content_y = ((anchor.1 - content.y) * scale).max(0.0) as f64;
+    let cell = input::cell_at(
+        content_x,
+        content_y,
+        cell_metrics,
+        rt.snapshot.rows.max(MIN_GRID),
+        rt.snapshot.cols.max(MIN_GRID),
+    );
+    let over_link = hyperlink::uri_at(&rt.snapshot, cell.row, cell.col).is_some();
+    terminal_menu_items(has_selection, over_link)
 }
 
 /// Espec. §2.19: "limiar de 4px de movimento" -- abaixo disso o gesto é
@@ -460,6 +501,9 @@ struct WindowState {
     /// exclusivo com `context_menu`/`group_editor`/`move_to_group`
     /// (`close_all_popovers`).
     group_context_menu: Option<GroupContextMenu>,
+    /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
+    /// mesma exclusão mútua de `close_all_popovers`.
+    terminal_context_menu: Option<TerminalContextMenu>,
     /// Editor de grupo (ADR-0023), o quinto widget de chrome.
     group_editor: Option<GroupEditor>,
     /// Popover de destino do `tab.move_to_group` (RF-2.20, ADR-0023 §4).
@@ -849,6 +893,7 @@ impl WindowState {
             dialog: None,
             context_menu: None,
             group_context_menu: None,
+            terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
             last_pill_click: None,
@@ -887,6 +932,7 @@ impl WindowState {
     fn close_all_popovers(&mut self) {
         self.context_menu = None;
         self.group_context_menu = None;
+        self.terminal_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
     }
@@ -1671,6 +1717,56 @@ impl WindowState {
                 let action = menu.selected();
                 self.group_context_menu = None;
                 Some(action)
+            }
+            _ => None,
+        }
+    }
+
+    /// Espelha `handle_group_menu_key`, sobre `terminal_context_menu`.
+    /// Recebe `style`/`cell_metrics` de fora -- `WindowState` não os guarda
+    /// -- para recomputar a lista de itens a cada navegação
+    /// (`terminal_menu_context_items`, mesmo padrão de `group_action_items`
+    /// no clique/hover do menu de grupo).
+    fn handle_terminal_menu_key(
+        &mut self,
+        event: &KeyEvent,
+        style: &TabBarStyle,
+        cell_metrics: CellMetrics,
+    ) -> Option<TerminalMenuAction> {
+        if event.state != ElementState::Pressed {
+            return None;
+        }
+        let Some(menu) = &self.terminal_context_menu else {
+            return None;
+        };
+        let items = terminal_menu_context_items(
+            &self.tabs,
+            style,
+            cell_metrics,
+            self.logical_width,
+            self.logical_height,
+            self.scale,
+            menu.tab,
+            menu.anchor,
+        );
+        let menu = self.terminal_context_menu.as_mut()?;
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.terminal_context_menu = None;
+                None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                menu.move_highlight(-1, &items);
+                None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                menu.move_highlight(1, &items);
+                None
+            }
+            Key::Named(NamedKey::Enter) => {
+                let action = menu.selected(&items);
+                self.terminal_context_menu = None;
+                action
             }
             _ => None,
         }
@@ -3506,6 +3602,70 @@ impl App {
         }
     }
 
+    /// Espelha `run_menu_action`, para o menu de contexto do terminal
+    /// (RF-11.14 a RF-11.16). Copiar/colar/selecionar tudo/buscar chamam
+    /// exatamente as mesmas funções que a tecla usa (`input::
+    /// clipboard_copy`/`clipboard_paste`, `Terminal::select_all`,
+    /// `Action::SearchOpen`'s dispatch) -- tecla e menu não podem divergir
+    /// (lição da F3, ADR-0042 §10). Abrir/copiar link reusam a mesma
+    /// célula do clique que abriu o menu (`menu.anchor`), não a posição
+    /// corrente do cursor -- o menu pode ter sido navegado por teclado.
+    fn run_terminal_menu_action(
+        &mut self,
+        window_id: WindowId,
+        menu: TerminalContextMenu,
+        action: TerminalMenuAction,
+    ) {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let Some(runtime) = state.tabs.get(&menu.tab) else {
+            return;
+        };
+        match action {
+            TerminalMenuAction::Copy => input::clipboard_copy(&runtime.terminal),
+            TerminalMenuAction::Paste => {
+                let modes = runtime.terminal.modes();
+                input::clipboard_paste(&runtime.terminal, &modes);
+            }
+            TerminalMenuAction::SelectAll => runtime.terminal.select_all(),
+            TerminalMenuAction::OpenSearch => {
+                runtime.terminal.clear_selection();
+                if state.search.as_ref().map(SearchBarState::tab) != Some(menu.tab) {
+                    state.search = Some(SearchBarState::new(menu.tab));
+                }
+            }
+            TerminalMenuAction::OpenLink | TerminalMenuAction::CopyLink => {
+                let content = paint::terminal_content_rect(
+                    &self.style,
+                    bar_height(&self.style),
+                    state.logical_width,
+                    state.logical_height,
+                );
+                let content_x = ((menu.anchor.0 - content.x) * state.scale).max(0.0) as f64;
+                let content_y = ((menu.anchor.1 - content.y) * state.scale).max(0.0) as f64;
+                let cell = input::cell_at(
+                    content_x,
+                    content_y,
+                    self.cell_metrics,
+                    runtime.snapshot.rows.max(MIN_GRID),
+                    runtime.snapshot.cols.max(MIN_GRID),
+                );
+                let uri =
+                    hyperlink::uri_at(&runtime.snapshot, cell.row, cell.col).map(str::to_string);
+                if let Some(uri) = uri {
+                    if action == TerminalMenuAction::CopyLink {
+                        clipboard::copy(&uri);
+                    } else {
+                        let outcome = hyperlink::open_hyperlink(&uri);
+                        state.report_link_outcome(outcome, &uri, Instant::now());
+                    }
+                }
+            }
+        }
+        state.window.request_redraw();
+    }
+
     /// RF-3.6: único ponto que decide se a sessão persiste -- o debounce
     /// e a gravação síncrona do exit consultam isto, nunca a config
     /// direto. RF-3.12/ADR-0040 §2: o modo de caminho posicional nunca
@@ -4410,6 +4570,19 @@ impl App {
             }
             return;
         }
+        if state.terminal_context_menu.is_some() {
+            let menu = state.terminal_context_menu;
+            if let Some(action) =
+                state.handle_terminal_menu_key(&key, &self.style, self.cell_metrics)
+                && let Some(menu) = menu
+            {
+                self.run_terminal_menu_action(window_id, menu, action);
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
         if state.group_editor.is_some() {
             let outcome = state.handle_group_editor_key(&key);
             if let GroupEditorOutcome::Action(group, action) = outcome
@@ -4656,6 +4829,7 @@ impl App {
         if state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
         {
             return;
@@ -4759,6 +4933,35 @@ impl App {
             );
             if let Some(index) = overlay::group_menu_hit(&layout, logical_point) {
                 menu.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+        // Menu de contexto do terminal: mesmo tratamento dos dois acima.
+        if let Some(menu) = &mut state.terminal_context_menu {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let items = terminal_menu_context_items(
+                &state.tabs,
+                &self.style,
+                self.cell_metrics,
+                state.logical_width,
+                state.logical_height,
+                state.scale,
+                menu.tab,
+                menu.anchor,
+            );
+            let layout = overlay::layout_terminal_menu(
+                menu,
+                items.len(),
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            if let Some(index) = overlay::terminal_menu_hit(&layout, logical_point) {
+                menu.set_highlight(index, &items);
             }
             state.window.request_redraw();
             return;
@@ -5048,6 +5251,7 @@ impl App {
         let overlay_open = state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
             || state.rename.editing_tab().is_some();
@@ -5260,6 +5464,39 @@ impl App {
                     &self.term_params,
                     &self.config.shell,
                 );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
+        // Menu de contexto do terminal: mesmo padrão dos dois acima.
+        if let Some(menu) = state.terminal_context_menu {
+            let items = terminal_menu_context_items(
+                &state.tabs,
+                &self.style,
+                self.cell_metrics,
+                state.logical_width,
+                state.logical_height,
+                state.scale,
+                menu.tab,
+                menu.anchor,
+            );
+            let layout = overlay::layout_terminal_menu(
+                &menu,
+                items.len(),
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            let hit = overlay::terminal_menu_hit(&layout, logical_point);
+            state.terminal_context_menu = None;
+            if button == MouseButton::Left
+                && let Some(index) = hit
+                && items[index].enabled
+            {
+                self.run_terminal_menu_action(window_id, menu, items[index].action);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -5528,6 +5765,40 @@ impl App {
                 return;
             }
 
+            // Clique secundário (RF-11.14): só quando o terminal não faria
+            // nada com ele mesmo -- programa com mouse reporting pedido
+            // (sem `Shift`) continua ganhando a prioridade de sempre
+            // (ADR-0013), a mesma regra que `input::handle_mouse_button`
+            // já aplica pros outros botões.
+            let program_wants_mouse =
+                active_id
+                    .and_then(|id| state.tabs.get(&id))
+                    .is_some_and(|rt| {
+                        !state.modifiers.shift
+                            && rt.terminal.modes().mouse_reporting != MouseReporting::None
+                    });
+            if button == MouseButton::Right
+                && !program_wants_mouse
+                && let Some(id) = active_id
+            {
+                state.close_all_popovers();
+                let items = terminal_menu_context_items(
+                    &state.tabs,
+                    &self.style,
+                    self.cell_metrics,
+                    state.logical_width,
+                    state.logical_height,
+                    state.scale,
+                    id,
+                    logical_point,
+                );
+                state.terminal_context_menu =
+                    Some(TerminalContextMenu::new(id, logical_point, &items));
+                state.hover.dismiss();
+                state.window.request_redraw();
+                return;
+            }
+
             if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
                 input::handle_mouse_button(
                     &runtime.terminal,
@@ -5738,6 +6009,7 @@ impl App {
         let hyperlink_overlay_blocks_hover = state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
             || state.rename.editing_tab().is_some();
@@ -5894,6 +6166,32 @@ impl App {
                 state.logical_height,
             );
             popover.extend(overlay::paint_group_menu(
+                &layout,
+                &items,
+                menu.highlighted(),
+                config,
+                pal,
+            ));
+        }
+        if let Some(menu) = &state.terminal_context_menu {
+            let items = terminal_menu_context_items(
+                &state.tabs,
+                style,
+                self.cell_metrics,
+                state.logical_width,
+                state.logical_height,
+                state.scale,
+                menu.tab,
+                menu.anchor,
+            );
+            let layout = overlay::layout_terminal_menu(
+                menu,
+                items.len(),
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            popover.extend(overlay::paint_terminal_menu(
                 &layout,
                 &items,
                 menu.highlighted(),
