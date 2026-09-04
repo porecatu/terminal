@@ -190,6 +190,14 @@ pub struct TextMeasurer {
     /// CLAUDE.md registra. O conjunto de caracteres distintos numa sessão
     /// é pequeno e estável, então o cache satura rápido.
     advance_cache: HashMap<(char, FontFace), f32>,
+    /// RF-5.8/RF-11.25: `[terminal.font] family` configurada que não bateu
+    /// com nenhuma face carregada (nem embutida, nem do sistema) -- `Some`
+    /// com o nome exatamente como o usuário escreveu. O fallback já
+    /// funciona sozinho (a cadeia comum do `fontdb`/`cosmic-text` resolve
+    /// pra uma monoespaçada do sistema); isto só existe para quem chama
+    /// saber o que avisar. `None` no caminho comum (a Iosevka Fixed
+    /// embutida sempre bate).
+    missing_mono_family: Option<String>,
 }
 
 impl TextMeasurer {
@@ -199,6 +207,10 @@ impl TextMeasurer {
             db.load_font_data(bytes.to_vec());
         }
         db.load_system_fonts();
+        let missing_mono_family = (!db
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| *name == families.mono)))
+        .then(|| families.mono.clone());
         let fallback = ConfiguredFallback::new(&families.mono_fallback);
         let font_system =
             FontSystem::new_with_locale_and_db_and_fallback("en-US".to_string(), db, fallback);
@@ -206,7 +218,17 @@ impl TextMeasurer {
             font_system,
             families,
             advance_cache: HashMap::new(),
+            missing_mono_family,
         }
+    }
+
+    /// Nome de `[terminal.font] family` quando ela não foi encontrada
+    /// (RF-5.8/RF-11.25) -- `porecatu-render` não sabe empilhar aviso
+    /// nenhum (não conhece `porecatu-ui::warning`), só entrega o fato; quem
+    /// decide onde/como avisar é `porecatu-ui`, uma vez, no primeiro
+    /// `GpuContext::new` do processo.
+    pub fn missing_mono_family(&self) -> Option<&str> {
+        self.missing_mono_family.as_deref()
     }
 
     /// Registra as faces embutidas e **depois** as do sistema, com as
@@ -506,6 +528,23 @@ mod tests {
             a.measure_mono_cell(SIZE, SIZE * 1.75),
             b.measure_mono_cell(SIZE, SIZE * 1.75)
         );
+    }
+
+    /// RF-5.8/RF-11.25: a família embutida (default) sempre bate -- nunca
+    /// avisa no caminho comum.
+    #[test]
+    fn default_family_is_never_missing() {
+        let m = TextMeasurer::new();
+        assert_eq!(m.missing_mono_family(), None);
+    }
+
+    #[test]
+    fn unknown_family_is_reported_by_exact_name() {
+        let m = TextMeasurer::with_families(FontFamilies {
+            mono: "Uma Fonte Que Não Existe".to_owned(),
+            ..FontFamilies::default()
+        });
+        assert_eq!(m.missing_mono_family(), Some("Uma Fonte Que Não Existe"));
     }
 
     #[test]

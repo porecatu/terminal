@@ -3405,6 +3405,11 @@ impl App {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
 
+        // RF-11.25: avisos que só existem no primeiro `GpuContext::new` do
+        // processo (o `else` abaixo) -- não há `WindowState` ainda pra
+        // empilhar, então esperam até `state` ser criado no fim desta
+        // função (a primeira janela do processo, sempre).
+        let mut first_gpu_warnings: Vec<(Severity, &'static str, String)> = Vec::new();
         let window_surface = if let Some(gpu) = &mut self.gpu {
             match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
                 Ok(surface) => surface,
@@ -3418,12 +3423,22 @@ impl App {
                 }
             }
         } else {
-            let (gpu, window_surface) = GpuContext::new(
+            let (mut gpu, window_surface) = GpuContext::new(
                 Arc::clone(&window),
                 size.width,
                 size.height,
                 font_families_from_config(&self.config),
             );
+            // RF-5.8/RF-11.25: família de `[terminal.font] family` ausente
+            // no sistema -- o fallback já rodou sozinho, isto só nomeia o
+            // que faltou.
+            if let Some(family) = gpu.text_measurer().missing_mono_family() {
+                first_gpu_warnings.push((
+                    Severity::Warning,
+                    "Família de fonte não encontrada",
+                    format!("\"{family}\" não está instalada; usando uma monoespaçada do sistema."),
+                ));
+            }
             self.gpu = Some(gpu);
             window_surface
         };
@@ -3449,6 +3464,14 @@ impl App {
         state
             .animations
             .set_enabled(self.config.appearance.window.animations);
+        // RF-11.25/RF-11.26: entregues aqui porque `state` (a primeira
+        // janela do processo, sempre que `first_gpu_warnings` não está
+        // vazio) acabou de nascer -- não existia antes, nos dois `if`
+        // acima.
+        let now = Instant::now();
+        for (severity, title, body) in first_gpu_warnings {
+            state.warnings.push(severity, title, body, now);
+        }
         Some(state)
     }
 
