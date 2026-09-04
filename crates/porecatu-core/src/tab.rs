@@ -10,11 +10,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::TabId;
 
-/// Estado de vida da aba (ADR-0017 item 6). Uma aba `Exited` não tem PTY,
-/// não aceita input, mas continua rolável, selecionável e copiável -- é
-/// para isso que o RF-1.3 a mantém aberta.
+/// Estado de vida da aba (ADR-0017 item 6, ADR-0037 §1). Três estados,
+/// duas transições possíveis e só elas: `NotStarted -> Running` no
+/// primeiro foco, `Running -> Exited` quando o processo morre. Sem volta.
+///
+/// `NotStarted` só nasce da restauração de sessão (F5 etapa 4) -- aba
+/// nova por `Tab::new`/`Workspace::new_tab`/`Workspace::append_tab` nasce
+/// sempre `Running`. Uma aba `Exited` não tem PTY, não aceita input, mas
+/// continua rolável, selecionável e copiável -- é para isso que o RF-1.3 a
+/// mantém aberta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TabState {
+    NotStarted,
     Running,
     Exited { exit_code: i32 },
 }
@@ -115,9 +122,25 @@ impl Tab {
         matches!(self.state, TabState::Exited { .. })
     }
 
-    /// Aba `Exited` não aceita input (ADR-0017 item 6).
+    /// ADR-0037 §1: só a restauração de sessão produz este estado.
+    pub const fn is_not_started(&self) -> bool {
+        matches!(self.state, TabState::NotStarted)
+    }
+
+    /// `NotStarted` não tem PTY ainda, `Exited` não tem mais (ADR-0017
+    /// item 6, ADR-0037 §1).
     pub const fn accepts_input(&self) -> bool {
-        !self.is_exited()
+        matches!(self.state, TabState::Running)
+    }
+
+    /// Primeiro foco de uma aba restaurada sem shell (ADR-0037 §2): quem
+    /// chama já spawnou o `Terminal` de verdade antes de chamar isto --
+    /// este método só formaliza a transição no modelo. Sem volta: chamar
+    /// fora de `NotStarted` não faz nada, nunca regride `Running`/`Exited`.
+    pub fn start(&mut self) {
+        if self.state == TabState::NotStarted {
+            self.state = TabState::Running;
+        }
     }
 
     /// RF-1.3: processo encerrou com código diferente de zero, a aba
@@ -210,6 +233,64 @@ mod tests {
         tab.mark_activity();
         tab.mark_bell();
         tab.mark_exited(0);
+        assert!(!tab.activity());
+        assert!(!tab.bell());
+    }
+
+    /// ADR-0037 §1: aba nova nasce sempre `Running` -- só a restauração
+    /// (F5 etapa 4) produz `NotStarted`, e essa etapa não existe ainda.
+    #[test]
+    fn new_tab_is_always_running() {
+        let tab = Tab::new(TabId::new(0), "zsh");
+        assert_eq!(tab.state(), TabState::Running);
+    }
+
+    fn not_started_tab() -> Tab {
+        Tab {
+            state: TabState::NotStarted,
+            ..Tab::new(TabId::new(0), "zsh")
+        }
+    }
+
+    #[test]
+    fn not_started_transitions_to_running_on_start() {
+        let mut tab = not_started_tab();
+        tab.start();
+        assert_eq!(tab.state(), TabState::Running);
+    }
+
+    #[test]
+    fn start_on_already_running_is_a_no_op() {
+        let mut tab = Tab::new(TabId::new(0), "zsh");
+        tab.start();
+        assert_eq!(tab.state(), TabState::Running);
+    }
+
+    /// ADR-0037 §1: "sem volta" -- uma aba `Exited` não regride nunca,
+    /// nem por `start()`.
+    #[test]
+    fn start_never_revives_an_exited_tab() {
+        let mut tab = Tab::new(TabId::new(0), "zsh");
+        tab.mark_exited(1);
+        tab.start();
+        assert!(tab.is_exited());
+    }
+
+    #[test]
+    fn not_started_tab_rejects_input() {
+        let tab = not_started_tab();
+        assert!(!tab.accepts_input());
+    }
+
+    /// ADR-0037 §4: sem PTY, atividade e campainha não têm como acender --
+    /// `mark_activity`/`mark_bell` só são chamados a partir de um
+    /// `TermEvent`, que uma aba sem `Terminal` nunca recebe (mesma razão
+    /// que já valia para `Exited`). Documenta o dado que sustenta a
+    /// exclusão do indicador agregado (RF-2.16) em `porecatu-ui`, sem
+    /// precisar construir um `Workspace` inteiro pra provar.
+    #[test]
+    fn not_started_tab_has_no_indicators_by_default() {
+        let tab = not_started_tab();
         assert!(!tab.activity());
         assert!(!tab.bell());
     }

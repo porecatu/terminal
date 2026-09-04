@@ -747,6 +747,18 @@ impl Default for Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tab::TabState;
+
+    /// ADR-0037 §1: as três formas de criar aba nascem sempre `Running` --
+    /// só a restauração de sessão (F5 etapa 4) produz `NotStarted`.
+    #[test]
+    fn tabs_created_through_the_workspace_are_always_running() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.new_tab(None, "bash", None, 0);
+        assert_eq!(ws.tab(a).unwrap().state(), TabState::Running);
+        assert_eq!(ws.tab(b).unwrap().state(), TabState::Running);
+    }
 
     fn tab_ids(ws: &Workspace) -> Vec<TabId> {
         ws.tabs.iter().map(Tab::id).collect()

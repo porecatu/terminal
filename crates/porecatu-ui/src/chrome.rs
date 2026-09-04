@@ -108,6 +108,11 @@ pub(crate) const LABEL_FONT: FontFace = FontFace::Sans {
 const DRAG_HIGHLIGHT_BORDER_ALPHA: f64 = 0.45;
 const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
 
+/// RF-3.9 (ADR-0037 §5): rótulo de aba `NotStarted` esmaecido. Mesmo `.45`
+/// de cima -- **não é valor novo**, é o já usado no realce de borda do
+/// arraste (espec. §1.8, "Tingimentos"); só o consumidor é outro.
+const NOT_STARTED_LABEL_ALPHA: f64 = DRAG_HIGHLIGHT_BORDER_ALPHA;
+
 // Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
 // expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
 // ícone é o equivalente estático.
@@ -402,8 +407,10 @@ pub fn paint(
             };
 
             let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
+            let not_started = workspace.tab(tab.id).is_some_and(|t| t.is_not_started());
             let is_active = active == Some(tab.id);
             let (bg, border, border_width, text_color) = tab_colors(pal, style, exited, is_active);
+            let text_color = label_color(text_color, not_started);
             // Hover por brilho no corpo da aba (espec §1.10, `1.18`).
             let bg = if hover == Some(tab_bar::TabBarHit::Tab(tab.id)) {
                 brighten(bg, style.tab_hover_brightness)
@@ -535,8 +542,12 @@ pub fn paint(
         let fade_out = 1.0 - progress;
         let tab_rect = shift(old_tab.rect, scroll_dx);
         let exited = workspace.tab(old_tab.id).is_some_and(|t| t.is_exited());
+        let not_started = workspace
+            .tab(old_tab.id)
+            .is_some_and(|t| t.is_not_started());
         let is_active = active == Some(old_tab.id);
         let (bg, border, _border_width, text_color) = tab_colors(pal, style, exited, is_active);
+        let text_color = label_color(text_color, not_started);
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: tab_rect,
             radius: style.tab_corner_radius,
@@ -676,8 +687,10 @@ pub fn paint(
     if let Some(ghost) = &drag {
         let tab = &ghost.source;
         let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
+        let not_started = workspace.tab(tab.id).is_some_and(|t| t.is_not_started());
         let is_active = active == Some(tab.id);
         let (bg, border, _border_width, text_color) = tab_colors(pal, style, exited, is_active);
+        let text_color = label_color(text_color, not_started);
         // Espec §2.19: "hoje o fantasma sai no mesmo tom da aba parada; o
         // filter: brightness(1.18) e a sombra... estão nas duas mudanças
         // aprovadas para a F4" -- sempre ligado durante o arraste, não
@@ -859,6 +872,46 @@ fn scale_alpha(color: Color, mult: f32) -> Color {
     Color {
         a: color.a * mult as f64,
         ..color
+    }
+}
+
+/// RF-3.9 (ADR-0037 §5): sobre a cor de texto do estado de base (ativa ou
+/// inativa, já resolvida por `tab_colors`), aba `NotStarted` esmaece para
+/// `NOT_STARTED_LABEL_ALPHA`; qualquer outra fica no alfa cheio que já
+/// tinha. Nada mais muda -- fundo, borda, largura e cápsula atrás ficam
+/// exatamente como `tab_colors` decidiu.
+fn label_color(text_color: Color, not_started: bool) -> Color {
+    if not_started {
+        with_alpha(text_color, NOT_STARTED_LABEL_ALPHA)
+    } else {
+        text_color
+    }
+}
+
+#[cfg(test)]
+mod label_color_tests {
+    use super::*;
+
+    const OPAQUE_WHITE: Color = Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    };
+
+    /// RF-3.9: o alfa é o mesmo já usado no realce de borda do arraste --
+    /// nenhum valor inventado (espec. §1.8).
+    #[test]
+    fn not_started_label_uses_the_shared_45_alpha() {
+        assert_eq!(
+            label_color(OPAQUE_WHITE, true).a,
+            DRAG_HIGHLIGHT_BORDER_ALPHA
+        );
+    }
+
+    #[test]
+    fn started_label_keeps_the_base_color_untouched() {
+        assert_eq!(label_color(OPAQUE_WHITE, false), OPAQUE_WHITE);
     }
 }
 
