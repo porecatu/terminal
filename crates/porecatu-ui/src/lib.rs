@@ -47,6 +47,7 @@ mod terminal_menu;
 mod text_field;
 mod titlebar;
 mod tooltip;
+mod trace;
 mod warning;
 
 use animation::AnimationClock;
@@ -671,6 +672,12 @@ struct WindowState {
     /// há cliente de leitor de tela de fato conectado -- sem isso, custo
     /// zero (§3).
     access_adapter: accesskit_winit::Adapter,
+    /// PRD-000/etapa 6 da F6: `Instant` do último `KeyboardInput` pressionado
+    /// nesta janela, atrás de `PORECATU_TRACE` -- `redraw` consome e reporta
+    /// o intervalo até a submissão do frame ("latência de tecla até
+    /// pixel"). `None` sempre que a variável não está setada (`dispatch_
+    /// keyboard_input` só escreve aqui depois de conferir `trace::enabled`).
+    key_trace_pending: Option<Instant>,
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -1038,6 +1045,7 @@ impl WindowState {
             session_dirty: false,
             search: None,
             access_adapter,
+            key_trace_pending: None,
         }
     }
 
@@ -3158,6 +3166,26 @@ struct App {
     /// empilhar um `Warning` -- e entregues à primeira janela criada em
     /// `resumed`, mesmo padrão de `pending_session`/`Notice`.
     pending_startup_warnings: Vec<(Severity, &'static str, String)>,
+    /// PRD-000/etapa 6 da F6: `Instant` do início de `main` (`src/main.rs`),
+    /// atrás de `PORECATU_TRACE` -- ponto de partida de "tempo até o
+    /// primeiro prompt utilizável". Sempre presente (o custo de guardar um
+    /// `Instant` é zero); só é lido quando `trace::enabled()`.
+    process_start: Instant,
+    /// `true` depois do primeiro `Wakeup::TabDirty` do processo já ter sido
+    /// reportado como "primeiro byte do PTY" -- garante que a métrica saia
+    /// uma vez só, não a cada wakeup de toda aba que sobe depois.
+    first_pty_output_reported: bool,
+    /// `Instant` do primeiro `Wakeup::TabDirty` do processo, aguardando o
+    /// próximo `redraw` pra fechar o segundo trecho ("primeiro byte do PTY
+    /// -> primeiro frame"). Consumido (`take`) no primeiro `redraw` que
+    /// rodar depois, de qualquer janela -- só há uma aba na janela de
+    /// arranque, então não há ambiguidade de qual janela é "a" medida.
+    pending_first_frame_since: Option<Instant>,
+    /// Janela e `Instant` do início de `resumed` quando ele restaura sessão
+    /// gravada -- ("restauração de sessão" até a janela ficar interativa).
+    /// `redraw` reporta e limpa no primeiro frame **daquela** janela
+    /// especificamente (uma sessão pode abrir mais de uma).
+    pending_resumed_metric: Option<(WindowId, Instant)>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -3279,6 +3307,7 @@ impl App {
         proxy: EventLoopProxy<Wakeup>,
         cli_config: Option<PathBuf>,
         cli_directory: Option<PathBuf>,
+        process_start: Instant,
     ) -> Self {
         // RF-11.24: erro de parse/chave desconhecida/tema desconhecido no
         // arranque viajam para `pending_startup_warnings` em vez de
@@ -3390,6 +3419,10 @@ impl App {
             pending_shell_integration_note: None,
             vanished_restored_theme: None,
             pending_startup_warnings,
+            process_start,
+            first_pty_output_reported: false,
+            pending_first_frame_since: None,
+            pending_resumed_metric: None,
         }
     }
 
@@ -3478,11 +3511,16 @@ impl App {
     /// `lazy_restore = false`) -- as demais ficam `NotStarted`, subindo ao
     /// primeiro foco pelo mesmo `Self::ensure_active_tab_started` de
     /// sempre.
+    ///
+    /// Devolve o `WindowId` criado (`None` só na falha rara de
+    /// `create_window_with_attributes`) -- PRD-000/etapa 6 da F6 usa o da
+    /// primeira janela restaurada pra fechar a métrica de "restauração de
+    /// sessão até janela interativa" em `resumed`/`redraw`.
     fn open_window_from_session(
         &mut self,
         event_loop: &ActiveEventLoop,
         window_v1: &porecatu_session::WindowV1,
-    ) {
+    ) -> Option<WindowId> {
         let mut attributes = base_window_attributes();
         if self.config.session.restore_window_geometry {
             let monitors: Vec<session_writer::MonitorInfo> = event_loop
@@ -3513,9 +3551,7 @@ impl App {
                 .with_maximized(resolved.maximized);
         }
 
-        let Some(mut state) = self.create_window_with_attributes(event_loop, attributes) else {
-            return;
-        };
+        let mut state = self.create_window_with_attributes(event_loop, attributes)?;
         let window_id = state.window.id();
 
         let lazy_restore = self.config.session.lazy_restore;
@@ -3554,6 +3590,7 @@ impl App {
         }
         state.sync_window_title();
         self.windows.insert(window_id, state);
+        Some(window_id)
     }
 
     /// Núcleo comum de [`Self::open_window`]/[`Self::open_window_from_session`]:
@@ -4489,6 +4526,11 @@ impl ApplicationHandler<Wakeup> for App {
         if !self.windows.is_empty() {
             return;
         }
+        // PRD-000/etapa 6 da F6: início de "restauração de sessão até
+        // janela interativa" -- só vira métrica de fato se o `match`
+        // abaixo cair no ramo de restauração (arma `pending_resumed_metric`
+        // com o `WindowId` da primeira janela restaurada).
+        let resumed_start = Instant::now();
         // RF-3.12/ADR-0040 §2: uma janela, uma aba, `cwd` no diretório
         // pedido -- vence `startup_directory` e nem consulta
         // `pending_session` (que já não foi carregado, ver `App::new`).
@@ -4508,8 +4550,17 @@ impl ApplicationHandler<Wakeup> for App {
                 // janela -- `font_zoom_px` decide a métrica de célula que
                 // todas elas vão usar (ver o comentário do método).
                 self.apply_restored_session_state(session);
+                let mut restored_window_id = None;
                 for window_v1 in &session.windows {
-                    self.open_window_from_session(event_loop, window_v1);
+                    let window_id = self.open_window_from_session(event_loop, window_v1);
+                    if restored_window_id.is_none() {
+                        restored_window_id = window_id;
+                    }
+                }
+                if trace::enabled()
+                    && let Some(window_id) = restored_window_id
+                {
+                    self.pending_resumed_metric = Some((window_id, resumed_start));
                 }
             }
             _ => self.open_window(event_loop, None),
@@ -4537,7 +4588,10 @@ impl ApplicationHandler<Wakeup> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
         let (window, tab_id) = match event {
-            Wakeup::TabDirty { window, tab } => (window, tab),
+            Wakeup::TabDirty { window, tab } => {
+                self.mark_first_pty_output();
+                (window, tab)
+            }
             Wakeup::ConfigReloaded(outcome) => {
                 self.apply_config_reload(*outcome, Instant::now());
                 return;
@@ -4855,6 +4909,21 @@ impl App {
         state.refresh_access_tree(style, measurer);
     }
 
+    /// PRD-000/etapa 6 da F6: primeiro `Wakeup::TabDirty` do processo é a
+    /// aproximação de "primeiro byte do PTY" (o motor só acorda o wakeup
+    /// quando tem dado novo para desenhar) -- reporta o trecho desde `main`
+    /// e arma [`Self::pending_first_frame_since`] pro próximo `redraw`
+    /// fechar o segundo trecho. No-op (sem tocar `Instant::now()`) sem
+    /// `PORECATU_TRACE` ou depois da primeira vez.
+    fn mark_first_pty_output(&mut self) {
+        if !trace::enabled() || self.first_pty_output_reported {
+            return;
+        }
+        self.first_pty_output_reported = true;
+        trace::report("main -> primeiro byte do PTY", self.process_start);
+        self.pending_first_frame_since = Some(Instant::now());
+    }
+
     fn dispatch_keyboard_input(
         &mut self,
         window_id: WindowId,
@@ -4864,6 +4933,12 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
+        // PRD-000/etapa 6 da F6: início do trecho "tecla -> pixel" -- só no
+        // press (`Released` não desenha nada de novo), e só com
+        // `PORECATU_TRACE` setada. `redraw` consome e reporta.
+        if trace::enabled() && key.state == ElementState::Pressed {
+            state.key_trace_pending = Some(Instant::now());
+        }
         // ADR-0022: qualquer tecla descarta animação em curso e aplica o
         // estado final na hora -- a animação nunca bloqueia input.
         state.animations.clear();
@@ -6636,6 +6711,29 @@ impl App {
         // diferente da do box para o quadro aparecer -- a mesma da barra de
         // abas, já que os dois formam o "quadro" do app.
         state.window_surface.render(gpu, pal.bar_background, &frame);
+
+        // PRD-000/etapa 6 da F6: os três trechos que fecham aqui, no
+        // primeiro `redraw` depois de cada armadilha -- nenhum consulta
+        // `trace::enabled()` mais de uma vez por trecho, e nenhum sobrevive
+        // além do primeiro relato (métrica é "primeiro X", não amostra
+        // contínua, exceto tecla -> pixel, que é por natureza repetida).
+        if trace::enabled() {
+            if let Some(since) = state.key_trace_pending.take() {
+                trace::report("tecla -> pixel", since);
+            }
+            if let Some(since) = self.pending_first_frame_since.take() {
+                trace::report("primeiro byte do PTY -> primeiro frame", since);
+            }
+            if let Some((metric_window, since)) = self.pending_resumed_metric
+                && metric_window == window_id
+            {
+                trace::report(
+                    "resumed -> janela interativa (restauração de sessão)",
+                    since,
+                );
+                self.pending_resumed_metric = None;
+            }
+        }
     }
 }
 
@@ -6643,13 +6741,15 @@ impl App {
 /// janelas fecharem (ADR-0015). `cli_config`/`cli_directory` vêm do parse
 /// de `argv` em `src/main.rs` (ADR-0040 §4) -- `--config` e o caminho
 /// posicional do RF-3.12, já validados lá (caminho posicional inexistente
-/// ou que não é diretório nunca chega até aqui).
-pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>) {
+/// ou que não é diretório nunca chega até aqui). `process_start` é o
+/// `Instant` do início de `main` -- ponto de partida de "tempo até o
+/// primeiro prompt utilizável" (PRD-000, `PORECATU_TRACE`, etapa 6 da F6).
+pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>, process_start: Instant) {
     let event_loop = EventLoop::<Wakeup>::with_user_event()
         .build()
         .expect("falha ao criar event loop");
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(proxy, cli_config, cli_directory);
+    let mut app = App::new(proxy, cli_config, cli_directory, process_start);
     event_loop
         .run_app(&mut app)
         .expect("event loop terminou com erro");
