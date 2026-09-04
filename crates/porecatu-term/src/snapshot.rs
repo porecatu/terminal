@@ -117,6 +117,21 @@ pub struct SelectionSpan {
     pub is_block: bool,
 }
 
+/// Ocorrência de busca (ADR-0041) resolvida para pintura, em coordenadas de
+/// viewport -- mesma convenção de [`SelectionSpan`]. Quem corta a lista
+/// bruta de `crate::search::Occurrence` (posição absoluta na grade) pela
+/// vista e monta isto é `porecatu-ui`, que também resolve a cor (ADR-0041
+/// §4: "a mesma divisão de trabalho que já vale para a paleta").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OccurrenceSpan {
+    pub start_row: usize,
+    pub start_col: usize,
+    pub end_row: usize,
+    pub end_col: usize,
+    /// Ocorrência ativa (RF-11.7): realce distinto das demais.
+    pub active: bool,
+}
+
 /// Snapshot de grade de um frame -- tipo próprio de `porecatu-term`, seção
 /// 4.1 da arquitetura. Reusado entre frames: [`GridSnapshot::default`] uma
 /// vez, depois só `TermEngine::snapshot_into` sobre a mesma instância, sem
@@ -133,6 +148,11 @@ pub struct GridSnapshot {
     /// Linhas acima do fundo do scrollback.
     pub scroll_offset: usize,
     pub selection: Option<SelectionSpan>,
+    /// Ocorrências de busca (ADR-0041) já cortadas pela vista -- vazio sem
+    /// busca ativa. `TermEngine::snapshot_into` só limpa este buffer (sem
+    /// realocar, ADR-0007); é `porecatu-ui` quem o preenche a partir do
+    /// resultado de `TermEngine::search` e da cor resolvida.
+    pub occurrences: Vec<OccurrenceSpan>,
     pub modes: TermModes,
 }
 

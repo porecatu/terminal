@@ -21,6 +21,7 @@ use crate::event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 use crate::osc7::Osc7Watcher;
 use crate::params::TermParams;
 use crate::scroll::TermScroll;
+use crate::search::{InvalidPattern, SearchJob, SearchMode, SearchStep};
 use crate::selection::{SelectionKind, SelectionSide};
 use crate::snapshot::{
     Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, MouseReporting, SelectionSpan,
@@ -266,6 +267,30 @@ impl TermEngine {
         self.term.selection_to_string()
     }
 
+    /// Prepara uma busca no scrollback (ADR-0041, RF-11.1 a RF-11.9):
+    /// literal ou regex (`mode`), sobre a tela visível mais o scrollback
+    /// inteiro, reduzida à tela visível na tela alternativa. Nada é varrido
+    /// ainda -- ver [`TermEngine::step_search`]. Padrão de regex inválido é
+    /// erro devolvido, nunca `panic`. Nenhum tipo do `alacritty_terminal`
+    /// sai daqui -- ver `crate::search`; `porecatu-ui` corta o resultado
+    /// pela vista e resolve a cor.
+    pub fn start_search(
+        &self,
+        pattern: &str,
+        mode: SearchMode,
+        lines_per_step: usize,
+    ) -> Result<SearchJob, InvalidPattern> {
+        SearchJob::new(&self.term, pattern, mode, lines_per_step)
+    }
+
+    /// Varre um lote de `job` (ADR-0041 §"Riscos e mitigação": busca
+    /// incremental por lotes -- item 5 da Etapa 1 mediu que uma busca de
+    /// uma vez só estoura o orçamento de frame num scrollback cheio).
+    /// Chamar de novo a cada frame enquanto devolver `InProgress`.
+    pub fn step_search(&self, job: &mut SearchJob) -> SearchStep {
+        job.step(&self.term)
+    }
+
     fn viewport_point(&self, row: usize, col: usize) -> Point {
         let display_offset = self.term.grid().display_offset();
         viewport_to_point(display_offset, Point::new(row, Column(col)))
@@ -284,6 +309,10 @@ impl TermEngine {
         out.clusters.clear();
         out.cells.clear();
         out.cells.resize(rows * cols, Cell::default());
+        // `porecatu-ui` repopula a cada frame com busca ativa (ADR-0041 §4)
+        // -- sem realocar aqui evita que um frame sem busca herde as
+        // ocorrências do anterior.
+        out.occurrences.clear();
 
         for (index, indexed) in content.display_iter.enumerate() {
             if let Some(slot) = out.cells.get_mut(index) {
