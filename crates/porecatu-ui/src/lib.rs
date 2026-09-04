@@ -616,6 +616,10 @@ fn fallback_reveals_missing_osc7(
 
 /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: a aba ficou
 /// interativa (`spawned_at`) por `interval` sem nenhum `TermEvent::Cwd`.
+/// Só existe no Windows -- fora dele o gatilho é
+/// `fallback_reveals_missing_osc7`, e esta função ficaria sem chamador
+/// (`dead_code` do clippy, que só aparece no CI de Linux/macOS).
+#[cfg(windows)]
 fn windows_invite_timeout_due(
     received_osc7: bool,
     spawned_at: Instant,
@@ -708,6 +712,7 @@ mod shell_integration_trigger_tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn windows_timeout_does_not_fire_before_the_interval() {
         let spawned_at = Instant::now();
         let now = spawned_at + Duration::from_secs(1);
@@ -720,6 +725,7 @@ mod shell_integration_trigger_tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn windows_timeout_fires_once_the_interval_elapses() {
         let spawned_at = Instant::now();
         let now = spawned_at + Duration::from_secs(3);
@@ -734,6 +740,7 @@ mod shell_integration_trigger_tests {
     /// Aba que recebeu OSC 7 entre o agendamento e o despertar não
     /// dispara mais, mesmo já vencido o intervalo.
     #[test]
+    #[cfg(windows)]
     fn windows_timeout_never_fires_once_osc7_arrived() {
         let spawned_at = Instant::now();
         let now = spawned_at + Duration::from_secs(999);
