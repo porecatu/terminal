@@ -155,9 +155,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $msi = "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.msi"
-          $out = "msi-extraido"
-          msiexec /a "$msi" /qn TARGETDIR="$PWD\$out"
+          # `msiexec /a` entrega o trabalho de verdade ao serviço do Windows
+          # Installer (msiserver), que não herda o diretório corrente deste
+          # processo -- caminho relativo aqui falha com "This installation
+          # package could not be opened", mesmo com o arquivo existindo
+          # (achado ao vivo na primeira tentativa real de release, v0.7.0).
+          # Caminho absoluto resolve.
+          $msi = Join-Path (Get-Location) "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.msi"
+          $out = Join-Path (Get-Location) "msi-extraido"
+          Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$out`"" -Wait -PassThru |
+            ForEach-Object {
+              if ($_.ExitCode -ne 0) {
+                Write-Error "msiexec /a saiu com codigo $($_.ExitCode)"
+                exit 1
+              }
+            }
           $ofl = Get-ChildItem -Recurse -Filter "LICENSE-OFL-iosevka.txt" "$out" -ErrorAction SilentlyContinue
           $isc = Get-ChildItem -Recurse -Filter "LICENSE-ISC-lucide.txt" "$out" -ErrorAction SilentlyContinue
           if (-not $ofl -or -not $isc) {
