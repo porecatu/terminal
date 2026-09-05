@@ -163,13 +163,11 @@ jobs:
           # Caminho absoluto resolve.
           $msi = Join-Path (Get-Location) "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.msi"
           $out = Join-Path (Get-Location) "msi-extraido"
-          Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$out`"" -Wait -PassThru |
-            ForEach-Object {
-              if ($_.ExitCode -ne 0) {
-                Write-Error "msiexec /a saiu com codigo $($_.ExitCode)"
-                exit 1
-              }
-            }
+          $p = Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$out`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            Write-Error "msiexec /a saiu com codigo $($p.ExitCode)"
+            exit 1
+          }
           $ofl = Get-ChildItem -Recurse -Filter "LICENSE-OFL-iosevka.txt" "$out" -ErrorAction SilentlyContinue
           $isc = Get-ChildItem -Recurse -Filter "LICENSE-ISC-lucide.txt" "$out" -ErrorAction SilentlyContinue
           if (-not $ofl -or -not $isc) {
