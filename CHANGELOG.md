@@ -88,6 +88,14 @@ seis etapas, atrás dos ADRs que abriram a fase (0041 a 0045).
   publicaria uma release real
 - **macOS e Linux seguem só por compilação/CI**, mesma dívida herdada de
   todas as fases anteriores
+- **A tag `v0.7.0` saiu sem o artefato do Windows.** `msiexec /a` (passo
+  de verificação da atribuição das fontes no MSI) usava caminho relativo,
+  que o serviço `msiserver` não resolve — o job do Windows falhou antes
+  dos passos de checksum e upload, e a release publicada ficou só com
+  Linux e as duas arquiteturas de macOS. Corrigido no `main`
+  (`Join-Path (Get-Location) ...`, reproduzido e confirmado localmente
+  nos dois sentidos), mas conserta só a **próxima** tag — `v0.7.0` em si
+  precisaria de uma `v0.7.1` para ganhar o artefato do Windows
 
 #### Abertura da F6 — polimento
 
