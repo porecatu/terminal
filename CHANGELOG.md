@@ -88,14 +88,18 @@ seis etapas, atrás dos ADRs que abriram a fase (0041 a 0045).
   publicaria uma release real
 - **macOS e Linux seguem só por compilação/CI**, mesma dívida herdada de
   todas as fases anteriores
-- **A tag `v0.7.0` saiu sem o artefato do Windows.** `msiexec /a` (passo
-  de verificação da atribuição das fontes no MSI) usava caminho relativo,
-  que o serviço `msiserver` não resolve — o job do Windows falhou antes
-  dos passos de checksum e upload, e a release publicada ficou só com
-  Linux e as duas arquiteturas de macOS. Corrigido no `main`
-  (`Join-Path (Get-Location) ...`, reproduzido e confirmado localmente
-  nos dois sentidos), mas conserta só a **próxima** tag — `v0.7.0` em si
-  precisaria de uma `v0.7.1` para ganhar o artefato do Windows
+- **`v0.7.0` saiu sem o artefato do Windows**, `v0.7.1` (tentativa de
+  correção) falhou de novo pelo mesmo motivo com um bug próprio, e
+  `v0.7.2` finalmente publicou as quatro plataformas completas. Causa
+  raiz: `msiexec /a` entrega o trabalho ao serviço `msiserver`, que não
+  herda o diretório corrente do processo -- caminho relativo falha,
+  absoluto resolve (`v0.7.1`); o fix ficou incompleto porque `Start-
+  Process -PassThru | ForEach-Object { $_.ExitCode }` (com pipe) saiu
+  vazio no runner real, enquanto `$p = Start-Process ...; $p.ExitCode`
+  (sem pipe) funciona -- confirmado com `cmd.exe /c exit N` e com um
+  MSI de verdade antes de virar `v0.7.2`. `v0.7.0` e `v0.7.1` continuam
+  publicadas, incompletas; `v0.7.2` é a primeira com as quatro
+  plataformas de verdade
 
 #### Abertura da F6 — polimento
 
