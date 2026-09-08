@@ -331,9 +331,15 @@ mod tests {
             spawn_interactive_and_run("cmd.exe", None, ">", "ping -n 30 127.0.0.1");
 
         // Espera o `ping` subir como filho direto do `cmd.exe` antes de
-        // medir a contagem.
-        std::thread::sleep(std::time::Duration::from_millis(800));
-        let count_before = group.process_count();
+        // medir a contagem -- polling com prazo generoso em vez de um
+        // sleep fixo, que falseia sob CI contido/lento (a mesma técnica de
+        // `tests/cwd.rs`).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut count_before = group.process_count();
+        while count_before < 2 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            count_before = group.process_count();
+        }
         assert!(
             count_before >= 2,
             "esperava shell + ping, contou {count_before}"
@@ -347,9 +353,13 @@ mod tests {
             "kill_tree não pode bloquear como o ClosePseudoConsole -- levou {elapsed:?}"
         );
 
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let exited = handle.try_wait().ok().flatten().is_some();
-        assert!(exited, "shell raiz deveria ter morrido");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut exited = handle.try_wait().ok().flatten().is_some();
+        while !exited && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            exited = handle.try_wait().ok().flatten().is_some();
+        }
+        assert!(exited, "shell raiz deveria ter morrido a tempo");
     }
 
     /// A reprodução real do relato do usuário: PowerShell 7 (`pwsh.exe`)
@@ -380,11 +390,18 @@ mod tests {
         let (mut handle, group) =
             spawn_interactive_and_run("pwsh.exe", None, "PS ", "ping -n 30 127.0.0.1");
 
-        std::thread::sleep(std::time::Duration::from_millis(1500));
+        // Polling com prazo generoso em vez de um sleep fixo -- mesma
+        // técnica do teste anterior e de `tests/cwd.rs`, evita falso
+        // negativo sob CI contido/lento.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let root_pid = group.root_pid;
-        let system_before = refreshed_system();
-        let descendants_before: Vec<sysinfo::Pid> =
-            descendants_of(&system_before, sysinfo::Pid::from_u32(root_pid));
+        let mut descendants_before: Vec<sysinfo::Pid> =
+            descendants_of(&refreshed_system(), sysinfo::Pid::from_u32(root_pid));
+        while descendants_before.is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            descendants_before =
+                descendants_of(&refreshed_system(), sysinfo::Pid::from_u32(root_pid));
+        }
         assert!(
             !descendants_before.is_empty(),
             "esperava o `ping` vivo como descendente antes de matar"
@@ -417,18 +434,26 @@ mod tests {
         );
 
         group.kill_tree();
-        std::thread::sleep(std::time::Duration::from_millis(300));
 
-        let system_after = refreshed_system();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         for pid in &descendants_before {
+            let mut alive = refreshed_system().process(*pid).is_some();
+            while alive && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                alive = refreshed_system().process(*pid).is_some();
+            }
             assert!(
-                system_after.process(*pid).is_none(),
-                "pid {pid} deveria ter morrido com kill_tree, mas sobreviveu"
+                !alive,
+                "pid {pid} deveria ter morrido com kill_tree, mas sobreviveu a tempo"
             );
         }
 
-        let exited = handle.try_wait().ok().flatten().is_some();
-        assert!(exited, "pwsh raiz deveria ter morrido");
+        let mut exited = handle.try_wait().ok().flatten().is_some();
+        while !exited && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            exited = handle.try_wait().ok().flatten().is_some();
+        }
+        assert!(exited, "pwsh raiz deveria ter morrido a tempo");
     }
 
     /// Falha de atribuição não deve entrar em pânico -- degrada para
