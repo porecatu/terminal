@@ -103,6 +103,16 @@ pub struct ThemeTooltip {
     pub foreground: Option<Color>,
 }
 
+/// `[themes.window_controls]` -- override de `[appearance.window_controls]`.
+/// Só as três cores; largura/gap/borda de resize não mudam por tema.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default)]
+pub struct ThemeWindowControls {
+    pub hover_background: Option<Color>,
+    pub close_hover_background: Option<Color>,
+    pub close_hover_foreground: Option<Color>,
+}
+
 /// `[themes.group_editor]` -- override de `[appearance.group_editor]`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default)]
@@ -153,6 +163,7 @@ pub struct Theme {
     pub context_menu: ThemeContextMenu,
     pub tooltip: ThemeTooltip,
     pub group_editor: ThemeGroupEditor,
+    pub window_controls: ThemeWindowControls,
 }
 
 /// Nome duplicado entre dois `[[themes]]` é erro: não há como o usuário
@@ -367,6 +378,59 @@ fn catppuccin_latte() -> Theme {
             cyan: Some(Color::hex("#179299")),
             white: Some(Color::hex("#bcc0cc")),
         },
+        notices: ThemeNotices {
+            background: Some(Color::hex("#dce0e8")),
+            border: Some(Color::hex("#bcc0cc")),
+            foreground: Some(Color::hex("#4c4f69")),
+            body_foreground: Some(Color::hex("#5c5f77")),
+            error: Some(Color::hex("#d20f39")),
+            warning: Some(Color::hex("#df8e1d")),
+            info: Some(Color::hex("#179299")),
+        },
+        dialog: ThemeDialog {
+            background: Some(Color::hex("#dce0e8")),
+            border: Some(Color::hex("#bcc0cc")),
+            title_foreground: Some(Color::hex("#4c4f69")),
+            foreground: Some(Color::hex("#5c5f77")),
+            button_border: Some(Color::hex("#bcc0cc")),
+            destructive_foreground: Some(Color::hex("#d20f39")),
+            destructive_hover_background: Some(Color::hex("#f2dee1")),
+            ..ThemeDialog::default()
+        },
+        context_menu: ThemeContextMenu {
+            background: Some(Color::hex("#dce0e8")),
+            border: Some(Color::hex("#bcc0cc")),
+            item_hover_background: Some(Color::hex("#ccd0da")),
+            separator: Some(Color::hex("#ccd0da")),
+            foreground: Some(Color::hex("#5c5f77")),
+            disabled_foreground: Some(Color::hex("#8c8fa1")),
+            destructive_foreground: Some(Color::hex("#d20f39")),
+        },
+        tooltip: ThemeTooltip {
+            background: Some(Color::hex("#dce0e8")),
+            border: Some(Color::hex("#bcc0cc")),
+            foreground: Some(Color::hex("#5c5f77")),
+        },
+        group_editor: ThemeGroupEditor {
+            background: Some(Color::hex("#dce0e8")),
+            border: Some(Color::hex("#bcc0cc")),
+            section_foreground: Some(Color::hex("#8c8fa1")),
+            input_background: Some(Color::hex("#eff1f5")),
+            input_border: Some(Color::hex("#bcc0cc")),
+            input_border_focus: Some(Color::hex("#179299")),
+            input_foreground: Some(Color::hex("#4c4f69")),
+            swatch_ring_selected: Some(Color::hex("#4c4f69")),
+            item_foreground: Some(Color::hex("#5c5f77")),
+            item_hover_background: Some(Color::hex("#ccd0da")),
+            divider: Some(Color::hex("#ccd0da")),
+            destructive_foreground: Some(Color::hex("#d20f39")),
+            destructive_hover_background: Some(Color::hex("#f2dee1")),
+        },
+        window_controls: ThemeWindowControls {
+            hover_background: Some(Color::hex("#ccd0da")),
+            close_hover_background: Some(Color::hex("#d20f39")),
+            close_hover_foreground: Some(Color::hex("#ffffff")),
+        },
         ..Theme::default()
     }
 }
@@ -404,6 +468,59 @@ fn gruvbox_light() -> Theme {
             magenta: Some(Color::hex("#8f3f71")),
             cyan: Some(Color::hex("#427b58")),
             white: Some(Color::hex("#3c3836")),
+        },
+        notices: ThemeNotices {
+            background: Some(Color::hex("#ebdbb2")),
+            border: Some(Color::hex("#bdae93")),
+            foreground: Some(Color::hex("#3c3836")),
+            body_foreground: Some(Color::hex("#7c6f64")),
+            error: Some(Color::hex("#cc241d")),
+            warning: Some(Color::hex("#d79921")),
+            info: Some(Color::hex("#689d6a")),
+        },
+        dialog: ThemeDialog {
+            background: Some(Color::hex("#ebdbb2")),
+            border: Some(Color::hex("#bdae93")),
+            title_foreground: Some(Color::hex("#3c3836")),
+            foreground: Some(Color::hex("#7c6f64")),
+            button_border: Some(Color::hex("#bdae93")),
+            destructive_foreground: Some(Color::hex("#9d0006")),
+            destructive_hover_background: Some(Color::hex("#f0d9d1")),
+            ..ThemeDialog::default()
+        },
+        context_menu: ThemeContextMenu {
+            background: Some(Color::hex("#ebdbb2")),
+            border: Some(Color::hex("#bdae93")),
+            item_hover_background: Some(Color::hex("#d5c4a1")),
+            separator: Some(Color::hex("#d5c4a1")),
+            foreground: Some(Color::hex("#7c6f64")),
+            disabled_foreground: Some(Color::hex("#928374")),
+            destructive_foreground: Some(Color::hex("#9d0006")),
+        },
+        tooltip: ThemeTooltip {
+            background: Some(Color::hex("#ebdbb2")),
+            border: Some(Color::hex("#bdae93")),
+            foreground: Some(Color::hex("#7c6f64")),
+        },
+        group_editor: ThemeGroupEditor {
+            background: Some(Color::hex("#ebdbb2")),
+            border: Some(Color::hex("#bdae93")),
+            section_foreground: Some(Color::hex("#928374")),
+            input_background: Some(Color::hex("#fbf1c7")),
+            input_border: Some(Color::hex("#bdae93")),
+            input_border_focus: Some(Color::hex("#689d6a")),
+            input_foreground: Some(Color::hex("#3c3836")),
+            swatch_ring_selected: Some(Color::hex("#3c3836")),
+            item_foreground: Some(Color::hex("#7c6f64")),
+            item_hover_background: Some(Color::hex("#d5c4a1")),
+            divider: Some(Color::hex("#d5c4a1")),
+            destructive_foreground: Some(Color::hex("#9d0006")),
+            destructive_hover_background: Some(Color::hex("#f0d9d1")),
+        },
+        window_controls: ThemeWindowControls {
+            hover_background: Some(Color::hex("#d5c4a1")),
+            close_hover_background: Some(Color::hex("#9d0006")),
+            close_hover_foreground: Some(Color::hex("#ffffff")),
         },
         ..Theme::default()
     }
@@ -443,6 +560,59 @@ fn solarized_light() -> Theme {
             cyan: Some(Color::hex("#93a1a1")),
             white: Some(Color::hex("#fdf6e3")),
         },
+        notices: ThemeNotices {
+            background: Some(Color::hex("#eee8d5")),
+            border: Some(Color::hex("#93a1a1")),
+            foreground: Some(Color::hex("#586e75")),
+            body_foreground: Some(Color::hex("#657b83")),
+            error: Some(Color::hex("#dc322f")),
+            warning: Some(Color::hex("#b58900")),
+            info: Some(Color::hex("#2aa198")),
+        },
+        dialog: ThemeDialog {
+            background: Some(Color::hex("#eee8d5")),
+            border: Some(Color::hex("#93a1a1")),
+            title_foreground: Some(Color::hex("#586e75")),
+            foreground: Some(Color::hex("#657b83")),
+            button_border: Some(Color::hex("#93a1a1")),
+            destructive_foreground: Some(Color::hex("#dc322f")),
+            destructive_hover_background: Some(Color::hex("#f2e0dc")),
+            ..ThemeDialog::default()
+        },
+        context_menu: ThemeContextMenu {
+            background: Some(Color::hex("#eee8d5")),
+            border: Some(Color::hex("#93a1a1")),
+            item_hover_background: Some(Color::hex("#e0d9c4")),
+            separator: Some(Color::hex("#e0d9c4")),
+            foreground: Some(Color::hex("#657b83")),
+            disabled_foreground: Some(Color::hex("#93a1a1")),
+            destructive_foreground: Some(Color::hex("#dc322f")),
+        },
+        tooltip: ThemeTooltip {
+            background: Some(Color::hex("#eee8d5")),
+            border: Some(Color::hex("#93a1a1")),
+            foreground: Some(Color::hex("#657b83")),
+        },
+        group_editor: ThemeGroupEditor {
+            background: Some(Color::hex("#eee8d5")),
+            border: Some(Color::hex("#93a1a1")),
+            section_foreground: Some(Color::hex("#93a1a1")),
+            input_background: Some(Color::hex("#fdf6e3")),
+            input_border: Some(Color::hex("#93a1a1")),
+            input_border_focus: Some(Color::hex("#2aa198")),
+            input_foreground: Some(Color::hex("#586e75")),
+            swatch_ring_selected: Some(Color::hex("#586e75")),
+            item_foreground: Some(Color::hex("#657b83")),
+            item_hover_background: Some(Color::hex("#e0d9c4")),
+            divider: Some(Color::hex("#e0d9c4")),
+            destructive_foreground: Some(Color::hex("#dc322f")),
+            destructive_hover_background: Some(Color::hex("#f2e0dc")),
+        },
+        window_controls: ThemeWindowControls {
+            hover_background: Some(Color::hex("#e0d9c4")),
+            close_hover_background: Some(Color::hex("#dc322f")),
+            close_hover_foreground: Some(Color::hex("#ffffff")),
+        },
         ..Theme::default()
     }
 }
@@ -479,6 +649,8 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
     let tt = &config.appearance.tooltip;
     let ged = crate::appearance::GroupEditor::default();
     let ge = &config.appearance.group_editor;
+    let wcd = crate::appearance::WindowControls::default();
+    let wc = &config.appearance.window_controls;
     // `AnsiPalette::default()` sozinho devolve os valores de `normal`
     // (comentário em `terminal/colors.rs`: existe só pra satisfazer
     // `#[serde(default)]`, `Colors::default()` é quem monta os dois
@@ -865,6 +1037,27 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
             default: ged.destructive_hover_background,
             theme_value: theme.group_editor.destructive_hover_background,
             set: |cfg, v| cfg.appearance.group_editor.destructive_hover_background = v,
+        },
+        MergeField {
+            name: "appearance.window_controls.hover_background",
+            current: wc.hover_background,
+            default: wcd.hover_background,
+            theme_value: theme.window_controls.hover_background,
+            set: |cfg, v| cfg.appearance.window_controls.hover_background = v,
+        },
+        MergeField {
+            name: "appearance.window_controls.close_hover_background",
+            current: wc.close_hover_background,
+            default: wcd.close_hover_background,
+            theme_value: theme.window_controls.close_hover_background,
+            set: |cfg, v| cfg.appearance.window_controls.close_hover_background = v,
+        },
+        MergeField {
+            name: "appearance.window_controls.close_hover_foreground",
+            current: wc.close_hover_foreground,
+            default: wcd.close_hover_foreground,
+            theme_value: theme.window_controls.close_hover_foreground,
+            set: |cfg, v| cfg.appearance.window_controls.close_hover_foreground = v,
         },
     ];
 

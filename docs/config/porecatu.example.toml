@@ -1045,6 +1045,58 @@ magenta = "#ea76cb"
 cyan    = "#179299"
 white   = "#bcc0cc"
 
+[themes.notices]
+background      = "#dce0e8"
+border          = "#bcc0cc"
+foreground      = "#4c4f69"
+body_foreground = "#5c5f77"
+error           = "#d20f39"
+warning         = "#df8e1d"
+info            = "#179299"
+
+[themes.dialog]
+background                    = "#dce0e8"
+border                        = "#bcc0cc"
+title_foreground              = "#4c4f69"
+foreground                    = "#5c5f77"
+button_border                 = "#bcc0cc"
+destructive_foreground        = "#d20f39"
+destructive_hover_background  = "#f2dee1"
+
+[themes.context_menu]
+background            = "#dce0e8"
+border                = "#bcc0cc"
+item_hover_background = "#ccd0da"
+separator             = "#ccd0da"
+foreground            = "#5c5f77"
+disabled_foreground   = "#8c8fa1"
+destructive_foreground = "#d20f39"
+
+[themes.tooltip]
+background = "#dce0e8"
+border     = "#bcc0cc"
+foreground = "#5c5f77"
+
+[themes.group_editor]
+background                   = "#dce0e8"
+border                       = "#bcc0cc"
+section_foreground           = "#8c8fa1"
+input_background             = "#eff1f5"
+input_border                 = "#bcc0cc"
+input_border_focus           = "#179299"
+input_foreground             = "#4c4f69"
+swatch_ring_selected         = "#4c4f69"
+item_foreground              = "#5c5f77"
+item_hover_background        = "#ccd0da"
+divider                      = "#ccd0da"
+destructive_foreground       = "#d20f39"
+destructive_hover_background = "#f2dee1"
+
+[themes.window_controls]
+hover_background       = "#ccd0da"
+close_hover_background = "#d20f39"
+close_hover_foreground = "#ffffff"
+
 
 [[themes]]
 name = "gruvbox-light"
@@ -1080,6 +1132,58 @@ magenta = "#8f3f71"
 cyan    = "#427b58"
 white   = "#3c3836"
 
+[themes.notices]
+background      = "#ebdbb2"
+border          = "#bdae93"
+foreground      = "#3c3836"
+body_foreground = "#7c6f64"
+error           = "#cc241d"
+warning         = "#d79921"
+info            = "#689d6a"
+
+[themes.dialog]
+background                    = "#ebdbb2"
+border                        = "#bdae93"
+title_foreground              = "#3c3836"
+foreground                    = "#7c6f64"
+button_border                 = "#bdae93"
+destructive_foreground        = "#9d0006"
+destructive_hover_background  = "#f0d9d1"
+
+[themes.context_menu]
+background            = "#ebdbb2"
+border                = "#bdae93"
+item_hover_background = "#d5c4a1"
+separator             = "#d5c4a1"
+foreground            = "#7c6f64"
+disabled_foreground   = "#928374"
+destructive_foreground = "#9d0006"
+
+[themes.tooltip]
+background = "#ebdbb2"
+border     = "#bdae93"
+foreground = "#7c6f64"
+
+[themes.group_editor]
+background                   = "#ebdbb2"
+border                       = "#bdae93"
+section_foreground           = "#928374"
+input_background             = "#fbf1c7"
+input_border                 = "#bdae93"
+input_border_focus           = "#689d6a"
+input_foreground             = "#3c3836"
+swatch_ring_selected         = "#3c3836"
+item_foreground              = "#7c6f64"
+item_hover_background        = "#d5c4a1"
+divider                      = "#d5c4a1"
+destructive_foreground       = "#9d0006"
+destructive_hover_background = "#f0d9d1"
+
+[themes.window_controls]
+hover_background       = "#d5c4a1"
+close_hover_background = "#9d0006"
+close_hover_foreground = "#ffffff"
+
 
 [[themes]]
 name = "solarized-light"
@@ -1114,6 +1218,58 @@ blue    = "#83a598"
 magenta = "#6c71c4"
 cyan    = "#93a1a1"
 white   = "#fdf6e3"
+
+[themes.notices]
+background      = "#eee8d5"
+border          = "#93a1a1"
+foreground      = "#586e75"
+body_foreground = "#657b83"
+error           = "#dc322f"
+warning         = "#b58900"
+info            = "#2aa198"
+
+[themes.dialog]
+background                    = "#eee8d5"
+border                        = "#93a1a1"
+title_foreground              = "#586e75"
+foreground                    = "#657b83"
+button_border                 = "#93a1a1"
+destructive_foreground        = "#dc322f"
+destructive_hover_background  = "#f2e0dc"
+
+[themes.context_menu]
+background            = "#eee8d5"
+border                = "#93a1a1"
+item_hover_background = "#e0d9c4"
+separator             = "#e0d9c4"
+foreground            = "#657b83"
+disabled_foreground   = "#93a1a1"
+destructive_foreground = "#dc322f"
+
+[themes.tooltip]
+background = "#eee8d5"
+border     = "#93a1a1"
+foreground = "#657b83"
+
+[themes.group_editor]
+background                   = "#eee8d5"
+border                       = "#93a1a1"
+section_foreground           = "#93a1a1"
+input_background             = "#fdf6e3"
+input_border                 = "#93a1a1"
+input_border_focus           = "#2aa198"
+input_foreground             = "#586e75"
+swatch_ring_selected         = "#586e75"
+item_foreground              = "#657b83"
+item_hover_background        = "#e0d9c4"
+divider                      = "#e0d9c4"
+destructive_foreground       = "#dc322f"
+destructive_hover_background = "#f2e0dc"
+
+[themes.window_controls]
+hover_background       = "#e0d9c4"
+close_hover_background = "#dc322f"
+close_hover_foreground = "#ffffff"
 
 
 ##############################################################################

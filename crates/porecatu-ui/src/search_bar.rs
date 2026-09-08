@@ -28,22 +28,37 @@ use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::TabBarStyle;
 use crate::text_field::TextFieldState;
 
-/// Altura da barra (espec §2.21): o `input_height` do editor de grupo
-/// (§2.10) -- mesmo valor, sem chave própria (a barra reusa o do editor).
-pub const BAR_HEIGHT: f32 = 30.0;
+/// Altura da barra. A espec §2.21 original cravava isto no `input_height`
+/// do editor de grupo (30, sem margem nenhuma) -- mas aí o campo (a única
+/// caixa com fundo/borda própria da barra, além do trilho do toggle)
+/// esticava por essa altura inteira, encostando nas bordas superior e
+/// inferior sem respiro, enquanto tinha `padding_left` de sobra à esquerda.
+/// Pedido do usuário depois de ver o resultado: a barra cresce (`+
+/// FIELD_VERTICAL_MARGIN` dos dois lados), e o campo continua com os
+/// `input_height` cheios do editor -- nenhum dos dois fica espremido.
+pub const BAR_HEIGHT: f32 = FIELD_HEIGHT + 2.0 * FIELD_VERTICAL_MARGIN;
+
+/// Altura do campo de texto -- o `input_height` do editor de grupo (§2.10),
+/// sem mudança: é o valor que a espec §2.21 item 1 já reusava.
+const FIELD_HEIGHT: f32 = 30.0;
+
+/// Respiro entre o campo e a borda superior/inferior da barra, dos dois
+/// lados -- ver nota de `BAR_HEIGHT`.
+const FIELD_VERTICAL_MARGIN: f32 = 8.0;
 
 /// Trilho/botão do alternador de regex (espec §1.5/§2.21 item 3): "a
 /// primeira vez que esse token desenha no v1" -- já estava na tabela, sem
 /// consumidor, e por isso sem chave no TOML (mesmo padrão de
 /// `chrome::SHADOW_LAYERS`/`DRAG_HIGHLIGHT_BORDER_ALPHA`: valor de tabela
-/// de tokens, não configurável por si).
+/// de tokens, não configurável por si). As dimensões continuam fixas; a
+/// cor do trilho (ligado/desligado) segue o tema -- ver `push_toggle` --
+/// só o botão (`TOGGLE_KNOB_COLOR`) fica fixo, convenção comum de manter o
+/// indicador sempre claro independente da cor da trilha.
 const TOGGLE_TRACK_WIDTH: f32 = 34.0;
 const TOGGLE_TRACK_HEIGHT: f32 = 19.0;
 const TOGGLE_TRACK_RADIUS: f32 = 10.0;
 const TOGGLE_TRACK_PADDING: f32 = 2.0;
 const TOGGLE_KNOB_SIZE: f32 = 15.0;
-const TOGGLE_ON_COLOR: Color = palette::hex(0x3f, 0x8f, 0x80);
-const TOGGLE_OFF_COLOR: Color = palette::hex(0x2a, 0x30, 0x38);
 const TOGGLE_KNOB_COLOR: Color = palette::hex(0xf0, 0xf3, 0xf6);
 
 /// Largura de trabalho reservada para o contador ("3/17", "nenhum
@@ -337,9 +352,9 @@ pub fn layout_search_bar(box_rect: Rect, style: &TabBarStyle) -> SearchBarLayout
     let field_x = bar_rect.x + style.padding_left;
     let field_rect = Rect {
         x: field_x,
-        y: bar_rect.y,
+        y: bar_rect.y + FIELD_VERTICAL_MARGIN,
         width: (counter_rect.x - gap - field_x).max(0.0),
-        height: BAR_HEIGHT,
+        height: FIELD_HEIGHT,
     };
 
     SearchBarLayout {
@@ -353,15 +368,15 @@ pub fn layout_search_bar(box_rect: Rect, style: &TabBarStyle) -> SearchBarLayout
     }
 }
 
-fn push_toggle(rect: Rect, on: bool, out: &mut Vec<Primitive>) {
+/// `on_color`/`off_color`: acento de foco do campo de busca e borda neutra
+/// do widget (`pal.editor_input_border_focus`/`pal.editor_border`) --
+/// combinam com o campo de texto ao lado e seguem o tema ativo, claro ou
+/// escuro.
+fn push_toggle(rect: Rect, on: bool, on_color: Color, off_color: Color, out: &mut Vec<Primitive>) {
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect,
         radius: TOGGLE_TRACK_RADIUS,
-        color: if on {
-            TOGGLE_ON_COLOR
-        } else {
-            TOGGLE_OFF_COLOR
-        },
+        color: if on { on_color } else { off_color },
         border_color: palette::TRANSPARENT,
         border_width: 0.0,
     }));
@@ -571,7 +586,13 @@ pub fn paint_search_bar(
     }));
 
     // Alternador de regex (espec §1.5/§2.21 item 3).
-    push_toggle(layout.toggle_rect, state.is_regex(), &mut out);
+    push_toggle(
+        layout.toggle_rect,
+        state.is_regex(),
+        pal.editor_input_border_focus,
+        pal.editor_border,
+        &mut out,
+    );
 
     // Três botões de ícone (espec §2.21 item 4).
     let icon_size = style.icon_em_size;
