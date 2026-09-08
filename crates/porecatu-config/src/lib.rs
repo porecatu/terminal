@@ -155,7 +155,8 @@ pub fn load(cli_config: Option<&Path>) -> LoadResult {
 /// sintaticamente inválido, tipo errado num campo (inclusive cor
 /// inválida, RF-4.9) ou nome de tema duplicado.
 pub fn parse(text: &str) -> Result<(Config, Vec<String>), ConfigError> {
-    let deserializer = toml::de::Deserializer::new(text);
+    let deserializer =
+        toml::de::Deserializer::parse(text).map_err(|err| ConfigError::from_toml(text, err))?;
     let mut unknown_keys = Vec::new();
     let config: Config =
         serde_ignored::deserialize(deserializer, |path| unknown_keys.push(path.to_string()))
