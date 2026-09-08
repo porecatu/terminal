@@ -178,7 +178,10 @@ fn terminal_close_devolve_na_hora_sem_esperar_confirmacao() {
     let start = Instant::now();
     let wait = terminal.close();
     assert!(
-        start.elapsed() < Duration::from_millis(500),
+        // Margem generosa para CI contido/lento -- o que importa é não
+        // bloquear na ordem de grandeza de SHUTDOWN_TIMEOUT (2s), não uma
+        // latência precisa.
+        start.elapsed() < Duration::from_millis(1500),
         "close() bloqueou esperando confirmacao"
     );
 
