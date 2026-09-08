@@ -941,6 +941,181 @@ cyan    = "#8ec07c"
 white   = "#ebdbb2"
 
 
+[[themes]]
+name = "dracula"
+bar_background = "#1e1f29"
+tab_active_background = "#44475a"
+tab_inactive_background = "#282a36"
+tab_active_foreground = "#f8f8f2"
+tab_inactive_foreground = "#6272a4"
+foreground = "#f8f8f2"
+background = "#282a36"
+cursor = "#f8f8f2"
+cursor_text = "#282a36"
+selection_background = "#44475a"
+selection_foreground = "#f8f8f2"
+
+[themes.normal]
+black   = "#21222c"
+red     = "#ff5555"
+green   = "#50fa7b"
+yellow  = "#f1fa8c"
+blue    = "#bd93f9"
+magenta = "#ff79c6"
+cyan    = "#8be9fd"
+white   = "#f8f8f2"
+
+[themes.bright]
+black   = "#6272a4"
+red     = "#ff6e6e"
+green   = "#69ff94"
+yellow  = "#ffffa5"
+blue    = "#d6acff"
+magenta = "#ff92df"
+cyan    = "#a4ffff"
+white   = "#ffffff"
+
+
+[[themes]]
+name = "nord"
+bar_background = "#242933"
+tab_active_background = "#3b4252"
+tab_inactive_background = "#2e3440"
+tab_active_foreground = "#eceff4"
+tab_inactive_foreground = "#7b88a1"
+foreground = "#d8dee9"
+background = "#2e3440"
+cursor = "#d8dee9"
+cursor_text = "#2e3440"
+selection_background = "#434c5e"
+selection_foreground = "#eceff4"
+
+[themes.normal]
+black   = "#3b4252"
+red     = "#bf616a"
+green   = "#a3be8c"
+yellow  = "#ebcb8b"
+blue    = "#81a1c1"
+magenta = "#b48ead"
+cyan    = "#88c0d0"
+white   = "#e5e9f0"
+
+[themes.bright]
+black   = "#4c566a"
+red     = "#d08770"
+green   = "#8fbcbb"
+yellow  = "#ebcb8b"
+blue    = "#88c0d0"
+magenta = "#b48ead"
+cyan    = "#8fbcbb"
+white   = "#eceff4"
+
+
+[[themes]]
+name = "catppuccin-latte"
+bar_background = "#e6e9ef"
+tab_active_background = "#ccd0da"
+tab_inactive_background = "#eff1f5"
+tab_active_foreground = "#4c4f69"
+tab_inactive_foreground = "#8c8fa1"
+foreground = "#4c4f69"
+background = "#eff1f5"
+cursor = "#dc8a78"
+cursor_text = "#eff1f5"
+selection_background = "#acb0be"
+selection_foreground = "#4c4f69"
+
+[themes.normal]
+black   = "#5c5f77"
+red     = "#d20f39"
+green   = "#40a02b"
+yellow  = "#df8e1d"
+blue    = "#1e66f5"
+magenta = "#ea76cb"
+cyan    = "#179299"
+white   = "#acb0be"
+
+[themes.bright]
+black   = "#6c6f85"
+red     = "#d20f39"
+green   = "#40a02b"
+yellow  = "#df8e1d"
+blue    = "#1e66f5"
+magenta = "#ea76cb"
+cyan    = "#179299"
+white   = "#bcc0cc"
+
+
+[[themes]]
+name = "gruvbox-light"
+bar_background = "#ebdbb2"
+tab_active_background = "#fbf1c7"
+tab_inactive_background = "#dfd3b6"
+tab_active_foreground = "#3c3836"
+tab_inactive_foreground = "#7c6f64"
+foreground = "#3c3836"
+background = "#fbf1c7"
+cursor = "#3c3836"
+cursor_text = "#fbf1c7"
+selection_background = "#d5c4a1"
+selection_foreground = "#3c3836"
+
+[themes.normal]
+black   = "#fbf1c7"
+red     = "#cc241d"
+green   = "#98971a"
+yellow  = "#d79921"
+blue    = "#458588"
+magenta = "#b16286"
+cyan    = "#689d6a"
+white   = "#7c6f64"
+
+[themes.bright]
+black   = "#928374"
+red     = "#9d0006"
+green   = "#79740e"
+yellow  = "#b57614"
+blue    = "#076678"
+magenta = "#8f3f71"
+cyan    = "#427b58"
+white   = "#3c3836"
+
+
+[[themes]]
+name = "solarized-light"
+bar_background = "#eee8d5"
+tab_active_background = "#fdf6e3"
+tab_inactive_background = "#e0d9c4"
+tab_active_foreground = "#586e75"
+tab_inactive_foreground = "#93a1a1"
+foreground = "#657b83"
+background = "#fdf6e3"
+cursor = "#586e75"
+cursor_text = "#fdf6e3"
+selection_background = "#eee8d5"
+selection_foreground = "#586e75"
+
+[themes.normal]
+black   = "#073642"
+red     = "#dc322f"
+green   = "#859900"
+yellow  = "#b58900"
+blue    = "#268bd2"
+magenta = "#d33682"
+cyan    = "#2aa198"
+white   = "#eee8d5"
+
+[themes.bright]
+black   = "#002b36"
+red     = "#cb4b16"
+green   = "#586e75"
+yellow  = "#657b83"
+blue    = "#83a598"
+magenta = "#6c71c4"
+cyan    = "#93a1a1"
+white   = "#fdf6e3"
+
+
 ##############################################################################
 # KEYBINDINGS — ADR-0008 (semântica) e ADR-0029 (gramática)
 #
