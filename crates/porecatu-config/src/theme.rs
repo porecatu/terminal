@@ -170,7 +170,15 @@ pub fn find_duplicate_name(themes: &[Theme]) -> Option<&str> {
 /// de `Config` (regra 1 do ADR-0003: tudo o que o exemplo mostra é
 /// default).
 pub(crate) fn built_in_themes() -> Vec<Theme> {
-    vec![catppuccin_mocha(), gruvbox_dark()]
+    vec![
+        catppuccin_mocha(),
+        gruvbox_dark(),
+        dracula(),
+        nord(),
+        catppuccin_latte(),
+        gruvbox_light(),
+        solarized_light(),
+    ]
 }
 
 fn catppuccin_mocha() -> Theme {
@@ -244,6 +252,196 @@ fn gruvbox_dark() -> Theme {
             magenta: Some(Color::hex("#d3869b")),
             cyan: Some(Color::hex("#8ec07c")),
             white: Some(Color::hex("#ebdbb2")),
+        },
+        ..Theme::default()
+    }
+}
+
+fn dracula() -> Theme {
+    Theme {
+        name: "dracula".to_owned(),
+        bar_background: Some(Color::hex("#1e1f29")),
+        tab_active_background: Some(Color::hex("#44475a")),
+        tab_inactive_background: Some(Color::hex("#282a36")),
+        tab_active_foreground: Some(Color::hex("#f8f8f2")),
+        tab_inactive_foreground: Some(Color::hex("#6272a4")),
+        foreground: Some(Color::hex("#f8f8f2")),
+        background: Some(Color::hex("#282a36")),
+        cursor: Some(Color::hex("#f8f8f2")),
+        cursor_text: Some(Color::hex("#282a36")),
+        selection_background: Some(Color::hex("#44475a")),
+        selection_foreground: Some(Color::hex("#f8f8f2")),
+        normal: ThemeAnsiPalette {
+            black: Some(Color::hex("#21222c")),
+            red: Some(Color::hex("#ff5555")),
+            green: Some(Color::hex("#50fa7b")),
+            yellow: Some(Color::hex("#f1fa8c")),
+            blue: Some(Color::hex("#bd93f9")),
+            magenta: Some(Color::hex("#ff79c6")),
+            cyan: Some(Color::hex("#8be9fd")),
+            white: Some(Color::hex("#f8f8f2")),
+        },
+        bright: ThemeAnsiPalette {
+            black: Some(Color::hex("#6272a4")),
+            red: Some(Color::hex("#ff6e6e")),
+            green: Some(Color::hex("#69ff94")),
+            yellow: Some(Color::hex("#ffffa5")),
+            blue: Some(Color::hex("#d6acff")),
+            magenta: Some(Color::hex("#ff92df")),
+            cyan: Some(Color::hex("#a4ffff")),
+            white: Some(Color::hex("#ffffff")),
+        },
+        ..Theme::default()
+    }
+}
+
+fn nord() -> Theme {
+    Theme {
+        name: "nord".to_owned(),
+        bar_background: Some(Color::hex("#242933")),
+        tab_active_background: Some(Color::hex("#3b4252")),
+        tab_inactive_background: Some(Color::hex("#2e3440")),
+        tab_active_foreground: Some(Color::hex("#eceff4")),
+        tab_inactive_foreground: Some(Color::hex("#7b88a1")),
+        foreground: Some(Color::hex("#d8dee9")),
+        background: Some(Color::hex("#2e3440")),
+        cursor: Some(Color::hex("#d8dee9")),
+        cursor_text: Some(Color::hex("#2e3440")),
+        selection_background: Some(Color::hex("#434c5e")),
+        selection_foreground: Some(Color::hex("#eceff4")),
+        normal: ThemeAnsiPalette {
+            black: Some(Color::hex("#3b4252")),
+            red: Some(Color::hex("#bf616a")),
+            green: Some(Color::hex("#a3be8c")),
+            yellow: Some(Color::hex("#ebcb8b")),
+            blue: Some(Color::hex("#81a1c1")),
+            magenta: Some(Color::hex("#b48ead")),
+            cyan: Some(Color::hex("#88c0d0")),
+            white: Some(Color::hex("#e5e9f0")),
+        },
+        bright: ThemeAnsiPalette {
+            black: Some(Color::hex("#4c566a")),
+            red: Some(Color::hex("#d08770")),
+            green: Some(Color::hex("#8fbcbb")),
+            yellow: Some(Color::hex("#ebcb8b")),
+            blue: Some(Color::hex("#88c0d0")),
+            magenta: Some(Color::hex("#b48ead")),
+            cyan: Some(Color::hex("#8fbcbb")),
+            white: Some(Color::hex("#eceff4")),
+        },
+        ..Theme::default()
+    }
+}
+
+fn catppuccin_latte() -> Theme {
+    Theme {
+        name: "catppuccin-latte".to_owned(),
+        bar_background: Some(Color::hex("#e6e9ef")),
+        tab_active_background: Some(Color::hex("#ccd0da")),
+        tab_inactive_background: Some(Color::hex("#eff1f5")),
+        tab_active_foreground: Some(Color::hex("#4c4f69")),
+        tab_inactive_foreground: Some(Color::hex("#8c8fa1")),
+        foreground: Some(Color::hex("#4c4f69")),
+        background: Some(Color::hex("#eff1f5")),
+        cursor: Some(Color::hex("#dc8a78")),
+        cursor_text: Some(Color::hex("#eff1f5")),
+        selection_background: Some(Color::hex("#acb0be")),
+        selection_foreground: Some(Color::hex("#4c4f69")),
+        normal: ThemeAnsiPalette {
+            black: Some(Color::hex("#5c5f77")),
+            red: Some(Color::hex("#d20f39")),
+            green: Some(Color::hex("#40a02b")),
+            yellow: Some(Color::hex("#df8e1d")),
+            blue: Some(Color::hex("#1e66f5")),
+            magenta: Some(Color::hex("#ea76cb")),
+            cyan: Some(Color::hex("#179299")),
+            white: Some(Color::hex("#acb0be")),
+        },
+        bright: ThemeAnsiPalette {
+            black: Some(Color::hex("#6c6f85")),
+            red: Some(Color::hex("#d20f39")),
+            green: Some(Color::hex("#40a02b")),
+            yellow: Some(Color::hex("#df8e1d")),
+            blue: Some(Color::hex("#1e66f5")),
+            magenta: Some(Color::hex("#ea76cb")),
+            cyan: Some(Color::hex("#179299")),
+            white: Some(Color::hex("#bcc0cc")),
+        },
+        ..Theme::default()
+    }
+}
+
+fn gruvbox_light() -> Theme {
+    Theme {
+        name: "gruvbox-light".to_owned(),
+        bar_background: Some(Color::hex("#ebdbb2")),
+        tab_active_background: Some(Color::hex("#fbf1c7")),
+        tab_inactive_background: Some(Color::hex("#dfd3b6")),
+        tab_active_foreground: Some(Color::hex("#3c3836")),
+        tab_inactive_foreground: Some(Color::hex("#7c6f64")),
+        foreground: Some(Color::hex("#3c3836")),
+        background: Some(Color::hex("#fbf1c7")),
+        cursor: Some(Color::hex("#3c3836")),
+        cursor_text: Some(Color::hex("#fbf1c7")),
+        selection_background: Some(Color::hex("#d5c4a1")),
+        selection_foreground: Some(Color::hex("#3c3836")),
+        normal: ThemeAnsiPalette {
+            black: Some(Color::hex("#fbf1c7")),
+            red: Some(Color::hex("#cc241d")),
+            green: Some(Color::hex("#98971a")),
+            yellow: Some(Color::hex("#d79921")),
+            blue: Some(Color::hex("#458588")),
+            magenta: Some(Color::hex("#b16286")),
+            cyan: Some(Color::hex("#689d6a")),
+            white: Some(Color::hex("#7c6f64")),
+        },
+        bright: ThemeAnsiPalette {
+            black: Some(Color::hex("#928374")),
+            red: Some(Color::hex("#9d0006")),
+            green: Some(Color::hex("#79740e")),
+            yellow: Some(Color::hex("#b57614")),
+            blue: Some(Color::hex("#076678")),
+            magenta: Some(Color::hex("#8f3f71")),
+            cyan: Some(Color::hex("#427b58")),
+            white: Some(Color::hex("#3c3836")),
+        },
+        ..Theme::default()
+    }
+}
+
+fn solarized_light() -> Theme {
+    Theme {
+        name: "solarized-light".to_owned(),
+        bar_background: Some(Color::hex("#eee8d5")),
+        tab_active_background: Some(Color::hex("#fdf6e3")),
+        tab_inactive_background: Some(Color::hex("#e0d9c4")),
+        tab_active_foreground: Some(Color::hex("#586e75")),
+        tab_inactive_foreground: Some(Color::hex("#93a1a1")),
+        foreground: Some(Color::hex("#657b83")),
+        background: Some(Color::hex("#fdf6e3")),
+        cursor: Some(Color::hex("#586e75")),
+        cursor_text: Some(Color::hex("#fdf6e3")),
+        selection_background: Some(Color::hex("#eee8d5")),
+        selection_foreground: Some(Color::hex("#586e75")),
+        normal: ThemeAnsiPalette {
+            black: Some(Color::hex("#073642")),
+            red: Some(Color::hex("#dc322f")),
+            green: Some(Color::hex("#859900")),
+            yellow: Some(Color::hex("#b58900")),
+            blue: Some(Color::hex("#268bd2")),
+            magenta: Some(Color::hex("#d33682")),
+            cyan: Some(Color::hex("#2aa198")),
+            white: Some(Color::hex("#eee8d5")),
+        },
+        bright: ThemeAnsiPalette {
+            black: Some(Color::hex("#002b36")),
+            red: Some(Color::hex("#cb4b16")),
+            green: Some(Color::hex("#586e75")),
+            yellow: Some(Color::hex("#657b83")),
+            blue: Some(Color::hex("#83a598")),
+            magenta: Some(Color::hex("#6c71c4")),
+            cyan: Some(Color::hex("#93a1a1")),
+            white: Some(Color::hex("#fdf6e3")),
         },
         ..Theme::default()
     }
@@ -818,10 +1016,15 @@ mod tests {
     #[test]
     fn built_in_themes_match_example_toml() {
         let themes = built_in_themes();
-        assert_eq!(themes.len(), 2);
+        assert_eq!(themes.len(), 7);
         assert_eq!(themes[0].name, "catppuccin-mocha");
         assert_eq!(themes[1].name, "gruvbox-dark");
         assert_eq!(themes[1].bar_background, None);
+        assert_eq!(themes[2].name, "dracula");
+        assert_eq!(themes[3].name, "nord");
+        assert_eq!(themes[4].name, "catppuccin-latte");
+        assert_eq!(themes[5].name, "gruvbox-light");
+        assert_eq!(themes[6].name, "solarized-light");
     }
 
     #[test]
