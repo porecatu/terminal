@@ -19,7 +19,7 @@ workspace = true
 accesskit = "0.25"
 accesskit_winit = "0.34"
 arboard = "3"
-dirs = "5"
+dirs = "6"
 notify = "8.2.0"
 # Abre/revela hyperlinks OSC 8 (ADR-0042 §6): `unsafe` da chamada de
 # plataforma (ShellExecuteW/xdg-open/open) fica dentro do crate, como
