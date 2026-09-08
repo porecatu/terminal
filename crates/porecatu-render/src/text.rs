@@ -94,12 +94,13 @@ impl TextWindowState {
             // Sem limite de largura: cada `TextRun` é um trecho de mesmo
             // estilo numa linha só, não algo que deva quebrar.
             buffer.set_size(None, None);
-            // `size_px` (físico, já escalado) -- a mesma unidade em que
-            // `attrs_for` espera `letter_spacing` (RF-5.6): tem de casar com
-            // o que rasteriza, não com o `size_px` lógico que mediu a
-            // célula (`WindowSurface` é a única fronteira lógico->físico,
-            // ADR-0018, e `letter_spacing` reescala linearmente com ela).
-            let attrs = attrs_for(item.run.font, families, size_px);
+            // `letter_spacing` (RF-5.6) é em **em**, não em pixel --
+            // `attrs_for` não recebe `size_px` (ver o comentário lá); ele já
+            // reescala sozinho com o tamanho físico porque `cosmic-text`
+            // multiplica a soma (avanço normalizado + `letter_spacing`) por
+            // `font_size` só na hora de medir/desenhar (`Metrics::new`
+            // acima, com `size_px` físico), não aqui.
+            let attrs = attrs_for(item.run.font, families);
             buffer.set_text(&item.run.text, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(font_system, false);
             state.buffers.push(buffer);

@@ -3710,6 +3710,8 @@ impl App {
                 .text_measurer()
                 .measure_mono_cell(font_size_px, line_height_px);
             self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
+            gpu.text_measurer()
+                .align_mono_advance_to(self.cell_metrics.width, font_size_px);
         }
 
         let mut state = WindowState::new(window, window_surface, scale, access_adapter);
@@ -4391,6 +4393,8 @@ impl App {
                 .measure_mono_cell(font_size_px, line_height_px);
             let scale = self.windows.values().next().map_or(1.0, |w| w.scale);
             self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
+            gpu.text_measurer()
+                .align_mono_advance_to(self.cell_metrics.width, font_size_px);
         }
 
         let cell_metrics = self.cell_metrics;
@@ -4510,6 +4514,8 @@ impl App {
                 .measure_mono_cell(font_size_px, line_height_px);
             let scale = self.windows.values().next().map_or(1.0, |w| w.scale);
             self.cell_metrics = snap_cell_metrics_to_pixel_grid(cell_width, cell_height, scale);
+            gpu.text_measurer()
+                .align_mono_advance_to(self.cell_metrics.width, font_size_px);
         }
 
         let cell_metrics = self.cell_metrics;

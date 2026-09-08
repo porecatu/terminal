@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use glyphon::cosmic_text::{Fallback, PlatformFallback};
+use glyphon::cosmic_text::{Fallback, FeatureTag, FontFeatures, PlatformFallback};
 use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight, fontdb};
 use unicode_script::Script;
 
@@ -132,17 +132,55 @@ impl Fallback for ConfiguredFallback {
 }
 
 /// Monta os `Attrs` de shaping para `font`, na família resolvida de
-/// `families` e no tamanho `size_px` -- o tamanho só importa para
-/// `letter_spacing` (RF-5.6), que `cosmic-text` espera em pixels da
-/// própria camada de shaping, não em em (ver o comentário do campo).
-pub(crate) fn attrs_for<'a>(font: FontFace, families: &'a FontFamilies, size_px: f32) -> Attrs<'a> {
+/// `families`.
+///
+/// Sem `size_px`: `letter_spacing` (RF-5.6) não entra em pixel apesar do
+/// nome do campo em `cosmic_text::Attrs::letter_spacing` sugerir isso --
+/// achado depurando o drift do `align_mono_advance_to`. `shape.rs`
+/// (`x_advance = pos.x_advance/font_scale + letter_spacing_opt.0`) soma o
+/// valor bruto direto ao avanço **já normalizado pela em**
+/// (`pos.x_advance/font_scale`, tipicamente ~0.5-0.6), e só multiplica a
+/// soma inteira por `font_size` depois (`ShapeGlyph::width`). Ou seja: o
+/// parâmetro é em **em**, não em pixel -- multiplicar por `size_px` aqui
+/// (como este código fazia antes, quando a função ainda recebia esse
+/// parâmetro) aplica a escala **duas vezes**: a config `letter_spacing =
+/// 0.0` (default) nunca disparava o ramo abaixo, então o bug ficou
+/// dormente desde que RF-5.6 existe -- só apareceu quando
+/// `align_mono_advance_to` (que corrige o avanço mono pra bater com a
+/// grade arredondada, ver o comentário lá) passou a escrever um valor
+/// **não-zero** aqui pela primeira vez: um "M" de 6.5px virava 13px (dobro
+/// do esperado 7px) em vez de 7px.
+pub(crate) fn attrs_for<'a>(font: FontFace, families: &'a FontFamilies) -> Attrs<'a> {
     match font {
         FontFace::Mono { bold } => {
+            // A grade assume avanço aditivo (`fits_the_grid`, `paint.rs`):
+            // um `TextRun` de várias células não re-mede o avanço real do
+            // trecho, confia que cada glyph ocupa exatamente o que
+            // `advance_em` mediu isolado. Isso só é garantido *por
+            // construção* na Iosevka Fixed embutida, que `subset-fonts.py`
+            // recorta sem `kern`/`liga`/`calt`/`dlig`. Uma família
+            // configurada pelo usuário (`[terminal.font] family`, RF-5.1)
+            // pode ser monoespaçada e ainda trazer `kern` no arquivo --
+            // `harfbuzz`/`cosmic-text` aplica a feature por default sempre
+            // que a fonte a declara, mesmo sem par nenhum sendo testado por
+            // `advance_em` (que mede um caractere isolado, nunca um par).
+            // O efeito só aparece com o par certo em cena e cresce com o
+            // comprimento da linha -- cada kerning a mais desloca o resto
+            // do run, e a checagem de grade não vê nada de errado. Desligar
+            // as quatro aqui estende a mesma garantia para qualquer fonte
+            // mono, não só a embutida.
+            let mut features = FontFeatures::new();
+            features.disable(FeatureTag::KERNING);
+            features.disable(FeatureTag::STANDARD_LIGATURES);
+            features.disable(FeatureTag::CONTEXTUAL_LIGATURES);
+            features.disable(FeatureTag::CONTEXTUAL_ALTERNATES);
+            features.disable(FeatureTag::DISCRETIONARY_LIGATURES);
             let attrs = Attrs::new()
                 .family(Family::Name(&families.mono))
-                .weight(if bold { Weight::MEDIUM } else { Weight::NORMAL });
+                .weight(if bold { Weight::MEDIUM } else { Weight::NORMAL })
+                .font_features(features);
             if families.mono_letter_spacing_em != 0.0 {
-                attrs.letter_spacing(families.mono_letter_spacing_em * size_px)
+                attrs.letter_spacing(families.mono_letter_spacing_em)
             } else {
                 attrs
             }
@@ -308,7 +346,7 @@ impl TextMeasurer {
         let metrics = Metrics::new(size_px, size_px * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(None, None);
-        let attrs = attrs_for(font, &self.families, size_px);
+        let attrs = attrs_for(font, &self.families);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
@@ -325,6 +363,44 @@ impl TextMeasurer {
     pub fn measure_mono_cell(&mut self, size_px: f32, line_height_px: f32) -> (f32, f32) {
         let width = self.measure_width("M", FontFace::Mono { bold: false }, size_px);
         (width, line_height_px)
+    }
+
+    /// Corrige `mono_letter_spacing_em` para que o avanço renderizado de
+    /// cada glyph mono bata **exatamente** com `target_width_px` -- a
+    /// largura de célula já arredondada ao pixel físico
+    /// (`snap_cell_metrics_to_pixel_grid` em `porecatu-ui`).
+    ///
+    /// Sem isto, a grade (posição de coluna, cursor, resize do PTY) usa a
+    /// largura **arredondada**, enquanto `text.rs` renderiza cada glyph no
+    /// avanço **natural** da fonte -- que só coincide com o arredondado por
+    /// acaso (a Iosevka Fixed embutida foi calibrada pra isso, `FONT_SIZE_PX
+    /// = 14.0`, ver o comentário em `porecatu-ui`; uma fonte configurada
+    /// pelo usuário não tem por que bater). A diferença entre os dois é
+    /// pequena por caractere (fração de pixel), mas `paint_row_text` batcha
+    /// várias células no mesmo `TextRun` assumindo avanço aditivo -- ela
+    /// soma ao longo da linha inteira. É esse acúmulo que faz o cursor
+    /// "atrasar" atrás do texto conforme a linha cresce, e um `TextRun` de
+    /// cor nova (ex. o `ERROR` de um log colorido) desenhar por cima da
+    /// cauda do run anterior: o run anterior renderizou mais largo que as
+    /// colunas que a grade contou pra ele.
+    ///
+    /// Idempotente: mede o avanço **corrente** (que já inclui qualquer
+    /// correção de uma chamada anterior) contra o alvo, então uma segunda
+    /// chamada com o mesmo alvo não muda nada. Precisa ser chamado de novo
+    /// sempre que `size_px`/`target_width_px` mudar (fonte, zoom, hot
+    /// reload) -- é por isso que existe como método, não só uma conta feita
+    /// uma vez na construção.
+    pub fn align_mono_advance_to(&mut self, target_width_px: f32, size_px: f32) {
+        if size_px <= 0.0 {
+            return;
+        }
+        let current_advance_px = self.advance_em('M', FontFace::Mono { bold: false }) * size_px;
+        let delta_em = (target_width_px - current_advance_px) / size_px;
+        if delta_em.abs() <= f32::EPSILON {
+            return;
+        }
+        self.families.mono_letter_spacing_em += delta_em;
+        self.advance_cache.clear();
     }
 
     /// RF-1.10: trunca `text` para caber em `max_width`, cortando por
@@ -360,7 +436,7 @@ impl TextMeasurer {
         let metrics = Metrics::new(size_px, size_px * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(None, None);
-        let attrs = attrs_for(font, &self.families, size_px);
+        let attrs = attrs_for(font, &self.families);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
@@ -422,7 +498,7 @@ impl TextMeasurer {
         let metrics = Metrics::new(size_px, size_px * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(None, None);
-        let attrs = attrs_for(font, &self.families, size_px);
+        let attrs = attrs_for(font, &self.families);
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
@@ -462,6 +538,38 @@ mod tests {
     use super::*;
 
     const SIZE: f32 = 12.5;
+
+    /// Regressão: `fits_the_grid`/`paint_row_text` batcham várias células
+    /// num `TextRun` só assumindo avanço aditivo -- garantido por
+    /// construção na Iosevka Fixed embutida (sem `kern`/ligadura, ver
+    /// `subset-fonts.py`), mas não numa fonte de sistema configurada pelo
+    /// usuário que ainda tenha essas tabelas. Sem desligar a feature aqui,
+    /// um par kernado desloca o resto da linha e a checagem por caractere
+    /// isolado nunca vê o problema -- o cursor "atrasa" conforme a linha
+    /// cresce. Não depende de uma fonte com `kern` estar disponível em CI:
+    /// confere os `Attrs` montados, não o resultado do shaping.
+    #[test]
+    fn mono_attrs_disable_kerning_and_ligatures() {
+        let families = FontFamilies::default();
+        let attrs = attrs_for(FontFace::Mono { bold: false }, &families);
+        let disabled = [
+            FeatureTag::KERNING,
+            FeatureTag::STANDARD_LIGATURES,
+            FeatureTag::CONTEXTUAL_LIGATURES,
+            FeatureTag::CONTEXTUAL_ALTERNATES,
+            FeatureTag::DISCRETIONARY_LIGATURES,
+        ];
+        for tag in disabled {
+            assert!(
+                attrs
+                    .font_features
+                    .features
+                    .iter()
+                    .any(|f| f.tag == tag && f.value == 0),
+                "feature {tag:?} deveria estar desligada nos Attrs de FontFace::Mono"
+            );
+        }
+    }
 
     #[test]
     fn empty_string_measures_zero() {
@@ -654,7 +762,7 @@ mod tests {
         let metrics = Metrics::new(size, size * 1.2);
         let mut buffer = Buffer::new(&mut m.font_system, metrics);
         buffer.set_size(None, None);
-        let attrs = attrs_for(FontFace::Icon, &m.families, size);
+        let attrs = attrs_for(FontFace::Icon, &m.families);
         buffer.set_text(crate::icon::X.glyph, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut m.font_system, false);
 
@@ -714,7 +822,7 @@ mod tests {
             let metrics = Metrics::new(size, size * 1.2);
             let mut buffer = Buffer::new(&mut m.font_system, metrics);
             buffer.set_size(None, None);
-            let attrs = attrs_for(FontFace::Icon, &m.families, size);
+            let attrs = attrs_for(FontFace::Icon, &m.families);
             buffer.set_text(icon.glyph, &attrs, Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut m.font_system, false);
 
@@ -814,5 +922,49 @@ mod tests {
         let width = m.measure_width("á", font, SIZE);
         let idx = m.index_at_offset("á", font, SIZE, width / 2.0);
         assert!(idx == 0 || idx == 2, "índice {idx} corta o caractere");
+    }
+
+    /// Regressão: a `Iosevka Fixed` embutida foi calibrada pra 14px exato
+    /// (`FONT_SIZE_PX`, `porecatu-ui`) -- a 13px o avanço natural de `M`
+    /// (0.5 em) já não bate pixel inteiro (6.5px), exatamente o cenário que
+    /// expõe o bug sem depender de nenhuma fonte de sistema instalada: a
+    /// grade (`snap_cell_metrics_to_pixel_grid`, replicado aqui) arredonda
+    /// a célula pra 7px, mas sem `align_mono_advance_to` o render usaria os
+    /// 6.5px naturais -- 0.5px de erro por caractere, que cresce com a
+    /// linha (era exatamente o que fazia o cursor "atrasar" atrás do texto
+    /// digitado e um `TextRun` de cor nova desenhar por cima da cauda do
+    /// anterior).
+    #[test]
+    fn align_mono_advance_removes_drift_at_a_size_that_does_not_snap() {
+        let mut m = TextMeasurer::new();
+        let size = 13.0_f32;
+        let font = FontFace::Mono { bold: false };
+
+        let natural = m.measure_width("M", font, size);
+        assert!(
+            (natural - 6.5).abs() < 0.01,
+            "premissa do teste furou: 'M' a 13px deveria ser 6.5, veio {natural}"
+        );
+
+        // Mesma conta de `snap_cell_metrics_to_pixel_grid` em `porecatu-ui`
+        // (scale 1.0): arredonda ao pixel físico.
+        let snapped_width = natural.round().max(1.0);
+        assert_eq!(snapped_width, 7.0);
+
+        m.align_mono_advance_to(snapped_width, size);
+
+        let text = "a linha cresce e o cursor nao pode atrasar atras do texto digitado";
+        let n = text.chars().count() as f32;
+        let whole = m.measure_width(text, font, size);
+        assert!(
+            (whole - n * snapped_width).abs() < 0.01,
+            "avanço deveria bater exatamente com a grade: medido {whole}, esperado {}",
+            n * snapped_width
+        );
+
+        // Idempotente: chamar de novo com o mesmo alvo não move nada.
+        m.align_mono_advance_to(snapped_width, size);
+        let whole_again = m.measure_width(text, font, size);
+        assert_eq!(whole, whole_again);
     }
 }
