@@ -60,7 +60,7 @@ impl Default for Font {
             synthesize_bold: true,
             synthesize_italic: true,
             bold_is_bright: false,
-            line_height: 1.75,
+            line_height: 1.2,
             letter_spacing: 0.0,
             ligatures: false,
             zoom_scope: ZoomScope::All,

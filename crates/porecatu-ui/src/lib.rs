@@ -3588,6 +3588,25 @@ impl App {
                 tab.start();
             }
         }
+        // Garantia de terminal mínimo: se o workspace ficou vazio após a
+        // restauração -- p.ex. todas as abas estavam `Exited` na gravação
+        // (shells que saíram com código 0 antes de o app ser fechado) --
+        // abre uma aba nova em vez de restaurar uma janela sem terminal.
+        // A geometria/monitor gravados ainda são respeitados.
+        if state.workspace.visual_order().next().is_none() {
+            let cwd = self.startup_directory.clone();
+            state.open_tab(
+                self.cell_metrics,
+                &self.proxy,
+                cwd,
+                now,
+                NewTabTarget::ActiveGroup,
+                &self.style,
+                &self.term_params,
+                &self.config.shell,
+                &self.startup_directory,
+            );
+        }
         state.sync_window_title();
         self.windows.insert(window_id, state);
         Some(window_id)

@@ -39,11 +39,12 @@ pub struct CellMetrics {
 
 /// Cursor já resolvido por `lib.rs` -- cor (`[terminal.colors] cursor`, ou a
 /// cor do grupo da aba ativa se `follows_group_color`, RF-5.22 comentário),
-/// espessura de traço (`[terminal.cursor] width`, usada por beam/underline/
-/// contorno do bloco vazado) e se o formato bloco deve sair vazado
-/// (`unfocused_hollow`, RF-5.24: janela sem foco). `paint.rs` não conhece
-/// `Workspace` nem foco de janela -- por isso a decisão chega já tomada,
-/// não como `&Config`.
+/// espessura de traço (`[terminal.cursor] width`, usada por beam/cursor-
+/// underline/contorno do bloco vazado -- **não** pelo sublinhado SGR, que
+/// deriva a espessura do `font_size_px`) e se o formato bloco deve sair
+/// vazado (`unfocused_hollow`, RF-5.24: janela sem foco). `paint.rs` não
+/// conhece `Workspace` nem foco de janela -- por isso a decisão chega já
+/// tomada, não como `&Config`.
 #[derive(Debug, Clone, Copy)]
 pub struct CursorAppearance {
     pub color: Color,
@@ -52,11 +53,11 @@ pub struct CursorAppearance {
 }
 
 /// Altura do cursor bloco, em fração de `font_size_px` -- **não**
-/// `metrics.height` (a altura de linha, com `LINE_HEIGHT_MULTIPLIER` de
-/// 1.75 embutido pra dar respiro entre linhas). Um cursor do tamanho da
-/// linha inteira sobra bem abaixo do glyph, na folga que o line-height
-/// reserva pra próxima linha -- visível assim que o quadro do terminal
-/// parou de escondê-lo atrás de si (`frame::GeometryPrimitive`).
+/// `metrics.height` (a altura de linha, com o `line_height` configurável
+/// embutido pra dar respiro entre linhas). Um cursor do tamanho da linha
+/// inteira sobra bem abaixo do glyph, na folga que o line-height reserva
+/// pra próxima linha -- visível assim que o quadro do terminal parou de
+/// escondê-lo atrás de si (`frame::GeometryPrimitive`).
 ///
 /// Vem do mockup (`docs/design/mockup-estatico.html`, `.caret-blk`):
 /// 15px de cursor sobre 12.5px de fonte -- a proporção 15/12.5, não os
@@ -65,7 +66,7 @@ pub struct CursorAppearance {
 /// (`Metrics::new(size_px, size_px * 1.2)`) -- não coincidência, é a
 /// mesma caixa. Por isso o cursor fica colado no topo da linha (`row_y`),
 /// não centralizado em `metrics.height`: a caixa do glyph também começa
-/// ali, não no meio da folga que o line-height de 1.75 reserva embaixo.
+/// ali, não no meio da folga que o line-height reserva embaixo.
 const CURSOR_HEIGHT_RATIO: f32 = 1.2;
 
 /// Retângulo do box arredondado do terminal: a área abaixo da barra
@@ -181,8 +182,8 @@ pub fn build_primitives(
             x_offset,
             row_y,
             metrics,
+            font_size_px,
             term_pal,
-            cursor.width,
             hyperlink_hover,
             &mut primitives,
         );
@@ -498,12 +499,15 @@ fn occurrence_at(occurrences: &[OccurrenceSpan], row: usize, col: usize) -> Opti
 
 /// Sublinhado real (SGR, flag `UNDERLINE` -- nunca desenhado antes desta
 /// etapa, achado ao implementar a affordance do ADR-0042 §3: a espec
-/// citava "o pintor já desenha", e não havia primitiva nenhuma para isso)
+/// citava \"o pintor já desenha\", e não havia primitiva nenhuma para isso)
 /// e a affordance de hyperlink sob o modificador de abertura (mesma flag
-/// visual, RF-11.11) -- um traço por trecho contíguo de mesma cor, sem
-/// valor de aparência novo: a espessura reusa `[terminal.cursor] width`
-/// (`cursor.width`, já o traço do beam/underline-cursor em `paint_row_
-/// text`'s vizinho `cursor_primitive`), e a cor é a do próprio texto.
+/// visual, RF-11.11) -- um traço por trecho contíguo de mesma cor.
+///
+/// Espessura: ~10% de `font_size_px`, arredondado para o pixel físico mais
+/// próximo, mínimo 1px. Antes reusava `cursor.width` (7 px por default),
+/// que invadia o glyph (50% da fonte a 14 px). O cursor beam/underline-
+/// cursor continua usando `cursor.width` -- só o sublinhado de texto SGR
+/// é que agora usa essa espessura fina derivada da fonte.
 #[allow(clippy::too_many_arguments)]
 fn paint_row_underlines(
     snapshot: &GridSnapshot,
@@ -512,11 +516,14 @@ fn paint_row_underlines(
     x_offset: f32,
     row_y: f32,
     metrics: CellMetrics,
+    font_size_px: f32,
     term_pal: &ResolvedTermPalette,
-    thickness: f32,
     hyperlink_hover: &[HyperlinkSpan],
     out: &mut Vec<Primitive>,
 ) {
+    // ~10% do em, arredondado para 1px mínimo -- convencional em terminais.
+    let thickness = (font_size_px * 0.1).round().max(1.0);
+
     let underlined_at = |col: usize| -> bool {
         snapshot.cells[row * cols + col]
             .flags
