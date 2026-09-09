@@ -327,6 +327,18 @@ impl TextMeasurer {
         &self.families
     }
 
+    /// Reconstrói `FontSystem`/`missing_mono_family` para as famílias novas
+    /// e limpa `advance_cache` -- exatamente o consumidor de troca em
+    /// runtime que o comentário do campo `families` previa. Chamado pelo
+    /// hot reload de config (ADR-0030 classe B): `[terminal.font] family`/
+    /// `fallback` mudam a largura de célula tanto quanto `size`, mas sem
+    /// isto o `TextMeasurer` seguia medindo e desenhando com a família
+    /// antiga -- `measure_mono_cell` seria recalculado, só que a partir do
+    /// mesmo `FontSystem` de antes.
+    pub fn set_families(&mut self, families: FontFamilies) {
+        *self = Self::build(families);
+    }
+
     /// `FontSystem` e `FontFamilies` emprestados **juntos**, sem clonar
     /// `FontFamilies` a cada frame (que aloca -- `String`/`Vec<String>` --
     /// no caminho quente do render, a armadilha de performance de sempre).

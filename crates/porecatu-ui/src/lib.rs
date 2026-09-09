@@ -4385,9 +4385,19 @@ impl App {
         // usuário, o app não desfaz uma escolha da sessão sozinho".
         let font_size_px = self.effective_font_size_px();
         let line_height_px = font_size_px * self.config.terminal.font.line_height as f32;
+        let mut missing_mono_family = None;
         if effects.grid_changed
             && let Some(gpu) = &mut self.gpu
         {
+            // `terminal.font` está dentro do que faz `grid_changed`, e
+            // isso inclui `family`/`fallback` -- sem reconstruir as
+            // famílias do `TextMeasurer` aqui, ele seguiria medindo (e
+            // `WindowSurface::render` desenhando) com a família antiga: a
+            // recarga recalcularia a métrica de célula a partir do mesmo
+            // `FontSystem` de antes (RF-5.1/RF-5.2, ADR-0030 classe B).
+            gpu.text_measurer()
+                .set_families(font_families_from_config(&self.config));
+            missing_mono_family = gpu.text_measurer().missing_mono_family().map(str::to_owned);
             let (cell_width, cell_height) = gpu
                 .text_measurer()
                 .measure_mono_cell(font_size_px, line_height_px);
@@ -4413,6 +4423,17 @@ impl App {
             {
                 let size = state.window.inner_size();
                 state.resize_to(size.width, size.height, gpu, cell_metrics, &style);
+            }
+            // RF-5.8/RF-11.25, mesmo aviso do primeiro `GpuContext::new`,
+            // só que agora reagindo a uma família trocada na recarga em
+            // vez de só na primeira janela do processo.
+            if let Some(family) = &missing_mono_family {
+                state.warnings.push(
+                    Severity::Warning,
+                    "Família de fonte não encontrada",
+                    format!("\"{family}\" não está instalada; usando uma monoespaçada do sistema."),
+                    now,
+                );
             }
             // Classe C: "mudei e não aconteceu nada" seria indistinguível
             // de bug (ADR-0030) -- por isso o aviso, severidade
