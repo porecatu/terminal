@@ -121,7 +121,12 @@ pub fn layout_warnings(
     let mut y = bar_height + margin_top;
     let mut entries = Vec::new();
     for (index, _) in stack.items().iter().enumerate().rev() {
-        let height = padding_y * 2.0 + title_size.max(line_height);
+        // Duas linhas -- título e corpo, mesma anatomia de
+        // `layout_dialog` (`title_size + gap + body_size + gap +
+        // button_height`) -- `paint_warnings` desenha o corpo em
+        // `title_y + line_height`, então a altura precisa reservar essa
+        // segunda linha também, não só a primeira.
+        let height = padding_y * 2.0 + title_size.max(line_height) + line_height;
         let rect = Rect {
             x,
             y,

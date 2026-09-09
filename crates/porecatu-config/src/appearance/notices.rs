@@ -44,7 +44,13 @@ impl Default for Notices {
             border: Color::hex("#2e343e"),
             corner_radius: 8,
             foreground: Color::hex("#dfe4ea"),
-            body_foreground: Color::hex("#6b737e"),
+            // Contraste vs `background` (#1a1e25): ~3.45:1 com o tom
+            // anterior (#6b737e), abaixo do mínimo WCAG AA (4.5:1) pra
+            // texto pequeno (`body_font_size` 11px) -- corpo do aviso
+            // "quase indistinguível" do fundo. `#a8b0bb` (token
+            // "Secundário", seção 1 da espec. visual) sobe pra ~7.46:1,
+            // sem inventar cor nova.
+            body_foreground: Color::hex("#a8b0bb"),
             font_size: 12.5,
             body_font_size: 11.0,
             width: 320,

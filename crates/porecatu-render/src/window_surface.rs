@@ -145,6 +145,18 @@ impl WindowSurface {
             for layer in Layer::ORDER {
                 self.quad_state
                     .render_layer(layer, &gpu.quad_shared, &mut pass);
+                // `QuadWindowState::render_layer` deixa o `scissor_rect` do
+                // passe no último batch que desenhou -- se for um clip
+                // estreito (a barra de severidade do aviso, 2px, é o caso
+                // que expôs isto), ele fica em vigor pro texto que vem
+                // logo depois. `glyphon::TextRenderer::render` nunca chama
+                // `set_scissor_rect` (clip por `TextBounds` é feito no
+                // shader, a partir do que `to_text_bounds` calculou por
+                // `TextArea`) -- ele confia no scissor que já estiver
+                // setado no passe, então sem isto o texto de uma camada
+                // cujo último quad é clipado sai cortado pro mesmo
+                // retângulo estreito, efetivamente invisível.
+                pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
                 self.text_state
                     .render_layer(layer, &gpu.text_atlas, &self.viewport, &mut pass);
             }

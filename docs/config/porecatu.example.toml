@@ -454,7 +454,7 @@ background = "#1a1e25"
 border = "#2e343e"
 corner_radius = 8
 foreground = "#dfe4ea"        # título
-body_foreground = "#6b737e"   # corpo
+body_foreground = "#a8b0bb"   # corpo
 font_size = 12.5              # título
 body_font_size = 11.0
 # Geometria da pilha e do cartão.

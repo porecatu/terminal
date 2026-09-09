@@ -612,9 +612,9 @@ Fundo `#1a1e25`, borda `1px #2e343e`, raio 8. Desde a F4 etapa 6, sombra em cama
 
 **O corpo é de uma linha**, truncado com reticências. Esta seção especificava até três linhas; `TextRun` é sempre uma linha, e quebrar por palavra é trabalho de `porecatu-ui` sobre o `TextMeasurer`. Fica como está: o truncamento em uma linha é o comportamento aprovado (ADR-0028 §4). Registro na seção 4.4.
 
-Da esquerda para a direita: barra de severidade de 2px em altura cheia — erro `#ef8a8a`, aviso `#e0b060`, informação `#5ed3bc` —, depois título 12.5px/500 `#dfe4ea` e corpo 11px `#6b737e`. Botão de fechar 17×17, raio 4, `✕` 10px `#727a86`, hover fundo `#39404b` e ícone `#e4e8ee` — os mesmos do botão de fechar da aba.
+Da esquerda para a direita: barra de severidade de 2px em altura cheia — erro `#ef8a8a`, aviso `#e0b060`, informação `#5ed3bc` —, depois título 12.5px/500 `#dfe4ea` e corpo 11px `#a8b0bb` (token "Secundário" — o tom anterior, `#6b737e`, dava ~3.45:1 de contraste contra o fundo do card, abaixo do mínimo WCAG AA pra texto pequeno; `#a8b0bb` sobe pra ~7.46:1). Botão de fechar 17×17, raio 4, `✕` 10px `#727a86`, hover fundo `#39404b` e ícone `#e4e8ee` — os mesmos do botão de fechar da aba.
 
-Erro de config cita caminho, linha e chave em mono 10.5px `#6b737e`, para que a coordenada seja legível. O convite de integração de shell (RF-3.1) é o único com ação embutida: snippet copiável em mono 10.5px sobre `#12151a`, raio 3, mais um "não mostrar mais".
+Erro de config cita caminho, linha e chave em mono 10.5px `#a8b0bb`, para que a coordenada seja legível. O convite de integração de shell (RF-3.1) é o único com ação embutida: snippet copiável em mono 10.5px sobre `#12151a`, raio 3, mais um "não mostrar mais".
 
 Erro e aviso persistem até dispensa; informação sai em 6 s. `Esc` dispensa o do topo.
 

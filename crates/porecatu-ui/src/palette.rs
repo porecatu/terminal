@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(pal.popover_background, hex(0x1a, 0x1e, 0x25));
         assert_eq!(pal.popover_border, hex(0x2e, 0x34, 0x3e));
         assert_eq!(pal.warning_title_text, hex(0xdf, 0xe4, 0xea));
-        assert_eq!(pal.warning_body_text, hex(0x6b, 0x73, 0x7e));
+        assert_eq!(pal.warning_body_text, hex(0xa8, 0xb0, 0xbb));
         assert_eq!(pal.warning_severity_error, hex(0xef, 0x8a, 0x8a));
         assert_eq!(pal.warning_severity_warning, hex(0xe0, 0xb0, 0x60));
         assert_eq!(pal.warning_severity_info, hex(0x5e, 0xd3, 0xbc));
