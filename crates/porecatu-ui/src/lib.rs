@@ -27,6 +27,7 @@ mod chrome;
 mod clipboard;
 mod context_menu;
 mod dialog;
+mod git;
 mod group_editor;
 mod group_menu;
 mod hyperlink;
@@ -679,6 +680,11 @@ struct WindowState {
     /// classificação de `selection`, ADR-0041 §8). `redraw` fecha sozinha
     /// se a aba ativa mudar.
     search: Option<search_bar::SearchBarState>,
+    /// Cache da branch do repositório da aba ativa (ADR-0049). `RefCell`
+    /// porque `status_bar_content` toma `&self` -- a alternativa seria
+    /// `&mut self` num caminho que só lê estado, e propagá-lo até o
+    /// `redraw` por causa de um `stat`.
+    git: std::cell::RefCell<git::GitInfo>,
     /// Adaptador de acessibilidade (ADR-0043 §1) -- um por janela, sempre
     /// presente (não `Option`: a construção não falha, só exige a janela
     /// ainda invisível, garantido por `create_window_with_attributes`).
@@ -1058,6 +1064,7 @@ impl WindowState {
             last_titlebar_click: None,
             session_dirty: false,
             search: None,
+            git: std::cell::RefCell::new(git::GitInfo::default()),
             access_adapter,
             key_trace_pending: None,
         }
@@ -2978,11 +2985,23 @@ impl WindowState {
         // nova **herda** o `cwd` do grupo sem nunca ter recebido OSC 7.
         let runtime = self.tabs.get(&tab_id);
         let received_osc7 = runtime.is_some_and(|rt| rt.received_osc7);
-        let cwd = tab
+        let cwd_path = tab
             .and_then(|t| t.cwd())
             .map(PathBuf::from)
             .or_else(|| runtime.and_then(|rt| rt.spawn_cwd.clone()));
-        let cwd = cwd
+
+        // ADR-0049: a branch é a do `cwd` que a barra conhece. Sem OSC 7
+        // esse `cwd` é o de spawn, e a branch herda a mesma ressalva --
+        // sem marca própria, porque o diretório ao lado já está no tom
+        // apagado dizendo isso (§6). O trabalho no caso comum é um
+        // `stat`; a subida atrás de `.git` só refaz quando o `cwd` muda.
+        let git_branch = self
+            .git
+            .borrow_mut()
+            .branch(cwd_path.as_deref())
+            .map(str::to_owned);
+
+        let cwd = cwd_path
             .map(|p| {
                 status_bar::abbreviate_home(
                     &p.to_string_lossy(),
@@ -2993,6 +3012,7 @@ impl WindowState {
 
         status_bar::StatusBarContent {
             shell: tab.map(|t| t.shell_name().to_owned()).unwrap_or_default(),
+            git_branch,
             cwd_is_stale: !cwd.is_empty() && !received_osc7,
             cwd,
             group: self

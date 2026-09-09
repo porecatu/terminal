@@ -1,6 +1,6 @@
 # ADR-0048 — Barra de status: faixa no rodapé que encolhe a grade
 
-**Status:** Aceito
+**Status:** Aceito · §8 Superseded by [ADR-0049](0049-branch-git-na-barra-de-status.md) (**parcial**: só a linha que punha `git` entre o que nunca entra)
 **Data:** 2026-09-09
 **Relacionados:** ADR-0005, ADR-0007, ADR-0009, ADR-0014, ADR-0018, ADR-0019, ADR-0022, ADR-0027, ADR-0030, ADR-0032, ADR-0034, ADR-0037, ADR-0039, ADR-0041, ADR-0043, PRD-004, PRD-009
 
@@ -103,6 +103,8 @@ Ficam de fora, registrados no PRD-009 como diferidos:
 Todos os cinco segmentos mudam **por evento** — troca de aba, OSC 7, renomear grupo, hot reload —, e todos esses eventos já sujam o frame por outros motivos. A barra não introduz temporizador nem redraw periódico, e a propriedade de "terminal ocioso custa zero frames" ([ADR-0007](0007-modelo-de-threading.md)) fica intacta.
 
 Isto exclui, definitivamente: relógio, uso de CPU e memória, estado de repositório `git`, e a contagem de processos do [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md). Os três primeiros mudam sozinhos; o quarto mudaria de graça, mas lê-lo custa uma varredura de `sysinfo`.
+
+> **Revisto pelo [ADR-0049](0049-branch-git-na-barra-de-status.md).** A palavra `git` acima agrupava duas coisas de custo muito diferente: saber **qual é a branch** é ler 30 bytes revalidados por `mtime`; saber se a **árvore está suja** é um `git status` completo. A primeira entrou; a segunda continua fora, e pela razão que este parágrafo dá. O resto da lista não muda.
 
 ### 9. O que **não** muda: o ADR-0014
 

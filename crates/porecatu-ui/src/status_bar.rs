@@ -15,8 +15,9 @@
 //! [`layout_status_bar`], pintura em [`paint_status_bar`], e nada aqui
 //! chama `Instant::now` nem toca estado.
 
-use porecatu_render::{Color, FontFace, Primitive, Rect, TextMeasurer, TextRun};
+use porecatu_render::{Color, FontFace, Primitive, Rect, TextMeasurer, TextRun, icon};
 
+use crate::chrome::ICON_FONT;
 use crate::palette::ResolvedPalette;
 use crate::tab_bar::TabBarStyle;
 
@@ -57,6 +58,10 @@ pub enum SegmentRole {
     Cwd {
         stale: bool,
     },
+    /// Branch do repositório do diretório da aba (ADR-0049). Único
+    /// segmento com ícone -- e o ícone **é** o indicador de "há um
+    /// repositório aqui": fora de um, o segmento inteiro some.
+    GitBranch,
     Group,
     Encoding,
     System,
@@ -75,6 +80,9 @@ pub struct StatusBarContent {
     /// RF-9.4: `true` quando `cwd` é o diretório de spawn porque nenhum
     /// OSC 7 chegou.
     pub cwd_is_stale: bool,
+    /// Branch do repositório do diretório da aba, ou `None` fora de um
+    /// repositório -- e aí nem o ícone aparece (ADR-0049 §5).
+    pub git_branch: Option<String>,
     /// Nome do grupo da aba ativa. `None` em grupo implícito.
     pub group: Option<String>,
     /// Sistema, ex. `"windows"`. Sem a versão do app: pedido do dono do
@@ -99,6 +107,8 @@ pub struct StatusBarLayout {
     /// Tamanho da fonte de todos os segmentos -- viaja no layout para o
     /// pintor não reler `TabBarStyle` e as duas metades não divergirem.
     pub font_size: f32,
+    /// Em do ícone de repositório, pelo mesmo motivo do campo acima.
+    pub icon_em: f32,
     pub segments: Vec<PlacedSegment>,
 }
 
@@ -122,6 +132,18 @@ pub fn abbreviate_home(path: &str, home: Option<&str>) -> String {
         Some(sep) if sep == '/' || sep == '\\' => format!("~{}", &path[home.len()..]),
         Some(_) => path.to_owned(),
     }
+}
+
+/// Em do ícone de repositório, em pixels. Não é valor novo: `0.8` é o
+/// mesmo multiplicador que o botão de configurações já aplica sobre
+/// `icon_em_size` (§1.1), e ele cai aqui porque a fonte da barra é
+/// 10.5px contra os 13px do rótulo de aba -- `10.5 / 13 ≈ 0.8`.
+///
+/// É também a largura que o segmento reserva para o ícone: a glyph avança
+/// **1 em** e o desenho preenche ~0.84 dela, então o resto vira a folga
+/// entre o ícone e o nome da branch, sem `gap` inventado (ADR-0049 §4).
+fn icon_em(style: &TabBarStyle) -> f32 {
+    style.icon_em_size * 0.8
 }
 
 /// Largura de um texto na face mono, pela soma dos avanços por caractere.
@@ -286,15 +308,20 @@ pub fn layout_status_bar(
         },
         measurer,
     );
-    // O diretório cede espaço ao grupo, que vem depois dele: reserva o
-    // que o grupo precisa antes de tomar o resto. Sem isso, um caminho
-    // longo empurraria o grupo para fora e a aba perderia a identidade
-    // que a cápsula na barra de abas dá de relance.
+    // O diretório cede espaço ao que vem depois dele -- a branch e o
+    // grupo --, reservando o que os dois precisam antes de tomar o resto.
+    // Sem isso, um caminho longo os empurraria para fora, e a aba
+    // perderia tanto a identidade que a cápsula dá de relance quanto o
+    // repositório em que está.
     let group = content.group.as_deref().filter(|g| !g.is_empty());
     let group_width = group
         .map(|g| text_width(measurer, g, size) + gap)
         .unwrap_or(0.0);
-    let cwd_limit = (left_limit - group_width).max(x);
+    let branch = content.git_branch.as_deref().filter(|b| !b.is_empty());
+    let branch_width = branch
+        .map(|b| icon_em(style) + text_width(measurer, b, size) + gap)
+        .unwrap_or(0.0);
+    let cwd_limit = (left_limit - group_width - branch_width).max(x);
     push_left(
         &mut segments,
         &mut x,
@@ -311,6 +338,25 @@ pub fn layout_status_bar(
         },
         measurer,
     );
+    // Branch logo depois do diretório: o repositório é propriedade dele,
+    // e ler os dois juntos é o que faz sentido (ADR-0049 §4).
+    if let Some(branch) = branch {
+        let em = icon_em(style);
+        let width = em + text_width(measurer, branch, size);
+        if x + width <= left_limit {
+            segments.push(PlacedSegment {
+                rect: Rect {
+                    x,
+                    y: bar_rect.y,
+                    width,
+                    height: bar_height,
+                },
+                text: branch.to_owned(),
+                role: SegmentRole::GitBranch,
+            });
+            x += width + gap;
+        }
+    }
     if let Some(group) = group {
         push_left(
             &mut segments,
@@ -331,6 +377,7 @@ pub fn layout_status_bar(
     StatusBarLayout {
         bar_rect,
         font_size: size,
+        icon_em: icon_em(style),
         segments,
     }
 }
@@ -361,12 +408,34 @@ pub fn paint_status_bar(layout: &StatusBarLayout, pal: &ResolvedPalette) -> Vec<
     // ancorado pelo topo do `TextRun`, então a folga se divide em dois.
     let text_y = layout.bar_rect.y + (layout.bar_rect.height - layout.font_size) / 2.0;
     for segment in &layout.segments {
+        let color = segment_color(segment.role, pal);
+        // O único segmento com ícone. Ele é centrado pela própria em
+        // (`centered_origin`, não a mesma conta do texto: a face de ícones
+        // declara ascent = em e descent = 0, e centrar como texto desenha
+        // o ícone baixo demais), e o nome começa depois do avanço de 1 em.
+        let text_x = if segment.role == SegmentRole::GitBranch {
+            let em = layout.icon_em;
+            let icon_rect = Rect {
+                width: em,
+                ..segment.rect
+            };
+            out.push(Primitive::Text(TextRun {
+                origin: icon::GIT_BRANCH.centered_origin(icon_rect, em),
+                text: icon::GIT_BRANCH.glyph.to_owned(),
+                font: ICON_FONT,
+                size_px: em,
+                color,
+            }));
+            segment.rect.x + em
+        } else {
+            segment.rect.x
+        };
         out.push(Primitive::Text(TextRun {
-            origin: (segment.rect.x, text_y),
+            origin: (text_x, text_y),
             text: segment.text.clone(),
             font: FONT,
             size_px: layout.font_size,
-            color: segment_color(segment.role, pal),
+            color,
         }));
     }
     out
@@ -395,6 +464,7 @@ mod tests {
             shell: "pwsh".to_owned(),
             cwd: "~/projetos/porecatu".to_owned(),
             cwd_is_stale: false,
+            git_branch: None,
             group: Some("producao".to_owned()),
             system: "windows".to_owned(),
         }
@@ -592,6 +662,111 @@ mod tests {
             height(&TabBarStyle::DEFAULT),
             "a faixa continua ocupando altura mesmo sem nada a dizer"
         );
+    }
+
+    #[test]
+    fn git_segment_carries_the_icon_and_the_branch_name() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        let style = TabBarStyle::DEFAULT;
+        let layout = layout_with(&c, &style, W);
+        let git = role_of(&layout, SegmentRole::GitBranch).expect("segmento de branch");
+        assert_eq!(git.text, "main");
+
+        // A largura reserva a em do ícone MAIS o nome -- o ícone avança 1
+        // em, e é essa sobra sobre o desenho (~0.84 em) que faz a folga
+        // entre os dois, sem `gap` inventado (ADR-0049 §4).
+        let mut m = TextMeasurer::new();
+        let name_width = text_width(&mut m, "main", style.status_bar_font_size);
+        assert!((git.rect.width - (icon_em(&style) + name_width)).abs() < 0.01);
+    }
+
+    #[test]
+    fn git_segment_sits_between_the_cwd_and_the_group() {
+        // O repositório e propriedade do diretorio: ler os dois juntos e o
+        // que faz sentido, e o grupo fecha a zona.
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let order: Vec<_> = layout
+            .segments
+            .iter()
+            .filter(|s| !is_right(s.role))
+            .map(|s| s.role)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                SegmentRole::Shell,
+                SegmentRole::Cwd { stale: false },
+                SegmentRole::GitBranch,
+                SegmentRole::Group,
+            ]
+        );
+    }
+
+    #[test]
+    fn outside_a_repository_the_whole_segment_disappears() {
+        // ADR-0049 §5: o ícone É a resposta a "estou num repositório?".
+        // Nada de ícone apagado nem texto de "sem repositório".
+        let mut c = content();
+        c.git_branch = None;
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        assert!(role_of(&layout, SegmentRole::GitBranch).is_none());
+        let primitives = paint_status_bar(&layout, &pal());
+        assert!(
+            !primitives.iter().any(|p| matches!(
+                p,
+                Primitive::Text(run) if run.text == icon::GIT_BRANCH.glyph
+            )),
+            "nenhum ícone de repositório é desenhado"
+        );
+    }
+
+    #[test]
+    fn the_branch_paints_an_icon_run_and_a_text_run() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let primitives = paint_status_bar(&layout, &pal());
+        let icon_run = primitives
+            .iter()
+            .find_map(|p| match p {
+                Primitive::Text(run) if run.text == icon::GIT_BRANCH.glyph => Some(run),
+                _ => None,
+            })
+            .expect("o ícone é desenhado");
+        assert_eq!(icon_run.size_px, layout.icon_em, "a em, não o desenho");
+        assert_eq!(
+            icon_run.color,
+            pal().status_bar_text,
+            "o acento é só do shell: um segundo item colorido apagaria a distinção (§2.8)"
+        );
+
+        let git = role_of(&layout, SegmentRole::GitBranch).unwrap();
+        let name_run = primitives
+            .iter()
+            .find_map(|p| match p {
+                Primitive::Text(run) if run.text == "main" => Some(run),
+                _ => None,
+            })
+            .expect("o nome é desenhado");
+        assert!(
+            (name_run.origin.0 - (git.rect.x + layout.icon_em)).abs() < 0.01,
+            "o nome começa depois do avanço de 1 em do ícone"
+        );
+    }
+
+    #[test]
+    fn a_narrow_window_drops_the_branch_rather_than_truncating_it() {
+        // Metade de um nome de branch nao informa nada -- e o cwd, que e o
+        // elastico, ja cedeu antes de chegar aqui.
+        let mut c = content();
+        c.git_branch = Some("feat/uma-branch-de-nome-bem-longo".to_owned());
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, 400.0);
+        if let Some(git) = role_of(&layout, SegmentRole::GitBranch) {
+            assert_eq!(git.text, "feat/uma-branch-de-nome-bem-longo");
+        }
     }
 
     #[test]

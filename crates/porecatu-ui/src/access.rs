@@ -384,6 +384,7 @@ fn segment_label(role: SegmentRole) -> &'static str {
     match role {
         SegmentRole::Shell => "shell",
         SegmentRole::Cwd { .. } => "diretório",
+        SegmentRole::GitBranch => "branch",
         SegmentRole::Group => "grupo",
         SegmentRole::Encoding => "codificação",
         SegmentRole::System => "sistema",
@@ -781,6 +782,7 @@ mod tests {
             shell: "pwsh".to_owned(),
             cwd: "~/projetos".to_owned(),
             cwd_is_stale: true,
+            git_branch: None,
             group: None,
             system: "windows - 0.7.0".to_owned(),
         };

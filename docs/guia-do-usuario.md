@@ -171,7 +171,7 @@ A faixa no rodapé da janela mostra, da aba ativa:
 
 | Zona | O que aparece |
 |---|---|
-| Esquerda | nome do shell (o único item colorido), diretório atual, grupo da aba |
+| Esquerda | nome do shell (o único item colorido), diretório atual, branch do Git, grupo da aba |
 | Direita | codificação e o sistema |
 
 O diretório aparece com `~` no lugar da sua pasta pessoal, e é cortado à
@@ -189,6 +189,26 @@ Não é um erro, e nada quebra — mas duas coisas dependem disso: a
 restauração de sessão reabre a aba no lugar errado, e uma aba nova herda
 o diretório errado. Aplicar o snippet da seção anterior resolve as três
 de uma vez, e o esmaecimento some assim que o primeiro `cd` acontecer.
+
+### Repositório Git
+
+Quando o diretório da aba está dentro de um repositório, aparece um ícone
+de ramificação e o nome da branch atual. Fora de um repositório, os dois
+somem — o ícone é a própria resposta a "estou num repositório?".
+
+Com o `HEAD` destacado (depois de um `git checkout <commit>`), o lugar da
+branch traz os sete primeiros caracteres do commit, como o próprio `git`
+abrevia.
+
+A barra mostra **só a branch**: se há alterações não commitadas, quantos
+commits você está à frente ou atrás do remoto, o que está em stage — nada
+disso aparece. Saber a branch é ler um arquivo de trinta bytes; saber o
+resto é percorrer a árvore inteira, e o Porecatu não faz isso enquanto
+você digita.
+
+O nome da branch vem do diretório que a barra conhece — então, se o
+diretório estiver no tom apagado (acima), a branch pode ser a de outro
+repositório. A integração de shell resolve as duas coisas de uma vez.
 
 ### Desligar
 

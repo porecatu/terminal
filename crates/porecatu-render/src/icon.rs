@@ -125,9 +125,18 @@ pub const CHEVRON_LEFT: Icon = Icon {
     ink_height_em: 0.590,
 };
 
+/// `git-branch` -- segmento de repositório da barra de status (ADR-0049).
+/// É o próprio indicador de "este diretório pertence a um repositório":
+/// fora de um, o segmento inteiro some, em vez de aparecer apagado.
+pub const GIT_BRANCH: Icon = Icon {
+    glyph: "\u{e0e2}",
+    ink_width_em: 0.840,
+    ink_height_em: 0.840,
+};
+
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 9] = [
+pub const ALL: [(&str, Icon); 10] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -137,6 +146,7 @@ pub const ALL: [(&str, Icon); 9] = [
     ("minus", MINUS),
     ("square", MAXIMIZE),
     ("copy", RESTORE),
+    ("git-branch", GIT_BRANCH),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
