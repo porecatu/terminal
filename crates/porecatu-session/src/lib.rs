@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn missing_file_is_not_an_error() {
         let dir = tempdir();
-        let path = dir.join("session.json");
+        let path = dir.path().join("session.json");
         let outcome = load_from(&path);
         assert_eq!(outcome, LoadOutcome::default());
     }
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn save_then_load_round_trips() {
         let dir = tempdir();
-        let path = dir.join("session.json");
+        let path = dir.path().join("session.json");
         let session = sample_session();
         save_to(&path, &session).unwrap();
 
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn shell_integration_dismissed_survives_a_round_trip() {
         let dir = tempdir();
-        let path = dir.join("session.json");
+        let path = dir.path().join("session.json");
         let mut session = sample_session();
         session.shell_integration_dismissed = true;
         save_to(&path, &session).unwrap();
@@ -233,12 +233,12 @@ mod tests {
     #[test]
     fn corrupt_json_is_quarantined_without_overwrite() {
         let dir = tempdir();
-        let path = dir.join("session.json");
+        let path = dir.path().join("session.json");
         fs::write(&path, b"{ nao eh json valido").unwrap();
 
         let outcome = load_from(&path);
         assert_eq!(outcome.session, None);
-        let corrupt_path = dir.join("session.json.corrupt");
+        let corrupt_path = dir.path().join("session.json.corrupt");
         assert_eq!(outcome.notices, vec![Notice::Corrupt(corrupt_path.clone())]);
         assert!(corrupt_path.exists());
         assert!(!path.exists());
@@ -247,22 +247,22 @@ mod tests {
     #[test]
     fn second_corruption_does_not_overwrite_the_first() {
         let dir = tempdir();
-        let path = dir.join("session.json");
+        let path = dir.path().join("session.json");
 
         fs::write(&path, b"primeiro corrompido").unwrap();
         load_from(&path);
-        assert!(dir.join("session.json.corrupt").exists());
+        assert!(dir.path().join("session.json.corrupt").exists());
 
         fs::write(&path, b"segundo corrompido").unwrap();
         load_from(&path);
-        assert!(dir.join("session.json.corrupt.1").exists());
+        assert!(dir.path().join("session.json.corrupt.1").exists());
 
         assert_eq!(
-            fs::read(dir.join("session.json.corrupt")).unwrap(),
+            fs::read(dir.path().join("session.json.corrupt")).unwrap(),
             b"primeiro corrompido"
         );
         assert_eq!(
-            fs::read(dir.join("session.json.corrupt.1")).unwrap(),
+            fs::read(dir.path().join("session.json.corrupt.1")).unwrap(),
             b"segundo corrompido"
         );
     }
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn newer_schema_version_preserves_file_and_warns() {
         let dir = tempdir();
-        let path = dir.join("session.json");
+        let path = dir.path().join("session.json");
         fs::write(&path, br#"{"schema_version":99,"windows":[]}"#).unwrap();
 
         let outcome = load_from(&path);
@@ -297,32 +297,27 @@ mod tests {
     #[test]
     fn interrupted_write_leaves_previous_session_intact() {
         let dir = tempdir();
-        let path = dir.join("session.json");
+        let path = dir.path().join("session.json");
         let good = sample_session();
         save_to(&path, &good).unwrap();
 
         let mut tmp_name = path.file_name().unwrap().to_os_string();
         tmp_name.push(".tmp");
-        fs::write(dir.join(tmp_name), b"escrita pela metade").unwrap();
+        fs::write(dir.path().join(tmp_name), b"escrita pela metade").unwrap();
 
         let outcome = load_from(&path);
         assert_eq!(outcome.session, Some(good));
         assert!(outcome.notices.is_empty());
     }
 
-    fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "porecatu-session-test-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn unique_suffix() -> u64 {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        COUNTER.fetch_add(1, Ordering::Relaxed)
+    /// `TempDir` (nome aleatório, `Drop` limpa sozinho) no lugar do antigo
+    /// PID + contador estático: sem `Drop`, o diretório nunca era
+    /// removido, e o nome dependia só de PID + posição de chamada --
+    /// determinístico o bastante pra colidir com o lixo de uma run
+    /// anterior sempre que o SO reciclasse o mesmo PID (visto na prática:
+    /// `session.json.corrupt` de uma run velha fazia o teste desta run
+    /// enxergar uma quarentena "de segunda vez" que nunca aconteceu).
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("cria diretório temporário de teste")
     }
 }

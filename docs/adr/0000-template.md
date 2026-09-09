@@ -51,6 +51,7 @@
 | [0045](0045-primeira-versao-0-7-0.md) | A primeira versão publicada é `0.7.0`, não `1.0.0` | Aceito |
 | [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito · §8 Superseded by ADR-0049 (**parcial**) |
 | [0049](0049-branch-git-na-barra-de-status.md) | Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore | Aceito |
+| [0050](0050-tela-cheia.md) | Tela cheia por `F11`: janela `Borderless`, sem estado novo em `Config` | Aceito |
 
 ## Convenção
 

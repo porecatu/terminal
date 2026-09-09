@@ -14,7 +14,9 @@
 //! fechada; qualquer outra chave sob `[[themes]]` cai como desconhecida.
 //!
 //! O merge cobre toda a superfície de cor do ADR-0031 §1: as 16 ANSI, os
-//! dez campos nomeados de chrome/terminal, `[appearance.groups]` (incl.
+//! onze campos nomeados de chrome/terminal (`close_button_foreground`
+//! entrou depois, correção de uma lacuna -- ver o comentário do campo),
+//! `[appearance.groups]` (incl.
 //! `palette`/`ungrouped_color`, com a exceção de substituição inteira do
 //! ADR-0031 §2) e as cores dos cinco widgets de chrome.
 
@@ -155,6 +157,12 @@ pub struct Theme {
     pub tab_inactive_background: Option<Color>,
     pub tab_active_foreground: Option<Color>,
     pub tab_inactive_foreground: Option<Color>,
+    /// Mesmo nome de `[appearance.tabs.colors]`: cor dos ícones do chrome
+    /// (botões de janela, "+", configurações) -- faltava desta lista desde
+    /// o ADR-0031, apesar de a chave já existir então (F3). Sem override,
+    /// cai no default embutido (`#e4e8ee`, claro o bastante pra sumir
+    /// contra o `bar_background` de todo tema claro).
+    pub close_button_foreground: Option<Color>,
 
     // --- cores de TERMINAL, mesmos nomes de [terminal.colors] -----------
     pub foreground: Option<Color>,
@@ -365,6 +373,10 @@ fn catppuccin_latte() -> Theme {
         tab_inactive_background: Some(Color::hex("#eff1f5")),
         tab_active_foreground: Some(Color::hex("#4c4f69")),
         tab_inactive_foreground: Some(Color::hex("#8c8fa1")),
+        // Mesmo tom de `notices.body_foreground`/`tooltip.foreground`
+        // abaixo -- o "texto secundário legível" já escolhido pra este
+        // tema, não um valor novo.
+        close_button_foreground: Some(Color::hex("#5c5f77")),
         foreground: Some(Color::hex("#4c4f69")),
         background: Some(Color::hex("#eff1f5")),
         cursor: Some(Color::hex("#dc8a78")),
@@ -461,6 +473,8 @@ fn gruvbox_light() -> Theme {
         tab_inactive_background: Some(Color::hex("#dfd3b6")),
         tab_active_foreground: Some(Color::hex("#3c3836")),
         tab_inactive_foreground: Some(Color::hex("#7c6f64")),
+        // Mesmo tom de `tab_inactive_foreground`/`tooltip.foreground`.
+        close_button_foreground: Some(Color::hex("#7c6f64")),
         foreground: Some(Color::hex("#3c3836")),
         background: Some(Color::hex("#fbf1c7")),
         cursor: Some(Color::hex("#3c3836")),
@@ -557,6 +571,8 @@ fn solarized_light() -> Theme {
         tab_inactive_background: Some(Color::hex("#e0d9c4")),
         tab_active_foreground: Some(Color::hex("#586e75")),
         tab_inactive_foreground: Some(Color::hex("#93a1a1")),
+        // Mesmo tom de `foreground`/`notices.body_foreground` abaixo.
+        close_button_foreground: Some(Color::hex("#657b83")),
         foreground: Some(Color::hex("#657b83")),
         background: Some(Color::hex("#fdf6e3")),
         cursor: Some(Color::hex("#586e75")),
@@ -766,6 +782,13 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
             default: bd.inactive_foreground,
             theme_value: theme.tab_inactive_foreground,
             set: |cfg, v| cfg.appearance.tabs.colors.inactive_foreground = v,
+        },
+        MergeField {
+            name: "appearance.tabs.colors.close_button_foreground",
+            current: b.close_button_foreground,
+            default: bd.close_button_foreground,
+            theme_value: theme.close_button_foreground,
+            set: |cfg, v| cfg.appearance.tabs.colors.close_button_foreground = v,
         },
         MergeField {
             name: "appearance.groups.count_background",

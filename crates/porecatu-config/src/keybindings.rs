@@ -63,6 +63,9 @@ fn common_defaults() -> BTreeMap<String, String> {
         ("ctrl+shift+pageup", "group.prev"),
         ("ctrl+shift+n", "window.new"),
         ("ctrl+shift+q", "window.close"),
+        // F11 (ADR-0050): convenção de Windows/Linux, vale nas três
+        // plataformas -- mesmo padrão de `f3`/`shift+f3` acima.
+        ("f11", "window.toggle_fullscreen"),
         ("ctrl+shift+c", "clipboard.copy"),
         ("ctrl+shift+v", "clipboard.paste"),
         ("shift+pageup", "scrollback.page_up"),
@@ -140,7 +143,7 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         let bindings = Keybindings::default();
-        assert_eq!(bindings.common.len(), 32);
+        assert_eq!(bindings.common.len(), 33);
         assert_eq!(
             bindings.common.get("ctrl+shift+t"),
             Some(&"tab.new".to_owned())

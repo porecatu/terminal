@@ -163,6 +163,7 @@ ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 |---|---|---|---|---|
 | `window.new` | Abre janela nova com uma aba, herdando o `cwd` da aba ativa | [ADR-0015](../adr/0015-multiplas-janelas.md) | F2 | |
 | `window.close` | Fecha a janela; confirma se houver mais de uma aba, ou uma só com processo ativo | ADR-0015, ADR-0034, RF-1.4 | F2 | |
+| `window.toggle_fullscreen` | Alterna a janela ativa entre normal e tela cheia (`Borderless`, sem estado persistido) | [ADR-0050](../adr/0050-tela-cheia.md) | fora de fase | |
 
 ---
 

@@ -119,6 +119,7 @@ usados, no default de fábrica:
 | `Alt+1`…`Alt+9` | `Cmd+1`…`Cmd+9` | Ir para a N-ésima aba |
 | `Ctrl+Shift+G` | `Cmd+G` | Criar grupo com a seleção |
 | `Ctrl+Shift+N` | `Cmd+N` | Nova janela |
+| `F11` | igual | Alternar tela cheia |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | `Cmd+C` / `Cmd+V` | Copiar/colar |
 | `Shift+PageUp` / `Shift+PageDown` | igual | Rolar o scrollback |
 | `Ctrl+Shift+F` | `Cmd+F` | Buscar no scrollback |

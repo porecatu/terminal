@@ -198,7 +198,10 @@ pub fn paint(
     now: Instant,
     measurer: &mut porecatu_render::TextMeasurer,
     is_macos: bool,
-    is_maximized: bool,
+    // ADR-0050: `true` também em tela cheia, não só maximizada -- as duas
+    // mostram o ícone de restaurar (chamar isto `is_maximized` seria
+    // enganoso: o botão nunca "maximiza-por-cima-do-fullscreen").
+    show_restore_icon: bool,
     hover_window_button: Option<tab_bar::WindowButtonHit>,
     // Hover por brilho (F4 etapa 6, ADR-0032 §2, espec §1.10) -- `None`
     // durante arraste/rename/qualquer modo de captura, mesma regra do
@@ -627,7 +630,7 @@ pub fn paint(
             (
                 1u8,
                 tab_bar::WindowButtonHit::MaximizeRestore,
-                if is_maximized {
+                if show_restore_icon {
                     icon::RESTORE
                 } else {
                     icon::MAXIMIZE

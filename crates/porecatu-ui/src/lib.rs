@@ -18,7 +18,7 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId};
 
 mod access;
 mod animation;
@@ -698,6 +698,14 @@ struct WindowState {
     /// pixel"). `None` sempre que a variável não está setada (`dispatch_
     /// keyboard_input` só escreve aqui depois de conferir `trace::enabled`).
     key_trace_pending: Option<Instant>,
+    /// ADR-0050: `true` quando a janela estava maximizada ao entrar em
+    /// tela cheia -- no Windows, pedir fullscreen borderless sem antes
+    /// desmaximizar deixa o estilo `WS_MAXIMIZE` vivo, que briga com o
+    /// `SetWindowPos` do `winit` (a taskbar acha que a janela foi pra tela
+    /// cheia, o retângulo não muda de verdade). Restaura a maximização ao
+    /// sair, em vez de devolver uma janela "restaurada" que o usuário não
+    /// pediu.
+    fullscreen_restore_maximized: bool,
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -1067,6 +1075,7 @@ impl WindowState {
             git: std::cell::RefCell::new(git::GitInfo::default()),
             access_adapter,
             key_trace_pending: None,
+            fullscreen_restore_maximized: false,
         }
     }
 
@@ -2253,6 +2262,12 @@ impl WindowState {
             }
             Action::WindowNew => ActionOutcome::OpenWindow,
             Action::WindowClose => ActionOutcome::CloseWindowRequested,
+            // ADR-0050: geometria da própria janela, como minimizar/
+            // maximizar -- resolvido aqui mesmo, sem bubble pra `App`.
+            Action::WindowToggleFullscreen => {
+                self.toggle_fullscreen();
+                ActionOutcome::Handled
+            }
             // Sem default fora do macOS (`docs/reference/acoes.md`); o
             // efeito documentado é "o mesmo do RF-1.4 ao fechar a última
             // janela" -- mesmo caminho de `window.close` na janela atual,
@@ -2395,8 +2410,7 @@ impl WindowState {
                         NewTabRequest::None
                     }
                     tab_bar::WindowButtonHit::MaximizeRestore => {
-                        let maximized = self.window.is_maximized();
-                        self.window.set_maximized(!maximized);
+                        self.maximize_or_restore();
                         NewTabRequest::None
                     }
                     tab_bar::WindowButtonHit::Close => NewTabRequest::CloseWindowRequested,
@@ -2586,6 +2600,56 @@ impl WindowState {
         }
     }
 
+    /// ADR-0050: `F11` -- entra ou sai de tela cheia, desmaximizando antes
+    /// de entrar (ver o comentário do campo `fullscreen_restore_maximized`,
+    /// o motivo é o `SetWindowPos` do `winit` perder a briga contra
+    /// `WS_MAXIMIZE` no Windows) e remaximizando ao sair, se foi esse o
+    /// estado que a janela deixou pra trás.
+    fn toggle_fullscreen(&mut self) {
+        if self.window.fullscreen().is_some() {
+            self.exit_fullscreen();
+        } else {
+            self.fullscreen_restore_maximized = self.window.is_maximized();
+            if self.fullscreen_restore_maximized {
+                self.window.set_maximized(false);
+            }
+            self.window
+                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+    }
+
+    /// `true` quando a janela ocupa a tela do jeito que maximizar ocuparia
+    /// -- maximizada de verdade, **ou** em tela cheia (ADR-0050). As duas
+    /// situações compartilham as mesmas duas consequências: o botão de
+    /// janela mostra o ícone de restaurar, e a borda de resize (que não
+    /// faz sentido nos dois estados) fica desligada.
+    fn occupies_the_whole_screen(&self) -> bool {
+        self.window.is_maximized() || self.window.fullscreen().is_some()
+    }
+
+    fn exit_fullscreen(&mut self) {
+        self.window.set_fullscreen(None);
+        if self.fullscreen_restore_maximized {
+            self.window.set_maximized(true);
+            self.fullscreen_restore_maximized = false;
+        }
+    }
+
+    /// O que o botão de janela "restaurar/maximizar" e o duplo clique na
+    /// drag region (`resolve_titlebar_drag`) fazem -- os dois pontos de
+    /// entrada da mesma convenção. Em tela cheia, "restaurar" tem que
+    /// **sair** dela (devolvendo o estado de antes, `exit_fullscreen`),
+    /// não alternar o maximizado por baixo enquanto a tela cheia continua
+    /// ativa -- senão o botão pareceria não fazer nada.
+    fn maximize_or_restore(&mut self) {
+        if self.window.fullscreen().is_some() {
+            self.exit_fullscreen();
+        } else {
+            let maximized = self.window.is_maximized();
+            self.window.set_maximized(!maximized);
+        }
+    }
+
     /// ADR-0027: clique na drag region (nada sob o cursor na barra).
     /// Duplo clique maximiza/restaura, resolvido no *press* -- mesmo
     /// padrão de `handle_pill_click`/`last_pill_click`, mas sem
@@ -2602,8 +2666,7 @@ impl WindowState {
             .is_some_and(|at| now.duration_since(at) <= DOUBLE_CLICK_THRESHOLD);
         self.last_titlebar_click = if is_double_click { None } else { Some(now) };
         if is_double_click {
-            let maximized = self.window.is_maximized();
-            self.window.set_maximized(!maximized);
+            self.maximize_or_restore();
         } else {
             let _ = self.window.drag_window();
         }
@@ -5829,7 +5892,7 @@ impl App {
             ),
             state.logical_width,
             state.logical_height,
-            state.window.is_maximized(),
+            state.occupies_the_whole_screen(),
             self.config.appearance.window_controls.resize_border as f32,
         );
         // Affordance de hyperlink (ADR-0042 §3, RF-11.11): "o cursor do
@@ -6249,7 +6312,7 @@ impl App {
                 logical_point,
                 state.logical_width,
                 state.logical_height,
-                state.window.is_maximized(),
+                state.occupies_the_whole_screen(),
                 self.config.appearance.window_controls.resize_border as f32,
             )
         {
@@ -6589,7 +6652,7 @@ impl App {
             now,
             gpu.text_measurer(),
             is_mac,
-            state.window.is_maximized(),
+            state.occupies_the_whole_screen(),
             hover_window_button,
             bar_hover,
         );

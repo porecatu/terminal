@@ -1052,6 +1052,7 @@ tab_active_background = "#ccd0da"
 tab_inactive_background = "#eff1f5"
 tab_active_foreground = "#4c4f69"
 tab_inactive_foreground = "#8c8fa1"
+close_button_foreground = "#5c5f77"  # mesmo tom de notices.body_foreground
 foreground = "#4c4f69"
 background = "#eff1f5"
 cursor = "#dc8a78"
@@ -1144,6 +1145,7 @@ tab_active_background = "#fbf1c7"
 tab_inactive_background = "#dfd3b6"
 tab_active_foreground = "#3c3836"
 tab_inactive_foreground = "#7c6f64"
+close_button_foreground = "#7c6f64"  # mesmo tom de tab_inactive_foreground
 foreground = "#3c3836"
 background = "#fbf1c7"
 cursor = "#3c3836"
@@ -1236,6 +1238,7 @@ tab_active_background = "#fdf6e3"
 tab_inactive_background = "#e0d9c4"
 tab_active_foreground = "#586e75"
 tab_inactive_foreground = "#93a1a1"
+close_button_foreground = "#657b83"  # mesmo tom de foreground
 foreground = "#657b83"
 background = "#fdf6e3"
 cursor = "#586e75"
@@ -1407,6 +1410,10 @@ close_hover_foreground = "#ffffff"
 "ctrl+shift+q"        = "window.close"   # não é ctrl+shift+w: essa é tab.close
 # app.quit não tem default em Windows e Linux — fechar a última janela já
 # encerra o app (RF-1.4). No macOS o default é Cmd+Q, por convenção.
+
+# Tela cheia, ADR-0050. F11 vale nas três plataformas, como f3/shift+f3
+# abaixo -- sem entrada própria em [keybindings.macos], a comum já cobre.
+"f11"                 = "window.toggle_fullscreen"
 
 "ctrl+shift+c"        = "clipboard.copy"
 "ctrl+shift+v"        = "clipboard.paste"

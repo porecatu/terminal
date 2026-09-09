@@ -26,6 +26,8 @@ Por que essa fronteira: tema é o que o usuário troca para mudar de humor, vár
 
 O tema **pode** mudar cor de chrome — a alternativa (só terminal) deixaria a barra de abas em desacordo com um tema claro, que é o caso de uso mais óbvio depois do escuro.
 
+**Correção de cobertura.** `close_button_foreground` (a cor dos ícones do chrome — botões de janela, "+", configurações) sempre esteve dentro desta fronteira, mas ficou fora da lista mesclável implementada até ser notado: o default embutido (`#e4e8ee`, claro) é ilegível contra o `bar_background` de qualquer tema claro. Os três temas claros embutidos (`catppuccin-latte`, `gruvbox-light`, `solarized-light`) agora declaram um valor próprio; os escuros continuam no default, sem mudança visual.
+
 ### 2. Merge é por chave, com três níveis de precedência
 
 ```
