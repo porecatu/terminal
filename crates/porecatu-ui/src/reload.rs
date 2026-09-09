@@ -187,7 +187,12 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
         || old.appearance.terminal_frame.margin != new.appearance.terminal_frame.margin
         || old.appearance.terminal_frame.padding != new.appearance.terminal_frame.padding
         || old.appearance.terminal_frame.corner_radius
-            != new.appearance.terminal_frame.corner_radius;
+            != new.appearance.terminal_frame.corner_radius
+        // A barra de status encolhe a grade (ADR-0048 §1): ligá-la,
+        // desligá-la ou mudar a altura muda o número de linhas.
+        || old.appearance.status_bar.enabled != new.appearance.status_bar.enabled
+        || old.appearance.status_bar.height != new.appearance.status_bar.height
+        || old.appearance.status_bar.font_size != new.appearance.status_bar.font_size;
 
     let mut deferred = Vec::new();
     if old.appearance.window.opacity != new.appearance.window.opacity {
@@ -272,6 +277,27 @@ mod tests {
         let mut new = base();
         new.appearance.tabs.tab_height = 40;
         assert!(diff(&base(), &new).grid_changed);
+    }
+
+    #[test]
+    fn status_bar_toggle_is_class_b() {
+        let mut new = base();
+        new.appearance.status_bar.enabled = false;
+        assert!(diff(&base(), &new).grid_changed);
+    }
+
+    #[test]
+    fn status_bar_height_change_is_class_b() {
+        let mut new = base();
+        new.appearance.status_bar.height = 40;
+        assert!(diff(&base(), &new).grid_changed);
+    }
+
+    #[test]
+    fn status_bar_color_change_is_class_a_not_b() {
+        let mut new = base();
+        new.appearance.status_bar.foreground = new.appearance.status_bar.shell;
+        assert!(!diff(&base(), &new).grid_changed);
     }
 
     #[test]

@@ -590,6 +590,31 @@ A ordem não é arbitrária: 1 destrava 2, e as duas são as duas metades da bus
 
 ---
 
+## Depois do v1 — barra de status — implementada
+
+Fora da ordem de fases, por decisão do dono do produto: o [PRD-009](prd/prd-009-barra-de-status.md) foi promovido de rascunho a **Aprovado** e a barra de status entrou no produto, atrás do [ADR-0048](adr/0048-barra-de-status.md).
+
+Era o único elemento `[v2]` cujo valor **não dependia de nenhum recurso de v2 para existir** — os dados que ela exibe já estão todos em runtime desde a F5, e a tabela de tokens já a nomeava em quatro lugares desde o ADR-0009, sem consumidor. O que faltava era decisão, não capacidade.
+
+A razão de trazê-la agora é o **RF-9.4**: o diretório exibido em alfa `.45` quando não veio de OSC 7. É a contrapartida permanente do convite do [ADR-0039](adr/0039-convite-a-integracao-de-shell.md) — o convite avisa uma vez e é dispensável, a barra mostra o estado o tempo todo. Sem ela, a ausência de integração de shell só aparece quando a sessão restaura no diretório errado.
+
+**Quatro etapas:**
+
+1. **Documentação e decisão** — ADR-0048, promoção do PRD-009, §2.8 da especificação de `[v2]` a `[v1]`, tabela de fases, §4.4 e os índices.
+2. **Config** — `[appearance.status_bar]` em `porecatu-config`, tokens em `TabBarStyle`/`ResolvedPalette`, `ThemeStatusBar`, recarga **classe B** e as entradas novas em `VALORES` (`scripts/verify-docs.py`).
+3. **Geometria e desenho** — `status_bar_height` em `paint::terminal_box_rect`, propagação pelos nove sítios de `lib.rs`, `status_bar.rs` novo com layout puro e pintor, `in_status_bar`.
+4. **Interação, acessibilidade e guia** — clique bloqueado antes da grade (a borda de resize continua vencendo os 6px), `build_status_bar` na árvore do [ADR-0043](adr/0043-arvore-de-acessibilidade.md), hot reload ponta a ponta e a seção no [guia do usuário](guia-do-usuario.md).
+
+**Escopo:** RF-9.1, RF-9.2, RF-9.3 (só a abreviação com `~`), RF-9.4, RF-9.6 e RF-9.8. **Diferidos:** RF-9.5 (zonas configuráveis), RF-9.7 (clicar copia) e a metade de tooltip do RF-9.3, que exige generalizar `tooltip::Hover` para além de `TabId`. A contagem de painéis do mockup fica fora enquanto o [PRD-006](prd/prd-006-paineis-divididos.md) for `[v2]`.
+
+**Critério de saída:** a barra desenha os cinco segmentos com a barra ligada, e com `enabled = false` a grade volta **exatamente** ao tamanho de hoje; o `cwd` aparece a `.45` num shell sem OSC 7 e opaco depois do snippet de integração; arrastar a borda inferior ainda redimensiona a janela; `verify-docs.py` e o CI verdes nas três plataformas.
+
+**Dívida de verificação**, na mesma classe da que o v1 já carrega. A cobertura automatizada fechou tudo o que é geometria e conteúdo: regressão zero com `enabled = false` (o retângulo do terminal é byte a byte o de antes), o `margin` entre o quadro e a faixa, a ordem e o `gap` dos segmentos, o diretório cedendo espaço ao grupo em janela estreita, o alfa do RF-9.4 e a árvore de acessibilidade projetando o mesmo layout que o pintor consome. **Não** foram exercitados à vista: a barra desenhada em tela e o hot reload de `enabled`/`height` refluindo a grade ao vivo. A tentativa de captura de tela do agente pegou outra janela do usuário em vez da do app -- a janela nova não sobe no z-order sem foco, e a lição da F5 vale: não insistir em captura de tela cheia.
+
+**Uma decisão de aparência foi tomada nesta entrega** e está no ADR-0048 §4, com as duas alternativas recusadas e o porquê: a marca do RF-9.4 é o **alfa `.45`** já em uso no rótulo da aba não iniciada. Nenhum valor novo entrou -- os cinco tokens da §2.8 estavam na tabela desde o ADR-0009, três deles nomeando a barra de status explicitamente.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.
@@ -601,7 +626,6 @@ A coluna **Desenhado** marca o que já tem alvo visual aprovado no canvas. Estar
 | Splits / panes na aba | [PRD-000](prd/prd-000-visao-de-produto.md), [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md), [PRD-006](prd/prd-006-paineis-divididos.md) *(rascunho)* | sim, `[v2]` |
 | Perfis de aba (WSL, SSH, container) | [PRD-000](prd/prd-000-visao-de-produto.md), [PRD-007](prd/prd-007-perfis-de-aba.md) *(rascunho)* | sim, `[v2]` |
 | Paleta de comandos | [PRD-008](prd/prd-008-paleta-de-comandos.md) *(rascunho)* | sim, `[v2]` |
-| Barra de status | [PRD-009](prd/prd-009-barra-de-status.md) *(rascunho)* | sim, `[v2]` |
 | Configuração por GUI | [ADR-0003](adr/0003-formato-de-configuracao.md), [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) | sim, `[v2]` |
 | Faixa de identidade da barra de título (logo, nome do app, título da aba ativa) | [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) (parcial, ver [ADR-0027](adr/0027-controles-de-janela-e-resize-proprios.md)), [PRD-004](prd/prd-004-aparencia-do-chrome.md) | sim, `[v2]` |
 | Multiplexação remota | [PRD-000](prd/prd-000-visao-de-produto.md) | não |

@@ -9,6 +9,7 @@ mod group_editor;
 mod groups;
 mod move_to_group;
 mod notices;
+mod status_bar;
 mod tabs;
 mod terminal_frame;
 mod tooltip;
@@ -21,6 +22,7 @@ pub use group_editor::GroupEditor;
 pub use groups::{GroupPaletteEntry, Groups};
 pub use move_to_group::MoveToGroup;
 pub use notices::Notices;
+pub use status_bar::StatusBar;
 pub use tabs::{CloseButtonVisibility, Tabs, TabsColors, TabsOverflow, TabsRename};
 pub use terminal_frame::TerminalFrame;
 pub use tooltip::Tooltip;
@@ -43,4 +45,5 @@ pub struct Appearance {
     pub group_editor: GroupEditor,
     pub move_to_group: MoveToGroup,
     pub terminal_frame: TerminalFrame,
+    pub status_bar: StatusBar,
 }

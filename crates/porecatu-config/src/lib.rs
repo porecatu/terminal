@@ -27,7 +27,7 @@ mod theme;
 
 pub use appearance::{
     Appearance, CloseButtonVisibility, ContextMenu, Dialog, GroupEditor, GroupPaletteEntry, Groups,
-    MoveToGroup, Notices, TabBarPosition, Tabs, TabsColors, TabsOverflow, TabsRename,
+    MoveToGroup, Notices, StatusBar, TabBarPosition, Tabs, TabsColors, TabsOverflow, TabsRename,
     TerminalFrame, Tooltip, Window, WindowControls,
 };
 pub use color::{Color, ColorParseError};
@@ -43,7 +43,8 @@ pub use terminal::{
 };
 pub use theme::{
     Theme, ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeGroupEditor, ThemeGroups,
-    ThemeNotices, ThemeTooltip, apply as apply_theme, overridden_keys as theme_overridden_keys,
+    ThemeNotices, ThemeStatusBar, ThemeTooltip, apply as apply_theme,
+    overridden_keys as theme_overridden_keys,
 };
 
 use std::path::Path;

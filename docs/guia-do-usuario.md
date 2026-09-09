@@ -161,3 +161,46 @@ PowerShell — os snippets por shell (bash, zsh, fish, PowerShell) estão em
 [docs/reference/integracao-de-shell.md](reference/integracao-de-shell.md),
 com o passo a passo de instalação e a forma exata do URI que o Porecatu
 espera.
+
+O convite aparece uma vez e pode ser dispensado. Quem diz o tempo todo em
+que pé está é a **barra de status**, abaixo.
+
+## Barra de status
+
+A faixa no rodapé da janela mostra, da aba ativa:
+
+| Zona | O que aparece |
+|---|---|
+| Esquerda | nome do shell (o único item colorido), diretório atual, grupo da aba |
+| Direita | codificação e o sistema |
+
+O diretório aparece com `~` no lugar da sua pasta pessoal, e é cortado à
+direita quando a janela estreita — os outros campos são curtos e não
+cedem espaço.
+
+### Diretório apagado: o que significa
+
+**Quando o diretório aparece num tom mais apagado que o resto, ele é o
+diretório em que a aba foi aberta, não o atual.** O Porecatu não tem como saber para onde você
+navegou: quem informa isso é o shell, com OSC 7 (acima). Sem essa
+integração, um `cd` não chega até aqui.
+
+Não é um erro, e nada quebra — mas duas coisas dependem disso: a
+restauração de sessão reabre a aba no lugar errado, e uma aba nova herda
+o diretório errado. Aplicar o snippet da seção anterior resolve as três
+de uma vez, e o esmaecimento some assim que o primeiro `cd` acontecer.
+
+### Desligar
+
+```toml
+[appearance.status_bar]
+enabled = false
+```
+
+Desligada, a barra devolve a altura ao terminal — o número de linhas da
+grade cresce de volta, na hora, sem reiniciar. Cores, altura e tamanho da
+fonte também são configuráveis; ver `[appearance.status_bar]` no
+[arquivo de exemplo](config/porecatu.example.toml).
+
+A barra não tem nada clicável: a borda inferior da janela continua sendo
+a área de redimensionar, mesmo em cima dela.

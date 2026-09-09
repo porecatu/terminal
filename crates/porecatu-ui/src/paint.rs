@@ -77,18 +77,32 @@ const CURSOR_HEIGHT_RATIO: f32 = 1.2;
 /// encostam na barra** (esquerda, direita, base): em cima o box começa
 /// colado em `bar_height`, sem gap -- um gap ali é uma linha visível entre
 /// a trilha e o terminal, pedido do usuário para eliminar.
+///
+/// `status_bar_height` (`status_bar::height`, ADR-0048 §5) é a faixa do
+/// rodapé, e quando ela existe o box **encosta nela**, sem `margin` --
+/// exatamente como já encosta na barra de abas em cima, e pela mesma
+/// razão: a faixa é outra barra de chrome, não a borda da janela, e um
+/// vão entre as duas lê como uma linha a mais. Com a barra desligada o
+/// `margin` da base volta a valer contra a borda da janela, e a conta é
+/// byte a byte a de antes de a barra existir.
+///
+/// A barra **encolhe** a grade: é esta linha que tira as linhas do PTY, e
+/// é a diferença deliberada contra a barra de busca, que sobrepõe
+/// (ADR-0041) por ser transitória.
 pub fn terminal_box_rect(
     style: &TabBarStyle,
     bar_height: f32,
+    status_bar_height: f32,
     logical_width: f32,
     logical_height: f32,
 ) -> Rect {
     let margin = style.terminal_frame_margin;
+    let bottom_margin = if status_bar_height > 0.0 { 0.0 } else { margin };
     Rect {
         x: margin,
         y: bar_height,
         width: (logical_width - margin * 2.0).max(0.0),
-        height: (logical_height - bar_height - margin).max(0.0),
+        height: (logical_height - bar_height - status_bar_height - bottom_margin).max(0.0),
     }
 }
 
@@ -102,10 +116,17 @@ pub fn terminal_box_rect(
 pub fn terminal_content_rect(
     style: &TabBarStyle,
     bar_height: f32,
+    status_bar_height: f32,
     logical_width: f32,
     logical_height: f32,
 ) -> Rect {
-    let box_rect = terminal_box_rect(style, bar_height, logical_width, logical_height);
+    let box_rect = terminal_box_rect(
+        style,
+        bar_height,
+        status_bar_height,
+        logical_width,
+        logical_height,
+    );
     let padding = style.terminal_frame_padding;
     Rect {
         x: box_rect.x + padding,
@@ -602,6 +623,88 @@ fn resolved_colors(
         std::mem::swap(&mut fg, &mut bg);
     }
     (fg, bg)
+}
+
+#[cfg(test)]
+mod status_bar_geometry_tests {
+    use super::*;
+    use crate::status_bar;
+    use crate::tab_bar::TabBarStyle;
+
+    const BAR: f32 = 52.0;
+    const W: f32 = 900.0;
+    const H: f32 = 600.0;
+
+    /// O que a conta era antes da barra de status existir -- escrito à
+    /// mão de propósito, para o teste abaixo comparar contra algo que
+    /// não vem da mesma função que ele verifica.
+    fn height_before_the_status_bar(style: &TabBarStyle) -> f32 {
+        H - BAR - style.terminal_frame_margin
+    }
+
+    #[test]
+    fn disabled_status_bar_gives_back_exactly_the_old_rect() {
+        // Regressão zero: com `enabled = false`, a área do terminal tem
+        // de ser byte a byte a de antes desta entrega. É o que torna o
+        // opt-out real, em vez de "quase igual".
+        let mut style = TabBarStyle::DEFAULT;
+        style.status_bar_enabled = false;
+        let rect = terminal_box_rect(&style, BAR, status_bar::height(&style), W, H);
+        assert_eq!(rect.height, height_before_the_status_bar(&style));
+        assert_eq!(rect.y, BAR);
+        assert_eq!(rect.x, style.terminal_frame_margin);
+    }
+
+    #[test]
+    fn enabled_status_bar_takes_its_height_and_gives_back_the_bottom_margin() {
+        // A barra tira a própria altura e **devolve** o `margin` da base,
+        // porque com ela o box encosta na faixa em vez de na borda da
+        // janela. Líquido: a grade perde `altura - margin`, não `altura`.
+        let style = TabBarStyle::DEFAULT;
+        let h = status_bar::height(&style);
+        assert!(h > 0.0, "ligada por padrão (RF-9.1)");
+        let rect = terminal_box_rect(&style, BAR, h, W, H);
+        assert_eq!(
+            rect.height,
+            height_before_the_status_bar(&style) - h + style.terminal_frame_margin
+        );
+    }
+
+    #[test]
+    fn the_box_touches_the_status_bar_with_no_gap() {
+        // ADR-0048 §5, revisto depois de ver a barra em tela: o box
+        // encosta na faixa, como já encostava na barra de abas em cima --
+        // um vão entre duas barras de chrome lê como uma linha a mais,
+        // que é o mesmo motivo pelo qual o topo nunca teve gap.
+        let style = TabBarStyle::DEFAULT;
+        let h = status_bar::height(&style);
+        let rect = terminal_box_rect(&style, BAR, h, W, H);
+        assert_eq!(
+            rect.y + rect.height,
+            H - h,
+            "sem folga entre o box e a faixa"
+        );
+    }
+
+    #[test]
+    fn content_rect_inherits_the_status_bar_inset() {
+        let style = TabBarStyle::DEFAULT;
+        let h = status_bar::height(&style);
+        let box_rect = terminal_box_rect(&style, BAR, h, W, H);
+        let content = terminal_content_rect(&style, BAR, h, W, H);
+        assert_eq!(
+            content.height,
+            box_rect.height - style.terminal_frame_padding * 2.0,
+            "a grade herda o recuo sem lógica própria -- a fórmula mora numa função só"
+        );
+    }
+
+    #[test]
+    fn a_window_shorter_than_its_own_chrome_never_goes_negative() {
+        let style = TabBarStyle::DEFAULT;
+        let rect = terminal_box_rect(&style, BAR, status_bar::height(&style), W, 10.0);
+        assert_eq!(rect.height, 0.0);
+    }
 }
 
 #[cfg(test)]

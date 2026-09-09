@@ -74,7 +74,6 @@ Vários deles **já estão desenhados** no design canvas ([`docs/design/`](../de
 - **Splits / panes dentro da aba.** Grupos e panes resolvem necessidades parecidas; fazer os dois ao mesmo tempo dilui ambos. Se entrar, muda o modelo de `Tab` ([ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md)) e merece ADR próprio. — *desenhado, `[v2]`, [PRD-006](prd-006-paineis-divididos.md) (rascunho)*
 - **Perfis de aba** (aba que abre WSL, aba que abre SSH). Recurso natural para v2; não é do núcleo. — *desenhado, `[v2]`, [PRD-007](prd-007-perfis-de-aba.md) (rascunho)*
 - **Paleta de comandos.** Busca unificada de abas, grupos e ações. — *desenhado, `[v2]`, [PRD-008](prd-008-paleta-de-comandos.md) (rascunho)*
-- **Barra de status.** — *desenhado, `[v2]`, [PRD-009](prd-009-barra-de-status.md) (rascunho)*
 - **Configuração por interface gráfica.** No v1, a config é o arquivo TOML ([ADR-0003](../adr/0003-formato-de-configuracao.md)). — *desenhado, `[v2]`; quando existir, escreverá no TOML ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))*
 - **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa). Decorações nativas continuam só no macOS; Windows/Linux já têm controles de janela e resize próprios ([ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md)). — *desenhado, `[v2]` ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))*
 - **Multiplexação remota** (anexar a sessão em servidor, estilo `tmux -CC`). Problema grande e ortogonal.

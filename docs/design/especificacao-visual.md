@@ -6,7 +6,7 @@ Registro dos valores de aparência do chrome. **O binário é a referência norm
 
 > **Nenhuma mudança de aparência sem aval do dono do produto** (ADR-0028 §4). A seção 4.4 é histórico, não lista de tarefas: nada nela autoriza mexer na interface.
 
-> **Aviso de fase.** O mockup contém elementos que **não são do v1**, e para o que é `[v1]` ele é referência **histórica** — divergência entre ele e o binário não é bug. Antes de implementar qualquer coisa daqui, consulte a [tabela de fases](#3-tabela-de-fases). Painéis divididos, perfis, paleta de comandos, painel de configurações, barra de status e a faixa de identidade da barra de título são todos `[v2]`.
+> **Aviso de fase.** O mockup contém elementos que **não são do v1**, e para o que é `[v1]` ele é referência **histórica** — divergência entre ele e o binário não é bug. Antes de implementar qualquer coisa daqui, consulte a [tabela de fases](#3-tabela-de-fases). Painéis divididos, perfis, paleta de comandos, painel de configurações e a faixa de identidade da barra de título são todos `[v2]`. A **barra de status** deixou de ser: entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases.
 
 ---
 
@@ -145,7 +145,7 @@ Cor de aba sem grupo: `#7b838f`.
 | **Barra de abas** | **52px** — `chrome::bar_height` = aba 34 + `wrapper_padding` 3 nos dois lados + `trilha_padding` 6 nos dois lados. Sai de uma função só: recalcular a altura localmente já custou um respiro inferior que não aparecia, porque o recorte da trilha vinha de uma cópia velha da conta |
 | **Aba dentro de grupo, pílula de grupo** | **34px** (`tab_height`) |
 | **Aba solta** | **40px** — `tab_height + wrapper_padding * 2`: sem bloco de grupo a que ceder o `wrapper_padding`, ela ocupa a caixa inteira do wrapper e alinha topo e base com a agrupada (§2.5) |
-| Barra de status `[v2]` | 26px |
+| **Barra de status** | **26px** — `status_bar::height`, e `0.0` quando `[appearance.status_bar] enabled = false`: desligada, a barra não desenha nem ocupa altura (§2.8) |
 | Botão da barra de título `[v2]` | 44px de largura |
 | **Botão de janela** (minimizar / maximizar / fechar) | **46px de largura, altura cheia da barra** — ADR-0027, §2.2.1 |
 | **Zona de resize da janela** | **6px** em toda borda (ADR-0027) |
@@ -521,11 +521,33 @@ Com painéis divididos `[v2]`, os painéis ficam lado a lado com `gap: 1px` sobr
 
 Cores de saída: padrão `#c7ccd6`, esmaecido `#6f7783`, sucesso `#86c56a`, aviso `#e0b060`, erro `#ef8a8a`, destaque `#5ed3bc`.
 
-### 2.8 Barra de status `[v2]`
+### 2.8 Barra de status `[v1]`
 
-Altura 26, `padding: 0 12`, fundo `#1b1f26`, borda superior `#23272f`, mono 10.5px `#6b737e`, `gap: 16`.
+Faixa fixa no rodapé da janela, largura cheia, na camada `Chrome` ([ADR-0048](../adr/0048-barra-de-status.md)). Altura 26, `padding: 0 12`, mono 10.5px (§1.1) em `#a8b0bb` (token "Secundário", §1.4), `gap: 16` entre segmentos.
 
-Esquerda: nome do shell em `#5ed3bc`, diretório atual, grupo da aba. Direita: codificação, contagem de painéis, sistema e versão.
+**A faixa não pinta fundo próprio.** O fundo da janela ali já é `#1b1f26` (token "Barras", §1.2), e um quad opaco por cima cobriria a **sombra do quadro do terminal** (§1.2, §2.7), que desce 7,5px sobre o topo da faixa — em tela, a sombra aparecia decepada numa linha reta. Sem o quad, ela cai sobre o fundo da janela e o texto, que começa a 7,75px do topo, fica logo abaixo dela.
+
+**Sem linha separadora no topo.** O desenho original pedia uma borda `#23272f`; o binário não a pinta. Com o quadro encostado na faixa, o que separa os dois é a **sombra do quadro** mais a diferença de fundo — `#0f1216` do terminal contra `#1b1f26` da janela. Uma borda ali seria uma terceira separação (§4.4).
+
+**A cor do texto não é a do desenho.** Ele pedia `#6b737e` ("Tênue"), que a 10.5px dá 3.45:1 contra o fundo — abaixo do mínimo WCAG AA para texto pequeno, e quase indistinguível em tela. É `#a8b0bb`, 7.55:1, a mesma correção que o corpo do aviso já recebera pelo mesmo motivo (§2.14).
+
+Ela **encolhe a grade**, não a sobrepõe. O quadro do terminal (§2.7) **encosta nela**, sem `terminal_frame_margin` — como já encosta na barra de abas em cima, e pela mesma razão: um vão entre duas barras de chrome lê como uma linha a mais. O `margin` da base só volta a valer, contra a borda da janela, quando a barra está desligada (`[appearance.status_bar] enabled = false`) — e aí ela não desenha **nem ocupa altura**, com a grade voltando ao tamanho que teria sem ela.
+
+Cinco segmentos, três à esquerda e dois à direita:
+
+| Zona | Segmento | Cor |
+|---|---|---|
+| Esquerda | nome do shell | `#5ed3bc` (acento, §1.5) — **o único segmento destacado** |
+| Esquerda | diretório atual, com `~` no lugar do home e truncado à direita quando não cabe | a de base, ou `#828a96` quando o diretório não veio de OSC 7 |
+| Esquerda | nome do grupo da aba ativa; ausente em grupo implícito | a de base |
+| Direita | `UTF-8` | a de base |
+| Direita | sistema | a de base |
+
+**O diretório em `#828a96` é o RF-9.4**: o caminho exibido é o de spawn, não o atual, porque o shell não emitiu OSC 7. É o token "Terciário" (§1.4), um degrau abaixo da cor de base na escada de ênfase de texto — e não um alfa sobre ela: a `.45`, o caminho caía para 2.61:1 e ficava ilegível, o que apaga o dado em vez de marcá-lo. Continua em 4.74:1, acima do mínimo AA.
+
+**Sem sombra** — a barra é encostada e opaca, não flutua, como a barra de busca (§2.21). **Sem animação** e **sem alvo clicável**: os 6px de zona de resize da janela (§1.7, [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md)) continuam valendo sobre ela. O que a barra faz com o mouse é impedir que o clique chegue à grade.
+
+O mockup desenha dois segmentos a mais: a **contagem de painéis**, que não entra enquanto os painéis forem `[v2]`, e a **versão do app** ao lado do sistema, tirada por não mudar entre execuções (§4.4).
 
 ### 2.9 Menu de perfis `[v2]`
 
@@ -857,7 +879,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | **Badge de perfil na aba** | `[v2]` | PRD-007 *(rascunho)*, PRD-004 RF-4.23 |
 | **Tela de nova aba** | `[v2]` | PRD-007 *(rascunho)* |
 | **Paleta de comandos e botão de busca** | `[v2]` | [PRD-008](../prd/prd-008-paleta-de-comandos.md) *(rascunho)* |
-| **Barra de status** | `[v2]` | [PRD-009](../prd/prd-009-barra-de-status.md) *(rascunho)* |
+| **Barra de status** | `[v1]` | [PRD-009](../prd/prd-009-barra-de-status.md), [ADR-0048](../adr/0048-barra-de-status.md) — fora da ordem de fases |
 | **Painel de configurações GUI** | `[v2]` | [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) — sem PRD |
 | **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa) | `[v2]` | ADR-0009 (parcial; controles de janela e resize já são `[v1]`, ver [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) e §2.2.1) — sem PRD |
 
@@ -907,7 +929,9 @@ O comportamento da seleção de texto — gesto, semântica de palavra, recorte 
 
 ### 4.3 Elementos do design **sem** requisito no v1
 
-Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis e badge, tela de nova aba, paleta de comandos, barra de status, painel de configurações, faixa de identidade da barra de título.
+Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis e badge, tela de nova aba, paleta de comandos, painel de configurações, faixa de identidade da barra de título.
+
+A **barra de status** saiu desta lista em 2026-09-09, pelo [ADR-0048](../adr/0048-barra-de-status.md) — a primeira redução dela desde que foi escrita. O [PRD-009](../prd/prd-009-barra-de-status.md) foi promovido a Aprovado no mesmo movimento.
 
 ### 4.4 Histórico de decisões visuais
 
@@ -917,6 +941,10 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 
 | O que o desenho pedia | O que vale, e por quê | Onde |
 |---|---|---|
+| A barra de status está desenhada no canvas desde o começo (§2.8), com seis segmentos, e era `[v2]` — a tabela de tokens já a nomeava em quatro lugares, sem consumidor | **Entrou no produto, fora da ordem de fases**, por decisão do dono do produto. Cinco segmentos, não seis: a contagem de painéis sai enquanto o [PRD-006](../prd/prd-006-paineis-divididos.md) for `[v2]`, porque "1 painel" para sempre é ruído com aparência de informação. **Encolhe a grade em vez de sobrepor** — o inverso do [ADR-0041](../adr/0041-busca-no-scrollback.md), e pela razão que aquele ADR escreveu: o rodapé é onde o prompt ativo está, e uma faixa permanente sobreposta o taparia para sempre. A marca do RF-9.4 (diretório que não veio de OSC 7) é o **alfa `.45`** do [ADR-0037](../adr/0037-aba-nao-iniciada.md), recusadas a cor de aviso `#e0b060` (colide com saída WARN do terminal, e a barra encosta nele) e um ícone de alerta (pediria codepoint novo na face Lucide recortada). **Zero valor novo e zero ícone novo.** Terceira mudança de seções 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e a primeira que **remove** um `[v2]` da tabela de fases em vez de acrescentar anatomia | [ADR-0048](../adr/0048-barra-de-status.md), fora de fase |
+| O desenho da barra de status pedia borda superior `#23272f`, texto em `#6b737e` ("Tênue") e a versão do app ao lado do sistema | As três saíram, por pedido do dono do produto depois de ver a barra em tela. A **borda** era uma segunda separação em cima de uma que já existe — o quadro do terminal termina `terminal_frame_margin` acima, e o vão de fundo de janela ali já separa. A **versão** não muda entre execuções, e o que não muda não é o que se consulta de relance. O **texto** virou `#a8b0bb` ("Secundário"): a 10.5px, `#6b737e` dá 3.45:1 contra o fundo, abaixo do mínimo WCAG AA, e o relato foi literalmente "quase indistinguível do plano de fundo" — é a mesma correção que o corpo do aviso recebeu na §2.14, pelo mesmo motivo e para o mesmo tom. Na mesma leva, a marca do RF-9.4 deixou de ser alfa `.45` sobre a cor de base (2.61:1, ilegível justo no caso comum do Windows) e passou a ser `#828a96` ("Terciário"), um degrau da escada da §1.4, em 4.74:1. Nenhum valor novo nas quatro mudanças | [ADR-0048](../adr/0048-barra-de-status.md), fora de fase |
+| A primeira versão da barra deixava `terminal_frame_margin` (6px) entre o quadro do terminal e a faixa, por simetria com os outros três lados do quadro | **O quadro encosta na faixa, sem margem.** A simetria estava errada: os outros três lados dão para a borda da janela, e a faixa de status não é borda de janela, é outra barra de chrome — a comparação certa é o **topo**, onde o quadro sempre encostou na barra de abas sem gap. Em tela os 6px liam como folga sobrando, e o relato do dono do produto foi exatamente esse. O `margin` da base só volta a valer, contra a borda da janela, com a barra desligada | [ADR-0048](../adr/0048-barra-de-status.md) §5, fora de fase |
+| Encostar o quadro na faixa (linha acima) descobriu que a barra pintava um quad de fundo opaco, e ele **decepava a sombra do quadro** numa linha reta | **A faixa deixou de pintar fundo próprio.** O `clear` da janela já é `#1b1f26` ali — a mesma cor, e também nos três temas claros —, então o quad era redundante; e por sair na camada `Chrome`, cobria a sombra que a camada `Grid` desenha 7,5px sobre o topo da faixa. Sem ele a ordem das camadas trabalha a favor: a sombra cai sobre o fundo da janela e o texto começa logo abaixo dela, a 7,75px do topo. `[appearance.status_bar]` perdeu a chave `background` junto — chave que não desenha nada é pior que chave ausente | [ADR-0048](../adr/0048-barra-de-status.md) §10, fora de fase |
 | Nada — o único "campo de busca" do canvas é o da paleta de comandos, `[v2]` (§2.11); a busca no scrollback nunca foi desenhada | **Barra sobreposta ao topo do quadro do terminal** (§2.21), na camada `Chrome`. Sobrepõe em vez de empurrar, porque empurrar mandaria `resize` ao PTY e um programa em execução veria a tela encolher. **Zero valor novo e zero ícone novo**: reusa o campo de texto do editor de grupo (§2.10, com a seleção do ADR-0035), o toggle que já estava na §1.5 sem consumidor no v1, os três ícones já recortados, e — no realce — a cor de seleção de texto e o acento. Segunda mudança de seção 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e passou pelo ADR que ele exige | F6, [ADR-0041](../adr/0041-busca-no-scrollback.md) |
 | Nada — hyperlink nunca teve representação, e o snapshot excluía o campo de propósito | **Sublinhado só sob o modificador de abertura**, na cor do próprio texto, pela flag `UNDERLINE` que o pintor já desenha. Sublinhado permanente foi recusado: marcaria de destaque qualquer coisa que um `curl` ecoasse, e o app não decide o que na saída do usuário merece atenção | F6, [ADR-0042](../adr/0042-hyperlinks-osc-8.md) |
 | Nada — o RF-3.9 (aba restaurada ainda sem shell) era o **último** item da lista da §4.2, sem desenho aprovado | **Rótulo com alfa `.45`**, sobre a cor de texto do estado de base (§2.5). Escolhido entre três alternativas levadas ao dono do produto; as recusadas foram um ponto vazado na família da §2.17 (acrescentaria um quarto significado ao mesmo slot, contra o "sem poluir a barra" do requisito) e a aba sem preenchimento de fundo (visível demais justo no caso comum do recurso, dez ou vinte abas restauradas). Nenhum elemento novo e **nenhum valor novo** — `.45` já era a borda do indicador agregado da §2.4. Primeira mudança de seção 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e passou pelo ADR que ele exige | F5, [ADR-0037](../adr/0037-aba-nao-iniciada.md) |

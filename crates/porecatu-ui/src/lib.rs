@@ -42,6 +42,7 @@ mod search_bar;
 mod selection;
 mod session_writer;
 mod shell_integration;
+mod status_bar;
 mod tab_bar;
 mod terminal_menu;
 mod text_field;
@@ -113,8 +114,13 @@ fn terminal_menu_context_items(
         return terminal_menu_items(false, false);
     };
     let has_selection = rt.terminal.selection_text().is_some();
-    let content =
-        paint::terminal_content_rect(style, bar_height(style), logical_width, logical_height);
+    let content = paint::terminal_content_rect(
+        style,
+        bar_height(style),
+        status_bar_height(style),
+        logical_width,
+        logical_height,
+    );
     let content_x = ((anchor.0 - content.x) * scale).max(0.0) as f64;
     let content_y = ((anchor.1 - content.y) * scale).max(0.0) as f64;
     let cell = input::cell_at(
@@ -290,6 +296,14 @@ struct TabRuntime {
 /// processo em `App::style`).
 fn bar_height(style: &TabBarStyle) -> f32 {
     chrome::bar_height(style)
+}
+
+/// Altura da barra de status, em pixels lógicos -- `0.0` quando ela está
+/// desligada (ADR-0048 §6). Irmã de [`bar_height`] e, como ela, **fonte
+/// única**: as duas entram juntas em `paint::terminal_box_rect`, e é o par
+/// delas que define a área útil do terminal.
+fn status_bar_height(style: &TabBarStyle) -> f32 {
+    status_bar::height(style)
 }
 
 /// Arredonda a métrica de célula para que a origem de toda coluna
@@ -1058,7 +1072,27 @@ impl WindowState {
     /// emprestados aqui, nunca `self` inteiro -- é o que permite
     /// `self.access_adapter` (mutável) e o resto de `self` (imutável)
     /// coexistirem no mesmo `match`/closure.
-    fn refresh_access_tree(&mut self, style: &TabBarStyle, measurer: &mut TextMeasurer) {
+    fn refresh_access_tree(
+        &mut self,
+        style: &TabBarStyle,
+        home: Option<&Path>,
+        measurer: &mut TextMeasurer,
+    ) {
+        // ADR-0048 §11: a árvore é projeção do mesmo layout que o pintor
+        // consome. Montado aqui fora do `update_if_active` porque o
+        // fechamento é `move` e o `measurer` já viaja nele -- o custo é
+        // montar cinco strings curtas, sem syscall nenhuma (RF-9.8), e
+        // isto roda por mudança de estado, não por frame.
+        let status_bar_layout = (status_bar::height(style) > 0.0).then(|| {
+            let content = self.status_bar_content(home);
+            status_bar::layout_status_bar(
+                &content,
+                style,
+                self.logical_width,
+                self.logical_height,
+                measurer,
+            )
+        });
         let workspace = &self.workspace;
         let warnings = &self.warnings;
         let dialog = &self.dialog;
@@ -1081,6 +1115,7 @@ impl WindowState {
                 group_editor,
                 move_to_group,
                 search,
+                status_bar_layout.as_ref(),
                 style,
                 logical_width,
                 scroll_offset,
@@ -1197,6 +1232,7 @@ impl WindowState {
         let content = paint::terminal_content_rect(
             style,
             bar_height(style),
+            status_bar_height(style),
             self.logical_width,
             self.logical_height,
         );
@@ -2912,6 +2948,65 @@ impl WindowState {
         physical_y < (bar_height(style) * self.scale) as f64
     }
 
+    /// Irmão de [`WindowState::in_bar`] para a faixa do rodapé (ADR-0048).
+    /// `false` com a barra desligada, porque `status_bar_height` é `0.0`
+    /// e nenhum `y` da janela é `>=` à altura dela.
+    ///
+    /// Todo `!in_bar(...)` do arquivo significa "a grade"; com a barra de
+    /// status, passa a significar "a grade **ou** a faixa", e é por isso
+    /// que os caminhos de clique e de arraste consultam este método antes
+    /// de tratar o ponto como célula.
+    fn in_status_bar(&self, physical_y: f64, style: &TabBarStyle) -> bool {
+        let h = status_bar_height(style);
+        h > 0.0 && physical_y >= ((self.logical_height - h) * self.scale) as f64
+    }
+
+    /// O que a barra de status mostra da aba ativa (RF-9.2, RF-9.4).
+    ///
+    /// Barato de propósito -- é chamado por frame. Nada aqui consulta
+    /// `sysinfo`: `Terminal::cwd_fallback` e `ProcessGroup::process_count`
+    /// fazem `refresh_processes(All)` e estão fora deste caminho por
+    /// decisão explícita (ADR-0048 §3 e §8, RF-9.8).
+    fn status_bar_content(&self, home: Option<&Path>) -> status_bar::StatusBarContent {
+        let Some(tab_id) = self.workspace.active_tab() else {
+            return status_bar::StatusBarContent::default();
+        };
+        let tab = self.workspace.tab(tab_id);
+        // O `cwd` de OSC 7 é o dado bom; o de spawn é o degrau seguinte, e
+        // é justamente o caso que o RF-9.4 marca. `received_osc7` é o
+        // sinal de verdade: `Tab::cwd` sozinho não serve, porque uma aba
+        // nova **herda** o `cwd` do grupo sem nunca ter recebido OSC 7.
+        let runtime = self.tabs.get(&tab_id);
+        let received_osc7 = runtime.is_some_and(|rt| rt.received_osc7);
+        let cwd = tab
+            .and_then(|t| t.cwd())
+            .map(PathBuf::from)
+            .or_else(|| runtime.and_then(|rt| rt.spawn_cwd.clone()));
+        let cwd = cwd
+            .map(|p| {
+                status_bar::abbreviate_home(
+                    &p.to_string_lossy(),
+                    home.map(|h| h.to_string_lossy()).as_deref(),
+                )
+            })
+            .unwrap_or_default();
+
+        status_bar::StatusBarContent {
+            shell: tab.map(|t| t.shell_name().to_owned()).unwrap_or_default(),
+            cwd_is_stale: !cwd.is_empty() && !received_osc7,
+            cwd,
+            group: self
+                .workspace
+                .group_of_tab(tab_id)
+                .and_then(|g| self.workspace.group(g))
+                .and_then(|g| g.name())
+                .map(str::to_owned),
+            // Sem a versão do app: pedido do dono do produto depois de
+            // ver a barra em tela.
+            system: std::env::consts::OS.to_owned(),
+        }
+    }
+
     /// O que abre o menu de contexto da barra (ADR-0021 §3): botão direito
     /// em qualquer plataforma, e `Ctrl`+clique esquerdo **só** no macOS --
     /// lá é o clique secundário da plataforma, e não toca a seleção.
@@ -2954,6 +3049,7 @@ impl WindowState {
         let content = paint::terminal_content_rect(
             style,
             bar_height(style),
+            status_bar_height(style),
             self.logical_width,
             self.logical_height,
         );
@@ -3948,6 +4044,7 @@ impl App {
                 let content = paint::terminal_content_rect(
                     &self.style,
                     bar_height(&self.style),
+                    status_bar_height(&self.style),
                     state.logical_width,
                     state.logical_height,
                 );
@@ -4132,8 +4229,9 @@ impl App {
         };
         let measurer = gpu.text_measurer();
         let style = &self.style;
+        let home = self.startup_directory.as_deref();
         for state in self.windows.values_mut() {
-            state.refresh_access_tree(style, measurer);
+            state.refresh_access_tree(style, home, measurer);
         }
     }
 
@@ -4949,10 +5047,11 @@ impl App {
         let Some(gpu) = &mut self.gpu else { return };
         let measurer = gpu.text_measurer();
         let style = &self.style;
+        let home = self.startup_directory.as_deref();
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        state.refresh_access_tree(style, measurer);
+        state.refresh_access_tree(style, home, measurer);
     }
 
     /// PRD-000/etapa 6 da F6: primeiro `Wakeup::TabDirty` do processo é a
@@ -5540,6 +5639,7 @@ impl App {
             let box_rect = paint::terminal_box_rect(
                 &self.style,
                 bar_height(&self.style),
+                status_bar_height(&self.style),
                 state.logical_width,
                 state.logical_height,
             );
@@ -5734,10 +5834,12 @@ impl App {
             && resize_direction.is_none()
             && !overlay_open
             && !state.in_bar(position.y, &self.style)
+            && !state.in_status_bar(position.y, &self.style)
             && state.active_runtime().is_some_and(|rt| {
                 let content = paint::terminal_content_rect(
                     &self.style,
                     bar_height(&self.style),
+                    status_bar_height(&self.style),
                     state.logical_width,
                     state.logical_height,
                 );
@@ -5767,6 +5869,7 @@ impl App {
         }
 
         if !state.in_bar(position.y, &self.style)
+            && !state.in_status_bar(position.y, &self.style)
             && let Some(runtime) = state.active_runtime()
         {
             let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
@@ -5808,7 +5911,9 @@ impl App {
                 if let Some(gpu) = &mut self.gpu {
                     state.finish_drag(gpu, &self.style);
                 }
-            } else if !state.in_bar(state.cursor_position.1, &self.style) {
+            } else if !state.in_bar(state.cursor_position.1, &self.style)
+                && !state.in_status_bar(state.cursor_position.1, &self.style)
+            {
                 // Solta o botão sobre o terminal: repassa ao programa (SGR/X10
                 // release) se ele pediu mouse reporting, senão é o fim de uma
                 // seleção local -- mesmo caminho do press, ver lib.rs:2967+.
@@ -6034,6 +6139,7 @@ impl App {
             let box_rect = paint::terminal_box_rect(
                 &self.style,
                 bar_height(&self.style),
+                status_bar_height(&self.style),
                 state.logical_width,
                 state.logical_height,
             );
@@ -6212,7 +6318,14 @@ impl App {
         }
 
         state.mouse_button_down = Some(button);
-        if !state.in_bar(state.cursor_position.1, &self.style) {
+        // A barra de status não tem alvo clicável (ADR-0048 §5, o RF-9.7
+        // ficou diferido) -- o que ela faz com o mouse é só impedir que o
+        // clique chegue à grade, para não posicionar cursor nem iniciar
+        // seleção numa faixa que não é terminal. Os 6px de resize da
+        // janela continuam por cima dela, e são tratados antes daqui.
+        if !state.in_bar(state.cursor_position.1, &self.style)
+            && !state.in_status_bar(state.cursor_position.1, &self.style)
+        {
             let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
             let active_id = state.workspace.active_tab();
 
@@ -6463,6 +6576,7 @@ impl App {
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
         let h = bar_height(style);
+        let status_bar_h = status_bar_height(style);
         // A busca é por aba (RF-11.1) -- trocar de aba fecha a que estava
         // aberta, em vez de continuar mostrando o realce/estado de uma
         // aba que não está mais em tela.
@@ -6490,9 +6604,15 @@ impl App {
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
             || state.rename.editing_tab().is_some();
-        let hovering_grid = !state.in_bar(state.cursor_position.1, style);
-        let hover_content =
-            paint::terminal_content_rect(style, h, state.logical_width, state.logical_height);
+        let hovering_grid = !state.in_bar(state.cursor_position.1, style)
+            && !state.in_status_bar(state.cursor_position.1, style);
+        let hover_content = paint::terminal_content_rect(
+            style,
+            h,
+            status_bar_h,
+            state.logical_width,
+            state.logical_height,
+        );
         let hover_content_x = state.cursor_position.0 - (hover_content.x * state.scale) as f64;
         let hover_content_y = state.cursor_position.1 - (hover_content.y * state.scale) as f64;
 
@@ -6525,8 +6645,13 @@ impl App {
                 );
             }
 
-            let box_rect =
-                paint::terminal_box_rect(style, h, state.logical_width, state.logical_height);
+            let box_rect = paint::terminal_box_rect(
+                style,
+                h,
+                status_bar_h,
+                state.logical_width,
+                state.logical_height,
+            );
             let cursor_config = &self.config.terminal.cursor;
             let cursor_color = if cursor_config.follows_group_color {
                 active_group_color(&state.workspace, pal)
@@ -6587,6 +6712,23 @@ impl App {
                 for primitive in search_primitives {
                     frame.push(Layer::Chrome, primitive);
                 }
+            }
+        }
+
+        // Barra de status (ADR-0048). Camada `Chrome`, como a busca: sem
+        // camada nova. A altura dela já saiu da grade lá em cima, em
+        // `terminal_box_rect` -- aqui é só desenho.
+        if status_bar_h > 0.0 {
+            let content = state.status_bar_content(self.startup_directory.as_deref());
+            let status_layout = status_bar::layout_status_bar(
+                &content,
+                style,
+                state.logical_width,
+                state.logical_height,
+                gpu.text_measurer(),
+            );
+            for primitive in status_bar::paint_status_bar(&status_layout, pal) {
+                frame.push(Layer::Chrome, primitive);
             }
         }
 

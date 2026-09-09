@@ -49,10 +49,12 @@
 | [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito |
 | [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Superseded by ADR-0045 (**parcial**: só §3, o número da versão) |
 | [0045](0045-primeira-versao-0-7-0.md) | A primeira versão publicada é `0.7.0`, não `1.0.0` | Aceito |
+| [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito |
 
 ## Convenção
 
 - Numeração sequencial de quatro dígitos, nunca reaproveitada.
+- **0046 e 0047 não existem.** Foram escritos (largura de ícones tipo-emoji e desenho nativo de box drawing) e revertidos junto com o código que os acompanhava, antes de qualquer um dos dois chegar ao histórico. Os números ficam vagos, pela regra acima: quem os retomar escreve um ADR novo, com número novo.
 - Nome do arquivo: `NNNN-titulo-em-kebab-case.md`.
 - Status possíveis: `Proposto`, `Aceito`, `Rejeitado`, `Superseded by ADR-NNNN`.
 - Decisão aceita não se edita. Para mudar, escreva um ADR novo com `Supersedes: ADR-NNNN` e marque o antigo. Correção de erro factual ou de clareza no texto é permitida; mudança de decisão, não.

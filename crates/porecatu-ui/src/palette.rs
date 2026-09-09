@@ -268,6 +268,16 @@ pub struct ResolvedPalette {
     pub tooltip_border: Color,
     pub tooltip_text: Color,
 
+    // [appearance.status_bar] -- sem cor de fundo: a faixa vive sobre o
+    // `clear` da janela, para não cobrir a sombra do quadro do terminal.
+    pub status_bar_text: Color,
+    /// Nome do shell -- o único segmento colorido (§2.8).
+    pub status_bar_shell: Color,
+    /// RF-9.4: cor do diretório quando ele não veio de um OSC 7 -- um
+    /// degrau abaixo de `status_bar_text` na escada da §1.4, não um alfa
+    /// sobre ela (ADR-0048 §4).
+    pub status_bar_stale_cwd: Color,
+
     // [appearance.group_editor]
     pub editor_background: Color,
     pub editor_border: Color,
@@ -296,6 +306,7 @@ impl ResolvedPalette {
         let dialog = &config.appearance.dialog;
         let context_menu = &config.appearance.context_menu;
         let tooltip = &config.appearance.tooltip;
+        let status_bar = &config.appearance.status_bar;
         let editor = &config.appearance.group_editor;
 
         let mut group_colors = [TRANSPARENT; 6];
@@ -379,6 +390,10 @@ impl ResolvedPalette {
             tooltip_background: cvt(tooltip.background),
             tooltip_border: cvt(tooltip.border),
             tooltip_text: cvt(tooltip.foreground),
+
+            status_bar_text: cvt(status_bar.foreground),
+            status_bar_shell: cvt(status_bar.shell),
+            status_bar_stale_cwd: cvt(status_bar.stale_cwd),
 
             editor_background: cvt(editor.background),
             editor_border: cvt(editor.border),

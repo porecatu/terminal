@@ -35,6 +35,7 @@ use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::search_bar::SearchBarState;
+use crate::status_bar::{SegmentRole, StatusBarLayout};
 use crate::tab_bar::{self, Indicator, TabBarStyle};
 use crate::terminal_menu::{TerminalContextMenu, terminal_menu_items};
 use crate::warning::{Severity, WarningStack};
@@ -64,6 +65,8 @@ const GROUP_EDITOR_ID: NodeId = NodeId(17);
 const GROUP_EDITOR_FIELD_ID: NodeId = NodeId(18);
 const GROUP_EDITOR_SWATCHES_ID: NodeId = NodeId(19);
 const GROUP_EDITOR_ACTIONS_ID: NodeId = NodeId(20);
+const STATUS_BAR_ID: NodeId = NodeId(21);
+const STATUS_BAR_FIRST_SEGMENT_ID: u64 = 22;
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -154,6 +157,7 @@ pub(crate) fn build_tree(
     group_editor: &Option<GroupEditor>,
     move_to_group: &Option<MoveToGroupPopover>,
     search: &Option<SearchBarState>,
+    status_bar: Option<&StatusBarLayout>,
     style: &TabBarStyle,
     logical_width: f32,
     scroll_offset: f32,
@@ -217,6 +221,10 @@ pub(crate) fn build_tree(
 
     if let Some(state) = search {
         build_search_bar(state, &mut nodes, &mut root_children);
+    }
+
+    if let Some(layout) = status_bar {
+        build_status_bar(layout, &mut nodes, &mut root_children);
     }
 
     if !warnings.is_empty() {
@@ -341,6 +349,45 @@ fn build_search_bar(
         container(Role::Search, vec![SEARCH_FIELD_ID, SEARCH_REGEX_TOGGLE_ID]),
     ));
     root_children.push(SEARCH_BAR_ID);
+}
+
+/// Barra de status (ADR-0048 §11). Como todo o resto do chrome, é
+/// **projeção do layout puro** -- os rótulos e a ordem saem do mesmo
+/// `StatusBarLayout` que o pintor consome, nunca de uma segunda travessia
+/// do estado: árvore construída à parte divergiria do desenho, e árvore
+/// que mente é pior que ausente.
+fn build_status_bar(
+    layout: &StatusBarLayout,
+    nodes: &mut Vec<(NodeId, Node)>,
+    root_children: &mut Vec<NodeId>,
+) {
+    let mut children = Vec::new();
+    for (i, segment) in layout.segments.iter().enumerate() {
+        let id = NodeId(STATUS_BAR_FIRST_SEGMENT_ID + i as u64);
+        let mut node = Node::new(Role::Label);
+        node.set_value(segment.text.clone());
+        node.set_label(segment_label(segment.role));
+        // RF-9.4: sem isto, o leitor de tela lê o caminho como se fosse o
+        // atual -- que é exatamente o mal-entendido que a barra existe
+        // para desfazer. O alfa não chega a quem não vê a tela.
+        if matches!(segment.role, SegmentRole::Cwd { stale: true }) {
+            node.set_description("diretório de origem; o shell não informa o atual");
+        }
+        nodes.push((id, node));
+        children.push(id);
+    }
+    nodes.push((STATUS_BAR_ID, container(Role::Status, children)));
+    root_children.push(STATUS_BAR_ID);
+}
+
+fn segment_label(role: SegmentRole) -> &'static str {
+    match role {
+        SegmentRole::Shell => "shell",
+        SegmentRole::Cwd { .. } => "diretório",
+        SegmentRole::Group => "grupo",
+        SegmentRole::Encoding => "codificação",
+        SegmentRole::System => "sistema",
+    }
 }
 
 fn build_warnings(
@@ -616,6 +663,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -709,6 +757,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -719,6 +768,113 @@ mod tests {
         let label = item.label().unwrap();
         assert!(label.starts_with("Erro:"));
         assert!(label.contains("Config inválida"));
+    }
+
+    #[test]
+    fn status_bar_projects_the_layout_and_names_the_stale_cwd() {
+        // ADR-0048 §11 e RF-9.4: o alfa que marca o diretório de origem
+        // não chega a quem não vê a tela, então a distinção tem de estar
+        // na descrição do nó -- sem ela, o leitor de tela apresenta um
+        // caminho possivelmente velho como se fosse o atual.
+        let ws = Workspace::new();
+        let content = crate::status_bar::StatusBarContent {
+            shell: "pwsh".to_owned(),
+            cwd: "~/projetos".to_owned(),
+            cwd_is_stale: true,
+            group: None,
+            system: "windows - 0.7.0".to_owned(),
+        };
+        let layout = crate::status_bar::layout_status_bar(
+            &content,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            600.0,
+            &mut measurer(),
+        );
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            Some(&layout),
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &mut measurer(),
+        );
+
+        let bar = node(&update, STATUS_BAR_ID);
+        assert_eq!(bar.role(), Role::Status);
+        assert_eq!(
+            bar.children().len(),
+            layout.segments.len(),
+            "um nó por segmento desenhado, nem mais nem menos"
+        );
+
+        let cwd_index = layout
+            .segments
+            .iter()
+            .position(|s| matches!(s.role, SegmentRole::Cwd { .. }))
+            .expect("o diretório está no layout");
+        let cwd = node(
+            &update,
+            NodeId(STATUS_BAR_FIRST_SEGMENT_ID + cwd_index as u64),
+        );
+        assert_eq!(cwd.label(), Some("diretório"));
+        assert_eq!(cwd.value(), Some("~/projetos"));
+        assert!(
+            cwd.description()
+                .is_some_and(|d| d.contains("não informa o atual")),
+            "o RF-9.4 precisa ser audível, não só visível"
+        );
+    }
+
+    #[test]
+    fn fresh_cwd_carries_no_stale_description() {
+        let ws = Workspace::new();
+        let content = crate::status_bar::StatusBarContent {
+            cwd: "~/projetos".to_owned(),
+            cwd_is_stale: false,
+            ..Default::default()
+        };
+        let layout = crate::status_bar::layout_status_bar(
+            &content,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            600.0,
+            &mut measurer(),
+        );
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            Some(&layout),
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &mut measurer(),
+        );
+        let cwd_index = layout
+            .segments
+            .iter()
+            .position(|s| matches!(s.role, SegmentRole::Cwd { .. }))
+            .expect("o diretório está no layout");
+        let cwd = node(
+            &update,
+            NodeId(STATUS_BAR_FIRST_SEGMENT_ID + cwd_index as u64),
+        );
+        assert_eq!(cwd.description(), None);
     }
 
     #[test]
@@ -740,6 +896,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -767,6 +924,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,

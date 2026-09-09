@@ -237,6 +237,21 @@ pub struct TabBarStyle {
     pub terminal_frame_corner_radius: f32,
     /// `[appearance.terminal_frame] shadow`.
     pub terminal_frame_shadow_enabled: bool,
+    /// `[appearance.status_bar] enabled` -- RF-9.1. Desligada, a barra não
+    /// desenha **nem ocupa altura**: `status_bar::height` devolve `0.0` e a
+    /// grade volta ao tamanho que teria sem ela.
+    pub status_bar_enabled: bool,
+    /// `[appearance.status_bar] height` -- espec. §2.8. Use
+    /// `status_bar::height(style)`, nunca este campo direto: é ele que
+    /// aplica o `enabled` acima, e fórmula de geometria copiada em dois
+    /// lugares é a armadilha registrada em `chrome::bar_height`.
+    pub status_bar_height: f32,
+    /// `[appearance.status_bar] padding_x`.
+    pub status_bar_padding_x: f32,
+    /// `[appearance.status_bar] gap` -- entre segmentos, dentro de cada zona.
+    pub status_bar_gap: f32,
+    /// `[appearance.status_bar] font_size`.
+    pub status_bar_font_size: f32,
 }
 
 impl TabBarStyle {
@@ -296,6 +311,11 @@ impl TabBarStyle {
         terminal_frame_padding: 6.0,
         terminal_frame_corner_radius: 6.0,
         terminal_frame_shadow_enabled: true,
+        status_bar_enabled: true,
+        status_bar_height: 26.0,
+        status_bar_padding_x: 12.0,
+        status_bar_gap: 16.0,
+        status_bar_font_size: 10.5,
     };
 
     /// Constrói o estilo a partir da config carregada (F4 etapa 2) --
@@ -308,6 +328,7 @@ impl TabBarStyle {
         let groups = &config.appearance.groups;
         let window_controls = &config.appearance.window_controls;
         let terminal_frame = &config.appearance.terminal_frame;
+        let status_bar = &config.appearance.status_bar;
         Self {
             tab_height: tabs.tab_height as f32,
             max_width: tabs.max_width as f32,
@@ -360,6 +381,11 @@ impl TabBarStyle {
             terminal_frame_padding: terminal_frame.padding as f32,
             terminal_frame_corner_radius: terminal_frame.corner_radius as f32,
             terminal_frame_shadow_enabled: terminal_frame.shadow,
+            status_bar_enabled: status_bar.enabled,
+            status_bar_height: status_bar.height as f32,
+            status_bar_padding_x: status_bar.padding_x as f32,
+            status_bar_gap: status_bar.gap as f32,
+            status_bar_font_size: status_bar.font_size as f32,
         }
     }
 }

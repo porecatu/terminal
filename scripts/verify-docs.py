@@ -267,12 +267,37 @@ VALORES = [
      "appearance.terminal_frame.corner_radius", "raio 6"),
     ("resize da janela", "window_controls.rs", "resize_border",
      "appearance.window_controls.resize_border", "**6px** em toda borda"),
+    ("altura da barra de status", "config:status_bar.rs", "height",
+     "appearance.status_bar.height", "Altura 26"),
+    ("padding da barra de status", "config:status_bar.rs", "padding_x",
+     "appearance.status_bar.padding_x", "`padding: 0 12`"),
+    ("gap da barra de status", "config:status_bar.rs", "gap",
+     "appearance.status_bar.gap", "`gap: 16`"),
+    ("fonte da barra de status", "config:status_bar.rs", "font_size",
+     "appearance.status_bar.font_size", "mono 10.5px"),
 ]
 
 # `height`/`width` de `TabsRename` colidem, no mesmo arquivo, com `height`
 # de `Tabs` (altura da barra) e não têm homônimo de `width` -- só `height`
 # precisa de escopo pra não casar com o primeiro `height:` do arquivo.
 ESCOPOS = {"altura do rename": "struct TabsRename"}
+
+
+def candidatos_de(arquivo: str) -> list[str]:
+    """Caminhos onde procurar o arquivo de origem de um valor.
+
+    Sem prefixo, procura em `porecatu-ui` e depois nos defaults de
+    `porecatu-config` -- a ordem histórica, de quando nenhum nome de
+    arquivo existia nos dois. `status_bar.rs` existe: o módulo de layout
+    em `porecatu-ui` e a seção de config em `porecatu-config`, e o
+    primeiro tem `height:` em construção de `Rect` que casaria com o
+    campo errado. Prefixe com `config:` ou `ui:` para fixar o lado.
+    """
+    if arquivo.startswith("config:"):
+        return [os.path.join(CONFIG_APPEARANCE, arquivo[len("config:") :])]
+    if arquivo.startswith("ui:"):
+        return [os.path.join(UI, arquivo[len("ui:") :])]
+    return [os.path.join(UI, arquivo), os.path.join(CONFIG_APPEARANCE, arquivo)]
 
 
 def constante_rust(fonte: str, nome: str, escopo: str | None = None) -> float | None:
@@ -318,7 +343,7 @@ def verificar_valores(config: dict | None) -> None:
     spec = ler(SPEC)
     fontes: dict[str, str] = {}
     for arquivo in {v[1] for v in VALORES}:
-        candidatos = [os.path.join(UI, arquivo), os.path.join(CONFIG_APPEARANCE, arquivo)]
+        candidatos = candidatos_de(arquivo)
         caminho = next((c for c in candidatos if os.path.exists(c)), None)
         if caminho is None:
             erro(f"{arquivo} não encontrado em nenhum de {candidatos}")

@@ -27,7 +27,7 @@ Os PRDs continuam **normativos para o comportamento** — o que acontece ao clic
 
 ## Aviso de fase
 
-O mockup mostra o produto completo, **não o v1**. Painéis divididos, perfis de aba, paleta de comandos, painel de configurações GUI, barra de status e barra de título customizada são todos `[v2]`.
+O mockup mostra o produto completo, **não o v1**. Painéis divididos, perfis de aba, paleta de comandos, painel de configurações GUI e barra de título customizada são todos `[v2]`. A barra de status era, e entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases.
 
 Antes de implementar qualquer coisa daqui, consulte a **tabela de fases** (seção 3 da especificação visual). Ela classifica todo elemento do desenho como `[v1]` ou `[v2]` e aponta o PRD que o governa.
 

@@ -103,6 +103,18 @@ pub struct ThemeTooltip {
     pub foreground: Option<Color>,
 }
 
+/// `[themes.status_bar]` -- override de `[appearance.status_bar]`. Só as
+/// quatro cores; altura, paddings e tamanho de fonte não mudam por tema.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default)]
+pub struct ThemeStatusBar {
+    pub foreground: Option<Color>,
+    pub shell: Option<Color>,
+    /// RF-9.4. Um degrau abaixo de `foreground`, e cada tema escolhe o
+    /// seu: um alfa fixo não sobrevive a fundos claros e escuros.
+    pub stale_cwd: Option<Color>,
+}
+
 /// `[themes.window_controls]` -- override de `[appearance.window_controls]`.
 /// Só as três cores; largura/gap/borda de resize não mudam por tema.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
@@ -164,6 +176,7 @@ pub struct Theme {
     pub tooltip: ThemeTooltip,
     pub group_editor: ThemeGroupEditor,
     pub window_controls: ThemeWindowControls,
+    pub status_bar: ThemeStatusBar,
 }
 
 /// Nome duplicado entre dois `[[themes]]` é erro: não há como o usuário
@@ -411,6 +424,11 @@ fn catppuccin_latte() -> Theme {
             border: Some(Color::hex("#bcc0cc")),
             foreground: Some(Color::hex("#5c5f77")),
         },
+        status_bar: ThemeStatusBar {
+            foreground: Some(Color::hex("#4c4f69")),
+            shell: Some(Color::hex("#179299")),
+            stale_cwd: Some(Color::hex("#5c5f77")),
+        },
         group_editor: ThemeGroupEditor {
             background: Some(Color::hex("#dce0e8")),
             border: Some(Color::hex("#bcc0cc")),
@@ -501,6 +519,11 @@ fn gruvbox_light() -> Theme {
             background: Some(Color::hex("#ebdbb2")),
             border: Some(Color::hex("#bdae93")),
             foreground: Some(Color::hex("#7c6f64")),
+        },
+        status_bar: ThemeStatusBar {
+            foreground: Some(Color::hex("#3c3836")),
+            shell: Some(Color::hex("#689d6a")),
+            stale_cwd: Some(Color::hex("#665c54")),
         },
         group_editor: ThemeGroupEditor {
             background: Some(Color::hex("#ebdbb2")),
@@ -593,6 +616,11 @@ fn solarized_light() -> Theme {
             border: Some(Color::hex("#93a1a1")),
             foreground: Some(Color::hex("#657b83")),
         },
+        status_bar: ThemeStatusBar {
+            foreground: Some(Color::hex("#073642")),
+            shell: Some(Color::hex("#2aa198")),
+            stale_cwd: Some(Color::hex("#586e75")),
+        },
         group_editor: ThemeGroupEditor {
             background: Some(Color::hex("#eee8d5")),
             border: Some(Color::hex("#93a1a1")),
@@ -649,6 +677,8 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
     let tt = &config.appearance.tooltip;
     let ged = crate::appearance::GroupEditor::default();
     let ge = &config.appearance.group_editor;
+    let sbd = crate::appearance::StatusBar::default();
+    let sb = &config.appearance.status_bar;
     let wcd = crate::appearance::WindowControls::default();
     let wc = &config.appearance.window_controls;
     // `AnsiPalette::default()` sozinho devolve os valores de `normal`
@@ -946,6 +976,27 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
             default: ttd.foreground,
             theme_value: theme.tooltip.foreground,
             set: |cfg, v| cfg.appearance.tooltip.foreground = v,
+        },
+        MergeField {
+            name: "appearance.status_bar.stale_cwd",
+            current: sb.stale_cwd,
+            default: sbd.stale_cwd,
+            theme_value: theme.status_bar.stale_cwd,
+            set: |cfg, v| cfg.appearance.status_bar.stale_cwd = v,
+        },
+        MergeField {
+            name: "appearance.status_bar.foreground",
+            current: sb.foreground,
+            default: sbd.foreground,
+            theme_value: theme.status_bar.foreground,
+            set: |cfg, v| cfg.appearance.status_bar.foreground = v,
+        },
+        MergeField {
+            name: "appearance.status_bar.shell",
+            current: sb.shell,
+            default: sbd.shell,
+            theme_value: theme.status_bar.shell,
+            set: |cfg, v| cfg.appearance.status_bar.shell = v,
         },
         MergeField {
             name: "appearance.group_editor.background",

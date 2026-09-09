@@ -649,6 +649,40 @@ corner_radius = 6
 shadow = true                 # mesma sombra em camadas da cápsula
 
 
+# Barra de status: faixa fixa no rodapé da janela. Origem: PRD-009 (RF-9.1
+# a RF-9.8) e ADR-0048, anatomia na seção 2.8 da espec. Ela ENCOLHE a
+# grade -- o quadro do terminal acima termina `terminal_frame.margin`
+# antes dela, e o PTY recebe menos linhas.
+# Classe de recarga: [B] para `enabled`, `height` e `font_size` (mudam a
+# área útil, logo colunas e linhas); [A] para o resto.
+[appearance.status_bar]
+# Desligada, a barra não desenha NEM ocupa altura: a grade volta ao
+# tamanho que teria sem ela. Ligada por padrão porque, desligada, ela
+# anula o RF-9.4 -- quem não sabe que o OSC 7 pode faltar nunca vai
+# ligá-la para descobrir (ADR-0048 §6).                                RF-9.1
+enabled = true
+height = 26
+padding_x = 12
+gap = 16                      # folga entre segmentos, dentro de cada zona
+font_size = 10.5
+# Sem chave de fundo: a faixa NÃO pinta fundo próprio. O fundo da janela
+# ali já é a cor das barras, e um quad opaco cobriria a sombra do quadro
+# do terminal, que desce sobre o topo dela.
+# Token "Secundário" (§1.4). NÃO é o "Tênue" #6b737e que o desenho pedia:
+# a 10.5px ele dava 3.45:1 contra o fundo, abaixo do mínimo WCAG AA, e
+# ficava quase indistinguível. Mesma correção que o corpo do aviso já
+# tinha recebido (§2.14), pelo mesmo motivo. #a8b0bb sobe pra 7.55:1.
+foreground = "#a8b0bb"
+# Nome do shell -- o único segmento colorido (acento).                  RF-9.2
+shell = "#5ed3bc"
+# RF-9.4: cor do diretório quando ele NÃO veio de um OSC 7, ou seja,
+# quando é o de spawn e pode estar obsoleto -- o requisito que dá razão de
+# existir à barra. Token "Terciário", um degrau abaixo de `foreground` na
+# escada da §1.4, e ainda 4.74:1 (passa AA): o caminho é para ser lido e
+# marcado, não apagado.
+stale_cwd = "#828a96"
+
+
 ##############################################################################
 # APARÊNCIA DO TERMINAL — PRD-005
 ##############################################################################
@@ -1077,6 +1111,11 @@ background = "#dce0e8"
 border     = "#bcc0cc"
 foreground = "#5c5f77"
 
+[themes.status_bar]
+foreground = "#4c4f69"
+shell      = "#179299"
+stale_cwd  = "#5c5f77"
+
 [themes.group_editor]
 background                   = "#dce0e8"
 border                       = "#bcc0cc"
@@ -1164,6 +1203,11 @@ background = "#ebdbb2"
 border     = "#bdae93"
 foreground = "#7c6f64"
 
+[themes.status_bar]
+foreground = "#3c3836"
+shell      = "#689d6a"
+stale_cwd  = "#665c54"
+
 [themes.group_editor]
 background                   = "#ebdbb2"
 border                       = "#bdae93"
@@ -1250,6 +1294,11 @@ destructive_foreground = "#dc322f"
 background = "#eee8d5"
 border     = "#93a1a1"
 foreground = "#657b83"
+
+[themes.status_bar]
+foreground = "#073642"
+shell      = "#2aa198"
+stale_cwd  = "#586e75"
 
 [themes.group_editor]
 background                   = "#eee8d5"
