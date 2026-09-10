@@ -23,6 +23,7 @@ use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId};
 mod access;
 mod animation;
 mod app_icon;
+mod box_glyphs;
 mod chrome;
 mod clipboard;
 mod context_menu;

@@ -55,11 +55,32 @@ struct Instance {
     border_color: [f32; 4],
 }
 
+/// Arredonda os dois cantos de `rect` (já em pixels físicos, pós-`scale`) ao
+/// pixel inteiro mais próximo, e devolve posição/tamanho derivados desses
+/// cantos -- não largura/altura arredondadas isoladamente, que ainda
+/// deixaria dois quads vizinhos discordando sobre uma borda compartilhada
+/// se ela vier de dois call sites com valores próximos mas não
+/// bit-idênticos. `quad.wgsl` antisserrilha as quatro bordas de todo quad
+/// via SDF (`smoothstep`); isso só fecha sem costura entre dois quads
+/// sólidos adjacentes quando a borda comum cai num pixel físico inteiro --
+/// do contrário o blend "over" sequencial de duas bordas parcialmente
+/// transparentes não soma cobertura total, e sobra uma linha fina da cor de
+/// trás (a costura de blocos/box-drawing que motivou isto; ver `paint.rs`).
+/// Mesma razão que `text.rs` já arredonda a origem de todo `TextRun`.
+fn snap_rect_to_physical_pixels(rect: Rect, scale: f32) -> ([f32; 2], [f32; 2]) {
+    let x0 = (rect.x * scale).round();
+    let y0 = (rect.y * scale).round();
+    let x1 = ((rect.x + rect.width) * scale).round();
+    let y1 = ((rect.y + rect.height) * scale).round();
+    ([x0, y0], [x1 - x0, y1 - y0])
+}
+
 impl Instance {
     fn from_quad(quad: &Quad, scale: f32) -> Self {
+        let (rect_pos, rect_size) = snap_rect_to_physical_pixels(quad.rect, scale);
         Self {
-            rect_pos: [quad.rect.x * scale, quad.rect.y * scale],
-            rect_size: [quad.rect.width * scale, quad.rect.height * scale],
+            rect_pos,
+            rect_size,
             color: color_to_array(quad.color),
             radius: 0.0,
             border_width: 0.0,
@@ -69,9 +90,10 @@ impl Instance {
     }
 
     fn from_rounded_quad(quad: &RoundedQuad, scale: f32) -> Self {
+        let (rect_pos, rect_size) = snap_rect_to_physical_pixels(quad.rect, scale);
         Self {
-            rect_pos: [quad.rect.x * scale, quad.rect.y * scale],
-            rect_size: [quad.rect.width * scale, quad.rect.height * scale],
+            rect_pos,
+            rect_size,
             color: color_to_array(quad.color),
             radius: quad.radius * scale,
             border_width: quad.border_width * scale,
@@ -433,6 +455,41 @@ mod tests {
                 height: 8.0
             }
         );
+    }
+
+    #[test]
+    fn snap_rect_to_physical_pixels_rounds_both_corners_not_width_in_isolation() {
+        // Arredondar `width` isolado daria `round(4.3) = 4`; o certo é
+        // `round(14.7) - round(10.4) = 15 - 10 = 5` -- é essa diferença que
+        // fecha a costura entre dois quads vizinhos (ver o teste abaixo).
+        let rect = Rect {
+            x: 10.4,
+            y: 0.0,
+            width: 4.3,
+            height: 1.0,
+        };
+        let (pos, size) = snap_rect_to_physical_pixels(rect, 1.0);
+        assert_eq!(pos, [10.0, 0.0]);
+        assert_eq!(size, [5.0, 1.0]);
+    }
+
+    #[test]
+    fn adjacent_quads_share_an_exact_physical_pixel_boundary() {
+        let a = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.4,
+            height: 1.0,
+        };
+        let b = Rect {
+            x: 10.4,
+            y: 0.0,
+            width: 9.6,
+            height: 1.0,
+        };
+        let (a_pos, a_size) = snap_rect_to_physical_pixels(a, 1.0);
+        let (b_pos, _) = snap_rect_to_physical_pixels(b, 1.0);
+        assert_eq!(a_pos[0] + a_size[0], b_pos[0]);
     }
 
     #[test]

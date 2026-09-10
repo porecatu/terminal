@@ -27,6 +27,7 @@ use porecatu_term::{
     SelectionSpan,
 };
 
+use crate::box_glyphs;
 use crate::chrome::push_shadow;
 use crate::palette::{self, ResolvedTermPalette, TRANSPARENT};
 use crate::tab_bar::TabBarStyle;
@@ -136,6 +137,31 @@ pub fn terminal_content_rect(
     }
 }
 
+/// Topo lógico da linha `row` -- sempre esta mesma expressão, nunca
+/// recomputada como "`row_y` da linha anterior + `metrics.height`": duas
+/// contas matematicamente iguais podem divergir por 1 ULP de ponto
+/// flutuante dependendo do valor, e depois do arredondamento por quad em
+/// `quad.rs` (`snap_rect_to_physical_pixels`, que arredonda os dois cantos
+/// de **um** quad, sem saber que o vizinho deveria compartilhar a mesma
+/// borda) isso vira uma costura de 1px entre duas linhas -- só numa linha
+/// específica, a que por acaso cai bem na fronteira de arredondamento, e
+/// que muda de lugar se `y_offset` mudar (barra de status ligada/desligada,
+/// redimensionamento). Usar a mesma função para "o fim da linha `row`" e "o
+/// início da linha `row + 1`" garante que os dois cálculos cheguem no
+/// mesmo `f32`, então `quad.rs` arredonda os dois pro mesmo pixel físico.
+fn row_top(y_offset: f32, row: usize, metrics: CellMetrics) -> f32 {
+    y_offset + row as f32 * metrics.height
+}
+
+/// Mesma razão de [`row_top`], eixo X -- já não tinha sintoma visível (o
+/// avanço de coluna passa por `align_mono_advance_to`, que aparentemente
+/// evita a fronteira de arredondamento na prática), mas nada garante isso
+/// pra todo tamanho de fonte/escala configurável, então `paint_row_backgrounds`
+/// usa esta função nos dois lados de cada célula pela mesma razão.
+fn col_left(x_offset: f32, col: usize, metrics: CellMetrics) -> f32 {
+    x_offset + col as f32 * metrics.width
+}
+
 /// Constrói as primitivas do box arredondado do terminal e da grade lá
 /// dentro. `box_rect`: [`terminal_box_rect`] -- a grade começa
 /// `style.terminal_frame_padding` adiante da borda do box, nos dois eixos.
@@ -173,13 +199,17 @@ pub fn build_primitives(
     let y_offset = box_rect.y + style.terminal_frame_padding;
 
     for row in 0..snapshot.rows {
-        let row_y = y_offset + row as f32 * metrics.height;
+        let row_y = row_top(y_offset, row, metrics);
+        // Fim desta linha == início da próxima, pela mesma função --
+        // ver o comentário de `row_top`.
+        let row_bottom = row_top(y_offset, row + 1, metrics);
         paint_row_backgrounds(
             snapshot,
             row,
             cols,
             x_offset,
             row_y,
+            row_bottom,
             metrics,
             term_pal,
             &mut primitives,
@@ -190,6 +220,7 @@ pub fn build_primitives(
             cols,
             x_offset,
             row_y,
+            row_bottom,
             metrics,
             font_size_px,
             term_pal,
@@ -219,8 +250,8 @@ pub fn build_primitives(
         // 1.2)` -- a caixa do texto começa em `row_y`, não no meio da linha
         // -- e é esse `1.2` que `CURSOR_HEIGHT_RATIO` replica.
         let cursor_height = font_size_px * CURSOR_HEIGHT_RATIO;
-        let row_y = y_offset + row as f32 * metrics.height;
-        let cell_x = x_offset + col as f32 * metrics.width;
+        let row_y = row_top(y_offset, row, metrics);
+        let cell_x = col_left(x_offset, col, metrics);
         primitives.push(cursor_primitive(
             snapshot.cursor.shape,
             cursor,
@@ -283,6 +314,7 @@ fn paint_row_backgrounds(
     cols: usize,
     x_offset: f32,
     row_y: f32,
+    row_bottom: f32,
     metrics: CellMetrics,
     term_pal: &ResolvedTermPalette,
     out: &mut Vec<Primitive>,
@@ -293,12 +325,19 @@ fn paint_row_backgrounds(
         let occurrence = occurrence_at(&snapshot.occurrences, row, col);
         let (_, bg) = resolved_colors(cell, selected, occurrence, term_pal);
         if bg != term_pal.background {
+            // `col_left`/`row_y`/`row_bottom`, não `col as f32 *
+            // metrics.width`/`metrics.height` soltos -- a célula vizinha
+            // (linha de baixo, coluna ao lado) usa a mesma função pro
+            // mesmo limite, então os dois fecham no mesmo pixel físico
+            // depois do arredondamento em `quad.rs` (ver `row_top`).
+            let x0 = col_left(x_offset, col, metrics);
+            let x1 = col_left(x_offset, col + 1, metrics);
             out.push(Primitive::Quad(Quad {
                 rect: Rect {
-                    x: x_offset + col as f32 * metrics.width,
+                    x: x0,
                     y: row_y,
-                    width: metrics.width,
-                    height: metrics.height,
+                    width: x1 - x0,
+                    height: row_bottom - row_y,
                 },
                 color: bg,
             }));
@@ -359,12 +398,17 @@ fn paint_row_text(
     cols: usize,
     x_offset: f32,
     row_y: f32,
+    row_bottom: f32,
     metrics: CellMetrics,
     font_size_px: f32,
     term_pal: &ResolvedTermPalette,
     measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
+    // Mesma conta de `paint_row_underlines`: ~10% do em, mínimo 1px --
+    // espessura de traço leve pro box-drawing (`box_glyphs::push`).
+    let box_glyph_thickness = (font_size_px * 0.1).round().max(1.0);
+
     let mut col = 0;
     while col < cols {
         let cell = &snapshot.cells[row * cols + col];
@@ -377,6 +421,32 @@ fn paint_row_text(
         let occurrence = occurrence_at(&snapshot.occurrences, row, col);
         let (fg, _) = resolved_colors(cell, selected, occurrence, term_pal);
         let bold = cell.flags.contains(CellFlags::BOLD);
+
+        // Bloco/box-drawing (U+2580-259F, núcleo reto de U+2500-254B): sai
+        // como `Quad` nosso, não como glyph da fonte -- ver
+        // `box_glyphs`, motivado por `text_measurer.rs`
+        // (`full_block_glyph_ink_coverage_of_its_advance_box`) mostrar que
+        // a tinta rasterizada não bate com a caixa de linha que `text.rs`
+        // usa pra posicionar cada linha.
+        if let CellText::Char(ch) = cell.text
+            && box_glyphs::is_covered(ch)
+        {
+            // `col_left`/`row_y`/`row_bottom`: mesma razão de
+            // `paint_row_backgrounds` -- um bloco precisa fechar sem
+            // costura contra o vizinho de cima/baixo/lado, mesmo quando
+            // esse vizinho é outro bloco ou um fundo de célula comum.
+            let x0 = col_left(x_offset, col, metrics);
+            let x1 = col_left(x_offset, col + cell_span(cell) as usize, metrics);
+            let cell_rect = Rect {
+                x: x0,
+                y: row_y,
+                width: x1 - x0,
+                height: row_bottom - row_y,
+            };
+            box_glyphs::push(ch, cell_rect, fg, box_glyph_thickness, out);
+            col += 1;
+            continue;
+        }
 
         // Caractere que não avança o que a grade reservou sai sozinho,
         // ancorado no `x` da célula e encolhido para caber nela -- senão
@@ -414,6 +484,14 @@ fn paint_row_text(
             let (cell_fg, _) = resolved_colors(cell, cell_selected, cell_occurrence, term_pal);
             let cell_bold = cell.flags.contains(CellFlags::BOLD);
             if cell_fg != fg || cell_bold != bold {
+                break;
+            }
+            if let CellText::Char(ch) = cell.text
+                && box_glyphs::is_covered(ch)
+            {
+                // Sai do run pra ser tratado como quad no início do laço
+                // externo -- `col` não avança, a próxima volta pega esta
+                // mesma célula de novo.
                 break;
             }
             if !fits_the_grid(cell, bold, measurer) {
@@ -709,6 +787,8 @@ mod status_bar_geometry_tests {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use porecatu_term::GridSnapshot;
 
@@ -775,6 +855,84 @@ mod tests {
             color: TRANSPARENT,
             width: 7.0,
             hollow: false,
+        }
+    }
+
+    /// Regressão: `row_y + metrics.height` (fim de uma linha) e `y_offset +
+    /// (row + 1) as f32 * metrics.height` (início da próxima) são duas
+    /// contas matematicamente iguais que podem divergir por 1 ULP de ponto
+    /// flutuante -- depois do arredondamento por quad em
+    /// `porecatu-render/quad.rs` (que arredonda os dois cantos de **um**
+    /// quad, sem saber que o vizinho deveria compartilhar a mesma borda),
+    /// isso vira uma costura de 1px numa linha específica, que muda de
+    /// lugar conforme `y_offset` (ex.: barra de status ligada/desligada).
+    /// `row_top`/`col_left` fecham isso por construção -- este teste varre
+    /// várias combinações de tamanho de fonte/offset pra pegar de volta se
+    /// alguém reintroduzir a conta duplicada em vez de reusar a função.
+    #[test]
+    fn adjacent_row_and_column_backgrounds_share_an_exact_edge() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cols = 3;
+        let rows = 6;
+        let cells = vec![
+            Cell {
+                bg: porecatu_term::TermColor::Rgb {
+                    r: 200,
+                    g: 60,
+                    b: 60,
+                },
+                ..Cell::default()
+            };
+            rows * cols
+        ];
+        let snap = GridSnapshot {
+            cols,
+            rows,
+            cells,
+            ..GridSnapshot::default()
+        };
+
+        for size in [13.0_f32, 14.0, 14.3, 15.7, 16.0, 18.25] {
+            for y in [0.0_f32, 1.0, 33.0, 52.3, 100.7] {
+                let (width, height) = m.measure_mono_cell(size, size * 1.2);
+                let cell_metrics = CellMetrics { width, height };
+                let box_rect = Rect {
+                    x: 0.0,
+                    y,
+                    width: 1000.0,
+                    height: 1000.0,
+                };
+                let out = build_primitives(
+                    &snap,
+                    cell_metrics,
+                    size,
+                    box_rect,
+                    &TabBarStyle::DEFAULT,
+                    &test_term_pal(),
+                    test_cursor(),
+                    &mut m,
+                    &[],
+                );
+
+                let mut by_col: HashMap<i64, Vec<(f32, f32)>> = HashMap::new();
+                for p in &out {
+                    if let Primitive::Quad(q) = p {
+                        by_col
+                            .entry((q.rect.x * 1024.0).round() as i64)
+                            .or_default()
+                            .push((q.rect.y, q.rect.y + q.rect.height));
+                    }
+                }
+                for edges in by_col.values_mut() {
+                    edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                    for w in edges.windows(2) {
+                        assert_eq!(
+                            w[0].1, w[1].0,
+                            "costura entre linhas em size={size} y_offset={y}"
+                        );
+                    }
+                }
+            }
         }
     }
 

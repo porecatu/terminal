@@ -878,6 +878,60 @@ mod tests {
         }
     }
 
+    /// Confirma com dado, não só leitura, a causa 2 da costura de blocos:
+    /// se a tinta rasterizada de U+2588 (bloco cheio) cobre a caixa de
+    /// avanço da mono inteira, ou sobra bearing/gap numa das bordas. É o
+    /// que decide se blocos/box-drawing precisam sair da fonte e virar
+    /// geometria nossa (`porecatu-ui/src/box_glyphs.rs`), ou se a correção
+    /// de arredondamento de pixel (`porecatu-render/src/quad.rs`) já
+    /// bastaria. Roda com `--nocapture` pra ver a folga medida.
+    #[test]
+    fn full_block_glyph_ink_coverage_of_its_advance_box() {
+        use glyphon::{SwashCache, SwashContent};
+
+        let mut m = TextMeasurer::new();
+        let mut swash = SwashCache::new();
+        let size = 200.0_f32;
+        let font = FontFace::Mono { bold: false };
+
+        let advance_em = m.advance_em('█', font);
+        let metrics = Metrics::new(size, size * 1.2);
+        let mut buffer = Buffer::new(&mut m.font_system, metrics);
+        buffer.set_size(None, None);
+        let attrs = attrs_for(font, &m.families);
+        buffer.set_text("█", &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut m.font_system, false);
+
+        let run = buffer.layout_runs().next().expect("bloco deveria shapar");
+        let glyph = run.glyphs.first().expect("um glyph");
+        let physical = glyph.physical((0.0, 0.0), 1.0);
+        let image = swash
+            .get_image_uncached(&mut m.font_system, physical.cache_key)
+            .expect("bloco deveria rasterizar");
+        assert_ne!(image.content, SwashContent::Color);
+        let placement = image.placement;
+
+        let advance_px = advance_em * size;
+        let left_gap_px = placement.left as f32;
+        let right_gap_px = advance_px - (placement.left as f32 + placement.width as f32);
+        // Altura: a caixa vertical do glyph é `size * 1.2` (line height),
+        // não `size` -- mesma caixa que `text.rs` usa pra rasterizar.
+        let line_height_px = size * 1.2;
+        let top_gap_px = line_height_px * 1.1 - placement.top as f32;
+        let bottom_gap_px = line_height_px - (top_gap_px + placement.height as f32);
+
+        eprintln!(
+            "U+2588 em {size}px: avanço={advance_px:.2}px, tinta {}x{} em ({}, topo {}) -- \
+             folga esquerda={left_gap_px:.2}px direita={right_gap_px:.2}px \
+             topo={top_gap_px:.2}px baixo={bottom_gap_px:.2}px",
+            placement.width, placement.height, placement.left, placement.top,
+        );
+
+        // Não afirma "sem folga" -- é exatamente o que este teste existe
+        // pra medir. Só protege contra o glyph não rasterizar nada.
+        assert!(placement.width > 0 && placement.height > 0);
+    }
+
     #[test]
     fn truncate_tiny_budget_still_returns_ellipsis() {
         let mut m = TextMeasurer::new();

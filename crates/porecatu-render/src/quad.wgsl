@@ -50,9 +50,22 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     return out;
 }
 
+// SDF de caixa reta (distância de Chebyshev). Usada quando `radius <= 0`:
+// a formula de retangulo arredondado abaixo, na regiao de canto (q.x > 0 e
+// q.y > 0 ao mesmo tempo), cai em `length(max(q,0))` -- distancia
+// euclidiana ate o ponto do canto, que arredonda visivelmente o pixel do
+// canto mesmo com `radius = 0.0`. `max(q.x, q.y)` corta reto ali.
+fn sdf_box(p: vec2<f32>, half_size: vec2<f32>) -> f32 {
+    let q = abs(p) - half_size;
+    return max(q.x, q.y);
+}
+
 // SDF de retângulo arredondado. `p` relativo ao centro; negativo dentro,
 // positivo fora, zero na borda. Formula padrao (Inigo Quilez).
 fn sdf_rounded_box(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
+    if radius <= 0.0 {
+        return sdf_box(p, half_size);
+    }
     let q = abs(p) - half_size + vec2<f32>(radius, radius);
     return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
