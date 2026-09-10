@@ -35,6 +35,7 @@
 #   [terminal.clipboard]     PRD-010, ADR-0013  (OSC 52)
 #   [keybindings]            ADR-0008; catálogo em docs/reference/acoes.md
 #   [session]                PRD-003
+#   [project_file]           PRD-012, ADR-0051  (arquivo .porecatu do projeto)
 #
 # ORIGEM DOS VALORES DE APARÊNCIA
 # Cores, dimensões, raios e espaçamentos estão registrados em
@@ -1530,3 +1531,46 @@ restore_window_geometry = true                                          # RF-3.1
 # Oferece uma vez o trecho de integração de shell quando OSC 7 não é
 # detectado. No Windows, sem OSC 7 o diretório NÃO é restaurado.          RF-3.1
 suggest_shell_integration = true
+
+
+##############################################################################
+# ARQUIVO DE PROJETO — PRD-012
+##############################################################################
+
+# O arquivo `.porecatu` na raiz de um projeto declara o que rodar quando uma
+# aba daquele diretório é RESTAURADA de uma sessão gravada -- uma seção por
+# tipo de terminal, com o script literal dentro. Origem: PRD-012 (RF-12.1 a
+# RF-12.15) e ADR-0051. Formato completo em docs/reference/arquivo-de-projeto.md.
+#
+# Só na restauração: aba nova no mesmo diretório NÃO dispara, e `cd` para ele
+# também não (ADR-0051 §1). O script é escrito no terminal como se digitado --
+# aparece na tela, entra no histórico do shell e o Ctrl+C o interrompe.
+# Classe de recarga: [C] -- "reinicie o app".
+[project_file]
+# Desligado, nada é lido do disco -- nem o arquivo, nem o aviso abaixo. RF-12.7
+enabled = true
+# Diretórios em que um `.porecatu` tem permissão para rodar. Um caminho aqui
+# cobre a ÁRVORE INTEIRA sob ele. Aceita `~`.                            RF-12.5
+#
+# VAZIA POR PADRÃO, E ISSO É DELIBERADO. O `.porecatu` chega junto com o
+# projeto, e projeto clonado é arquivo escrito por OUTRA PESSOA: sem esta
+# lista, um `git clone` qualquer mais uma aba restaurada bastaria para
+# executar o que estivesse dentro dele.
+#
+# Pelo mesmo motivo, PENSE ANTES DE LISTAR UM CAMINHO LARGO. Apontar para o
+# diretório onde você clona repositórios -- ou para o seu home -- faz todo
+# repositório novo ali dentro rodar o `.porecatu` dele sozinho, meses depois
+# de você ter escrito a linha e sem nenhum lembrete. Liste onde ficam os
+# projetos que são SEUS.
+#
+# Caminho que não existe é ignorado em silêncio, não é erro: dotfiles viajam
+# entre máquinas, e um `~/work` que só existe no escritório não pode derrubar
+# a config em casa.
+#
+# Exemplo: trusted_paths = ["C:/Projetos", "~/work"]
+trusted_paths = []
+# Um `.porecatu` encontrado FORA dessa lista não roda e não passa em silêncio:
+# o app escreve uma nota na aba com o caminho e a linha que o autorizaria, uma
+# vez por execução do app (não uma por aba). Não há chave para desligar só a
+# nota -- quem não a quer autoriza o diretório, apaga o arquivo, ou usa
+# `enabled = false` acima.                                               RF-12.6

@@ -453,8 +453,8 @@ mod tests {
 
         for &scale in &[1.0_f32, 1.25, 1.5, 2.0] {
             let physical_cursor = (
-                logical_cursor.0 as f64 * scale as f64,
-                logical_cursor.1 as f64 * scale as f64,
+                logical_cursor.0 * scale as f64,
+                logical_cursor.1 * scale as f64,
             );
             let logical_from_physical = (
                 (physical_cursor.0 / scale as f64) as f32,

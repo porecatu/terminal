@@ -14,6 +14,72 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [Não lançado]
+
+### Adicionado
+
+#### Comando de projeto por diretório (`.porecatu`)
+
+Uma aba **restaurada de sessão** cujo diretório contém um arquivo
+`.porecatu` executa o script da seção correspondente ao seu shell — visível
+no prompt, no histórico e interrompível com `Ctrl+C`, como se digitado. É a
+resposta a uma métrica que o v1 declarava atingida e não estava: "zero
+ações do usuário para retomar um projeto depois de reabrir" foi medida na
+F6 contra a estrutura restaurada (abas, grupos, diretórios), não contra o
+trabalho — quem reabria com quinze abas ainda digitava quinze comandos.
+Implementado em quatro etapas, fora da ordem de fases; detalhe completo,
+incluindo o bug achado e corrigido na verificação, em
+[docs/roadmap.md](docs/roadmap.md).
+
+**Para ligar**, uma linha na config do usuário — o recurso não roda em
+nenhum diretório sem ela:
+
+```toml
+[project_file]
+trusted_paths = ["C:/Projetos"]
+```
+
+- [**PRD-012**](docs/prd/prd-012-comando-de-projeto-por-diretorio.md) —
+  comando de projeto por diretório, RF-12.1 a RF-12.15. Aprovado fora da
+  ordem de fases, a pedido do dono do produto
+- [**ADR-0051**](docs/adr/0051-arquivo-de-projeto-porecatu.md) — fecha as
+  cinco decisões que o PRD deixa em aberto: formato de **seções cruas**
+  (corpo literal, sem escape e sem comentário próprio, porque o corpo é
+  script); casamento **exato** de `shell_name` com `[default]` de último
+  recurso e **sem tabela de apelidos** entre shells; confiança por
+  **allowlist em `[project_file] trusted_paths`, vazia por default**, com
+  canonicalização dos dois lados e comparação por componente de caminho;
+  escrita no PTY depois do primeiro byte mais um silêncio de ~300 ms, teto
+  de 5 s e guarda de tela alternativa (atraso fixo não serve — a F6 mediu
+  ~480 ms até o primeiro byte com `pwsh` e ~358 ms com `cmd.exe`); e nota
+  no grid, uma vez por execução, para o arquivo achado em diretório não
+  autorizado
+- [**docs/reference/arquivo-de-projeto.md**](docs/reference/arquivo-de-projeto.md)
+  — referência do formato, com exemplo por shell e o que fazer quando não
+  funciona. Ao contrário dos snippets de OSC 7, **não** é embutida no
+  binário
+- `project_file.rs` em `porecatu-config`: parser de seções cruas, escolha
+  de seção e checagem de `trusted_paths`, 21 testes. Gatilho (`SpawnOrigin`
+  explícito no spawn da aba), temporização de escrita e nota de não
+  autorizado em `porecatu-ui`, com as funções de decisão extraídas puras e
+  testadas sem `Terminal`/PTY real. `porecatu-term` e `porecatu-session`
+  não mudaram
+- Seção `[project_file]` no
+  [arquivo de exemplo](docs/config/porecatu.example.toml) (`enabled`,
+  `trusted_paths`), classe de recarga **[C]**, com o custo de um
+  `trusted_paths` largo escrito em prosa; seção nova no
+  [guia do usuário](docs/guia-do-usuario.md); § 6.1 da
+  [arquitetura](docs/arquitetura.md) separando "config do app" de "arquivo
+  do projeto"
+
+### Alterado
+
+- [PRD-003](docs/prd/prd-003-persistencia-de-sessao.md) ganha uma emenda em
+  blockquote: a proibição de reexecutar o processo restaurado **continua
+  valendo inteira** e não foi reaberta. O PRD-012 executa o que o usuário
+  **declarou** num arquivo versionado com o projeto, não o que o app
+  **gravou** observando — um é declaração, o outro é replay
+
 ## [0.7.0] - 2026-09-04
 
 A primeira versão publicada. Não `1.0.0`: decisão do dono do produto ao

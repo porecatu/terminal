@@ -20,6 +20,7 @@ mod error;
 mod general;
 mod keybindings;
 mod path;
+mod project_file;
 mod session;
 mod shell;
 mod terminal;
@@ -35,6 +36,10 @@ pub use error::ConfigError;
 pub use general::General;
 pub use keybindings::Keybindings;
 pub use path::resolve_config_path;
+pub use project_file::{
+    PROJECT_FILE_NAME, ProjectFile, ProjectFileOutcome, ProjectScript, is_trusted,
+    parse as parse_project_file, resolve as resolve_project_file,
+};
 pub use session::Session;
 pub use shell::Shell;
 pub use terminal::{
@@ -61,6 +66,7 @@ pub struct Config {
     pub themes: Vec<Theme>,
     pub keybindings: Keybindings,
     pub session: Session,
+    pub project_file: ProjectFile,
 }
 
 impl Default for Config {
@@ -73,6 +79,7 @@ impl Default for Config {
             themes: theme::built_in_themes(),
             keybindings: Keybindings::default(),
             session: Session::default(),
+            project_file: ProjectFile::default(),
         }
     }
 }

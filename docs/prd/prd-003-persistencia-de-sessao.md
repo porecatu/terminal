@@ -3,7 +3,7 @@
 **Status:** Aprovado
 **Data:** 2026-08-26
 **Requisito de origem:** 3 — ao fechar e reabrir o emulador, as abas e grupos devem voltar abertos nos mesmos diretórios (sem os processos)
-**Relacionados:** [ADR-0005](../adr/0005-persistencia-de-sessao.md), [ADR-0004](../adr/0004-pty-cross-platform.md), [PRD-002](prd-002-grupos-de-abas.md)
+**Relacionados:** [ADR-0005](../adr/0005-persistencia-de-sessao.md), [ADR-0004](../adr/0004-pty-cross-platform.md), [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md), [PRD-002](prd-002-grupos-de-abas.md), [PRD-012](prd-012-comando-de-projeto-por-diretorio.md)
 
 ## Problema
 
@@ -33,6 +33,8 @@ Todo usuário que criou mais de duas abas. O valor cresce com o tamanho da sess�
 | Histórico de comandos | Não — é do shell, não nosso |
 
 Processos não são restaurados por decisão explícita, não por limitação: reexecutar automaticamente o comando que estava rodando não é seguro. Restaurar um `rm -rf` ou um `terraform apply` interrompido seria pior que não restaurar nada.
+
+> **Precisado pelo [PRD-012](prd-012-comando-de-projeto-por-diretorio.md).** O parágrafo acima continua valendo inteiro, e não foi reaberto: o app segue sem gravar o que estava rodando e sem reexecutar nada que tenha observado. O que o PRD-012 acrescenta tem outra origem — um comando que o **usuário declarou** num arquivo `.porecatu` versionado com o projeto, autorizado por diretório na config, e escrito no terminal à vista dele. Um é replay do que o app viu; o outro é declaração do que o projeto pede. A proibição aqui é do primeiro.
 
 ## A ressalva do diretório de trabalho
 

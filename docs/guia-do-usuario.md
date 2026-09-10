@@ -166,6 +166,57 @@ espera.
 O convite aparece uma vez e pode ser dispensado. Quem diz o tempo todo em
 que pé está é a **barra de status**, abaixo.
 
+## Rodar um comando ao restaurar a aba (`.porecatu`)
+
+A sessão devolve suas abas nos diretórios certos, mas não o que elas
+estavam fazendo — o `npm run dev`, o `docker compose up`, você digita de
+novo. Um arquivo chamado `.porecatu` na raiz do projeto resolve isso: ele
+declara o que rodar, com uma seção por tipo de terminal.
+
+```
+[pwsh]
+npm run dev
+
+[bash]
+nvm use
+npm run dev
+```
+
+Tudo depois de `[nome]` é o script daquela seção, literal, até a próxima
+seção. O nome é o do seu shell sem caminho nem extensão — o mesmo que
+aparece no canto esquerdo da barra de status. `[default]` vale para
+qualquer shell que não tenha seção própria.
+
+Isso **não basta para o arquivo rodar**. Como o `.porecatu` vem junto com
+o projeto — e projeto clonado é arquivo escrito por outra pessoa —, ele
+só é executado em diretórios que você declarou na **sua** configuração:
+
+```toml
+[project_file]
+trusted_paths = ["C:/Projetos"]
+```
+
+Um caminho listado cobre tudo abaixo dele. A lista é **vazia por
+padrão**: numa instalação nova, nenhum `.porecatu` roda. Por isso mesmo,
+evite listar o diretório onde você clona repositórios de terceiros, ou o
+seu home — todo repositório novo ali dentro passaria a rodar o arquivo
+dele sozinho.
+
+Encontrando um `.porecatu` num diretório que você não autorizou, o
+Porecatu não executa nada e escreve na aba o caminho e a linha que o
+autorizaria, uma vez por execução.
+
+Formato completo, exemplos por shell e o que fazer quando não funciona:
+[docs/reference/arquivo-de-projeto.md](reference/arquivo-de-projeto.md).
+
+O que o `.porecatu` **não** faz: não roda em aba nova (só na restauração
+de uma sessão gravada), não roda quando você dá `cd` para o diretório,
+não sobe a árvore de diretórios (um arquivo na raiz do projeto não
+alcança uma aba em `src/`), não roda duas vezes na mesma aba, e não roda
+escondido — o comando é escrito no terminal como se você o tivesse
+digitado, aparece na tela, entra no histórico do shell e `Ctrl+C` o
+interrompe. Para desligar tudo, `[project_file] enabled = false`.
+
 ## Barra de status
 
 A faixa no rodapé da janela mostra, da aba ativa:
