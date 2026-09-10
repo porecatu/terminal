@@ -190,14 +190,30 @@ jobs:
           cargo deb --no-build --target ${{ matrix.alvo }} \
             -o "dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.deb"
 
+      # `dpkg-deb -c "$deb" | grep -q ...` parecia óbvio e não era: o shell
+      # padrão do GitHub Actions roda `bash -eo pipefail`, e `grep -q` fecha
+      # o pipe assim que acha a primeira ocorrência. Como o arquivo aparece
+      # cedo na listagem, o `tar` interno do `dpkg-deb` (ainda escrevendo o
+      # resto) leva SIGPIPE, sai com status 2, e o `pipefail` propaga essa
+      # falha do `dpkg-deb` como falha do pipeline -- mesmo o `grep` já
+      # tendo achado o match e retornado 0. Falso-negativo, achado ao vivo
+      # na v0.7.5. Capturar a listagem inteira numa variável primeiro, sem
+      # pipe nenhum pro `grep`, elimina o SIGPIPE.
       - name: Verificar atribuição das fontes (.deb)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -e
           deb="dist/porecatu-${{ github.ref_name }}-${{ matrix.alvo }}.deb"
-          dpkg-deb -c "$deb" | grep -q "LICENSE-OFL-iosevka.txt" || { echo "faltando OFL no .deb"; exit 1; }
-          dpkg-deb -c "$deb" | grep -q "LICENSE-ISC-lucide.txt" || { echo "faltando ISC no .deb"; exit 1; }
+          conteudo="$(dpkg-deb -c "$deb")"
+          case "$conteudo" in
+            *LICENSE-OFL-iosevka.txt*) ;;
+            *) echo "faltando OFL no .deb"; exit 1 ;;
+          esac
+          case "$conteudo" in
+            *LICENSE-ISC-lucide.txt*) ;;
+            *) echo "faltando ISC no .deb"; exit 1 ;;
+          esac
 
       - name: AppImage
         if: runner.os == 'Linux'
