@@ -264,6 +264,32 @@ impl From<accesskit_winit::Event> for Wakeup {
     }
 }
 
+/// ADR-0051 §1: distingue aba restaurada de aba nova no ponto exato em que
+/// o `Terminal` é spawnado -- parâmetro, não campo inferido, para que o
+/// compilador force uma decisão em todo ponto de chamada de
+/// `WindowState::spawn_tab_runtime`. Só `Restored` pode produzir
+/// `pending_project_command`/`pending_project_notice` (RF-12.12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnOrigin {
+    New,
+    Restored,
+}
+
+/// ADR-0051 §6. Some quando o comando é escrito -- é o que garante "uma vez
+/// por aba" (RF-12.9) sem um segundo booleano para desincronizar.
+struct PendingProjectCommand {
+    command: String,
+    first_output_at: Option<Instant>,
+    last_output_at: Option<Instant>,
+    give_up_at: Instant,
+}
+
+/// Silêncio do PTY que separa "o prompt terminou de desenhar" de "o ConPTY
+/// ainda está reemitindo a tela" (ADR-0051 §6).
+const PROJECT_COMMAND_QUIET: Duration = Duration::from_millis(300);
+/// Teto a partir do spawn. Sem ele, um shell que nunca cala nunca recebe.
+const PROJECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Estado de execução de uma aba: o `Terminal` (motor+PTY+threads) e o
 /// snapshot reusado entre frames. Vive fora de `porecatu_core::Tab`, que é
 /// domínio puro sem I/O (docs/arquitetura.md seção 4) -- a fronteira entre
@@ -289,6 +315,13 @@ struct TabRuntime {
     /// gatilho é o fallback do ADR-0038, consultado na gravação.
     #[cfg(windows)]
     spawned_at: Instant,
+    /// ADR-0051 §6: comando do `.porecatu` à espera do momento certo de
+    /// escrita. Só populado por aba `Restored` (RF-12.12).
+    pending_project_command: Option<PendingProjectCommand>,
+    /// ADR-0051 §5: caminho de um `.porecatu` achado em diretório não
+    /// autorizado, à espera da nota. Drenado por `App`, que é quem sabe se a
+    /// nota desta execução já foi escrita.
+    pending_project_notice: Option<PathBuf>,
 }
 
 /// Altura da barra de abas, em pixels lógicos -- não depende de estado de
@@ -863,6 +896,96 @@ fn shell_integration_note_timing(alt_screen_active: bool) -> ShellIntegrationNot
     }
 }
 
+/// RF-12.12/RF-12.13/RF-12.14 (ADR-0051 §1): só uma aba `Restored`, com o
+/// `cwd` gravado ainda existente, é candidata a ter um `.porecatu`
+/// procurado -- pura, testável sem `Terminal`/PTY reais. Aba `New` nunca
+/// produz candidato aqui, o que garante RF-12.12 (aba nova/`cd` não
+/// disparam) antes mesmo de `porecatu_config::resolve_project_file` ser
+/// chamado.
+fn project_file_candidate_dir(
+    origin: SpawnOrigin,
+    cwd_exists: bool,
+    cwd: Option<&Path>,
+) -> Option<PathBuf> {
+    (origin == SpawnOrigin::Restored && cwd_exists)
+        .then(|| cwd.map(Path::to_path_buf))
+        .flatten()
+}
+
+/// ADR-0051 §6: decide se um `PendingProjectCommand` já pode ser escrito.
+/// Função livre e pura -- `now` vem de fora, nunca `Instant::now()` daqui,
+/// pelo mesmo motivo do `shell_integration_note_timing` acima.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectCommandTiming {
+    Wait,
+    WriteNow,
+    GiveUp,
+}
+
+fn project_command_timing(
+    pending: &PendingProjectCommand,
+    now: Instant,
+    alt_screen_active: bool,
+) -> ProjectCommandTiming {
+    // O teto vence tudo, inclusive tela alternativa: sem ele, uma aba presa
+    // em tela alternativa para sempre nunca desiste do pendente.
+    if now >= pending.give_up_at {
+        return ProjectCommandTiming::GiveUp;
+    }
+    let Some(last_output_at) = pending.last_output_at else {
+        return ProjectCommandTiming::Wait; // o shell nem falou ainda
+    };
+    if alt_screen_active {
+        return ProjectCommandTiming::Wait;
+    }
+    if now.duration_since(last_output_at) >= PROJECT_COMMAND_QUIET {
+        ProjectCommandTiming::WriteNow
+    } else {
+        ProjectCommandTiming::Wait
+    }
+}
+
+/// Monta os bytes do script do `.porecatu` para `Terminal::write` (ADR-0051
+/// §6, RF-12.8): uma linha por vez, cada uma terminada em `\r` -- o mesmo
+/// byte que `input::handle_keyboard_input` manda no Enter, para que o shell
+/// veja exatamente o que veria de alguém digitando.
+fn project_command_bytes(command: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for line in command.lines() {
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\r');
+    }
+    bytes
+}
+
+/// ADR-0051 §5: texto da nota de `.porecatu` não autorizado -- três linhas,
+/// terminando em `\r\n` (`Terminal::inject_note` não normaliza `\n` cru, ver
+/// `shell_integration::invite_text`). `path` é o `.porecatu` em si
+/// (`ProjectFileOutcome::Untrusted`); a nota fala do diretório que o contém,
+/// que é o que entraria em `trusted_paths`.
+fn project_file_notice_text(path: &Path) -> String {
+    let dir = path.parent().unwrap_or(path);
+    let toml_value = dir.to_string_lossy().replace('\\', "/");
+    let text = format!(
+        "{} encontrado em {}, mas este diretório não está autorizado.\nPara autorizá-lo, acrescente em porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]",
+        porecatu_config::PROJECT_FILE_NAME,
+        dir.display(),
+    );
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
+/// ADR-0051 §5 (RF-12.6): "uma vez por execução, não por aba" -- dado se a
+/// nota já foi reclamada nesta execução e se esta aba tem um pendente,
+/// decide se ela escreve agora e o próximo valor de `claimed`. Pura, para
+/// testar sem `Terminal`: `check_project_file_notice` chama isto por aba,
+/// na ordem de iteração, e drena o pendente de toda aba de qualquer jeito
+/// (escrevendo ou não).
+fn project_file_notice_write_decision(claimed: bool, has_pending: bool) -> (bool, bool) {
+    let write = has_pending && !claimed;
+    let next_claimed = claimed || write;
+    (write, next_claimed)
+}
+
 #[cfg(test)]
 mod shell_integration_trigger_tests {
     use super::*;
@@ -983,6 +1106,224 @@ mod shell_integration_trigger_tests {
         assert_eq!(
             shell_integration_note_timing(false),
             ShellIntegrationNoteTiming::WriteNow
+        );
+    }
+}
+
+#[cfg(test)]
+mod project_file_candidate_dir_tests {
+    use super::*;
+
+    /// RF-12.12: é o teste que impede a regressão mais provável desta
+    /// etapa -- aba nova nunca vira candidata, mesmo com `.porecatu`
+    /// presente e o diretório autorizado (o que `resolve_project_file`
+    /// decidiria depois nunca chega a ser consultado).
+    #[test]
+    fn new_tab_origin_never_produces_a_candidate() {
+        assert_eq!(
+            project_file_candidate_dir(SpawnOrigin::New, true, Some(Path::new("/projetos/api"))),
+            None
+        );
+    }
+
+    #[test]
+    fn restored_tab_with_existing_cwd_is_a_candidate() {
+        assert_eq!(
+            project_file_candidate_dir(
+                SpawnOrigin::Restored,
+                true,
+                Some(Path::new("/projetos/api"))
+            ),
+            Some(PathBuf::from("/projetos/api"))
+        );
+    }
+
+    /// RF-12.14: diretório gravado que sumiu não procura nada.
+    #[test]
+    fn missing_cwd_produces_no_candidate_even_when_restored() {
+        assert_eq!(
+            project_file_candidate_dir(
+                SpawnOrigin::Restored,
+                false,
+                Some(Path::new("/projetos/api"))
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn no_cwd_at_all_produces_no_candidate() {
+        assert_eq!(
+            project_file_candidate_dir(SpawnOrigin::Restored, true, None),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod project_command_timing_tests {
+    use super::*;
+
+    fn pending_at(now: Instant) -> PendingProjectCommand {
+        PendingProjectCommand {
+            command: "npm run dev".to_owned(),
+            first_output_at: None,
+            last_output_at: None,
+            give_up_at: now + PROJECT_COMMAND_TIMEOUT,
+        }
+    }
+
+    #[test]
+    fn no_output_yet_waits() {
+        let now = Instant::now();
+        let pending = pending_at(now);
+        assert_eq!(
+            project_command_timing(&pending, now, false),
+            ProjectCommandTiming::Wait
+        );
+    }
+
+    #[test]
+    fn insufficient_quiet_waits() {
+        let now = Instant::now();
+        let mut pending = pending_at(now);
+        pending.first_output_at = Some(now);
+        pending.last_output_at = Some(now);
+        let later = now + Duration::from_millis(100);
+        assert_eq!(
+            project_command_timing(&pending, later, false),
+            ProjectCommandTiming::Wait
+        );
+    }
+
+    #[test]
+    fn quiet_interval_elapsed_writes_now() {
+        let now = Instant::now();
+        let mut pending = pending_at(now);
+        pending.first_output_at = Some(now);
+        pending.last_output_at = Some(now);
+        let later = now + PROJECT_COMMAND_QUIET;
+        assert_eq!(
+            project_command_timing(&pending, later, false),
+            ProjectCommandTiming::WriteNow
+        );
+    }
+
+    #[test]
+    fn alternate_screen_holds_back_even_with_quiet_elapsed() {
+        let now = Instant::now();
+        let mut pending = pending_at(now);
+        pending.first_output_at = Some(now);
+        pending.last_output_at = Some(now);
+        let later = now + PROJECT_COMMAND_QUIET;
+        assert_eq!(
+            project_command_timing(&pending, later, true),
+            ProjectCommandTiming::Wait
+        );
+    }
+
+    #[test]
+    fn expired_deadline_gives_up_even_on_the_alternate_screen() {
+        let now = Instant::now();
+        let mut pending = pending_at(now);
+        pending.first_output_at = Some(now);
+        pending.last_output_at = Some(now);
+        let later = pending.give_up_at;
+        assert_eq!(
+            project_command_timing(&pending, later, true),
+            ProjectCommandTiming::GiveUp
+        );
+    }
+
+    #[test]
+    fn expired_deadline_gives_up_even_without_any_output() {
+        let now = Instant::now();
+        let pending = pending_at(now);
+        let later = pending.give_up_at;
+        assert_eq!(
+            project_command_timing(&pending, later, false),
+            ProjectCommandTiming::GiveUp
+        );
+    }
+}
+
+#[cfg(test)]
+mod project_command_bytes_tests {
+    use super::*;
+
+    #[test]
+    fn each_line_ends_in_carriage_return() {
+        let bytes = project_command_bytes("nvm use\nnpm run dev");
+        assert_eq!(bytes, b"nvm use\rnpm run dev\r");
+    }
+
+    #[test]
+    fn blank_line_in_the_middle_survives() {
+        let bytes = project_command_bytes("first\n\nsecond");
+        assert_eq!(bytes, b"first\r\rsecond\r");
+    }
+}
+
+#[cfg(test)]
+mod project_file_notice_text_tests {
+    use super::*;
+
+    #[test]
+    fn names_the_directory_and_the_config_line() {
+        let path = Path::new("/home/ana/projetos/api/.porecatu");
+        let text = project_file_notice_text(path);
+        assert!(text.contains("/home/ana/projetos/api"));
+        assert!(text.contains("trusted_paths"));
+        assert!(text.contains("[project_file]"));
+    }
+
+    #[test]
+    fn no_bare_newline_ever_reaches_inject_note() {
+        let path = Path::new("/home/ana/projetos/api/.porecatu");
+        let text = project_file_notice_text(path);
+        for (index, byte) in text.bytes().enumerate() {
+            if byte == b'\n' {
+                assert_eq!(
+                    text.as_bytes()[index - 1],
+                    b'\r',
+                    "quebra de linha crua em {index}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod project_file_notice_write_decision_tests {
+    use super::*;
+
+    /// RF-12.6: a primeira aba com pendente, na execução, escreve e
+    /// reclama a nota.
+    #[test]
+    fn first_pending_notice_writes_and_claims() {
+        assert_eq!(
+            project_file_notice_write_decision(false, true),
+            (true, true)
+        );
+    }
+
+    /// RF-12.6 ("uma vez por execução, não uma por aba"): uma segunda aba
+    /// com pendente, depois que a primeira já reclamou, não escreve de
+    /// novo -- é o teste que corresponde ao cenário "duas abas produzem
+    /// uma nota, não duas".
+    #[test]
+    fn second_pending_notice_in_the_same_run_does_not_write_again() {
+        assert_eq!(
+            project_file_notice_write_decision(true, true),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn no_pending_notice_never_writes() {
+        assert_eq!(
+            project_file_notice_write_decision(false, false),
+            (false, false)
         );
     }
 }
@@ -1350,6 +1691,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
     ) {
         let shell_name = Self::shell_display_name(shell);
@@ -1379,6 +1721,8 @@ impl WindowState {
             style,
             term_params,
             shell,
+            SpawnOrigin::New,
+            project_file,
             startup_directory,
         );
     }
@@ -1410,6 +1754,8 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        origin: SpawnOrigin,
+        project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
     ) {
         let (rows, cols) = self.grid_size(cell_metrics, style);
@@ -1417,6 +1763,23 @@ impl WindowState {
         let tab = tab_id;
         let proxy = proxy.clone();
         let cwd_exists = cwd.as_ref().is_none_or(|p| p.is_dir());
+        // RF-12.12/RF-12.14 (ADR-0051 §1): calculado **antes** de
+        // `resolve_tab_cwd` substituir `cwd` -- veja `project_file_
+        // candidate_dir` para a regra em si.
+        let project_dir = project_file_candidate_dir(origin, cwd_exists, cwd.as_deref());
+        // Cuidado: o shell a considerar é o que **vai ser lançado agora**
+        // (`shell`, de onde `pty_config.program` abaixo sai), nunca
+        // `Tab::shell_name()` -- numa aba restaurada aquele valor veio do
+        // arquivo de sessão, e a restauração ignora esse campo ao spawnar
+        // (sempre usa `config.shell`); os dois podem divergir se o usuário
+        // trocou de shell entre uma execução e outra.
+        let project_outcome = project_dir.as_deref().map(|dir| {
+            porecatu_config::resolve_project_file(
+                dir,
+                &Self::shell_display_name(shell),
+                project_file,
+            )
+        });
         let (cwd, missing_cwd_note) =
             session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
@@ -1452,6 +1815,34 @@ impl WindowState {
                 if let Some(note) = &missing_cwd_note {
                     terminal.inject_note(note, palette::NOTE_ACCENT_RGB);
                 }
+                // ADR-0051 §5/§6: `Ready` popula o pendente de escrita;
+                // `Untrusted` popula o pendente de nota (drenado por
+                // `App::check_project_file_notice`, que sabe se a nota desta
+                // execução já saiu); `Unreadable` é por aba (RF-12.4), então
+                // vira nota na hora, pelo mesmo caminho de `missing_cwd_note`;
+                // `Disabled`/`NotFound`/`NoSection` não produzem nada.
+                let (pending_project_command, pending_project_notice) = match project_outcome {
+                    Some(porecatu_config::ProjectFileOutcome::Ready { command, .. }) => (
+                        Some(PendingProjectCommand {
+                            command,
+                            first_output_at: None,
+                            last_output_at: None,
+                            give_up_at: now + PROJECT_COMMAND_TIMEOUT,
+                        }),
+                        None,
+                    ),
+                    Some(porecatu_config::ProjectFileOutcome::Untrusted { path }) => {
+                        (None, Some(path))
+                    }
+                    Some(porecatu_config::ProjectFileOutcome::Unreadable { path, reason }) => {
+                        terminal.inject_note(
+                            &format!("não foi possível ler \"{}\": {reason}", path.display()),
+                            palette::NOTE_ACCENT_RGB,
+                        );
+                        (None, None)
+                    }
+                    _ => (None, None),
+                };
                 self.tabs.insert(
                     tab_id,
                     TabRuntime {
@@ -1461,6 +1852,8 @@ impl WindowState {
                         received_osc7: false,
                         #[cfg(windows)]
                         spawned_at: now,
+                        pending_project_command,
+                        pending_project_notice,
                     },
                 );
             }
@@ -1500,6 +1893,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
     ) {
         let Some(id) = self.workspace.active_tab() else {
@@ -1512,6 +1906,8 @@ impl WindowState {
             return;
         }
         let cwd = tab.cwd().cloned();
+        // ADR-0037 §1/ADR-0051 §1: `NotStarted` só é criada pela
+        // restauração de sessão -- este caminho é sempre `Restored`.
         self.spawn_tab_runtime(
             id,
             cwd,
@@ -1521,6 +1917,8 @@ impl WindowState {
             style,
             term_params,
             shell,
+            SpawnOrigin::Restored,
+            project_file,
             startup_directory,
         );
         // Formaliza a transição no modelo só depois do spawn de verdade --
@@ -1605,6 +2003,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
@@ -1619,6 +2018,7 @@ impl WindowState {
             style,
             term_params,
             shell,
+            project_file,
             startup_directory,
         );
     }
@@ -2154,6 +2554,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        project_file: &porecatu_config::ProjectFile,
         keymap: &HashMap<Chord, Action>,
         confirm_close_with_process: bool,
     ) -> ActionOutcome {
@@ -2192,6 +2593,7 @@ impl WindowState {
                     style,
                     term_params,
                     shell,
+                    project_file,
                 );
             }
             return ActionOutcome::Handled;
@@ -2207,6 +2609,7 @@ impl WindowState {
                     style,
                     term_params,
                     shell,
+                    project_file,
                 );
                 ActionOutcome::Handled
             }
@@ -2848,6 +3251,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        project_file: &porecatu_config::ProjectFile,
     ) {
         match action {
             GroupAction::Rename => self.open_group_editor(group, EditorRegion::Name),
@@ -2863,6 +3267,7 @@ impl WindowState {
                     style,
                     term_params,
                     shell,
+                    project_file,
                 );
             }
             GroupAction::CloseAll => {
@@ -2905,6 +3310,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
@@ -2919,6 +3325,7 @@ impl WindowState {
             style,
             term_params,
             shell,
+            project_file,
             startup_directory,
         );
     }
@@ -2934,6 +3341,7 @@ impl WindowState {
         style: &TabBarStyle,
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
+        project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
@@ -2948,6 +3356,7 @@ impl WindowState {
             style,
             term_params,
             shell,
+            project_file,
             startup_directory,
         );
     }
@@ -3330,6 +3739,10 @@ struct App {
     /// desta mesma aba (`App::user_event`), quando ela pode ter voltado à
     /// tela primária.
     pending_shell_integration_note: Option<(WindowId, TabId)>,
+    /// ADR-0051 §5: a nota do `.porecatu` não autorizado sai uma vez por
+    /// execução do app, não uma por aba -- dez projetos não autorizados são
+    /// uma nota, não dez.
+    project_file_notice_claimed: bool,
     /// Nome do tema de sessão restaurado que não existe mais no arquivo
     /// (ADR-0031 §4) -- guardado por `apply_restored_session_state` e
     /// consumido por `resumed` assim que a primeira janela existe (é
@@ -3592,6 +4005,7 @@ impl App {
             shell_integration_dismissed: false,
             shell_integration_invite_claimed: false,
             pending_shell_integration_note: None,
+            project_file_notice_claimed: false,
             vanished_restored_theme: None,
             pending_startup_warnings,
             process_start,
@@ -3672,6 +4086,7 @@ impl App {
             &self.style,
             &self.term_params,
             &self.config.shell,
+            &self.config.project_file,
             &self.startup_directory,
         );
         self.windows.insert(window_id, state);
@@ -3757,6 +4172,8 @@ impl App {
                 &self.style,
                 &self.term_params,
                 &self.config.shell,
+                SpawnOrigin::Restored,
+                &self.config.project_file,
                 &self.startup_directory,
             );
             if let Some(tab) = state.workspace.tab_mut(tab_id) {
@@ -3779,6 +4196,7 @@ impl App {
                 &self.style,
                 &self.term_params,
                 &self.config.shell,
+                &self.config.project_file,
                 &self.startup_directory,
             );
         }
@@ -4042,6 +4460,7 @@ impl App {
                         &self.style,
                         &self.term_params,
                         &self.config.shell,
+                        &self.config.project_file,
                     );
                     state.window.request_redraw();
                 }
@@ -4288,6 +4707,7 @@ impl App {
             .filter_map(|w| w.next_wake(now))
             .chain(self.session.next_deadline())
             .chain(self.shell_integration_invite_deadline())
+            .chain(self.project_command_deadline())
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
@@ -4362,6 +4782,8 @@ impl App {
             }
         }
         self.check_shell_integration_invite_timeout(now);
+        self.check_project_commands(now);
+        self.check_project_file_notice();
         if self.session.ready(now) {
             // RF-3.1 (ADR-0038 §5, ADR-0039 §2): fora do Windows, o
             // gatilho do convite é o mesmo sinal que decide consultar o
@@ -4372,6 +4794,82 @@ impl App {
             // `self.shell_integration_dismissed`, não o texto do grid).
             self.check_shell_integration_fallback_trigger();
             self.write_session_now(self.windows.values());
+        }
+    }
+
+    /// ADR-0051 §6: mais próximo `Instant` em que uma aba com comando
+    /// pendente precisa ser reavaliada -- o silêncio ainda por cumprir
+    /// (`last_output_at + PROJECT_COMMAND_QUIET`) ou o teto de segurança,
+    /// o que vier primeiro. Sem isto o event loop dorme e nem o silêncio
+    /// nem o teto são notados (`schedule_next_wake` encadeia isto igual
+    /// aos outros prazos do processo).
+    fn project_command_deadline(&self) -> Option<Instant> {
+        self.windows
+            .values()
+            .flat_map(|w| w.tabs.values())
+            .filter_map(|rt| rt.pending_project_command.as_ref())
+            .map(|pending| match pending.last_output_at {
+                Some(last) => (last + PROJECT_COMMAND_QUIET).min(pending.give_up_at),
+                None => pending.give_up_at,
+            })
+            .min()
+    }
+
+    /// ADR-0051 §6: percorre as abas com comando pendente e aplica
+    /// `project_command_timing` -- `WriteNow` escreve e limpa o pendente
+    /// (RF-12.9, "uma vez por aba"); `GiveUp` só descarta, sem avisar nada
+    /// (o script não rodou por uma heurística de prontidão, e um aviso
+    /// aqui seria ruído sobre ela).
+    fn check_project_commands(&mut self, now: Instant) {
+        for state in self.windows.values_mut() {
+            for runtime in state.tabs.values_mut() {
+                let Some(pending) = runtime.pending_project_command.as_ref() else {
+                    continue;
+                };
+                let alt_screen_active = runtime.terminal.modes().alt_screen;
+                let timing = project_command_timing(pending, now, alt_screen_active);
+                if timing == ProjectCommandTiming::Wait {
+                    continue;
+                }
+                if timing == ProjectCommandTiming::WriteNow {
+                    let bytes = project_command_bytes(&pending.command);
+                    runtime.terminal.write(bytes);
+                }
+                runtime.pending_project_command = None;
+            }
+        }
+    }
+
+    /// ADR-0051 §5 (RF-12.6): acha a primeira aba com `pending_project_notice`
+    /// e escreve a nota, se a execução ainda não escreveu nenhuma -- e limpa
+    /// o pendente de **todas** as abas de qualquer jeito, tenha escrito ou
+    /// não, para não deixar pendência acumulada depois que a chance de
+    /// mostrar a nota já passou. `let Self { .. } = self` desestrutura em vez
+    /// de emprestar `self` duas vezes (`windows` mutável, `project_file_
+    /// notice_claimed` mutável, ao mesmo tempo). A decisão em si
+    /// (`project_file_notice_write_decision`) é pura -- testável sem
+    /// `Terminal`.
+    fn check_project_file_notice(&mut self) {
+        let Self {
+            windows,
+            project_file_notice_claimed,
+            ..
+        } = self;
+        for state in windows.values_mut() {
+            for runtime in state.tabs.values_mut() {
+                let Some(path) = runtime.pending_project_notice.take() else {
+                    continue;
+                };
+                let (write, next_claimed) =
+                    project_file_notice_write_decision(*project_file_notice_claimed, true);
+                *project_file_notice_claimed = next_claimed;
+                if write {
+                    let text = project_file_notice_text(&path);
+                    runtime
+                        .terminal
+                        .inject_note(&text, palette::NOTE_ACCENT_RGB);
+                }
+            }
         }
     }
 
@@ -4828,6 +5326,22 @@ impl ApplicationHandler<Wakeup> for App {
             return;
         };
 
+        // ADR-0051 §6: `Wakeup::TabDirty` é o sinal de "o PTY produziu
+        // saída" -- a base do critério de prontidão do comando pendente.
+        // `check_project_commands` decide o que fazer com os `Instant`
+        // marcados aqui; nunca escreve na hora, mesmo que o silêncio já
+        // esteja cumprido (mantém "quem chama `Instant::now()` é `lib.rs`"
+        // num só lugar por gatilho).
+        if let Some(runtime) = state.tabs.get_mut(&tab_id)
+            && let Some(pending) = &mut runtime.pending_project_command
+        {
+            let now = Instant::now();
+            if pending.first_output_at.is_none() {
+                pending.first_output_at = Some(now);
+            }
+            pending.last_output_at = Some(now);
+        }
+
         // Aba suja que não é a visível: só marca o indicador de atividade
         // (RF-1.20) -- sem redraw, ela não está na tela (ADR-0007 ponto 2).
         if state.workspace.active_tab() != Some(tab_id)
@@ -5084,6 +5598,7 @@ impl ApplicationHandler<Wakeup> for App {
                 &self.style,
                 &self.term_params,
                 &self.config.shell,
+                &self.config.project_file,
                 &self.startup_directory,
             );
         }
@@ -5231,6 +5746,7 @@ impl App {
                     &self.style,
                     &self.term_params,
                     &self.config.shell,
+                    &self.config.project_file,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -5267,6 +5783,7 @@ impl App {
                     &self.style,
                     &self.term_params,
                     &self.config.shell,
+                    &self.config.project_file,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -5352,6 +5869,7 @@ impl App {
             &self.style,
             &self.term_params,
             &self.config.shell,
+            &self.config.project_file,
             &self.keymap,
             self.config.general.confirm_close_with_process,
         );
@@ -5482,6 +6000,7 @@ impl App {
                     &self.style,
                     &self.term_params,
                     &self.config.shell,
+                    &self.config.project_file,
                 );
             }
             None => {
@@ -6140,6 +6659,7 @@ impl App {
                     &self.style,
                     &self.term_params,
                     &self.config.shell,
+                    &self.config.project_file,
                 );
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -6377,6 +6897,7 @@ impl App {
                         &self.style,
                         &self.term_params,
                         &self.config.shell,
+                        &self.config.project_file,
                     );
                     state.window.request_redraw();
                 }
@@ -6390,6 +6911,7 @@ impl App {
                         &self.style,
                         &self.term_params,
                         &self.config.shell,
+                        &self.config.project_file,
                     );
                     state.window.request_redraw();
                 }
