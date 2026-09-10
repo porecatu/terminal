@@ -273,9 +273,26 @@ pub struct CellPosition {
     pub side: SelectionSide,
 }
 
-/// Converte posição em pixels físicos pra célula, usando a métrica já
-/// medida (Etapa 4). Fora da grade satura na borda -- arrastar a seleção
-/// até fora da janela ainda estende até a última célula visível.
+/// Posição lógica de um ponto em relação à origem do retângulo de
+/// conteúdo, ambos em pixels lógicos -- mesma unidade de `CellMetrics`
+/// (ADR-0018: só `WindowSurface` trabalha em físico). Satura em zero:
+/// ponto à esquerda/acima do conteúdo mapeia na borda.
+///
+/// Existe pra evitar que a conversão físico->lógico seja reescrita (e
+/// divirja) em cada chamador de `cell_at` -- já aconteceu de um mesmo bug
+/// de unidade (misturar físico com lógico) se espalhar por cópia em cinco
+/// pontos diferentes.
+pub fn logical_point_in_content(point: (f32, f32), content_origin: (f32, f32)) -> (f64, f64) {
+    (
+        ((point.0 - content_origin.0) as f64).max(0.0),
+        ((point.1 - content_origin.1) as f64).max(0.0),
+    )
+}
+
+/// Converte posição em pixels lógicos (mesma unidade de `CellMetrics`,
+/// tipicamente já produzida por `logical_point_in_content`) pra célula.
+/// Fora da grade satura na borda -- arrastar a seleção até fora da janela
+/// ainda estende até a última célula visível.
 pub fn cell_at(x: f64, y: f64, metrics: CellMetrics, rows: usize, cols: usize) -> CellPosition {
     let col_f = (x as f32 / metrics.width).max(0.0);
     let row_f = (y as f32 / metrics.height).max(0.0);
@@ -413,5 +430,49 @@ pub fn handle_mouse_motion(
 
     if button_down == Some(WinitMouseButton::Left) {
         terminal.update_selection(cell.row, cell.col, cell.side);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regressão: um clique no "mesmo lugar lógico" tem que cair na mesma
+    /// célula não importa o `scale_factor` da janela -- o bug original
+    /// misturava um `cursor_position` físico com `CellMetrics` lógico (ou
+    /// multiplicava um ponto já lógico por `scale` de novo antes de
+    /// dividir), o que só era invisível em `scale == 1.0`.
+    #[test]
+    fn cell_at_is_stable_across_scale_factors() {
+        let metrics = CellMetrics {
+            width: 8.4,
+            height: 17.0,
+        };
+        let content_origin = (10.0, 6.0);
+        let logical_cursor = (94.0, 40.0);
+
+        for &scale in &[1.0_f32, 1.25, 1.5, 2.0] {
+            let physical_cursor = (
+                logical_cursor.0 as f64 * scale as f64,
+                logical_cursor.1 as f64 * scale as f64,
+            );
+            let logical_from_physical = (
+                (physical_cursor.0 / scale as f64) as f32,
+                (physical_cursor.1 / scale as f64) as f32,
+            );
+            let (content_x, content_y) =
+                logical_point_in_content(logical_from_physical, content_origin);
+            let cell = cell_at(content_x, content_y, metrics, 24, 80);
+
+            assert_eq!(cell.col, 10, "scale {scale}: coluna divergiu");
+            assert_eq!(cell.row, 2, "scale {scale}: linha divergiu");
+        }
+    }
+
+    #[test]
+    fn logical_point_in_content_saturates_at_zero() {
+        let (x, y) = logical_point_in_content((5.0, 3.0), (10.0, 20.0));
+        assert_eq!(x, 0.0);
+        assert_eq!(y, 0.0);
     }
 }

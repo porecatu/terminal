@@ -107,7 +107,6 @@ fn terminal_menu_context_items(
     cell_metrics: CellMetrics,
     logical_width: f32,
     logical_height: f32,
-    scale: f32,
     tab: TabId,
     anchor: (f32, f32),
 ) -> Vec<TerminalMenuItem> {
@@ -122,8 +121,7 @@ fn terminal_menu_context_items(
         logical_width,
         logical_height,
     );
-    let content_x = ((anchor.0 - content.x) * scale).max(0.0) as f64;
-    let content_y = ((anchor.1 - content.y) * scale).max(0.0) as f64;
+    let (content_x, content_y) = input::logical_point_in_content(anchor, (content.x, content.y));
     let cell = input::cell_at(
         content_x,
         content_y,
@@ -1982,7 +1980,6 @@ impl WindowState {
             cell_metrics,
             self.logical_width,
             self.logical_height,
-            self.scale,
             menu.tab,
             menu.anchor,
         );
@@ -3136,21 +3133,19 @@ impl WindowState {
             self.logical_width,
             self.logical_height,
         );
-        let content_x = self.cursor_position.0 - (content.x * self.scale) as f64;
-        let content_y = self.cursor_position.1 - (content.y * self.scale) as f64;
+        let logical_cursor = (
+            self.cursor_position.0 as f32 / self.scale,
+            self.cursor_position.1 as f32 / self.scale,
+        );
+        let (content_x, content_y) =
+            input::logical_point_in_content(logical_cursor, (content.x, content.y));
         let (rows, cols) = self.active_runtime().map_or((MIN_GRID, MIN_GRID), |rt| {
             (
                 rt.snapshot.rows.max(MIN_GRID),
                 rt.snapshot.cols.max(MIN_GRID),
             )
         });
-        input::cell_at(
-            content_x.max(0.0),
-            content_y.max(0.0),
-            cell_metrics,
-            rows,
-            cols,
-        )
+        input::cell_at(content_x, content_y, cell_metrics, rows, cols)
     }
 
     /// Atualiza o hover da barra (ADR-0019) a partir da posição corrente do
@@ -4131,8 +4126,8 @@ impl App {
                     state.logical_width,
                     state.logical_height,
                 );
-                let content_x = ((menu.anchor.0 - content.x) * state.scale).max(0.0) as f64;
-                let content_y = ((menu.anchor.1 - content.y) * state.scale).max(0.0) as f64;
+                let (content_x, content_y) =
+                    input::logical_point_in_content(menu.anchor, (content.x, content.y));
                 let cell = input::cell_at(
                     content_x,
                     content_y,
@@ -4984,16 +4979,37 @@ impl ApplicationHandler<Wakeup> for App {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.scale = scale_factor as f32;
-                    let size = state.window.inner_size();
-                    if let Some(gpu) = &self.gpu {
-                        state.resize_to(
-                            size.width,
-                            size.height,
-                            gpu,
-                            self.cell_metrics,
-                            &self.style,
-                        );
+                }
+                // `cell_metrics` é global (ADR-0015/ADR-0030 -- uma
+                // medição serve todas as janelas), então uma mudança de
+                // DPI precisa recalculá-la e reaplicar a todas as janelas,
+                // não só à que mudou -- mesmo padrão de `apply_zoom`. Sem
+                // isto, a grade fica presa na métrica da escala antiga
+                // (costura de pixel/glyph borrado) até outro gatilho
+                // (zoom, reload de config, nova janela) recalcular.
+                let font_size_px = self.effective_font_size_px();
+                let line_height_px = font_size_px * self.config.terminal.font.line_height as f32;
+                if let Some(gpu) = &mut self.gpu {
+                    let (cell_width, cell_height) = gpu
+                        .text_measurer()
+                        .measure_mono_cell(font_size_px, line_height_px);
+                    self.cell_metrics = snap_cell_metrics_to_pixel_grid(
+                        cell_width,
+                        cell_height,
+                        scale_factor as f32,
+                    );
+                    gpu.text_measurer()
+                        .align_mono_advance_to(self.cell_metrics.width, font_size_px);
+                }
+                let cell_metrics = self.cell_metrics;
+                let style = self.style;
+                let gpu = self.gpu.as_ref();
+                for state in self.windows.values_mut() {
+                    if let Some(gpu) = gpu {
+                        let size = state.window.inner_size();
+                        state.resize_to(size.width, size.height, gpu, cell_metrics, &style);
                     }
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::Focused(false) => {
@@ -5600,7 +5616,6 @@ impl App {
                 self.cell_metrics,
                 state.logical_width,
                 state.logical_height,
-                state.scale,
                 menu.tab,
                 menu.anchor,
             );
@@ -5926,11 +5941,15 @@ impl App {
                     state.logical_width,
                     state.logical_height,
                 );
-                let content_x = position.x - (content.x * state.scale) as f64;
-                let content_y = position.y - (content.y * state.scale) as f64;
+                let logical_position = (
+                    position.x as f32 / state.scale,
+                    position.y as f32 / state.scale,
+                );
+                let (content_x, content_y) =
+                    input::logical_point_in_content(logical_position, (content.x, content.y));
                 let cell = input::cell_at(
-                    content_x.max(0.0),
-                    content_y.max(0.0),
+                    content_x,
+                    content_y,
                     self.cell_metrics,
                     rt.snapshot.rows.max(MIN_GRID),
                     rt.snapshot.cols.max(MIN_GRID),
@@ -6136,7 +6155,6 @@ impl App {
                 self.cell_metrics,
                 state.logical_width,
                 state.logical_height,
-                state.scale,
                 menu.tab,
                 menu.anchor,
             );
@@ -6461,7 +6479,6 @@ impl App {
                     self.cell_metrics,
                     state.logical_width,
                     state.logical_height,
-                    state.scale,
                     id,
                     logical_point,
                 );
@@ -6696,8 +6713,14 @@ impl App {
             state.logical_width,
             state.logical_height,
         );
-        let hover_content_x = state.cursor_position.0 - (hover_content.x * state.scale) as f64;
-        let hover_content_y = state.cursor_position.1 - (hover_content.y * state.scale) as f64;
+        let logical_hover_cursor = (
+            state.cursor_position.0 as f32 / state.scale,
+            state.cursor_position.1 as f32 / state.scale,
+        );
+        let (hover_content_x, hover_content_y) = input::logical_point_in_content(
+            logical_hover_cursor,
+            (hover_content.x, hover_content.y),
+        );
 
         if let Some(id) = state.workspace.active_tab()
             && let Some(runtime) = state.tabs.get_mut(&id)
@@ -6753,8 +6776,8 @@ impl App {
                 && !hyperlink_overlay_blocks_hover
             {
                 let cell = input::cell_at(
-                    hover_content_x.max(0.0),
-                    hover_content_y.max(0.0),
+                    hover_content_x,
+                    hover_content_y,
                     self.cell_metrics,
                     runtime.snapshot.rows.max(MIN_GRID),
                     runtime.snapshot.cols.max(MIN_GRID),
@@ -6882,7 +6905,6 @@ impl App {
                 self.cell_metrics,
                 state.logical_width,
                 state.logical_height,
-                state.scale,
                 menu.tab,
                 menu.anchor,
             );
