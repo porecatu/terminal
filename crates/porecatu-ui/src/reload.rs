@@ -213,6 +213,9 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
     if old.session != new.session {
         deferred.push("[session]: reinicie o app".to_owned());
     }
+    if old.project_file != new.project_file {
+        deferred.push("[project_file]: reinicie o app".to_owned());
+    }
 
     ReloadEffects {
         grid_changed,

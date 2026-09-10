@@ -2419,6 +2419,7 @@ dependencies = [
  "dirs",
  "serde",
  "serde_ignored",
+ "tempfile",
  "toml 1.1.5+spec-1.1.0",
 ]
 
