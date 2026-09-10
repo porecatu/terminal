@@ -5,12 +5,6 @@ que é preciso para que ele rode. Requisito em
 [PRD-012](../prd/prd-012-comando-de-projeto-por-diretorio.md), decisões em
 [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md).
 
-> **Ainda não implementado.** O formato e o comportamento descritos aqui estão
-> decididos, mas o binário ainda não lê o `.porecatu`, e a seção
-> `[project_file]` está comentada no
-> [arquivo de exemplo](../config/porecatu.example.toml) porque as chaves ainda
-> não existem em `Config`. Ver [docs/roadmap.md](../roadmap.md).
-
 > Diferente de [integracao-de-shell.md](integracao-de-shell.md), este arquivo
 > **não** é embutido no binário: o app não mostra nada daqui na tela. É
 > documentação para quem escreve um `.porecatu`.

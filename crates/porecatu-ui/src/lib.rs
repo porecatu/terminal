@@ -4687,6 +4687,15 @@ impl App {
         // pede frame -- `refresh_all_access_trees` só monta e entrega
         // dados, ver o comentário de `WindowState::refresh_access_tree`.
         self.refresh_all_access_trees();
+        // ADR-0051 §5: a nota de `.porecatu` não autorizado não tem
+        // critério de tempo -- ao contrário do comando pendente do
+        // `check_project_commands` (que precisa do `Instant` de
+        // `tick_all`), ela só precisa do primeiro passo do event loop
+        // depois do spawn. Drenar aqui, e não em `tick_all`, evita que a
+        // nota só apareça por coincidência com outro temporizador (sessão,
+        // convite de shell) já agendado -- ela é chamada aqui sempre,
+        // reagendado ou não.
+        self.check_project_file_notice();
         let now = Instant::now();
         // RF-3.2: qualquer janela suja (re)agenda o debounce único do
         // processo -- RF-3.17, um arquivo para todas. Drenado aqui, não
@@ -4783,7 +4792,6 @@ impl App {
         }
         self.check_shell_integration_invite_timeout(now);
         self.check_project_commands(now);
-        self.check_project_file_notice();
         if self.session.ready(now) {
             // RF-3.1 (ADR-0038 §5, ADR-0039 §2): fora do Windows, o
             // gatilho do convite é o mesmo sinal que decide consultar o
