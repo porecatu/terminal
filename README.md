@@ -137,7 +137,7 @@ Versões travadas por igualdade exata onde a API quebra a cada release: `alacrit
 
 ## Documentação
 
-- [docs/guia-do-usuario.md](docs/guia-do-usuario.md) — instalação, config, atalhos, integração de shell, a convenção do `Shift`
+- [docs/guia-do-usuario.md](docs/guia-do-usuario.md) — instalação, config, atalhos, integração de shell, o `.porecatu`, a convenção do `Shift`
 - [CLAUDE.md](CLAUDE.md) — guia operacional para agentes e contribuidores
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, fases, histórico de decisões (o mockup é histórico, ver [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
@@ -145,6 +145,7 @@ Versões travadas por igualdade exata onde a API quebra a cada release: `alacrit
 - [docs/prd/](docs/prd/) — Product Requirement Documents
 - [docs/roadmap.md](docs/roadmap.md) — fases de entrega
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo fechado de ações vinculáveis a teclas
+- [docs/reference/arquivo-de-projeto.md](docs/reference/arquivo-de-projeto.md) — formato do `.porecatu`, o arquivo com que um projeto declara o que rodar ao restaurar a aba
 - [docs/config/porecatu.example.toml](docs/config/porecatu.example.toml) — configuração de referência comentada
 
 ## Nome

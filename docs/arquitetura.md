@@ -315,11 +315,19 @@ notify (watcher) -> arquivo mudou
 
 Config inválida **nunca** derruba o app nem limpa a tela. O usuário está editando o arquivo enquanto o app roda; estados intermediários inválidos são normais.
 
-> **Escopo, decidido no [ADR-0030](adr/0030-escopo-do-hot-reload.md).** "Recalcula métricas + redraw" acima é só uma das três classes de chave. **A**: cor, fonte de chrome, dimensão, geometria de widget, `animations`, tema — troca o `Arc`, recalcula o layout da barra (que é função pura desde a F2) e redesenha. **B**: métrica de fonte do terminal e as alturas que mudam a área útil — recalcula a célula, deriva colunas e linhas e **redimensiona todos os PTYs**, um resize por recarga, coalescido pelo debounce. **C**: `decorations`, `tab_bar_position`, `opacity` de janela, `[shell]`, `[session]` — não aplica a quente e **avisa** qual é o escopo real, porque ignorar em silêncio produz o relato "mudei e não aconteceu nada", que é indistinguível de bug.
+> **Escopo, decidido no [ADR-0030](adr/0030-escopo-do-hot-reload.md).** "Recalcula métricas + redraw" acima é só uma das três classes de chave. **A**: cor, fonte de chrome, dimensão, geometria de widget, `animations`, tema — troca o `Arc`, recalcula o layout da barra (que é função pura desde a F2) e redesenha. **B**: métrica de fonte do terminal e as alturas que mudam a área útil — recalcula a célula, deriva colunas e linhas e **redimensiona todos os PTYs**, um resize por recarga, coalescido pelo debounce. **C**: `decorations`, `tab_bar_position`, `opacity` de janela, `[shell]`, `[session]`, `[project_file]` — não aplica a quente e **avisa** qual é o escopo real, porque ignorar em silêncio produz o relato "mudei e não aconteceu nada", que é indistinguível de bug.
 >
 > A classe fica escrita ao lado da chave no arquivo de exemplo. O evento de `notify` chega por `EventLoopProxy`, como o `Wakeup` de PTY: uma recarga é um evento e um frame, e o loop volta a dormir ([ADR-0007](adr/0007-modelo-de-threading.md)). O `Arc<Config>` é **do processo**, não da janela — uma recarga redesenha todas as janelas, e o recálculo da classe B roda por janela, porque a métrica é a mesma e as dimensões não.
 >
 > Duas decisões vizinhas: o enum `Action` que o parser de `[keybindings]` produz nasce em `porecatu-core`, porque `config` não pode depender de `ui` ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)); e um tema nomeado só declara **cor**, nunca fonte ou dimensão, o que mantém `theme.cycle` na classe A ([ADR-0031](adr/0031-temas-nomeados.md)).
+
+### 6.1 O arquivo de projeto não é config do app
+
+`porecatu-config` hospeda um segundo formato, e a distinção importa: o `.porecatu` do [ADR-0051](adr/0051-arquivo-de-projeto-porecatu.md) é arquivo **do projeto**, não do usuário nem do app. Não é TOML, não tem defaults, não entra em `Config` e não passa pelo hot reload — o que entra em `Config` é só `[project_file]`, com a chave de liga-desliga e a lista de diretórios autorizados.
+
+O parser (seções cruas, escolha da seção por `shell_name`) e a checagem de `trusted_paths` moram em `porecatu-config` porque o crate já é "arquivo do usuário, parseado", já vê `dirs` e não depende de GUI nem de PTY — nenhuma aresta nova na árvore da seção 1. O **gatilho** e a escrita no PTY ficam em `porecatu-ui`, junto do ciclo de vida da aba: é o único lugar que sabe que uma aba veio da restauração, quando o shell dela subiu e se o PTY já ficou quieto. `porecatu-term` e `porecatu-session` não participam — o primeiro já expõe `write` e `inject_note`, o segundo não tem nada novo a gravar ([ADR-0036](adr/0036-formato-do-arquivo-de-sessao.md) não muda).
+
+É também o primeiro caso em que o app escreve no PTY um byte que não veio de tecla, clipboard, mouse ou resposta ao programa hospedado. A regra da seção 2 continua valendo — a escrita passa pelo mesmo canal e pela mesma thread —, e o que muda é só a origem.
 
 ---
 
