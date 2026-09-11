@@ -73,6 +73,8 @@ No Windows não existe fallback: não há API viável para ler o diretório de o
 
 **RF-3.8** — Restauração **preguiçosa**: apenas a aba ativa de cada janela tem seu shell iniciado no start. As demais mostram a aba na barra, com seu título e grupo, e iniciam o shell ao serem focadas pela primeira vez. *(É o que permite restaurar 50 abas rápido, em vez de disparar 50 processos de uma vez.)*
 
+> **Emenda:** o default de `[session] lazy_restore` passou de `true` para `false` — hoje o app restaura **eager** por padrão: todas as abas sobem juntas no arranque. O comportamento preguiçoso descrito acima continua implementado e disponível, ligando `lazy_restore = true`.
+
 **RF-3.9** — Uma aba ainda não iniciada é visualmente distinguível de uma aba com shell rodando — discretamente, sem poluir a barra.
 
 **RF-3.10** — Se o diretório gravado não existe mais, a aba abre no diretório home e informa isso na primeira linha. A estrutura de grupos é preservada.

@@ -1524,9 +1524,9 @@ close_hover_foreground = "#ffffff"
 enabled = true                    # false = sempre abre com uma aba limpa  RF-3.6
 # Atraso do agrupamento de gravações. Fechar 10 abas gera 1 escrita.       RF-3.3
 save_debounce_ms = 2000
-# Só a aba ativa de cada janela inicia o shell no start; as demais
-# iniciam ao serem focadas.                                               RF-3.8
-lazy_restore = true
+# true: só a aba ativa de cada janela inicia o shell no start, as demais
+# no primeiro foco. Default false (eager): todas sobem juntas.            RF-3.8
+lazy_restore = false
 restore_window_geometry = true                                          # RF-3.11
 # Oferece uma vez o trecho de integração de shell quando OSC 7 não é
 # detectado. No Windows, sem OSC 7 o diretório NÃO é restaurado.          RF-3.1

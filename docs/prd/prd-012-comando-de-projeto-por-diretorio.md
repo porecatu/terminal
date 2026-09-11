@@ -87,7 +87,9 @@ A referência completa do formato está em [docs/reference/arquivo-de-projeto.md
 
 **RF-12.10** — O script só é escrito quando o shell está pronto para recebê-lo. Um script escrito antes de o shell chegar ao primeiro prompt se perde, e perder-se em silêncio é o pior resultado possível.
 
-**RF-12.11** — Com `lazy_restore = true` (o default do [RF-3.8](prd-003-persistencia-de-sessao.md)), o script roda quando a aba de fato inicia — no primeiro foco —, não no arranque do app.
+**RF-12.11** — Com `lazy_restore = true` ([RF-3.8](prd-003-persistencia-de-sessao.md)), o script roda quando a aba de fato inicia — no primeiro foco —, não no arranque do app.
+
+> **Emenda:** `lazy_restore = true` deixou de ser o default (ver emenda no RF-3.8). Com o default atual (`false`, eager), toda aba restaurada elegível inicia no arranque, e o script do `.porecatu` roda ali mesmo — cada aba rastreia seu próprio silêncio pós-primeiro-byte (RF-12.10) de forma independente, então não há disputa entre abas subindo ao mesmo tempo.
 
 ### Fronteiras
 

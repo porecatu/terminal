@@ -13,7 +13,9 @@ pub struct Session {
     pub enabled: bool,
     /// Atraso do agrupamento de gravações. RF-3.3.
     pub save_debounce_ms: u64,
-    /// Só a aba ativa de cada janela inicia o shell no start. RF-3.8.
+    /// `true`: só a aba ativa de cada janela inicia o shell no start, as
+    /// demais no primeiro foco. RF-3.8. Default `false` (eager): todas
+    /// as abas restauradas sobem juntas no arranque.
     pub lazy_restore: bool,
     pub restore_window_geometry: bool,
     /// Oferece uma vez o trecho de integração de shell quando OSC 7 não é
@@ -26,7 +28,7 @@ impl Default for Session {
         Self {
             enabled: true,
             save_debounce_ms: 2000,
-            lazy_restore: true,
+            lazy_restore: false,
             restore_window_geometry: true,
             suggest_shell_integration: true,
         }
@@ -42,5 +44,6 @@ mod tests {
         let session = Session::default();
         assert!(session.enabled);
         assert_eq!(session.save_debounce_ms, 2000);
+        assert!(!session.lazy_restore);
     }
 }
