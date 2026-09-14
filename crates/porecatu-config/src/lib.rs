@@ -18,6 +18,7 @@ mod appearance;
 mod color;
 mod error;
 mod general;
+mod git;
 mod keybindings;
 mod path;
 mod project_file;
@@ -34,6 +35,7 @@ pub use appearance::{
 pub use color::{Color, ColorParseError};
 pub use error::ConfigError;
 pub use general::General;
+pub use git::Git;
 pub use keybindings::Keybindings;
 pub use path::resolve_config_path;
 pub use project_file::{
@@ -67,6 +69,7 @@ pub struct Config {
     pub keybindings: Keybindings,
     pub session: Session,
     pub project_file: ProjectFile,
+    pub git: Git,
 }
 
 impl Default for Config {
@@ -80,6 +83,7 @@ impl Default for Config {
             keybindings: Keybindings::default(),
             session: Session::default(),
             project_file: ProjectFile::default(),
+            git: Git::default(),
         }
     }
 }

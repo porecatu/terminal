@@ -89,12 +89,14 @@ Do v1, medidas em uso real:
 | Métrica | Alvo |
 |---|---|
 | Tempo até o primeiro prompt utilizável | < 300 ms em máquina modesta |
-| Uso de CPU com todas as abas ociosas | ~0% |
+| Uso de CPU com todas as abas ociosas | ~0%, com a ressalva abaixo |
 | Restauração de sessão com 20 abas | < 1 s até a janela interativa |
 | Latência de tecla até pixel | < 16 ms (um intervalo de frame) |
 | Reconstrução manual de contexto após reabrir | zero ações do usuário |
 
 A última é a que define o produto. Se o usuário ainda precisa reorganizar abas depois de reabrir, o v1 falhou no que se propôs.
+
+> **Ressalva da segunda ([PRD-013](prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §1).** A consulta ao remoto do Git faz trabalho periódico com as abas ociosas, e vem ligada por padrão: o uso de CPU passa a ter **um pico por intervalo** (default, cinco minutos), não um valor contínuo. A média fica onde estava; o zero deixa de ser literal. Com `[git] remote_poll_interval_secs = 0` a métrica volta a valer ao pé da letra, e é isso que o segundo item do critério do ADR-0052 §1 exige e torna testável. O **princípio 4 acima continua literal nos dois casos**, porque ele fala de *frame*: consulta que confirma "nada novo" não desenha nada.
 
 ## Riscos de produto
 

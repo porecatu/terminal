@@ -1,8 +1,8 @@
 # ADR-0007 — Modelo de threading e render damage-driven
 
-**Status:** Aceito
+**Status:** Aceito · uma linha das Consequências revista por [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) (**parcial**: só o "zero CPU" com a consulta ao remoto ligada; a decisão em si não muda)
 **Data:** 2026-08-26
-**Relacionados:** ADR-0001, ADR-0002, ADR-0004
+**Relacionados:** ADR-0001, ADR-0002, ADR-0004, ADR-0052
 
 ## Contexto
 
@@ -117,6 +117,8 @@ Permitiria render e leitura concorrentes. Descartada porque só há um leitor (o
 ### Positivas
 
 - Terminal ocioso custa zero CPU e zero GPU.
+
+  > **Revisto pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) §1.** Com a consulta ao remoto do Git ligada (`[git] remote_poll_interval_secs` maior que zero, e o default é 300), o **zero de CPU deixa de ser literal**: há um pico por intervalo, numa thread de vida curta, com a máquina ociosa. O **zero de GPU continua inteiro** — a consulta só suja a barra quando a contagem **muda**, e confirmar "nada novo" não desenha quadro nenhum, então a decisão central desta seção (*sem sujeira, sem frame*) sobrevive sem emenda. Com o intervalo em `0`, nada disto existe e esta linha volta a valer ao pé da letra.
 - Saída rápida não degrada a UI: os bytes entram no `Term` na velocidade do PTY, o desenho acompanha na velocidade do monitor.
 - Abas em segundo plano são baratas — só memória de grid.
 - Modelo simples de raciocinar: um lock, um dono por dado, uma direção de mensagem.

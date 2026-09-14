@@ -46,6 +46,8 @@ A escolha que organiza o resto: **um fato que vale para o app não aparece no me
 
 **Canal 2 — nota na aba.** Escrita como primeira linha no grid daquela aba, marcada para não se confundir com saída de programa. Recebe: diretório gravado inexistente (RF-3.10) e código de saída de processo que falhou (RF-1.3).
 
+> **Acrescentado pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) §7.1.** O **canal 1** ganha três consumidores: o resultado da integração com o remoto do Git (informação quando dá certo, **erro** quando falha, com a mensagem do `git`), o aviso de `git` ausente do sistema e o de intervalo de consulta elevado ao piso. A enumeração acima é fechada por intenção, então acrescentar a ela é decisão, não detalhe — e o critério desta seção continua decidindo: nada disso é saída de um programa que rodou **naquela aba**, e escrever no grid mexeria na tela do que o usuário tem aberto para dizer algo que ele não pediu ao terminal.
+
 O RF-3.10 já pede exatamente isso — *"a aba abre no diretório home e informa isso na primeira linha"* — e o RF-1.3 cabe no mesmo mecanismo sem inventar nada. O critério é simples: informação que pertence ao histórico de um terminal fica dentro dele, e sobrevive à rolagem; informação sobre o app fica no overlay, e é dispensável.
 
 ### Anatomia — aviso do app

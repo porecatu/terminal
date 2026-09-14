@@ -52,6 +52,8 @@ Com cliente ativo, a atualização acontece **na volta do event loop que mudou o
 
 **Barra de abas.** Cada aba é um nó com título, posição na ordem visual, o grupo a que pertence, e o estado que muda o que ela significa: ativa, com atividade (RF-1.20), com campainha (RF-1.21), não iniciada ([ADR-0037](0037-aba-nao-iniciada.md)). Pílula de grupo, botão de fechar da aba, botões de nova aba, indicador de overflow, botão de configurações e os botões de janela ([ADR-0027](0027-controles-de-janela-e-resize-proprios.md)) são nós com nome e ação.
 
+> **Acrescentado pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) §9.** A **barra de status** entrou no produto depois deste ADR ([ADR-0048](0048-barra-de-status.md) §11) e é projetada como o resto — um nó por segmento, com a marca do RF-9.4 na descrição do diretório. Com o [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) ela ganha o **primeiro nó com ação fora da barra de abas**: o indicador de commits atrás do remoto, anunciado como botão, com a contagem na descrição. Ele é **só de mouse** enquanto a §6 abaixo valer e a invocação de ação de leitor de tela não for roteada — consequência registrada lá, não esquecida aqui.
+
 **Os cinco widgets**, cada um com o papel que o leitor de tela trata de forma especial:
 
 | Widget | Papel | Comportamento exigido |

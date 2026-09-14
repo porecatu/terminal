@@ -256,6 +256,21 @@ enum Wakeup {
     /// `App::handle_accesskit_event`. Chega pela mesma `EventLoopProxy`
     /// porque `Adapter::with_event_loop_proxy` exige `T: From<Event>`.
     AccessKit(accesskit_winit::Event),
+    /// Uma consulta ao remoto do Git terminou (PRD-013, ADR-0052 §3/§5):
+    /// dado chaveado por repositório, nunca um comando pra mostrar algo
+    /// -- `apply_git_query_result` só guarda no mapa do processo. **Sem**
+    /// `Box`, ao contrário de `ConfigReloaded`: `size_of::<Wakeup>()` já
+    /// é 80 bytes por causa de `AccessKit(accesskit_winit::Event)`
+    /// (também 80 bytes, sem `Box`), e `RemoteQueryResult` mede 72 --
+    /// caber dentro do que a variante mais larga já reserva não custa
+    /// nada, medido antes de decidir (CLAUDE.md, comentário de `Wakeup`).
+    GitQueryResult(git::RemoteQueryResult),
+    /// Uma integração (`pull --ff-only`) terminou (PRD-013, ADR-0052 §9,
+    /// RF-13.13/RF-13.14): sucesso ou falha com a mensagem do `git`.
+    /// **Sem** `Box`, mesma verificação de `GitQueryResult` acima --
+    /// `RemoteIntegrationResult` não passa dos 56 bytes (`PathBuf` mais um
+    /// enum com `String`), bem dentro dos 80 que `AccessKit` já reserva.
+    GitIntegrationResult(git::RemoteIntegrationResult),
 }
 
 impl From<accesskit_winit::Event> for Wakeup {
@@ -1433,6 +1448,7 @@ impl WindowState {
         style: &TabBarStyle,
         home: Option<&Path>,
         measurer: &mut TextMeasurer,
+        git_remotes: &HashMap<PathBuf, git::RemoteEntry>,
     ) {
         // ADR-0048 §11: a árvore é projeção do mesmo layout que o pintor
         // consome. Montado aqui fora do `update_if_active` porque o
@@ -1440,7 +1456,7 @@ impl WindowState {
         // montar cinco strings curtas, sem syscall nenhuma (RF-9.8), e
         // isto roda por mudança de estado, não por frame.
         let status_bar_layout = (status_bar::height(style) > 0.0).then(|| {
-            let content = self.status_bar_content(home);
+            let content = self.status_bar_content(home, git_remotes);
             status_bar::layout_status_bar(
                 &content,
                 style,
@@ -3444,7 +3460,11 @@ impl WindowState {
     /// `sysinfo`: `Terminal::cwd_fallback` e `ProcessGroup::process_count`
     /// fazem `refresh_processes(All)` e estão fora deste caminho por
     /// decisão explícita (ADR-0048 §3 e §8, RF-9.8).
-    fn status_bar_content(&self, home: Option<&Path>) -> status_bar::StatusBarContent {
+    fn status_bar_content(
+        &self,
+        home: Option<&Path>,
+        git_remotes: &HashMap<PathBuf, git::RemoteEntry>,
+    ) -> status_bar::StatusBarContent {
         let Some(tab_id) = self.workspace.active_tab() else {
             return status_bar::StatusBarContent::default();
         };
@@ -3465,11 +3485,38 @@ impl WindowState {
         // sem marca própria, porque o diretório ao lado já está no tom
         // apagado dizendo isso (§6). O trabalho no caso comum é um
         // `stat`; a subida atrás de `.git` só refaz quando o `cwd` muda.
-        let git_branch = self
-            .git
-            .borrow_mut()
-            .branch(cwd_path.as_deref())
-            .map(str::to_owned);
+        let mut git = self.git.borrow_mut();
+        let (git_branch, head_branch_name) = match git.head(cwd_path.as_deref()) {
+            Some(head) => {
+                let label = head.label().to_owned();
+                let branch_name = match head {
+                    git::Head::Branch(name) => Some(name.clone()),
+                    git::Head::Detached(_) => None,
+                };
+                (Some(label), branch_name)
+            }
+            None => (None, None),
+        };
+        // PRD-013/ADR-0052 §7: `HEAD` destacado nem consulta nem
+        // indicador -- só uma branch de verdade tem upstream a seguir.
+        // O mapa é consultado pela mesma chave de repositório que o
+        // agendador usa (`GitInfo::repo_root`), nunca pelo `cwd`.
+        let ahead_behind = head_branch_name.and_then(|name| {
+            let repo = git.repo_root(cwd_path.as_deref())?.to_path_buf();
+            let entry = git_remotes.get(&repo)?;
+            if entry.branch.as_deref() != Some(name.as_str()) {
+                return None;
+            }
+            let (behind, ahead) = entry.counts?;
+            let label = git::ahead_behind_label(behind, ahead)?;
+            // RF-13.11: nem consulta nem integração em andamento aceitam
+            // um segundo clique -- `InFlight` cobre as duas (comentário do
+            // variante em `git.rs`). RF-13.9: `can_integrate` é a mesma
+            // decisão pura da etapa 2, não reimplementada aqui.
+            let clickable = entry.state == git::QueryState::Idle && git::can_integrate(ahead);
+            Some(status_bar::AheadBehindContent { label, clickable })
+        });
+        drop(git);
 
         let cwd = cwd_path
             .map(|p| {
@@ -3483,6 +3530,7 @@ impl WindowState {
         status_bar::StatusBarContent {
             shell: tab.map(|t| t.shell_name().to_owned()).unwrap_or_default(),
             git_branch,
+            ahead_behind,
             cwd_is_stale: !cwd.is_empty() && !received_osc7,
             cwd,
             group: self
@@ -3495,6 +3543,42 @@ impl WindowState {
             // ver a barra em tela.
             system: std::env::consts::OS.to_owned(),
         }
+    }
+
+    /// Acerto do indicador de commits atrás/à frente sob `logical_point`
+    /// (ADR-0052 §9) -- recomputa o **mesmo** layout puro que `redraw`
+    /// monta para pintar e que `access.rs` projeta, para os três nunca
+    /// discordarem de onde o alvo está. Chamado de `dispatch_cursor_moved`
+    /// (affordance de hover/cursor) e de `dispatch_mouse_input` (o clique
+    /// em si) -- mesmo par de lugares que a precedência do resize exige
+    /// (ADR-0052 §9: "as duas precedências mudam juntas").
+    ///
+    /// O `bar_h`/`logical_height` de saída antecipada evita montar o
+    /// layout inteiro a cada movimento do mouse fora da faixa -- o
+    /// trabalho real (`layout_status_bar`) é barato (medição cacheada por
+    /// caractere, não shaping), mas não há razão para pagá-lo em todo
+    /// `CursorMoved` da janela inteira.
+    fn status_bar_hit(
+        &self,
+        style: &TabBarStyle,
+        git_remotes: &HashMap<PathBuf, git::RemoteEntry>,
+        home: Option<&Path>,
+        measurer: &mut TextMeasurer,
+        logical_point: (f32, f32),
+    ) -> Option<status_bar::StatusBarHit> {
+        let bar_h = status_bar::height(style);
+        if bar_h <= 0.0 || logical_point.1 < self.logical_height - bar_h {
+            return None;
+        }
+        let content = self.status_bar_content(home, git_remotes);
+        let layout = status_bar::layout_status_bar(
+            &content,
+            style,
+            self.logical_width,
+            self.logical_height,
+            measurer,
+        );
+        status_bar::hit_test(&layout, logical_point)
     }
 
     /// O que abre o menu de contexto da barra (ADR-0021 §3): botão direito
@@ -3774,6 +3858,23 @@ struct App {
     /// `redraw` reporta e limpa no primeiro frame **daquela** janela
     /// especificamente (uma sessão pode abrir mais de uma).
     pending_resumed_metric: Option<(WindowId, Instant)>,
+    /// PRD-013/ADR-0052 §3: estado da sincronização com o remoto, por
+    /// repositório -- mapa do **processo**, nunca por janela (duas
+    /// janelas no mesmo repo fariam dois `fetch` concorrentes no mesmo
+    /// `.git`). Cresce com os repositórios visitados na sessão, sem
+    /// teto de propósito (§3: "código para um problema que não aparece
+    /// em sessão nenhuma real"). Escrito só em `check_git_remote_queries`
+    /// (dispatch) e `apply_git_query_result` (resultado); lido em
+    /// `status_bar_content` a cada quadro.
+    git_remotes: HashMap<PathBuf, git::RemoteEntry>,
+    /// RF-13.19: `true` depois do primeiro `git` não encontrado --
+    /// desliga a consulta pelo resto da execução (a branch da barra,
+    /// que não usa processo nenhum, continua funcionando). Nunca volta
+    /// a `false`: "informa uma vez, não tenta de novo nesta execução".
+    git_disabled: bool,
+    /// RF-13.3: `true` depois do primeiro aviso de intervalo elevado ao
+    /// piso -- uma vez por execução, mesmo padrão do campo acima.
+    git_poll_interval_warned: bool,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -4012,6 +4113,9 @@ impl App {
             first_pty_output_reported: false,
             pending_first_frame_since: None,
             pending_resumed_metric: None,
+            git_remotes: HashMap::new(),
+            git_disabled: false,
+            git_poll_interval_warned: false,
         }
     }
 
@@ -4710,6 +4814,13 @@ impl App {
             let debounce = Duration::from_millis(self.config.session.save_debounce_ms);
             self.session.mark_dirty(now, debounce);
         }
+        // PRD-013/ADR-0052 §5/§10: descoberta e disparo rodam aqui, não em
+        // `tick_all` -- mesma lição da nota de `.porecatu` não autorizado
+        // (CLAUDE.md, descobertas pós-F6): um pendente sem prazo próprio só
+        // acontece por coincidência com outro temporizador. Com o mapa
+        // ainda vazio no início da execução, nenhum outro prazo garante
+        // que `tick_all` rode a tempo de descobrir o primeiro repositório.
+        self.check_git_remote_queries(now);
         let next = self
             .windows
             .values()
@@ -4717,10 +4828,277 @@ impl App {
             .chain(self.session.next_deadline())
             .chain(self.shell_integration_invite_deadline())
             .chain(self.project_command_deadline())
+            .chain(self.git_next_deadline(now))
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+
+    /// PRD-013/ADR-0052 §1/§5: descobre o repositório da aba ativa de cada
+    /// janela (deduplicado -- RF-13.6), e dispara uma consulta por
+    /// repositório cuja hora chegou. Chamada de `schedule_next_wake`, a
+    /// cada volta do event loop -- não de `tick_all`, que só roda quando
+    /// um prazo vence: com o mapa vazio no início da execução, nenhum
+    /// outro prazo garante que `tick_all` rode a tempo de descobrir o
+    /// primeiro repositório (mesma lição da nota de `.porecatu` não
+    /// autorizado, CLAUDE.md).
+    fn check_git_remote_queries(&mut self, now: Instant) {
+        if self.git_disabled {
+            return;
+        }
+        let effective = git::effective_poll_interval(self.config.git.remote_poll_interval_secs);
+        if effective.raised_to_floor && !self.git_poll_interval_warned {
+            self.git_poll_interval_warned = true;
+            for state in self.windows.values_mut() {
+                state.warnings.push(
+                    Severity::Info,
+                    "Intervalo de sincronização ajustado",
+                    "\"[git] remote_poll_interval_secs\" é menor que o piso de 30s; usando 30s."
+                        .to_owned(),
+                    now,
+                );
+                state.window.request_redraw();
+            }
+        }
+        // RF-13.2: `0` desliga o recurso inteiro -- nenhum processo,
+        // nenhum prazo, nem esta descoberta.
+        let Some(interval) = effective.interval else {
+            return;
+        };
+
+        // RF-13.1/RF-13.6: repositório da aba ativa de cada janela,
+        // deduplicado -- duas janelas no mesmo projeto produzem uma
+        // consulta só.
+        let mut targets: Vec<(PathBuf, String)> = Vec::new();
+        for state in self.windows.values() {
+            let Some(tab_id) = state.workspace.active_tab() else {
+                continue;
+            };
+            let tab = state.workspace.tab(tab_id);
+            let runtime = state.tabs.get(&tab_id);
+            let cwd = tab
+                .and_then(|t| t.cwd())
+                .map(PathBuf::from)
+                .or_else(|| runtime.and_then(|rt| rt.spawn_cwd.clone()));
+            let Some(cwd) = cwd else {
+                continue;
+            };
+            let mut git = state.git.borrow_mut();
+            // ADR-0052 §7: `HEAD` destacado nem consulta nem indicador --
+            // só uma branch de verdade segue um upstream.
+            let branch = match git.head(Some(&cwd)) {
+                Some(git::Head::Branch(name)) => name.clone(),
+                _ => continue,
+            };
+            let Some(repo) = git.repo_root(Some(&cwd)).map(Path::to_path_buf) else {
+                continue;
+            };
+            drop(git);
+            if !targets.iter().any(|(r, _)| r == &repo) {
+                targets.push((repo, branch));
+            }
+        }
+
+        for (repo, branch) in targets {
+            let entry = self
+                .git_remotes
+                .entry(repo.clone())
+                .or_insert_with(|| git::RemoteEntry {
+                    last_queried_at: Some(now),
+                    ..Default::default()
+                });
+            // RF-13.10: branch mudou desde a última consulta -- a
+            // contagem velha não pertence a ela. Reinicia como se o
+            // repositório fosse visto agora, com o mesmo adiamento da
+            // primeira consulta (RF-13.5).
+            if let Some(tracked) = &entry.branch
+                && tracked != &branch
+            {
+                *entry = git::RemoteEntry {
+                    last_queried_at: Some(now),
+                    ..Default::default()
+                };
+            }
+            if !git::is_time_to_query(entry.state, entry.last_queried_at, now, interval) {
+                continue;
+            }
+            entry.state = git::QueryState::InFlight;
+            entry.last_queried_at = Some(now);
+            entry.branch = Some(branch.clone());
+            let proxy = self.proxy.clone();
+            git::spawn_query(repo, branch, move |result| {
+                let _ = proxy.send_event(Wakeup::GitQueryResult(result));
+            });
+        }
+    }
+
+    /// Próximo instante em que alguma entrada do mapa precisa ser
+    /// reavaliada -- `None` com o recurso desligado (RF-13.2: nenhum
+    /// prazo entra na conta) ou sem nada pendente. Fina camada sobre
+    /// `git::next_query_deadline`, pura e testável sem `App`/GPU/janela
+    /// -- é ela que prova o item 2 do critério do ADR-0052 §1. `&self`:
+    /// o disparo em si já aconteceu em `check_git_remote_queries`, no
+    /// mesmo `schedule_next_wake`.
+    fn git_next_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.git_disabled {
+            return None;
+        }
+        let interval =
+            git::effective_poll_interval(self.config.git.remote_poll_interval_secs).interval;
+        git::next_query_deadline(interval, self.git_remotes.values(), now)
+    }
+
+    /// Aplica o resultado de uma consulta (ADR-0052 §3): guarda no mapa
+    /// se ainda pertence à branch atual do repositório, descarta senão.
+    /// Nunca é um comando pra mostrar algo -- quem decide o que a barra
+    /// exibe é `status_bar_content`, a cada quadro.
+    fn apply_git_query_result(&mut self, result: git::RemoteQueryResult) {
+        let current = git::current_branch(&result.repo);
+        if git::incoming_result_decision(&result.branch, current.as_deref())
+            == git::IncomingResultDecision::Discard
+        {
+            return;
+        }
+        let now = Instant::now();
+        let Some(entry) = self.git_remotes.get_mut(&result.repo) else {
+            return;
+        };
+        entry.branch = Some(result.branch);
+        match result.outcome {
+            git::RemoteQueryOutcome::Counted { behind, ahead } => {
+                let changed = entry.counts != Some((behind, ahead));
+                entry.state = git::QueryState::Idle;
+                entry.counts = Some((behind, ahead));
+                // ADR-0052 §1/§3: a consulta marca sujeira só quando a
+                // contagem muda -- o caso comum ("nada novo") não desenha
+                // quadro nenhum.
+                if changed {
+                    for state in self.windows.values_mut() {
+                        state.window.request_redraw();
+                    }
+                }
+            }
+            git::RemoteQueryOutcome::NoUpstream => {
+                entry.state = git::QueryState::NoUpstream;
+                entry.counts = None;
+            }
+            git::RemoteQueryOutcome::Shallow => {
+                entry.state = git::QueryState::Shallow;
+                entry.counts = None;
+            }
+            git::RemoteQueryOutcome::Failed(failure) => {
+                let attempt = match entry.state {
+                    git::QueryState::Failed { attempt } => attempt + 1,
+                    _ => 1,
+                };
+                entry.state = git::QueryState::Failed { attempt };
+                // ADR-0052, tabela de riscos: "falha não repinta a barra
+                // nem gera aviso repetido" -- a contagem antiga (se
+                // houver) continua na tela, porque uma falha transitória
+                // não é motivo para escondê-la.
+                if failure == git::QueryFailure::GitMissing && !self.git_disabled {
+                    self.git_disabled = true;
+                    for state in self.windows.values_mut() {
+                        state.warnings.push(
+                            Severity::Info,
+                            "Git não encontrado",
+                            "Sincronização com o remoto desligada nesta execução: o app não achou o executável \"git\"."
+                                .to_owned(),
+                            now,
+                        );
+                        state.window.request_redraw();
+                    }
+                }
+            }
+        }
+    }
+
+    /// RF-13.12: clique no indicador integra por fast-forward, em segundo
+    /// plano -- nunca no clique em si (RF-13.13). Reconfirma no instante do
+    /// clique que o repositório ainda é clicável (o `hit_test` já filtrou
+    /// contra o layout do último quadro, mas branch e estado podem ter
+    /// mudado entre um frame e o clique): a mesma decisão pura do RF-13.9,
+    /// [`git::can_integrate`], mais o estado de voo, sem reimplementar
+    /// nenhuma das duas no meio do tratamento de clique.
+    fn attempt_git_integration(&mut self, window_id: WindowId) {
+        let Some(state) = self.windows.get(&window_id) else {
+            return;
+        };
+        let Some(tab_id) = state.workspace.active_tab() else {
+            return;
+        };
+        let tab = state.workspace.tab(tab_id);
+        let runtime = state.tabs.get(&tab_id);
+        let cwd = tab
+            .and_then(|t| t.cwd())
+            .map(PathBuf::from)
+            .or_else(|| runtime.and_then(|rt| rt.spawn_cwd.clone()));
+        let Some(cwd) = cwd else {
+            return;
+        };
+        let mut git = state.git.borrow_mut();
+        let branch = match git.head(Some(&cwd)) {
+            Some(git::Head::Branch(name)) => name.clone(),
+            _ => return,
+        };
+        let Some(repo) = git.repo_root(Some(&cwd)).map(Path::to_path_buf) else {
+            return;
+        };
+        drop(git);
+
+        let Some(entry) = self.git_remotes.get_mut(&repo) else {
+            return;
+        };
+        let clickable = entry.branch.as_deref() == Some(branch.as_str())
+            && entry.state == git::QueryState::Idle
+            && entry
+                .counts
+                .is_some_and(|(behind, ahead)| behind > 0 && git::can_integrate(ahead));
+        if !clickable {
+            return;
+        }
+        // Reaproveita `InFlight` (ver o comentário do variante em `git.rs`):
+        // barra tanto o segundo clique (RF-13.11) quanto uma consulta
+        // periódica concorrente no mesmo repositório enquanto o `pull`
+        // roda.
+        entry.state = git::QueryState::InFlight;
+        let proxy = self.proxy.clone();
+        git::spawn_integration(repo, move |result| {
+            let _ = proxy.send_event(Wakeup::GitIntegrationResult(result));
+        });
+    }
+
+    /// Aplica o resultado de uma integração (RF-13.14/RF-13.15, ADR-0052
+    /// §7.1): sempre um aviso do app, nunca escrito no grid. Sucesso limpa
+    /// a contagem -- depois de um `pull --ff-only` bem sucedido a branch
+    /// está em dia com o que se sabia do remoto, e é isso que faz o
+    /// indicador sumir sem precisar de uma consulta nova para confirmar.
+    /// Falha não toca `counts`: a integração foi recusada **sem alterar
+    /// nada** (RF-13.9/RF-13.12 via `--ff-only`), então o número antigo
+    /// continua verdadeiro.
+    fn apply_git_integration_result(&mut self, result: git::RemoteIntegrationResult) {
+        let now = Instant::now();
+        if let Some(entry) = self.git_remotes.get_mut(&result.repo) {
+            entry.state = git::QueryState::Idle;
+            if matches!(result.outcome, git::IntegrationOutcome::Success) {
+                entry.counts = None;
+            }
+        }
+        let (severity, title, body) = match result.outcome {
+            git::IntegrationOutcome::Success => (
+                Severity::Info,
+                "Integração concluída",
+                "A branch está em dia com o remoto.".to_owned(),
+            ),
+            git::IntegrationOutcome::Failed { message } => {
+                (Severity::Error, "Falha ao integrar com o remoto", message)
+            }
+        };
+        for state in self.windows.values_mut() {
+            state.warnings.push(severity, title, body.clone(), now);
+            state.window.request_redraw();
         }
     }
 
@@ -4738,8 +5116,9 @@ impl App {
         let measurer = gpu.text_measurer();
         let style = &self.style;
         let home = self.startup_directory.as_deref();
+        let git_remotes = &self.git_remotes;
         for state in self.windows.values_mut() {
-            state.refresh_access_tree(style, home, measurer);
+            state.refresh_access_tree(style, home, measurer, git_remotes);
         }
     }
 
@@ -5329,6 +5708,14 @@ impl ApplicationHandler<Wakeup> for App {
                 self.handle_accesskit_event(evt);
                 return;
             }
+            Wakeup::GitQueryResult(result) => {
+                self.apply_git_query_result(result);
+                return;
+            }
+            Wakeup::GitIntegrationResult(result) => {
+                self.apply_git_integration_result(result);
+                return;
+            }
         };
         let Some(state) = self.windows.get_mut(&window) else {
             return;
@@ -5671,10 +6058,11 @@ impl App {
         let measurer = gpu.text_measurer();
         let style = &self.style;
         let home = self.startup_directory.as_deref();
+        let git_remotes = &self.git_remotes;
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        state.refresh_access_tree(style, home, measurer);
+        state.refresh_access_tree(style, home, measurer, git_remotes);
     }
 
     /// PRD-000/etapa 6 da F6: primeiro `Wakeup::TabDirty` do processo é a
@@ -6420,29 +6808,8 @@ impl App {
             return;
         }
 
-        // Cursor de resize por borda (ADR-0027): a janela inteira, não só
-        // a barra -- `titlebar::resize_direction_at` já desliga sozinho
-        // com a janela maximizada. Resolvido a cada `CursorMoved`, sempre
-        // pro estado certo (ícone de resize ou `Default`): nada aqui
-        // guarda "estava em resize antes", porque não há outro cursor
-        // continuamente gerenciado no app pra colidir com isto (o resto
-        // só muda cursor em transição de estado -- `Grabbing`/`Default` no
-        // arraste).
-        let resize_direction = titlebar::resize_direction_at(
-            (
-                position.x as f32 / state.scale,
-                position.y as f32 / state.scale,
-            ),
-            state.logical_width,
-            state.logical_height,
-            state.occupies_the_whole_screen(),
-            self.config.appearance.window_controls.resize_border as f32,
-        );
-        // Affordance de hyperlink (ADR-0042 §3, RF-11.11): "o cursor do
-        // mouse muda de forma" -- resize de borda vence (não há como as
-        // duas zonas colidirem na prática, mas a ordem segue a mesma
-        // prioridade do `match` abaixo). Qualquer popover que capturaria o
-        // clique também suprime isto -- mesma lista de `redraw`.
+        // Overlay aberto bloqueia toda esta disputa -- calculado antes
+        // porque tanto o indicador quanto o hyperlink (abaixo) o exigem.
         let overlay_open = state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
@@ -6450,6 +6817,58 @@ impl App {
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
             || state.rename.editing_tab().is_some();
+        let logical_point = (
+            position.x as f32 / state.scale,
+            position.y as f32 / state.scale,
+        );
+        // PRD-013/ADR-0052 §9: o retângulo do indicador vence a faixa
+        // inteira dentro dos próprios limites -- mesma precedência que os
+        // botões de janela já têm contra o canto superior direito
+        // (`over_window_button`, em `dispatch_mouse_input` mais abaixo),
+        // com mais um termo. **As duas precedências mudam juntas**: esta
+        // decide a forma do cursor, a de lá decide o clique -- é a
+        // armadilha desta seção, e por isso as duas usam o mesmo
+        // `status_bar_hit`.
+        let over_ahead_behind = !overlay_open
+            && if let Some(gpu) = &mut self.gpu {
+                state
+                    .status_bar_hit(
+                        &self.style,
+                        &self.git_remotes,
+                        self.startup_directory.as_deref(),
+                        gpu.text_measurer(),
+                        logical_point,
+                    )
+                    .is_some()
+            } else {
+                false
+            };
+        // Cursor de resize por borda (ADR-0027): a janela inteira, não só
+        // a barra -- `titlebar::resize_direction_at` já desliga sozinho
+        // com a janela maximizada. Resolvido a cada `CursorMoved`, sempre
+        // pro estado certo (ícone de resize, mão sobre o indicador, ou
+        // `Default`): nada aqui guarda "estava em resize antes", porque
+        // não há outro cursor continuamente gerenciado no app pra colidir
+        // com isto (o resto só muda cursor em transição de estado --
+        // `Grabbing`/`Default` no arraste). `over_ahead_behind` vence: só
+        // quando ele é falso o retângulo do indicador entra na conta do
+        // resize.
+        let resize_direction = if over_ahead_behind {
+            None
+        } else {
+            titlebar::resize_direction_at(
+                logical_point,
+                state.logical_width,
+                state.logical_height,
+                state.occupies_the_whole_screen(),
+                self.config.appearance.window_controls.resize_border as f32,
+            )
+        };
+        // Affordance de hyperlink (ADR-0042 §3, RF-11.11): "o cursor do
+        // mouse muda de forma" -- resize de borda vence (não há como as
+        // duas zonas colidirem na prática, mas a ordem segue a mesma
+        // prioridade do `match` abaixo). Qualquer popover que capturaria o
+        // clique também suprime isto -- mesma lista de `redraw`.
         let link_modifier = if is_macos() {
             state.modifiers.super_
         } else {
@@ -6486,6 +6905,9 @@ impl App {
             });
         state.window.set_cursor(match resize_direction {
             Some(direction) => CursorIcon::from(direction),
+            // Mesmo cursor de mão do hyperlink OSC 8 (ADR-0052 §8/§9): o
+            // que é clicável precisa dizer que é, com o mesmo vocabulário.
+            None if over_ahead_behind => CursorIcon::Pointer,
             None if over_link => CursorIcon::Pointer,
             None => CursorIcon::Default,
         });
@@ -6830,6 +7252,37 @@ impl App {
                     }
                 }
                 state.window.request_redraw();
+                return;
+            }
+        }
+
+        // PRD-013/ADR-0052 §9: o indicador vence a faixa inteira dentro do
+        // próprio retângulo -- resolvido **antes** do bloco de resize/
+        // botão de janela logo abaixo, pela mesma razão que motiva
+        // `over_window_button` ali (um alvo específico ganha, o resto da
+        // faixa continua resize). **As duas precedências mudam juntas**
+        // com `dispatch_cursor_moved` acima -- mesmo `status_bar_hit`,
+        // para os dois nunca discordarem de onde o alvo está. Só o botão
+        // esquerdo aciona.
+        if button == MouseButton::Left {
+            let ahead_behind_hit = if let Some(gpu) = &mut self.gpu {
+                state
+                    .status_bar_hit(
+                        &self.style,
+                        &self.git_remotes,
+                        self.startup_directory.as_deref(),
+                        gpu.text_measurer(),
+                        logical_point,
+                    )
+                    .is_some()
+            } else {
+                false
+            };
+            if ahead_behind_hit {
+                self.attempt_git_integration(window_id);
+                if let Some(state) = self.windows.get(&window_id) {
+                    state.window.request_redraw();
+                }
                 return;
             }
         }
@@ -7356,7 +7809,8 @@ impl App {
         // camada nova. A altura dela já saiu da grade lá em cima, em
         // `terminal_box_rect` -- aqui é só desenho.
         if status_bar_h > 0.0 {
-            let content = state.status_bar_content(self.startup_directory.as_deref());
+            let content =
+                state.status_bar_content(self.startup_directory.as_deref(), &self.git_remotes);
             let status_layout = status_bar::layout_status_bar(
                 &content,
                 style,
@@ -7364,7 +7818,18 @@ impl App {
                 state.logical_height,
                 gpu.text_measurer(),
             );
-            for primitive in status_bar::paint_status_bar(&status_layout, pal) {
+            // ADR-0052 §8/§9: sublinhado sob o cursor -- mesmo
+            // `status_bar::hit_test` que `dispatch_cursor_moved` e
+            // `dispatch_mouse_input` usam para a forma do cursor e para o
+            // clique, para os três nunca discordarem de onde o alvo está.
+            let cursor_logical = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            let ahead_behind_hovered =
+                status_bar::hit_test(&status_layout, cursor_logical).is_some();
+            for primitive in status_bar::paint_status_bar(&status_layout, pal, ahead_behind_hovered)
+            {
                 frame.push(Layer::Chrome, primitive);
             }
         }

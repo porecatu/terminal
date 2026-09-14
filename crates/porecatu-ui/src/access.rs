@@ -364,7 +364,15 @@ fn build_status_bar(
     let mut children = Vec::new();
     for (i, segment) in layout.segments.iter().enumerate() {
         let id = NodeId(STATUS_BAR_FIRST_SEGMENT_ID + i as u64);
-        let mut node = Node::new(Role::Label);
+        // ADR-0052 §9: o indicador de commits atrás/à frente é o
+        // **primeiro nó de chrome com ação que não é da barra de abas** --
+        // papel de botão, porque o que a cor e o sublinhado dizem (é
+        // clicável, integra) não chega a quem não vê a tela.
+        let role = match segment.role {
+            SegmentRole::AheadBehind { .. } => Role::Button,
+            _ => Role::Label,
+        };
+        let mut node = Node::new(role);
         node.set_value(segment.text.clone());
         node.set_label(segment_label(segment.role));
         // RF-9.4: sem isto, o leitor de tela lê o caminho como se fosse o
@@ -372,6 +380,13 @@ fn build_status_bar(
         // para desfazer. O alfa não chega a quem não vê a tela.
         if matches!(segment.role, SegmentRole::Cwd { stale: true }) {
             node.set_description("diretório de origem; o shell não informa o atual");
+        }
+        if let SegmentRole::AheadBehind { clickable } = segment.role {
+            node.set_description(if clickable {
+                "clique integra os commits do remoto por fast-forward"
+            } else {
+                "commits locais à frente impedem a integração automática"
+            });
         }
         nodes.push((id, node));
         children.push(id);
@@ -385,6 +400,7 @@ fn segment_label(role: SegmentRole) -> &'static str {
         SegmentRole::Shell => "shell",
         SegmentRole::Cwd { .. } => "diretório",
         SegmentRole::GitBranch => "branch",
+        SegmentRole::AheadBehind { .. } => "commits atrás/à frente do remoto",
         SegmentRole::Group => "grupo",
         SegmentRole::Encoding => "codificação",
         SegmentRole::System => "sistema",
@@ -783,6 +799,7 @@ mod tests {
             cwd: "~/projetos".to_owned(),
             cwd_is_stale: true,
             git_branch: None,
+            ahead_behind: None,
             group: None,
             system: "windows - 0.7.0".to_owned(),
         };
@@ -833,6 +850,57 @@ mod tests {
             cwd.description()
                 .is_some_and(|d| d.contains("não informa o atual")),
             "o RF-9.4 precisa ser audível, não só visível"
+        );
+    }
+
+    #[test]
+    fn ahead_behind_projects_as_a_button_with_the_count_in_the_description() {
+        // ADR-0052 §9: primeiro nó de chrome com ação fora da barra de
+        // abas -- o que a cor e o sublinhado dizem (é clicável, integra)
+        // não chega a quem não vê a tela.
+        let ws = Workspace::new();
+        let content = crate::status_bar::StatusBarContent {
+            git_branch: Some("main".to_owned()),
+            ahead_behind: Some(crate::status_bar::AheadBehindContent {
+                label: "3 commits atrás".to_owned(),
+                clickable: true,
+            }),
+            ..Default::default()
+        };
+        let layout = crate::status_bar::layout_status_bar(
+            &content,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            600.0,
+            &mut measurer(),
+        );
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            Some(&layout),
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &mut measurer(),
+        );
+        let index = layout
+            .segments
+            .iter()
+            .position(|s| matches!(s.role, SegmentRole::AheadBehind { .. }))
+            .expect("o indicador está no layout");
+        let node = node(&update, NodeId(STATUS_BAR_FIRST_SEGMENT_ID + index as u64));
+        assert_eq!(node.role(), Role::Button);
+        assert_eq!(node.value(), Some("3 commits atrás"));
+        assert!(
+            node.description()
+                .is_some_and(|d| d.contains("fast-forward"))
         );
     }
 

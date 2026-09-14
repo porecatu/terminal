@@ -35,6 +35,11 @@ pub struct StatusBar {
     /// ela, que a esta altura de fonte apagaria o caminho em vez de
     /// marcá-lo (ADR-0048 §4).
     pub stale_cwd: Color,
+    /// PRD-013, ADR-0052 §8: cor do indicador de commits atrás/à frente do
+    /// remoto -- o segundo item colorido da barra e o primeiro alvo
+    /// clicável dela. Mesmo valor do token Acento que `shell` já usa; o
+    /// PRD-004 exige a chave mesmo sem cor nova.
+    pub ahead_behind: Color,
 }
 
 impl Default for StatusBar {
@@ -48,6 +53,7 @@ impl Default for StatusBar {
             foreground: Color::hex("#a8b0bb"),
             shell: Color::hex("#5ed3bc"),
             stale_cwd: Color::hex("#828a96"),
+            ahead_behind: Color::hex("#5ed3bc"),
         }
     }
 }
@@ -61,5 +67,6 @@ mod tests {
         assert!(StatusBar::default().enabled);
         assert_eq!(StatusBar::default().height, 26);
         assert_eq!(StatusBar::default().stale_cwd, Color::hex("#828a96"));
+        assert_eq!(StatusBar::default().ahead_behind, Color::hex("#5ed3bc"));
     }
 }
