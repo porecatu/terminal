@@ -138,7 +138,7 @@ Versões travadas por igualdade exata onde a API quebra a cada release: `alacrit
 
 ## Documentação
 
-- [docs/guia-do-usuario.md](docs/guia-do-usuario.md) — instalação, config, atalhos, integração de shell, o `.porecatu`, a convenção do `Shift`
+- [docs/guia-do-usuario.md](docs/guia-do-usuario.md) — instalação, config, atalhos, integração de shell, o `.porecatu`, commits novos no remoto do Git, a convenção do `Shift`
 - [CLAUDE.md](CLAUDE.md) — guia operacional para agentes e contribuidores
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, fases, histórico de decisões (o mockup é histórico, ver [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))

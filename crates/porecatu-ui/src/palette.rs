@@ -277,6 +277,9 @@ pub struct ResolvedPalette {
     /// degrau abaixo de `status_bar_text` na escada da §1.4, não um alfa
     /// sobre ela (ADR-0048 §4).
     pub status_bar_stale_cwd: Color,
+    /// PRD-013, ADR-0052 §8: indicador de commits atrás/à frente do
+    /// remoto -- o segundo item colorido da barra.
+    pub status_bar_ahead_behind: Color,
 
     // [appearance.group_editor]
     pub editor_background: Color,
@@ -394,6 +397,7 @@ impl ResolvedPalette {
             status_bar_text: cvt(status_bar.foreground),
             status_bar_shell: cvt(status_bar.shell),
             status_bar_stale_cwd: cvt(status_bar.stale_cwd),
+            status_bar_ahead_behind: cvt(status_bar.ahead_behind),
 
             editor_background: cvt(editor.background),
             editor_border: cvt(editor.border),

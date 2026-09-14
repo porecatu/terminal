@@ -36,13 +36,7 @@
 #   [keybindings]            ADR-0008; catálogo em docs/reference/acoes.md
 #   [session]                PRD-003
 #   [project_file]           PRD-012, ADR-0051  (arquivo .porecatu do projeto)
-#
-# AINDA NÃO AQUI: a seção [git] (PRD-013, ADR-0052 -- consulta ao remoto do
-# Git) está decidida e documentada, e entra neste arquivo junto com o campo
-# correspondente em `Config`. Este arquivo é verificado contra os defaults
-# embutidos por teste (`tests/example_toml.rs`), então chave que o código
-# ainda não conhece reprova o CI: documentar aqui antes da struct existir
-# quebraria a única garantia que este arquivo oferece.
+#   [git]                    PRD-013, ADR-0052  (sincronização com o remoto do Git)
 #
 # ORIGEM DOS VALORES DE APARÊNCIA
 # Cores, dimensões, raios e espaçamentos estão registrados em
@@ -689,6 +683,11 @@ shell = "#5ed3bc"
 # escada da §1.4, e ainda 4.74:1 (passa AA): o caminho é para ser lido e
 # marcado, não apagado.
 stale_cwd = "#828a96"
+# Indicador de commits atrás/à frente do remoto (PRD-013, ADR-0052 §8) -- o
+# segundo item colorido da barra, e o primeiro alvo clicável dela. Mesmo
+# token Acento que `shell` já usa: zero cor nova, mas o PRD-004 exige a
+# chave mesmo assim.                                                   RF-13.7
+ahead_behind = "#5ed3bc"
 
 
 ##############################################################################
@@ -1581,4 +1580,31 @@ trusted_paths = []
 # vez por execução do app (não uma por aba). Não há chave para desligar só a
 # nota -- quem não a quer autoriza o diretório, apaga o arquivo, ou usa
 # `enabled = false` acima.                                               RF-12.6
+
+
+##############################################################################
+# SINCRONIZAÇÃO COM O REMOTO DO GIT — PRD-013
+##############################################################################
+
+# Consulta periódica de quantos commits a branch da aba ativa está atrás do
+# remoto que ela segue, mostrado como segmento clicável na barra de status ao
+# lado da branch (ADR-0049). O clique integra por `pull --ff-only`, só quando
+# não há commits locais à frente -- nunca sozinho. Origem: PRD-013 (RF-13.1 a
+# RF-13.19) e ADR-0052.
+#
+# Não altera a árvore de trabalho, o índice nem o HEAD por si só -- só o
+# clique toca algo, e só por fast-forward. Estado da árvore (sujo/limpo,
+# stage) continua fora: percorre a árvore, o que isto não faz.
+# Classe de recarga: [A].
+[git]
+# Intervalo entre consultas, em SEGUNDOS (as outras chaves de tempo da config
+# são em milissegundos; um intervalo de rede em ms seria um número de seis
+# dígitos que ninguém lê). `0` desliga o recurso INTEIRO: nenhuma consulta,
+# nenhum indicador, nenhum processo lançado, nenhum prazo agendado -- o app
+# se comporta exatamente como antes deste recurso existir.              RF-13.2
+#
+# Valor entre 1 e 29 é elevado a 30 e o app informa uma vez que elevou --
+# saturar em silêncio esconderia que o número não vale, e recusar a config
+# derrubaria mais do que o erro merece.                                 RF-13.3
+remote_poll_interval_secs = 300
 

@@ -15,7 +15,7 @@
 //! [`layout_status_bar`], pintura em [`paint_status_bar`], e nada aqui
 //! chama `Instant::now` nem toca estado.
 
-use porecatu_render::{Color, FontFace, Primitive, Rect, TextMeasurer, TextRun, icon};
+use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, TextMeasurer, TextRun, icon};
 
 use crate::chrome::ICON_FONT;
 use crate::palette::ResolvedPalette;
@@ -62,6 +62,14 @@ pub enum SegmentRole {
     /// segmento com ícone -- e o ícone **é** o indicador de "há um
     /// repositório aqui": fora de um, o segmento inteiro some.
     GitBranch,
+    /// Commits atrás/à frente do remoto (PRD-013, ADR-0052 §8). `clickable`
+    /// é `false` quando a branch também tem commits locais à frente --
+    /// `pull --ff-only` falharia por definição, e a barra não oferece um
+    /// alvo que já sabe que não funciona (RF-13.9). O clique em si é a
+    /// etapa 4; aqui é só o que muda a cor e a affordance de hover.
+    AheadBehind {
+        clickable: bool,
+    },
     Group,
     Encoding,
     System,
@@ -83,12 +91,30 @@ pub struct StatusBarContent {
     /// Branch do repositório do diretório da aba, ou `None` fora de um
     /// repositório -- e aí nem o ícone aparece (ADR-0049 §5).
     pub git_branch: Option<String>,
+    /// Commits atrás/à frente do remoto da branch acima (PRD-013,
+    /// ADR-0052 §8), ou `None` sem commits novos -- e aí o segmento
+    /// inteiro some, nem apagado nem "0 atrás" (RF-13.8).
+    pub ahead_behind: Option<AheadBehindContent>,
     /// Nome do grupo da aba ativa. `None` em grupo implícito.
     pub group: Option<String>,
     /// Sistema, ex. `"windows"`. Sem a versão do app: pedido do dono do
     /// produto depois de ver a barra em tela -- ela não muda entre
     /// execuções e não é o que se consulta de relance.
     pub system: String,
+}
+
+/// Conteúdo do segmento de commits atrás/à frente (PRD-013, ADR-0052
+/// §8), já resolvido pelo layout puro do mapa de sincronização -- este
+/// módulo não conhece o mapa nem o repositório, só o rótulo pronto e se
+/// o clique (etapa 4) poderia integrar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AheadBehindContent {
+    /// `"3 commits atrás"`, `"2 atrás, 1 à frente"` -- já com singular e
+    /// plural corretos (`git::ahead_behind_label`).
+    pub label: String,
+    /// `false` quando há commits locais à frente: `pull --ff-only`
+    /// falharia por definição (RF-13.9).
+    pub clickable: bool,
 }
 
 /// Um segmento já posicionado, pronto para desenhar.
@@ -321,7 +347,14 @@ pub fn layout_status_bar(
     let branch_width = branch
         .map(|b| icon_em(style) + text_width(measurer, b, size) + gap)
         .unwrap_or(0.0);
-    let cwd_limit = (left_limit - group_width - branch_width).max(x);
+    let ahead_behind = content
+        .ahead_behind
+        .as_ref()
+        .filter(|ab| !ab.label.is_empty());
+    let ahead_behind_width = ahead_behind
+        .map(|ab| icon_em(style) + text_width(measurer, &ab.label, size) + gap)
+        .unwrap_or(0.0);
+    let cwd_limit = (left_limit - group_width - branch_width - ahead_behind_width).max(x);
     push_left(
         &mut segments,
         &mut x,
@@ -357,6 +390,30 @@ pub fn layout_status_bar(
             x += width + gap;
         }
     }
+    // Commits atrás/à frente logo depois da branch: a contagem é
+    // propriedade dela, como a branch é propriedade do diretório
+    // (ADR-0052 §8). Mesmo tratamento de "nunca truncado" da branch:
+    // some por inteiro se não couber, em vez de mostrar metade de um
+    // número.
+    if let Some(ab) = ahead_behind {
+        let em = icon_em(style);
+        let width = em + text_width(measurer, &ab.label, size);
+        if x + width <= left_limit {
+            segments.push(PlacedSegment {
+                rect: Rect {
+                    x,
+                    y: bar_rect.y,
+                    width,
+                    height: bar_height,
+                },
+                text: ab.label.clone(),
+                role: SegmentRole::AheadBehind {
+                    clickable: ab.clickable,
+                },
+            });
+            x += width + gap;
+        }
+    }
     if let Some(group) = group {
         push_left(
             &mut segments,
@@ -382,10 +439,51 @@ pub fn layout_status_bar(
     }
 }
 
+/// O que está sob um ponto da barra (ADR-0052 §9) -- irmã de
+/// [`crate::search_bar::search_bar_hit`], e pelo mesmo motivo: projeta o
+/// **mesmo** [`StatusBarLayout`] que [`paint_status_bar`] e a árvore de
+/// acessibilidade (`access.rs`) consomem, para os três nunca discordarem
+/// de onde o alvo está -- é a garantia de que o clique nunca acerta um
+/// lugar e o desenho outro.
+///
+/// Só o indicador de commits atrás/à frente é alvo, e só quando clicável:
+/// `clickable: false` (RF-13.9, branch divergida) não é alvo nenhum -- o
+/// app não oferece um clique que já sabe que falha, mesmo sob o cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusBarHit {
+    AheadBehind,
+}
+
+pub fn hit_test(layout: &StatusBarLayout, point: (f32, f32)) -> Option<StatusBarHit> {
+    let (x, y) = point;
+    layout.segments.iter().find_map(|s| {
+        let inside = x >= s.rect.x
+            && x < s.rect.x + s.rect.width
+            && y >= s.rect.y
+            && y < s.rect.y + s.rect.height;
+        if inside && matches!(s.role, SegmentRole::AheadBehind { clickable: true }) {
+            Some(StatusBarHit::AheadBehind)
+        } else {
+            None
+        }
+    })
+}
+
 /// Primitivas da barra, na camada `Chrome`. **Sem sombra**: a barra é
 /// encostada e opaca, não flutua -- a lista de superfícies com sombra do
 /// ADR-0032 §2 é exaustiva e não muda (mesma razão da barra de busca).
-pub fn paint_status_bar(layout: &StatusBarLayout, pal: &ResolvedPalette) -> Vec<Primitive> {
+///
+/// `ahead_behind_hovered` é a única entrada de mouse desta função pura:
+/// `true` quando o cursor está sobre o retângulo do segmento clicável
+/// (ADR-0052 §8, sublinhado sob o cursor -- a mesma affordance do
+/// hyperlink OSC 8). Quem faz o hit-test é o chamador, com o layout já
+/// pronto; esta etapa não mexe em cursor de mouse nem em precedência de
+/// resize -- isso é a etapa 4, junto do clique em si.
+pub fn paint_status_bar(
+    layout: &StatusBarLayout,
+    pal: &ResolvedPalette,
+    ahead_behind_hovered: bool,
+) -> Vec<Primitive> {
     if layout.bar_rect.height <= 0.0 {
         return Vec::new();
     }
@@ -409,19 +507,26 @@ pub fn paint_status_bar(layout: &StatusBarLayout, pal: &ResolvedPalette) -> Vec<
     let text_y = layout.bar_rect.y + (layout.bar_rect.height - layout.font_size) / 2.0;
     for segment in &layout.segments {
         let color = segment_color(segment.role, pal);
-        // O único segmento com ícone. Ele é centrado pela própria em
-        // (`centered_origin`, não a mesma conta do texto: a face de ícones
-        // declara ascent = em e descent = 0, e centrar como texto desenha
-        // o ícone baixo demais), e o nome começa depois do avanço de 1 em.
-        let text_x = if segment.role == SegmentRole::GitBranch {
+        // O ícone é centrado pela própria em (`centered_origin`, não a
+        // mesma conta do texto: a face de ícones declara ascent = em e
+        // descent = 0, e centrar como texto desenha o ícone baixo
+        // demais), e o texto começa depois do avanço de 1 em -- mesmo
+        // tratamento para os dois segmentos com ícone (ADR-0052 §8: a
+        // mesma em do ícone de branch).
+        let icon = match segment.role {
+            SegmentRole::GitBranch => Some(&icon::GIT_BRANCH),
+            SegmentRole::AheadBehind { .. } => Some(&icon::ARROW_DOWN),
+            _ => None,
+        };
+        let text_x = if let Some(icon) = icon {
             let em = layout.icon_em;
             let icon_rect = Rect {
                 width: em,
                 ..segment.rect
             };
             out.push(Primitive::Text(TextRun {
-                origin: icon::GIT_BRANCH.centered_origin(icon_rect, em),
-                text: icon::GIT_BRANCH.glyph.to_owned(),
+                origin: icon.centered_origin(icon_rect, em),
+                text: icon.glyph.to_owned(),
                 font: ICON_FONT,
                 size_px: em,
                 color,
@@ -437,6 +542,25 @@ pub fn paint_status_bar(layout: &StatusBarLayout, pal: &ResolvedPalette) -> Vec<
             size_px: layout.font_size,
             color,
         }));
+        // ADR-0052 §8: sublinhado sob o cursor, a mesma affordance do
+        // hyperlink OSC 8 (`paint_row_underlines`) -- mesma espessura,
+        // ~10% da fonte, mínimo 1px. Só quando clicável: sem commits à
+        // frente escondendo o botão, sublinhar prometeria um clique que
+        // já se sabe que falha.
+        if matches!(segment.role, SegmentRole::AheadBehind { clickable: true })
+            && ahead_behind_hovered
+        {
+            let thickness = (layout.font_size * 0.1).max(1.0);
+            out.push(Primitive::Quad(Quad {
+                rect: Rect {
+                    x: segment.rect.x,
+                    y: text_y + layout.font_size,
+                    width: segment.rect.width,
+                    height: thickness,
+                },
+                color,
+            }));
+        }
     }
     out
 }
@@ -448,6 +572,10 @@ fn segment_color(role: SegmentRole, pal: &ResolvedPalette) -> Color {
         // alfa sobre a cor de base -- a 10.5px o alfa apagava o caminho
         // em vez de marcá-lo (ADR-0048 §4).
         SegmentRole::Cwd { stale: true } => pal.status_bar_stale_cwd,
+        // ADR-0052 §8: o segundo item colorido da barra -- clicável ou
+        // não, o par de números é sempre acento; o que muda com
+        // `clickable` é só a affordance de hover (sublinhado).
+        SegmentRole::AheadBehind { .. } => pal.status_bar_ahead_behind,
         _ => pal.status_bar_text,
     }
 }
@@ -465,6 +593,7 @@ mod tests {
             cwd: "~/projetos/porecatu".to_owned(),
             cwd_is_stale: false,
             git_branch: None,
+            ahead_behind: None,
             group: Some("producao".to_owned()),
             system: "windows".to_owned(),
         }
@@ -488,14 +617,14 @@ mod tests {
     }
 
     fn primitive_count_of_quads(layout: &StatusBarLayout) -> usize {
-        paint_status_bar(layout, &pal())
+        paint_status_bar(layout, &pal(), false)
             .iter()
             .filter(|p| matches!(p, Primitive::Quad(_)))
             .count()
     }
 
     fn text_count(layout: &StatusBarLayout) -> usize {
-        paint_status_bar(layout, &pal())
+        paint_status_bar(layout, &pal(), false)
             .iter()
             .filter(|p| matches!(p, Primitive::Text(_)))
             .count()
@@ -537,7 +666,7 @@ mod tests {
         // o topo da faixa -- foi o que se viu em tela depois de o quadro
         // passar a encostar nela.
         let layout = layout_with(&content(), &TabBarStyle::DEFAULT, W);
-        let primitives = paint_status_bar(&layout, &pal());
+        let primitives = paint_status_bar(&layout, &pal(), false);
         assert!(
             !primitives.iter().any(|p| matches!(p, Primitive::Quad(_))),
             "nenhuma geometria opaca: só os runs de texto"
@@ -570,7 +699,7 @@ mod tests {
         let mut style = TabBarStyle::DEFAULT;
         style.status_bar_enabled = false;
         let layout = layout_with(&content(), &style, W);
-        assert!(paint_status_bar(&layout, &pal()).is_empty());
+        assert!(paint_status_bar(&layout, &pal(), false).is_empty());
     }
 
     #[test]
@@ -713,7 +842,7 @@ mod tests {
         c.git_branch = None;
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
         assert!(role_of(&layout, SegmentRole::GitBranch).is_none());
-        let primitives = paint_status_bar(&layout, &pal());
+        let primitives = paint_status_bar(&layout, &pal(), false);
         assert!(
             !primitives.iter().any(|p| matches!(
                 p,
@@ -728,7 +857,7 @@ mod tests {
         let mut c = content();
         c.git_branch = Some("main".to_owned());
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
-        let primitives = paint_status_bar(&layout, &pal());
+        let primitives = paint_status_bar(&layout, &pal(), false);
         let icon_run = primitives
             .iter()
             .find_map(|p| match p {
@@ -740,7 +869,7 @@ mod tests {
         assert_eq!(
             icon_run.color,
             pal().status_bar_text,
-            "o acento é só do shell: um segundo item colorido apagaria a distinção (§2.8)"
+            "a branch é cor de base -- o acento é do shell e do indicador de commits (§2.8)"
         );
 
         let git = role_of(&layout, SegmentRole::GitBranch).unwrap();
@@ -766,6 +895,243 @@ mod tests {
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, 400.0);
         if let Some(git) = role_of(&layout, SegmentRole::GitBranch) {
             assert_eq!(git.text, "feat/uma-branch-de-nome-bem-longo");
+        }
+    }
+
+    #[test]
+    fn ahead_behind_segment_carries_the_icon_and_the_label() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "3 commits atrás".to_owned(),
+            clickable: true,
+        });
+        let style = TabBarStyle::DEFAULT;
+        let layout = layout_with(&c, &style, W);
+        let segment = role_of(&layout, SegmentRole::AheadBehind { clickable: true })
+            .expect("segmento de commits atrás/à frente");
+        assert_eq!(segment.text, "3 commits atrás");
+
+        let mut m = TextMeasurer::new();
+        let label_width = text_width(&mut m, "3 commits atrás", style.status_bar_font_size);
+        assert!((segment.rect.width - (icon_em(&style) + label_width)).abs() < 0.01);
+    }
+
+    #[test]
+    fn ahead_behind_sits_between_the_branch_and_the_group() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "3 commits atrás".to_owned(),
+            clickable: true,
+        });
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let order: Vec<_> = layout
+            .segments
+            .iter()
+            .filter(|s| !is_right(s.role))
+            .map(|s| s.role)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                SegmentRole::Shell,
+                SegmentRole::Cwd { stale: false },
+                SegmentRole::GitBranch,
+                SegmentRole::AheadBehind { clickable: true },
+                SegmentRole::Group,
+            ]
+        );
+    }
+
+    #[test]
+    fn no_new_commits_the_whole_segment_disappears() {
+        // RF-13.8: nem apagado, nem "0 atrás" -- a ausência é a resposta,
+        // como o ícone de repositório fora de um `.git` (ADR-0049 §5).
+        let c = content();
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        assert!(role_of(&layout, SegmentRole::AheadBehind { clickable: true }).is_none());
+        let primitives = paint_status_bar(&layout, &pal(), false);
+        assert!(
+            !primitives.iter().any(|p| matches!(
+                p,
+                Primitive::Text(run) if run.text == icon::ARROW_DOWN.glyph
+            )),
+            "sem commits novos, nem o ícone é desenhado"
+        );
+    }
+
+    #[test]
+    fn a_narrow_window_drops_ahead_behind_rather_than_truncating_it() {
+        // Nunca truncado (ADR-0052 §8) -- mesma regra da branch.
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "2 atrás, 1 à frente".to_owned(),
+            clickable: false,
+        });
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, 380.0);
+        if let Some(segment) = role_of(&layout, SegmentRole::AheadBehind { clickable: false }) {
+            assert_eq!(segment.text, "2 atrás, 1 à frente");
+        }
+    }
+
+    #[test]
+    fn ahead_behind_is_accent_coloured_whether_clickable_or_not() {
+        let pal = pal();
+        assert_eq!(
+            segment_color(SegmentRole::AheadBehind { clickable: true }, &pal),
+            pal.status_bar_ahead_behind
+        );
+        assert_eq!(
+            segment_color(SegmentRole::AheadBehind { clickable: false }, &pal),
+            pal.status_bar_ahead_behind
+        );
+    }
+
+    #[test]
+    fn hover_underlines_the_clickable_segment_only() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "3 commits atrás".to_owned(),
+            clickable: true,
+        });
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+
+        let not_hovered = paint_status_bar(&layout, &pal(), false);
+        assert!(
+            !not_hovered.iter().any(|p| matches!(p, Primitive::Quad(_))),
+            "sem hover, sem sublinhado"
+        );
+
+        let hovered = paint_status_bar(&layout, &pal(), true);
+        assert!(
+            hovered.iter().any(|p| matches!(p, Primitive::Quad(_))),
+            "sob o cursor, o sublinhado aparece"
+        );
+    }
+
+    #[test]
+    fn a_diverged_branch_is_not_underlined_even_when_hovered() {
+        // RF-13.9: sem número à frente > 0, o `pull --ff-only` falharia
+        // por definição -- sublinhar prometeria um clique que já se sabe
+        // que não funciona.
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "2 atrás, 1 à frente".to_owned(),
+            clickable: false,
+        });
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let primitives = paint_status_bar(&layout, &pal(), true);
+        assert!(
+            !primitives.iter().any(|p| matches!(p, Primitive::Quad(_))),
+            "não clicável, sem sublinhado mesmo sob o cursor"
+        );
+    }
+
+    #[test]
+    fn hit_test_finds_the_clickable_indicator() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "3 commits atrás".to_owned(),
+            clickable: true,
+        });
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let segment = role_of(&layout, SegmentRole::AheadBehind { clickable: true })
+            .expect("indicador no layout");
+        let inside = (
+            segment.rect.x + segment.rect.width / 2.0,
+            segment.rect.y + segment.rect.height / 2.0,
+        );
+        assert_eq!(hit_test(&layout, inside), Some(StatusBarHit::AheadBehind));
+    }
+
+    #[test]
+    fn hit_test_misses_everywhere_else() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "3 commits atrás".to_owned(),
+            clickable: true,
+        });
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        assert_eq!(hit_test(&layout, (0.0, 0.0)), None, "fora da faixa");
+        let branch = role_of(&layout, SegmentRole::GitBranch).expect("branch no layout");
+        assert_eq!(
+            hit_test(&layout, (branch.rect.x + 1.0, branch.rect.y + 1.0)),
+            None,
+            "a branch não é alvo, só o indicador"
+        );
+    }
+
+    #[test]
+    fn hit_test_never_targets_a_diverged_indicator() {
+        // RF-13.9: sem número à frente > 0, o `pull --ff-only` falharia por
+        // definição -- não há alvo, mesmo em cima do retângulo.
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "2 atrás, 1 à frente".to_owned(),
+            clickable: false,
+        });
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let segment = role_of(&layout, SegmentRole::AheadBehind { clickable: false })
+            .expect("indicador no layout");
+        let inside = (
+            segment.rect.x + segment.rect.width / 2.0,
+            segment.rect.y + segment.rect.height / 2.0,
+        );
+        assert_eq!(hit_test(&layout, inside), None);
+    }
+
+    #[test]
+    fn the_indicator_never_reaches_a_diagonal_resize_corner() {
+        // ADR-0052 §9: "os cantos de redimensionamento diagonal nunca são
+        // alcançados, porque o indicador nasce depois do padding e de três
+        // segmentos" -- geometria provada, não raciocínio confiado. Os
+        // quatro cantos do retângulo do indicador, testados contra a mesma
+        // `resize_direction_at` que decide o cursor e o clique em `lib.rs`,
+        // nunca podem cair numa das quatro direções diagonais.
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "3 commits atrás".to_owned(),
+            clickable: true,
+        });
+        let style = TabBarStyle::DEFAULT;
+        let layout = layout_with(&c, &style, W);
+        let segment = role_of(&layout, SegmentRole::AheadBehind { clickable: true })
+            .expect("indicador no layout");
+        let border = porecatu_config::Config::default()
+            .appearance
+            .window_controls
+            .resize_border as f32;
+        let corners = [
+            (segment.rect.x, segment.rect.y),
+            (segment.rect.x + segment.rect.width, segment.rect.y),
+            (segment.rect.x, segment.rect.y + segment.rect.height),
+            (
+                segment.rect.x + segment.rect.width,
+                segment.rect.y + segment.rect.height,
+            ),
+        ];
+        for point in corners {
+            let direction = crate::titlebar::resize_direction_at(point, W, H, false, border);
+            assert!(
+                !matches!(
+                    direction,
+                    Some(
+                        winit::window::ResizeDirection::NorthWest
+                            | winit::window::ResizeDirection::NorthEast
+                            | winit::window::ResizeDirection::SouthWest
+                            | winit::window::ResizeDirection::SouthEast
+                    )
+                ),
+                "canto {point:?} do indicador cai em zona de resize diagonal: {direction:?}"
+            );
         }
     }
 
@@ -824,6 +1190,8 @@ mod tests {
             SegmentRole::Shell,
             SegmentRole::Cwd { stale: false },
             SegmentRole::Cwd { stale: true },
+            SegmentRole::GitBranch,
+            SegmentRole::AheadBehind { clickable: true },
             SegmentRole::Group,
             SegmentRole::Encoding,
             SegmentRole::System,
@@ -840,13 +1208,21 @@ mod tests {
     }
 
     #[test]
-    fn shell_is_the_only_coloured_segment() {
+    fn shell_and_ahead_behind_are_the_only_coloured_segments() {
+        // ADR-0052 §8 revisa o ADR-0048 §3: o nome do shell deixa de ser
+        // o único item colorido -- o segmento de commits atrás/à frente
+        // ganha o mesmo acento. A branch continua na cor de base.
         let pal = pal();
         assert_eq!(
             segment_color(SegmentRole::Shell, &pal),
             pal.status_bar_shell
         );
+        assert_eq!(
+            segment_color(SegmentRole::AheadBehind { clickable: true }, &pal),
+            pal.status_bar_ahead_behind
+        );
         for role in [
+            SegmentRole::GitBranch,
             SegmentRole::Group,
             SegmentRole::Encoding,
             SegmentRole::System,

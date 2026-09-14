@@ -216,6 +216,8 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
     if old.project_file != new.project_file {
         deferred.push("[project_file]: reinicie o app".to_owned());
     }
+    // [git] não entra aqui: é classe A -- o prazo da consulta é recalculado
+    // a cada volta do laço lendo a config atual (ADR-0052 §10).
 
     ReloadEffects {
         grid_changed,
@@ -301,6 +303,17 @@ mod tests {
         let mut new = base();
         new.appearance.status_bar.foreground = new.appearance.status_bar.shell;
         assert!(!diff(&base(), &new).grid_changed);
+    }
+
+    #[test]
+    fn git_poll_interval_change_is_class_a_not_deferred() {
+        // ADR-0052 §10: classe A -- o prazo é recalculado a cada volta do
+        // laço de eventos lendo a config atual, sem trabalho de hot reload.
+        let mut new = base();
+        new.git.remote_poll_interval_secs = 0;
+        let effects = diff(&base(), &new);
+        assert!(!effects.grid_changed);
+        assert!(effects.deferred.is_empty());
     }
 
     #[test]

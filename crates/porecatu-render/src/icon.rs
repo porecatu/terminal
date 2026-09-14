@@ -134,9 +134,17 @@ pub const GIT_BRANCH: Icon = Icon {
     ink_height_em: 0.840,
 };
 
+/// `arrow-down` -- indicador de commits atrás do remoto na barra de status
+/// (PRD-013, ADR-0052 §8).
+pub const ARROW_DOWN: Icon = Icon {
+    glyph: "\u{e042}",
+    ink_width_em: 0.670,
+    ink_height_em: 0.670,
+};
+
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 10] = [
+pub const ALL: [(&str, Icon); 11] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -147,6 +155,7 @@ pub const ALL: [(&str, Icon); 10] = [
     ("square", MAXIMIZE),
     ("copy", RESTORE),
     ("git-branch", GIT_BRANCH),
+    ("arrow-down", ARROW_DOWN),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
