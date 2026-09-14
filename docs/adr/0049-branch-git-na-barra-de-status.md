@@ -1,8 +1,8 @@
 # ADR-0049 — Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore
 
-**Status:** Aceito
+**Status:** Aceito · §7 Superseded by [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) (**parcial**: só ahead/behind; sujo/limpo e stage continuam fora)
 **Data:** 2026-09-09
-**Relacionados:** ADR-0003, ADR-0007, ADR-0024, ADR-0034, ADR-0038, ADR-0039, ADR-0048, PRD-009
+**Relacionados:** ADR-0003, ADR-0007, ADR-0024, ADR-0034, ADR-0038, ADR-0039, ADR-0048, ADR-0052, PRD-009, PRD-013
 **Supersedes:** ADR-0048 §8 (**parcial**: só a linha que põe `git` na lista do que nunca entra)
 
 ## Contexto
@@ -76,6 +76,8 @@ A branch é a do `cwd` que a barra conhece. Sem OSC 7, esse `cwd` é o de spawn 
 ### 7. O estado da árvore continua fora
 
 Não é "ainda não", é a fronteira desta decisão. Sujo/limpo, contagem de ahead/behind, arquivos em stage: todos precisam percorrer a árvore, todos custam ordens de grandeza mais, e nenhum tem um `mtime` único que diga "mudou". Entrar exigiria thread e um ADR que enfrente o RF-9.8 de verdade — não a extensão deste.
+
+> **Revisto pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md).** O parágrafo acima agrupa três coisas sob uma razão que só vale para duas — o mesmo erro, na mesma forma, que este ADR apontou no ADR-0048 §8. **A contagem de ahead/behind não percorre a árvore**: ela consulta a rede e caminha o grafo de commits. É cara por outro motivo, e é esse outro motivo que o ADR-0052 §1 enfrenta, emendando o RF-9.8 em vez de contorná-lo. **Sujo/limpo e arquivos em stage continuam fora**, e a razão foi reescrita em base nova no ADR-0052 §2: eles ficam fora porque percorrem a árvore de trabalho, **não** porque exigiriam uma thread — a thread nunca foi a razão, foi consequência dela. A frase "entrar exigiria thread" é a única linha desta seção que não sobrevive.
 
 ## Alternativas consideradas
 

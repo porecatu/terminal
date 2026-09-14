@@ -37,6 +37,13 @@
 #   [session]                PRD-003
 #   [project_file]           PRD-012, ADR-0051  (arquivo .porecatu do projeto)
 #
+# AINDA NÃO AQUI: a seção [git] (PRD-013, ADR-0052 -- consulta ao remoto do
+# Git) está decidida e documentada, e entra neste arquivo junto com o campo
+# correspondente em `Config`. Este arquivo é verificado contra os defaults
+# embutidos por teste (`tests/example_toml.rs`), então chave que o código
+# ainda não conhece reprova o CI: documentar aqui antes da struct existir
+# quebraria a única garantia que este arquivo oferece.
+#
 # ORIGEM DOS VALORES DE APARÊNCIA
 # Cores, dimensões, raios e espaçamentos estão registrados em
 # docs/design/especificacao-visual.md (seção 1, Tokens), e não são
@@ -1574,3 +1581,4 @@ trusted_paths = []
 # vez por execução do app (não uma por aba). Não há chave para desligar só a
 # nota -- quem não a quer autoriza o diretório, apaga o arquivo, ou usa
 # `enabled = false` acima.                                               RF-12.6
+

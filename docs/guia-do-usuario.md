@@ -223,7 +223,7 @@ A faixa no rodapé da janela mostra, da aba ativa:
 
 | Zona | O que aparece |
 |---|---|
-| Esquerda | nome do shell (o único item colorido), diretório atual, branch do Git, grupo da aba |
+| Esquerda | nome do shell, diretório atual, branch do Git, quantos commits atrás do remoto, grupo da aba |
 | Direita | codificação e o sistema |
 
 O diretório aparece com `~` no lugar da sua pasta pessoal, e é cortado à
@@ -252,15 +252,71 @@ Com o `HEAD` destacado (depois de um `git checkout <commit>`), o lugar da
 branch traz os sete primeiros caracteres do commit, como o próprio `git`
 abrevia.
 
-A barra mostra **só a branch**: se há alterações não commitadas, quantos
-commits você está à frente ou atrás do remoto, o que está em stage — nada
-disso aparece. Saber a branch é ler um arquivo de trinta bytes; saber o
-resto é percorrer a árvore inteira, e o Porecatu não faz isso enquanto
-você digita.
+Sobre o **estado dos seus arquivos**, a barra não diz nada: alterações não
+commitadas, o que está em stage, arquivos novos — nada disso aparece.
+Saber a branch é ler um arquivo de trinta bytes; saber o resto é percorrer
+a árvore inteira, e o Porecatu não faz isso enquanto você digita.
+
+Quantos commits você está **atrás do remoto**, esse sim aparece — é a
+seção seguinte, e é a única coisa que o Porecatu consulta pela rede.
 
 O nome da branch vem do diretório que a barra conhece — então, se o
 diretório estiver no tom apagado (acima), a branch pode ser a de outro
 repositório. A integração de shell resolve as duas coisas de uma vez.
+
+### Commits novos no remoto
+
+De tempos em tempos, o Porecatu pergunta ao servidor se a branch da aba
+ativa tem commits que você ainda não tem. Havendo, aparece um número ao
+lado da branch:
+
+```
+  pwsh   ~/Projetos/api   ⑂ main   ↓ 3 commits atrás
+```
+
+**Esse número é clicável.** Clicar traz os commits — em segundo plano, sem
+travar nada e sem você sair do que estava fazendo. Nada é trazido sem esse
+clique: o Porecatu nunca mexe nos seus arquivos sozinho.
+
+Sem commits novos, o número não existe. Não há "0 atrás" nem versão
+apagada — como o ícone de branch, a ausência já é a resposta.
+
+**Quando você também tem commits locais ainda não enviados**, o rótulo
+muda e deixa de ser clicável:
+
+```
+  pwsh   ~/Projetos/api   ⑂ main   ↓ 2 atrás, 1 à frente
+```
+
+Nesse caso as duas histórias divergiram, e trazer os commits exigiria um
+merge ou um rebase — decisão sua, tomada no terminal, onde você vê o que
+está fazendo. O Porecatu não oferece um botão que ele já sabe que não
+funcionaria.
+
+Se o clique não der certo — arquivos modificados no caminho, senha
+recusada, rede fora —, o app avisa no canto superior, com a mensagem que o
+`git` deu. Clicar e não acontecer nada é o único resultado que não existe.
+
+O que o Porecatu **não** faz aqui: não envia commits, não faz merge, não
+faz rebase, não resolve conflito e não escolhe servidor (usa o que a
+própria branch já segue). Uma branch que você nunca enviou não é
+consultada e não mostra número.
+
+**Mudar o intervalo, ou desligar:**
+
+```toml
+[git]
+remote_poll_interval_secs = 300   # 0 desliga
+```
+
+O padrão é 300 segundos (cinco minutos). **`0` desliga tudo**: nenhuma
+consulta, nenhum número, nenhuma conversa com a rede. Vale desligar se
+você trabalha offline, se a rede é limitada, ou se abre repositórios de
+terceiros que prefere não consultar — a consulta não toca nos seus
+arquivos, mas escreve dentro da pasta `.git` do repositório.
+
+Valores entre 1 e 29 viram 30, e o app avisa que subiu: um `1` ali seria
+uma consulta de rede por segundo, em cada repositório aberto.
 
 ### Desligar
 
@@ -274,5 +330,7 @@ grade cresce de volta, na hora, sem reiniciar. Cores, altura e tamanho da
 fonte também são configuráveis; ver `[appearance.status_bar]` no
 [arquivo de exemplo](config/porecatu.example.toml).
 
-A barra não tem nada clicável: a borda inferior da janela continua sendo
-a área de redimensionar, mesmo em cima dela.
+A única coisa clicável na barra é o número de commits atrás do remoto
+(acima). Em todo o resto dela, a borda inferior da janela continua sendo
+a área de redimensionar, mesmo em cima da barra — inclusive nos cantos,
+que o número nunca alcança.

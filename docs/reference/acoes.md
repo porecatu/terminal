@@ -255,7 +255,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Treze comportamentos das F2 e F3 têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete últimos da F3. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Catorze comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e o último é fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -272,5 +272,6 @@ Treze comportamentos das F2 e F3 têm requisito aprovado e **não recebem nome d
 | Arrastar aba para dentro ou fora de um grupo | RF-1.16, RF-2.18 | o grupo de destino vem dos limites visuais sob o cursor; `tab.move_to_group` é o equivalente sem mouse, e por isso é `Arg` |
 | Arrastar o rótulo do grupo | RF-2.19 | move o grupo inteiro para uma fronteira contínua; nenhum RF pede equivalente de teclado |
 | Botão "+" ao final de um grupo | RF-2.8 | o alvo é o wrapper clicado; `group.new_tab` **é** a ação que ele invoca, e continua sem default de tecla |
+| Clicar no indicador de commits atrás do remoto, na barra de status | [RF-13.12](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §9 | integra commits no repositório da aba ativa, e uma tecla faria isso no repositório que a aba ativa **por acaso** tem — a mesma classe de decisão que o [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md) §4 registrou para `trusted_paths`: tomada uma vez, esquecida depois. O clique mira o que descreve, e só existe quando há o que integrar |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

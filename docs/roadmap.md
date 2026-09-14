@@ -644,6 +644,33 @@ A razão de existir é uma métrica que o v1 declarou atingida e não estava. O 
 
 ---
 
+## Depois do v1 — sincronização com o remoto do Git — planejada
+
+Fora da ordem de fases, como as duas entradas acima, e pelo mesmo caminho do arquivo de projeto: **requisito novo**, não rascunho promovido. O [PRD-013](prd/prd-013-sincronizacao-com-o-remoto-do-git.md) nasceu de pedido direto do dono do produto sobre a barra já em uso, e o [ADR-0052](adr/0052-sincronizacao-com-o-remoto-do-git.md) fecha o que ele deixa em aberto.
+
+A razão de existir está escrita como convite no [ADR-0049](adr/0049-branch-git-na-barra-de-status.md) §7: *"entrar exigiria thread e um ADR que enfrente o RF-9.8 de verdade"*. Ao escrever esse ADR, descobriu-se que aquele parágrafo agrupava três coisas sob uma razão que só vale para duas — **a contagem de ahead/behind não percorre a árvore de trabalho**, ela consulta a rede e caminha o grafo de commits. Sujo/limpo e stage continuam fora, agora com a razão certa registrada.
+
+**Quatro etapas:**
+
+1. **Documentação e decisão — feita.** PRD-013; ADR-0052; os blockquotes de revisão dentro das quatro seções supersedidas (ADR-0049 §7, ADR-0048 §3, §5 e §8) e as emendas no PRD-009 (RF-9.8, RF-9.9 e o bullet de "Fora de escopo"); a §2.8, a §1.5, a tabela de fases e a §4.4 da especificação visual; a linha em `docs/reference/acoes.md`; as duas tabelas da §2 da [arquitetura](arquitetura.md); guia do usuário, README, CLAUDE.md e índices.
+
+   **A seção `[git]` do arquivo de exemplo não entrou aqui**, e a razão vale registrar porque contraria o que as duas entradas anteriores fizeram: `porecatu.example.toml` é verificado contra `Config::default()` por teste (`tests/example_toml.rs` exige **zero** chaves desconhecidas), então documentar a chave antes de o campo existir reprova o CI — foi verificado, não suposto. Ela entra na etapa 2, junto da struct. O cabeçalho do arquivo de exemplo carrega a nota apontando para cá enquanto isso.
+2. **Config e funções puras** — `[git]` em `porecatu-config` (`remote_poll_interval_secs`, default 300, piso 30 com aviso) **e no arquivo de exemplo, na mesma leva**, mais a chave de **cor** do indicador em `[appearance.status_bar]` (o PRD-004 não admite cor no código, e a métrica dele de valor de aparência hardcoded é zero) — as duas únicas chaves que o recurso acrescenta, uma de comportamento e uma de aparência; teste fixando a classe de recarga **A** ao lado do que já fixa a mesma coisa para as cores da barra. Em `porecatu-ui`, o módulo que já lê a branch ganha as funções puras: parsing da saída do `rev-list`, intervalo efetivo, quando consultar, o que fazer com um resultado que chega, o rótulo com singular/plural e o estado divergente, o vetor de não-interação, a classificação de falha e a decisão de poder ou não integrar. **Zero comportamento novo observável.**
+3. **Thread, consulta e o segmento** — variante nova no canal de eventos; o mapa por repositório em `App`; o prazo encadeado em `schedule_next_wake`; a thread de vida curta com o processo `git`, a supressão de console no Windows, o vetor de não-interação e o watchdog; o `SegmentRole` novo no layout e no pintor; a projeção em `access.rs`. A API que lê a branch cresce um degrau, para quem chama distinguir branch de `HEAD` destacado. **Somente leitura**: o indicador aparece, o clique ainda não existe.
+4. **Clique, integração e guia** — o teste de acerto no layout; a precedência contra a borda de resize **nos dois caminhos**, clique e cursor; a thread do `pull --ff-only`; o resultado no canal 1 do [ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md); verificação ao vivo e a seção do guia.
+
+**Escopo:** RF-13.1 a RF-13.19, todos. Nada diferido — o PRD foi escrito já sem o que ficaria de fora.
+
+**Aparência:** **uma decisão**, e está no [ADR-0052](adr/0052-sincronizacao-com-o-remoto-do-git.md) §8 com as alternativas recusadas. O indicador é o **segundo item colorido** da barra e o **primeiro alvo clicável** dela, o que revisa duas linhas do ADR-0048 — as duas por decisão do dono do produto, sobre opções mostradas. **Zero cor nova** (o acento `#5ed3bc` já era token com outros consumidores) e **um ícone novo**, da face Lucide, que não é subsetada. O [ADR-0032](adr/0032-interface-do-v1-fechada.md) continua fechado: a mudança das seções 1/2 da especificação passou pelo ADR que ele exige.
+
+**Dependências:** **nenhuma**. O `git` é o do sistema, lançado como processo pela biblioteca padrão — o primeiro lançamento de processo do projeto fora do PTY sem crate wrapper, e ele não precisa de um porque não há `unsafe` a encapsular (a flag que suprime a janela de console é API segura). `unsafe_code = "deny"` segue sem exceção, e a tabela de stack do README ganha uma linha.
+
+**Critério de saída:** com `remote_poll_interval_secs = 0` o app **não agenda nenhum prazo novo** e o comportamento é o de antes — e isso é teste, não promessa, porque é o item 2 do critério que substitui o RF-9.8; com intervalo configurado, um `git push` de outra máquina faz o indicador aparecer dentro de um intervalo; clicar traz a branch em dia, e falhar informa com a mensagem do `git`; uma branch com commits locais à frente mostra os dois números e não aceita clique; nenhuma janela de console pisca no Windows; arrastar a borda inferior ainda redimensiona fora do retângulo do indicador; `verify-docs.py` e o CI verdes nas três plataformas.
+
+**A decisão que mais pesou:** o **default ligado** (300s). O recurso podia nascer desligado, como `trusted_paths` nasceu vazio, e o dono do produto escolheu o contrário pelo argumento que ligou a barra de status (ADR-0048 §6): recurso que precisa ser descoberto para ser ligado não é descoberto. O custo está registrado como primeira consequência negativa e primeira linha de riscos do ADR-0052 — o app fala com a rede sozinho e escreve no `.git` de repositório que o usuário só abriu — e a §4 explica por que ele não é da mesma natureza do risco que a allowlist do `.porecatu` contém: ali roda código declarado por terceiros, aqui roda um comando fixo, escolhido por nós, que não toca a árvore de trabalho.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

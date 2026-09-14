@@ -10,7 +10,7 @@
 | [0004](0004-pty-cross-platform.md) | PTY cross-platform via portable-pty | Aceito |
 | [0005](0005-persistencia-de-sessao.md) | Persistência de sessão em JSON versionado | Superseded by ADR-0036 e ADR-0038 (os dois **parcialmente**) |
 | [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito |
-| [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito |
+| [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito · uma linha das Consequências revista por ADR-0052 (**parcial**) |
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
 | [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Superseded by ADR-0027, ADR-0028 e ADR-0032 (parcial) |
 | [0010](0010-licenciamento.md) | Licenciamento sob GPL-3.0-or-later | Aceito |
@@ -49,10 +49,11 @@
 | [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito |
 | [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Superseded by ADR-0045 (**parcial**: só §3, o número da versão) |
 | [0045](0045-primeira-versao-0-7-0.md) | A primeira versão publicada é `0.7.0`, não `1.0.0` | Aceito |
-| [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito · §8 Superseded by ADR-0049 (**parcial**) |
-| [0049](0049-branch-git-na-barra-de-status.md) | Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore | Aceito |
+| [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito · §8 Superseded by ADR-0049 (**parcial**) · §3, §5 e §8 Superseded by ADR-0052 (**parcial**) |
+| [0049](0049-branch-git-na-barra-de-status.md) | Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore | Aceito · §7 Superseded by ADR-0052 (**parcial**: só ahead/behind) |
 | [0050](0050-tela-cheia.md) | Tela cheia por `F11`: janela `Borderless`, sem estado novo em `Config` | Aceito |
 | [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito |
+| [0052](0052-sincronizacao-com-o-remoto-do-git.md) | Sincronização com o remoto do Git: poll em thread, contagem por `rev-list`, integração só por clique | Aceito |
 
 ## Convenção
 

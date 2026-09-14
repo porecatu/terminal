@@ -1,8 +1,8 @@
 # ADR-0048 — Barra de status: faixa no rodapé que encolhe a grade
 
-**Status:** Aceito · §8 Superseded by [ADR-0049](0049-branch-git-na-barra-de-status.md) (**parcial**: só a linha que punha `git` entre o que nunca entra)
+**Status:** Aceito · §8 Superseded by [ADR-0049](0049-branch-git-na-barra-de-status.md) (**parcial**: só a linha que punha `git` entre o que nunca entra) · §3, §5 e §8 Superseded by [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) (**parcial**: a linha do "único item colorido", a razão de ceder a borda, e a regra "nada que mude sozinho")
 **Data:** 2026-09-09
-**Relacionados:** ADR-0005, ADR-0007, ADR-0009, ADR-0014, ADR-0018, ADR-0019, ADR-0022, ADR-0027, ADR-0030, ADR-0032, ADR-0034, ADR-0037, ADR-0039, ADR-0041, ADR-0043, PRD-004, PRD-009
+**Relacionados:** ADR-0005, ADR-0007, ADR-0009, ADR-0014, ADR-0018, ADR-0019, ADR-0022, ADR-0027, ADR-0030, ADR-0032, ADR-0034, ADR-0037, ADR-0039, ADR-0041, ADR-0043, ADR-0049, ADR-0052, PRD-004, PRD-009, PRD-013
 
 ## Contexto
 
@@ -60,6 +60,8 @@ Mesma resposta e mesmo raciocínio do ADR-0041 §2: `Chrome` está acima da grad
 
 O nome do shell é o **único item colorido**, como o design sempre pediu — é o que distingue a aba de relance.
 
+> **Revisto pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) §8.** Passa a haver um segundo item colorido: o indicador de commits atrás do remoto, no mesmo Acento. Decisão do dono do produto, com as alternativas recusadas registradas lá. A razão de ele não apagar a distinção que este parágrafo defende é que ele **quase nunca está presente** — sem commits novos não há indicador, e o caso comum da barra continua tendo um item colorido só. O segundo acento aparece exatamente quando há algo a notar.
+
 Nenhum desses dados custa syscall por frame. Em particular, `ProcessGroup::process_count()` e `Terminal::cwd_fallback()` estão **proibidos** neste caminho: os dois fazem `refresh_processes(All)` do `sysinfo`, e o RF-9.8 é regra dura (§8).
 
 ### 4. A marca do RF-9.4: o `cwd` um degrau abaixo na escada de texto
@@ -81,6 +83,8 @@ Então o `margin` da base vale contra a borda da janela quando a barra está des
 **A zona de resize ganha os 6px que disputa com a barra.** O ADR-0027 pôs `South`/`SouthEast`/`SouthWest` na borda inferior, exatamente sobre a barra. A barra cede, e a razão é aritmética: no escopo aprovado ela **não tem nenhum alvo clicável** (o RF-9.7 ficou de fora, §7), então ceder 6px não custa função nenhuma — enquanto tirar o resize do rodapé quebraria um gesto que existe hoje e não tem substituto.
 
 O que a barra faz com o mouse é só uma coisa: **impedir que o clique chegue à grade**. Clicar na faixa não posiciona cursor, não inicia seleção, e arrastar uma seleção para dentro dela não continua selecionando.
+
+> **Revisto pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) §9.** A premissa "ela não tem nenhum alvo clicável" deixou de valer: o indicador de commits atrás do remoto é clicável. **A metade desta seção que decide continua inteira** — tirar o resize do rodapé quebraria um gesto sem substituto, e ele continua vencendo em toda a faixa. O que muda é que o **retângulo do indicador** vence dentro dos seus próprios limites, que é literalmente a saída escrita na alternativa recusada mais abaixo (*"o alvo específico ganha, o resto da faixa continua sendo resize"*) e a mesma precedência que os botões de janela já têm contra o canto superior. Os cantos de redimensionamento diagonal nunca são alcançados: o indicador nasce depois do padding e de três segmentos.
 
 ### 6. Ligada por padrão
 
@@ -105,6 +109,8 @@ Todos os cinco segmentos mudam **por evento** — troca de aba, OSC 7, renomear 
 Isto exclui, definitivamente: relógio, uso de CPU e memória, estado de repositório `git`, e a contagem de processos do [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md). Os três primeiros mudam sozinhos; o quarto mudaria de graça, mas lê-lo custa uma varredura de `sysinfo`.
 
 > **Revisto pelo [ADR-0049](0049-branch-git-na-barra-de-status.md).** A palavra `git` acima agrupava duas coisas de custo muito diferente: saber **qual é a branch** é ler 30 bytes revalidados por `mtime`; saber se a **árvore está suja** é um `git status` completo. A primeira entrou; a segunda continua fora, e pela razão que este parágrafo dá. O resto da lista não muda.
+
+> **Revisto pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) §1.** A regra **"nada que mude sozinho"** foi substituída, porque ela ia longe demais e de menos ao mesmo tempo: proibia uma consulta de rede de cinco em cinco minutos e não teria como proibir um `git status` por frame, que é muito pior e não "muda sozinho". O critério novo tem três partes, e uma coisa só entra se passar nas três — **desligável numa linha de config**, **custando exatamente zero quando desligada**, e **sem percorrer a árvore de trabalho**. **A lista de exclusões deste parágrafo sobrevive inteira**: relógio e medidores de CPU/memória reprovam na segunda parte, a contagem de processos reprova na terceira (a leitura é a varredura de `sysinfo` que o §3 proíbe nominalmente), e a árvore suja também. Só a formulação da regra muda.
 
 ### 9. O que **não** muda: o ADR-0014
 

@@ -88,6 +88,8 @@ Input do teclado vira bytes no `porecatu-ui` e é enviado por `mpsc::Sender` par
 
 > **Na implementação.** São **três** threads por terminal, não duas: leitura, escrita e observação do processo (`try_wait` em intervalo curto). A de observação é a dona do `PtyHandle`, e por isso é ela quem aplica o resize do lado do PTY — o lado do motor é síncrono. Quem spawna as três é `porecatu-term::Terminal`; `porecatu-ui` nunca vê `PtyHandle` nem thread nenhuma, só `spawn`, `write`, `snapshot_into`, `try_recv_event`, `scroll`, `modes`, `resize` e as operações de seleção. A notificação de sujeira sai por um closure genérico (`on_wakeup`), para o crate não precisar conhecer `winit`; quem fecha esse closure sobre `EventLoopProxy` e `Wakeup` é a `ui`.
 >
+> **Threads fora do PTY.** São duas, e nenhuma delas é por terminal. A do **watcher de config** ([ADR-0030](adr/0030-escopo-do-hot-reload.md)) é única e vive enquanto o processo viver. A da **consulta ao remoto do Git** ([ADR-0052](adr/0052-sincronizacao-com-o-remoto-do-git.md)) é de vida curta: nasce para uma execução, lança o processo `git`, manda o resultado pelo `EventLoopProxy` e morre. Só existe com `[git] remote_poll_interval_secs` maior que zero, e **quem tem o relógio é a main thread** — o prazo entra em `ControlFlow::WaitUntil` junto com os de aviso, tooltip, animação, gravação de sessão e comando de projeto. Nenhuma das duas recebe `join`, como as de PTY.
+>
 > **Encerramento de uma aba.** O [ADR-0017](adr/0017-ciclo-de-vida-da-aba.md) decidiu o que o RF-1.2 chamava de "aguardar EOF": o ConPTY não emite EOF, então a espera é pela confirmação de morte da thread de observação, **fora da main thread**. A aba sai da barra imediatamente. Sem isso, fechar uma janela com 50 abas custaria 50 × `SHUTDOWN_TIMEOUT` na main thread, contra a métrica de 50 abas do PRD-001.
 >
 > **Implementado na F2:** `Terminal::close` sinaliza o processo e devolve na hora; `Terminal::shutdown` virou `close().wait()`, para quem precisa da confirmação. Fechar a janela sinaliza todas as abas primeiro e espera depois, não uma a uma. Há teste de integração cobrindo que `close` devolve antes do `SHUTDOWN_TIMEOUT` mesmo com processo vivo.
@@ -121,8 +123,11 @@ O mesmo vale para o chrome: mudança de hover, foco ou config marca a barra de a
 | `Workspace` (abas, grupos) | main thread | exclusivo, sem lock — um por janela |
 | `Config` | main thread | `Arc<Config>`, trocado inteiro no reload |
 | Handle de escrita do PTY | `mpsc` | clonável |
+| Estado remoto do Git, por repositório | main thread | exclusivo, sem lock — **um por processo**, não por janela ([ADR-0052](adr/0052-sincronizacao-com-o-remoto-do-git.md) §3) |
 
 `Workspace` só é tocado pela main thread, então não precisa de lock. `Config` é imutável e trocado por inteiro no hot reload — nenhum lock, só uma troca de `Arc`.
+
+O estado remoto do Git segue a mesma regra sem exceção: a thread de consulta **não o enxerga**. Ela devolve o resultado como evento, e quem escreve no mapa é a main thread — que é a resposta que o [ADR-0007](adr/0007-modelo-de-threading.md) já dava para "preciso mutar estado de outra thread": mandar um evento, não adicionar um `Mutex`. Ele é por processo e não por janela porque a chave é o **repositório**: duas janelas no mesmo projeto precisam compartilhar a consulta, e não fazer duas.
 
 > **Na implementação (F2, etapa 6).** Há **um `Workspace` por janela**, dentro de `WindowState`, e as janelas vivem num `HashMap<WindowId, WindowState>` em `App` ([ADR-0015](adr/0015-multiplas-janelas.md)). Junto com o workspace, migrou para `WindowState` tudo o que varia por janela: abas, rename em curso, arraste, deslocamento de rolagem da barra, hover, avisos, diálogo e menu. O que não varia — `GpuContext`, `cell_metrics` (em pixels lógicos, DPI-independente) e `startup_directory` — continua em `App`, um por processo.
 

@@ -101,6 +101,7 @@ O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alv
 | Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
 | Acessibilidade | `accesskit_winit` sobre o chrome (barra de abas e os cinco widgets); grade fora do v1 | [ADR-0001](docs/adr/0001-stack-de-gui.md), [ADR-0043](docs/adr/0043-arvore-de-acessibilidade.md) |
 | Abrir/revelar URI do sistema | crate wrapper (o `unsafe` fica nele; a regra do workspace segue sem exceção) | [ADR-0042](docs/adr/0042-hyperlinks-osc-8.md) |
+| Consulta ao remoto do Git | o `git` do sistema, lançado como processo pela biblioteca padrão, numa thread de vida curta — sem crate novo e sem `unsafe` | [ADR-0052](docs/adr/0052-sincronizacao-com-o-remoto-do-git.md) |
 | Fontes | Iosevka Fixed (OFL-1.1, terminal e chrome) + Lucide (ISC), embutidas | [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md) |
 | Ícone do app | `png` (decodifica em runtime) + `winres` num `build.rs` (recurso PE no Windows) | — |
 | Caminhos do usuário | `dirs` (home como diretório inicial de aba; caminho de config) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
@@ -146,6 +147,7 @@ Versões travadas por igualdade exata onde a API quebra a cada release: `alacrit
 - [docs/roadmap.md](docs/roadmap.md) — fases de entrega
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo fechado de ações vinculáveis a teclas
 - [docs/reference/arquivo-de-projeto.md](docs/reference/arquivo-de-projeto.md) — formato do `.porecatu`, o arquivo com que um projeto declara o que rodar ao restaurar a aba
+- [docs/reference/integracao-de-shell.md](docs/reference/integracao-de-shell.md) — snippets de OSC 7 por shell, fonte única do que o convite do RF-3.1 mostra
 - [docs/config/porecatu.example.toml](docs/config/porecatu.example.toml) — configuração de referência comentada
 
 ## Nome

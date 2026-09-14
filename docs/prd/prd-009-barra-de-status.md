@@ -2,7 +2,7 @@
 
 **Status:** Aprovado
 **Data:** 2026-08-26 (rascunho) · 2026-09-09 (aprovado)
-**Relacionados:** [ADR-0005](../adr/0005-persistencia-de-sessao.md), [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md), [ADR-0039](../adr/0039-convite-a-integracao-de-shell.md), [ADR-0048](../adr/0048-barra-de-status.md), [ADR-0049](../adr/0049-branch-git-na-barra-de-status.md), [PRD-004](prd-004-aparencia-do-chrome.md)
+**Relacionados:** [ADR-0005](../adr/0005-persistencia-de-sessao.md), [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md), [ADR-0039](../adr/0039-convite-a-integracao-de-shell.md), [ADR-0048](../adr/0048-barra-de-status.md), [ADR-0049](../adr/0049-branch-git-na-barra-de-status.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md), [PRD-004](prd-004-aparencia-do-chrome.md), [PRD-013](prd-013-sincronizacao-com-o-remoto-do-git.md)
 
 > Aprovado em 2026-09-09, por decisão do dono do produto, **fora da ordem de fases**: era o único elemento `[v2]` cujo valor não dependia de nenhum recurso de v2 para existir. A anatomia e as cinco decisões que o rascunho deixava em aberto estão no [ADR-0048](../adr/0048-barra-de-status.md).
 
@@ -29,6 +29,8 @@ Altura 26, mono 10.5px, `gap: 16`. **O que o binário desenha divergiu do desenh
 
 O nome do shell é o único item colorido — é o que distingue a aba de relance.
 
+> **Emenda ([ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §8).** Há um segundo item colorido, no mesmo acento: o indicador de commits atrás do remoto, que **só existe quando há commits novos**. No caso comum a frase acima continua descrevendo a barra.
+
 O mockup desenha a **contagem de painéis**, que **não entra**: depende do [PRD-006](prd-006-paineis-divididos.md) (`[v2]`, inexistente) e hoje exibiria "1 painel" para sempre. Volta com os painéis. Ver [ADR-0048](../adr/0048-barra-de-status.md) §3. O segmento de **branch** não estava no desenho e entrou depois, pelo [ADR-0049](../adr/0049-branch-git-na-barra-de-status.md).
 
 ## Requisitos
@@ -41,7 +43,11 @@ O mockup desenha a **contagem de painéis**, que **não entra**: depende do [PRD
 - **RF-9.6** — Cores, altura e fonte configuráveis, como o resto do chrome ([PRD-004](prd-004-aparencia-do-chrome.md)).
 - **RF-9.7** — *(**Diferido.** Clicar no campo de diretório copia o caminho. Arrasta hit-test com semântica de clique e um feedback de "copiado" que não existe fora da seleção do terminal — e é o requisito que tornaria a cessão dos 6px da borda de resize uma perda real. [ADR-0048](../adr/0048-barra-de-status.md) §5 e §7.)*
 - **RF-9.8** — A barra atualiza sob o mesmo regime damage-driven do resto da UI ([ADR-0007](../adr/0007-modelo-de-threading.md)); não introduz timer nem redraw periódico.
+
+  > **Emenda ([PRD-013](prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §1).** O segmento de commits atrás do remoto **introduz um timer**, e ele é ligado por padrão. A regra que este requisito virou no [ADR-0048](../adr/0048-barra-de-status.md) §8 — *"nada que mude sozinho"* — foi substituída por um critério de três partes: o que muda sozinho precisa ser **desligável numa linha de config**, **custar exatamente zero quando desligado** e **não percorrer a árvore de trabalho**. A lista de exclusões sobrevive inteira (relógio, CPU, memória, contagem de processos, estado da árvore); o que muda é a formulação. E o regime damage-driven em si continua: a consulta só suja a barra quando a contagem **muda**, então confirmar "nada novo" não desenha quadro nenhum, e o princípio 4 do [PRD-000](prd-000-visao-de-produto.md) segue literal.
 - **RF-9.9** — Quando o diretório da aba pertence a um repositório Git, a barra exibe um **ícone** indicando isso e o **nome da branch** atual. Fora de um repositório, o segmento inteiro desaparece — o ícone é a resposta ao "estou num repositório?", e não há versão apagada dele. Estado da árvore fica de fora, ver "Fora de escopo". ([ADR-0049](../adr/0049-branch-git-na-barra-de-status.md), pedido do dono do produto depois de a barra estar em uso.)
+
+  > **Emenda.** Ao lado da branch pode aparecer um segundo segmento, clicável, com quantos commits a branch está atrás do remoto — requisito próprio no [PRD-013](prd-013-sincronizacao-com-o-remoto-do-git.md), decidido pelo [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md). Ele é o **primeiro alvo clicável da barra** e o **segundo item colorido** dela, e só existe quando há commits novos.
 
 RF-9.8 não é detalhe: uma barra de status com relógio ou uso de CPU quebraria a propriedade de "terminal ocioso custa zero frames", que é um princípio do produto. Qualquer campo que mude sozinho precisa ser avaliado contra isso.
 
@@ -64,5 +70,7 @@ Campos definidos por script; relógio; medidores de CPU e memória — todos vio
 
 - **Branch — entrou** (RF-9.9 acima). Ler `.git/HEAD` é um arquivo de ~30 bytes, revalidado por `mtime`; não precisa de thread, temporizador nem dependência nova, e portanto não toca o RF-9.8.
 - **Estado da árvore — continua fora.** Sujo/limpo, ahead/behind, o que está em stage: todos precisam percorrer a árvore, e nenhum tem um sinal barato que diga quando refazer. É fronteira, não pendência.
+
+  > **Partido em dois pelo [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md)**, pelo mesmo movimento que o ADR-0049 fez com a palavra "git" logo acima — e pela mesma descoberta: a frase agrupava coisas de naturezas diferentes. **Ahead/behind entrou** ([PRD-013](prd-013-sincronizacao-com-o-remoto-do-git.md)), porque ele **não percorre a árvore**: consulta a rede e caminha o grafo de commits. **Sujo/limpo e o que está em stage continuam fora**, e agora com a razão certa escrita — eles percorrem a árvore de trabalho, e é só isso que os mantém fora. É fronteira, não pendência, e continua sendo.
 
 Também fora, pelo mesmo RF-9.8: a **contagem de processos da aba** ([ADR-0034](../adr/0034-deteccao-de-processo-ativo-para-confirmacao.md)). Ela mudaria por evento, mas lê-la custa uma varredura de `sysinfo` — cara demais para o caminho de render.
