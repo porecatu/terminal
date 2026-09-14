@@ -1068,9 +1068,28 @@ mod tests {
     fn head_exposes_the_branch_variant_not_just_the_label() {
         // O degrau que a etapa 3 precisa (ADR-0052 §7): quem chama `head`
         // sabe se é uma branch ou um `HEAD` destacado, não só o texto.
+        //
+        // Fabricado, não a real HEAD do repositório onde o teste roda:
+        // `actions/checkout` do GitHub Actions deixa o `.git` do runner em
+        // HEAD destacado por padrão (checa um SHA, não uma branch), e
+        // `this_very_repository_reports_its_branch` já cobre o caso real
+        // -- este teste precisa de uma branch garantida, não da sorte do
+        // ambiente. `find_head_file` só olha para `.git/HEAD`, então
+        // fabricar os dois arquivos é suficiente, sem `git init`.
+        let dir = std::env::temp_dir().join(format!(
+            "porecatu-ui-test-branch-head-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join(".git")).expect("dir de teste");
+        std::fs::write(dir.join(".git").join("HEAD"), "ref: refs/heads/main\n")
+            .expect("escreve HEAD de teste");
         let mut info = GitInfo::default();
-        let here = std::env::current_dir().expect("cwd do teste");
-        assert!(matches!(info.head(Some(&here)), Some(Head::Branch(_))));
+        assert!(matches!(info.head(Some(&dir)), Some(Head::Branch(_))));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
