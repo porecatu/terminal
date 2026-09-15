@@ -56,6 +56,13 @@ Mesma superfície, texto diferente. Fora do Windows o convite diz que a restaura
 - **A dispensa é explícita**, não implícita: fechar a aba ou rolar a nota para fora da vista não dispensa nada. A nota traz a instrução de como dispensar, e a ação de dispensa é digitada pelo usuário no próprio terminal, do mesmo jeito que ele copiaria o snippet.
 - `[session] suggest_shell_integration = false` desliga o convite antes de qualquer detecção, e `[session] enabled = false` o desliga junto com o resto (não há onde gravar a dispensa).
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md) §12.** Só o **endereço** muda:
+> a nota é escrita no grid de um painel, e o pendente passa a ser `(janela, painel)`
+> em vez de `(janela, aba)`. **"Uma vez por execução do app" sobrevive inteiro** — e
+> agora com um caso a mais que ele já cobre de graça, que é a aba dividida em quatro
+> painéis sem OSC 7 produzindo uma nota só. A dispensa definitiva, o campo em
+> `session.json` e o parser sobre o eco do PTY não mudam.
+
 ### 5. Snippets
 
 Cobrem os shells que `resolve_default_shell` sabe escolher e os que o usuário tem chance de configurar em `[shell]`: **bash**, **zsh**, **fish**, **PowerShell** (5.1 e 7) e **cmd**. Para fish e para prompts que já emitem OSC 7 por padrão (starship, por exemplo), o texto diz que nada é preciso — detectá-los e mandar configurar seria pior que ficar calado.

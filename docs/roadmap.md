@@ -605,7 +605,7 @@ A razão de trazê-la agora é o **RF-9.4**: o diretório exibido em alfa `.45` 
 3. **Geometria e desenho** — `status_bar_height` em `paint::terminal_box_rect`, propagação pelos nove sítios de `lib.rs`, `status_bar.rs` novo com layout puro e pintor, `in_status_bar`.
 4. **Interação, acessibilidade e guia** — clique bloqueado antes da grade (a borda de resize continua vencendo os 6px), `build_status_bar` na árvore do [ADR-0043](adr/0043-arvore-de-acessibilidade.md), hot reload ponta a ponta e a seção no [guia do usuário](guia-do-usuario.md).
 
-**Escopo:** RF-9.1, RF-9.2, RF-9.3 (só a abreviação com `~`), RF-9.4, RF-9.6 e RF-9.8. **Diferidos:** RF-9.5 (zonas configuráveis), RF-9.7 (clicar copia) e a metade de tooltip do RF-9.3, que exige generalizar `tooltip::Hover` para além de `TabId`. A contagem de painéis do mockup fica fora enquanto o [PRD-006](prd/prd-006-paineis-divididos.md) for `[v2]`.
+**Escopo:** RF-9.1, RF-9.2, RF-9.3 (só a abreviação com `~`), RF-9.4, RF-9.6 e RF-9.8. **Diferidos:** RF-9.5 (zonas configuráveis), RF-9.7 (clicar copia) e a metade de tooltip do RF-9.3, que exige generalizar `tooltip::Hover` para além de `TabId`. A contagem de painéis do mockup fica fora enquanto o [PRD-006](prd/prd-006-paineis-divididos.md) for `[v2]`. *(Deixou de ser em 2026-09-15: o PRD-006 foi aprovado e a contagem entra com os painéis — ver a seção deles abaixo.)*
 
 **Critério de saída:** a barra desenha os cinco segmentos com a barra ligada, e com `enabled = false` a grade volta **exatamente** ao tamanho de hoje; o `cwd` aparece a `.45` num shell sem OSC 7 e opaco depois do snippet de integração; arrastar a borda inferior ainda redimensiona a janela; `verify-docs.py` e o CI verdes nas três plataformas.
 
@@ -675,6 +675,36 @@ A razão de existir está escrita como convite no [ADR-0049](adr/0049-branch-git
 
 ---
 
+## Depois do v1 — painéis divididos — documentada, não implementada
+
+Fora da ordem de fases, como as três entradas acima, e por um quarto caminho: aqui houve **rascunho a promover**, como na barra de status, mas o rascunho era de um recurso que o [PRD-000](prd/prd-000-visao-de-produto.md) listava como **não-objetivo declarado** do v1 — não de um elemento apenas adiado. O [PRD-006](prd/prd-006-paineis-divididos.md) existia desde 2026-08-26 com sete requisitos esboçados e quatro perguntas em aberto; foi aprovado em 2026-09-15 por pedido direto do dono do produto, e o [ADR-0053](adr/0053-paineis-divididos.md) fecha as cinco decisões que ele deixava.
+
+A razão de existir é a lacuna mais visível que sobrou depois do v1, e ela tem nome: **`tmux` rodando dentro de uma aba do Porecatu**. Abas resolvem "muitos contextos" e o produto é definido por isso ([PRD-000](prd/prd-000-visao-de-produto.md)); nada nele resolve "um contexto, duas superfícies" — um servidor e o log dele, um build e os testes —, e quem precisa disso hoje arruma duas janelas à mão a cada vez ou põe um segundo multiplexador embaixo do nosso, com uma segunda tecla líder e um scrollback que não é o nosso.
+
+O que o [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md) escreveu como profecia em agosto — *"se entrar, `Tab` passa a conter uma árvore de panes… mereceria ADR próprio"* — é literalmente o que aconteceu, e a mitigação que ele registrou (`Tab` ser struct própria, nunca um alias de terminal) é a razão de a troca ser localizada.
+
+**Cinco etapas:**
+
+1. **Documentação e decisão — feita.** PRD-006 promovido a Aprovado e reescrito por inteiro (RF-6.1 a RF-6.27); ADR-0053; os blockquotes de revisão dentro das nove seções supersedidas (ADR-0006 Alternativas, ADR-0017 §6, ADR-0036 §3, ADR-0037 §1, ADR-0039 §4, ADR-0041 §8, ADR-0043 §4, ADR-0048 §5, ADR-0051 §6) mais duas notas que **não** revisam decisão — a de escopo no ADR-0007 ("uma thread por terminal" continua literal; o que muda é a contagem por aba) e a de fato no ADR-0009 §2 (a aposta do desenho `[v2]` foi cobrada e pagou); as emendas em seis PRDs (RF-1.2, RF-1.3, RF-1.7, RF-1.20/RF-1.21, RF-3.8, RF-9.2, RF-11.1, RF-12.9 e o não-objetivo do PRD-000); a §1.7, a **§2.7.1 nova**, a §2.7, a §2.8, a tabela de fases, a §4.3 e a §4.4 da especificação visual; a seção `pane.*` em [docs/reference/acoes.md](reference/acoes.md); a §2, a §5 e a §7 da [arquitetura](arquitetura.md); guia do usuário, README, CLAUDE.md e índices.
+
+   **A seção `[panes]` do arquivo de exemplo não entra aqui**, pela mesma razão que a `[git]` não entrou na etapa 1 do PRD-013: `tests/example_toml.rs` exige **zero** chaves desconhecidas contra `Config::default()`, então documentar a chave antes de o campo existir reprova o CI. Ela entra na etapa 2, junto da struct; o cabeçalho do arquivo de exemplo carrega a nota apontando para cá enquanto isso.
+2. **Modelo e config.** `PaneId` em `porecatu-core/src/id.rs`, no molde de `TabId`; `Pane` e a árvore binária (`pane.rs`), com `split`, `close`, `focus`, `focus_in_direction`, `set_ratio` e `leaves_in_order` puras; a migração dos **seis campos** que saem de `Tab` (`process_title`, `cwd`, `shell_name`, `state`, `activity`, `bell`) e a derivação de título, atividade e campainha na aba. Invariantes em teste, no molde dos de `Workspace`: toda aba com pelo menos um painel, exatamente um focado e ele sendo folha, `ratio` no intervalo aberto, fechar o penúltimo colapsando o nó. `[panes]` em `porecatu-config` **e no arquivo de exemplo, na mesma leva**, com o teste que fixa a classe de recarga **A**. As sete ações em `Action`/`CATALOG` e os seis defaults em `[keybindings]`, com as contagens de `default_matches_example_toml` ajustadas. **Sem comportamento observável novo.**
+3. **Runtime e render.** O layout puro (`panes.rs`), com os dois invariantes de geometria em teste; `PaneRuntime` e o mapa por `PaneId`; `Wakeup::TabDirty` ganhando o painel; N quadros com sombra e o cursor vazado em `paint.rs` (reusando `row_top`/`col_left`, que é o que impede a costura de 1px voltar por outra porta); `grid_size` por retângulo e o laço de `resize_to` com um par por painel.
+4. **Input.** Foco por clique — com o clique **também** indo ao terminal, que é o RF-6.7 e a parte fácil de errar; `Alt+setas`; o arraste do divisor nos estados novos de `Drag`, com a precedência contra a borda de resize mudando **nos dois caminhos** (cursor e clique) e o teste de geometria contra `titlebar::resize_direction_at`; `ClickTracker` guardando o painel do clique anterior; menu de contexto, busca e seleção no painel certo; `pane.close` com a confirmação por painel.
+5. **Sessão, barra e guia.** `PaneV1` e o campo opcional em `TabV1` (sem subir `schema_version`), com round-trip em teste incluindo o caso de ausência = um painel; restauração preguiçosa subindo a aba inteira; `.porecatu` no painel focado, com teste de duas folhas no mesmo diretório autorizado; o segmento de contagem em `status_bar.rs`; os nós de painel em `access.rs`; guia do usuário conferido contra o binário.
+
+**Escopo:** RF-6.1 a RF-6.27, todos. Nada diferido — o PRD foi reescrito já sem o que ficaria de fora, e o que ficou está nomeado nas fronteiras (RF-6.25 a RF-6.27).
+
+**Aparência:** **uma decisão**, com três recusas dentro dela, e está no [ADR-0053](adr/0053-paineis-divididos.md) §3, §4 e nas alternativas. O canvas desenhava divisor de 1px, borda na cor do grupo no painel focado e um cabeçalho por painel; o que vale é **quadro completo repetido por painel, separado só pelo vão de 6px que já existe, com cursor vazado como única marca de foco**. **Zero valor novo, zero cor nova, zero primitiva nova** — o quadro é o da §2.7 repetido, o vão é o `terminal_frame_margin`, e o cursor vazado é um `RoundedQuad` de raio 0 com borda de 1px. Mudança de seções 1/2 da especificação depois do [ADR-0032](adr/0032-interface-do-v1-fechada.md), passando pelo ADR que ele exige; a trilha de grupos e abas **não é tocada**.
+
+**Dependências:** **nenhuma**. Nenhum crate novo, nenhum `unsafe`, e a tabela de stack do README não muda. `porecatu-term` e `porecatu-render` não mudam uma linha — o que é o teste retroativo das fronteiras do [ADR-0018](adr/0018-composicao-de-frame.md) e da §4 da [arquitetura](arquitetura.md).
+
+**Critério de saída:** dividir uma aba nas duas orientações e repetir sobre qualquer painel; o vão sendo a única separação, com cada painel respeitando raio, sombra, recuo, fonte e cores do terminal inteiro; arrastar o vão redimensionando os dois vizinhos com a grade reencaixando durante o gesto, e parando no mínimo; a borda de resize da janela continuando a funcionar fora do divisor; teclado indo só para o painel focado, com o cursor vazado nos demais; fechar painel devolvendo o espaço e fechar o último fechando a aba; a barra de status descrevendo o painel focado e mostrando a contagem só com dois ou mais; a sessão devolvendo árvore e proporções; e o `.porecatu` rodando **uma vez** numa aba dividida no mesmo diretório autorizado.
+
+**A decisão que mais pesou:** o **foco marcado só pelo cursor**. Foram levadas três opções ao dono do produto — borda na cor do grupo (a recomendada), cursor vazado, e esmaecer os painéis sem foco — e ele escolheu a mais discreta. O custo está registrado como consequência negativa e como linha da tabela de riscos do [ADR-0053](adr/0053-paineis-divididos.md): **um painel rodando `vim` em modo normal, ou qualquer TUI que esconda o cursor, não tem marca de foco nenhuma.** É reversível por aval, e as duas alternativas já estão levantadas e descritas.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.
@@ -683,7 +713,6 @@ A coluna **Desenhado** marca o que já tem alvo visual aprovado no canvas. Estar
 
 | Item | Onde está justificado | Desenhado |
 |---|---|---|
-| Splits / panes na aba | [PRD-000](prd/prd-000-visao-de-produto.md), [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md), [PRD-006](prd/prd-006-paineis-divididos.md) *(rascunho)* | sim, `[v2]` |
 | Perfis de aba (WSL, SSH, container) | [PRD-000](prd/prd-000-visao-de-produto.md), [PRD-007](prd/prd-007-perfis-de-aba.md) *(rascunho)* | sim, `[v2]` |
 | Paleta de comandos | [PRD-008](prd/prd-008-paleta-de-comandos.md) *(rascunho)* | sim, `[v2]` |
 | Configuração por GUI | [ADR-0003](adr/0003-formato-de-configuracao.md), [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) | sim, `[v2]` |

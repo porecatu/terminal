@@ -109,6 +109,19 @@ Modelagem mais "honesta" em Rust. Descartada por custo de código: dobra os cami
 
 Fora do escopo do v1 por decisão de produto (PRD-000). Registrado aqui porque afeta o modelo: se entrar, `Tab` passa a conter uma árvore de panes em vez de um terminal. O modelo atual não impede — `Tab` já é uma struct, não um alias de terminal — mas a mudança seria real e mereceria ADR próprio.
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md).** Entrou, fora da ordem de
+> fases, e este parágrafo descreve exatamente o que aconteceu: `Tab` passa a conter
+> uma árvore binária de painéis, e o ADR próprio que ele exigia é o 0053. A
+> mitigação funcionou — `Tab` ser struct desde o primeiro dia fez a troca ser
+> localizada, e nenhuma decisão deste documento precisou ser revogada.
+>
+> **As quatro restrições da seção "Decisão" sobrevivem inteiras**, e não se
+> confundem com a árvore nova: grupos continuam sem sobreposição, sem aninhamento,
+> contíguos na barra, com grupo implícito. Quem aninha é o painel dentro da aba, um
+> nível abaixo de tudo que este documento decide. A última linha da tabela de riscos
+> — *"pressão por splits mudar o modelo depois"* — é a única que deixa de ser risco,
+> por ter acontecido.
+
 ## Consequências
 
 ### Positivas

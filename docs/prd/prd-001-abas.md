@@ -27,9 +27,13 @@ Todo usuário do Porecatu. Este é o recurso de base.
 
 > **Reconciliado pelo [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md).** A regra — não perder a última saída — vale; o mecanismo não. O pipe do ConPTY não emite EOF quando o processo hospedado sai, então a espera é pela confirmação de morte do processo, fora da main thread, e não por EOF.
 
+> **Emenda ([PRD-006](prd-006-paineis-divididos.md) RF-6.10, [ADR-0053](../adr/0053-paineis-divididos.md) §10).** Os três gestos deste requisito continuam fechando **a aba inteira**, com todos os painéis dela — inclusive `Ctrl+Shift+W`, que não muda de significado. Fechar **um** painel é a ação `pane.close`, que nasce sem atalho default. O RF-1.6 abaixo passa a ser avaliado por painel: fechar a aba confirma se **qualquer** painel dela tem processo ativo.
+
 **RF-1.3** — Quando o shell de uma aba encerra por conta própria (`exit`, `Ctrl+D`), a aba fecha automaticamente. Se o processo encerrar com código diferente de zero, a aba permanece aberta exibindo o código de saída, até que o usuário a feche. *(Fechar uma aba que falhou esconde a mensagem de erro justamente quando ela importa.)*
 
 > **Reconciliado pelo [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md).** O ADR define o estado `Exited` da aba e a posição da nota: **após a última linha de saída**, não na primeira linha do grid como o [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md) havia generalizado.
+
+> **Emenda ([PRD-006](prd-006-paineis-divididos.md) RF-6.11, [ADR-0053](../adr/0053-paineis-divididos.md) §10).** Numa aba dividida, o shell que encerra por conta própria fecha **aquele painel**, e a aba só fecha quando ele era o último. A regra do código diferente de zero desce junto: o painel fica aberto com a nota de saída, no lugar dela.
 
 **RF-1.4** — Fechar a última aba de uma janela fecha a janela. Fechar a última janela encerra o app, gravando a sessão de forma síncrona antes de sair.
 
@@ -42,6 +46,8 @@ Todo usuário do Porecatu. Este é o recurso de base.
 ### Identidade e título
 
 **RF-1.7** — Cada aba exibe um título. A precedência é: título customizado definido pelo usuário → título vindo de OSC 0 / OSC 2 emitido pelo programa → nome do processo em primeiro plano → nome do shell.
+
+> **Emenda ([PRD-006](prd-006-paineis-divididos.md) RF-6.17, [ADR-0053](../adr/0053-paineis-divididos.md) §2).** Numa aba dividida em painéis, a precedência abaixo é aplicada dentro do **painel focado** — o título da aba é o dele. O título customizado continua sendo **da aba** e continua vencendo tudo, inclusive a troca de painel focado. Concatenar os títulos de todos os painéis foi recusado: o rótulo tem 180px de teto (§2.5 da especificação visual), e dois títulos truncados ali não informam nenhum.
 
 > **Reconciliado pelo [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md).** O nível do processo em primeiro plano **sai**, pelo mesmo motivo do RF-1.6. A precedência é: título customizado → OSC 0 / OSC 2 → nome do shell. Programa de tela cheia emite OSC 0/2 com o próprio nome, então o nível 2 já o cobre; comando que não emite título nenhum é sinalizado pelo indicador de atividade do RF-1.20.
 
@@ -80,6 +86,8 @@ Todo usuário do Porecatu. Este é o recurso de base.
 **RF-1.20** — Uma aba em segundo plano cuja saída mudou desde a última visita exibe um indicador de atividade. *(É o que permite deixar um build rodando em outra aba e perceber que terminou.)*
 
 **RF-1.21** — Uma aba em segundo plano que emitiu campainha (BEL) exibe um indicador distinto do de atividade.
+
+> **Emenda ao RF-1.20 e ao RF-1.21 ([PRD-006](prd-006-paineis-divididos.md) RF-6.18, [ADR-0053](../adr/0053-paineis-divididos.md) §2).** Numa aba dividida, os dois indicadores **agregam**: qualquer painel que produza saída, ou que toque a campainha, acende o indicador **da aba**. Ativar a aba os limpa, como sempre. É a escolha oposta à do título (RF-1.7), e de propósito — uma aba que esconde a atividade de metade dos terminais dela seria pior que não ter indicador nenhum.
 
 **RF-1.22** — Ambos os indicadores somem ao visitar a aba, e ambos são desligáveis na config.
 

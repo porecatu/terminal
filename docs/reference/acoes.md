@@ -167,6 +167,30 @@ ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 
 ---
 
+## `pane.*` — painéis
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `pane.split_horizontal` | Divide o painel focado com um **divisor deitado**; o painel novo nasce **abaixo**, no `cwd` do de origem, e já focado | [RF-6.1](../prd/prd-006-paineis-divididos.md), [ADR-0053](../adr/0053-paineis-divididos.md) | fora de fase | |
+| `pane.split_vertical` | Divide o painel focado com um **divisor em pé**; o painel novo nasce **à direita**, no `cwd` do de origem, e já focado | RF-6.1, ADR-0053 | fora de fase | |
+| `pane.close` | Fecha o painel focado e devolve o espaço aos vizinhos; sendo o último da aba, fecha a aba. Confirma se houver processo ativo (RF-1.6) | [RF-6.10](../prd/prd-006-paineis-divididos.md) | fora de fase | |
+| `pane.focus_left` | Move o foco para o painel vizinho à esquerda; sem vizinho naquela direção, não faz nada | [RF-6.8](../prd/prd-006-paineis-divididos.md) | fora de fase | |
+| `pane.focus_right` | Idem, à direita | RF-6.8 | fora de fase | |
+| `pane.focus_up` | Idem, acima | RF-6.8 | fora de fase | |
+| `pane.focus_down` | Idem, abaixo | RF-6.8 | fora de fase | |
+
+**"Horizontal" e "vertical" nomeiam o divisor, não o arranjo**, e a ambiguidade entre emuladores é conhecida: `pane.split_horizontal` produz dois painéis **empilhados** e `pane.split_vertical` produz dois **lado a lado**. É a tabela do RF-6.1 que manda, e ela está reproduzida aqui de propósito — quem lê o catálogo lê a definição junto.
+
+Os dois splits são recusados, com aviso, quando qualquer um dos painéis resultantes ficaria abaixo de `[panes] min_columns` ou `min_rows` (RF-6.4). Não há ação de zoom de painel, nem de mover painel entre abas: as duas são fora de escopo do [PRD-006](../prd/prd-006-paineis-divididos.md) (RF-6.25, RF-6.26).
+
+> **Estado.** Defaults: `Ctrl+Shift+H` para `pane.split_horizontal` e `Ctrl+Shift+D` para `pane.split_vertical` nas três plataformas, mais `Cmd+Shift+H` e `Cmd+Shift+D` no macOS; `Alt+←/→/↑/↓` para as quatro de foco, nas três plataformas — como `f11` e `f3`, sem entrada própria em `[keybindings.macos]`.
+>
+> `pane.close` é **vinculável e nasce sem default**, por decisão do dono do produto, como `group.new_tab` e `group.close_all`: `exit` no shell já fecha o painel (RF-6.11), e `Ctrl+Shift+W` continua significando "fecha esta aba inteira". Quem quiser, vincula.
+>
+> `Ctrl+Shift+V` foi pedido primeiro para o split vertical e **recusado na verificação**: já é `clipboard.paste` nas três plataformas ([ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md)). `Ctrl+Alt+H`/`Ctrl+Alt+V` foram considerados depois e descartados — `Ctrl+Alt` é o AltGr sintetizado no Windows, e `Alt+Ctrl+H` é `backward-kill-word` no readline ([ADR-0053](../adr/0053-paineis-divididos.md), alternativas).
+
+---
+
 ## `scrollback.*` — rolagem
 
 | Ação | O que faz | Origem | Fase | Arg |
@@ -244,7 +268,6 @@ Ausências deliberadas, registradas para que ninguém as adicione achando que fo
 | `tab.duplicate` | Fora de escopo do PRD-001 (*"duplicar aba com o estado do processo"*) |
 | `tab.pin` | Fora de escopo do PRD-001 (*"fixar aba"*) |
 | `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000) |
-| `pane.split` / `pane.close` | Painéis divididos são v2 ([PRD-006](../prd/prd-006-paineis-divididos.md), rascunho) |
 | `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho) |
 | `terminal.clear` | Nenhum RF pede; o shell já tem `clear` |
 | `terminal.reset` | Idem; `reset` existe no shell |
@@ -255,7 +278,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Catorze comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e o último é fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Dezesseis comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os três últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -272,6 +295,8 @@ Catorze comportamentos têm requisito aprovado e **não recebem nome de ação**
 | Arrastar aba para dentro ou fora de um grupo | RF-1.16, RF-2.18 | o grupo de destino vem dos limites visuais sob o cursor; `tab.move_to_group` é o equivalente sem mouse, e por isso é `Arg` |
 | Arrastar o rótulo do grupo | RF-2.19 | move o grupo inteiro para uma fronteira contínua; nenhum RF pede equivalente de teclado |
 | Botão "+" ao final de um grupo | RF-2.8 | o alvo é o wrapper clicado; `group.new_tab` **é** a ação que ele invoca, e continua sem default de tecla |
+| Focar um painel por clique | [RF-6.7](../prd/prd-006-paineis-divididos.md) | o alvo é o pixel clicado, e o mesmo clique já é entregue ao terminal daquele painel; `pane.focus_*` é o equivalente de teclado |
+| Arrastar o divisor entre dois painéis | [RF-6.13](../prd/prd-006-paineis-divididos.md), [ADR-0053](../adr/0053-paineis-divididos.md) §7 | a proporção é contínua e o alvo é o vão sob o cursor; nenhum RF pede equivalente de teclado, e uma tecla teria de inventar um passo |
 | Clicar no indicador de commits atrás do remoto, na barra de status | [RF-13.12](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §9 | integra commits no repositório da aba ativa, e uma tecla faria isso no repositório que a aba ativa **por acaso** tem — a mesma classe de decisão que o [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md) §4 registrou para `trusted_paths`: tomada uma vez, esquecida depois. O clique mira o que descreve, e só existe quando há o que integrar |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

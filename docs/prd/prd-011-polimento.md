@@ -34,6 +34,8 @@ A acessibilidade tem um alvo próprio e menor, e é a razão de o requisito exis
 
 **RF-11.1** — `search.open` abre a busca na aba ativa com o campo de texto já focado. `Esc` ou o botão de fechar encerram a busca, devolvem o foco ao terminal e limpam o realce. A busca é **por aba**: abrir busca numa aba não afeta as outras.
 
+> **Emenda ([PRD-006](prd-006-paineis-divididos.md) RF-6.21, [ADR-0053](../adr/0053-paineis-divididos.md) §14).** Numa aba dividida, a busca é do **painel focado** e a barra se posiciona sobre o quadro daquele painel, não sobre a aba inteira. Trocar de painel a fecha, pelo mesmo caminho por que trocar de aba já a fechava. O mesmo vale para o menu de contexto do terminal (RF-11.14) e para `selection.select_all` (RF-11.16): do painel focado, quando vêm do teclado; do painel sob o cursor, quando vêm do mouse.
+
 **RF-11.2** — A busca é **incremental**: cada caractere digitado recalcula o resultado, sem exigir `Enter`.
 
 **RF-11.3** — O escopo é a tela visível **mais o scrollback inteiro** daquela aba — não só o que está em tela no momento.

@@ -87,6 +87,24 @@ Substitui a seção "O que é gravado" do ADR-0005.
 
 Tema e zoom são **por janela**, não por processo. Restaurar duas janelas com temas diferentes sai de graça nesta forma, e é a forma que não precisa mudar se o `zoom_scope` ganhar escopo menor depois.
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md) §11.** A lista de gravados
+> ganha, por aba, a **árvore de painéis**: a estrutura, a proporção de cada divisor,
+> o `cwd` e o programa de cada painel, e qual deles estava focado. O que era "por
+> aba, `cwd` e programa de spawn" passa a ser por painel, e a aba guarda a árvore que
+> os organiza.
+>
+> **Sem subir `schema_version`**, e isto é a §1 deste documento pagando: o campo novo
+> em `TabV1` é opcional, com `#[serde(default)]`, e a ausência dele significa "um
+> painel só". O mecanismo de migração encadeada continua exatamente onde está, ainda
+> com a lista vazia. O resto da lista sobrevive inteiro, inclusive o que **não** é
+> gravado — com `Tab::activity`, `Tab::bell`, `Tab::process_title` e o estado agora
+> sendo do painel, e igualmente descartados.
+>
+> A consequência assimétrica, registrada porque é silenciosa: sessão gravada por uma
+> versão com painéis e lida por uma anterior devolve **uma aba com um painel**. Perda
+> de layout, não corrupção — que é o comportamento que o `#[serde(default)]` promete
+> e o preço de não subir a versão.
+
 ### 4. Identidade de monitor
 
 `MonitorIdV1` grava o nome do monitor quando a plataforma o dá, mais a posição da origem dele no espaço virtual. Na restauração, casa por nome; sem nome, ou sem casamento, casa por posição; sem nenhum dos dois, cai no monitor primário com o tamanho preservado dentro dos limites da tela (RF-3.11). Nome é estável e legível quando existe; a posição é o desempate que funciona quando o mesmo modelo aparece duas vezes.

@@ -6,7 +6,7 @@ Registro dos valores de aparência do chrome. **O binário é a referência norm
 
 > **Nenhuma mudança de aparência sem aval do dono do produto** (ADR-0028 §4). A seção 4.4 é histórico, não lista de tarefas: nada nela autoriza mexer na interface.
 
-> **Aviso de fase.** O mockup contém elementos que **não são do v1**, e para o que é `[v1]` ele é referência **histórica** — divergência entre ele e o binário não é bug. Antes de implementar qualquer coisa daqui, consulte a [tabela de fases](#3-tabela-de-fases). Painéis divididos, perfis, paleta de comandos, painel de configurações e a faixa de identidade da barra de título são todos `[v2]`. A **barra de status** deixou de ser: entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases.
+> **Aviso de fase.** O mockup contém elementos que **não são do v1**, e para o que é `[v1]` ele é referência **histórica** — divergência entre ele e o binário não é bug. Antes de implementar qualquer coisa daqui, consulte a [tabela de fases](#3-tabela-de-fases). Perfis, paleta de comandos, painel de configurações e a faixa de identidade da barra de título são todos `[v2]`. A **barra de status** deixou de ser: entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases. Os **painéis divididos** também, pelo [ADR-0053](../adr/0053-paineis-divididos.md) — mas o **cabeçalho de painel** que o canvas desenha junto com eles continua `[v2]`, e por decisão de não fazer, não por fase.
 
 ---
 
@@ -73,7 +73,7 @@ Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuári
 | Token | Valor | Onde |
 |---|---|---|
 | Janela / divisor de popover | `#2a2f38` | também borda esquerda do drawer |
-| Separador de barra | `#23272f` | base da barra de título e de abas, topo da status, gap entre painéis |
+| Separador de barra | `#23272f` | base da barra de título e de abas, topo da status, gap entre painéis — as três do canvas; o binário não pinta nenhuma (§2.7.1, §2.8, §4.4) |
 | Borda de controle | `#262b34` | botões da barra, botão de nova aba, borda de card e de linha de perfil |
 | Borda de popover | `#2e343e` | |
 | Borda da aba ativa | `#39404b` | também hover do botão de busca. **2px** em todo estado (§2.5) |
@@ -173,8 +173,9 @@ Cor de aba sem grupo: `#7b838f`.
 | Pílula | `padding: 0 9px 0 10px`, `gap: 7` (o `label_padding_left` subiu de 8 para 10) |
 | **Dentro de todo botão de ícone** | `icon_button_padding_x` **4px de cada lado** — fechar da aba, os dois "+", caret da pílula e o botão da zona fixa ficam mais largos que altos; a altura não muda, senão o botão de fechar deixaria de caber na aba |
 | **Quadro do terminal** | 6px de margem da borda da janela nos três lados que não encostam na barra, e 6px de padding entre a borda do quadro e a grade (§2.7) |
-| Cabeçalho do painel | `padding: 7px 12px` |
-| Conteúdo do painel | `padding: 12px 14px` |
+| **Vão entre painéis** | o mesmo valor do quadro do terminal, **6px** — o divisor é esse vão e não tem valor próprio (§2.7.1) |
+| Cabeçalho do painel `[v2]` | `padding: 7px 12px` — do canvas; o cabeçalho de painel foi recusado ([ADR-0053](../adr/0053-paineis-divididos.md)), ver §4.3 |
+| Conteúdo do painel `[v2]` | `padding: 12px 14px` — do canvas; o que o binário desenha é o padding do quadro, acima |
 | Item de menu | `padding: 7px 8px` |
 | Drawer | `padding: 18px`, `gap: 24` entre seções |
 
@@ -509,17 +510,58 @@ grade fica recuada mais 6px por dentro do quadro, nos quatro lados. Tudo pedido 
 usuário, com os valores tirados de `trilha_padding` e `wrapper_padding` (§1.7) — nada
 de número novo. Registro na seção 4.4.
 
-Com painéis divididos `[v2]`, os painéis ficam lado a lado com `gap: 1px` sobre `#23272f` — o gap é o divisor.
-
-**Painel:** `border-top: 2px` na cor do grupo quando focado, `transparent` quando não. O anel só aparece com mais de um painel.
-
-**Cabeçalho do painel** `[v2]` — `padding: 7px 12px`, borda inferior `#1c2027`. Ponto 6×6 circular na cor do grupo quando focado, `#3b434f` quando não. Título mono 11px `#828a96`, truncado. À direita, dividir (`◫` 11px) e fechar (`✕` 10px), 22×20, raio 4, `#6b737e`, hover fundo `#1e232b` e ícone `#cfd5dd`.
+Com a aba dividida em painéis, **este quadro se repete por painel** — ver a §2.7.1. O
+canvas desenhava outra coisa (divisor de 1px sobre `#23272f`, `border-top: 2px` na cor
+do grupo no painel focado e um cabeçalho por painel); as três foram recusadas pelo
+[ADR-0053](../adr/0053-paineis-divididos.md), e o cabeçalho está registrado na §4.3
+como elemento do canvas deliberadamente não construído.
 
 **Conteúdo** — `padding: 12px 14px`, mono 12.5px, `line-height: 1.75`, `white-space: pre-wrap`.
 
 **Prompt e cursor** `[v1]` — primeira parte do prompt na cor do grupo, segunda em `#6b737e`. Cursor de uma célula de largura e `1.2 ×` o tamanho da fonte de altura (§1.7), cor do grupo, `animation: blink 1.1s step-end infinite`. Ele é ancorado no **topo** da linha, não centrado na altura de linha: a caixa do glyph começa ali, e a folga do `line-height` de 1.75 fica embaixo.
 
 Cores de saída: padrão `#c7ccd6`, esmaecido `#6f7783`, sucesso `#86c56a`, aviso `#e0b060`, erro `#ef8a8a`, destaque `#5ed3bc`.
+
+### 2.7.1 Painéis `[v1]`
+
+Uma aba dividida ([PRD-006](../prd/prd-006-paineis-divididos.md),
+[ADR-0053](../adr/0053-paineis-divididos.md)) **repete o quadro da §2.7 por painel**:
+mesmo fundo `#0f1216`, mesmo raio 6, mesma sombra em camadas por baixo, mesmos 6px de
+padding entre a borda do quadro e a grade. Um painel é indistinguível de um terminal
+inteiro — é o pedido literal do dono do produto, e é o que faz o recurso não precisar
+de nenhum valor novo.
+
+**O divisor é o vão, e nada mais.** Entre dois painéis irmãos ficam **6px** de fundo
+de janela, a mesma medida que já separa o quadro da borda da janela nos três lados da
+§2.7 (§1.7). Não há linha, traço, alça, gradiente nem sombra própria do divisor: o que
+separa dois painéis é o mesmo nada que já separa o terminal da janela. O canvas pedia
+`gap: 1px` sobre `#23272f`; entre dois quadros que já têm sombra e fundo próprio, uma
+linha seria a terceira separação no mesmo lugar — o argumento que já tirou a borda do
+topo da barra de status (§2.8) e a borda inferior da barra de abas (§4.4).
+
+O vão **sai da área útil antes** do cálculo de linhas e colunas, como toda mobília
+(§2.8): o que cada painel recebe é o retângulo dele menos o padding, e é dele que saem
+as colunas e as linhas daquele PTY.
+
+**O foco é o cursor, e só.** O painel focado desenha o cursor da §2.7 como sempre — uma
+célula de largura, `1.2 ×` o tamanho da fonte de altura, cor do grupo. Os demais
+desenham **o mesmo cursor vazado**: preenchimento transparente e borda de 1px (§1.3) na
+mesma cor, no mesmo retângulo. Nenhuma borda no quadro, nenhum ponto, nenhum cabeçalho
+e nenhum esmaecimento — o quadro de um painel sem foco é pixel por pixel o de um painel
+com foco, exceto ali. Com um painel só, não há o que distinguir e o cursor é sempre o
+cheio.
+
+**Sobre o divisor**, o cursor do mouse vira o de redimensionamento do eixo
+correspondente, e a faixa sensível é o próprio vão de 6px. Dentro dele o arraste do
+divisor vence a borda de resize da janela; fora dele, a borda continua sendo a borda
+([ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md)) — a mesma
+precedência que os botões de janela (§2.2.1) e o indicador de commits (§2.8) já
+resolvem.
+
+**Nada mais muda.** A barra de busca (§2.21) passa a se posicionar sobre o quadro do
+painel focado em vez do quadro da aba; a barra de abas, a trilha, as cápsulas e as
+pílulas não são tocadas ([ADR-0032](../adr/0032-interface-do-v1-fechada.md)); e a barra
+de status ganha um segmento, descrito na §2.8.
 
 ### 2.8 Barra de status `[v1]`
 
@@ -533,7 +575,7 @@ Faixa fixa no rodapé da janela, largura cheia, na camada `Chrome` ([ADR-0048](.
 
 Ela **encolhe a grade**, não a sobrepõe. O quadro do terminal (§2.7) **encosta nela**, sem `terminal_frame_margin` — como já encosta na barra de abas em cima, e pela mesma razão: um vão entre duas barras de chrome lê como uma linha a mais. O `margin` da base só volta a valer, contra a borda da janela, quando a barra está desligada (`[appearance.status_bar] enabled = false`) — e aí ela não desenha **nem ocupa altura**, com a grade voltando ao tamanho que teria sem ela.
 
-Até sete segmentos, cinco à esquerda e dois à direita:
+Até oito segmentos, seis à esquerda e dois à direita:
 
 | Zona | Segmento | Cor |
 |---|---|---|
@@ -542,8 +584,11 @@ Até sete segmentos, cinco à esquerda e dois à direita:
 | Esquerda | ícone `git-branch` mais o nome da branch; ausente fora de um repositório | a de base, nos dois |
 | Esquerda | ícone de seta para baixo mais a contagem de commits atrás do remoto; ausente quando não há nenhum | `#5ed3bc` (acento), sublinhado sob o cursor |
 | Esquerda | nome do grupo da aba ativa; ausente em grupo implícito | a de base |
+| Esquerda | contagem de painéis da aba ativa; **ausente com um painel só** | a de base |
 | Direita | `UTF-8` | a de base |
 | Direita | sistema | a de base |
+
+**Os cinco primeiros descrevem o painel focado** quando a aba está dividida (§2.7.1) — shell, diretório, branch, commits e grupo. Não é mudança de regra: a barra sempre descreveu o terminal em foco, e o terminal em foco passou a ser um painel.
 
 **O segmento de branch** ([ADR-0049](../adr/0049-branch-git-na-barra-de-status.md)) vem logo depois do diretório: o repositório é propriedade dele. O ícone é `git-branch` do Lucide, com em de `icon_em_size * 0.8` — o mesmo multiplicador do botão de configurações (§1.1), e ele cai aqui porque a fonte da barra é 10.5px contra os 13px do rótulo de aba. Entre o ícone e o nome **não há `gap`**: a glyph avança 1 em e o desenho preenche 0.84 dela, e essa sobra é a folga. Fora de um repositório o segmento inteiro desaparece — o ícone *é* o indicador de que há um, e não existe versão apagada dele.
 
@@ -553,7 +598,9 @@ Até sete segmentos, cinco à esquerda e dois à direita:
 
 **Sem sombra** — a barra é encostada e opaca, não flutua, como a barra de busca (§2.21). **Sem animação.** A zona de resize da janela (§1.7, [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) — 6px por default, e configurável) continua valendo sobre ela em toda a extensão, **com uma exceção**: o retângulo do segmento de commits atrás do remoto, que vence dentro dos próprios limites — a mesma precedência que os botões de janela têm contra o canto superior direito ([ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §9). Os cantos de redimensionamento diagonal nunca são alcançados, porque aquele segmento nasce depois do `padding` e de três outros. Fora dele, o que a barra faz com o mouse continua sendo uma coisa só: impedir que o clique chegue à grade.
 
-O mockup desenha dois segmentos a mais: a **contagem de painéis**, que não entra enquanto os painéis forem `[v2]`, e a **versão do app** ao lado do sistema, tirada por não mudar entre execuções (§4.4).
+**O segmento de contagem de painéis** ([ADR-0053](../adr/0053-paineis-divididos.md) §14) fecha a zona esquerda, e existe **só com dois ou mais painéis** — `2 painéis`, `3 painéis`, por extenso como a contagem de commits. Com um painel ele não existe: nem "1 painel", nem versão apagada dele, que é a regra de ausência que os dois segmentos de Git já seguem, e a condição exata sob a qual o [ADR-0048](../adr/0048-barra-de-status.md) §5 tinha prometido que ele voltaria. Não é clicável e não tem ícone.
+
+O mockup desenha um segmento a mais: a **versão do app** ao lado do sistema, tirada por não mudar entre execuções (§4.4). A **contagem de painéis**, que também estava só no desenho, entrou com o [PRD-006](../prd/prd-006-paineis-divididos.md) em 2026-09-15.
 
 ### 2.9 Menu de perfis `[v2]`
 
@@ -879,8 +926,9 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Affordance de hyperlink (sublinhado sob modificador) | `[v1]` | PRD-011 RF-11.11; [ADR-0042](../adr/0042-hyperlinks-osc-8.md) — sem representação no canvas |
 | Menu de contexto do terminal | `[v1]` | PRD-011 RF-11.14; ADR-0014 — mesma anatomia da §2.16 |
 | Ícone da janela e do executável | fora de fase | estava listado em F6 no roadmap; entregue antes, ver o roadmap |
-| **Painéis divididos** | `[v2]` | [PRD-006](../prd/prd-006-paineis-divididos.md) *(rascunho)* |
-| **Cabeçalho e botões do painel** | `[v2]` | PRD-006 *(rascunho)* |
+| Painéis divididos (§2.7.1): quadro por painel, divisor que é só o vão, cursor vazado no painel sem foco | `[v1]` | [PRD-006](../prd/prd-006-paineis-divididos.md), [ADR-0053](../adr/0053-paineis-divididos.md) — fora da ordem de fases |
+| Contagem de painéis na barra de status (§2.8), só com dois ou mais | `[v1]` | PRD-006 RF-6.20, ADR-0053 — fora da ordem de fases; cumpre a promessa do [ADR-0048](../adr/0048-barra-de-status.md) §5 |
+| **Cabeçalho e botões do painel** | `[v2]` | recusado pelo [ADR-0053](../adr/0053-paineis-divididos.md) — desenho do canvas sem requisito, ver §4.3 |
 | **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md) *(rascunho)* |
 | **Badge de perfil na aba** | `[v2]` | PRD-007 *(rascunho)*, PRD-004 RF-4.23 |
 | **Tela de nova aba** | `[v2]` | PRD-007 *(rascunho)* |
@@ -936,9 +984,11 @@ O comportamento da seleção de texto — gesto, semântica de palavra, recorte 
 
 ### 4.3 Elementos do design **sem** requisito no v1
 
-Todos `[v2]`, todos endereçados na tabela de fases: painéis divididos, perfis e badge, tela de nova aba, paleta de comandos, painel de configurações, faixa de identidade da barra de título.
+Todos `[v2]`, todos endereçados na tabela de fases: perfis e badge, tela de nova aba, paleta de comandos, painel de configurações, faixa de identidade da barra de título.
 
 A **barra de status** saiu desta lista em 2026-09-09, pelo [ADR-0048](../adr/0048-barra-de-status.md) — a primeira redução dela desde que foi escrita. O [PRD-009](../prd/prd-009-barra-de-status.md) foi promovido a Aprovado no mesmo movimento.
+
+Os **painéis divididos** saíram em 2026-09-15, pelo mesmo caminho: [PRD-006](../prd/prd-006-paineis-divididos.md) promovido a Aprovado e [ADR-0053](../adr/0053-paineis-divididos.md) escrito, fora da ordem de fases. **Um pedaço do desenho deles fica**, e é o único item desta lista que não é um recurso inteiro: o **cabeçalho de painel** — título, ponto de foco, botão de dividir e botão de fechar — foi recusado pelo ADR-0053, não adiado. Ele continua desenhado no canvas e continua sem requisito, agora por decisão em vez de por fase: cada cabeçalho custaria linhas de grade em todo painel para repetir o que a barra de status já diz do focado. As três linhas de token que descrevem o cabeçalho (§1.7) continuam marcadas `[v2]` e apontando para cá.
 
 ### 4.4 Histórico de decisões visuais
 
@@ -948,6 +998,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 
 | O que o desenho pedia | O que vale, e por quê | Onde |
 |---|---|---|
+| O canvas desenha painéis divididos com `gap: 1px` sobre `#23272f` como divisor, `border-top: 2px` na cor do grupo marcando o painel focado, e um **cabeçalho por painel** com ponto de status, título mono truncado e botões de dividir e fechar | **As três saíram, e o que entrou foi a ausência delas.** O divisor é o **vão de 6px** que já separa o quadro da janela (§2.7.1) — pedido literal do dono do produto, *"somente um espaço entre os dois terminais, como são as próprias margens entre a janela e o terminal"* —, porque entre dois quadros que já têm sombra e fundo próprio uma linha é a terceira separação no mesmo lugar, o mesmo argumento que tirou a borda do topo da barra de status. O foco é **o cursor vazado** no painel sem foco, escolhido entre três opções levadas ao dono do produto; as recusadas foram a borda na cor do grupo (reintroduziria no quadro do terminal a distinção de cor que a trilha já faz, e o pedido era que um painel fosse indistinguível de um terminal inteiro) e esmaecer os painéis sem foco (o caso de uso do recurso é **ler os dois ao mesmo tempo**). O **cabeçalho** foi recusado: ~26px por painel saindo da grade, em todo painel, para repetir o que a barra de status já diz do focado. **Zero valor novo, zero cor nova, zero primitiva nova** — o quadro por painel é o da §2.7 repetido, e o cursor vazado é um `RoundedQuad` de raio 0 com borda de 1px, que corta reto desde a correção de `sdf_box` no `quad.wgsl`. Mudança de seções 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), passando pelo ADR que ele exige — e a segunda que **remove** um `[v2]` da tabela de fases, depois da barra de status | [ADR-0053](../adr/0053-paineis-divididos.md), fora de fase |
 | A barra de status está desenhada no canvas desde o começo (§2.8), com seis segmentos, e era `[v2]` — a tabela de tokens já a nomeava em quatro lugares, sem consumidor | **Entrou no produto, fora da ordem de fases**, por decisão do dono do produto. Cinco segmentos, não seis: a contagem de painéis sai enquanto o [PRD-006](../prd/prd-006-paineis-divididos.md) for `[v2]`, porque "1 painel" para sempre é ruído com aparência de informação. **Encolhe a grade em vez de sobrepor** — o inverso do [ADR-0041](../adr/0041-busca-no-scrollback.md), e pela razão que aquele ADR escreveu: o rodapé é onde o prompt ativo está, e uma faixa permanente sobreposta o taparia para sempre. A marca do RF-9.4 (diretório que não veio de OSC 7) é o **alfa `.45`** do [ADR-0037](../adr/0037-aba-nao-iniciada.md), recusadas a cor de aviso `#e0b060` (colide com saída WARN do terminal, e a barra encosta nele) e um ícone de alerta (pediria codepoint novo na face Lucide recortada). **Zero valor novo e zero ícone novo.** Terceira mudança de seções 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e a primeira que **remove** um `[v2]` da tabela de fases em vez de acrescentar anatomia | [ADR-0048](../adr/0048-barra-de-status.md), fora de fase |
 | O desenho da barra de status pedia borda superior `#23272f`, texto em `#6b737e` ("Tênue") e a versão do app ao lado do sistema | As três saíram, por pedido do dono do produto depois de ver a barra em tela. A **borda** era uma segunda separação em cima de uma que já existe — o quadro do terminal termina `terminal_frame_margin` acima, e o vão de fundo de janela ali já separa. A **versão** não muda entre execuções, e o que não muda não é o que se consulta de relance. O **texto** virou `#a8b0bb` ("Secundário"): a 10.5px, `#6b737e` dá 3.45:1 contra o fundo, abaixo do mínimo WCAG AA, e o relato foi literalmente "quase indistinguível do plano de fundo" — é a mesma correção que o corpo do aviso recebeu na §2.14, pelo mesmo motivo e para o mesmo tom. Na mesma leva, a marca do RF-9.4 deixou de ser alfa `.45` sobre a cor de base (2.61:1, ilegível justo no caso comum do Windows) e passou a ser `#828a96` ("Terciário"), um degrau da escada da §1.4, em 4.74:1. Nenhum valor novo nas quatro mudanças | [ADR-0048](../adr/0048-barra-de-status.md), fora de fase |
 | A primeira versão da barra deixava `terminal_frame_margin` (6px) entre o quadro do terminal e a faixa, por simetria com os outros três lados do quadro | **O quadro encosta na faixa, sem margem.** A simetria estava errada: os outros três lados dão para a borda da janela, e a faixa de status não é borda de janela, é outra barra de chrome — a comparação certa é o **topo**, onde o quadro sempre encostou na barra de abas sem gap. Em tela os 6px liam como folga sobrando, e o relato do dono do produto foi exatamente esse. O `margin` da base só volta a valer, contra a borda da janela, com a barra desligada | [ADR-0048](../adr/0048-barra-de-status.md) §5, fora de fase |

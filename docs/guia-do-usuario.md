@@ -118,6 +118,9 @@ usados, no default de fábrica:
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | igual | Próxima/anterior aba |
 | `Alt+1`…`Alt+9` | `Cmd+1`…`Cmd+9` | Ir para a N-ésima aba |
 | `Ctrl+Shift+G` | `Cmd+G` | Criar grupo com a seleção |
+| `Ctrl+Shift+H` † | `Cmd+Shift+H` † | Dividir a aba: painel novo **abaixo** |
+| `Ctrl+Shift+D` † | `Cmd+Shift+D` † | Dividir a aba: painel novo **à direita** |
+| `Alt+←` `→` `↑` `↓` † | igual | Trocar o painel focado |
 | `Ctrl+Shift+N` | `Cmd+N` | Nova janela |
 | `F11` | igual | Alternar tela cheia |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | `Cmd+C` / `Cmd+V` | Copiar/colar |
@@ -128,10 +131,62 @@ usados, no default de fábrica:
 | `Ctrl+Shift+Y` | `Cmd+Y` | Alternar tema |
 | `Ctrl+Shift+,` | `Cmd+,` | Recarregar config na hora |
 
+† Painéis divididos: aprovado e especificado, **ainda não na versão publicada** — ver
+[Dividir a aba em painéis](#dividir-a-aba-em-painéis).
+
 Todo atalho é reconfigurável na seção `[keybindings]` (e
 `[keybindings.macos]`/`[keybindings.linux]`/`[keybindings.windows]` para
 desvio por plataforma) — [`porecatu.example.toml`](config/porecatu.example.toml)
 tem a tabela inteira, comentada.
+
+## Dividir a aba em painéis
+
+> **Ainda não está na versão publicada.** O recurso está aprovado e
+> especificado ([PRD-006](prd/prd-006-paineis-divididos.md),
+> [ADR-0053](adr/0053-paineis-divididos.md)), e esta seção descreve o que
+> ele será. A implementação está nas etapas 2 a 5 do
+> [roadmap](roadmap.md); até elas fecharem, os atalhos abaixo não fazem
+> nada e a seção `[panes]` não existe na config.
+
+Uma aba pode ser dividida em vários terminais, cada um com o próprio
+shell, scrollback e diretório. `Ctrl+Shift+H` divide com o painel novo
+**abaixo** do focado; `Ctrl+Shift+D`, com o painel novo **à direita**. O
+gesto se repete sobre qualquer painel, quantas vezes couber — e é sempre
+o **painel focado** que se divide, não a aba inteira.
+
+> "Horizontal" e "vertical" nomeiam o **divisor**, não o arranjo, e cada
+> emulador escolhe um lado dessa ambiguidade. Aqui: `H` deixa os painéis
+> um **sobre** o outro, `D` deixa-os **lado a lado**.
+
+O painel novo abre no mesmo diretório do painel de origem, e já nasce
+focado.
+
+**Trocar de painel:** clique dentro dele, ou `Alt+←` / `→` / `↑` / `↓`.
+O painel focado é o que recebe tudo o que você digita — e é ele que a
+barra de status descreve. Quando há mais de um painel, ela também mostra
+a contagem.
+
+**Como saber qual está focado:** pelo **cursor**. O painel focado tem o
+cursor cheio, como sempre; os outros mostram o mesmo cursor **vazado**,
+só o contorno. É a única diferença entre eles — não há cabeçalho, borda
+nem esmaecimento. (Num painel rodando `vim` em modo normal, ou outro
+programa que esconda o cursor, não há marca nenhuma: o foco é o último
+painel em que você clicou ou para o qual navegou.)
+
+**Redimensionar:** arraste o **espaço** entre dois painéis. Não há
+divisor desenhado — o vão entre os quadros *é* o divisor, com a mesma
+medida da margem entre a janela e o terminal. O cursor muda de forma
+quando você passa por cima dele, e o conteúdo reencaixa enquanto você
+arrasta. O arraste para sozinho quando um dos painéis chega ao tamanho
+mínimo (`[panes] min_columns` e `min_rows` na config).
+
+**Fechar um painel:** digite `exit` no shell dele, como numa aba. Fechar
+o último painel fecha a aba. Se preferir uma tecla, vincule a ação
+`pane.close` em `[keybindings]` — ela não tem atalho de fábrica, e
+`Ctrl+Shift+W` continua fechando a **aba inteira**, com todos os painéis.
+
+O layout volta quando você reabre o app: a divisão, as proporções e o
+diretório de cada painel fazem parte da sessão.
 
 ## Selecionar texto dentro de um programa que pede o mouse (`Shift`)
 

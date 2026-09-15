@@ -9,7 +9,7 @@
 | [0003](0003-formato-de-configuracao.md) | Configuração em TOML | Aceito |
 | [0004](0004-pty-cross-platform.md) | PTY cross-platform via portable-pty | Aceito |
 | [0005](0005-persistencia-de-sessao.md) | Persistência de sessão em JSON versionado | Superseded by ADR-0036 e ADR-0038 (os dois **parcialmente**) |
-| [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito |
+| [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito · Alternativas Superseded by ADR-0053 (**parcial**: só o item "Splits/panes dentro da aba") |
 | [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito · uma linha das Consequências revista por ADR-0052 (**parcial**) |
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
 | [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Superseded by ADR-0027, ADR-0028 e ADR-0032 (parcial) |
@@ -20,7 +20,7 @@
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 |
-| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034 e ADR-0037 (os dois **parcialmente**) |
+| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034, ADR-0037 e ADR-0053 (os três **parcialmente**) |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
 | [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
 | [0020](0020-grupos-explicitos.md) | Grupos explícitos: multiplicidade do implícito, colapso e foco | Aceito |
@@ -39,21 +39,22 @@
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito |
 | [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
-| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito |
-| [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito |
+| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) |
+| [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito · Superseded by ADR-0053 (**parcial**: só a granularidade) |
 | [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
-| [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito |
+| [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito · Superseded by ADR-0053 (**parcial**: só o endereço da nota) |
 | [0040](0040-superficie-de-linha-de-comando.md) | Superfície de linha de comando | Aceito |
-| [0041](0041-busca-no-scrollback.md) | Busca no scrollback: barra sobreposta no topo do quadro | Aceito |
+| [0041](0041-busca-no-scrollback.md) | Busca no scrollback: barra sobreposta no topo do quadro | Aceito · Superseded by ADR-0053 (**parcial**: só o quadro sobre o qual ela se posiciona) |
 | [0042](0042-hyperlinks-osc-8.md) | Hyperlinks OSC 8: spans no snapshot, abertura sob modificador, esquemas fechados | Aceito |
-| [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito |
+| [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito · acrescentado por ADR-0053 (**parcial**: nós de painel; a grade continua fora) |
 | [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Superseded by ADR-0045 (**parcial**: só §3, o número da versão) |
 | [0045](0045-primeira-versao-0-7-0.md) | A primeira versão publicada é `0.7.0`, não `1.0.0` | Aceito |
-| [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito · §8 Superseded by ADR-0049 (**parcial**) · §3, §5 e §8 Superseded by ADR-0052 (**parcial**) |
+| [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito · §8 Superseded by ADR-0049 (**parcial**) · §3, §5 e §8 Superseded by ADR-0052 (**parcial**) · §5 Superseded by ADR-0053 (**parcial**: a contagem de painéis volta) |
 | [0049](0049-branch-git-na-barra-de-status.md) | Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore | Aceito · §7 Superseded by ADR-0052 (**parcial**: só ahead/behind) |
 | [0050](0050-tela-cheia.md) | Tela cheia por `F11`: janela `Borderless`, sem estado novo em `Config` | Aceito |
-| [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito |
+| [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito · §6 Superseded by ADR-0053 (**parcial**: qual terminal recebe o comando) |
 | [0052](0052-sincronizacao-com-o-remoto-do-git.md) | Sincronização com o remoto do Git: poll em thread, contagem por `rev-list`, integração só por clique | Aceito |
+| [0053](0053-paineis-divididos.md) | Painéis divididos: árvore binária no core, divisor que é ausência de pixel, foco pelo cursor | Aceito |
 
 ## Convenção
 

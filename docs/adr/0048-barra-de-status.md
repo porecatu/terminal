@@ -58,6 +58,18 @@ Mesma resposta e mesmo raciocínio do ADR-0041 §2: `Chrome` está acima da grad
 
 **A contagem de painéis sai.** Ela é o único segmento do mockup que depende de um recurso inexistente (PRD-006, `[v2]`); hoje exibiria "1 painel" para sempre, que é ruído com aparência de informação. Volta quando os painéis existirem, e o PRD-009 já registra a dependência.
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md) §14.** Os painéis existem, e
+> **a promessa deste parágrafo se cumpre**: a contagem volta à barra. Ela volta com a
+> condição que o próprio parágrafo escreveu — **só com dois ou mais painéis**, nunca
+> exibindo "1 painel", nem uma versão apagada dele. Com um painel o segmento não
+> existe, que é a mesma regra de ausência do ícone de repositório (§5 do
+> [ADR-0049](0049-branch-git-na-barra-de-status.md)) e do indicador de commits
+> ([ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md)).
+>
+> Os demais segmentos desta tabela passam a descrever o **painel focado** em vez do
+> único terminal da aba. Não é mudança de regra: a barra sempre descreveu o terminal
+> em foco, e o terminal em foco passou a ser um painel.
+
 O nome do shell é o **único item colorido**, como o design sempre pediu — é o que distingue a aba de relance.
 
 > **Revisto pelo [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) §8.** Passa a haver um segundo item colorido: o indicador de commits atrás do remoto, no mesmo Acento. Decisão do dono do produto, com as alternativas recusadas registradas lá. A razão de ele não apagar a distinção que este parágrafo defende é que ele **quase nunca está presente** — sem commits novos não há indicador, e o caso comum da barra continua tendo um item colorido só. O segundo acento aparece exatamente quando há algo a notar.

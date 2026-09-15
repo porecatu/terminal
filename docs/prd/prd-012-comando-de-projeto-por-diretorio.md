@@ -85,6 +85,8 @@ A referência completa do formato está em [docs/reference/arquivo-de-projeto.md
 
 **RF-12.9** — O script roda no máximo **uma vez por aba, por execução do app**. Sair da aba e voltar não reexecuta nada.
 
+> **Emenda ([PRD-006](prd-006-paineis-divididos.md) RF-6.24, [ADR-0053](../adr/0053-paineis-divididos.md) §12).** "Uma vez por aba" continua valendo literalmente numa aba dividida, e o terminal que recebe o script é o **painel focado**. Não é uma vez por painel: o painel novo herda o diretório do painel de origem, então painéis de um split quase sempre dividem o mesmo `cwd`, e disparar o mesmo `.porecatu` em dois deles sobe o mesmo servidor duas vezes na mesma porta.
+
 **RF-12.10** — O script só é escrito quando o shell está pronto para recebê-lo. Um script escrito antes de o shell chegar ao primeiro prompt se perde, e perder-se em silêncio é o pior resultado possível.
 
 **RF-12.11** — Com `lazy_restore = true` ([RF-3.8](prd-003-persistencia-de-sessao.md)), o script roda quando a aba de fato inicia — no primeiro foco —, não no arranque do app.

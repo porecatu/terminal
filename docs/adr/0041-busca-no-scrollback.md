@@ -83,6 +83,17 @@ Com `alt_screen` ativo não existe scrollback a percorrer e a tela pertence ao p
 
 O estado da busca — termo, modo, ocorrência ativa — vive em `WindowState`, por aba, e **não é persistido na sessão**. É a mesma classificação da seleção múltipla no [ADR-0021](0021-selecao-multipla-e-gestos-da-barra.md): estado efêmero de janela. O [ADR-0036](0036-formato-do-arquivo-de-sessao.md) não ganha campo.
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md) §14.** O escopo desce um
+> nível: a busca é do **painel focado**, e a barra se posiciona sobre o quadro
+> daquele painel em vez de atravessar a aba inteira. Trocar de painel a fecha, pelo
+> mesmo caminho por que trocar de aba já a fechava.
+>
+> **O resto sobrevive inteiro**, e a §1 é o que torna isso barato: a barra continua
+> sobrepondo em vez de empurrar, então nenhum `resize` é mandado ao PTY do painel ao
+> abri-la, e `reserved_rows`/`scroll_delta_to_reveal` já recebem as linhas de fora —
+> passam a receber as do painel, sem mudar de forma. Uma barra por janela continua
+> sendo uma barra por janela; ela só passa a saber a qual painel pertence.
+
 Ir até uma ocorrência numa aba dentro de grupo colapsado **expande o grupo** pelo caminho que já existe: `Workspace::activate_tab` carrega a regra do RF-2.17 desde o PR de fechamento da F3, e a restauração de sessão já provou o mecanismo na F5. A busca é a segunda fonte que o requisito citava, e fecha o RF-2.17 por completo.
 
 ### 9. Sem animação

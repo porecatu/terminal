@@ -50,6 +50,14 @@ Duas regras:
 - O `Mutex<Term>` é segurado **só durante o `advance`**. Nunca durante render, nunca durante I/O.
 - Ler até EOF antes de considerar a aba encerrada — senão a última linha de saída se perde ([ADR-0004](0004-pty-cross-platform.md)).
 
+> **Nota de escopo do [ADR-0053](0053-paineis-divididos.md), sem mudança de decisão.**
+> A regra **uma thread de leitura por terminal continua literalmente verdadeira**; o
+> que muda é que uma aba passa a poder ter mais de um terminal, e portanto mais de
+> uma dessas threads. O `Wakeup` deste laço passa a endereçar o painel, não a aba,
+> pela mesma razão que já o fez carregar a janela ([ADR-0015](0015-multiplas-janelas.md)).
+> O regime damage-driven não é tocado: painel ocioso não produz quadro, e painel que
+> escreve suja o painel.
+
 ### Escrita
 
 Input de teclado vira bytes em `porecatu-ui` e vai por `mpsc::Sender` para o handle de escrita. Não passa pela thread de leitura. O `Write` do PTY é `Send` e independente do `Read`.

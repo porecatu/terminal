@@ -112,6 +112,18 @@ O RF-1.3 mantém a aba aberta depois de o processo morrer. Isso é um estado, e 
 - Conta para a navegação e para o índice do RF-1.12 como qualquer aba.
 - **Não é restaurada** pela sessão na F5 — restaurar uma aba morta restauraria um erro passado.
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md) §10.** O estado deixa de ser
+> da aba e passa a ser do **painel**: uma aba com três painéis pode ter um `Exited` e
+> dois `Running` ao mesmo tempo, e a frase "estado da aba" deixa de nomear um valor
+> único. Tudo o mais desta seção sobrevive inteiro, aplicado ao painel — sem PTY,
+> aceita rolagem e cópia, não aceita input, título congelado, fora dos indicadores,
+> descartado na gravação da sessão.
+>
+> As duas consequências que mudam de sujeito: `TermEvent::Exit` com código zero fecha
+> **o painel**, e só fecha a aba quando era o último dela; e a confirmação do RF-1.6
+> (§3 acima) passa a perguntar por painel — fechar a aba confirma se **qualquer**
+> painel dela tem processo ativo.
+
 ### 7. `app.quit` e RF-1.4 na F2
 
 Na F2 as duas encerram sem gravar sessão, porque não há sessão. O gancho é explícito e único: o ponto em que a última janela fecha chama a gravação síncrona, e na F2 esse ponto é um no-op documentado. A F5 preenche o no-op e não precisa procurar onde.

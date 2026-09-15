@@ -38,6 +38,13 @@
 #   [project_file]           PRD-012, ADR-0051  (arquivo .porecatu do projeto)
 #   [git]                    PRD-013, ADR-0052  (sincronização com o remoto do Git)
 #
+# AINDA NÃO AQUI: a seção [panes] (min_columns, min_rows -- PRD-006 RF-6.4,
+# ADR-0053, classe [A]) está aprovada e especificada, mas só entra neste
+# arquivo quando o campo existir em Config. Este arquivo é comparado com
+# Config::default() por teste (tests/example_toml.rs, zero chaves
+# desconhecidas), então documentar a chave antes do campo reprova o CI.
+# Ver docs/roadmap.md, "Depois do v1 -- painéis divididos", etapa 2.
+#
 # ORIGEM DOS VALORES DE APARÊNCIA
 # Cores, dimensões, raios e espaçamentos estão registrados em
 # docs/design/especificacao-visual.md (seção 1, Tokens), e não são
