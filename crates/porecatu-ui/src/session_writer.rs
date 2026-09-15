@@ -93,10 +93,14 @@ pub fn window_monitor(window: &Window) -> Option<MonitorIdV1> {
 /// build_session_file` é quem drena `winit` (`window_geometry`/
 /// `window_monitor`) antes de chamar isto, uma janela por vez.
 ///
-/// RF-3.10/ADR-0038 §2: o fallback só é consultado para a aba cujo `cwd`
-/// saiu `None` de [`porecatu_session::convert::window_from_workspace`] --
-/// ou seja, que nunca recebeu OSC 7. Com OSC 7 presente, a aba já tem
-/// `cwd` aqui e o closure nem é chamado para ela.
+/// RF-3.10/ADR-0038 §2: o fallback é consultado para toda aba, mas quem
+/// decide se ele *sobrescreve* `tab.cwd` é o próprio `cwd_fallback` --
+/// `Some` só quando a aba nunca recebeu `TermEvent::Cwd` de verdade
+/// (`received_osc7`), `None` quando já recebeu. `tab.cwd.is_none()` não
+/// serve mais como esse sinal: uma aba nova **herda** `cwd` do grupo na
+/// criação (ADR-0017 item 1), então `tab.cwd` já sai `Some` de
+/// [`porecatu_session::convert::window_from_workspace`] mesmo sem OSC 7
+/// nenhum ter chegado.
 pub fn window_v1(
     workspace: &Workspace,
     geometry: GeometryV1,
@@ -108,8 +112,8 @@ pub fn window_v1(
     let (groups, mut tabs, active_tab) =
         porecatu_session::convert::window_from_workspace(workspace);
     for tab in &mut tabs {
-        if tab.cwd.is_none() {
-            tab.cwd = cwd_fallback(TabId::new(tab.id));
+        if let Some(fallback) = cwd_fallback(TabId::new(tab.id)) {
+            tab.cwd = Some(fallback);
         }
     }
     WindowV1 {
@@ -351,23 +355,43 @@ mod tests {
         );
     }
 
-    /// ADR-0038 §2: `cwd` de OSC 7 vence -- o fallback nem precisa
-    /// devolver o valor certo, só não pode ser chamado (aqui ele erra de
-    /// propósito para provar que não entrou em jogo).
+    /// ADR-0038 §2: quem decide se o `cwd` de OSC 7 vence é o closure --
+    /// `window_v1` não olha mais `tab.cwd.is_none()` (uma aba nova herda
+    /// `cwd` do grupo na criação, ADR-0017 item 1, então isso nunca seria
+    /// `None`). Aqui o closure devolve `None`, simulando `received_osc7 ==
+    /// true` em `App::build_session_file`: o valor de OSC 7 já em
+    /// `tab.cwd` não é sobrescrito.
     #[test]
-    fn osc7_cwd_wins_over_the_fallback() {
+    fn osc7_cwd_wins_when_fallback_declines() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", Some(PathBuf::from("/from/osc7")));
-        let window = window_v1(&ws, geometry(0), None, None, 0, |_| {
-            Some(PathBuf::from("/should/not/be/used"))
-        });
+        let window = window_v1(&ws, geometry(0), None, None, 0, |_| None);
         assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/from/osc7")));
     }
 
-    /// Sem OSC 7 (`cwd` gravado como `None`), o fallback por `TabId`
-    /// preenche o valor -- é o degrau `ProcessGroup::cwd`/`cwd` de spawn
-    /// da precedência, resolvido por `App::build_session_file` antes de
-    /// chegar aqui.
+    /// Bug corrigido: uma aba nova herda `cwd` do grupo já na criação
+    /// (`tab.cwd` sai `Some` mesmo sem OSC 7 nenhum ter chegado -- ver
+    /// `Workspace::insert_tab`). `window_v1` não pode mais tratar esse
+    /// `Some` herdado como confirmado; quem sabe que não foi confirmado
+    /// (`received_osc7 == false` em `TabRuntime`) é o chamador, que aqui
+    /// devolve `Some` para forçar a sobrescrita.
+    #[test]
+    fn inherited_cwd_without_osc7_confirmation_is_overwritten_by_fallback() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", Some(PathBuf::from("/inherited/from/other/tab")));
+        let window = window_v1(&ws, geometry(0), None, None, 0, |_| {
+            Some(PathBuf::from("/real/cwd/of/this/tab"))
+        });
+        assert_eq!(
+            window.tabs[0].cwd,
+            Some(PathBuf::from("/real/cwd/of/this/tab"))
+        );
+    }
+
+    /// Sem `cwd` nenhum (nem de OSC 7, nem herdado), o fallback por
+    /// `TabId` preenche o valor -- é o degrau `ProcessGroup::cwd`/`cwd` de
+    /// spawn da precedência, resolvido por `App::build_session_file`
+    /// antes de chegar aqui.
     #[test]
     fn missing_cwd_falls_back_by_tab_id() {
         let mut ws = Workspace::new();

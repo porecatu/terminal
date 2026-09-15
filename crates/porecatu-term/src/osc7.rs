@@ -66,7 +66,11 @@ impl Default for Osc7Watcher {
 pub fn parse_file_uri(bytes: &[u8]) -> Option<PathBuf> {
     let s = std::str::from_utf8(bytes).ok()?;
     let rest = s.strip_prefix("file://")?;
-    let path = rest.find('/').map(|idx| &rest[idx..])?;
+    let path = if is_windows_drive_without_host(rest) {
+        rest
+    } else {
+        rest.find('/').map(|idx| &rest[idx..])?
+    };
     let path = strip_windows_drive_leading_slash(path);
     let decoded = percent_decode(path);
     if decoded.is_empty() {
@@ -74,6 +78,20 @@ pub fn parse_file_uri(bytes: &[u8]) -> Option<PathBuf> {
     } else {
         Some(PathBuf::from(decoded))
     }
+}
+
+/// `file://C:/Users/ana` -- duas barras, sem a barra extra de host vazio
+/// que `file:///C:/...` tem. Forma que alguns emissores usam para o
+/// caminho local do Windows, tratando a letra de unidade como se fosse
+/// tudo que vem depois de `file://` sem `authority`. Sem este desvio,
+/// `rest.find('/')` acharia a barra logo depois de `C:` e devolveria
+/// `/Users/ana` como se `C:` fosse hostname -- descartando a letra de
+/// unidade **em silêncio** (nunca `None`, `received_osc7` marcado mesmo
+/// assim, caminho resultante inválido no Windows). Só bate para letra de
+/// unidade seguida de `:/`; um hostname de verdade não tem essa forma.
+fn is_windows_drive_without_host(rest: &str) -> bool {
+    let bytes = rest.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }
 
 /// Bug latente da F2 (achado ao escrever os snippets do ADR-0039):
@@ -183,5 +201,23 @@ mod tests {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file:///d:/projetos/porecatu"));
         assert_eq!(cwd, Some(PathBuf::from("d:/projetos/porecatu")));
+    }
+
+    /// Forma de duas barras (sem a barra extra de host vazio) não deve
+    /// ter a letra de unidade confundida com hostname e descartada.
+    #[test]
+    fn windows_drive_letter_two_slash_form_is_not_mistaken_for_host() {
+        let mut w = Osc7Watcher::new();
+        let cwd = w.advance(&osc7("file://C:/Users/ana"));
+        assert_eq!(cwd, Some(PathBuf::from("C:/Users/ana")));
+    }
+
+    /// Um hostname de verdade (sem letra de unidade seguida de `:/`)
+    /// continua descartado normalmente, sem cair no desvio novo.
+    #[test]
+    fn real_hostname_is_still_discarded() {
+        let mut w = Osc7Watcher::new();
+        let cwd = w.advance(&osc7("file://myhost/C:/Users/ana"));
+        assert_eq!(cwd, Some(PathBuf::from("C:/Users/ana")));
     }
 }
