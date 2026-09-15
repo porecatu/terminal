@@ -324,12 +324,19 @@ struct TabRuntime {
     /// uma aba nova herda `cwd` do grupo (ADR-0017 item 1) sem nunca ter
     /// recebido OSC 7 -- este campo só o sinal de verdade, nunca herdado.
     received_osc7: bool,
-    /// Instante do spawn -- base do gatilho temporal do convite no Windows
-    /// (ADR-0039 §2: "não há fallback lá, então o gatilho é o tempo").
-    /// Só existe no Windows porque só lá o gatilho é temporal; fora dele o
-    /// gatilho é o fallback do ADR-0038, consultado na gravação.
+    /// `Instant` do primeiro `Wakeup::TabDirty` desta aba -- "o shell
+    /// desenhou alguma coisa", aproximação de "prompt pronto" (mesmo
+    /// sinal de `App::mark_first_pty_output`, por aba em vez de por
+    /// processo). Base do gatilho temporal do convite no Windows: contar
+    /// os 3s a partir do *spawn* dispara cedo demais em shell com
+    /// startup lento (perfil grande, antivírus, unidade de rede) mesmo
+    /// com a integração corretamente configurada -- contar a partir da
+    /// primeira saída de verdade não tem esse falso-positivo, e `None`
+    /// (shell ainda não desenhou nada) não agenda nem expira o convite.
+    /// Só existe no Windows porque só lá o gatilho é temporal; fora dele
+    /// o gatilho é o fallback do ADR-0038, consultado na gravação.
     #[cfg(windows)]
-    spawned_at: Instant,
+    first_output_at: Option<Instant>,
     /// ADR-0051 §6: comando do `.porecatu` à espera do momento certo de
     /// escrita. Só populado por aba `Restored` (RF-12.12).
     pending_project_command: Option<PendingProjectCommand>,
@@ -880,19 +887,22 @@ fn fallback_reveals_missing_osc7(
     !received_osc7 && fallback.is_some_and(|f| Some(f) != spawn_cwd)
 }
 
-/// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: a aba ficou
-/// interativa (`spawned_at`) por `interval` sem nenhum `TermEvent::Cwd`.
-/// Só existe no Windows -- fora dele o gatilho é
+/// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: a aba produziu a
+/// primeira saída (`first_output_at`, aproximação de "prompt pronto") há
+/// `interval` sem nenhum `TermEvent::Cwd`. `None` (shell ainda não
+/// desenhou nada) nunca expira -- um shell de startup lento não pode
+/// disparar o convite antes de ter tido a chance de emitir OSC 7. Só
+/// existe no Windows -- fora dele o gatilho é
 /// `fallback_reveals_missing_osc7`, e esta função ficaria sem chamador
 /// (`dead_code` do clippy, que só aparece no CI de Linux/macOS).
 #[cfg(windows)]
 fn windows_invite_timeout_due(
     received_osc7: bool,
-    spawned_at: Instant,
+    first_output_at: Option<Instant>,
     now: Instant,
     interval: Duration,
 ) -> bool {
-    !received_osc7 && now >= spawned_at + interval
+    !received_osc7 && first_output_at.is_some_and(|t| now >= t + interval)
 }
 
 /// RF-3.1 (ADR-0039 §1): "não escrever com a tela alternativa ativa" --
@@ -1070,11 +1080,11 @@ mod shell_integration_trigger_tests {
     #[test]
     #[cfg(windows)]
     fn windows_timeout_does_not_fire_before_the_interval() {
-        let spawned_at = Instant::now();
-        let now = spawned_at + Duration::from_secs(1);
+        let first_output_at = Instant::now();
+        let now = first_output_at + Duration::from_secs(1);
         assert!(!windows_invite_timeout_due(
             false,
-            spawned_at,
+            Some(first_output_at),
             now,
             Duration::from_secs(3)
         ));
@@ -1083,11 +1093,11 @@ mod shell_integration_trigger_tests {
     #[test]
     #[cfg(windows)]
     fn windows_timeout_fires_once_the_interval_elapses() {
-        let spawned_at = Instant::now();
-        let now = spawned_at + Duration::from_secs(3);
+        let first_output_at = Instant::now();
+        let now = first_output_at + Duration::from_secs(3);
         assert!(windows_invite_timeout_due(
             false,
-            spawned_at,
+            Some(first_output_at),
             now,
             Duration::from_secs(3)
         ));
@@ -1098,11 +1108,27 @@ mod shell_integration_trigger_tests {
     #[test]
     #[cfg(windows)]
     fn windows_timeout_never_fires_once_osc7_arrived() {
-        let spawned_at = Instant::now();
-        let now = spawned_at + Duration::from_secs(999);
+        let first_output_at = Instant::now();
+        let now = first_output_at + Duration::from_secs(999);
         assert!(!windows_invite_timeout_due(
             true,
-            spawned_at,
+            Some(first_output_at),
+            now,
+            Duration::from_secs(3)
+        ));
+    }
+
+    /// Bug corrigido: contar a partir do spawn (em vez da primeira saída
+    /// de verdade) disparava o convite cedo demais num shell de startup
+    /// lento. Sem `first_output_at` (nada desenhado ainda), o convite não
+    /// pode vencer -- não importa quanto tempo tenha passado.
+    #[test]
+    #[cfg(windows)]
+    fn windows_timeout_never_fires_before_any_output() {
+        let now = Instant::now() + Duration::from_secs(999);
+        assert!(!windows_invite_timeout_due(
+            false,
+            None,
             now,
             Duration::from_secs(3)
         ));
@@ -1867,7 +1893,7 @@ impl WindowState {
                         spawn_cwd: cwd,
                         received_osc7: false,
                         #[cfg(windows)]
-                        spawned_at: now,
+                        first_output_at: None,
                         pending_project_command,
                         pending_project_notice,
                     },
@@ -4754,7 +4780,19 @@ impl App {
                         zoom_steps,
                         |tab_id| {
                             state.tabs.get(&tab_id).and_then(|rt| {
-                                rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
+                                // RF-3.10/ADR-0038 §2: `rt.received_osc7` é o
+                                // sinal de verdade, não `Tab::cwd().is_some()`
+                                // -- uma aba nova herda `cwd` do grupo na
+                                // criação (ADR-0017 item 1) sem nunca ter
+                                // recebido OSC 7. Com OSC 7 confirmado, não
+                                // sobrescreve (`None`); sem confirmação,
+                                // consulta o fallback (`ProcessGroup::cwd`
+                                // fora do Windows, senão o `cwd` de spawn).
+                                if rt.received_osc7 {
+                                    None
+                                } else {
+                                    rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
+                                }
                             })
                         },
                     )
@@ -5123,11 +5161,15 @@ impl App {
     }
 
     /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: mais próxima
-    /// entre as abas ainda sem OSC 7 de `spawned_at + WINDOWS_SHELL_
-    /// INTEGRATION_INVITE_INTERVAL`. `None` fora do Windows (lá o gatilho
-    /// é o fallback do ADR-0038, consultado só na gravação -- ver
-    /// `check_shell_integration_fallback_trigger`) ou quando o convite já
-    /// foi escolhido/dispensado/desligado -- não há por que a janela
+    /// entre as abas ainda sem OSC 7 **e já com primeira saída** de
+    /// `first_output_at + WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL` --
+    /// aba sem `first_output_at` ainda (shell não desenhou nada) não
+    /// entra na conta, então não agenda despertar nenhum por ela até que
+    /// produza saída. `None` fora do Windows (lá o gatilho é o fallback
+    /// do ADR-0038, consultado só na gravação -- ver
+    /// `check_shell_integration_fallback_trigger`), quando não há
+    /// nenhuma aba com saída ainda, ou quando o convite já foi
+    /// escolhido/dispensado/desligado -- não há por que a janela
     /// continuar despertando por isto depois disso.
     #[cfg(windows)]
     fn shell_integration_invite_deadline(&self) -> Option<Instant> {
@@ -5141,7 +5183,8 @@ impl App {
             .values()
             .flat_map(|w| w.tabs.values())
             .filter(|rt| !rt.received_osc7)
-            .map(|rt| rt.spawned_at + WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL)
+            .filter_map(|rt| rt.first_output_at)
+            .map(|first_output_at| first_output_at + WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL)
             .min()
     }
 
@@ -5309,7 +5352,7 @@ impl App {
             state.tabs.iter().find_map(|(tab_id, rt)| {
                 windows_invite_timeout_due(
                     rt.received_osc7,
-                    rt.spawned_at,
+                    rt.first_output_at,
                     now,
                     WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL,
                 )
@@ -5735,6 +5778,18 @@ impl ApplicationHandler<Wakeup> for App {
                 pending.first_output_at = Some(now);
             }
             pending.last_output_at = Some(now);
+        }
+
+        // ADR-0039 §2: primeira saída desta aba -- base do gatilho
+        // temporal do convite de integração de shell no Windows
+        // (`shell_integration_invite_deadline`/`windows_invite_timeout_
+        // due`), em vez do instante do spawn. Marcado uma vez só, no
+        // primeiro `Wakeup::TabDirty` da aba.
+        #[cfg(windows)]
+        if let Some(runtime) = state.tabs.get_mut(&tab_id)
+            && runtime.first_output_at.is_none()
+        {
+            runtime.first_output_at = Some(Instant::now());
         }
 
         // Aba suja que não é a visível: só marca o indicador de atividade
