@@ -70,18 +70,46 @@ fn sdf_rounded_box(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
+// Cobertura de caixa reta por eixo, separavel. `max(q.x, q.y)` (sdf_box) tem
+// uma quina de gradiente na diagonal do canto (onde q.x ~= q.y, os dois
+// positivos); `fwidth` sobre essa quina mistura a derivada dos dois lados e
+// alarga o antialiasing so ali, arredondando visivelmente o canto mesmo com
+// a SDF reta. Calculando a cobertura de cada eixo com seu proprio fwidth (que
+// nunca depende do outro eixo) e multiplicando, a quina desaparece por
+// construcao -- e um retangulo com bordas ja alinhadas ao pixel fisico
+// (snap_rect_to_physical_pixels) sai 0/1 puro em todo canto, sem faixa cinza.
+fn box_coverage(local_pos: vec2<f32>, half_size: vec2<f32>) -> f32 {
+    let edge = half_size - abs(local_pos);
+    let aa = max(fwidth(local_pos), vec2<f32>(0.0001, 0.0001));
+    let cov = clamp(edge / aa + vec2<f32>(0.5, 0.5), vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0));
+    return cov.x * cov.y;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let dist = sdf_rounded_box(in.local_pos, in.half_size, in.radius);
-    let aa = max(fwidth(dist) * 0.5, 0.0001);
-    let fill_alpha = 1.0 - smoothstep(-aa, aa, dist);
+    var fill_alpha: f32;
+    var border_frac = 0.0;
+
+    if in.radius <= 0.0 {
+        fill_alpha = box_coverage(in.local_pos, in.half_size);
+        if in.border_width > 0.0 {
+            let outer_cov = box_coverage(in.local_pos, in.half_size + vec2<f32>(in.border_width, in.border_width));
+            border_frac = clamp(outer_cov - fill_alpha, 0.0, 1.0);
+        }
+    } else {
+        let dist = sdf_rounded_box(in.local_pos, in.half_size, in.radius);
+        let aa = max(fwidth(dist) * 0.5, 0.0001);
+        fill_alpha = 1.0 - smoothstep(-aa, aa, dist);
+        if in.border_width > 0.0 {
+            let border_dist = dist + in.border_width;
+            let border_alpha = 1.0 - smoothstep(-aa, aa, border_dist);
+            border_frac = clamp(border_alpha - fill_alpha, 0.0, 1.0);
+        }
+    }
 
     var color = in.color;
     if in.border_width > 0.0 {
-        let border_dist = dist + in.border_width;
-        let border_alpha = 1.0 - smoothstep(-aa, aa, border_dist);
-        let is_border = clamp(border_alpha - fill_alpha, 0.0, 1.0);
-        color = mix(in.color, in.border_color, is_border);
+        color = mix(in.color, in.border_color, border_frac);
     }
 
     let alpha = color.a * fill_alpha;
