@@ -17,6 +17,7 @@
 
 use std::time::{Duration, Instant};
 
+use porecatu_core::PaneId;
 use porecatu_term::{
     Modifiers, MouseAction, MouseButton as TermMouseButton, SelectionKind, SelectionSide, TermKey,
     TermModes, TermScroll, Terminal, encode_ctrl_char, encode_key, encode_mouse_report,
@@ -317,22 +318,29 @@ fn term_button(button: WinitMouseButton) -> Option<TermMouseButton> {
 
 /// Conta cliques no mesmo lugar dentro de [`MULTI_CLICK_THRESHOLD`] para
 /// decidir Simples/Semântica/Linha (RF-10.4). `winit` não dá isso pronto.
+///
+/// ADR-0053 §7 (riscos): o rastreador é **por janela**, não por painel --
+/// com painéis divididos, dois cliques rápidos em painéis diferentes na
+/// mesma célula (`(0, 0)` de cada grade, por exemplo) não podem contar como
+/// duplo clique. `pane` guarda o painel do clique anterior junto da
+/// posição; `register` exige os dois iguais para continuar a sequência.
 #[derive(Debug, Default)]
 pub struct ClickTracker {
-    last: Option<(Instant, usize, usize)>,
+    last: Option<(Instant, PaneId, usize, usize)>,
     count: u8,
 }
 
 impl ClickTracker {
-    /// Registra um clique em `(row, col)` e devolve a contagem atual
-    /// (1 = simples, 2 = duplo, 3 = triplo, e cicla de volta pra 1).
-    fn register(&mut self, row: usize, col: usize) -> u8 {
+    /// Registra um clique em `(row, col)` do painel `pane` e devolve a
+    /// contagem atual (1 = simples, 2 = duplo, 3 = triplo, e cicla de volta
+    /// pra 1).
+    fn register(&mut self, pane: PaneId, row: usize, col: usize) -> u8 {
         let now = Instant::now();
-        let continues = self.last.is_some_and(|(t, r, c)| {
-            r == row && c == col && now.duration_since(t) < MULTI_CLICK_THRESHOLD
+        let continues = self.last.is_some_and(|(t, p, r, c)| {
+            p == pane && r == row && c == col && now.duration_since(t) < MULTI_CLICK_THRESHOLD
         });
         self.count = if continues { (self.count % 3) + 1 } else { 1 };
-        self.last = Some((now, row, col));
+        self.last = Some((now, pane, row, col));
         self.count
     }
 }
@@ -357,6 +365,7 @@ pub fn handle_mouse_button(
     modes: &TermModes,
     button: WinitMouseButton,
     pressed: bool,
+    pane: PaneId,
     cell: CellPosition,
     modifiers: Modifiers,
     click_tracker: &mut ClickTracker,
@@ -390,7 +399,7 @@ pub fn handle_mouse_button(
     }
 
     if pressed {
-        let count = click_tracker.register(cell.row, cell.col);
+        let count = click_tracker.register(pane, cell.row, cell.col);
         let kind = selection_kind(count, modifiers.alt);
         terminal.start_selection(kind, cell.row, cell.col, cell.side);
     } else if copy_on_select && let Some(text) = terminal.selection_text() {

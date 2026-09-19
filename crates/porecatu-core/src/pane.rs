@@ -195,6 +195,21 @@ pub enum Direction {
     Down,
 }
 
+/// Lado descido a partir de um nó `Split`, um passo do caminho até ele a
+/// partir da raiz -- endereça um divisor por **posição estrutural**, não
+/// por painel vizinho. `PaneTree::set_ratio` (por `PaneId` de uma folha
+/// filha imediata) não alcança um split cujos dois filhos já são splits --
+/// um layout em cruz de quatro painéis (RF-6.2, aninhamento sem limite) tem
+/// exatamente essa forma para o divisor externo. `path` é a mesma
+/// travessia `first`/`second` que `porecatu_ui::panes::layout` já faz para
+/// desenhar o vão, então sempre existe um caminho válido para qualquer
+/// divisor que apareça em tela.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    First,
+    Second,
+}
+
 /// Nó da árvore binária: folha (um painel) ou split (dois filhos, um eixo e
 /// a posição do divisor). `ratio` é a fração do retângulo que `first`
 /// recebe -- sempre no intervalo aberto `(0, 1)`.
@@ -466,6 +481,27 @@ impl PaneTree {
             ratio.clamp(RATIO_EPSILON, 1.0 - RATIO_EPSILON),
         )
     }
+
+    /// RF-6.13/RF-6.14, endereçado por `path` em vez de painel vizinho --
+    /// ver a nota de [`Side`]. `porecatu_ui::panes::dividers` produz o
+    /// mesmo `path` para cada vão em tela, então este método alcança
+    /// qualquer divisor visível, inclusive o de um layout em cruz. `false`
+    /// se `path` não leva a um `Split` (árvore mudou sob o arraste --
+    /// painel fechado no meio do gesto, por exemplo).
+    pub fn set_ratio_at_path(&mut self, path: &[Side], ratio: f32) -> bool {
+        set_ratio_at_path(
+            &mut self.root,
+            path,
+            ratio.clamp(RATIO_EPSILON, 1.0 - RATIO_EPSILON),
+        )
+    }
+
+    /// O `ratio` do `Split` em `path`, se ele existir -- usado para
+    /// resolver o `ratio` inicial ao armar o arraste (`Drag::
+    /// DividerPressed`), sem duplicar a travessia de `set_ratio_at_path`.
+    pub fn ratio_at_path(&self, path: &[Side]) -> Option<f32> {
+        ratio_at_path(&self.root, path)
+    }
 }
 
 fn fresh_pane_id(counter: &mut u32) -> PaneId {
@@ -590,6 +626,31 @@ fn remove_leaf(node: PaneNode, target: PaneId) -> RemoveOutcome {
                 }),
             },
         },
+    }
+}
+
+fn set_ratio_at_path(node: &mut PaneNode, path: &[Side], ratio: f32) -> bool {
+    match (node, path.split_first()) {
+        (PaneNode::Split { ratio: r, .. }, None) => {
+            *r = ratio;
+            true
+        }
+        (PaneNode::Split { first, .. }, Some((Side::First, rest))) => {
+            set_ratio_at_path(first, rest, ratio)
+        }
+        (PaneNode::Split { second, .. }, Some((Side::Second, rest))) => {
+            set_ratio_at_path(second, rest, ratio)
+        }
+        (PaneNode::Leaf(_), _) => false,
+    }
+}
+
+fn ratio_at_path(node: &PaneNode, path: &[Side]) -> Option<f32> {
+    match (node, path.split_first()) {
+        (PaneNode::Split { ratio, .. }, None) => Some(*ratio),
+        (PaneNode::Split { first, .. }, Some((Side::First, rest))) => ratio_at_path(first, rest),
+        (PaneNode::Split { second, .. }, Some((Side::Second, rest))) => ratio_at_path(second, rest),
+        (PaneNode::Leaf(_), _) => None,
     }
 }
 
@@ -856,6 +917,58 @@ mod tests {
         assert!(!pane.activity());
         assert!(!pane.bell());
         assert!(pane.is_exited());
+    }
+
+    // -----------------------------------------------------------------
+    // Divisor endereçado por caminho (RF-6.13/RF-6.14)
+    // -----------------------------------------------------------------
+
+    /// O caso que `set_ratio(id, ..)` não alcança: layout em cruz, os dois
+    /// filhos imediatos da raiz já são `Split` -- nenhuma folha é filha
+    /// direta dela. `set_ratio_at_path([], ..)` move o divisor externo
+    /// mesmo assim.
+    #[test]
+    fn set_ratio_at_path_reaches_a_split_whose_children_are_both_splits() {
+        let mut tree = PaneTree::new("zsh");
+        let top_left = tree.focused_id();
+        let right_half = tree
+            .split(top_left, SplitAxis::Vertical, "zsh", None)
+            .unwrap();
+        tree.split(right_half, SplitAxis::Horizontal, "zsh", None);
+        tree.split(top_left, SplitAxis::Horizontal, "zsh", None);
+        let PaneNode::Split { first, second, .. } = tree.root() else {
+            panic!("split esperado");
+        };
+        assert!(
+            matches!(**first, PaneNode::Split { .. }) && matches!(**second, PaneNode::Split { .. }),
+            "pré-condição do teste: os dois filhos da raiz já são splits"
+        );
+
+        assert_eq!(tree.ratio_at_path(&[]), Some(0.5));
+        assert!(tree.set_ratio_at_path(&[], 0.3));
+        assert_eq!(tree.ratio_at_path(&[]), Some(0.3));
+
+        // O divisor interno (`First`) continua endereçável e independente.
+        assert!(tree.set_ratio_at_path(&[Side::First], 0.7));
+        assert_eq!(tree.ratio_at_path(&[Side::First]), Some(0.7));
+        assert_eq!(tree.ratio_at_path(&[]), Some(0.3), "não deve se mexer");
+    }
+
+    #[test]
+    fn set_ratio_at_path_clamps_to_the_open_interval() {
+        let mut tree = PaneTree::new("zsh");
+        let a = tree.focused_id();
+        tree.split(a, SplitAxis::Vertical, "zsh", None);
+        assert!(tree.set_ratio_at_path(&[], -5.0));
+        let ratio = tree.ratio_at_path(&[]).unwrap();
+        assert!(ratio > 0.0 && ratio < 1.0);
+    }
+
+    #[test]
+    fn set_ratio_at_path_is_false_for_a_path_that_does_not_lead_to_a_split() {
+        let mut tree = PaneTree::new("zsh");
+        assert!(!tree.set_ratio_at_path(&[Side::First], 0.5), "raiz é folha");
+        assert!(tree.ratio_at_path(&[Side::First]).is_none());
     }
 
     #[test]

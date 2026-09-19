@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use porecatu_core::{Action, GroupId, PaneId, TabId, Workspace};
+use porecatu_core::{
+    Action, Direction as PaneDirection, GroupId, PaneId, Side, SplitAxis, TabId, Workspace,
+};
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_term::{
     DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
@@ -115,13 +117,11 @@ fn focused_pane(workspace: &Workspace, tab: TabId) -> Option<PaneId> {
 /// (nota do módulo `terminal_menu.rs`). Função livre, não método de
 /// `App`/`WindowState`, porque os dois às vezes precisam ser chamados com
 /// `state.panes` já emprestado por outro campo do mesmo `state`.
-#[allow(clippy::too_many_arguments)]
 fn terminal_menu_context_items(
     panes: &HashMap<PaneId, PaneRuntime>,
     style: &TabBarStyle,
     cell_metrics: CellMetrics,
-    logical_width: f32,
-    logical_height: f32,
+    pane_rect: Rect,
     pane: PaneId,
     anchor: (f32, f32),
 ) -> Vec<TerminalMenuItem> {
@@ -129,13 +129,7 @@ fn terminal_menu_context_items(
         return terminal_menu_items(false, false);
     };
     let has_selection = rt.terminal.selection_text().is_some();
-    let content = paint::terminal_content_rect(
-        style,
-        bar_height(style),
-        status_bar_height(style),
-        logical_width,
-        logical_height,
-    );
+    let content = paint::pane_content_rect(pane_rect, style);
     let (content_x, content_y) = input::logical_point_in_content(anchor, (content.x, content.y));
     let cell = input::cell_at(
         content_x,
@@ -242,6 +236,34 @@ enum Drag {
         grab_offset: f32,
         /// Mesma convenção de `tab_bar::group_drag_target_index`.
         preview_index: usize,
+    },
+    /// Arraste do divisor entre painéis (ADR-0053 §7/§8, RF-6.13/RF-6.14).
+    /// **Duas simplificações contra o arraste de aba**: sem clone do
+    /// `Workspace` (o que muda é um `ratio`, e não há "soltar fora" que
+    /// precise descartar algo) e sem `AnimationClock` (a cadência é a dos
+    /// eventos de mouse, como a seleção de texto). O `path` (ADR-0053 §7 --
+    /// `porecatu_core::pane::Side`) é a mesma travessia de
+    /// `panes::dividers`, então o alvo nunca discorda de onde o cursor
+    /// pegou o divisor.
+    PaneDividerPressed {
+        tab: TabId,
+        path: [Side; panes::MAX_DEPTH],
+        depth: usize,
+        axis: SplitAxis,
+        start: (f32, f32),
+    },
+    /// **Reencaixa o PTY a cada quadro** (ADR-0053 §8), não só ao soltar --
+    /// ver o comentário de `resize_to`. `container`/`axis` vêm do mesmo
+    /// `PaneDivider` que armou o gesto; recalculados a cada `CursorMoved`
+    /// não fariam sentido (a árvore de painéis não muda durante o arraste),
+    /// mas guardá-los evita reconsultar `panes::dividers` a cada quadro só
+    /// para descobrir de novo o que já se sabe desde o press.
+    PaneDividerDragging {
+        tab: TabId,
+        path: [Side; panes::MAX_DEPTH],
+        depth: usize,
+        axis: SplitAxis,
+        container: Rect,
     },
 }
 
@@ -394,6 +416,73 @@ fn grid_size_for_rect(content: Rect, cell_metrics: CellMetrics) -> (usize, usize
     let cols = ((content.width / cell_metrics.width) as usize).max(MIN_GRID);
     let rows = ((content.height / cell_metrics.height) as usize).max(MIN_GRID);
     (rows, cols)
+}
+
+/// RF-6.4/RF-6.14: `pane_rect` comporta o mínimo de `[panes]`? Calculado
+/// com a mesma `grid_size_for_rect`/`pane_content_rect` que o spawn e o
+/// resize de verdade usam -- nunca uma conta paralela (é a régua explícita
+/// do prompt desta etapa), senão o gate poderia discordar do tamanho que o
+/// painel de fato recebe.
+fn pane_meets_minimum(
+    pane_rect: Rect,
+    style: &TabBarStyle,
+    cell_metrics: CellMetrics,
+    panes_config: &porecatu_config::Panes,
+) -> bool {
+    let content = paint::pane_content_rect(pane_rect, style);
+    let (rows, cols) = grid_size_for_rect(content, cell_metrics);
+    cols >= panes_config.min_columns as usize && rows >= panes_config.min_rows as usize
+}
+
+/// RF-6.4: todo painel de `layout` comporta o mínimo -- usado para
+/// recusar um split (ou parar um arraste) antes de aplicá-lo de verdade.
+/// Checa a lista inteira, não só os dois painéis que acabaram de mudar de
+/// tamanho: mais barato que descobrir quais dois são, e correto do mesmo
+/// jeito -- painéis que não mudaram de retângulo continuam dentro do
+/// mínimo se já estavam.
+fn all_panes_meet_minimum(
+    layout: &[(PaneId, Rect)],
+    style: &TabBarStyle,
+    cell_metrics: CellMetrics,
+    panes_config: &porecatu_config::Panes,
+) -> bool {
+    layout
+        .iter()
+        .all(|(_, rect)| pane_meets_minimum(*rect, style, cell_metrics, panes_config))
+}
+
+/// RF-6.14: intervalo de `ratio` em que os dois lados de `container`
+/// (dividido em `axis`) continuam comportando `[panes] min_columns`/
+/// `min_rows` -- o arraste clampa a este intervalo, "o divisor para quando
+/// um dos vizinhos chega ao limite". Álgebra linear direta (`split_rect` de
+/// `panes.rs` é linear em `ratio`), não busca: `first`/`second` em pixels
+/// são funções lineares de `ratio`, então o mínimo de cada lado vira um
+/// limite de `ratio` fechado, sem iterar candidatos.
+fn divider_ratio_bounds(
+    container: Rect,
+    axis: SplitAxis,
+    gap: f32,
+    style: &TabBarStyle,
+    cell_metrics: CellMetrics,
+    panes_config: &porecatu_config::Panes,
+) -> (f32, f32) {
+    let padding = style.terminal_frame_padding;
+    let (available, min_pane_px) = match axis {
+        SplitAxis::Vertical => (
+            (container.width - gap).max(1.0),
+            panes_config.min_columns as f32 * cell_metrics.width + 2.0 * padding,
+        ),
+        SplitAxis::Horizontal => (
+            (container.height - gap).max(1.0),
+            panes_config.min_rows as f32 * cell_metrics.height + 2.0 * padding,
+        ),
+    };
+    // `.min(0.5)`: se o container inteiro não comporta duas vezes o
+    // mínimo (não devia acontecer -- `all_panes_meet_minimum` já recusou
+    // o split que criaria isto -- mas a janela pode ter encolhido depois),
+    // trava no meio em vez de produzir um intervalo invertido.
+    let min_ratio = (min_pane_px / available).min(0.5);
+    (min_ratio, 1.0 - min_ratio)
 }
 
 /// Arredonda a métrica de célula para que a origem de toda coluna
@@ -1977,6 +2066,178 @@ impl WindowState {
         self.sync_window_title();
     }
 
+    /// RF-6.1/RF-6.3: sobe o `Terminal` de `pane_id`, recém-criado por um
+    /// split. Molde bem mais simples de [`Self::spawn_tab_runtime`]: um
+    /// painel de split nunca é `Restored` (é sempre gesto do usuário
+    /// agora), então não há `.porecatu` a considerar (RF-6.24 é só de aba
+    /// restaurada, ADR-0053 §12) nem nota de `cwd` ausente a injetar -- o
+    /// `cwd` herdado do painel de origem (RF-6.3) sempre existiu.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_split_pane_runtime(
+        &mut self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        cwd: Option<PathBuf>,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
+        now: Instant,
+    ) {
+        let pane_rect = self.pane_box_rect(style, pane_id);
+        let content = paint::pane_content_rect(pane_rect, style);
+        let (rows, cols) = grid_size_for_rect(content, cell_metrics);
+        let window_id = self.window.id();
+        let proxy = proxy.clone();
+        let pty_config = SpawnConfig {
+            program: (!shell.program.is_empty()).then(|| shell.program.clone()),
+            args: shell.args.clone(),
+            env: shell
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            cwd: cwd.clone(),
+            size: PtySize {
+                rows: rows as u16,
+                cols: cols as u16,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+        };
+        match Terminal::spawn(pty_config, term_params.clone(), move || {
+            let _ = proxy.send_event(Wakeup::TabDirty {
+                window: window_id,
+                tab: tab_id,
+                pane: pane_id,
+            });
+        }) {
+            Ok(terminal) => {
+                self.panes.insert(
+                    pane_id,
+                    PaneRuntime {
+                        terminal,
+                        snapshot: GridSnapshot::default(),
+                        spawn_cwd: cwd,
+                        received_osc7: false,
+                        #[cfg(windows)]
+                        first_output_at: None,
+                        pending_project_command: None,
+                        pending_project_notice: None,
+                    },
+                );
+            }
+            Err(err) => {
+                self.warnings.push(
+                    Severity::Error,
+                    "Falha ao iniciar terminal",
+                    err.to_string(),
+                    now,
+                );
+                // Desfaz o split: fechar o painel devolve o espaço ao
+                // irmão (`PaneTree::close`), em vez de deixar uma folha
+                // sem `PaneRuntime` na árvore.
+                if let Some(tab) = self.workspace.tab_mut(tab_id) {
+                    tab.panes_mut().close(pane_id);
+                }
+            }
+        }
+        self.sync_window_title();
+    }
+
+    /// RF-6.1/RF-6.2/RF-6.3/RF-6.4: divide o painel focado da aba ativa.
+    /// Simula o split numa árvore clonada **antes** de tocar a de
+    /// verdade -- barato (só a árvore, sem PTY) -- para recusar (canal 1
+    /// do ADR-0014) quando qualquer um dos dois painéis resultantes
+    /// ficaria abaixo de `[panes] min_columns`/`min_rows`, calculado com a
+    /// mesma `panes::layout` que desenha o vão, nunca uma conta paralela.
+    #[allow(clippy::too_many_arguments)]
+    fn action_split_pane(
+        &mut self,
+        axis: SplitAxis,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
+        panes_config: &porecatu_config::Panes,
+    ) {
+        let Some(tab_id) = self.workspace.active_tab() else {
+            return;
+        };
+        let Some(tab) = self.workspace.tab(tab_id) else {
+            return;
+        };
+        let focused = tab.panes().focused_id();
+        let shell_name = Self::shell_display_name(shell);
+        // RF-6.3: o painel novo herda o `cwd` do painel de origem -- o
+        // mesmo valor que a barra de status/o título já mostram para ele.
+        let cwd = tab.cwd().cloned();
+
+        let mut trial = tab.panes().clone();
+        if trial
+            .split(focused, axis, shell_name.clone(), cwd.clone())
+            .is_none()
+        {
+            return;
+        }
+        let box_rect = self.active_tab_box_rect(style);
+        let trial_layout = panes::layout(&trial, box_rect, style);
+        if !all_panes_meet_minimum(&trial_layout, style, cell_metrics, panes_config) {
+            self.warnings.push(
+                Severity::Warning,
+                "Painel não cabe",
+                format!(
+                    "Dividir deixaria um painel com menos de {}×{} células.",
+                    panes_config.min_columns, panes_config.min_rows
+                ),
+                now,
+            );
+            return;
+        }
+
+        let Some(tab) = self.workspace.tab_mut(tab_id) else {
+            return;
+        };
+        let Some(new_pane_id) = tab
+            .panes_mut()
+            .split(focused, axis, shell_name, cwd.clone())
+        else {
+            return;
+        };
+        self.spawn_split_pane_runtime(
+            tab_id,
+            new_pane_id,
+            cwd,
+            cell_metrics,
+            proxy,
+            style,
+            term_params,
+            shell,
+            now,
+        );
+        self.mark_session_dirty();
+    }
+
+    /// RF-6.8: move o foco para o vizinho geométrico -- `focus_in_direction`
+    /// já existe no core desde a etapa 2. O que é de janela: título e barra
+    /// de status seguem o painel focado (RF-6.17/RF-6.19), e trocar de
+    /// painel fecha a busca (mesma regra de trocar de aba, conferida a cada
+    /// redraw).
+    fn action_focus_pane(&mut self, direction: PaneDirection) {
+        let Some(tab_id) = self.workspace.active_tab() else {
+            return;
+        };
+        let Some(tab) = self.workspace.tab_mut(tab_id) else {
+            return;
+        };
+        if tab.panes_mut().focus_in_direction(direction) {
+            self.sync_window_title();
+        }
+    }
+
     /// ADR-0037 §2: o shell sobe no primeiro foco, por qualquer caminho de
     /// ativação -- chamado uma vez por evento de janela, no fim de
     /// [`App::window_event`], depois que qualquer clique/atalho já
@@ -2069,6 +2330,25 @@ impl WindowState {
         self.workspace.active_tab().is_none()
     }
 
+    /// RF-6.10: fecha `pane_id` sem perguntar, devolvendo o espaço ao
+    /// irmão (`PaneTree::close`). **Nunca** chamado para o último painel de
+    /// uma aba -- fechar o último é fechar a aba inteira, que é
+    /// `close_tab_unconditionally` (`action_close_pane` decide qual dos
+    /// dois vale antes de chamar).
+    fn close_pane_unconditionally(&mut self, tab_id: TabId, pane_id: PaneId) {
+        if let Some(runtime) = self.panes.remove(&pane_id) {
+            let _ = runtime.terminal.close();
+        }
+        if let Some(tab) = self.workspace.tab_mut(tab_id) {
+            tab.panes_mut().close(pane_id);
+        }
+        if self.search.as_ref().is_some_and(|s| s.pane() == pane_id) {
+            self.search = None;
+        }
+        self.sync_window_title();
+        self.mark_session_dirty();
+    }
+
     /// Sincroniza o título da janela do SO com o título da aba ativa
     /// (RF-1.7, já com a precedência do ADR-0017 aplicada por
     /// `Tab::title`). Chamado depois de qualquer mudança que possa afetar
@@ -2146,20 +2426,31 @@ impl WindowState {
     fn action_close_tab(&mut self, confirm_close_with_process: bool) -> Option<TabCloseOutcome> {
         let id = self.workspace.active_tab()?;
         // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
-        // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup` --
-        // sem isto, `self.pane_runtime(id)?` abaixo (que só existe para
-        // painel já spawnado) devolveria `None` e o fechamento não faria
-        // nada.
+        // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup`.
         if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
-        let runtime = self.pane_runtime(id)?;
-        if should_confirm_tab_close(
-            confirm_close_with_process,
-            runtime.terminal.modes(),
-            runtime.terminal.has_extra_processes(),
-        ) {
+        // ADR-0053 §10: fechar a aba pergunta se **qualquer** painel dela
+        // tem processo ativo -- não só o focado. Diferente de
+        // `action_close_pane`, que fecha um painel só e por isso olha
+        // apenas o runtime dele.
+        let any_pane_needs_confirmation = self
+            .workspace
+            .tab(id)?
+            .panes()
+            .leaves_in_order()
+            .iter()
+            .any(|pane| {
+                self.panes.get(pane).is_some_and(|runtime| {
+                    should_confirm_tab_close(
+                        confirm_close_with_process,
+                        runtime.terminal.modes(),
+                        runtime.terminal.has_extra_processes(),
+                    )
+                })
+            });
+        if any_pane_needs_confirmation {
             let title = self
                 .workspace
                 .tab(id)
@@ -2174,6 +2465,39 @@ impl WindowState {
         }
         let window_empty = self.close_tab_unconditionally(id);
         Some(TabCloseOutcome::Closed { window_empty })
+    }
+
+    /// RF-6.10: fecha o painel **focado**. Fechar o último painel de uma
+    /// aba fecha a aba inteira -- mesmo caminho de `action_close_tab`
+    /// (inclusive a confirmação agregada do ADR-0053 §10, porque nesse
+    /// caso "fechar o painel" e "fechar a aba" são o mesmo gesto).
+    /// Confirmação de um painel que não é o último olha só o runtime
+    /// **dele** (RF-1.6 sobre o painel, não a aba).
+    fn action_close_pane(&mut self, confirm_close_with_process: bool) -> Option<TabCloseOutcome> {
+        let tab_id = self.workspace.active_tab()?;
+        let tab = self.workspace.tab(tab_id)?;
+        let pane_id = tab.panes().focused_id();
+        if tab.panes().leaves_in_order().len() <= 1 {
+            return self.action_close_tab(confirm_close_with_process);
+        }
+        let runtime = self.panes.get(&pane_id)?;
+        if should_confirm_tab_close(
+            confirm_close_with_process,
+            runtime.terminal.modes(),
+            runtime.terminal.has_extra_processes(),
+        ) {
+            let title = tab.title().to_string();
+            return Some(TabCloseOutcome::Dialog(ConfirmDialog::new(
+                "Fechar painel?",
+                format!("\"{title}\" tem um programa em primeiro plano. Fechar mesmo assim?"),
+                "Fechar painel",
+                DialogAction::ClosePane(tab_id, pane_id),
+            )));
+        }
+        self.close_pane_unconditionally(tab_id, pane_id);
+        Some(TabCloseOutcome::Closed {
+            window_empty: false,
+        })
     }
 
     fn action_rename_start(&mut self) {
@@ -2360,7 +2684,11 @@ impl WindowState {
         let Some(occurrence) = search.advance(forward) else {
             return;
         };
-        let Some(rt) = self.pane_runtime(tab) else {
+        // ADR-0053 §14: o painel da busca -- pode não ser mais o focado por
+        // um instante (a troca só fecha a busca no próximo redraw), mas é
+        // sempre o que ela varreu.
+        let pane = search.pane();
+        let Some(rt) = self.panes.get(&pane) else {
             return;
         };
         let reserved = search_bar::reserved_rows(cell_metrics.height);
@@ -2491,13 +2819,12 @@ impl WindowState {
         let Some(menu) = &self.terminal_context_menu else {
             return None;
         };
-        let items = match self.focused_pane_of(menu.tab) {
-            Some(pane) => terminal_menu_context_items(
+        let items = match self.pane_and_rect_at(style, menu.anchor) {
+            Some((pane, pane_rect)) => terminal_menu_context_items(
                 &self.panes,
                 style,
                 cell_metrics,
-                self.logical_width,
-                self.logical_height,
+                pane_rect,
                 pane,
                 menu.anchor,
             ),
@@ -2674,6 +3001,7 @@ impl WindowState {
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
         project_file: &porecatu_config::ProjectFile,
+        panes_config: &porecatu_config::Panes,
         keymap: &HashMap<Chord, Action>,
         confirm_close_with_process: bool,
     ) -> ActionOutcome {
@@ -2832,11 +3160,13 @@ impl WindowState {
             // limpa a seleção de texto (ADR-0041 §5): sem isso, seleção e
             // ocorrência ficam indistinguíveis, mesma cor.
             Action::SearchOpen => {
-                if let Some(id) = self.workspace.active_tab() {
-                    if self.search.as_ref().map(SearchBarState::tab) != Some(id) {
-                        self.search = Some(SearchBarState::new(id));
+                if let Some(id) = self.workspace.active_tab()
+                    && let Some(pane) = self.focused_pane_of(id)
+                {
+                    if self.search.as_ref().map(|s| (s.tab(), s.pane())) != Some((id, pane)) {
+                        self.search = Some(SearchBarState::new(id, pane));
                     }
-                    if let Some(rt) = self.pane_runtime(id) {
+                    if let Some(rt) = self.panes.get(&pane) {
                         rt.terminal.clear_selection();
                     }
                 }
@@ -2858,19 +3188,63 @@ impl WindowState {
                 }
                 ActionOutcome::Handled
             }
-            // Painéis divididos (PRD-006, ADR-0053) -- etapa 2, só modelo
-            // e config. As sete entram no catálogo e no mapa resolvido
-            // agora (para os testes de `keymap`/`Keybindings` cobrirem),
-            // mas o wiring de verdade é a etapa 4: devolver `Unhandled`
-            // entrega a tecla ao terminal, que é exatamente o
-            // comportamento de hoje, sem painel nenhum.
-            Action::PaneSplitHorizontal
-            | Action::PaneSplitVertical
-            | Action::PaneClose
-            | Action::PaneFocusLeft
-            | Action::PaneFocusRight
-            | Action::PaneFocusUp
-            | Action::PaneFocusDown => ActionOutcome::Unhandled,
+            // Painéis divididos (PRD-006, ADR-0053) -- wiring de verdade
+            // (etapa 4).
+            Action::PaneSplitHorizontal => {
+                self.action_split_pane(
+                    SplitAxis::Horizontal,
+                    cell_metrics,
+                    proxy,
+                    now,
+                    style,
+                    term_params,
+                    shell,
+                    panes_config,
+                );
+                ActionOutcome::Handled
+            }
+            Action::PaneSplitVertical => {
+                self.action_split_pane(
+                    SplitAxis::Vertical,
+                    cell_metrics,
+                    proxy,
+                    now,
+                    style,
+                    term_params,
+                    shell,
+                    panes_config,
+                );
+                ActionOutcome::Handled
+            }
+            Action::PaneClose => match self.action_close_pane(confirm_close_with_process) {
+                Some(TabCloseOutcome::Dialog(dialog)) => {
+                    self.dialog = Some(dialog);
+                    ActionOutcome::Handled
+                }
+                Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                    ActionOutcome::WindowEmptied
+                }
+                _ => ActionOutcome::Handled,
+            },
+            // RF-6.8: `focus_in_direction` já existe no core desde a etapa
+            // 2 -- aqui só o que é de janela (título/barra de status
+            // seguem o painel focado, RF-6.17/RF-6.19).
+            Action::PaneFocusLeft => {
+                self.action_focus_pane(PaneDirection::Left);
+                ActionOutcome::Handled
+            }
+            Action::PaneFocusRight => {
+                self.action_focus_pane(PaneDirection::Right);
+                ActionOutcome::Handled
+            }
+            Action::PaneFocusUp => {
+                self.action_focus_pane(PaneDirection::Up);
+                ActionOutcome::Handled
+            }
+            Action::PaneFocusDown => {
+                self.action_focus_pane(PaneDirection::Down);
+                ActionOutcome::Handled
+            }
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
             // resolvido -- inalcançável na prática, mas o `match` precisa
             // ser exaustivo.
@@ -3239,12 +3613,23 @@ impl WindowState {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
-        let runtime = self.pane_runtime(id)?;
-        if should_confirm_tab_close(
-            confirm_close_with_process,
-            runtime.terminal.modes(),
-            runtime.terminal.has_extra_processes(),
-        ) {
+        // ADR-0053 §10 -- mesma agregação de `action_close_tab`.
+        let any_pane_needs_confirmation = self
+            .workspace
+            .tab(id)?
+            .panes()
+            .leaves_in_order()
+            .iter()
+            .any(|pane| {
+                self.panes.get(pane).is_some_and(|runtime| {
+                    should_confirm_tab_close(
+                        confirm_close_with_process,
+                        runtime.terminal.modes(),
+                        runtime.terminal.has_extra_processes(),
+                    )
+                })
+            });
+        if any_pane_needs_confirmation {
             let title = self
                 .workspace
                 .tab(id)
@@ -3547,6 +3932,11 @@ impl WindowState {
                 self.handle_pill_click(group, gpu, style);
             }
             Drag::TabPressed { .. } | Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {}
+            // RF-6.14: soltar não confirma nada que já não estivesse
+            // valendo -- o `ratio` já foi escrito ao vivo a cada quadro do
+            // arraste (ADR-0053 §8). Nada a fazer aqui além de devolver o
+            // cursor ao normal, já feito abaixo.
+            Drag::PaneDividerPressed { .. } | Drag::PaneDividerDragging { .. } => {}
             Drag::Idle => {}
         }
         self.window.set_cursor(CursorIcon::Default);
@@ -3751,31 +4141,170 @@ impl WindowState {
         self.window.request_redraw();
     }
 
-    fn cell_at_cursor(
-        &self,
-        cell_metrics: CellMetrics,
-        style: &TabBarStyle,
-    ) -> input::CellPosition {
-        let content = paint::terminal_content_rect(
+    /// ADR-0053 §8: reencaixa o PTY de todos os painéis de `tab_id` a
+    /// partir da árvore corrente -- chamado a cada quadro do arraste do
+    /// divisor, não só ao soltar (`Terminal::resize` é barato em rajada, e
+    /// perder um em trânsito não é grave, mesmo comentário de
+    /// [`Self::resize_to`]). Sem redimensionar a janela: só a subdivisão
+    /// interna mudou.
+    fn resize_tab_panes(&mut self, tab_id: TabId, cell_metrics: CellMetrics, style: &TabBarStyle) {
+        let box_rect = self.active_tab_box_rect(style);
+        let Some(tab) = self.workspace.tab(tab_id) else {
+            return;
+        };
+        for (pane_id, pane_rect) in panes::layout(tab.panes(), box_rect, style) {
+            let content = paint::pane_content_rect(pane_rect, style);
+            let (rows, cols) = grid_size_for_rect(content, cell_metrics);
+            if let Some(runtime) = self.panes.get(&pane_id) {
+                runtime.terminal.resize(rows, cols);
+            }
+        }
+    }
+
+    /// Retângulo do quadro inteiro da aba **ativa** (todos os painéis, antes
+    /// da subdivisão) -- fonte única para quem precisa montar o layout de
+    /// painéis dela (`pane_layout`, hit-test de divisor, retângulo da busca).
+    fn active_tab_box_rect(&self, style: &TabBarStyle) -> Rect {
+        paint::terminal_box_rect(
             style,
             bar_height(style),
             status_bar_height(style),
             self.logical_width,
             self.logical_height,
-        );
-        let logical_cursor = (
-            self.cursor_position.0 as f32 / self.scale,
-            self.cursor_position.1 as f32 / self.scale,
-        );
+        )
+    }
+
+    /// `panes::layout` da aba **ativa**, `None` sem aba ativa -- evita
+    /// repetir "pega a aba ativa, monta o retângulo, subdivide" nos quatro
+    /// lugares que precisam do layout vivo (hit-test de painel/divisor,
+    /// menu de contexto do terminal, retângulo da busca).
+    fn active_pane_layout(&self, style: &TabBarStyle) -> Option<Vec<(PaneId, Rect)>> {
+        let id = self.workspace.active_tab()?;
+        let tab = self.workspace.tab(id)?;
+        let box_rect = self.active_tab_box_rect(style);
+        Some(panes::layout(tab.panes(), box_rect, style))
+    }
+
+    /// ADR-0053 §5/RF-6.21: painel sob um ponto lógico da janela, na aba
+    /// ativa, com o retângulo dele já resolvido -- `None` fora do quadro do
+    /// terminal ou exatamente no vão entre dois painéis. Gesto de
+    /// **mouse** (roda, clique, hyperlink, menu de contexto) mira o painel
+    /// sob o cursor; teclado sempre mira o painel focado (ADR-0008 nunca
+    /// olha posição do cursor) -- os dois caminhos não se confundem.
+    fn pane_and_rect_at(
+        &self,
+        style: &TabBarStyle,
+        logical_point: (f32, f32),
+    ) -> Option<(PaneId, Rect)> {
+        let layout = self.active_pane_layout(style)?;
+        let pane = panes::pane_at(&layout, logical_point)?;
+        let rect = layout.into_iter().find(|(id, _)| *id == pane)?.1;
+        Some((pane, rect))
+    }
+
+    /// Divisor sob um ponto lógico da janela, na aba ativa (ADR-0053 §7,
+    /// RF-6.13/RF-6.16) -- `None` fora de todo vão. `PaneDivider` é
+    /// `Copy`, então devolver por valor não amarra o retorno ao
+    /// `Workspace` (a árvore muda entre o hit-test e o uso, ex. arraste
+    /// que continua depois de um painel fechar em outro lugar).
+    fn divider_at_logical_point(
+        &self,
+        style: &TabBarStyle,
+        point: (f32, f32),
+    ) -> Option<panes::PaneDivider> {
+        let id = self.workspace.active_tab()?;
+        let tab = self.workspace.tab(id)?;
+        let box_rect = self.active_tab_box_rect(style);
+        let dividers = panes::dividers(tab.panes(), box_rect, style);
+        panes::divider_at(&dividers, point).copied()
+    }
+
+    /// O retângulo (do quadro, não do conteúdo) de `pane` na aba ativa --
+    /// cai no quadro inteiro da aba se o painel já não existir mais nela
+    /// (ex.: fechado sob a busca que ainda vai fechar no próximo redraw).
+    fn pane_box_rect(&self, style: &TabBarStyle, pane: PaneId) -> Rect {
+        self.active_pane_layout(style)
+            .and_then(|layout| {
+                layout
+                    .into_iter()
+                    .find(|(id, _)| *id == pane)
+                    .map(|(_, r)| r)
+            })
+            .unwrap_or_else(|| self.active_tab_box_rect(style))
+    }
+
+    /// Célula dentro de `pane` sob `logical_point` -- para gestos que já
+    /// sabem **qual** painel querem (o focado, continuando uma seleção que
+    /// começou nele; o de um menu de contexto já aberto), ao contrário de
+    /// [`Self::cell_at_cursor`], que descobre o painel a partir do ponto.
+    /// Sem o painel certo, arrastar uma seleção para fora do quadro dele
+    /// (ex.: até o vão, ou até um painel vizinho) reportaria a célula do
+    /// painel errado no meio do gesto.
+    fn cell_in_pane(
+        &self,
+        pane: PaneId,
+        style: &TabBarStyle,
+        cell_metrics: CellMetrics,
+        logical_point: (f32, f32),
+    ) -> input::CellPosition {
+        let pane_rect = self
+            .active_pane_layout(style)
+            .and_then(|layout| {
+                layout
+                    .into_iter()
+                    .find(|(id, _)| *id == pane)
+                    .map(|(_, r)| r)
+            })
+            .unwrap_or_else(|| self.active_tab_box_rect(style));
+        let content = paint::pane_content_rect(pane_rect, style);
         let (content_x, content_y) =
-            input::logical_point_in_content(logical_cursor, (content.x, content.y));
-        let (rows, cols) = self.active_runtime().map_or((MIN_GRID, MIN_GRID), |rt| {
+            input::logical_point_in_content(logical_point, (content.x, content.y));
+        let (rows, cols) = self.panes.get(&pane).map_or((MIN_GRID, MIN_GRID), |rt| {
             (
                 rt.snapshot.rows.max(MIN_GRID),
                 rt.snapshot.cols.max(MIN_GRID),
             )
         });
         input::cell_at(content_x, content_y, cell_metrics, rows, cols)
+    }
+
+    /// Painel sob o cursor e a célula dentro dele (ADR-0053 §5): cada
+    /// painel tem sua própria grade, então a conversão ponto->célula
+    /// precisa saber **qual** grade primeiro. Cai no painel focado quando o
+    /// ponto não bate em nenhum (cursor fora da janela, ou exatamente no
+    /// vão) -- mesmo fallback de "sem aba ativa" de antes desta etapa.
+    fn cell_at_cursor(
+        &self,
+        cell_metrics: CellMetrics,
+        style: &TabBarStyle,
+    ) -> Option<(PaneId, input::CellPosition)> {
+        let logical_cursor = (
+            self.cursor_position.0 as f32 / self.scale,
+            self.cursor_position.1 as f32 / self.scale,
+        );
+        let layout = self.active_pane_layout(style)?;
+        let focused = self
+            .workspace
+            .active_tab()
+            .and_then(|id| self.focused_pane_of(id));
+        let pane_id = panes::pane_at(&layout, logical_cursor).or(focused)?;
+        let pane_rect = layout
+            .iter()
+            .find(|(id, _)| *id == pane_id)
+            .map_or(self.active_tab_box_rect(style), |(_, r)| *r);
+        let content = paint::pane_content_rect(pane_rect, style);
+        let (content_x, content_y) =
+            input::logical_point_in_content(logical_cursor, (content.x, content.y));
+        let (rows, cols) = self.panes.get(&pane_id).map_or((MIN_GRID, MIN_GRID), |rt| {
+            (
+                rt.snapshot.rows.max(MIN_GRID),
+                rt.snapshot.cols.max(MIN_GRID),
+            )
+        });
+        Some((
+            pane_id,
+            input::cell_at(content_x, content_y, cell_metrics, rows, cols),
+        ))
     }
 
     /// Atualiza o hover da barra (ADR-0019) a partir da posição corrente do
@@ -4668,6 +5197,12 @@ impl App {
                     }
                 }
             }
+            DialogAction::ClosePane(tab_id, pane_id) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.close_pane_unconditionally(tab_id, pane_id);
+                    state.window.request_redraw();
+                }
+            }
             DialogAction::CloseWindow => {
                 self.close_window_unconditionally(window_id, event_loop);
             }
@@ -4769,7 +5304,10 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let Some(pane) = focused_pane(&state.workspace, menu.tab) else {
+        // RF-6.21: as ações do menu miram o painel que estava sob o
+        // cursor quando o menu abriu (`menu.anchor`), não o focado -- o
+        // menu de contexto é gesto de mouse.
+        let Some((pane, pane_rect)) = state.pane_and_rect_at(&self.style, menu.anchor) else {
             return;
         };
         let Some(runtime) = state.panes.get(&pane) else {
@@ -4784,18 +5322,12 @@ impl App {
             TerminalMenuAction::SelectAll => runtime.terminal.select_all(),
             TerminalMenuAction::OpenSearch => {
                 runtime.terminal.clear_selection();
-                if state.search.as_ref().map(SearchBarState::tab) != Some(menu.tab) {
-                    state.search = Some(SearchBarState::new(menu.tab));
+                if state.search.as_ref().map(|s| (s.tab(), s.pane())) != Some((menu.tab, pane)) {
+                    state.search = Some(SearchBarState::new(menu.tab, pane));
                 }
             }
             TerminalMenuAction::OpenLink | TerminalMenuAction::CopyLink => {
-                let content = paint::terminal_content_rect(
-                    &self.style,
-                    bar_height(&self.style),
-                    status_bar_height(&self.style),
-                    state.logical_width,
-                    state.logical_height,
-                );
+                let content = paint::pane_content_rect(pane_rect, &self.style);
                 let (content_x, content_y) =
                     input::logical_point_in_content(menu.anchor, (content.x, content.y));
                 let cell = input::cell_at(
@@ -6445,6 +6977,7 @@ impl App {
             &self.term_params,
             &self.config.shell,
             &self.config.project_file,
+            &self.config.panes,
             &self.keymap,
             self.config.general.confirm_close_with_process,
         );
@@ -6625,8 +7158,11 @@ impl App {
                 state.scroll_offset = state.scroll_offset.max(0.0);
                 state.window.request_redraw();
             }
-        } else if let Some(runtime) = state.active_runtime() {
-            let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
+        } else if let Some((pane, cell)) = state.cell_at_cursor(self.cell_metrics, &self.style)
+            && let Some(runtime) = state.panes.get(&pane)
+        {
+            // RF-6.21: roda do mouse mira o painel **sob o cursor**, não o
+            // focado -- é gesto de mouse, não de teclado (ADR-0008).
             input::handle_mouse_wheel(
                 &runtime.terminal,
                 &runtime.terminal.modes(),
@@ -6700,23 +7236,26 @@ impl App {
             return;
         }
         // Menu de contexto do terminal: mesmo tratamento dos dois acima.
-        if let Some(menu) = &mut state.terminal_context_menu {
+        if let Some(anchor) = state.terminal_context_menu.as_ref().map(|m| m.anchor) {
             let logical_point = (
                 position.x as f32 / state.scale,
                 position.y as f32 / state.scale,
             );
-            let items = match focused_pane(&state.workspace, menu.tab) {
-                Some(pane) => terminal_menu_context_items(
+            // RF-6.21: o menu mira o painel que estava sob o cursor no
+            // clique que o abriu (`menu.anchor`) -- recomputado a cada
+            // navegação, nunca guardado (nota do módulo `terminal_menu.rs`).
+            let items = match state.pane_and_rect_at(&self.style, anchor) {
+                Some((pane, pane_rect)) => terminal_menu_context_items(
                     &state.panes,
                     &self.style,
                     self.cell_metrics,
-                    state.logical_width,
-                    state.logical_height,
+                    pane_rect,
                     pane,
-                    menu.anchor,
+                    anchor,
                 ),
                 None => terminal_menu_items(false, false),
             };
+            let menu = state.terminal_context_menu.as_ref().expect("checado acima");
             let layout = overlay::layout_terminal_menu(
                 menu,
                 items.len(),
@@ -6724,7 +7263,9 @@ impl App {
                 state.logical_width,
                 state.logical_height,
             );
-            if let Some(index) = overlay::terminal_menu_hit(&layout, logical_point) {
+            if let Some(index) = overlay::terminal_menu_hit(&layout, logical_point)
+                && let Some(menu) = state.terminal_context_menu.as_mut()
+            {
                 menu.set_highlight(index, &items);
             }
             state.window.request_redraw();
@@ -6825,20 +7366,16 @@ impl App {
         // já pressionado a partir de um clique no próprio campo (o único
         // lugar que arma `mouse_button_down` na busca).
         if state.mouse_button_down == Some(MouseButton::Left)
-            && state.search.is_some()
+            && let Some(pane) = state.search.as_ref().map(SearchBarState::pane)
             && let Some(gpu) = &mut self.gpu
         {
             let logical_point = (
                 position.x as f32 / state.scale,
                 position.y as f32 / state.scale,
             );
-            let box_rect = paint::terminal_box_rect(
-                &self.style,
-                bar_height(&self.style),
-                status_bar_height(&self.style),
-                state.logical_width,
-                state.logical_height,
-            );
+            // ADR-0053 §14: a busca se posiciona sobre o quadro do painel
+            // em que foi aberta, não sobre a aba inteira.
+            let box_rect = state.pane_box_rect(&self.style, pane);
             let layout = search_bar::layout_search_bar(box_rect, &self.style);
             let measurer = gpu.text_measurer();
             if let Some(search) = state.search.as_mut() {
@@ -6982,6 +7519,84 @@ impl App {
                 }
                 true
             }
+            // ADR-0053 §7: mesmo ciclo de press-arma/limiar-promove do
+            // arraste de aba. Sem clone do `Workspace` (o que muda é um
+            // `ratio`, não há "soltar fora" que precise descartar nada).
+            Drag::PaneDividerPressed {
+                tab,
+                path,
+                depth,
+                axis,
+                start,
+            } => {
+                let (tab, path, depth, axis, start) = (*tab, *path, *depth, *axis, *start);
+                let logical = (
+                    position.x as f32 / state.scale,
+                    position.y as f32 / state.scale,
+                );
+                let past_threshold = (logical.0 - start.0).abs() > DRAG_THRESHOLD_PX
+                    || (logical.1 - start.1).abs() > DRAG_THRESHOLD_PX;
+                if past_threshold
+                    && let Some(divider) = state.divider_at_logical_point(&self.style, start)
+                {
+                    state.drag = Drag::PaneDividerDragging {
+                        tab,
+                        path,
+                        depth,
+                        axis,
+                        container: divider.container,
+                    };
+                    state.window.set_cursor(match axis {
+                        SplitAxis::Vertical => CursorIcon::EwResize,
+                        SplitAxis::Horizontal => CursorIcon::NsResize,
+                    });
+                    state.hover.dismiss();
+                }
+                true
+            }
+            // ADR-0053 §8: reencaixa o PTY a cada quadro, não só ao
+            // soltar -- `resize_tab_panes` faz a mesma chamada barata de
+            // `Terminal::resize` que `resize_to` já faz em rajada.
+            Drag::PaneDividerDragging {
+                tab,
+                path,
+                depth,
+                axis,
+                container,
+            } => {
+                let (tab, path, depth, axis, container) = (*tab, *path, *depth, *axis, *container);
+                let logical = (
+                    position.x as f32 / state.scale,
+                    position.y as f32 / state.scale,
+                );
+                let gap = self.style.terminal_frame_margin;
+                let (min_ratio, max_ratio) = divider_ratio_bounds(
+                    container,
+                    axis,
+                    gap,
+                    &self.style,
+                    self.cell_metrics,
+                    &self.config.panes,
+                );
+                let available = match axis {
+                    SplitAxis::Vertical => (container.width - gap).max(1.0),
+                    SplitAxis::Horizontal => (container.height - gap).max(1.0),
+                };
+                let origin = match axis {
+                    SplitAxis::Vertical => container.x,
+                    SplitAxis::Horizontal => container.y,
+                };
+                let cursor_on_axis = match axis {
+                    SplitAxis::Vertical => logical.0,
+                    SplitAxis::Horizontal => logical.1,
+                };
+                let ratio = ((cursor_on_axis - origin) / available).clamp(min_ratio, max_ratio);
+                if let Some(t) = state.workspace.tab_mut(tab) {
+                    t.panes_mut().set_ratio_at_path(&path[..depth], ratio);
+                }
+                state.resize_tab_panes(tab, self.cell_metrics, &self.style);
+                true
+            }
             Drag::Idle => false,
         };
 
@@ -7025,6 +7640,17 @@ impl App {
             } else {
                 false
             };
+        // Divisor entre painéis (ADR-0053 §7, RF-6.13/RF-6.16): mesma
+        // precedência de `over_ahead_behind` contra a borda de resize --
+        // dentro do vão, o divisor vence; fora, a borda continua sendo a
+        // borda. Mesmo `divider_at_logical_point` do clique (`dispatch_
+        // mouse_input`), para os dois nunca discordarem de onde o divisor
+        // está (espec. §2.7.1: "a faixa sensível é o próprio vão de 6px").
+        let over_divider = if !overlay_open && !over_ahead_behind {
+            state.divider_at_logical_point(&self.style, logical_point)
+        } else {
+            None
+        };
         // Cursor de resize por borda (ADR-0027): a janela inteira, não só
         // a barra -- `titlebar::resize_direction_at` já desliga sozinho
         // com a janela maximizada. Resolvido a cada `CursorMoved`, sempre
@@ -7032,10 +7658,10 @@ impl App {
         // `Default`): nada aqui guarda "estava em resize antes", porque
         // não há outro cursor continuamente gerenciado no app pra colidir
         // com isto (o resto só muda cursor em transição de estado --
-        // `Grabbing`/`Default` no arraste). `over_ahead_behind` vence: só
-        // quando ele é falso o retângulo do indicador entra na conta do
-        // resize.
-        let resize_direction = if over_ahead_behind {
+        // `Grabbing`/`Default` no arraste). `over_ahead_behind`/
+        // `over_divider` vencem: só quando os dois são falsos a borda
+        // entra na conta do resize.
+        let resize_direction = if over_ahead_behind || over_divider.is_some() {
             None
         } else {
             titlebar::resize_direction_at(
@@ -7056,43 +7682,58 @@ impl App {
         } else {
             state.modifiers.ctrl
         };
+        // RF-6.21: affordance de hyperlink mira o painel sob o cursor, não
+        // o focado -- mesmo princípio da roda do mouse e do clique.
         let over_link = self.config.terminal.hyperlinks.enabled
             && link_modifier
             && resize_direction.is_none()
             && !overlay_open
             && !state.in_bar(position.y, &self.style)
             && !state.in_status_bar(position.y, &self.style)
-            && state.active_runtime().is_some_and(|rt| {
-                let content = paint::terminal_content_rect(
-                    &self.style,
-                    bar_height(&self.style),
-                    status_bar_height(&self.style),
-                    state.logical_width,
-                    state.logical_height,
-                );
+            && {
                 let logical_position = (
                     position.x as f32 / state.scale,
                     position.y as f32 / state.scale,
                 );
-                let (content_x, content_y) =
-                    input::logical_point_in_content(logical_position, (content.x, content.y));
-                let cell = input::cell_at(
-                    content_x,
-                    content_y,
-                    self.cell_metrics,
-                    rt.snapshot.rows.max(MIN_GRID),
-                    rt.snapshot.cols.max(MIN_GRID),
-                );
-                hyperlink::uri_at(&rt.snapshot, cell.row, cell.col).is_some()
-            });
-        state.window.set_cursor(match resize_direction {
-            Some(direction) => CursorIcon::from(direction),
+                state
+                    .pane_and_rect_at(&self.style, logical_position)
+                    .and_then(|(pane, pane_rect)| Some((state.panes.get(&pane)?, pane_rect)))
+                    .is_some_and(|(rt, pane_rect)| {
+                        let content = paint::pane_content_rect(pane_rect, &self.style);
+                        let (content_x, content_y) = input::logical_point_in_content(
+                            logical_position,
+                            (content.x, content.y),
+                        );
+                        let cell = input::cell_at(
+                            content_x,
+                            content_y,
+                            self.cell_metrics,
+                            rt.snapshot.rows.max(MIN_GRID),
+                            rt.snapshot.cols.max(MIN_GRID),
+                        );
+                        hyperlink::uri_at(&rt.snapshot, cell.row, cell.col).is_some()
+                    })
+            };
+        let cursor_icon = if let Some(direction) = resize_direction {
+            CursorIcon::from(direction)
+        } else if over_ahead_behind {
             // Mesmo cursor de mão do hyperlink OSC 8 (ADR-0052 §8/§9): o
             // que é clicável precisa dizer que é, com o mesmo vocabulário.
-            None if over_ahead_behind => CursorIcon::Pointer,
-            None if over_link => CursorIcon::Pointer,
-            None => CursorIcon::Default,
-        });
+            CursorIcon::Pointer
+        } else if let Some(divider) = over_divider {
+            // Espec. §2.7.1: cursor de redimensionamento do eixo do
+            // divisor -- em pé (lado a lado) redimensiona horizontalmente,
+            // e vice-versa.
+            match divider.axis {
+                SplitAxis::Vertical => CursorIcon::EwResize,
+                SplitAxis::Horizontal => CursorIcon::NsResize,
+            }
+        } else if over_link {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        };
+        state.window.set_cursor(cursor_icon);
 
         if let Some(gpu) = &mut self.gpu {
             state.update_hover(gpu, Instant::now(), &self.config, &self.style);
@@ -7104,9 +7745,19 @@ impl App {
 
         if !state.in_bar(position.y, &self.style)
             && !state.in_status_bar(position.y, &self.style)
-            && let Some(runtime) = state.active_runtime()
+            && let Some(id) = state.workspace.active_tab()
+            && let Some(pane) = state.focused_pane_of(id)
+            && let Some(runtime) = state.panes.get(&pane)
         {
-            let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
+            // Continuação de um gesto que começou no painel **focado**
+            // (o clique de press já focou/entregou ao painel certo) --
+            // ao contrário da roda do mouse, que mira o painel sob o
+            // cursor a cada evento.
+            let logical_cursor = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let cell = state.cell_in_pane(pane, &self.style, self.cell_metrics, logical_cursor);
             input::handle_mouse_motion(
                 &runtime.terminal,
                 &runtime.terminal.modes(),
@@ -7150,16 +7801,25 @@ impl App {
             {
                 // Solta o botão sobre o terminal: repassa ao programa (SGR/X10
                 // release) se ele pediu mouse reporting, senão é o fim de uma
-                // seleção local -- mesmo caminho do press, ver lib.rs:2967+.
-                let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
+                // seleção local -- mesmo caminho do press, no painel **focado**
+                // (o que recebeu o press que iniciou este gesto).
+                let logical_point = (
+                    state.cursor_position.0 as f32 / state.scale,
+                    state.cursor_position.1 as f32 / state.scale,
+                );
                 let active_id = state.workspace.active_tab();
                 let pane = active_id.and_then(|id| focused_pane(&state.workspace, id));
-                if let Some(runtime) = pane.and_then(|p| state.panes.get(&p)) {
+                if let Some(pane) = pane
+                    && let Some(runtime) = state.panes.get(&pane)
+                {
+                    let cell =
+                        state.cell_in_pane(pane, &self.style, self.cell_metrics, logical_point);
                     input::handle_mouse_button(
                         &runtime.terminal,
                         &runtime.terminal.modes(),
                         button,
                         pressed,
+                        pane,
                         cell,
                         state.modifiers,
                         &mut state.click_tracker,
@@ -7283,13 +7943,12 @@ impl App {
 
         // Menu de contexto do terminal: mesmo padrão dos dois acima.
         if let Some(menu) = state.terminal_context_menu {
-            let items = match focused_pane(&state.workspace, menu.tab) {
-                Some(pane) => terminal_menu_context_items(
+            let items = match state.pane_and_rect_at(&self.style, menu.anchor) {
+                Some((pane, pane_rect)) => terminal_menu_context_items(
                     &state.panes,
                     &self.style,
                     self.cell_metrics,
-                    state.logical_width,
-                    state.logical_height,
+                    pane_rect,
                     pane,
                     menu.anchor,
                 ),
@@ -7373,14 +8032,11 @@ impl App {
         // pra grade por baixo); fora, cai pra barra de abas/grade como
         // sempre. Só o botão esquerdo age; qualquer outro é ignorado sem
         // fechar nada (mesma régua do editor de grupo).
-        if let Some(search_tab) = state.search.as_ref().map(SearchBarState::tab) {
-            let box_rect = paint::terminal_box_rect(
-                &self.style,
-                bar_height(&self.style),
-                status_bar_height(&self.style),
-                state.logical_width,
-                state.logical_height,
-            );
+        if let Some((search_tab, search_pane)) = state.search.as_ref().map(|s| (s.tab(), s.pane()))
+        {
+            // ADR-0053 §14: a busca se posiciona sobre o quadro do painel
+            // em que foi aberta, não sobre a aba inteira.
+            let box_rect = state.pane_box_rect(&self.style, search_pane);
             let layout = search_bar::layout_search_bar(box_rect, &self.style);
             let inside_bar = logical_point.0 >= layout.bar_rect.x
                 && logical_point.0 < layout.bar_rect.x + layout.bar_rect.width
@@ -7391,8 +8047,7 @@ impl App {
                     match search_bar::search_bar_hit(&layout, logical_point) {
                         Some(SearchBarHit::Close) => state.search = None,
                         Some(SearchBarHit::Toggle) => {
-                            let pane = focused_pane(&state.workspace, search_tab);
-                            if let Some(rt) = pane.and_then(|p| state.panes.get(&p))
+                            if let Some(rt) = state.panes.get(&search_pane)
                                 && let Some(search) = state.search.as_mut()
                             {
                                 search.toggle_regex(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
@@ -7472,6 +8127,28 @@ impl App {
                 }
                 return;
             }
+        }
+
+        // Divisor entre painéis (ADR-0053 §7, RF-6.13/RF-6.16): vence a
+        // borda de resize da janela **dentro** dos próprios limites --
+        // resolvido antes dela, mesma ordem que o indicador de commits já
+        // usa contra ela (`over_ahead_behind` em `dispatch_cursor_moved`).
+        // As duas precedências (cursor e clique) usam a mesma decisão
+        // (`divider_at_logical_point`), então nunca discordam de onde o
+        // divisor está.
+        if button == MouseButton::Left
+            && let Some(divider) = state.divider_at_logical_point(&self.style, logical_point)
+            && let Some(tab) = state.workspace.active_tab()
+        {
+            state.drag = Drag::PaneDividerPressed {
+                tab,
+                path: divider.path,
+                depth: divider.depth,
+                axis: divider.axis,
+                start: logical_point,
+            };
+            state.window.request_redraw();
+            return;
         }
 
         // Resize por borda (ADR-0027): janela inteira, fora de qualquer
@@ -7597,15 +8274,17 @@ impl App {
         // janela continuam por cima dela, e são tratados antes daqui.
         if !state.in_bar(state.cursor_position.1, &self.style)
             && !state.in_status_bar(state.cursor_position.1, &self.style)
+            && let Some((pane, cell)) = state.cell_at_cursor(self.cell_metrics, &self.style)
         {
-            let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
             let active_id = state.workspace.active_tab();
 
             // Affordance de hyperlink (ADR-0042 §2/§3): o mesmo modificador
             // que já desenha o sublinhado. Vence a prioridade do programa
             // como o `Shift` já vence pra seleção (ADR-0013) -- é a razão
             // de existir de um modificador dedicado: um clique com ele é
-            // sempre "abrir o link", nunca reportado ao programa.
+            // sempre "abrir o link", nunca reportado ao programa. Mira o
+            // painel **sob o cursor** (RF-6.21) -- não precisa focar antes
+            // de abrir um link.
             let link_modifier = if is_macos() {
                 state.modifiers.super_
             } else {
@@ -7614,9 +8293,9 @@ impl App {
             if button == MouseButton::Left
                 && self.config.terminal.hyperlinks.enabled
                 && link_modifier
-                && let Some(id) = active_id
                 && let Some(uri) = state
-                    .pane_runtime(id)
+                    .panes
+                    .get(&pane)
                     .and_then(|rt| hyperlink::uri_at(&rt.snapshot, cell.row, cell.col))
                     .map(str::to_string)
             {
@@ -7630,31 +8309,29 @@ impl App {
             // nada com ele mesmo -- programa com mouse reporting pedido
             // (sem `Shift`) continua ganhando a prioridade de sempre
             // (ADR-0013), a mesma regra que `input::handle_mouse_button`
-            // já aplica pros outros botões.
-            let program_wants_mouse =
-                active_id
-                    .and_then(|id| state.pane_runtime(id))
-                    .is_some_and(|rt| {
-                        !state.modifiers.shift
-                            && rt.terminal.modes().mouse_reporting != MouseReporting::None
-                    });
+            // já aplica pros outros botões. Mira o painel sob o cursor
+            // (RF-6.21), sem focar -- o menu de contexto não é gesto de
+            // foco.
+            let program_wants_mouse = state.panes.get(&pane).is_some_and(|rt| {
+                !state.modifiers.shift
+                    && rt.terminal.modes().mouse_reporting != MouseReporting::None
+            });
             if button == MouseButton::Right
                 && !program_wants_mouse
                 && let Some(id) = active_id
             {
                 state.close_all_popovers();
-                let items = match focused_pane(&state.workspace, id) {
-                    Some(pane) => terminal_menu_context_items(
-                        &state.panes,
-                        &self.style,
-                        self.cell_metrics,
-                        state.logical_width,
-                        state.logical_height,
-                        pane,
-                        logical_point,
-                    ),
-                    None => terminal_menu_items(false, false),
-                };
+                let pane_rect = state
+                    .pane_and_rect_at(&self.style, logical_point)
+                    .map_or(state.active_tab_box_rect(&self.style), |(_, r)| r);
+                let items = terminal_menu_context_items(
+                    &state.panes,
+                    &self.style,
+                    self.cell_metrics,
+                    pane_rect,
+                    pane,
+                    logical_point,
+                );
                 state.terminal_context_menu =
                     Some(TerminalContextMenu::new(id, logical_point, &items));
                 state.hover.dismiss();
@@ -7662,13 +8339,30 @@ impl App {
                 return;
             }
 
-            let pane = active_id.and_then(|id| focused_pane(&state.workspace, id));
-            if let Some(runtime) = pane.and_then(|p| state.panes.get(&p)) {
+            // RF-6.7: o clique esquerdo foca o painel sob o cursor **e** o
+            // mesmo clique já é entregue a ele -- posicionar cursor ou
+            // iniciar seleção funciona no primeiro clique, sem exigir um
+            // clique de foco antes.
+            if button == MouseButton::Left
+                && let Some(id) = active_id
+                && let Some(tab) = state.workspace.tab_mut(id)
+                && tab.panes().focused_id() != pane
+            {
+                tab.panes_mut().focus(pane);
+                state.sync_window_title();
+                if let Some(search) = &state.search
+                    && search.pane() != pane
+                {
+                    state.search = None;
+                }
+            }
+            if let Some(runtime) = state.panes.get(&pane) {
                 input::handle_mouse_button(
                     &runtime.terminal,
                     &runtime.terminal.modes(),
                     button,
                     pressed,
+                    pane,
                     cell,
                     state.modifiers,
                     &mut state.click_tracker,
@@ -7851,13 +8545,16 @@ impl App {
 
         let h = bar_height(style);
         let status_bar_h = status_bar_height(style);
-        // A busca é por aba (RF-11.1) -- trocar de aba fecha a que estava
-        // aberta, em vez de continuar mostrando o realce/estado de uma
-        // aba que não está mais em tela.
-        if let Some(search) = &state.search
-            && Some(search.tab()) != state.workspace.active_tab()
-        {
-            state.search = None;
+        // A busca é por painel (ADR-0053 §14) -- trocar de aba **ou** de
+        // painel focado dentro da mesma aba fecha a que estava aberta, em
+        // vez de continuar mostrando o realce/estado de um painel que não
+        // é mais o focado.
+        if let Some(search) = &state.search {
+            let still_focused = state.workspace.active_tab() == Some(search.tab())
+                && state.focused_pane_of(search.tab()) == Some(search.pane());
+            if !still_focused {
+                state.search = None;
+            }
         }
 
         // Affordance de hyperlink (ADR-0042 §3): calculada do zero a cada
@@ -7880,20 +8577,9 @@ impl App {
             || state.rename.editing_tab().is_some();
         let hovering_grid = !state.in_bar(state.cursor_position.1, style)
             && !state.in_status_bar(state.cursor_position.1, style);
-        let hover_content = paint::terminal_content_rect(
-            style,
-            h,
-            status_bar_h,
-            state.logical_width,
-            state.logical_height,
-        );
         let logical_hover_cursor = (
             state.cursor_position.0 as f32 / state.scale,
             state.cursor_position.1 as f32 / state.scale,
-        );
-        let (hover_content_x, hover_content_y) = input::logical_point_in_content(
-            logical_hover_cursor,
-            (hover_content.x, hover_content.y),
         );
 
         if let Some(id) = state.workspace.active_tab()
@@ -7911,6 +8597,9 @@ impl App {
             // entrada, e ela é o `box_rect` inteiro (nenhum vão tirado).
             let focused_pane = tab.panes().focused_id();
             let pane_layout = panes::layout(tab.panes(), box_rect, style);
+            // RF-6.21: a affordance de hyperlink é gesto de mouse -- mira o
+            // painel sob o cursor, não necessariamente o focado.
+            let hover_pane = panes::pane_at(&pane_layout, logical_hover_cursor);
             let cursor_config = &self.config.terminal.cursor;
             let cursor_color = if cursor_config.follows_group_color {
                 active_group_color(&state.workspace, pal)
@@ -7962,15 +8651,20 @@ impl App {
                     hollow,
                 };
 
-                let hyperlink_hover: Vec<HyperlinkSpan> = if pane_id == focused_pane
+                let hyperlink_hover: Vec<HyperlinkSpan> = if Some(pane_id) == hover_pane
                     && self.config.terminal.hyperlinks.enabled
                     && link_modifier
                     && hovering_grid
                     && !hyperlink_overlay_blocks_hover
                 {
+                    let pane_content = paint::pane_content_rect(*pane_rect, style);
+                    let (px, py) = input::logical_point_in_content(
+                        logical_hover_cursor,
+                        (pane_content.x, pane_content.y),
+                    );
                     let cell = input::cell_at(
-                        hover_content_x,
-                        hover_content_y,
+                        px,
+                        py,
                         self.cell_metrics,
                         runtime.snapshot.rows.max(MIN_GRID),
                         runtime.snapshot.cols.max(MIN_GRID),
@@ -8105,13 +8799,12 @@ impl App {
             ));
         }
         if let Some(menu) = &state.terminal_context_menu {
-            let items = match focused_pane(&state.workspace, menu.tab) {
-                Some(pane) => terminal_menu_context_items(
+            let items = match state.pane_and_rect_at(style, menu.anchor) {
+                Some((pane, pane_rect)) => terminal_menu_context_items(
                     &state.panes,
                     style,
                     self.cell_metrics,
-                    state.logical_width,
-                    state.logical_height,
+                    pane_rect,
                     pane,
                     menu.anchor,
                 ),

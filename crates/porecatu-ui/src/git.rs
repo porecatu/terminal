@@ -1306,7 +1306,7 @@ mod tests {
         // prazo entra na conta -- nem com repositórios já no mapa de uma
         // execução anterior à mudança de config.
         let now = Instant::now();
-        let entries = vec![RemoteEntry {
+        let entries = [RemoteEntry {
             state: QueryState::Idle,
             last_queried_at: Some(now - Duration::from_secs(10_000)),
             ..Default::default()
@@ -1328,7 +1328,7 @@ mod tests {
     fn idle_entry_deadline_is_last_queried_plus_interval() {
         let now = Instant::now();
         let last = now - Duration::from_secs(100);
-        let entries = vec![RemoteEntry {
+        let entries = [RemoteEntry {
             state: QueryState::Idle,
             last_queried_at: Some(last),
             ..Default::default()
@@ -1345,7 +1345,7 @@ mod tests {
         let now = Instant::now();
         let last = now - Duration::from_secs(100);
         let interval = Duration::from_secs(30);
-        let entries = vec![RemoteEntry {
+        let entries = [RemoteEntry {
             state: QueryState::Failed { attempt: 2 },
             last_queried_at: Some(last),
             ..Default::default()
@@ -1365,7 +1365,7 @@ mod tests {
             QueryState::NoUpstream,
             QueryState::Shallow,
         ] {
-            let entries = vec![RemoteEntry {
+            let entries = [RemoteEntry {
                 state,
                 last_queried_at: Some(now - Duration::from_secs(10_000)),
                 ..Default::default()
@@ -1382,7 +1382,7 @@ mod tests {
     fn the_earliest_of_several_repositories_wins() {
         let now = Instant::now();
         let interval = Duration::from_secs(300);
-        let entries = vec![
+        let entries = [
             RemoteEntry {
                 state: QueryState::Idle,
                 last_queried_at: Some(now - Duration::from_secs(50)),
