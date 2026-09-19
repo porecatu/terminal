@@ -128,12 +128,22 @@ pub fn terminal_content_rect(
         logical_width,
         logical_height,
     );
+    pane_content_rect(box_rect, style)
+}
+
+/// Generalização de [`terminal_content_rect`] para o quadro de **um
+/// painel** (ADR-0053 §5): mesmo recuo de `style.terminal_frame_padding`
+/// nos quatro lados, aplicado a um retângulo já subdividido por
+/// `panes::layout` em vez do quadro externo da aba inteira. Com um painel
+/// só, o retângulo de entrada já é o `terminal_box_rect` inteiro, e o
+/// resultado é idêntico ao de `terminal_content_rect`.
+pub fn pane_content_rect(pane_box_rect: Rect, style: &TabBarStyle) -> Rect {
     let padding = style.terminal_frame_padding;
     Rect {
-        x: box_rect.x + padding,
-        y: box_rect.y + padding,
-        width: (box_rect.width - padding * 2.0).max(0.0),
-        height: (box_rect.height - padding * 2.0).max(0.0),
+        x: pane_box_rect.x + padding,
+        y: pane_box_rect.y + padding,
+        width: (pane_box_rect.width - padding * 2.0).max(0.0),
+        height: (pane_box_rect.height - padding * 2.0).max(0.0),
     }
 }
 

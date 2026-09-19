@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use porecatu_core::{Action, GroupId, TabId, Workspace};
+use porecatu_core::{Action, GroupId, PaneId, TabId, Workspace};
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_term::{
     DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
@@ -38,6 +38,7 @@ mod move_to_group;
 mod overlay;
 mod paint;
 mod palette;
+mod panes;
 mod reload;
 mod rename;
 mod search_bar;
@@ -94,24 +95,37 @@ fn is_macos() -> bool {
     cfg!(target_os = "macos")
 }
 
-/// Itens do menu de contexto do terminal, resolvidos do estado ao vivo da
-/// aba (`menu.tab`) e da célula sob `menu.anchor` (RF-11.14/RF-11.15) --
-/// mesmo padrão de `group_menu::group_action_items`: recomputado a cada
+/// ADR-0053 §6: painel focado da aba `tab` -- toda aba tem exatamente um
+/// painel até a etapa 4 ligar o gesto de split, então isto é sempre "o
+/// runtime a consultar" para quem só conhece `TabId`. Função livre, pela
+/// mesma razão de `terminal_menu_context_items` logo abaixo: alguns
+/// chamadores precisam dela com um campo de `state` diferente de
+/// `workspace` já emprestado (`&mut` ou `&`) no mesmo escopo, e um método
+/// pediria o `state` inteiro.
+fn focused_pane(workspace: &Workspace, tab: TabId) -> Option<PaneId> {
+    Some(workspace.tab(tab)?.panes().focused_id())
+}
+
+/// Itens do menu de contexto do terminal, resolvidos do estado ao vivo do
+/// painel (o focado da aba de `menu.tab`, ADR-0053 §6 -- a etapa 4 é quem
+/// vai endereçar o menu a um painel específico) e da célula sob
+/// `menu.anchor` (RF-11.14/RF-11.15) -- mesmo padrão de
+/// `group_menu::group_action_items`: recomputado a cada
 /// abertura/navegação/pintura, nunca guardado no `TerminalContextMenu`
 /// (nota do módulo `terminal_menu.rs`). Função livre, não método de
 /// `App`/`WindowState`, porque os dois às vezes precisam ser chamados com
-/// `state.tabs` já emprestado por outro campo do mesmo `state`.
+/// `state.panes` já emprestado por outro campo do mesmo `state`.
 #[allow(clippy::too_many_arguments)]
 fn terminal_menu_context_items(
-    tabs: &HashMap<TabId, TabRuntime>,
+    panes: &HashMap<PaneId, PaneRuntime>,
     style: &TabBarStyle,
     cell_metrics: CellMetrics,
     logical_width: f32,
     logical_height: f32,
-    tab: TabId,
+    pane: PaneId,
     anchor: (f32, f32),
 ) -> Vec<TerminalMenuItem> {
-    let Some(rt) = tabs.get(&tab) else {
+    let Some(rt) = panes.get(&pane) else {
         return terminal_menu_items(false, false);
     };
     let has_selection = rt.terminal.selection_text().is_some();
@@ -242,10 +256,17 @@ const MIN_GRID: usize = 1;
 /// nada aqui precisava deles antes.
 #[derive(Debug)]
 enum Wakeup {
-    /// Uma aba ficou suja e precisa de redraw. Carrega `(WindowId, TabId)`
+    /// Um painel ficou sujo e precisa de redraw. Carrega `(WindowId, TabId)`
     /// desde a F1 (ADR-0015): com mais de uma janela, `TabId` sozinho não
-    /// diz qual `Workspace` sujou -- os contadores são por janela.
-    TabDirty { window: WindowId, tab: TabId },
+    /// diz qual `Workspace` sujou -- os contadores são por janela. Ganhou
+    /// `PaneId` na etapa 3 do ADR-0053, pela mesma razão um nível abaixo:
+    /// os `PaneId` são por aba, e o evento sozinho não diz qual painel
+    /// sujou -- sem ele o sintoma é o painel errado redesenhando.
+    TabDirty {
+        window: WindowId,
+        tab: TabId,
+        pane: PaneId,
+    },
     /// A thread do watcher (F4 etapa 4, ADR-0030) já leu e parseou o
     /// arquivo -- nunca um caminho para a main thread abrir. `Box` porque
     /// `ConfigReload::Loaded` carrega uma `Config` inteira, bem maior que
@@ -305,28 +326,31 @@ const PROJECT_COMMAND_QUIET: Duration = Duration::from_millis(300);
 /// Teto a partir do spawn. Sem ele, um shell que nunca cala nunca recebe.
 const PROJECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Estado de execução de uma aba: o `Terminal` (motor+PTY+threads) e o
-/// snapshot reusado entre frames. Vive fora de `porecatu_core::Tab`, que é
-/// domínio puro sem I/O (docs/arquitetura.md seção 4) -- a fronteira entre
-/// os dois é exatamente `TabId`.
-struct TabRuntime {
+/// Estado de execução de um painel (ADR-0053 §6, desceu de aba para cá): o
+/// `Terminal` (motor+PTY+threads) e o snapshot reusado entre frames. Vive
+/// fora de `porecatu_core::Pane`, que é domínio puro sem I/O
+/// (docs/arquitetura.md seção 4) -- a fronteira entre os dois é exatamente
+/// `PaneId`. Todo o conteúdo já era por terminal antes desta etapa, não
+/// por aba -- a troca é de chave do mapa (`WindowState::panes`), não de
+/// forma.
+struct PaneRuntime {
     terminal: Terminal,
     snapshot: GridSnapshot,
     /// `cwd` já resolvido (RF-3.10) que foi de fato usado no `SpawnConfig`
-    /// desta aba -- terceiro degrau da precedência do ADR-0038 §2 (depois
-    /// de `Tab::cwd`/OSC 7 e de `Terminal::cwd_fallback`/`ProcessGroup`),
-    /// consultado só na gravação da sessão. Guardado aqui porque
-    /// `porecatu_core::Tab` não guarda o `cwd` de spawn -- só o que OSC 7
-    /// reporta.
+    /// deste painel -- terceiro degrau da precedência do ADR-0038 §2
+    /// (depois de `Pane::cwd`/OSC 7 e de `Terminal::cwd_fallback`/
+    /// `ProcessGroup`), consultado só na gravação da sessão. Guardado aqui
+    /// porque `porecatu_core::Pane` não guarda o `cwd` de spawn -- só o
+    /// que OSC 7 reporta.
     spawn_cwd: Option<PathBuf>,
     /// `true` depois do primeiro `TermEvent::Cwd` desta instância (RF-3.1,
-    /// ADR-0039 §2). Diferente de `porecatu_core::Tab::cwd().is_some()`:
-    /// uma aba nova herda `cwd` do grupo (ADR-0017 item 1) sem nunca ter
+    /// ADR-0039 §2). Diferente de `porecatu_core::Pane::cwd().is_some()`:
+    /// um painel novo herda `cwd` do de origem (RF-6.3) sem nunca ter
     /// recebido OSC 7 -- este campo só o sinal de verdade, nunca herdado.
     received_osc7: bool,
-    /// `Instant` do primeiro `Wakeup::TabDirty` desta aba -- "o shell
+    /// `Instant` do primeiro `Wakeup::TabDirty` deste painel -- "o shell
     /// desenhou alguma coisa", aproximação de "prompt pronto" (mesmo
-    /// sinal de `App::mark_first_pty_output`, por aba em vez de por
+    /// sinal de `App::mark_first_pty_output`, por painel em vez de por
     /// processo). Base do gatilho temporal do convite no Windows: contar
     /// os 3s a partir do *spawn* dispara cedo demais em shell com
     /// startup lento (perfil grande, antivírus, unidade de rede) mesmo
@@ -338,7 +362,7 @@ struct TabRuntime {
     #[cfg(windows)]
     first_output_at: Option<Instant>,
     /// ADR-0051 §6: comando do `.porecatu` à espera do momento certo de
-    /// escrita. Só populado por aba `Restored` (RF-12.12).
+    /// escrita. Só populado por painel `Restored` (RF-12.12).
     pending_project_command: Option<PendingProjectCommand>,
     /// ADR-0051 §5: caminho de um `.porecatu` achado em diretório não
     /// autorizado, à espera da nota. Drenado por `App`, que é quem sabe se a
@@ -359,6 +383,17 @@ fn bar_height(style: &TabBarStyle) -> f32 {
 /// delas que define a área útil do terminal.
 fn status_bar_height(style: &TabBarStyle) -> f32 {
     status_bar::height(style)
+}
+
+/// Linhas/colunas a partir de um retângulo de conteúdo qualquer e da
+/// métrica de célula já medida (ADR-0053 §5): deixou de ser "da janela"
+/// para ser "de um retângulo" -- quem chama já resolveu qual quadro
+/// interessa, o da aba inteira ou o de um painel depois de
+/// `panes::layout`.
+fn grid_size_for_rect(content: Rect, cell_metrics: CellMetrics) -> (usize, usize) {
+    let cols = ((content.width / cell_metrics.width) as usize).max(MIN_GRID);
+    let rows = ((content.height / cell_metrics.height) as usize).max(MIN_GRID);
+    (rows, cols)
 }
 
 /// Arredonda a métrica de célula para que a origem de toda coluna
@@ -660,7 +695,12 @@ struct WindowState {
     logical_width: f32,
     logical_height: f32,
     workspace: Workspace,
-    tabs: HashMap<TabId, TabRuntime>,
+    /// ADR-0053 §6: mapa por `PaneId`, não por `TabId` -- todo o conteúdo
+    /// já era por terminal antes desta etapa (`Terminal`, `snapshot`,
+    /// `spawn_cwd`, `received_osc7`, os pendentes de `.porecatu`), então a
+    /// troca é de chave, não de forma. Até a etapa 4 ligar o gesto de
+    /// split, toda aba tem exatamente um painel.
+    panes: HashMap<PaneId, PaneRuntime>,
     /// Estado corrente dos modificadores, mantido via `ModifiersChanged`
     /// -- o `KeyEvent` do `winit` não carrega isso junto.
     modifiers: Modifiers,
@@ -780,8 +820,13 @@ fn should_confirm_tab_close(
 
 /// ADR-0034 §6, ADR-0037 §3: decide se `window.close`/`app.quit` devem
 /// confirmar. `significant_tab_count` já vem contado sem aba `NotStarted`
-/// (`request_close_window` conta `state.tabs`, o mapa de `TabRuntime` --
-/// função livre e pura, testável sem `WindowState`.
+/// (`request_close_window` conta `state.panes`, o mapa de `PaneRuntime`) --
+/// função livre e pura, testável sem `WindowState`. ADR-0053 §10: com o
+/// mapa virando de painéis, esse `len()` conta painéis, não abas, e
+/// continua sendo a pergunta certa ("quantos terminais vivos há nesta
+/// janela") só porque toda aba tem exatamente um painel até a etapa 4
+/// ligar o gesto de split -- registrado aqui de propósito, para não
+/// repetir a dívida que a F5 já pagou uma vez com `tabs.len()`.
 fn window_close_needs_confirmation(significant_tab_count: usize, any_tab_busy: bool) -> bool {
     significant_tab_count > 1 || any_tab_busy
 }
@@ -1431,7 +1476,7 @@ impl WindowState {
             logical_width: size.width as f32 / scale,
             logical_height: size.height as f32 / scale,
             workspace: Workspace::new(),
-            tabs: HashMap::new(),
+            panes: HashMap::new(),
             modifiers: Modifiers::NONE,
             cursor_position: (0.0, 0.0),
             mouse_button_down: None,
@@ -1624,8 +1669,10 @@ impl WindowState {
             .or_else(|| self.resolve_new_tab_cwd(startup_directory))
     }
 
-    /// Linhas/colunas atuais a partir do tamanho lógico da janela (descontada
-    /// a barra de abas) e da métrica de célula já medida.
+    /// Linhas/colunas do quadro inteiro da aba (sem subdividir por
+    /// painel) -- usado por quem ainda não precisa da árvore de uma aba
+    /// específica (ex.: `spawn_tab_runtime`, sempre chamado para a
+    /// primeira folha de uma árvore nova, que já é o quadro inteiro).
     fn grid_size(&self, cell_metrics: CellMetrics, style: &TabBarStyle) -> (usize, usize) {
         let content = paint::terminal_content_rect(
             style,
@@ -1634,9 +1681,7 @@ impl WindowState {
             self.logical_width,
             self.logical_height,
         );
-        let cols = ((content.width / cell_metrics.width) as usize).max(MIN_GRID);
-        let rows = ((content.height / cell_metrics.height) as usize).max(MIN_GRID);
-        (rows, cols)
+        grid_size_for_rect(content, cell_metrics)
     }
 
     /// Nome de exibição do shell (fallback de última instância da
@@ -1713,15 +1758,28 @@ impl WindowState {
             .unwrap_or(0.0)
     }
 
-    fn active_runtime(&self) -> Option<&TabRuntime> {
+    /// ADR-0053 §6: o mapa de runtimes é por painel, não por aba. Até a
+    /// etapa 4 ligar o gesto de split, toda aba tem exatamente um painel --
+    /// então "o runtime desta aba" é sempre "o runtime do painel focado
+    /// dela", e é isso que este helper resolve para os chamadores que
+    /// ainda só conhecem `TabId` (a maioria, nesta etapa).
+    fn focused_pane_of(&self, tab: TabId) -> Option<PaneId> {
+        focused_pane(&self.workspace, tab)
+    }
+
+    fn pane_runtime(&self, tab: TabId) -> Option<&PaneRuntime> {
+        self.panes.get(&self.focused_pane_of(tab)?)
+    }
+
+    fn active_runtime(&self) -> Option<&PaneRuntime> {
         let id = self.workspace.active_tab()?;
-        self.tabs.get(&id)
+        self.pane_runtime(id)
     }
 
     /// Cria uma aba, herdando `cwd` (RF-1.1, ADR-0017), e spawna a
     /// `Terminal` dela via [`Self::spawn_tab_runtime`]. Aba nova nasce
     /// sempre `Running` (ADR-0037 §1) -- `spawn_tab_runtime` não muda
-    /// estado nenhum, só cria o `TabRuntime`.
+    /// estado nenhum, só cria o `PaneRuntime`.
     #[allow(clippy::too_many_arguments)]
     fn open_tab(
         &mut self,
@@ -1800,9 +1858,15 @@ impl WindowState {
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
     ) {
+        // ADR-0053 §6: sobe o painel focado da aba -- até a etapa 4 ligar o
+        // gesto de split, é sempre o único painel dela.
+        let Some(pane_id) = self.workspace.tab(tab_id).map(|t| t.panes().focused_id()) else {
+            return;
+        };
         let (rows, cols) = self.grid_size(cell_metrics, style);
         let window_id = self.window.id();
         let tab = tab_id;
+        let pane = pane_id;
         let proxy = proxy.clone();
         let cwd_exists = cwd.as_ref().is_none_or(|p| p.is_dir());
         // RF-12.12/RF-12.14 (ADR-0051 §1): calculado **antes** de
@@ -1851,6 +1915,7 @@ impl WindowState {
             let _ = proxy.send_event(Wakeup::TabDirty {
                 window: window_id,
                 tab,
+                pane,
             });
         }) {
             Ok(terminal) => {
@@ -1885,9 +1950,9 @@ impl WindowState {
                     }
                     _ => (None, None),
                 };
-                self.tabs.insert(
-                    tab_id,
-                    TabRuntime {
+                self.panes.insert(
+                    pane_id,
+                    PaneRuntime {
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
@@ -1990,8 +2055,14 @@ impl WindowState {
         // "âncora mais próxima" faz sentido.
         let order: Vec<TabId> = self.workspace.visual_order().collect();
         self.selection.remove_tab(id, &order);
-        if let Some(runtime) = self.tabs.remove(&id) {
-            let _ = runtime.terminal.close();
+        // ADR-0053 §10: fecha todos os painéis da aba, não só o focado --
+        // capturado antes de `workspace.close_tab` desfazer a árvore.
+        if let Some(tab) = self.workspace.tab(id) {
+            for pane in tab.panes().leaves_in_order() {
+                if let Some(runtime) = self.panes.remove(&pane) {
+                    let _ = runtime.terminal.close();
+                }
+            }
         }
         self.touch_workspace(|ws| ws.close_tab(id));
         self.sync_window_title();
@@ -2076,13 +2147,14 @@ impl WindowState {
         let id = self.workspace.active_tab()?;
         // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
         // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup` --
-        // sem isto, `self.tabs.get(&id)?` abaixo (que só existe para aba
-        // já spawnada) devolveria `None` e o fechamento não faria nada.
+        // sem isto, `self.pane_runtime(id)?` abaixo (que só existe para
+        // painel já spawnado) devolveria `None` e o fechamento não faria
+        // nada.
         if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
-        let runtime = self.tabs.get(&id)?;
+        let runtime = self.pane_runtime(id)?;
         if should_confirm_tab_close(
             confirm_close_with_process,
             runtime.terminal.modes(),
@@ -2245,7 +2317,8 @@ impl WindowState {
                 if let Some(search) = self.search.as_mut() {
                     search.field_mut().backspace();
                 }
-                if let Some(rt) = self.tabs.get(&tab)
+                let pane = focused_pane(&self.workspace, tab);
+                if let Some(rt) = pane.and_then(|p| self.panes.get(&p))
                     && let Some(search) = self.search.as_mut()
                 {
                     search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
@@ -2263,8 +2336,9 @@ impl WindowState {
                         modifiers,
                     );
                 }
+                let pane = focused_pane(&self.workspace, tab);
                 if consumed
-                    && let Some(rt) = self.tabs.get(&tab)
+                    && let Some(rt) = pane.and_then(|p| self.panes.get(&p))
                     && let Some(search) = self.search.as_mut()
                 {
                     search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
@@ -2286,7 +2360,7 @@ impl WindowState {
         let Some(occurrence) = search.advance(forward) else {
             return;
         };
-        let Some(rt) = self.tabs.get(&tab) else {
+        let Some(rt) = self.pane_runtime(tab) else {
             return;
         };
         let reserved = search_bar::reserved_rows(cell_metrics.height);
@@ -2417,15 +2491,18 @@ impl WindowState {
         let Some(menu) = &self.terminal_context_menu else {
             return None;
         };
-        let items = terminal_menu_context_items(
-            &self.tabs,
-            style,
-            cell_metrics,
-            self.logical_width,
-            self.logical_height,
-            menu.tab,
-            menu.anchor,
-        );
+        let items = match self.focused_pane_of(menu.tab) {
+            Some(pane) => terminal_menu_context_items(
+                &self.panes,
+                style,
+                cell_metrics,
+                self.logical_width,
+                self.logical_height,
+                pane,
+                menu.anchor,
+            ),
+            None => terminal_menu_items(false, false),
+        };
         let menu = self.terminal_context_menu.as_mut()?;
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
@@ -2744,7 +2821,7 @@ impl WindowState {
             // extremos já na tela visível mais o scrollback inteiro.
             Action::SelectionSelectAll => {
                 if let Some(id) = self.workspace.active_tab()
-                    && let Some(rt) = self.tabs.get(&id)
+                    && let Some(rt) = self.pane_runtime(id)
                 {
                     rt.terminal.select_all();
                 }
@@ -2759,7 +2836,7 @@ impl WindowState {
                     if self.search.as_ref().map(SearchBarState::tab) != Some(id) {
                         self.search = Some(SearchBarState::new(id));
                     }
-                    if let Some(rt) = self.tabs.get(&id) {
+                    if let Some(rt) = self.pane_runtime(id) {
                         rt.terminal.clear_selection();
                     }
                 }
@@ -3162,7 +3239,7 @@ impl WindowState {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
-        let runtime = self.tabs.get(&id)?;
+        let runtime = self.pane_runtime(id)?;
         if should_confirm_tab_close(
             confirm_close_with_process,
             runtime.terminal.modes(),
@@ -3512,7 +3589,7 @@ impl WindowState {
         // é justamente o caso que o RF-9.4 marca. `received_osc7` é o
         // sinal de verdade: `Tab::cwd` sozinho não serve, porque uma aba
         // nova **herda** o `cwd` do grupo sem nunca ter recebido OSC 7.
-        let runtime = self.tabs.get(&tab_id);
+        let runtime = self.pane_runtime(tab_id);
         let received_osc7 = runtime.is_some_and(|rt| rt.received_osc7);
         let cwd_path = tab
             .and_then(|t| t.cwd())
@@ -3647,9 +3724,29 @@ impl WindowState {
         self.window_surface.resize(gpu, width, height, self.scale);
         self.logical_width = width as f32 / self.scale;
         self.logical_height = height as f32 / self.scale;
-        let (rows, cols) = self.grid_size(cell_metrics, style);
-        for runtime in self.tabs.values() {
-            runtime.terminal.resize(rows, cols);
+        // ADR-0053 §5/RF-6.15: cada painel de cada aba recebe o par
+        // (rows, cols) do retângulo dele, não um único par pra janela
+        // inteira -- preserva as proporções e redimensiona o PTY de
+        // todos, não só o da aba ativa (uma aba em segundo plano cujo PTY
+        // nunca foi redimensionado mostraria a métrica errada ao ativar).
+        let box_rect = paint::terminal_box_rect(
+            style,
+            bar_height(style),
+            status_bar_height(style),
+            self.logical_width,
+            self.logical_height,
+        );
+        for tab_id in self.workspace.visual_order().collect::<Vec<_>>() {
+            let Some(tab) = self.workspace.tab(tab_id) else {
+                continue;
+            };
+            for (pane_id, pane_rect) in panes::layout(tab.panes(), box_rect, style) {
+                let content = paint::pane_content_rect(pane_rect, style);
+                let (rows, cols) = grid_size_for_rect(content, cell_metrics);
+                if let Some(runtime) = self.panes.get(&pane_id) {
+                    runtime.terminal.resize(rows, cols);
+                }
+            }
         }
         self.window.request_redraw();
     }
@@ -3787,7 +3884,7 @@ struct App {
     /// (RF-5.10, "só a aba ativa ou todas") não tem efeito ainda -- o
     /// zoom é sempre do processo inteiro, como se `zoom_scope = "all"`
     /// sempre valesse. Zoom por aba exigiria métricas de célula por
-    /// `TabRuntime`, não só por processo -- fora do escopo desta etapa;
+    /// `PaneRuntime`, não só por processo -- fora do escopo desta etapa;
     /// reportado ao usuário.
     font_zoom_px: Option<f32>,
     /// `theme.cycle` (RF-5.21, ADR-0031 §4): tema da **sessão**, nunca
@@ -4297,7 +4394,7 @@ impl App {
 
         // RF-3.8: só a aba ativa sobe agora; com `lazy_restore = false`,
         // `workspace_from_window` já não produziu nenhuma `NotStarted`, e
-        // todas precisam de `TabRuntime` desde já.
+        // todas precisam de `PaneRuntime` desde já.
         let to_start: Vec<TabId> = if lazy_restore {
             state.workspace.active_tab().into_iter().collect()
         } else {
@@ -4477,7 +4574,7 @@ impl App {
         if self.windows.is_empty() {
             // `app.quit`/RF-3.4: gravação síncrona da sessão, antes de
             // sair -- fecha o no-op documentado desde a F2 (ADR-0017 §7).
-            // Captura `state` **antes** de `state.tabs` ser consumido
+            // Captura `state` **antes** de `state.panes` ser consumido
             // abaixo: `write_session_now` precisa de uma referência à
             // janela inteira (workspace + geometria), que um campo já
             // movido não permite mais emprestar. Falha de gravação nunca
@@ -4485,7 +4582,7 @@ impl App {
             self.write_session_now(std::iter::once(&state));
         }
         let waits: Vec<_> = state
-            .tabs
+            .panes
             .into_values()
             .map(|runtime| runtime.terminal.close())
             .collect();
@@ -4509,17 +4606,24 @@ impl App {
     /// `confirm_close_with_process`, como o fechamento de aba.
     ///
     /// ADR-0037 §3: a contagem que decide "mais de uma aba aberta" conta
-    /// `state.tabs` (o mapa de `TabRuntime`), não `workspace` -- aba
+    /// `state.panes` (o mapa de `PaneRuntime`), não `workspace` -- aba
     /// `NotStarted` nunca tem entrada ali (nada rodou, nada a perder), e
     /// contar `workspace` faria uma janela só com abas `NotStarted`
-    /// confirmar por "mais de uma aba", o que o ADR proíbe.
+    /// confirmar por "mais de uma aba", o que o ADR proíbe. ADR-0053 §10:
+    /// desde que o mapa passou a ser por painel, o nome
+    /// `significant_tab_count` conta painéis, não abas -- continua sendo
+    /// a pergunta certa só por acidente, porque toda aba tem exatamente
+    /// um painel até a etapa 4 ligar o gesto de split. Sem harness de
+    /// `WindowState` neste crate (exige `GpuContext`/janela reais), então
+    /// isto não tem teste de unidade próprio -- fica registrado aqui, no
+    /// molde da mesma dívida que a F5 já pagou uma vez com `tabs.len()`.
     fn request_close_window(&mut self, window_id: WindowId, event_loop: &ActiveEventLoop) {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let significant_tab_count = state.tabs.len();
+        let significant_tab_count = state.panes.len();
         let confirm_close_with_process = self.config.general.confirm_close_with_process;
-        let any_tab_busy = state.tabs.values().any(|runtime| {
+        let any_tab_busy = state.panes.values().any(|runtime| {
             should_confirm_tab_close(
                 confirm_close_with_process,
                 runtime.terminal.modes(),
@@ -4665,7 +4769,10 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let Some(runtime) = state.tabs.get(&menu.tab) else {
+        let Some(pane) = focused_pane(&state.workspace, menu.tab) else {
+            return;
+        };
+        let Some(runtime) = state.panes.get(&pane) else {
             return;
         };
         match action {
@@ -4792,21 +4899,23 @@ impl App {
                         theme.clone(),
                         zoom_steps,
                         |tab_id| {
-                            state.tabs.get(&tab_id).and_then(|rt| {
-                                // RF-3.10/ADR-0038 §2: `rt.received_osc7` é o
-                                // sinal de verdade, não `Tab::cwd().is_some()`
-                                // -- uma aba nova herda `cwd` do grupo na
-                                // criação (ADR-0017 item 1) sem nunca ter
-                                // recebido OSC 7. Com OSC 7 confirmado, não
-                                // sobrescreve (`None`); sem confirmação,
-                                // consulta o fallback (`ProcessGroup::cwd`
-                                // fora do Windows, senão o `cwd` de spawn).
-                                if rt.received_osc7 {
-                                    None
-                                } else {
-                                    rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
-                                }
-                            })
+                            focused_pane(&state.workspace, tab_id)
+                                .and_then(|pane| state.panes.get(&pane))
+                                .and_then(|rt| {
+                                    // RF-3.10/ADR-0038 §2: `rt.received_osc7` é o
+                                    // sinal de verdade, não `Tab::cwd().is_some()`
+                                    // -- uma aba nova herda `cwd` do grupo na
+                                    // criação (ADR-0017 item 1) sem nunca ter
+                                    // recebido OSC 7. Com OSC 7 confirmado, não
+                                    // sobrescreve (`None`); sem confirmação,
+                                    // consulta o fallback (`ProcessGroup::cwd`
+                                    // fora do Windows, senão o `cwd` de spawn).
+                                    if rt.received_osc7 {
+                                        None
+                                    } else {
+                                        rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
+                                    }
+                                })
                         },
                     )
                 })
@@ -4928,7 +5037,7 @@ impl App {
                 continue;
             };
             let tab = state.workspace.tab(tab_id);
-            let runtime = state.tabs.get(&tab_id);
+            let runtime = state.pane_runtime(tab_id);
             let cwd = tab
                 .and_then(|t| t.cwd())
                 .map(PathBuf::from)
@@ -5081,7 +5190,7 @@ impl App {
             return;
         };
         let tab = state.workspace.tab(tab_id);
-        let runtime = state.tabs.get(&tab_id);
+        let runtime = state.pane_runtime(tab_id);
         let cwd = tab
             .and_then(|t| t.cwd())
             .map(PathBuf::from)
@@ -5194,7 +5303,7 @@ impl App {
         }
         self.windows
             .values()
-            .flat_map(|w| w.tabs.values())
+            .flat_map(|w| w.panes.values())
             .filter(|rt| !rt.received_osc7)
             .filter_map(|rt| rt.first_output_at)
             .map(|first_output_at| first_output_at + WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL)
@@ -5249,7 +5358,7 @@ impl App {
     fn project_command_deadline(&self) -> Option<Instant> {
         self.windows
             .values()
-            .flat_map(|w| w.tabs.values())
+            .flat_map(|w| w.panes.values())
             .filter_map(|rt| rt.pending_project_command.as_ref())
             .map(|pending| match pending.last_output_at {
                 Some(last) => (last + PROJECT_COMMAND_QUIET).min(pending.give_up_at),
@@ -5265,7 +5374,7 @@ impl App {
     /// aqui seria ruído sobre ela).
     fn check_project_commands(&mut self, now: Instant) {
         for state in self.windows.values_mut() {
-            for runtime in state.tabs.values_mut() {
+            for runtime in state.panes.values_mut() {
                 let Some(pending) = runtime.pending_project_command.as_ref() else {
                     continue;
                 };
@@ -5299,7 +5408,7 @@ impl App {
             ..
         } = self;
         for state in windows.values_mut() {
-            for runtime in state.tabs.values_mut() {
+            for runtime in state.panes.values_mut() {
                 let Some(path) = runtime.pending_project_notice.take() else {
                     continue;
                 };
@@ -5332,14 +5441,15 @@ impl App {
             return;
         }
         let candidate = self.windows.iter().find_map(|(window_id, state)| {
-            state.tabs.iter().find_map(|(tab_id, rt)| {
+            state.workspace.visual_order().find_map(|tab_id| {
+                let rt = state.pane_runtime(tab_id)?;
                 let fallback = rt.terminal.cwd_fallback();
                 fallback_reveals_missing_osc7(
                     rt.received_osc7,
                     fallback.as_deref(),
                     rt.spawn_cwd.as_deref(),
                 )
-                .then_some((*window_id, *tab_id))
+                .then_some((*window_id, tab_id))
             })
         });
         if let Some((window_id, tab_id)) = candidate {
@@ -5362,14 +5472,15 @@ impl App {
             return;
         }
         let candidate = self.windows.iter().find_map(|(window_id, state)| {
-            state.tabs.iter().find_map(|(tab_id, rt)| {
+            state.workspace.visual_order().find_map(|tab_id| {
+                let rt = state.pane_runtime(tab_id)?;
                 windows_invite_timeout_due(
                     rt.received_osc7,
                     rt.first_output_at,
                     now,
                     WINDOWS_SHELL_INTEGRATION_INVITE_INTERVAL,
                 )
-                .then_some((*window_id, *tab_id))
+                .then_some((*window_id, tab_id))
             })
         });
         if let Some((window_id, tab_id)) = candidate {
@@ -5389,7 +5500,7 @@ impl App {
         let alt_screen_active = self
             .windows
             .get(&window_id)
-            .and_then(|s| s.tabs.get(&tab_id))
+            .and_then(|s| s.pane_runtime(tab_id))
             .is_some_and(|rt| rt.terminal.modes().alt_screen);
         match shell_integration_note_timing(alt_screen_active) {
             ShellIntegrationNoteTiming::Defer => {
@@ -5410,7 +5521,7 @@ impl App {
         let Some(state) = self.windows.get(&window_id) else {
             return;
         };
-        let Some(rt) = state.tabs.get(&tab_id) else {
+        let Some(rt) = state.pane_runtime(tab_id) else {
             return;
         };
         let shell_name = state
@@ -5432,7 +5543,7 @@ impl App {
         let alt_screen_active = self
             .windows
             .get(&window_id)
-            .and_then(|s| s.tabs.get(&tab_id))
+            .and_then(|s| s.pane_runtime(tab_id))
             .is_some_and(|rt| rt.terminal.modes().alt_screen);
         if !alt_screen_active {
             self.write_shell_integration_note(window_id, tab_id);
@@ -5751,10 +5862,10 @@ impl ApplicationHandler<Wakeup> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
-        let (window, tab_id) = match event {
-            Wakeup::TabDirty { window, tab } => {
+        let (window, tab_id, pane_id) = match event {
+            Wakeup::TabDirty { window, tab, pane } => {
                 self.mark_first_pty_output();
-                (window, tab)
+                (window, tab, pane)
             }
             Wakeup::ConfigReloaded(outcome) => {
                 self.apply_config_reload(*outcome, Instant::now());
@@ -5783,7 +5894,7 @@ impl ApplicationHandler<Wakeup> for App {
         // marcados aqui; nunca escreve na hora, mesmo que o silêncio já
         // esteja cumprido (mantém "quem chama `Instant::now()` é `lib.rs`"
         // num só lugar por gatilho).
-        if let Some(runtime) = state.tabs.get_mut(&tab_id)
+        if let Some(runtime) = state.panes.get_mut(&pane_id)
             && let Some(pending) = &mut runtime.pending_project_command
         {
             let now = Instant::now();
@@ -5799,7 +5910,7 @@ impl ApplicationHandler<Wakeup> for App {
         // due`), em vez do instante do spawn. Marcado uma vez só, no
         // primeiro `Wakeup::TabDirty` da aba.
         #[cfg(windows)]
-        if let Some(runtime) = state.tabs.get_mut(&tab_id)
+        if let Some(runtime) = state.panes.get_mut(&pane_id)
             && runtime.first_output_at.is_none()
         {
             runtime.first_output_at = Some(Instant::now());
@@ -5815,7 +5926,7 @@ impl ApplicationHandler<Wakeup> for App {
         }
 
         let mut pending = Vec::new();
-        if let Some(runtime) = state.tabs.get(&tab_id) {
+        if let Some(runtime) = state.panes.get(&pane_id) {
             while let Some(term_event) = runtime.terminal.try_recv_event() {
                 pending.push(term_event);
             }
@@ -5840,7 +5951,7 @@ impl ApplicationHandler<Wakeup> for App {
                 }
                 TermEvent::ClipboardWrite(text) => clipboard::copy(&text),
                 TermEvent::ClipboardRead(responder) => {
-                    if let Some(runtime) = state.tabs.get(&tab_id) {
+                    if let Some(runtime) = state.panes.get(&pane_id) {
                         let content = clipboard::paste().unwrap_or_default();
                         runtime
                             .terminal
@@ -5853,8 +5964,8 @@ impl ApplicationHandler<Wakeup> for App {
                     // RF-3.1 (ADR-0039 §2): sinal de verdade de que esta
                     // instância tem OSC 7 -- diferente de `Tab::cwd()`,
                     // que uma aba nova já pode ter por herança (ver o
-                    // comentário do campo em `TabRuntime`).
-                    if let Some(rt) = state.tabs.get_mut(&tab_id) {
+                    // comentário do campo em `PaneRuntime`).
+                    if let Some(rt) = state.panes.get_mut(&pane_id) {
                         rt.received_osc7 = true;
                     }
                     if let Some(tab) = state.workspace.tab_mut(tab_id) {
@@ -5864,7 +5975,7 @@ impl ApplicationHandler<Wakeup> for App {
                 }
                 // RF-3.1 (ADR-0039 §4): marcador digitado pelo usuário.
                 // Só tem efeito depois do convite ter sido escolhido para
-                // aparecer nesta execução -- ver o campo em `TabRuntime`/
+                // aparecer nesta execução -- ver o campo em `PaneRuntime`/
                 // `App`; um shell que por acaso emita a mesma string
                 // (extremamente improvável) não dispensa nada sem o
                 // convite ter chegado a existir.
@@ -5882,7 +5993,7 @@ impl ApplicationHandler<Wakeup> for App {
                             window_should_close = true;
                         }
                     } else {
-                        if let Some(runtime) = state.tabs.get(&tab_id) {
+                        if let Some(runtime) = state.panes.get(&pane_id) {
                             runtime.terminal.inject_note(
                                 &format!("processo encerrado (código {code})"),
                                 palette::NOTE_ACCENT_RGB,
@@ -6594,15 +6705,18 @@ impl App {
                 position.x as f32 / state.scale,
                 position.y as f32 / state.scale,
             );
-            let items = terminal_menu_context_items(
-                &state.tabs,
-                &self.style,
-                self.cell_metrics,
-                state.logical_width,
-                state.logical_height,
-                menu.tab,
-                menu.anchor,
-            );
+            let items = match focused_pane(&state.workspace, menu.tab) {
+                Some(pane) => terminal_menu_context_items(
+                    &state.panes,
+                    &self.style,
+                    self.cell_metrics,
+                    state.logical_width,
+                    state.logical_height,
+                    pane,
+                    menu.anchor,
+                ),
+                None => terminal_menu_items(false, false),
+            };
             let layout = overlay::layout_terminal_menu(
                 menu,
                 items.len(),
@@ -7039,7 +7153,8 @@ impl App {
                 // seleção local -- mesmo caminho do press, ver lib.rs:2967+.
                 let cell = state.cell_at_cursor(self.cell_metrics, &self.style);
                 let active_id = state.workspace.active_tab();
-                if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
+                let pane = active_id.and_then(|id| focused_pane(&state.workspace, id));
+                if let Some(runtime) = pane.and_then(|p| state.panes.get(&p)) {
                     input::handle_mouse_button(
                         &runtime.terminal,
                         &runtime.terminal.modes(),
@@ -7168,15 +7283,18 @@ impl App {
 
         // Menu de contexto do terminal: mesmo padrão dos dois acima.
         if let Some(menu) = state.terminal_context_menu {
-            let items = terminal_menu_context_items(
-                &state.tabs,
-                &self.style,
-                self.cell_metrics,
-                state.logical_width,
-                state.logical_height,
-                menu.tab,
-                menu.anchor,
-            );
+            let items = match focused_pane(&state.workspace, menu.tab) {
+                Some(pane) => terminal_menu_context_items(
+                    &state.panes,
+                    &self.style,
+                    self.cell_metrics,
+                    state.logical_width,
+                    state.logical_height,
+                    pane,
+                    menu.anchor,
+                ),
+                None => terminal_menu_items(false, false),
+            };
             let layout = overlay::layout_terminal_menu(
                 &menu,
                 items.len(),
@@ -7273,7 +7391,8 @@ impl App {
                     match search_bar::search_bar_hit(&layout, logical_point) {
                         Some(SearchBarHit::Close) => state.search = None,
                         Some(SearchBarHit::Toggle) => {
-                            if let Some(rt) = state.tabs.get(&search_tab)
+                            let pane = focused_pane(&state.workspace, search_tab);
+                            if let Some(rt) = pane.and_then(|p| state.panes.get(&p))
                                 && let Some(search) = state.search.as_mut()
                             {
                                 search.toggle_regex(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
@@ -7497,8 +7616,7 @@ impl App {
                 && link_modifier
                 && let Some(id) = active_id
                 && let Some(uri) = state
-                    .tabs
-                    .get(&id)
+                    .pane_runtime(id)
                     .and_then(|rt| hyperlink::uri_at(&rt.snapshot, cell.row, cell.col))
                     .map(str::to_string)
             {
@@ -7515,7 +7633,7 @@ impl App {
             // já aplica pros outros botões.
             let program_wants_mouse =
                 active_id
-                    .and_then(|id| state.tabs.get(&id))
+                    .and_then(|id| state.pane_runtime(id))
                     .is_some_and(|rt| {
                         !state.modifiers.shift
                             && rt.terminal.modes().mouse_reporting != MouseReporting::None
@@ -7525,15 +7643,18 @@ impl App {
                 && let Some(id) = active_id
             {
                 state.close_all_popovers();
-                let items = terminal_menu_context_items(
-                    &state.tabs,
-                    &self.style,
-                    self.cell_metrics,
-                    state.logical_width,
-                    state.logical_height,
-                    id,
-                    logical_point,
-                );
+                let items = match focused_pane(&state.workspace, id) {
+                    Some(pane) => terminal_menu_context_items(
+                        &state.panes,
+                        &self.style,
+                        self.cell_metrics,
+                        state.logical_width,
+                        state.logical_height,
+                        pane,
+                        logical_point,
+                    ),
+                    None => terminal_menu_items(false, false),
+                };
                 state.terminal_context_menu =
                     Some(TerminalContextMenu::new(id, logical_point, &items));
                 state.hover.dismiss();
@@ -7541,7 +7662,8 @@ impl App {
                 return;
             }
 
-            if let Some(runtime) = active_id.and_then(|id| state.tabs.get(&id)) {
+            let pane = active_id.and_then(|id| focused_pane(&state.workspace, id));
+            if let Some(runtime) = pane.and_then(|p| state.panes.get(&p)) {
                 input::handle_mouse_button(
                     &runtime.terminal,
                     &runtime.terminal.modes(),
@@ -7775,34 +7897,8 @@ impl App {
         );
 
         if let Some(id) = state.workspace.active_tab()
-            && let Some(runtime) = state.tabs.get_mut(&id)
+            && let Some(tab) = state.workspace.tab(id)
         {
-            runtime.terminal.snapshot_into(&mut runtime.snapshot);
-
-            // Busca (ADR-0041): varre mais um lote por frame enquanto
-            // houver, sem travar a UI (item 5 da etapa 1) -- pede outro
-            // redraw imediatamente se ainda não terminou (não é o relógio
-            // de animação do ADR-0022, que a §9 fecha em dois consumidores;
-            // isto é o mesmo padrão de "saída do PTY continua chegando em
-            // frames seguintes"). Corta as ocorrências pela vista e limpa
-            // o buffer sem realocar (ADR-0007) -- `TermEngine::
-            // snapshot_into` só zera (já aconteceu na chamada acima); quem
-            // preenche é `porecatu-ui` (ADR-0041 §4).
-            if let Some(search) = state.search.as_mut() {
-                if search.step(&runtime.terminal) {
-                    state.window.request_redraw();
-                }
-                let scroll_offset = runtime.snapshot.scroll_offset;
-                let rows = runtime.snapshot.rows;
-                search_bar::occurrences_in_view(
-                    search.occurrences(),
-                    search.active_index(),
-                    scroll_offset,
-                    rows,
-                    &mut runtime.snapshot.occurrences,
-                );
-            }
-
             let box_rect = paint::terminal_box_rect(
                 style,
                 h,
@@ -7810,6 +7906,11 @@ impl App {
                 state.logical_width,
                 state.logical_height,
             );
+            // ADR-0053 §5: subdivide o retângulo do quadro pela árvore de
+            // painéis da aba -- com um painel só, `pane_layout` tem uma
+            // entrada, e ela é o `box_rect` inteiro (nenhum vão tirado).
+            let focused_pane = tab.panes().focused_id();
+            let pane_layout = panes::layout(tab.panes(), box_rect, style);
             let cursor_config = &self.config.terminal.cursor;
             let cursor_color = if cursor_config.follows_group_color {
                 active_group_color(&state.workspace, pal)
@@ -7817,39 +7918,80 @@ impl App {
                 None
             }
             .unwrap_or(self.term_pal.cursor);
-            let cursor = paint::CursorAppearance {
-                color: cursor_color,
-                width: cursor_config.width as f32,
-                hollow: !state.focused && cursor_config.unfocused_hollow,
-            };
-            let hyperlink_hover: Vec<HyperlinkSpan> = if self.config.terminal.hyperlinks.enabled
-                && link_modifier
-                && hovering_grid
-                && !hyperlink_overlay_blocks_hover
-            {
-                let cell = input::cell_at(
-                    hover_content_x,
-                    hover_content_y,
+
+            let mut grid_primitives = Vec::new();
+            for (pane_id, pane_rect) in &pane_layout {
+                let pane_id = *pane_id;
+                let Some(runtime) = state.panes.get_mut(&pane_id) else {
+                    continue;
+                };
+                runtime.terminal.snapshot_into(&mut runtime.snapshot);
+
+                // Busca (ADR-0041): amarrada ao painel focado -- os demais
+                // não têm o que varrer. Mesmo comentário de antes: varre
+                // mais um lote por frame sem travar a UI, pede outro
+                // redraw se ainda não terminou, corta as ocorrências pela
+                // vista sem realocar (ADR-0007).
+                if pane_id == focused_pane
+                    && let Some(search) = state.search.as_mut()
+                {
+                    if search.step(&runtime.terminal) {
+                        state.window.request_redraw();
+                    }
+                    let scroll_offset = runtime.snapshot.scroll_offset;
+                    let rows = runtime.snapshot.rows;
+                    search_bar::occurrences_in_view(
+                        search.occurrences(),
+                        search.active_index(),
+                        scroll_offset,
+                        rows,
+                        &mut runtime.snapshot.occurrences,
+                    );
+                }
+
+                // RF-6.9/ADR-0053 §4: o foco é o cursor, e só -- o painel
+                // focado desenha cheio (sujeito à mesma regra de janela
+                // sem foco, RF-5.24), os demais desenham o mesmo cursor
+                // **sempre** vazado. Reusa `unfocused_hollow`: é o mesmo
+                // `RoundedQuad` de raio 0 com borda, sem primitiva nova.
+                let hollow =
+                    pane_id != focused_pane || (!state.focused && cursor_config.unfocused_hollow);
+                let cursor = paint::CursorAppearance {
+                    color: cursor_color,
+                    width: cursor_config.width as f32,
+                    hollow,
+                };
+
+                let hyperlink_hover: Vec<HyperlinkSpan> = if pane_id == focused_pane
+                    && self.config.terminal.hyperlinks.enabled
+                    && link_modifier
+                    && hovering_grid
+                    && !hyperlink_overlay_blocks_hover
+                {
+                    let cell = input::cell_at(
+                        hover_content_x,
+                        hover_content_y,
+                        self.cell_metrics,
+                        runtime.snapshot.rows.max(MIN_GRID),
+                        runtime.snapshot.cols.max(MIN_GRID),
+                    );
+                    hyperlink::spans_sharing_id_at(&runtime.snapshot, cell.row, cell.col)
+                } else {
+                    Vec::new()
+                };
+                grid_primitives.extend(paint::build_primitives(
+                    &runtime.snapshot,
                     self.cell_metrics,
-                    runtime.snapshot.rows.max(MIN_GRID),
-                    runtime.snapshot.cols.max(MIN_GRID),
-                );
-                hyperlink::spans_sharing_id_at(&runtime.snapshot, cell.row, cell.col)
-            } else {
-                Vec::new()
-            };
-            let primitives = paint::build_primitives(
-                &runtime.snapshot,
-                self.cell_metrics,
-                font_size_px,
-                box_rect,
-                style,
-                &self.term_pal,
-                cursor,
-                gpu.text_measurer(),
-                &hyperlink_hover,
-            );
-            frame.set_layer(Layer::Grid, primitives);
+                    font_size_px,
+                    *pane_rect,
+                    style,
+                    &self.term_pal,
+                    cursor,
+                    gpu.text_measurer(),
+                    &hyperlink_hover,
+                ));
+            }
+            frame.set_layer(Layer::Grid, grid_primitives);
 
             if let Some(search) = &state.search {
                 let search_layout = search_bar::layout_search_bar(box_rect, style);
@@ -7963,15 +8105,18 @@ impl App {
             ));
         }
         if let Some(menu) = &state.terminal_context_menu {
-            let items = terminal_menu_context_items(
-                &state.tabs,
-                style,
-                self.cell_metrics,
-                state.logical_width,
-                state.logical_height,
-                menu.tab,
-                menu.anchor,
-            );
+            let items = match focused_pane(&state.workspace, menu.tab) {
+                Some(pane) => terminal_menu_context_items(
+                    &state.panes,
+                    style,
+                    self.cell_metrics,
+                    state.logical_width,
+                    state.logical_height,
+                    pane,
+                    menu.anchor,
+                ),
+                None => terminal_menu_items(false, false),
+            };
             let layout = overlay::layout_terminal_menu(
                 menu,
                 items.len(),
