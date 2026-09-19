@@ -3,55 +3,35 @@
 //! `Tab`, seu ciclo de vida (ADR-0017) e a precedência de título (RF-1.7,
 //! reconciliada pelo ADR-0017 -- sem o nível de processo em primeiro
 //! plano).
+//!
+//! ADR-0053 §2: uma aba passa a conter uma árvore de painéis
+//! ([`PaneTree`]), não mais um terminal só. Os seis campos que descreviam
+//! um shell (`process_title`, `cwd`, `shell_name`, o estado de vida,
+//! `activity`, `bell`) migraram para [`Pane`] -- `Tab` fica com identidade,
+//! `custom_title` e a árvore, e **deriva** o que a barra de abas precisa:
+//! título do painel focado (`custom_title` continua vencendo tudo,
+//! RF-6.17), e atividade/campainha por **agregação** de todos os painéis
+//! (RF-6.18) -- a escolha oposta à do título, e de propósito.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::id::TabId;
-
-/// Estado de vida da aba (ADR-0017 item 6, ADR-0037 §1). Três estados,
-/// duas transições possíveis e só elas: `NotStarted -> Running` no
-/// primeiro foco, `Running -> Exited` quando o processo morre. Sem volta.
-///
-/// `NotStarted` só nasce da restauração de sessão (F5 etapa 4) -- aba
-/// nova por `Tab::new`/`Workspace::new_tab`/`Workspace::append_tab` nasce
-/// sempre `Running`. Uma aba `Exited` não tem PTY, não aceita input, mas
-/// continua rolável, selecionável e copiável -- é para isso que o RF-1.3 a
-/// mantém aberta.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TabState {
-    NotStarted,
-    Running,
-    Exited { exit_code: i32 },
-}
+use crate::pane::PaneTree;
 
 /// Uma aba. Não carrega PTY nem motor VT -- isso é `porecatu-term`, do
 /// outro lado da fronteira da seção 4 da arquitetura. `Tab` só guarda o
 /// que o domínio precisa para desenhar a barra e decidir foco.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tab {
     id: TabId,
     /// Título definido pelo usuário (RF-1.8). `Some` congela o título:
-    /// atualizações de `process_title` continuam sendo aplicadas por baixo,
+    /// atualizações do painel focado continuam sendo aplicadas por baixo,
     /// mas [`Tab::title`] as ignora enquanto isto for `Some`. RF-1.9 limpa
     /// voltando a `None`.
     custom_title: Option<String>,
-    /// Último título recebido por OSC 0 / OSC 2.
-    process_title: Option<String>,
-    /// Nome do shell spawnado -- fallback de última instância, sempre
-    /// presente.
-    shell_name: String,
-    /// Diretório de trabalho conhecido, capturado por OSC 7 (ADR-0017 item
-    /// 1). `None` até o primeiro OSC 7 chegar; quem decide o fallback
-    /// (`startup_directory`) é o chamador, não este tipo.
-    cwd: Option<PathBuf>,
-    state: TabState,
-    /// Indicador de atividade (RF-1.20): saída nova enquanto em segundo
-    /// plano.
-    activity: bool,
-    /// Indicador de campainha (RF-1.21), distinto do de atividade.
-    bell: bool,
+    panes: PaneTree,
 }
 
 impl Tab {
@@ -59,22 +39,19 @@ impl Tab {
         Self {
             id,
             custom_title: None,
-            process_title: None,
-            shell_name: shell_name.into(),
-            cwd: None,
-            state: TabState::Running,
-            activity: false,
-            bell: false,
+            panes: PaneTree::new(shell_name),
         }
     }
 
-    /// ADR-0037 §1: única forma de nascer `NotStarted` -- reservada à
-    /// restauração de sessão (F5 etapa 4). Todo outro caminho (`tab.new`,
-    /// `group.new_tab`, `window.new`) usa [`Tab::new`], que nasce `Running`.
+    /// ADR-0037 §1: única forma de nascer com o painel em `NotStarted` --
+    /// reservada à restauração de sessão (F5 etapa 4). Todo outro caminho
+    /// (`tab.new`, `group.new_tab`, `window.new`) usa [`Tab::new`], que
+    /// nasce `Running`.
     pub fn new_not_started(id: TabId, shell_name: impl Into<String>) -> Self {
         Self {
-            state: TabState::NotStarted,
-            ..Self::new(id, shell_name)
+            id,
+            custom_title: None,
+            panes: PaneTree::new_not_started(shell_name),
         }
     }
 
@@ -82,14 +59,23 @@ impl Tab {
         self.id
     }
 
-    /// Título exibido, na precedência do RF-1.7 já sem o nível de processo
-    /// em primeiro plano (ADR-0017): customizado -> OSC 0/2 -> nome do
-    /// shell.
+    /// A árvore de painéis desta aba (ADR-0053 §1) -- layout (etapa 3),
+    /// input (etapa 4) e sessão (etapa 5) leem daqui.
+    pub const fn panes(&self) -> &PaneTree {
+        &self.panes
+    }
+
+    pub const fn panes_mut(&mut self) -> &mut PaneTree {
+        &mut self.panes
+    }
+
+    /// Título exibido (RF-6.17): customizado -> o do painel **focado**
+    /// (que por si já segue OSC 0/2 -> nome do shell, RF-1.7 um nível
+    /// abaixo).
     pub fn title(&self) -> &str {
         self.custom_title
             .as_deref()
-            .or(self.process_title.as_deref())
-            .unwrap_or(&self.shell_name)
+            .unwrap_or_else(|| self.panes.focused().title())
     }
 
     pub fn has_custom_title(&self) -> bool {
@@ -101,103 +87,102 @@ impl Tab {
         self.custom_title = title;
     }
 
-    /// Aplica um título vindo de OSC 0 / OSC 2. Sempre atualizado, mesmo
-    /// com título customizado ativo -- é [`Tab::title`] quem ignora o valor
-    /// enquanto o congelamento estiver em vigor, não este método.
+    /// Aplica um título vindo de OSC 0 / OSC 2 -- do painel **focado**
+    /// (RF-6.17). Sempre atualizado, mesmo com título customizado ativo --
+    /// é [`Tab::title`] quem ignora o valor enquanto o congelamento
+    /// estiver em vigor, não este método.
     pub fn set_process_title(&mut self, title: Option<String>) {
-        self.process_title = title;
+        self.panes.focused_mut().set_process_title(title);
     }
 
+    /// `cwd` do painel **focado** (RF-6.17/ADR-0053 §2).
     pub fn cwd(&self) -> Option<&PathBuf> {
-        self.cwd.as_ref()
+        self.panes.focused().cwd()
     }
 
-    /// Nome do shell spawnado (ADR-0036 §3: `porecatu-session` grava isto
-    /// como `TabV1::spawn_program`, para diferenciar do shell padrão da
-    /// config na restauração).
-    pub fn shell_name(&self) -> &str {
-        &self.shell_name
-    }
-
-    /// Captura de OSC 7 (ADR-0017 item 1).
+    /// Captura de OSC 7 (ADR-0017 item 1) -- do painel focado.
     pub fn set_cwd(&mut self, cwd: PathBuf) {
-        self.cwd = Some(cwd);
+        self.panes.focused_mut().set_cwd(cwd);
     }
 
-    pub const fn state(&self) -> TabState {
-        self.state
+    /// Nome do shell do painel focado (ADR-0036 §3: `porecatu-session`
+    /// grava isto como `TabV1::spawn_program`, para diferenciar do shell
+    /// padrão da config na restauração).
+    pub fn shell_name(&self) -> &str {
+        self.panes.focused().shell_name()
     }
 
-    pub const fn is_exited(&self) -> bool {
-        matches!(self.state, TabState::Exited { .. })
+    pub fn is_exited(&self) -> bool {
+        self.panes.focused().is_exited()
     }
 
     /// ADR-0037 §1: só a restauração de sessão produz este estado.
-    pub const fn is_not_started(&self) -> bool {
-        matches!(self.state, TabState::NotStarted)
+    pub fn is_not_started(&self) -> bool {
+        self.panes.focused().is_not_started()
     }
 
     /// `NotStarted` não tem PTY ainda, `Exited` não tem mais (ADR-0017
-    /// item 6, ADR-0037 §1).
-    pub const fn accepts_input(&self) -> bool {
-        matches!(self.state, TabState::Running)
+    /// item 6, ADR-0037 §1) -- do painel focado.
+    pub fn accepts_input(&self) -> bool {
+        self.panes.focused().accepts_input()
     }
 
     /// Primeiro foco de uma aba restaurada sem shell (ADR-0037 §2): quem
     /// chama já spawnou o `Terminal` de verdade antes de chamar isto --
-    /// este método só formaliza a transição no modelo. Sem volta: chamar
-    /// fora de `NotStarted` não faz nada, nunca regride `Running`/`Exited`.
+    /// este método só formaliza a transição no modelo, no painel focado.
     pub fn start(&mut self) {
-        if self.state == TabState::NotStarted {
-            self.state = TabState::Running;
-        }
+        self.panes.focused_mut().start();
     }
 
-    /// RF-1.3: processo encerrou com código diferente de zero, a aba
-    /// permanece aberta. Encerramento com código zero remove a aba
-    /// inteiramente -- isso é `Workspace::close_tab`, chamado pelo `ui`, não
-    /// uma transição de estado deste tipo.
+    /// RF-1.3/RF-6.11: processo do painel focado encerrou com código
+    /// diferente de zero, a aba permanece aberta. Encerramento com código
+    /// zero remove o painel (a aba, se ele era o último) -- isso é
+    /// `Workspace::close_tab`/`PaneTree::close`, chamado pelo `ui`, não uma
+    /// transição de estado deste tipo.
     pub fn mark_exited(&mut self, exit_code: i32) {
-        self.state = TabState::Exited { exit_code };
-        // Aba morta não produz mais saída (ADR-0017 item 6): os
-        // indicadores de atividade e campainha deixam de fazer sentido.
-        self.activity = false;
-        self.bell = false;
+        self.panes.focused_mut().mark_exited(exit_code);
     }
 
-    pub const fn activity(&self) -> bool {
-        self.activity
+    /// RF-6.18: agregação -- qualquer painel com atividade acende o
+    /// indicador da aba.
+    pub fn activity(&self) -> bool {
+        self.panes.panes().iter().any(crate::pane::Pane::activity)
     }
 
-    /// RF-1.20: saída nova enquanto a aba está em segundo plano. Aba
-    /// `Exited` nunca produz saída nova; chamar isto nela é erro do
-    /// chamador, não algo que este método precise validar -- `ui` só chama
-    /// a partir de um `TermEvent`, que uma aba morta não emite mais.
+    /// RF-1.20: saída nova enquanto a aba está em segundo plano -- no
+    /// painel focado, que é o único que existe até a etapa 3/4 ligar o
+    /// resto da árvore ao runtime.
     pub fn mark_activity(&mut self) {
-        self.activity = true;
+        self.panes.focused_mut().mark_activity();
     }
 
-    pub const fn bell(&self) -> bool {
-        self.bell
+    /// RF-6.18: agregação, mesmo motivo de [`Tab::activity`].
+    pub fn bell(&self) -> bool {
+        self.panes.panes().iter().any(crate::pane::Pane::bell)
     }
 
-    /// RF-1.21: campainha (BEL) emitida em segundo plano.
+    /// RF-1.21: campainha (BEL) emitida em segundo plano -- no painel
+    /// focado.
     pub fn mark_bell(&mut self) {
-        self.bell = true;
+        self.panes.focused_mut().mark_bell();
     }
 
-    /// RF-1.22: visitar a aba limpa os dois indicadores. Chamado por
+    /// RF-1.22/RF-6.18: visitar a aba limpa os indicadores agregados --
+    /// que só apagam de verdade quando **nenhum** painel tem indicador
+    /// aceso, então limpa todos, não só o focado. Chamado por
     /// `Workspace::activate_tab`, não diretamente -- "visitar" é um
     /// conceito de workspace (qual aba está ativa), não de aba isolada.
     pub(crate) fn clear_indicators(&mut self) {
-        self.activity = false;
-        self.bell = false;
+        for pane in self.panes.panes_mut() {
+            pane.clear_indicators();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pane::PaneState;
 
     #[test]
     fn title_falls_back_to_shell_name() {
@@ -229,6 +214,31 @@ mod tests {
         assert_eq!(tab.title(), "vim: main.rs");
     }
 
+    /// RF-6.17, a metade que a F3 não tinha como testar: trocar o painel
+    /// focado muda o título derivado, mas `custom_title` continua
+    /// vencendo mesmo depois da troca.
+    #[test]
+    fn switching_focused_pane_changes_the_derived_title_but_not_a_custom_one() {
+        let mut tab = Tab::new(TabId::new(0), "zsh");
+        let first = tab.panes().focused_id();
+        let second = tab
+            .panes_mut()
+            .split(first, crate::pane::SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        assert_eq!(tab.title(), "bash", "painel novo nasce focado (RF-6.1)");
+
+        tab.panes_mut().focus(first);
+        assert_eq!(tab.title(), "zsh");
+
+        tab.set_custom_title(Some("meu terminal".to_string()));
+        tab.panes_mut().focus(second);
+        assert_eq!(
+            tab.title(),
+            "meu terminal",
+            "custom_title vence a troca de painel focado"
+        );
+    }
+
     #[test]
     fn exited_tab_rejects_input() {
         let mut tab = Tab::new(TabId::new(0), "zsh");
@@ -247,12 +257,34 @@ mod tests {
         assert!(!tab.bell());
     }
 
+    /// RF-6.18: painel em segundo plano (não o focado) acende o indicador
+    /// agregado da aba -- não só o do painel focado.
+    #[test]
+    fn activity_on_any_pane_lights_up_the_aggregated_indicator() {
+        let mut tab = Tab::new(TabId::new(0), "zsh");
+        let first = tab.panes().focused_id();
+        let second = tab
+            .panes_mut()
+            .split(first, crate::pane::SplitAxis::Horizontal, "bash", None)
+            .unwrap();
+        assert_eq!(tab.panes().focused_id(), second);
+
+        tab.panes_mut().focus(first);
+        assert!(!tab.activity() && !tab.bell());
+
+        tab.panes_mut().pane_mut(second).unwrap().mark_activity();
+        assert!(tab.activity(), "atividade em painel não focado agrega");
+
+        tab.panes_mut().pane_mut(second).unwrap().mark_bell();
+        assert!(tab.bell());
+    }
+
     /// ADR-0037 §1: aba nova nasce sempre `Running` -- só a restauração
     /// (F5 etapa 4) produz `NotStarted`, e essa etapa não existe ainda.
     #[test]
     fn new_tab_is_always_running() {
         let tab = Tab::new(TabId::new(0), "zsh");
-        assert_eq!(tab.state(), TabState::Running);
+        assert_eq!(tab.panes().focused().state(), PaneState::Running);
     }
 
     fn not_started_tab() -> Tab {
@@ -265,7 +297,7 @@ mod tests {
     #[test]
     fn new_not_started_produces_the_not_started_state() {
         let tab = Tab::new_not_started(TabId::new(0), "zsh");
-        assert_eq!(tab.state(), TabState::NotStarted);
+        assert_eq!(tab.panes().focused().state(), PaneState::NotStarted);
         assert_eq!(tab.title(), "zsh");
     }
 
@@ -273,14 +305,14 @@ mod tests {
     fn not_started_transitions_to_running_on_start() {
         let mut tab = not_started_tab();
         tab.start();
-        assert_eq!(tab.state(), TabState::Running);
+        assert_eq!(tab.panes().focused().state(), PaneState::Running);
     }
 
     #[test]
     fn start_on_already_running_is_a_no_op() {
         let mut tab = Tab::new(TabId::new(0), "zsh");
         tab.start();
-        assert_eq!(tab.state(), TabState::Running);
+        assert_eq!(tab.panes().focused().state(), PaneState::Running);
     }
 
     /// ADR-0037 §1: "sem volta" -- uma aba `Exited` não regride nunca,

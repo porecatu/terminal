@@ -218,6 +218,9 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
     }
     // [git] não entra aqui: é classe A -- o prazo da consulta é recalculado
     // a cada volta do laço lendo a config atual (ADR-0052 §10).
+    // [panes] também não entra: é classe A (ADR-0053 §9) -- o mínimo
+    // governa o próximo split e o próximo arraste, sem redimensionar o
+    // que já existe.
 
     ReloadEffects {
         grid_changed,
@@ -311,6 +314,18 @@ mod tests {
         // laço de eventos lendo a config atual, sem trabalho de hot reload.
         let mut new = base();
         new.git.remote_poll_interval_secs = 0;
+        let effects = diff(&base(), &new);
+        assert!(!effects.grid_changed);
+        assert!(effects.deferred.is_empty());
+    }
+
+    #[test]
+    fn panes_min_change_is_class_a_not_deferred() {
+        // ADR-0053 §9: classe A -- governa o próximo split e o próximo
+        // arraste, sem tocar em PTY já existente.
+        let mut new = base();
+        new.panes.min_columns = 40;
+        new.panes.min_rows = 10;
         let effects = diff(&base(), &new);
         assert!(!effects.grid_changed);
         assert!(effects.deferred.is_empty());

@@ -37,13 +37,7 @@
 #   [session]                PRD-003
 #   [project_file]           PRD-012, ADR-0051  (arquivo .porecatu do projeto)
 #   [git]                    PRD-013, ADR-0052  (sincronização com o remoto do Git)
-#
-# AINDA NÃO AQUI: a seção [panes] (min_columns, min_rows -- PRD-006 RF-6.4,
-# ADR-0053, classe [A]) está aprovada e especificada, mas só entra neste
-# arquivo quando o campo existir em Config. Este arquivo é comparado com
-# Config::default() por teste (tests/example_toml.rs, zero chaves
-# desconhecidas), então documentar a chave antes do campo reprova o CI.
-# Ver docs/roadmap.md, "Depois do v1 -- painéis divididos", etapa 2.
+#   [panes]                  PRD-006, ADR-0053  (painéis divididos -- documentado, não implementado)
 #
 # ORIGEM DOS VALORES DE APARÊNCIA
 # Cores, dimensões, raios e espaçamentos estão registrados em
@@ -1464,6 +1458,22 @@ close_hover_foreground = "#ffffff"
 "shift+f3"            = "search.prev"                        # RF-11.5
 "ctrl+shift+a"        = "selection.select_all"               # RF-11.16
 
+# Painéis divididos (PRD-006, ADR-0053). A tabela do RF-6.1 desambigua
+# "horizontal": divisor deitado (painel novo abaixo) para Ctrl+Shift+H,
+# divisor em pé (painel novo à direita) para Ctrl+Shift+D. As quatro de
+# foco valem nas três plataformas -- mesmo padrão de f11/f3 acima.
+"ctrl+shift+h"        = "pane.split_horizontal"               # RF-6.1
+"ctrl+shift+d"        = "pane.split_vertical"                 # RF-6.1
+"alt+left"            = "pane.focus_left"                     # RF-6.8
+"alt+right"           = "pane.focus_right"                    # RF-6.8
+"alt+up"              = "pane.focus_up"                       # RF-6.8
+"alt+down"            = "pane.focus_down"                     # RF-6.8
+# pane.close é vinculável e fica SEM default, de propósito -- mesmo
+# precedente de group.new_tab/group.close_all acima: exit no shell já
+# fecha o painel (RF-6.11), e Ctrl+Shift+W continua fechando a aba inteira.
+# Quem quiser, vincula:
+# "ctrl+shift+x"      = "pane.close"
+
 # --- defaults de macOS ---------------------------------- ADR-0008, ADR-0029
 # A tabela do ADR-0008 define Cmd para todas as ações de app; nada disso
 # responde no Mac até o parser existir. Estão aqui no formato que ele lê.
@@ -1505,6 +1515,11 @@ close_hover_foreground = "#ffffff"
 "shift+f3"            = "search.prev"                        # RF-11.5
 "cmd+a"               = "selection.select_all"               # RF-11.16
 # "cmd+shift+p"       = "command.palette"   # [v2], fora do catálogo -- ver nota acima
+
+# Painéis divididos. Só os dois de split levam entrada própria aqui -- as
+# quatro de foco já valem nas três plataformas pela tabela comum acima.
+"cmd+shift+h"         = "pane.split_horizontal"               # RF-6.1
+"cmd+shift+d"         = "pane.split_vertical"                 # RF-6.1
 
 # As duas tabelas abaixo existem pela mesma razão e ficam vazias por
 # default -- os defaults de Windows e Linux são os da tabela comum acima.
@@ -1614,4 +1629,25 @@ trusted_paths = []
 # saturar em silêncio esconderia que o número não vale, e recusar a config
 # derrubaria mais do que o erro merece.                                 RF-13.3
 remote_poll_interval_secs = 300
+
+
+##############################################################################
+# PAINÉIS DIVIDIDOS — PRD-006 (documentado, não implementado)
+##############################################################################
+
+# Mínimo útil de painel -- comportamento, não aparência: não descreve
+# dimensão desenhada nenhuma, por isso não entra na tabela VALORES de
+# scripts/verify-docs.py. Governa dois gestos (ADR-0053 §9):
+#   - pane.split_horizontal/pane.split_vertical são RECUSADOS quando
+#     qualquer um dos dois painéis resultantes ficaria abaixo do mínimo,
+#     com aviso explicando por quê (RF-6.4).
+#   - Arrastar o divisor entre dois painéis PARA no mínimo -- o painel que
+#     encolhe nunca passa dele (RF-6.14).
+# Dois números, não um: colunas e linhas não são a mesma quantidade de
+# terminal, e um valor único obrigaria a escolher qual eixo fica errado.
+# Classe de recarga: [A] -- vale no próximo split e no próximo arraste, sem
+# tocar em painel que já existe.
+[panes]
+min_columns = 20
+min_rows = 5
 

@@ -20,6 +20,7 @@ mod error;
 mod general;
 mod git;
 mod keybindings;
+mod panes;
 mod path;
 mod project_file;
 mod session;
@@ -37,6 +38,7 @@ pub use error::ConfigError;
 pub use general::General;
 pub use git::Git;
 pub use keybindings::Keybindings;
+pub use panes::Panes;
 pub use path::resolve_config_path;
 pub use project_file::{
     PROJECT_FILE_NAME, ProjectFile, ProjectFileOutcome, ProjectScript, is_trusted,
@@ -70,6 +72,7 @@ pub struct Config {
     pub session: Session,
     pub project_file: ProjectFile,
     pub git: Git,
+    pub panes: Panes,
 }
 
 impl Default for Config {
@@ -84,6 +87,7 @@ impl Default for Config {
             session: Session::default(),
             project_file: ProjectFile::default(),
             git: Git::default(),
+            panes: Panes::default(),
         }
     }
 }

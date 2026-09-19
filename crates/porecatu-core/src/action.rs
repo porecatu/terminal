@@ -86,9 +86,22 @@ pub enum Action {
     SearchNext,
     SearchPrev,
     AppQuit,
+
+    /// RF-6.1: divisor deitado, painel novo abaixo do focado.
+    PaneSplitHorizontal,
+    /// RF-6.1: divisor em pé, painel novo à direita do focado.
+    PaneSplitVertical,
+    /// RF-6.10. Vinculável e **sem default** em nenhuma plataforma --
+    /// mesmo precedente de `group.new_tab`/`group.close_all` (ver
+    /// `common_defaults`/`macos_defaults` em `porecatu-config`).
+    PaneClose,
+    PaneFocusLeft,
+    PaneFocusRight,
+    PaneFocusUp,
+    PaneFocusDown,
 }
 
-/// As 46 linhas do catálogo fechado, na grafia exata que `FromStr`/
+/// As 53 linhas do catálogo fechado, na grafia exata que `FromStr`/
 /// `Display` usam. Único array-fonte: o teste bidirecional
 /// (`tests::every_catalog_name_round_trips`) e a sugestão de erro
 /// (`closest_name`) partem dele, então as duas checagens não podem
@@ -146,6 +159,13 @@ pub const CATALOG: &[&str] = &[
     "search.next",
     "search.prev",
     "app.quit",
+    "pane.split_horizontal",
+    "pane.split_vertical",
+    "pane.close",
+    "pane.focus_left",
+    "pane.focus_right",
+    "pane.focus_up",
+    "pane.focus_down",
 ];
 
 /// Erro de parse de uma ação (ADR-0029 §4): sempre traz a sugestão do
@@ -231,6 +251,13 @@ impl FromStr for Action {
             "search.next" => Action::SearchNext,
             "search.prev" => Action::SearchPrev,
             "app.quit" => Action::AppQuit,
+            "pane.split_horizontal" => Action::PaneSplitHorizontal,
+            "pane.split_vertical" => Action::PaneSplitVertical,
+            "pane.close" => Action::PaneClose,
+            "pane.focus_left" => Action::PaneFocusLeft,
+            "pane.focus_right" => Action::PaneFocusRight,
+            "pane.focus_up" => Action::PaneFocusUp,
+            "pane.focus_down" => Action::PaneFocusDown,
             _ => {
                 return Err(ActionParseError {
                     input: s.to_owned(),
@@ -284,12 +311,19 @@ impl fmt::Display for Action {
             Action::SearchNext => "search.next",
             Action::SearchPrev => "search.prev",
             Action::AppQuit => "app.quit",
+            Action::PaneSplitHorizontal => "pane.split_horizontal",
+            Action::PaneSplitVertical => "pane.split_vertical",
+            Action::PaneClose => "pane.close",
+            Action::PaneFocusLeft => "pane.focus_left",
+            Action::PaneFocusRight => "pane.focus_right",
+            Action::PaneFocusUp => "pane.focus_up",
+            Action::PaneFocusDown => "pane.focus_down",
         };
         f.write_str(name)
     }
 }
 
-/// Distância de Levenshtein, sem crate externo -- a tabela é pequena (46
+/// Distância de Levenshtein, sem crate externo -- a tabela é pequena (53
 /// nomes, todos curtos) e roda só no caminho de erro, nunca por frame.
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -387,6 +421,13 @@ mod tests {
             Action::SearchNext,
             Action::SearchPrev,
             Action::AppQuit,
+            Action::PaneSplitHorizontal,
+            Action::PaneSplitVertical,
+            Action::PaneClose,
+            Action::PaneFocusLeft,
+            Action::PaneFocusRight,
+            Action::PaneFocusUp,
+            Action::PaneFocusDown,
         ];
         for action in variants {
             let name = action.to_string();

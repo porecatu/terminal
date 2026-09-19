@@ -169,7 +169,7 @@ fn color_from_str(s: &str) -> Option<GroupColor> {
 mod tests {
     use std::path::PathBuf;
 
-    use porecatu_core::TabState;
+    use porecatu_core::PaneState;
 
     use super::*;
 
@@ -243,8 +243,14 @@ mod tests {
         let ws = workspace_from_window(&groups, &tabs, Some(1), true);
 
         let ids: Vec<TabId> = ws.visual_order().collect();
-        assert_eq!(ws.tab(ids[0]).unwrap().state(), TabState::NotStarted);
-        assert_eq!(ws.tab(ids[1]).unwrap().state(), TabState::Running);
+        assert_eq!(
+            ws.tab(ids[0]).unwrap().panes().focused().state(),
+            PaneState::NotStarted
+        );
+        assert_eq!(
+            ws.tab(ids[1]).unwrap().panes().focused().state(),
+            PaneState::Running
+        );
         assert_eq!(ws.active_tab(), Some(ids[1]));
     }
 
@@ -265,7 +271,7 @@ mod tests {
 
         assert!(
             ws.visual_order()
-                .all(|id| ws.tab(id).unwrap().state() == TabState::Running)
+                .all(|id| ws.tab(id).unwrap().panes().focused().state() == PaneState::Running)
         );
     }
 
@@ -303,7 +309,7 @@ mod tests {
         let a = ws.append_tab("zsh", None);
         let b = ws.append_tab("zsh", None);
         ws.tab_mut(b).unwrap().mark_exited(1);
-        assert!(ws.tab(b).unwrap().state() != TabState::Running);
+        assert!(ws.tab(b).unwrap().panes().focused().state() != PaneState::Running);
 
         let (groups, tabs, _) = window_from_workspace(&ws);
         assert!(!tabs.iter().any(|t| t.id == b.get()));
@@ -337,6 +343,13 @@ mod tests {
     /// classificado como gravado ou explicitamente descartado. O domínio
     /// deriva `Serialize` (ADR-0006), então introspeccionar as chaves do
     /// JSON pega campo novo sem depender de acesso a campo privado.
+    ///
+    /// ADR-0053 §2: os seis campos que descreviam um shell (`process_title`,
+    /// `cwd`, `shell_name`, o estado de vida, `activity`, `bell`) saíram de
+    /// `Tab` e foram para dentro de `panes` (a árvore de painéis, ADR-0053
+    /// §1) -- a cobertura de campo deles é a etapa 5 (`PaneV1`), que
+    /// decide o que a sessão grava da árvore inteira, não só do painel
+    /// focado. Aqui só cabe o que ainda é de `Tab`.
     #[test]
     fn tab_field_coverage() {
         let tab = porecatu_core::Tab::new(porecatu_core::TabId::new(0), "zsh");
@@ -349,19 +362,11 @@ mod tests {
             .collect();
         keys.sort_unstable();
 
-        // Gravado (via TabV1): id (via TabId, fora da struct), custom_title,
-        // cwd, shell_name (-> spawn_program).
-        // Descartado (ADR-0036 §3): process_title, state, activity, bell.
-        let mut expected = [
-            "id",
-            "custom_title",
-            "process_title",
-            "shell_name",
-            "cwd",
-            "state",
-            "activity",
-            "bell",
-        ];
+        // Gravado (via TabV1): id (via TabId, fora da struct), custom_title.
+        // `panes` -- a árvore inteira -- fica de fora desta etapa (2);
+        // `cwd`/`shell_name` do painel focado voltam a ser gravados na
+        // etapa 5, via `PaneV1`.
+        let mut expected = ["id", "custom_title", "panes"];
         expected.sort_unstable();
         assert_eq!(
             keys, expected,

@@ -2781,6 +2781,19 @@ impl WindowState {
                 }
                 ActionOutcome::Handled
             }
+            // Painéis divididos (PRD-006, ADR-0053) -- etapa 2, só modelo
+            // e config. As sete entram no catálogo e no mapa resolvido
+            // agora (para os testes de `keymap`/`Keybindings` cobrirem),
+            // mas o wiring de verdade é a etapa 4: devolver `Unhandled`
+            // entrega a tecla ao terminal, que é exatamente o
+            // comportamento de hoje, sem painel nenhum.
+            Action::PaneSplitHorizontal
+            | Action::PaneSplitVertical
+            | Action::PaneClose
+            | Action::PaneFocusLeft
+            | Action::PaneFocusRight
+            | Action::PaneFocusUp
+            | Action::PaneFocusDown => ActionOutcome::Unhandled,
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
             // resolvido -- inalcançável na prática, mas o `match` precisa
             // ser exaustivo.
