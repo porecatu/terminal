@@ -118,9 +118,9 @@ usados, no default de fábrica:
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | igual | Próxima/anterior aba |
 | `Alt+1`…`Alt+9` | `Cmd+1`…`Cmd+9` | Ir para a N-ésima aba |
 | `Ctrl+Shift+G` | `Cmd+G` | Criar grupo com a seleção |
-| `Ctrl+Shift+H` † | `Cmd+Shift+H` † | Dividir a aba: painel novo **abaixo** |
-| `Ctrl+Shift+D` † | `Cmd+Shift+D` † | Dividir a aba: painel novo **à direita** |
-| `Alt+←` `→` `↑` `↓` † | igual | Trocar o painel focado |
+| `Ctrl+Shift+H` | `Cmd+Shift+H` | Dividir a aba: painel novo **abaixo** |
+| `Ctrl+Shift+D` | `Cmd+Shift+D` | Dividir a aba: painel novo **à direita** |
+| `Alt+←` `→` `↑` `↓` | igual | Trocar o painel focado |
 | `Ctrl+Shift+N` | `Cmd+N` | Nova janela |
 | `F11` | igual | Alternar tela cheia |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | `Cmd+C` / `Cmd+V` | Copiar/colar |
@@ -131,22 +131,12 @@ usados, no default de fábrica:
 | `Ctrl+Shift+Y` | `Cmd+Y` | Alternar tema |
 | `Ctrl+Shift+,` | `Cmd+,` | Recarregar config na hora |
 
-† Painéis divididos: aprovado e especificado, **ainda não na versão publicada** — ver
-[Dividir a aba em painéis](#dividir-a-aba-em-painéis).
-
 Todo atalho é reconfigurável na seção `[keybindings]` (e
 `[keybindings.macos]`/`[keybindings.linux]`/`[keybindings.windows]` para
 desvio por plataforma) — [`porecatu.example.toml`](config/porecatu.example.toml)
 tem a tabela inteira, comentada.
 
 ## Dividir a aba em painéis
-
-> **Ainda não está na versão publicada.** O recurso está aprovado e
-> especificado ([PRD-006](prd/prd-006-paineis-divididos.md),
-> [ADR-0053](adr/0053-paineis-divididos.md)), e esta seção descreve o que
-> ele será. A implementação está nas etapas 2 a 5 do
-> [roadmap](roadmap.md); até elas fecharem, os atalhos abaixo não fazem
-> nada e a seção `[panes]` não existe na config.
 
 Uma aba pode ser dividida em vários terminais, cada um com o próprio
 shell, scrollback e diretório. `Ctrl+Shift+H` divide com o painel novo
@@ -278,12 +268,17 @@ A faixa no rodapé da janela mostra, da aba ativa:
 
 | Zona | O que aparece |
 |---|---|
-| Esquerda | nome do shell, diretório atual, branch do Git, quantos commits atrás do remoto, grupo da aba |
+| Esquerda | nome do shell, diretório atual, branch do Git, quantos commits atrás do remoto, grupo da aba, contagem de painéis |
 | Direita | codificação e o sistema |
 
 O diretório aparece com `~` no lugar da sua pasta pessoal, e é cortado à
 direita quando a janela estreita — os outros campos são curtos e não
 cedem espaço.
+
+Com a aba dividida em painéis, o shell e o diretório mostrados são os do
+**painel focado**. A contagem de painéis fecha a zona esquerda, depois do
+grupo, e só aparece **a partir de dois painéis** — com um só, ela some por
+completo, não vira "1 painel".
 
 ### Diretório apagado: o que significa
 

@@ -510,6 +510,108 @@ fn fresh_pane_id(counter: &mut u32) -> PaneId {
     id
 }
 
+/// Descrição externa de um nó de árvore, para reconstruir uma [`PaneTree`]
+/// a partir de sessão (ADR-0053 §11) sem que este crate precise conhecer o
+/// schema de disco. `L` carrega o que o chamador sabe sobre uma folha antes
+/// de existir `PaneId` -- `porecatu-session` usa isto para ir de
+/// `PaneNodeV1` (que endereça painel por `u32` gravado no arquivo) até uma
+/// árvore de verdade.
+#[derive(Debug, Clone)]
+pub enum ExternalNode<L> {
+    Leaf(L),
+    Split {
+        axis: SplitAxis,
+        ratio: f32,
+        first: Box<ExternalNode<L>>,
+        second: Box<ExternalNode<L>>,
+    },
+}
+
+impl PaneTree {
+    /// Reconstrói uma árvore a partir de uma descrição externa (ADR-0053
+    /// §11) -- `make_pane` produz o painel de cada folha a partir do dado
+    /// externo dela, e `is_focused` diz qual delas era a focada gravada.
+    /// `PaneId` é atribuído de novo, na ordem de travessia (`first` antes
+    /// de `second`) -- a mesma convenção de `porecatu_session::convert`
+    /// para `TabId`/`GroupId`: identidade do arquivo não sobrevive à
+    /// leitura. Sem nenhuma folha batendo em `is_focused` (arquivo editado
+    /// à mão), a primeira visitada fica focada -- mesma robustez que
+    /// `convert::workspace_from_window` já tem para `active_tab` órfão.
+    pub fn from_external<L>(
+        shape: ExternalNode<L>,
+        mut make_pane: impl FnMut(PaneId, &L) -> Pane,
+        is_focused: impl Fn(&L) -> bool,
+    ) -> Self {
+        let mut next_pane_id = 0;
+        let mut panes = Vec::new();
+        let mut focused = None;
+        let root = build_external_node(
+            shape,
+            &mut next_pane_id,
+            &mut panes,
+            &mut focused,
+            &mut make_pane,
+            &is_focused,
+        );
+        let focused = focused.unwrap_or_else(|| panes[0].id());
+        Self {
+            root,
+            panes,
+            focused,
+            next_pane_id,
+        }
+    }
+}
+
+fn build_external_node<L>(
+    shape: ExternalNode<L>,
+    next_pane_id: &mut u32,
+    panes: &mut Vec<Pane>,
+    focused: &mut Option<PaneId>,
+    make_pane: &mut impl FnMut(PaneId, &L) -> Pane,
+    is_focused: &impl Fn(&L) -> bool,
+) -> PaneNode {
+    match shape {
+        ExternalNode::Leaf(data) => {
+            let id = fresh_pane_id(next_pane_id);
+            if is_focused(&data) {
+                *focused = Some(id);
+            }
+            panes.push(make_pane(id, &data));
+            PaneNode::Leaf(id)
+        }
+        ExternalNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            let first = Box::new(build_external_node(
+                *first,
+                next_pane_id,
+                panes,
+                focused,
+                make_pane,
+                is_focused,
+            ));
+            let second = Box::new(build_external_node(
+                *second,
+                next_pane_id,
+                panes,
+                focused,
+                make_pane,
+                is_focused,
+            ));
+            PaneNode::Split {
+                axis,
+                ratio: ratio.clamp(RATIO_EPSILON, 1.0 - RATIO_EPSILON),
+                first,
+                second,
+            }
+        }
+    }
+}
+
 fn collect_leaves(node: &PaneNode, out: &mut Vec<PaneId>) {
     match node {
         PaneNode::Leaf(id) => out.push(*id),
@@ -977,5 +1079,40 @@ mod tests {
         assert_eq!(pane.title(), "zsh");
         pane.set_process_title(Some("vim: main.rs".to_string()));
         assert_eq!(pane.title(), "vim: main.rs");
+    }
+
+    // -----------------------------------------------------------------
+    // Reconstrução a partir de sessão (ADR-0053 §11)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn from_external_rebuilds_structure_ratio_and_focus() {
+        let shape = ExternalNode::Split {
+            axis: SplitAxis::Vertical,
+            ratio: 0.3,
+            first: Box::new(ExternalNode::Leaf("left")),
+            second: Box::new(ExternalNode::Leaf("right")),
+        };
+        let tree = PaneTree::from_external(
+            shape,
+            |id, name: &&str| Pane::new(id, *name),
+            |name| *name == "right",
+        );
+
+        assert_eq!(leaf_count(&tree), 2);
+        let PaneNode::Split { ratio, axis, .. } = tree.root() else {
+            panic!("split esperado");
+        };
+        assert_eq!(*ratio, 0.3);
+        assert_eq!(*axis, SplitAxis::Vertical);
+        assert_eq!(tree.focused().shell_name(), "right");
+    }
+
+    #[test]
+    fn from_external_without_a_matching_focus_falls_back_to_the_first_leaf() {
+        let shape = ExternalNode::Leaf("only");
+        let tree =
+            PaneTree::from_external(shape, |id, name: &&str| Pane::new(id, *name), |_| false);
+        assert_eq!(tree.focused().shell_name(), "only");
     }
 }

@@ -19,9 +19,11 @@
 
 use std::collections::HashMap;
 
-use porecatu_core::{GroupColor, TabId, Workspace};
+use porecatu_core::{
+    ExternalNode, GroupColor, Pane, PaneNode, PaneTree, SplitAxis, TabId, Workspace,
+};
 
-use crate::schema::v1::{GroupV1, TabV1};
+use crate::schema::v1::{GroupV1, PaneNodeV1, PaneTreeV1, PaneV1, SplitAxisV1, TabV1};
 
 /// Extrai grupos, abas e aba ativa de um `Workspace`, na forma que
 /// `WindowV1::groups`/`WindowV1::tabs`/`WindowV1::active_tab` esperam.
@@ -58,6 +60,7 @@ pub fn window_from_workspace(ws: &Workspace) -> (Vec<GroupV1>, Vec<TabV1>, Optio
             custom_title: tab.has_custom_title().then(|| tab.title().to_string()),
             cwd: tab.cwd().cloned(),
             spawn_program: Some(tab.shell_name().to_string()),
+            panes: Some(pane_tree_v1(tab.panes())),
         });
     }
 
@@ -99,12 +102,21 @@ pub fn workspace_from_window(
             let Some(tab) = by_id.get(&file_tab_id) else {
                 continue;
             };
-            let shell = tab.spawn_program.clone().unwrap_or_default();
             let is_active = active_tab == Some(file_tab_id);
-            let new_id = if lazy_restore && !is_active {
-                ws.new_tab_not_started(group_id, shell, tab.cwd.clone(), pos)
+            let not_started = lazy_restore && !is_active;
+            let new_id = if let Some(tree) = &tab.panes {
+                let core_tree = pane_tree_from_v1(tree, not_started);
+                ws.insert_tab_with_panes(group_id, core_tree, pos)
             } else {
-                ws.new_tab(group_id, shell, tab.cwd.clone(), pos)
+                // Arquivo gravado por uma versão anterior ao ADR-0053 §11:
+                // sem árvore, a aba volta como um painel só (ADR-0036 §3,
+                // "perda de layout, não corrupção").
+                let shell = tab.spawn_program.clone().unwrap_or_default();
+                if not_started {
+                    ws.new_tab_not_started(group_id, shell, tab.cwd.clone(), pos)
+                } else {
+                    ws.new_tab(group_id, shell, tab.cwd.clone(), pos)
+                }
             };
             if group_id.is_none() {
                 group_id = ws.group_of_tab(new_id);
@@ -165,6 +177,100 @@ fn color_from_str(s: &str) -> Option<GroupColor> {
     })
 }
 
+/// ADR-0053 §11: `PaneTree` (domínio) -> `PaneTreeV1` (disco), estrutura,
+/// `ratio` e `cwd`/`spawn_program` de cada folha, mais o `id` do painel
+/// focado.
+fn pane_tree_v1(tree: &PaneTree) -> PaneTreeV1 {
+    PaneTreeV1 {
+        root: pane_node_v1(tree.root(), tree),
+        focused: tree.focused_id().get(),
+    }
+}
+
+fn pane_node_v1(node: &PaneNode, tree: &PaneTree) -> PaneNodeV1 {
+    match node {
+        PaneNode::Leaf(id) => {
+            let pane = tree
+                .pane(*id)
+                .expect("todo Leaf de PaneTree referencia um painel existente");
+            PaneNodeV1::Leaf(PaneV1 {
+                id: id.get(),
+                cwd: pane.cwd().cloned(),
+                spawn_program: Some(pane.shell_name().to_string()),
+            })
+        }
+        PaneNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => PaneNodeV1::Split {
+            axis: axis_to_v1(*axis),
+            ratio: *ratio,
+            first: Box::new(pane_node_v1(first, tree)),
+            second: Box::new(pane_node_v1(second, tree)),
+        },
+    }
+}
+
+fn axis_to_v1(axis: SplitAxis) -> SplitAxisV1 {
+    match axis {
+        SplitAxis::Horizontal => SplitAxisV1::Horizontal,
+        SplitAxis::Vertical => SplitAxisV1::Vertical,
+    }
+}
+
+fn axis_from_v1(axis: SplitAxisV1) -> SplitAxis {
+    match axis {
+        SplitAxisV1::Horizontal => SplitAxis::Horizontal,
+        SplitAxisV1::Vertical => SplitAxis::Vertical,
+    }
+}
+
+/// `PaneNodeV1` (disco) -> `ExternalNode<PaneV1>` (o que
+/// `PaneTree::from_external` consome) -- puramente estrutural, sem decidir
+/// estado nenhum ainda.
+fn external_from_v1(node: &PaneNodeV1) -> ExternalNode<PaneV1> {
+    match node {
+        PaneNodeV1::Leaf(pane) => ExternalNode::Leaf(pane.clone()),
+        PaneNodeV1::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => ExternalNode::Split {
+            axis: axis_from_v1(*axis),
+            ratio: *ratio,
+            first: Box::new(external_from_v1(first)),
+            second: Box::new(external_from_v1(second)),
+        },
+    }
+}
+
+/// ADR-0053 §11: `PaneTreeV1` (disco) -> `PaneTree` (domínio) --
+/// `not_started` vem de fora porque o gatilho de restauração preguiçosa é
+/// por **aba** (RF-6.23): todo painel da árvore nasce no mesmo estado, nunca
+/// decidido folha a folha.
+fn pane_tree_from_v1(tree: &PaneTreeV1, not_started: bool) -> PaneTree {
+    let shape = external_from_v1(&tree.root);
+    PaneTree::from_external(
+        shape,
+        |id, leaf: &PaneV1| {
+            let shell = leaf.spawn_program.clone().unwrap_or_default();
+            let mut pane = if not_started {
+                Pane::new_not_started(id, shell)
+            } else {
+                Pane::new(id, shell)
+            };
+            if let Some(cwd) = leaf.cwd.clone() {
+                pane.set_cwd(cwd);
+            }
+            pane
+        },
+        |leaf: &PaneV1| leaf.id == tree.focused,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -217,13 +323,159 @@ mod tests {
         assert_eq!(backend_tab.cwd(), Some(&PathBuf::from("/srv/api")));
     }
 
+    /// Sem `panes` -- o caminho de um arquivo gravado antes do ADR-0053
+    /// §11, usado por vários testes de restauração preguiçosa que não
+    /// precisam de árvore nenhuma.
     fn tab_v1(id: u32, shell: &str) -> TabV1 {
         TabV1 {
             id,
             custom_title: None,
             cwd: None,
             spawn_program: Some(shell.to_string()),
+            panes: None,
         }
+    }
+
+    /// ADR-0053 §11: round-trip de sessão com três painéis -- estrutura
+    /// (split externo em pé com um split interno deitado do lado direito),
+    /// `ratio` de cada divisor, `cwd` de cada folha e qual delas estava
+    /// focada sobrevivem ao DTO.
+    #[test]
+    fn round_trip_preserves_pane_tree_structure_ratios_and_focus() {
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", Some(PathBuf::from("/srv/api")));
+        let top = ws.tab(tab_id).unwrap().panes().focused_id();
+        let right = ws
+            .tab_mut(tab_id)
+            .unwrap()
+            .panes_mut()
+            .split(
+                top,
+                SplitAxis::Vertical,
+                "bash",
+                Some(PathBuf::from("/srv/api/logs")),
+            )
+            .unwrap();
+        ws.tab_mut(tab_id)
+            .unwrap()
+            .panes_mut()
+            .set_ratio(right, 0.3);
+        let bottom_right = ws
+            .tab_mut(tab_id)
+            .unwrap()
+            .panes_mut()
+            .split(
+                right,
+                SplitAxis::Horizontal,
+                "bash",
+                Some(PathBuf::from("/srv/api/logs")),
+            )
+            .unwrap();
+        ws.tab_mut(tab_id).unwrap().panes_mut().focus(top);
+
+        let (groups, tabs, active_tab) = window_from_workspace(&ws);
+        let json = serde_json::to_string(&(&groups, &tabs, active_tab)).unwrap();
+        let (groups2, tabs2, active_tab2): (Vec<GroupV1>, Vec<TabV1>, Option<u32>) =
+            serde_json::from_str(&json).unwrap();
+        let rebuilt = workspace_from_window(&groups2, &tabs2, active_tab2, false);
+
+        let rebuilt_id = rebuilt.visual_order().next().unwrap();
+        let tree = rebuilt.tab(rebuilt_id).unwrap().panes();
+        assert_eq!(tree.leaves_in_order().len(), 3);
+
+        let PaneNode::Split {
+            axis: outer_axis,
+            ratio: outer_ratio,
+            first,
+            second,
+        } = tree.root()
+        else {
+            panic!("split externo esperado");
+        };
+        assert_eq!(*outer_axis, SplitAxis::Vertical);
+        assert!((*outer_ratio - 0.3).abs() < 0.001);
+
+        let PaneNode::Leaf(rebuilt_top) = **first else {
+            panic!("primeiro filho deveria continuar folha (o painel de origem)");
+        };
+        // O painel focado (o de origem, `top`) sobrevive à volta.
+        assert_eq!(tree.focused_id(), rebuilt_top);
+        assert_eq!(
+            tree.pane(rebuilt_top).unwrap().cwd(),
+            Some(&PathBuf::from("/srv/api"))
+        );
+
+        let PaneNode::Split {
+            axis: inner_axis,
+            first: inner_first,
+            second: inner_second,
+            ..
+        } = second.as_ref()
+        else {
+            panic!("segundo filho deveria ser o split interno");
+        };
+        assert_eq!(*inner_axis, SplitAxis::Horizontal);
+        let PaneNode::Leaf(rebuilt_right) = **inner_first else {
+            panic!("split interno deveria ter duas folhas");
+        };
+        let PaneNode::Leaf(rebuilt_bottom_right) = **inner_second else {
+            panic!("split interno deveria ter duas folhas");
+        };
+        for id in [rebuilt_right, rebuilt_bottom_right] {
+            assert_eq!(
+                tree.pane(id).unwrap().cwd(),
+                Some(&PathBuf::from("/srv/api/logs"))
+            );
+        }
+        let _ = bottom_right; // usado só para montar o cenário original
+    }
+
+    /// ADR-0036 §3/ADR-0053 §11: um arquivo gravado por uma versão anterior
+    /// a esta -- sem a chave `panes` sequer presente no JSON, não só
+    /// `null` -- restaura a aba como um painel só, no `cwd` que o arquivo
+    /// antigo gravava.
+    #[test]
+    fn legacy_file_without_a_panes_key_restores_as_a_single_pane() {
+        let groups_json = r#"[{"id":0,"name":null,"color":null,"collapsed":false,"tabs":[0]}]"#;
+        let tabs_json =
+            r#"[{"id":0,"custom_title":null,"cwd":"/home/user","spawn_program":"zsh"}]"#;
+        let groups: Vec<GroupV1> = serde_json::from_str(groups_json).unwrap();
+        let tabs: Vec<TabV1> = serde_json::from_str(tabs_json).unwrap();
+        assert!(tabs[0].panes.is_none(), "chave ausente vira None");
+
+        let ws = workspace_from_window(&groups, &tabs, Some(0), false);
+        let id = ws.visual_order().next().unwrap();
+        let tab = ws.tab(id).unwrap();
+        assert_eq!(tab.panes().leaves_in_order().len(), 1);
+        assert_eq!(tab.cwd(), Some(&PathBuf::from("/home/user")));
+    }
+
+    /// ADR-0053 §10/§11: aba com o painel **focado** em `Exited` continua
+    /// sendo descartada na gravação, como hoje -- mesmo com painéis
+    /// saudáveis ao lado. A regra não mudou de forma com os painéis; ela
+    /// já olhava o painel focado antes deles existirem (`Tab::is_exited`).
+    #[test]
+    fn tab_with_the_focused_pane_exited_is_still_discarded_with_split_panes() {
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let top = ws.tab(tab_id).unwrap().panes().focused_id();
+        ws.tab_mut(tab_id)
+            .unwrap()
+            .panes_mut()
+            .split(top, SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        // O painel focado (o novo, à direita) sai com código != 0: fica
+        // `Exited`, mas não é removido da árvore (RF-6.11).
+        ws.tab_mut(tab_id).unwrap().mark_exited(1);
+
+        let (groups, tabs, _) = window_from_workspace(&ws);
+        assert!(!tabs.iter().any(|t| t.id == tab_id.get()));
+        assert!(
+            groups
+                .iter()
+                .flat_map(|g| g.tabs.iter())
+                .all(|&id| id != tab_id.get())
+        );
     }
 
     /// RF-3.8/ADR-0037 §1 (F5 etapa 4): com `lazy_restore = true`, só a
@@ -347,9 +599,10 @@ mod tests {
     /// ADR-0053 §2: os seis campos que descreviam um shell (`process_title`,
     /// `cwd`, `shell_name`, o estado de vida, `activity`, `bell`) saíram de
     /// `Tab` e foram para dentro de `panes` (a árvore de painéis, ADR-0053
-    /// §1) -- a cobertura de campo deles é a etapa 5 (`PaneV1`), que
-    /// decide o que a sessão grava da árvore inteira, não só do painel
-    /// focado. Aqui só cabe o que ainda é de `Tab`.
+    /// §1). A árvore inteira é gravada via `TabV1::panes` (`PaneTreeV1`/
+    /// `PaneV1`, ADR-0053 §11) -- cada folha carrega `cwd`/`shell_name`
+    /// dela; o estado de vida (`process_title`, `activity`, `bell`,
+    /// `state`) continua descartado, como sempre foi.
     #[test]
     fn tab_field_coverage() {
         let tab = porecatu_core::Tab::new(porecatu_core::TabId::new(0), "zsh");
@@ -362,10 +615,8 @@ mod tests {
             .collect();
         keys.sort_unstable();
 
-        // Gravado (via TabV1): id (via TabId, fora da struct), custom_title.
-        // `panes` -- a árvore inteira -- fica de fora desta etapa (2);
-        // `cwd`/`shell_name` do painel focado voltam a ser gravados na
-        // etapa 5, via `PaneV1`.
+        // Gravado: id (via TabId, fora da struct), custom_title, e panes
+        // (a árvore inteira, via `PaneTreeV1`).
         let mut expected = ["id", "custom_title", "panes"];
         expected.sort_unstable();
         assert_eq!(

@@ -22,6 +22,8 @@ mod workspace;
 pub use action::{Action, ActionParseError, CATALOG, MoveDestination};
 pub use group::{Group, GroupColor, GroupKind, GroupMeta};
 pub use id::{GroupId, PaneId, TabId};
-pub use pane::{Direction, Pane, PaneCloseOutcome, PaneNode, PaneState, PaneTree, Side, SplitAxis};
+pub use pane::{
+    Direction, ExternalNode, Pane, PaneCloseOutcome, PaneNode, PaneState, PaneTree, Side, SplitAxis,
+};
 pub use tab::Tab;
 pub use workspace::Workspace;

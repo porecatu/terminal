@@ -13,8 +13,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use porecatu_core::{TabId, Workspace};
-use porecatu_session::{GeometryV1, MonitorIdV1, WindowV1};
+use porecatu_core::{PaneId, TabId, Workspace};
+use porecatu_session::{GeometryV1, MonitorIdV1, PaneNodeV1, WindowV1};
 use winit::dpi::PhysicalPosition;
 use winit::window::Window;
 
@@ -93,26 +93,33 @@ pub fn window_monitor(window: &Window) -> Option<MonitorIdV1> {
 /// build_session_file` é quem drena `winit` (`window_geometry`/
 /// `window_monitor`) antes de chamar isto, uma janela por vez.
 ///
-/// RF-3.10/ADR-0038 §2: o fallback é consultado para toda aba, mas quem
-/// decide se ele *sobrescreve* `tab.cwd` é o próprio `cwd_fallback` --
-/// `Some` só quando a aba nunca recebeu `TermEvent::Cwd` de verdade
-/// (`received_osc7`), `None` quando já recebeu. `tab.cwd.is_none()` não
-/// serve mais como esse sinal: uma aba nova **herda** `cwd` do grupo na
-/// criação (ADR-0017 item 1), então `tab.cwd` já sai `Some` de
-/// [`porecatu_session::convert::window_from_workspace`] mesmo sem OSC 7
-/// nenhum ter chegado.
+/// RF-3.10/ADR-0038 §2: o fallback é consultado para todo **painel**
+/// (ADR-0053 §11: era por `TabId`, cada aba tendo um terminal só; com a
+/// árvore, cada folha tem o PTY dela, então o fallback também precisa
+/// dizer de qual painel fala). Quem decide se ele *sobrescreve* o `cwd` de
+/// uma folha é o próprio `cwd_fallback` -- `Some` só quando aquele painel
+/// nunca recebeu `TermEvent::Cwd` de verdade (`received_osc7`), `None`
+/// quando já recebeu. `TabV1::cwd`/`spawn_program` (o painel **focado**,
+/// para leitura por uma versão anterior) são realinhados depois, a partir
+/// da folha focada já corrigida -- nunca uma segunda resolução paralela.
 pub fn window_v1(
     workspace: &Workspace,
     geometry: GeometryV1,
     monitor: Option<MonitorIdV1>,
     theme: Option<String>,
     zoom_steps: i32,
-    cwd_fallback: impl Fn(TabId) -> Option<PathBuf>,
+    cwd_fallback: impl Fn(TabId, PaneId) -> Option<PathBuf>,
 ) -> WindowV1 {
     let (groups, mut tabs, active_tab) =
         porecatu_session::convert::window_from_workspace(workspace);
     for tab in &mut tabs {
-        if let Some(fallback) = cwd_fallback(TabId::new(tab.id)) {
+        let tab_id = TabId::new(tab.id);
+        if let Some(tree) = &mut tab.panes {
+            apply_pane_cwd_fallback(&mut tree.root, tab_id, &cwd_fallback);
+            if let Some(cwd) = find_leaf_cwd(&tree.root, tree.focused) {
+                tab.cwd = cwd;
+            }
+        } else if let Some(fallback) = cwd_fallback(tab_id, PaneId::new(0)) {
             tab.cwd = Some(fallback);
         }
     }
@@ -124,6 +131,44 @@ pub fn window_v1(
         active_tab,
         theme,
         zoom_steps,
+    }
+}
+
+/// Aplica `fallback` a cada folha da árvore, recursivamente -- a mesma
+/// convenção de `PaneId::new(leaf.id)` que `convert::pane_tree_from_v1`
+/// usa: o `id` gravado numa folha identifica o painel dentro desta mesma
+/// leitura, não precisa ser estável entre execuções.
+fn apply_pane_cwd_fallback(
+    node: &mut PaneNodeV1,
+    tab_id: TabId,
+    fallback: &impl Fn(TabId, PaneId) -> Option<PathBuf>,
+) {
+    match node {
+        PaneNodeV1::Leaf(pane) => {
+            if let Some(cwd) = fallback(tab_id, PaneId::new(pane.id)) {
+                pane.cwd = Some(cwd);
+            }
+        }
+        PaneNodeV1::Split { first, second, .. } => {
+            apply_pane_cwd_fallback(first, tab_id, fallback);
+            apply_pane_cwd_fallback(second, tab_id, fallback);
+        }
+    }
+}
+
+/// `cwd` da folha cujo `id` é `target`, se ela existir -- usado para
+/// realinhar `TabV1::cwd` (o painel focado) depois do fallback ter
+/// corrigido a árvore inteira. `Option` externo é "achou a folha";
+/// interno é o `cwd` dela, que pode legitimamente ser `None` -- por isso
+/// dois níveis, não um só (senão "achou, sem cwd" e "não achou"
+/// colapsariam no mesmo `None`).
+fn find_leaf_cwd(node: &PaneNodeV1, target: u32) -> Option<Option<PathBuf>> {
+    match node {
+        PaneNodeV1::Leaf(pane) if pane.id == target => Some(pane.cwd.clone()),
+        PaneNodeV1::Leaf(_) => None,
+        PaneNodeV1::Split { first, second, .. } => {
+            find_leaf_cwd(first, target).or_else(|| find_leaf_cwd(second, target))
+        }
     }
 }
 
@@ -330,14 +375,14 @@ mod tests {
         second.group_tabs(&[a], "api", GroupColor::Blue).unwrap();
 
         let windows = [
-            window_v1(&first, geometry(0), None, None, 0, |_| None),
+            window_v1(&first, geometry(0), None, None, 0, |_, _| None),
             window_v1(
                 &second,
                 geometry(830),
                 None,
                 Some("dracula".to_string()),
                 2,
-                |_| None,
+                |_, _| None,
             ),
         ];
 
@@ -365,7 +410,7 @@ mod tests {
     fn osc7_cwd_wins_when_fallback_declines() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", Some(PathBuf::from("/from/osc7")));
-        let window = window_v1(&ws, geometry(0), None, None, 0, |_| None);
+        let window = window_v1(&ws, geometry(0), None, None, 0, |_, _| None);
         assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/from/osc7")));
     }
 
@@ -379,7 +424,7 @@ mod tests {
     fn inherited_cwd_without_osc7_confirmation_is_overwritten_by_fallback() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", Some(PathBuf::from("/inherited/from/other/tab")));
-        let window = window_v1(&ws, geometry(0), None, None, 0, |_| {
+        let window = window_v1(&ws, geometry(0), None, None, 0, |_, _| {
             Some(PathBuf::from("/real/cwd/of/this/tab"))
         });
         assert_eq!(
@@ -396,7 +441,7 @@ mod tests {
     fn missing_cwd_falls_back_by_tab_id() {
         let mut ws = Workspace::new();
         let id = ws.append_tab("zsh", None);
-        let window = window_v1(&ws, geometry(0), None, None, 0, move |tab_id| {
+        let window = window_v1(&ws, geometry(0), None, None, 0, move |tab_id, _pane_id| {
             (tab_id == id).then(|| PathBuf::from("/fallback"))
         });
         assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/fallback")));
@@ -407,8 +452,58 @@ mod tests {
     fn missing_cwd_without_fallback_stays_none() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", None);
-        let window = window_v1(&ws, geometry(0), None, None, 0, |_| None);
+        let window = window_v1(&ws, geometry(0), None, None, 0, |_, _| None);
         assert_eq!(window.tabs[0].cwd, None);
+    }
+
+    /// ADR-0053 §11: o fallback é por painel, não só por aba -- duas folhas
+    /// da mesma aba podem receber `cwd`s diferentes, e `TabV1::cwd` (lido
+    /// por uma versão anterior do app) tem que vir da folha **focada**
+    /// depois do split, não da primeira da árvore. `split` deixa o painel
+    /// novo focado (`PaneTree::split`), então é o segundo que deve aparecer
+    /// em `tab.cwd`.
+    #[test]
+    fn fallback_is_keyed_by_pane_not_only_by_tab() {
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let tab = ws.tab_mut(tab_id).unwrap();
+        let first_pane = tab.panes().focused_id();
+        let second_pane = tab
+            .panes_mut()
+            .split(first_pane, porecatu_core::SplitAxis::Vertical, "zsh", None)
+            .unwrap();
+
+        let window = window_v1(&ws, geometry(0), None, None, 0, move |t, p| {
+            assert_eq!(t, tab_id);
+            if p == first_pane {
+                Some(PathBuf::from("/first"))
+            } else if p == second_pane {
+                Some(PathBuf::from("/second"))
+            } else {
+                None
+            }
+        });
+
+        assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/second")));
+
+        let tree = window.tabs[0].panes.as_ref().expect("aba foi dividida");
+        let mut seen = Vec::new();
+        collect_leaf_cwds(&tree.root, &mut seen);
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![PathBuf::from("/first"), PathBuf::from("/second")]
+        );
+    }
+
+    fn collect_leaf_cwds(node: &PaneNodeV1, out: &mut Vec<PathBuf>) {
+        match node {
+            PaneNodeV1::Leaf(pane) => out.push(pane.cwd.clone().expect("fallback preencheu")),
+            PaneNodeV1::Split { first, second, .. } => {
+                collect_leaf_cwds(first, out);
+                collect_leaf_cwds(second, out);
+            }
+        }
     }
 
     #[test]

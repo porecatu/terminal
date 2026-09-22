@@ -37,7 +37,7 @@
 #   [session]                PRD-003
 #   [project_file]           PRD-012, ADR-0051  (arquivo .porecatu do projeto)
 #   [git]                    PRD-013, ADR-0052  (sincronização com o remoto do Git)
-#   [panes]                  PRD-006, ADR-0053  (painéis divididos -- documentado, não implementado)
+#   [panes]                  PRD-006, ADR-0053  (painéis divididos)
 #
 # ORIGEM DOS VALORES DE APARÊNCIA
 # Cores, dimensões, raios e espaçamentos estão registrados em
@@ -1632,7 +1632,7 @@ remote_poll_interval_secs = 300
 
 
 ##############################################################################
-# PAINÉIS DIVIDIDOS — PRD-006 (documentado, não implementado)
+# PAINÉIS DIVIDIDOS — PRD-006
 ##############################################################################
 
 # Mínimo útil de painel -- comportamento, não aparência: não descreve

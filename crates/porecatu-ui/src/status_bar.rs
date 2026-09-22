@@ -71,6 +71,11 @@ pub enum SegmentRole {
         clickable: bool,
     },
     Group,
+    /// RF-6.20/ADR-0053 §14: contagem de painéis da aba ativa, só com dois
+    /// ou mais -- com um painel só, o segmento não existe (nem "1 painel",
+    /// nem versão apagada dele). Fecha a zona esquerda. Não é clicável e
+    /// não tem ícone.
+    PaneCount,
     Encoding,
     System,
 }
@@ -97,6 +102,10 @@ pub struct StatusBarContent {
     pub ahead_behind: Option<AheadBehindContent>,
     /// Nome do grupo da aba ativa. `None` em grupo implícito.
     pub group: Option<String>,
+    /// RF-6.20: quantos painéis a aba ativa tem. `< 2` esconde o segmento
+    /// por completo -- não há "1 painel" nem versão apagada dele, a mesma
+    /// regra de ausência dos dois segmentos de Git.
+    pub pane_count: usize,
     /// Sistema, ex. `"windows"`. Sem a versão do app: pedido do dono do
     /// produto depois de ver a barra em tela -- ela não muda entre
     /// execuções e não é o que se consulta de relance.
@@ -211,6 +220,13 @@ fn truncate_to(measurer: &mut TextMeasurer, text: &str, size_px: f32, max_width:
         end = i + ch.len_utf8();
     }
     text[..end].to_owned()
+}
+
+/// RF-6.20/ADR-0053 §14: rótulo por extenso da contagem de painéis, mesma
+/// convenção de `git::ahead_behind_label`. Sempre plural por construção --
+/// o corte em `< 2` já elimina o único caso em que o singular apareceria.
+fn pane_count_label(count: usize) -> Option<String> {
+    (count >= 2).then(|| format!("{count} painéis"))
 }
 
 /// Parâmetros de posicionamento comuns aos segmentos da zona esquerda --
@@ -430,6 +446,24 @@ pub fn layout_status_bar(
             measurer,
         );
     }
+    // ADR-0053 §14: contagem de painéis fecha a zona esquerda, depois do
+    // grupo.
+    if let Some(label) = pane_count_label(content.pane_count) {
+        push_left(
+            &mut segments,
+            &mut x,
+            &label,
+            SegmentRole::PaneCount,
+            Placement {
+                limit: left_limit,
+                bar_y: bar_rect.y,
+                bar_height,
+                size,
+                gap,
+            },
+            measurer,
+        );
+    }
 
     StatusBarLayout {
         bar_rect,
@@ -595,6 +629,7 @@ mod tests {
             git_branch: None,
             ahead_behind: None,
             group: Some("producao".to_owned()),
+            pane_count: 1,
             system: "windows".to_owned(),
         }
     }
@@ -1193,6 +1228,7 @@ mod tests {
             SegmentRole::GitBranch,
             SegmentRole::AheadBehind { clickable: true },
             SegmentRole::Group,
+            SegmentRole::PaneCount,
             SegmentRole::Encoding,
             SegmentRole::System,
         ] {
@@ -1224,11 +1260,52 @@ mod tests {
         for role in [
             SegmentRole::GitBranch,
             SegmentRole::Group,
+            SegmentRole::PaneCount,
             SegmentRole::Encoding,
             SegmentRole::System,
         ] {
             assert_eq!(segment_color(role, &pal), pal.status_bar_text);
         }
+    }
+
+    #[test]
+    fn pane_count_label_is_always_plural_and_absent_below_two() {
+        assert_eq!(pane_count_label(0), None);
+        assert_eq!(pane_count_label(1), None, "1 painel nunca aparece");
+        assert_eq!(pane_count_label(2), Some("2 painéis".to_owned()));
+        assert_eq!(pane_count_label(5), Some("5 painéis".to_owned()));
+    }
+
+    #[test]
+    fn pane_count_segment_closes_the_left_zone_after_the_group() {
+        let mut c = content();
+        c.pane_count = 3;
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let order: Vec<_> = layout
+            .segments
+            .iter()
+            .filter(|s| !is_right(s.role))
+            .map(|s| s.role)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                SegmentRole::Shell,
+                SegmentRole::Cwd { stale: false },
+                SegmentRole::Group,
+                SegmentRole::PaneCount,
+            ]
+        );
+        let segment = role_of(&layout, SegmentRole::PaneCount).expect("segmento de contagem");
+        assert_eq!(segment.text, "3 painéis");
+    }
+
+    #[test]
+    fn a_single_pane_shows_no_pane_count_segment() {
+        // RF-6.20: nem "1 painel", nem versão apagada -- a mesma regra dos
+        // dois segmentos de Git.
+        let layout = layout_with(&content(), &TabBarStyle::DEFAULT, W);
+        assert!(role_of(&layout, SegmentRole::PaneCount).is_none());
     }
 
     #[test]

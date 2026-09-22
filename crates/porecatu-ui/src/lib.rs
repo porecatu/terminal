@@ -1004,6 +1004,23 @@ fn window_close_needs_confirmation(significant_tab_count: usize, any_tab_busy: b
     significant_tab_count > 1 || any_tab_busy
 }
 
+/// Achado na verificação ao vivo da etapa 5 (painéis divididos): o texto
+/// do diálogo de `request_close_window` escolhia por `significant_tab_count`
+/// (a contagem de **painéis**, ver o comentário de
+/// [`window_close_needs_confirmation`]) -- uma janela com **uma aba só**
+/// dividida em vários painéis mostrava "Esta janela tem mais de uma aba
+/// aberta", que é falso. A **decisão** de confirmar continua correta por
+/// acidente (registrado ali); só a **palavra certa** precisa da contagem
+/// de abas de verdade, não da de painéis. Pura e testável sem
+/// `WindowState`, ao contrário do resto de `request_close_window`.
+fn close_confirmation_body(real_tab_count: usize) -> &'static str {
+    if real_tab_count > 1 {
+        "Esta janela tem mais de uma aba aberta."
+    } else {
+        "Esta janela tem um programa em primeiro plano."
+    }
+}
+
 /// RF-3.14/RF-3.16 (ADR-0036 §5): texto do aviso de recuperação de sessão
 /// (canal 1, ADR-0014) para cada `Notice` que `porecatu_session::load`
 /// pode devolver -- puro, sem `WindowState`, só a tradução de dado para
@@ -1076,6 +1093,28 @@ mod window_close_needs_confirmation_tests {
     #[test]
     fn a_single_busy_tab_confirms() {
         assert!(window_close_needs_confirmation(1, true));
+    }
+
+    /// Regressão achada na verificação ao vivo da etapa 5: uma janela com
+    /// uma aba só, dividida em painéis (`real_tab_count == 1`), não pode
+    /// mostrar "mais de uma aba aberta" -- antes do fix, `request_close_
+    /// window` decidia essa frase pela contagem de **painéis**
+    /// (`significant_tab_count`), não de abas, e uma aba com três painéis
+    /// mostrava a frase errada.
+    #[test]
+    fn close_body_names_the_program_not_the_tab_count_for_a_single_tab_with_many_panes() {
+        assert_eq!(
+            close_confirmation_body(1),
+            "Esta janela tem um programa em primeiro plano."
+        );
+    }
+
+    #[test]
+    fn close_body_names_more_than_one_tab_when_there_really_is_more_than_one() {
+        assert_eq!(
+            close_confirmation_body(2),
+            "Esta janela tem mais de uma aba aberta."
+        );
     }
 }
 
@@ -1709,6 +1748,13 @@ impl WindowState {
                 measurer,
             )
         });
+        // ADR-0053 §13: mesma função pura que posiciona os painéis
+        // (`panes::layout`), consultada só pela ordem que ela produz --
+        // `access.rs` não recebe `Rect` nenhum (a árvore já não carrega
+        // `bounds` por nó, ver o comentário do topo do módulo).
+        let active_pane_order: Option<Vec<PaneId>> = self
+            .active_pane_layout(style)
+            .map(|layout| layout.into_iter().map(|(id, _)| id).collect());
         let workspace = &self.workspace;
         let warnings = &self.warnings;
         let dialog = &self.dialog;
@@ -1732,6 +1778,7 @@ impl WindowState {
                 move_to_group,
                 search,
                 status_bar_layout.as_ref(),
+                active_pane_order.as_deref(),
                 style,
                 logical_width,
                 scroll_offset,
@@ -2151,17 +2198,26 @@ impl WindowState {
     }
 
     /// RF-6.1/RF-6.3: sobe o `Terminal` de `pane_id`, recém-criado por um
-    /// split. Molde bem mais simples de [`Self::spawn_tab_runtime`]: um
-    /// painel de split nunca é `Restored` (é sempre gesto do usuário
-    /// agora), então não há `.porecatu` a considerar (RF-6.24 é só de aba
-    /// restaurada, ADR-0053 §12) nem nota de `cwd` ausente a injetar -- o
-    /// `cwd` herdado do painel de origem (RF-6.3) sempre existiu.
+    /// split (ou, no caminho de restauração de sessão, um painel que já
+    /// existia na árvore gravada). Molde bem mais simples de
+    /// [`Self::spawn_tab_runtime`]: nunca considera `.porecatu` (RF-6.24 é
+    /// só do painel focado de uma aba restaurada, ADR-0053 §12, e quem
+    /// sobe esse é sempre `spawn_tab_runtime`) nem nota de `cwd` ausente --
+    /// o `cwd` já existia (herdado do painel de origem no split, RF-6.3; o
+    /// gravado na sessão, na restauração).
+    ///
+    /// `pane_rect` vem de fora, em vez de `self.pane_box_rect(style,
+    /// pane_id)`: aquele helper só enxerga a árvore da aba **ativa**
+    /// (`Self::active_pane_layout`), e a restauração de sessão sobe
+    /// painéis de abas que ainda não são a ativa da janela (RF-6.23, e
+    /// `lazy_restore = false` sobe todas de uma vez).
     #[allow(clippy::too_many_arguments)]
     fn spawn_split_pane_runtime(
         &mut self,
         tab_id: TabId,
         pane_id: PaneId,
         cwd: Option<PathBuf>,
+        pane_rect: Rect,
         cell_metrics: CellMetrics,
         proxy: &EventLoopProxy<Wakeup>,
         style: &TabBarStyle,
@@ -2169,7 +2225,6 @@ impl WindowState {
         shell: &porecatu_config::Shell,
         now: Instant,
     ) {
-        let pane_rect = self.pane_box_rect(style, pane_id);
         let content = paint::pane_content_rect(pane_rect, style);
         let (rows, cols) = grid_size_for_rect(content, cell_metrics);
         let window_id = self.window.id();
@@ -2228,6 +2283,54 @@ impl WindowState {
             }
         }
         self.sync_window_title();
+    }
+
+    /// RF-6.23: sobe os painéis da árvore de `tab_id` que ainda não têm
+    /// `PaneRuntime` -- chamado depois de [`Self::spawn_tab_runtime`], que
+    /// já subiu o painel **focado** (o único que considera `.porecatu`,
+    /// RF-6.24/ADR-0053 §12). O layout é calculado direto da árvore de
+    /// `tab_id`, nunca via [`Self::pane_box_rect`] (que só enxerga a aba
+    /// ativa) -- com `lazy_restore = false`, `open_window_from_session`
+    /// sobe abas em segundo plano também.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_restored_sibling_panes(
+        &mut self,
+        tab_id: TabId,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        shell: &porecatu_config::Shell,
+        now: Instant,
+    ) {
+        let Some(tab) = self.workspace.tab(tab_id) else {
+            return;
+        };
+        let focused = tab.panes().focused_id();
+        let box_rect = self.active_tab_box_rect(style);
+        let siblings: Vec<(PaneId, Option<PathBuf>, Rect)> =
+            panes::layout(tab.panes(), box_rect, style)
+                .into_iter()
+                .filter(|(id, _)| *id != focused)
+                .filter_map(|(id, rect)| tab.panes().pane(id).map(|p| (id, p.cwd().cloned(), rect)))
+                .collect();
+        for (pane_id, cwd, pane_rect) in siblings {
+            if self.panes.contains_key(&(tab_id, pane_id)) {
+                continue;
+            }
+            self.spawn_split_pane_runtime(
+                tab_id,
+                pane_id,
+                cwd,
+                pane_rect,
+                cell_metrics,
+                proxy,
+                style,
+                term_params,
+                shell,
+                now,
+            );
+        }
     }
 
     /// RF-6.1/RF-6.2/RF-6.3/RF-6.4: divide o painel focado da aba ativa.
@@ -2291,10 +2394,12 @@ impl WindowState {
         else {
             return;
         };
+        let new_pane_rect = self.pane_box_rect(style, new_pane_id);
         self.spawn_split_pane_runtime(
             tab_id,
             new_pane_id,
             cwd,
+            new_pane_rect,
             cell_metrics,
             proxy,
             style,
@@ -2375,10 +2480,16 @@ impl WindowState {
         );
         // Formaliza a transição no modelo só depois do spawn de verdade --
         // se `spawn_tab_runtime` desfez a aba (erro), `tab_mut` abaixo
-        // devolve `None` e não há nada a marcar.
+        // devolve `None` e não há nada a marcar. RF-6.23: o gatilho
+        // continua sendo o foco da aba, mas ele sobe **todos** os painéis
+        // dela de uma vez -- `Tab::start()` só formaliza o focado, então
+        // cada painel da árvore recebe o próprio `Pane::start()` aqui.
         if let Some(tab) = self.workspace.tab_mut(id) {
-            tab.start();
+            for pane in tab.panes_mut().panes_mut() {
+                pane.start();
+            }
         }
+        self.spawn_restored_sibling_panes(id, cell_metrics, proxy, style, term_params, shell, now);
     }
 
     /// Fecha uma aba sem perguntar: sinaliza o processo sem bloquear
@@ -4130,6 +4241,9 @@ impl WindowState {
                 .and_then(|g| self.workspace.group(g))
                 .and_then(|g| g.name())
                 .map(str::to_owned),
+            // RF-6.20/ADR-0053 §14: da aba ativa, não do painel focado --
+            // um painel só não mostra a contagem (`pane_count_label`).
+            pane_count: tab.map_or(0, |t| t.panes().leaves_in_order().len()),
             // Sem a versão do app: pedido do dono do produto depois de
             // ver a barra em tela.
             system: std::env::consts::OS.to_owned(),
@@ -5036,9 +5150,22 @@ impl App {
                 &self.config.project_file,
                 &self.startup_directory,
             );
+            // RF-6.23: sobe todos os painéis da árvore de uma vez, não só
+            // o focado -- mesma razão de `Self::ensure_active_tab_started`.
             if let Some(tab) = state.workspace.tab_mut(tab_id) {
-                tab.start();
+                for pane in tab.panes_mut().panes_mut() {
+                    pane.start();
+                }
             }
+            state.spawn_restored_sibling_panes(
+                tab_id,
+                self.cell_metrics,
+                &self.proxy,
+                &self.style,
+                &self.term_params,
+                &self.config.shell,
+                now,
+            );
         }
         // Garantia de terminal mínimo: se o workspace ficou vazio após a
         // restauração -- p.ex. todas as abas estavam `Exited` na gravação
@@ -5225,18 +5352,24 @@ impl App {
     /// nenhum nesse caminho. Essa segunda checagem respeita
     /// `confirm_close_with_process`, como o fechamento de aba.
     ///
-    /// ADR-0037 §3: a contagem que decide "mais de uma aba aberta" conta
+    /// ADR-0037 §3: a contagem que decide **se** confirma conta
     /// `state.panes` (o mapa de `PaneRuntime`), não `workspace` -- aba
     /// `NotStarted` nunca tem entrada ali (nada rodou, nada a perder), e
     /// contar `workspace` faria uma janela só com abas `NotStarted`
     /// confirmar por "mais de uma aba", o que o ADR proíbe. ADR-0053 §10:
     /// desde que o mapa passou a ser por painel, o nome
     /// `significant_tab_count` conta painéis, não abas -- continua sendo
-    /// a pergunta certa só por acidente, porque toda aba tem exatamente
-    /// um painel até a etapa 4 ligar o gesto de split. Sem harness de
-    /// `WindowState` neste crate (exige `GpuContext`/janela reais), então
-    /// isto não tem teste de unidade próprio -- fica registrado aqui, no
-    /// molde da mesma dívida que a F5 já pagou uma vez com `tabs.len()`.
+    /// a pergunta certa ("há mais de um terminal vivo?") só por acidente,
+    /// porque toda aba tinha exatamente um painel até a etapa 4 ligar o
+    /// gesto de split. **O texto** do diálogo é outra pergunta ("quantas
+    /// abas?") e usa a contagem de verdade -- achado como bug real na
+    /// verificação ao vivo da etapa 5 (uma aba só, três painéis, mostrava
+    /// "mais de uma aba aberta"), corrigido com
+    /// [`close_confirmation_body`]. Sem harness de `WindowState` neste
+    /// crate (exige `GpuContext`/janela reais), então a decisão de
+    /// confirmar não tem teste de unidade próprio -- fica registrado
+    /// aqui, no molde da mesma dívida que a F5 já pagou uma vez com
+    /// `tabs.len()`.
     fn request_close_window(&mut self, window_id: WindowId, event_loop: &ActiveEventLoop) {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
@@ -5251,11 +5384,7 @@ impl App {
             )
         });
         if window_close_needs_confirmation(significant_tab_count, any_tab_busy) {
-            let body = if significant_tab_count > 1 {
-                "Esta janela tem mais de uma aba aberta."
-            } else {
-                "Esta janela tem um programa em primeiro plano."
-            };
+            let body = close_confirmation_body(state.workspace.visual_order().count());
             state.dialog = Some(ConfirmDialog::new(
                 "Fechar janela?",
                 body,
@@ -5521,24 +5650,25 @@ impl App {
                         session_writer::window_monitor(&state.window),
                         theme.clone(),
                         zoom_steps,
-                        |tab_id| {
-                            focused_pane(&state.workspace, tab_id)
-                                .and_then(|pane| state.panes.get(&(tab_id, pane)))
-                                .and_then(|rt| {
-                                    // RF-3.10/ADR-0038 §2: `rt.received_osc7` é o
-                                    // sinal de verdade, não `Tab::cwd().is_some()`
-                                    // -- uma aba nova herda `cwd` do grupo na
-                                    // criação (ADR-0017 item 1) sem nunca ter
-                                    // recebido OSC 7. Com OSC 7 confirmado, não
-                                    // sobrescreve (`None`); sem confirmação,
-                                    // consulta o fallback (`ProcessGroup::cwd`
-                                    // fora do Windows, senão o `cwd` de spawn).
-                                    if rt.received_osc7 {
-                                        None
-                                    } else {
-                                        rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
-                                    }
-                                })
+                        |tab_id, pane_id| {
+                            state.panes.get(&(tab_id, pane_id)).and_then(|rt| {
+                                // RF-3.10/ADR-0038 §2: `rt.received_osc7` é o
+                                // sinal de verdade, não `Tab::cwd().is_some()`
+                                // -- uma aba nova herda `cwd` do grupo na
+                                // criação (ADR-0017 item 1) sem nunca ter
+                                // recebido OSC 7. Com OSC 7 confirmado, não
+                                // sobrescreve (`None`); sem confirmação,
+                                // consulta o fallback (`ProcessGroup::cwd`
+                                // fora do Windows, senão o `cwd` de spawn).
+                                // ADR-0053 §11: por painel, não mais só o
+                                // focado -- cada folha da árvore tem o PTY
+                                // dela.
+                                if rt.received_osc7 {
+                                    None
+                                } else {
+                                    rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
+                                }
+                            })
                         },
                     )
                 })
@@ -6541,11 +6671,13 @@ impl ApplicationHandler<Wakeup> for App {
 
         // Aba suja que não é a visível: só marca o indicador de atividade
         // (RF-1.20) -- sem redraw, ela não está na tela (ADR-0007 ponto 2).
+        // No painel `pane_id`, que é quem de fato produziu a saída -- não
+        // necessariamente o focado da aba (ADR-0053 §2).
         if state.workspace.active_tab() != Some(tab_id)
             && let Some(tab) = state.workspace.tab_mut(tab_id)
             && !tab.is_exited()
         {
-            tab.mark_activity();
+            tab.mark_pane_activity(pane_id);
         }
 
         let mut pending = Vec::new();
@@ -6558,18 +6690,22 @@ impl ApplicationHandler<Wakeup> for App {
         let mut window_should_close = false;
         for term_event in pending {
             match term_event {
+                // Do painel `pane_id`, não necessariamente o focado da aba
+                // (ADR-0053 §2) -- `Tab::title` já lê o focado sob demanda
+                // (RF-6.17), então só a escrita precisa saber de onde veio.
                 TermEvent::Title(title) => {
                     if let Some(tab) = state.workspace.tab_mut(tab_id) {
-                        tab.set_process_title(title);
+                        tab.set_pane_process_title(pane_id, title);
                     }
                 }
                 // RF-1.21 (indicador de campainha): só sinaliza em segundo
-                // plano -- em primeiro plano o usuário já está vendo.
+                // plano -- em primeiro plano o usuário já está vendo. No
+                // painel `pane_id`, mesma razão do `Title` acima.
                 TermEvent::Bell => {
                     if state.workspace.active_tab() != Some(tab_id)
                         && let Some(tab) = state.workspace.tab_mut(tab_id)
                     {
-                        tab.mark_bell();
+                        tab.mark_pane_bell(pane_id);
                     }
                 }
                 TermEvent::ClipboardWrite(text) => clipboard::copy(&text),
@@ -6591,8 +6727,13 @@ impl ApplicationHandler<Wakeup> for App {
                     if let Some(rt) = state.panes.get_mut(&(tab_id, pane_id)) {
                         rt.received_osc7 = true;
                     }
+                    // No painel `pane_id`, não no focado da aba (ADR-0053
+                    // §2) -- `tab.set_cwd` gravaria no painel focado *no
+                    // instante em que este evento é processado*, que pode
+                    // já não ser mais `pane_id` se o foco mudou entre o
+                    // evento ser gerado e ser lido aqui.
                     if let Some(tab) = state.workspace.tab_mut(tab_id) {
-                        tab.set_cwd(cwd);
+                        tab.set_pane_cwd(pane_id, cwd);
                         state.mark_session_dirty();
                     }
                 }

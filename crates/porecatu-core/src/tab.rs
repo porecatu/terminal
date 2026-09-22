@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::TabId;
+use crate::id::{PaneId, TabId};
 use crate::pane::PaneTree;
 
 /// Uma aba. Não carrega PTY nem motor VT -- isso é `porecatu-term`, do
@@ -52,6 +52,20 @@ impl Tab {
             id,
             custom_title: None,
             panes: PaneTree::new_not_started(shell_name),
+        }
+    }
+
+    /// ADR-0053 §11: aba com uma árvore de painéis já construída --
+    /// restauração de sessão com layout (`PaneTree::from_external`). Ao
+    /// contrário de [`Tab::new`]/[`Tab::new_not_started`], o estado de cada
+    /// painel já vem decidido na árvore -- não há um shell "de nascença"
+    /// aqui, e sim N deles, cada um já com o estado que a restauração
+    /// escolheu.
+    pub const fn from_panes(id: TabId, panes: PaneTree) -> Self {
+        Self {
+            id,
+            custom_title: None,
+            panes,
         }
     }
 
@@ -90,9 +104,21 @@ impl Tab {
     /// Aplica um título vindo de OSC 0 / OSC 2 -- do painel **focado**
     /// (RF-6.17). Sempre atualizado, mesmo com título customizado ativo --
     /// é [`Tab::title`] quem ignora o valor enquanto o congelamento
-    /// estiver em vigor, não este método.
+    /// estiver em vigor, não este método. Mesma ressalva de
+    /// [`Tab::set_cwd`]: seguro só quando o painel focado é o que emitiu o
+    /// evento. Use [`Tab::set_pane_process_title`] fora disso.
     pub fn set_process_title(&mut self, title: Option<String>) {
         self.panes.focused_mut().set_process_title(title);
+    }
+
+    /// Título vindo de OSC 0 / OSC 2 do painel `pane`, não necessariamente
+    /// o focado -- mesma razão de [`Tab::set_pane_cwd`]. `Tab::title` já lê
+    /// o focado a cada chamada (RF-6.17), então só a escrita precisa saber
+    /// de qual painel o evento veio.
+    pub fn set_pane_process_title(&mut self, pane: PaneId, title: Option<String>) {
+        if let Some(p) = self.panes.pane_mut(pane) {
+            p.set_process_title(title);
+        }
     }
 
     /// `cwd` do painel **focado** (RF-6.17/ADR-0053 §2).
@@ -100,9 +126,29 @@ impl Tab {
         self.panes.focused().cwd()
     }
 
-    /// Captura de OSC 7 (ADR-0017 item 1) -- do painel focado.
+    /// Captura de OSC 7 (ADR-0017 item 1) -- do painel focado. Seguro só
+    /// onde o painel focado É o painel que emitiu o evento (criação de
+    /// aba, com um painel só). Fora disso use
+    /// [`Tab::set_pane_cwd`], que grava no painel certo mesmo se ele não
+    /// for o focado no momento.
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         self.panes.focused_mut().set_cwd(cwd);
+    }
+
+    /// Captura de OSC 7 (ADR-0017 item 1, ADR-0053 §2) do painel `pane`,
+    /// não necessariamente o focado. `Tab::cwd`/`Tab::set_cwd` sempre leem
+    /// e escrevem no painel focado **no momento da chamada** -- correto
+    /// para exibição (RF-6.17: o dono da leitura decide qual painel olhar
+    /// a cada chamada), errado para a captura de um evento que já sabe de
+    /// qual painel veio. Usar `set_cwd` aqui faria o diretório de um
+    /// painel em segundo plano vazar para o painel que está focado no
+    /// instante em que o evento chega -- exatamente o tipo de corrida que
+    /// motivou este método. `None` silencioso se `pane` não existir mais
+    /// (painel fechado entre o evento ser gerado e processado).
+    pub fn set_pane_cwd(&mut self, pane: PaneId, cwd: PathBuf) {
+        if let Some(p) = self.panes.pane_mut(pane) {
+            p.set_cwd(cwd);
+        }
     }
 
     /// Nome do shell do painel focado (ADR-0036 §3: `porecatu-session`
@@ -150,10 +196,23 @@ impl Tab {
     }
 
     /// RF-1.20: saída nova enquanto a aba está em segundo plano -- no
-    /// painel focado, que é o único que existe até a etapa 3/4 ligar o
-    /// resto da árvore ao runtime.
+    /// painel focado. Mesma ressalva de [`Tab::set_cwd`]: seguro só quando
+    /// o painel focado é o que produziu a saída. Use
+    /// [`Tab::mark_pane_activity`] fora disso.
     pub fn mark_activity(&mut self) {
         self.panes.focused_mut().mark_activity();
+    }
+
+    /// RF-1.20/RF-6.18 do painel `pane`, não necessariamente o focado --
+    /// mesma razão de [`Tab::set_pane_cwd`]. A agregação de
+    /// [`Tab::activity`] não *precisa* disto para acender o indicador da
+    /// aba (qualquer painel marcado já satisfaz o `.any()`), mas gravar
+    /// sempre no focado, e não em `pane`, é o mesmo tipo de escrita cega
+    /// que corrompeu o `cwd` -- só que mascarada aqui pela agregação.
+    pub fn mark_pane_activity(&mut self, pane: PaneId) {
+        if let Some(p) = self.panes.pane_mut(pane) {
+            p.mark_activity();
+        }
     }
 
     /// RF-6.18: agregação, mesmo motivo de [`Tab::activity`].
@@ -162,9 +221,18 @@ impl Tab {
     }
 
     /// RF-1.21: campainha (BEL) emitida em segundo plano -- no painel
-    /// focado.
+    /// focado. Mesma ressalva de [`Tab::set_cwd`]. Use
+    /// [`Tab::mark_pane_bell`] fora disso.
     pub fn mark_bell(&mut self) {
         self.panes.focused_mut().mark_bell();
+    }
+
+    /// RF-1.21/RF-6.18 do painel `pane`, mesma razão de
+    /// [`Tab::mark_pane_activity`].
+    pub fn mark_pane_bell(&mut self, pane: PaneId) {
+        if let Some(p) = self.panes.pane_mut(pane) {
+            p.mark_bell();
+        }
     }
 
     /// RF-1.22/RF-6.18: visitar a aba limpa os indicadores agregados --
@@ -237,6 +305,80 @@ mod tests {
             "meu terminal",
             "custom_title vence a troca de painel focado"
         );
+    }
+
+    /// ADR-0053 §2/§11: regressão achada na verificação ao vivo da etapa 5
+    /// -- um evento (OSC 7, aqui) de um painel em segundo plano não pode
+    /// vazar para o painel focado. Antes do fix, `TermEvent::Cwd` chamava
+    /// `Tab::set_cwd` (sempre o focado) em vez de `set_pane_cwd(pane_id,
+    /// ..)`, e o `cwd` de um painel qualquer sobrescrevia o do painel que
+    /// o usuário estava olhando de verdade.
+    #[test]
+    fn set_pane_cwd_targets_the_named_pane_even_when_it_is_not_focused() {
+        let mut tab = Tab::new(TabId::new(0), "zsh");
+        let focused = tab.panes().focused_id();
+        let background = tab
+            .panes_mut()
+            .split(focused, crate::pane::SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        tab.panes_mut().focus(focused);
+
+        tab.set_pane_cwd(background, PathBuf::from("/em/segundo/plano"));
+
+        assert_eq!(tab.cwd(), None, "painel focado não deve ter sido tocado");
+        assert_eq!(
+            tab.panes().pane(background).unwrap().cwd(),
+            Some(&PathBuf::from("/em/segundo/plano"))
+        );
+    }
+
+    /// Mesma regressão do teste acima, para o título (OSC 0/2).
+    #[test]
+    fn set_pane_process_title_targets_the_named_pane_even_when_it_is_not_focused() {
+        let mut tab = Tab::new(TabId::new(0), "zsh");
+        let focused = tab.panes().focused_id();
+        let background = tab
+            .panes_mut()
+            .split(focused, crate::pane::SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        tab.panes_mut().focus(focused);
+
+        tab.set_pane_process_title(background, Some("vim: main.rs".to_string()));
+
+        assert_eq!(
+            tab.title(),
+            "zsh",
+            "título derivado (do painel focado) não deve ter mudado"
+        );
+        assert_eq!(
+            tab.panes().pane(background).unwrap().title(),
+            "vim: main.rs"
+        );
+    }
+
+    /// Mesma regressão, para atividade/campainha (RF-1.20/RF-1.21) -- aqui
+    /// mascarada pela agregação de `Tab::activity`/`Tab::bell` quando lida
+    /// pela aba, mas ainda incorreta ao nível do painel individual.
+    #[test]
+    fn mark_pane_activity_and_bell_target_the_named_pane_even_when_it_is_not_focused() {
+        let mut tab = Tab::new(TabId::new(0), "zsh");
+        let focused = tab.panes().focused_id();
+        let background = tab
+            .panes_mut()
+            .split(focused, crate::pane::SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        tab.panes_mut().focus(focused);
+
+        tab.mark_pane_activity(background);
+        tab.mark_pane_bell(background);
+
+        assert!(
+            !tab.panes().pane(focused).unwrap().activity(),
+            "painel focado não deve ter sido marcado"
+        );
+        assert!(!tab.panes().pane(focused).unwrap().bell());
+        assert!(tab.panes().pane(background).unwrap().activity());
+        assert!(tab.panes().pane(background).unwrap().bell());
     }
 
     #[test]

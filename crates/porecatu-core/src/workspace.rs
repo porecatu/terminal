@@ -153,6 +153,34 @@ impl Workspace {
         )
     }
 
+    /// ADR-0053 §11: cria a aba a partir de uma árvore de painéis já
+    /// construída (restauração de sessão com layout, `Tab::from_panes`) --
+    /// cada folha já traz o `cwd` dela, então, ao contrário de
+    /// [`Self::insert_tab`], nada é sobrescrito por cima. Não ativa, pelo
+    /// mesmo motivo de [`Self::new_tab_not_started`]: quem restaura decide
+    /// separadamente, no fim, qual aba de cada janela fica ativa.
+    pub fn insert_tab_with_panes(
+        &mut self,
+        group: Option<GroupId>,
+        panes: crate::pane::PaneTree,
+        pos: usize,
+    ) -> TabId {
+        let id = TabId::new(self.next_tab_id);
+        self.next_tab_id += 1;
+        self.tabs.push(Tab::from_panes(id, panes));
+
+        let group_index = match group.and_then(|g| self.group_index(g)) {
+            Some(index) => index,
+            None => {
+                let fresh = Group::new_implicit(self.fresh_group_id());
+                self.groups.push(fresh);
+                self.groups.len() - 1
+            }
+        };
+        self.groups[group_index].insert(pos, id);
+        id
+    }
+
     /// Núcleo comum de [`Self::new_tab`]/[`Self::new_tab_not_started`]:
     /// gera o `cwd`, insere no `Vec<Tab>` e posiciona no grupo (existente,
     /// ou um run implícito novo no fim se `group` for `None`/inexistente).
