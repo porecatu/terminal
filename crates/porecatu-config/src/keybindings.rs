@@ -88,6 +88,23 @@ fn common_defaults() -> BTreeMap<String, String> {
         ("f3", "search.next"),
         ("shift+f3", "search.prev"),
         ("ctrl+shift+a", "selection.select_all"),
+        // Painéis divididos (PRD-006, ADR-0053). A tabela do RF-6.1
+        // desambigua "horizontal": divisor deitado (painel novo abaixo)
+        // para `Ctrl+Shift+H`, divisor em pé (painel novo à direita) para
+        // `Ctrl+Shift+D`. As quatro de foco valem nas três plataformas --
+        // mesmo padrão de `f11`/`f3` acima, sem entrada própria em
+        // `macos_defaults`.
+        ("ctrl+shift+h", "pane.split_horizontal"),
+        ("ctrl+shift+d", "pane.split_vertical"),
+        ("alt+left", "pane.focus_left"),
+        ("alt+right", "pane.focus_right"),
+        ("alt+up", "pane.focus_up"),
+        ("alt+down", "pane.focus_down"),
+        // `pane.close` fica SEM default em nenhuma plataforma, de
+        // propósito -- mesmo precedente de `group.new_tab`/
+        // `group.close_all`: `exit` no shell já fecha o painel (RF-6.11),
+        // e `Ctrl+Shift+W` continua significando "fecha esta aba inteira".
+        // Quem quiser, vincula.
     ])
 }
 
@@ -133,6 +150,10 @@ fn macos_defaults() -> BTreeMap<String, String> {
         ("f3", "search.next"),
         ("shift+f3", "search.prev"),
         ("cmd+a", "selection.select_all"),
+        // Só os dois de split levam entrada própria aqui -- as quatro de
+        // foco já valem nas três plataformas pela tabela comum acima.
+        ("cmd+shift+h", "pane.split_horizontal"),
+        ("cmd+shift+d", "pane.split_vertical"),
     ])
 }
 
@@ -143,12 +164,12 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         let bindings = Keybindings::default();
-        assert_eq!(bindings.common.len(), 33);
+        assert_eq!(bindings.common.len(), 39);
         assert_eq!(
             bindings.common.get("ctrl+shift+t"),
             Some(&"tab.new".to_owned())
         );
-        assert_eq!(bindings.macos.len(), 33);
+        assert_eq!(bindings.macos.len(), 35);
         assert_eq!(bindings.macos.get("cmd+q"), Some(&"app.quit".to_owned()));
         assert!(bindings.windows.is_empty());
         assert!(bindings.linux.is_empty());

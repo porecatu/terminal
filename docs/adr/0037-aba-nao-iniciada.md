@@ -29,6 +29,17 @@ Sem esta decisão, cada um desses cruzamentos seria resolvido na implementação
 
 `NotStarted` só é criada pela restauração de sessão. Aba nova por `tab.new`, `group.new_tab` ou `window.new` nasce `Running` — o usuário pediu um terminal e vai ver um terminal.
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md) §11.** O estado passa a ser do
+> **painel**, como todo o ciclo de vida ([ADR-0017](0017-ciclo-de-vida-da-aba.md)).
+> **O gatilho da §2 não muda de nível**: focar a aba continua sendo o que sobe o
+> shell, e uma aba restaurada com três painéis sobe os **três** de uma vez.
+>
+> Subir só o painel focado foi considerado e recusado por duas razões: meia aba com
+> prompt e meia aba em branco é um estado que o rótulo esmaecido da §5 não sabe
+> descrever, porque ele é da aba; e um painel que ainda não tem grade não tem como
+> dizer quantas colunas o vizinho pode ter, o que a proporção exige. Painel novo por
+> split nasce `Running`, pela mesma frase acima — o usuário pediu um terminal.
+
 ### 2. O shell inicia no foco, e passar por uma aba é focar
 
 O shell sobe quando a aba se torna a **aba ativa** da janela, por qualquer caminho: clique, `Ctrl+Tab`, `Ctrl+PageDown`, índice do RF-1.12, `step_group` do RF-2.21, expansão de grupo colapsado que a torne ativa, ou a restauração que a escolheu como ativa no start.

@@ -92,6 +92,22 @@ Mais três regras:
 - **Não escrever com a tela alternativa ativa** — mesma guarda do ADR-0039. Se algo já tomou a tela, o prompt não está lá para receber o script.
 - **Nada do que o script faz entra na sessão.** O arquivo de sessão continua gravando estrutura e diretórios, e a lista de campos do [ADR-0036](0036-formato-do-arquivo-de-sessao.md) não muda um byte.
 
+> **Revisto pelo [ADR-0053](0053-paineis-divididos.md) §12.** Com painéis, "uma vez
+> por aba" precisa dizer **em qual terminal**, e a resposta é: no **painel focado**, e
+> só nele. A leitura ingênua — uma vez por terminal restaurado — está errada por um
+> motivo concreto: o painel novo herda o `cwd` do painel de origem (RF-6.3), então
+> painéis de um split quase sempre dividem o mesmo diretório, e disparar o mesmo
+> `.porecatu` em dois deles sobe o mesmo servidor duas vezes na mesma porta — com o
+> segundo morrendo num erro que parece bug do app.
+>
+> **O resto desta seção sobrevive inteiro**: a escrita no PTY como se digitada, o
+> primeiro byte mais o silêncio, o teto de 5s, a guarda de tela alternativa, o prazo
+> por `ControlFlow::WaitUntil` com o `Instant` vindo de fora. A marca continua no
+> runtime que nasce e morre com o PTY — que agora é o do painel. E a última linha
+> segue verdadeira por outra razão: a sessão ganha a árvore de painéis
+> ([ADR-0036](0036-formato-do-arquivo-de-sessao.md)), e continua não gravando nada do
+> que o script faz.
+
 ### 7. Onde o código mora
 
 `crates/porecatu-config/src/project_file.rs`: o parser (puro, sobre uma string), a escolha da seção, a leitura do arquivo e a checagem de confiança contra `trusted_paths`. O crate já é "arquivo do usuário, parseado", já depende de `dirs` e já é visto por `porecatu-ui`; a regra de dependência da [arquitetura](../arquitetura.md) continua satisfeita sem uma aresta nova.

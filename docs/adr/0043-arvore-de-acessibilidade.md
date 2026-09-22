@@ -68,6 +68,17 @@ O tooltip é o caso que o ADR-0019 avisou ser o menos padronizado. A regra aqui 
 
 **Barra de busca** (§2.21, [ADR-0041](0041-busca-no-scrollback.md)): campo de texto com valor, mais o contador como descrição. Nasce acessível, em vez de virar dívida na semana seguinte.
 
+> **Acrescentado pelo [ADR-0053](0053-paineis-divididos.md) §13.** Uma aba dividida
+> expõe os **painéis** como nós filhos do nó dela: posição, rótulo derivado do título
+> do painel, e qual deles tem o foco. É estrutura, que é exatamente o que este
+> documento decidiu projetar — e ela é projeção da mesma função pura que posiciona os
+> painéis na tela, pela regra da §2.
+>
+> **A §5 abaixo não se mexe**: o conteúdo da grade continua declaradamente fora do
+> escopo, agora de N grades em vez de uma. O que muda em código é o namespacing de
+> `NodeId`, que ganha faixa própria para painéis, na mesma disciplina de `TAB_STRIDE`
+> que a §2 já usa.
+
 ### 5. A grade do terminal fica fora do v1 — declarado, com o porquê
 
 `porecatu-render` desenha a grade e `accesskit` não a vê. **No v1 continua assim**, e isto é limitação registrada, não esquecimento. As três perguntas que precisariam de resposta antes de uma linha de código:

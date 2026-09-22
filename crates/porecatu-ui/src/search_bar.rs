@@ -19,7 +19,7 @@
 //! convive com tooltip e menu de contexto por cima dela, mas fica acima da
 //! grade.
 
-use porecatu_core::TabId;
+use porecatu_core::{PaneId, TabId};
 use porecatu_render::{Color, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun, icon};
 use porecatu_term::{Occurrence, OccurrenceSpan, SearchJob, SearchMode, SearchStep, Terminal};
 
@@ -73,11 +73,15 @@ pub(crate) const FIELD_FONT_SIZE: f32 = 13.0;
 pub(crate) const FIELD_PADDING_X: f32 = 9.0;
 
 /// Estado de uma busca aberta numa aba. `WindowState::search` guarda no
-/// máximo um -- só a aba em que a busca foi aberta tem o widget; trocar de
-/// aba fecha a busca (`lib.rs::redraw` confere `tab` a cada frame).
+/// máximo um -- amarrado ao **painel** em que a busca foi aberta (ADR-0053
+/// §14: "continua sendo uma por janela, amarrada agora a um painel"), não
+/// só à aba: trocar de painel focado fecha a busca pelo mesmo caminho que
+/// trocar de aba já fechava (`lib.rs::redraw` confere `tab`/`pane` a cada
+/// frame).
 #[derive(Debug)]
 pub struct SearchBarState {
     tab: TabId,
+    pane: PaneId,
     field: TextFieldState,
     regex: bool,
     /// Erro do padrão atual (RF-11.4). `job`/`active` continuam com o
@@ -90,10 +94,14 @@ pub struct SearchBarState {
 
 impl SearchBarState {
     /// Campo vazio, sem busca em andamento -- `restart` faz o primeiro
-    /// disparo assim que o usuário digitar algo.
-    pub fn new(tab: TabId) -> Self {
+    /// disparo assim que o usuário digitar algo. `pane` é o painel
+    /// **focado** no momento da abertura (RF-11.1 sobre o painel, ADR-0053
+    /// §14) -- trocar de painel fecha a busca, então este valor nunca
+    /// precisa mudar depois de criado.
+    pub fn new(tab: TabId, pane: PaneId) -> Self {
         Self {
             tab,
+            pane,
             field: TextFieldState::new(""),
             regex: false,
             error: None,
@@ -104,6 +112,10 @@ impl SearchBarState {
 
     pub const fn tab(&self) -> TabId {
         self.tab
+    }
+
+    pub const fn pane(&self) -> PaneId {
+        self.pane
     }
 
     pub fn field(&self) -> &TextFieldState {
@@ -750,14 +762,14 @@ mod tests {
 
     #[test]
     fn state_new_has_no_error_and_blank_counter() {
-        let state = SearchBarState::new(TabId::new(0));
+        let state = SearchBarState::new(TabId::new(0), PaneId::new(0));
         assert_eq!(state.counter_display(), (String::new(), false));
         assert!(state.occurrences().is_empty());
     }
 
     #[test]
     fn advance_without_occurrences_is_none() {
-        let mut state = SearchBarState::new(TabId::new(0));
+        let mut state = SearchBarState::new(TabId::new(0), PaneId::new(0));
         assert_eq!(state.advance(true), None);
     }
 }

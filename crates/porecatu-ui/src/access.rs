@@ -25,7 +25,7 @@
 //! ao app (a árvore expõe, não interage -- RF-11.17/18 pedem o primeiro).
 
 use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
-use porecatu_core::{GroupColor, GroupId, TabId, Workspace};
+use porecatu_core::{GroupColor, GroupId, PaneId, TabId, Workspace};
 use porecatu_render::TextMeasurer;
 
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
@@ -88,6 +88,18 @@ fn group_pill_id(id: GroupId) -> NodeId {
 
 fn group_new_tab_id(id: GroupId) -> NodeId {
     NodeId(GROUP_ID_BASE + u64::from(id.get()) * GROUP_STRIDE + 1)
+}
+
+/// ADR-0053 §13: painéis viram nós filhos do nó da aba, numa faixa própria
+/// -- mesma disciplina de [`TAB_STRIDE`]/[`GROUP_ID_BASE`]. `PaneId` só é
+/// único **dentro** de uma aba (`id.rs`), então o `NodeId` precisa das
+/// duas identidades: `PANE_TAB_STRIDE` reserva espaço de sobra por aba
+/// para os painéis dela nunca colidirem com os da aba seguinte.
+const PANE_ID_BASE: u64 = 600_000;
+const PANE_TAB_STRIDE: u64 = 1_000;
+
+fn pane_node_id(tab: TabId, pane: PaneId) -> NodeId {
+    NodeId(PANE_ID_BASE + u64::from(tab.get()) * PANE_TAB_STRIDE + u64::from(pane.get()))
 }
 
 const WARNING_ITEM_BASE: u64 = 300_000;
@@ -158,6 +170,7 @@ pub(crate) fn build_tree(
     move_to_group: &Option<MoveToGroupPopover>,
     search: &Option<SearchBarState>,
     status_bar: Option<&StatusBarLayout>,
+    active_pane_order: Option<&[PaneId]>,
     style: &TabBarStyle,
     logical_width: f32,
     scroll_offset: f32,
@@ -171,7 +184,13 @@ pub(crate) fn build_tree(
     let layout = tab_bar::layout(workspace, style, measurer);
     let overflow = tab_bar::overflow_state(&layout, trilha_width, scroll_offset);
 
-    build_tab_list(workspace, &layout, &mut nodes, &mut root_children);
+    build_tab_list(
+        workspace,
+        &layout,
+        active_pane_order,
+        &mut nodes,
+        &mut root_children,
+    );
 
     if overflow.hidden_left > 0 {
         nodes.push((
@@ -264,6 +283,7 @@ pub(crate) fn build_tree(
 fn build_tab_list(
     workspace: &Workspace,
     layout: &tab_bar::TabBarLayout,
+    active_pane_order: Option<&[PaneId]>,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) {
@@ -309,7 +329,33 @@ fn build_tab_list(
             node.set_label(label);
             node.add_action(accesskit::Action::Focus);
             let close_id = tab_close_button_id(tab_rect.id);
-            node.set_children(vec![close_id]);
+            let mut children = vec![close_id];
+            // ADR-0053 §13: painéis como filhos do nó da aba, projeção da
+            // mesma ordem de travessia que `panes::layout` usa para
+            // desenhar (nunca uma segunda descrição da árvore). Só para a
+            // aba **ativa** -- é a única com painéis de verdade em tela; e
+            // só com dois ou mais, mesma regra de ausência do segmento de
+            // contagem da barra de status (RF-6.20): um painel só não diz
+            // nada que o próprio nó da aba já não diga.
+            if Some(tab_rect.id) == active_tab
+                && let Some(order) = active_pane_order
+                && order.len() > 1
+            {
+                let focused = tab.panes().focused_id();
+                for &pane_id in order {
+                    let Some(pane) = tab.panes().pane(pane_id) else {
+                        continue;
+                    };
+                    let mut label = pane.title().to_owned();
+                    if pane_id == focused {
+                        label.push_str(" (foco)");
+                    }
+                    let id = pane_node_id(tab_rect.id, pane_id);
+                    nodes.push((id, leaf(Role::GenericContainer, label)));
+                    children.push(id);
+                }
+            }
+            node.set_children(children);
             nodes.push((tab_node_id(tab_rect.id), node));
             nodes.push((close_id, leaf(Role::Button, "Fechar aba")));
             tab_list_children.push(tab_node_id(tab_rect.id));
@@ -402,6 +448,7 @@ fn segment_label(role: SegmentRole) -> &'static str {
         SegmentRole::GitBranch => "branch",
         SegmentRole::AheadBehind { .. } => "commits atrás/à frente do remoto",
         SegmentRole::Group => "grupo",
+        SegmentRole::PaneCount => "contagem de painéis",
         SegmentRole::Encoding => "codificação",
         SegmentRole::System => "sistema",
     }
@@ -681,6 +728,7 @@ mod tests {
             &None,
             &None,
             None,
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -740,6 +788,98 @@ mod tests {
         assert!(pos_a < pos_b);
     }
 
+    /// ADR-0053 §13: com dois ou mais painéis na aba ativa, cada um vira
+    /// um nó filho do nó da aba, na ordem de `active_pane_order` (a mesma
+    /// que `panes::layout` produz) -- e o focado carrega a marca no
+    /// rótulo.
+    #[test]
+    fn active_tab_exposes_its_panes_as_children_with_focus_marked() {
+        use porecatu_core::SplitAxis;
+
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let left = ws.tab(tab_id).unwrap().panes().focused_id();
+        let right = ws
+            .tab_mut(tab_id)
+            .unwrap()
+            .panes_mut()
+            .split(left, SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        let order = [left, right];
+
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            Some(&order),
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &mut measurer(),
+        );
+
+        let tab_node = node(&update, tab_node_id(tab_id));
+        let close_id = tab_close_button_id(tab_id);
+        let pane_children: Vec<NodeId> = tab_node
+            .children()
+            .iter()
+            .copied()
+            .filter(|id| *id != close_id)
+            .collect();
+        assert_eq!(
+            pane_children,
+            vec![pane_node_id(tab_id, left), pane_node_id(tab_id, right)]
+        );
+
+        let focused_node = node(&update, pane_node_id(tab_id, right));
+        assert!(focused_node.label().unwrap().contains("(foco)"));
+        let unfocused_node = node(&update, pane_node_id(tab_id, left));
+        assert!(!unfocused_node.label().unwrap().contains("(foco)"));
+    }
+
+    /// RF-6.20 (mesma regra do segmento de contagem na barra de status):
+    /// um painel só não ganha nó filho -- o próprio nó da aba já diz tudo
+    /// que haveria a dizer.
+    #[test]
+    fn a_single_pane_tab_gets_no_pane_children() {
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let focused = ws.tab(tab_id).unwrap().panes().focused_id();
+        let order = [focused];
+
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            Some(&order),
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &mut measurer(),
+        );
+
+        let tab_node = node(&update, tab_node_id(tab_id));
+        assert_eq!(
+            tab_node.children(),
+            vec![tab_close_button_id(tab_id)],
+            "sem painéis: só o botão de fechar"
+        );
+    }
+
     #[test]
     fn group_pill_names_color_and_collapsed_state() {
         let mut ws = Workspace::new();
@@ -775,6 +915,7 @@ mod tests {
             &None,
             &None,
             None,
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -801,6 +942,7 @@ mod tests {
             git_branch: None,
             ahead_behind: None,
             group: None,
+            pane_count: 0,
             system: "windows - 0.7.0".to_owned(),
         };
         let layout = crate::status_bar::layout_status_bar(
@@ -821,6 +963,7 @@ mod tests {
             &None,
             &None,
             Some(&layout),
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -885,6 +1028,7 @@ mod tests {
             &None,
             &None,
             Some(&layout),
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -930,6 +1074,7 @@ mod tests {
             &None,
             &None,
             Some(&layout),
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -967,6 +1112,7 @@ mod tests {
             &None,
             &None,
             None,
+            None,
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
@@ -994,6 +1140,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             None,
             &TabBarStyle::DEFAULT,
             800.0,

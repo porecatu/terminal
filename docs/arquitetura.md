@@ -68,6 +68,8 @@ A main thread **nunca** faz I/O bloqueante. Nem leitura de PTY, nem leitura de a
 
 ### Uma thread de leitura por terminal
 
+> **Com painéis divididos ([ADR-0053](adr/0053-paineis-divididos.md)), "por terminal" deixa de ser "por aba".** A regra desta seção não muda — continua uma thread de leitura por terminal —, mas uma aba passa a poder ter N terminais, e portanto N destas threads (3N contando a de escrita e a de observação). O `Wakeup` abaixo passa a carregar o **painel** junto da janela e da aba, pela mesma razão que já o fez carregar a janela: os IDs são por workspace, e o evento sozinho não diz o que sujou.
+
 Cada terminal aberto tem uma thread dedicada:
 
 ```rust
@@ -271,7 +273,7 @@ barato para eles, além de estampá-los no snapshot.
 
 ## 5. Fronteira de render
 
-> **Depois da F3.** Duas coisas entraram na pintura da grade e valem nota aqui, porque são invariantes de layout e não escolha de desenho. (1) A grade é desenhada dentro de um **quadro arredondado** (`paint::terminal_box_rect`), colado na barra de abas em cima e recuado nos outros três lados; a área útil do terminal é a de dentro do quadro menos o padding interno, e é dela que saem colunas e linhas. (2) A célula e a origem de cada `TextRun` são **arredondadas ao pixel físico** (`snap_cell_metrics_to_pixel_grid`), o que mata a costura de 1px entre glyphs — mas esse valor arredondado **não** serve para decidir se um caractere pode viajar num run compartilhado: essa decisão é em **em**, contra o avanço natural do `'M'` da face mono. Comparar um contra o outro erra por até meio pixel, reprova toda célula e re-shapa a grade inteira por frame.
+> **Depois da F3.** Duas coisas entraram na pintura da grade e valem nota aqui, porque são invariantes de layout e não escolha de desenho. (1) A grade é desenhada dentro de um **quadro arredondado** (`paint::terminal_box_rect`), colado na barra de abas em cima e recuado nos outros três lados; a área útil do terminal é a de dentro do quadro menos o padding interno, e é dela que saem colunas e linhas. (Com painéis, esse quadro se repete por painel e a área útil passa a ser a de cada um — [ADR-0053](adr/0053-paineis-divididos.md) §3 e §5; o cálculo não muda de forma, muda de retângulo.) (2) A célula e a origem de cada `TextRun` são **arredondadas ao pixel físico** (`snap_cell_metrics_to_pixel_grid`), o que mata a costura de 1px entre glyphs — mas esse valor arredondado **não** serve para decidir se um caractere pode viajar num run compartilhado: essa decisão é em **em**, contra o avanço natural do `'M'` da face mono. Comparar um contra o outro erra por até meio pixel, reprova toda célula e re-shapa a grade inteira por frame.
 
 `porecatu-render` recebe uma **sequência de camadas** por frame ([ADR-0018](adr/0018-composicao-de-frame.md)), cada uma com sua lista de primitivas:
 
@@ -349,6 +351,8 @@ O parser (seções cruas, escolha da seção por `shell_name`) e a checagem de `
 | `porecatu-ui` | hit-testing e layout são funções puras sobre geometria, testáveis sem janela |
 
 O layout da barra de abas é deliberadamente uma função pura `(Workspace, Config, largura) -> Vec<TabRect>`. Isso permite testar overflow, colapso de grupo e truncamento de título sem abrir uma janela.
+
+O layout de **painéis** ([ADR-0053](adr/0053-paineis-divididos.md) §5) entra na mesma disciplina, e é a segunda função pura desta seção: `(árvore de painéis, retângulo do quadro, Config) -> Vec<(PaneId, Rect)>`. Ela **subdivide** o que `paint::terminal_box_rect` já devolve — que continua sendo a fonte única do retângulo externo — tirando o vão a cada nó de split. Duas propriedades ficam testáveis sem janela, e as duas são as que quebrariam em silêncio: a soma dos painéis mais os vãos é o retângulo original, e o mesmo ponto lógico cai sempre no mesmo painel. É dela que saem as colunas e as linhas de cada PTY.
 
 Isso só é cumprível porque o medidor de texto do [ADR-0018](adr/0018-composicao-de-frame.md) se constrói **sem `Device` nem `Queue`**: a função recebe o medidor emprestado, e o teste constrói um sem tocar em `wgpu`. Na F1 não era — o `FontSystem` vivia dentro do pipeline de texto, que exige GPU, e não havia como medir largura de string proporcional.
 

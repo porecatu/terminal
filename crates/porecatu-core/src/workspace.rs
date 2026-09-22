@@ -19,7 +19,10 @@ use crate::group::{Group, GroupColor};
 use crate::id::{GroupId, TabId};
 use crate::tab::Tab;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// `Eq` não dá para derivar: `Tab` carrega a árvore de painéis (ADR-0053
+// §1), e o `ratio` do divisor é `f32`, que não é `Eq`. `PartialEq` continua
+// -- é o que `assert_eq!` exige, e é usado nos testes deste módulo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     groups: Vec<Group>,
     /// Dados das abas, sem relação com a ordem visual -- a ordem visual
@@ -148,6 +151,34 @@ impl Workspace {
             cwd,
             pos,
         )
+    }
+
+    /// ADR-0053 §11: cria a aba a partir de uma árvore de painéis já
+    /// construída (restauração de sessão com layout, `Tab::from_panes`) --
+    /// cada folha já traz o `cwd` dela, então, ao contrário de
+    /// [`Self::insert_tab`], nada é sobrescrito por cima. Não ativa, pelo
+    /// mesmo motivo de [`Self::new_tab_not_started`]: quem restaura decide
+    /// separadamente, no fim, qual aba de cada janela fica ativa.
+    pub fn insert_tab_with_panes(
+        &mut self,
+        group: Option<GroupId>,
+        panes: crate::pane::PaneTree,
+        pos: usize,
+    ) -> TabId {
+        let id = TabId::new(self.next_tab_id);
+        self.next_tab_id += 1;
+        self.tabs.push(Tab::from_panes(id, panes));
+
+        let group_index = match group.and_then(|g| self.group_index(g)) {
+            Some(index) => index,
+            None => {
+                let fresh = Group::new_implicit(self.fresh_group_id());
+                self.groups.push(fresh);
+                self.groups.len() - 1
+            }
+        };
+        self.groups[group_index].insert(pos, id);
+        id
     }
 
     /// Núcleo comum de [`Self::new_tab`]/[`Self::new_tab_not_started`]:
@@ -786,7 +817,7 @@ impl Default for Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tab::TabState;
+    use crate::pane::PaneState;
 
     /// ADR-0037 §1: as três formas de criar aba nascem sempre `Running` --
     /// só a restauração de sessão (F5 etapa 4) produz `NotStarted`.
@@ -795,8 +826,14 @@ mod tests {
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
         let b = ws.new_tab(None, "bash", None, 0);
-        assert_eq!(ws.tab(a).unwrap().state(), TabState::Running);
-        assert_eq!(ws.tab(b).unwrap().state(), TabState::Running);
+        assert_eq!(
+            ws.tab(a).unwrap().panes().focused().state(),
+            PaneState::Running
+        );
+        assert_eq!(
+            ws.tab(b).unwrap().panes().focused().state(),
+            PaneState::Running
+        );
     }
 
     /// ADR-0037 §1/F5 etapa 4: `new_tab_not_started` é o único caminho que
@@ -807,7 +844,10 @@ mod tests {
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
         let b = ws.new_tab_not_started(None, "bash", None, 1);
-        assert_eq!(ws.tab(b).unwrap().state(), TabState::NotStarted);
+        assert_eq!(
+            ws.tab(b).unwrap().panes().focused().state(),
+            PaneState::NotStarted
+        );
         assert_eq!(ws.active_tab(), Some(a));
         assert_eq!(ws.visual_order().collect::<Vec<_>>(), vec![a, b]);
     }

@@ -27,7 +27,7 @@ Os PRDs continuam **normativos para o comportamento** — o que acontece ao clic
 
 ## Aviso de fase
 
-O mockup mostra o produto completo, **não o v1**. Painéis divididos, perfis de aba, paleta de comandos, painel de configurações GUI e barra de título customizada são todos `[v2]`. A barra de status era, e entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases.
+O mockup mostra o produto completo, **não o v1**. Perfis de aba, paleta de comandos, painel de configurações GUI e barra de título customizada são todos `[v2]`. A barra de status era, e entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases; os **painéis divididos** também, pelo [PRD-006](../prd/prd-006-paineis-divididos.md) e o [ADR-0053](../adr/0053-paineis-divididos.md) — com uma diferença que vale saber antes de olhar o desenho: o **cabeçalho de painel** que o canvas desenha (ponto de foco, título, botões de dividir e fechar) e o **divisor de 1px** foram **recusados**, não adiados. O divisor é só o vão entre os quadros, e o foco se vê pelo cursor.
 
 Antes de implementar qualquer coisa daqui, consulte a **tabela de fases** (seção 3 da especificação visual). Ela classifica todo elemento do desenho como `[v1]` ou `[v2]` e aponta o PRD que o governa.
 

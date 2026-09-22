@@ -13,7 +13,10 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 pub use schema::CURRENT_SCHEMA_VERSION;
-pub use schema::v1::{GeometryV1, GroupV1, MonitorIdV1, SessionFileV1, TabV1, WindowV1};
+pub use schema::v1::{
+    GeometryV1, GroupV1, MonitorIdV1, PaneNodeV1, PaneTreeV1, PaneV1, SessionFileV1, SplitAxisV1,
+    TabV1, WindowV1,
+};
 
 /// Um aviso a mostrar ao usuário sobre a leitura da sessão (ADR-0036 §5).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +180,7 @@ mod tests {
                 custom_title: None,
                 cwd: None,
                 spawn_program: Some("zsh".to_string()),
+                panes: None,
             }],
             active_tab,
             theme: None,

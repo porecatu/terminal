@@ -7,7 +7,7 @@
 //! `action` é um enum fechado, não uma closure: o diálogo é dado puro, sem
 //! capturar estado de `App` dentro dele.
 
-use porecatu_core::{GroupId, TabId};
+use porecatu_core::{GroupId, PaneId, TabId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogButton {
@@ -25,6 +25,9 @@ pub enum DialogAction {
     /// RF-1.6 (ADR-0017): fechar aba com tela alternativa ou reporte de
     /// mouse ligado.
     CloseTab(TabId),
+    /// RF-6.10/RF-1.6: fechar um painel (não o último da aba) com tela
+    /// alternativa ou reporte de mouse ligado.
+    ClosePane(TabId, PaneId),
     /// RF-10.23 (ADR-0015): fechar janela com mais de uma aba.
     CloseWindow,
     /// RF-2.22/RF-2.23 (`group.close_all`): fecha todas as abas do grupo.

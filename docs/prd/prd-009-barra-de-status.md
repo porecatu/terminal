@@ -33,6 +33,8 @@ O nome do shell é o único item colorido — é o que distingue a aba de relanc
 
 O mockup desenha a **contagem de painéis**, que **não entra**: depende do [PRD-006](prd-006-paineis-divididos.md) (`[v2]`, inexistente) e hoje exibiria "1 painel" para sempre. Volta com os painéis. Ver [ADR-0048](../adr/0048-barra-de-status.md) §3. O segmento de **branch** não estava no desenho e entrou depois, pelo [ADR-0049](../adr/0049-branch-git-na-barra-de-status.md).
 
+> **Emenda ([PRD-006](prd-006-paineis-divididos.md) RF-6.20, [ADR-0053](../adr/0053-paineis-divididos.md) §14).** Os painéis existem, e a contagem **voltou** — com a condição que este parágrafo escreveu: ela aparece **só com dois ou mais painéis**, e nunca exibe "1 painel". O RF-9.2 passa a ler o **painel focado** em vez do único terminal da aba, o que não muda a regra: a barra sempre descreveu o terminal em foco.
+
 ## Requisitos
 
 - **RF-9.1** — Barra opcional, ligável e desligável na config. **Ligada por padrão** — a decisão que o rascunho deixava em aberto, resolvida no [ADR-0048](../adr/0048-barra-de-status.md) §6: desligada por padrão, ela anula o RF-9.4, porque quem não sabe que o OSC 7 pode faltar nunca vai ligá-la para descobrir. Desligada, a barra não desenha **nem ocupa altura**.
@@ -58,7 +60,7 @@ Todas resolvidas pelo [ADR-0048](../adr/0048-barra-de-status.md).
 | Pergunta | Resposta |
 |---|---|
 | Campos de sistema (versão, plataforma) valem o espaço, ou são ruído? | **A plataforma vale; a versão não.** São constantes e não custam frame, mas a versão não muda entre execuções, e o que não muda não é o que se consulta de relance — saiu depois de aparecer em tela ([ADR-0048](../adr/0048-barra-de-status.md) §10). |
-| Contagem de painéis só faz sentido com [PRD-006](prd-006-paineis-divididos.md) implementado. | **Sai do escopo** até os painéis existirem (§3). |
+| Contagem de painéis só faz sentido com [PRD-006](prd-006-paineis-divididos.md) implementado. | **Sai do escopo** até os painéis existirem (§3). — *Voltou em 2026-09-15, com o [PRD-006](prd-006-paineis-divididos.md) aprovado: aparece com dois ou mais painéis, nunca com um ([ADR-0053](../adr/0053-paineis-divididos.md) §14).* |
 | Barra por janela ou por aba? | **Por janela**, lendo a aba ativa. Uma barra por aba seria N barras invisíveis exceto uma — o mesmo desenho, com estado a mais. |
 | Exibe indicadores de atividade e campainha ([PRD-001](prd-001-abas.md) RF-1.20, RF-1.21), ou eles ficam só na aba? | **Só na aba.** Os indicadores existem para dizer o que acontece em abas que **não** estão à vista; a barra descreve a aba ativa, onde não há o que sinalizar. |
 
