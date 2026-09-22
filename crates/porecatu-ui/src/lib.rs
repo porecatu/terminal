@@ -2407,6 +2407,14 @@ impl WindowState {
             shell,
             now,
         );
+        // O painel de origem encolheu na árvore, mas o `Terminal` dele já
+        // existia antes do split e não sabe disso sozinho -- sem isto, um
+        // programa em tela cheia (ex. o Claude Code CLI) continua achando
+        // que tem a aba inteira depois de dividida. Mesma varredura que
+        // `resize_to`/o arraste do divisor já fazem; redimensionar de novo
+        // o painel novo (que `spawn_split_pane_runtime` já subiu no
+        // tamanho certo) é barato e não erra nada.
+        self.resize_tab_panes(tab_id, cell_metrics, style);
         self.mark_session_dirty();
     }
 
@@ -2530,7 +2538,13 @@ impl WindowState {
     /// uma aba -- fechar o último é fechar a aba inteira, que é
     /// `close_tab_unconditionally` (`action_close_pane` decide qual dos
     /// dois vale antes de chamar).
-    fn close_pane_unconditionally(&mut self, tab_id: TabId, pane_id: PaneId) {
+    fn close_pane_unconditionally(
+        &mut self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        cell_metrics: CellMetrics,
+        style: &TabBarStyle,
+    ) {
         if let Some(runtime) = self.panes.remove(&(tab_id, pane_id)) {
             let _ = runtime.terminal.close();
         }
@@ -2540,6 +2554,10 @@ impl WindowState {
         if self.search.as_ref().is_some_and(|s| s.pane() == pane_id) {
             self.search = None;
         }
+        // O irmão que absorveu o espaço (`PaneTree::close`) cresceu na
+        // árvore, mas o `Terminal` dele continua no tamanho antigo, menor
+        // -- mesma razão do resize que falta em `action_split_pane`.
+        self.resize_tab_panes(tab_id, cell_metrics, style);
         self.sync_window_title();
         self.mark_session_dirty();
     }
@@ -2668,7 +2686,12 @@ impl WindowState {
     /// caso "fechar o painel" e "fechar a aba" são o mesmo gesto).
     /// Confirmação de um painel que não é o último olha só o runtime
     /// **dele** (RF-1.6 sobre o painel, não a aba).
-    fn action_close_pane(&mut self, confirm_close_with_process: bool) -> Option<TabCloseOutcome> {
+    fn action_close_pane(
+        &mut self,
+        confirm_close_with_process: bool,
+        cell_metrics: CellMetrics,
+        style: &TabBarStyle,
+    ) -> Option<TabCloseOutcome> {
         let tab_id = self.workspace.active_tab()?;
         let tab = self.workspace.tab(tab_id)?;
         let pane_id = tab.panes().focused_id();
@@ -2689,7 +2712,7 @@ impl WindowState {
                 DialogAction::ClosePane(tab_id, pane_id),
             )));
         }
-        self.close_pane_unconditionally(tab_id, pane_id);
+        self.close_pane_unconditionally(tab_id, pane_id, cell_metrics, style);
         Some(TabCloseOutcome::Closed {
             window_empty: false,
         })
@@ -3412,16 +3435,18 @@ impl WindowState {
                 );
                 ActionOutcome::Handled
             }
-            Action::PaneClose => match self.action_close_pane(confirm_close_with_process) {
-                Some(TabCloseOutcome::Dialog(dialog)) => {
-                    self.dialog = Some(dialog);
-                    ActionOutcome::Handled
+            Action::PaneClose => {
+                match self.action_close_pane(confirm_close_with_process, cell_metrics, style) {
+                    Some(TabCloseOutcome::Dialog(dialog)) => {
+                        self.dialog = Some(dialog);
+                        ActionOutcome::Handled
+                    }
+                    Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                        ActionOutcome::WindowEmptied
+                    }
+                    _ => ActionOutcome::Handled,
                 }
-                Some(TabCloseOutcome::Closed { window_empty: true }) => {
-                    ActionOutcome::WindowEmptied
-                }
-                _ => ActionOutcome::Handled,
-            },
+            }
             // RF-6.8: `focus_in_direction` já existe no core desde a etapa
             // 2 -- aqui só o que é de janela (título/barra de status
             // seguem o painel focado, RF-6.17/RF-6.19).
@@ -5419,7 +5444,12 @@ impl App {
             }
             DialogAction::ClosePane(tab_id, pane_id) => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
-                    state.close_pane_unconditionally(tab_id, pane_id);
+                    state.close_pane_unconditionally(
+                        tab_id,
+                        pane_id,
+                        self.cell_metrics,
+                        &self.style,
+                    );
                     state.window.request_redraw();
                 }
             }
@@ -6765,7 +6795,12 @@ impl ApplicationHandler<Wakeup> for App {
                                 window_should_close = true;
                             }
                         } else {
-                            state.close_pane_unconditionally(tab_id, pane_id);
+                            state.close_pane_unconditionally(
+                                tab_id,
+                                pane_id,
+                                self.cell_metrics,
+                                &self.style,
+                            );
                         }
                     } else {
                         if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
