@@ -8,7 +8,7 @@
 | [0002](0002-motor-vte.md) | Motor VT: crate alacritty_terminal | Aceito |
 | [0003](0003-formato-de-configuracao.md) | Configuração em TOML | Aceito |
 | [0004](0004-pty-cross-platform.md) | PTY cross-platform via portable-pty | Aceito |
-| [0005](0005-persistencia-de-sessao.md) | Persistência de sessão em JSON versionado | Superseded by ADR-0036 e ADR-0038 (os dois **parcialmente**) |
+| [0005](0005-persistencia-de-sessao.md) | Persistência de sessão em JSON versionado | Superseded by ADR-0036 e ADR-0038 (os dois **parcialmente**) · "Quando gravar" revisto por ADR-0054 (**parcial**: só a premissa de que toda gravação é automática) |
 | [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito · Alternativas Superseded by ADR-0053 (**parcial**: só o item "Splits/panes dentro da aba") |
 | [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito · uma linha das Consequências revista por ADR-0052 (**parcial**) |
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
@@ -39,7 +39,7 @@
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito |
 | [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
-| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) |
+| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) · §1 e §6 Superseded by ADR-0054 (**parcial**: dois campos opcionais e o diretório `sessions/`) |
 | [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito · Superseded by ADR-0053 (**parcial**: só a granularidade) |
 | [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
 | [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito · Superseded by ADR-0053 (**parcial**: só o endereço da nota) |
@@ -55,6 +55,8 @@
 | [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito · §6 Superseded by ADR-0053 (**parcial**: qual terminal recebe o comando) |
 | [0052](0052-sincronizacao-com-o-remoto-do-git.md) | Sincronização com o remoto do Git: poll em thread, contagem por `rev-list`, integração só por clique | Aceito |
 | [0053](0053-paineis-divididos.md) | Painéis divididos: árvore binária no core, divisor que é ausência de pixel, foco pelo cursor | Aceito |
+| [0054](0054-sessoes-nomeadas.md) | Sessões nomeadas: um arquivo por sessão ao lado do `session.json`, mesmo schema, restauração pelo caminho do arranque | Aceito |
+| [0055](0055-botao-e-popover-de-sessoes.md) | Botão e popover de sessões: segundo botão da zona fixa, sétimo widget de chrome | Aceito |
 
 ## Convenção
 

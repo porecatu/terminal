@@ -71,6 +71,14 @@ struct MonitorIdV1 { name: Option<String>, x: i32, y: i32 }
 
 `schema_version` nasce em **1**. Ela sobe quando um campo muda de significado ou some — não quando um campo opcional é acrescentado, que `#[serde(default)]` já absorve. Subir a versão obriga a criar `v2.rs` e a função `v1 -> v2`; migrar de 1 para 3 é a composição das duas, nunca um caminho direto.
 
+> **Revisto pelo [ADR-0054](0054-sessoes-nomeadas.md) §4.** `SessionFileV1` ganha
+> dois campos opcionais, `name: Option<String>` e `saved_at: Option<u64>`, com
+> `#[serde(default)]` — **sem subir `schema_version`**, a regra do parágrafo acima.
+> O mesmo tipo passa a descrever dois arquivos: o `session.json` automático, que
+> deixa os dois ausentes e grava N janelas, e o arquivo de **sessão nomeada**, que os
+> preenche e grava exatamente uma. A invariante "uma janela" é da função que grava a
+> nomeada, não do tipo.
+
 ### 2. Por que DTO, e não `#[serde(skip)]` no domínio
 
 A alternativa barata era marcar os voláteis com `skip` em `porecatu-core` e filtrar abas `Exited` na gravação. Ela mantém o "trivial" que o ADR-0005 prometeu e reusa o teste de round-trip que já existe. Foi descartada por um motivo específico: **acopla o formato de disco à forma do domínio**. Campo novo em `Tab` vira campo novo no arquivo sem ninguém decidir, e a decisão de persistir passa a ser o default — o inverso do que se quer num formato que precisa sobreviver a versões do app. E migração com tipos por versão fica impossível de escrever, porque só existe **um** tipo, o de hoje.
@@ -118,6 +126,14 @@ O ADR-0005 manda renomear para `session.json.corrupt`. Se já houver um, o novo 
 O caminho resolve por `PORECATU_SESSION` → caminho de plataforma via `dirs`, na mesma forma que `porecatu-config/src/path.rs` já usa para a config (sem o nível de `--config`: não há flag para a sessão). A variável é a costura que torna gravação e leitura testáveis sem tocar o diretório de estado real da máquina de quem roda o teste.
 
 Não há chave TOML de caminho de sessão, pelo motivo que o próprio arquivo de exemplo registra: trocar o destino com sessão em memória pediria migração de arquivo. `[session] enabled = false` continua sendo o desligamento inteiro, tema e zoom inclusos.
+
+> **Revisto pelo [ADR-0054](0054-sessoes-nomeadas.md) §2 e §8.** Um segundo
+> destino passa a existir: o diretório `sessions/`, **derivado** do caminho que esta
+> seção resolve (`session_dir(...) / "sessions"`), e não resolvido de novo — então
+> `PORECATU_SESSION` desloca os dois juntos e a costura de teste continua sendo uma
+> só. "`enabled = false` é o desligamento inteiro" continua literal para o
+> `session.json`; as sessões nomeadas, gravadas e restauradas por gesto do usuário,
+> **não** são desligadas por ela.
 
 ## Alternativas consideradas
 

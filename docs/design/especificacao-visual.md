@@ -270,7 +270,7 @@ Altura **52px** (§1.7), fundo `#1b1f26`, e o conteúdo recuado por `trilha_padd
 Zonas, da esquerda para a direita:
 
 1. **Trilha rolável** `[v1]` — ocupa toda a largura que sobra, `gap: 6`, recortada nas duas pontas. Contém os wrappers de grupo, e só eles. Rola como **um componente só**: nada dentro dela encolhe (§2.18).
-2. **Zona fixa à direita** `[v1]` — não rola, e a largura disponível para a trilha é a da barra **menos** esta zona. Carrega o **botão de configurações**: 30×30 de desenho (38×30 de alvo), raio 6, borda `#262b34`, engrenagem Lucide, com o mesmo `gap: 6` da trilha como respiro nas duas pontas. Ele **desenha e consome o clique, mas não faz nada** — `porecatu-config` é F4. Consumir o clique é deliberado: sem isso o gesto atravessaria até o que estivesse embaixo. A zona nasceu na F3 para o botão de nova aba global, que saiu (§2.6); ela fica, reservada para o que a barra ganhar à direita daqui em diante.
+2. **Zona fixa à direita** `[v1]` — não rola, e a largura disponível para a trilha é a da barra **menos** esta zona. Carrega o **botão de configurações**: 30×30 de desenho (38×30 de alvo), raio 6, borda `#262b34`, engrenagem Lucide, com o mesmo `gap: 6` da trilha como respiro nas duas pontas. O clique **abre o arquivo de config** no editor do sistema, criando-o a partir do exemplo embutido se ainda não existir ([PRD-011](../prd/prd-011-polimento.md) RF-11.27, F6); até a F6 ele desenhava e consumia o clique sem fazer nada. A zona nasceu na F3 para o botão de nova aba global, que saiu (§2.6); ela fica, reservada para o que a barra ganhar à direita daqui em diante.
 3. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
 4. **Zona de botões de janela** `[v1]` — minimizar, maximizar/restaurar, fechar (ADR-0027; anatomia em §2.2.1). Ausente no macOS: lá o semáforo nativo faz esse papel, e a trilha reserva espaço à **esquerda** (§2.2.1) em vez de perder espaço à direita.
 
@@ -919,7 +919,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Popover de grupo de destino | `[v1]` | PRD-002 RF-2.20; ADR-0023 — sem representação no canvas |
 | Reordenação animada ao formar grupo | `[v1]` | PRD-002 RF-2.5; [ADR-0022](../adr/0022-animacao-de-interface.md) — sem representação no canvas |
 | Controles de janela e resize sem decoração nativa | `[v1]` | [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) — sem PRD, sem representação no canvas |
-| Botão de configurações da zona fixa (inerte até a F6 lhe dar ação) | `[v1]` | PRD-004 — ver §2.2; [PRD-011](../prd/prd-011-polimento.md) RF-11.27 |
+| Botão de configurações da zona fixa (abre o arquivo de config desde a F6) | `[v1]` | PRD-004 — ver §2.2; [PRD-011](../prd/prd-011-polimento.md) RF-11.27 |
 | Aba restaurada sem shell iniciado (rótulo esmaecido; existe a partir da F5) | `[v1]` | PRD-003 RF-3.9; [ADR-0037](../adr/0037-aba-nao-iniciada.md) — sem representação no canvas |
 | Barra de busca (campo, contador, alternador de regex, navegação) | `[v1]` | [PRD-011](../prd/prd-011-polimento.md) RF-11.1 a RF-11.9; [ADR-0041](../adr/0041-busca-no-scrollback.md) — sem representação no canvas |
 | Realce de ocorrência da busca na grade | `[v1]` | PRD-011 RF-11.7; ADR-0041 — sem representação no canvas |

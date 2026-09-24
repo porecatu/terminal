@@ -711,6 +711,30 @@ O que o [ADR-0006](adr/0006-modelo-de-abas-e-grupos.md) escreveu como profecia e
 
 ---
 
+## Depois do v1 — sessões nomeadas — em implementação
+
+Fora da ordem de fases, como as quatro entradas acima, e pelo caminho do arquivo de projeto e da sincronização com o remoto: **requisito novo**, a pedido do dono do produto. Não há rascunho a promover, mas há uma linha a cobrar: o [PRD-003](prd/prd-003-persistencia-de-sessao.md) listava *"múltiplas sessões nomeadas, salvas e alternáveis"* como ideia para v2 em "Fora de escopo". O [PRD-014](prd/prd-014-sessoes-nomeadas.md) a promove; o [ADR-0054](adr/0054-sessoes-nomeadas.md) decide armazenamento, formato e restauração; o [ADR-0055](adr/0055-botao-e-popover-de-sessoes.md) decide o botão e o popover.
+
+O pedido tinha três partes, e a primeira já estava entregue: desligar a sessão automática é o RF-3.6, `[session] enabled`, desde a F5. O que entra é salvar **a janela atual** com um nome e reabri-la numa **janela nova** pelo mesmo caminho da restauração do arranque — `cwd`, painéis, `lazy_restore` e `.porecatu` sem caminho paralelo.
+
+**Cinco etapas:**
+
+1. **Documentação e decisão — feita.** PRD-014; ADR-0054; ADR-0055, **aceito** com o aval visual do dono do produto (ícone `bookmark`, à esquerda da engrenagem, trilha 44px menor); os blockquotes de revisão no ADR-0005 ("Quando gravar") e no ADR-0036 (§1 e §6); a emenda na linha de "Fora de escopo" do PRD-003; a seção `session.*` e a linha revista de "ações que não existem" em [docs/reference/acoes.md](reference/acoes.md); a correção de fato do texto que ainda chamava a engrenagem de "inerte" na §2.2 e na tabela de fases da especificação visual; CLAUDE.md e índices. **A §2.22 nova, a §2.2, a §1.7, a tabela de fases e a §4.4 ficam para a etapa 4**: desde o [ADR-0028](adr/0028-o-binario-como-referencia-visual.md) a especificação descreve o binário, e é atualizada no PR que o muda. **Nem o atalho em `[keybindings]` nem `[appearance.session_picker]` entram no arquivo de exemplo aqui** — `tests/example_toml.rs` e `default_matches_example_toml` reprovam chave e binding antes de o código existir, como na `[git]` e na `[panes]`.
+2. **`porecatu-session`** — `name` e `saved_at` opcionais em `SessionFileV1` (sem subir `schema_version`); `named.rs` com a função de *slug* (nomes reservados do Windows, colisão com sufixo), `list_named_in`, `load_named`, `save_named_in`, `delete_named`; testes de round-trip, de ordem da lista, de arquivo ruim listado sem ser renomeado e de recusa a sobrescrever schema mais novo. **Sem comportamento observável novo.**
+3. **Ações e restauração** — `Action::SessionSaveNamed`/`SessionOpenList` em `porecatu-core`, o default `ctrl+shift+s`/`cmd+shift+s` em `porecatu-config` **e no arquivo de exemplo, na mesma leva**; `WindowPlacement` em `open_window_from_session`, com a conta de cascata de `open_window` extraída para uma função que as duas chamam; teste que restaura o mesmo `WindowV1` pelos dois posicionamentos e compara o `Workspace` resultante.
+4. **Botão, popover e especificação visual** — ícone em `porecatu_render::icon` com a tinta pinada por teste; `right_zone_width`, `sessions_button_rect`/`point_in_sessions_button` e a drag region; o widget novo (estado puro, layout, pintura, hit test) reusando `TextFieldState`; `[appearance.session_picker]` em `porecatu-config` e no arquivo de exemplo; o nó em `access.rs`; diálogos de sobrescrever e excluir por cima do popover; a §2.22, a §2.2, a §1.7, a tabela de fases e a §4.4 da especificação visual, no mesmo PR.
+5. **Verificação ao vivo e guia** — salvar, restaurar numa janela nova com `.porecatu` autorizado e não autorizado, `lazy_restore` nos dois valores, `[session] enabled = false`, sobrescrever, excluir, arquivo ruim na lista; seção nova no [guia do usuário](guia-do-usuario.md), dizendo numa frase a diferença entre a sessão automática e as nomeadas.
+
+**Escopo:** RF-14.1 a RF-14.18.
+
+**Aparência:** **uma decisão**, no [ADR-0055](adr/0055-botao-e-popover-de-sessoes.md): segundo botão de ícone na zona fixa, à esquerda da engrenagem, e um popover novo — o sétimo widget de chrome — montado com os tokens do menu de contexto, do popover de destino e do campo do editor de grupo. **Zero valor novo, zero cor nova, um ícone novo.** A trilha perde 44px.
+
+**Dependências:** nenhuma prevista.
+
+**Critério de saída:** salvar uma janela com grupos, abas e painéis e reabri-la numa janela nova devolve a mesma disposição, sem tocar a janela de origem; o `.porecatu` roda na janela restaurada exatamente onde rodaria no arranque, e só lá; o recurso funciona com `[session] enabled = false`; nenhuma sobrescrita ou exclusão sem confirmação; o diretório de sessões nomeadas não é lido no arranque.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

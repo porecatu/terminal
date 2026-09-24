@@ -62,6 +62,14 @@ Nunca truncar o arquivo bom antes de ter o novo completo. Um crash no meio da gr
 
 O debounce importa: fechar 10 abas em sequência deve gerar uma escrita, não dez.
 
+> **Revisto pelo [ADR-0054](0054-sessoes-nomeadas.md) §1.** Esta seção continua
+> valendo inteira para o `session.json`: ele é gravado **sozinho**, e nenhum gesto
+> do usuário força, adia ou restaura essa gravação. O que deixa de valer é a
+> premissa implícita de que **toda** gravação de sessão é automática. Passa a existir
+> um segundo objeto — a **sessão nomeada**, uma janela gravada por gesto do usuário,
+> num arquivo à parte em `sessions/`, ao lado deste — que a sessão automática nunca
+> lê nem escreve, e que `[session] enabled` não alcança.
+
 ### Recuperação
 
 | Situação | Comportamento |
