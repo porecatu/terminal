@@ -16,6 +16,17 @@ pub struct SessionFileV1 {
     /// Dispensa definitiva do convite de integração de shell (ADR-0039).
     #[serde(default)]
     pub shell_integration_dismissed: bool,
+    /// Nome exibido (ADR-0054 §3) -- só sessões nomeadas; o `session.json`
+    /// automático nunca preenche, e por isso omitido da saída quando
+    /// ausente (`skip_serializing_if`), para o arquivo automático
+    /// continuar byte a byte igual ao de antes deste campo existir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Segundos desde a época Unix, gravado no gesto de salvar (ADR-0054
+    /// §4) -- não é o `mtime` do arquivo, que muda por cópia ou
+    /// sincronização de pasta. Mesmo tratamento de ausência que `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

@@ -5704,6 +5704,11 @@ impl App {
                 })
                 .collect(),
             shell_integration_dismissed: self.shell_integration_dismissed,
+            // ADR-0054 §1/§4: `session.json` automático não é sessão
+            // nomeada -- os dois campos ficam `None` aqui, o mesmo que
+            // "ausente" que a leitura de uma versão anterior já entendia.
+            name: None,
+            saved_at: None,
         }
     }
 
