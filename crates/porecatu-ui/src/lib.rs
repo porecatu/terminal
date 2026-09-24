@@ -157,6 +157,63 @@ const DRAG_AUTOSCROLL_STEP_PX: f32 = 12.0;
 /// criou, em pixels físicos.
 const NEW_WINDOW_CASCADE_PX: i32 = 30;
 
+/// Posição em cascata (ADR-0015; ADR-0054 §6 item 1, RF-14.12): desloca
+/// [`NEW_WINDOW_CASCADE_PX`] em X e Y a partir de `origin_position`,
+/// grampeada aos limites de `origin_monitor` para a janela nova (do
+/// tamanho `new_window_size`) não vazar dele. Pura -- usada por
+/// [`App::open_window`] (janela comum, tamanho da própria origem) e por
+/// [`App::open_window_from_session`] com `WindowPlacement::CascadeFrom`
+/// (sessão nomeada, tamanho gravado no arquivo).
+fn cascade_position(
+    origin_position: (i32, i32),
+    new_window_size: (u32, u32),
+    origin_monitor: Option<((i32, i32), (u32, u32))>,
+) -> (i32, i32) {
+    let mut x = origin_position.0 + NEW_WINDOW_CASCADE_PX;
+    let mut y = origin_position.1 + NEW_WINDOW_CASCADE_PX;
+    if let Some((mon_pos, mon_size)) = origin_monitor {
+        let max_x = mon_pos.0 + mon_size.0 as i32 - new_window_size.0 as i32;
+        let max_y = mon_pos.1 + mon_size.1 as i32 - new_window_size.1 as i32;
+        x = x.clamp(mon_pos.0, max_x.max(mon_pos.0));
+        y = y.clamp(mon_pos.1, max_y.max(mon_pos.1));
+    }
+    (x, y)
+}
+
+#[cfg(test)]
+mod cascade_position_tests {
+    use super::cascade_position;
+
+    #[test]
+    fn offsets_by_the_cascade_amount() {
+        assert_eq!(
+            cascade_position((100, 100), (400, 300), Some(((0, 0), (800, 600)))),
+            (130, 130)
+        );
+    }
+
+    #[test]
+    fn clamps_to_the_origin_monitor_so_the_new_window_never_leaks_out() {
+        // Origem perto da borda direita/inferior: sem grampear, a nova
+        // janela (400x300) vazaria do monitor (800x600).
+        assert_eq!(
+            cascade_position((750, 550), (400, 300), Some(((0, 0), (800, 600)))),
+            (400, 300)
+        );
+    }
+
+    #[test]
+    fn without_a_monitor_just_offsets() {
+        assert_eq!(
+            cascade_position((10, 20), (400, 300), None),
+            (
+                10 + super::NEW_WINDOW_CASCADE_PX,
+                20 + super::NEW_WINDOW_CASCADE_PX
+            )
+        );
+    }
+}
+
 /// Atributos comuns a toda janela do Porecatu (ADR-0027: sem decoração
 /// nativa fora do macOS, onde o semáforo continua nativo). Compartilhado
 /// por [`App::open_window`] e [`App::open_window_from_session`] -- cada
@@ -764,6 +821,17 @@ mod ensure_config_file_exists_tests {
     }
 }
 
+/// Como `App::open_window_from_session` posiciona a janela (ADR-0054 §6):
+/// `Saved` é o comportamento de hoje (arranque, RF-3.11) -- geometria e
+/// monitor gravados. `CascadeFrom` é a sessão nomeada (RF-14.12): tamanho
+/// gravado, posição em cascata a partir da janela de onde o gesto partiu,
+/// grampeada no monitor dela.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowPlacement {
+    Saved,
+    CascadeFrom(WindowId),
+}
+
 /// O que `WindowState::handle_tab_action_key` não pode resolver sozinho --
 /// `window.new`/`window.close` (ADR-0015) tocam outras janelas, então
 /// precisam voltar pra `App`. `WindowEmptied` é o mesmo caso: fechar a
@@ -785,6 +853,15 @@ enum ActionOutcome {
     /// `theme.cycle` (RF-5.21, F4 etapa 6): o ciclo é do processo
     /// (ADR-0031 §4), não da janela.
     CycleTheme,
+    /// `session.save_named`/`session.open_list` (ADR-0054 §7, PRD-014).
+    /// `edit_name = true` para `save_named` (campo de nome já em foco,
+    /// RF-14.2); `false` para `open_list` (primeira linha realçada,
+    /// RF-14.7). O popover em si é o ADR-0055 -- por ora `App` só recebe
+    /// o pedido e ignora (`// TODO(prompt 04)` no `match outcome` do
+    /// dispatcher de tecla).
+    OpenSessionPicker {
+        edit_name: bool,
+    },
     Unhandled,
 }
 
@@ -3466,6 +3543,11 @@ impl WindowState {
                 self.action_focus_pane(PaneDirection::Down);
                 ActionOutcome::Handled
             }
+            // ADR-0054 §7: o popover que consome isto é o ADR-0055,
+            // ainda não construído (prompt 04) -- por ora só sobe o
+            // pedido pra `App`.
+            Action::SessionSaveNamed => ActionOutcome::OpenSessionPicker { edit_name: true },
+            Action::SessionOpenList => ActionOutcome::OpenSessionPicker { edit_name: false },
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
             // resolvido -- inalcançável na prática, mas o `match` precisa
             // ser exaustivo.
@@ -5034,19 +5116,19 @@ impl App {
             && let Ok(origin_position) = origin_window.outer_position()
         {
             let size = origin_window.inner_size();
-            let mut position = winit::dpi::PhysicalPosition::new(
-                origin_position.x + NEW_WINDOW_CASCADE_PX,
-                origin_position.y + NEW_WINDOW_CASCADE_PX,
+            let monitor = origin_window.current_monitor().map(|m| {
+                let mon_pos = m.position();
+                let mon_size = m.size();
+                ((mon_pos.x, mon_pos.y), (mon_size.width, mon_size.height))
+            });
+            let (x, y) = cascade_position(
+                (origin_position.x, origin_position.y),
+                (size.width, size.height),
+                monitor,
             );
-            if let Some(monitor) = origin_window.current_monitor() {
-                let mon_pos = monitor.position();
-                let mon_size = monitor.size();
-                let max_x = mon_pos.x + mon_size.width as i32 - size.width as i32;
-                let max_y = mon_pos.y + mon_size.height as i32 - size.height as i32;
-                position.x = position.x.clamp(mon_pos.x, max_x.max(mon_pos.x));
-                position.y = position.y.clamp(mon_pos.y, max_y.max(mon_pos.y));
-            }
-            attributes = attributes.with_inner_size(size).with_position(position);
+            attributes = attributes
+                .with_inner_size(size)
+                .with_position(winit::dpi::PhysicalPosition::new(x, y));
         }
         // ADR-0015: "a janela nova abre com uma aba no cwd da aba ativa no
         // momento da criação" -- da janela de ORIGEM, já que a nova ainda
@@ -5101,6 +5183,16 @@ impl App {
     /// primeiro foco pelo mesmo `Self::ensure_active_tab_started` de
     /// sempre.
     ///
+    /// `placement` (ADR-0054 §6) é a **única** diferença entre restaurar no
+    /// arranque e restaurar uma sessão nomeada: decide só o cálculo de
+    /// `attributes` (posição/tamanho/maximizado) abaixo. Tudo o resto desta
+    /// função -- `SpawnOrigin::Restored`, `lazy_restore`, painéis irmãos,
+    /// `.porecatu` -- é o mesmo código para os dois caminhos. Tema e zoom
+    /// (RF-14.13) não são aplicados aqui em nenhum dos dois casos: quem os
+    /// aplica é `App::apply_restored_session_state`, chamada por `resumed`
+    /// **antes** de qualquer janela existir -- a restauração nomeada
+    /// simplesmente não a chama.
+    ///
     /// Devolve o `WindowId` criado (`None` só na falha rara de
     /// `create_window_with_attributes`) -- PRD-000/etapa 6 da F6 usa o da
     /// primeira janela restaurada pra fechar a métrica de "restauração de
@@ -5109,35 +5201,66 @@ impl App {
         &mut self,
         event_loop: &ActiveEventLoop,
         window_v1: &porecatu_session::WindowV1,
+        placement: WindowPlacement,
     ) -> Option<WindowId> {
         let mut attributes = base_window_attributes();
-        if self.config.session.restore_window_geometry {
-            let monitors: Vec<session_writer::MonitorInfo> = event_loop
-                .available_monitors()
-                .map(|m| session_writer::monitor_info(&m))
-                .collect();
-            let primary = event_loop
-                .primary_monitor()
-                .map(|m| session_writer::monitor_info(&m));
-            let resolved = session_writer::resolve_restored_geometry(
-                &window_v1.geometry,
-                window_v1.monitor.as_ref(),
-                &monitors,
-                primary.as_ref(),
-            );
-            // `winit` recusa tamanho zero -- geometria degenerada (arquivo
-            // editado à mão) cai no mínimo de 1px em vez de falhar a
-            // criação da janela inteira.
-            attributes = attributes
-                .with_inner_size(winit::dpi::PhysicalSize::new(
-                    resolved.size.0.max(1),
-                    resolved.size.1.max(1),
-                ))
-                .with_position(winit::dpi::PhysicalPosition::new(
-                    resolved.position.0,
-                    resolved.position.1,
-                ))
-                .with_maximized(resolved.maximized);
+        match placement {
+            WindowPlacement::Saved => {
+                if self.config.session.restore_window_geometry {
+                    let monitors: Vec<session_writer::MonitorInfo> = event_loop
+                        .available_monitors()
+                        .map(|m| session_writer::monitor_info(&m))
+                        .collect();
+                    let primary = event_loop
+                        .primary_monitor()
+                        .map(|m| session_writer::monitor_info(&m));
+                    let resolved = session_writer::resolve_restored_geometry(
+                        &window_v1.geometry,
+                        window_v1.monitor.as_ref(),
+                        &monitors,
+                        primary.as_ref(),
+                    );
+                    // `winit` recusa tamanho zero -- geometria degenerada
+                    // (arquivo editado à mão) cai no mínimo de 1px em vez
+                    // de falhar a criação da janela inteira.
+                    attributes = attributes
+                        .with_inner_size(winit::dpi::PhysicalSize::new(
+                            resolved.size.0.max(1),
+                            resolved.size.1.max(1),
+                        ))
+                        .with_position(winit::dpi::PhysicalPosition::new(
+                            resolved.position.0,
+                            resolved.position.1,
+                        ))
+                        .with_maximized(resolved.maximized);
+                }
+            }
+            WindowPlacement::CascadeFrom(origin) => {
+                // RF-14.12/ADR-0054 §6 item 1: tamanho **gravado**, posição
+                // em **cascata** a partir da janela de origem, grampeada no
+                // monitor dela -- ignora monitor, posição e maximizado
+                // gravados. Sem origem viva (não deveria acontecer: quem
+                // chama sempre tem a janela de onde o gesto partiu), cai no
+                // canto do `winit` como se não houvesse posição nenhuma.
+                let size = (
+                    window_v1.geometry.width.max(1),
+                    window_v1.geometry.height.max(1),
+                );
+                attributes =
+                    attributes.with_inner_size(winit::dpi::PhysicalSize::new(size.0, size.1));
+                if let Some(origin_window) = self.windows.get(&origin).map(|s| &s.window)
+                    && let Ok(origin_position) = origin_window.outer_position()
+                {
+                    let monitor = origin_window.current_monitor().map(|m| {
+                        let mon_pos = m.position();
+                        let mon_size = m.size();
+                        ((mon_pos.x, mon_pos.y), (mon_size.width, mon_size.height))
+                    });
+                    let (x, y) =
+                        cascade_position((origin_position.x, origin_position.y), size, monitor);
+                    attributes = attributes.with_position(winit::dpi::PhysicalPosition::new(x, y));
+                }
+            }
         }
 
         let mut state = self.create_window_with_attributes(event_loop, attributes)?;
@@ -5215,6 +5338,93 @@ impl App {
         state.sync_window_title();
         self.windows.insert(window_id, state);
         Some(window_id)
+    }
+
+    /// RF-14.10/RF-14.11 (ADR-0054 §6): restaura uma sessão nomeada numa
+    /// janela nova em cascata a partir de `origin` -- a janela de onde o
+    /// gesto partiu não muda (RF-14.10). Sessão com uma janela só chama
+    /// [`Self::open_window_from_session`], o mesmo caminho do arranque;
+    /// qualquer outra saída (arquivo ilegível, corrompido, schema mais
+    /// nova, ou -- não deveria acontecer, `save_named_in` só grava uma
+    /// janela -- mais de uma) empurra um aviso na janela de origem (canal
+    /// 1, ADR-0014) e não abre nada. Ainda sem chamador (prompt 04).
+    pub(crate) fn restore_named_session(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        origin: WindowId,
+        file: &Path,
+    ) {
+        let outcome = porecatu_session::named::load_named(file);
+        if let Some(session) = &outcome.session
+            && let [window_v1] = session.windows.as_slice()
+        {
+            self.open_window_from_session(
+                event_loop,
+                window_v1,
+                WindowPlacement::CascadeFrom(origin),
+            );
+            return;
+        }
+        let Some(state) = self.windows.get_mut(&origin) else {
+            return;
+        };
+        let now = Instant::now();
+        let (title, body) = match outcome.notices.first() {
+            Some(porecatu_session::Notice::Corrupt(path)) => (
+                "Sessão nomeada corrompida",
+                format!("O arquivo foi preservado em \"{}\".", path.display()),
+            ),
+            Some(porecatu_session::Notice::NewerSchema { found, supported }) => (
+                "Sessão nomeada de uma versão mais nova",
+                format!(
+                    "O formato salvo (versão {found}) é mais novo que o suportado por esta versão do Porecatu (até {supported})."
+                ),
+            ),
+            None => (
+                "Não foi possível restaurar a sessão",
+                "O arquivo não pôde ser lido.".to_owned(),
+            ),
+        };
+        state.warnings.push(Severity::Error, title, body, now);
+        state.window.request_redraw();
+    }
+
+    /// RF-14.1/RF-14.4/RF-14.6 (ADR-0054 §5/§9): monta o `WindowV1` de
+    /// **uma** janela só (`window_id`) com o mesmo `session_writer::
+    /// window_v1` que a gravação automática usa (`Self::build_session_file`)
+    /// e grava por `save_named_in`. Funciona independente de `[session]
+    /// enabled` e do modo posicional (ADR-0054 §8) -- não passa por
+    /// `Self::session_persistence_enabled`, de propósito. Ainda sem
+    /// chamador (prompt 04).
+    pub(crate) fn save_named_session(
+        &mut self,
+        window_id: WindowId,
+        name: &str,
+    ) -> Result<(), String> {
+        let Some(state) = self.windows.get(&window_id) else {
+            return Err("janela não encontrada".to_owned());
+        };
+        let theme = self.session_theme.clone();
+        let zoom_steps = self.session_zoom_steps();
+        let window = session_writer::window_v1(
+            &state.workspace,
+            session_writer::window_geometry(&state.window),
+            session_writer::window_monitor(&state.window),
+            theme,
+            zoom_steps,
+            |tab_id, pane_id| {
+                state.panes.get(&(tab_id, pane_id)).and_then(|rt| {
+                    if rt.received_osc7 {
+                        None
+                    } else {
+                        rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
+                    }
+                })
+            },
+        );
+        porecatu_session::named::save_named(name, window)
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     /// Núcleo comum de [`Self::open_window`]/[`Self::open_window_from_session`]:
@@ -6615,7 +6825,11 @@ impl ApplicationHandler<Wakeup> for App {
                 self.apply_restored_session_state(session);
                 let mut restored_window_id = None;
                 for window_v1 in &session.windows {
-                    let window_id = self.open_window_from_session(event_loop, window_v1);
+                    let window_id = self.open_window_from_session(
+                        event_loop,
+                        window_v1,
+                        WindowPlacement::Saved,
+                    );
                     if restored_window_id.is_none() {
                         restored_window_id = window_id;
                     }
@@ -7289,6 +7503,11 @@ impl App {
             }
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
             ActionOutcome::CycleTheme => self.cycle_theme(Instant::now()),
+            // TODO(prompt 04): abrir o popover de sessões (ADR-0055),
+            // com o campo de nome em foco quando `edit_name`. Por ora
+            // o pedido (`session.save_named`/`session.open_list`) é
+            // recebido e descartado -- nenhuma UI ainda o consome.
+            ActionOutcome::OpenSessionPicker { edit_name: _ } => {}
             ActionOutcome::Unhandled => {
                 if let Some(runtime) = state.active_runtime() {
                     // Modos lidos agora, não do snapshot do último frame

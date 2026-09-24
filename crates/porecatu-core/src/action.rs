@@ -99,9 +99,17 @@ pub enum Action {
     PaneFocusRight,
     PaneFocusUp,
     PaneFocusDown,
+
+    /// ADR-0054 §7. Abre o popover de sessões com o campo de nome em foco,
+    /// para salvar a janela ativa (RF-14.1, RF-14.2).
+    SessionSaveNamed,
+    /// ADR-0054 §7. Abre o popover de sessões com a primeira linha
+    /// realçada (RF-14.7). Vinculável e **sem default** em nenhuma
+    /// plataforma -- mesmo precedente de `group.new_tab`/`pane.close`.
+    SessionOpenList,
 }
 
-/// As 53 linhas do catálogo fechado, na grafia exata que `FromStr`/
+/// As 55 linhas do catálogo fechado, na grafia exata que `FromStr`/
 /// `Display` usam. Único array-fonte: o teste bidirecional
 /// (`tests::every_catalog_name_round_trips`) e a sugestão de erro
 /// (`closest_name`) partem dele, então as duas checagens não podem
@@ -166,6 +174,8 @@ pub const CATALOG: &[&str] = &[
     "pane.focus_right",
     "pane.focus_up",
     "pane.focus_down",
+    "session.save_named",
+    "session.open_list",
 ];
 
 /// Erro de parse de uma ação (ADR-0029 §4): sempre traz a sugestão do
@@ -258,6 +268,8 @@ impl FromStr for Action {
             "pane.focus_right" => Action::PaneFocusRight,
             "pane.focus_up" => Action::PaneFocusUp,
             "pane.focus_down" => Action::PaneFocusDown,
+            "session.save_named" => Action::SessionSaveNamed,
+            "session.open_list" => Action::SessionOpenList,
             _ => {
                 return Err(ActionParseError {
                     input: s.to_owned(),
@@ -318,12 +330,14 @@ impl fmt::Display for Action {
             Action::PaneFocusRight => "pane.focus_right",
             Action::PaneFocusUp => "pane.focus_up",
             Action::PaneFocusDown => "pane.focus_down",
+            Action::SessionSaveNamed => "session.save_named",
+            Action::SessionOpenList => "session.open_list",
         };
         f.write_str(name)
     }
 }
 
-/// Distância de Levenshtein, sem crate externo -- a tabela é pequena (53
+/// Distância de Levenshtein, sem crate externo -- a tabela é pequena (55
 /// nomes, todos curtos) e roda só no caminho de erro, nunca por frame.
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -428,6 +442,8 @@ mod tests {
             Action::PaneFocusRight,
             Action::PaneFocusUp,
             Action::PaneFocusDown,
+            Action::SessionSaveNamed,
+            Action::SessionOpenList,
         ];
         for action in variants {
             let name = action.to_string();

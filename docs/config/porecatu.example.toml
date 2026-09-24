@@ -1474,6 +1474,12 @@ close_hover_foreground = "#ffffff"
 # Quem quiser, vincula:
 # "ctrl+shift+x"      = "pane.close"
 
+# Sessões nomeadas (PRD-014, ADR-0054), fora da ordem de fases.
+# session.open_list é vinculável e fica SEM default, de propósito -- mesmo
+# precedente de group.new_tab/pane.close acima. Quem quiser, vincula:
+# "ctrl+shift+o"      = "session.open_list"
+"ctrl+shift+s"        = "session.save_named"                  # RF-14.1
+
 # --- defaults de macOS ---------------------------------- ADR-0008, ADR-0029
 # A tabela do ADR-0008 define Cmd para todas as ações de app; nada disso
 # responde no Mac até o parser existir. Estão aqui no formato que ele lê.
@@ -1520,6 +1526,9 @@ close_hover_foreground = "#ffffff"
 # quatro de foco já valem nas três plataformas pela tabela comum acima.
 "cmd+shift+h"         = "pane.split_horizontal"               # RF-6.1
 "cmd+shift+d"         = "pane.split_vertical"                 # RF-6.1
+
+# Sessões nomeadas -- mesma razão do bloco comum acima.
+"cmd+shift+s"         = "session.save_named"                  # RF-14.1
 
 # As duas tabelas abaixo existem pela mesma razão e ficam vazias por
 # default -- os defaults de Windows e Linux são os da tabela comum acima.
