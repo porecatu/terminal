@@ -9,6 +9,7 @@ use porecatu_core::{
     Action, Direction as PaneDirection, GroupId, PaneId, Side, SplitAxis, TabId, Workspace,
 };
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
+use porecatu_session::named::{EntryStatus, NamedSessionEntry};
 use porecatu_term::{
     DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
     SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell,
@@ -833,11 +834,8 @@ mod ensure_config_file_exists_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WindowPlacement {
     Saved,
-    // `App::restore_named_session`, o único lugar que constrói esta
-    // variante, ainda não tem chamador (popover é o prompt 04) --
-    // `#[allow(dead_code)]` até lá, mesmo precedente do `warning.rs`
-    // citado no CLAUDE.md para código estagiado à frente da UI que o usa.
-    #[allow(dead_code)]
+    /// `App::restore_named_session`, o único lugar que constrói esta
+    /// variante.
     CascadeFrom(WindowId),
 }
 
@@ -920,9 +918,10 @@ enum NewTabRequest {
     /// resolvido no arranque, ADR-0003) só existe em `App`, não em
     /// `WindowState` -- mesmo motivo de `CloseWindowRequested`.
     OpenConfigFile,
-    /// Botão de sessões nomeadas (ADR-0054/ADR-0055): o popover em si é
-    /// o prompt 04 -- por ora só sobe o pedido, `App` recebe e ignora
-    /// (mesmo `// TODO(prompt 04)` do despacho de `session.open_list`).
+    /// Botão de sessões nomeadas (ADR-0054/ADR-0055): `WindowState::
+    /// open_session_picker` resolve sozinho, mas o hit-test do botão só
+    /// devolve `NewTabRequest` -- vive na mesma enumeração dos outros
+    /// hits da zona fixa por uniformidade, não por precisar de `App`.
     OpenSessionPicker,
 }
 
@@ -1156,6 +1155,87 @@ mod session_notice_text_tests {
         assert_eq!(title, "Sessão de uma versão mais nova");
         assert!(body.contains("99"));
         assert!(body.contains('1'));
+    }
+}
+
+/// RF-14.5/RF-14.17 (ADR-0054 §5, "a pergunta 'já existe?' não é da
+/// API"): pura, testável sem `App`/`WindowState` -- `submit_named_session`
+/// só interpreta o resultado (abre diálogo, avisa, ou grava direto).
+/// `entries` é a lista que o popover já tem na mão (RF-14.18: nunca uma
+/// releitura do disco aqui).
+#[derive(Debug, Clone, PartialEq)]
+enum NameSubmitDecision {
+    /// Sem colisão: grava direto.
+    Save,
+    /// Colisão com uma entrada que pode ser sobrescrita (`Ok` ou
+    /// `Unreadable`) -- pede confirmação antes.
+    Overwrite(NamedSessionEntry),
+    /// Colisão com `NewerSchema` (RF-14.17): nunca sobrescreve, vira
+    /// aviso.
+    Blocked(NamedSessionEntry),
+}
+
+fn decide_named_session_submit(entries: &[NamedSessionEntry], name: &str) -> NameSubmitDecision {
+    let target = porecatu_session::named::normalize_name(name);
+    match entries
+        .iter()
+        .find(|entry| porecatu_session::named::normalize_name(&entry.name) == target)
+    {
+        None => NameSubmitDecision::Save,
+        Some(entry) if matches!(entry.status, EntryStatus::NewerSchema { .. }) => {
+            NameSubmitDecision::Blocked(entry.clone())
+        }
+        Some(entry) => NameSubmitDecision::Overwrite(entry.clone()),
+    }
+}
+
+#[cfg(test)]
+mod decide_named_session_submit_tests {
+    use super::*;
+
+    fn entry(name: &str, status: EntryStatus) -> NamedSessionEntry {
+        NamedSessionEntry {
+            name: name.to_string(),
+            file: PathBuf::from(format!("{name}.json")),
+            saved_at: Some(1),
+            status,
+        }
+    }
+
+    #[test]
+    fn no_collision_saves_directly() {
+        let entries = vec![entry("infra", EntryStatus::Ok)];
+        assert_eq!(
+            decide_named_session_submit(&entries, "api"),
+            NameSubmitDecision::Save
+        );
+    }
+
+    #[test]
+    fn collision_case_and_space_insensitive_asks_to_overwrite() {
+        let entries = vec![entry("Infra", EntryStatus::Ok)];
+        assert_eq!(
+            decide_named_session_submit(&entries, "  infra  "),
+            NameSubmitDecision::Overwrite(entry("Infra", EntryStatus::Ok))
+        );
+    }
+
+    #[test]
+    fn collision_with_unreadable_entry_still_offers_overwrite() {
+        let entries = vec![entry("quebrada", EntryStatus::Unreadable)];
+        assert_eq!(
+            decide_named_session_submit(&entries, "quebrada"),
+            NameSubmitDecision::Overwrite(entry("quebrada", EntryStatus::Unreadable))
+        );
+    }
+
+    #[test]
+    fn collision_with_newer_schema_is_blocked_not_overwrite() {
+        let entries = vec![entry("futuro", EntryStatus::NewerSchema { found: 99 })];
+        assert_eq!(
+            decide_named_session_submit(&entries, "futuro"),
+            NameSubmitDecision::Blocked(entry("futuro", EntryStatus::NewerSchema { found: 99 }))
+        );
     }
 }
 
@@ -1855,6 +1935,7 @@ impl WindowState {
         let terminal_context_menu = &self.terminal_context_menu;
         let group_editor = &self.group_editor;
         let move_to_group = &self.move_to_group;
+        let session_picker = &self.session_picker;
         let search = &self.search;
         let logical_width = self.logical_width;
         let scroll_offset = self.scroll_offset;
@@ -1868,6 +1949,7 @@ impl WindowState {
                 terminal_context_menu,
                 group_editor,
                 move_to_group,
+                session_picker,
                 search,
                 status_bar_layout.as_ref(),
                 active_pane_order.as_deref(),
@@ -3035,7 +3117,7 @@ impl WindowState {
             }
             Key::Named(NamedKey::Enter) => {
                 let focused = dialog.focused();
-                let action = dialog.action;
+                let action = dialog.action.clone();
                 if focused == DialogButton::Confirm {
                     self.dialog = None;
                     Some(action)
@@ -3264,40 +3346,32 @@ impl WindowState {
         }
     }
 
-    /// Espelha `handle_move_to_group_key`, sobre `session_picker` -- só
-    /// que aqui a maioria dos efeitos ainda não tem para onde ir
-    /// (`App::restore_named_session`/`save_named_session`/`delete_named`
-    /// só ganham chamador no prompt 05, ADR-0055 §3): por ora `Restore`/
-    /// `SubmitName` fecham o popover (é o que vai acontecer de verdade
-    /// depois de restaurar/salvar, ADR-0055 §3 "fecha... depois de
-    /// restaurar... e depois de salvar com sucesso") sem tocar disco
-    /// nenhum ainda; `RequestDelete` fica aberto -- excluir de verdade
-    /// pede o diálogo de confirmação do prompt 05, que ainda não existe.
-    fn handle_session_picker_key(&mut self, event: &KeyEvent, max_visible_rows: usize) {
+    /// Espelha `handle_move_to_group_key`, sobre `session_picker` -- mas
+    /// devolve o `PickerOutcome` puro em vez de já agir sobre ele: os
+    /// efeitos de verdade (`App::restore_named_session`/
+    /// `save_named_session`/`delete_named`, diálogo de confirmação)
+    /// precisam de `event_loop`/`window_id`, que `WindowState` não tem --
+    /// `dispatch_keyboard_input` repassa o resultado a
+    /// `App::resolve_session_picker_outcome`, o mesmo ponto único que o
+    /// clique usa (`dispatch_session_picker_click`).
+    fn handle_session_picker_key(
+        &mut self,
+        event: &KeyEvent,
+        max_visible_rows: usize,
+    ) -> PickerOutcome {
         if event.state != ElementState::Pressed {
-            return;
+            return PickerOutcome::None;
         }
         let modifiers = self.modifiers;
         let Some(picker) = &mut self.session_picker else {
-            return;
+            return PickerOutcome::None;
         };
-        let outcome = picker.handle_key(
+        picker.handle_key(
             &event.logical_key,
             event.text.as_deref(),
             modifiers,
             max_visible_rows,
-        );
-        match outcome {
-            PickerOutcome::None => {}
-            PickerOutcome::Close => self.session_picker = None,
-            // TODO(prompt 05): App::restore_named_session(event_loop,
-            // window_id, &file).
-            PickerOutcome::Restore(_file) => self.session_picker = None,
-            // TODO(prompt 05): diálogo de confirmação + delete_named.
-            PickerOutcome::RequestDelete(_entry) => {}
-            // TODO(prompt 05): App::save_named_session(window_id, &name).
-            PickerOutcome::SubmitName(_name) => self.session_picker = None,
-        }
+        )
     }
 
     /// Executa o destino escolhido no popover do RF-2.20.
@@ -3595,9 +3669,7 @@ impl WindowState {
                 self.action_focus_pane(PaneDirection::Down);
                 ActionOutcome::Handled
             }
-            // ADR-0054 §7: o popover que consome isto é o ADR-0055,
-            // ainda não construído (prompt 04) -- por ora só sobe o
-            // pedido pra `App`.
+            // ADR-0054 §7/ADR-0055 §3: abre o popover de sessões.
             Action::SessionSaveNamed => ActionOutcome::OpenSessionPicker { edit_name: true },
             Action::SessionOpenList => ActionOutcome::OpenSessionPicker { edit_name: false },
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
@@ -5456,9 +5528,8 @@ impl App {
     /// qualquer outra saída (arquivo ilegível, corrompido, schema mais
     /// nova, ou -- não deveria acontecer, `save_named_in` só grava uma
     /// janela -- mais de uma) empurra um aviso na janela de origem (canal
-    /// 1, ADR-0014) e não abre nada. Ainda sem chamador (prompt 04) --
-    /// `#[allow(dead_code)]` até lá.
-    #[allow(dead_code)]
+    /// 1, ADR-0014) e não abre nada. Chamada por
+    /// [`Self::resolve_session_picker_outcome`].
     pub(crate) fn restore_named_session(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -5505,9 +5576,9 @@ impl App {
     /// window_v1` que a gravação automática usa (`Self::build_session_file`)
     /// e grava por `save_named_in`. Funciona independente de `[session]
     /// enabled` e do modo posicional (ADR-0054 §8) -- não passa por
-    /// `Self::session_persistence_enabled`, de propósito. Ainda sem
-    /// chamador (prompt 04) -- `#[allow(dead_code)]` até lá.
-    #[allow(dead_code)]
+    /// `Self::session_persistence_enabled`, de propósito. Chamada por
+    /// [`Self::commit_named_session_save`]; a checagem de colisão de
+    /// nome é da UI, **antes** desta função (ADR-0054 §5).
     pub(crate) fn save_named_session(
         &mut self,
         window_id: WindowId,
@@ -5537,6 +5608,144 @@ impl App {
         porecatu_session::named::save_named(name, window)
             .map(|_| ())
             .map_err(|err| err.to_string())
+    }
+
+    /// Resolve o `PickerOutcome` do popover de sessões nomeadas
+    /// (ADR-0055 §3) -- ponto único, chamado tanto do teclado
+    /// (`dispatch_keyboard_input`) quanto do clique
+    /// (`dispatch_session_picker_click`), o mesmo padrão de
+    /// `run_dialog_action`/`run_menu_action` para os outros widgets.
+    fn resolve_session_picker_outcome(
+        &mut self,
+        window_id: WindowId,
+        event_loop: &ActiveEventLoop,
+        outcome: PickerOutcome,
+    ) {
+        match outcome {
+            PickerOutcome::None => {}
+            PickerOutcome::Close => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.session_picker = None;
+                }
+            }
+            // RF-14.10: fecha o popover **antes** de restaurar -- a
+            // janela nova ganha o foco (ADR-0055 §3, "fecha... depois de
+            // restaurar"), e `restore_named_session` pode empurrar um
+            // aviso na janela de origem se a leitura falhar.
+            PickerOutcome::Restore(file) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.session_picker = None;
+                }
+                self.restore_named_session(event_loop, window_id, &file);
+            }
+            PickerOutcome::RequestDelete(entry) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.dialog = Some(ConfirmDialog::new(
+                        "Excluir sessão salva?",
+                        format!("Isso remove «{}» permanentemente.", entry.name),
+                        "Excluir",
+                        DialogAction::DeleteNamedSession(entry.file),
+                    ));
+                    state.window.request_redraw();
+                }
+            }
+            PickerOutcome::SubmitName(name) => self.submit_named_session(window_id, name),
+        }
+    }
+
+    /// RF-14.5 (ADR-0054 §5, "a pergunta 'já existe?' não é da API"): a
+    /// decisão em si é [`decide_named_session_submit`], pura e testada à
+    /// parte -- aqui só se interpreta o resultado. Colisão com
+    /// `NewerSchema` nunca oferece sobrescrever (RF-14.17) -- vira aviso,
+    /// campo continua aberto. Qualquer outra colisão (`Ok` ou
+    /// `Unreadable`) abre o diálogo de sobrescrever por cima do popover,
+    /// que fica atrás intacto -- o campo já tem o nome digitado, porque
+    /// `SubmitName` nunca saiu do modo de edição
+    /// (`SessionPicker::handle_key`).
+    fn submit_named_session(&mut self, window_id: WindowId, name: String) {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let Some(picker) = &state.session_picker else {
+            return;
+        };
+        match decide_named_session_submit(picker.entries(), &name) {
+            NameSubmitDecision::Blocked(entry) => {
+                state.warnings.push(
+                    Severity::Warning,
+                    "Não é possível sobrescrever",
+                    format!(
+                        "«{}» foi salva por uma versão mais nova do Porecatu.",
+                        entry.name
+                    ),
+                    Instant::now(),
+                );
+                state.window.request_redraw();
+            }
+            NameSubmitDecision::Overwrite(entry) => {
+                state.dialog = Some(ConfirmDialog::new(
+                    format!("Sobrescrever a sessão «{}»?", entry.name),
+                    "A sessão salva com esse nome será substituída.",
+                    "Sobrescrever",
+                    DialogAction::OverwriteNamedSession(name),
+                ));
+                state.window.request_redraw();
+            }
+            NameSubmitDecision::Save => self.commit_named_session_save(window_id, &name),
+        }
+    }
+
+    /// Grava de verdade (sem colisão, ou colisão já confirmada por
+    /// `OverwriteNamedSession`): sucesso fecha o popover (RF-14.6);
+    /// erro vira aviso e o popover -- com o campo -- continua aberto.
+    fn commit_named_session_save(&mut self, window_id: WindowId, name: &str) {
+        let result = self.save_named_session(window_id, name);
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        match result {
+            Ok(()) => state.session_picker = None,
+            Err(reason) => {
+                state.warnings.push(
+                    Severity::Error,
+                    "Não foi possível salvar a sessão",
+                    reason,
+                    Instant::now(),
+                );
+            }
+        }
+        state.window.request_redraw();
+    }
+
+    /// RF-14.16: exclui de verdade, recarrega a lista e mantém o popover
+    /// aberto com o realce numa linha vizinha válida
+    /// ([`SessionPicker::reload_after_delete`]). Erro vira aviso -- a
+    /// lista não é recarregada nesse caso, porque o arquivo pode não ter
+    /// sido removido de fato.
+    fn commit_named_session_delete(&mut self, window_id: WindowId, file: &Path) {
+        let result = porecatu_session::named::delete_named(file);
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        match result {
+            Ok(()) => {
+                if let Some(picker) = &mut state.session_picker {
+                    let max_visible_rows =
+                        self.config.appearance.session_picker.max_visible_rows as usize;
+                    let entries = porecatu_session::named::list_named();
+                    picker.reload_after_delete(entries, file, max_visible_rows);
+                }
+            }
+            Err(err) => {
+                state.warnings.push(
+                    Severity::Error,
+                    "Não foi possível excluir a sessão",
+                    err.to_string(),
+                    Instant::now(),
+                );
+            }
+        }
+        state.window.request_redraw();
     }
 
     /// Núcleo comum de [`Self::open_window`]/[`Self::open_window_from_session`]:
@@ -5787,6 +5996,12 @@ impl App {
                         state.window.request_redraw();
                     }
                 }
+            }
+            DialogAction::OverwriteNamedSession(name) => {
+                self.commit_named_session_save(window_id, &name);
+            }
+            DialogAction::DeleteNamedSession(file) => {
+                self.commit_named_session_delete(window_id, &file);
             }
         }
     }
@@ -7527,7 +7742,8 @@ impl App {
         }
         if state.session_picker.is_some() {
             let max_visible_rows = self.config.appearance.session_picker.max_visible_rows as usize;
-            state.handle_session_picker_key(&key, max_visible_rows);
+            let outcome = state.handle_session_picker_key(&key, max_visible_rows);
+            self.resolve_session_picker_outcome(window_id, event_loop, outcome);
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
             }
@@ -7651,14 +7867,16 @@ impl App {
     /// campo -- mesmo padrão de `dispatch_group_editor_click` logo
     /// abaixo); linha restaura, `X` pede exclusão sem restaurar nem mexer
     /// no realce; fora de tudo isso, ou botão que não é o esquerdo,
-    /// fecha. `Restore` só fecha o popover por ora -- `App::
-    /// restore_named_session` é o prompt 05, mesma dívida marcada em
-    /// `WindowState::handle_session_picker_key`.
+    /// fecha. O que sai do clique é o mesmo `PickerOutcome` que o
+    /// teclado produz, resolvido pelo mesmo ponto único
+    /// (`App::resolve_session_picker_outcome`) -- clicar numa linha boa e
+    /// dar `Enter` sobre ela têm de convergir para o mesmo efeito.
     fn dispatch_session_picker_click(
         &mut self,
         window_id: WindowId,
         logical_point: (f32, f32),
         button: MouseButton,
+        event_loop: &ActiveEventLoop,
     ) {
         let Some(gpu) = &mut self.gpu else {
             return;
@@ -7682,12 +7900,12 @@ impl App {
         let hit = overlay::session_picker_hit(&layout, logical_point);
 
         if button != MouseButton::Left {
-            state.session_picker = None;
+            self.resolve_session_picker_outcome(window_id, event_loop, PickerOutcome::Close);
             return;
         }
 
         let max_visible_rows = self.config.appearance.session_picker.max_visible_rows as usize;
-        match hit {
+        let outcome = match hit {
             Some(overlay::SessionPickerHit::SaveArea) => {
                 let Some(picker) = &mut state.session_picker else {
                     return;
@@ -7728,26 +7946,23 @@ impl App {
                         state.mouse_button_down = Some(button);
                     }
                 }
+                PickerOutcome::None
             }
             Some(overlay::SessionPickerHit::DeleteRow(index)) => {
-                if let Some(picker) = &mut state.session_picker {
-                    // TODO(prompt 05): diálogo de confirmação + `delete_named`.
-                    let _ = picker.click_delete(index);
-                }
+                let Some(picker) = &mut state.session_picker else {
+                    return;
+                };
+                picker.click_delete(index)
             }
             Some(overlay::SessionPickerHit::Row(index)) => {
-                if let Some(picker) = &mut state.session_picker {
-                    let outcome = picker.click_row(index, max_visible_rows);
-                    if matches!(outcome, PickerOutcome::Restore(_)) {
-                        // TODO(prompt 05): App::restore_named_session.
-                        state.session_picker = None;
-                    }
-                }
+                let Some(picker) = &mut state.session_picker else {
+                    return;
+                };
+                picker.click_row(index, max_visible_rows)
             }
-            None => {
-                state.session_picker = None;
-            }
-        }
+            None => PickerOutcome::Close,
+        };
+        self.resolve_session_picker_outcome(window_id, event_loop, outcome);
     }
 
     /// Clique com o editor de grupo aberto: campo foca, swatch foca e
@@ -8675,7 +8890,7 @@ impl App {
             if button == MouseButton::Left {
                 if let Some(clicked) = overlay::dialog_hit(&layout, logical_point) {
                     if clicked == DialogButton::Confirm {
-                        let action = state.dialog.as_ref().map(|d| d.action);
+                        let action = state.dialog.as_ref().map(|d| d.action.clone());
                         state.dialog = None;
                         if let Some(action) = action {
                             self.run_dialog_action(window_id, action, event_loop);
@@ -8839,7 +9054,7 @@ impl App {
 
         // Popover de sessões: ver `dispatch_session_picker_click`.
         if state.session_picker.is_some() {
-            self.dispatch_session_picker_click(window_id, logical_point, button);
+            self.dispatch_session_picker_click(window_id, logical_point, button, event_loop);
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
             }

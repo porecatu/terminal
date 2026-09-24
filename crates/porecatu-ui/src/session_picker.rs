@@ -15,9 +15,9 @@
 //!
 //! Este módulo só decide **o quê** aconteceu (`PickerOutcome`); nenhuma
 //! variante chama `porecatu_session::named` -- isso é `App::
-//! restore_named_session`/`save_named_session`/`delete_named`, ligados no
-//! prompt 05. Por ora `lib.rs` só fecha o popover ou marca `// TODO
-//! (prompt 05)`.
+//! restore_named_session`/`save_named_session`/`delete_named`, todos
+//! ligados a partir de `App::resolve_session_picker_outcome` em `lib.rs`
+//! (ADR-0055 §3).
 
 use porecatu_session::named::{EntryStatus, MAX_NAME_CHARS, NamedSessionEntry};
 use porecatu_term::Modifiers;
@@ -217,6 +217,32 @@ impl SessionPicker {
         } else if i >= self.scroll_top + max_visible_rows {
             self.scroll_top = i + 1 - max_visible_rows;
         }
+    }
+
+    /// RF-14.16: depois de excluir de verdade (`App::
+    /// commit_named_session_delete`), recarrega a lista inteira e mantém
+    /// o popover aberto com o realce numa **linha vizinha válida** --
+    /// posição de `deleted_file` na lista **antiga** (não o realce atual:
+    /// o `X` clicado não precisa ser o da linha realçada, RF-14.16 "visível
+    /// sob o cursor **ou** na linha realçada"), clampada ao novo tamanho --
+    /// aterrissa na linha que ocupava o lugar da excluída, ou na nova
+    /// última se era a última. Sem `deleted_file` na lista antiga (não
+    /// deveria acontecer) ou lista vazia depois: primeira linha, ou o
+    /// item de salvar se não sobrou nenhuma.
+    pub fn reload_after_delete(
+        &mut self,
+        entries: Vec<NamedSessionEntry>,
+        deleted_file: &std::path::Path,
+        max_visible_rows: usize,
+    ) {
+        let deleted_index = self.entries.iter().position(|e| e.file == deleted_file);
+        self.entries = entries;
+        self.highlighted = match deleted_index {
+            Some(i) if !self.entries.is_empty() => Highlight::Row(i.min(self.entries.len() - 1)),
+            _ if !self.entries.is_empty() => Highlight::Row(0),
+            _ => Highlight::Save,
+        };
+        self.ensure_highlight_visible(max_visible_rows);
     }
 
     /// Roda do mouse: rola a lista sem tocar o realce -- gesto
@@ -610,5 +636,54 @@ mod tests {
             Mode::EditingName(field) => assert_eq!(field.text(), ""),
             Mode::Browsing => panic!("esperava EditingName"),
         }
+    }
+
+    #[test]
+    fn reload_after_delete_highlights_the_row_that_took_the_deleted_ones_place() {
+        let mut picker =
+            SessionPicker::open_browsing(vec![ok_entry("a"), ok_entry("b"), ok_entry("c")]);
+        picker.set_highlight(Highlight::Row(1), 6);
+        // "b" (índice 1) foi excluída; "c" tomou o lugar dela.
+        let remaining = vec![ok_entry("a"), ok_entry("c")];
+        picker.reload_after_delete(remaining, &PathBuf::from("b.json"), 6);
+        assert_eq!(picker.highlighted(), Highlight::Row(1));
+        assert_eq!(picker.entries()[1].name, "c");
+    }
+
+    #[test]
+    fn reload_after_delete_clamps_when_the_last_row_was_deleted() {
+        let mut picker = SessionPicker::open_browsing(vec![ok_entry("a"), ok_entry("b")]);
+        picker.set_highlight(Highlight::Row(1), 6);
+        let remaining = vec![ok_entry("a")];
+        picker.reload_after_delete(remaining, &PathBuf::from("b.json"), 6);
+        assert_eq!(
+            picker.highlighted(),
+            Highlight::Row(0),
+            "última linha excluída cai na nova última"
+        );
+    }
+
+    #[test]
+    fn reload_after_delete_of_the_only_entry_highlights_save() {
+        let mut picker = SessionPicker::open_browsing(vec![ok_entry("a")]);
+        picker.reload_after_delete(vec![], &PathBuf::from("a.json"), 6);
+        assert_eq!(picker.highlighted(), Highlight::Save);
+    }
+
+    #[test]
+    fn reload_after_delete_ignores_the_current_highlight_and_follows_the_deleted_file() {
+        // Excluir pelo `X` de uma linha que não é a realçada (RF-14.16:
+        // "visível sob o cursor **ou** na linha realçada") -- o realce
+        // segue a excluída, não o realce anterior.
+        let mut picker =
+            SessionPicker::open_browsing(vec![ok_entry("a"), ok_entry("b"), ok_entry("c")]);
+        picker.set_highlight(Highlight::Row(0), 6);
+        let remaining = vec![ok_entry("a"), ok_entry("b")];
+        picker.reload_after_delete(remaining, &PathBuf::from("c.json"), 6);
+        assert_eq!(
+            picker.highlighted(),
+            Highlight::Row(1),
+            "segue onde \"c\" estava (índice 2), clampado ao novo tamanho"
+        );
     }
 }
