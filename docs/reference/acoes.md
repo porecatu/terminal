@@ -167,6 +167,19 @@ ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 
 ---
 
+## `session.*` — sessões nomeadas
+
+Fora da ordem de fases ([PRD-014](../prd/prd-014-sessoes-nomeadas.md), [ADR-0054](../adr/0054-sessoes-nomeadas.md)). Nenhuma das duas toca a sessão automática do [PRD-003](../prd/prd-003-persistencia-de-sessao.md), que continua sem ação manual (ver "Ações que não existem").
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `session.save_named` | Abre o popover de sessões com o campo de nome em foco, para salvar a janela ativa como sessão nomeada. Default `Ctrl+Shift+S` (`Cmd+Shift+S` no macOS) | RF-14.1, RF-14.2, ADR-0054 §7 | fora de fase | |
+| `session.open_list` | Abre o popover de sessões com a primeira linha realçada. **Sem default** — precedente de `group.new_tab` e `pane.close` | RF-14.7, ADR-0054 §7 | fora de fase | |
+
+Restaurar uma sessão específica e excluí-la **não são ações**: exigiriam argumento. Estão na tabela de superfícies de mouse e de modal, abaixo.
+
+---
+
 ## `pane.*` — painéis
 
 | Ação | O que faz | Origem | Fase | Arg |
@@ -271,14 +284,14 @@ Ausências deliberadas, registradas para que ninguém as adicione achando que fo
 | `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho) |
 | `terminal.clear` | Nenhum RF pede; o shell já tem `clear` |
 | `terminal.reset` | Idem; `reset` existe no shell |
-| `session.save` / `session.restore` | A gravação é automática por decisão do [ADR-0005](../adr/0005-persistencia-de-sessao.md); ação manual sugeriria que não é |
+| `session.save` / `session.restore` | A gravação da sessão automática é automática por decisão do [ADR-0005](../adr/0005-persistencia-de-sessao.md); ação manual sugeriria que não é. *Revisto pelo [ADR-0054](../adr/0054-sessoes-nomeadas.md) §1 e §7:* continua valendo para o `session.json`; as **sessões nomeadas** são outro objeto, com ações de nome próprio (`session.save_named`, `session.open_list`) na seção `session.*` acima |
 | `group.select_all_tabs` | RF-2.1 define seleção múltipla por mouse; nenhum RF pede equivalente de teclado |
 
 Precisar de uma delas é sinal de requisito faltando, não de catálogo incompleto. O caminho é PRD ou ADR primeiro.
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Dezesseis comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os três últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Dezoito comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os cinco últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -298,5 +311,7 @@ Dezesseis comportamentos têm requisito aprovado e **não recebem nome de ação
 | Focar um painel por clique | [RF-6.7](../prd/prd-006-paineis-divididos.md) | o alvo é o pixel clicado, e o mesmo clique já é entregue ao terminal daquele painel; `pane.focus_*` é o equivalente de teclado |
 | Arrastar o divisor entre dois painéis | [RF-6.13](../prd/prd-006-paineis-divididos.md), [ADR-0053](../adr/0053-paineis-divididos.md) §7 | a proporção é contínua e o alvo é o vão sob o cursor; nenhum RF pede equivalente de teclado, e uma tecla teria de inventar um passo |
 | Clicar no indicador de commits atrás do remoto, na barra de status | [RF-13.12](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §9 | integra commits no repositório da aba ativa, e uma tecla faria isso no repositório que a aba ativa **por acaso** tem — a mesma classe de decisão que o [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md) §4 registrou para `trusted_paths`: tomada uma vez, esquecida depois. O clique mira o que descreve, e só existe quando há o que integrar |
+| Restaurar uma sessão nomeada, por clique ou `Enter` na linha do popover | [RF-14.10](../prd/prd-014-sessoes-nomeadas.md), [ADR-0054](../adr/0054-sessoes-nomeadas.md) §7 | o alvo é a sessão da linha; uma ação precisaria de argumento (qual sessão?), e ação com argumento não é vinculável a tecla. `session.open_list` leva até a lista |
+| Excluir uma sessão nomeada, pelo `X` ou `Delete` na linha do popover | [RF-14.16](../prd/prd-014-sessoes-nomeadas.md), ADR-0054 §7 | idem, e sempre com o diálogo de confirmação por cima |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

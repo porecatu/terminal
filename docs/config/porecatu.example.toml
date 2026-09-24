@@ -635,6 +635,23 @@ swatch_size = 8
 swatch_gap = 8
 
 
+# Popover de sessões nomeadas (PRD-014, ADR-0054, ADR-0055 §2), sétimo
+# widget de chrome -- botão à esquerda da engrenagem. Só geometria: cores
+# e tipografia vêm de [appearance.context_menu] (mesmo popover, linhas em
+# vez de itens de ação), e o campo "Salvar esta janela..." em modo de
+# edição reaproveita [appearance.group_editor] (o mesmo campo de nome).
+# Classe de recarga: [A].
+[appearance.session_picker]
+# Largura fixa -- o teto do menu de contexto e do aviso, não a largura
+# mínima de context_menu.width: nome de sessão é o conteúdo, e a largura
+# mínima de 200 truncaria quase todo nome.
+width = 320
+row_height = 28               # = context_menu.item_height
+row_padding_x = 8
+# Teto de linhas visíveis de uma vez; acima disso a lista rola.
+max_visible_rows = 6
+
+
 # Quadro arredondado em volta da grade do terminal -- pedido do usuário,
 # sem origem no design (a seção 2.7 da espec. descrevia um retângulo pleno).
 # A margem é o `trilha_padding` da barra e o padding é o `wrapper_padding`
@@ -1474,6 +1491,12 @@ close_hover_foreground = "#ffffff"
 # Quem quiser, vincula:
 # "ctrl+shift+x"      = "pane.close"
 
+# Sessões nomeadas (PRD-014, ADR-0054), fora da ordem de fases.
+# session.open_list é vinculável e fica SEM default, de propósito -- mesmo
+# precedente de group.new_tab/pane.close acima. Quem quiser, vincula:
+# "ctrl+shift+o"      = "session.open_list"
+"ctrl+shift+s"        = "session.save_named"                  # RF-14.1
+
 # --- defaults de macOS ---------------------------------- ADR-0008, ADR-0029
 # A tabela do ADR-0008 define Cmd para todas as ações de app; nada disso
 # responde no Mac até o parser existir. Estão aqui no formato que ele lê.
@@ -1521,6 +1544,9 @@ close_hover_foreground = "#ffffff"
 "cmd+shift+h"         = "pane.split_horizontal"               # RF-6.1
 "cmd+shift+d"         = "pane.split_vertical"                 # RF-6.1
 
+# Sessões nomeadas -- mesma razão do bloco comum acima.
+"cmd+shift+s"         = "session.save_named"                  # RF-14.1
+
 # As duas tabelas abaixo existem pela mesma razão e ficam vazias por
 # default -- os defaults de Windows e Linux são os da tabela comum acima.
 # Elas são o lugar de um desvio por SO num dotfile compartilhado.
@@ -1547,7 +1573,11 @@ close_hover_foreground = "#ffffff"
 # destino com sessão em memória pediria migração de arquivo. Para testes existe
 # a variável PORECATU_SESSION (ADR-0036), que não é contrato público.
 # Tema e zoom de sessão são persistidos junto (ADR-0031, ADR-0036) e não têm
-# chave própria -- `enabled = false` desliga tudo de uma vez.
+# chave própria -- `enabled = false` desliga a gravação/leitura automática
+# de uma vez. NÃO afeta as sessões nomeadas (PRD-014, ADR-0054 §8): salvar
+# e restaurar por nome (botão/Ctrl+Shift+S) continuam funcionando com
+# enabled = false -- são gravadas à parte, em sessions/, por gesto do
+# usuário, nunca pelo app sozinho.
 [session]
 enabled = true                    # false = sempre abre com uma aba limpa  RF-3.6
 # Atraso do agrupamento de gravações. Fechar 10 abas gera 1 escrita.       RF-3.3

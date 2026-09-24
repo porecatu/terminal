@@ -161,6 +161,8 @@ Cenário: abrir com caminho não afeta a sessão
 - Persistir conteúdo do scrollback (aumentaria o arquivo em ordens de grandeza; revisitar em v2)
 - Restaurar processos em execução (decisão explícita, não limitação)
 - Múltiplas sessões nomeadas, salvas e alternáveis (ideia para v2)
+
+  > **Emenda ([PRD-014](prd-014-sessoes-nomeadas.md), [ADR-0054](../adr/0054-sessoes-nomeadas.md)).** Promovida fora da ordem de fases, em forma mais estreita que "alternáveis": o usuário salva **uma janela** com um nome e a reabre numa **janela nova**, sem trocar a sessão em uso. Nada deste documento muda por isso — a sessão automática continua a única lida no arranque, sem gesto manual, e desligável pelo RF-3.6; as nomeadas são arquivos à parte que ela nunca lê nem escreve, e que o RF-3.6 não alcança.
 - Sincronizar sessão entre máquinas
 - Anexar a sessão remota, estilo `tmux`
 

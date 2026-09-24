@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `porecatu-session` (ADR-0036, PRD-003): carrega e grava o arquivo de
-//! sessão. **Sem consumidor nesta etapa** -- ninguém em `porecatu-ui`
-//! chama isto ainda; a F5 liga isto à UI em etapas seguintes.
+//! sessão automática (`session.json`), consumido por `porecatu-ui` desde
+//! a F5. Desde o ADR-0054 (PRD-014), também sessões **nomeadas** -- mesmo
+//! schema, um arquivo por sessão em `sessions/` ao lado do `session.json`
+//! -- no módulo [`named`].
 
 pub mod convert;
+pub mod named;
 pub mod path;
 pub mod schema;
 
@@ -193,6 +196,8 @@ mod tests {
             schema_version: CURRENT_SCHEMA_VERSION,
             windows: vec![window(Some(0))],
             shell_integration_dismissed: false,
+            name: None,
+            saved_at: None,
         }
     }
 
@@ -232,6 +237,30 @@ mod tests {
             outcome.session.map(|s| s.shell_integration_dismissed),
             Some(true)
         );
+    }
+
+    /// ADR-0054 §4: `name`/`saved_at` só existem para sessão nomeada --
+    /// `session.json` automático continua saindo sem essas duas chaves,
+    /// byte a byte igual ao formato de antes delas existirem
+    /// (`skip_serializing_if`), e volta a ler igual.
+    #[test]
+    fn automatic_session_without_named_fields_keeps_the_legacy_json_shape() {
+        let dir = tempdir();
+        let path = dir.path().join("session.json");
+        let session = sample_session();
+        save_to(&path, &session).unwrap();
+
+        // Checagem no `Value` top-level, não em `contains` na string crua:
+        // `GroupV1::name` já existia antes e continua serializando `null`
+        // -- é a chave *de topo* que precisa continuar ausente.
+        let raw = fs::read_to_string(&path).unwrap();
+        let top_level: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&raw).unwrap();
+        assert!(!top_level.contains_key("name"));
+        assert!(!top_level.contains_key("saved_at"));
+
+        let outcome = load_from(&path);
+        assert_eq!(outcome.session, Some(session));
     }
 
     #[test]

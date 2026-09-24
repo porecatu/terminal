@@ -150,7 +150,7 @@ Cor de aba sem grupo: `#7b838f`.
 | **Botão de janela** (minimizar / maximizar / fechar) | **46px de largura, altura cheia da barra** — ADR-0027, §2.2.1 |
 | **Zona de resize da janela** | **6px** em toda borda (ADR-0027) |
 | Botão de fechar da aba | 17×17 de desenho, **25×17** de alvo com o respiro de `icon_button_padding_x` |
-| Botão da zona fixa à direita (configurações) | 30×30 de desenho, **38×30** de alvo |
+| Botões da zona fixa à direita (sessões, configurações) | 30×30 de desenho, **38×30** de alvo cada — mesma anatomia (§2.22, §2.2) |
 | **Indicador de overflow** | **18×18**, círculo (§2.18) |
 | Botões do painel `[v2]` | 22×20 |
 | Swatch de cor | 28×28 |
@@ -161,7 +161,7 @@ Cor de aba sem grupo: `#7b838f`.
 |---|---|
 | **Aba** | **fixa e igual para toda aba**: `padding_left` 10 + rótulo 180 + `internal_gap` 8 + botão de fechar 25 + `padding_right` 6 = **229px**, saturada em `max_width` 260. O teto de 180px do rótulo é também o piso — título, indicador e renomeação não refluem a trilha (§2.5) |
 | Nome da pílula do grupo | teto de **140px** (`pill_name_max_width`), truncado com reticências |
-| Trilha | largura da barra **menos** a zona fixa à direita (`right_zone_width` = `trilha_gap` 6 nos dois lados + o botão de 38px). No macOS reserva-se ainda `MACOS_TRAFFIC_LIGHT_INSET` (78px) à esquerda, para a trilha não desenhar sob o semáforo nativo |
+| Trilha | largura da barra **menos** a zona fixa à direita (`right_zone_width` = `trilha_gap` 6 nas pontas e entre os dois botões + dois botões de 38px = **94px**, fora do macOS; **50px** era o valor com um botão só). No macOS reserva-se ainda `MACOS_TRAFFIC_LIGHT_INSET` (78px) à esquerda, para a trilha não desenhar sob o semáforo nativo |
 
 | Espaçamento | Valor |
 |---|---|
@@ -270,7 +270,7 @@ Altura **52px** (§1.7), fundo `#1b1f26`, e o conteúdo recuado por `trilha_padd
 Zonas, da esquerda para a direita:
 
 1. **Trilha rolável** `[v1]` — ocupa toda a largura que sobra, `gap: 6`, recortada nas duas pontas. Contém os wrappers de grupo, e só eles. Rola como **um componente só**: nada dentro dela encolhe (§2.18).
-2. **Zona fixa à direita** `[v1]` — não rola, e a largura disponível para a trilha é a da barra **menos** esta zona. Carrega o **botão de configurações**: 30×30 de desenho (38×30 de alvo), raio 6, borda `#262b34`, engrenagem Lucide, com o mesmo `gap: 6` da trilha como respiro nas duas pontas. Ele **desenha e consome o clique, mas não faz nada** — `porecatu-config` é F4. Consumir o clique é deliberado: sem isso o gesto atravessaria até o que estivesse embaixo. A zona nasceu na F3 para o botão de nova aba global, que saiu (§2.6); ela fica, reservada para o que a barra ganhar à direita daqui em diante.
+2. **Zona fixa à direita** `[v1]` — não rola, e a largura disponível para a trilha é a da barra **menos** esta zona. Carrega **dois** botões, da esquerda para a direita: **sessões** e **configurações**, com o mesmo `gap: 6` da trilha nas duas pontas e entre os dois. Os dois têm a mesma anatomia: 30×30 de desenho (38×30 de alvo), raio 6, borda `#262b34`. O de **configurações** (engrenagem Lucide) **abre o arquivo de config** no editor do sistema, criando-o a partir do exemplo embutido se ainda não existir ([PRD-011](../prd/prd-011-polimento.md) RF-11.27, F6). O de **sessões** (`bookmark` Lucide, [ADR-0054](../adr/0054-sessoes-nomeadas.md)/[ADR-0055](../adr/0055-botao-e-popover-de-sessoes.md)) abre o popover de sessões nomeadas — anatomia na §2.22. A zona nasceu na F3 para o botão de nova aba global, que saiu (§2.6); o botão de configurações a herdou sozinho, e o de sessões é o segundo ocupante — a razão de a zona ter ficado reservada.
 3. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
 4. **Zona de botões de janela** `[v1]` — minimizar, maximizar/restaurar, fechar (ADR-0027; anatomia em §2.2.1). Ausente no macOS: lá o semáforo nativo faz esse papel, e a trilha reserva espaço à **esquerda** (§2.2.1) em vez de perder espaço à direita.
 
@@ -289,7 +289,7 @@ Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
 [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md): fora do macOS a janela perde a decoração nativa (`decorations = false`), e a própria barra de abas assume o que a decoração fazia — sem token de design próprio, a espec. nunca cobriu janela sem decoração nativa antes deste ADR.
 
-**Drag region** — a área vazia da barra (fora de aba, pílula, "+", botão de configurações e botões de janela) arrasta a janela. Duplo clique nela maximiza/restaura.
+**Drag region** — a área vazia da barra (fora de aba, pílula, "+", botão de sessões, botão de configurações e botões de janela) arrasta a janela. Duplo clique nela maximiza/restaura.
 
 **Botões de janela** — três, **46px** de largura cada, altura cheia da barra (52px), colados na borda direita: minimizar, maximizar/restaurar, fechar. Ícones Lucide 14px (`ICON_EM_SIZE * 0.7`): `minus`, `square`, `copy` (sem ícone dedicado de "restore" no Lucide; dois quadrados sobrepostos, aproximação comum de outras suítes) para minimizar/maximizar/restaurar, `x` para fechar — mesmo ícone da aba. Cor de repouso `#8b929e`, hover `#252a33`; fechar em hover vira `#c4413f` com ícone `#ffffff` — os três tons são os que §2.1 já descrevia para a faixa `[v2]`, sem cor nova.
 
@@ -881,6 +881,26 @@ Camada **`Chrome`** do [ADR-0018](../adr/0018-composicao-de-frame.md) — acima 
 
 `Esc` ou o `✕` fecham, limpam o realce e devolvem o teclado ao terminal. A captura de teclado é **parcial**: o campo consome o texto e as teclas que reivindica — `Enter`, `Shift+Enter`, `Esc` e as de edição do ADR-0035 —, e todo o resto continua chegando aos keybinds de aplicação. É o único modo de captura do app que não é modal, e a razão está no ADR-0041 §3.
 
+### 2.22 Popover de sessões `[v1]`
+
+Sem representação no canvas — a lista de sessões salvas não existia no mockup. O sétimo widget de chrome, decidido pelo [ADR-0055](../adr/0055-botao-e-popover-de-sessoes.md) (que também é o ADR que a §1/§2 exige desde o [ADR-0032](../adr/0032-interface-do-v1-fechada.md)), aberto pelo botão de sessões da zona fixa (§2.2). **Nenhum valor novo:** o popover de grupo de destino com um campo de texto do editor de grupo no topo, sobre os tokens do menu de contexto (§2.16).
+
+**Onde abre.** Ancorado sob o botão, borda direita alinhada à borda direita do botão, **8px abaixo da borda inferior da barra** — a mesma regra do editor de grupo (§2.10). Flip nos dois eixos, como o menu de contexto; com `tab_bar_position = "bottom"`, abre acima da barra. Camada **popover** do [ADR-0018](../adr/0018-composicao-de-frame.md), compartilhada com o menu de contexto, o editor e o tooltip. Nunca coexiste com o menu de contexto nem com o editor de grupo — a mesma regra de exclusão do [ADR-0023](../adr/0023-editor-de-grupo.md), estendida a este widget.
+
+**Superfície.** Fundo `#1a1e25`, borda `1px #2e343e`, raio 8, `padding: 6`, sombra em camadas (§1.7). Largura fixa **320** (`[appearance.session_picker] width`) — o teto do menu de contexto e do aviso, não um valor novo.
+
+Da esquerda para a direita, de cima para baixo:
+
+1. **Item "Salvar esta janela…"** — item de menu da §2.16 (`padding: 7px 8px`, raio 5, texto 12.5px `#d7dce3`, hover `#242a33`), ícone `PLUS` à esquerda no `gap: 10`, chip de tecla do atalho (`Ctrl+Shift+S`/`Cmd+Shift+S`) à direita, mono 9.5px `#5c646f` — lido do mapa resolvido, some se o usuário desvincular a ação.
+   - **Em modo de edição**, o item vira o campo de texto do editor de grupo (§2.10 item 1): fundo `#0f1216`, borda `1px #333a45` com foco `#5ed3bc`, raio 5, 13px `#e4e8ee`, `padding: 7px 9px`, altura 30, foco automático, cursor e seleção do [ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md). Placeholder "nome da sessão" em `#5c646f`. É o **mesmo componente** (`TextFieldState`) do editor de grupo, do rename de aba e do rename de pílula.
+2. **Divisor** `1px #2a2f38`, `margin: 5px 4px` (§2.16) — fixo, não rola com a lista.
+3. **Lista de sessões** — linhas com os valores do popover de grupo de destino (`row_height` 28, `row_padding_x` 8, ambos em `[appearance.session_picker]`), rótulo 12.5px `#d7dce3` truncado com reticências e tooltip com o nome inteiro (§2.20). À direita de cada linha, o botão de excluir: o `X` do botão de fechar da aba, 17×17 de desenho e 25×17 de alvo (§1.7), visível **só** na linha sob o cursor ou realçada pelo teclado. Hover da linha `#242a33`; hover do `X` no tom destrutivo `#e08585` do item destrutivo da §2.16.
+   - **Linha de arquivo ilegível ou de schema mais novo** — rótulo esmaecido em `#5c646f`, a regra "item indisponível fica esmaecido, nunca ausente" da §2.16. Não restaura; o `X` continua disponível.
+   - **Lista vazia** — uma linha só, "nenhuma sessão salva", 12.5px `#5c646f`, sem hover e sem alvo.
+   - **Rolagem** — teto de `max_visible_rows` **6** (`[appearance.session_picker]`), o mesmo valor do popover de grupo de destino; acima disso a lista rola pelo realce de teclado e pela roda do mouse. Item de salvar e divisor não rolam.
+
+**Teclado e ciclo de vida.** Abre pelo clique no botão (fecha se já aberto), por `session.open_list` (primeira linha realçada) e por `session.save_named` (campo em edição). `Up`/`Down` movem o realce entre o item de salvar e as linhas; `Enter` aciona o realçado; `Delete` exclui a linha realçada. Hover e realce de teclado são o mesmo estado visual e mutuamente exclusivos, como na §2.16. No campo, `Enter` confirma e `Esc` sai da edição voltando ao popover com o item de salvar realçado — não fecha tudo; um segundo `Esc` fecha. Captura de teclado **total** enquanto aberto, como o editor de grupo. Fecha em clique fora, `Esc`, perda de foco da janela, depois de restaurar (a janela nova ganha o foco) e depois de salvar com sucesso. Confirmações (sobrescrever, excluir) abrem o diálogo da §2.15 **por cima** do popover, que permanece atrás; cancelar volta a ele, com o estado de antes — a regra que o editor de grupo já usa para "Fechar grupo". **Sem animação**, como todo popover do v1.
+
 ---
 
 ## 3. Tabela de fases
@@ -919,12 +939,14 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Popover de grupo de destino | `[v1]` | PRD-002 RF-2.20; ADR-0023 — sem representação no canvas |
 | Reordenação animada ao formar grupo | `[v1]` | PRD-002 RF-2.5; [ADR-0022](../adr/0022-animacao-de-interface.md) — sem representação no canvas |
 | Controles de janela e resize sem decoração nativa | `[v1]` | [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) — sem PRD, sem representação no canvas |
-| Botão de configurações da zona fixa (inerte até a F6 lhe dar ação) | `[v1]` | PRD-004 — ver §2.2; [PRD-011](../prd/prd-011-polimento.md) RF-11.27 |
+| Botão de configurações da zona fixa (abre o arquivo de config desde a F6) | `[v1]` | PRD-004 — ver §2.2; [PRD-011](../prd/prd-011-polimento.md) RF-11.27 |
 | Aba restaurada sem shell iniciado (rótulo esmaecido; existe a partir da F5) | `[v1]` | PRD-003 RF-3.9; [ADR-0037](../adr/0037-aba-nao-iniciada.md) — sem representação no canvas |
 | Barra de busca (campo, contador, alternador de regex, navegação) | `[v1]` | [PRD-011](../prd/prd-011-polimento.md) RF-11.1 a RF-11.9; [ADR-0041](../adr/0041-busca-no-scrollback.md) — sem representação no canvas |
 | Realce de ocorrência da busca na grade | `[v1]` | PRD-011 RF-11.7; ADR-0041 — sem representação no canvas |
 | Affordance de hyperlink (sublinhado sob modificador) | `[v1]` | PRD-011 RF-11.11; [ADR-0042](../adr/0042-hyperlinks-osc-8.md) — sem representação no canvas |
 | Menu de contexto do terminal | `[v1]` | PRD-011 RF-11.14; ADR-0014 — mesma anatomia da §2.16 |
+| Botão de sessões salvas da zona fixa | `[v1]` | [PRD-014](../prd/prd-014-sessoes-nomeadas.md); [ADR-0055](../adr/0055-botao-e-popover-de-sessoes.md) — fora da ordem de fases; sem representação no canvas |
+| Popover de sessões (salvar, lista rolável, excluir) | `[v1]` | PRD-014; ADR-0055 — fora da ordem de fases; sem representação no canvas |
 | Ícone da janela e do executável | fora de fase | estava listado em F6 no roadmap; entregue antes, ver o roadmap |
 | Painéis divididos (§2.7.1): quadro por painel, divisor que é só o vão, cursor vazado no painel sem foco | `[v1]` | [PRD-006](../prd/prd-006-paineis-divididos.md), [ADR-0053](../adr/0053-paineis-divididos.md) — fora da ordem de fases |
 | Contagem de painéis na barra de status (§2.8), só com dois ou mais | `[v1]` | PRD-006 RF-6.20, ADR-0053 — fora da ordem de fases; cumpre a promessa do [ADR-0048](../adr/0048-barra-de-status.md) §5 |
@@ -1052,6 +1074,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Contador de abas na pílula, mono 10px sobre `#12151a`, raio 9 (§2.4, item 3) | **Removido**, por pedido do usuário. `show_tab_count_when_collapsed` (RF-4.17) fica no arquivo de exemplo, e os tokens `count_*` continuam em uso noutros lugares: o escuro virou a cor de nome, caret e "+" sobre a cápsula, e o fundo do indicador de overflow (§2.18). O indicador **agregado** de grupo colapsado (RF-2.16) não foi afetado — ele é o ponto de 6×6, não o contador | pós-F3 |
 | Botão de nova aba de 30×30 (§2.6, §1.7) | **17×17 de desenho, 25×17 de alvo** — o mesmo tamanho do botão de fechar da aba, que é o vizinho dele dentro da mesma trilha; os 30×30 eram do botão global, que saiu. O botão da zona fixa à direita herdou aqueles 30×30 (§2.2) | pós-F3 |
 | Barra de abas com borda inferior `#23272f` (§2.2) | **Não é pintada.** O separador de 1px na base virava a linha contra o quadro do terminal (§2.7) que o usuário pediu para tirar. A cor fica registrada na §1.3: com `tab_bar_position = "bottom"` (RF-4.1) o separador muda de aresta e volta a fazer sentido | pós-F3 |
+| A zona fixa à direita é do botão de configurações, reservada desde a F3 para o que a barra ganhar à direita daqui em diante (§2.2) | **Ganha o segundo ocupante**: o botão de sessões salvas (`bookmark`), à esquerda da engrenagem — a razão de a zona ter ficado reservada. `right_zone_width` cresce de 50 para **94px**; a trilha perde 44px fora do macOS. Aval visual do dono do produto (ícone, posição, a perda de trilha) | [ADR-0055](../adr/0055-botao-e-popover-de-sessoes.md), fora de fase |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.
 

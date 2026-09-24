@@ -1039,25 +1039,32 @@ pub fn point_in_overflow_pill(
     )
 }
 
+/// Largura combinada dos dois botões de ícone da zona fixa (sessões +
+/// configurações) e do respiro entre eles: `trilha_gap` antes do botão de
+/// sessões, entre os dois botões, e depois da engrenagem -- três vezes o
+/// mesmo respiro que separa grupos, reaproveitado em vez de inventar um
+/// padding próprio (ADR-0055 §1: 6 + 38 + 6 + 38 + 6 = 94px fora do
+/// macOS, o mesmo sem os botões de janela).
+fn icon_buttons_zone_width(style: &TabBarStyle) -> f32 {
+    style.trilha_gap * 3.0 + style.icon_button_width(style.right_zone_button_size) * 2.0
+}
+
 /// Largura da zona fixa à direita da barra (pedido do usuário, fora da
-/// espec.): só o suficiente pra sempre caber o botão de nova aba global,
-/// com o mesmo `trilha_gap` que separa grupos como respiro nas duas
-/// pontas -- reaproveitado em vez de inventar um padding próprio. Zero
-/// Não depende de config: a zona é do botão de configurações, que existe
-/// sempre. Ela nasceu para o botão de nova aba global (que saía de vista
-/// com a trilha rolando), e sobreviveu a ele -- é o bloco reservado para
-/// o que a barra ganhar à direita daqui em diante.
+/// espec.): só o suficiente pra sempre caber os dois botões de ícone
+/// (sessões, ADR-0055; configurações). Não depende de config: a zona
+/// existe sempre. Nasceu para o botão de nova aba global (que saía de
+/// vista com a trilha rolando), e sobreviveu a ele -- é o bloco reservado
+/// para o que a barra ganhar à direita daqui em diante.
 ///
 /// Desde o ADR-0027, soma a zona dos 3 botões de janela quando
 /// `is_macos` é falso -- no macOS eles não existem aqui (semáforo nativo,
 /// ver [`left_inset`]).
 pub fn right_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
-    let settings_zone =
-        style.trilha_gap * 2.0 + style.icon_button_width(style.right_zone_button_size);
+    let buttons_zone = icon_buttons_zone_width(style);
     if is_macos {
-        settings_zone
+        buttons_zone
     } else {
-        settings_zone + style.window_controls_gap + window_controls_width(style, is_macos)
+        buttons_zone + style.window_controls_gap + window_controls_width(style, is_macos)
     }
 }
 
@@ -1068,17 +1075,29 @@ pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool) -> f32 
     (bar_width - right_zone_width(style, is_macos)).max(0.0)
 }
 
-/// Retângulo do botão de nova aba global, em coordenadas de tela da barra
+/// Retângulo do botão de configurações, em coordenadas de tela da barra
 /// (zona fixa à direita -- não rola com a trilha, ao contrário do botão
-/// por grupo dentro de [`GroupWrapperRect::new_tab_button`]).
+/// por grupo dentro de [`GroupWrapperRect::new_tab_button`]). Colado nos
+/// botões de janela (ADR-0055 §1: "a engrenagem continua colada nos
+/// botões de janela") -- por isso ancorado pela direita, a partir da zona
+/// de botões de janela, e não por `right_zone_width`, que cresceria com o
+/// botão de sessões e empurraria a engrenagem junto.
 pub fn settings_button_rect(
     style: &TabBarStyle,
     bar_width: f32,
     bar_height: f32,
     is_macos: bool,
 ) -> Rect {
+    let window_controls_zone = if is_macos {
+        0.0
+    } else {
+        style.window_controls_gap + window_controls_width(style, is_macos)
+    };
     Rect {
-        x: bar_width - right_zone_width(style, is_macos) + style.trilha_gap,
+        x: bar_width
+            - window_controls_zone
+            - style.trilha_gap
+            - style.icon_button_width(style.right_zone_button_size),
         y: (bar_height - style.right_zone_button_size) / 2.0,
         width: style.icon_button_width(style.right_zone_button_size),
         height: style.right_zone_button_size,
@@ -1094,6 +1113,38 @@ pub fn point_in_settings_button(
 ) -> bool {
     rect_contains(
         settings_button_rect(style, bar_width, bar_height, is_macos),
+        point,
+    )
+}
+
+/// Retângulo do botão de sessões nomeadas (ADR-0054, ADR-0055 §1),
+/// imediatamente à esquerda da engrenagem, separado dela por
+/// `trilha_gap` -- mesma anatomia, ancorado a partir dela em vez de um
+/// cálculo independente, para os dois nunca poderem divergir.
+pub fn sessions_button_rect(
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+) -> Rect {
+    let settings = settings_button_rect(style, bar_width, bar_height, is_macos);
+    Rect {
+        x: settings.x - style.trilha_gap - settings.width,
+        y: settings.y,
+        width: settings.width,
+        height: settings.height,
+    }
+}
+
+pub fn point_in_sessions_button(
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+    point: (f32, f32),
+) -> bool {
+    rect_contains(
+        sessions_button_rect(style, bar_width, bar_height, is_macos),
         point,
     )
 }
@@ -1598,6 +1649,61 @@ mod tests {
         // ADR-0027) -- o botão de configurações volta a colar na borda.
         let mac_button = settings_button_rect(&style, bar_width, bar_height, true);
         assert_eq!(mac_button.x, bar_width - style.trilha_gap - width);
+    }
+
+    /// ADR-0055 §1: o botão de sessões fica à esquerda da engrenagem,
+    /// separado dela por `trilha_gap`, sem sobrepor nem vazar da zona
+    /// fixa -- e a trilha perde exatamente os 44px que os dois novos
+    /// elementos (botão + respiro) custam.
+    #[test]
+    fn sessions_button_sits_left_of_settings_with_trilha_gap_between() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_width = 400.0;
+        let bar_height = crate::chrome::bar_height(&style);
+
+        for is_macos in [false, true] {
+            let sessions = sessions_button_rect(&style, bar_width, bar_height, is_macos);
+            let settings = settings_button_rect(&style, bar_width, bar_height, is_macos);
+
+            assert_eq!(sessions.width, settings.width, "mesma anatomia");
+            assert_eq!(sessions.height, settings.height, "mesma anatomia");
+            assert_eq!(sessions.y, settings.y, "mesma anatomia");
+            assert_eq!(
+                settings.x - (sessions.x + sessions.width),
+                style.trilha_gap,
+                "distância entre os dois botões é trilha_gap, nem mais nem menos"
+            );
+            assert!(
+                sessions.x >= bar_width - right_zone_width(&style, is_macos),
+                "botão de sessões não vaza pra fora da zona fixa"
+            );
+            assert!(
+                sessions.x + sessions.width <= settings.x,
+                "os dois retângulos não se sobrepõem"
+            );
+        }
+
+        // A trilha perde exatamente 44px (trilha_gap + icon_button_width,
+        // o custo do botão novo e do respiro que o acompanha) em relação
+        // ao que valia antes deste ADR (zona de 50px antes dos botões de
+        // janela, teste `settings_button_sits_in_the_fixed_right_zone`).
+        let old_zone_before_window_controls =
+            style.trilha_gap * 2.0 + style.icon_button_width(style.right_zone_button_size);
+        let new_zone_before_window_controls =
+            style.trilha_gap * 3.0 + style.icon_button_width(style.right_zone_button_size) * 2.0;
+        assert_eq!(
+            new_zone_before_window_controls - old_zone_before_window_controls,
+            44.0,
+            "ADR-0055 §1: a trilha perde 44px"
+        );
+        assert_eq!(
+            trilha_width(&style, bar_width, false) + 44.0,
+            bar_width
+                - (old_zone_before_window_controls
+                    + style.window_controls_gap
+                    + window_controls_width(&style, false)),
+            "a trilha de hoje, menos 44px, é a trilha nova"
+        );
     }
 
     #[test]

@@ -105,6 +105,10 @@ fn common_defaults() -> BTreeMap<String, String> {
         // `group.close_all`: `exit` no shell já fecha o painel (RF-6.11),
         // e `Ctrl+Shift+W` continua significando "fecha esta aba inteira".
         // Quem quiser, vincula.
+        // Sessões nomeadas (PRD-014, ADR-0054 §7), fora da ordem de fases.
+        // `session.open_list` fica SEM default em nenhuma plataforma --
+        // mesmo precedente de `group.new_tab`/`pane.close` acima.
+        ("ctrl+shift+s", "session.save_named"),
     ])
 }
 
@@ -154,6 +158,7 @@ fn macos_defaults() -> BTreeMap<String, String> {
         // foco já valem nas três plataformas pela tabela comum acima.
         ("cmd+shift+h", "pane.split_horizontal"),
         ("cmd+shift+d", "pane.split_vertical"),
+        ("cmd+shift+s", "session.save_named"),
     ])
 }
 
@@ -164,12 +169,12 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         let bindings = Keybindings::default();
-        assert_eq!(bindings.common.len(), 39);
+        assert_eq!(bindings.common.len(), 40);
         assert_eq!(
             bindings.common.get("ctrl+shift+t"),
             Some(&"tab.new".to_owned())
         );
-        assert_eq!(bindings.macos.len(), 35);
+        assert_eq!(bindings.macos.len(), 36);
         assert_eq!(bindings.macos.get("cmd+q"), Some(&"app.quit".to_owned()));
         assert!(bindings.windows.is_empty());
         assert!(bindings.linux.is_empty());

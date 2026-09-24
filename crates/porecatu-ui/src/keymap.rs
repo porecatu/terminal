@@ -188,6 +188,97 @@ impl Chord {
             key: chord_key,
         })
     }
+
+    /// Rótulo curto pro chip de tecla do item "Salvar esta janela..." do
+    /// popover de sessões (ADR-0055 §2) -- a única leitura de `Chord` de
+    /// volta pra texto que o projeto tem hoje; nenhum outro widget
+    /// desenha chip ainda (dívida pré-existente do menu de contexto/
+    /// editor de grupo, §2.16/§2.10, fora desta etapa). Não é o inverso
+    /// de `parse`: um símbolo sai como o próprio caractere maiúsculo
+    /// (`shift+comma` -> "Shift+,"), não a palavra da gramática -- é o
+    /// que cabe no chip mono 9.5px sem alargar a linha.
+    pub fn label(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl {
+            parts.push("Ctrl".to_string());
+        }
+        if self.alt {
+            parts.push("Alt".to_string());
+        }
+        if self.shift {
+            parts.push("Shift".to_string());
+        }
+        if self.cmd {
+            parts.push("Cmd".to_string());
+        }
+        parts.push(self.key.label());
+        parts.join("+")
+    }
+}
+
+impl ChordKey {
+    /// Símbolo (`,`, `=`, ...) sai como o próprio caractere maiúsculo --
+    /// não a palavra da gramática (`comma`, `equals`): é o que cabe no
+    /// chip mono 9.5px sem alargar a linha. Tecla nomeada de verdade
+    /// (setas, `Enter`, `PageUp`...) sai como palavra curta.
+    fn label(&self) -> String {
+        match self {
+            ChordKey::Char(c) => c.to_ascii_uppercase().to_string(),
+            ChordKey::Named(named) => named_key_label(*named),
+        }
+    }
+}
+
+fn named_key_label(named: NamedKey) -> String {
+    let label = match named {
+        NamedKey::Space => "Space",
+        NamedKey::Tab => "Tab",
+        NamedKey::Enter => "Enter",
+        NamedKey::Escape => "Esc",
+        NamedKey::Backspace => "Backspace",
+        NamedKey::Delete => "Delete",
+        NamedKey::Insert => "Insert",
+        NamedKey::Home => "Home",
+        NamedKey::End => "End",
+        NamedKey::PageUp => "PageUp",
+        NamedKey::PageDown => "PageDown",
+        NamedKey::ArrowUp => "Up",
+        NamedKey::ArrowDown => "Down",
+        NamedKey::ArrowLeft => "Left",
+        NamedKey::ArrowRight => "Right",
+        NamedKey::F1 => "F1",
+        NamedKey::F2 => "F2",
+        NamedKey::F3 => "F3",
+        NamedKey::F4 => "F4",
+        NamedKey::F5 => "F5",
+        NamedKey::F6 => "F6",
+        NamedKey::F7 => "F7",
+        NamedKey::F8 => "F8",
+        NamedKey::F9 => "F9",
+        NamedKey::F10 => "F10",
+        NamedKey::F11 => "F11",
+        NamedKey::F12 => "F12",
+        // Fora do vocabulário documentado (ADR-0029 §2 não nomeia F13+
+        // nem tecla de mídia) -- rótulo de reserva, nunca alcançado
+        // pelos defaults embutidos nem pela gramática de texto, só por
+        // um `Chord::from_key` sobre uma tecla rara.
+        other => return format!("{other:?}"),
+    };
+    label.to_string()
+}
+
+/// `Chord` vinculado a `action` no mapa resolvido, se algum -- usado pro
+/// chip do item "Salvar esta janela..." (ADR-0055 §2, "some se o usuário
+/// desvincular a ação"). Dois `Chord`s diferentes pro mesmo `Action` são
+/// possíveis (nada no ADR-0029 proíbe) -- o retorno é o de rótulo
+/// alfabeticamente menor só para ser determinístico; a UI não distingue
+/// qual "o" atalho é.
+pub fn chord_for_action(bindings: &HashMap<Chord, Action>, action: Action) -> Option<Chord> {
+    bindings
+        .iter()
+        .filter(|(_, a)| **a == action)
+        .map(|(c, _)| *c)
+        .min_by_key(|c| c.label())
 }
 
 /// Plataforma-alvo, injetada em vez de lida direto de `cfg!` -- é o que
@@ -490,6 +581,56 @@ mod tests {
             assert_eq!(resolved.bindings.get(&next), Some(&Action::TabNext));
             assert_eq!(resolved.bindings.get(&prev), Some(&Action::TabPrev));
         }
+    }
+
+    #[test]
+    fn label_renders_modifiers_in_a_fixed_order_and_uppercases_the_key() {
+        assert_eq!(
+            Chord::parse("ctrl+shift+s").unwrap().label(),
+            "Ctrl+Shift+S"
+        );
+        assert_eq!(
+            Chord::parse("shift+ctrl+s").unwrap().label(),
+            "Ctrl+Shift+S"
+        );
+        assert_eq!(Chord::parse("cmd+shift+s").unwrap().label(), "Shift+Cmd+S");
+    }
+
+    #[test]
+    fn label_renders_a_symbol_as_the_character_not_the_grammar_word() {
+        assert_eq!(Chord::parse("ctrl+comma").unwrap().label(), "Ctrl+,");
+    }
+
+    #[test]
+    fn label_renders_named_keys_as_short_words() {
+        assert_eq!(
+            Chord::parse("ctrl+pagedown").unwrap().label(),
+            "Ctrl+PageDown"
+        );
+        assert_eq!(
+            Chord::parse("ctrl+shift+tab").unwrap().label(),
+            "Ctrl+Shift+Tab"
+        );
+    }
+
+    #[test]
+    fn chord_for_action_finds_the_bound_chord() {
+        let user = keybindings_with(&[("ctrl+shift+s", "session.save_named")]);
+        let resolved = resolve(&user, Platform::Windows);
+        let chord = chord_for_action(&resolved.bindings, Action::SessionSaveNamed).unwrap();
+        assert_eq!(chord.label(), "Ctrl+Shift+S");
+    }
+
+    #[test]
+    fn chord_for_action_is_none_when_unbound() {
+        let user = keybindings_with(&[("ctrl+shift+s", "none")]);
+        let resolved = resolve(&user, Platform::Windows);
+        // `session.save_named` não tem default embutido fora do macOS
+        // além do próprio "ctrl+shift+s" que acabou de ser liberado.
+        assert_eq!(
+            chord_for_action(&resolved.bindings, Action::SessionSaveNamed),
+            None
+        );
     }
 
     #[test]

@@ -35,6 +35,7 @@ use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::search_bar::SearchBarState;
+use crate::session_picker::{self, SessionPicker};
 use crate::status_bar::{SegmentRole, StatusBarLayout};
 use crate::tab_bar::{self, Indicator, TabBarStyle};
 use crate::terminal_menu::{TerminalContextMenu, terminal_menu_items};
@@ -67,6 +68,20 @@ const GROUP_EDITOR_SWATCHES_ID: NodeId = NodeId(19);
 const GROUP_EDITOR_ACTIONS_ID: NodeId = NodeId(20);
 const STATUS_BAR_ID: NodeId = NodeId(21);
 const STATUS_BAR_FIRST_SEGMENT_ID: u64 = 22;
+/// ADR-0054/ADR-0055: botão de sessões nomeadas. Longe da faixa dinâmica
+/// de `STATUS_BAR_FIRST_SEGMENT_ID` (poucas unidades, um `id` por
+/// segmento da barra de status) em vez de seguir logo depois dela, para
+/// nunca colidir se essa faixa crescer.
+const SESSIONS_BUTTON_ID: NodeId = NodeId(100);
+/// ADR-0054/ADR-0055 §5: o popover em si -- mesma disciplina de
+/// [`SESSIONS_BUTTON_ID`], longe da faixa dinâmica da barra de status.
+const SESSION_PICKER_ID: NodeId = NodeId(101);
+/// O item "Salvar esta janela..." em modo de edição vira o campo de
+/// texto (mesmo molde de [`GROUP_EDITOR_FIELD_ID`]); em navegação, é
+/// [`SESSION_PICKER_SAVE_ITEM_ID`] -- os dois nunca coexistem, então
+/// dividir o `id` entre os dois estados não colide.
+const SESSION_PICKER_FIELD_ID: NodeId = NodeId(102);
+const SESSION_PICKER_SAVE_ITEM_ID: NodeId = NodeId(103);
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -107,6 +122,7 @@ const MENU_ITEM_BASE: u64 = 400_000;
 const SWATCH_BASE: u64 = 500_000;
 const EDITOR_ACTION_BASE: u64 = 500_100;
 const MOVE_TARGET_BASE: u64 = 500_200;
+const SESSION_PICKER_ROW_BASE: u64 = 500_300;
 
 fn warning_item_id(index: usize) -> NodeId {
     NodeId(WARNING_ITEM_BASE + index as u64)
@@ -126,6 +142,10 @@ fn editor_action_id(index: usize) -> NodeId {
 
 fn move_target_id(index: usize) -> NodeId {
     NodeId(MOVE_TARGET_BASE + index as u64)
+}
+
+fn session_picker_row_id(index: usize) -> NodeId {
+    NodeId(SESSION_PICKER_ROW_BASE + index as u64)
 }
 
 /// Nome em português da cor -- só rótulo acessível, não valor de aparência
@@ -168,6 +188,7 @@ pub(crate) fn build_tree(
     terminal_context_menu: &Option<TerminalContextMenu>,
     group_editor: &Option<GroupEditor>,
     move_to_group: &Option<MoveToGroupPopover>,
+    session_picker: &Option<SessionPicker>,
     search: &Option<SearchBarState>,
     status_bar: Option<&StatusBarLayout>,
     active_pane_order: Option<&[PaneId]>,
@@ -221,6 +242,11 @@ pub(crate) fn build_tree(
         root_children.push(UNGROUPED_NEW_TAB_ID);
     }
 
+    // ADR-0054/ADR-0055: à esquerda da engrenagem na tela -- ordem do nó
+    // na árvore segue a mesma ordem de leitura, como o resto da barra.
+    nodes.push((SESSIONS_BUTTON_ID, leaf(Role::Button, "Sessões salvas")));
+    root_children.push(SESSIONS_BUTTON_ID);
+
     nodes.push((SETTINGS_BUTTON_ID, leaf(Role::Button, "Configurações")));
     root_children.push(SETTINGS_BUTTON_ID);
 
@@ -265,6 +291,8 @@ pub(crate) fn build_tree(
         focus = build_group_editor(e, workspace, &mut nodes, &mut root_children);
     } else if let Some(p) = move_to_group {
         focus = build_move_to_group(p, workspace, &mut nodes, &mut root_children);
+    } else if let Some(p) = session_picker {
+        focus = build_session_picker(p, &mut nodes, &mut root_children);
     }
 
     let mut root = Node::new(Role::Window);
@@ -693,6 +721,62 @@ fn build_move_to_group(
     focus
 }
 
+/// ADR-0054/ADR-0055 §5: projeção do popover de sessões, a partir do
+/// mesmo `SessionPicker` que `overlay::layout_session_picker`/
+/// `paint_session_picker` consomem em `lib.rs` -- nunca uma segunda
+/// árvore. Em modo de edição, o item de salvar vira o campo de texto
+/// (mesmo molde de [`build_group_editor`]); em navegação, é um item de
+/// menu com o rótulo fixo. Lista vazia projeta a linha "nenhuma sessão
+/// salva" como um item sem alvo -- ela nunca é `Highlight::Row`
+/// (`session_picker.rs`), então nunca ganha foco.
+fn build_session_picker(
+    picker: &SessionPicker,
+    nodes: &mut Vec<(NodeId, Node)>,
+    root_children: &mut Vec<NodeId>,
+) -> NodeId {
+    let mut children = Vec::new();
+    let mut focus = SESSION_PICKER_ID;
+
+    let save_id = match picker.mode() {
+        session_picker::Mode::EditingName(field) => {
+            let mut node = Node::new(Role::TextInput);
+            node.set_value(field.text());
+            nodes.push((SESSION_PICKER_FIELD_ID, node));
+            SESSION_PICKER_FIELD_ID
+        }
+        session_picker::Mode::Browsing => {
+            nodes.push((
+                SESSION_PICKER_SAVE_ITEM_ID,
+                leaf(Role::MenuItem, "Salvar esta janela…"),
+            ));
+            SESSION_PICKER_SAVE_ITEM_ID
+        }
+    };
+    children.push(save_id);
+    if picker.highlighted() == session_picker::Highlight::Save {
+        focus = save_id;
+    }
+
+    if picker.entries().is_empty() {
+        let id = session_picker_row_id(0);
+        nodes.push((id, leaf(Role::MenuItem, "nenhuma sessão salva")));
+        children.push(id);
+    } else {
+        for (index, entry) in picker.entries().iter().enumerate() {
+            let id = session_picker_row_id(index);
+            nodes.push((id, leaf(Role::MenuItem, entry.name.clone())));
+            children.push(id);
+            if picker.highlighted() == session_picker::Highlight::Row(index) {
+                focus = id;
+            }
+        }
+    }
+
+    nodes.push((SESSION_PICKER_ID, container(Role::Menu, children)));
+    root_children.push(SESSION_PICKER_ID);
+    focus
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -720,6 +804,7 @@ mod tests {
         build_tree(
             ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -817,6 +902,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             Some(&order),
             &TabBarStyle::DEFAULT,
@@ -857,6 +943,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -914,6 +1001,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -955,6 +1043,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1027,6 +1116,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             Some(&layout),
             None,
             &TabBarStyle::DEFAULT,
@@ -1073,6 +1163,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             Some(&layout),
             None,
             &TabBarStyle::DEFAULT,
@@ -1111,6 +1202,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -1140,6 +1232,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -1156,5 +1249,91 @@ mod tests {
             .unwrap();
         let move_item = node(&update, menu_item_id(move_index));
         assert_eq!(move_item.is_disabled(), !TAB_MENU_ITEMS[move_index].enabled);
+    }
+
+    /// ADR-0054/ADR-0055 §5: em navegação, o item de salvar é um item de
+    /// menu com o rótulo fixo, e cada linha da lista vira um `MenuItem`
+    /// com o nome da sessão -- a mesma lista que `overlay::
+    /// layout_session_picker` desenharia, nunca uma segunda fonte.
+    #[test]
+    fn session_picker_browsing_projects_rows_and_focuses_the_highlighted_one() {
+        use porecatu_session::named::{EntryStatus, NamedSessionEntry};
+        use std::path::PathBuf;
+
+        let ws = Workspace::new();
+        let entries = vec![
+            NamedSessionEntry {
+                name: "api".to_string(),
+                file: PathBuf::from("api.json"),
+                saved_at: Some(2),
+                status: EntryStatus::Ok,
+            },
+            NamedSessionEntry {
+                name: "infra".to_string(),
+                file: PathBuf::from("infra.json"),
+                saved_at: Some(1),
+                status: EntryStatus::Ok,
+            },
+        ];
+        let picker = Some(SessionPicker::open_browsing(entries));
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &picker,
+            &None,
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &mut measurer(),
+        );
+
+        let save_item = node(&update, SESSION_PICKER_SAVE_ITEM_ID);
+        assert_eq!(save_item.role(), Role::MenuItem);
+        let first_row = node(&update, session_picker_row_id(0));
+        assert_eq!(first_row.label(), Some("api"));
+        // Realce inicial de `open_browsing` é a primeira linha.
+        assert_eq!(update.focus, session_picker_row_id(0));
+    }
+
+    /// Modo de edição vira campo de texto -- mesmo molde do editor de
+    /// grupo, e o foco segue para lá (o item de salvar realçado é o
+    /// estado de abertura de `session.save_named`, RF-14.1/RF-14.2).
+    #[test]
+    fn session_picker_editing_projects_a_text_field_in_focus() {
+        let ws = Workspace::new();
+        let picker = Some(SessionPicker::open_editing(vec![]));
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &picker,
+            &None,
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &mut measurer(),
+        );
+
+        let field = node(&update, SESSION_PICKER_FIELD_ID);
+        assert_eq!(field.role(), Role::TextInput);
+        assert_eq!(update.focus, SESSION_PICKER_FIELD_ID);
+        // Lista vazia: linha "nenhuma sessão salva" sem ser alvo de foco.
+        let empty_row = node(&update, session_picker_row_id(0));
+        assert_eq!(empty_row.label(), Some("nenhuma sessão salva"));
     }
 }

@@ -144,7 +144,7 @@ pub const ARROW_DOWN: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 11] = [
+pub const ALL: [(&str, Icon); 12] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -156,6 +156,7 @@ pub const ALL: [(&str, Icon); 11] = [
     ("copy", RESTORE),
     ("git-branch", GIT_BRANCH),
     ("arrow-down", ARROW_DOWN),
+    ("bookmark", BOOKMARK),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
@@ -193,4 +194,11 @@ pub const SETTINGS: Icon = Icon {
     glyph: "\u{e154}",
     ink_width_em: 0.840,
     ink_height_em: 0.920,
+};
+
+/// `bookmark` -- botão de sessões nomeadas da zona fixa (ADR-0055 §1).
+pub const BOOKMARK: Icon = Icon {
+    glyph: "\u{e060}",
+    ink_width_em: 0.670,
+    ink_height_em: 0.840,
 };

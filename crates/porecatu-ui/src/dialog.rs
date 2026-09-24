@@ -7,6 +7,8 @@
 //! `action` é um enum fechado, não uma closure: o diálogo é dado puro, sem
 //! capturar estado de `App` dentro dele.
 
+use std::path::PathBuf;
+
 use porecatu_core::{GroupId, PaneId, TabId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,11 +18,16 @@ pub enum DialogButton {
 }
 
 /// O que confirmar faz de verdade -- resolvido por `lib.rs`, que já tem
-/// acesso ao `WindowState`/`App` que o diálogo não carrega. Os três
-/// diálogos do v1 (RF-10.19) são todos de fechamento -- o prefixo comum
-/// não é redundância, é coincidência de escopo.
+/// acesso ao `WindowState`/`App` que o diálogo não carrega. Os quatro
+/// primeiros diálogos do v1 (RF-10.19) são todos de fechamento -- o
+/// prefixo comum não é redundância, é coincidência de escopo. As duas
+/// últimas variantes (RF-14.5/RF-14.16, ADR-0055 §3) carregam o dado que
+/// falta pra confirmar de verdade -- nome pro sobrescrever, caminho pro
+/// excluir -- e é isso que tira `Copy` do enum (`PathBuf`/`String` não
+/// são `Copy`); todo call site que fazia `dialog.action` (cópia) passou a
+/// `dialog.action.clone()`.
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogAction {
     /// RF-1.6 (ADR-0017): fechar aba com tela alternativa ou reporte de
     /// mouse ligado.
@@ -34,6 +41,11 @@ pub enum DialogAction {
     /// Confirmação **sempre**, não configurável -- "a ação mais destrutiva
     /// da interface" (ADR-0023).
     CloseGroup(GroupId),
+    /// RF-14.5 (ADR-0054 §5, ADR-0055 §3): nome que já existe na lista
+    /// confirmado -- grava por cima do arquivo que já tem esse nome.
+    OverwriteNamedSession(String),
+    /// RF-14.16: exclui de verdade o arquivo da sessão nomeada.
+    DeleteNamedSession(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq)]

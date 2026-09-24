@@ -47,6 +47,7 @@ use porecatu_core::{GroupColor, Workspace};
 use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextMeasurer, TextRun, icon,
 };
+use porecatu_session::named::EntryStatus;
 
 use crate::chrome::{centered_glyph, push_shadow};
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
@@ -55,6 +56,7 @@ use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
 use crate::move_to_group::MoveToGroupPopover;
 use crate::palette::{self, ResolvedPalette};
+use crate::session_picker::{Highlight, Mode, SessionPicker};
 use crate::tab_bar::{self, TabBarStyle, rect_contains};
 use crate::terminal_menu::{TerminalContextMenu, TerminalMenuItem};
 use crate::warning::{Severity, WarningStack};
@@ -1360,6 +1362,476 @@ pub fn move_to_group_hit(layout: &MoveToGroupLayout, point: (f32, f32)) -> Optio
         .iter()
         .position(|&rect| rect_contains(rect, point))
         .map(|i| layout.first_visible_index + i)
+}
+
+// ---- popover de sessões nomeadas (PRD-014, ADR-0054, ADR-0055 §2) ----
+// Sétimo widget de chrome. Superfície e "chip de tecla à direita" do
+// item de salvar são os tokens gerais do menu de contexto (§2.16) que
+// nenhum widget até aqui tinha consumido de verdade -- `[appearance.
+// context_menu]` não tem chave própria pra `gap`/divisor/chip porque
+// nada os desenhava. O campo de nome do modo de edição é o mesmo
+// componente do editor de grupo (`[appearance.group_editor]`), inclusive
+// o `offset_y` de 8px abaixo da barra (ADR-0055 §2: "a regra do editor
+// de grupo").
+
+const SAVE_ITEM_LABEL: &str = "Salvar esta janela…";
+const EMPTY_LIST_LABEL: &str = "nenhuma sessão salva";
+/// Espec §2.16 ("Itens: ... `gap: 10`") -- primeiro item do chrome com
+/// ícone à esquerda do rótulo; token geral sem chave própria.
+const SAVE_ITEM_ICON_GAP: f32 = 10.0;
+/// Espec §2.16 ("Divisor `1px #2a2f38` com `margin: 5px 4px`") -- token
+/// geral, sem chave própria (o divisor do editor de grupo usa `gap` em
+/// vez de margem em volta do dele).
+const SAVE_DIVIDER_HEIGHT: f32 = 1.0;
+const SAVE_DIVIDER_MARGIN_Y: f32 = 5.0;
+const SAVE_DIVIDER_MARGIN_X: f32 = 4.0;
+const CHIP_FONT: FontFace = FontFace::Mono { bold: false };
+const CHIP_FONT_SIZE: f32 = 9.5;
+
+pub struct SessionPickerLayout {
+    pub popover_rect: Rect,
+    /// Item "Salvar esta janela..." (navegação) ou o campo de nome
+    /// (edição) -- fixo no topo, não rola.
+    pub save_rect: Rect,
+    pub divider_rect: Rect,
+    /// `Some` só com `entries` vazio: a linha "nenhuma sessão salva",
+    /// sem alvo de clique (espec §2.16, "sem hover e sem alvo").
+    pub empty_row_rect: Option<Rect>,
+    /// Só as linhas visíveis na janela de rolagem atual -- alinhadas por
+    /// índice com `first_visible_index + i`, mesmo contrato de
+    /// `MoveToGroupLayout`.
+    pub visible_row_rects: Vec<Rect>,
+    /// O `X` de excluir de cada linha visível, alinhado por índice com
+    /// `visible_row_rects` -- mesma anatomia do botão de fechar da aba
+    /// (17×17 de desenho, 25×17 de alvo, §1.7).
+    pub delete_button_rects: Vec<Rect>,
+    pub first_visible_index: usize,
+}
+
+/// `bar_width`/`is_macos`: para achar `sessions_button_rect`, de onde a
+/// borda direita do popover nasce (ADR-0055 §2: "borda direita alinhada
+/// à borda direita do botão"). A janela de rolagem vem de
+/// `picker.scroll_top()` direto (não derivada de `highlighted` como em
+/// `layout_move_to_group`): a nota do módulo `session_picker.rs` explica
+/// por quê -- aqui a rolagem por roda é um gesto próprio.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_session_picker(
+    picker: &SessionPicker,
+    config: &porecatu_config::Config,
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_bottom_y: f32,
+    is_macos: bool,
+    window_width: f32,
+    window_height: f32,
+) -> SessionPickerLayout {
+    let picker_cfg = &config.appearance.session_picker;
+    let menu_cfg = &config.appearance.context_menu;
+    let editor_cfg = &config.appearance.group_editor;
+    let width = picker_cfg.width as f32;
+    let padding = menu_cfg.padding as f32;
+    let row_height = picker_cfg.row_height as f32;
+    let max_visible_rows = picker_cfg.max_visible_rows as usize;
+
+    let save_height = match picker.mode() {
+        Mode::Browsing => menu_cfg.item_height as f32,
+        Mode::EditingName(_) => editor_cfg.input_height as f32,
+    };
+
+    let total_rows = picker.entries().len();
+    let visible_rows = if total_rows == 0 {
+        1
+    } else {
+        total_rows.min(max_visible_rows)
+    };
+    let rows_height = row_height * visible_rows as f32;
+    let content_height =
+        save_height + SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT + rows_height;
+    let height = padding * 2.0 + content_height;
+
+    let button_rect = tab_bar::sessions_button_rect(style, bar_width, bar_bottom_y, is_macos);
+    let mut x = button_rect.x + button_rect.width - width;
+    if x < 0.0 {
+        x = 0.0;
+    }
+    if x + width > window_width {
+        x = (window_width - width).max(0.0);
+    }
+    let mut y = bar_bottom_y + editor_cfg.offset_y as f32;
+    if y + height > window_height {
+        y = (window_height - height).max(0.0);
+    }
+    let popover_rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    let inner_x = popover_rect.x + padding;
+    let inner_width = popover_rect.width - padding * 2.0;
+    let save_rect = Rect {
+        x: inner_x,
+        y: popover_rect.y + padding,
+        width: inner_width,
+        height: save_height,
+    };
+    let divider_rect = Rect {
+        x: inner_x + SAVE_DIVIDER_MARGIN_X,
+        y: save_rect.y + save_height + SAVE_DIVIDER_MARGIN_Y,
+        width: inner_width - SAVE_DIVIDER_MARGIN_X * 2.0,
+        height: SAVE_DIVIDER_HEIGHT,
+    };
+    let rows_top = divider_rect.y + SAVE_DIVIDER_HEIGHT + SAVE_DIVIDER_MARGIN_Y;
+
+    let mut empty_row_rect = None;
+    let mut visible_row_rects = Vec::new();
+    let mut delete_button_rects = Vec::new();
+    let mut first_visible_index = 0;
+
+    if total_rows == 0 {
+        empty_row_rect = Some(Rect {
+            x: inner_x,
+            y: rows_top,
+            width: inner_width,
+            height: row_height,
+        });
+    } else {
+        let max_first = total_rows.saturating_sub(visible_rows);
+        first_visible_index = picker.scroll_top().min(max_first);
+        let row_padding_x = picker_cfg.row_padding_x as f32;
+        let delete_target_width = style.icon_button_width(style.close_button_size);
+        for i in 0..visible_rows {
+            let rect = Rect {
+                x: inner_x,
+                y: rows_top + row_height * i as f32,
+                width: inner_width,
+                height: row_height,
+            };
+            let delete_rect = Rect {
+                x: rect.x + rect.width - row_padding_x - delete_target_width,
+                y: rect.y + (rect.height - style.close_button_size) / 2.0,
+                width: delete_target_width,
+                height: style.close_button_size,
+            };
+            visible_row_rects.push(rect);
+            delete_button_rects.push(delete_rect);
+        }
+    }
+
+    SessionPickerLayout {
+        popover_rect,
+        save_rect,
+        divider_rect,
+        empty_row_rect,
+        visible_row_rects,
+        delete_button_rects,
+        first_visible_index,
+    }
+}
+
+/// Rótulo truncado de uma linha, com reticências (espec §2.16) -- função
+/// única para pintura e para o alvo do tooltip (`lib.rs::update_hover`),
+/// para as duas nunca discordarem de onde o nome foi cortado (a lição do
+/// `bar_height` da F3, CLAUDE.md). `max_width` já deve descontar o
+/// espaço do `X` de excluir -- reservado sempre, não só sob hover, pra o
+/// rótulo não pular de posição quando o `X` aparece/some.
+pub fn session_picker_row_label(
+    name: &str,
+    row_rect: Rect,
+    row_padding_x: f32,
+    delete_rect: Rect,
+    font_size: f32,
+    measurer: &mut TextMeasurer,
+) -> (String, bool) {
+    let max_width = row_label_max_width(row_rect, row_padding_x, delete_rect);
+    measurer.truncate(name, BODY_FONT, font_size, max_width)
+}
+
+/// Largura útil do rótulo de uma linha: a largura da linha menos o
+/// respiro à esquerda e o espaço do `X` de excluir à direita, **sempre**
+/// descontado -- ver a nota de [`session_picker_row_label`].
+fn row_label_max_width(row_rect: Rect, row_padding_x: f32, delete_rect: Rect) -> f32 {
+    (delete_rect.x - row_padding_x - (row_rect.x + row_padding_x)).max(0.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn paint_session_picker(
+    layout: &SessionPickerLayout,
+    picker: &SessionPicker,
+    save_chip_label: Option<&str>,
+    hovered_delete: Option<usize>,
+    config: &porecatu_config::Config,
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    term_pal: &palette::ResolvedTermPalette,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
+    let picker_cfg = &config.appearance.session_picker;
+    let menu_cfg = &config.appearance.context_menu;
+    let editor_cfg = &config.appearance.group_editor;
+    let row_padding_x = picker_cfg.row_padding_x as f32;
+    let item_padding_x = menu_cfg.item_padding_x as f32;
+    let item_text_size = menu_cfg.font_size as f32;
+
+    let mut out = Vec::new();
+    push_shadow(&mut out, layout.popover_rect, menu_cfg.corner_radius as f32);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: layout.popover_rect,
+        radius: menu_cfg.corner_radius as f32,
+        color: pal.context_menu_background,
+        border_color: pal.context_menu_border,
+        border_width: 1.0,
+    }));
+
+    // Item "Salvar esta janela..." (navegação) ou campo de nome (edição)
+    // -- mesmo retângulo fixo `layout.save_rect`, anatomia diferente por
+    // modo (ADR-0055 §2, item 1).
+    match picker.mode() {
+        Mode::Browsing => {
+            let is_highlighted = picker.highlighted() == Highlight::Save;
+            if is_highlighted {
+                out.push(Primitive::RoundedQuad(RoundedQuad {
+                    rect: layout.save_rect,
+                    radius: menu_cfg.item_corner_radius as f32,
+                    color: pal.menu_item_hover,
+                    border_color: palette::TRANSPARENT,
+                    border_width: 0.0,
+                }));
+            }
+            let icon_rect = Rect {
+                x: layout.save_rect.x + item_padding_x,
+                y: layout.save_rect.y,
+                width: style.icon_em_size,
+                height: layout.save_rect.height,
+            };
+            out.push(centered_glyph(
+                icon::PLUS,
+                icon_rect,
+                style.icon_em_size,
+                pal.menu_item_text,
+            ));
+            let label_x =
+                icon_rect.x + icon::PLUS.ink_width(style.icon_em_size) + SAVE_ITEM_ICON_GAP;
+            out.push(Primitive::Text(TextRun {
+                origin: (
+                    label_x,
+                    layout.save_rect.y + (layout.save_rect.height - item_text_size) / 2.0,
+                ),
+                text: SAVE_ITEM_LABEL.to_string(),
+                font: BODY_FONT,
+                size_px: item_text_size,
+                color: pal.menu_item_text,
+            }));
+            if let Some(chip) = save_chip_label {
+                let chip_width = measurer.measure_width(chip, CHIP_FONT, CHIP_FONT_SIZE);
+                out.push(Primitive::Text(TextRun {
+                    origin: (
+                        layout.save_rect.x + layout.save_rect.width - item_padding_x - chip_width,
+                        layout.save_rect.y + (layout.save_rect.height - CHIP_FONT_SIZE) / 2.0,
+                    ),
+                    text: chip.to_string(),
+                    font: CHIP_FONT,
+                    size_px: CHIP_FONT_SIZE,
+                    color: pal.menu_item_disabled_text,
+                }));
+            }
+        }
+        Mode::EditingName(field) => {
+            // Foco automático (ADR-0055 §2): diferente do editor de
+            // grupo, aqui não há outra região pra `Tab` ceder o foco --
+            // o campo é sempre o foco enquanto o modo de edição existir.
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect: layout.save_rect,
+                radius: editor_cfg.input_corner_radius as f32,
+                color: pal.editor_input_background,
+                border_color: pal.editor_input_border_focus,
+                border_width: 1.0,
+            }));
+            let input_padding_x = editor_cfg.input_padding_x as f32;
+            let input_font_size = editor_cfg.input_font_size as f32;
+            let buffer = field.text();
+            let available_width = (layout.save_rect.width - input_padding_x * 2.0).max(0.0);
+            let text_width = measurer.measure_width(buffer, BODY_FONT, input_font_size);
+            let text_x = tab_bar::scrolled_text_x(
+                layout.save_rect.x,
+                input_padding_x,
+                text_width,
+                available_width,
+            );
+            let text_y = layout.save_rect.y + (layout.save_rect.height - input_font_size) / 2.0;
+            out.push(Primitive::PushClip(layout.save_rect));
+            if buffer.is_empty() {
+                out.push(Primitive::Text(TextRun {
+                    origin: (text_x, text_y),
+                    text: "nome da sessão".to_string(),
+                    font: BODY_FONT,
+                    size_px: input_font_size,
+                    color: pal.menu_item_disabled_text,
+                }));
+            } else {
+                let selection_range = field.selection_range();
+                if let Some((start, end)) = selection_range {
+                    let sel_x0 = text_x
+                        + measurer.measure_width(&buffer[..start], BODY_FONT, input_font_size);
+                    let sel_x1 =
+                        text_x + measurer.measure_width(&buffer[..end], BODY_FONT, input_font_size);
+                    out.push(Primitive::Quad(Quad {
+                        rect: Rect {
+                            x: sel_x0,
+                            y: layout.save_rect.y + 4.0,
+                            width: sel_x1 - sel_x0,
+                            height: layout.save_rect.height - 8.0,
+                        },
+                        color: term_pal.selection_background,
+                    }));
+                }
+                out.push(Primitive::Text(TextRun {
+                    origin: (text_x, text_y),
+                    text: buffer.to_string(),
+                    font: BODY_FONT,
+                    size_px: input_font_size,
+                    color: pal.editor_input_text,
+                }));
+                if selection_range.is_none() {
+                    let cursor_width = measurer.measure_width(
+                        &buffer[..field.cursor()],
+                        BODY_FONT,
+                        input_font_size,
+                    );
+                    let caret_x = (text_x + cursor_width)
+                        .min(layout.save_rect.x + layout.save_rect.width - 1.0);
+                    out.push(Primitive::Quad(Quad {
+                        rect: Rect {
+                            x: caret_x,
+                            y: layout.save_rect.y + 4.0,
+                            width: 1.0,
+                            height: layout.save_rect.height - 8.0,
+                        },
+                        color: pal.editor_input_text,
+                    }));
+                }
+            }
+            out.push(Primitive::PopClip);
+        }
+    }
+
+    out.push(Primitive::Quad(Quad {
+        // `context_menu.separator` não tem campo próprio em
+        // `ResolvedPalette` (nada desenhava um até aqui) -- mesmo
+        // `#2a2f38` de `editor_divider` (`[appearance.group_editor]
+        // divider`), token reaproveitado, não novo.
+        rect: layout.divider_rect,
+        color: pal.editor_divider,
+    }));
+
+    if let Some(rect) = layout.empty_row_rect {
+        out.push(Primitive::Text(TextRun {
+            origin: (
+                rect.x + row_padding_x,
+                rect.y + (rect.height - item_text_size) / 2.0,
+            ),
+            text: EMPTY_LIST_LABEL.to_string(),
+            font: BODY_FONT,
+            size_px: item_text_size,
+            color: pal.menu_item_disabled_text,
+        }));
+    }
+
+    for (visible_i, &rect) in layout.visible_row_rects.iter().enumerate() {
+        let row_index = layout.first_visible_index + visible_i;
+        let Some(entry) = picker.entries().get(row_index) else {
+            continue;
+        };
+        let is_highlighted = picker.highlighted() == Highlight::Row(row_index);
+        if is_highlighted {
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect,
+                radius: menu_cfg.item_corner_radius as f32,
+                color: pal.menu_item_hover,
+                border_color: palette::TRANSPARENT,
+                border_width: 0.0,
+            }));
+        }
+        let text_color = if entry.status == EntryStatus::Ok {
+            pal.menu_item_text
+        } else {
+            pal.menu_item_disabled_text
+        };
+        let delete_rect = layout.delete_button_rects[visible_i];
+        let (label, _) = session_picker_row_label(
+            &entry.name,
+            rect,
+            row_padding_x,
+            delete_rect,
+            item_text_size,
+            measurer,
+        );
+        out.push(Primitive::Text(TextRun {
+            origin: (
+                rect.x + row_padding_x,
+                rect.y + (rect.height - item_text_size) / 2.0,
+            ),
+            text: label,
+            font: BODY_FONT,
+            size_px: item_text_size,
+            color: text_color,
+        }));
+        // O `X` só aparece na linha sob o cursor ou realçada pelo
+        // teclado -- com um `X` em toda linha, a lista viraria uma
+        // coluna de botões destrutivos (ADR-0055 §2).
+        if is_highlighted {
+            let icon_color = if hovered_delete == Some(row_index) {
+                pal.menu_item_destructive_text
+            } else {
+                pal.menu_item_text
+            };
+            out.push(centered_glyph(
+                icon::X,
+                delete_rect,
+                style.icon_em_size,
+                icon_color,
+            ));
+        }
+    }
+
+    out
+}
+
+/// O que está sob `point`, se algo -- checado na mesma ordem de
+/// precedência do `X` da aba contra o corpo dela
+/// (`hit_test_close_button_wins_over_tab_body`): o `X` primeiro, porque
+/// fica **dentro** do retângulo da linha.
+pub enum SessionPickerHit {
+    /// Item de salvar (navegação) ou campo de nome (edição) -- o mesmo
+    /// retângulo fixo, `lib.rs` decide o que fazer por `picker.mode()`.
+    SaveArea,
+    Row(usize),
+    DeleteRow(usize),
+}
+
+pub fn session_picker_hit(
+    layout: &SessionPickerLayout,
+    point: (f32, f32),
+) -> Option<SessionPickerHit> {
+    if rect_contains(layout.save_rect, point) {
+        return Some(SessionPickerHit::SaveArea);
+    }
+    for (visible_i, &delete_rect) in layout.delete_button_rects.iter().enumerate() {
+        if rect_contains(delete_rect, point) {
+            return Some(SessionPickerHit::DeleteRow(
+                layout.first_visible_index + visible_i,
+            ));
+        }
+    }
+    for (visible_i, &rect) in layout.visible_row_rects.iter().enumerate() {
+        if rect_contains(rect, point) {
+            return Some(SessionPickerHit::Row(
+                layout.first_visible_index + visible_i,
+            ));
+        }
+    }
+    None
 }
 
 // ---- tooltip (espec §2.20, ADR-0019, `[appearance.tooltip]`) ----

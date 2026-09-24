@@ -9,6 +9,7 @@ mod group_editor;
 mod groups;
 mod move_to_group;
 mod notices;
+mod session_picker;
 mod status_bar;
 mod tabs;
 mod terminal_frame;
@@ -22,6 +23,7 @@ pub use group_editor::GroupEditor;
 pub use groups::{GroupPaletteEntry, Groups};
 pub use move_to_group::MoveToGroup;
 pub use notices::Notices;
+pub use session_picker::SessionPicker;
 pub use status_bar::StatusBar;
 pub use tabs::{CloseButtonVisibility, Tabs, TabsColors, TabsOverflow, TabsRename};
 pub use terminal_frame::TerminalFrame;
@@ -44,6 +46,7 @@ pub struct Appearance {
     pub tooltip: Tooltip,
     pub group_editor: GroupEditor,
     pub move_to_group: MoveToGroup,
+    pub session_picker: SessionPicker,
     pub terminal_frame: TerminalFrame,
     pub status_bar: StatusBar,
 }
