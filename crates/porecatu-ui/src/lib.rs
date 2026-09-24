@@ -829,6 +829,11 @@ mod ensure_config_file_exists_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WindowPlacement {
     Saved,
+    // `App::restore_named_session`, o único lugar que constrói esta
+    // variante, ainda não tem chamador (popover é o prompt 04) --
+    // `#[allow(dead_code)]` até lá, mesmo precedente do `warning.rs`
+    // citado no CLAUDE.md para código estagiado à frente da UI que o usa.
+    #[allow(dead_code)]
     CascadeFrom(WindowId),
 }
 
@@ -860,6 +865,9 @@ enum ActionOutcome {
     /// o pedido e ignora (`// TODO(prompt 04)` no `match outcome` do
     /// dispatcher de tecla).
     OpenSessionPicker {
+        // Lido só quando o popover existir (prompt 04) --
+        // `#[allow(dead_code)]` até lá.
+        #[allow(dead_code)]
         edit_name: bool,
     },
     Unhandled,
@@ -913,6 +921,10 @@ enum NewTabRequest {
     /// resolvido no arranque, ADR-0003) só existe em `App`, não em
     /// `WindowState` -- mesmo motivo de `CloseWindowRequested`.
     OpenConfigFile,
+    /// Botão de sessões nomeadas (ADR-0054/ADR-0055): o popover em si é
+    /// o prompt 04 -- por ora só sobe o pedido, `App` recebe e ignora
+    /// (mesmo `// TODO(prompt 04)` do despacho de `session.open_list`).
+    OpenSessionPicker,
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -3626,6 +3638,13 @@ impl WindowState {
                     tab_bar::WindowButtonHit::Close => NewTabRequest::CloseWindowRequested,
                 };
             }
+            // Botão de sessões nomeadas (ADR-0054/ADR-0055): mesma zona
+            // fixa, mesma ordem de teste que a engrenagem -- depois dos
+            // botões de janela, antes da trilha. Testado antes da
+            // engrenagem (fica à esquerda dela na tela).
+            if tab_bar::point_in_sessions_button(style, bar_width, h, is_macos(), logical_point) {
+                return NewTabRequest::OpenSessionPicker;
+            }
             // Botão de configurações (RF-11.27): zona fixa à direita, fora
             // da trilha que rola -- resolvido em coordenadas de tela, como
             // as pílulas de overflow logo abaixo, não pelo hit-test de
@@ -5347,7 +5366,9 @@ impl App {
     /// qualquer outra saída (arquivo ilegível, corrompido, schema mais
     /// nova, ou -- não deveria acontecer, `save_named_in` só grava uma
     /// janela -- mais de uma) empurra um aviso na janela de origem (canal
-    /// 1, ADR-0014) e não abre nada. Ainda sem chamador (prompt 04).
+    /// 1, ADR-0014) e não abre nada. Ainda sem chamador (prompt 04) --
+    /// `#[allow(dead_code)]` até lá.
+    #[allow(dead_code)]
     pub(crate) fn restore_named_session(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -5395,7 +5416,8 @@ impl App {
     /// e grava por `save_named_in`. Funciona independente de `[session]
     /// enabled` e do modo posicional (ADR-0054 §8) -- não passa por
     /// `Self::session_persistence_enabled`, de propósito. Ainda sem
-    /// chamador (prompt 04).
+    /// chamador (prompt 04) -- `#[allow(dead_code)]` até lá.
+    #[allow(dead_code)]
     pub(crate) fn save_named_session(
         &mut self,
         window_id: WindowId,
@@ -8773,6 +8795,12 @@ impl App {
                     );
                     state.window.request_redraw();
                 }
+                // TODO(prompt 04): abrir o popover de sessões (ADR-0055).
+                // Mesmo estado de "pedido recebido, ainda sem UI" do
+                // `ActionOutcome::OpenSessionPicker` do prompt 02.
+                NewTabRequest::OpenSessionPicker => {
+                    state.window.request_redraw();
+                }
                 NewTabRequest::None => {
                     state.window.request_redraw();
                 }
@@ -8935,6 +8963,24 @@ impl App {
             None
         };
 
+        // ADR-0055 §1: hover do botão de sessões, mesmo padrão acima --
+        // fora da `TabBarLayout` (zona fixa), calculado à parte de
+        // `bar_hover` (que só cobre o que `hit_test` testa: trilha,
+        // pílulas, abas).
+        let hover_sessions_button = state.in_bar(state.cursor_position.1, style) && {
+            let cursor_logical = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            tab_bar::point_in_sessions_button(
+                style,
+                bar_width,
+                bar_height(style),
+                is_mac,
+                cursor_logical,
+            )
+        };
+
         // Hover por brilho (F4 etapa 6, espec §1.10): mesmo padrão do
         // hover dos botões de janela acima -- calculado fresco a cada
         // frame a partir do cursor, nunca guardado. `None` durante
@@ -9056,6 +9102,7 @@ impl App {
             state.occupies_the_whole_screen(),
             hover_window_button,
             bar_hover,
+            hover_sessions_button,
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 

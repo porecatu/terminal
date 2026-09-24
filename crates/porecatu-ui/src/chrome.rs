@@ -208,6 +208,11 @@ pub fn paint(
     // resto do hover da barra: calculado fresco por frame a partir do
     // cursor, nunca por dentro de um modo que já consome o clique.
     hover: Option<tab_bar::TabBarHit>,
+    // ADR-0055 §1: hover do botão de sessões, mesmo padrão de
+    // `hover_window_button` acima -- fora da `TabBarLayout` (zona fixa,
+    // não rola com a trilha), por isso um parâmetro à parte, não uma
+    // variante de `TabBarHit`.
+    hover_sessions_button: bool,
 ) -> Vec<Primitive> {
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
@@ -606,20 +611,33 @@ pub fn paint(
     // ganhar à direita daqui em diante, e por ora carrega o botão de
     // configurações (RF-11.27): abre o arquivo de config no editor padrão
     // do sistema, ver `handle_bar_click`.
-    let settings = tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos);
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect: settings,
-        radius: style.tab_corner_radius,
-        color: palette::TRANSPARENT,
-        border_color: pal.new_tab_border,
-        border_width: 1.0,
-    }));
-    out.push(centered_glyph(
-        icon::SETTINGS,
-        settings,
+    // ADR-0054/ADR-0055: botão de sessões nomeadas, imediatamente à
+    // esquerda da engrenagem -- mesma anatomia, pintado pelo mesmo
+    // helper para os dois nunca divergirem (`paint_zone_icon_button`).
+    // Hover por brilho só aqui: a engrenagem nunca teve estado de hover
+    // (dívida pré-existente, fora do escopo deste ADR -- `hovered: false`
+    // preserva o pixel de hoje).
+    let sessions = tab_bar::sessions_button_rect(style, bar_width, bar_height, is_macos);
+    paint_zone_icon_button(
+        sessions,
+        icon::BOOKMARK,
         settings_icon_size,
-        pal.chrome_icon,
-    ));
+        hover_sessions_button,
+        style,
+        pal,
+        &mut out,
+    );
+
+    let settings = tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos);
+    paint_zone_icon_button(
+        settings,
+        icon::SETTINGS,
+        settings_icon_size,
+        false,
+        style,
+        pal,
+        &mut out,
+    );
 
     // Botões de janela (ADR-0027): minimizar/maximizar-restaurar/fechar,
     // colados na borda direita. Não existem no macOS -- lá é o semáforo
@@ -851,6 +869,42 @@ fn shift(rect: Rect, dx: f32) -> Rect {
 
 fn with_alpha(color: Color, alpha: f64) -> Color {
     Color { a: alpha, ..color }
+}
+
+/// Botão de ícone da zona fixa (engrenagem, sessões -- ADR-0055 §1:
+/// "idêntica à do botão de configurações"): quadro arredondado com
+/// borda, sem preenchimento, e o ícone centrado nele. `hovered` clareia
+/// borda e ícone pelo mesmo `tab_hover_brightness` que
+/// `search_bar::push_icon_button` já usa nos três botões de ícone da
+/// busca (ADR-0041 §6: "mesmo brilho 1.18 dos demais botões da barra") --
+/// extraído aqui para os dois botões da zona fixa nunca divergirem entre
+/// si.
+#[allow(clippy::too_many_arguments)]
+fn paint_zone_icon_button(
+    rect: Rect,
+    icon: icon::Icon,
+    icon_size: f32,
+    hovered: bool,
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    out: &mut Vec<Primitive>,
+) {
+    let (border_color, icon_color) = if hovered {
+        (
+            brighten(pal.new_tab_border, style.tab_hover_brightness),
+            brighten(pal.chrome_icon, style.tab_hover_brightness),
+        )
+    } else {
+        (pal.new_tab_border, pal.chrome_icon)
+    };
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: style.tab_corner_radius,
+        color: palette::TRANSPARENT,
+        border_color,
+        border_width: 1.0,
+    }));
+    out.push(centered_glyph(icon, rect, icon_size, icon_color));
 }
 
 /// `filter: brightness(mult)` (espec §1.10), resolvido em CPU: multiplica
@@ -1209,6 +1263,7 @@ mod tests {
                 false,
                 None,
                 None,
+                false,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -1278,6 +1333,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
 
         let expected = bar_height(&style);

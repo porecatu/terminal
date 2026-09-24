@@ -67,6 +67,11 @@ const GROUP_EDITOR_SWATCHES_ID: NodeId = NodeId(19);
 const GROUP_EDITOR_ACTIONS_ID: NodeId = NodeId(20);
 const STATUS_BAR_ID: NodeId = NodeId(21);
 const STATUS_BAR_FIRST_SEGMENT_ID: u64 = 22;
+/// ADR-0054/ADR-0055: botão de sessões nomeadas. Longe da faixa dinâmica
+/// de `STATUS_BAR_FIRST_SEGMENT_ID` (poucas unidades, um `id` por
+/// segmento da barra de status) em vez de seguir logo depois dela, para
+/// nunca colidir se essa faixa crescer.
+const SESSIONS_BUTTON_ID: NodeId = NodeId(100);
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -220,6 +225,11 @@ pub(crate) fn build_tree(
         ));
         root_children.push(UNGROUPED_NEW_TAB_ID);
     }
+
+    // ADR-0054/ADR-0055: à esquerda da engrenagem na tela -- ordem do nó
+    // na árvore segue a mesma ordem de leitura, como o resto da barra.
+    nodes.push((SESSIONS_BUTTON_ID, leaf(Role::Button, "Sessões salvas")));
+    root_children.push(SESSIONS_BUTTON_ID);
 
     nodes.push((SETTINGS_BUTTON_ID, leaf(Role::Button, "Configurações")));
     root_children.push(SETTINGS_BUTTON_ID);
