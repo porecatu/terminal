@@ -140,7 +140,26 @@ impl GpuContext {
 
         let quad_shared = QuadShared::new(&device, format);
         let text_cache = glyphon::Cache::new(&device);
-        let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, &text_cache, format);
+        // `ColorMode::Accurate` (o default de `TextAtlas::new`) faz o
+        // glyphon decodificar a cor de todo glyph de sRGB pra linear antes
+        // de desenhar -- a mesma dupla conversão do comentário acima, só
+        // que dentro do próprio glyphon, e sem `remove_srgb_suffix` pra
+        // consertar: nossas cores de texto também vêm direto de hex, sem
+        // gestão de cor nenhuma. Escurecia todo texto (imperceptível nos
+        // tons já claros do corpo do chrome) e apagava por completo o
+        // tom esmaecido de item desabilitado (`#5c646f`, ~92,100,111):
+        // decodificado, cai perto de (27,33,41) -- quase idêntico ao fundo
+        // do popover/menu (`#1a1e25`, 26,30,37). `ColorMode::Web` é o que a
+        // própria doc do glyphon recomenda pra "renderizar numa textura
+        // linear que já contém cores em espaço sRGB" -- exatamente o nosso
+        // caso: passa a cor adiante sem decodificar.
+        let mut text_atlas = glyphon::TextAtlas::with_color_mode(
+            &device,
+            &queue,
+            &text_cache,
+            format,
+            glyphon::ColorMode::Web,
+        );
         let swash_cache = glyphon::SwashCache::new();
         let text_measurer = TextMeasurer::with_families(fonts);
 
