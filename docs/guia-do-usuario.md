@@ -262,6 +262,53 @@ escondido — o comando é escrito no terminal como se você o tivesse
 digitado, aparece na tela, entra no histórico do shell e `Ctrl+C` o
 interrompe. Para desligar tudo, `[project_file] enabled = false`.
 
+## Sessões nomeadas
+
+A sessão automática (acima) responde "onde eu parei?" — grava sozinha e
+devolve no arranque. As sessões nomeadas respondem a uma pergunta vizinha:
+"como eu monto o ambiente do projeto X?". Você salva a janela atual com um
+nome, e reabre aquela disposição — grupos, abas, painéis — sempre que
+quiser, numa janela nova.
+
+**Salvar.** Dois jeitos: o atalho `Ctrl+Shift+S` (`Cmd+Shift+S` no macOS),
+ou o botão de marcador na zona fixa da barra, à esquerda da engrenagem —
+ele abre um popover com "Salvar esta janela…" no topo. Os
+dois abrem um campo de texto; digite um nome e `Enter` confirma, `Esc`
+cancela sem gravar nada. Só a janela em que você está entra — as demais
+janelas abertas não são tocadas.
+
+**Restaurar.** Clique no botão de marcador para ver a lista, e clique
+numa sessão (ou realce com as setas e dê `Enter`). Isso abre uma **janela
+nova**, em cascata a partir da atual, com a mesma disposição salva: os
+mesmos grupos, abas e painéis, cada aba no `cwd` gravado (ou no diretório
+inicial, com uma nota, se aquele diretório não existe mais). A janela de
+onde você restaurou **não muda em nada**.
+
+**Sobrescrever e excluir.** Salvar com um nome que já existe (sem
+diferenciar maiúsculas) pede confirmação antes de substituir o arquivo; o
+`✕` de cada linha exclui, também com confirmação. Nenhum dos dois
+acontece sem esse passo.
+
+**A diferença com a sessão automática, numa frase:** `[session] enabled =
+false` desliga só a automática — as sessões nomeadas continuam
+funcionando, gravadas e restauradas por gesto, com ou sem ela ligada.
+
+O `.porecatu` roda numa janela restaurada por nome exatamente como rodaria
+numa restaurada no arranque: só em diretório declarado em
+`[project_file] trusted_paths`, uma vez por aba, no painel focado (acima).
+
+**Onde os arquivos ficam**, num diretório `sessions/` ao lado do
+`session.json`:
+
+| Plataforma | Caminho |
+|---|---|
+| Windows | `%LOCALAPPDATA%\porecatu\sessions\` |
+| Linux | `$XDG_STATE_HOME/porecatu/sessions/` (default `~/.local/state/porecatu/sessions/`) |
+| macOS | `~/Library/Application Support/porecatu/sessions/` |
+
+Cada sessão é um arquivo `.json` próprio — um por nome salvo, nunca lido
+no arranque do app, só quando você abre o popover, salva ou exclui.
+
 ## Barra de status
 
 A faixa no rodapé da janela mostra, da aba ativa:

@@ -2377,9 +2377,14 @@ impl WindowState {
     /// existia na árvore gravada). Molde bem mais simples de
     /// [`Self::spawn_tab_runtime`]: nunca considera `.porecatu` (RF-6.24 é
     /// só do painel focado de uma aba restaurada, ADR-0053 §12, e quem
-    /// sobe esse é sempre `spawn_tab_runtime`) nem nota de `cwd` ausente --
-    /// o `cwd` já existia (herdado do painel de origem no split, RF-6.3; o
-    /// gravado na sessão, na restauração).
+    /// sobe esse é sempre `spawn_tab_runtime`) -- mas **considera**, sim, a
+    /// nota de `cwd` ausente (RF-3.10), pelo mesmo `resolve_tab_cwd` puro
+    /// de `spawn_tab_runtime`: no split ao vivo o `cwd` herdado do painel
+    /// de origem sempre existe (`cwd_exists` dá `true` e o caminho é
+    /// idêntico ao anterior), mas o gravado na sessão de um painel
+    /// **irmão** (não focado) pode ter sido apagado do disco entre a
+    /// gravação e a restauração -- achado ao vivo nesta etapa, verificando
+    /// o cenário 9 do PRD-014 com uma sessão nomeada de dois painéis.
     ///
     /// `pane_rect` vem de fora, em vez de `self.pane_box_rect(style,
     /// pane_id)`: aquele helper só enxerga a árvore da aba **ativa**
@@ -2399,11 +2404,15 @@ impl WindowState {
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
         now: Instant,
+        startup_directory: &Option<PathBuf>,
     ) {
         let content = paint::pane_content_rect(pane_rect, style);
         let (rows, cols) = grid_size_for_rect(content, cell_metrics);
         let window_id = self.window.id();
         let proxy = proxy.clone();
+        let cwd_exists = cwd.as_ref().is_none_or(|p| p.is_dir());
+        let (cwd, missing_cwd_note) =
+            session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
             program: (!shell.program.is_empty()).then(|| shell.program.clone()),
             args: shell.args.clone(),
@@ -2428,6 +2437,9 @@ impl WindowState {
             });
         }) {
             Ok(terminal) => {
+                if let Some(note) = &missing_cwd_note {
+                    terminal.inject_note(note, palette::NOTE_ACCENT_RGB);
+                }
                 self.panes.insert(
                     (tab_id, pane_id),
                     PaneRuntime {
@@ -2477,6 +2489,7 @@ impl WindowState {
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
         now: Instant,
+        startup_directory: &Option<PathBuf>,
     ) {
         let Some(tab) = self.workspace.tab(tab_id) else {
             return;
@@ -2504,6 +2517,7 @@ impl WindowState {
                 term_params,
                 shell,
                 now,
+                startup_directory,
             );
         }
     }
@@ -2525,6 +2539,7 @@ impl WindowState {
         term_params: &TermParams,
         shell: &porecatu_config::Shell,
         panes_config: &porecatu_config::Panes,
+        startup_directory: &Option<PathBuf>,
     ) {
         let Some(tab_id) = self.workspace.active_tab() else {
             return;
@@ -2581,6 +2596,7 @@ impl WindowState {
             term_params,
             shell,
             now,
+            startup_directory,
         );
         // O painel de origem encolheu na árvore, mas o `Terminal` dele já
         // existia antes do split e não sabe disso sozinho -- sem isto, um
@@ -2672,7 +2688,16 @@ impl WindowState {
                 pane.start();
             }
         }
-        self.spawn_restored_sibling_panes(id, cell_metrics, proxy, style, term_params, shell, now);
+        self.spawn_restored_sibling_panes(
+            id,
+            cell_metrics,
+            proxy,
+            style,
+            term_params,
+            shell,
+            now,
+            startup_directory,
+        );
     }
 
     /// Fecha uma aba sem perguntar: sinaliza o processo sem bloquear
@@ -3622,6 +3647,7 @@ impl WindowState {
                     term_params,
                     shell,
                     panes_config,
+                    startup_directory,
                 );
                 ActionOutcome::Handled
             }
@@ -3635,6 +3661,7 @@ impl WindowState {
                     term_params,
                     shell,
                     panes_config,
+                    startup_directory,
                 );
                 ActionOutcome::Handled
             }
@@ -5494,6 +5521,7 @@ impl App {
                 &self.term_params,
                 &self.config.shell,
                 now,
+                &self.startup_directory,
             );
         }
         // Garantia de terminal mínimo: se o workspace ficou vazio após a

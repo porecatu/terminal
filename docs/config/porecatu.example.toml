@@ -1573,7 +1573,11 @@ close_hover_foreground = "#ffffff"
 # destino com sessão em memória pediria migração de arquivo. Para testes existe
 # a variável PORECATU_SESSION (ADR-0036), que não é contrato público.
 # Tema e zoom de sessão são persistidos junto (ADR-0031, ADR-0036) e não têm
-# chave própria -- `enabled = false` desliga tudo de uma vez.
+# chave própria -- `enabled = false` desliga a gravação/leitura automática
+# de uma vez. NÃO afeta as sessões nomeadas (PRD-014, ADR-0054 §8): salvar
+# e restaurar por nome (botão/Ctrl+Shift+S) continuam funcionando com
+# enabled = false -- são gravadas à parte, em sessions/, por gesto do
+# usuário, nunca pelo app sozinho.
 [session]
 enabled = true                    # false = sempre abre com uma aba limpa  RF-3.6
 # Atraso do agrupamento de gravações. Fechar 10 abas gera 1 escrita.       RF-3.3
