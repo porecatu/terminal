@@ -45,6 +45,7 @@ mod reload;
 mod rename;
 mod search_bar;
 mod selection;
+mod session_picker;
 mod session_writer;
 mod shell_integration;
 mod status_bar;
@@ -71,13 +72,16 @@ use reload::ConfigReload;
 use rename::RenameState;
 use search_bar::{SearchBarHit, SearchBarState};
 use selection::Selection;
+use session_picker::{
+    Highlight as SessionHighlight, Mode as SessionMode, PickerOutcome, SessionPicker,
+};
 use session_writer::SessionScheduler;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
 use terminal_menu::{
     TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
 };
 use text_field::{TextFieldState, apply_text_field_key};
-use tooltip::Hover;
+use tooltip::{Hover, HoverKey};
 use warning::{Severity, WarningStack};
 
 /// Janela de tempo entre um clique e o próximo pra contar como duplo
@@ -858,16 +862,11 @@ enum ActionOutcome {
     /// `theme.cycle` (RF-5.21, F4 etapa 6): o ciclo é do processo
     /// (ADR-0031 §4), não da janela.
     CycleTheme,
-    /// `session.save_named`/`session.open_list` (ADR-0054 §7, PRD-014).
-    /// `edit_name = true` para `save_named` (campo de nome já em foco,
-    /// RF-14.2); `false` para `open_list` (primeira linha realçada,
-    /// RF-14.7). O popover em si é o ADR-0055 -- por ora `App` só recebe
-    /// o pedido e ignora (`// TODO(prompt 04)` no `match outcome` do
-    /// dispatcher de tecla).
+    /// `session.save_named`/`session.open_list` (ADR-0054 §7, ADR-0055
+    /// §3, PRD-014). `edit_name = true` para `save_named` (campo de nome
+    /// já em foco, RF-14.2); `false` para `open_list` (primeira linha
+    /// realçada, RF-14.7).
     OpenSessionPicker {
-        // Lido só quando o popover existir (prompt 04) --
-        // `#[allow(dead_code)]` até lá.
-        #[allow(dead_code)]
         edit_name: bool,
     },
     Unhandled,
@@ -1004,6 +1003,9 @@ struct WindowState {
     group_editor: Option<GroupEditor>,
     /// Popover de destino do `tab.move_to_group` (RF-2.20, ADR-0023 §4).
     move_to_group: Option<MoveToGroupPopover>,
+    /// Popover de sessões nomeadas (PRD-014, ADR-0054, ADR-0055), sétimo
+    /// widget de chrome -- mesma exclusão mútua de `close_all_popovers`.
+    session_picker: Option<SessionPicker>,
     /// Último clique numa pílula, pra detectar o duplo clique do RF-2.22 --
     /// mesmo padrão de `input::ClickTracker`, mas escopado à pílula (que
     /// não passa pelo roteamento de mouse do terminal).
@@ -1794,6 +1796,7 @@ impl WindowState {
             terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
+            session_picker: None,
             last_pill_click: None,
             selection: Selection::default(),
             last_titlebar_click: None,
@@ -1897,16 +1900,17 @@ impl WindowState {
         self.session_dirty = true;
     }
 
-    /// Fecha os quatro widgets da camada popover (ADR-0023: "abrir
-    /// qualquer um dos dois fecha o outro, num ponto só do código") --
-    /// chamado antes de abrir qualquer um deles, garantindo que nunca
-    /// coexistem.
+    /// Fecha os cinco widgets da camada popover (ADR-0023: "abrir
+    /// qualquer um dos dois fecha o outro, num ponto só do código" --
+    /// estendido ao popover de sessões pelo ADR-0055 §2) -- chamado antes
+    /// de abrir qualquer um deles, garantindo que nunca coexistem.
     fn close_all_popovers(&mut self) {
         self.context_menu = None;
         self.group_context_menu = None;
         self.terminal_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
+        self.session_picker = None;
     }
 
     /// Informa o resultado de agir sobre um hyperlink (RF-11.12/RF-11.13)
@@ -3260,6 +3264,42 @@ impl WindowState {
         }
     }
 
+    /// Espelha `handle_move_to_group_key`, sobre `session_picker` -- só
+    /// que aqui a maioria dos efeitos ainda não tem para onde ir
+    /// (`App::restore_named_session`/`save_named_session`/`delete_named`
+    /// só ganham chamador no prompt 05, ADR-0055 §3): por ora `Restore`/
+    /// `SubmitName` fecham o popover (é o que vai acontecer de verdade
+    /// depois de restaurar/salvar, ADR-0055 §3 "fecha... depois de
+    /// restaurar... e depois de salvar com sucesso") sem tocar disco
+    /// nenhum ainda; `RequestDelete` fica aberto -- excluir de verdade
+    /// pede o diálogo de confirmação do prompt 05, que ainda não existe.
+    fn handle_session_picker_key(&mut self, event: &KeyEvent, max_visible_rows: usize) {
+        if event.state != ElementState::Pressed {
+            return;
+        }
+        let modifiers = self.modifiers;
+        let Some(picker) = &mut self.session_picker else {
+            return;
+        };
+        let outcome = picker.handle_key(
+            &event.logical_key,
+            event.text.as_deref(),
+            modifiers,
+            max_visible_rows,
+        );
+        match outcome {
+            PickerOutcome::None => {}
+            PickerOutcome::Close => self.session_picker = None,
+            // TODO(prompt 05): App::restore_named_session(event_loop,
+            // window_id, &file).
+            PickerOutcome::Restore(_file) => self.session_picker = None,
+            // TODO(prompt 05): diálogo de confirmação + delete_named.
+            PickerOutcome::RequestDelete(_entry) => {}
+            // TODO(prompt 05): App::save_named_session(window_id, &name).
+            PickerOutcome::SubmitName(_name) => self.session_picker = None,
+        }
+    }
+
     /// Executa o destino escolhido no popover do RF-2.20.
     fn run_move_target(&mut self, tab: TabId, target: MoveTarget) {
         match target {
@@ -4068,6 +4108,23 @@ impl WindowState {
         self.group_editor = Some(GroupEditor::new(group, &name, color_index, focus));
     }
 
+    /// Abre o popover de sessões (ADR-0054/ADR-0055 §3): fecha qualquer
+    /// outro popover primeiro (ADR-0023, estendido a este widget), lê a
+    /// lista **na hora de abrir** (RF-14.18) -- nunca no arranque, e
+    /// nunca guardada entre uma abertura e outra. `edit_name = true`
+    /// abre já em edição (`session.save_named`, RF-14.1/RF-14.2);
+    /// `false` em navegação (`session.open_list`/clique no botão,
+    /// RF-14.7).
+    fn open_session_picker(&mut self, edit_name: bool) {
+        self.close_all_popovers();
+        let entries = porecatu_session::named::list_named();
+        self.session_picker = Some(if edit_name {
+            SessionPicker::open_editing(entries)
+        } else {
+            SessionPicker::open_browsing(entries)
+        });
+    }
+
     /// Executa uma ação da lista única de grupo (RF-10.21,
     /// `group_menu::group_action_items`) -- chamado tanto pelo menu de
     /// contexto do grupo quanto pela lista de ações do editor
@@ -4655,7 +4712,40 @@ impl WindowState {
             self.cursor_position.0 as f32 / self.scale,
             self.cursor_position.1 as f32 / self.scale,
         );
-        let target = if self.in_bar(self.cursor_position.1, style)
+        // Popover de sessões (ADR-0055 §2): tooltip da linha truncada sob
+        // o cursor -- independe de `in_bar` (o popover flutua abaixo da
+        // barra), então entra antes e como ramo exclusivo do resto.
+        let target = if let Some(picker) = &self.session_picker {
+            let layout = overlay::layout_session_picker(
+                picker,
+                config,
+                style,
+                self.logical_width,
+                bar_height(style),
+                is_macos(),
+                self.logical_width,
+                self.logical_height,
+            );
+            match overlay::session_picker_hit(&layout, bar_point) {
+                Some(overlay::SessionPickerHit::Row(i)) => {
+                    let visible_i = i - layout.first_visible_index;
+                    picker.entries().get(i).and_then(|entry| {
+                        let row_rect = layout.visible_row_rects[visible_i];
+                        let delete_rect = layout.delete_button_rects[visible_i];
+                        let (_, truncated) = overlay::session_picker_row_label(
+                            &entry.name,
+                            row_rect,
+                            config.appearance.session_picker.row_padding_x as f32,
+                            delete_rect,
+                            config.appearance.context_menu.font_size as f32,
+                            gpu.text_measurer(),
+                        );
+                        truncated.then(|| (HoverKey::SessionRow(i), row_rect, entry.name.clone()))
+                    })
+                }
+                _ => None,
+            }
+        } else if self.in_bar(self.cursor_position.1, style)
             && self.dialog.is_none()
             && self.context_menu.is_none()
             && self.group_context_menu.is_none()
@@ -4682,7 +4772,7 @@ impl WindowState {
                         x: t.rect.x - self.scroll_offset,
                         ..t.rect
                     };
-                    Some((t.id, screen_rect, title))
+                    Some((HoverKey::Tab(t.id), screen_rect, title))
                 })
         } else {
             None
@@ -7435,6 +7525,14 @@ impl App {
             }
             return;
         }
+        if state.session_picker.is_some() {
+            let max_visible_rows = self.config.appearance.session_picker.max_visible_rows as usize;
+            state.handle_session_picker_key(&key, max_visible_rows);
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
         if matches!(
             state.drag,
             Drag::TabDragging { .. } | Drag::GroupDragging { .. }
@@ -7525,11 +7623,12 @@ impl App {
             }
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
             ActionOutcome::CycleTheme => self.cycle_theme(Instant::now()),
-            // TODO(prompt 04): abrir o popover de sessões (ADR-0055),
-            // com o campo de nome em foco quando `edit_name`. Por ora
-            // o pedido (`session.save_named`/`session.open_list`) é
-            // recebido e descartado -- nenhuma UI ainda o consome.
-            ActionOutcome::OpenSessionPicker { edit_name: _ } => {}
+            // ADR-0055 §3: `session.save_named` abre em edição (campo em
+            // foco), `session.open_list` em navegação.
+            ActionOutcome::OpenSessionPicker { edit_name } => {
+                state.open_session_picker(edit_name);
+                state.window.request_redraw();
+            }
             ActionOutcome::Unhandled => {
                 if let Some(runtime) = state.active_runtime() {
                     // Modos lidos agora, não do snapshot do último frame
@@ -7543,6 +7642,110 @@ impl App {
                         self.config.terminal.scrollback.scroll_on_input,
                     );
                 }
+            }
+        }
+    }
+
+    /// Clique com o popover de sessões aberto (ADR-0055 §3): item de
+    /// salvar entra em edição (ou, já em edição, posiciona o cursor no
+    /// campo -- mesmo padrão de `dispatch_group_editor_click` logo
+    /// abaixo); linha restaura, `X` pede exclusão sem restaurar nem mexer
+    /// no realce; fora de tudo isso, ou botão que não é o esquerdo,
+    /// fecha. `Restore` só fecha o popover por ora -- `App::
+    /// restore_named_session` é o prompt 05, mesma dívida marcada em
+    /// `WindowState::handle_session_picker_key`.
+    fn dispatch_session_picker_click(
+        &mut self,
+        window_id: WindowId,
+        logical_point: (f32, f32),
+        button: MouseButton,
+    ) {
+        let Some(gpu) = &mut self.gpu else {
+            return;
+        };
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let Some(picker) = &state.session_picker else {
+            return;
+        };
+        let layout = overlay::layout_session_picker(
+            picker,
+            &self.config,
+            &self.style,
+            state.logical_width,
+            bar_height(&self.style),
+            is_macos(),
+            state.logical_width,
+            state.logical_height,
+        );
+        let hit = overlay::session_picker_hit(&layout, logical_point);
+
+        if button != MouseButton::Left {
+            state.session_picker = None;
+            return;
+        }
+
+        let max_visible_rows = self.config.appearance.session_picker.max_visible_rows as usize;
+        match hit {
+            Some(overlay::SessionPickerHit::SaveArea) => {
+                let Some(picker) = &mut state.session_picker else {
+                    return;
+                };
+                // Sai da borda de `picker.mode()` como um `Option<String>`
+                // **antes** de chamar qualquer método `&mut self` sobre
+                // `picker` -- nada de casar `picker.mode()` e mutar
+                // `picker` dentro do mesmo braço.
+                let editing_buffer = match picker.mode() {
+                    SessionMode::EditingName(field) => Some(field.text().to_string()),
+                    SessionMode::Browsing => None,
+                };
+                match editing_buffer {
+                    None => picker.enter_editing(),
+                    Some(buffer) => {
+                        let cfg = &self.config.appearance.group_editor;
+                        let input_padding_x = cfg.input_padding_x as f32;
+                        let input_font_size = cfg.input_font_size as f32;
+                        let measurer = gpu.text_measurer();
+                        let available_width =
+                            (layout.save_rect.width - input_padding_x * 2.0).max(0.0);
+                        let text_width =
+                            measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
+                        let text_x = tab_bar::scrolled_text_x(
+                            layout.save_rect.x,
+                            input_padding_x,
+                            text_width,
+                            available_width,
+                        );
+                        let local_x = logical_point.0 - text_x;
+                        let byte_index = measurer.index_at_offset(
+                            &buffer,
+                            overlay::BODY_FONT,
+                            input_font_size,
+                            local_x,
+                        );
+                        picker.click_name_at(byte_index);
+                        state.mouse_button_down = Some(button);
+                    }
+                }
+            }
+            Some(overlay::SessionPickerHit::DeleteRow(index)) => {
+                if let Some(picker) = &mut state.session_picker {
+                    // TODO(prompt 05): diálogo de confirmação + `delete_named`.
+                    let _ = picker.click_delete(index);
+                }
+            }
+            Some(overlay::SessionPickerHit::Row(index)) => {
+                if let Some(picker) = &mut state.session_picker {
+                    let outcome = picker.click_row(index, max_visible_rows);
+                    if matches!(outcome, PickerOutcome::Restore(_)) {
+                        // TODO(prompt 05): App::restore_named_session.
+                        state.session_picker = None;
+                    }
+                }
+            }
+            None => {
+                state.session_picker = None;
             }
         }
     }
@@ -7672,6 +7875,22 @@ impl App {
             };
             if notches != 0.0 {
                 popover.move_highlight(-notches.signum() as isize);
+                state.window.request_redraw();
+            }
+            return;
+        }
+        // Popover de sessões (`session_picker.rs`, nota do módulo): roda
+        // rola a lista sem mexer no realce -- gesto independente do
+        // teclado, ao contrário do popover de destino acima.
+        if let Some(picker) = &mut state.session_picker {
+            let notches = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if notches != 0.0 {
+                let max_visible_rows =
+                    self.config.appearance.session_picker.max_visible_rows as usize;
+                picker.scroll_by(-notches.signum() as isize, max_visible_rows);
                 state.window.request_redraw();
             }
             return;
@@ -7888,6 +8107,76 @@ impl App {
             );
             if let Some(index) = overlay::move_to_group_hit(&layout, logical_point) {
                 popover.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+
+        // Popover de sessões: hover move o realce entre item de salvar e
+        // linhas -- mesmo estado do teclado (ADR-0055 §3) -- e arrasta
+        // dentro do campo em modo de edição, mesmo padrão do editor de
+        // grupo/busca (só entra com o botão esquerdo já pressionado a
+        // partir de um clique no próprio campo).
+        if state.session_picker.is_some() {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let max_visible_rows = self.config.appearance.session_picker.max_visible_rows as usize;
+            let layout = {
+                let picker = state.session_picker.as_ref().expect("checado acima");
+                overlay::layout_session_picker(
+                    picker,
+                    &self.config,
+                    &self.style,
+                    state.logical_width,
+                    bar_height(&self.style),
+                    is_macos(),
+                    state.logical_width,
+                    state.logical_height,
+                )
+            };
+            if state.mouse_button_down == Some(MouseButton::Left)
+                && let Some(gpu) = &mut self.gpu
+                && let Some(picker) = &mut state.session_picker
+            {
+                let editing_buffer = match picker.mode() {
+                    SessionMode::EditingName(field) => Some(field.text().to_string()),
+                    SessionMode::Browsing => None,
+                };
+                if let Some(buffer) = editing_buffer {
+                    let cfg = &self.config.appearance.group_editor;
+                    let input_padding_x = cfg.input_padding_x as f32;
+                    let input_font_size = cfg.input_font_size as f32;
+                    let measurer = gpu.text_measurer();
+                    let available_width = (layout.save_rect.width - input_padding_x * 2.0).max(0.0);
+                    let text_width =
+                        measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
+                    let text_x = tab_bar::scrolled_text_x(
+                        layout.save_rect.x,
+                        input_padding_x,
+                        text_width,
+                        available_width,
+                    );
+                    let local_x = logical_point.0 - text_x;
+                    let byte_index = measurer.index_at_offset(
+                        &buffer,
+                        overlay::BODY_FONT,
+                        input_font_size,
+                        local_x,
+                    );
+                    picker.drag_name_to(byte_index);
+                }
+            } else if let Some(picker) = &mut state.session_picker {
+                match overlay::session_picker_hit(&layout, logical_point) {
+                    Some(overlay::SessionPickerHit::Row(index)) => {
+                        picker.set_highlight(SessionHighlight::Row(index), max_visible_rows);
+                    }
+                    Some(overlay::SessionPickerHit::SaveArea) => {
+                        picker.set_highlight(SessionHighlight::Save, max_visible_rows);
+                    }
+                    _ => {}
+                }
             }
             state.window.request_redraw();
             return;
@@ -8145,6 +8434,7 @@ impl App {
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
+            || state.session_picker.is_some()
             || state.rename.editing_tab().is_some();
         let logical_point = (
             position.x as f32 / state.scale,
@@ -8547,6 +8837,15 @@ impl App {
             return;
         }
 
+        // Popover de sessões: ver `dispatch_session_picker_click`.
+        if state.session_picker.is_some() {
+            self.dispatch_session_picker_click(window_id, logical_point, button);
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
         // Aviso: botão de fechar dispensa; corpo não faz nada além de
         // consumir o clique (não deixa passar pro que está atrás).
         let warning_layout = overlay::layout_warnings(
@@ -8795,10 +9094,16 @@ impl App {
                     );
                     state.window.request_redraw();
                 }
-                // TODO(prompt 04): abrir o popover de sessões (ADR-0055).
-                // Mesmo estado de "pedido recebido, ainda sem UI" do
-                // `ActionOutcome::OpenSessionPicker` do prompt 02.
+                // ADR-0055 §3: clique no botão abre em navegação. "Clicar
+                // de novo com ele aberto fecha" já sai de graça: com o
+                // popover aberto, `dispatch_session_picker_click`
+                // intercepta todo clique antes daqui (`return` mais
+                // acima), e um clique sobre o botão -- fora dos
+                // retângulos do popover -- cai no braço `None` dele, que
+                // fecha. Este braço só é alcançado com o popover já
+                // fechado.
                 NewTabRequest::OpenSessionPicker => {
+                    state.open_session_picker(false);
                     state.window.request_redraw();
                 }
                 NewTabRequest::None => {
@@ -9137,6 +9442,7 @@ impl App {
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
+            || state.session_picker.is_some()
             || state.rename.editing_tab().is_some();
         let hovering_grid = !state.in_bar(state.cursor_position.1, style)
             && !state.in_status_bar(state.cursor_position.1, style);
@@ -9438,6 +9744,53 @@ impl App {
                 &state.workspace,
                 config,
                 pal,
+                gpu.text_measurer(),
+            ));
+        }
+        if let Some(picker) = &state.session_picker {
+            let layout = overlay::layout_session_picker(
+                picker,
+                config,
+                style,
+                bar_width,
+                h,
+                is_mac,
+                state.logical_width,
+                state.logical_height,
+            );
+            // Hover por brilho, mesmo padrão de `hover_window_button`/
+            // `hover_sessions_button` acima: calculado fresco do cursor a
+            // cada frame, nunca guardado -- o `X` só tinge de destrutivo
+            // quando o cursor está precisamente sobre ele, não em toda a
+            // linha (ADR-0055 §2).
+            let cursor_logical = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            let hovered_delete = layout
+                .delete_button_rects
+                .iter()
+                .position(|&rect| tab_bar::rect_contains(rect, cursor_logical))
+                .map(|i| layout.first_visible_index + i);
+            // Chip do atalho (ADR-0055 §2): lido do mapa resolvido, some
+            // se o usuário desvinculou `session.save_named`. Só faz
+            // sentido em navegação -- em edição o item vira o campo.
+            let save_chip_label = match picker.mode() {
+                SessionMode::Browsing => {
+                    keymap::chord_for_action(&self.keymap, Action::SessionSaveNamed)
+                        .map(|chord| chord.label())
+                }
+                SessionMode::EditingName(_) => None,
+            };
+            popover.extend(overlay::paint_session_picker(
+                &layout,
+                picker,
+                save_chip_label.as_deref(),
+                hovered_delete,
+                config,
+                style,
+                pal,
+                &self.term_pal,
                 gpu.text_measurer(),
             ));
         }

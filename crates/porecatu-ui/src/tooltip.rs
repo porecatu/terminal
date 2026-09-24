@@ -2,7 +2,11 @@
 
 //! Hover e tooltip (ADR-0019, RF-1.10): só aparece pra alvo com texto
 //! truncado, depois de 600ms de hover parado. F2 só tem alvo de aba
-//! (rótulo); grupo (RF-2.12) é F3.
+//! (rótulo); grupo (RF-2.12) é F3. Desde o ADR-0055 §2, também a linha
+//! do popover de sessões (`HoverKey::SessionRow`) -- `Hover` não conhece
+//! ali `TabId` como o único tipo de alvo possível, só um `HoverKey` que
+//! distingue os dois por igualdade, o que é tudo que a máquina de estado
+//! abaixo precisa.
 //!
 //! `Instant::now()` não aparece aqui, pelo mesmo motivo de `warning.rs`:
 //! quem chama passa `now`, o que torna o atraso testável sem dormir.
@@ -15,18 +19,28 @@ use porecatu_render::Rect;
 /// Espec. §2.20: "após 600ms de hover parado".
 pub const HOVER_DELAY: Duration = Duration::from_millis(600);
 
+/// O que está sob hover -- aba (rótulo truncado) ou linha do popover de
+/// sessões (nome truncado, ADR-0055 §2). Um `enum` em vez de genérico
+/// porque só há dois consumidores, e um genérico não pagaria pela
+/// simplicidade perdida no resto do módulo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoverKey {
+    Tab(TabId),
+    SessionRow(usize),
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Hover {
     #[default]
     None,
     Pending {
-        tab: TabId,
+        key: HoverKey,
         anchor: Rect,
         text: String,
         since: Instant,
     },
     Shown {
-        tab: TabId,
+        key: HoverKey,
         anchor: Rect,
         text: String,
     },
@@ -37,33 +51,33 @@ impl Hover {
     /// não há alvo elegível (fora de qualquer aba truncada, ou aba não
     /// truncada: ADR-0019 "aba cujo título cabe inteiro não tem tooltip").
     /// Mudar de alvo reinicia o atraso; o mesmo alvo atualiza a geometria
-    /// (a trilha pode ter rolado) sem reiniciar.
-    pub fn update(&mut self, target: Option<(TabId, Rect, String)>, now: Instant) {
-        let Some((tab, anchor, text)) = target else {
+    /// (a trilha pode ter rolado, ou a lista de sessões) sem reiniciar.
+    pub fn update(&mut self, target: Option<(HoverKey, Rect, String)>, now: Instant) {
+        let Some((key, anchor, text)) = target else {
             *self = Hover::None;
             return;
         };
         match self {
             Hover::None => {
                 *self = Hover::Pending {
-                    tab,
+                    key,
                     anchor,
                     text,
                     since: now,
                 };
             }
             Hover::Pending {
-                tab: cur,
+                key: cur,
                 anchor: a,
                 text: t,
                 ..
             } => {
-                if *cur == tab {
+                if *cur == key {
                     *a = anchor;
                     *t = text;
                 } else {
                     *self = Hover::Pending {
-                        tab,
+                        key,
                         anchor,
                         text,
                         since: now,
@@ -71,16 +85,16 @@ impl Hover {
                 }
             }
             Hover::Shown {
-                tab: cur,
+                key: cur,
                 anchor: a,
                 text: t,
             } => {
-                if *cur == tab {
+                if *cur == key {
                     *a = anchor;
                     *t = text;
                 } else {
                     *self = Hover::Pending {
-                        tab,
+                        key,
                         anchor,
                         text,
                         since: now,
@@ -93,7 +107,7 @@ impl Hover {
     /// Promove `Pending` a `Shown` quando o atraso passou.
     pub fn tick(&mut self, now: Instant) {
         if let Hover::Pending {
-            tab,
+            key,
             anchor,
             text,
             since,
@@ -101,7 +115,7 @@ impl Hover {
             && now.duration_since(*since) >= HOVER_DELAY
         {
             *self = Hover::Shown {
-                tab: *tab,
+                key: *key,
                 anchor: *anchor,
                 text: std::mem::take(text),
             };
@@ -146,10 +160,14 @@ mod tests {
         }
     }
 
+    fn tab(n: u32) -> HoverKey {
+        HoverKey::Tab(TabId::new(n))
+    }
+
     #[test]
     fn shows_after_delay_elapses() {
         let mut hover = Hover::default();
-        hover.update(Some((TabId::new(0), rect(), "titulo".into())), t(0));
+        hover.update(Some((tab(0), rect(), "titulo".into())), t(0));
         hover.tick(t(599));
         assert_eq!(hover.visible(), None);
         hover.tick(t(600));
@@ -159,8 +177,8 @@ mod tests {
     #[test]
     fn switching_target_restarts_the_delay() {
         let mut hover = Hover::default();
-        hover.update(Some((TabId::new(0), rect(), "a".into())), t(0));
-        hover.update(Some((TabId::new(1), rect(), "b".into())), t(500));
+        hover.update(Some((tab(0), rect(), "a".into())), t(0));
+        hover.update(Some((tab(1), rect(), "b".into())), t(500));
         hover.tick(t(600)); // só 100ms desde o segundo alvo
         assert_eq!(hover.visible(), None);
         hover.tick(t(1100));
@@ -170,7 +188,7 @@ mod tests {
     #[test]
     fn losing_the_target_dismisses_immediately() {
         let mut hover = Hover::default();
-        hover.update(Some((TabId::new(0), rect(), "a".into())), t(0));
+        hover.update(Some((tab(0), rect(), "a".into())), t(0));
         hover.tick(t(700));
         assert!(hover.visible().is_some());
         hover.update(None, t(701));
@@ -180,11 +198,29 @@ mod tests {
     #[test]
     fn dismiss_clears_regardless_of_state() {
         let mut hover = Hover::default();
-        hover.update(Some((TabId::new(0), rect(), "a".into())), t(0));
+        hover.update(Some((tab(0), rect(), "a".into())), t(0));
         hover.tick(t(700));
         assert!(hover.visible().is_some());
         hover.dismiss();
         assert_eq!(hover, Hover::None);
         assert_eq!(hover.next_deadline(), None);
+    }
+
+    /// Diferente de `TabId`, não é o único tipo de chave possível -- uma
+    /// linha do popover de sessões (ADR-0055 §2) muda de alvo mesmo com
+    /// `text`/`rect` iguais a uma aba, porque a chave é o que decide
+    /// "é o mesmo alvo", não o conteúdo mostrado.
+    #[test]
+    fn a_session_row_and_a_tab_are_never_the_same_target() {
+        let mut hover = Hover::default();
+        hover.update(Some((tab(0), rect(), "igual".into())), t(0));
+        hover.update(
+            Some((HoverKey::SessionRow(0), rect(), "igual".into())),
+            t(100),
+        );
+        hover.tick(t(699)); // 599ms desde a troca -- ainda não mostrou
+        assert_eq!(hover.visible(), None);
+        hover.tick(t(700));
+        assert_eq!(hover.visible(), Some((rect(), "igual")));
     }
 }

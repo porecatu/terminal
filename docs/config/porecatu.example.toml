@@ -635,6 +635,23 @@ swatch_size = 8
 swatch_gap = 8
 
 
+# Popover de sessões nomeadas (PRD-014, ADR-0054, ADR-0055 §2), sétimo
+# widget de chrome -- botão à esquerda da engrenagem. Só geometria: cores
+# e tipografia vêm de [appearance.context_menu] (mesmo popover, linhas em
+# vez de itens de ação), e o campo "Salvar esta janela..." em modo de
+# edição reaproveita [appearance.group_editor] (o mesmo campo de nome).
+# Classe de recarga: [A].
+[appearance.session_picker]
+# Largura fixa -- o teto do menu de contexto e do aviso, não a largura
+# mínima de context_menu.width: nome de sessão é o conteúdo, e a largura
+# mínima de 200 truncaria quase todo nome.
+width = 320
+row_height = 28               # = context_menu.item_height
+row_padding_x = 8
+# Teto de linhas visíveis de uma vez; acima disso a lista rola.
+max_visible_rows = 6
+
+
 # Quadro arredondado em volta da grade do terminal -- pedido do usuário,
 # sem origem no design (a seção 2.7 da espec. descrevia um retângulo pleno).
 # A margem é o `trilha_padding` da barra e o padding é o `wrapper_padding`
