@@ -1,6 +1,6 @@
 # ADR-0044 — Empacotamento por plataforma e a primeira release
 
-**Status:** Superseded by ADR-0045 (parcial — só §3, o número da primeira versão; instalador, `release.yml`, ausência de assinatura e conteúdo de artefato continuam valendo por inteiro)
+**Status:** Superseded by ADR-0045 (parcial — só §3, o número da primeira versão) · §1 e §4 Superseded by [ADR-0057](0057-idiomas-nos-artefatos.md) (**parcial**: o binário cru deixa de ser publicado, e todo artefato ganha os arquivos de idioma); instalador, `release.yml`, ausência de assinatura e o resto do conteúdo de artefato continuam valendo
 **Data:** 2026-09-04
 **Relacionados:** ADR-0010, ADR-0011, ADR-0016, ADR-0026, ADR-0027, ADR-0040, PRD-000, PRD-011
 
@@ -33,6 +33,8 @@ Some-se um detalhe que só aparece quando alguém tenta: a matriz do `release.ym
 | Linux | `.deb` e AppImage | `.desktop` e ícone no menu; o AppImage cobre quem não usa distribuição Debian |
 
 O **binário cru continua sendo publicado**, ao lado dos instaladores e com o mesmo `sha256`. Ele é o caminho de quem põe o app num diretório do `PATH` à mão, e já funciona hoje — tirá-lo seria remover uma opção que existe para acrescentar outra.
+
+> **Revisto pelo [ADR-0057](0057-idiomas-nos-artefatos.md) §3.** O binário cru **deixa de ser publicado**. Com o texto da interface vivendo só em disco ([ADR-0056](0056-catalogo-de-textos-da-interface.md)), um executável solto abre sem texto, e a página de release sobe arquivos um a um, sem estrutura de pasta. Os acompanhantes soltos saem junto; todos continuam dentro de cada instalador. Os quatro instaladores desta tabela não mudam.
 
 Duas correções entram junto, porque são a mesma conversa:
 
@@ -73,6 +75,8 @@ O `version.workspace` sobe de `0.1.0` para `1.0.0` no PR de release, junto com o
 - **A atribuição das fontes embutidas**: `assets/fonts/LICENSE-OFL-iosevka.txt` e `assets/fonts/LICENSE-ISC-lucide.txt`. Não é cortesia — as três faces são embutidas e recortadas no binário, e as duas licenças exigem que o texto acompanhe a distribuição ([ADR-0016](0016-fontes-embutidas.md), [ADR-0024](0024-face-de-icones.md), [ADR-0026](0026-chrome-unificado-em-iosevka-fixed.md)). Os dois arquivos existem no repositório e **não** são copiados para `dist/`: o `release.yml` copia só `LICENSE` e `README.md`. É um descumprimento de licença que só não aconteceu porque nada foi publicado.
 - `porecatu.example.toml`, que é a documentação real da configuração.
 - O `sha256` de cada artefato.
+
+> **Acrescentado pelo [ADR-0057](0057-idiomas-nos-artefatos.md) §1.** A lista ganha os **arquivos de idioma** (`locales/*.toml`), no caminho que o resolvedor do [ADR-0056](0056-catalogo-de-textos-da-interface.md) §6 procura em cada plataforma — dentro do `.app`, não ao lado dele no `.dmg` —, com verificação por artefato no CI, no molde da verificação de atribuição de fonte.
 
 ### 5. Sem assinatura de código no v1
 

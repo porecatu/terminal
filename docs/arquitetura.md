@@ -54,6 +54,8 @@ O [ADR-0018](adr/0018-composicao-de-frame.md) acrescenta duas coisas a esse crat
 >
 > **Na F3 o modelo do ADR-0020 está em pé:** grupos explícitos com nome, cor e colapso, N runs implícitos mantidos por `normalize_groups`, `navigable_order()` ao lado de `visual_order()`, MRU por grupo e a escada de foco de quatro níveis. As operações da tabela existem todas, mais quatro de movimentação entre grupos e de grupo (`move_tab_to_group`, `move_tab_to_group_at`, `move_tab_to_new_run`, `move_group`). Detalhes na seção 7. O que falta do PRD-002 no core é o RF-2.21: o MRU está gravado, mas não há operação que ande de grupo em grupo.
 
+> **Acrescentado pelo [ADR-0056](adr/0056-catalogo-de-textos-da-interface.md).** Um crate folha entra no workspace, **`porecatu-locale`**, sem dependência nenhuma do projeto: lê, valida e mescla os arquivos de idioma de `locales/` ([PRD-015](prd/prd-015-idioma-da-interface.md)), recebendo de fora os diretórios e o esquema das frases. Só `porecatu-ui` depende dele. A regra que vem junto vale para todo crate abaixo de `ui`: **nenhum produz frase de interface** — devolvem erro tipado, e o `Display` deles fica para a saída de erro. Texto de interface é composto num lugar só, `porecatu-ui`, a partir do catálogo, que é `Arc` do processo como o `Arc<Config>`, e troca a quente pelo mesmo caminho da seção 6.
+
 ---
 
 ## 2. Modelo de threading
@@ -327,6 +329,8 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 > A classe fica escrita ao lado da chave no arquivo de exemplo. O evento de `notify` chega por `EventLoopProxy`, como o `Wakeup` de PTY: uma recarga é um evento e um frame, e o loop volta a dormir ([ADR-0007](adr/0007-modelo-de-threading.md)). O `Arc<Config>` é **do processo**, não da janela — uma recarga redesenha todas as janelas, e o recálculo da classe B roda por janela, porque a métrica é a mesma e as dimensões não.
 >
 > Duas decisões vizinhas: o enum `Action` que o parser de `[keybindings]` produz nasce em `porecatu-core`, porque `config` não pode depender de `ui` ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)); e um tema nomeado só declara **cor**, nunca fonte ou dimensão, o que mantém `theme.cycle` na classe A ([ADR-0031](adr/0031-temas-nomeados.md)).
+
+> **Acrescentado pelo [ADR-0056](adr/0056-catalogo-de-textos-da-interface.md) §9.** O mesmo desenho recarrega o **catálogo de idioma**: `[general] language` é classe A, e editar um arquivo em `locales/`, ao lado do `porecatu.toml`, também dispara recarga, por um segundo watch não recursivo. O catálogo é montado na thread do watcher e chega por `EventLoopProxy`; se falhar, o anterior continua.
 
 ### 6.1 O arquivo de projeto não é config do app
 

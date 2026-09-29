@@ -742,6 +742,32 @@ O pedido tinha três partes, e a primeira já estava entregue: desligar a sessã
 
 ---
 
+## Depois do v1 — idioma da interface — em andamento
+
+Fora da ordem de fases, como as cinco entradas acima, e pelo caminho do arquivo de projeto, da sincronização com o remoto e das sessões nomeadas: **requisito novo**, a pedido do dono do produto, sem rascunho a promover e sem não-objetivo a emendar — nenhum documento mencionava idioma de interface. O [PRD-015](prd/prd-015-idioma-da-interface.md) pede a escolha por `[general] language`, com arquivos por idioma em disco (`en_US.toml`, `pt_BR.toml`); o [ADR-0056](adr/0056-catalogo-de-textos-da-interface.md) decide o catálogo, o formato, a busca, a mescla e a troca ao vivo; o [ADR-0057](adr/0057-idiomas-nos-artefatos.md) decide como os arquivos entram em cada instalador.
+
+O ponto de partida é um inventário: ~180 frases em pt-BR escritas no código, a maior parte em `porecatu-ui`, e parte da prosa nascendo em `porecatu-core`, `porecatu-config` e `porecatu-session`. **O default passa a ser `en_US`** — todo usuário atual vê a interface em inglês ao atualizar, até escrever `language = "pt_BR"` —, e por isso a entrega é a **`0.8.0`**.
+
+**Sete etapas:**
+
+1. **Documentação e decisão — feita.** PRD-015; ADR-0056; ADR-0057; blockquotes de revisão no ADR-0009 §8, ADR-0014 (canal 1), ADR-0030 (classe A), ADR-0039 §5, ADR-0040 §1, ADR-0043 §4 e ADR-0044 §1 e §4; índice de ADRs, CLAUDE.md, arquitetura, CONTRIBUTING e README. **A chave `language` não entra no arquivo de exemplo aqui** — `tests/example_toml.rs` reprova chave antes de o campo existir, como na `[git]`, na `[panes]` e na `[appearance.session_picker]`.
+2. **Crate `porecatu-locale`.** Formato, parse com linha e coluna, mescla de camadas, validação contra esquema recebido, marcadores, plural `one`/`other`, gramática do nome, resolvedor puro com diretórios por argumento. Só lógica e testes. **Sem comportamento observável novo.**
+3. **Erros tipados.** `ConfigError` ganha `kind`; mensagem de cor em inglês técnico neutro; `porecatu-ui` deixa de usar `Display` de outro crate em superfície de interface. O texto visível continua o mesmo, em pt-BR.
+4. **Catálogo e migração.** `locales/en_US.toml` e `locales/pt_BR.toml` na raiz; registro de mensagens com acessores tipados; migração superfície por superfície (chrome e acessibilidade; notas no grid; avisos de config); `general.language` em `porecatu-config` **e no arquivo de exemplo, na mesma leva**; candidato de debug do resolvedor; teste de completude e de contagem de frases no código; texto da linha de comando em inglês fixo; truncamento de rótulo de menu. **É aqui que o default vira inglês.**
+5. **Troca ao vivo.** `language` na recarga, watch não recursivo sobre `locales/`, catálogo montado na thread do watcher, manutenção do anterior em falha, `Node::set_language` na raiz da árvore de acessibilidade.
+6. **Empacotamento.** `locales/` no MSI, no `.deb`, no AppImage e dentro do `.app`; verificação por artefato no CI; o binário cru sai do `release.yml`. **Nenhuma tag entre a etapa 4 e o fim desta** ([ADR-0057](adr/0057-idiomas-nos-artefatos.md) §4).
+7. **Verificação ao vivo e fechamento.** Os dois idiomas nos sete widgets, na barra de status e nas notas; troca ao vivo com menu aberto e com diálogo aberto; idioma inexistente, arquivo do usuário parcial, instalação sem `locales/`; seção "Idioma da interface" no [guia do usuário](guia-do-usuario.md); CHANGELOG em "Alterado" com a linha `language = "pt_BR"` pronta para copiar; a §4.4 da especificação visual com o truncamento de menu; versão `0.8.0`.
+
+**Escopo:** RF-15.1 a RF-15.23.
+
+**Aparência:** **uma decisão**, no [ADR-0056](adr/0056-catalogo-de-textos-da-interface.md) §12, com aval do dono do produto: rótulo de menu mais largo que o menu trunca com reticências. **Zero valor novo** — nenhum rótulo dos dois arquivos do projeto é cortado.
+
+**Dependências:** nenhuma de terceiros. Um crate novo do workspace, `porecatu-locale`, folha, que só `porecatu-ui` usa.
+
+**Critério de saída:** com `language` ausente a interface abre em inglês, e com `"pt_BR"` em português, nas duas sem nenhuma frase em identificador; trocar a chave com o app aberto muda a próxima pintura de toda janela, sem reiniciar; um arquivo do usuário com uma frase muda só aquela frase; idioma inexistente cai em `en_US` com aviso; os quatro instaladores abrem com texto, provado pelo CI; `pt_BR.toml` sem "guia"; uma só frase de interface no código.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

@@ -1,6 +1,6 @@
 # ADR-0040 — Superfície de linha de comando
 
-**Status:** Aceito
+**Status:** Aceito · §1 Superseded by [ADR-0056](0056-catalogo-de-textos-da-interface.md) (**parcial**: só o idioma do texto impresso, que passa a inglês fixo)
 **Data:** 2026-09-04
 **Relacionados:** [ADR-0003](0003-formato-de-configuracao.md), [ADR-0005](0005-persistencia-de-sessao.md), [ADR-0010](0010-licenciamento.md), [ADR-0036](0036-formato-do-arquivo-de-sessao.md), PRD-003
 
@@ -29,6 +29,8 @@ A decisão que falta tem duas partes: **como** parsear, e **o que exatamente** a
 | `porecatu --version` / `-V` | Imprime nome, versão e a licença ([ADR-0010](0010-licenciamento.md)) e sai |
 
 `--config` e o caminho posicional combinam. Argumento desconhecido, `--config` sem valor, ou mais de um posicional: mensagem de erro numa linha, código de saída diferente de zero, **sem abrir janela**. Falhar cedo e visível é melhor que abrir uma janela que ignorou o que o usuário pediu.
+
+> **Revisto pelo [ADR-0056](0056-catalogo-de-textos-da-interface.md) §3.** O texto que esta superfície imprime — `--help` e as mensagens de erro de argumento — passa a ser **inglês fixo**, fora do catálogo de idiomas do [PRD-015](../prd/prd-015-idioma-da-interface.md). `argv` é lido antes de a config existir, e traduzi-lo exigiria resolver config e idioma antes de parsear o argumento que diz qual config ler. As formas, a semântica e o código de saída não mudam.
 
 Não há flag para o arquivo de **sessão**: só `PORECATU_SESSION` ([ADR-0036](0036-formato-do-arquivo-de-sessao.md) §6). A assimetria é deliberada — `--config` existe porque o ADR-0003 a decidiu e porque trocar de config é caso de uso real; trocar o destino da sessão é costura de teste, e costura de teste não vira contrato público.
 

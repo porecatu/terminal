@@ -43,11 +43,11 @@
 | [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito · Superseded by ADR-0053 (**parcial**: só a granularidade) |
 | [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
 | [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito · Superseded by ADR-0053 (**parcial**: só o endereço da nota) |
-| [0040](0040-superficie-de-linha-de-comando.md) | Superfície de linha de comando | Aceito |
+| [0040](0040-superficie-de-linha-de-comando.md) | Superfície de linha de comando | Aceito · §1 Superseded by ADR-0056 (**parcial**: só o idioma do texto impresso, que passa a inglês fixo) |
 | [0041](0041-busca-no-scrollback.md) | Busca no scrollback: barra sobreposta no topo do quadro | Aceito · Superseded by ADR-0053 (**parcial**: só o quadro sobre o qual ela se posiciona) |
 | [0042](0042-hyperlinks-osc-8.md) | Hyperlinks OSC 8: spans no snapshot, abertura sob modificador, esquemas fechados | Aceito |
 | [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito · acrescentado por ADR-0053 (**parcial**: nós de painel; a grade continua fora) |
-| [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Superseded by ADR-0045 (**parcial**: só §3, o número da versão) |
+| [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Superseded by ADR-0045 (**parcial**: só §3, o número da versão) · §1 e §4 Superseded by ADR-0057 (**parcial**: binário cru deixa de ser publicado; arquivos de idioma em todo artefato) |
 | [0045](0045-primeira-versao-0-7-0.md) | A primeira versão publicada é `0.7.0`, não `1.0.0` | Aceito |
 | [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito · §8 Superseded by ADR-0049 (**parcial**) · §3, §5 e §8 Superseded by ADR-0052 (**parcial**) · §5 Superseded by ADR-0053 (**parcial**: a contagem de painéis volta) |
 | [0049](0049-branch-git-na-barra-de-status.md) | Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore | Aceito · §7 Superseded by ADR-0052 (**parcial**: só ahead/behind) |
@@ -57,6 +57,8 @@
 | [0053](0053-paineis-divididos.md) | Painéis divididos: árvore binária no core, divisor que é ausência de pixel, foco pelo cursor | Aceito |
 | [0054](0054-sessoes-nomeadas.md) | Sessões nomeadas: um arquivo por sessão ao lado do `session.json`, mesmo schema, restauração pelo caminho do arranque | Aceito |
 | [0055](0055-botao-e-popover-de-sessoes.md) | Botão e popover de sessões: segundo botão da zona fixa, sétimo widget de chrome | Aceito |
+| [0056](0056-catalogo-de-textos-da-interface.md) | Catálogo de textos da interface: arquivos TOML por idioma em disco, crate `porecatu-locale`, prosa só em `porecatu-ui` | Aceito |
+| [0057](0057-idiomas-nos-artefatos.md) | Idiomas nos artefatos de release: `locales/` dentro de todo instalador, e o binário cru deixa de ser publicado | Aceito |
 
 ## Convenção
 
