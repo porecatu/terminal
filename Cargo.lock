@@ -2432,6 +2432,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "porecatu-locale"
+version = "0.7.10"
+dependencies = [
+ "tempfile",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
 name = "porecatu-pty"
 version = "0.7.10"
 dependencies = [
