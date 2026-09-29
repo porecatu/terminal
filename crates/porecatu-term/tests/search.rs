@@ -106,7 +106,7 @@ fn padrao_de_regex_invalido_e_erro_nunca_panic() {
         .start_search("(", SearchMode::Regex, 1_000)
         .expect_err("regex desbalanceado deveria falhar a compilar");
 
-    assert!(!err.message().is_empty());
+    assert!(!err.detail().is_empty());
 }
 
 #[test]

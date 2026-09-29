@@ -92,7 +92,7 @@ impl fmt::Display for ColorParseError {
         };
         write!(
             f,
-            "cor inválida {value:?}: use \"#rrggbb\", \"#rrggbbaa\" ou \"transparent\""
+            "invalid color {value:?}: expected \"#rrggbb\", \"#rrggbbaa\" or \"transparent\""
         )
     }
 }

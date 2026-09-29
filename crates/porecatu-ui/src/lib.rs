@@ -37,6 +37,7 @@ mod group_menu;
 mod hyperlink;
 mod input;
 mod keymap;
+mod messages;
 mod move_to_group;
 mod overlay;
 mod paint;
@@ -738,6 +739,14 @@ const EXAMPLE_CONFIG_TOML: &str = include_str!("../../../docs/config/porecatu.ex
 /// um arquivo vazio ou um erro). Separada de `open_config_file` para ser
 /// testável sem `opener` -- testar a chamada real abriria um programa de
 /// verdade na máquina que roda `cargo test`.
+/// Por que uma sessão nomeada não foi gravada: a janela sumiu antes, ou a
+/// gravação falhou (`SaveError`). A frase é de `messages` (ADR-0056 §2).
+#[derive(Debug)]
+pub(crate) enum SaveNamedFailure {
+    WindowNotFound,
+    Save(porecatu_session::named::SaveError),
+}
+
 fn ensure_config_file_exists(path: &Path) -> std::io::Result<()> {
     if path.exists() {
         return Ok(());
@@ -767,7 +776,7 @@ fn open_config_file(config_path: Option<&Path>, warnings: &mut WarningStack, now
         warnings.push(
             Severity::Warning,
             "Não foi possível criar a config",
-            err.to_string(),
+            messages::os_cause(&err),
             now,
         );
         return;
@@ -776,7 +785,7 @@ fn open_config_file(config_path: Option<&Path>, warnings: &mut WarningStack, now
         warnings.push(
             Severity::Warning,
             "Não foi possível abrir a config",
-            err.to_string(),
+            messages::os_cause(&err),
             now,
         );
     }
@@ -2338,7 +2347,7 @@ impl WindowState {
                     }
                     Some(porecatu_config::ProjectFileOutcome::Unreadable { path, reason }) => {
                         terminal.inject_note(
-                            &format!("não foi possível ler \"{}\": {reason}", path.display()),
+                            &messages::project_file_unreadable(&path, &reason),
                             palette::NOTE_ACCENT_RGB,
                         );
                         (None, None)
@@ -2363,7 +2372,7 @@ impl WindowState {
                 self.warnings.push(
                     Severity::Error,
                     "Falha ao iniciar terminal",
-                    err.to_string(),
+                    messages::terminal_spawn_error(&err),
                     now,
                 );
                 self.touch_workspace(|ws| ws.close_tab(tab_id));
@@ -2458,7 +2467,7 @@ impl WindowState {
                 self.warnings.push(
                     Severity::Error,
                     "Falha ao iniciar terminal",
-                    err.to_string(),
+                    messages::terminal_spawn_error(&err),
                     now,
                 );
                 // Desfaz o split: fechar o painel devolve o espaço ao
@@ -5197,7 +5206,7 @@ impl App {
                 pending_startup_warnings.push((
                     Severity::Error,
                     "Config inválida",
-                    error.to_string(),
+                    messages::config_error(error),
                 ));
             }
             porecatu_config::LoadResult::Loaded { unknown_keys, .. } => {
@@ -5242,7 +5251,10 @@ impl App {
         // malformada só descarta aquela linha).
         let keymap_resolved = keymap::resolve(&config.keybindings, keymap::Platform::current());
         for issue in &keymap_resolved.issues {
-            eprintln!("keybinding inválido, ignorado: {issue}");
+            eprintln!(
+                "keybinding inválido, ignorado: {}",
+                messages::keymap_issue(issue)
+            );
         }
         let keymap = keymap_resolved.bindings;
 
@@ -5611,9 +5623,9 @@ impl App {
         &mut self,
         window_id: WindowId,
         name: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), SaveNamedFailure> {
         let Some(state) = self.windows.get(&window_id) else {
-            return Err("janela não encontrada".to_owned());
+            return Err(SaveNamedFailure::WindowNotFound);
         };
         let theme = self.session_theme.clone();
         let zoom_steps = self.session_zoom_steps();
@@ -5635,7 +5647,7 @@ impl App {
         );
         porecatu_session::named::save_named(name, window)
             .map(|_| ())
-            .map_err(|err| err.to_string())
+            .map_err(SaveNamedFailure::Save)
     }
 
     /// Resolve o `PickerOutcome` do popover de sessões nomeadas
@@ -5733,11 +5745,11 @@ impl App {
         };
         match result {
             Ok(()) => state.session_picker = None,
-            Err(reason) => {
+            Err(failure) => {
                 state.warnings.push(
                     Severity::Error,
                     "Não foi possível salvar a sessão",
-                    reason,
+                    messages::save_named_failure(&failure),
                     Instant::now(),
                 );
             }
@@ -5768,7 +5780,7 @@ impl App {
                 state.warnings.push(
                     Severity::Error,
                     "Não foi possível excluir a sessão",
-                    err.to_string(),
+                    messages::os_cause(&err),
                     Instant::now(),
                 );
             }
@@ -6911,9 +6923,12 @@ impl App {
         let (new_config, unknown_keys) = match outcome {
             ConfigReload::Invalid { error } => {
                 for state in self.windows.values_mut() {
-                    state
-                        .warnings
-                        .push(Severity::Error, "Config inválida", error.to_string(), now);
+                    state.warnings.push(
+                        Severity::Error,
+                        "Config inválida",
+                        messages::config_error(&error),
+                        now,
+                    );
                     state.window.request_redraw();
                 }
                 return;
@@ -7039,9 +7054,12 @@ impl App {
             // `[keybindings]` -- o default embutido continua valendo,
             // e o resto do mapa aplica normalmente.
             for issue in &keymap_resolved.issues {
-                state
-                    .warnings
-                    .push(Severity::Warning, "Keybinding inválido", issue.clone(), now);
+                state.warnings.push(
+                    Severity::Warning,
+                    "Keybinding inválido",
+                    messages::keymap_issue(issue),
+                    now,
+                );
             }
             // ADR-0031 §4/§5: tema de sessão que sumiu, tema declarado
             // desconhecido, e a cor fora do tema que "venceu" o tema

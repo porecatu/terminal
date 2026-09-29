@@ -24,6 +24,7 @@ use porecatu_render::{Color, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, T
 use porecatu_term::{Occurrence, OccurrenceSpan, SearchJob, SearchMode, SearchStep, Terminal};
 
 use crate::chrome::{ICON_FONT, LABEL_FONT};
+use crate::messages;
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::TabBarStyle;
 use crate::text_field::TextFieldState;
@@ -163,7 +164,7 @@ impl SearchBarState {
                 self.active = 0;
             }
             Err(err) => {
-                self.error = Some(err.message().to_string());
+                self.error = Some(err.detail().to_owned());
             }
         }
     }
@@ -211,7 +212,7 @@ impl SearchBarState {
     /// depuração, sem consumidor de UI nesta etapa.
     pub fn counter_display(&self) -> (String, bool) {
         if self.error.is_some() {
-            return (PATTERN_INVALID_LABEL.to_string(), true);
+            return (messages::search_pattern_invalid().to_owned(), true);
         }
         if self.field.text().is_empty() {
             return (String::new(), false);
@@ -225,9 +226,9 @@ impl SearchBarState {
     }
 }
 
-/// Texto exibido no lugar de "padrão inválido"/"nenhum resultado" -- fixo,
-/// não vem de tokens de aparência (é conteúdo, não desenho).
-pub const PATTERN_INVALID_LABEL: &str = "padrão inválido";
+/// Texto exibido no lugar de "nenhum resultado" -- fixo, não vem de tokens
+/// de aparência (é conteúdo, não desenho). O rótulo de padrão inválido é de
+/// `messages::search_pattern_invalid`.
 pub const NO_RESULTS_LABEL: &str = "nenhum resultado";
 pub const ALT_SCREEN_SUFFIX: &str = " (tela alternativa)";
 

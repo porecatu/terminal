@@ -34,7 +34,7 @@ pub use appearance::{
     TerminalFrame, Tooltip, Window, WindowControls,
 };
 pub use color::{Color, ColorParseError};
-pub use error::ConfigError;
+pub use error::{ConfigError, ConfigErrorKind};
 pub use general::General;
 pub use git::Git;
 pub use keybindings::Keybindings;
@@ -145,10 +145,10 @@ pub fn load(cli_config: Option<&Path>) -> LoadResult {
         Err(err) => {
             return LoadResult::Invalid {
                 config: Config::default(),
-                error: ConfigError::new(format!(
-                    "não foi possível ler \"{}\": {err}",
-                    path.display()
-                )),
+                error: ConfigError::new(ConfigErrorKind::Unreadable {
+                    path,
+                    cause: err.to_string(),
+                }),
             };
         }
     };
@@ -179,9 +179,9 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), ConfigError> {
             .map_err(|err| ConfigError::from_toml(text, err))?;
 
     if let Some(name) = theme::find_duplicate_name(&config.themes) {
-        return Err(ConfigError::new(format!(
-            "nome de tema duplicado: \"{name}\""
-        )));
+        return Err(ConfigError::new(ConfigErrorKind::DuplicateThemeName {
+            name: name.to_owned(),
+        }));
     }
 
     Ok((config, unknown_keys))
@@ -202,6 +202,8 @@ mod tests {
     fn syntax_error_is_localized() {
         let err = parse("this is not toml").unwrap_err();
         assert!(err.line.is_some());
+        assert!(err.column.is_some());
+        assert!(matches!(err.kind, ConfigErrorKind::Toml { .. }));
     }
 
     #[test]
@@ -216,7 +218,11 @@ mod tests {
     fn invalid_color_is_localized_error() {
         let err = parse("[appearance.window]\nbackground = \"not-a-color\"\n").unwrap_err();
         assert!(err.line.is_some());
-        assert!(err.message.contains("cor inválida"));
+        let ConfigErrorKind::Toml { detail } = &err.kind else {
+            panic!("expected a Toml error, got {:?}", err.kind);
+        };
+        assert!(detail.contains("invalid color \"not-a-color\""));
+        assert!(detail.contains("expected \"#rrggbb\", \"#rrggbbaa\" or \"transparent\""));
     }
 
     #[test]
@@ -228,7 +234,13 @@ mod tests {
             name = "x"
         "#;
         let err = parse(text).unwrap_err();
-        assert!(err.message.contains("x"));
+        assert_eq!(
+            err.kind,
+            ConfigErrorKind::DuplicateThemeName {
+                name: "x".to_owned()
+            }
+        );
+        assert_eq!((err.line, err.column), (None, None));
     }
 
     #[test]
@@ -236,6 +248,24 @@ mod tests {
         let result = load_from_nonexistent_path();
         assert_eq!(result.config(), &Config::default());
         assert!(matches!(result, LoadResult::Missing { .. }));
+    }
+
+    #[test]
+    fn unreadable_file_is_unreadable_error() {
+        // A directory where the file should be: exists, but cannot be read
+        // as text, and the error is not `NotFound`.
+        let dir = tempfile::tempdir().unwrap();
+        let result = load(Some(dir.path()));
+        let LoadResult::Invalid { config, error } = result else {
+            panic!("expected Invalid, got {result:?}");
+        };
+        assert_eq!(config, Config::default());
+        assert_eq!((error.line, error.column), (None, None));
+        let ConfigErrorKind::Unreadable { path, cause } = error.kind else {
+            panic!("expected Unreadable, got {:?}", error.kind);
+        };
+        assert_eq!(path, dir.path());
+        assert!(!cause.is_empty());
     }
 
     fn load_from_nonexistent_path() -> LoadResult {

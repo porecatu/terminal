@@ -18,7 +18,7 @@ use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
 use notify::{Event, RecursiveMode, Watcher};
-use porecatu_config::{Config, ConfigError};
+use porecatu_config::{Config, ConfigError, ConfigErrorKind};
 
 /// ADR-0003 regra 5 / ADR-0030: uma gravação pode disparar vários eventos
 /// do SO (escreve, renomeia, toca mtime) -- o debounce colapsa a rajada
@@ -90,10 +90,10 @@ pub(crate) fn read_and_parse(path: &Path) -> Option<ConfigReload> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
         Err(err) => {
             return Some(ConfigReload::Invalid {
-                error: ConfigError::new(format!(
-                    "não foi possível ler \"{}\": {err}",
-                    path.display()
-                )),
+                error: ConfigError::new(ConfigErrorKind::Unreadable {
+                    path: path.to_path_buf(),
+                    cause: err.to_string(),
+                }),
             });
         }
     };
