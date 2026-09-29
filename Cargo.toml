@@ -69,6 +69,10 @@ assets = [
     ["docs/config/porecatu.example.toml", "usr/share/doc/porecatu/porecatu.example.toml", "644"],
     ["assets/icon/porecatu.png", "usr/share/icons/hicolor/512x512/apps/porecatu.png", "644"],
     ["packaging/linux/porecatu.desktop", "usr/share/applications/porecatu.desktop", "644"],
+    # ADR-0057 §1: arquivos de idioma onde o resolvedor os procura a partir de
+    # /usr/bin/porecatu (<exe>/../share/porecatu/locales). Glob: idioma novo
+    # em `locales/` entra sem mexer aqui.
+    ["locales/*.toml", "usr/share/porecatu/locales/", "644"],
 ]
 
 [dependencies]

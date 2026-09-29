@@ -8,9 +8,14 @@ só o "como usar".
 
 ## Instalação
 
-Cada release publica, por plataforma, um instalador nativo **e** o binário
-cru — os dois carregam a mesma licença, a mesma atribuição de fonte e o
-mesmo `sha256` ([ADR-0044](adr/0044-empacotamento-e-release.md)).
+Cada release publica, por plataforma, um instalador nativo, com a licença,
+a atribuição de fonte, o exemplo de configuração e os arquivos de idioma
+dentro, e um `sha256` para cada arquivo
+([ADR-0044](adr/0044-empacotamento-e-release.md),
+[ADR-0057](adr/0057-idiomas-nos-artefatos.md)). **Não há binário cru**: o
+texto da interface vive em arquivos de idioma ao lado do executável, e um
+`.exe` solto abriria sem texto. `cargo install` também não é um caminho
+suportado, pelo mesmo motivo.
 
 | Plataforma | Artefato | O que ele faz |
 |---|---|---|
@@ -19,7 +24,6 @@ mesmo `sha256` ([ADR-0044](adr/0044-empacotamento-e-release.md)).
 | macOS (Intel) | `porecatu-vX.Y.Z-x86_64-apple-darwin.dmg` | Idem, para Mac Intel |
 | Linux (Debian/Ubuntu) | `porecatu-vX.Y.Z-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./porecatu-*.deb` (ou `dpkg -i`) — entra no menu de aplicativos |
 | Linux (qualquer distribuição) | `porecatu-vX.Y.Z-x86_64-unknown-linux-gnu.AppImage` | `chmod +x`, executar direto — não precisa instalar nada |
-| Qualquer plataforma | binário cru (`.exe` ou sem extensão) | Para quem prefere pôr o executável num diretório do `PATH` à mão |
 
 ### Conferindo o `sha256`
 

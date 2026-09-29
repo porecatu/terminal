@@ -133,6 +133,26 @@
                                 Source='$(var.CargoTargetBinDir)\porecatu.exe'
                                 KeyPath='yes'/>
                         </Component>
+
+                        <!--
+                          ADR-0057 par. 1: os arquivos de idioma ficam em
+                          `bin\locales\`, o `<exe>/locales` que o resolvedor do
+                          ADR-0056 par. 6 procura no Windows. Nunca embutidos no
+                          binario. Um Component por idioma: idioma novo em
+                          `locales/` precisa de linha nova aqui, e a verificacao
+                          do MSI no release.yml reprova se ela faltar. `Source` e
+                          relativo a RAIZ do projeto, nao a `wix\`.
+                        -->
+                        <Directory Id='Locales' Name='locales'>
+                            <Component Id='LocaleEnUs' Guid='*'>
+                                <File Id='LocaleEnUsFile' Name='en_US.toml' DiskId='1'
+                                    Source='locales\en_US.toml' KeyPath='yes'/>
+                            </Component>
+                            <Component Id='LocalePtBr' Guid='*'>
+                                <File Id='LocalePtBrFile' Name='pt_BR.toml' DiskId='1'
+                                    Source='locales\pt_BR.toml' KeyPath='yes'/>
+                            </Component>
+                        </Directory>
                     </Directory>
                 </Directory>
             </Directory>
@@ -141,7 +161,7 @@
         <Feature
             Id='Binaries'
             Title='Application'
-            Description='Installs the binary, LICENSE, font attributions and porecatu.example.toml.'
+            Description='Installs the binary, language files, LICENSE, font attributions and porecatu.example.toml.'
             Level='1'
             ConfigurableDirectory='APPLICATIONFOLDER'
             AllowAdvertise='no'
@@ -155,6 +175,10 @@
             <ComponentRef Id='ExampleConfig'/>
 
             <ComponentRef Id='binary0'/>
+
+            <!-- ADR-0057: arquivos de idioma em bin\locales\. -->
+            <ComponentRef Id='LocaleEnUs'/>
+            <ComponentRef Id='LocalePtBr'/>
 
             <Feature
                 Id='Environment'
