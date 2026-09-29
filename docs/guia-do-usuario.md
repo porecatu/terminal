@@ -1,7 +1,7 @@
 # Guia do usuário
 
 RF-11.22, escrito no fechamento da F6. Cobre instalação, arquivo de
-configuração, atalhos, integração de shell e a convenção do `Shift` para
+configuração, idioma da interface, atalhos, integração de shell e a convenção do `Shift` para
 selecionar texto dentro de um programa que pede o mouse. Para decisões de
 arquitetura e o "porquê" de cada coisa, veja os ADRs linkados; este guia é
 só o "como usar".
@@ -108,6 +108,103 @@ porecatu --config <arquivo>  usa esse arquivo de config
 porecatu --help / -h         imprime as formas acima e sai
 porecatu --version / -V      imprime nome, versão e licença, e sai
 ```
+
+## Idioma da interface
+
+O texto da interface — menus, diálogos, avisos, barra de busca, barra de
+status, notas no terminal — vem de arquivos de idioma
+([PRD-015](prd/prd-015-idioma-da-interface.md),
+[ADR-0056](adr/0056-catalogo-de-textos-da-interface.md)). A chave é
+`language`, em `[general]`, e o valor é o nome do arquivo sem a extensão:
+
+```toml
+[general]
+language = "en_US"
+```
+
+Vêm dois idiomas prontos: **`en_US`** (inglês) e **`pt_BR`**
+(português do Brasil). O default é **`en_US`**, fixo: o Porecatu não olha o
+idioma do sistema. **Quem usava o app em português precisa de uma linha**:
+
+```toml
+[general]
+language = "pt_BR"
+```
+
+A troca vale **ao vivo**, sem reiniciar: menu aberto e barra mudam na hora
+nas janelas abertas. O que já foi composto por um evento fica como estava
+até fechar — um diálogo aberto continua no idioma antigo, e um grupo que
+você criou com o nome "Novo grupo" continua "Novo grupo" depois de trocar
+para inglês (grupo novo nasce "New group"). Se o valor não for um nome de
+idioma válido (`pt-BR` com hífen, por exemplo) ou não houver arquivo para
+ele, o app abre em inglês e avisa, com o valor e os diretórios procurados.
+
+### Onde ficam os arquivos
+
+Os arquivos vivem **só em disco**; nenhum é embutido no executável. O app
+procura em dois lugares e **mescla frase a frase**, com o inglês como
+reserva:
+
+| Camada | Onde |
+|---|---|
+| Instalado (Windows) | `bin\locales\` dentro da pasta de instalação (o `.exe` está em `bin\`) |
+| Instalado (`.deb`) | `/usr/share/porecatu/locales/` |
+| Instalado (AppImage) | `usr/share/porecatu/locales/`, dentro do próprio AppImage |
+| Instalado (macOS) | `Porecatu.app/Contents/Resources/locales/` |
+| Usuário | `locales/` **ao lado** do `porecatu.toml` (ver a tabela em "Arquivo de configuração") |
+
+A camada do usuário vence a instalada, frase por frase. A que faltar nas
+duas cai no `en_US`; a que faltar até no `en_US` aparece como o próprio
+identificador (`tab_menu.close`), o que é feio de propósito: dá para ver
+o que está faltando.
+
+### Corrigir uma frase
+
+Crie `locales/pt_BR.toml` ao lado do `porecatu.toml` e escreva **só** a
+frase que quer trocar. Um arquivo de uma linha basta:
+
+```toml
+[tab_menu]
+new = "Abrir aba"
+```
+
+O resto continua vindo do arquivo instalado. Os identificadores estão nos
+arquivos instalados (`locales/en_US.toml` no repositório é a referência).
+Um rótulo de menu que ficar largo demais é cortado com reticências.
+
+### Acrescentar um idioma
+
+1. Copie `en_US.toml` para `locales/<xx_YY>.toml` ao lado do
+   `porecatu.toml`. O **nome do arquivo é o idioma**: duas ou três
+   minúsculas, `_`, duas maiúsculas (`es_ES`, `de_DE`). Não há campo de
+   idioma dentro do arquivo.
+2. Traduza os valores. Não mude os identificadores nem os marcadores entre
+   chaves (`{nome}`); plural é `{ one = "...", other = "..." }`.
+3. Escreva `language = "es_ES"` em `[general]`.
+
+Não precisa traduzir tudo: o que faltar sai em inglês, e o app mostra
+**uma** nota dizendo quantos textos ficaram sem tradução, que some sozinha
+em alguns segundos.
+
+### O que fica sempre em inglês
+
+- A **linha de comando**: `porecatu --help`, `--version` e as mensagens de
+  argumento inválido. Não passam pelo catálogo.
+- Os **nomes de tecla** (`Ctrl+Shift+N`) e os nomes das ações e das chaves
+  do `porecatu.toml`.
+- O detalhe técnico que vem de uma biblioteca, como a descrição do tipo
+  errado num aviso de config inválida — o título e a posição saem no seu
+  idioma.
+
+### Quando os arquivos faltam
+
+Instalação sem nenhum arquivo de idioma (executável solto, sem
+`locales/`): a interface mostra os **identificadores** no lugar das frases
+e uma única frase fixa em inglês — *"language files not found"*, com os
+diretórios procurados — no aviso e no `stderr`. Reinstalar pelo instalador
+resolve. Fora de uma instalação, `PORECATU_LOCALES=<pasta>` aponta o app
+para uma pasta de arquivos; é um recurso de teste e desenvolvimento, não um
+contrato.
 
 ## Atalhos
 

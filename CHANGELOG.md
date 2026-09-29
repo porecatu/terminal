@@ -10,11 +10,81 @@ primeiro release.
 > uma segunda janela, sem decoração nativa fora do macOS. O arquivo de config
 > (`porecatu.toml`) governa aparência, teclas e temas com recarga a quente, e
 > a sessão volta como estava ao reabrir. Instalador nativo por plataforma e
-> binário cru publicados a partir desta versão
+> binário cru publicados a partir da `0.7.0` (o binário cru saiu na `0.8.0`)
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
-## [Não lançado]
+## [0.8.0] - 2026-09-29
+
+A interface passa a ter **idioma escolhido pelo usuário**, e o default passa
+a ser **inglês**. É a primeira mudança de comportamento visível a todo
+usuário desde a `0.7.0` — por isso sobe a versão do meio
+([PRD-015](docs/prd/prd-015-idioma-da-interface.md),
+[ADR-0056](docs/adr/0056-catalogo-de-textos-da-interface.md),
+[ADR-0057](docs/adr/0057-idiomas-nos-artefatos.md)).
+
+### Adicionado
+
+- **Idioma da interface.** `[general] language` escolhe o arquivo
+  `locales/<xx_YY>.toml`; vêm `en_US` e `pt_BR`. Toda frase de interface —
+  menus de aba, grupo e terminal, popover de destino, editor de grupo,
+  diálogos, popover de sessões, barra de busca, barra de status, avisos e
+  notas no grid — vem do catálogo, e nenhum arquivo de idioma é embutido no
+  executável
+- **Troca ao vivo**: mudar `language` (ou o arquivo em `locales/`) com o app
+  aberto recarrega o catálogo nas janelas abertas; falha mantém o anterior.
+  Um diálogo aberto ou um nome de grupo já criado ficam como foram
+  compostos. A árvore de acessibilidade anuncia o idioma (`en-US`/`pt-BR`)
+- **Arquivos do usuário**: `locales/` ao lado do `porecatu.toml` se mescla
+  frase a frase com o arquivo instalado, então um arquivo de uma linha
+  corrige uma frase; um idioma novo é só um arquivo novo, e o que faltar
+  cai no inglês com **uma** nota que expira
+- Rótulo de menu que passa da largura **trunca com reticências**
+  ([ADR-0056 §12](docs/adr/0056-catalogo-de-textos-da-interface.md), sem
+  valor novo de aparência)
+- Seção "Idioma da interface" no
+  [guia do usuário](docs/guia-do-usuario.md)
+
+### Alterado
+
+- **O default da interface passou a ser inglês.** Quem usava o app em
+  português vê inglês ao atualizar. Para voltar, uma linha em
+  `porecatu.toml`:
+
+  ```toml
+  [general]
+  language = "pt_BR"
+  ```
+
+- A **linha de comando** (`--help`, `--version`, argumento inválido) passa a
+  inglês fixo, fora do catálogo
+  ([ADR-0040](docs/adr/0040-superficie-de-linha-de-comando.md) §1 revisto)
+- Todo instalador leva `locales/` — MSI em `bin\locales\`, `.deb` em
+  `/usr/share/porecatu/locales/`, AppImage e `.app` no próprio pacote — e o
+  `release.yml` verifica cada artefato contra a lista de `locales/*.toml`
+  do repositório ([ADR-0057](docs/adr/0057-idiomas-nos-artefatos.md))
+
+### Removido
+
+- **O binário cru deixa de ser publicado** na página de release, com seus
+  acompanhantes soltos. Sem `locales/` ao lado ele abriria sem texto. Quem o
+  usava instala pelo MSI, `.deb`, AppImage ou `.dmg`
+  ([ADR-0044](docs/adr/0044-empacotamento-e-release.md) §1 revisto). Os
+  `.sha256` dos instaladores continuam
+
+### Dívida de verificação
+
+Os doze cenários do PRD-015 foram percorridos ao vivo numa instância isolada
+do Windows, com o MSI extraído sem `PORECATU_LOCALES` na etapa 6. Ficam só
+por teste automatizado e CI: `.deb`, AppImage e `.app` (sem ambiente Linux ou
+macOS aqui), leitor de tela de verdade (a árvore foi lida por UI Automation,
+não por NVDA) e o truncamento contra o atalho do menu. Detalhe em
+[docs/roadmap.md](docs/roadmap.md).
+
+## [0.7.10] - 2026-09-24
+
+Acumulado desde a `0.7.0`: as versões `0.7.1` a `0.7.10` não tiveram entrada
+própria neste arquivo.
 
 ### Adicionado
 
