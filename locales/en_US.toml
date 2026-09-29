@@ -1,0 +1,118 @@
+# en_US.toml -- textos da interface do Porecatu em inglês americano.
+#
+# É o idioma padrão e a reserva de todos os outros: uma frase que falta num
+# idioma cai aqui, e uma que falta aqui também aparece como o próprio
+# identificador (ADR-0056, PRD-015). O formato está descrito em pt_BR.toml;
+# em resumo:
+# - o NOME DO ARQUIVO é o idioma (`en_US`); não há campo de idioma aqui dentro;
+# - uma tabela por superfície, com no máximo dois níveis
+#   (`[dialog.close_tab]`); a chave é a identidade da frase, nunca o texto;
+# - `{nome}` é um marcador, preenchido pelo programa; `{{` e `}}` são chaves
+#   literais;
+# - plural é `{ one = "...", other = "..." }`: `one` para exatamente 1, `other`
+#   para todo o resto;
+# - caixa alta faz parte do texto (`GROUP`), escolha do tradutor;
+# - a tabela `meta` é reservada e ignorada.
+#
+# Terminologia: "tab" (em pt_BR, "aba").
+#
+# Este é o arquivo instalado com o app. Para mudar uma frase sem mexer nele,
+# crie `locales/en_US.toml` ao lado do seu `porecatu.toml` e escreva só as
+# frases que quer trocar: as camadas se mesclam frase a frase.
+
+[tab_menu]
+new = "New tab"
+close = "Close tab"
+move_to_group = "Move to group"
+
+[terminal_menu]
+copy = "Copy"
+paste = "Paste"
+select_all = "Select all"
+search = "Search"
+open_link = "Open link"
+copy_link = "Copy link"
+
+[group_menu]
+rename = "Rename"
+set_color = "Change color"
+collapse = "Collapse group"
+expand = "Expand group"
+new_tab = "New tab in group"
+close = { one = "Close group ({count} tab)", other = "Close group ({count} tabs)" }
+dissolve = "Ungroup"
+
+[group_editor]
+section_group = "GROUP"
+section_color = "COLOR"
+# Nome do grupo novo. É resolvido no idioma corrente quando o grupo nasce e
+# daí em diante é dado do usuário: gravado na sessão, nunca retraduzido.
+default_name = "New group"
+
+[move_to_group]
+new_group = "New group"
+
+[session_picker]
+save_item = "Save this window…"
+empty_list = "no saved sessions"
+name_placeholder = "session name"
+
+[dialog]
+cancel = "Cancel"
+
+[dialog.close_tab]
+title = "Close tab?"
+body = "\"{title}\" has a program running in the foreground. Close anyway?"
+confirm = "Close tab"
+
+[dialog.close_pane]
+title = "Close pane?"
+body = "\"{title}\" has a program running in the foreground. Close anyway?"
+confirm = "Close pane"
+
+[dialog.close_window]
+title = "Close window?"
+body_tabs = "This window has more than one tab open."
+body_program = "This window has a program running in the foreground."
+confirm = "Close window"
+
+[dialog.close_group]
+title = "Close group?"
+body = { one = "This closes {count} tab.", other = "This closes {count} tabs." }
+confirm = { one = "Close group ({count} tab)", other = "Close group ({count} tabs)" }
+
+[dialog.delete_session]
+title = "Delete saved session?"
+body = "This permanently removes «{name}»."
+confirm = "Delete"
+
+[dialog.overwrite_session]
+title = "Overwrite session «{name}»?"
+body = "The session saved under this name will be replaced."
+confirm = "Overwrite"
+
+# Avisos sobre o próprio idioma (ADR-0056 §8).
+[notice.language_not_found]
+title = "Language not found"
+body = "No file for \"{language}\" (searched: {searched})."
+
+[notice.language_invalid_name]
+title = "Invalid language name"
+body = "\"{value}\" is not a valid language name (example: pt_BR)."
+
+[notice.language_syntax]
+title = "Language file error"
+body = "{path}: {detail}"
+body_at = "{path}, line {line}, column {column}: {detail}"
+
+[notice.language_unreadable]
+title = "Language file unreadable"
+body = "Could not read \"{path}\": {cause}"
+
+[notice.language_missing_messages]
+title = "Untranslated texts"
+body = { one = "{count} text without translation in {locale}", other = "{count} texts without translation in {locale}" }
+
+[notice.language_unknown_keys]
+title = "Unknown keys in language file"
+body = { one = "{count} unknown key in {path}", other = "{count} unknown keys in {path}" }

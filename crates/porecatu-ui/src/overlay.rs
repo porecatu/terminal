@@ -44,6 +44,7 @@
 //! `chrome.rs` usa, não duplicado aqui.
 
 use porecatu_core::{GroupColor, Workspace};
+use porecatu_locale::Catalog;
 use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextMeasurer, TextRun, icon,
 };
@@ -54,6 +55,7 @@ use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
 use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
+use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::palette::{self, ResolvedPalette};
 use crate::session_picker::{Highlight, Mode, SessionPicker};
@@ -273,8 +275,6 @@ pub fn hit_test_warnings(layout: &WarningLayout, point: (f32, f32)) -> Option<Wa
 
 // ---- diálogo de confirmação (espec §2.15, ADR-0014, `[appearance.dialog]`) ----
 
-const DIALOG_CANCEL_LABEL: &str = "Cancelar";
-
 pub struct DialogLayout {
     pub modal_rect: Rect,
     pub cancel_rect: Rect,
@@ -299,7 +299,7 @@ pub fn layout_dialog(
     let button_padding_x = cfg.button_padding_x as f32;
 
     let cancel_width =
-        measurer.measure_width(DIALOG_CANCEL_LABEL, BODY_FONT, body_size) + button_padding_x * 2.0;
+        measurer.measure_width(&dialog.cancel_label, BODY_FONT, body_size) + button_padding_x * 2.0;
     let confirm_width = measurer.measure_width(&dialog.confirm_label, BODY_FONT, body_size)
         + button_padding_x * 2.0;
 
@@ -391,7 +391,7 @@ pub fn paint_dialog(
 
     paint_dialog_button(
         layout.cancel_rect,
-        DIALOG_CANCEL_LABEL,
+        &dialog.cancel_label,
         palette::TRANSPARENT,
         pal.dialog_cancel_text,
         if dialog.focused() == DialogButton::Cancel {
@@ -522,6 +522,7 @@ pub fn paint_context_menu(
     menu: &ContextMenu,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
+    catalog: &Catalog,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.context_menu;
     let corner_radius = cfg.corner_radius as f32;
@@ -559,7 +560,7 @@ pub fn paint_context_menu(
                 rect.x + item_padding_x,
                 rect.y + (rect.height - font_size) / 2.0,
             ),
-            text: item.label.to_string(),
+            text: item.action.label(catalog),
             font: BODY_FONT,
             size_px: font_size,
             color,
@@ -755,6 +756,7 @@ pub fn paint_terminal_menu(
     highlighted: usize,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
+    catalog: &Catalog,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.context_menu;
     let corner_radius = cfg.corner_radius as f32;
@@ -792,7 +794,7 @@ pub fn paint_terminal_menu(
                 rect.x + item_padding_x,
                 rect.y + (rect.height - font_size) / 2.0,
             ),
-            text: item.label.to_string(),
+            text: item.action.label(catalog),
             font: BODY_FONT,
             size_px: font_size,
             color,
@@ -809,9 +811,6 @@ pub fn terminal_menu_hit(layout: &TerminalMenuLayout, point: (f32, f32)) -> Opti
 }
 
 // ---- editor de grupo (espec §2.10, ADR-0023, `[appearance.group_editor]`) ----
-
-const EDITOR_SECTION_GROUP_LABEL: &str = "GRUPO";
-const EDITOR_SECTION_COLOR_LABEL: &str = "COR";
 
 pub struct GroupEditorLayout {
     pub popover_rect: Rect,
@@ -967,6 +966,7 @@ pub fn paint_group_editor(
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
     term_pal: &palette::ResolvedTermPalette,
+    catalog: &Catalog,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.group_editor;
@@ -995,7 +995,7 @@ pub fn paint_group_editor(
 
     out.push(Primitive::Text(TextRun {
         origin: layout.name_caption_origin,
-        text: EDITOR_SECTION_GROUP_LABEL.to_string(),
+        text: msg::group_editor::section_group(catalog),
         font: TITLE_FONT,
         size_px: section_font_size,
         color: pal.editor_section_text,
@@ -1066,7 +1066,7 @@ pub fn paint_group_editor(
 
     out.push(Primitive::Text(TextRun {
         origin: layout.color_caption_origin,
-        text: EDITOR_SECTION_COLOR_LABEL.to_string(),
+        text: msg::group_editor::section_color(catalog),
         font: TITLE_FONT,
         size_px: section_font_size,
         color: pal.editor_section_text,
@@ -1103,7 +1103,7 @@ pub fn paint_group_editor(
         color: pal.editor_divider,
     }));
 
-    let items = group_menu::group_action_items(is_collapsed, tab_count);
+    let items = group_menu::group_action_items(catalog, is_collapsed, tab_count);
     for (i, action) in EDITOR_ACTION_ORDER.iter().enumerate() {
         let item = items
             .iter()
@@ -1174,7 +1174,6 @@ pub fn group_editor_hit(layout: &GroupEditorLayout, point: (f32, f32)) -> Option
 // `[appearance.context_menu]` (comentário do TOML: "width = context_menu.
 // width", "row_height = context_menu.item_height").
 
-const MOVE_NEW_GROUP_LABEL: &str = "Novo grupo";
 /// Raio do swatch pequeno do popover -- menor que o das outras superfícies
 /// de cor (28px no editor, 6px de raio); sem chave própria, valor de
 /// trabalho já existente antes desta etapa.
@@ -1250,6 +1249,7 @@ pub fn paint_move_to_group(
     workspace: &Workspace,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
+    catalog: &Catalog,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let move_cfg = &config.appearance.move_to_group;
@@ -1343,7 +1343,7 @@ pub fn paint_move_to_group(
                     rect.x + row_padding_x,
                     rect.y + (rect.height - item_text_size) / 2.0,
                 ),
-                text: MOVE_NEW_GROUP_LABEL.to_string(),
+                text: msg::move_to_group::new_group(catalog),
                 font: BODY_FONT,
                 size_px: item_text_size,
                 color: pal.menu_item_text,
@@ -1374,8 +1374,6 @@ pub fn move_to_group_hit(layout: &MoveToGroupLayout, point: (f32, f32)) -> Optio
 // o `offset_y` de 8px abaixo da barra (ADR-0055 §2: "a regra do editor
 // de grupo").
 
-const SAVE_ITEM_LABEL: &str = "Salvar esta janela…";
-const EMPTY_LIST_LABEL: &str = "nenhuma sessão salva";
 /// Espec §2.16 ("Itens: ... `gap: 10`") -- primeiro item do chrome com
 /// ícone à esquerda do rótulo; token geral sem chave própria.
 const SAVE_ITEM_ICON_GAP: f32 = 10.0;
@@ -1565,6 +1563,7 @@ pub fn paint_session_picker(
     style: &TabBarStyle,
     pal: &ResolvedPalette,
     term_pal: &palette::ResolvedTermPalette,
+    catalog: &Catalog,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let picker_cfg = &config.appearance.session_picker;
@@ -1618,7 +1617,7 @@ pub fn paint_session_picker(
                     label_x,
                     layout.save_rect.y + (layout.save_rect.height - item_text_size) / 2.0,
                 ),
-                text: SAVE_ITEM_LABEL.to_string(),
+                text: msg::session_picker::save_item(catalog),
                 font: BODY_FONT,
                 size_px: item_text_size,
                 color: pal.menu_item_text,
@@ -1664,7 +1663,7 @@ pub fn paint_session_picker(
             if buffer.is_empty() {
                 out.push(Primitive::Text(TextRun {
                     origin: (text_x, text_y),
-                    text: "nome da sessão".to_string(),
+                    text: msg::session_picker::name_placeholder(catalog),
                     font: BODY_FONT,
                     size_px: input_font_size,
                     color: pal.menu_item_disabled_text,
@@ -1731,7 +1730,7 @@ pub fn paint_session_picker(
                 rect.x + row_padding_x,
                 rect.y + (rect.height - item_text_size) / 2.0,
             ),
-            text: EMPTY_LIST_LABEL.to_string(),
+            text: msg::session_picker::empty_list(catalog),
             font: BODY_FONT,
             size_px: item_text_size,
             color: pal.menu_item_disabled_text,

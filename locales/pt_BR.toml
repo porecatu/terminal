@@ -1,0 +1,120 @@
+# pt_BR.toml -- textos da interface do Porecatu em português do Brasil.
+#
+# Formato (ADR-0056, PRD-015):
+# - o NOME DO ARQUIVO é o idioma (`pt_BR`, dois ou três minúsculas, `_`, duas
+#   maiúsculas); não há campo de idioma aqui dentro;
+# - uma tabela por superfície, com no máximo dois níveis
+#   (`[dialog.close_tab]`); a chave é a identidade da frase, nunca o texto em
+#   inglês;
+# - `{nome}` é um marcador, preenchido pelo programa; `{{` e `}}` são chaves
+#   literais. Uma frase pode omitir um marcador, mas não pode usar um que o
+#   programa não declara para ela;
+# - plural é `{ one = "...", other = "..." }`: `one` para exatamente 1, `other`
+#   para todo o resto;
+# - caixa alta faz parte do texto (`GRUPO`), escolha do tradutor;
+# - a tabela `meta` é reservada e ignorada;
+# - uma frase que faltar aqui cai no `en_US`; uma que faltar nos dois aparece
+#   como o próprio identificador.
+#
+# Terminologia: "aba", nunca "guia" (ADR-0009 §8). Um teste reprova "guia".
+#
+# Este é o arquivo instalado com o app. Para mudar uma frase sem mexer nele,
+# crie `locales/pt_BR.toml` ao lado do seu `porecatu.toml` e escreva só as
+# frases que quer trocar: as camadas se mesclam frase a frase.
+
+[tab_menu]
+new = "Nova aba"
+close = "Fechar aba"
+move_to_group = "Mover para grupo"
+
+[terminal_menu]
+copy = "Copiar"
+paste = "Colar"
+select_all = "Selecionar tudo"
+search = "Buscar"
+open_link = "Abrir link"
+copy_link = "Copiar link"
+
+[group_menu]
+rename = "Renomear"
+set_color = "Mudar cor"
+collapse = "Colapsar grupo"
+expand = "Expandir grupo"
+new_tab = "Nova aba no grupo"
+close = { one = "Fechar grupo ({count} aba)", other = "Fechar grupo ({count} abas)" }
+dissolve = "Desagrupar"
+
+[group_editor]
+section_group = "GRUPO"
+section_color = "COR"
+# Nome do grupo novo. É resolvido no idioma corrente quando o grupo nasce e
+# daí em diante é dado do usuário: gravado na sessão, nunca retraduzido.
+default_name = "Novo grupo"
+
+[move_to_group]
+new_group = "Novo grupo"
+
+[session_picker]
+save_item = "Salvar esta janela…"
+empty_list = "nenhuma sessão salva"
+name_placeholder = "nome da sessão"
+
+[dialog]
+cancel = "Cancelar"
+
+[dialog.close_tab]
+title = "Fechar aba?"
+body = "\"{title}\" tem um programa em primeiro plano. Fechar mesmo assim?"
+confirm = "Fechar aba"
+
+[dialog.close_pane]
+title = "Fechar painel?"
+body = "\"{title}\" tem um programa em primeiro plano. Fechar mesmo assim?"
+confirm = "Fechar painel"
+
+[dialog.close_window]
+title = "Fechar janela?"
+body_tabs = "Esta janela tem mais de uma aba aberta."
+body_program = "Esta janela tem um programa em primeiro plano."
+confirm = "Fechar janela"
+
+[dialog.close_group]
+title = "Fechar grupo?"
+body = { one = "Isso fecha {count} aba.", other = "Isso fecha {count} abas." }
+confirm = { one = "Fechar grupo ({count} aba)", other = "Fechar grupo ({count} abas)" }
+
+[dialog.delete_session]
+title = "Excluir sessão salva?"
+body = "Isso remove «{name}» permanentemente."
+confirm = "Excluir"
+
+[dialog.overwrite_session]
+title = "Sobrescrever a sessão «{name}»?"
+body = "A sessão salva com esse nome será substituída."
+confirm = "Sobrescrever"
+
+# Avisos sobre o próprio idioma (ADR-0056 §8).
+[notice.language_not_found]
+title = "Idioma não encontrado"
+body = "Não há arquivo para \"{language}\" (procurado em: {searched})."
+
+[notice.language_invalid_name]
+title = "Nome de idioma inválido"
+body = "\"{value}\" não é um nome de idioma válido (exemplo: pt_BR)."
+
+[notice.language_syntax]
+title = "Erro no arquivo de idioma"
+body = "{path}: {detail}"
+body_at = "{path}, linha {line}, coluna {column}: {detail}"
+
+[notice.language_unreadable]
+title = "Arquivo de idioma ilegível"
+body = "Não foi possível ler \"{path}\": {cause}"
+
+[notice.language_missing_messages]
+title = "Textos sem tradução"
+body = { one = "{count} texto sem tradução em {locale}", other = "{count} textos sem tradução em {locale}" }
+
+[notice.language_unknown_keys]
+title = "Chaves desconhecidas no idioma"
+body = { one = "{count} chave desconhecida em {path}", other = "{count} chaves desconhecidas em {path}" }

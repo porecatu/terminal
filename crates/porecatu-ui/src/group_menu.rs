@@ -13,6 +13,9 @@
 //! implícito... ficam indisponíveis" -- mas o menu nunca abre sobre um).
 
 use porecatu_core::{GroupId, Workspace};
+use porecatu_locale::Catalog;
+
+use crate::messages::msg;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupAction {
@@ -55,44 +58,48 @@ pub struct GroupActionItem {
 }
 
 /// Definição única (RF-10.21). `is_collapsed`/`tab_count` resolvem os dois
-/// rótulos dinâmicos -- "Colapsar"/"Expandir grupo" e "Fechar grupo (N
-/// abas)" -- a partir do estado corrente do grupo, nunca guardado aqui.
-pub fn group_action_items(is_collapsed: bool, tab_count: usize) -> [GroupActionItem; 6] {
+/// rótulos dinâmicos -- colapsar/expandir e "fechar grupo (N abas)", este
+/// com a forma de plural do idioma -- a partir do estado corrente do grupo,
+/// nunca guardado aqui.
+pub fn group_action_items(
+    catalog: &Catalog,
+    is_collapsed: bool,
+    tab_count: usize,
+) -> [GroupActionItem; 6] {
     let collapse_label = if is_collapsed {
-        "Expandir grupo"
+        msg::group_menu::expand(catalog)
     } else {
-        "Colapsar grupo"
+        msg::group_menu::collapse(catalog)
     };
-    let plural = if tab_count == 1 { "" } else { "s" };
     [
         GroupActionItem {
             action: GroupAction::Rename,
-            label: "Renomear".to_string(),
+            label: msg::group_menu::rename(catalog),
             destructive: false,
         },
         GroupActionItem {
             action: GroupAction::SetColor,
-            label: "Mudar cor".to_string(),
+            label: msg::group_menu::set_color(catalog),
             destructive: false,
         },
         GroupActionItem {
             action: GroupAction::ToggleCollapse,
-            label: collapse_label.to_string(),
+            label: collapse_label,
             destructive: false,
         },
         GroupActionItem {
             action: GroupAction::NewTab,
-            label: "Nova aba no grupo".to_string(),
+            label: msg::group_menu::new_tab(catalog),
             destructive: false,
         },
         GroupActionItem {
             action: GroupAction::CloseAll,
-            label: format!("Fechar grupo ({tab_count} aba{plural})"),
+            label: msg::group_menu::close(catalog, tab_count),
             destructive: true,
         },
         GroupActionItem {
             action: GroupAction::Dissolve,
-            label: "Desagrupar".to_string(),
+            label: msg::group_menu::dissolve(catalog),
             destructive: false,
         },
     ]
@@ -160,6 +167,7 @@ pub fn keyboard_target(workspace: &Workspace) -> Option<GroupId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::test_support;
 
     fn g(n: u32) -> GroupId {
         GroupId::new(n)
@@ -208,24 +216,49 @@ mod tests {
 
     #[test]
     fn group_action_items_toggle_collapse_label_reflects_state() {
-        let expanded = group_action_items(false, 3);
-        let collapsed = group_action_items(true, 3);
+        let pt = test_support::pt_br();
+        let expanded = group_action_items(&pt, false, 3);
+        let collapsed = group_action_items(&pt, true, 3);
         assert_eq!(expanded[2].label, "Colapsar grupo");
         assert_eq!(collapsed[2].label, "Expandir grupo");
+
+        let en = test_support::en_us();
+        assert_eq!(group_action_items(&en, false, 3)[2].label, "Collapse group");
+        assert_eq!(group_action_items(&en, true, 3)[2].label, "Expand group");
     }
 
     #[test]
     fn group_action_items_close_all_label_counts_tabs_and_pluralizes() {
-        let one = group_action_items(false, 1);
-        let many = group_action_items(false, 4);
+        let pt = test_support::pt_br();
+        let one = group_action_items(&pt, false, 1);
+        let many = group_action_items(&pt, false, 4);
         assert_eq!(one[4].label, "Fechar grupo (1 aba)");
         assert_eq!(many[4].label, "Fechar grupo (4 abas)");
         assert!(one[4].destructive);
     }
 
+    /// O plural roda nos dois idiomas (ADR-0056 §10): `one` só para 1,
+    /// `other` para todo o resto -- inclusive 0.
+    #[test]
+    fn group_action_items_close_all_label_pluralizes_in_english_too() {
+        let en = test_support::en_us();
+        assert_eq!(
+            group_action_items(&en, false, 1)[4].label,
+            "Close group (1 tab)"
+        );
+        assert_eq!(
+            group_action_items(&en, false, 4)[4].label,
+            "Close group (4 tabs)"
+        );
+        assert_eq!(
+            group_action_items(&en, false, 0)[4].label,
+            "Close group (0 tabs)"
+        );
+    }
+
     #[test]
     fn group_action_items_order_matches_rf_2_22() {
-        let items = group_action_items(false, 0);
+        let items = group_action_items(&test_support::pt_br(), false, 0);
         let actions: Vec<GroupAction> = items.iter().map(|i| i.action).collect();
         assert_eq!(actions, GROUP_ACTION_ORDER);
     }

@@ -13,14 +13,20 @@
 //! - a `cause` do sistema operacional (`io::Error`, PTY), idem;
 //! - o que o usuário escreveu (nome de tema, de tecla, de ação).
 //!
-//! Hoje as frases são as de pt-BR de sempre; a etapa seguinte troca o corpo
-//! destas funções por acessores do catálogo, sem mudar as assinaturas.
+//! Duas famílias convivem aqui. O **registro** (`msg`, mais abaixo) é o que
+//! já lê o catálogo de idioma: cada identificador pontilhado, seus marcadores
+//! e se é plural, num lugar só, de onde saem os acessores tipados e o esquema
+//! que `porecatu-locale` valida. As funções acima dele (`config_error`,
+//! `keymap_issue`, ...) ainda compõem a frase de pt-BR de sempre a partir da
+//! variante do erro; a etapa seguinte troca o corpo delas por acessores do
+//! registro, sem mudar as assinaturas.
 
 use std::fmt::Display;
 use std::path::Path;
 
 use porecatu_config::{ConfigError, ConfigErrorKind};
 use porecatu_core::ActionParseError;
+use porecatu_locale::{Catalog, MessageSpec, Schema};
 use porecatu_session::CURRENT_SCHEMA_VERSION;
 use porecatu_session::named::SaveError;
 use porecatu_term::TerminalSpawnError;
@@ -130,6 +136,260 @@ pub(crate) fn search_pattern_invalid() -> &'static str {
     "padrão inválido"
 }
 
+/// Substitui o modelo da frase `id` no catálogo. Frase ausente devolve o
+/// **identificador** (RF-15.11): o defeito aparece na tela em vez de sumir.
+/// `count` escolhe `one`/`other` numa frase de plural e é ignorado numa
+/// simples.
+pub(crate) fn render(
+    catalog: &Catalog,
+    id: &'static str,
+    count: Option<u64>,
+    args: &[(&str, String)],
+) -> String {
+    let Some(message) = catalog.get(id) else {
+        return id.to_owned();
+    };
+    let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    porecatu_locale::format(message.select(count.unwrap_or(0)), &args)
+}
+
+/// Registro de mensagens (ADR-0056 §1). Cada linha declara uma frase:
+///
+/// - `nome()` é uma frase simples, sem marcadores;
+/// - `nome(a, b)` tem os marcadores `{a}` e `{b}`, e o acessor recebe um
+///   argumento por marcador -- esquecer um é erro de compilação, não um
+///   `{a}` cru na tela;
+/// - `nome(plural)` e `nome(plural, a)` são frases de plural: o acessor
+///   recebe `count: usize` primeiro, que escolhe `one`/`other` e preenche
+///   `{count}`.
+///
+/// Uma tabela pode ter tabelas dentro (`dialog { close_tab { .. }, }`), até
+/// o teto de dois níveis do formato. O identificador é o caminho pontilhado
+/// (`dialog.close_tab.title`), e o mesmo registro gera o [`schema`].
+///
+/// Toda entrada termina em vírgula, menos as tabelas de primeiro nível.
+macro_rules! registry {
+    ( $( $table:ident { $($body:tt)* } )* ) => {
+        /// Acessores tipados: `msg::tab_menu::close(&catalog)`.
+        pub(crate) mod msg {
+            $(
+                pub(crate) mod $table {
+                    registry!(@items [$table] $($body)*);
+                }
+            )*
+        }
+
+        /// O que o app declara ao `porecatu-locale`: todo identificador,
+        /// com marcadores e plural.
+        pub(crate) fn schema() -> Schema {
+            #[allow(unused_mut)]
+            let mut schema = Schema::new();
+            $( registry!(@schema schema [$table] $($body)*); )*
+            schema
+        }
+    };
+
+    (@items [$($pfx:ident)*]) => {};
+    (@items [$($pfx:ident)*] $name:ident ( plural $(, $arg:ident)* ) , $($rest:tt)*) => {
+        pub(crate) fn $name(
+            catalog: &::porecatu_locale::Catalog,
+            count: usize
+            $(, $arg: impl ::std::fmt::Display)*
+        ) -> String {
+            crate::messages::render(
+                catalog,
+                concat!($(stringify!($pfx), ".",)* stringify!($name)),
+                Some(count as u64),
+                &[
+                    ("count", count.to_string())
+                    $(, (stringify!($arg), $arg.to_string()))*
+                ],
+            )
+        }
+        registry!(@items [$($pfx)*] $($rest)*);
+    };
+    (@items [$($pfx:ident)*] $name:ident ( $($arg:ident),* ) , $($rest:tt)*) => {
+        pub(crate) fn $name(
+            catalog: &::porecatu_locale::Catalog
+            $(, $arg: impl ::std::fmt::Display)*
+        ) -> String {
+            crate::messages::render(
+                catalog,
+                concat!($(stringify!($pfx), ".",)* stringify!($name)),
+                None,
+                &[ $( (stringify!($arg), $arg.to_string()) ),* ],
+            )
+        }
+        registry!(@items [$($pfx)*] $($rest)*);
+    };
+    (@items [$($pfx:ident)*] $sub:ident { $($body:tt)* } , $($rest:tt)*) => {
+        pub(crate) mod $sub {
+            registry!(@items [$($pfx)* $sub] $($body)*);
+        }
+        registry!(@items [$($pfx)*] $($rest)*);
+    };
+
+    (@schema $schema:ident [$($pfx:ident)*]) => {};
+    (@schema $schema:ident [$($pfx:ident)*] $name:ident ( plural $(, $arg:ident)* ) , $($rest:tt)*) => {
+        $schema.insert(
+            concat!($(stringify!($pfx), ".",)* stringify!($name)),
+            MessageSpec::plural(&["count" $(, stringify!($arg))*]),
+        );
+        registry!(@schema $schema [$($pfx)*] $($rest)*);
+    };
+    (@schema $schema:ident [$($pfx:ident)*] $name:ident ( $($arg:ident),* ) , $($rest:tt)*) => {
+        $schema.insert(
+            concat!($(stringify!($pfx), ".",)* stringify!($name)),
+            MessageSpec::simple(&[ $( stringify!($arg) ),* ]),
+        );
+        registry!(@schema $schema [$($pfx)*] $($rest)*);
+    };
+    (@schema $schema:ident [$($pfx:ident)*] $sub:ident { $($body:tt)* } , $($rest:tt)*) => {
+        registry!(@schema $schema [$($pfx)* $sub] $($body)*);
+        registry!(@schema $schema [$($pfx)*] $($rest)*);
+    };
+}
+
+registry! {
+    tab_menu {
+        new(),
+        close(),
+        move_to_group(),
+    }
+    terminal_menu {
+        copy(),
+        paste(),
+        select_all(),
+        search(),
+        open_link(),
+        copy_link(),
+    }
+    group_menu {
+        rename(),
+        set_color(),
+        collapse(),
+        expand(),
+        new_tab(),
+        close(plural),
+        dissolve(),
+    }
+    group_editor {
+        section_group(),
+        section_color(),
+        default_name(),
+    }
+    move_to_group {
+        new_group(),
+    }
+    session_picker {
+        save_item(),
+        empty_list(),
+        name_placeholder(),
+    }
+    dialog {
+        cancel(),
+        close_tab {
+            title(),
+            body(title),
+            confirm(),
+        },
+        close_pane {
+            title(),
+            body(title),
+            confirm(),
+        },
+        close_window {
+            title(),
+            body_tabs(),
+            body_program(),
+            confirm(),
+        },
+        close_group {
+            title(),
+            body(plural),
+            confirm(plural),
+        },
+        delete_session {
+            title(),
+            body(name),
+            confirm(),
+        },
+        overwrite_session {
+            title(name),
+            body(),
+            confirm(),
+        },
+    }
+    notice {
+        language_not_found {
+            title(),
+            body(language, searched),
+        },
+        language_invalid_name {
+            title(),
+            body(value),
+        },
+        language_syntax {
+            title(),
+            body(path, detail),
+            body_at(path, line, column, detail),
+        },
+        language_unreadable {
+            title(),
+            body(path, cause),
+        },
+        language_missing_messages {
+            title(),
+            body(plural, locale),
+        },
+        language_unknown_keys {
+            title(),
+            body(plural, path),
+        },
+    }
+}
+
+/// Auxiliar dos testes de frase (ADR-0056 §10): carrega os arquivos de
+/// `locales/` do repositório -- o mesmo par que o app lê em disco --, para
+/// que um teste que compara uma frase compare a que o usuário vê, e não uma
+/// cópia dela escrita no teste.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::PathBuf;
+
+    use porecatu_locale::{Catalog, parse_layer};
+
+    use super::schema;
+
+    fn locales_dir() -> PathBuf {
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales"))
+    }
+
+    fn layer(locale: &str) -> porecatu_locale::Messages {
+        let path = locales_dir().join(format!("{locale}.toml"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
+        let outcome = parse_layer(&text, &schema());
+        if let Some(error) = outcome.syntax_error {
+            panic!("{}: {error:?}", path.display());
+        }
+        outcome.messages
+    }
+
+    /// `en_US` por baixo, `locale` por cima -- a mesma mescla do app.
+    pub(crate) fn catalog(locale: &str) -> Catalog {
+        Catalog::from_layers([layer("en_US"), layer(locale)])
+    }
+
+    pub(crate) fn pt_br() -> Catalog {
+        catalog("pt_BR")
+    }
+
+    pub(crate) fn en_us() -> Catalog {
+        catalog("en_US")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -143,6 +403,89 @@ mod tests {
             Some((line, column)) => ConfigError::at(line, column, kind),
             None => ConfigError::new(kind),
         }
+    }
+
+    #[test]
+    fn the_schema_declares_placeholders_and_plural_for_every_id() {
+        let schema = schema();
+        let close = schema["tab_menu.close"];
+        assert!(!close.plural);
+        assert!(close.placeholders.is_empty());
+
+        let group_close = schema["group_menu.close"];
+        assert!(group_close.plural);
+        assert_eq!(group_close.placeholders, ["count"]);
+
+        // Tabelas com tabelas dentro: o identificador é o caminho pontilhado.
+        assert_eq!(schema["dialog.close_tab.body"].placeholders, ["title"]);
+        assert_eq!(
+            schema["dialog.overwrite_session.title"].placeholders,
+            ["name"]
+        );
+        assert_eq!(schema["dialog.cancel"].placeholders.len(), 0);
+        assert_eq!(
+            schema["notice.language_syntax.body_at"].placeholders,
+            ["path", "line", "column", "detail"]
+        );
+        let missing = schema["notice.language_missing_messages.body"];
+        assert!(missing.plural);
+        assert_eq!(missing.placeholders, ["count", "locale"]);
+    }
+
+    #[test]
+    fn a_phrase_missing_from_the_catalog_is_its_identifier() {
+        let empty = Catalog::new();
+        assert_eq!(msg::tab_menu::close(&empty), "tab_menu.close");
+        assert_eq!(msg::group_menu::close(&empty, 3), "group_menu.close");
+        assert_eq!(
+            msg::dialog::close_tab::body(&empty, "vim"),
+            "dialog.close_tab.body"
+        );
+    }
+
+    /// O valor de um marcador vem de fora (um título de aba, que vem de um
+    /// programa) e nunca é lido de novo como modelo (ADR-0056 §5).
+    #[test]
+    fn placeholder_values_are_substituted_literally_and_never_expanded() {
+        let pt = test_support::pt_br();
+        assert_eq!(
+            msg::dialog::close_tab::body(&pt, "{count} {title}"),
+            "\"{count} {title}\" tem um programa em primeiro plano. Fechar mesmo assim?"
+        );
+    }
+
+    #[test]
+    fn plural_uses_one_only_for_exactly_one() {
+        for (catalog, one, other) in [
+            (
+                test_support::pt_br(),
+                "Fechar grupo (1 aba)",
+                "Fechar grupo (2 abas)",
+            ),
+            (
+                test_support::en_us(),
+                "Close group (1 tab)",
+                "Close group (2 tabs)",
+            ),
+        ] {
+            assert_eq!(msg::group_menu::close(&catalog, 1), one);
+            assert_eq!(msg::group_menu::close(&catalog, 2), other);
+            assert!(msg::group_menu::close(&catalog, 0).contains("(0 "));
+        }
+    }
+
+    #[test]
+    fn the_same_accessor_answers_in_the_language_of_the_catalog() {
+        assert_eq!(msg::tab_menu::close(&test_support::pt_br()), "Fechar aba");
+        assert_eq!(msg::tab_menu::close(&test_support::en_us()), "Close tab");
+        assert_eq!(
+            msg::group_editor::section_group(&test_support::pt_br()),
+            "GRUPO"
+        );
+        assert_eq!(
+            msg::group_editor::section_group(&test_support::en_us()),
+            "GROUP"
+        );
     }
 
     #[test]

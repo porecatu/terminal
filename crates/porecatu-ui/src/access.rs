@@ -26,6 +26,7 @@
 
 use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use porecatu_core::{GroupColor, GroupId, PaneId, TabId, Workspace};
+use porecatu_locale::Catalog;
 use porecatu_render::TextMeasurer;
 
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
@@ -33,6 +34,7 @@ use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
+use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
@@ -195,6 +197,7 @@ pub(crate) fn build_tree(
     style: &TabBarStyle,
     logical_width: f32,
     scroll_offset: f32,
+    catalog: &Catalog,
     measurer: &mut TextMeasurer,
 ) -> TreeUpdate {
     let is_mac = is_macos();
@@ -282,17 +285,17 @@ pub(crate) fn build_tree(
     if let Some(d) = dialog {
         focus = build_dialog(d, &mut nodes, &mut root_children);
     } else if let Some(m) = context_menu {
-        focus = build_tab_menu(m, &mut nodes, &mut root_children);
+        focus = build_tab_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(m) = group_context_menu {
-        focus = build_group_menu(m, workspace, &mut nodes, &mut root_children);
+        focus = build_group_menu(m, workspace, catalog, &mut nodes, &mut root_children);
     } else if let Some(m) = terminal_context_menu {
-        focus = build_terminal_menu(m, &mut nodes, &mut root_children);
+        focus = build_terminal_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(e) = group_editor {
-        focus = build_group_editor(e, workspace, &mut nodes, &mut root_children);
+        focus = build_group_editor(e, workspace, catalog, &mut nodes, &mut root_children);
     } else if let Some(p) = move_to_group {
-        focus = build_move_to_group(p, workspace, &mut nodes, &mut root_children);
+        focus = build_move_to_group(p, workspace, catalog, &mut nodes, &mut root_children);
     } else if let Some(p) = session_picker {
-        focus = build_session_picker(p, &mut nodes, &mut root_children);
+        focus = build_session_picker(p, catalog, &mut nodes, &mut root_children);
     }
 
     let mut root = Node::new(Role::Window);
@@ -523,7 +526,10 @@ fn build_dialog(
         DialogButton::Cancel => DIALOG_CANCEL_ID,
         DialogButton::Confirm => DIALOG_CONFIRM_ID,
     };
-    nodes.push((DIALOG_CANCEL_ID, leaf(Role::Button, "Cancelar")));
+    nodes.push((
+        DIALOG_CANCEL_ID,
+        leaf(Role::Button, dialog.cancel_label.clone()),
+    ));
     nodes.push((
         DIALOG_CONFIRM_ID,
         leaf(Role::Button, dialog.confirm_label.clone()),
@@ -541,6 +547,7 @@ fn build_dialog(
 
 fn build_tab_menu(
     menu: &ContextMenu,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -549,7 +556,7 @@ fn build_tab_menu(
     for (index, item) in TAB_MENU_ITEMS.iter().enumerate() {
         let id = menu_item_id(index);
         let mut node = Node::new(Role::MenuItem);
-        node.set_label(item.label);
+        node.set_label(item.action.label(catalog));
         if !item.enabled {
             node.set_disabled();
         }
@@ -567,6 +574,7 @@ fn build_tab_menu(
 fn build_group_menu(
     menu: &GroupContextMenu,
     workspace: &Workspace,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -574,7 +582,7 @@ fn build_group_menu(
         .group(menu.group)
         .is_some_and(|g| g.is_collapsed());
     let tab_count = workspace.group(menu.group).map_or(0, |g| g.tabs().len());
-    let items = crate::group_menu::group_action_items(is_collapsed, tab_count);
+    let items = crate::group_menu::group_action_items(catalog, is_collapsed, tab_count);
     let mut children = Vec::new();
     let mut focus = MENU_ID;
     for (index, item) in items.iter().enumerate() {
@@ -592,6 +600,7 @@ fn build_group_menu(
 
 fn build_terminal_menu(
     menu: &TerminalContextMenu,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -608,7 +617,7 @@ fn build_terminal_menu(
     for (index, item) in items.iter().enumerate() {
         let id = menu_item_id(index);
         let mut node = Node::new(Role::MenuItem);
-        node.set_label(item.label);
+        node.set_label(item.action.label(catalog));
         if !item.enabled {
             node.set_disabled();
         }
@@ -626,6 +635,7 @@ fn build_terminal_menu(
 fn build_group_editor(
     editor: &GroupEditor,
     workspace: &Workspace,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -652,6 +662,7 @@ fn build_group_editor(
     let mut action_children = Vec::new();
     for (index, action) in EDITOR_ACTION_ORDER.iter().enumerate() {
         let label = crate::group_menu::group_action_items(
+            catalog,
             workspace
                 .group(editor.group)
                 .is_some_and(|g| g.is_collapsed()),
@@ -692,6 +703,7 @@ fn build_group_editor(
 fn build_move_to_group(
     popover: &MoveToGroupPopover,
     workspace: &Workspace,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -711,7 +723,10 @@ fn build_move_to_group(
     }
     let new_group_index = popover.targets().len();
     let id = move_target_id(new_group_index);
-    nodes.push((id, leaf(Role::MenuItem, "Novo grupo")));
+    nodes.push((
+        id,
+        leaf(Role::MenuItem, msg::move_to_group::new_group(catalog)),
+    ));
     children.push(id);
     if popover.highlighted() == new_group_index {
         focus = id;
@@ -731,6 +746,7 @@ fn build_move_to_group(
 /// (`session_picker.rs`), então nunca ganha foco.
 fn build_session_picker(
     picker: &SessionPicker,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -747,7 +763,7 @@ fn build_session_picker(
         session_picker::Mode::Browsing => {
             nodes.push((
                 SESSION_PICKER_SAVE_ITEM_ID,
-                leaf(Role::MenuItem, "Salvar esta janela…"),
+                leaf(Role::MenuItem, msg::session_picker::save_item(catalog)),
             ));
             SESSION_PICKER_SAVE_ITEM_ID
         }
@@ -759,7 +775,10 @@ fn build_session_picker(
 
     if picker.entries().is_empty() {
         let id = session_picker_row_id(0);
-        nodes.push((id, leaf(Role::MenuItem, "nenhuma sessão salva")));
+        nodes.push((
+            id,
+            leaf(Role::MenuItem, msg::session_picker::empty_list(catalog)),
+        ));
         children.push(id);
     } else {
         for (index, entry) in picker.entries().iter().enumerate() {
@@ -817,6 +836,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         )
     }
@@ -908,6 +928,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
 
@@ -956,6 +977,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
 
@@ -1007,6 +1029,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
         let item = node(&update, warning_item_id(0));
@@ -1056,6 +1079,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
 
@@ -1122,6 +1146,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
         let index = layout
@@ -1169,6 +1194,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
         let cwd_index = layout
@@ -1190,6 +1216,7 @@ mod tests {
             "Fechar janela?",
             "Duas abas abertas.",
             "Fechar",
+            "Cancelar",
             DialogAction::CloseWindow,
         ));
         let update = build_tree(
@@ -1208,6 +1235,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
         let dialog_node = node(&update, DIALOG_ID);
@@ -1238,6 +1266,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
         let menu_node = node(&update, MENU_ID);
@@ -1292,6 +1321,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
 
@@ -1326,6 +1356,7 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
             &mut measurer(),
         );
 
