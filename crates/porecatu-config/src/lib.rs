@@ -97,6 +97,11 @@ impl Default for Config {
 /// variante -- inclusive `Invalid`, onde é `Config::default()`: o chamador
 /// decide o que fazer com o erro (mostrar aviso, por exemplo), a config
 /// nunca fica pela metade.
+///
+/// Uma exceção ao "defaults inteiros" em `Invalid`: `general.language` é lido
+/// do texto quando ele é TOML sintaticamente válido (ADR-0056 §7), para que
+/// um erro de digitação na config não ponha em inglês quem escolheu outro
+/// idioma. Sintaxe quebrada, ou arquivo ilegível, não deixa o que ler.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadResult {
     /// Nenhum arquivo no caminho resolvido -- estado válido (ADR-0003
@@ -157,11 +162,26 @@ pub fn load(cli_config: Option<&Path>) -> LoadResult {
             config,
             unknown_keys,
         },
-        Err(error) => LoadResult::Invalid {
-            config: Config::default(),
-            error,
-        },
+        Err(error) => {
+            let mut config = Config::default();
+            if let Some(language) = raw_language(&text) {
+                config.general.language = language;
+            }
+            LoadResult::Invalid { config, error }
+        }
     }
+}
+
+/// `general.language` de um parse cru (`toml::Table`), sem desserializar a
+/// config: é o que sobra de legível quando a desserialização falhou em outro
+/// campo. `None` com sintaxe quebrada ou quando a chave não é texto.
+fn raw_language(text: &str) -> Option<String> {
+    let table: toml::Table = text.parse().ok()?;
+    table
+        .get("general")?
+        .get("language")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// Parseia o texto de uma config já lida -- usado por `load` acima e pelo
@@ -266,6 +286,62 @@ mod tests {
         };
         assert_eq!(path, dir.path());
         assert!(!cause.is_empty());
+    }
+
+    fn load_text(text: &str) -> LoadResult {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("porecatu.toml");
+        std::fs::write(&path, text).unwrap();
+        load(Some(&path))
+    }
+
+    #[test]
+    fn invalid_config_with_valid_syntax_keeps_the_language() {
+        // Deserialization fails on the color; the TOML itself is fine.
+        let result = load_text(
+            "[general]
+language = \"pt_BR\"
+[appearance.window]
+background = \"nope\"
+",
+        );
+        let LoadResult::Invalid { config, .. } = result else {
+            panic!("expected Invalid, got {result:?}");
+        };
+        assert_eq!(config.general.language, "pt_BR");
+        // Everything else is still the defaults.
+        let mut expected = Config::default();
+        expected.general.language = "pt_BR".to_owned();
+        assert_eq!(config, expected);
+    }
+
+    #[test]
+    fn invalid_config_with_broken_syntax_falls_back_to_en_us() {
+        let result = load_text(
+            "[general]
+language = \"pt_BR\"
+this is not toml
+",
+        );
+        let LoadResult::Invalid { config, error } = result else {
+            panic!("expected Invalid, got {result:?}");
+        };
+        assert!(matches!(error.kind, ConfigErrorKind::Toml { .. }));
+        assert_eq!(config, Config::default());
+        assert_eq!(config.general.language, "en_US");
+    }
+
+    #[test]
+    fn invalid_config_with_non_text_language_falls_back_to_en_us() {
+        let result = load_text(
+            "[general]
+language = 5
+",
+        );
+        let LoadResult::Invalid { config, .. } = result else {
+            panic!("expected Invalid, got {result:?}");
+        };
+        assert_eq!(config.general.language, "en_US");
     }
 
     fn load_from_nonexistent_path() -> LoadResult {
