@@ -206,7 +206,7 @@ pub(crate) mod remote_sync {
 
     /// Piso do intervalo de consulta, em segundos (RF-13.3). Abaixo dele o
     /// `git` seria lançado rápido demais para um repositório de rede.
-    const MIN_POLL_INTERVAL_SECS: u64 = 30;
+    pub const MIN_POLL_INTERVAL_SECS: u64 = 30;
 
     /// O que `remote_poll_interval_secs` produz de fato (RF-13.2/RF-13.3):
     /// `0` desliga, valor abaixo do piso é elevado com aviso.
@@ -384,17 +384,23 @@ pub(crate) mod remote_sync {
 
     /// RF-13.7/RF-13.8/RF-13.9: singular e plural corretos, e o par
     /// divergente sem a palavra "commits" (é o formato que o PRD mostra:
-    /// `"2 atrás, 1 à frente"`). `None` quando não há nada a mostrar --
-    /// ausência é a resposta, nunca "0 atrás" nem uma versão apagada dele.
-    pub fn ahead_behind_label(behind: u32, ahead: u32) -> Option<String> {
+    /// `"2 atrás, 1 à frente"`). A frase vem do catálogo, com marcadores,
+    /// para a ordem das palavras poder mudar de idioma para idioma. `None`
+    /// quando não há nada a mostrar -- ausência é a resposta, nunca "0
+    /// atrás" nem uma versão apagada dele.
+    pub fn ahead_behind_label(
+        catalog: &porecatu_locale::Catalog,
+        behind: u32,
+        ahead: u32,
+    ) -> Option<String> {
+        use crate::messages::msg;
         if behind == 0 {
             return None;
         }
         if ahead == 0 {
-            let word = if behind == 1 { "commit" } else { "commits" };
-            Some(format!("{behind} {word} atrás"))
+            Some(msg::status_bar::commits_behind(catalog, behind as usize))
         } else {
-            Some(format!("{behind} atrás, {ahead} à frente"))
+            Some(msg::status_bar::behind_ahead(catalog, behind, ahead))
         }
     }
 
@@ -550,15 +556,31 @@ pub(crate) mod remote_sync {
         pub outcome: RemoteQueryOutcome,
     }
 
+    /// Por que uma integração falhou, **sem frase**: a frase é de `ui`, pelo
+    /// catálogo (ADR-0056 §2). A mensagem do `git` que recusou viaja como
+    /// `Refused` e entra no aviso como chegou -- é ela que diz o que fazer a
+    /// seguir (RF-13.14).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum IntegrationFailure {
+        /// O executável `git` não abriu.
+        GitMissing,
+        /// O `git` não respondeu dentro do prazo.
+        TimedOut,
+        /// O `git` recusou e disse por quê (`stderr`, ou `stdout` se o
+        /// primeiro veio vazio).
+        Refused { detail: String },
+        /// O `git` recusou sem dizer nada.
+        NoDetail,
+    }
+
     /// O que uma integração produziu (ADR-0052 §7.1, RF-13.14). Ao contrário
-    /// de [`RemoteQueryOutcome`], a falha viaja como **texto**, não como
-    /// enum classificado -- é a mensagem do `git` que diz o que fazer a
-    /// seguir (RF-13.14), e `QueryFailure` foi desenhado para o recuo
+    /// de [`RemoteQueryOutcome`], a falha carrega o **motivo** e o texto do
+    /// `git`, não um enum de recuo: `QueryFailure` foi desenhado para o recuo
     /// progressivo da consulta, não para o que o usuário lê no aviso.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum IntegrationOutcome {
         Success,
-        Failed { message: String },
+        Failed(IntegrationFailure),
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -902,15 +924,11 @@ fn run_integration(repo_root: PathBuf, timeout: Duration) -> RemoteIntegrationRe
     match spawn_git_command(&pull_args(&repo_root), timeout) {
         GitProcessResult::FailedToStart => RemoteIntegrationResult {
             repo: repo_root,
-            outcome: IntegrationOutcome::Failed {
-                message: "o git não foi encontrado no sistema.".to_owned(),
-            },
+            outcome: IntegrationOutcome::Failed(IntegrationFailure::GitMissing),
         },
         GitProcessResult::TimedOut => RemoteIntegrationResult {
             repo: repo_root,
-            outcome: IntegrationOutcome::Failed {
-                message: "o git não respondeu a tempo.".to_owned(),
-            },
+            outcome: IntegrationOutcome::Failed(IntegrationFailure::TimedOut),
         },
         GitProcessResult::Exited { success: true, .. } => RemoteIntegrationResult {
             repo: repo_root,
@@ -921,14 +939,16 @@ fn run_integration(repo_root: PathBuf, timeout: Duration) -> RemoteIntegrationRe
             stdout,
             stderr,
         } => {
-            let message = [stderr, stdout]
+            let failure = [stderr, stdout]
                 .into_iter()
                 .map(|s| s.trim().to_owned())
                 .find(|s| !s.is_empty())
-                .unwrap_or_else(|| "o git recusou a integração sem detalhar o motivo.".to_owned());
+                .map_or(IntegrationFailure::NoDetail, |detail| {
+                    IntegrationFailure::Refused { detail }
+                });
             RemoteIntegrationResult {
                 repo: repo_root,
-                outcome: IntegrationOutcome::Failed { message },
+                outcome: IntegrationOutcome::Failed(failure),
             }
         }
     }
@@ -951,6 +971,15 @@ pub(crate) fn spawn_integration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::test_support;
+
+    fn pt() -> porecatu_locale::Catalog {
+        test_support::pt_br()
+    }
+
+    fn en() -> porecatu_locale::Catalog {
+        test_support::en_us()
+    }
 
     #[test]
     fn plain_branch() {
@@ -1436,31 +1465,49 @@ mod tests {
 
     #[test]
     fn no_new_commits_shows_nothing() {
-        assert_eq!(ahead_behind_label(0, 0), None);
+        assert_eq!(ahead_behind_label(&pt(), 0, 0), None);
     }
 
     #[test]
     fn ahead_only_with_nothing_behind_shows_nothing() {
         // RF-13.8: o segmento existe por causa do que falta buscar, não do
         // que já está pronto pra empurrar.
-        assert_eq!(ahead_behind_label(0, 4), None);
+        assert_eq!(ahead_behind_label(&pt(), 0, 4), None);
     }
 
     #[test]
     fn one_commit_behind_is_singular() {
-        assert_eq!(ahead_behind_label(1, 0), Some("1 commit atrás".to_owned()));
+        assert_eq!(
+            ahead_behind_label(&pt(), 1, 0),
+            Some("1 commit atrás".to_owned())
+        );
+        assert_eq!(
+            ahead_behind_label(&en(), 1, 0),
+            Some("1 commit behind".to_owned())
+        );
     }
 
     #[test]
     fn three_commits_behind_is_plural() {
-        assert_eq!(ahead_behind_label(3, 0), Some("3 commits atrás".to_owned()));
+        assert_eq!(
+            ahead_behind_label(&pt(), 3, 0),
+            Some("3 commits atrás".to_owned())
+        );
+        assert_eq!(
+            ahead_behind_label(&en(), 3, 0),
+            Some("3 commits behind".to_owned())
+        );
     }
 
     #[test]
     fn diverged_branch_shows_both_numbers_without_the_word_commits() {
         assert_eq!(
-            ahead_behind_label(2, 1),
+            ahead_behind_label(&pt(), 2, 1),
             Some("2 atrás, 1 à frente".to_owned())
+        );
+        assert_eq!(
+            ahead_behind_label(&en(), 2, 1),
+            Some("2 behind, 1 ahead".to_owned())
         );
     }
 

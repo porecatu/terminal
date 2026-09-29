@@ -102,10 +102,11 @@ pub struct StatusBarContent {
     pub ahead_behind: Option<AheadBehindContent>,
     /// Nome do grupo da aba ativa. `None` em grupo implícito.
     pub group: Option<String>,
-    /// RF-6.20: quantos painéis a aba ativa tem. `< 2` esconde o segmento
-    /// por completo -- não há "1 painel" nem versão apagada dele, a mesma
-    /// regra de ausência dos dois segmentos de Git.
-    pub pane_count: usize,
+    /// RF-6.20: rótulo da contagem de painéis da aba ativa, já com o plural
+    /// do idioma (`pane_count_label`). `None` esconde o segmento por
+    /// completo -- não há "1 painel" nem versão apagada dele, a mesma regra
+    /// de ausência dos dois segmentos de Git.
+    pub pane_count_label: Option<String>,
     /// Sistema, ex. `"windows"`. Sem a versão do app: pedido do dono do
     /// produto depois de ver a barra em tela -- ela não muda entre
     /// execuções e não é o que se consulta de relance.
@@ -223,10 +224,11 @@ fn truncate_to(measurer: &mut TextMeasurer, text: &str, size_px: f32, max_width:
 }
 
 /// RF-6.20/ADR-0053 §14: rótulo por extenso da contagem de painéis, mesma
-/// convenção de `git::ahead_behind_label`. Sempre plural por construção --
-/// o corte em `< 2` já elimina o único caso em que o singular apareceria.
-fn pane_count_label(count: usize) -> Option<String> {
-    (count >= 2).then(|| format!("{count} painéis"))
+/// convenção de `git::ahead_behind_label`: a frase é do catálogo, com o
+/// plural do idioma. O corte em `< 2` elimina o único caso em que o singular
+/// apareceria, mas a frase de plural existe mesmo assim -- um idioma decide.
+pub fn pane_count_label(catalog: &porecatu_locale::Catalog, count: usize) -> Option<String> {
+    (count >= 2).then(|| crate::messages::msg::status_bar::pane_count(catalog, count))
 }
 
 /// Parâmetros de posicionamento comuns aos segmentos da zona esquerda --
@@ -448,7 +450,7 @@ pub fn layout_status_bar(
     }
     // ADR-0053 §14: contagem de painéis fecha a zona esquerda, depois do
     // grupo.
-    if let Some(label) = pane_count_label(content.pane_count) {
+    if let Some(label) = content.pane_count_label.clone() {
         push_left(
             &mut segments,
             &mut x,
@@ -629,7 +631,7 @@ mod tests {
             git_branch: None,
             ahead_behind: None,
             group: Some("producao".to_owned()),
-            pane_count: 1,
+            pane_count_label: None,
             system: "windows".to_owned(),
         }
     }
@@ -1269,17 +1271,20 @@ mod tests {
     }
 
     #[test]
-    fn pane_count_label_is_always_plural_and_absent_below_two() {
-        assert_eq!(pane_count_label(0), None);
-        assert_eq!(pane_count_label(1), None, "1 painel nunca aparece");
-        assert_eq!(pane_count_label(2), Some("2 painéis".to_owned()));
-        assert_eq!(pane_count_label(5), Some("5 painéis".to_owned()));
+    fn pane_count_label_is_absent_below_two_and_plural_in_both_languages() {
+        let pt = crate::messages::test_support::pt_br();
+        assert_eq!(pane_count_label(&pt, 0), None);
+        assert_eq!(pane_count_label(&pt, 1), None, "1 painel nunca aparece");
+        assert_eq!(pane_count_label(&pt, 2), Some("2 painéis".to_owned()));
+        assert_eq!(pane_count_label(&pt, 5), Some("5 painéis".to_owned()));
+        let en = crate::messages::test_support::en_us();
+        assert_eq!(pane_count_label(&en, 2), Some("2 panes".to_owned()));
     }
 
     #[test]
     fn pane_count_segment_closes_the_left_zone_after_the_group() {
         let mut c = content();
-        c.pane_count = 3;
+        c.pane_count_label = Some("3 painéis".to_owned());
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
         let order: Vec<_> = layout
             .segments

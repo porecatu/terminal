@@ -160,6 +160,27 @@ pub fn watch(path: PathBuf, on_reload: impl Fn(ConfigReload) + Send + 'static) -
     Some(())
 }
 
+/// Até quando uma mudança de classe C espera (ADR-0030). A frase que diz
+/// isso é do catálogo (`notice.deferred.*`); aqui só o escopo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeferredScope {
+    /// "vale na próxima janela".
+    NextWindow,
+    /// "vale em aba nova".
+    NewTab,
+    /// "reinicie o app".
+    Restart,
+}
+
+/// Uma mudança de classe C: a chave e o escopo em que ela vale. `key` é o
+/// nome da chave como aparece no arquivo de exemplo (`appearance.window.
+/// opacity`, `[shell]`) -- identificador, igual em todo idioma.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deferred {
+    pub key: &'static str,
+    pub scope: DeferredScope,
+}
+
 /// O que uma recarga precisa fazer, decidido comparando config antiga e
 /// nova (ADR-0030). Classe A não aparece aqui: ela é só trocar o `Arc` e
 /// redesenhar, o caminho comum a toda recarga.
@@ -168,10 +189,10 @@ pub struct ReloadEffects {
     /// Classe B: recalcula métrica de célula, deriva colunas/linhas e
     /// redimensiona todos os PTYs da janela -- um resize por recarga.
     pub grid_changed: bool,
-    /// Classe C: uma mensagem por chave que mudou e não se aplica agora,
-    /// com o escopo real ("vale na próxima janela", "vale em aba nova",
-    /// "reinicie o app") -- o mesmo texto do arquivo de exemplo.
-    pub deferred: Vec<String>,
+    /// Classe C: uma entrada por chave que mudou e não se aplica agora,
+    /// com o escopo real (próxima janela, aba nova, reinício) -- o mesmo do
+    /// arquivo de exemplo. Quem compõe a frase é `ui`, pelo catálogo.
+    pub deferred: Vec<Deferred>,
 }
 
 /// Compara `old` e `new` e devolve os efeitos de classe B/C. As chaves de
@@ -196,25 +217,46 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
 
     let mut deferred = Vec::new();
     if old.appearance.window.opacity != new.appearance.window.opacity {
-        deferred.push("appearance.window.opacity: vale na próxima janela".to_owned());
+        deferred.push(Deferred {
+            key: "appearance.window.opacity",
+            scope: DeferredScope::NextWindow,
+        });
     }
     if old.appearance.window.decorations != new.appearance.window.decorations {
-        deferred.push("appearance.window.decorations: reinicie o app".to_owned());
+        deferred.push(Deferred {
+            key: "appearance.window.decorations",
+            scope: DeferredScope::Restart,
+        });
     }
     if old.appearance.window.tab_bar_position != new.appearance.window.tab_bar_position {
-        deferred.push("appearance.window.tab_bar_position: reinicie o app".to_owned());
+        deferred.push(Deferred {
+            key: "appearance.window.tab_bar_position",
+            scope: DeferredScope::Restart,
+        });
     }
     if old.shell != new.shell {
-        deferred.push("[shell]: vale em aba nova".to_owned());
+        deferred.push(Deferred {
+            key: "[shell]",
+            scope: DeferredScope::NewTab,
+        });
     }
     if old.terminal.scrollback != new.terminal.scrollback {
-        deferred.push("[terminal.scrollback]: vale em aba nova".to_owned());
+        deferred.push(Deferred {
+            key: "[terminal.scrollback]",
+            scope: DeferredScope::NewTab,
+        });
     }
     if old.session != new.session {
-        deferred.push("[session]: reinicie o app".to_owned());
+        deferred.push(Deferred {
+            key: "[session]",
+            scope: DeferredScope::Restart,
+        });
     }
     if old.project_file != new.project_file {
-        deferred.push("[project_file]: reinicie o app".to_owned());
+        deferred.push(Deferred {
+            key: "[project_file]",
+            scope: DeferredScope::Restart,
+        });
     }
     // [git] não entra aqui: é classe A -- o prazo da consulta é recalculado
     // a cada volta do laço lendo a config atual (ADR-0052 §10).
@@ -348,7 +390,10 @@ mod tests {
         assert!(!effects.grid_changed);
         assert_eq!(
             effects.deferred,
-            vec!["[shell]: vale em aba nova".to_owned()]
+            vec![Deferred {
+                key: "[shell]",
+                scope: DeferredScope::NewTab
+            }]
         );
     }
 
@@ -360,7 +405,10 @@ mod tests {
         assert!(!effects.grid_changed);
         assert_eq!(
             effects.deferred,
-            vec!["[terminal.scrollback]: vale em aba nova".to_owned()]
+            vec![Deferred {
+                key: "[terminal.scrollback]",
+                scope: DeferredScope::NewTab
+            }]
         );
     }
 
@@ -372,7 +420,10 @@ mod tests {
         assert!(!effects.grid_changed);
         assert_eq!(
             effects.deferred,
-            vec!["appearance.window.decorations: reinicie o app".to_owned()]
+            vec![Deferred {
+                key: "appearance.window.decorations",
+                scope: DeferredScope::Restart
+            }]
         );
     }
 
@@ -383,7 +434,10 @@ mod tests {
         let effects = diff(&base(), &new);
         assert_eq!(
             effects.deferred,
-            vec!["[session]: reinicie o app".to_owned()]
+            vec![Deferred {
+                key: "[session]",
+                scope: DeferredScope::Restart
+            }]
         );
     }
 

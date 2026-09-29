@@ -57,6 +57,27 @@ save_item = "Save this window…"
 empty_list = "no saved sessions"
 name_placeholder = "session name"
 
+[search_bar]
+invalid_pattern = "invalid pattern"
+no_results = "no results"
+# {counter} é o contador da busca ("2/7"); o sufixo avisa que a busca só vê a
+# tela visível.
+alt_screen_counter = "{counter} (alternate screen)"
+
+[status_bar]
+pane_count = { one = "{count} pane", other = "{count} panes" }
+commits_behind = { one = "{count} commit behind", other = "{count} commits behind" }
+behind_ahead = "{behind} behind, {ahead} ahead"
+
+# Nomes das cores da paleta de grupo (só o leitor de tela os lê).
+[color]
+red = "Red"
+yellow = "Yellow"
+cyan = "Cyan"
+blue = "Blue"
+purple = "Purple"
+green = "Green"
+
 [dialog]
 cancel = "Cancel"
 
@@ -90,6 +111,207 @@ confirm = "Delete"
 title = "Overwrite session «{name}»?"
 body = "The session saved under this name will be replaced."
 confirm = "Overwrite"
+
+# Notas escritas no grid do terminal (canal 2 do ADR-0014). Os avisos da pilha
+# estão em [notice.*].
+[note]
+process_exited = "process exited (code {code})"
+cwd_missing = "directory \"{path}\" no longer exists, tab opened in home"
+# {name} é o nome do arquivo de projeto; {toml_value} é o diretório já escrito
+# como valor de TOML (barras normais).
+project_file_untrusted = "{name} found in {dir}, but this directory is not trusted.\nTo trust it, add to porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
+project_file_unreadable = "could not read \"{path}\": {reason}"
+
+# Convite de integração de shell (ADR-0039). Os trechos de código ficam em
+# docs/reference/integracao-de-shell.md e não são texto de interface; o
+# marcador de dispensa que o usuário digita também não é traduzido.
+[note.shell_invite]
+text = "This terminal does not have shell integration yet (OSC 7). {consequence}\n\n{body}\n\nSelect the snippet above with the mouse to copy it, the usual way.\n\nTo stop seeing this notice, type \"{marker}\" and press Enter (the shell will probably say the command does not exist -- that is fine, it is only the dismissal signal)."
+consequence_windows = "Without it, this tab's directory will not be restored when you reopen Porecatu."
+consequence_other = "Without it, restoring this tab's directory is less exact (it uses a costlier way to find out where you are)."
+body_snippet = "Paste this into your shell's config:\n\n{snippet}"
+body_cmd = "cmd.exe has no reliable way to emit this signal -- use PowerShell if restoring the directory matters to you."
+body_generic = "Shell not recognized, so there is no ready-made snippet to suggest. OSC 7 is the sequence the shell emits on every directory change -- see docs/reference/integracao-de-shell.md in the Porecatu repository to set yours up."
+
+# Rótulos que só o leitor de tela lê (ADR-0043). Frases montadas de pedaços
+# (grupo, aba) têm uma frase por combinação ou peças com identificador próprio,
+# para a ordem das palavras ficar livre para o tradutor.
+[access]
+new_tab_ungrouped = "New tab outside a group"
+new_tab_in_group = "New tab in this group"
+sessions_button = "Saved sessions"
+settings_button = "Settings"
+window_minimize = "Minimize"
+window_maximize = "Maximize or restore"
+window_close = "Close window"
+tab_close = "Close tab"
+regex_toggle = "Regular expression"
+group_editor = "Group editor"
+unnamed_group = "Group"
+tabs_hidden_left = { one = "{count} tab hidden on the left", other = "{count} tabs hidden on the left" }
+tabs_hidden_right = { one = "{count} tab hidden on the right", other = "{count} tabs hidden on the right" }
+# Uma frase por combinação de colapsado e cor.
+group = "Group {name}"
+group_collapsed = "Group {name}, collapsed"
+group_colored = "Group {name}, color {color}"
+group_collapsed_colored = "Group {name}, collapsed, color {color}"
+# Estados da aba: cada um é uma peça, encaixada depois do título por tab_state.
+tab_state = " ({state})"
+state_active = "active"
+state_not_started = "not started"
+state_bell = "bell"
+state_activity = "activity"
+pane_focused = "{title} (focused)"
+cwd_stale = "directory of origin; the shell does not report the current one"
+ahead_behind_clickable = "click to integrate the remote's commits by fast-forward"
+ahead_behind_blocked = "local commits ahead prevent automatic integration"
+segment_shell = "shell"
+segment_cwd = "directory"
+segment_branch = "branch"
+segment_ahead_behind = "commits behind/ahead of the remote"
+segment_group = "group"
+segment_pane_count = "pane count"
+segment_encoding = "encoding"
+segment_system = "system"
+severity_error = "Error"
+severity_warning = "Warning"
+severity_info = "Information"
+warning = "{severity}: {title}: {body}"
+
+# Avisos da pilha (canal 1 do ADR-0014). Uma tabela por aviso; `title` e `body`.
+# Quando o corpo é só um dado que veio de fora (causa do sistema, URI, nome de
+# chave), o aviso tem só `title` e o dado entra como chegou.
+[notice.config_invalid]
+title = "Invalid config"
+body_at = "line {line}, column {column}: {detail}"
+body = "{detail}"
+unreadable = "could not read \"{path}\": {cause}"
+duplicate_theme = "duplicate theme name: \"{name}\""
+
+[notice.unknown_config_key]
+title = "Unknown key in config"
+
+[notice.unknown_theme]
+title = "Unknown theme"
+body = "\"{name}\" is not in [[themes]]; using defaults."
+
+[notice.color_overridden]
+title = "Color overriding the theme"
+
+[notice.theme_vanished]
+title = "Session theme is gone"
+body_reload = "\"{name}\" no longer exists in the file; going back to the declared theme."
+body_start = "\"{name}\" no longer exists in the file; using the declared theme."
+
+[notice.keybinding_invalid]
+title = "Invalid keybinding"
+# Junta os nomes de um binding duplicado ("a" e "b").
+join_and = " and "
+empty_key = "empty key: \"{text}\""
+unknown_modifier = "unknown modifier: \"{modifier}\" in \"{text}\""
+unknown_key = "unknown key: \"{key}\" in \"{text}\""
+duplicate = "duplicate binding: {keys} resolve to the same key"
+action_unknown = "\"{key}\": unknown action: \"{input}\" -- did you mean \"{suggestion}\"?"
+action_not_bindable = "\"{key}\": \"{input}\" takes an argument and cannot be bound to a key"
+
+# Mudança de config que não vale agora. {key} é o nome da chave, que fica igual
+# em todo idioma.
+[notice.deferred]
+title = "Not applied now"
+next_window = "{key}: takes effect in the next window"
+new_tab = "{key}: takes effect in a new tab"
+restart = "{key}: restart the app"
+
+[notice.config_path_unresolved]
+title = "No config file"
+body = "Could not resolve a config path on this platform."
+
+[notice.config_create_failed]
+title = "Could not create the config"
+
+[notice.config_open_failed]
+title = "Could not open the config"
+
+[notice.link_open_failed]
+title = "Could not open the link"
+
+[notice.link_reveal_failed]
+title = "Could not reveal the file"
+body = "URI copied: {uri}"
+
+[notice.link_refused]
+title = "Scheme refused"
+body = "`{scheme}` does not open -- URI copied"
+
+[notice.spawn_failed]
+title = "Failed to start terminal"
+body = "terminal: pty: {operation}: {cause}"
+
+[notice.pane_too_small]
+title = "Pane does not fit"
+body = "Splitting would leave a pane smaller than {columns}×{rows} cells."
+
+[notice.session_corrupt]
+title = "Previous session corrupted"
+body = "The file was kept at \"{path}\". A new session was started."
+
+[notice.session_newer]
+title = "Session from a newer version"
+body = "The saved format (version {found}) is newer than the one this version of Porecatu supports (up to {supported}). A new session was started."
+
+[notice.named_session_corrupt]
+title = "Named session corrupted"
+body = "The file was kept at \"{path}\"."
+
+[notice.named_session_newer]
+title = "Named session from a newer version"
+body = "The saved format (version {found}) is newer than the one this version of Porecatu supports (up to {supported})."
+
+[notice.named_session_unreadable]
+title = "Could not restore the session"
+body = "The file could not be read."
+
+[notice.overwrite_blocked]
+title = "Cannot overwrite"
+body = "«{name}» was saved by a newer version of Porecatu."
+
+[notice.save_failed]
+title = "Could not save the session"
+window_not_found = "window not found"
+io = "I/O error writing the named session: {cause}"
+newer_schema = "existing file has schema_version {found}, newer than {supported}; not overwritten"
+empty_name = "session name is empty after trimming"
+
+[notice.delete_failed]
+title = "Could not delete the session"
+
+[notice.software_rendering]
+title = "No GPU acceleration"
+body = "No adapter with hardware acceleration was found; drawing in software (slower)."
+
+[notice.font_not_found]
+title = "Font family not found"
+body = "\"{family}\" is not installed; using a system monospace font."
+
+[notice.git_interval_adjusted]
+title = "Sync interval adjusted"
+body = "\"{key}\" is below the floor of {floor}s; using {floor}s."
+
+[notice.git_missing]
+title = "Git not found"
+body = "Remote sync turned off for this run: the app could not find the \"git\" executable."
+
+[notice.git_integration_ok]
+title = "Integration complete"
+body = "The branch is up to date with the remote."
+
+# Quando o git recusa com uma mensagem, ela entra como chegou; as três frases
+# abaixo cobrem quando não há mensagem nenhuma.
+[notice.git_integration_failed]
+title = "Failed to integrate with the remote"
+missing = "git was not found on the system."
+timed_out = "git did not respond in time."
+no_detail = "git refused the integration without giving a reason."
 
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]

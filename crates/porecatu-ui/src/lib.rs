@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// O registro de mensagens (`messages.rs`) é uma macro que se chama uma vez por
+// entrada; com ~200 frases ela passa do limite padrão de 128.
+#![recursion_limit = "512"]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -766,12 +770,17 @@ fn ensure_config_file_exists(path: &Path) -> std::io::Result<()> {
 /// nunca um `unsafe` novo nem uma string de shell montada com o caminho.
 /// Sem `config_path` resolvido (rara: falha da API de diretórios da
 /// plataforma), avisa e desiste.
-fn open_config_file(config_path: Option<&Path>, warnings: &mut WarningStack, now: Instant) {
+fn open_config_file(
+    config_path: Option<&Path>,
+    warnings: &mut WarningStack,
+    catalog: &Catalog,
+    now: Instant,
+) {
     let Some(path) = config_path else {
         warnings.push(
             Severity::Warning,
-            "Sem arquivo de configuração",
-            "Não foi possível resolver um caminho de config nesta plataforma.",
+            msg::notice::config_path_unresolved::title(catalog),
+            msg::notice::config_path_unresolved::body(catalog),
             now,
         );
         return;
@@ -779,7 +788,7 @@ fn open_config_file(config_path: Option<&Path>, warnings: &mut WarningStack, now
     if let Err(err) = ensure_config_file_exists(path) {
         warnings.push(
             Severity::Warning,
-            "Não foi possível criar a config",
+            msg::notice::config_create_failed::title(catalog),
             messages::os_cause(&err),
             now,
         );
@@ -788,7 +797,7 @@ fn open_config_file(config_path: Option<&Path>, warnings: &mut WarningStack, now
     if let Err(err) = opener::open(path) {
         warnings.push(
             Severity::Warning,
-            "Não foi possível abrir a config",
+            msg::notice::config_open_failed::title(catalog),
             messages::os_cause(&err),
             now,
         );
@@ -1076,6 +1085,10 @@ struct WindowState {
     /// sair, em vez de devolver uma janela "restaurada" que o usuário não
     /// pediu.
     fullscreen_restore_maximized: bool,
+    /// O mesmo `Arc<Catalog>` do processo (`App::catalog`), para os métodos
+    /// da janela que empilham aviso ou escrevem nota sem ter o `App` à mão.
+    /// Uma troca de idioma tem de atualizar toda janela junto com o `App`.
+    catalog: Arc<Catalog>,
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -1111,20 +1124,15 @@ fn window_close_needs_confirmation(significant_tab_count: usize, any_tab_busy: b
 /// (canal 1, ADR-0014) para cada `Notice` que `porecatu_session::load`
 /// pode devolver -- puro, sem `WindowState`, só a tradução de dado para
 /// texto.
-fn session_notice_text(notice: &porecatu_session::Notice) -> (&'static str, String) {
+fn session_notice_text(catalog: &Catalog, notice: &porecatu_session::Notice) -> (String, String) {
     match notice {
         porecatu_session::Notice::Corrupt(path) => (
-            "Sessão anterior corrompida",
-            format!(
-                "O arquivo foi preservado em \"{}\". Uma sessão nova foi iniciada.",
-                path.display()
-            ),
+            msg::notice::session_corrupt::title(catalog),
+            msg::notice::session_corrupt::body(catalog, path.display()),
         ),
         porecatu_session::Notice::NewerSchema { found, supported } => (
-            "Sessão de uma versão mais nova",
-            format!(
-                "O formato salvo (versão {found}) é mais novo que o suportado por esta versão do Porecatu (até {supported}). Uma sessão nova foi iniciada."
-            ),
+            msg::notice::session_newer::title(catalog),
+            msg::notice::session_newer::body(catalog, found, supported),
         ),
     }
 }
@@ -1135,22 +1143,27 @@ mod session_notice_text_tests {
 
     #[test]
     fn corrupt_notice_names_the_preserved_path() {
-        let (title, body) = session_notice_text(&porecatu_session::Notice::Corrupt(
-            "session.json.corrupt".into(),
-        ));
+        let notice = porecatu_session::Notice::Corrupt("session.json.corrupt".into());
+        let (title, body) = session_notice_text(&messages::test_support::pt_br(), &notice);
         assert_eq!(title, "Sessão anterior corrompida");
+        assert!(body.contains("session.json.corrupt"));
+        let (title, body) = session_notice_text(&messages::test_support::en_us(), &notice);
+        assert_eq!(title, "Previous session corrupted");
         assert!(body.contains("session.json.corrupt"));
     }
 
     #[test]
     fn newer_schema_notice_names_both_versions() {
-        let (title, body) = session_notice_text(&porecatu_session::Notice::NewerSchema {
+        let notice = porecatu_session::Notice::NewerSchema {
             found: 99,
             supported: 1,
-        });
+        };
+        let (title, body) = session_notice_text(&messages::test_support::pt_br(), &notice);
         assert_eq!(title, "Sessão de uma versão mais nova");
         assert!(body.contains("99"));
         assert!(body.contains('1'));
+        let (title, _) = session_notice_text(&messages::test_support::en_us(), &notice);
+        assert_eq!(title, "Session from a newer version");
     }
 }
 
@@ -1390,13 +1403,14 @@ fn project_command_bytes(command: &str) -> Vec<u8> {
 /// `shell_integration::invite_text`). `path` é o `.porecatu` em si
 /// (`ProjectFileOutcome::Untrusted`); a nota fala do diretório que o contém,
 /// que é o que entraria em `trusted_paths`.
-fn project_file_notice_text(path: &Path) -> String {
+fn project_file_notice_text(catalog: &Catalog, path: &Path) -> String {
     let dir = path.parent().unwrap_or(path);
     let toml_value = dir.to_string_lossy().replace('\\', "/");
-    let text = format!(
-        "{} encontrado em {}, mas este diretório não está autorizado.\nPara autorizá-lo, acrescente em porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]",
+    let text = msg::note::project_file_untrusted(
+        catalog,
         porecatu_config::PROJECT_FILE_NAME,
         dir.display(),
+        toml_value,
     );
     text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
@@ -1714,16 +1728,21 @@ mod project_file_notice_text_tests {
     #[test]
     fn names_the_directory_and_the_config_line() {
         let path = Path::new("/home/ana/projetos/api/.porecatu");
-        let text = project_file_notice_text(path);
-        assert!(text.contains("/home/ana/projetos/api"));
-        assert!(text.contains("trusted_paths"));
-        assert!(text.contains("[project_file]"));
+        for catalog in [
+            messages::test_support::pt_br(),
+            messages::test_support::en_us(),
+        ] {
+            let text = project_file_notice_text(&catalog, path);
+            assert!(text.contains("/home/ana/projetos/api"));
+            assert!(text.contains("trusted_paths"));
+            assert!(text.contains("[project_file]"));
+        }
     }
 
     #[test]
     fn no_bare_newline_ever_reaches_inject_note() {
         let path = Path::new("/home/ana/projetos/api/.porecatu");
-        let text = project_file_notice_text(path);
+        let text = project_file_notice_text(&messages::test_support::pt_br(), path);
         for (index, byte) in text.bytes().enumerate() {
             if byte == b'\n' {
                 assert_eq!(
@@ -1823,6 +1842,7 @@ impl WindowState {
         window_surface: WindowSurface,
         scale: f32,
         access_adapter: accesskit_winit::Adapter,
+        catalog: Arc<Catalog>,
     ) -> Self {
         let size = window.inner_size();
         Self {
@@ -1860,6 +1880,7 @@ impl WindowState {
             access_adapter,
             key_trace_pending: None,
             fullscreen_restore_maximized: false,
+            catalog,
         }
     }
 
@@ -1984,7 +2005,7 @@ impl WindowState {
             hyperlink::LinkOutcome::OpenFailed => {
                 self.warnings.push(
                     Severity::Warning,
-                    "Não foi possível abrir o link",
+                    msg::notice::link_open_failed::title(&self.catalog),
                     uri.to_string(),
                     now,
                 );
@@ -1993,8 +2014,8 @@ impl WindowState {
                 clipboard::copy(uri);
                 self.warnings.push(
                     Severity::Warning,
-                    "Não foi possível revelar o arquivo",
-                    format!("URI copiado: {uri}"),
+                    msg::notice::link_reveal_failed::title(&self.catalog),
+                    msg::notice::link_reveal_failed::body(&self.catalog, uri),
                     now,
                 );
             }
@@ -2002,8 +2023,8 @@ impl WindowState {
                 clipboard::copy(uri);
                 self.warnings.push(
                     Severity::Info,
-                    "Esquema recusado",
-                    format!("`{normalized_scheme}` não abre -- URI copiado"),
+                    msg::notice::link_refused::title(&self.catalog),
+                    msg::notice::link_refused::body(&self.catalog, normalized_scheme),
                     now,
                 );
             }
@@ -2290,8 +2311,11 @@ impl WindowState {
             });
         }) {
             Ok(terminal) => {
-                if let Some(note) = &missing_cwd_note {
-                    terminal.inject_note(note, palette::NOTE_ACCENT_RGB);
+                if let Some(missing) = &missing_cwd_note {
+                    terminal.inject_note(
+                        &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
                 }
                 // ADR-0051 §5/§6: `Ready` popula o pendente de escrita;
                 // `Untrusted` popula o pendente de nota (drenado por
@@ -2314,7 +2338,7 @@ impl WindowState {
                     }
                     Some(porecatu_config::ProjectFileOutcome::Unreadable { path, reason }) => {
                         terminal.inject_note(
-                            &messages::project_file_unreadable(&path, &reason),
+                            &messages::project_file_unreadable(&self.catalog, &path, &reason),
                             palette::NOTE_ACCENT_RGB,
                         );
                         (None, None)
@@ -2338,8 +2362,8 @@ impl WindowState {
             Err(err) => {
                 self.warnings.push(
                     Severity::Error,
-                    "Falha ao iniciar terminal",
-                    messages::terminal_spawn_error(&err),
+                    msg::notice::spawn_failed::title(&self.catalog),
+                    messages::terminal_spawn_error(&self.catalog, &err),
                     now,
                 );
                 self.touch_workspace(|ws| ws.close_tab(tab_id));
@@ -2413,8 +2437,11 @@ impl WindowState {
             });
         }) {
             Ok(terminal) => {
-                if let Some(note) = &missing_cwd_note {
-                    terminal.inject_note(note, palette::NOTE_ACCENT_RGB);
+                if let Some(missing) = &missing_cwd_note {
+                    terminal.inject_note(
+                        &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
                 }
                 self.panes.insert(
                     (tab_id, pane_id),
@@ -2433,8 +2460,8 @@ impl WindowState {
             Err(err) => {
                 self.warnings.push(
                     Severity::Error,
-                    "Falha ao iniciar terminal",
-                    messages::terminal_spawn_error(&err),
+                    msg::notice::spawn_failed::title(&self.catalog),
+                    messages::terminal_spawn_error(&self.catalog, &err),
                     now,
                 );
                 // Desfaz o split: fechar o painel devolve o espaço ao
@@ -2541,10 +2568,11 @@ impl WindowState {
         if !all_panes_meet_minimum(&trial_layout, style, cell_metrics, panes_config) {
             self.warnings.push(
                 Severity::Warning,
-                "Painel não cabe",
-                format!(
-                    "Dividir deixaria um painel com menos de {}×{} células.",
-                    panes_config.min_columns, panes_config.min_rows
+                msg::notice::pane_too_small::title(&self.catalog),
+                msg::notice::pane_too_small::body(
+                    &self.catalog,
+                    panes_config.min_columns,
+                    panes_config.min_rows,
                 ),
                 now,
             );
@@ -4477,7 +4505,7 @@ impl WindowState {
                 return None;
             }
             let (behind, ahead) = entry.counts?;
-            let label = git::ahead_behind_label(behind, ahead)?;
+            let label = git::ahead_behind_label(&self.catalog, behind, ahead)?;
             // RF-13.11: nem consulta nem integração em andamento aceitam
             // um segundo clique -- `InFlight` cobre as duas (comentário do
             // variante em `git.rs`). RF-13.9: `can_integrate` é a mesma
@@ -4510,7 +4538,10 @@ impl WindowState {
                 .map(str::to_owned),
             // RF-6.20/ADR-0053 §14: da aba ativa, não do painel focado --
             // um painel só não mostra a contagem (`pane_count_label`).
-            pane_count: tab.map_or(0, |t| t.panes().leaves_in_order().len()),
+            pane_count_label: status_bar::pane_count_label(
+                &self.catalog,
+                tab.map_or(0, |t| t.panes().leaves_in_order().len()),
+            ),
             // Sem a versão do app: pedido do dono do produto depois de
             // ver a barra em tela.
             system: std::env::consts::OS.to_owned(),
@@ -4898,9 +4929,7 @@ fn tab_bar_rect_contains(rect: Rect, point: (f32, f32)) -> bool {
 /// Aviso de arranque ainda **sem frase**: o dado tipado que o originou, para
 /// ser composto na entrega, depois de o catálogo existir (ADR-0056 §7) --
 /// é isso que deixa o aviso sair no idioma do catálogo que acabou de ser
-/// montado. Os títulos e corpos dos três primeiros continuam literais até
-/// a etapa seguinte migrar os avisos do app para `notice.*`; os de idioma
-/// já leem o catálogo.
+/// montado. Título e corpo de todos vêm do catálogo (`notice.*`).
 enum StartupNotice {
     /// RF-4.21.
     ConfigInvalid(porecatu_config::ConfigError),
@@ -4908,6 +4937,9 @@ enum StartupNotice {
     UnknownConfigKey(String),
     /// RF-5.18/ADR-0031 §5: nome de `[terminal] theme` fora de `[[themes]]`.
     UnknownTheme(String),
+    /// ADR-0029 §4: tecla malformada, ação desconhecida ou binding duplicado
+    /// no arranque -- só aquela linha é descartada.
+    KeybindingInvalid(keymap::KeymapIssue),
     /// ADR-0056 §8: o que `build_catalog` tem a dizer sobre os arquivos.
     Language(porecatu_locale::Diagnostic),
 }
@@ -4917,18 +4949,23 @@ impl StartupNotice {
         match self {
             StartupNotice::ConfigInvalid(error) => (
                 Severity::Error,
-                "Config inválida".to_owned(),
-                messages::config_error(error),
+                msg::notice::config_invalid::title(catalog),
+                messages::config_error(catalog, error),
             ),
             StartupNotice::UnknownConfigKey(key) => (
                 Severity::Warning,
-                "Chave desconhecida na config".to_owned(),
+                msg::notice::unknown_config_key::title(catalog),
                 key.clone(),
             ),
             StartupNotice::UnknownTheme(name) => (
                 Severity::Warning,
-                "Tema desconhecido".to_owned(),
-                format!("\"{name}\" não está em [[themes]]; usando defaults."),
+                msg::notice::unknown_theme::title(catalog),
+                msg::notice::unknown_theme::body(catalog, name),
+            ),
+            StartupNotice::KeybindingInvalid(issue) => (
+                Severity::Warning,
+                msg::notice::keybinding_invalid::title(catalog),
+                messages::keymap_issue(catalog, issue),
             ),
             StartupNotice::Language(diagnostic) => language::diagnostic_notice(diagnostic, catalog),
         }
@@ -5195,7 +5232,7 @@ impl App {
             if !overridden.is_empty() {
                 state.warnings.push(
                     Severity::Info,
-                    "Cor fora do tema vencendo",
+                    msg::notice::color_overridden::title(&self.catalog),
                     overridden.join(", "),
                     now,
                 );
@@ -5272,11 +5309,8 @@ impl App {
         // avisar. Log em stderr; o mapa resolvido nunca falta (uma chave
         // malformada só descarta aquela linha).
         let keymap_resolved = keymap::resolve(&config.keybindings, keymap::Platform::current());
-        for issue in &keymap_resolved.issues {
-            eprintln!(
-                "keybinding inválido, ignorado: {}",
-                messages::keymap_issue(issue)
-            );
+        for issue in keymap_resolved.issues {
+            pending_startup_warnings.push(StartupNotice::KeybindingInvalid(issue));
         }
         let keymap = keymap_resolved.bindings;
 
@@ -5613,20 +5647,19 @@ impl App {
             return;
         };
         let now = Instant::now();
+        let catalog = &self.catalog;
         let (title, body) = match outcome.notices.first() {
             Some(porecatu_session::Notice::Corrupt(path)) => (
-                "Sessão nomeada corrompida",
-                format!("O arquivo foi preservado em \"{}\".", path.display()),
+                msg::notice::named_session_corrupt::title(catalog),
+                msg::notice::named_session_corrupt::body(catalog, path.display()),
             ),
             Some(porecatu_session::Notice::NewerSchema { found, supported }) => (
-                "Sessão nomeada de uma versão mais nova",
-                format!(
-                    "O formato salvo (versão {found}) é mais novo que o suportado por esta versão do Porecatu (até {supported})."
-                ),
+                msg::notice::named_session_newer::title(catalog),
+                msg::notice::named_session_newer::body(catalog, found, supported),
             ),
             None => (
-                "Não foi possível restaurar a sessão",
-                "O arquivo não pôde ser lido.".to_owned(),
+                msg::notice::named_session_unreadable::title(catalog),
+                msg::notice::named_session_unreadable::body(catalog),
             ),
         };
         state.warnings.push(Severity::Error, title, body, now);
@@ -5734,11 +5767,8 @@ impl App {
             NameSubmitDecision::Blocked(entry) => {
                 state.warnings.push(
                     Severity::Warning,
-                    "Não é possível sobrescrever",
-                    format!(
-                        "«{}» foi salva por uma versão mais nova do Porecatu.",
-                        entry.name
-                    ),
+                    msg::notice::overwrite_blocked::title(&self.catalog),
+                    msg::notice::overwrite_blocked::body(&self.catalog, &entry.name),
                     Instant::now(),
                 );
                 state.window.request_redraw();
@@ -5768,8 +5798,8 @@ impl App {
             Err(failure) => {
                 state.warnings.push(
                     Severity::Error,
-                    "Não foi possível salvar a sessão",
-                    messages::save_named_failure(&failure),
+                    msg::notice::save_failed::title(&self.catalog),
+                    messages::save_named_failure(&self.catalog, &failure),
                     Instant::now(),
                 );
             }
@@ -5799,7 +5829,7 @@ impl App {
             Err(err) => {
                 state.warnings.push(
                     Severity::Error,
-                    "Não foi possível excluir a sessão",
+                    msg::notice::delete_failed::title(&self.catalog),
                     messages::os_cause(&err),
                     Instant::now(),
                 );
@@ -5846,7 +5876,7 @@ impl App {
         // `WindowState` ainda pra empilhar, então esperam até `state` ser
         // criado no fim desta função (a primeira janela do processo,
         // sempre).
-        let mut first_gpu_warnings: Vec<(Severity, &'static str, String)> = Vec::new();
+        let mut first_gpu_warnings: Vec<(Severity, String, String)> = Vec::new();
         let window_surface = if let Some(gpu) = &mut self.gpu {
             match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
                 Ok(surface) => surface,
@@ -5871,10 +5901,8 @@ impl App {
             if gpu.software_rendering() {
                 first_gpu_warnings.push((
                     Severity::Warning,
-                    "Sem aceleração de GPU",
-                    "Nenhum adapter com aceleração de hardware foi encontrado; \
-                     desenhando por software (mais lento)."
-                        .to_owned(),
+                    msg::notice::software_rendering::title(&self.catalog),
+                    msg::notice::software_rendering::body(&self.catalog),
                 ));
             }
             // RF-5.8/RF-11.25: família de `[terminal.font] family` ausente
@@ -5883,8 +5911,8 @@ impl App {
             if let Some(family) = gpu.text_measurer().missing_mono_family() {
                 first_gpu_warnings.push((
                     Severity::Warning,
-                    "Família de fonte não encontrada",
-                    format!("\"{family}\" não está instalada; usando uma monoespaçada do sistema."),
+                    msg::notice::font_not_found::title(&self.catalog),
+                    msg::notice::font_not_found::body(&self.catalog, family),
                 ));
             }
             self.gpu = Some(gpu);
@@ -5910,7 +5938,13 @@ impl App {
                 .align_mono_advance_to(self.cell_metrics.width, font_size_px);
         }
 
-        let mut state = WindowState::new(window, window_surface, scale, access_adapter);
+        let mut state = WindowState::new(
+            window,
+            window_surface,
+            scale,
+            access_adapter,
+            Arc::clone(&self.catalog),
+        );
         state
             .animations
             .set_enabled(self.config.appearance.window.animations);
@@ -6398,9 +6432,12 @@ impl App {
             for state in self.windows.values_mut() {
                 state.warnings.push(
                     Severity::Info,
-                    "Intervalo de sincronização ajustado",
-                    "\"[git] remote_poll_interval_secs\" é menor que o piso de 30s; usando 30s."
-                        .to_owned(),
+                    msg::notice::git_interval_adjusted::title(&self.catalog),
+                    msg::notice::git_interval_adjusted::body(
+                        &self.catalog,
+                        "[git] remote_poll_interval_secs",
+                        git::MIN_POLL_INTERVAL_SECS,
+                    ),
                     now,
                 );
                 state.window.request_redraw();
@@ -6547,9 +6584,8 @@ impl App {
                     for state in self.windows.values_mut() {
                         state.warnings.push(
                             Severity::Info,
-                            "Git não encontrado",
-                            "Sincronização com o remoto desligada nesta execução: o app não achou o executável \"git\"."
-                                .to_owned(),
+                            msg::notice::git_missing::title(&self.catalog),
+                            msg::notice::git_missing::body(&self.catalog),
                             now,
                         );
                         state.window.request_redraw();
@@ -6630,18 +6666,39 @@ impl App {
                 entry.counts = None;
             }
         }
+        let catalog = &self.catalog;
         let (severity, title, body) = match result.outcome {
             git::IntegrationOutcome::Success => (
                 Severity::Info,
-                "Integração concluída",
-                "A branch está em dia com o remoto.".to_owned(),
+                msg::notice::git_integration_ok::title(catalog),
+                msg::notice::git_integration_ok::body(catalog),
             ),
-            git::IntegrationOutcome::Failed { message } => {
-                (Severity::Error, "Falha ao integrar com o remoto", message)
+            git::IntegrationOutcome::Failed(failure) => {
+                // A mensagem do `git` que recusou entra como chegou; os
+                // outros três motivos são frases do catálogo.
+                let body = match failure {
+                    git::IntegrationFailure::GitMissing => {
+                        msg::notice::git_integration_failed::missing(catalog)
+                    }
+                    git::IntegrationFailure::TimedOut => {
+                        msg::notice::git_integration_failed::timed_out(catalog)
+                    }
+                    git::IntegrationFailure::Refused { detail } => detail,
+                    git::IntegrationFailure::NoDetail => {
+                        msg::notice::git_integration_failed::no_detail(catalog)
+                    }
+                };
+                (
+                    Severity::Error,
+                    msg::notice::git_integration_failed::title(catalog),
+                    body,
+                )
             }
         };
         for state in self.windows.values_mut() {
-            state.warnings.push(severity, title, body.clone(), now);
+            state
+                .warnings
+                .push(severity, title.clone(), body.clone(), now);
             state.window.request_redraw();
         }
     }
@@ -6790,6 +6847,7 @@ impl App {
         let Self {
             windows,
             project_file_notice_claimed,
+            catalog,
             ..
         } = self;
         for state in windows.values_mut() {
@@ -6801,7 +6859,7 @@ impl App {
                     project_file_notice_write_decision(*project_file_notice_claimed, true);
                 *project_file_notice_claimed = next_claimed;
                 if write {
-                    let text = project_file_notice_text(&path);
+                    let text = project_file_notice_text(catalog, &path);
                     runtime
                         .terminal
                         .inject_note(&text, palette::NOTE_ACCENT_RGB);
@@ -6914,7 +6972,7 @@ impl App {
             .tab(tab_id)
             .map(porecatu_core::Tab::shell_name)
             .unwrap_or_default();
-        let text = shell_integration::invite_text(shell_name);
+        let text = shell_integration::invite_text(&self.catalog, shell_name);
         rt.terminal.inject_note(&text, palette::NOTE_ACCENT_RGB);
     }
 
@@ -6945,8 +7003,8 @@ impl App {
                 for state in self.windows.values_mut() {
                     state.warnings.push(
                         Severity::Error,
-                        "Config inválida",
-                        messages::config_error(&error),
+                        msg::notice::config_invalid::title(&self.catalog),
+                        messages::config_error(&self.catalog, &error),
                         now,
                     );
                     state.window.request_redraw();
@@ -7047,24 +7105,38 @@ impl App {
             if let Some(family) = &missing_mono_family {
                 state.warnings.push(
                     Severity::Warning,
-                    "Família de fonte não encontrada",
-                    format!("\"{family}\" não está instalada; usando uma monoespaçada do sistema."),
+                    msg::notice::font_not_found::title(&self.catalog),
+                    msg::notice::font_not_found::body(&self.catalog, family),
                     now,
                 );
             }
             // Classe C: "mudei e não aconteceu nada" seria indistinguível
             // de bug (ADR-0030) -- por isso o aviso, severidade
             // informação, some sozinho.
-            for message in &effects.deferred {
-                state
-                    .warnings
-                    .push(Severity::Info, "Não aplicado agora", message.clone(), now);
+            for deferred in &effects.deferred {
+                let body = match deferred.scope {
+                    reload::DeferredScope::NextWindow => {
+                        msg::notice::deferred::next_window(&self.catalog, deferred.key)
+                    }
+                    reload::DeferredScope::NewTab => {
+                        msg::notice::deferred::new_tab(&self.catalog, deferred.key)
+                    }
+                    reload::DeferredScope::Restart => {
+                        msg::notice::deferred::restart(&self.catalog, deferred.key)
+                    }
+                };
+                state.warnings.push(
+                    Severity::Info,
+                    msg::notice::deferred::title(&self.catalog),
+                    body,
+                    now,
+                );
             }
             // RF-4.22: chave desconhecida é aviso, não erro.
             for key in &unknown_keys {
                 state.warnings.push(
                     Severity::Warning,
-                    "Chave desconhecida na config",
+                    msg::notice::unknown_config_key::title(&self.catalog),
                     key.clone(),
                     now,
                 );
@@ -7076,8 +7148,8 @@ impl App {
             for issue in &keymap_resolved.issues {
                 state.warnings.push(
                     Severity::Warning,
-                    "Keybinding inválido",
-                    messages::keymap_issue(issue),
+                    msg::notice::keybinding_invalid::title(&self.catalog),
+                    messages::keymap_issue(&self.catalog, issue),
                     now,
                 );
             }
@@ -7087,23 +7159,23 @@ impl App {
             if let Some(name) = &vanished_theme {
                 state.warnings.push(
                     Severity::Info,
-                    "Tema da sessão sumiu",
-                    format!("\"{name}\" não existe mais no arquivo; voltando ao tema declarado."),
+                    msg::notice::theme_vanished::title(&self.catalog),
+                    msg::notice::theme_vanished::body_reload(&self.catalog, name),
                     now,
                 );
             }
             if let Some(name) = &unknown_static_theme {
                 state.warnings.push(
                     Severity::Warning,
-                    "Tema desconhecido",
-                    format!("\"{name}\" não está em [[themes]]; usando defaults."),
+                    msg::notice::unknown_theme::title(&self.catalog),
+                    msg::notice::unknown_theme::body(&self.catalog, name),
                     now,
                 );
             }
             if !overridden.is_empty() {
                 state.warnings.push(
                     Severity::Info,
-                    "Cor fora do tema vencendo",
+                    msg::notice::color_overridden::title(&self.catalog),
                     overridden.join(", "),
                     now,
                 );
@@ -7240,14 +7312,14 @@ impl ApplicationHandler<Wakeup> for App {
         {
             let now = Instant::now();
             for notice in &outcome.notices {
-                let (title, body) = session_notice_text(notice);
+                let (title, body) = session_notice_text(&self.catalog, notice);
                 state.warnings.push(Severity::Error, title, body, now);
             }
             if let Some(name) = self.vanished_restored_theme.take() {
                 state.warnings.push(
                     Severity::Info,
-                    "Tema da sessão sumiu",
-                    format!("\"{name}\" não existe mais no arquivo; usando o tema declarado."),
+                    msg::notice::theme_vanished::title(&self.catalog),
+                    msg::notice::theme_vanished::body_start(&self.catalog, &name),
                     now,
                 );
             }
@@ -7417,7 +7489,7 @@ impl ApplicationHandler<Wakeup> for App {
                     } else {
                         if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
                             runtime.terminal.inject_note(
-                                &format!("processo encerrado (código {code})"),
+                                &msg::note::process_exited(&self.catalog, code),
                                 palette::NOTE_ACCENT_RGB,
                             );
                         }
@@ -9381,6 +9453,7 @@ impl App {
                     open_config_file(
                         self.config_path.as_deref(),
                         &mut state.warnings,
+                        &self.catalog,
                         Instant::now(),
                     );
                     state.window.request_redraw();
@@ -9861,6 +9934,7 @@ impl App {
                     pal,
                     &self.term_pal,
                     search_hover,
+                    &self.catalog,
                     gpu.text_measurer(),
                 );
                 for primitive in search_primitives {
@@ -9936,6 +10010,7 @@ impl App {
                 config,
                 pal,
                 &self.catalog,
+                gpu.text_measurer(),
             ));
         }
         if let Some(menu) = &state.group_context_menu {
@@ -9962,6 +10037,7 @@ impl App {
                 menu.highlighted(),
                 config,
                 pal,
+                gpu.text_measurer(),
             ));
         }
         if let Some(menu) = &state.terminal_context_menu {
@@ -9991,6 +10067,7 @@ impl App {
                 config,
                 pal,
                 &self.catalog,
+                gpu.text_measurer(),
             ));
         }
         if let Some(editor) = &state.group_editor {

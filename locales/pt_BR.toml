@@ -59,6 +59,27 @@ save_item = "Salvar esta janela…"
 empty_list = "nenhuma sessão salva"
 name_placeholder = "nome da sessão"
 
+[search_bar]
+invalid_pattern = "padrão inválido"
+no_results = "nenhum resultado"
+# {counter} é o contador da busca ("2/7"); o sufixo avisa que a busca só vê a
+# tela visível.
+alt_screen_counter = "{counter} (tela alternativa)"
+
+[status_bar]
+pane_count = { one = "{count} painel", other = "{count} painéis" }
+commits_behind = { one = "{count} commit atrás", other = "{count} commits atrás" }
+behind_ahead = "{behind} atrás, {ahead} à frente"
+
+# Nomes das cores da paleta de grupo (só o leitor de tela os lê).
+[color]
+red = "Vermelho"
+yellow = "Amarelo"
+cyan = "Ciano"
+blue = "Azul"
+purple = "Roxo"
+green = "Verde"
+
 [dialog]
 cancel = "Cancelar"
 
@@ -92,6 +113,207 @@ confirm = "Excluir"
 title = "Sobrescrever a sessão «{name}»?"
 body = "A sessão salva com esse nome será substituída."
 confirm = "Sobrescrever"
+
+# Notas escritas no grid do terminal (canal 2 do ADR-0014). Os avisos da pilha
+# estão em [notice.*].
+[note]
+process_exited = "processo encerrado (código {code})"
+cwd_missing = "diretório \"{path}\" não existe mais, aba aberta no home"
+# {name} é o nome do arquivo de projeto; {toml_value} é o diretório já escrito
+# como valor de TOML (barras normais).
+project_file_untrusted = "{name} encontrado em {dir}, mas este diretório não está autorizado.\nPara autorizá-lo, acrescente em porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
+project_file_unreadable = "não foi possível ler \"{path}\": {reason}"
+
+# Convite de integração de shell (ADR-0039). Os trechos de código ficam em
+# docs/reference/integracao-de-shell.md e não são texto de interface; o
+# marcador de dispensa que o usuário digita também não é traduzido.
+[note.shell_invite]
+text = "Este terminal ainda não tem integração de shell (OSC 7). {consequence}\n\n{body}\n\nSelecione o trecho acima com o mouse para copiar, do jeito de sempre.\n\nPara não ver este aviso de novo, digite \"{marker}\" e pressione Enter (o shell provavelmente vai dizer que o comando não existe -- sem problema, é só o sinal de dispensa)."
+consequence_windows = "Sem ela, o diretório desta aba não será restaurado quando você reabrir o Porecatu."
+consequence_other = "Sem ela, a restauração de diretório desta aba fica menos exata (usa um caminho mais caro para descobrir onde você está)."
+body_snippet = "Cole isto na config do seu shell:\n\n{snippet}"
+body_cmd = "O cmd.exe não tem forma confiável de emitir esse aviso -- use PowerShell se restaurar o diretório importar para você."
+body_generic = "Shell não reconhecido para sugerir um trecho pronto. OSC 7 é a sequência que o shell emite a cada mudança de diretório -- veja docs/reference/integracao-de-shell.md no repositório do Porecatu para configurar o seu."
+
+# Rótulos que só o leitor de tela lê (ADR-0043). Frases montadas de pedaços
+# (grupo, aba) têm uma frase por combinação ou peças com identificador próprio,
+# para a ordem das palavras ficar livre para o tradutor.
+[access]
+new_tab_ungrouped = "Nova aba fora de grupo"
+new_tab_in_group = "Nova aba neste grupo"
+sessions_button = "Sessões salvas"
+settings_button = "Configurações"
+window_minimize = "Minimizar"
+window_maximize = "Maximizar ou restaurar"
+window_close = "Fechar janela"
+tab_close = "Fechar aba"
+regex_toggle = "Expressão regular"
+group_editor = "Editor de grupo"
+unnamed_group = "Grupo"
+tabs_hidden_left = { one = "{count} aba oculta à esquerda", other = "{count} abas ocultas à esquerda" }
+tabs_hidden_right = { one = "{count} aba oculta à direita", other = "{count} abas ocultas à direita" }
+# Uma frase por combinação de colapsado e cor.
+group = "Grupo {name}"
+group_collapsed = "Grupo {name}, colapsado"
+group_colored = "Grupo {name}, cor {color}"
+group_collapsed_colored = "Grupo {name}, colapsado, cor {color}"
+# Estados da aba: cada um é uma peça, encaixada depois do título por tab_state.
+tab_state = " ({state})"
+state_active = "ativa"
+state_not_started = "não iniciada"
+state_bell = "campainha"
+state_activity = "atividade"
+pane_focused = "{title} (foco)"
+cwd_stale = "diretório de origem; o shell não informa o atual"
+ahead_behind_clickable = "clique integra os commits do remoto por fast-forward"
+ahead_behind_blocked = "commits locais à frente impedem a integração automática"
+segment_shell = "shell"
+segment_cwd = "diretório"
+segment_branch = "branch"
+segment_ahead_behind = "commits atrás/à frente do remoto"
+segment_group = "grupo"
+segment_pane_count = "contagem de painéis"
+segment_encoding = "codificação"
+segment_system = "sistema"
+severity_error = "Erro"
+severity_warning = "Aviso"
+severity_info = "Informação"
+warning = "{severity}: {title}: {body}"
+
+# Avisos da pilha (canal 1 do ADR-0014). Uma tabela por aviso; `title` e `body`.
+# Quando o corpo é só um dado que veio de fora (causa do sistema, URI, nome de
+# chave), o aviso tem só `title` e o dado entra como chegou.
+[notice.config_invalid]
+title = "Config inválida"
+body_at = "linha {line}, coluna {column}: {detail}"
+body = "{detail}"
+unreadable = "não foi possível ler \"{path}\": {cause}"
+duplicate_theme = "nome de tema duplicado: \"{name}\""
+
+[notice.unknown_config_key]
+title = "Chave desconhecida na config"
+
+[notice.unknown_theme]
+title = "Tema desconhecido"
+body = "\"{name}\" não está em [[themes]]; usando defaults."
+
+[notice.color_overridden]
+title = "Cor fora do tema vencendo"
+
+[notice.theme_vanished]
+title = "Tema da sessão sumiu"
+body_reload = "\"{name}\" não existe mais no arquivo; voltando ao tema declarado."
+body_start = "\"{name}\" não existe mais no arquivo; usando o tema declarado."
+
+[notice.keybinding_invalid]
+title = "Keybinding inválido"
+# Junta os nomes de um binding duplicado ("a" e "b").
+join_and = " e "
+empty_key = "tecla vazia: \"{text}\""
+unknown_modifier = "modificador desconhecido: \"{modifier}\" em \"{text}\""
+unknown_key = "tecla desconhecida: \"{key}\" em \"{text}\""
+duplicate = "binding duplicado: {keys} resolvem pra mesma tecla"
+action_unknown = "\"{key}\": ação desconhecida: \"{input}\" -- você quis dizer \"{suggestion}\"?"
+action_not_bindable = "\"{key}\": \"{input}\" tem argumento e não é vinculável a tecla"
+
+# Mudança de config que não vale agora. {key} é o nome da chave, que fica igual
+# em todo idioma.
+[notice.deferred]
+title = "Não aplicado agora"
+next_window = "{key}: vale na próxima janela"
+new_tab = "{key}: vale em aba nova"
+restart = "{key}: reinicie o app"
+
+[notice.config_path_unresolved]
+title = "Sem arquivo de configuração"
+body = "Não foi possível resolver um caminho de config nesta plataforma."
+
+[notice.config_create_failed]
+title = "Não foi possível criar a config"
+
+[notice.config_open_failed]
+title = "Não foi possível abrir a config"
+
+[notice.link_open_failed]
+title = "Não foi possível abrir o link"
+
+[notice.link_reveal_failed]
+title = "Não foi possível revelar o arquivo"
+body = "URI copiado: {uri}"
+
+[notice.link_refused]
+title = "Esquema recusado"
+body = "`{scheme}` não abre -- URI copiado"
+
+[notice.spawn_failed]
+title = "Falha ao iniciar terminal"
+body = "terminal: pty: {operation}: {cause}"
+
+[notice.pane_too_small]
+title = "Painel não cabe"
+body = "Dividir deixaria um painel com menos de {columns}×{rows} células."
+
+[notice.session_corrupt]
+title = "Sessão anterior corrompida"
+body = "O arquivo foi preservado em \"{path}\". Uma sessão nova foi iniciada."
+
+[notice.session_newer]
+title = "Sessão de uma versão mais nova"
+body = "O formato salvo (versão {found}) é mais novo que o suportado por esta versão do Porecatu (até {supported}). Uma sessão nova foi iniciada."
+
+[notice.named_session_corrupt]
+title = "Sessão nomeada corrompida"
+body = "O arquivo foi preservado em \"{path}\"."
+
+[notice.named_session_newer]
+title = "Sessão nomeada de uma versão mais nova"
+body = "O formato salvo (versão {found}) é mais novo que o suportado por esta versão do Porecatu (até {supported})."
+
+[notice.named_session_unreadable]
+title = "Não foi possível restaurar a sessão"
+body = "O arquivo não pôde ser lido."
+
+[notice.overwrite_blocked]
+title = "Não é possível sobrescrever"
+body = "«{name}» foi salva por uma versão mais nova do Porecatu."
+
+[notice.save_failed]
+title = "Não foi possível salvar a sessão"
+window_not_found = "janela não encontrada"
+io = "erro de E/S ao gravar sessão nomeada: {cause}"
+newer_schema = "arquivo existente tem schema_version {found}, mais nova que {supported}; não sobrescrito"
+empty_name = "nome de sessão vazio depois de aparado"
+
+[notice.delete_failed]
+title = "Não foi possível excluir a sessão"
+
+[notice.software_rendering]
+title = "Sem aceleração de GPU"
+body = "Nenhum adapter com aceleração de hardware foi encontrado; desenhando por software (mais lento)."
+
+[notice.font_not_found]
+title = "Família de fonte não encontrada"
+body = "\"{family}\" não está instalada; usando uma monoespaçada do sistema."
+
+[notice.git_interval_adjusted]
+title = "Intervalo de sincronização ajustado"
+body = "\"{key}\" é menor que o piso de {floor}s; usando {floor}s."
+
+[notice.git_missing]
+title = "Git não encontrado"
+body = "Sincronização com o remoto desligada nesta execução: o app não achou o executável \"git\"."
+
+[notice.git_integration_ok]
+title = "Integração concluída"
+body = "A branch está em dia com o remoto."
+
+# Quando o git recusa com uma mensagem, ela entra como chegou; as três frases
+# abaixo cobrem quando não há mensagem nenhuma.
+[notice.git_integration_failed]
+title = "Falha ao integrar com o remoto"
+missing = "o git não foi encontrado no sistema."
+timed_out = "o git não respondeu a tempo."
+no_detail = "o git recusou a integração sem detalhar o motivo."
 
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]

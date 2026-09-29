@@ -498,7 +498,10 @@ mod tests {
             resolved.issues[0],
             KeymapIssue::MalformedKey(ChordParseError::UnknownModifier { .. })
         ));
-        assert!(messages::keymap_issue(&resolved.issues[0]).contains("modificador desconhecido"));
+        assert!(
+            messages::keymap_issue(&messages::test_support::pt_br(), &resolved.issues[0])
+                .contains("modificador desconhecido")
+        );
     }
 
     #[test]
@@ -636,7 +639,10 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert!(keys.iter().any(|k| k == "ctrl+shift+t"));
         assert!(keys.iter().any(|k| k == "shift+ctrl+t"));
-        assert!(messages::keymap_issue(&resolved.issues[0]).contains("duplicado"));
+        assert!(
+            messages::keymap_issue(&messages::test_support::pt_br(), &resolved.issues[0])
+                .contains("duplicado")
+        );
         let chord = Chord::parse("ctrl+shift+t").unwrap();
         // Nenhuma das duas grafias ambíguas aplica -- mas o default
         // embutido (tab.new) já estava no mapa acumulado de uma camada
@@ -660,7 +666,10 @@ mod tests {
                 },
             }
         );
-        assert!(messages::keymap_issue(&resolved.issues[0]).contains("tab.close"));
+        assert!(
+            messages::keymap_issue(&messages::test_support::pt_br(), &resolved.issues[0])
+                .contains("tab.close")
+        );
     }
 
     #[test]

@@ -328,19 +328,16 @@ pub fn resolve_restored_geometry(
 /// para toda aba `NotStarted` de uma restauração, que seria N chamadas de
 /// `exists()` no caminho do start para abas que talvez nunca sejam
 /// focadas.
+///
+/// O segundo valor é o diretório que sumiu, **sem frase**: quem escreve a
+/// nota, no idioma do catálogo, é `ui` (`note.cwd_missing`).
 pub fn resolve_tab_cwd(
     cwd: Option<std::path::PathBuf>,
     exists: bool,
     startup_directory: &Option<std::path::PathBuf>,
-) -> (Option<std::path::PathBuf>, Option<String>) {
+) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
     match cwd {
-        Some(path) if !exists => (
-            startup_directory.clone(),
-            Some(format!(
-                "diretório \"{}\" não existe mais, aba aberta no home",
-                path.display()
-            )),
-        ),
+        Some(path) if !exists => (startup_directory.clone(), Some(path)),
         other => (other, None),
     }
 }
@@ -722,7 +719,7 @@ mod tests {
         let (cwd, note) =
             resolve_tab_cwd(Some(std::path::PathBuf::from("/srv/sumiu")), false, &home);
         assert_eq!(cwd, home);
-        assert!(note.is_some_and(|n| n.contains("/srv/sumiu")));
+        assert_eq!(note, Some(std::path::PathBuf::from("/srv/sumiu")));
     }
 
     #[test]

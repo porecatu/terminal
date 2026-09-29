@@ -73,6 +73,26 @@ pub(crate) const BODY_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Regular,
 };
 
+/// Rótulo de item de menu que cabe no orçamento de largura, ou truncado com
+/// reticências (ADR-0056 §12). O texto vem de um arquivo que o usuário pode
+/// escrever, e os menus têm largura fixa: sem o corte, um rótulo longo
+/// invadiria a borda. **Só chama `truncate` quando a largura medida passa do
+/// orçamento** -- todo rótulo dos arquivos do projeto cabe, e desenha
+/// exatamente como antes; medir é um shaping, cortar é outro, e a armadilha
+/// de medição por frame do CLAUDE.md pede que o segundo não rode à toa.
+fn fit_label(label: String, budget: f32, font_size: f32, measurer: &mut TextMeasurer) -> String {
+    if measurer.measure_width(&label, BODY_FONT, font_size) <= budget {
+        return label;
+    }
+    measurer.truncate(&label, BODY_FONT, font_size, budget).0
+}
+
+/// Largura que sobra ao rótulo de um item: a do item menos o respiro dos dois
+/// lados. Os menus que truncam não têm chip de atalho.
+fn menu_label_budget(item_rect: Rect, item_padding_x: f32) -> f32 {
+    (item_rect.width - item_padding_x * 2.0).max(0.0)
+}
+
 fn union(a: Rect, b: Rect) -> Rect {
     let x0 = a.x.min(b.x);
     let y0 = a.y.min(b.y);
@@ -523,6 +543,7 @@ pub fn paint_context_menu(
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
     catalog: &Catalog,
+    measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.context_menu;
     let corner_radius = cfg.corner_radius as f32;
@@ -560,7 +581,12 @@ pub fn paint_context_menu(
                 rect.x + item_padding_x,
                 rect.y + (rect.height - font_size) / 2.0,
             ),
-            text: item.action.label(catalog),
+            text: fit_label(
+                item.action.label(catalog),
+                menu_label_budget(rect, item_padding_x),
+                font_size,
+                measurer,
+            ),
             font: BODY_FONT,
             size_px: font_size,
             color,
@@ -638,6 +664,7 @@ pub fn paint_group_menu(
     highlighted: usize,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
+    measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.context_menu;
     let corner_radius = cfg.corner_radius as f32;
@@ -680,7 +707,12 @@ pub fn paint_group_menu(
                 rect.x + item_padding_x,
                 rect.y + (rect.height - font_size) / 2.0,
             ),
-            text: item.label.clone(),
+            text: fit_label(
+                item.label.clone(),
+                menu_label_budget(rect, item_padding_x),
+                font_size,
+                measurer,
+            ),
             font: BODY_FONT,
             size_px: font_size,
             color: text_color,
@@ -757,6 +789,7 @@ pub fn paint_terminal_menu(
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
     catalog: &Catalog,
+    measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.context_menu;
     let corner_radius = cfg.corner_radius as f32;
@@ -794,7 +827,12 @@ pub fn paint_terminal_menu(
                 rect.x + item_padding_x,
                 rect.y + (rect.height - font_size) / 2.0,
             ),
-            text: item.action.label(catalog),
+            text: fit_label(
+                item.action.label(catalog),
+                menu_label_budget(rect, item_padding_x),
+                font_size,
+                measurer,
+            ),
             font: BODY_FONT,
             size_px: font_size,
             color,
@@ -1343,7 +1381,12 @@ pub fn paint_move_to_group(
                     rect.x + row_padding_x,
                     rect.y + (rect.height - item_text_size) / 2.0,
                 ),
-                text: msg::move_to_group::new_group(catalog),
+                text: fit_label(
+                    msg::move_to_group::new_group(catalog),
+                    (rect.width - row_padding_x * 2.0).max(0.0),
+                    item_text_size,
+                    measurer,
+                ),
                 font: BODY_FONT,
                 size_px: item_text_size,
                 color: pal.menu_item_text,
@@ -1890,4 +1933,84 @@ pub fn paint_tooltip(
         color: pal.tooltip_text,
     }));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::messages::test_support;
+
+    fn width_of(text: &str, size: f32, measurer: &mut TextMeasurer) -> f32 {
+        measurer.measure_width(text, BODY_FONT, size)
+    }
+
+    /// Um rótulo mais largo que o orçamento é cortado com reticências, e o
+    /// resultado cabe (ADR-0056 §12).
+    #[test]
+    fn a_label_wider_than_the_budget_is_cut_with_an_ellipsis() {
+        let mut measurer = TextMeasurer::new();
+        let size = 12.0;
+        let long = "Um rótulo artificialmente longo que nenhum menu comportaria".to_owned();
+        let budget = 120.0;
+        assert!(width_of(&long, size, &mut measurer) > budget);
+        let fitted = fit_label(long.clone(), budget, size, &mut measurer);
+        assert_ne!(fitted, long);
+        assert!(fitted.ends_with('…'), "{fitted}");
+        assert!(width_of(&fitted, size, &mut measurer) <= budget + 0.5);
+    }
+
+    /// Rótulo que cabe sai idêntico -- e sem ter passado por `truncate`.
+    #[test]
+    fn a_label_that_fits_is_returned_untouched() {
+        let mut measurer = TextMeasurer::new();
+        assert_eq!(
+            fit_label("Nova aba".to_owned(), 200.0, 12.0, &mut measurer),
+            "Nova aba"
+        );
+        assert_eq!(fit_label(String::new(), 0.0, 12.0, &mut measurer), "");
+    }
+
+    /// Todo rótulo de menu dos dois arquivos do projeto cabe no espaço que o
+    /// menu de contexto, o de grupo e o popover de destino oferecem, com a
+    /// configuração padrão -- então nenhum é cortado, e o desenho de hoje não
+    /// muda.
+    #[test]
+    fn no_menu_label_of_the_project_files_is_cut() {
+        let config = porecatu_config::Config::default();
+        let menu = &config.appearance.context_menu;
+        let size = menu.font_size as f32;
+        let move_cfg = &config.appearance.move_to_group;
+        let mut measurer = TextMeasurer::new();
+
+        for catalog in [test_support::pt_br(), test_support::en_us()] {
+            let mut labels: Vec<String> = Vec::new();
+            for item in crate::context_menu::TAB_MENU_ITEMS {
+                labels.push(item.action.label(&catalog));
+            }
+            // O plural mais longo: o da forma `other`, com contagem grande.
+            for count in [1, 2, 10, 100] {
+                for item in group_menu::group_action_items(&catalog, false, count) {
+                    labels.push(item.label);
+                }
+            }
+            labels.push(
+                group_menu::group_action_items(&catalog, true, 3)[2]
+                    .label
+                    .clone(),
+            );
+            for label in labels {
+                let budget = menu.width as f32
+                    - menu.padding as f32 * 2.0
+                    - menu.item_padding_x as f32 * 2.0;
+                assert!(
+                    width_of(&label, size, &mut measurer) <= budget,
+                    "{label:?} não cabe em {budget}"
+                );
+                assert_eq!(fit_label(label.clone(), budget, size, &mut measurer), label);
+            }
+            let new_group = msg::move_to_group::new_group(&catalog);
+            let move_budget = menu.width as f32 - move_cfg.row_padding_x as f32 * 2.0;
+            assert!(width_of(&new_group, size, &mut measurer) <= move_budget);
+        }
+    }
 }

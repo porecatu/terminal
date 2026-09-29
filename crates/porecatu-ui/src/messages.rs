@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Frases de interface compostas a partir de erros tipados (ADR-0056 §2).
+//! Frases de interface (ADR-0056). Todo texto que chega a uma superfície --
+//! aviso, diálogo, nota no grid, rótulo, leitor de tela -- sai daqui e só
+//! daqui, lido do catálogo de idioma.
 //!
-//! Os crates abaixo de `porecatu-ui` devolvem o motivo como variante e nunca
-//! prosa; é aqui, e só aqui, que a variante vira frase de aviso, diálogo ou
-//! nota. Nenhuma função chama `to_string()` num erro de outro crate: casa a
-//! variante e monta o texto.
+//! Duas camadas:
+//! - o **registro** (`msg`, mais abaixo): cada identificador pontilhado, seus
+//!   marcadores e se é plural, num lugar só, de onde saem os acessores tipados
+//!   e o esquema que `porecatu-locale` valida;
+//! - as funções compostas (`config_error`, `keymap_issue`, ...): casam a
+//!   variante de um erro tipado dos crates de baixo e escolhem a frase do
+//!   registro. Nenhuma chama `to_string()` num erro de outro crate
+//!   (ADR-0056 §2).
 //!
 //! Três tipos de texto entram nas frases sem tradução, e é de propósito:
 //! - o `detail` do crate `toml` e o do compilador de regex (detalhe técnico,
 //!   mostrado como chegou);
-//! - a `cause` do sistema operacional (`io::Error`, PTY), idem;
-//! - o que o usuário escreveu (nome de tema, de tecla, de ação).
-//!
-//! Duas famílias convivem aqui. O **registro** (`msg`, mais abaixo) é o que
-//! já lê o catálogo de idioma: cada identificador pontilhado, seus marcadores
-//! e se é plural, num lugar só, de onde saem os acessores tipados e o esquema
-//! que `porecatu-locale` valida. As funções acima dele (`config_error`,
-//! `keymap_issue`, ...) ainda compõem a frase de pt-BR de sempre a partir da
-//! variante do erro; a etapa seguinte troca o corpo delas por acessores do
-//! registro, sem mudar as assinaturas.
+//! - a `cause` do sistema operacional (`io::Error`, PTY, `git`), idem;
+//! - o que o usuário escreveu (nome de tema, de tecla, de ação, de sessão) e o
+//!   que um programa escreveu (título de aba, URI).
 
 use std::fmt::Display;
 use std::path::Path;
@@ -41,99 +40,84 @@ pub(crate) fn os_cause(err: &dyn Display) -> String {
     err.to_string()
 }
 
-/// Corpo do aviso de config inválida: posição (se houver) mais o motivo.
-pub(crate) fn config_error(error: &ConfigError) -> String {
-    let reason = match &error.kind {
-        ConfigErrorKind::Toml { detail } => detail.clone(),
-        ConfigErrorKind::Unreadable { path, cause } => {
-            format!("não foi possível ler \"{}\": {cause}", path.display())
+/// Corpo do aviso de config inválida. Posição só existe para erro de sintaxe
+/// do TOML (`ConfigError::at`); leitura e nome de tema duplicado não têm
+/// linha nem coluna.
+pub(crate) fn config_error(catalog: &Catalog, error: &ConfigError) -> String {
+    match (&error.kind, error.line, error.column) {
+        (ConfigErrorKind::Toml { detail }, Some(line), Some(column)) => {
+            msg::notice::config_invalid::body_at(catalog, line, column, detail)
         }
-        ConfigErrorKind::DuplicateThemeName { name } => {
-            format!("nome de tema duplicado: \"{name}\"")
+        (ConfigErrorKind::Toml { detail }, _, _) => {
+            msg::notice::config_invalid::body(catalog, detail)
         }
-    };
-    match (error.line, error.column) {
-        (Some(line), Some(column)) => format!("linha {line}, coluna {column}: {reason}"),
-        _ => reason,
+        (ConfigErrorKind::Unreadable { path, cause }, _, _) => {
+            msg::notice::config_invalid::unreadable(catalog, path.display(), cause)
+        }
+        (ConfigErrorKind::DuplicateThemeName { name }, _, _) => {
+            msg::notice::config_invalid::duplicate_theme(catalog, name)
+        }
     }
 }
 
 /// Nota no grid de uma aba cujo `.porecatu` existe, é de diretório
 /// autorizado e não pôde ser lido. `reason` é o texto do `io::Error`.
-pub(crate) fn project_file_unreadable(path: &Path, reason: &str) -> String {
-    format!("não foi possível ler \"{}\": {reason}", path.display())
+pub(crate) fn project_file_unreadable(catalog: &Catalog, path: &Path, reason: &str) -> String {
+    msg::note::project_file_unreadable(catalog, path.display(), reason)
 }
 
 /// Corpo do aviso "Falha ao iniciar terminal".
-pub(crate) fn terminal_spawn_error(error: &TerminalSpawnError) -> String {
+pub(crate) fn terminal_spawn_error(catalog: &Catalog, error: &TerminalSpawnError) -> String {
     match error {
         TerminalSpawnError::Pty(err) => {
-            format!("terminal: pty: {}: {}", err.kind().as_str(), err.cause())
+            msg::notice::spawn_failed::body(catalog, err.kind().as_str(), err.cause())
         }
     }
 }
 
 /// Corpo do aviso de falha ao salvar sessão nomeada.
-pub(crate) fn save_named_failure(failure: &SaveNamedFailure) -> String {
+pub(crate) fn save_named_failure(catalog: &Catalog, failure: &SaveNamedFailure) -> String {
     match failure {
-        SaveNamedFailure::WindowNotFound => "janela não encontrada".to_owned(),
+        SaveNamedFailure::WindowNotFound => msg::notice::save_failed::window_not_found(catalog),
         SaveNamedFailure::Save(SaveError::Io(err)) => {
-            format!("erro de E/S ao gravar sessão nomeada: {err}")
+            msg::notice::save_failed::io(catalog, os_cause(err))
         }
-        SaveNamedFailure::Save(SaveError::NewerSchema { found }) => format!(
-            "arquivo existente tem schema_version {found}, mais nova que {CURRENT_SCHEMA_VERSION}; não sobrescrito"
-        ),
+        SaveNamedFailure::Save(SaveError::NewerSchema { found }) => {
+            msg::notice::save_failed::newer_schema(catalog, found, CURRENT_SCHEMA_VERSION)
+        }
         SaveNamedFailure::Save(SaveError::EmptyName) => {
-            "nome de sessão vazio depois de aparado".to_owned()
-        }
-    }
-}
-
-fn chord_parse_error(error: &ChordParseError) -> String {
-    match error {
-        ChordParseError::EmptyKey { text } => format!("tecla vazia: \"{text}\""),
-        ChordParseError::UnknownModifier { modifier, text } => {
-            format!("modificador desconhecido: \"{modifier}\" em \"{text}\"")
-        }
-        ChordParseError::UnknownKey { key, text } => {
-            format!("tecla desconhecida: \"{key}\" em \"{text}\"")
-        }
-    }
-}
-
-fn action_parse_error(error: &ActionParseError) -> String {
-    match error {
-        ActionParseError::Unknown { input, suggestion } => {
-            format!("ação desconhecida: \"{input}\" -- você quis dizer \"{suggestion}\"?")
-        }
-        ActionParseError::NotBindable { input } => {
-            format!("\"{input}\" tem argumento e não é vinculável a tecla")
+            msg::notice::save_failed::empty_name(catalog)
         }
     }
 }
 
 /// Corpo do aviso "Keybinding inválido".
-pub(crate) fn keymap_issue(issue: &KeymapIssue) -> String {
+pub(crate) fn keymap_issue(catalog: &Catalog, issue: &KeymapIssue) -> String {
+    use msg::notice::keybinding_invalid as kb;
     match issue {
-        KeymapIssue::MalformedKey(err) => chord_parse_error(err),
-        KeymapIssue::DuplicateBinding { keys } => format!(
-            "binding duplicado: {} resolvem pra mesma tecla",
-            keys.iter()
-                .map(|k| format!("\"{k}\""))
-                .collect::<Vec<_>>()
-                .join(" e ")
-        ),
-        KeymapIssue::InvalidAction { key, error } => {
-            format!("\"{key}\": {}", action_parse_error(error))
+        KeymapIssue::MalformedKey(ChordParseError::EmptyKey { text }) => {
+            kb::empty_key(catalog, text)
         }
+        KeymapIssue::MalformedKey(ChordParseError::UnknownModifier { modifier, text }) => {
+            kb::unknown_modifier(catalog, modifier, text)
+        }
+        KeymapIssue::MalformedKey(ChordParseError::UnknownKey { key, text }) => {
+            kb::unknown_key(catalog, key, text)
+        }
+        KeymapIssue::DuplicateBinding { keys } => {
+            let joiner = kb::join_and(catalog);
+            let quoted: Vec<String> = keys.iter().map(|k| format!("\"{k}\"")).collect();
+            kb::duplicate(catalog, quoted.join(&joiner))
+        }
+        KeymapIssue::InvalidAction {
+            key,
+            error: ActionParseError::Unknown { input, suggestion },
+        } => kb::action_unknown(catalog, key, input, suggestion),
+        KeymapIssue::InvalidAction {
+            key,
+            error: ActionParseError::NotBindable { input },
+        } => kb::action_not_bindable(catalog, key, input),
     }
-}
-
-/// Rótulo do contador da barra de busca quando o padrão não compila
-/// (RF-11.4). O detalhe do compilador de regex fica de fora do rótulo
-/// (espec. da barra); quem o guarda mostra como chegou.
-pub(crate) fn search_pattern_invalid() -> &'static str {
-    "padrão inválido"
 }
 
 /// Substitui o modelo da frase `id` no catálogo. Frase ausente devolve o
@@ -286,6 +270,24 @@ registry! {
         empty_list(),
         name_placeholder(),
     }
+    search_bar {
+        invalid_pattern(),
+        no_results(),
+        alt_screen_counter(counter),
+    }
+    status_bar {
+        pane_count(plural),
+        commits_behind(plural),
+        behind_ahead(behind, ahead),
+    }
+    color {
+        red(),
+        yellow(),
+        cyan(),
+        blue(),
+        purple(),
+        green(),
+    }
     dialog {
         cancel(),
         close_tab {
@@ -320,7 +322,188 @@ registry! {
             confirm(),
         },
     }
+    note {
+        process_exited(code),
+        cwd_missing(path),
+        project_file_untrusted(name, dir, toml_value),
+        project_file_unreadable(path, reason),
+        shell_invite {
+            text(consequence, body, marker),
+            consequence_windows(),
+            consequence_other(),
+            body_snippet(snippet),
+            body_cmd(),
+            body_generic(),
+        },
+    }
+    access {
+        new_tab_ungrouped(),
+        new_tab_in_group(),
+        sessions_button(),
+        settings_button(),
+        window_minimize(),
+        window_maximize(),
+        window_close(),
+        tab_close(),
+        regex_toggle(),
+        group_editor(),
+        unnamed_group(),
+        tabs_hidden_left(plural),
+        tabs_hidden_right(plural),
+        group(name),
+        group_collapsed(name),
+        group_colored(name, color),
+        group_collapsed_colored(name, color),
+        tab_state(state),
+        state_active(),
+        state_not_started(),
+        state_bell(),
+        state_activity(),
+        pane_focused(title),
+        cwd_stale(),
+        ahead_behind_clickable(),
+        ahead_behind_blocked(),
+        segment_shell(),
+        segment_cwd(),
+        segment_branch(),
+        segment_ahead_behind(),
+        segment_group(),
+        segment_pane_count(),
+        segment_encoding(),
+        segment_system(),
+        severity_error(),
+        severity_warning(),
+        severity_info(),
+        warning(severity, title, body),
+    }
     notice {
+        config_invalid {
+            title(),
+            body_at(line, column, detail),
+            body(detail),
+            unreadable(path, cause),
+            duplicate_theme(name),
+        },
+        unknown_config_key {
+            title(),
+        },
+        unknown_theme {
+            title(),
+            body(name),
+        },
+        color_overridden {
+            title(),
+        },
+        theme_vanished {
+            title(),
+            body_reload(name),
+            body_start(name),
+        },
+        keybinding_invalid {
+            title(),
+            join_and(),
+            empty_key(text),
+            unknown_modifier(modifier, text),
+            unknown_key(key, text),
+            duplicate(keys),
+            action_unknown(key, input, suggestion),
+            action_not_bindable(key, input),
+        },
+        deferred {
+            title(),
+            next_window(key),
+            new_tab(key),
+            restart(key),
+        },
+        config_path_unresolved {
+            title(),
+            body(),
+        },
+        config_create_failed {
+            title(),
+        },
+        config_open_failed {
+            title(),
+        },
+        link_open_failed {
+            title(),
+        },
+        link_reveal_failed {
+            title(),
+            body(uri),
+        },
+        link_refused {
+            title(),
+            body(scheme),
+        },
+        spawn_failed {
+            title(),
+            body(operation, cause),
+        },
+        pane_too_small {
+            title(),
+            body(columns, rows),
+        },
+        session_corrupt {
+            title(),
+            body(path),
+        },
+        session_newer {
+            title(),
+            body(found, supported),
+        },
+        named_session_corrupt {
+            title(),
+            body(path),
+        },
+        named_session_newer {
+            title(),
+            body(found, supported),
+        },
+        named_session_unreadable {
+            title(),
+            body(),
+        },
+        overwrite_blocked {
+            title(),
+            body(name),
+        },
+        save_failed {
+            title(),
+            window_not_found(),
+            io(cause),
+            newer_schema(found, supported),
+            empty_name(),
+        },
+        delete_failed {
+            title(),
+        },
+        software_rendering {
+            title(),
+            body(),
+        },
+        font_not_found {
+            title(),
+            body(family),
+        },
+        git_interval_adjusted {
+            title(),
+            body(key, floor),
+        },
+        git_missing {
+            title(),
+            body(),
+        },
+        git_integration_ok {
+            title(),
+            body(),
+        },
+        git_integration_failed {
+            title(),
+            missing(),
+            timed_out(),
+            no_detail(),
+        },
         language_not_found {
             title(),
             body(language, searched),
@@ -430,6 +613,13 @@ mod tests {
         let missing = schema["notice.language_missing_messages.body"];
         assert!(missing.plural);
         assert_eq!(missing.placeholders, ["count", "locale"]);
+        // Plural com marcador extra, e frase de uma tabela de primeiro nível
+        // dentro de `access`.
+        assert!(schema["access.tabs_hidden_left"].plural);
+        assert_eq!(
+            schema["access.warning"].placeholders,
+            ["severity", "title", "body"]
+        );
     }
 
     #[test]
@@ -497,13 +687,18 @@ mod tests {
             Some((3, 5)),
         );
         assert_eq!(
-            config_error(&error),
+            config_error(&test_support::pt_br(), &error),
             "linha 3, coluna 5: expected an equals"
+        );
+        assert_eq!(
+            config_error(&test_support::en_us(), &error),
+            "line 3, column 5: expected an equals"
         );
     }
 
     #[test]
     fn config_unreadable_and_duplicate_have_no_position() {
+        let pt = test_support::pt_br();
         let unreadable = config_error_of(
             ConfigErrorKind::Unreadable {
                 path: PathBuf::from("p.toml"),
@@ -512,7 +707,7 @@ mod tests {
             None,
         );
         assert_eq!(
-            config_error(&unreadable),
+            config_error(&pt, &unreadable),
             "não foi possível ler \"p.toml\": acesso negado"
         );
         let duplicate = config_error_of(
@@ -521,11 +716,20 @@ mod tests {
             },
             None,
         );
-        assert_eq!(config_error(&duplicate), "nome de tema duplicado: \"x\"");
+        assert_eq!(
+            config_error(&pt, &duplicate),
+            "nome de tema duplicado: \"x\""
+        );
+        assert_eq!(
+            config_error(&test_support::en_us(), &duplicate),
+            "duplicate theme name: \"x\""
+        );
     }
 
+    /// A frase de pt-BR é a que o `Display` do erro sempre escreveu.
     #[test]
-    fn config_phrases_are_the_ones_the_error_displayed_before() {
+    fn config_phrases_in_pt_br_are_the_ones_the_error_displayed_before() {
+        let pt = test_support::pt_br();
         for error in [
             config_error_of(
                 ConfigErrorKind::Toml {
@@ -547,38 +751,57 @@ mod tests {
                 None,
             ),
         ] {
-            assert_eq!(config_error(&error), error.to_string());
+            assert_eq!(config_error(&pt, &error), error.to_string());
         }
     }
 
     #[test]
     fn save_failure_phrases() {
+        let pt = test_support::pt_br();
         assert_eq!(
-            save_named_failure(&SaveNamedFailure::WindowNotFound),
+            save_named_failure(&pt, &SaveNamedFailure::WindowNotFound),
             "janela não encontrada"
         );
         assert_eq!(
-            save_named_failure(&SaveNamedFailure::Save(SaveError::EmptyName)),
+            save_named_failure(&pt, &SaveNamedFailure::Save(SaveError::EmptyName)),
             "nome de sessão vazio depois de aparado"
         );
-        let newer =
-            save_named_failure(&SaveNamedFailure::Save(SaveError::NewerSchema { found: 9 }));
+        let newer = save_named_failure(
+            &pt,
+            &SaveNamedFailure::Save(SaveError::NewerSchema { found: 9 }),
+        );
         assert!(newer.starts_with("arquivo existente tem schema_version 9,"));
-        let io = save_named_failure(&SaveNamedFailure::Save(SaveError::Io(
-            std::io::Error::other("disco cheio"),
-        )));
+        let io = save_named_failure(
+            &pt,
+            &SaveNamedFailure::Save(SaveError::Io(std::io::Error::other("disco cheio"))),
+        );
         assert_eq!(io, "erro de E/S ao gravar sessão nomeada: disco cheio");
+
+        let en = test_support::en_us();
+        assert_eq!(
+            save_named_failure(&en, &SaveNamedFailure::WindowNotFound),
+            "window not found"
+        );
+        let io = save_named_failure(
+            &en,
+            &SaveNamedFailure::Save(SaveError::Io(std::io::Error::other("disk full"))),
+        );
+        assert_eq!(io, "I/O error writing the named session: disk full");
     }
 
     #[test]
-    fn save_failure_phrases_match_the_display_of_the_error() {
+    fn save_failure_phrases_in_pt_br_match_the_display_of_the_error() {
+        let pt = test_support::pt_br();
         for error in [
             SaveError::EmptyName,
             SaveError::NewerSchema { found: 9 },
             SaveError::Io(std::io::Error::other("disco cheio")),
         ] {
             let display = error.to_string();
-            assert_eq!(save_named_failure(&SaveNamedFailure::Save(error)), display);
+            assert_eq!(
+                save_named_failure(&pt, &SaveNamedFailure::Save(error)),
+                display
+            );
         }
     }
 
@@ -592,8 +815,12 @@ mod tests {
             },
         };
         assert_eq!(
-            keymap_issue(&unknown),
+            keymap_issue(&test_support::pt_br(), &unknown),
             "\"ctrl+z\": ação desconhecida: \"tab.clsoe\" -- você quis dizer \"tab.close\"?"
+        );
+        assert_eq!(
+            keymap_issue(&test_support::en_us(), &unknown),
+            "\"ctrl+z\": unknown action: \"tab.clsoe\" -- did you mean \"tab.close\"?"
         );
         let not_bindable = KeymapIssue::InvalidAction {
             key: "ctrl+z".to_owned(),
@@ -602,31 +829,36 @@ mod tests {
             },
         };
         assert_eq!(
-            keymap_issue(&not_bindable),
+            keymap_issue(&test_support::pt_br(), &not_bindable),
             "\"ctrl+z\": \"group.set_color\" tem argumento e não é vinculável a tecla"
         );
     }
 
     #[test]
     fn chord_issue_phrases() {
+        let pt = test_support::pt_br();
         let issue = KeymapIssue::MalformedKey(ChordParseError::UnknownKey {
             key: "bogus".to_owned(),
             text: "ctrl+bogus".to_owned(),
         });
         assert_eq!(
-            keymap_issue(&issue),
+            keymap_issue(&pt, &issue),
             "tecla desconhecida: \"bogus\" em \"ctrl+bogus\""
         );
         let empty = KeymapIssue::MalformedKey(ChordParseError::EmptyKey {
             text: "x".to_owned(),
         });
-        assert_eq!(keymap_issue(&empty), "tecla vazia: \"x\"");
+        assert_eq!(keymap_issue(&pt, &empty), "tecla vazia: \"x\"");
         let duplicate = KeymapIssue::DuplicateBinding {
             keys: vec!["a".to_owned(), "b".to_owned()],
         };
         assert_eq!(
-            keymap_issue(&duplicate),
+            keymap_issue(&pt, &duplicate),
             "binding duplicado: \"a\" e \"b\" resolvem pra mesma tecla"
+        );
+        assert_eq!(
+            keymap_issue(&test_support::en_us(), &duplicate),
+            "duplicate binding: \"a\" and \"b\" resolve to the same key"
         );
     }
 
@@ -653,11 +885,13 @@ mod tests {
         let Err(error) = result else {
             panic!("spawning a program that does not exist should fail");
         };
-        let phrase = terminal_spawn_error(&error);
-        assert!(
-            phrase.starts_with("terminal: pty: spawn_command: "),
-            "{phrase}"
-        );
-        assert_eq!(phrase, error.to_string());
+        for catalog in [test_support::pt_br(), test_support::en_us()] {
+            let phrase = terminal_spawn_error(&catalog, &error);
+            assert!(
+                phrase.starts_with("terminal: pty: spawn_command: "),
+                "{phrase}"
+            );
+            assert_eq!(phrase, error.to_string());
+        }
     }
 }
