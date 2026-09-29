@@ -17,6 +17,11 @@ pub struct General {
     pub confirm_close_window: bool,
     /// `"home"` ou um caminho absoluto. RF-1.1.
     pub startup_directory: String,
+    /// RF-15.1, [ADR-0056](../../../docs/adr/0056-catalogo-de-textos-da-interface.md).
+    /// Nome do arquivo de idioma (`pt_BR` lê `locales/pt_BR.toml`). Não é
+    /// validado aqui: um valor ruim não pode derrubar a config inteira
+    /// (ADR-0003, regra 2); quem valida é o resolvedor de `porecatu-locale`.
+    pub language: String,
 }
 
 impl Default for General {
@@ -25,6 +30,7 @@ impl Default for General {
             confirm_close_with_process: true,
             confirm_close_window: true,
             startup_directory: "home".to_owned(),
+            language: "en_US".to_owned(),
         }
     }
 }
@@ -41,6 +47,7 @@ mod tests {
                 confirm_close_with_process: true,
                 confirm_close_window: true,
                 startup_directory: "home".to_owned(),
+                language: "en_US".to_owned(),
             }
         );
     }

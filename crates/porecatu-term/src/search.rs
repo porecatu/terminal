@@ -35,8 +35,9 @@ pub enum SearchMode {
 pub struct InvalidPattern(String);
 
 impl InvalidPattern {
-    /// Mensagem para exibição (RF-11.4: "a barra sinaliza o erro").
-    pub fn message(&self) -> &str {
+    /// Texto do compilador de regex, como chegou -- detalhe técnico, não
+    /// frase de interface (a moldura é de quem exibe).
+    pub fn detail(&self) -> &str {
         &self.0
     }
 }

@@ -1,9 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Erro localizado (ADR-0003 regra 3): linha, coluna e mensagem, nunca
-//! `String` solta. A etapa 4 formata isto num aviso de UI (ADR-0014).
+//! Erro localizado (ADR-0003 regra 3): linha, coluna e o **motivo tipado**,
+//! nunca `String` de prosa. A frase de interface é composta em
+//! `porecatu-ui` a partir de [`ConfigErrorKind`] (ADR-0056 §2); o `Display`
+//! daqui é só para a saída de erro e depuração.
 
 use std::fmt;
+use std::path::PathBuf;
+
+/// Por que a config não carregou.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigErrorKind {
+    /// Texto do crate `toml` (sintaxe, tipo errado, cor inválida), mostrado
+    /// como chegou -- é detalhe técnico, não frase do app.
+    Toml { detail: String },
+    /// O arquivo existe mas não pôde ser lido. `cause` é o texto do
+    /// `io::Error`, do sistema operacional.
+    Unreadable { path: PathBuf, cause: String },
+    /// Dois `[[themes]]` com o mesmo `name`.
+    DuplicateThemeName { name: String },
+}
 
 /// Erro de parse ou de validação semântica de uma config.
 ///
@@ -14,35 +30,37 @@ use std::fmt;
 pub struct ConfigError {
     pub line: Option<usize>,
     pub column: Option<usize>,
-    pub message: String,
+    pub kind: ConfigErrorKind,
 }
 
 impl ConfigError {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn new(kind: ConfigErrorKind) -> Self {
         Self {
             line: None,
             column: None,
-            message: message.into(),
+            kind,
         }
     }
 
-    pub fn at(line: usize, column: usize, message: impl Into<String>) -> Self {
+    pub fn at(line: usize, column: usize, kind: ConfigErrorKind) -> Self {
         Self {
             line: Some(line),
             column: Some(column),
-            message: message.into(),
+            kind,
         }
     }
 
     /// Converte um `toml::de::Error` em erro localizado, usando o span que o
     /// crate `toml` fornece para calcular linha e coluna no texto original.
     pub(crate) fn from_toml(source: &str, err: toml::de::Error) -> Self {
-        let message = err.message().to_owned();
+        let kind = ConfigErrorKind::Toml {
+            detail: err.message().to_owned(),
+        };
         let Some(span) = err.span() else {
-            return Self::new(message);
+            return Self::new(kind);
         };
         let (line, column) = line_column_at(source, span.start);
-        Self::at(line, column, message)
+        Self::at(line, column, kind)
     }
 }
 
@@ -59,13 +77,27 @@ fn line_column_at(source: &str, pos: usize) -> (usize, usize) {
     (line, column)
 }
 
+impl fmt::Display for ConfigErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Toml { detail } => f.write_str(detail),
+            Self::Unreadable { path, cause } => {
+                write!(f, "não foi possível ler \"{}\": {cause}", path.display())
+            }
+            Self::DuplicateThemeName { name } => {
+                write!(f, "nome de tema duplicado: \"{name}\"")
+            }
+        }
+    }
+}
+
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (self.line, self.column) {
             (Some(line), Some(column)) => {
-                write!(f, "linha {line}, coluna {column}: {}", self.message)
+                write!(f, "linha {line}, coluna {column}: {}", self.kind)
             }
-            _ => write!(f, "{}", self.message),
+            _ => write!(f, "{}", self.kind),
         }
     }
 }
@@ -89,13 +121,21 @@ mod tests {
 
     #[test]
     fn display_with_position() {
-        let err = ConfigError::at(3, 5, "chave desconhecida");
+        let err = ConfigError::at(
+            3,
+            5,
+            ConfigErrorKind::Toml {
+                detail: "chave desconhecida".to_owned(),
+            },
+        );
         assert_eq!(err.to_string(), "linha 3, coluna 5: chave desconhecida");
     }
 
     #[test]
     fn display_without_position() {
-        let err = ConfigError::new("nome de tema duplicado");
-        assert_eq!(err.to_string(), "nome de tema duplicado");
+        let err = ConfigError::new(ConfigErrorKind::DuplicateThemeName {
+            name: "x".to_owned(),
+        });
+        assert_eq!(err.to_string(), "nome de tema duplicado: \"x\"");
     }
 }

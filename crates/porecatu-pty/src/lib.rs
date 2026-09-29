@@ -16,7 +16,7 @@ mod job;
 mod shell;
 mod spawn;
 
-pub use error::PtyError;
+pub use error::{PtyError, PtyErrorKind};
 pub use job::ProcessGroup;
 pub use shell::{resolve_default_shell, search_path};
 pub use spawn::{PtyExitStatus, PtyHandle, PtySize, SpawnConfig, spawn};

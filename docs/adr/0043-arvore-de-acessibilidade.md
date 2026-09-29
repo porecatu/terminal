@@ -68,6 +68,8 @@ O tooltip é o caso que o ADR-0019 avisou ser o menos padronizado. A regra aqui 
 
 **Barra de busca** (§2.21, [ADR-0041](0041-busca-no-scrollback.md)): campo de texto com valor, mais o contador como descrição. Nasce acessível, em vez de virar dívida na semana seguinte.
 
+> **Acrescentado pelo [ADR-0056](0056-catalogo-de-textos-da-interface.md) §11.** Os rótulos e descrições dos nós passam a vir do arquivo de idioma ([PRD-015](../prd/prd-015-idioma-da-interface.md)), incluindo os nomes das cores da paleta de grupo, e a raiz ganha o **idioma** da árvore (`Node::set_language`, em BCP 47) para o leitor de tela anunciar com a voz certa. Continua projeção: o texto muda com o idioma, a estrutura não.
+
 > **Acrescentado pelo [ADR-0053](0053-paineis-divididos.md) §13.** Uma aba dividida
 > expõe os **painéis** como nós filhos do nó dela: posição, rótulo derivado do título
 > do painel, e qual deles tem o foco. É estrutura, que é exatamente o que este

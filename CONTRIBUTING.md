@@ -38,6 +38,24 @@ Regra que costuma surpreender, então vem primeiro:
 O projeto usa **"abas"**, não "guias" — inclusive em futuras strings de
 interface ([ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md)).
 
+### Texto da interface
+
+O idioma do **texto que o app mostra** é outra coisa, e é escolha do usuário
+(`[general] language`, [PRD-015](docs/prd/prd-015-idioma-da-interface.md)).
+Por isso ([ADR-0056](docs/adr/0056-catalogo-de-textos-da-interface.md)):
+
+- **Frase de interface nunca é escrita no código.** Ela ganha um identificador
+  no registro de mensagens de `porecatu-ui` e um valor em **cada** arquivo de
+  `locales/` — `en_US.toml` e `pt_BR.toml` no mínimo. O CI reprova chave que
+  exista num e não no outro, marcador divergente e "guia" no `pt_BR.toml`.
+- **Crates abaixo de `porecatu-ui` não produzem frase de interface**: devolvem
+  erro tipado, e quem compõe o texto é `ui`.
+- **Idioma novo** é um arquivo `locales/xx_YY.toml` com todas as chaves, mais
+  o `Component` correspondente em `wix/main.wxs` ([ADR-0057](docs/adr/0057-idiomas-nos-artefatos.md));
+  os outros instaladores copiam a pasta inteira.
+- Os comentários dentro dos arquivos de idioma seguem a regra de
+  documentação: português do Brasil.
+
 ## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org), em pt-BR:

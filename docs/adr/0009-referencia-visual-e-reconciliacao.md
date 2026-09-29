@@ -93,6 +93,8 @@ O design diz "guias"; a documentação diz "abas".
 
 **Decisão:** o projeto padroniza **"abas"**, em documentação e em strings de interface. Os rótulos do mockup ficam anotados como divergência conhecida. A documentação não muda.
 
+> **Revisto pelo [ADR-0056](0056-catalogo-de-textos-da-interface.md) §10.** As strings de interface saem do código e passam a morar em arquivos de idioma ([PRD-015](../prd/prd-015-idioma-da-interface.md)). A regra continua inteira e passa a ter endereço: vale para `locales/pt_BR.toml`, e deixa de depender de revisão — um teste reprova o arquivo que contiver "guia" ou "guias". Nos outros idiomas, a palavra é a do idioma (*tab* em inglês).
+
 ## Alternativas consideradas
 
 ### Expandir o v1 para tudo que está no design

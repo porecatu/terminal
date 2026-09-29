@@ -5,6 +5,13 @@
 //! `-h`, `--version`/`-V`. Laço à mão sobre `OsString`, sem crate de CLI
 //! (motivo escrito no ADR: cinco formas não justificam a dependência).
 //!
+//! **O texto impresso aqui é inglês fixo, fora do catálogo** (ADR-0056 §3,
+//! que revê o ADR-0040 §1): `argv` é lido antes de a config existir, e
+//! traduzir o `--help` exigiria resolver config e idioma antes de parsear o
+//! argumento que diz qual config ler. O binário não depende de
+//! `porecatu-locale`, e este texto não conta como interface para a métrica
+//! de "uma frase no código".
+//!
 //! `parse` é pura -- recebe os argumentos, devolve um resultado -- pelo
 //! mesmo motivo de `porecatu_config::path::resolve`: testável sem
 //! processo. Mora no binário, não em `porecatu-ui`: `argv` é do
@@ -28,24 +35,24 @@ pub enum Cli {
 /// Fonte única das formas aceitas -- `help_text` e o teste que a compara
 /// ao parser leem daqui, para as duas nunca divergirem em silêncio.
 const FORMS: &[(&str, &str)] = &[
-    ("porecatu", "Restaura a última sessão gravada"),
+    ("porecatu", "Restores the last saved session"),
     (
-        "porecatu <diretório>",
-        "Sessão nova naquele diretório; não restaura, não sobrescreve",
+        "porecatu <directory>",
+        "New session in that directory; does not restore, does not overwrite",
     ),
     (
-        "porecatu --config <arquivo>",
-        "Usa esse arquivo de config, vencendo PORECATU_CONFIG e o caminho de plataforma",
+        "porecatu --config <file>",
+        "Uses that config file, overriding PORECATU_CONFIG and the platform path",
     ),
-    ("porecatu --help / -h", "Imprime as formas acima e sai"),
+    ("porecatu --help / -h", "Prints the forms above and exits"),
     (
         "porecatu --version / -V",
-        "Imprime nome, versão e licença, e sai",
+        "Prints name, version and license, and exits",
     ),
 ];
 
 pub fn help_text() -> String {
-    let mut text = String::from("Uso:\n");
+    let mut text = String::from("Usage:\n");
     for (form, effect) in FORMS {
         text.push_str(&format!("  {form}\n      {effect}\n"));
     }
@@ -77,7 +84,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
             Some("--config") => {
                 let value = args
                     .next()
-                    .ok_or_else(|| "--config exige um argumento: <arquivo>".to_string())?;
+                    .ok_or_else(|| "--config requires an argument: <file>".to_string())?;
                 config = Some(PathBuf::from(value));
             }
             // Qualquer outra coisa começando com `-` é flag desconhecida --
@@ -86,11 +93,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
             // `None`) nunca começa com um `-` ASCII reconhecível aqui, e
             // cai direto no último ramo, como qualquer outro caminho.
             Some(unknown) if unknown.starts_with('-') && unknown != "-" => {
-                return Err(format!("argumento desconhecido: {unknown}"));
+                return Err(format!("unknown argument: {unknown}"));
             }
             _ => {
                 if directory.is_some() {
-                    return Err("mais de um caminho posicional".to_string());
+                    return Err("more than one positional path".to_string());
                 }
                 directory = Some(PathBuf::from(arg));
             }
@@ -107,10 +114,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Cli, String> {
 /// em silêncio (isso é o RF-3.10, para um `cwd` **gravado** que sumiu --
 /// situação diferente de um caminho que o usuário acabou de digitar).
 pub fn validate_directory(path: &std::path::Path) -> Result<(), String> {
-    let metadata = std::fs::metadata(path)
-        .map_err(|_| format!("diretório não encontrado: {}", path.display()))?;
+    let metadata =
+        std::fs::metadata(path).map_err(|_| format!("directory not found: {}", path.display()))?;
     if !metadata.is_dir() {
-        return Err(format!("não é um diretório: {}", path.display()));
+        return Err(format!("not a directory: {}", path.display()));
     }
     Ok(())
 }
@@ -237,7 +244,44 @@ mod tests {
     fn help_text_lists_every_accepted_form() {
         let text = help_text();
         for (form, _) in FORMS {
-            assert!(text.contains(form), "forma ausente na ajuda: {form}");
+            assert!(text.contains(form), "form missing from the help: {form}");
         }
+    }
+
+    /// ADR-0056 §3: a linha de comando é inglês fixo, sem catálogo.
+    #[test]
+    fn help_text_is_english() {
+        let text = help_text();
+        assert!(text.starts_with("Usage:\n"));
+        assert!(text.contains("Restores the last saved session"));
+        assert!(!text.contains("Uso:"));
+        assert!(text.is_ascii(), "the help has no accented character");
+    }
+
+    #[test]
+    fn argument_errors_are_english() {
+        assert_eq!(
+            parse(args(&["--session"])).unwrap_err(),
+            "unknown argument: --session"
+        );
+        assert_eq!(
+            parse(args(&["--config"])).unwrap_err(),
+            "--config requires an argument: <file>"
+        );
+        assert_eq!(
+            parse(args(&["/tmp/a", "/tmp/b"])).unwrap_err(),
+            "more than one positional path"
+        );
+    }
+
+    #[test]
+    fn directory_errors_are_english() {
+        let missing = std::env::temp_dir().join("porecatu-cli-no-such-dir-xyz");
+        let err = validate_directory(&missing).unwrap_err();
+        assert!(err.starts_with("directory not found: "), "{err}");
+        // Um arquivo existente no lugar do diretório.
+        let file = std::env::current_exe().unwrap();
+        let err = validate_directory(&file).unwrap_err();
+        assert!(err.starts_with("not a directory: "), "{err}");
     }
 }

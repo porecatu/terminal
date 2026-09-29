@@ -7,10 +7,11 @@ members = [
     "crates/porecatu-render",
     "crates/porecatu-ui",
     "crates/porecatu-session",
+    "crates/porecatu-locale",
 ]
 
 [workspace.package]
-version = "0.7.10"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.98.0"
 license = "GPL-3.0-or-later"
@@ -68,6 +69,11 @@ assets = [
     ["docs/config/porecatu.example.toml", "usr/share/doc/porecatu/porecatu.example.toml", "644"],
     ["assets/icon/porecatu.png", "usr/share/icons/hicolor/512x512/apps/porecatu.png", "644"],
     ["packaging/linux/porecatu.desktop", "usr/share/applications/porecatu.desktop", "644"],
+    # ADR-0057 §1: arquivos de idioma onde o resolvedor os procura a partir de
+    # /usr/bin/porecatu (<exe>/../share/porecatu/locales). Uma linha por
+    # idioma (o passo do .deb no release.yml reprova se faltar um).
+    ["locales/en_US.toml", "usr/share/porecatu/locales/", "644"],
+    ["locales/pt_BR.toml", "usr/share/porecatu/locales/", "644"],
 ]
 
 [dependencies]

@@ -79,6 +79,9 @@ confirm_close_window = true
 # Diretório da primeira aba de uma sessão nova. "home" ou um caminho absoluto.
 # Abas criadas depois herdam o diretório da aba ativa.  RF-1.1
 startup_directory = "home"
+# Idioma da interface: nome do arquivo em locales/ (en_US, pt_BR). Sem o
+# arquivo, cai em en_US.                     [A]  RF-15.1, ADR-0056
+language = "en_US"
 
 
 # Classe de recarga: [C] -- "vale em aba nova". Aba já aberta tem processo

@@ -7,6 +7,9 @@
 //! pintura (`overlay.rs`), não deste módulo.
 
 use porecatu_core::TabId;
+use porecatu_locale::Catalog;
+
+use crate::messages::msg;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -19,10 +22,21 @@ pub enum MenuAction {
     MoveToGroup,
 }
 
+impl MenuAction {
+    /// Rótulo do item no idioma do catálogo (ADR-0056): o texto é lido a
+    /// cada frame, então uma troca de idioma vale no menu já aberto.
+    pub fn label(self, catalog: &Catalog) -> String {
+        match self {
+            MenuAction::NewTab => msg::tab_menu::new(catalog),
+            MenuAction::CloseTab => msg::tab_menu::close(catalog),
+            MenuAction::MoveToGroup => msg::tab_menu::move_to_group(catalog),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MenuItem {
     pub action: MenuAction,
-    pub label: &'static str,
     pub enabled: bool,
 }
 
@@ -31,17 +45,14 @@ pub struct MenuItem {
 pub const TAB_MENU_ITEMS: [MenuItem; 3] = [
     MenuItem {
         action: MenuAction::NewTab,
-        label: "Nova aba",
         enabled: true,
     },
     MenuItem {
         action: MenuAction::CloseTab,
-        label: "Fechar aba",
         enabled: true,
     },
     MenuItem {
         action: MenuAction::MoveToGroup,
-        label: "Mover para grupo",
         enabled: true,
     },
 ];

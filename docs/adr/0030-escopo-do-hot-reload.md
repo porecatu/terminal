@@ -22,6 +22,8 @@ Cor, fonte de chrome, dimensão, raio, espaçamento, indicador, geometria de wid
 
 O layout da barra é função pura de `(Workspace, Config, largura)` desde a F2 — é isso que torna a classe A trivial: nada de estado a migrar.
 
+> **Acrescentado pelo [ADR-0056](0056-catalogo-de-textos-da-interface.md) §9.** `[general] language` é classe A, e traz um gatilho que não é o arquivo de config: editar um arquivo em `locales/`, ao lado do `porecatu.toml`, também recarrega. O watcher ganha um segundo watch **não recursivo** sobre essa pasta, e o catálogo é montado na thread dele e entregue pelo mesmo `EventLoopProxy` — uma recarga, um evento, um frame. Troca que falha mantém o catálogo anterior, como a config inválida mantém a anterior. A regra do que muda é a da classe A levada ao pé da letra: o que é desenhado a cada frame muda; texto já escrito no grid, avisos empilhados e diálogo aberto ficam como foram compostos.
+
 ### Classe B — aplica a quente, com recálculo de grade e resize de PTY
 
 `terminal.font.*` (família, tamanho, `line_height`, `letter_spacing`), `[appearance.tabs] height`/`tab_height`/`trilha_padding` (mudam a altura da barra, logo a área do terminal) e `[appearance.terminal_frame]` (mudam a área útil dentro do quadro). Depois da troca do `Arc`, recalcula a métrica de célula, deriva colunas e linhas e **redimensiona todos os PTYs da janela** — o mesmo caminho de um resize de janela, que já existe.

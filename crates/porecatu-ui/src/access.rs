@@ -26,6 +26,7 @@
 
 use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use porecatu_core::{GroupColor, GroupId, PaneId, TabId, Workspace};
+use porecatu_locale::Catalog;
 use porecatu_render::TextMeasurer;
 
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
@@ -33,6 +34,7 @@ use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
+use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
@@ -148,17 +150,18 @@ fn session_picker_row_id(index: usize) -> NodeId {
     NodeId(SESSION_PICKER_ROW_BASE + index as u64)
 }
 
-/// Nome em português da cor -- só rótulo acessível, não valor de aparência
-/// (a regra do CLAUDE.md sobre "nenhuma cor inventada" é sobre tokens
-/// visuais, não sobre o nome falado de uma cor já escolhida).
-fn color_name(color: GroupColor) -> &'static str {
+/// Nome falado da cor, do catálogo (tabela `color`) -- só rótulo acessível,
+/// não valor de aparência (a regra do CLAUDE.md sobre "nenhuma cor
+/// inventada" é sobre tokens visuais, não sobre o nome falado de uma cor já
+/// escolhida).
+fn color_name(catalog: &Catalog, color: GroupColor) -> String {
     match color {
-        GroupColor::Red => "Vermelho",
-        GroupColor::Yellow => "Amarelo",
-        GroupColor::Cyan => "Ciano",
-        GroupColor::Blue => "Azul",
-        GroupColor::Purple => "Roxo",
-        GroupColor::Green => "Verde",
+        GroupColor::Red => msg::color::red(catalog),
+        GroupColor::Yellow => msg::color::yellow(catalog),
+        GroupColor::Cyan => msg::color::cyan(catalog),
+        GroupColor::Blue => msg::color::blue(catalog),
+        GroupColor::Purple => msg::color::purple(catalog),
+        GroupColor::Green => msg::color::green(catalog),
     }
 }
 
@@ -175,6 +178,7 @@ fn container(role: Role, children: Vec<NodeId>) -> Node {
 }
 
 /// Entrada de todo o módulo: monta a árvore inteira do chrome de `state`,
+/// no idioma `language` (BCP 47) do catálogo em uso,
 /// sempre completa (nunca incremental) -- é o que `Adapter::update_if_
 /// active` exige quando o adaptador foi criado com `with_event_loop_proxy`
 /// (ver o comentário do próprio construtor).
@@ -195,6 +199,8 @@ pub(crate) fn build_tree(
     style: &TabBarStyle,
     logical_width: f32,
     scroll_offset: f32,
+    catalog: &Catalog,
+    language: &str,
     measurer: &mut TextMeasurer,
 ) -> TreeUpdate {
     let is_mac = is_macos();
@@ -209,6 +215,7 @@ pub(crate) fn build_tree(
         workspace,
         &layout,
         active_pane_order,
+        catalog,
         &mut nodes,
         &mut root_children,
     );
@@ -218,7 +225,7 @@ pub(crate) fn build_tree(
             OVERFLOW_LEFT_ID,
             leaf(
                 Role::Button,
-                format!("{} abas ocultas à esquerda", overflow.hidden_left),
+                msg::access::tabs_hidden_left(catalog, overflow.hidden_left),
             ),
         ));
         root_children.push(OVERFLOW_LEFT_ID);
@@ -228,7 +235,7 @@ pub(crate) fn build_tree(
             OVERFLOW_RIGHT_ID,
             leaf(
                 Role::Button,
-                format!("{} abas ocultas à direita", overflow.hidden_right),
+                msg::access::tabs_hidden_right(catalog, overflow.hidden_right),
             ),
         ));
         root_children.push(OVERFLOW_RIGHT_ID);
@@ -237,26 +244,38 @@ pub(crate) fn build_tree(
     if layout.ungrouped_new_tab_button.is_some() {
         nodes.push((
             UNGROUPED_NEW_TAB_ID,
-            leaf(Role::Button, "Nova aba fora de grupo"),
+            leaf(Role::Button, msg::access::new_tab_ungrouped(catalog)),
         ));
         root_children.push(UNGROUPED_NEW_TAB_ID);
     }
 
     // ADR-0054/ADR-0055: à esquerda da engrenagem na tela -- ordem do nó
     // na árvore segue a mesma ordem de leitura, como o resto da barra.
-    nodes.push((SESSIONS_BUTTON_ID, leaf(Role::Button, "Sessões salvas")));
+    nodes.push((
+        SESSIONS_BUTTON_ID,
+        leaf(Role::Button, msg::access::sessions_button(catalog)),
+    ));
     root_children.push(SESSIONS_BUTTON_ID);
 
-    nodes.push((SETTINGS_BUTTON_ID, leaf(Role::Button, "Configurações")));
+    nodes.push((
+        SETTINGS_BUTTON_ID,
+        leaf(Role::Button, msg::access::settings_button(catalog)),
+    ));
     root_children.push(SETTINGS_BUTTON_ID);
 
     if !is_mac {
-        nodes.push((WINDOW_MINIMIZE_ID, leaf(Role::Button, "Minimizar")));
+        nodes.push((
+            WINDOW_MINIMIZE_ID,
+            leaf(Role::Button, msg::access::window_minimize(catalog)),
+        ));
         nodes.push((
             WINDOW_MAXIMIZE_ID,
-            leaf(Role::Button, "Maximizar ou restaurar"),
+            leaf(Role::Button, msg::access::window_maximize(catalog)),
         ));
-        nodes.push((WINDOW_CLOSE_ID, leaf(Role::Button, "Fechar janela")));
+        nodes.push((
+            WINDOW_CLOSE_ID,
+            leaf(Role::Button, msg::access::window_close(catalog)),
+        ));
         root_children.push(WINDOW_MINIMIZE_ID);
         root_children.push(WINDOW_MAXIMIZE_ID);
         root_children.push(WINDOW_CLOSE_ID);
@@ -265,15 +284,15 @@ pub(crate) fn build_tree(
     let mut focus = ROOT_ID;
 
     if let Some(state) = search {
-        build_search_bar(state, &mut nodes, &mut root_children);
+        build_search_bar(state, catalog, &mut nodes, &mut root_children);
     }
 
     if let Some(layout) = status_bar {
-        build_status_bar(layout, &mut nodes, &mut root_children);
+        build_status_bar(layout, catalog, &mut nodes, &mut root_children);
     }
 
     if !warnings.is_empty() {
-        build_warnings(warnings, &mut nodes, &mut root_children);
+        build_warnings(warnings, catalog, &mut nodes, &mut root_children);
     }
 
     // No máximo um destes está `Some` de cada vez, por construção da
@@ -282,21 +301,25 @@ pub(crate) fn build_tree(
     if let Some(d) = dialog {
         focus = build_dialog(d, &mut nodes, &mut root_children);
     } else if let Some(m) = context_menu {
-        focus = build_tab_menu(m, &mut nodes, &mut root_children);
+        focus = build_tab_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(m) = group_context_menu {
-        focus = build_group_menu(m, workspace, &mut nodes, &mut root_children);
+        focus = build_group_menu(m, workspace, catalog, &mut nodes, &mut root_children);
     } else if let Some(m) = terminal_context_menu {
-        focus = build_terminal_menu(m, &mut nodes, &mut root_children);
+        focus = build_terminal_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(e) = group_editor {
-        focus = build_group_editor(e, workspace, &mut nodes, &mut root_children);
+        focus = build_group_editor(e, workspace, catalog, &mut nodes, &mut root_children);
     } else if let Some(p) = move_to_group {
-        focus = build_move_to_group(p, workspace, &mut nodes, &mut root_children);
+        focus = build_move_to_group(p, workspace, catalog, &mut nodes, &mut root_children);
     } else if let Some(p) = session_picker {
-        focus = build_session_picker(p, &mut nodes, &mut root_children);
+        focus = build_session_picker(p, catalog, &mut nodes, &mut root_children);
     }
 
     let mut root = Node::new(Role::Window);
     root.set_label("Porecatu");
+    // ADR-0056 §11: sem o idioma na raiz, um leitor de tela em português
+    // leria rótulos em inglês com a fonética portuguesa. `language` é o do
+    // catálogo **efetivamente carregado**, em BCP 47.
+    root.set_language(language);
     root.set_children(root_children);
     nodes.push((ROOT_ID, root));
 
@@ -312,6 +335,7 @@ fn build_tab_list(
     workspace: &Workspace,
     layout: &tab_bar::TabBarLayout,
     active_pane_order: Option<&[PaneId]>,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) {
@@ -324,14 +348,19 @@ fn build_tab_list(
         if let Some(pill) = &group_wrapper.pill
             && let Some(group) = group
         {
-            let mut label = format!("Grupo {}", group.name().unwrap_or(&pill.name));
-            if group.is_collapsed() {
-                label.push_str(", colapsado");
-            }
-            if let Some(color) = group.color() {
-                label.push_str(", cor ");
-                label.push_str(color_name(color));
-            }
+            // Uma frase por combinação de colapsado e cor (a ordem das
+            // palavras é do tradutor), em vez de pedaços colados.
+            let name = group.name().unwrap_or(&pill.name);
+            let label = match (group.is_collapsed(), group.color()) {
+                (false, None) => msg::access::group(catalog, name),
+                (true, None) => msg::access::group_collapsed(catalog, name),
+                (false, Some(color)) => {
+                    msg::access::group_colored(catalog, name, color_name(catalog, color))
+                }
+                (true, Some(color)) => {
+                    msg::access::group_collapsed_colored(catalog, name, color_name(catalog, color))
+                }
+            };
             nodes.push((group_pill_id(group_wrapper.id), leaf(Role::Button, label)));
             tab_list_children.push(group_pill_id(group_wrapper.id));
         }
@@ -341,17 +370,26 @@ fn build_tab_list(
                 continue;
             };
             let mut node = Node::new(Role::Tab);
+            // O título vem primeiro; cada estado é uma peça do catálogo
+            // (`access.state_*`) encaixada por `access.tab_state`, então a
+            // ordem das palavras **dentro** de cada peça é do tradutor. A
+            // ordem título-depois-estados e a soma de até quatro estados
+            // ficam no código: as combinações passam de dez, e uma frase
+            // por combinação seria pior que a ordem fixa.
             let mut label = tab.title().to_owned();
+            let mut push_state = |state: String| {
+                label.push_str(&msg::access::tab_state(catalog, state));
+            };
             if Some(tab_rect.id) == active_tab {
                 node.set_selected(true);
-                label.push_str(" (ativa)");
+                push_state(msg::access::state_active(catalog));
             }
             if tab.is_not_started() {
-                label.push_str(" (não iniciada)");
+                push_state(msg::access::state_not_started(catalog));
             }
             match tab_rect.indicator {
-                Some(Indicator::Bell) => label.push_str(" (campainha)"),
-                Some(Indicator::Activity) => label.push_str(" (atividade)"),
+                Some(Indicator::Bell) => push_state(msg::access::state_bell(catalog)),
+                Some(Indicator::Activity) => push_state(msg::access::state_activity(catalog)),
                 None => {}
             }
             node.set_label(label);
@@ -374,10 +412,11 @@ fn build_tab_list(
                     let Some(pane) = tab.panes().pane(pane_id) else {
                         continue;
                     };
-                    let mut label = pane.title().to_owned();
-                    if pane_id == focused {
-                        label.push_str(" (foco)");
-                    }
+                    let label = if pane_id == focused {
+                        msg::access::pane_focused(catalog, pane.title())
+                    } else {
+                        pane.title().to_owned()
+                    };
                     let id = pane_node_id(tab_rect.id, pane_id);
                     nodes.push((id, leaf(Role::GenericContainer, label)));
                     children.push(id);
@@ -385,13 +424,19 @@ fn build_tab_list(
             }
             node.set_children(children);
             nodes.push((tab_node_id(tab_rect.id), node));
-            nodes.push((close_id, leaf(Role::Button, "Fechar aba")));
+            nodes.push((
+                close_id,
+                leaf(Role::Button, msg::access::tab_close(catalog)),
+            ));
             tab_list_children.push(tab_node_id(tab_rect.id));
         }
 
         if group_wrapper.new_tab_button.is_some() {
             let id = group_new_tab_id(group_wrapper.id);
-            nodes.push((id, leaf(Role::Button, "Nova aba neste grupo")));
+            nodes.push((
+                id,
+                leaf(Role::Button, msg::access::new_tab_in_group(catalog)),
+            ));
             tab_list_children.push(id);
         }
     }
@@ -402,10 +447,11 @@ fn build_tab_list(
 
 fn build_search_bar(
     state: &SearchBarState,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) {
-    let (counter, _is_error) = state.counter_display();
+    let (counter, _is_error) = state.counter_display(catalog);
     let mut field = Node::new(Role::SearchInput);
     field.set_value(state.field().text());
     if !counter.is_empty() {
@@ -414,7 +460,7 @@ fn build_search_bar(
     nodes.push((SEARCH_FIELD_ID, field));
 
     let mut toggle = Node::new(Role::Switch);
-    toggle.set_label("Expressão regular");
+    toggle.set_label(msg::access::regex_toggle(catalog));
     toggle.set_toggled(state.is_regex().into());
     nodes.push((SEARCH_REGEX_TOGGLE_ID, toggle));
 
@@ -432,6 +478,7 @@ fn build_search_bar(
 /// que mente é pior que ausente.
 fn build_status_bar(
     layout: &StatusBarLayout,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) {
@@ -448,18 +495,18 @@ fn build_status_bar(
         };
         let mut node = Node::new(role);
         node.set_value(segment.text.clone());
-        node.set_label(segment_label(segment.role));
+        node.set_label(segment_label(catalog, segment.role));
         // RF-9.4: sem isto, o leitor de tela lê o caminho como se fosse o
         // atual -- que é exatamente o mal-entendido que a barra existe
         // para desfazer. O alfa não chega a quem não vê a tela.
         if matches!(segment.role, SegmentRole::Cwd { stale: true }) {
-            node.set_description("diretório de origem; o shell não informa o atual");
+            node.set_description(msg::access::cwd_stale(catalog));
         }
         if let SegmentRole::AheadBehind { clickable } = segment.role {
             node.set_description(if clickable {
-                "clique integra os commits do remoto por fast-forward"
+                msg::access::ahead_behind_clickable(catalog)
             } else {
-                "commits locais à frente impedem a integração automática"
+                msg::access::ahead_behind_blocked(catalog)
             });
         }
         nodes.push((id, node));
@@ -469,37 +516,38 @@ fn build_status_bar(
     root_children.push(STATUS_BAR_ID);
 }
 
-fn segment_label(role: SegmentRole) -> &'static str {
+fn segment_label(catalog: &Catalog, role: SegmentRole) -> String {
     match role {
-        SegmentRole::Shell => "shell",
-        SegmentRole::Cwd { .. } => "diretório",
-        SegmentRole::GitBranch => "branch",
-        SegmentRole::AheadBehind { .. } => "commits atrás/à frente do remoto",
-        SegmentRole::Group => "grupo",
-        SegmentRole::PaneCount => "contagem de painéis",
-        SegmentRole::Encoding => "codificação",
-        SegmentRole::System => "sistema",
+        SegmentRole::Shell => msg::access::segment_shell(catalog),
+        SegmentRole::Cwd { .. } => msg::access::segment_cwd(catalog),
+        SegmentRole::GitBranch => msg::access::segment_branch(catalog),
+        SegmentRole::AheadBehind { .. } => msg::access::segment_ahead_behind(catalog),
+        SegmentRole::Group => msg::access::segment_group(catalog),
+        SegmentRole::PaneCount => msg::access::segment_pane_count(catalog),
+        SegmentRole::Encoding => msg::access::segment_encoding(catalog),
+        SegmentRole::System => msg::access::segment_system(catalog),
     }
 }
 
 fn build_warnings(
     warnings: &WarningStack,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) {
     let mut children = Vec::new();
     for (index, item) in warnings.items().iter().enumerate() {
         let severity = match item.severity {
-            Severity::Error => "Erro",
-            Severity::Warning => "Aviso",
-            Severity::Info => "Informação",
+            Severity::Error => msg::access::severity_error(catalog),
+            Severity::Warning => msg::access::severity_warning(catalog),
+            Severity::Info => msg::access::severity_info(catalog),
         };
         let id = warning_item_id(index);
         nodes.push((
             id,
             leaf(
                 Role::Alert,
-                format!("{severity}: {}: {}", item.title, item.body),
+                msg::access::warning(catalog, severity, &item.title, &item.body),
             ),
         ));
         children.push(id);
@@ -523,7 +571,10 @@ fn build_dialog(
         DialogButton::Cancel => DIALOG_CANCEL_ID,
         DialogButton::Confirm => DIALOG_CONFIRM_ID,
     };
-    nodes.push((DIALOG_CANCEL_ID, leaf(Role::Button, "Cancelar")));
+    nodes.push((
+        DIALOG_CANCEL_ID,
+        leaf(Role::Button, dialog.cancel_label.clone()),
+    ));
     nodes.push((
         DIALOG_CONFIRM_ID,
         leaf(Role::Button, dialog.confirm_label.clone()),
@@ -541,6 +592,7 @@ fn build_dialog(
 
 fn build_tab_menu(
     menu: &ContextMenu,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -549,7 +601,7 @@ fn build_tab_menu(
     for (index, item) in TAB_MENU_ITEMS.iter().enumerate() {
         let id = menu_item_id(index);
         let mut node = Node::new(Role::MenuItem);
-        node.set_label(item.label);
+        node.set_label(item.action.label(catalog));
         if !item.enabled {
             node.set_disabled();
         }
@@ -567,6 +619,7 @@ fn build_tab_menu(
 fn build_group_menu(
     menu: &GroupContextMenu,
     workspace: &Workspace,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -574,7 +627,7 @@ fn build_group_menu(
         .group(menu.group)
         .is_some_and(|g| g.is_collapsed());
     let tab_count = workspace.group(menu.group).map_or(0, |g| g.tabs().len());
-    let items = crate::group_menu::group_action_items(is_collapsed, tab_count);
+    let items = crate::group_menu::group_action_items(catalog, is_collapsed, tab_count);
     let mut children = Vec::new();
     let mut focus = MENU_ID;
     for (index, item) in items.iter().enumerate() {
@@ -592,6 +645,7 @@ fn build_group_menu(
 
 fn build_terminal_menu(
     menu: &TerminalContextMenu,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -608,7 +662,7 @@ fn build_terminal_menu(
     for (index, item) in items.iter().enumerate() {
         let id = menu_item_id(index);
         let mut node = Node::new(Role::MenuItem);
-        node.set_label(item.label);
+        node.set_label(item.action.label(catalog));
         if !item.enabled {
             node.set_disabled();
         }
@@ -626,6 +680,7 @@ fn build_terminal_menu(
 fn build_group_editor(
     editor: &GroupEditor,
     workspace: &Workspace,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -637,7 +692,7 @@ fn build_group_editor(
     for (index, color) in GroupColor::ALL.iter().enumerate() {
         let id = swatch_id(index);
         let mut node = Node::new(Role::RadioButton);
-        node.set_label(color_name(*color));
+        node.set_label(color_name(catalog, *color));
         if index == editor.swatch_highlight() {
             node.set_toggled(accesskit::Toggled::True);
         }
@@ -652,6 +707,7 @@ fn build_group_editor(
     let mut action_children = Vec::new();
     for (index, action) in EDITOR_ACTION_ORDER.iter().enumerate() {
         let label = crate::group_menu::group_action_items(
+            catalog,
             workspace
                 .group(editor.group)
                 .is_some_and(|g| g.is_collapsed()),
@@ -671,7 +727,7 @@ fn build_group_editor(
     ));
 
     let mut node = Node::new(Role::Group);
-    node.set_label("Editor de grupo");
+    node.set_label(msg::access::group_editor(catalog));
     node.set_children(vec![
         GROUP_EDITOR_FIELD_ID,
         GROUP_EDITOR_SWATCHES_ID,
@@ -692,6 +748,7 @@ fn build_group_editor(
 fn build_move_to_group(
     popover: &MoveToGroupPopover,
     workspace: &Workspace,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -701,7 +758,7 @@ fn build_move_to_group(
         let name = workspace
             .group(*group_id)
             .and_then(porecatu_core::Group::name)
-            .unwrap_or("Grupo");
+            .map_or_else(|| msg::access::unnamed_group(catalog), str::to_owned);
         let id = move_target_id(index);
         nodes.push((id, leaf(Role::MenuItem, name)));
         children.push(id);
@@ -711,7 +768,10 @@ fn build_move_to_group(
     }
     let new_group_index = popover.targets().len();
     let id = move_target_id(new_group_index);
-    nodes.push((id, leaf(Role::MenuItem, "Novo grupo")));
+    nodes.push((
+        id,
+        leaf(Role::MenuItem, msg::move_to_group::new_group(catalog)),
+    ));
     children.push(id);
     if popover.highlighted() == new_group_index {
         focus = id;
@@ -731,6 +791,7 @@ fn build_move_to_group(
 /// (`session_picker.rs`), então nunca ganha foco.
 fn build_session_picker(
     picker: &SessionPicker,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
 ) -> NodeId {
@@ -747,7 +808,7 @@ fn build_session_picker(
         session_picker::Mode::Browsing => {
             nodes.push((
                 SESSION_PICKER_SAVE_ITEM_ID,
-                leaf(Role::MenuItem, "Salvar esta janela…"),
+                leaf(Role::MenuItem, msg::session_picker::save_item(catalog)),
             ));
             SESSION_PICKER_SAVE_ITEM_ID
         }
@@ -759,7 +820,10 @@ fn build_session_picker(
 
     if picker.entries().is_empty() {
         let id = session_picker_row_id(0);
-        nodes.push((id, leaf(Role::MenuItem, "nenhuma sessão salva")));
+        nodes.push((
+            id,
+            leaf(Role::MenuItem, msg::session_picker::empty_list(catalog)),
+        ));
         children.push(id);
     } else {
         for (index, entry) in picker.entries().iter().enumerate() {
@@ -801,6 +865,10 @@ mod tests {
     }
 
     fn build(ws: &Workspace) -> TreeUpdate {
+        build_in(ws, "pt-BR")
+    }
+
+    fn build_in(ws: &Workspace, language: &str) -> TreeUpdate {
         build_tree(
             ws,
             &WarningStack::default(),
@@ -817,6 +885,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            language,
             &mut measurer(),
         )
     }
@@ -838,6 +908,26 @@ mod tests {
         assert_ne!(
             tree_before, tree_after,
             "a árvore reflete a mudança de estado"
+        );
+    }
+
+    /// ADR-0056 §11: a raiz declara o idioma do catálogo carregado, e a
+    /// árvore montada de novo com outro idioma (a troca ao vivo) o atualiza.
+    #[test]
+    fn the_root_declares_the_language_of_the_loaded_catalog() {
+        let ws = Workspace::new();
+        assert_eq!(
+            node(&build_in(&ws, "pt-BR"), ROOT_ID).language(),
+            Some("pt-BR")
+        );
+        assert_eq!(
+            node(&build_in(&ws, "en-US"), ROOT_ID).language(),
+            Some("en-US")
+        );
+        // O rótulo da raiz é nome próprio: não muda com o idioma.
+        assert_eq!(
+            node(&build_in(&ws, "en-US"), ROOT_ID).label(),
+            Some("Porecatu")
         );
     }
 
@@ -908,6 +998,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -956,6 +1048,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -1007,6 +1101,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let item = node(&update, warning_item_id(0));
@@ -1030,7 +1126,7 @@ mod tests {
             git_branch: None,
             ahead_behind: None,
             group: None,
-            pane_count: 0,
+            pane_count_label: None,
             system: "windows - 0.7.0".to_owned(),
         };
         let layout = crate::status_bar::layout_status_bar(
@@ -1056,6 +1152,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -1122,6 +1220,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let index = layout
@@ -1169,6 +1269,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let cwd_index = layout
@@ -1190,6 +1292,7 @@ mod tests {
             "Fechar janela?",
             "Duas abas abertas.",
             "Fechar",
+            "Cancelar",
             DialogAction::CloseWindow,
         ));
         let update = build_tree(
@@ -1208,6 +1311,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let dialog_node = node(&update, DIALOG_ID);
@@ -1238,6 +1343,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let menu_node = node(&update, MENU_ID);
@@ -1292,6 +1399,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -1326,6 +1435,8 @@ mod tests {
             &TabBarStyle::DEFAULT,
             800.0,
             0.0,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 

@@ -178,30 +178,31 @@ pub const CATALOG: &[&str] = &[
     "session.open_list",
 ];
 
-/// Erro de parse de uma ação (ADR-0029 §4): sempre traz a sugestão do
-/// nome mais próximo do catálogo, exceto para as duas `Arg` -- rejeitadas
-/// por razão própria, não por grafia errada.
+/// Erro de parse de uma ação (ADR-0029 §4). Dois casos distintos, cada um com
+/// os dados que a frase de interface precisa (ADR-0056 §2) -- o `Display`
+/// abaixo é só para a saída de erro.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActionParseError {
-    pub input: String,
-    /// `None` só para `group.set_color`/`tab.move_to_group`: a rejeição é
-    /// "isto não é vinculável", não "isto não existe".
-    pub suggestion: Option<&'static str>,
+pub enum ActionParseError {
+    /// Nome que não existe no catálogo, com a sugestão do mais próximo.
+    Unknown {
+        input: String,
+        suggestion: &'static str,
+    },
+    /// `group.set_color`/`tab.move_to_group`: existem, mas têm argumento --
+    /// rejeitadas por razão própria, não por grafia errada.
+    NotBindable { input: String },
 }
 
 impl fmt::Display for ActionParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.suggestion {
-            Some(s) => write!(
+        match self {
+            Self::Unknown { input, suggestion } => write!(
                 f,
-                "ação desconhecida: \"{}\" -- você quis dizer \"{s}\"?",
-                self.input
+                "ação desconhecida: \"{input}\" -- você quis dizer \"{suggestion}\"?"
             ),
-            None => write!(
-                f,
-                "\"{}\" tem argumento e não é vinculável a tecla",
-                self.input
-            ),
+            Self::NotBindable { input } => {
+                write!(f, "\"{input}\" tem argumento e não é vinculável a tecla")
+            }
         }
     }
 }
@@ -213,9 +214,8 @@ impl FromStr for Action {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s == "group.set_color" || s == "tab.move_to_group" {
-            return Err(ActionParseError {
+            return Err(ActionParseError::NotBindable {
                 input: s.to_owned(),
-                suggestion: None,
             });
         }
         if let Some(n) = s.strip_prefix("tab.goto_")
@@ -271,9 +271,9 @@ impl FromStr for Action {
             "session.save_named" => Action::SessionSaveNamed,
             "session.open_list" => Action::SessionOpenList,
             _ => {
-                return Err(ActionParseError {
+                return Err(ActionParseError::Unknown {
                     input: s.to_owned(),
-                    suggestion: Some(closest_name(s)),
+                    suggestion: closest_name(s),
                 });
             }
         };
@@ -464,15 +464,31 @@ mod tests {
     #[test]
     fn arg_actions_are_rejected_without_suggestion() {
         let err = "group.set_color".parse::<Action>().unwrap_err();
-        assert_eq!(err.suggestion, None);
+        assert_eq!(
+            err,
+            ActionParseError::NotBindable {
+                input: "group.set_color".to_owned()
+            }
+        );
         let err = "tab.move_to_group".parse::<Action>().unwrap_err();
-        assert_eq!(err.suggestion, None);
+        assert_eq!(
+            err,
+            ActionParseError::NotBindable {
+                input: "tab.move_to_group".to_owned()
+            }
+        );
     }
 
     #[test]
     fn unknown_action_suggests_closest() {
         let err = "tab.clsoe".parse::<Action>().unwrap_err();
-        assert_eq!(err.suggestion, Some("tab.close"));
+        assert_eq!(
+            err,
+            ActionParseError::Unknown {
+                input: "tab.clsoe".to_owned(),
+                suggestion: "tab.close"
+            }
+        );
     }
 
     #[test]

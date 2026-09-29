@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use porecatu_core::Action;
+use porecatu_core::{Action, ActionParseError};
 use porecatu_term::Modifiers;
 use winit::keyboard::{Key, NamedKey};
 
@@ -124,16 +124,52 @@ fn parse_key(text: &str) -> Option<ChordKey> {
     None
 }
 
+/// Por que uma chave de `[keybindings]` não virou `Chord`. A frase de
+/// interface é composta em `messages` (ADR-0056 §2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChordParseError {
+    /// Texto sem tecla nenhuma.
+    EmptyKey {
+        text: String,
+    },
+    UnknownModifier {
+        modifier: String,
+        text: String,
+    },
+    UnknownKey {
+        key: String,
+        text: String,
+    },
+}
+
+/// Um problema achado ao resolver `[keybindings]`: descarta só a linha
+/// (ou as linhas) envolvida, o resto do mapa aplica normalmente.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeymapIssue {
+    MalformedKey(ChordParseError),
+    /// Duas grafias da mesma tecla na mesma tabela.
+    DuplicateBinding {
+        keys: Vec<String>,
+    },
+    /// A tecla `key` aponta para uma ação que o parser recusou.
+    InvalidAction {
+        key: String,
+        error: ActionParseError,
+    },
+}
+
 impl Chord {
     /// Parseia uma chave de `[keybindings]` (ADR-0029 §2):
     /// `modificador* tecla`, separados por `+`. Tolerante a maiúsculas --
     /// a gramática documentada é minúscula, mas rejeitar `Ctrl+T` só por
     /// causa do `C` maiúsculo não ajuda ninguém.
-    pub fn parse(text: &str) -> Result<Chord, String> {
+    pub fn parse(text: &str) -> Result<Chord, ChordParseError> {
         let lower = text.to_lowercase();
         let mut parts: Vec<&str> = lower.split('+').collect();
         let Some(key_text) = parts.pop() else {
-            return Err(format!("tecla vazia: \"{text}\""));
+            return Err(ChordParseError::EmptyKey {
+                text: text.to_owned(),
+            });
         };
         let mut chord = Chord {
             ctrl: false,
@@ -149,14 +185,18 @@ impl Chord {
                 "shift" => chord.shift = true,
                 "cmd" => chord.cmd = true,
                 other => {
-                    return Err(format!(
-                        "modificador desconhecido: \"{other}\" em \"{text}\""
-                    ));
+                    return Err(ChordParseError::UnknownModifier {
+                        modifier: other.to_owned(),
+                        text: text.to_owned(),
+                    });
                 }
             }
         }
         let Some(key) = parse_key(key_text) else {
-            return Err(format!("tecla desconhecida: \"{key_text}\" em \"{text}\""));
+            return Err(ChordParseError::UnknownKey {
+                key: key_text.to_owned(),
+                text: text.to_owned(),
+            });
         };
         chord.key = key;
         Ok(chord)
@@ -323,7 +363,7 @@ impl Platform {
 fn apply_table(
     bindings: &mut HashMap<Chord, Action>,
     table: &BTreeMap<String, String>,
-    issues: &mut Vec<String>,
+    issues: &mut Vec<KeymapIssue>,
 ) {
     // Primeiro passo: resolve cada chave de texto pra Chord, detectando
     // duplicado antes de tocar `bindings` -- um duplicado não deve
@@ -333,21 +373,16 @@ fn apply_table(
     for key_text in table.keys() {
         match Chord::parse(key_text) {
             Ok(chord) => by_chord.entry(chord).or_default().push(key_text.as_str()),
-            Err(msg) => malformed.push(msg),
+            Err(err) => malformed.push(KeymapIssue::MalformedKey(err)),
         }
     }
     issues.extend(malformed);
 
     for (chord, key_texts) in by_chord {
         if key_texts.len() > 1 {
-            issues.push(format!(
-                "binding duplicado: {} resolvem pra mesma tecla",
-                key_texts
-                    .iter()
-                    .map(|k| format!("\"{k}\""))
-                    .collect::<Vec<_>>()
-                    .join(" e ")
-            ));
+            issues.push(KeymapIssue::DuplicateBinding {
+                keys: key_texts.iter().map(|k| (*k).to_owned()).collect(),
+            });
             continue;
         }
         let key_text = key_texts[0];
@@ -360,7 +395,10 @@ fn apply_table(
             Ok(action) => {
                 bindings.insert(chord, action);
             }
-            Err(err) => issues.push(format!("\"{key_text}\": {err}")),
+            Err(error) => issues.push(KeymapIssue::InvalidAction {
+                key: key_text.to_owned(),
+                error,
+            }),
         }
     }
 }
@@ -376,13 +414,13 @@ pub struct ResolvedKeymap {
     /// Um item por chave malformada, ação desconhecida ou duplicado --
     /// vira aviso na superfície do ADR-0014 (RF-4.22-like, mas para
     /// `[keybindings]`), severidade aviso, persiste até dispensa.
-    pub issues: Vec<String>,
+    pub issues: Vec<KeymapIssue>,
 }
 
 pub fn resolve(user: &porecatu_config::Keybindings, platform: Platform) -> ResolvedKeymap {
     let embedded = porecatu_config::Keybindings::default();
     let mut bindings = HashMap::new();
-    let mut issues = Vec::new();
+    let mut issues: Vec<KeymapIssue> = Vec::new();
 
     apply_table(&mut bindings, &embedded.common, &mut issues);
     if platform == Platform::Macos {
@@ -407,6 +445,7 @@ pub fn resolve(user: &porecatu_config::Keybindings, platform: Platform) -> Resol
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages;
 
     fn mods(ctrl: bool, alt: bool, shift: bool, cmd: bool) -> Modifiers {
         Modifiers {
@@ -422,6 +461,46 @@ mod tests {
         assert_eq!(
             Chord::parse("shift+ctrl+t").unwrap(),
             Chord::parse("ctrl+shift+t").unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_errors_are_typed_by_cause() {
+        assert_eq!(
+            Chord::parse("super+t"),
+            Err(ChordParseError::UnknownModifier {
+                modifier: "super".to_owned(),
+                text: "super+t".to_owned(),
+            })
+        );
+        assert_eq!(
+            Chord::parse("ctrl+bogus"),
+            Err(ChordParseError::UnknownKey {
+                key: "bogus".to_owned(),
+                text: "ctrl+bogus".to_owned(),
+            })
+        );
+        // `split('+')` always yields one part, so the empty-key case is
+        // only reachable through an empty final segment after a trailing
+        // `+`... which `parse_key` rejects as an unknown (empty) key.
+        assert!(matches!(
+            Chord::parse("ctrl+"),
+            Err(ChordParseError::UnknownKey { .. })
+        ));
+    }
+
+    #[test]
+    fn malformed_key_is_an_issue() {
+        let user = keybindings_with(&[("super+t", "tab.new")]);
+        let resolved = resolve(&user, Platform::Windows);
+        assert_eq!(resolved.issues.len(), 1);
+        assert!(matches!(
+            resolved.issues[0],
+            KeymapIssue::MalformedKey(ChordParseError::UnknownModifier { .. })
+        ));
+        assert!(
+            messages::keymap_issue(&messages::test_support::pt_br(), &resolved.issues[0])
+                .contains("modificador desconhecido")
         );
     }
 
@@ -554,7 +633,16 @@ mod tests {
         ]);
         let resolved = resolve(&user, Platform::Windows);
         assert_eq!(resolved.issues.len(), 1);
-        assert!(resolved.issues[0].contains("duplicado"));
+        let KeymapIssue::DuplicateBinding { keys } = &resolved.issues[0] else {
+            panic!("expected DuplicateBinding, got {:?}", resolved.issues[0]);
+        };
+        assert_eq!(keys.len(), 2);
+        assert!(keys.iter().any(|k| k == "ctrl+shift+t"));
+        assert!(keys.iter().any(|k| k == "shift+ctrl+t"));
+        assert!(
+            messages::keymap_issue(&messages::test_support::pt_br(), &resolved.issues[0])
+                .contains("duplicado")
+        );
         let chord = Chord::parse("ctrl+shift+t").unwrap();
         // Nenhuma das duas grafias ambíguas aplica -- mas o default
         // embutido (tab.new) já estava no mapa acumulado de uma camada
@@ -568,7 +656,20 @@ mod tests {
         let user = keybindings_with(&[("ctrl+shift+z", "tab.clsoe")]);
         let resolved = resolve(&user, Platform::Windows);
         assert_eq!(resolved.issues.len(), 1);
-        assert!(resolved.issues[0].contains("tab.close"));
+        assert_eq!(
+            resolved.issues[0],
+            KeymapIssue::InvalidAction {
+                key: "ctrl+shift+z".to_owned(),
+                error: ActionParseError::Unknown {
+                    input: "tab.clsoe".to_owned(),
+                    suggestion: "tab.close",
+                },
+            }
+        );
+        assert!(
+            messages::keymap_issue(&messages::test_support::pt_br(), &resolved.issues[0])
+                .contains("tab.close")
+        );
     }
 
     #[test]

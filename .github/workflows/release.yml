@@ -8,12 +8,19 @@ name: release
 # das três plataformas passam a ser construídos e anexados automaticamente,
 # sem editar este arquivo.
 #
-# ADR-0044/ADR-0045 (F6 etapa 6): além do binário cru, cada plataforma ganha
-# um instalador nativo -- MSI (cargo-wix), .deb + AppImage (cargo-deb +
-# appimagetool), .app dentro de .dmg (script nativo, sem dependência nova).
-# Nenhum deles recompila o binário (critério 2 do ADR-0044 §2): todos
-# consomem o executável que o passo "Compilar" já produziu, via `--no-build`
+# ADR-0044/ADR-0045 (F6 etapa 6): cada plataforma publica um instalador
+# nativo -- MSI (cargo-wix), .deb + AppImage (cargo-deb + appimagetool), .app
+# dentro de .dmg (script nativo, sem dependência nova). Nenhum deles
+# recompila o binário (critério 2 do ADR-0044 §2): todos consomem o
+# executável que o passo "Compilar" já produziu, via `--no-build`
 # (cargo-wix/cargo-deb) ou por só copiar arquivo (macOS).
+#
+# ADR-0057: o binário cru NÃO é mais publicado -- o texto da interface vive só
+# em `locales/*.toml` (ADR-0056), e um executável solto abriria sem texto. Todo
+# instalador leva `locales/` no caminho que o resolvedor procura, e cada job
+# prova isso por artefato: a lista de arquivos esperados sai de
+# `locales/*.toml` do próprio checkout, não de lista escrita à mão, então um
+# idioma novo esquecido no `wix/main.wxs` reprova o MSI.
 
 # Actions pinadas por SHA de commit, com a versão legível no comentário ao
 # lado. Tag major é ponteiro móvel: pode ser reapontada para outro commit, e
@@ -109,36 +116,20 @@ jobs:
       - name: Compilar
         run: cargo build --release --locked --target ${{ matrix.alvo }}
 
-      # RF-11.21: todo artefato carrega o binário, a licença do projeto, a
-      # atribuição das duas fontes embutidas e o `porecatu.example.toml`
-      # (ADR-0044 §4). O checksum sai num passo à parte, no fim do job,
-      # depois que os instaladores também tiverem entrado em `dist/`.
-      - name: Empacotar binário cru
+      # RF-11.21: todo instalador carrega a licença do projeto, a atribuição
+      # das duas fontes embutidas e o `porecatu.example.toml` (ADR-0044 §4),
+      # mais os arquivos de idioma (ADR-0057 §1). `dist/` só recebe
+      # instaladores; o checksum sai num passo à parte, no fim do job.
+      - name: Preparar dist/
         shell: bash
-        run: |
-          set -e
-          mkdir -p dist
-          nome="porecatu-${{ github.ref_name }}-${{ matrix.alvo }}"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.alvo }}/release/porecatu.exe" "dist/$nome.exe"
-          else
-            cp "target/${{ matrix.alvo }}/release/porecatu" "dist/$nome"
-          fi
-          cp LICENSE README.md dist/
-          cp assets/fonts/LICENSE-OFL-iosevka.txt assets/fonts/LICENSE-ISC-lucide.txt dist/
-          cp docs/config/porecatu.example.toml dist/
-
-      - name: Verificar atribuição das fontes (binário cru)
-        shell: bash
-        run: |
-          test -f dist/LICENSE-OFL-iosevka.txt || { echo "faltando LICENSE-OFL-iosevka.txt em dist/"; exit 1; }
-          test -f dist/LICENSE-ISC-lucide.txt || { echo "faltando LICENSE-ISC-lucide.txt em dist/"; exit 1; }
+        run: mkdir -p dist
 
       # Windows: instalador MSI. `--no-build` (critério 2 do ADR-0044 §2):
       # não recompila, só empacota o que "Compilar" já produziu.
       # `wix/main.wxs` (versionado, `cargo wix init` já rodado) declara os
       # quatro componentes extras -- LICENSE e as duas atribuições e o
-      # exemplo de config -- ao lado do executável.
+      # exemplo de config -- ao lado do executável, e um por arquivo de
+      # idioma em `bin\locales\` (ADR-0057 §1).
       - name: Instalador MSI (cargo-wix)
         if: runner.os == 'Windows'
         shell: bash
@@ -151,7 +142,7 @@ jobs:
       # Instalação administrativa extrai a árvore inteira do MSI sem
       # instalar de fato -- é como conferir o conteúdo sem `msitools`/
       # `lessmsi`, ferramenta a mais nenhuma além do que o Windows já traz.
-      - name: Verificar atribuição das fontes (MSI)
+      - name: Verificar atribuição das fontes e idiomas (MSI)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -172,6 +163,27 @@ jobs:
           $isc = Get-ChildItem -Recurse -Filter "LICENSE-ISC-lucide.txt" "$out" -ErrorAction SilentlyContinue
           if (-not $ofl -or -not $isc) {
             Write-Error "MSI nao contem a atribuicao das duas fontes"
+            exit 1
+          }
+          # ADR-0057 §2: a lista vem de `locales/*.toml` do checkout, nao de
+          # nomes escritos aqui -- idioma novo esquecido no main.wxs reprova.
+          # O caminho tem de terminar em `\bin\locales\<arquivo>`, o
+          # `<exe>\locales` do resolvedor: achar o arquivo em outro lugar da
+          # arvore nao vale. O prefixo (pasta do Program Files na extracao
+          # administrativa) fica de fora de proposito.
+          $idiomas = Get-ChildItem -Path "locales" -Filter "*.toml"
+          if (-not $idiomas) {
+            Write-Error "nenhum arquivo em locales/ no checkout"
+            exit 1
+          }
+          $faltando = @()
+          foreach ($i in $idiomas) {
+            $achado = Get-ChildItem -Recurse -File -Filter $i.Name "$out" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName.EndsWith("\bin\locales\$($i.Name)") }
+            if (-not $achado) { $faltando += $i.Name }
+          }
+          if ($faltando.Count -gt 0) {
+            Write-Error "MSI nao contem bin\locales\: $($faltando -join ', ')"
             exit 1
           }
           Remove-Item -Recurse -Force "$out"
@@ -199,7 +211,7 @@ jobs:
       # tendo achado o match e retornado 0. Falso-negativo, achado ao vivo
       # na v0.7.5. Capturar a listagem inteira numa variável primeiro, sem
       # pipe nenhum pro `grep`, elimina o SIGPIPE.
-      - name: Verificar atribuição das fontes (.deb)
+      - name: Verificar atribuição das fontes e idiomas (.deb)
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -214,6 +226,18 @@ jobs:
             *LICENSE-ISC-lucide.txt*) ;;
             *) echo "faltando ISC no .deb"; exit 1 ;;
           esac
+          # ADR-0057 §2: a lista vem de `locales/*.toml` do checkout. Mesma
+          # regra do bloco acima -- casa contra a variável, sem pipe. O `\n`
+          # no fim ancora o nome: cada linha do `dpkg-deb -c` termina no
+          # caminho do arquivo, então `en_US.toml` não casa com `xen_US.toml`.
+          ls locales/*.toml > /dev/null
+          for f in locales/*.toml; do
+            nome="$(basename "$f")"
+            case "$conteudo"$'\n' in
+              *"/usr/share/porecatu/locales/$nome"$'\n'*) ;;
+              *) echo "faltando $nome em /usr/share/porecatu/locales/ no .deb"; exit 1 ;;
+            esac
+          done
 
       - name: AppImage
         if: runner.os == 'Linux'
@@ -222,7 +246,8 @@ jobs:
           set -e
           appdir="appdir-porecatu"
           mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
-            "$appdir/usr/share/icons/hicolor/512x512/apps" "$appdir/usr/share/doc/porecatu"
+            "$appdir/usr/share/icons/hicolor/512x512/apps" "$appdir/usr/share/doc/porecatu" \
+            "$appdir/usr/share/porecatu/locales"
           cp "target/${{ matrix.alvo }}/release/porecatu" "$appdir/usr/bin/porecatu"
           cp packaging/linux/porecatu.desktop "$appdir/usr/share/applications/porecatu.desktop"
           cp packaging/linux/porecatu.desktop "$appdir/porecatu.desktop"
@@ -230,6 +255,9 @@ jobs:
           cp assets/icon/porecatu.png "$appdir/porecatu.png"
           cp LICENSE assets/fonts/LICENSE-OFL-iosevka.txt assets/fonts/LICENSE-ISC-lucide.txt \
             docs/config/porecatu.example.toml "$appdir/usr/share/doc/porecatu/"
+          # ADR-0057 §1: `<exe>/../share/porecatu/locales`, o mesmo caminho do
+          # .deb (o executável fica em usr/bin, como em /usr/bin).
+          cp locales/*.toml "$appdir/usr/share/porecatu/locales/"
           cat > "$appdir/AppRun" <<'APPRUN'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
@@ -239,6 +267,13 @@ jobs:
 
           for f in LICENSE LICENSE-OFL-iosevka.txt LICENSE-ISC-lucide.txt porecatu.example.toml; do
             test -f "$appdir/usr/share/doc/porecatu/$f" || { echo "faltando $f no AppDir"; exit 1; }
+          done
+
+          # ADR-0057 §2: cada arquivo de `locales/` do checkout, no AppDir,
+          # antes do appimagetool empacotar.
+          for f in locales/*.toml; do
+            test -f "$appdir/usr/share/porecatu/locales/$(basename "$f")" \
+              || { echo "faltando $(basename "$f") em usr/share/porecatu/locales/ no AppDir"; exit 1; }
           done
 
           curl -fsSL -o appimagetool \
@@ -260,9 +295,14 @@ jobs:
         run: |
           set -e
           app="Porecatu.app"
-          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/locales"
           cp "target/${{ matrix.alvo }}/release/porecatu" "$app/Contents/MacOS/porecatu"
           chmod +x "$app/Contents/MacOS/porecatu"
+
+          # ADR-0057 §1: `<exe>/../Resources/locales`. DENTRO do bundle, não
+          # ao lado dele no .dmg: o usuário arrasta só o .app para
+          # Applications, e o que ficar fora dele fica para trás.
+          cp locales/*.toml "$app/Contents/Resources/locales/"
 
           iconset="porecatu.iconset"
           mkdir -p "$iconset"
@@ -309,13 +349,21 @@ jobs:
             test -f "$staging/$f" || { echo "faltando $f no dmg"; exit 1; }
           done
 
+          # ADR-0057 §2: cada arquivo de `locales/` do checkout, dentro do
+          # .app já em staging, antes do hdiutil.
+          for f in locales/*.toml; do
+            test -f "$staging/$app/Contents/Resources/locales/$(basename "$f")" \
+              || { echo "faltando $(basename "$f") em Contents/Resources/locales/ no .app"; exit 1; }
+          done
+
           mkdir -p dist
           nome="porecatu-${{ github.ref_name }}-${{ matrix.alvo }}"
           hdiutil create -volname "Porecatu" -srcfolder "$staging" -ov -format UDZO "dist/$nome.dmg"
           rm -rf "$staging"
 
-      # Checksum por cima de tudo que entrou em dist/ -- binário cru e
-      # todo instalador desta plataforma, cada um com sua própria linha.
+      # Checksum por cima de tudo que entrou em dist/ -- todo instalador
+      # desta plataforma (ADR-0057: não há mais binário cru), cada um com sua
+      # própria linha.
       - name: Checksums
         shell: bash
         run: |

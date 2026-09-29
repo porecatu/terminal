@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, native_pty_system};
 
-use crate::error::PtyError;
+use crate::error::{PtyError, PtyErrorKind};
 use crate::job::ProcessGroup;
 use crate::shell::{resolve_default_shell, search_path};
 
@@ -100,7 +100,7 @@ impl PtyHandle {
     pub fn reader(&self) -> Result<Box<dyn Read + Send>, PtyError> {
         self.master
             .try_clone_reader()
-            .map_err(|e| PtyError::new("try_clone_reader", e))
+            .map_err(|e| PtyError::new(PtyErrorKind::TryCloneReader, e))
     }
 
     /// Novo handle de escrita. A escrita não passa pela thread de leitura
@@ -108,7 +108,7 @@ impl PtyHandle {
     pub fn writer(&self) -> Result<Box<dyn Write + Send>, PtyError> {
         self.master
             .take_writer()
-            .map_err(|e| PtyError::new("take_writer", e))
+            .map_err(|e| PtyError::new(PtyErrorKind::TakeWriter, e))
     }
 
     /// Redimensiona o PTY. Tamanho em pixels não é rastreado pelo handle —
@@ -123,7 +123,7 @@ impl PtyHandle {
         };
         self.master
             .resize(size)
-            .map_err(|e| PtyError::new("resize", e))
+            .map_err(|e| PtyError::new(PtyErrorKind::Resize, e))
     }
 
     /// Consulta não bloqueante: `None` enquanto o processo segue vivo.
@@ -141,7 +141,7 @@ impl PtyHandle {
         self.child
             .try_wait()
             .map(|status| status.map(PtyExitStatus::from))
-            .map_err(|e| PtyError::new("try_wait", e))
+            .map_err(|e| PtyError::new(PtyErrorKind::TryWait, e))
     }
 
     /// Bloqueia até o processo encerrar. Mesma ressalva de EOF que
@@ -150,13 +150,15 @@ impl PtyHandle {
         self.child
             .wait()
             .map(PtyExitStatus::from)
-            .map_err(|e| PtyError::new("wait", e))
+            .map_err(|e| PtyError::new(PtyErrorKind::Wait, e))
     }
 
     /// Encerra o processo à força. Usado no fechamento de aba com processo
     /// que não respondeu — não substitui `wait` no caminho normal.
     pub fn kill(&mut self) -> Result<(), PtyError> {
-        self.child.kill().map_err(|e| PtyError::new("kill", e))
+        self.child
+            .kill()
+            .map_err(|e| PtyError::new(PtyErrorKind::Kill, e))
     }
 }
 
@@ -173,7 +175,7 @@ pub fn spawn(config: SpawnConfig) -> Result<(PtyHandle, Option<ProcessGroup>), P
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(config.size.into())
-        .map_err(|e| PtyError::new("openpty", e))?;
+        .map_err(|e| PtyError::new(PtyErrorKind::OpenPty, e))?;
 
     let program = config.program.unwrap_or_else(|| {
         resolve_default_shell(std::env::var("SHELL").ok().as_deref(), search_path)
@@ -194,7 +196,7 @@ pub fn spawn(config: SpawnConfig) -> Result<(PtyHandle, Option<ProcessGroup>), P
     let child = pair
         .slave
         .spawn_command(cmd)
-        .map_err(|e| PtyError::new("spawn_command", e))?;
+        .map_err(|e| PtyError::new(PtyErrorKind::SpawnCommand, e))?;
     // O slave em si (a ponta que o filho herdou) não precisa continuar
     // aberto neste processo; o filho já tem sua própria cópia.
     drop(pair.slave);

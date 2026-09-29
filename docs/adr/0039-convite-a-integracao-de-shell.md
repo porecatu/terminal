@@ -71,6 +71,8 @@ Os snippets vivem em `docs/reference/integracao-de-shell.md`, versionados como d
 
 O shell é o detectado no spawn da aba (`shell_name`, que o domínio já carrega). Shell não reconhecido: nota genérica explicando o que é OSC 7 e apontando o arquivo de referência, em vez de um snippet errado.
 
+> **Revisto pelo [ADR-0056](0056-catalogo-de-textos-da-interface.md) §3.** A **frase em volta** do snippet — o convite, a nota genérica, a instrução de colar — passa a vir do arquivo de idioma. Os **snippets continuam embutidos** daqui: são código que o usuário cola na config do shell, não texto de interface. O marcador de dispensa definitiva também não muda em idioma nenhum — é protocolo que o usuário digita, e traduzi-lo quebraria a dispensa de quem trocou de idioma depois de dispensar.
+
 ## Alternativas consideradas
 
 ### Barra de aviso do ADR-0014

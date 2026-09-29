@@ -12,6 +12,9 @@
 //! `group_menu::group_action_items`), nunca a guardam.
 
 use porecatu_core::TabId;
+use porecatu_locale::Catalog;
+
+use crate::messages::msg;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalMenuAction {
@@ -23,10 +26,23 @@ pub enum TerminalMenuAction {
     CopyLink,
 }
 
+impl TerminalMenuAction {
+    /// Rótulo do item no idioma do catálogo, lido a cada frame.
+    pub fn label(self, catalog: &Catalog) -> String {
+        match self {
+            TerminalMenuAction::Copy => msg::terminal_menu::copy(catalog),
+            TerminalMenuAction::Paste => msg::terminal_menu::paste(catalog),
+            TerminalMenuAction::SelectAll => msg::terminal_menu::select_all(catalog),
+            TerminalMenuAction::OpenSearch => msg::terminal_menu::search(catalog),
+            TerminalMenuAction::OpenLink => msg::terminal_menu::open_link(catalog),
+            TerminalMenuAction::CopyLink => msg::terminal_menu::copy_link(catalog),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalMenuItem {
     pub action: TerminalMenuAction,
-    pub label: &'static str,
     pub enabled: bool,
 }
 
@@ -40,34 +56,28 @@ pub fn terminal_menu_items(has_selection: bool, over_link: bool) -> Vec<Terminal
     let mut items = vec![
         TerminalMenuItem {
             action: TerminalMenuAction::Copy,
-            label: "Copiar",
             enabled: has_selection,
         },
         TerminalMenuItem {
             action: TerminalMenuAction::Paste,
-            label: "Colar",
             enabled: true,
         },
         TerminalMenuItem {
             action: TerminalMenuAction::SelectAll,
-            label: "Selecionar tudo",
             enabled: true,
         },
         TerminalMenuItem {
             action: TerminalMenuAction::OpenSearch,
-            label: "Buscar",
             enabled: true,
         },
     ];
     if over_link {
         items.push(TerminalMenuItem {
             action: TerminalMenuAction::OpenLink,
-            label: "Abrir link",
             enabled: true,
         });
         items.push(TerminalMenuItem {
             action: TerminalMenuAction::CopyLink,
-            label: "Copiar link",
             enabled: true,
         });
     }

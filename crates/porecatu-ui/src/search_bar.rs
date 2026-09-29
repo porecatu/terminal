@@ -20,10 +20,12 @@
 //! grade.
 
 use porecatu_core::{PaneId, TabId};
+use porecatu_locale::Catalog;
 use porecatu_render::{Color, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun, icon};
 use porecatu_term::{Occurrence, OccurrenceSpan, SearchJob, SearchMode, SearchStep, Terminal};
 
 use crate::chrome::{ICON_FONT, LABEL_FONT};
+use crate::messages::msg;
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::TabBarStyle;
 use crate::text_field::TextFieldState;
@@ -163,7 +165,7 @@ impl SearchBarState {
                 self.active = 0;
             }
             Err(err) => {
-                self.error = Some(err.message().to_string());
+                self.error = Some(err.detail().to_owned());
             }
         }
     }
@@ -208,28 +210,23 @@ impl SearchBarState {
     /// o slot fica em branco em vez de "nenhum resultado". Padrão inválido
     /// (RF-11.4) mostra o rótulo fixo da espec, não a mensagem técnica do
     /// compilador de regex -- `self.error` guarda essa mensagem só para
-    /// depuração, sem consumidor de UI nesta etapa.
-    pub fn counter_display(&self) -> (String, bool) {
+    /// depuração, sem consumidor de UI nesta etapa. Os dois rótulos de
+    /// texto são do catálogo (`search_bar.*`); o "2/7" é número, não frase.
+    pub fn counter_display(&self, catalog: &Catalog) -> (String, bool) {
         if self.error.is_some() {
-            return (PATTERN_INVALID_LABEL.to_string(), true);
+            return (msg::search_bar::invalid_pattern(catalog), true);
         }
         if self.field.text().is_empty() {
             return (String::new(), false);
         }
         let total = self.occurrences().len();
         if total == 0 {
-            (NO_RESULTS_LABEL.to_string(), false)
+            (msg::search_bar::no_results(catalog), false)
         } else {
             (format!("{}/{}", self.active + 1, total), false)
         }
     }
 }
-
-/// Texto exibido no lugar de "padrão inválido"/"nenhum resultado" -- fixo,
-/// não vem de tokens de aparência (é conteúdo, não desenho).
-pub const PATTERN_INVALID_LABEL: &str = "padrão inválido";
-pub const NO_RESULTS_LABEL: &str = "nenhum resultado";
-pub const ALT_SCREEN_SUFFIX: &str = " (tela alternativa)";
 
 /// Corta uma posição absoluta de grade (`GridPos::line`, pode ser negativa
 /// no scrollback) para a linha de viewport -- mesma fórmula de
@@ -478,6 +475,7 @@ pub fn paint_search_bar(
     pal: &ResolvedPalette,
     term_pal: &palette::ResolvedTermPalette,
     hover: Option<SearchBarHit>,
+    catalog: &Catalog,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let mut out = Vec::new();
@@ -576,9 +574,9 @@ pub fn paint_search_bar(
     out.push(Primitive::PopClip);
 
     // Contador -- RF-11.6, cor de erro (RF-11.4) ou tênue (§1.4).
-    let (counter_text, is_error) = state.counter_display();
+    let (counter_text, is_error) = state.counter_display(catalog);
     let counter_text = if !is_error && state.scope_reduced() && !counter_text.is_empty() {
-        format!("{counter_text}{ALT_SCREEN_SUFFIX}")
+        msg::search_bar::alt_screen_counter(catalog, &counter_text)
     } else {
         counter_text
     };
@@ -763,7 +761,10 @@ mod tests {
     #[test]
     fn state_new_has_no_error_and_blank_counter() {
         let state = SearchBarState::new(TabId::new(0), PaneId::new(0));
-        assert_eq!(state.counter_display(), (String::new(), false));
+        assert_eq!(
+            state.counter_display(&crate::messages::test_support::pt_br()),
+            (String::new(), false)
+        );
         assert!(state.occurrences().is_empty());
     }
 
