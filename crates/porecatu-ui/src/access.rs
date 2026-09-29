@@ -178,6 +178,7 @@ fn container(role: Role, children: Vec<NodeId>) -> Node {
 }
 
 /// Entrada de todo o módulo: monta a árvore inteira do chrome de `state`,
+/// no idioma `language` (BCP 47) do catálogo em uso,
 /// sempre completa (nunca incremental) -- é o que `Adapter::update_if_
 /// active` exige quando o adaptador foi criado com `with_event_loop_proxy`
 /// (ver o comentário do próprio construtor).
@@ -199,6 +200,7 @@ pub(crate) fn build_tree(
     logical_width: f32,
     scroll_offset: f32,
     catalog: &Catalog,
+    language: &str,
     measurer: &mut TextMeasurer,
 ) -> TreeUpdate {
     let is_mac = is_macos();
@@ -314,6 +316,10 @@ pub(crate) fn build_tree(
 
     let mut root = Node::new(Role::Window);
     root.set_label("Porecatu");
+    // ADR-0056 §11: sem o idioma na raiz, um leitor de tela em português
+    // leria rótulos em inglês com a fonética portuguesa. `language` é o do
+    // catálogo **efetivamente carregado**, em BCP 47.
+    root.set_language(language);
     root.set_children(root_children);
     nodes.push((ROOT_ID, root));
 
@@ -859,6 +865,10 @@ mod tests {
     }
 
     fn build(ws: &Workspace) -> TreeUpdate {
+        build_in(ws, "pt-BR")
+    }
+
+    fn build_in(ws: &Workspace, language: &str) -> TreeUpdate {
         build_tree(
             ws,
             &WarningStack::default(),
@@ -876,6 +886,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            language,
             &mut measurer(),
         )
     }
@@ -897,6 +908,26 @@ mod tests {
         assert_ne!(
             tree_before, tree_after,
             "a árvore reflete a mudança de estado"
+        );
+    }
+
+    /// ADR-0056 §11: a raiz declara o idioma do catálogo carregado, e a
+    /// árvore montada de novo com outro idioma (a troca ao vivo) o atualiza.
+    #[test]
+    fn the_root_declares_the_language_of_the_loaded_catalog() {
+        let ws = Workspace::new();
+        assert_eq!(
+            node(&build_in(&ws, "pt-BR"), ROOT_ID).language(),
+            Some("pt-BR")
+        );
+        assert_eq!(
+            node(&build_in(&ws, "en-US"), ROOT_ID).language(),
+            Some("en-US")
+        );
+        // O rótulo da raiz é nome próprio: não muda com o idioma.
+        assert_eq!(
+            node(&build_in(&ws, "en-US"), ROOT_ID).label(),
+            Some("Porecatu")
         );
     }
 
@@ -968,6 +999,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -1017,6 +1049,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -1069,6 +1102,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let item = node(&update, warning_item_id(0));
@@ -1119,6 +1153,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -1186,6 +1221,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let index = layout
@@ -1234,6 +1270,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let cwd_index = layout
@@ -1275,6 +1312,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let dialog_node = node(&update, DIALOG_ID);
@@ -1306,6 +1344,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
         let menu_node = node(&update, MENU_ID);
@@ -1361,6 +1400,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 
@@ -1396,6 +1436,7 @@ mod tests {
             800.0,
             0.0,
             &crate::messages::test_support::pt_br(),
+            "pt-BR",
             &mut measurer(),
         );
 

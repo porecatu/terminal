@@ -78,7 +78,7 @@ use keymap::Chord;
 use move_to_group::{MoveTarget, MoveToGroupPopover};
 use paint::CellMetrics;
 use porecatu_core::GroupColor;
-use reload::ConfigReload;
+use reload::{ConfigReload, LanguageReload, Reload};
 use rename::RenameState;
 use search_bar::{SearchBarHit, SearchBarState};
 use selection::Selection;
@@ -362,10 +362,11 @@ enum Wakeup {
         pane: PaneId,
     },
     /// A thread do watcher (F4 etapa 4, ADR-0030) já leu e parseou o
-    /// arquivo -- nunca um caminho para a main thread abrir. `Box` porque
-    /// `ConfigReload::Loaded` carrega uma `Config` inteira, bem maior que
-    /// `TabDirty`.
-    ConfigReloaded(Box<ConfigReload>),
+    /// arquivo -- nunca um caminho para a main thread abrir --, e, quando o
+    /// idioma mudou, já montou o catálogo (ADR-0056 §9): uma recarga, um
+    /// evento. `Box` porque `ConfigReload::Loaded` carrega uma `Config`
+    /// inteira, bem maior que `TabDirty`.
+    ConfigReloaded(Box<Reload>),
     /// Evento do adaptador `accesskit_winit` (ADR-0043 §1): árvore inicial
     /// pedida, ação de um leitor de tela, ou desativação -- roteado por
     /// `App::handle_accesskit_event`. Chega pela mesma `EventLoopProxy`
@@ -1087,7 +1088,8 @@ struct WindowState {
     fullscreen_restore_maximized: bool,
     /// O mesmo `Arc<Catalog>` do processo (`App::catalog`), para os métodos
     /// da janela que empilham aviso ou escrevem nota sem ter o `App` à mão.
-    /// Uma troca de idioma tem de atualizar toda janela junto com o `App`.
+    /// Uma troca de idioma atualiza toda janela junto com o `App`
+    /// (`App::apply_language_reload`).
     catalog: Arc<Catalog>,
 }
 
@@ -1900,6 +1902,7 @@ impl WindowState {
         measurer: &mut TextMeasurer,
         git_remotes: &HashMap<PathBuf, git::RemoteEntry>,
         catalog: &Catalog,
+        language: &str,
     ) {
         // ADR-0048 §11: a árvore é projeção do mesmo layout que o pintor
         // consome. Montado aqui fora do `update_if_active` porque o
@@ -1953,6 +1956,7 @@ impl WindowState {
                 logical_width,
                 scroll_offset,
                 catalog,
+                language,
                 measurer,
             )
         });
@@ -5090,6 +5094,10 @@ struct App {
     /// (etapa 5) põe um valor novo inteiro, sem lock. Montado em `App::new`
     /// depois da config e antes de qualquer frase de arranque ser composta.
     catalog: Arc<Catalog>,
+    /// Etiqueta BCP 47 do idioma **efetivamente carregado** em `catalog`
+    /// (`pt-BR`; `en-US` quando caiu na reserva), para a raiz da árvore de
+    /// acessibilidade (ADR-0056 §11). Muda junto com o catálogo.
+    language_tag: String,
     /// PRD-000/etapa 6 da F6: `Instant` do início de `main` (`src/main.rs`),
     /// atrás de `PORECATU_TRACE` -- ponto de partida de "tempo até o
     /// primeiro prompt utilizável". Sempre presente (o custo de guardar um
@@ -5279,6 +5287,7 @@ impl App {
         let config_path = porecatu_config::resolve_config_path(cli_config.as_deref());
         let language_outcome =
             language::load_catalog(&config.general.language, config_path.as_deref());
+        let language_tag = language::language_tag(language_outcome.locale.as_ref());
         let catalog = Arc::new(language_outcome.catalog);
         for diagnostic in language_outcome.diagnostics {
             if let porecatu_locale::Diagnostic::NoCatalogAtAll { searched } = &diagnostic {
@@ -5320,7 +5329,7 @@ impl App {
         // hot reload" -- não falha o start (ADR-0003 regra 1).
         if let Some(path) = config_path.clone() {
             let watcher_proxy = proxy.clone();
-            reload::watch(path, move |reload| {
+            reload::watch(path, config.general.language.clone(), move |reload| {
                 let _ = watcher_proxy.send_event(Wakeup::ConfigReloaded(Box::new(reload)));
             });
         }
@@ -5362,6 +5371,7 @@ impl App {
             vanished_restored_theme: None,
             pending_startup_warnings,
             catalog,
+            language_tag,
             process_start,
             first_pty_output_reported: false,
             pending_first_frame_since: None,
@@ -6719,8 +6729,9 @@ impl App {
         let home = self.startup_directory.as_deref();
         let git_remotes = &self.git_remotes;
         let catalog = &self.catalog;
+        let language = &self.language_tag;
         for state in self.windows.values_mut() {
-            state.refresh_access_tree(style, home, measurer, git_remotes, catalog);
+            state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
         }
     }
 
@@ -6993,6 +7004,59 @@ impl App {
         }
     }
 
+    /// Aplica uma recarga inteira, que chegou como **um** evento: primeiro o
+    /// idioma, depois a config -- assim os avisos da config já saem no
+    /// catálogo novo. Toda janela é redesenhada, então o próximo frame é
+    /// um só (ADR-0056 §9).
+    fn apply_reload(&mut self, reload: Reload, now: Instant) {
+        if let Some(language) = reload.language {
+            self.apply_language_reload(language, now);
+        }
+        if let Some(config) = reload.config {
+            self.apply_config_reload(config, now);
+        }
+    }
+
+    /// Troca ao vivo do idioma (ADR-0056 §9, RF-15.22/RF-15.23). `Replace`
+    /// põe o `Arc<Catalog>` novo no processo **e em toda janela** -- duas
+    /// janelas, um catálogo --, e a etiqueta da árvore de acessibilidade
+    /// acompanha. `Keep` deixa o catálogo em uso e só avisa o que falhou. Os
+    /// diagnósticos saem no idioma que **vale** depois da troca (o novo, ou o
+    /// anterior quando a troca falhou).
+    ///
+    /// O que muda é o que é lido a cada frame (barra, menus -- inclusive um
+    /// aberto --, status, busca, popovers, árvore de acessibilidade); o que
+    /// já foi composto por um evento fica: aviso empilhado, nota no grid e
+    /// diálogo aberto (título, corpo e botões copiados na abertura).
+    fn apply_language_reload(&mut self, reload: LanguageReload, now: Instant) {
+        let diagnostics = match reload {
+            LanguageReload::Replace {
+                catalog,
+                locale,
+                diagnostics,
+            } => {
+                self.catalog = catalog;
+                self.language_tag = language::language_tag(locale.as_ref());
+                for state in self.windows.values_mut() {
+                    state.catalog = Arc::clone(&self.catalog);
+                }
+                diagnostics
+            }
+            LanguageReload::Keep { diagnostics } => diagnostics,
+        };
+        for diagnostic in &diagnostics {
+            let (severity, title, body) = language::diagnostic_notice(diagnostic, &self.catalog);
+            for state in self.windows.values_mut() {
+                state
+                    .warnings
+                    .push(severity, title.clone(), body.clone(), now);
+            }
+        }
+        for state in self.windows.values() {
+            state.window.request_redraw();
+        }
+    }
+
     /// Aplica o resultado de uma recarga de config (F4 etapa 4,
     /// ADR-0030). Erro mantém a config anterior e só avisa (ADR-0003
     /// regra 2) -- sucesso troca o `Arc` inteiro (dono é o processo, não
@@ -7195,8 +7259,19 @@ impl App {
         let Some(path) = self.config_path.clone() else {
             return;
         };
-        if let Some(outcome) = reload::read_and_parse(&path) {
-            self.apply_config_reload(outcome, now);
+        let config = reload::read_and_parse(&path);
+        // O `config.reload` manual também refaz o catálogo: é o recurso de
+        // quando o watcher não disparou, e isso vale para `locales/` tanto
+        // quanto para a config. Roda na main thread porque foi o usuário que
+        // pediu -- são dois arquivos pequenos.
+        let requested =
+            reload::language_to_rebuild(&self.config.general.language, config.as_ref(), true);
+        let language = requested.map(|requested| {
+            let outcome = language::load_catalog(&requested, self.config_path.as_deref());
+            reload::settle_language(outcome, &requested, messages::schema().len())
+        });
+        if config.is_some() || language.is_some() {
+            self.apply_reload(Reload { config, language }, now);
         }
     }
 
@@ -7334,8 +7409,8 @@ impl ApplicationHandler<Wakeup> for App {
                 self.mark_first_pty_output();
                 (window, tab, pane)
             }
-            Wakeup::ConfigReloaded(outcome) => {
-                self.apply_config_reload(*outcome, Instant::now());
+            Wakeup::ConfigReloaded(reload) => {
+                self.apply_reload(*reload, Instant::now());
                 return;
             }
             Wakeup::AccessKit(evt) => {
@@ -7740,10 +7815,11 @@ impl App {
         let home = self.startup_directory.as_deref();
         let git_remotes = &self.git_remotes;
         let catalog = &self.catalog;
+        let language = &self.language_tag;
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        state.refresh_access_tree(style, home, measurer, git_remotes, catalog);
+        state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
     }
 
     /// PRD-000/etapa 6 da F6: primeiro `Wakeup::TabDirty` do processo é a

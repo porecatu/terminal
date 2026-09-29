@@ -12,7 +12,9 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use porecatu_locale::{Catalog, CatalogOutcome, Diagnostic, NO_CATALOG_MESSAGE, build_catalog};
+use porecatu_locale::{
+    Catalog, CatalogOutcome, Diagnostic, LocaleName, NO_CATALOG_MESSAGE, build_catalog,
+};
 
 use crate::keymap::Platform;
 use crate::messages::{msg, schema};
@@ -106,6 +108,14 @@ pub(crate) fn load_catalog(language: &str, config_path: Option<&Path>) -> Catalo
         user_dir(config_path).as_deref(),
         &schema(),
     )
+}
+
+/// Etiqueta BCP 47 do idioma **efetivamente carregado** (ADR-0056 §11), para
+/// a raiz da árvore de acessibilidade. Quando o pedido caiu na reserva, é a
+/// da reserva (`en-US`), não a do que foi pedido; sem catálogo nenhum, também
+/// -- a única frase que resta é em inglês.
+pub(crate) fn language_tag(locale: Option<&LocaleName>) -> String {
+    locale.map_or_else(|| LocaleName::fallback().bcp47(), LocaleName::bcp47)
 }
 
 /// A frase fixa do ADR-0056 §8, com os diretórios procurados. É a única
@@ -283,6 +293,15 @@ mod tests {
             Some(PathBuf::from("/home/ana/.config/porecatu/locales"))
         );
         assert_eq!(user_dir(None), None);
+    }
+
+    #[test]
+    fn the_language_tag_is_the_bcp47_form_of_the_loaded_locale() {
+        let pt = LocaleName::parse("pt_BR").unwrap();
+        assert_eq!(language_tag(Some(&pt)), "pt-BR");
+        assert_eq!(language_tag(Some(&LocaleName::fallback())), "en-US");
+        // Sem nenhum arquivo, sobra a frase em inglês.
+        assert_eq!(language_tag(None), "en-US");
     }
 
     fn notice(diagnostic: &Diagnostic, catalog: &Catalog) -> (Severity, String, String) {
