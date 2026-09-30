@@ -10278,6 +10278,21 @@ impl App {
         // abas, já que os dois formam o "quadro" do app.
         state.window_surface.render(gpu, pal.bar_background, &frame);
 
+        // ADR-0022: enquanto há reflui em curso o próximo quadro sai daqui,
+        // não só do `WaitUntil` de `schedule_next_wake`. O prazo dele é
+        // recalculado como `agora + intervalo` a cada volta do event loop,
+        // então qualquer fluxo de eventos mais rápido que o intervalo (saída
+        // de PTY de outra aba, por exemplo) o empurra adiante sem nunca
+        // deixá-lo vencer, e o colapso/expansão do grupo ficava parado até o
+        // mouse mover. Encadear o redraw não depende de temporizador; o
+        // quadro que remove o último reflui ainda pede mais um, que é o
+        // final. Sem animação pendente, nada é pedido (ADR-0007).
+        let was_animating = !state.animations.is_empty();
+        state.animations.tick(Instant::now());
+        if was_animating {
+            state.window.request_redraw();
+        }
+
         // PRD-000/etapa 6 da F6: os três trechos que fecham aqui, no
         // primeiro `redraw` depois de cada armadilha -- nenhum consulta
         // `trace::enabled()` mais de uma vez por trecho, e nenhum sobrevive
