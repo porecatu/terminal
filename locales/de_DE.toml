@@ -1,0 +1,300 @@
+# de_DE.toml -- textos da interface do Porecatu em alemão da Alemanha.
+#
+# O formato está descrito em pt_BR.toml. Uma frase que falta aqui cai em
+# en_US (ADR-0056, PRD-015). Para mudar uma frase sem mexer neste arquivo,
+# crie `locales/de_DE.toml` ao lado do seu `porecatu.toml`.
+#
+# Terminologia: "Tab" (em pt_BR, "aba"), "Bereich" para painel dividido.
+
+[tab_menu]
+new = "Neuer Tab"
+close = "Tab schließen"
+move_to_group = "In Gruppe verschieben"
+
+[terminal_menu]
+copy = "Kopieren"
+paste = "Einfügen"
+select_all = "Alles auswählen"
+search = "Suchen"
+open_link = "Link öffnen"
+copy_link = "Link kopieren"
+
+[group_menu]
+rename = "Umbenennen"
+set_color = "Farbe ändern"
+collapse = "Gruppe einklappen"
+expand = "Gruppe ausklappen"
+new_tab = "Neuer Tab in der Gruppe"
+close = { one = "Gruppe schließen ({count} Tab)", other = "Gruppe schließen ({count} Tabs)" }
+dissolve = "Gruppierung aufheben"
+
+[group_editor]
+section_group = "GRUPPE"
+section_color = "FARBE"
+default_name = "Neue Gruppe"
+
+[move_to_group]
+new_group = "Neue Gruppe"
+
+[session_picker]
+save_item = "Dieses Fenster speichern…"
+empty_list = "keine gespeicherten Sitzungen"
+name_placeholder = "Sitzungsname"
+
+[search_bar]
+invalid_pattern = "ungültiges Muster"
+no_results = "keine Treffer"
+alt_screen_counter = "{counter} (alternativer Bildschirm)"
+
+[status_bar]
+pane_count = { one = "{count} Bereich", other = "{count} Bereiche" }
+commits_behind = { one = "{count} Commit zurück", other = "{count} Commits zurück" }
+behind_ahead = "{behind} zurück, {ahead} voraus"
+
+[color]
+red = "Rot"
+yellow = "Gelb"
+cyan = "Cyan"
+blue = "Blau"
+purple = "Violett"
+green = "Grün"
+
+[dialog]
+cancel = "Abbrechen"
+
+[dialog.close_tab]
+title = "Tab schließen?"
+body = "In «{title}» läuft ein Programm im Vordergrund. Trotzdem schließen?"
+confirm = "Tab schließen"
+
+[dialog.close_pane]
+title = "Bereich schließen?"
+body = "In «{title}» läuft ein Programm im Vordergrund. Trotzdem schließen?"
+confirm = "Bereich schließen"
+
+[dialog.close_window]
+title = "Fenster schließen?"
+body_tabs = "In diesem Fenster ist mehr als ein Tab geöffnet."
+body_program = "In diesem Fenster läuft ein Programm im Vordergrund."
+confirm = "Fenster schließen"
+
+[dialog.close_group]
+title = "Gruppe schließen?"
+body = { one = "Dadurch wird {count} Tab geschlossen.", other = "Dadurch werden {count} Tabs geschlossen." }
+confirm = { one = "Gruppe schließen ({count} Tab)", other = "Gruppe schließen ({count} Tabs)" }
+
+[dialog.delete_session]
+title = "Gespeicherte Sitzung löschen?"
+body = "Dadurch wird «{name}» endgültig entfernt."
+confirm = "Löschen"
+
+[dialog.overwrite_session]
+title = "Sitzung «{name}» überschreiben?"
+body = "Die unter diesem Namen gespeicherte Sitzung wird ersetzt."
+confirm = "Überschreiben"
+
+[note]
+process_exited = "Prozess beendet (Code {code})"
+cwd_missing = "Verzeichnis \"{path}\" existiert nicht mehr, Tab im Home-Verzeichnis geöffnet"
+project_file_untrusted = "{name} in {dir} gefunden, aber dieses Verzeichnis ist nicht vertrauenswürdig.\nUm ihm zu vertrauen, füge in porecatu.toml hinzu:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
+project_file_unreadable = "\"{path}\" konnte nicht gelesen werden: {reason}"
+
+[note.shell_invite]
+text = "Dieses Terminal hat noch keine Shell-Integration (OSC 7). {consequence}\n\n{body}\n\nMarkiere das Snippet oben mit der Maus, um es wie gewohnt zu kopieren.\n\nUm diesen Hinweis nicht mehr zu sehen, tippe \"{marker}\" und drücke die Eingabetaste (die Shell meldet vermutlich, dass der Befehl nicht existiert -- das ist in Ordnung, es ist nur das Signal zum Ausblenden)."
+consequence_windows = "Ohne sie wird das Verzeichnis dieses Tabs beim erneuten Öffnen von Porecatu nicht wiederhergestellt."
+consequence_other = "Ohne sie ist die Wiederherstellung des Verzeichnisses dieses Tabs ungenauer (es wird ein aufwendigerer Weg genutzt, um den Aufenthaltsort zu ermitteln)."
+body_snippet = "Füge Folgendes in die Konfiguration deiner Shell ein:\n\n{snippet}"
+body_cmd = "cmd.exe kann dieses Signal nicht zuverlässig senden -- verwende PowerShell, wenn dir die Wiederherstellung des Verzeichnisses wichtig ist."
+body_generic = "Shell nicht erkannt, daher gibt es kein fertiges Snippet. OSC 7 ist die Sequenz, die die Shell bei jedem Verzeichniswechsel sendet -- siehe docs/reference/integracao-de-shell.md im Porecatu-Repository, um deine einzurichten."
+
+[access]
+new_tab_ungrouped = "Neuer Tab außerhalb einer Gruppe"
+new_tab_in_group = "Neuer Tab in dieser Gruppe"
+sessions_button = "Gespeicherte Sitzungen"
+settings_button = "Einstellungen"
+window_minimize = "Minimieren"
+window_maximize = "Maximieren oder wiederherstellen"
+window_close = "Fenster schließen"
+tab_close = "Tab schließen"
+regex_toggle = "Regulärer Ausdruck"
+group_editor = "Gruppeneditor"
+unnamed_group = "Gruppe"
+tabs_hidden_left = { one = "{count} Tab links ausgeblendet", other = "{count} Tabs links ausgeblendet" }
+tabs_hidden_right = { one = "{count} Tab rechts ausgeblendet", other = "{count} Tabs rechts ausgeblendet" }
+group = "Gruppe {name}"
+group_collapsed = "Gruppe {name}, eingeklappt"
+group_colored = "Gruppe {name}, Farbe {color}"
+group_collapsed_colored = "Gruppe {name}, eingeklappt, Farbe {color}"
+tab_state = " ({state})"
+state_active = "aktiv"
+state_not_started = "nicht gestartet"
+state_bell = "Glocke"
+state_activity = "Aktivität"
+pane_focused = "{title} (fokussiert)"
+cwd_stale = "Ursprungsverzeichnis; die Shell meldet das aktuelle nicht"
+ahead_behind_clickable = "klicken, um die Commits des Remotes per Fast-Forward zu integrieren"
+ahead_behind_blocked = "lokale Commits voraus verhindern die automatische Integration"
+segment_shell = "Shell"
+segment_cwd = "Verzeichnis"
+segment_branch = "Branch"
+segment_ahead_behind = "Commits hinter/vor dem Remote"
+segment_group = "Gruppe"
+segment_pane_count = "Anzahl der Bereiche"
+segment_encoding = "Kodierung"
+segment_system = "System"
+severity_error = "Fehler"
+severity_warning = "Warnung"
+severity_info = "Information"
+warning = "{severity}: {title}: {body}"
+
+[notice.config_invalid]
+title = "Ungültige Konfiguration"
+body_at = "Zeile {line}, Spalte {column}: {detail}"
+body = "{detail}"
+unreadable = "\"{path}\" konnte nicht gelesen werden: {cause}"
+duplicate_theme = "doppelter Themenname: \"{name}\""
+
+[notice.unknown_config_key]
+title = "Unbekannter Schlüssel in der Konfiguration"
+
+[notice.unknown_theme]
+title = "Unbekanntes Thema"
+body = "\"{name}\" steht nicht in [[themes]]; Standardwerte werden verwendet."
+
+[notice.color_overridden]
+title = "Farbe überschreibt das Thema"
+
+[notice.theme_vanished]
+title = "Thema der Sitzung nicht mehr vorhanden"
+body_reload = "\"{name}\" existiert in der Datei nicht mehr; Rückkehr zum deklarierten Thema."
+body_start = "\"{name}\" existiert in der Datei nicht mehr; das deklarierte Thema wird verwendet."
+
+[notice.keybinding_invalid]
+title = "Ungültige Tastenbelegung"
+join_and = " und "
+empty_key = "leere Taste: \"{text}\""
+unknown_modifier = "unbekannter Modifikator: \"{modifier}\" in \"{text}\""
+unknown_key = "unbekannte Taste: \"{key}\" in \"{text}\""
+duplicate = "doppelte Belegung: {keys} ergeben dieselbe Taste"
+action_unknown = "\"{key}\": unbekannte Aktion: \"{input}\" -- meintest du \"{suggestion}\"?"
+action_not_bindable = "\"{key}\": \"{input}\" erwartet ein Argument und kann nicht an eine Taste gebunden werden"
+
+[notice.deferred]
+title = "Jetzt nicht angewendet"
+next_window = "{key}: gilt ab dem nächsten Fenster"
+new_tab = "{key}: gilt in einem neuen Tab"
+restart = "{key}: App neu starten"
+
+[notice.config_path_unresolved]
+title = "Keine Konfigurationsdatei"
+body = "Auf dieser Plattform konnte kein Konfigurationspfad ermittelt werden."
+
+[notice.config_create_failed]
+title = "Konfiguration konnte nicht erstellt werden"
+
+[notice.config_open_failed]
+title = "Konfiguration konnte nicht geöffnet werden"
+
+[notice.link_open_failed]
+title = "Link konnte nicht geöffnet werden"
+
+[notice.link_reveal_failed]
+title = "Datei konnte nicht angezeigt werden"
+body = "URI kopiert: {uri}"
+
+[notice.link_refused]
+title = "Schema abgelehnt"
+body = "`{scheme}` wird nicht geöffnet -- URI kopiert"
+
+[notice.spawn_failed]
+title = "Terminal konnte nicht gestartet werden"
+body = "Terminal: pty: {operation}: {cause}"
+
+[notice.pane_too_small]
+title = "Bereich passt nicht"
+body = "Durch das Teilen würde ein Bereich kleiner als {columns}×{rows} Zellen."
+
+[notice.session_corrupt]
+title = "Vorherige Sitzung beschädigt"
+body = "Die Datei wurde unter \"{path}\" aufbewahrt. Eine neue Sitzung wurde gestartet."
+
+[notice.session_newer]
+title = "Sitzung einer neueren Version"
+body = "Das gespeicherte Format (Version {found}) ist neuer als das, was diese Version von Porecatu unterstützt (bis {supported}). Eine neue Sitzung wurde gestartet."
+
+[notice.named_session_corrupt]
+title = "Benannte Sitzung beschädigt"
+body = "Die Datei wurde unter \"{path}\" aufbewahrt."
+
+[notice.named_session_newer]
+title = "Benannte Sitzung einer neueren Version"
+body = "Das gespeicherte Format (Version {found}) ist neuer als das, was diese Version von Porecatu unterstützt (bis {supported})."
+
+[notice.named_session_unreadable]
+title = "Sitzung konnte nicht wiederhergestellt werden"
+body = "Die Datei konnte nicht gelesen werden."
+
+[notice.overwrite_blocked]
+title = "Überschreiben nicht möglich"
+body = "«{name}» wurde von einer neueren Version von Porecatu gespeichert."
+
+[notice.save_failed]
+title = "Sitzung konnte nicht gespeichert werden"
+window_not_found = "Fenster nicht gefunden"
+io = "E/A-Fehler beim Schreiben der benannten Sitzung: {cause}"
+newer_schema = "vorhandene Datei hat schema_version {found}, neuer als {supported}; nicht überschrieben"
+empty_name = "Sitzungsname ist nach dem Kürzen leer"
+
+[notice.delete_failed]
+title = "Sitzung konnte nicht gelöscht werden"
+
+[notice.software_rendering]
+title = "Keine GPU-Beschleunigung"
+body = "Kein Adapter mit Hardwarebeschleunigung gefunden; Darstellung per Software (langsamer)."
+
+[notice.font_not_found]
+title = "Schriftfamilie nicht gefunden"
+body = "\"{family}\" ist nicht installiert; eine Monospace-Schrift des Systems wird verwendet."
+
+[notice.git_interval_adjusted]
+title = "Synchronisierungsintervall angepasst"
+body = "\"{key}\" liegt unter dem Minimum von {floor}s; {floor}s werden verwendet."
+
+[notice.git_missing]
+title = "Git nicht gefunden"
+body = "Remote-Synchronisierung für diesen Lauf ausgeschaltet: Die App konnte die ausführbare Datei \"git\" nicht finden."
+
+[notice.git_integration_ok]
+title = "Integration abgeschlossen"
+body = "Der Branch ist auf dem Stand des Remotes."
+
+[notice.git_integration_failed]
+title = "Integration mit dem Remote fehlgeschlagen"
+missing = "git wurde auf dem System nicht gefunden."
+timed_out = "git hat nicht rechtzeitig geantwortet."
+no_detail = "git hat die Integration ohne Begründung abgelehnt."
+
+[notice.language_not_found]
+title = "Sprache nicht gefunden"
+body = "Keine Datei für \"{language}\" (gesucht in: {searched})."
+
+[notice.language_invalid_name]
+title = "Ungültiger Sprachname"
+body = "\"{value}\" ist kein gültiger Sprachname (Beispiel: pt_BR)."
+
+[notice.language_syntax]
+title = "Fehler in der Sprachdatei"
+body = "{path}: {detail}"
+body_at = "{path}, Zeile {line}, Spalte {column}: {detail}"
+
+[notice.language_unreadable]
+title = "Sprachdatei nicht lesbar"
+body = "\"{path}\" konnte nicht gelesen werden: {cause}"
+
+[notice.language_missing_messages]
+title = "Nicht übersetzte Texte"
+body = { one = "{count} Text ohne Übersetzung in {locale}", other = "{count} Texte ohne Übersetzung in {locale}" }
+
+[notice.language_unknown_keys]
+title = "Unbekannte Schlüssel in der Sprachdatei"
+body = { one = "{count} unbekannter Schlüssel in {path}", other = "{count} unbekannte Schlüssel in {path}" }

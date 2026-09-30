@@ -152,6 +152,18 @@
                                 <File Id='LocalePtBrFile' Name='pt_BR.toml' DiskId='1'
                                     Source='locales\pt_BR.toml' KeyPath='yes'/>
                             </Component>
+                            <Component Id='LocaleFrFr' Guid='*'>
+                                <File Id='LocaleFrFrFile' Name='fr_FR.toml' DiskId='1'
+                                    Source='locales\fr_FR.toml' KeyPath='yes'/>
+                            </Component>
+                            <Component Id='LocaleEsEs' Guid='*'>
+                                <File Id='LocaleEsEsFile' Name='es_ES.toml' DiskId='1'
+                                    Source='locales\es_ES.toml' KeyPath='yes'/>
+                            </Component>
+                            <Component Id='LocaleDeDe' Guid='*'>
+                                <File Id='LocaleDeDeFile' Name='de_DE.toml' DiskId='1'
+                                    Source='locales\de_DE.toml' KeyPath='yes'/>
+                            </Component>
                         </Directory>
                     </Directory>
                 </Directory>
@@ -179,6 +191,9 @@
             <!-- ADR-0057: arquivos de idioma em bin\locales\. -->
             <ComponentRef Id='LocaleEnUs'/>
             <ComponentRef Id='LocalePtBr'/>
+            <ComponentRef Id='LocaleFrFr'/>
+            <ComponentRef Id='LocaleEsEs'/>
+            <ComponentRef Id='LocaleDeDe'/>
 
             <Feature
                 Id='Environment'

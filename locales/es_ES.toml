@@ -1,0 +1,300 @@
+# es_ES.toml -- textos da interface do Porecatu em espanhol da Espanha.
+#
+# O formato está descrito em pt_BR.toml. Uma frase que falta aqui cai em
+# en_US (ADR-0056, PRD-015). Para mudar uma frase sem mexer neste arquivo,
+# crie `locales/es_ES.toml` ao lado do seu `porecatu.toml`.
+#
+# Terminologia: "pestaña" (em pt_BR, "aba"), "panel" para painel dividido.
+
+[tab_menu]
+new = "Nueva pestaña"
+close = "Cerrar pestaña"
+move_to_group = "Mover al grupo"
+
+[terminal_menu]
+copy = "Copiar"
+paste = "Pegar"
+select_all = "Seleccionar todo"
+search = "Buscar"
+open_link = "Abrir enlace"
+copy_link = "Copiar enlace"
+
+[group_menu]
+rename = "Renombrar"
+set_color = "Cambiar color"
+collapse = "Contraer grupo"
+expand = "Expandir grupo"
+new_tab = "Nueva pestaña en el grupo"
+close = { one = "Cerrar grupo ({count} pestaña)", other = "Cerrar grupo ({count} pestañas)" }
+dissolve = "Desagrupar"
+
+[group_editor]
+section_group = "GRUPO"
+section_color = "COLOR"
+default_name = "Nuevo grupo"
+
+[move_to_group]
+new_group = "Nuevo grupo"
+
+[session_picker]
+save_item = "Guardar esta ventana…"
+empty_list = "no hay sesiones guardadas"
+name_placeholder = "nombre de la sesión"
+
+[search_bar]
+invalid_pattern = "patrón no válido"
+no_results = "sin resultados"
+alt_screen_counter = "{counter} (pantalla alternativa)"
+
+[status_bar]
+pane_count = { one = "{count} panel", other = "{count} paneles" }
+commits_behind = { one = "{count} commit por detrás", other = "{count} commits por detrás" }
+behind_ahead = "{behind} por detrás, {ahead} por delante"
+
+[color]
+red = "Rojo"
+yellow = "Amarillo"
+cyan = "Cian"
+blue = "Azul"
+purple = "Morado"
+green = "Verde"
+
+[dialog]
+cancel = "Cancelar"
+
+[dialog.close_tab]
+title = "¿Cerrar la pestaña?"
+body = "«{title}» tiene un programa ejecutándose en primer plano. ¿Cerrar de todos modos?"
+confirm = "Cerrar pestaña"
+
+[dialog.close_pane]
+title = "¿Cerrar el panel?"
+body = "«{title}» tiene un programa ejecutándose en primer plano. ¿Cerrar de todos modos?"
+confirm = "Cerrar panel"
+
+[dialog.close_window]
+title = "¿Cerrar la ventana?"
+body_tabs = "Esta ventana tiene más de una pestaña abierta."
+body_program = "Esta ventana tiene un programa ejecutándose en primer plano."
+confirm = "Cerrar ventana"
+
+[dialog.close_group]
+title = "¿Cerrar el grupo?"
+body = { one = "Esto cierra {count} pestaña.", other = "Esto cierra {count} pestañas." }
+confirm = { one = "Cerrar grupo ({count} pestaña)", other = "Cerrar grupo ({count} pestañas)" }
+
+[dialog.delete_session]
+title = "¿Eliminar la sesión guardada?"
+body = "Esto elimina de forma permanente «{name}»."
+confirm = "Eliminar"
+
+[dialog.overwrite_session]
+title = "¿Sobrescribir la sesión «{name}»?"
+body = "La sesión guardada con este nombre será reemplazada."
+confirm = "Sobrescribir"
+
+[note]
+process_exited = "proceso terminado (código {code})"
+cwd_missing = "el directorio \"{path}\" ya no existe, pestaña abierta en el directorio personal"
+project_file_untrusted = "{name} encontrado en {dir}, pero este directorio no es de confianza.\nPara confiar en él, añade a porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
+project_file_unreadable = "no se pudo leer \"{path}\": {reason}"
+
+[note.shell_invite]
+text = "Este terminal aún no tiene integración con el shell (OSC 7). {consequence}\n\n{body}\n\nSelecciona el fragmento de arriba con el ratón para copiarlo, como de costumbre.\n\nPara dejar de ver este aviso, escribe \"{marker}\" y pulsa Intro (el shell probablemente dirá que el comando no existe -- no pasa nada, es solo la señal de descarte)."
+consequence_windows = "Sin ella, el directorio de esta pestaña no se restaurará al volver a abrir Porecatu."
+consequence_other = "Sin ella, la restauración del directorio de esta pestaña es menos exacta (usa un método más costoso para saber dónde estás)."
+body_snippet = "Pega esto en la configuración de tu shell:\n\n{snippet}"
+body_cmd = "cmd.exe no tiene una forma fiable de emitir esta señal -- usa PowerShell si te importa restaurar el directorio."
+body_generic = "Shell no reconocido, así que no hay un fragmento listo que sugerir. OSC 7 es la secuencia que el shell emite en cada cambio de directorio -- consulta docs/reference/integracao-de-shell.md en el repositorio de Porecatu para configurar el tuyo."
+
+[access]
+new_tab_ungrouped = "Nueva pestaña fuera de un grupo"
+new_tab_in_group = "Nueva pestaña en este grupo"
+sessions_button = "Sesiones guardadas"
+settings_button = "Ajustes"
+window_minimize = "Minimizar"
+window_maximize = "Maximizar o restaurar"
+window_close = "Cerrar ventana"
+tab_close = "Cerrar pestaña"
+regex_toggle = "Expresión regular"
+group_editor = "Editor de grupo"
+unnamed_group = "Grupo"
+tabs_hidden_left = { one = "{count} pestaña oculta a la izquierda", other = "{count} pestañas ocultas a la izquierda" }
+tabs_hidden_right = { one = "{count} pestaña oculta a la derecha", other = "{count} pestañas ocultas a la derecha" }
+group = "Grupo {name}"
+group_collapsed = "Grupo {name}, contraído"
+group_colored = "Grupo {name}, color {color}"
+group_collapsed_colored = "Grupo {name}, contraído, color {color}"
+tab_state = " ({state})"
+state_active = "activa"
+state_not_started = "sin iniciar"
+state_bell = "campana"
+state_activity = "actividad"
+pane_focused = "{title} (con foco)"
+cwd_stale = "directorio de origen; el shell no informa del actual"
+ahead_behind_clickable = "haz clic para integrar los commits del remoto por avance rápido"
+ahead_behind_blocked = "los commits locales por delante impiden la integración automática"
+segment_shell = "shell"
+segment_cwd = "directorio"
+segment_branch = "rama"
+segment_ahead_behind = "commits por detrás/por delante del remoto"
+segment_group = "grupo"
+segment_pane_count = "número de paneles"
+segment_encoding = "codificación"
+segment_system = "sistema"
+severity_error = "Error"
+severity_warning = "Advertencia"
+severity_info = "Información"
+warning = "{severity}: {title}: {body}"
+
+[notice.config_invalid]
+title = "Configuración no válida"
+body_at = "línea {line}, columna {column}: {detail}"
+body = "{detail}"
+unreadable = "no se pudo leer \"{path}\": {cause}"
+duplicate_theme = "nombre de tema duplicado: \"{name}\""
+
+[notice.unknown_config_key]
+title = "Clave desconocida en la configuración"
+
+[notice.unknown_theme]
+title = "Tema desconocido"
+body = "\"{name}\" no está en [[themes]]; se usan los valores por defecto."
+
+[notice.color_overridden]
+title = "Color que sustituye al tema"
+
+[notice.theme_vanished]
+title = "El tema de la sesión ya no existe"
+body_reload = "\"{name}\" ya no existe en el archivo; se vuelve al tema declarado."
+body_start = "\"{name}\" ya no existe en el archivo; se usa el tema declarado."
+
+[notice.keybinding_invalid]
+title = "Atajo no válido"
+join_and = " y "
+empty_key = "tecla vacía: \"{text}\""
+unknown_modifier = "modificador desconocido: \"{modifier}\" en \"{text}\""
+unknown_key = "tecla desconocida: \"{key}\" en \"{text}\""
+duplicate = "atajo duplicado: {keys} se resuelven en la misma tecla"
+action_unknown = "\"{key}\": acción desconocida: \"{input}\" -- ¿quisiste decir \"{suggestion}\"?"
+action_not_bindable = "\"{key}\": \"{input}\" recibe un argumento y no se puede asignar a una tecla"
+
+[notice.deferred]
+title = "No se aplica ahora"
+next_window = "{key}: surte efecto en la próxima ventana"
+new_tab = "{key}: surte efecto en una pestaña nueva"
+restart = "{key}: reinicia la aplicación"
+
+[notice.config_path_unresolved]
+title = "Sin archivo de configuración"
+body = "No se pudo determinar una ruta de configuración en esta plataforma."
+
+[notice.config_create_failed]
+title = "No se pudo crear la configuración"
+
+[notice.config_open_failed]
+title = "No se pudo abrir la configuración"
+
+[notice.link_open_failed]
+title = "No se pudo abrir el enlace"
+
+[notice.link_reveal_failed]
+title = "No se pudo mostrar el archivo"
+body = "URI copiada: {uri}"
+
+[notice.link_refused]
+title = "Esquema rechazado"
+body = "`{scheme}` no se abre -- URI copiada"
+
+[notice.spawn_failed]
+title = "Error al iniciar el terminal"
+body = "terminal: pty: {operation}: {cause}"
+
+[notice.pane_too_small]
+title = "El panel no cabe"
+body = "Dividir dejaría un panel menor de {columns}×{rows} celdas."
+
+[notice.session_corrupt]
+title = "Sesión anterior dañada"
+body = "El archivo se conservó en \"{path}\". Se inició una sesión nueva."
+
+[notice.session_newer]
+title = "Sesión de una versión más reciente"
+body = "El formato guardado (versión {found}) es más reciente que el que admite esta versión de Porecatu (hasta {supported}). Se inició una sesión nueva."
+
+[notice.named_session_corrupt]
+title = "Sesión con nombre dañada"
+body = "El archivo se conservó en \"{path}\"."
+
+[notice.named_session_newer]
+title = "Sesión con nombre de una versión más reciente"
+body = "El formato guardado (versión {found}) es más reciente que el que admite esta versión de Porecatu (hasta {supported})."
+
+[notice.named_session_unreadable]
+title = "No se pudo restaurar la sesión"
+body = "No se pudo leer el archivo."
+
+[notice.overwrite_blocked]
+title = "No se puede sobrescribir"
+body = "«{name}» fue guardada por una versión más reciente de Porecatu."
+
+[notice.save_failed]
+title = "No se pudo guardar la sesión"
+window_not_found = "ventana no encontrada"
+io = "error de E/S al escribir la sesión con nombre: {cause}"
+newer_schema = "el archivo existente tiene schema_version {found}, más reciente que {supported}; no se sobrescribe"
+empty_name = "el nombre de la sesión está vacío tras recortar espacios"
+
+[notice.delete_failed]
+title = "No se pudo eliminar la sesión"
+
+[notice.software_rendering]
+title = "Sin aceleración por GPU"
+body = "No se encontró ningún adaptador con aceleración por hardware; se dibuja por software (más lento)."
+
+[notice.font_not_found]
+title = "Familia de fuente no encontrada"
+body = "\"{family}\" no está instalada; se usa una fuente monoespaciada del sistema."
+
+[notice.git_interval_adjusted]
+title = "Intervalo de sincronización ajustado"
+body = "\"{key}\" está por debajo del mínimo de {floor}s; se usan {floor}s."
+
+[notice.git_missing]
+title = "Git no encontrado"
+body = "Sincronización remota desactivada en esta ejecución: la aplicación no encontró el ejecutable \"git\"."
+
+[notice.git_integration_ok]
+title = "Integración completada"
+body = "La rama está al día con el remoto."
+
+[notice.git_integration_failed]
+title = "Error al integrar con el remoto"
+missing = "git no se encontró en el sistema."
+timed_out = "git no respondió a tiempo."
+no_detail = "git rechazó la integración sin dar motivo."
+
+[notice.language_not_found]
+title = "Idioma no encontrado"
+body = "No hay archivo para \"{language}\" (buscado en: {searched})."
+
+[notice.language_invalid_name]
+title = "Nombre de idioma no válido"
+body = "\"{value}\" no es un nombre de idioma válido (ejemplo: pt_BR)."
+
+[notice.language_syntax]
+title = "Error en el archivo de idioma"
+body = "{path}: {detail}"
+body_at = "{path}, línea {line}, columna {column}: {detail}"
+
+[notice.language_unreadable]
+title = "Archivo de idioma ilegible"
+body = "No se pudo leer \"{path}\": {cause}"
+
+[notice.language_missing_messages]
+title = "Textos sin traducir"
+body = { one = "{count} texto sin traducción en {locale}", other = "{count} textos sin traducción en {locale}" }
+
+[notice.language_unknown_keys]
+title = "Claves desconocidas en el archivo de idioma"
+body = { one = "{count} clave desconocida en {path}", other = "{count} claves desconocidas en {path}" }

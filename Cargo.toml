@@ -74,6 +74,9 @@ assets = [
     # idioma (o passo do .deb no release.yml reprova se faltar um).
     ["locales/en_US.toml", "usr/share/porecatu/locales/", "644"],
     ["locales/pt_BR.toml", "usr/share/porecatu/locales/", "644"],
+    ["locales/fr_FR.toml", "usr/share/porecatu/locales/", "644"],
+    ["locales/es_ES.toml", "usr/share/porecatu/locales/", "644"],
+    ["locales/de_DE.toml", "usr/share/porecatu/locales/", "644"],
 ]
 
 [dependencies]

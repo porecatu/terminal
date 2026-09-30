@@ -1,0 +1,300 @@
+# fr_FR.toml -- textos da interface do Porecatu em francês da França.
+#
+# O formato está descrito em pt_BR.toml. Uma frase que falta aqui cai em
+# en_US (ADR-0056, PRD-015). Para mudar uma frase sem mexer neste arquivo,
+# crie `locales/fr_FR.toml` ao lado do seu `porecatu.toml`.
+#
+# Terminologia: "onglet" (em pt_BR, "aba"), "volet" para painel dividido.
+
+[tab_menu]
+new = "Nouvel onglet"
+close = "Fermer l'onglet"
+move_to_group = "Déplacer vers le groupe"
+
+[terminal_menu]
+copy = "Copier"
+paste = "Coller"
+select_all = "Tout sélectionner"
+search = "Rechercher"
+open_link = "Ouvrir le lien"
+copy_link = "Copier le lien"
+
+[group_menu]
+rename = "Renommer"
+set_color = "Changer la couleur"
+collapse = "Réduire le groupe"
+expand = "Développer le groupe"
+new_tab = "Nouvel onglet dans le groupe"
+close = { one = "Fermer le groupe ({count} onglet)", other = "Fermer le groupe ({count} onglets)" }
+dissolve = "Dissocier"
+
+[group_editor]
+section_group = "GROUPE"
+section_color = "COULEUR"
+default_name = "Nouveau groupe"
+
+[move_to_group]
+new_group = "Nouveau groupe"
+
+[session_picker]
+save_item = "Enregistrer cette fenêtre…"
+empty_list = "aucune session enregistrée"
+name_placeholder = "nom de la session"
+
+[search_bar]
+invalid_pattern = "motif invalide"
+no_results = "aucun résultat"
+alt_screen_counter = "{counter} (écran alternatif)"
+
+[status_bar]
+pane_count = { one = "{count} volet", other = "{count} volets" }
+commits_behind = { one = "{count} commit de retard", other = "{count} commits de retard" }
+behind_ahead = "{behind} de retard, {ahead} d'avance"
+
+[color]
+red = "Rouge"
+yellow = "Jaune"
+cyan = "Cyan"
+blue = "Bleu"
+purple = "Violet"
+green = "Vert"
+
+[dialog]
+cancel = "Annuler"
+
+[dialog.close_tab]
+title = "Fermer l'onglet ?"
+body = "« {title} » exécute un programme au premier plan. Fermer quand même ?"
+confirm = "Fermer l'onglet"
+
+[dialog.close_pane]
+title = "Fermer le volet ?"
+body = "« {title} » exécute un programme au premier plan. Fermer quand même ?"
+confirm = "Fermer le volet"
+
+[dialog.close_window]
+title = "Fermer la fenêtre ?"
+body_tabs = "Cette fenêtre contient plusieurs onglets ouverts."
+body_program = "Cette fenêtre exécute un programme au premier plan."
+confirm = "Fermer la fenêtre"
+
+[dialog.close_group]
+title = "Fermer le groupe ?"
+body = { one = "Cela ferme {count} onglet.", other = "Cela ferme {count} onglets." }
+confirm = { one = "Fermer le groupe ({count} onglet)", other = "Fermer le groupe ({count} onglets)" }
+
+[dialog.delete_session]
+title = "Supprimer la session enregistrée ?"
+body = "Cela supprime définitivement «{name}»."
+confirm = "Supprimer"
+
+[dialog.overwrite_session]
+title = "Écraser la session «{name}» ?"
+body = "La session enregistrée sous ce nom sera remplacée."
+confirm = "Écraser"
+
+[note]
+process_exited = "processus terminé (code {code})"
+cwd_missing = "le répertoire \"{path}\" n'existe plus, onglet ouvert dans le répertoire personnel"
+project_file_untrusted = "{name} trouvé dans {dir}, mais ce répertoire n'est pas approuvé.\nPour l'approuver, ajoutez à porecatu.toml :\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
+project_file_unreadable = "impossible de lire \"{path}\" : {reason}"
+
+[note.shell_invite]
+text = "Ce terminal n'a pas encore l'intégration du shell (OSC 7). {consequence}\n\n{body}\n\nSélectionnez l'extrait ci-dessus à la souris pour le copier, comme d'habitude.\n\nPour ne plus voir cet avis, tapez \"{marker}\" puis Entrée (le shell dira probablement que la commande n'existe pas -- c'est normal, ce n'est que le signal de rejet)."
+consequence_windows = "Sans elle, le répertoire de cet onglet ne sera pas restauré à la réouverture de Porecatu."
+consequence_other = "Sans elle, la restauration du répertoire de cet onglet est moins précise (elle utilise un moyen plus coûteux pour savoir où vous êtes)."
+body_snippet = "Collez ceci dans la configuration de votre shell :\n\n{snippet}"
+body_cmd = "cmd.exe n'a aucun moyen fiable d'émettre ce signal -- utilisez PowerShell si la restauration du répertoire compte pour vous."
+body_generic = "Shell non reconnu, donc aucun extrait prêt à proposer. OSC 7 est la séquence que le shell émet à chaque changement de répertoire -- consultez docs/reference/integracao-de-shell.md dans le dépôt de Porecatu pour configurer le vôtre."
+
+[access]
+new_tab_ungrouped = "Nouvel onglet hors d'un groupe"
+new_tab_in_group = "Nouvel onglet dans ce groupe"
+sessions_button = "Sessions enregistrées"
+settings_button = "Paramètres"
+window_minimize = "Réduire"
+window_maximize = "Agrandir ou restaurer"
+window_close = "Fermer la fenêtre"
+tab_close = "Fermer l'onglet"
+regex_toggle = "Expression régulière"
+group_editor = "Éditeur de groupe"
+unnamed_group = "Groupe"
+tabs_hidden_left = { one = "{count} onglet masqué à gauche", other = "{count} onglets masqués à gauche" }
+tabs_hidden_right = { one = "{count} onglet masqué à droite", other = "{count} onglets masqués à droite" }
+group = "Groupe {name}"
+group_collapsed = "Groupe {name}, réduit"
+group_colored = "Groupe {name}, couleur {color}"
+group_collapsed_colored = "Groupe {name}, réduit, couleur {color}"
+tab_state = " ({state})"
+state_active = "actif"
+state_not_started = "non démarré"
+state_bell = "cloche"
+state_activity = "activité"
+pane_focused = "{title} (actif)"
+cwd_stale = "répertoire d'origine ; le shell ne signale pas le répertoire courant"
+ahead_behind_clickable = "cliquez pour intégrer les commits du dépôt distant par avance rapide"
+ahead_behind_blocked = "des commits locaux en avance empêchent l'intégration automatique"
+segment_shell = "shell"
+segment_cwd = "répertoire"
+segment_branch = "branche"
+segment_ahead_behind = "commits de retard/d'avance sur le dépôt distant"
+segment_group = "groupe"
+segment_pane_count = "nombre de volets"
+segment_encoding = "encodage"
+segment_system = "système"
+severity_error = "Erreur"
+severity_warning = "Avertissement"
+severity_info = "Information"
+warning = "{severity} : {title} : {body}"
+
+[notice.config_invalid]
+title = "Configuration invalide"
+body_at = "ligne {line}, colonne {column} : {detail}"
+body = "{detail}"
+unreadable = "impossible de lire \"{path}\" : {cause}"
+duplicate_theme = "nom de thème en double : \"{name}\""
+
+[notice.unknown_config_key]
+title = "Clé inconnue dans la configuration"
+
+[notice.unknown_theme]
+title = "Thème inconnu"
+body = "\"{name}\" n'est pas dans [[themes]] ; valeurs par défaut utilisées."
+
+[notice.color_overridden]
+title = "Couleur qui remplace le thème"
+
+[notice.theme_vanished]
+title = "Le thème de la session a disparu"
+body_reload = "\"{name}\" n'existe plus dans le fichier ; retour au thème déclaré."
+body_start = "\"{name}\" n'existe plus dans le fichier ; thème déclaré utilisé."
+
+[notice.keybinding_invalid]
+title = "Raccourci invalide"
+join_and = " et "
+empty_key = "touche vide : \"{text}\""
+unknown_modifier = "modificateur inconnu : \"{modifier}\" dans \"{text}\""
+unknown_key = "touche inconnue : \"{key}\" dans \"{text}\""
+duplicate = "raccourci en double : {keys} correspondent à la même touche"
+action_unknown = "\"{key}\" : action inconnue : \"{input}\" -- vouliez-vous dire \"{suggestion}\" ?"
+action_not_bindable = "\"{key}\" : \"{input}\" prend un argument et ne peut pas être associée à une touche"
+
+[notice.deferred]
+title = "Non appliqué maintenant"
+next_window = "{key} : prend effet dans la prochaine fenêtre"
+new_tab = "{key} : prend effet dans un nouvel onglet"
+restart = "{key} : redémarrez l'application"
+
+[notice.config_path_unresolved]
+title = "Aucun fichier de configuration"
+body = "Impossible de déterminer un chemin de configuration sur cette plateforme."
+
+[notice.config_create_failed]
+title = "Impossible de créer la configuration"
+
+[notice.config_open_failed]
+title = "Impossible d'ouvrir la configuration"
+
+[notice.link_open_failed]
+title = "Impossible d'ouvrir le lien"
+
+[notice.link_reveal_failed]
+title = "Impossible d'afficher le fichier"
+body = "URI copiée : {uri}"
+
+[notice.link_refused]
+title = "Schéma refusé"
+body = "`{scheme}` ne s'ouvre pas -- URI copiée"
+
+[notice.spawn_failed]
+title = "Échec du démarrage du terminal"
+body = "terminal : pty : {operation} : {cause}"
+
+[notice.pane_too_small]
+title = "Le volet ne tient pas"
+body = "La division laisserait un volet plus petit que {columns}×{rows} cellules."
+
+[notice.session_corrupt]
+title = "Session précédente corrompue"
+body = "Le fichier a été conservé dans \"{path}\". Une nouvelle session a été démarrée."
+
+[notice.session_newer]
+title = "Session d'une version plus récente"
+body = "Le format enregistré (version {found}) est plus récent que celui pris en charge par cette version de Porecatu (jusqu'à {supported}). Une nouvelle session a été démarrée."
+
+[notice.named_session_corrupt]
+title = "Session nommée corrompue"
+body = "Le fichier a été conservé dans \"{path}\"."
+
+[notice.named_session_newer]
+title = "Session nommée d'une version plus récente"
+body = "Le format enregistré (version {found}) est plus récent que celui pris en charge par cette version de Porecatu (jusqu'à {supported})."
+
+[notice.named_session_unreadable]
+title = "Impossible de restaurer la session"
+body = "Le fichier n'a pas pu être lu."
+
+[notice.overwrite_blocked]
+title = "Écrasement impossible"
+body = "«{name}» a été enregistrée par une version plus récente de Porecatu."
+
+[notice.save_failed]
+title = "Impossible d'enregistrer la session"
+window_not_found = "fenêtre introuvable"
+io = "erreur d'E/S lors de l'écriture de la session nommée : {cause}"
+newer_schema = "le fichier existant a schema_version {found}, plus récent que {supported} ; non écrasé"
+empty_name = "le nom de la session est vide après suppression des espaces"
+
+[notice.delete_failed]
+title = "Impossible de supprimer la session"
+
+[notice.software_rendering]
+title = "Pas d'accélération GPU"
+body = "Aucun adaptateur avec accélération matérielle trouvé ; dessin logiciel (plus lent)."
+
+[notice.font_not_found]
+title = "Famille de police introuvable"
+body = "\"{family}\" n'est pas installée ; police à chasse fixe du système utilisée."
+
+[notice.git_interval_adjusted]
+title = "Intervalle de synchronisation ajusté"
+body = "\"{key}\" est inférieur au plancher de {floor}s ; {floor}s utilisées."
+
+[notice.git_missing]
+title = "Git introuvable"
+body = "Synchronisation distante désactivée pour cette exécution : l'application n'a pas trouvé l'exécutable \"git\"."
+
+[notice.git_integration_ok]
+title = "Intégration terminée"
+body = "La branche est à jour avec le dépôt distant."
+
+[notice.git_integration_failed]
+title = "Échec de l'intégration avec le dépôt distant"
+missing = "git est introuvable sur le système."
+timed_out = "git n'a pas répondu à temps."
+no_detail = "git a refusé l'intégration sans donner de raison."
+
+[notice.language_not_found]
+title = "Langue introuvable"
+body = "Aucun fichier pour \"{language}\" (recherché : {searched})."
+
+[notice.language_invalid_name]
+title = "Nom de langue invalide"
+body = "\"{value}\" n'est pas un nom de langue valide (exemple : pt_BR)."
+
+[notice.language_syntax]
+title = "Erreur dans le fichier de langue"
+body = "{path} : {detail}"
+body_at = "{path}, ligne {line}, colonne {column} : {detail}"
+
+[notice.language_unreadable]
+title = "Fichier de langue illisible"
+body = "Impossible de lire \"{path}\" : {cause}"
+
+[notice.language_missing_messages]
+title = "Textes non traduits"
+body = { one = "{count} texte sans traduction en {locale}", other = "{count} textes sans traduction en {locale}" }
+
+[notice.language_unknown_keys]
+title = "Clés inconnues dans le fichier de langue"
+body = { one = "{count} clé inconnue dans {path}", other = "{count} clés inconnues dans {path}" }
