@@ -144,7 +144,7 @@ pub const ARROW_DOWN: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 12] = [
+pub const ALL: [(&str, Icon); 13] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -157,6 +157,7 @@ pub const ALL: [(&str, Icon); 12] = [
     ("git-branch", GIT_BRANCH),
     ("arrow-down", ARROW_DOWN),
     ("bookmark", BOOKMARK),
+    ("rotate-ccw", ROTATE_CCW),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
@@ -201,4 +202,12 @@ pub const BOOKMARK: Icon = Icon {
     glyph: "\u{e060}",
     ink_width_em: 0.670,
     ink_height_em: 0.840,
+};
+
+/// `rotate-ccw` -- botão de restaurar o padrão de uma opção na tela de
+/// configurações (ADR-0060 §4).
+pub const ROTATE_CCW: Icon = Icon {
+    glyph: "\u{e148}",
+    ink_width_em: 0.84,
+    ink_height_em: 0.84,
 };

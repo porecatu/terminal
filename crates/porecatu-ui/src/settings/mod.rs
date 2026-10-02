@@ -19,6 +19,7 @@ mod paint;
 mod phrases;
 mod window;
 
+use porecatu_config::Config;
 use porecatu_render::Color;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::window::WindowAttributes;
@@ -29,37 +30,6 @@ pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
 pub(crate) use window::{Env, Press, SettingsWindow};
 
 use crate::palette;
-
-// Tamanhos provisórios, com os valores propostos no ADR-0060 §5. Cada um
-// vira chave de `[appearance.settings]` na tarefa 08, junto com o arquivo de
-// exemplo e a especificação visual (`verify-docs.py` cobra os três lados).
-
-/// Tamanho de abertura, em pixels lógicos.
-// [appearance.settings] window_width — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const WINDOW_WIDTH: f32 = 900.0;
-// [appearance.settings] window_height — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const WINDOW_HEIGHT: f32 = 640.0;
-/// Tamanho mínimo, em pixels lógicos.
-// [appearance.settings] min_width — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const MIN_WIDTH: f32 = 640.0;
-// [appearance.settings] min_height — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const MIN_HEIGHT: f32 = 420.0;
-/// Largura da guia lateral.
-// [appearance.settings] sidebar_width — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const SIDEBAR_WIDTH: f32 = 200.0;
-
-/// Largura do campo de texto.
-// [appearance.settings] text_field_width — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const TEXT_FIELD_WIDTH: f32 = 240.0;
-/// Largura do campo numérico.
-// [appearance.settings] number_field_width — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const NUMBER_FIELD_WIDTH: f32 = 88.0;
-/// Espaçamento entre linhas de opção.
-// [appearance.settings] row_gap — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const ROW_GAP: f32 = 8.0;
-/// Lado de cada quadrado da amostra de tema.
-// [appearance.settings] theme_swatch_size — ADR-0060 §5, chave entra na tarefa 08
-pub(crate) const THEME_SWATCH_SIZE: f32 = 12.0;
 
 /// Fundo da linha de opção: a "linha de perfil" `#1c2028` do canvas (espec. §1.2, ADR-0060 §2). Não está em `ResolvedPalette`.
 pub(crate) const ROW_BACKGROUND: Color = palette::hex(0x1c, 0x20, 0x28);
@@ -107,14 +77,26 @@ pub(crate) fn centered_position(
 
 /// Atributos da janela de configurações: os comuns a toda janela do app
 /// (`base_window_attributes`: sem decoração nativa fora do macOS, ADR-0027)
-/// mais título, tamanho e mínimo. `position` já vem centrada sobre a origem
+/// mais título, tamanho e mínimo, lidos de `[appearance.settings]` (classe C:
+/// valem na próxima abertura). `position` já vem centrada sobre a origem
 /// (`centered_position`); `None` deixa o sistema escolher.
-pub(crate) fn window_attributes(title: &str, position: Option<(i32, i32)>) -> WindowAttributes {
+pub(crate) fn window_attributes(
+    title: &str,
+    position: Option<(i32, i32)>,
+    config: &Config,
+) -> WindowAttributes {
+    let settings = &config.appearance.settings;
     #[allow(unused_mut)]
     let mut attributes = crate::base_window_attributes()
         .with_title(title)
-        .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
-        .with_min_inner_size(LogicalSize::new(MIN_WIDTH, MIN_HEIGHT));
+        .with_inner_size(LogicalSize::new(
+            settings.window_width as f32,
+            settings.window_height as f32,
+        ))
+        .with_min_inner_size(LogicalSize::new(
+            settings.min_width as f32,
+            settings.min_height as f32,
+        ));
     // macOS: decoração nativa **com** título (ADR-0059 §2) -- diferente da
     // janela de terminal, que esconde o título e estende o conteúdo por
     // baixo da barra para pôr as abas ali. Esta não tem barra nossa.
@@ -196,7 +178,8 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
     let metrics = layout::Metrics::from_config(&config, 52.0);
     let key = content::ContentKey {
         group,
-        panel_width_bits: (WINDOW_WIDTH - SIDEBAR_WIDTH).to_bits(),
+        panel_width_bits: (config.appearance.settings.window_width as f32 - metrics.sidebar_width)
+            .to_bits(),
         generation: 0,
     };
     content::build(
@@ -219,11 +202,12 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
 /// com ou sem o cabeçalho nosso (sem ele é o macOS).
 #[cfg(test)]
 pub(crate) fn layout_for_test(with_header: bool) -> Layout {
+    let settings = porecatu_config::Config::default().appearance.settings;
     layout::layout(
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
+        settings.window_width as f32,
+        settings.window_height as f32,
         if with_header { 52.0 } else { 0.0 },
-        SIDEBAR_WIDTH,
+        settings.sidebar_width as f32,
         54.0,
     )
 }

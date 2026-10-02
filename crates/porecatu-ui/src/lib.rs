@@ -7338,11 +7338,10 @@ impl App {
             return;
         }
         let origin_window = self.windows.get(&origin).map(|state| &state.window);
+        let scale = origin_window.map_or(1.0, |w| w.scale_factor() as f32);
         let size = (
-            (settings::WINDOW_WIDTH * origin_window.map_or(1.0, |w| w.scale_factor() as f32))
-                .round() as u32,
-            (settings::WINDOW_HEIGHT * origin_window.map_or(1.0, |w| w.scale_factor() as f32))
-                .round() as u32,
+            (self.config.appearance.settings.window_width as f32 * scale).round() as u32,
+            (self.config.appearance.settings.window_height as f32 * scale).round() as u32,
         );
         let position = origin_window.and_then(|window| {
             let origin_position = window.outer_position().ok()?;
@@ -7359,8 +7358,11 @@ impl App {
                 monitor,
             ))
         });
-        let attributes =
-            settings::window_attributes(&msg::settings::window_title(&self.catalog), position);
+        let attributes = settings::window_attributes(
+            &msg::settings::window_title(&self.catalog),
+            position,
+            &self.config,
+        );
         self.settings = self.create_settings_window(event_loop, attributes);
     }
 

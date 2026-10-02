@@ -36,7 +36,7 @@ use super::layout::{
     group_items, hit_test, next_focus,
 };
 use super::paint;
-use super::{Group, HEADER_GAP_PX, PANEL_BACKGROUND, SIDEBAR_WIDTH, TITLE_SIZE_PX};
+use super::{Group, HEADER_GAP_PX, PANEL_BACKGROUND, TITLE_SIZE_PX};
 use crate::messages::msg;
 use crate::palette::ResolvedPalette;
 use crate::tab_bar::{self, TabBarStyle, WindowButtonHit};
@@ -226,7 +226,7 @@ impl SettingsWindow {
             self.logical_width,
             self.logical_height,
             m.header_height,
-            SIDEBAR_WIDTH,
+            m.sidebar_width,
             m.footer_height(),
         )
     }

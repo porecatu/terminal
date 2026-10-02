@@ -146,6 +146,7 @@ Cor de aba sem grupo: `#7b838f`.
 | **Aba dentro de grupo, pílula de grupo** | **34px** (`tab_height`) |
 | **Aba solta** | **40px** — `tab_height + wrapper_padding * 2`: sem bloco de grupo a que ceder o `wrapper_padding`, ela ocupa a caixa inteira do wrapper e alinha topo e base com a agrupada (§2.5) |
 | **Barra de status** | **26px** — `status_bar::height`, e `0.0` quando `[appearance.status_bar] enabled = false`: desligada, a barra não desenha nem ocupa altura (§2.8) |
+| **Janela de configurações** (ADR-0060 §5) | **900×640** de abertura (`window_width` 900, `window_height` 640) e **640×420** de mínimo (`min_width` 640, `min_height` 420), as quatro em `[appearance.settings]`. Valem na próxima abertura da tela |
 | Botão da barra de título `[v2]` | 44px de largura |
 | **Botão de janela** (minimizar / maximizar / fechar) | **46px de largura, altura cheia da barra** — ADR-0027, §2.2.1 |
 | **Zona de resize da janela** | **6px** em toda borda (ADR-0027) |
@@ -161,6 +162,8 @@ Cor de aba sem grupo: `#7b838f`.
 |---|---|
 | **Aba** | **fixa e igual para toda aba**: `padding_left` 10 + rótulo 180 + `internal_gap` 8 + botão de fechar 25 + `padding_right` 6 = **229px**, saturada em `max_width` 260. O teto de 180px do rótulo é também o piso — título, indicador e renomeação não refluem a trilha (§2.5) |
 | Nome da pílula do grupo | teto de **140px** (`pill_name_max_width`), truncado com reticências |
+| **Guia da janela de configurações** | **200px** (`sidebar_width`) — a largura mínima do menu de contexto, que é o que a guia é: uma lista de itens de menu (ADR-0060 §5) |
+| Campo de texto e campo numérico da tela de configurações | **240px** (`text_field_width`) e **88px** (`number_field_width`) — o numérico cabe `102400` com folga para um sétimo dígito; os dois em `[appearance.settings]` (ADR-0060 §5) |
 | Trilha | largura da barra **menos** a zona fixa à direita (`right_zone_width` = `trilha_gap` 6 nas pontas e entre os dois botões + dois botões de 38px = **94px**, fora do macOS; **50px** era o valor com um botão só). No macOS reserva-se ainda `MACOS_TRAFFIC_LIGHT_INSET` (78px) à esquerda, para a trilha não desenhar sob o semáforo nativo |
 
 | Espaçamento | Valor |
@@ -178,6 +181,8 @@ Cor de aba sem grupo: `#7b838f`.
 | Conteúdo do painel `[v2]` | `padding: 12px 14px` — do canvas; o que o binário desenha é o padding do quadro, acima |
 | Item de menu | `padding: 7px 8px` |
 | Drawer | `padding: 18px`, `gap: 24` entre seções |
+| **Entre linhas de opção da tela de configurações** | `row_gap` **8** — o `gap: 8` dos botões do diálogo e dos avisos empilhados; ganha chave porque define a densidade da tela inteira (ADR-0060 §5) |
+| **Amostra de tema** | dez quadrados de `theme_swatch_size` **12px**, `gap: 2` (ADR-0060 §3, §5) |
 
 Sombras. O binário desenha sombra **em camadas** (§1.2): três `RoundedQuad` pretos empilhados, crescendo de spread (1 / 2.5 / 4.5) e caindo de alfa (`.16` / `.10` / `.06`), com offset Y de 1 / 2 / 3. É a aproximação possível sem passo de blur. Desde a F3, em três lugares — cápsula de grupo, aba solta e quadro do terminal; desde a F4 etapa 6, também nos cinco widgets de chrome (aviso, diálogo, menu de contexto, tooltip, editor de grupo) e no fantasma de arraste (`chrome::push_shadow`, ADR-0032 §2).
 

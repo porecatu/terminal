@@ -15,7 +15,6 @@ use porecatu_config::Config;
 use porecatu_render::Rect;
 
 use super::catalog::Group;
-use super::{NUMBER_FIELD_WIDTH, ROW_GAP, TEXT_FIELD_WIDTH, THEME_SWATCH_SIZE};
 
 /// As faixas da janela, em coordenadas lógicas de janela.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -146,13 +145,14 @@ pub(crate) fn group_items(sidebar: Rect, padding: f32, item_height: f32) -> Vec<
 /// Todas as dimensões do painel, de um lugar só. As que têm token vêm de
 /// `Config` (o que o ADR-0060 chama de "widgets que o app já desenha": o
 /// campo do editor de grupo, o botão do diálogo, o item do menu); as que o
-/// ADR dá em número entram como constante com a citação; e as quatro de
-/// `[appearance.settings]` (§5) são constantes provisórias em `mod.rs` até a
-/// tarefa 08.
+/// ADR dá em número entram como constante com a citação; e as de
+/// `[appearance.settings]` (ADR-0060 §5) vêm de `Config`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Metrics {
     /// Altura do cabeçalho; zero onde a decoração é nativa.
     pub header_height: f32,
+    /// Largura da guia lateral (`[appearance.settings] sidebar_width`).
+    pub sidebar_width: f32,
     /// `padding` da guia e altura do item: os do menu de contexto (ADR-0060
     /// §1, §2).
     pub sidebar_padding: f32,
@@ -217,15 +217,17 @@ impl Metrics {
         let menu = &config.appearance.context_menu;
         let editor = &config.appearance.group_editor;
         let dialog = &config.appearance.dialog;
+        let settings = &config.appearance.settings;
         Self {
             header_height,
+            sidebar_width: settings.sidebar_width as f32,
             sidebar_padding: menu.padding as f32,
             sidebar_item_height: menu.item_height as f32,
             panel_padding: 18.0,
             title_size: 15.0,
             section_size: editor.section_font_size as f32,
             section_gap: 24.0,
-            row_gap: ROW_GAP,
+            row_gap: settings.row_gap as f32,
             row_padding_x: 11.0,
             row_padding_y: 9.0,
             row_radius: 6.0,
@@ -240,9 +242,9 @@ impl Metrics {
             button_gap: dialog.button_gap as f32,
             button_radius: dialog.button_corner_radius as f32,
             button_font_size: dialog.font_size as f32,
-            text_field_width: TEXT_FIELD_WIDTH,
-            number_field_width: NUMBER_FIELD_WIDTH,
-            swatch_size: THEME_SWATCH_SIZE,
+            text_field_width: settings.text_field_width as f32,
+            number_field_width: settings.number_field_width as f32,
+            swatch_size: settings.theme_swatch_size as f32,
             restore_width: 25.0,
             restore_height: 17.0,
             dot_size: 6.0,
@@ -615,7 +617,8 @@ mod tests {
         }
         // Os nove cabem na altura mínima da janela (420) com folga.
         let last = items.last().unwrap().1;
-        assert!(last.y + last.height <= super::super::MIN_HEIGHT);
+        let min_height = Config::default().appearance.settings.min_height as f32;
+        assert!(last.y + last.height <= min_height);
     }
 
     #[test]
