@@ -29,6 +29,7 @@ use crate::messages::msg;
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::TabBarStyle;
 use crate::text_field::TextFieldState;
+use crate::toggle::{TOGGLE_TRACK_HEIGHT, TOGGLE_TRACK_WIDTH, push_toggle};
 
 /// Altura da barra. A espec §2.21 original cravava isto no `input_height`
 /// do editor de grupo (30, sem margem nenhuma) -- mas aí o campo (a única
@@ -47,21 +48,6 @@ const FIELD_HEIGHT: f32 = 30.0;
 /// Respiro entre o campo e a borda superior/inferior da barra, dos dois
 /// lados -- ver nota de `BAR_HEIGHT`.
 const FIELD_VERTICAL_MARGIN: f32 = 8.0;
-
-/// Trilho/botão do alternador de regex (espec §1.5/§2.21 item 3): "a
-/// primeira vez que esse token desenha no v1" -- já estava na tabela, sem
-/// consumidor, e por isso sem chave no TOML (mesmo padrão de
-/// `chrome::SHADOW_LAYERS`/`DRAG_HIGHLIGHT_BORDER_ALPHA`: valor de tabela
-/// de tokens, não configurável por si). As dimensões continuam fixas; a
-/// cor do trilho (ligado/desligado) segue o tema -- ver `push_toggle` --
-/// só o botão (`TOGGLE_KNOB_COLOR`) fica fixo, convenção comum de manter o
-/// indicador sempre claro independente da cor da trilha.
-const TOGGLE_TRACK_WIDTH: f32 = 34.0;
-const TOGGLE_TRACK_HEIGHT: f32 = 19.0;
-const TOGGLE_TRACK_RADIUS: f32 = 10.0;
-const TOGGLE_TRACK_PADDING: f32 = 2.0;
-const TOGGLE_KNOB_SIZE: f32 = 15.0;
-const TOGGLE_KNOB_COLOR: Color = palette::hex(0xf0, 0xf3, 0xf6);
 
 /// Largura de trabalho reservada para o contador ("3/17", "nenhum
 /// resultado", "padrão inválido") -- sem chave de aparência, mesma nota de
@@ -375,37 +361,6 @@ pub fn layout_search_bar(box_rect: Rect, style: &TabBarStyle) -> SearchBarLayout
         next_button,
         close_button,
     }
-}
-
-/// `on_color`/`off_color`: acento de foco do campo de busca e borda neutra
-/// do widget (`pal.editor_input_border_focus`/`pal.editor_border`) --
-/// combinam com o campo de texto ao lado e seguem o tema ativo, claro ou
-/// escuro.
-fn push_toggle(rect: Rect, on: bool, on_color: Color, off_color: Color, out: &mut Vec<Primitive>) {
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect,
-        radius: TOGGLE_TRACK_RADIUS,
-        color: if on { on_color } else { off_color },
-        border_color: palette::TRANSPARENT,
-        border_width: 0.0,
-    }));
-    let knob_x = if on {
-        rect.x + rect.width - TOGGLE_TRACK_PADDING - TOGGLE_KNOB_SIZE
-    } else {
-        rect.x + TOGGLE_TRACK_PADDING
-    };
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect: Rect {
-            x: knob_x,
-            y: rect.y + (rect.height - TOGGLE_KNOB_SIZE) / 2.0,
-            width: TOGGLE_KNOB_SIZE,
-            height: TOGGLE_KNOB_SIZE,
-        },
-        radius: TOGGLE_KNOB_SIZE / 2.0,
-        color: TOGGLE_KNOB_COLOR,
-        border_color: palette::TRANSPARENT,
-        border_width: 0.0,
-    }));
 }
 
 #[allow(clippy::too_many_arguments)]

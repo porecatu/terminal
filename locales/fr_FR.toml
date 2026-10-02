@@ -197,6 +197,16 @@ reload = "Recharger"
 keep_mine = "Conserver mes modifications"
 invalid_file = "Le fichier de configuration est invalide ; les options sont en lecture seule."
 
+[settings.choice]
+block = "Bloc"
+beam = "Barre"
+underline = "Souligné"
+always = "Toujours"
+hover = "Au survol"
+never = "Jamais"
+top = "Haut"
+bottom = "Bas"
+
 [settings.dialog]
 close_title = "Fermer avec des modifications en attente ?"
 close_body = { one = "Il y a {count} modification non enregistrée.", other = "Il y a {count} modifications non enregistrées." }

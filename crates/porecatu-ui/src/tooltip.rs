@@ -27,6 +27,9 @@ pub const HOVER_DELAY: Duration = Duration::from_millis(600);
 pub enum HoverKey {
     Tab(TabId),
     SessionRow(usize),
+    /// Descrição truncada de uma linha de opção da janela de configurações
+    /// (ADR-0060 §2); o índice é o do bloco no painel.
+    SettingsRow(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

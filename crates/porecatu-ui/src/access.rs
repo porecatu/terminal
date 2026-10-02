@@ -38,7 +38,9 @@ use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
-use crate::settings::{FOOTER_BUTTONS, FooterButton, Group, Layout as SettingsLayout};
+use crate::settings::{
+    ControlView, FOOTER_BUTTONS, FooterButton, Group, Layout as SettingsLayout, RowView,
+};
 use crate::status_bar::{SegmentRole, StatusBarLayout};
 use crate::tab_bar::{self, Indicator, TabBarStyle};
 use crate::terminal_menu::{TerminalContextMenu, terminal_menu_items};
@@ -859,6 +861,10 @@ const SETTINGS_WINDOW_MINIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 20);
 const SETTINGS_WINDOW_MAXIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 21);
 const SETTINGS_WINDOW_CLOSE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 22);
 const SETTINGS_GROUP_ITEM_BASE: u64 = SETTINGS_ID_BASE + 100;
+/// Uma faixa de mil `NodeId` por linha de opção: o nó da linha, mais os dos
+/// itens de uma lista ou das duas metades de `git.remote_poll_interval_secs`.
+const SETTINGS_ROW_BASE: u64 = SETTINGS_ID_BASE + 10_000;
+const SETTINGS_ROW_STRIDE: u64 = 1_000;
 
 fn settings_group_item_id(index: usize) -> NodeId {
     NodeId(SETTINGS_GROUP_ITEM_BASE + index as u64)
@@ -880,12 +886,15 @@ fn settings_footer_button_id(button: FooterButton) -> NodeId {
 ///
 /// `has_pending` diz se há alteração pendente: sem ela, Descartar e Salvar
 /// são anunciados como indisponíveis (RF-16.14, "esmaecidos, nunca
-/// ausentes").
+/// ausentes"). `rows` são as linhas de opção do grupo em vista, as mesmas que
+/// a pintura lê: cada uma vira um nó com o papel do controle, o nome, a
+/// descrição inteira (a pintura a corta, a árvore não) e o valor.
 pub(crate) fn build_settings_tree(
     layout: &SettingsLayout,
     groups: &[Group],
     selected: Group,
     has_pending: bool,
+    rows: &[&RowView],
     catalog: &Catalog,
     language: &str,
 ) -> TreeUpdate {
@@ -942,8 +951,14 @@ pub(crate) fn build_settings_tree(
     }
     nodes.push((SETTINGS_FOOTER_ID, container(Role::Group, footer_children)));
 
+    let mut panel_children = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        panel_children.push(settings_row_node(index, row, &mut nodes));
+    }
+    panel_children.push(SETTINGS_FOOTER_ID);
+
     // O painel é o do grupo escolhido -- o rótulo diz qual.
-    let mut panel = container(Role::TabPanel, vec![SETTINGS_FOOTER_ID]);
+    let mut panel = container(Role::TabPanel, panel_children);
     panel.set_label(format!(
         "{}: {}",
         msg::access::settings_panel(catalog),
@@ -965,6 +980,111 @@ pub(crate) fn build_settings_tree(
         tree_id: TreeId::ROOT,
         focus: SETTINGS_ROOT_ID,
     }
+}
+
+/// Um nó por linha de opção, com o papel que o controle pede (ADR-0059 §5):
+/// alternância é `Switch`, campo de texto `TextInput`, numérico `SpinButton`,
+/// escolha `ComboBox`, lista `List`. Devolve o id do nó da linha e empilha os
+/// nós dela em `nodes`.
+fn settings_row_node(index: usize, row: &RowView, nodes: &mut Vec<(NodeId, Node)>) -> NodeId {
+    let id = NodeId(SETTINGS_ROW_BASE + index as u64 * SETTINGS_ROW_STRIDE);
+    // A descrição inteira, com o escopo de classe C depois dela: quem ouve o
+    // leitor de tela não vê o corte nem a posição do escopo.
+    let description = match &row.scope {
+        Some((scope, _)) if !row.description_full.is_empty() => {
+            format!("{} ({scope})", row.description_full)
+        }
+        Some((scope, _)) => scope.clone(),
+        None => row.description_full.clone(),
+    };
+    let describe = |node: &mut Node| {
+        if !description.is_empty() {
+            node.set_description(description.clone());
+        }
+    };
+    match &row.control {
+        ControlView::Toggle { on } => {
+            let mut node = leaf(Role::Switch, row.name.clone());
+            node.set_toggled(if *on {
+                accesskit::Toggled::True
+            } else {
+                accesskit::Toggled::False
+            });
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+        ControlView::Field {
+            text,
+            right_aligned,
+            ..
+        } => {
+            let mut node = if *right_aligned {
+                let mut node = leaf(Role::SpinButton, row.name.clone());
+                if let Ok(number) = text.parse::<f64>() {
+                    node.set_numeric_value(number);
+                }
+                node
+            } else {
+                leaf(Role::TextInput, row.name.clone())
+            };
+            node.set_value(text.clone());
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+        ControlView::Segmented {
+            labels, selected, ..
+        } => {
+            let mut node = leaf(Role::ComboBox, row.name.clone());
+            node.set_value(labels.get(*selected).cloned().unwrap_or_default());
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+        ControlView::Choice { text } => {
+            let mut node = leaf(Role::ComboBox, row.name.clone());
+            node.set_value(text.clone());
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+        ControlView::List { items, .. } => {
+            let mut children = Vec::new();
+            for (item_index, item) in items.iter().enumerate() {
+                let item_id = NodeId(id.0 + 1 + item_index as u64);
+                nodes.push((item_id, leaf(Role::ListItem, item.clone())));
+                children.push(item_id);
+            }
+            let mut node = container(Role::List, children);
+            node.set_label(row.name.clone());
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+        ControlView::Themes { selected, .. } => {
+            let mut node = leaf(Role::ListBoxOption, row.name.clone());
+            node.set_selected(*selected);
+            nodes.push((id, node));
+        }
+        ControlView::GitPoll { on, seconds, .. } => {
+            let switch_id = NodeId(id.0 + 1);
+            let mut switch = leaf(Role::Switch, row.name.clone());
+            switch.set_toggled(if *on {
+                accesskit::Toggled::True
+            } else {
+                accesskit::Toggled::False
+            });
+            nodes.push((switch_id, switch));
+            let seconds_id = NodeId(id.0 + 2);
+            let mut number = leaf(Role::SpinButton, row.name.clone());
+            number.set_value(seconds.clone());
+            if let Ok(value) = seconds.parse::<f64>() {
+                number.set_numeric_value(value);
+            }
+            nodes.push((seconds_id, number));
+            let mut node = container(Role::Group, vec![switch_id, seconds_id]);
+            node.set_label(row.name.clone());
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+    }
+    id
 }
 
 #[cfg(test)]
@@ -1579,15 +1699,27 @@ mod tests {
 mod settings_tree_tests {
     use super::*;
     use crate::messages::test_support;
-    use crate::settings::layout_for_test;
+    use crate::settings::{layout_for_test, rows_for_test};
 
     fn tree(selected: Group, has_pending: bool, with_header: bool, language: &str) -> TreeUpdate {
+        tree_with_rows(selected, has_pending, with_header, language, &[])
+    }
+
+    fn tree_with_rows(
+        selected: Group,
+        has_pending: bool,
+        with_header: bool,
+        language: &str,
+        rows: &[RowView],
+    ) -> TreeUpdate {
         let layout = layout_for_test(with_header);
+        let refs: Vec<&RowView> = rows.iter().collect();
         build_settings_tree(
             &layout,
             &Group::ALL,
             selected,
             has_pending,
+            &refs,
             &test_support::pt_br(),
             language,
         )
@@ -1728,6 +1860,7 @@ mod settings_tree_tests {
             &Group::ALL,
             Group::General,
             false,
+            &[],
             &test_support::en_us(),
             "en-US",
         );
@@ -1738,5 +1871,142 @@ mod settings_tree_tests {
             node(&en, settings_group_item_id(0)).label(),
             Some("General")
         );
+    }
+
+    // ---- linhas de opção
+
+    fn row_nodes(update: &TreeUpdate) -> Vec<&Node> {
+        node(update, SETTINGS_PANEL_ID)
+            .children()
+            .iter()
+            .filter(|id| **id != SETTINGS_FOOTER_ID)
+            .map(|id| node(update, *id))
+            .collect()
+    }
+
+    fn labelled<'a>(nodes: &[&'a Node], label: &str) -> &'a Node {
+        nodes
+            .iter()
+            .find(|node| node.label() == Some(label))
+            .unwrap_or_else(|| panic!("{label}"))
+    }
+
+    #[test]
+    fn each_option_row_becomes_a_node_with_the_role_of_its_control() {
+        let rows = rows_for_test(Group::Terminal);
+        let update = tree_with_rows(Group::Terminal, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        assert_eq!(nodes.len(), rows.len());
+        // alternância, campo numérico, campo de texto, escolha.
+        assert_eq!(labelled(&nodes, "Piscar").role(), Role::Switch);
+        assert_eq!(labelled(&nodes, "Tamanho").role(), Role::SpinButton);
+        assert_eq!(labelled(&nodes, "Família").role(), Role::TextInput);
+        assert_eq!(labelled(&nodes, "Forma").role(), Role::ComboBox);
+    }
+
+    #[test]
+    fn rows_expose_name_description_and_value() {
+        let rows = rows_for_test(Group::Terminal);
+        let update = tree_with_rows(Group::Terminal, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let size = labelled(&nodes, "Tamanho");
+        assert_eq!(size.value(), Some("14"));
+        assert_eq!(size.numeric_value(), Some(14.0));
+        assert_eq!(
+            size.description(),
+            Some("Tamanho da fonte, em pixels lógicos.")
+        );
+        assert_eq!(
+            labelled(&nodes, "Piscar").toggled(),
+            Some(accesskit::Toggled::False)
+        );
+        assert_eq!(labelled(&nodes, "Forma").value(), Some("Bloco"));
+    }
+
+    #[test]
+    fn a_class_c_option_announces_its_scope_in_the_description() {
+        let rows = rows_for_test(Group::Shell);
+        let update = tree_with_rows(Group::Shell, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let program = labelled(&nodes, "Programa");
+        assert!(
+            program
+                .description()
+                .unwrap()
+                .ends_with("(vale em aba nova)")
+        );
+    }
+
+    #[test]
+    fn a_list_row_has_its_items_as_children() {
+        let mut rows = rows_for_test(Group::Shell);
+        let args = rows
+            .iter_mut()
+            .find(|row| row.option == Some("shell_args"))
+            .unwrap();
+        args.control = ControlView::List {
+            items: vec!["-l".to_owned(), "-i".to_owned()],
+            add_label: "Adicionar".to_owned(),
+        };
+        let update = tree_with_rows(Group::Shell, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let list = labelled(&nodes, "Argumentos");
+        assert_eq!(list.role(), Role::List);
+        let items: Vec<&str> = list
+            .children()
+            .iter()
+            .map(|id| node(&update, *id).label().unwrap())
+            .collect();
+        assert_eq!(items, ["-l", "-i"]);
+    }
+
+    #[test]
+    fn theme_rows_are_selectable_options_and_the_git_row_has_two_halves() {
+        let rows = rows_for_test(Group::Appearance);
+        let update = tree_with_rows(Group::Appearance, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let themes: Vec<&&Node> = nodes
+            .iter()
+            .filter(|node| node.role() == Role::ListBoxOption)
+            .collect();
+        assert!(themes.len() >= 2);
+        assert_eq!(
+            themes
+                .iter()
+                .filter(|node| node.is_selected() == Some(true))
+                .count(),
+            1
+        );
+
+        let rows = rows_for_test(Group::Git);
+        let update = tree_with_rows(Group::Git, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let git = nodes[0];
+        assert_eq!(git.role(), Role::Group);
+        let roles: Vec<Role> = git
+            .children()
+            .iter()
+            .map(|id| node(&update, *id).role())
+            .collect();
+        assert_eq!(roles, [Role::Switch, Role::SpinButton]);
+    }
+
+    #[test]
+    fn row_ids_stay_unique_across_every_group() {
+        for group in Group::ALL {
+            let rows = rows_for_test(group);
+            let update = tree_with_rows(group, true, true, "pt-BR", &rows);
+            let mut ids: Vec<u64> = update.nodes.iter().map(|(id, _)| id.0).collect();
+            let total = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), total, "{group:?}");
+            let known: Vec<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+            for (_, node) in &update.nodes {
+                for child in node.children() {
+                    assert!(known.contains(child), "{group:?}: filho {child:?} fora");
+                }
+            }
+        }
     }
 }

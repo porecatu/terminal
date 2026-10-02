@@ -12,8 +12,10 @@
 
 mod actions;
 mod catalog;
+mod content;
 mod draft;
 mod layout;
+mod paint;
 mod phrases;
 mod window;
 
@@ -22,8 +24,9 @@ use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::window::WindowAttributes;
 
 pub(crate) use catalog::Group;
+pub(crate) use content::{ControlView, RowView};
 pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
-pub(crate) use window::{Press, SettingsWindow};
+pub(crate) use window::{Env, Press, SettingsWindow};
 
 use crate::palette;
 
@@ -44,6 +47,27 @@ pub(crate) const MIN_HEIGHT: f32 = 420.0;
 /// Largura da guia lateral.
 // [appearance.settings] sidebar_width — ADR-0060 §5, chave entra na tarefa 08
 pub(crate) const SIDEBAR_WIDTH: f32 = 200.0;
+
+/// Largura do campo de texto.
+// [appearance.settings] text_field_width — ADR-0060 §5, chave entra na tarefa 08
+pub(crate) const TEXT_FIELD_WIDTH: f32 = 240.0;
+/// Largura do campo numérico.
+// [appearance.settings] number_field_width — ADR-0060 §5, chave entra na tarefa 08
+pub(crate) const NUMBER_FIELD_WIDTH: f32 = 88.0;
+/// Espaçamento entre linhas de opção.
+// [appearance.settings] row_gap — ADR-0060 §5, chave entra na tarefa 08
+pub(crate) const ROW_GAP: f32 = 8.0;
+/// Lado de cada quadrado da amostra de tema.
+// [appearance.settings] theme_swatch_size — ADR-0060 §5, chave entra na tarefa 08
+pub(crate) const THEME_SWATCH_SIZE: f32 = 12.0;
+
+/// Fundo da linha de opção: a "linha de perfil" `#1c2028` do canvas (espec. §1.2, ADR-0060 §2). Não está em `ResolvedPalette`.
+pub(crate) const ROW_BACKGROUND: Color = palette::hex(0x1c, 0x20, 0x28);
+/// Trilho da alternância ligada, `#3f8f80` (espec. §1.5, ADR-0060 §3), e o
+/// fundo do botão Salvar -- "o par ligado da alternância" (ADR-0060 §4).
+pub(crate) const TOGGLE_ON: Color = palette::hex(0x3f, 0x8f, 0x80);
+/// Trilho da alternância desligada, `#2a3038` (espec. §1.5, ADR-0060 §3).
+pub(crate) const TOGGLE_OFF: Color = palette::hex(0x2a, 0x30, 0x38);
 
 /// Fundo do painel: o token "Drawer" `#171b21` (espec. §1.2, "painel de
 /// configurações"), citado pelo ADR-0060 §1. É a única cor da janela que
@@ -162,6 +186,35 @@ mod tests {
     }
 }
 
+/// As linhas de opção de `group`, montadas sobre o `Config` padrão e o
+/// catálogo pt_BR, para os testes da árvore de acessibilidade.
+#[cfg(test)]
+pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
+    use porecatu_render::TextMeasurer;
+
+    let config = porecatu_config::Config::default();
+    let metrics = layout::Metrics::from_config(&config, 52.0);
+    let key = content::ContentKey {
+        group,
+        panel_width_bits: (WINDOW_WIDTH - SIDEBAR_WIDTH).to_bits(),
+        generation: 0,
+    };
+    content::build(
+        key,
+        &config,
+        &crate::messages::test_support::pt_br(),
+        &metrics,
+        &mut TextMeasurer::new(),
+    )
+    .blocks
+    .into_iter()
+    .filter_map(|block| match block {
+        content::Block::Row(row) => Some(row),
+        content::Block::Section(_) => None,
+    })
+    .collect()
+}
+
 /// Um `Layout` de tamanho fixo para os testes da árvore de acessibilidade,
 /// com ou sem o cabeçalho nosso (sem ele é o macOS).
 #[cfg(test)]
@@ -171,5 +224,6 @@ pub(crate) fn layout_for_test(with_header: bool) -> Layout {
         WINDOW_HEIGHT,
         if with_header { 52.0 } else { 0.0 },
         SIDEBAR_WIDTH,
+        54.0,
     )
 }

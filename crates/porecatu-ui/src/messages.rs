@@ -425,6 +425,16 @@ registry! {
             keep_mine(),
             invalid_file(),
         },
+        choice {
+            block(),
+            beam(),
+            underline(),
+            always(),
+            hover(),
+            never(),
+            top(),
+            bottom(),
+        },
         dialog {
             close_title(),
             close_body(plural),

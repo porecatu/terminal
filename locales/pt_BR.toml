@@ -215,6 +215,16 @@ reload = "Recarregar"
 keep_mine = "Manter minhas alterações"
 invalid_file = "O arquivo de configuração é inválido; as opções estão somente para leitura."
 
+[settings.choice]
+block = "Bloco"
+beam = "Barra"
+underline = "Sublinhado"
+always = "Sempre"
+hover = "Ao passar o mouse"
+never = "Nunca"
+top = "Topo"
+bottom = "Base"
+
 [settings.dialog]
 close_title = "Fechar com alterações pendentes?"
 close_body = { one = "Há {count} alteração não salva.", other = "Há {count} alterações não salvas." }

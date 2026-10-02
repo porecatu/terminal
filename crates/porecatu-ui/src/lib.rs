@@ -64,6 +64,7 @@ mod tab_bar;
 mod terminal_menu;
 mod text_field;
 mod titlebar;
+mod toggle;
 mod tooltip;
 mod trace;
 mod warning;
@@ -773,9 +774,6 @@ fn ensure_config_file_exists(path: &Path) -> std::io::Result<()> {
 /// nunca um `unsafe` novo nem uma string de shell montada com o caminho.
 /// Sem `config_path` resolvido (rara: falha da API de diretórios da
 /// plataforma), avisa e desiste.
-// Sem chamador até o botão "Abrir arquivo no editor" da tela (RF-16.14, ADR-0059
-// §6): a engrenagem já não abre o arquivo, abre a janela.
-#[allow(dead_code)]
 fn open_config_file(
     config_path: Option<&Path>,
     warnings: &mut WarningStack,
@@ -5080,6 +5078,10 @@ struct App {
     /// `windows` -- sessão, wakeup de PTY e contagem de abas nunca a veem. O
     /// estado dela morre com a janela.
     settings: Option<SettingsWindow>,
+    /// O último grupo escolhido na janela de configurações (RF-16.9): vive
+    /// até o fim da execução e é onde a janela reabre. O resto do estado dela
+    /// morre com ela.
+    settings_last_group: settings::Group,
     /// Debounce da gravação de sessão (RF-3.3, ADR-0036) -- por
     /// **processo**, não por janela: o arquivo é um só para todas
     /// (RF-3.17). Drenado em `schedule_next_wake`, disparado em
@@ -5404,6 +5406,7 @@ impl App {
             keymap,
             windows: HashMap::new(),
             settings: None,
+            settings_last_group: settings::Group::General,
             session: SessionScheduler::default(),
             pending_session,
             positional_directory: cli_directory,
@@ -6467,6 +6470,7 @@ impl App {
             .windows
             .values()
             .filter_map(|w| w.next_wake(now))
+            .chain(self.settings.as_ref().and_then(SettingsWindow::next_wake))
             .chain(self.session.next_deadline())
             .chain(self.shell_integration_invite_deadline())
             .chain(self.project_command_deadline())
@@ -6794,11 +6798,14 @@ impl App {
     /// terminal (ADR-0043 §3). Usa o idioma do catálogo em uso e as métricas
     /// de item de menu que a guia herda (ADR-0060 §2).
     fn refresh_settings_access_tree(&mut self) {
-        let menu = &self.config.appearance.context_menu;
-        let (padding, item_height) = (menu.padding as f32, menu.item_height as f32);
-        if let Some(settings) = &mut self.settings {
-            settings.refresh_access_tree(&self.style, padding, item_height, &self.language_tag);
-        }
+        let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
+            return;
+        };
+        let env = settings::Env {
+            style: &self.style,
+            config: &self.config,
+        };
+        settings.refresh_access_tree(env, gpu.text_measurer(), &self.language_tag);
     }
 
     /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: mais próxima
@@ -6852,6 +6859,9 @@ impl App {
             {
                 state.window.request_redraw();
             }
+        }
+        if let Some(settings) = &mut self.settings {
+            settings.tick(now);
         }
         self.check_shell_integration_invite_timeout(now);
         self.check_project_commands(now);
@@ -7310,7 +7320,11 @@ impl App {
         }
         // Classe A: o layout da barra é função pura de
         // `(Workspace, Config, largura)` -- só redesenhar já aplica. Inclui a
-        // janela de configurações, que lê a mesma paleta e o mesmo estilo.
+        // janela de configurações, que lê a mesma paleta e o mesmo estilo; o
+        // conteúdo medido dela, esse, depende do `Config` e é refeito.
+        if let Some(settings) = &mut self.settings {
+            settings.invalidate();
+        }
         self.for_each_surface(|surface| surface.request_redraw());
     }
 
@@ -7394,25 +7408,46 @@ impl App {
             scale,
             Arc::clone(&self.catalog),
             access_adapter,
+            self.settings_last_group,
         ))
     }
 
-    /// Fecha a janela de configurações sem encerrar o app (ADR-0059 §2).
-    /// Soltar o `SettingsWindow` fecha a janela do SO.
+    /// Fecha a janela de configurações sem encerrar o app (ADR-0059 §2) e
+    /// guarda o grupo em que ela estava (RF-16.9). Soltar o `SettingsWindow`
+    /// fecha a janela do SO.
     fn close_settings(&mut self) {
-        self.settings = None;
+        if let Some(settings) = self.settings.take() {
+            self.settings_last_group = settings.selected_group();
+        }
+    }
+
+    /// "Abrir arquivo no editor" (RF-16.14): o comportamento antigo da
+    /// engrenagem, criar o arquivo a partir do exemplo e abri-lo. A falha vira
+    /// aviso na primeira janela de terminal -- a de configurações não tem pilha
+    /// de avisos.
+    fn open_config_file_from_settings(&mut self) {
+        let Some(state) = self.windows.values_mut().next() else {
+            return;
+        };
+        open_config_file(
+            self.config_path.as_deref(),
+            &mut state.warnings,
+            &self.catalog,
+            Instant::now(),
+        );
+        state.window.request_redraw();
     }
 
     /// Evento de uma janela que é a de configurações -- o roteamento do
-    /// topo de `window_event` (ADR-0059 §1). Só o que esta etapa desenha e
-    /// aceita; o resto é ignorado.
+    /// topo de `window_event` (ADR-0059 §1). Modo de captura: o `keymap` do
+    /// processo não é consultado (ADR-0059 §3).
     fn settings_window_event(&mut self, event: WindowEvent) {
         if let Some(settings) = &mut self.settings {
             settings.process_access_event(&event);
         }
-        let resize_border = self.config.appearance.window_controls.resize_border as f32;
+        let mut press = settings::Press::Nothing;
         match event {
-            WindowEvent::CloseRequested => self.close_settings(),
+            WindowEvent::CloseRequested => press = settings::Press::Close,
             WindowEvent::Resized(size) => {
                 if let (Some(settings), Some(gpu)) = (&mut self.settings, &self.gpu) {
                     settings.resize(gpu, size.width, size.height);
@@ -7423,9 +7458,18 @@ impl App {
                     settings.rescale(gpu, scale_factor as f32);
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::ModifiersChanged(modifiers) => {
                 if let Some(settings) = &mut self.settings {
-                    settings.cursor_moved(position, &self.style, resize_border);
+                    settings.modifiers_changed(modifiers.state().shift_key());
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    settings.cursor_moved(position, env, gpu.text_measurer(), Instant::now());
                 }
             }
             WindowEvent::CursorLeft { .. } => {
@@ -7433,21 +7477,44 @@ impl App {
                     settings.cursor_left();
                 }
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    settings.wheel(delta, env, gpu.text_measurer());
+                }
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
             } => {
-                let press = self
-                    .settings
-                    .as_mut()
-                    .map(|settings| settings.left_pressed(&self.style, resize_border));
-                if press == Some(settings::Press::Close) {
-                    self.close_settings();
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    press = settings.left_pressed(env, gpu.text_measurer());
+                }
+            }
+            WindowEvent::KeyboardInput { event: key, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    press = settings.key(&key, env, gpu.text_measurer());
                 }
             }
             WindowEvent::RedrawRequested => self.redraw_settings(),
             _ => {}
+        }
+        match press {
+            settings::Press::Nothing => {}
+            settings::Press::Close => self.close_settings(),
+            settings::Press::OpenFile => self.open_config_file_from_settings(),
         }
     }
 
@@ -7455,7 +7522,11 @@ impl App {
         let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
             return;
         };
-        let frame = settings.paint(&self.style, &self.pal);
+        let env = settings::Env {
+            style: &self.style,
+            config: &self.config,
+        };
+        let frame = settings.paint(env, &self.pal, gpu.text_measurer());
         settings.render(gpu, &frame);
     }
 

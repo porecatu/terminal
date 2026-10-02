@@ -197,6 +197,16 @@ reload = "Neu laden"
 keep_mine = "Meine Änderungen behalten"
 invalid_file = "Die Konfigurationsdatei ist ungültig; die Optionen sind schreibgeschützt."
 
+[settings.choice]
+block = "Block"
+beam = "Strich"
+underline = "Unterstrich"
+always = "Immer"
+hover = "Beim Überfahren"
+never = "Nie"
+top = "Oben"
+bottom = "Unten"
+
 [settings.dialog]
 close_title = "Mit ausstehenden Änderungen schließen?"
 close_body = { one = "Es gibt {count} nicht gespeicherte Änderung.", other = "Es gibt {count} nicht gespeicherte Änderungen." }

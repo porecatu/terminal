@@ -197,6 +197,16 @@ reload = "Recargar"
 keep_mine = "Mantener mis cambios"
 invalid_file = "El archivo de configuración no es válido; las opciones son de solo lectura."
 
+[settings.choice]
+block = "Bloque"
+beam = "Barra"
+underline = "Subrayado"
+always = "Siempre"
+hover = "Al pasar el ratón"
+never = "Nunca"
+top = "Arriba"
+bottom = "Abajo"
+
 [settings.dialog]
 close_title = "¿Cerrar con cambios pendientes?"
 close_body = { one = "Hay {count} cambio sin guardar.", other = "Hay {count} cambios sin guardar." }

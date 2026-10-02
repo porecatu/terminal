@@ -213,6 +213,16 @@ reload = "Reload"
 keep_mine = "Keep my changes"
 invalid_file = "The configuration file is invalid; the options are read-only."
 
+[settings.choice]
+block = "Block"
+beam = "Beam"
+underline = "Underline"
+always = "Always"
+hover = "On hover"
+never = "Never"
+top = "Top"
+bottom = "Bottom"
+
 [settings.dialog]
 close_title = "Close with pending changes?"
 close_body = { one = "There is {count} unsaved change.", other = "There are {count} unsaved changes." }
