@@ -185,6 +185,8 @@ Cenário: chave desconhecida não quebra
 
 - **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa em faixa própria) — desenhada no canvas, fase `[v2]`. Decorações nativas continuam só no macOS; Windows/Linux já têm controles de janela e resize próprios, resolvidos na barra de abas existente, não numa faixa nova ([ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md), que supersede parcialmente [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) nisso)
 - **Painel de configurações por GUI** — desenhado no canvas, fase `[v2]`. Quando existir, escreverá no TOML, sem introduzir segunda fonte de verdade ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))
+
+  > **Emenda (2026-10-02).** Saiu do `[v2]`: é o [PRD-016](prd-016-tela-de-configuracoes.md), numa janela própria ([ADR-0059](../adr/0059-janela-de-configuracoes.md)), com a anatomia do [ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md). Os tokens de aparência deste PRD continuam editáveis só pelo arquivo — ficam fora do catálogo curado da tela.
 - Temas visuais de chrome distribuídos como arquivo separado e importável (v2)
 - Aparência definida por script ou lógica ([ADR-0003](../adr/0003-formato-de-configuracao.md))
 - Imagem de fundo na barra de abas

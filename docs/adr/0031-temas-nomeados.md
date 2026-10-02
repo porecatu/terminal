@@ -50,6 +50,9 @@ Com nenhum `[[themes]]` declarado, `theme.cycle` não faz nada — não é erro,
 
 Mesma regra do zoom de fonte (RF-5.9), e pela mesma razão: o arquivo é do usuário, o app não o edita — o painel de configurações `[v2]` do [ADR-0009](0009-referencia-visual-e-reconciliacao.md) é a única superfície que um dia escreverá nele, e por ação explícita. O tema escolhido por atalho vale **para a sessão**, e:
 
+> **Revisto pelo [ADR-0059](0059-janela-de-configuracoes.md) (2026-10-02).** A superfície prevista aqui existe: a tela de configurações do [PRD-016](../prd/prd-016-tela-de-configuracoes.md) grava `terminal.theme`, e só no clique em Salvar. O ciclo continua sem escrever no arquivo, e o tema de sessão não vira pendência da tela (RF-16.25).
+
+
 - **Uma recarga do arquivo mantém o tema ciclado**, desde que ele ainda exista. O tema de sessão é uma escolha do usuário, não um valor de config, e descartá-lo a cada gravação faria `Ctrl+Shift+Y` parecer aleatório para quem tem o editor aberto.
 - Se o tema ciclado **desaparecer** do arquivo, a sessão volta ao `theme` declarado (ou a nenhum) e um aviso de informação diz qual tema sumiu.
 - **Persistir o tema de sessão é F5**, junto com o resto do estado de janela ([PRD-003](../prd/prd-003-persistencia-de-sessao.md)); até lá, reiniciar volta ao `theme` do arquivo.

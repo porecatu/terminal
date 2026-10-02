@@ -83,6 +83,8 @@ O ADR-0003 decidiu que a configuração vive em um arquivo TOML. O design tem um
 
 Isso preserva o ADR-0003 intacto e mantém a propriedade que importa: o usuário pode versionar seus dotfiles e ver toda a configuração em um lugar. O custo é que o painel precisa preservar comentários e formatação ao regravar o arquivo — problema conhecido, resolvível com um parser que preserva a árvore sintática.
 
+> **Revisto pelo [ADR-0059](0059-janela-de-configuracoes.md) (2026-10-02).** O painel deixou de ser `[v2]`: entrou fora da ordem de fases pelo [PRD-016](../prd/prd-016-tela-de-configuracoes.md), como **janela própria** com guia lateral e painel de opções, não como o drawer do canvas. A regra desta seção continua inteira — a tela só edita o TOML, e o arquivo é a única fonte de verdade. O custo nomeado acima foi pago pelo [ADR-0058](0058-escrita-do-arquivo-de-configuracao.md): `toml_edit` e edição por chave.
+
 ### 7. Barra de título customizada
 
 **Decisão:** `[v2]`. O default do v1 permanece `decorations = true`, com as decorações do sistema. Quando a barra customizada existir, será opcional e configurável, nunca imposta — decorações nativas trazem comportamento de janela que é caro e arriscado reimplementar em três plataformas.
@@ -128,7 +130,7 @@ Traria fidelidade total ao mockup. Descartada pelo motivo original do ADR-0008: 
 - A pasta `docs/design/` precisa ser mantida em sincronia com o canvas manualmente. Canvas alterado sem regravar a cópia produz documentação errada.
 - O mockup mostra mais do que o v1 entrega, e isso pode gerar expectativa equivocada em quem olhe só a imagem. Mitigado pelas marcações `v2` no mockup estático e pelo aviso de fase em três lugares.
 - Nove requisitos do v1 não têm representação visual (seção 4.2 da especificação visual). Continuam sendo decisão de desenho na implementação.
-- O painel de configurações do `[v2]` herda um problema real: regravar TOML preservando comentários.
+- O painel de configurações do `[v2]` herda um problema real: regravar TOML preservando comentários. *Resolvido pelo [ADR-0058](0058-escrita-do-arquivo-de-configuracao.md).*
 
 ### Riscos e mitigação
 

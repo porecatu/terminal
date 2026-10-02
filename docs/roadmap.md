@@ -779,6 +779,32 @@ O ponto de partida é um inventário: ~180 frases em pt-BR escritas no código, 
 
 ---
 
+## Depois do v1 — tela de configurações — em planejamento
+
+Fora da ordem de fases, como as seis entradas acima, e pelo caminho da barra de status e dos painéis divididos: **promoção de um elemento `[v2]`** que o canvas desenhou — o painel de configurações GUI da §2.12 da [especificação visual](design/especificacao-visual.md) —, a pedido do dono do produto, mas sem rascunho a promover e numa forma diferente da desenhada. O [PRD-016](prd/prd-016-tela-de-configuracoes.md) pede uma **janela própria**, com guia lateral de grupos e painel de opções, que grave no `porecatu.toml` o que hoje só se muda editando o arquivo; o [ADR-0058](adr/0058-escrita-do-arquivo-de-configuracao.md) decide como o arquivo é regravado sem perder nada (`toml_edit`, edição por chave, gravação atômica, conflito por conteúdo); o [ADR-0059](adr/0059-janela-de-configuracoes.md), a janela, o ciclo de vida, o teclado e a ação `settings.open`; o [ADR-0060](adr/0060-anatomia-da-tela-de-configuracoes.md), a anatomia, **Proposto** até o aval visual.
+
+O ponto de partida: nada no projeto escreve o `porecatu.toml` (`Config` só desserializa), toda janela é um `Workspace` de terminal, e a engrenagem abre o arquivo no editor do sistema (RF-11.27). A regra herdada do [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) §6 não muda: **o arquivo é a única fonte de verdade**, e quem aplica é a recarga a quente.
+
+**Sete etapas:**
+
+1. **Documentação e decisão — feita.** PRD-016; ADR-0058, ADR-0059 e ADR-0060; blockquotes de revisão no ADR-0008 (tabela de teclas), ADR-0009 §6, ADR-0015 "Escopo", ADR-0031 §4 e ADR-0043 §6; emendas no PRD-000, PRD-004, PRD-011 (RF-11.27) e PRD-015; `settings.open` no catálogo de ações; índice de ADRs, tabela de fases da especificação (só a classificação), README (stack com `toml_edit`), `docs/design/README.md` e CLAUDE.md. **A §2.12 da especificação não é reescrita aqui** — descreve o drawer até o PR que muda o binário ([ADR-0028](adr/0028-o-binario-como-referencia-visual.md)) —, e **`[appearance.settings]` não entra no arquivo de exemplo** — `tests/example_toml.rs` reprova chave antes do campo.
+2. **Escrita do arquivo.** `toml_edit` pinado em `porecatu-config`; módulo `edit` com `KeyPath`, `EditValue`, `Edit`, `ConfigDocument::apply`, gravação atômica no alvo real do link, conflito por conteúdo e revalidação por `parse` (ADR-0058 §2 a §4). Testes de ida e volta byte a byte do arquivo de exemplo, de tabela inline, chave pontilhada, CRLF, `Remove` preservando o comentário acima, e de mescla sobre arquivo alterado. **Sem comportamento observável novo.**
+3. **Janela vazia e ação.** `Action::SettingsOpen` e defaults (com `config.reload` no macOS); `App.settings: Option<SettingsWindow>` com roteamento por `WindowId`; engrenagem disparando a ação; criação centrada, singleton, cabeçalho com controles de janela fora do macOS, fechamento, encerramento do app com a janela aberta; árvore de acessibilidade própria e frases no catálogo. A janela abre com a guia e o rodapé, ainda sem opções.
+4. **Catálogo, controles e Salvar/Descartar.** `settings/catalog.rs`, `draft.rs` e `layout.rs`; os controles do ADR-0060 §3 (alternância extraída da barra de busca, campo de texto e numérico, segmentado, escolha por lista, listas editáveis, lista de temas); pendências, validação de faixa, restaurar padrão, Salvar e Descartar sobre o `edit` da etapa 2; diálogo de três botões ao fechar com pendências; `[appearance.settings]` no código, no arquivo de exemplo e na §1.7, na mesma leva. **Aval visual pedido aqui**, sobre a build.
+5. **Atalhos.** `settings/shortcuts.rs`: lista de ações vinculáveis com atalhos efetivos, filtro, captura pelo mesmo caminho de `Chord` do `keymap`, conflito com Substituir, restaurar padrão, gravação em `[keybindings.<plataforma>]`.
+6. **Arquivo inexistente, inválido e alterado fora.** Criação a partir do exemplo embutido no primeiro Salvar; somente leitura com faixa de erro; faixa de conflito com Recarregar e Manter; recarga entregue à janela. A §2.12 da especificação é reescrita e a §4.4 ganha a entrada; ADR-0060 passa a Aceito com o que o aval tiver mudado.
+7. **Verificação ao vivo e fechamento.** Os treze cenários do PRD-016 numa instância isolada (`--config` e `PORECATU_SESSION` temporários, PID anotado); seção no guia do usuário; CHANGELOG; `version.workspace` em `0.9.0`.
+
+**Escopo:** RF-16.1 a RF-16.33.
+
+**Aparência:** uma janela nova, sobre os tokens que o canvas já tinha dado ao painel de configurações e a widgets que o binário já desenha; **nenhuma cor nova**, um ícone novo (`rotate-ccw`) e nove chaves de dimensão em `[appearance.settings]`, sete com valor novo — todos sujeitos ao aval visual da etapa 4.
+
+**Dependências:** uma direta nova, `toml_edit`, que já estava no `Cargo.lock` como dependência de compilação de `winit` em parte das plataformas.
+
+**Critério de saída:** toda opção do catálogo do RF-16.11 alterável pela tela, gravada no `porecatu.toml` sem mudar um byte fora das chaves editadas, e aplicada pela recarga a quente; atalho remapeado pela tela vale na janela de terminal sem reiniciar; arquivo inexistente, inválido e alterado fora tratados como o PRD descreve; `verify-docs.py`, `cargo test --workspace`, `clippy -D warnings` e `cargo fmt --check` verdes.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

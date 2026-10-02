@@ -99,6 +99,8 @@ Não entra navegação de chrome por `Tab`/`Shift+Tab`. Leitor de tela navega a 
 
 A razão de não somar a travessia é concreta: `Tab` num terminal pertence ao shell, onde é completação. Capturar `Tab` no nível do app para andar pelo chrome quebraria autocompletar em toda aba, e o ADR-0008 é explícito sobre o que o app pode reivindicar. Dentro do editor de grupo, `Tab` já percorre as três regiões — mas ali existe um modo de captura modal, que é justamente o que a barra de abas não tem.
 
+> **Revisto pelo [ADR-0059](0059-janela-de-configuracoes.md) §3 e §5 (2026-10-02).** A janela de configurações não tem terminal, e por isso `Tab`/`Shift+Tab` percorrem guia, opções e rodapé dentro dela. Ela tem a **própria árvore**, montada por um segundo construtor em `access.rs`, projeção do layout dela — o princípio do §2 vale igual. Nada muda nas janelas de terminal.
+
 ## Alternativas consideradas
 
 ### Escrever a integração de acessibilidade à mão, por plataforma

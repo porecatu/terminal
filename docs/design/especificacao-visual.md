@@ -6,7 +6,7 @@ Registro dos valores de aparência do chrome. **O binário é a referência norm
 
 > **Nenhuma mudança de aparência sem aval do dono do produto** (ADR-0028 §4). A seção 4.4 é histórico, não lista de tarefas: nada nela autoriza mexer na interface.
 
-> **Aviso de fase.** O mockup contém elementos que **não são do v1**, e para o que é `[v1]` ele é referência **histórica** — divergência entre ele e o binário não é bug. Antes de implementar qualquer coisa daqui, consulte a [tabela de fases](#3-tabela-de-fases). Perfis, paleta de comandos, painel de configurações e a faixa de identidade da barra de título são todos `[v2]`. A **barra de status** deixou de ser: entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases. Os **painéis divididos** também, pelo [ADR-0053](../adr/0053-paineis-divididos.md) — mas o **cabeçalho de painel** que o canvas desenha junto com eles continua `[v2]`, e por decisão de não fazer, não por fase.
+> **Aviso de fase.** O mockup contém elementos que **não são do v1**, e para o que é `[v1]` ele é referência **histórica** — divergência entre ele e o binário não é bug. Antes de implementar qualquer coisa daqui, consulte a [tabela de fases](#3-tabela-de-fases). Perfis, paleta de comandos e a faixa de identidade da barra de título são todos `[v2]`. O **painel de configurações** saiu dessa lista pelo [PRD-016](../prd/prd-016-tela-de-configuracoes.md), como janela própria e não como o drawer do canvas; a §2.12 ainda descreve o drawer até o PR que mudar o binário ([ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md)). A **barra de status** deixou de ser: entrou no produto pelo [ADR-0048](../adr/0048-barra-de-status.md), fora da ordem de fases. Os **painéis divididos** também, pelo [ADR-0053](../adr/0053-paineis-divididos.md) — mas o **cabeçalho de painel** que o canvas desenha junto com eles continua `[v2]`, e por decisão de não fazer, não por fase.
 
 ---
 
@@ -957,7 +957,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | **Paleta de comandos e botão de busca** | `[v2]` | [PRD-008](../prd/prd-008-paleta-de-comandos.md) *(rascunho)* |
 | **Barra de status** | `[v1]` | [PRD-009](../prd/prd-009-barra-de-status.md), [ADR-0048](../adr/0048-barra-de-status.md) — fora da ordem de fases |
 | Indicador de commits atrás do remoto (§2.8), com sublinhado sob o cursor | `[v1]` | [PRD-013](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) — fora da ordem de fases; o primeiro alvo clicável da barra |
-| **Painel de configurações GUI** | `[v2]` | [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) — sem PRD |
+| **Painel de configurações GUI** — janela própria com guia lateral, não o drawer do canvas | `[v1]` | [PRD-016](../prd/prd-016-tela-de-configuracoes.md), [ADR-0059](../adr/0059-janela-de-configuracoes.md), [ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md) — fora de fase, em planejamento; a §2.12 é reescrita no PR que muda o binário |
 | **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa) | `[v2]` | ADR-0009 (parcial; controles de janela e resize já são `[v1]`, ver [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) e §2.2.1) — sem PRD |
 
 ---
@@ -1006,7 +1006,7 @@ O comportamento da seleção de texto — gesto, semântica de palavra, recorte 
 
 ### 4.3 Elementos do design **sem** requisito no v1
 
-Todos `[v2]`, todos endereçados na tabela de fases: perfis e badge, tela de nova aba, paleta de comandos, painel de configurações, faixa de identidade da barra de título.
+Todos `[v2]`, todos endereçados na tabela de fases: perfis e badge, tela de nova aba, paleta de comandos, faixa de identidade da barra de título. O painel de configurações saiu desta lista: tem requisito desde o [PRD-016](../prd/prd-016-tela-de-configuracoes.md).
 
 A **barra de status** saiu desta lista em 2026-09-09, pelo [ADR-0048](../adr/0048-barra-de-status.md) — a primeira redução dela desde que foi escrita. O [PRD-009](../prd/prd-009-barra-de-status.md) foi promovido a Aprovado no mesmo movimento.
 

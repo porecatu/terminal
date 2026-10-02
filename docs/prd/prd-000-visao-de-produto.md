@@ -77,6 +77,8 @@ Vários deles **já estão desenhados** no design canvas ([`docs/design/`](../de
 - **Perfis de aba** (aba que abre WSL, aba que abre SSH). Recurso natural para v2; não é do núcleo. — *desenhado, `[v2]`, [PRD-007](prd-007-perfis-de-aba.md) (rascunho)*
 - **Paleta de comandos.** Busca unificada de abas, grupos e ações. — *desenhado, `[v2]`, [PRD-008](prd-008-paleta-de-comandos.md) (rascunho)*
 - **Configuração por interface gráfica.** No v1, a config é o arquivo TOML ([ADR-0003](../adr/0003-formato-de-configuracao.md)). — *desenhado, `[v2]`; quando existir, escreverá no TOML ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))*
+
+  > **Emenda (2026-10-02).** Deixou de ser não-objetivo: a tela de configurações entrou fora da ordem de fases pelo [PRD-016](prd-016-tela-de-configuracoes.md), escrevendo no TOML como o ADR-0009 §6 exige.
 - **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa). Decorações nativas continuam só no macOS; Windows/Linux já têm controles de janela e resize próprios ([ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md)). — *desenhado, `[v2]` ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))*
 - **Multiplexação remota** (anexar a sessão em servidor, estilo `tmux -CC`). Problema grande e ortogonal.
 - **Sistema de plugins.** Sem lógica programável na config no v1 ([ADR-0003](../adr/0003-formato-de-configuracao.md)).

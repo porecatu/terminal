@@ -100,6 +100,8 @@ Não são escopo novo. Cada um tem requisito aprovado desde a fase indicada, e n
 
 **RF-11.27** — O botão de configurações da barra de abas deixa de ser inerte: ele abre o arquivo de configuração do usuário no editor padrão do sistema.
 
+> **Emenda (2026-10-02, [PRD-016](prd-016-tela-de-configuracoes.md) RF-16.1 e RF-16.14).** O botão passa a abrir a **tela de configurações**. Abrir o arquivo no editor — inclusive criá-lo a partir do exemplo embutido — continua existindo, como o botão "Abrir arquivo no editor" do rodapé da tela.
+
 **RF-11.28** — `zoom_scope = "active"` passa a ter efeito: com esse valor, o zoom de sessão vale só para a aba ativa (RF-5.10). Hoje o zoom é sempre do processo inteiro.
 
 **RF-11.29** — O editor de grupo aceita cor por **hexadecimal**, além dos seis swatches da paleta (RF-2.10).
