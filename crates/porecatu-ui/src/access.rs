@@ -38,6 +38,7 @@ use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
+use crate::settings::{FOOTER_BUTTONS, FooterButton, Group, Layout as SettingsLayout};
 use crate::status_bar::{SegmentRole, StatusBarLayout};
 use crate::tab_bar::{self, Indicator, TabBarStyle};
 use crate::terminal_menu::{TerminalContextMenu, terminal_menu_items};
@@ -841,6 +842,131 @@ fn build_session_picker(
     focus
 }
 
+// ---- Janela de configurações (ADR-0059 §5)
+
+/// Bloco de `NodeId` da janela de configurações: acima de tudo o que a árvore
+/// da janela de terminal usa (a maior base dela é `PANE_ID_BASE` + 1_000 por
+/// aba). Cada janela tem a sua árvore, então a colisão não seria um erro --
+/// mas um bloco separado evita confundir um nó com o de outra janela em teste
+/// e em log.
+const SETTINGS_ID_BASE: u64 = 2_000_000;
+const SETTINGS_ROOT_ID: NodeId = NodeId(SETTINGS_ID_BASE);
+const SETTINGS_GROUP_LIST_ID: NodeId = NodeId(SETTINGS_ID_BASE + 1);
+const SETTINGS_PANEL_ID: NodeId = NodeId(SETTINGS_ID_BASE + 2);
+const SETTINGS_FOOTER_ID: NodeId = NodeId(SETTINGS_ID_BASE + 3);
+const SETTINGS_FOOTER_BUTTON_BASE: u64 = SETTINGS_ID_BASE + 10;
+const SETTINGS_WINDOW_MINIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 20);
+const SETTINGS_WINDOW_MAXIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 21);
+const SETTINGS_WINDOW_CLOSE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 22);
+const SETTINGS_GROUP_ITEM_BASE: u64 = SETTINGS_ID_BASE + 100;
+
+fn settings_group_item_id(index: usize) -> NodeId {
+    NodeId(SETTINGS_GROUP_ITEM_BASE + index as u64)
+}
+
+fn settings_footer_button_id(button: FooterButton) -> NodeId {
+    let index = FOOTER_BUTTONS
+        .iter()
+        .position(|candidate| *candidate == button)
+        .expect("todo botão do rodapé está em FOOTER_BUTTONS");
+    NodeId(SETTINGS_FOOTER_BUTTON_BASE + index as u64)
+}
+
+/// Monta a árvore da janela de configurações: projeção do mesmo `Layout` que
+/// a pintura consome (ADR-0043 §2: árvore é projeção do layout, não uma
+/// segunda descrição). Existem nesta etapa a janela -- com o idioma do
+/// catálogo em uso --, a guia como lista com os nove grupos selecionáveis, o
+/// painel e os três botões do rodapé; as opções entram com o layout delas.
+///
+/// `has_pending` diz se há alteração pendente: sem ela, Descartar e Salvar
+/// são anunciados como indisponíveis (RF-16.14, "esmaecidos, nunca
+/// ausentes").
+pub(crate) fn build_settings_tree(
+    layout: &SettingsLayout,
+    groups: &[Group],
+    selected: Group,
+    has_pending: bool,
+    catalog: &Catalog,
+    language: &str,
+) -> TreeUpdate {
+    let mut nodes: Vec<(NodeId, Node)> = Vec::new();
+    let mut root_children: Vec<NodeId> = Vec::new();
+
+    // Onde a decoração é do sistema (macOS) não há cabeçalho nosso e, com
+    // ele, não há botão de janela nosso.
+    if layout.header.is_some() {
+        for (id, label) in [
+            (
+                SETTINGS_WINDOW_MINIMIZE_ID,
+                msg::access::window_minimize(catalog),
+            ),
+            (
+                SETTINGS_WINDOW_MAXIMIZE_ID,
+                msg::access::window_maximize(catalog),
+            ),
+            (SETTINGS_WINDOW_CLOSE_ID, msg::access::window_close(catalog)),
+        ] {
+            nodes.push((id, leaf(Role::Button, label)));
+            root_children.push(id);
+        }
+    }
+
+    let mut item_ids = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        let id = settings_group_item_id(index);
+        let mut node = leaf(Role::ListBoxOption, group.label(catalog));
+        node.set_selected(*group == selected);
+        node.add_action(accesskit::Action::Focus);
+        nodes.push((id, node));
+        item_ids.push(id);
+    }
+    let mut list = container(Role::ListBox, item_ids);
+    list.set_label(msg::access::settings_groups(catalog));
+    nodes.push((SETTINGS_GROUP_LIST_ID, list));
+    root_children.push(SETTINGS_GROUP_LIST_ID);
+
+    let mut footer_children = Vec::new();
+    for button in FOOTER_BUTTONS {
+        let (label, available) = match button {
+            FooterButton::OpenFile => (msg::settings::button::open_file(catalog), true),
+            FooterButton::Discard => (msg::settings::button::discard(catalog), has_pending),
+            FooterButton::Save => (msg::settings::button::save(catalog), has_pending),
+        };
+        let id = settings_footer_button_id(button);
+        let mut node = leaf(Role::Button, label);
+        if !available {
+            node.set_disabled();
+        }
+        nodes.push((id, node));
+        footer_children.push(id);
+    }
+    nodes.push((SETTINGS_FOOTER_ID, container(Role::Group, footer_children)));
+
+    // O painel é o do grupo escolhido -- o rótulo diz qual.
+    let mut panel = container(Role::TabPanel, vec![SETTINGS_FOOTER_ID]);
+    panel.set_label(format!(
+        "{}: {}",
+        msg::access::settings_panel(catalog),
+        selected.label(catalog)
+    ));
+    nodes.push((SETTINGS_PANEL_ID, panel));
+    root_children.push(SETTINGS_PANEL_ID);
+
+    let mut root = Node::new(Role::Window);
+    root.set_label(msg::settings::window_title(catalog));
+    // ADR-0056 §11: o idioma do catálogo **efetivamente carregado**.
+    root.set_language(language);
+    root.set_children(root_children);
+    nodes.push((SETTINGS_ROOT_ID, root));
+
+    TreeUpdate {
+        nodes,
+        tree: Some(TreeInfo::new(SETTINGS_ROOT_ID)),
+        tree_id: TreeId::ROOT,
+        focus: SETTINGS_ROOT_ID,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -1446,5 +1572,171 @@ mod tests {
         // Lista vazia: linha "nenhuma sessão salva" sem ser alvo de foco.
         let empty_row = node(&update, session_picker_row_id(0));
         assert_eq!(empty_row.label(), Some("nenhuma sessão salva"));
+    }
+}
+
+#[cfg(test)]
+mod settings_tree_tests {
+    use super::*;
+    use crate::messages::test_support;
+    use crate::settings::layout_for_test;
+
+    fn tree(selected: Group, has_pending: bool, with_header: bool, language: &str) -> TreeUpdate {
+        let layout = layout_for_test(with_header);
+        build_settings_tree(
+            &layout,
+            &Group::ALL,
+            selected,
+            has_pending,
+            &test_support::pt_br(),
+            language,
+        )
+    }
+
+    fn node(update: &TreeUpdate, id: NodeId) -> &Node {
+        &update
+            .nodes
+            .iter()
+            .find(|(n, _)| *n == id)
+            .expect("nó ausente")
+            .1
+    }
+
+    #[test]
+    fn the_root_is_a_window_with_the_language_of_the_catalog() {
+        let update = tree(Group::General, false, true, "pt-BR");
+        let root = node(&update, SETTINGS_ROOT_ID);
+        assert_eq!(root.role(), Role::Window);
+        assert_eq!(root.label(), Some("Configurações"));
+        assert_eq!(root.language(), Some("pt-BR"));
+        assert_eq!(update.tree.as_ref().unwrap().root, SETTINGS_ROOT_ID);
+        assert_eq!(update.focus, SETTINGS_ROOT_ID);
+    }
+
+    #[test]
+    fn the_sidebar_is_a_list_with_the_nine_groups_and_one_selected() {
+        let update = tree(Group::Terminal, false, true, "pt-BR");
+        let list = node(&update, SETTINGS_GROUP_LIST_ID);
+        assert_eq!(list.role(), Role::ListBox);
+        let items: Vec<&Node> = list
+            .children()
+            .iter()
+            .map(|id| node(&update, *id))
+            .collect();
+        let labels: Vec<&str> = items.iter().map(|n| n.label().unwrap()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Geral",
+                "Shell",
+                "Terminal",
+                "Aparência",
+                "Sessão",
+                "Projeto",
+                "Git",
+                "Painéis",
+                "Atalhos"
+            ]
+        );
+        assert!(items.iter().all(|n| n.role() == Role::ListBoxOption));
+        let selected: Vec<&str> = items
+            .iter()
+            .filter(|n| n.is_selected() == Some(true))
+            .map(|n| n.label().unwrap())
+            .collect();
+        assert_eq!(selected, ["Terminal"]);
+    }
+
+    #[test]
+    fn the_panel_names_the_selected_group_and_holds_the_footer() {
+        let update = tree(Group::Git, false, true, "pt-BR");
+        let panel = node(&update, SETTINGS_PANEL_ID);
+        assert_eq!(panel.role(), Role::TabPanel);
+        assert!(panel.label().unwrap().ends_with("Git"));
+        assert_eq!(panel.children(), [SETTINGS_FOOTER_ID]);
+        let footer = node(&update, SETTINGS_FOOTER_ID);
+        let labels: Vec<&str> = footer
+            .children()
+            .iter()
+            .map(|id| node(&update, *id).label().unwrap())
+            .collect();
+        assert_eq!(labels, ["Abrir arquivo no editor", "Descartar", "Salvar"]);
+    }
+
+    #[test]
+    fn discard_and_save_are_disabled_without_pending_changes() {
+        let disabled = |update: &TreeUpdate| -> Vec<bool> {
+            node(update, SETTINGS_FOOTER_ID)
+                .children()
+                .iter()
+                .map(|id| node(update, *id).is_disabled())
+                .collect()
+        };
+        assert_eq!(
+            disabled(&tree(Group::General, false, true, "pt-BR")),
+            [false, true, true]
+        );
+        assert_eq!(
+            disabled(&tree(Group::General, true, true, "pt-BR")),
+            [false, false, false]
+        );
+    }
+
+    #[test]
+    fn window_buttons_exist_only_with_our_header() {
+        let with = tree(Group::General, false, true, "pt-BR");
+        let without = tree(Group::General, false, false, "pt-BR");
+        let root_children =
+            |update: &TreeUpdate| node(update, SETTINGS_ROOT_ID).children().to_vec();
+        assert!(root_children(&with).contains(&SETTINGS_WINDOW_CLOSE_ID));
+        assert!(!root_children(&without).contains(&SETTINGS_WINDOW_CLOSE_ID));
+        assert_eq!(
+            root_children(&with).len(),
+            root_children(&without).len() + 3
+        );
+    }
+
+    #[test]
+    fn every_node_id_is_unique_and_inside_the_settings_block() {
+        let update = tree(Group::General, true, true, "pt-BR");
+        let mut ids: Vec<u64> = update.nodes.iter().map(|(id, _)| id.0).collect();
+        assert!(ids.iter().all(|id| *id >= SETTINGS_ID_BASE));
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total);
+        // Acima de todo bloco da janela de terminal.
+        assert!(SETTINGS_ID_BASE > PANE_ID_BASE + 1_000 * 1_000);
+    }
+
+    #[test]
+    fn every_child_is_a_node_of_the_tree() {
+        let update = tree(Group::General, true, true, "pt-BR");
+        let ids: Vec<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+        for (_, node) in &update.nodes {
+            for child in node.children() {
+                assert!(ids.contains(child), "filho {child:?} fora da árvore");
+            }
+        }
+    }
+
+    #[test]
+    fn a_language_switch_changes_the_labels_and_the_language() {
+        let layout = layout_for_test(true);
+        let en = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::General,
+            false,
+            &test_support::en_us(),
+            "en-US",
+        );
+        let root = node(&en, SETTINGS_ROOT_ID);
+        assert_eq!(root.label(), Some("Settings"));
+        assert_eq!(root.language(), Some("en-US"));
+        assert_eq!(
+            node(&en, settings_group_item_id(0)).label(),
+            Some("General")
+        );
     }
 }

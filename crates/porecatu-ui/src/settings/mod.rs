@@ -10,15 +10,19 @@
 //! encerrar o app). Itens, opções, rodapé, acessibilidade e pendências entram
 //! com as tarefas seguintes.
 
+mod actions;
 mod catalog;
 mod draft;
 mod layout;
+mod phrases;
 mod window;
 
 use porecatu_render::Color;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::window::WindowAttributes;
 
+pub(crate) use catalog::Group;
+pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
 pub(crate) use window::{Press, SettingsWindow};
 
 use crate::palette;
@@ -156,4 +160,16 @@ mod tests {
             (10, 20)
         );
     }
+}
+
+/// Um `Layout` de tamanho fixo para os testes da árvore de acessibilidade,
+/// com ou sem o cabeçalho nosso (sem ele é o macOS).
+#[cfg(test)]
+pub(crate) fn layout_for_test(with_header: bool) -> Layout {
+    layout::layout(
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+        if with_header { 52.0 } else { 0.0 },
+        SIDEBAR_WIDTH,
+    )
 }

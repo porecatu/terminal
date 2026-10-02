@@ -19,14 +19,16 @@ use porecatu_render::{
     Frame, GpuContext, Layer, Primitive, Quad, Rect, TextRun, WindowSurface, icon,
 };
 use winit::dpi::PhysicalPosition;
+use winit::event::WindowEvent;
 use winit::window::{CursorIcon, Window, WindowId};
 
-use super::layout::{self, Layout};
+use super::Group;
+use super::layout::{self, Layout, group_items};
 use super::{HEADER_GAP_PX, PANEL_BACKGROUND, SIDEBAR_WIDTH, TITLE_SIZE_PX};
 use crate::messages::msg;
 use crate::palette::ResolvedPalette;
 use crate::tab_bar::{self, TabBarStyle, WindowButtonHit};
-use crate::{DOUBLE_CLICK_THRESHOLD, bar_height, chrome, is_macos, overlay, titlebar};
+use crate::{DOUBLE_CLICK_THRESHOLD, access, bar_height, chrome, is_macos, overlay, titlebar};
 
 /// O que um clique esquerdo pede a quem possui a janela. A janela não se
 /// fecha sozinha: quem a guarda (`App.settings`) é quem a solta.
@@ -58,6 +60,13 @@ pub(crate) struct SettingsWindow {
     /// O mesmo `Arc<Catalog>` do processo (`App::catalog`); a troca de idioma
     /// o substitui aqui junto com as janelas de terminal.
     catalog: Arc<Catalog>,
+    /// Adaptador de acessibilidade (ADR-0043 §1, ADR-0059 §5): um por janela,
+    /// criado antes de ela ficar visível. Sem leitor de tela conectado, a
+    /// árvore nem é montada (`update_if_active`).
+    access_adapter: accesskit_winit::Adapter,
+    /// O grupo escolhido na guia. O padrão é Geral (RF-16.9); a tarefa que
+    /// ativa a guia o troca, e o último escolhido passa a viver em `App`.
+    selected_group: Group,
 }
 
 impl SettingsWindow {
@@ -66,6 +75,7 @@ impl SettingsWindow {
         surface: WindowSurface,
         scale: f32,
         catalog: Arc<Catalog>,
+        access_adapter: accesskit_winit::Adapter,
     ) -> Self {
         let size = window.inner_size();
         Self {
@@ -78,7 +88,39 @@ impl SettingsWindow {
             hovered_button: None,
             last_titlebar_click: None,
             catalog,
+            access_adapter,
+            selected_group: Group::General,
         }
+    }
+
+    /// ADR-0043 §1: o adaptador precisa ver todo `WindowEvent` da janela,
+    /// antes de ele ser tratado.
+    pub(crate) fn process_access_event(&mut self, event: &WindowEvent) {
+        self.access_adapter.process_event(&self.window, event);
+    }
+
+    /// Monta a árvore de acessibilidade e a entrega -- só se houver cliente
+    /// conectado, e nunca pede quadro (ADR-0043 §3). `menu_padding` e
+    /// `menu_item_height` são os do item de menu, que é o que a guia é
+    /// (ADR-0060 §2); `language` é a etiqueta BCP 47 do catálogo em uso.
+    pub(crate) fn refresh_access_tree(
+        &mut self,
+        style: &TabBarStyle,
+        menu_padding: f32,
+        menu_item_height: f32,
+        language: &str,
+    ) {
+        let layout = self.layout(style);
+        let groups: Vec<Group> = group_items(layout.sidebar, menu_padding, menu_item_height)
+            .into_iter()
+            .map(|(group, _)| group)
+            .collect();
+        let selected = self.selected_group;
+        let has_pending = self.has_pending_changes();
+        let catalog = &self.catalog;
+        self.access_adapter.update_if_active(|| {
+            access::build_settings_tree(&layout, &groups, selected, has_pending, catalog, language)
+        });
     }
 
     pub(crate) fn window_id(&self) -> WindowId {
@@ -102,8 +144,14 @@ impl SettingsWindow {
         false
     }
 
+    /// Troca de idioma ao vivo (ADR-0056 §9): o catálogo novo vale no próximo
+    /// quadro, e o título da janela do SO -- que não é desenhado, é do
+    /// sistema -- acompanha agora. A árvore de acessibilidade é refeita na
+    /// próxima volta do event loop.
     pub(crate) fn set_catalog(&mut self, catalog: &Arc<Catalog>) {
         self.catalog = Arc::clone(catalog);
+        self.window
+            .set_title(&msg::settings::window_title(&self.catalog));
     }
 
     pub(crate) fn request_redraw(&self) {

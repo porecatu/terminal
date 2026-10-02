@@ -6787,6 +6787,18 @@ impl App {
         for state in self.windows.values_mut() {
             state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
         }
+        self.refresh_settings_access_tree();
+    }
+
+    /// A árvore da janela de configurações, no mesmo ponto único das de
+    /// terminal (ADR-0043 §3). Usa o idioma do catálogo em uso e as métricas
+    /// de item de menu que a guia herda (ADR-0060 §2).
+    fn refresh_settings_access_tree(&mut self) {
+        let menu = &self.config.appearance.context_menu;
+        let (padding, item_height) = (menu.padding as f32, menu.item_height as f32);
+        if let Some(settings) = &mut self.settings {
+            settings.refresh_access_tree(&self.style, padding, item_height, &self.language_tag);
+        }
     }
 
     /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: mais próxima
@@ -7357,6 +7369,13 @@ impl App {
                 return None;
             }
         };
+        // ADR-0043 §1: o adaptador exige a janela ainda invisível -- criado
+        // antes de `set_visible`, como em `create_window_with_attributes`.
+        let access_adapter = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        );
         window.set_visible(true);
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
@@ -7374,6 +7393,7 @@ impl App {
             surface,
             scale,
             Arc::clone(&self.catalog),
+            access_adapter,
         ))
     }
 
@@ -7387,6 +7407,9 @@ impl App {
     /// topo de `window_event` (ADR-0059 §1). Só o que esta etapa desenha e
     /// aceita; o resto é ignorado.
     fn settings_window_event(&mut self, event: WindowEvent) {
+        if let Some(settings) = &mut self.settings {
+            settings.process_access_event(&event);
+        }
         let resize_border = self.config.appearance.window_controls.resize_border as f32;
         match event {
             WindowEvent::CloseRequested => self.close_settings(),
@@ -8019,6 +8042,14 @@ impl App {
     /// montagem nem roda, custo zero. Nunca chama `request_redraw`: a
     /// árvore e o frame são consumidores independentes do mesmo estado.
     fn refresh_access_tree(&mut self, window_id: WindowId) {
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.window_id() == window_id)
+        {
+            self.refresh_settings_access_tree();
+            return;
+        }
         let Some(gpu) = &mut self.gpu else { return };
         let measurer = gpu.text_measurer();
         let style = &self.style;
