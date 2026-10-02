@@ -61,7 +61,7 @@
 | [0057](0057-idiomas-nos-artefatos.md) | Idiomas nos artefatos de release: `locales/` dentro de todo instalador, e o binário cru deixa de ser publicado | Aceito |
 | [0058](0058-escrita-do-arquivo-de-configuracao.md) | Escrita do arquivo de configuração: `toml_edit`, edição por chave e gravação atômica | Aceito |
 | [0059](0059-janela-de-configuracoes.md) | Janela de configurações: a primeira janela que não é um workspace de terminal | Aceito |
-| [0060](0060-anatomia-da-tela-de-configuracoes.md) | Anatomia da tela de configurações: guia lateral, painel de opções e os controles que faltavam | Proposto — aguarda aval visual |
+| [0060](0060-anatomia-da-tela-de-configuracoes.md) | Anatomia da tela de configurações: guia lateral, painel de opções e os controles que faltavam | Aceito — aval visual em 2026-10-02 |
 
 ## Convenção
 

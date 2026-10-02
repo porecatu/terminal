@@ -230,7 +230,7 @@ Só as oito brilhantes de cor (`red` a `cyan`) são valores novos; `black`, `whi
 |---|---|---|
 | `blink` | `1.1s step-end infinite` | cursor do terminal |
 | `pop` | `.13s ease-out`, de `opacity 0` + `translateY(-4px)` | popovers; `.14s` no modal da paleta |
-| `slidein` | `.16s ease-out`, de `translateX(24px)` + `opacity 0` | drawer de configurações |
+| `slidein` | `.16s ease-out`, de `translateX(24px)` + `opacity 0` | drawer de configurações do canvas (a tela de configurações do binário não anima, §2.12) |
 | Transições | `.15s` | rotação do caret, cor do trilho e posição do botão do toggle |
 | `reflow` | `.18s` linear ao formar grupo; **`.15s`** no colapso e na expansão | reordenação das abas ao formar grupo (RF-2.5) e ao arrastar grupo; colapso e expansão de grupo. São duas durações, uma por consumidor (`GROUP_CREATE_REFLOW_DURATION`, `COLLAPSE_REFLOW_DURATION`) |
 | Hover por brilho | `filter: brightness(1.25)` na pílula, `1.18` na aba | evita definir uma cor de hover por grupo. Resolvido em CPU (`chrome::brighten`), sem primitiva de filtro em `porecatu-render` (F4 etapa 6, [ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2). Os botões de janela (ADR-0027) continuam sendo o único hover que troca fundo e ícone |
@@ -666,17 +666,42 @@ Tipos e cores: `aba` `#5ed3bc`, `grupo` `#a68cf0`, `ação` `#e0b060`.
 
 Vazio: "Nada encontrado", `padding: 26`, centralizado, 13px `#5c646f`.
 
-### 2.12 Painel de configurações `[v2]`
+### 2.12 Tela de configurações `[v1]`
 
-Overlay `rgba(6,7,9,.45)` alinhado à direita. Drawer largura 400, altura cheia, fundo `#171b21`, borda esquerda `#2a2f38`, animação `slidein .16s`.
+Uma **janela própria do SO**, não o drawer que o canvas desenhava ([ADR-0059](../adr/0059-janela-de-configuracoes.md), [ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md), [PRD-016](../prd/prd-016-tela-de-configuracoes.md)). No máximo uma por processo, centrada sobre a janela de origem, **900×640** de abertura e **640×420** de mínimo (§1.7). Fora do macOS não tem decoração nativa: o **cabeçalho** tem a altura da barra de abas (§2.2), com o ícone `settings` na em do botão de configurações (`icon_em_size × 0.8`), o título 15px/500 `#e6eaef` depois de um `gap: 8`, a drag region e os três botões de janela (§2.2, ADR-0027). Tudo na camada `Chrome`; a lista de escolha e o tooltip na `Popover`; o diálogo na `Modal`. **Nada anima** — nem o `slidein` do drawer, nem a transição da alternância.
 
-Cabeçalho `padding: 16px 18px`, borda inferior `#23272f`: título 15px/500 `#e6eaef` e botão de fechar 24×24, raio 5, hover `#242a33`.
+**Guia lateral**, 200px, fundo `bar_background`, separador de 1px `#2a2f38`: nove itens (Geral, Shell, Terminal, Aparência, Sessão, Projeto, Git, Painéis, Atalhos), cada um um item de menu da §2.16 — `padding: 7px 8px`, raio 5, texto 12.5px `#d7dce3`, hover `#242a33`, `gap: 2`. O grupo escolhido tem o fundo **Aba ativa** `#282e37` e o texto **Máximo** `#eaeef3`; o foco do teclado é o anel de 1px `#5ed3bc` do diálogo (§2.15). Um grupo com alteração pendente leva à direita do nome o ponto 6×6 **Acento** `#5ed3bc` (o ponto dos indicadores da aba, §2.17).
 
-Corpo `padding: 18`, `gap: 24`. Três seções, cada uma com rótulo 10px uppercase `#5c646f` (`letter-spacing: .8px`):
+**Painel**, fundo `#171b21`, `padding: 18`, com **rolagem** vertical (sem barra visível) e rodapé fixo. Título do grupo 15px/500 `#e6eaef`; **rótulo de seção** 10px uppercase `#5c646f`, `letter-spacing: .8px`; `gap: 24` entre seções.
 
-- **Abas e grupos** — toggles: trilho 34×19, raio 10, `padding: 2`, ligado `#3f8f80` e desligado `#2a3038`; botão 15×15 circular `#f0f3f6`, `translateX(15px)` quando ligado, transição `.15s`. Ao lado, rótulo 12.5px `#d7dce3` e descrição 11px `#5c646f`.
-- **Perfis instalados** — linhas `padding: 9px 11px`, raio 6, fundo `#1c2028`, borda `#262b34`: badge, nome, comando mono 10.5px truncado, sistema à direita.
-- **Atalhos** — pares rótulo/tecla, chip mono 10.5px sobre `#1e232b` com borda `#2a2f38`, raio 4, `padding: 3px 7px`.
+**Linha de opção** — fundo `#1c2028`, borda `1px #262b34`, raio 6, `padding: 9px 11px`, `row_gap` (§1.7) entre linhas. À esquerda, o nome 12.5px `#d7dce3` — com, logo depois dele, o **escopo** de classe C ("vale em aba nova") em 11px `#828a96` — sobre a descrição 11px `#5c646f`, cortada com reticências (tooltip com o texto inteiro); à direita, o controle, centrado na vertical, e depois dele:
+
+- o **ponto de pendente** 6×6 Acento, quando a opção mudou e não foi gravada;
+- o botão **Restaurar padrão** — ícone `rotate-ccw`, 17×17 de desenho e 25×17 de alvo, raio 4, ícone `#727a86`, hover fundo `#39404b` e ícone `#e4e8ee` (a anatomia do botão de fechar da aba, §2.5) —, visível só com a linha sob o cursor ou focada e só se o valor difere do padrão, com tooltip (§2.20).
+
+Valor **recusado** (fora da faixa, número malformado, nome de variável vazio ou repetido): a razão em 11px `#ef8a8a` abaixo da descrição e a borda do controle em Erro; o Salvar fica indisponível enquanto houver uma. Toda linha e todo controle focável recebe o anel de foco `#5ed3bc`.
+
+**Controles.**
+
+| Controle | Anatomia |
+|---|---|
+| Alternância | trilho 34×19, raio 10, `padding: 2`, ligado `#3f8f80` e desligado `#2a3038`; botão 15×15 circular `#f0f3f6`, deslocado 15px quando ligado; **sem transição** |
+| Campo de texto e numérico | fundo `#0f1216`, borda `1px #333a45` (foco `#5ed3bc`), raio 5, 13px `#e4e8ee`, `padding: 7px 9px`, altura 30, largura `text_field_width` / `number_field_width` (§1.7); o numérico alinha à direita e `Up`/`Down` somam o passo; cursor e seleção do ADR-0035 |
+| Escolha de até três valores | segmentado: os botões do diálogo colados, altura 30, borda `1px #262b34`, texto 12.5px `#d7dce3`, raio 5 só nas pontas; o escolhido com fundo `#282e37`, borda `#39404b` e texto `#eaeef3` |
+| Escolha com mais valores (idioma) | botão com a anatomia do campo e o caret `chevron-down`; abre a lista no menu de contexto (§2.16) sob ele |
+| Lista editável (`shell.args`, diretórios autorizados) | um campo por item, o `X` do botão de fechar da aba à direita e, abaixo, o item "Adicionar" com o ícone `plus`, `gap: 6`; `Alt+Up`/`Alt+Down` reordenam o item em edição. Os diretórios autorizados levam acima o aviso do RF-16.27 em 11px `#e0b060` |
+| Lista de nome e valor (`shell.env`) | a lista editável com dois campos por item: o nome em `text_field_width / 2` e o valor no resto |
+| Lista de temas | uma linha por tema (sem tema, os embutidos e os de `[[themes]]`, na ordem do ciclo) com a **amostra** de dez quadrados `theme_swatch_size`, raio 3, `gap: 2` — fundo, texto e as oito ANSI normais; o escolhido leva a borda `1px #5ed3bc`; o tema de `theme.cycle`, se difere do arquivo, ganha uma linha 11px `#828a96` abaixo da lista e **nunca** vira pendência |
+| Atalho | o **chip** mono 10.5px sobre `#1e232b`, borda `1px #2a2f38`, raio 4, `padding: 3px 7px`, texto `Chord::label` em `#d7dce3`, lado a lado com `gap: 6`; "Nenhum atalho" em `#5c646f`. Em **captura**: borda `#5ed3bc` e a frase "Pressione a combinação…" em `#5c646f`. **Conflito**: abaixo do nome, 11px `#e0b060` com a ação em conflito, e os botões Substituir/Cancelar no lugar dos chips |
+| Filtro (Atalhos) | o campo de texto em largura cheia no topo do grupo, com a frase esmaecida `#5c646f` enquanto vazio; filtra a cada tecla por nome ou por tecla |
+
+**Rodapé**, fixo, `padding: 12px 18px`, separador de 1px `#23272f` em cima. **Abrir arquivo no editor** à esquerda; **Descartar** e **Salvar** à direita, com a anatomia do botão do diálogo (§2.15: altura 30, `padding: 0 12`, raio 5, `gap: 8`, 12.5px). **Descartar** no estilo cancelar (borda `1px #262b34`, texto `#d7dce3`, hover `#262b34`); **Salvar** é o **primeiro botão primário do app** — fundo `#3f8f80`, texto `#f0f3f6`, hover por brilho (`chrome::brighten`, 1.18, o da aba). Indisponível (nada pendente, ou um valor recusado): texto `#5c646f` e sem fundo.
+
+**Faixa** do estado do arquivo, fixa no topo do painel, de largura cheia entre as margens de 18, sem sombra (não flutua, como a barra de busca): o aviso do app (§2.14) embutido — fundo `#1a1e25`, borda `1px #2e343e`, raio 8, `padding: 11px 12px`, barra de severidade de 2px, título 12.5px/500 `#dfe4ea` e corpo 11px `#a8b0bb`, os botões à direita. **Arquivo alterado fora** com alterações pendentes: aviso `#e0b060`, título "O arquivo mudou fora daqui.", botões **Recarregar** (descarta as pendências) e **Manter minhas alterações** (o Salvar aplica as pendências sobre o arquivo novo, chave a chave; Salvar com a faixa à vista equivale a Manter). **Arquivo inválido**: erro `#ef8a8a`, o erro com linha e coluna no corpo e o botão **Abrir arquivo no editor**; a tela fica **somente leitura** — controles e textos das linhas em `#5c646f`, o trilho ligado da alternância escurecido — até um texto válido. A gravação da própria tela nunca levanta a faixa.
+
+**Diálogo de pendências** — o da §2.15, largura 380 (cresce o que for preciso se os três botões não couberem), com **três** botões: **Cancelar** (foco inicial), **Descartar e fechar** (destrutivo: texto `#e08585`, sem fundo, hover `#2e2224`) e **Salvar e fechar** (primário, como o Salvar do rodapé). Abre ao fechar a janela, ou ao encerrar o app com a última janela de terminal, com alterações pendentes.
+
+**Bordas.** As bordas de 1px descritas acima — a da linha, a do campo, o anel de foco, a do tema escolhido, a do chip em captura — são o desenho; hoje o renderizador **não pinta a borda de retângulo arredondado** (defeito do `quad.wgsl` anterior à tela, que vale para o app inteiro e está registrado na dívida de verificação do [roadmap](../roadmap.md)), então elas só aparecem quando ele for corrigido.
 
 ### 2.13 Tela de nova aba `[v2]`
 
@@ -962,7 +987,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | **Paleta de comandos e botão de busca** | `[v2]` | [PRD-008](../prd/prd-008-paleta-de-comandos.md) *(rascunho)* |
 | **Barra de status** | `[v1]` | [PRD-009](../prd/prd-009-barra-de-status.md), [ADR-0048](../adr/0048-barra-de-status.md) — fora da ordem de fases |
 | Indicador de commits atrás do remoto (§2.8), com sublinhado sob o cursor | `[v1]` | [PRD-013](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) — fora da ordem de fases; o primeiro alvo clicável da barra |
-| **Painel de configurações GUI** — janela própria com guia lateral, não o drawer do canvas | `[v1]` | [PRD-016](../prd/prd-016-tela-de-configuracoes.md), [ADR-0059](../adr/0059-janela-de-configuracoes.md), [ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md) — fora de fase, em planejamento; a §2.12 é reescrita no PR que muda o binário |
+| **Painel de configurações GUI** — janela própria com guia lateral, não o drawer do canvas | `[v1]` | [PRD-016](../prd/prd-016-tela-de-configuracoes.md), [ADR-0059](../adr/0059-janela-de-configuracoes.md), [ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md) — fora de fase, implementada; a §2.12 descreve a janela como o binário a desenha |
 | **Faixa de identidade da barra de título** (logo, nome do app, título da aba ativa) | `[v2]` | ADR-0009 (parcial; controles de janela e resize já são `[v1]`, ver [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) e §2.2.1) — sem PRD |
 
 ---
@@ -1081,6 +1106,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Barra de abas com borda inferior `#23272f` (§2.2) | **Não é pintada.** O separador de 1px na base virava a linha contra o quadro do terminal (§2.7) que o usuário pediu para tirar. A cor fica registrada na §1.3: com `tab_bar_position = "bottom"` (RF-4.1) o separador muda de aresta e volta a fazer sentido | pós-F3 |
 | A zona fixa à direita é do botão de configurações, reservada desde a F3 para o que a barra ganhar à direita daqui em diante (§2.2) | **Ganha o segundo ocupante**: o botão de sessões salvas (`bookmark`), à esquerda da engrenagem — a razão de a zona ter ficado reservada. `right_zone_width` cresce de 50 para **94px**; a trilha perde 44px fora do macOS. Aval visual do dono do produto (ícone, posição, a perda de trilha) | [ADR-0055](../adr/0055-botao-e-popover-de-sessoes.md), fora de fase |
 | Menus de contexto, de grupo e popover de grupo de destino com largura fixa, sem regra para rótulo maior que a linha (a §2.16 dizia que o rótulo mais longo trunca, e o binário não truncava) | **O rótulo do item trunca com reticências** pelo mesmo `TextMeasurer::truncate` que corta o título da aba, dentro do orçamento de largura da linha e sem invadir o chip de atalho. Deixou de ser só desenho porque o texto passou a vir de arquivo que o usuário pode escrever ([ADR-0056](../adr/0056-catalogo-de-textos-da-interface.md) §12): um rótulo longo num arquivo do usuário não pode mais escapar da linha. **Sem valor novo** — largura, padding, fonte e cor são os da §2.16 —, com o aval do dono do produto. Os rótulos dos dois arquivos do projeto cabem e não são cortados | idioma da interface, etapa 4 |
+| Painel de configurações GUI: drawer `[v2]` de 400px, alinhado à direita sobre um overlay, com três seções (abas e grupos, perfis instalados, atalhos) e `slidein .16s` (§2.12) | **Janela própria do SO** com guia lateral de nove grupos, painel de linhas de opção com controles de verdade (alternância, campos, segmentado, listas, temas, atalhos com captura), rodapé Abrir arquivo · Descartar · Salvar, faixa de arquivo alterado fora ou inválido e diálogo de três saídas. **Nenhuma cor nova, um ícone novo (`rotate-ccw`), nove chaves de dimensão em `[appearance.settings]` e nenhuma animação.** O que o ADR-0060 não fixava foi decidido na implementação e está no registro do aval do próprio ADR, com o aval do dono do produto | [ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md), fora de fase |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.
 

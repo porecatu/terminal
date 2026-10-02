@@ -1,6 +1,6 @@
 # ADR-0060 — Anatomia da tela de configurações: guia lateral, painel de opções e os controles que faltavam
 
-**Status:** Proposto — aguarda o aval visual do dono do produto, como o [ADR-0032](0032-interface-do-v1-fechada.md) exige para mudança das seções 1/2 da especificação visual. O aval é pedido sobre a primeira build com a janela desenhada (etapa 4 do [roadmap](../roadmap.md)), e os valores novos do §5 podem mudar nele; o que for alterado é registrado aqui antes de o status passar a Aceito.
+**Status:** Aceito — aval visual do dono do produto em 2026-10-02, sem ajustes nos valores propostos; o que a implementação decidiu onde o ADR não fixava está no registro ao fim do documento.
 **Data:** 2026-10-02
 **Supersedes:** a §2.12 da [especificação visual](../design/especificacao-visual.md) (drawer `[v2]` de 400px) — reescrita no PR que muda o binário, como o [ADR-0028](0028-o-binario-como-referencia-visual.md) manda
 **Relacionados:** [ADR-0014](0014-superficie-de-aviso-e-dialogo.md), [ADR-0018](0018-composicao-de-frame.md), [ADR-0022](0022-animacao-de-interface.md), [ADR-0023](0023-editor-de-grupo.md), [ADR-0024](0024-face-de-icones.md), [ADR-0027](0027-controles-de-janela-e-resize-proprios.md), [ADR-0028](0028-o-binario-como-referencia-visual.md), [ADR-0032](0032-interface-do-v1-fechada.md), [ADR-0035](0035-selecao-de-texto-em-campo-de-nome.md), [ADR-0041](0041-busca-no-scrollback.md), [ADR-0055](0055-botao-e-popover-de-sessoes.md), [ADR-0059](0059-janela-de-configuracoes.md), [PRD-004](../prd/prd-004-aparencia-do-chrome.md), [PRD-016](../prd/prd-016-tela-de-configuracoes.md)
@@ -143,3 +143,19 @@ Ver §1: seria o primeiro widget do tipo no app, e a rolagem já se lê pela lin
 | O aval visual muda valores do §5 | Alta | Baixo | Status Proposto até a primeira build; mudanças registradas aqui e na §4.4 antes de Aceito |
 | Rótulos e descrições traduzidos (de_DE) estouram a largura da linha | Média | Médio | Descrição trunca com reticências e mostra inteira no tooltip, a regra de rótulo de menu do [ADR-0056](0056-catalogo-de-textos-da-interface.md) §12 |
 | Contraste da descrição 11px `#5c646f` sobre `#1c2028` abaixo de AA | Média | Médio | Medir na build; se reprovar, subir para **Terciário** `#828a96`, como a barra de status e o aviso já fizeram (§2.8, §2.14) — correção registrada, não valor novo |
+
+## Registro do aval visual
+
+**2026-10-02.** O dono do produto avaliou as capturas da janela (Geral, Terminal com uma linha pendente e uma recusada, Aparência com a lista de temas, Shell com a lista de variáveis e o diálogo de três botões) e deu o aval **sem pedir ajuste**: nenhum valor da §1 a §5 mudou. O grupo Atalhos e a faixa de estado do arquivo foram desenhados depois, com os mesmos tokens, e não foram capturados para esse aval.
+
+**O que a implementação decidiu onde este ADR não dava o número** — registrado aqui para que o ADR e a [§2.12 da especificação](../design/especificacao-visual.md) digam o mesmo que o binário:
+
+- **Descartar e fechar** (§4) é texto `#e08585` sem fundo, hover `#2e2224` — as cores do item destrutivo do menu —, para que só o Salvar seja cheio; o hover de Cancelar usa `#262b34`; com três botões que não cabem em 380px o diálogo cresce em vez de cortar.
+- O **chip de atalho** (§3) tem o texto em `#d7dce3`, a cor do item de menu; em captura, a frase em `#5c646f`; a **advertência** de `Ctrl+<letra>` sozinho usa o mesmo lugar e o mesmo tom do conflito (11px `#e0b060`); os botões do conflito são o segmentado sem nenhum lado escolhido.
+- **Somente leitura** (§2): controles e textos da linha em `#5c646f`; o trilho ligado da alternância escurece (fator 0.45) para o estado continuar legível.
+- A **faixa** (§2) é fixa no topo do painel, não rola com ele, com margem de 12px em cima e embaixo, e cabe numa linha de título e, no erro, uma de corpo; o texto corta com reticências antes do primeiro botão.
+- O **vão** entre o nome e a descrição é 2px (o `gap` do menu), e do título do grupo à primeira seção 24px (o `gap` entre seções): o ADR não os dava.
+- Só o campo do **nome** de uma variável recusada leva a borda de Erro; o do valor não.
+- A frase do aviso do RF-16.27 chama-se `settings.option.trusted_paths_warning` (o carregador de `locales/` recusa tabela com mais de dois níveis).
+
+**Pendente, fora do aval:** a borda de retângulo arredondado não é pintada pelo renderizador (`quad.wgsl`, anterior a esta tela); corrigi-la muda a aparência do app inteiro e depende de aval próprio.
