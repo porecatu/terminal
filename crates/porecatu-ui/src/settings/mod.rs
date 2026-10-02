@@ -12,11 +12,15 @@
 
 mod actions;
 mod catalog;
+mod choice_list;
 mod content;
 mod draft;
+mod field_edit;
+mod interact;
 mod layout;
 mod paint;
 mod phrases;
+pub(crate) mod save;
 mod window;
 
 use porecatu_config::Config;
@@ -38,6 +42,18 @@ pub(crate) const ROW_BACKGROUND: Color = palette::hex(0x1c, 0x20, 0x28);
 pub(crate) const TOGGLE_ON: Color = palette::hex(0x3f, 0x8f, 0x80);
 /// Trilho da alternância desligada, `#2a3038` (espec. §1.5, ADR-0060 §3).
 pub(crate) const TOGGLE_OFF: Color = palette::hex(0x2a, 0x30, 0x38);
+
+/// Ícone do botão de restaurar padrão: `#727a86` (ADR-0060 §2, o do botão de
+/// fechar da aba, espec. §1.7 e §2.14). `ResolvedPalette` o carrega com outro
+/// nome (`tab_exited_text`); aqui o nome diz para que ele serve.
+pub(crate) const RESTORE_ICON: Color = palette::hex(0x72, 0x7a, 0x86);
+/// Fundo do botão de restaurar sob o cursor: `#39404b` (ADR-0060 §2, espec.
+/// §1.7).
+pub(crate) const RESTORE_HOVER_BACKGROUND: Color = palette::hex(0x39, 0x40, 0x4b);
+/// Ícone do botão de restaurar sob o cursor: `#e4e8ee` (ADR-0060 §2).
+pub(crate) const RESTORE_HOVER_ICON: Color = palette::hex(0xe4, 0xe8, 0xee);
+/// Raio do botão de restaurar: 4px, o do botão de fechar da aba (espec. §1.7).
+pub(crate) const RESTORE_RADIUS: f32 = 4.0;
 
 /// Fundo do painel: o token "Drawer" `#171b21` (espec. §1.2, "painel de
 /// configurações"), citado pelo ADR-0060 §1. É a única cor da janela que
@@ -184,7 +200,7 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
     };
     content::build(
         key,
-        &config,
+        &draft::Draft::new(&config),
         &crate::messages::test_support::pt_br(),
         &metrics,
         &mut TextMeasurer::new(),
@@ -192,7 +208,7 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
     .blocks
     .into_iter()
     .filter_map(|block| match block {
-        content::Block::Row(row) => Some(row),
+        content::Block::Row(row) => Some(*row),
         content::Block::Section(_) => None,
     })
     .collect()

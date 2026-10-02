@@ -453,6 +453,12 @@ title = "Konfiguration konnte nicht erstellt werden"
 [notice.config_open_failed]
 title = "Konfiguration konnte nicht geöffnet werden"
 
+[notice.settings_save_failed]
+title = "Einstellungen konnten nicht gespeichert werden"
+changed = "Die Datei hat sich nach dem Lesen auf dem Datenträger geändert; es wurde nichts geschrieben."
+io = "\"{path}\" konnte nicht geschrieben werden: {cause}"
+structure = "der Schlüssel \"{path}\" passt nicht zur Form der Datei"
+
 [notice.link_open_failed]
 title = "Link konnte nicht geöffnet werden"
 

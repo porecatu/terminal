@@ -490,6 +490,12 @@ title = "Could not create the config"
 [notice.config_open_failed]
 title = "Could not open the config"
 
+[notice.settings_save_failed]
+title = "Could not save the settings"
+changed = "The file changed on disk after it was read; nothing was written."
+io = "could not write \"{path}\": {cause}"
+structure = "the key \"{path}\" does not fit the shape the file has"
+
 [notice.link_open_failed]
 title = "Could not open the link"
 

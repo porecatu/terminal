@@ -84,6 +84,12 @@ impl Draft {
 
     // ---- leitura
 
+    /// O `Config` que o arquivo diz -- a base do rascunho: lista de temas,
+    /// valores das opções sem pendência.
+    pub(crate) fn file_config(&self) -> &Config {
+        &self.file
+    }
+
     /// O valor que o arquivo diz para `option`.
     pub(crate) fn file_value(&self, option: &OptionDef) -> EditValue {
         option.read(&self.file)
@@ -141,6 +147,19 @@ impl Draft {
             .iter()
             .filter(|(id, _)| OPTIONS.iter().any(|o| o.id == *id && o.group == group))
             .count()
+    }
+
+    /// Os grupos com ao menos uma pendência, na ordem da guia.
+    pub(crate) fn pending_groups(&self) -> Vec<Group> {
+        Group::ALL
+            .into_iter()
+            .filter(|group| self.pending_in_group(*group) > 0)
+            .collect()
+    }
+
+    /// Quantas pendências há ao todo.
+    pub(crate) fn pending_count(&self) -> usize {
+        self.pending.len()
     }
 
     /// `option` tem pendência.
@@ -273,6 +292,34 @@ impl Draft {
 
     /// Descartar (RF-16.15): nenhuma pendência, de volta ao que o arquivo diz.
     pub(crate) fn discard(&mut self) {
+        self.pending.clear();
+    }
+
+    /// O que o arquivo diz mudou -- uma recarga que não veio do Salvar da
+    /// própria tela. A base troca; uma pendência que agora coincide com o
+    /// arquivo deixa de ser pendência (RF-16.15), e as outras ficam.
+    // TODO(tarefa 11): arquivo alterado fora com pendências é a faixa do
+    // RF-16.23 (Recarregar / Manter minhas alterações); aqui a base só troca.
+    pub(crate) fn rebase(&mut self, file: &Config) {
+        self.file = file.clone();
+        let file = &self.file;
+        self.pending.retain(|(id, pending)| {
+            let Some(option) = OPTIONS.iter().find(|option| option.id == *id) else {
+                return true;
+            };
+            match pending {
+                Pending::Value(value) => *value != option.read(file),
+                Pending::Reset => option.read(file) != option.default_value(),
+                Pending::Invalid { .. } => true,
+            }
+        });
+    }
+
+    /// Salvar deu certo: o arquivo agora diz `saved` (o texto gravado,
+    /// relido), e nenhuma pendência sobra. A tela passa a mostrar isso na
+    /// hora, sem esperar a recarga a quente que o watcher vai disparar.
+    pub(crate) fn commit(&mut self, saved: &Config) {
+        self.file = saved.clone();
         self.pending.clear();
     }
 
@@ -738,5 +785,67 @@ mod tests {
         for option in OPTIONS {
             assert_eq!(option.read(&config), draft.value(option), "{}", option.id);
         }
+    }
+
+    #[test]
+    fn pending_groups_follow_the_catalog_group_of_each_pending_option() {
+        let mut draft = draft();
+        assert!(draft.pending_groups().is_empty());
+        draft.set(opt("font_size"), EditValue::Float(16.0)).unwrap();
+        draft
+            .set(opt("language"), EditValue::String("pt_BR".to_owned()))
+            .unwrap();
+        assert_eq!(draft.pending_groups(), [Group::General, Group::Terminal]);
+        assert_eq!(draft.pending_count(), 2);
+    }
+
+    #[test]
+    fn committing_a_save_makes_the_saved_config_the_new_base_and_clears_everything() {
+        let mut draft = draft();
+        draft.set(opt("font_size"), EditValue::Float(16.0)).unwrap();
+        draft.set_raw(opt("line_height"), "abc").unwrap_err();
+        let mut saved = Config::default();
+        saved.terminal.font.size = 16.0;
+        draft.commit(&saved);
+        assert!(!draft.is_dirty());
+        assert!(!draft.has_invalid());
+        assert_eq!(draft.value(opt("font_size")), EditValue::Float(16.0));
+        assert_eq!(draft.file_value(opt("font_size")), EditValue::Float(16.0));
+        // O novo arquivo já diz 16: restaurar agora remove a chave.
+        draft.reset(opt("font_size"));
+        assert_eq!(draft.edits().len(), 1);
+    }
+
+    #[test]
+    fn a_reload_drops_the_pendings_the_file_now_agrees_with_and_keeps_the_rest() {
+        let mut draft = draft();
+        draft.set(opt("font_size"), EditValue::Float(16.0)).unwrap();
+        draft
+            .set(opt("cursor_blink"), EditValue::Bool(true))
+            .unwrap();
+        // Um editor externo gravou o 16: essa pendência acabou, a outra segue.
+        let mut reloaded = Config::default();
+        reloaded.terminal.font.size = 16.0;
+        draft.rebase(&reloaded);
+        assert!(!draft.is_pending(opt("font_size")));
+        assert!(draft.is_pending(opt("cursor_blink")));
+        assert_eq!(draft.file_value(opt("font_size")), EditValue::Float(16.0));
+    }
+
+    #[test]
+    fn a_pending_reset_is_dropped_when_the_file_already_says_the_default() {
+        let file = porecatu_config::parse(
+            "[terminal.font]
+size = 18.0
+",
+        )
+        .unwrap()
+        .0;
+        let mut draft = Draft::new(&file);
+        draft.reset(opt("font_size"));
+        assert_eq!(draft.edits().len(), 1);
+        // O arquivo passa a dizer o padrão (outra janela restaurou): nada a remover.
+        draft.rebase(&Config::default());
+        assert!(!draft.is_dirty());
     }
 }

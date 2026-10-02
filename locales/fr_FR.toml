@@ -453,6 +453,12 @@ title = "Impossible de créer la configuration"
 [notice.config_open_failed]
 title = "Impossible d'ouvrir la configuration"
 
+[notice.settings_save_failed]
+title = "Impossible d'enregistrer la configuration"
+changed = "Le fichier a changé sur le disque après sa lecture ; rien n'a été écrit."
+io = "impossible d'écrire \"{path}\" : {cause}"
+structure = "la clé \"{path}\" ne rentre pas dans la forme du fichier"
+
 [notice.link_open_failed]
 title = "Impossible d'ouvrir le lien"
 

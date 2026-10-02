@@ -492,6 +492,12 @@ title = "Não foi possível criar a config"
 [notice.config_open_failed]
 title = "Não foi possível abrir a config"
 
+[notice.settings_save_failed]
+title = "Não foi possível salvar as configurações"
+changed = "O arquivo mudou no disco depois de lido; nada foi gravado."
+io = "não foi possível gravar \"{path}\": {cause}"
+structure = "a chave \"{path}\" não cabe na forma que o arquivo tem"
+
 [notice.link_open_failed]
 title = "Não foi possível abrir o link"
 

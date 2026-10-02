@@ -267,10 +267,12 @@ pub(crate) enum BlockSpec {
     /// Rótulo de seção.
     Section,
     /// Linha de opção. `control` é o tamanho do controle (já medido por quem
-    /// chama); `two_lines` diz se há descrição sob o nome.
+    /// chama); `two_lines` diz se há descrição sob o nome e `reason` se há,
+    /// abaixo dela, a razão de um valor recusado (RF-16.18).
     Row {
         control: (f32, f32),
         two_lines: bool,
+        reason: bool,
     },
 }
 
@@ -281,6 +283,8 @@ pub(crate) struct RowGeometry {
     pub rect: Rect,
     pub name_origin: (f32, f32),
     pub description_origin: (f32, f32),
+    /// Onde a razão de um valor recusado começa, abaixo da descrição.
+    pub reason_origin: (f32, f32),
     pub control: Rect,
     /// Ponto de pendente, entre o controle e o botão de restaurar.
     pub dot: Rect,
@@ -339,16 +343,25 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 y += m.section_size + m.row_gap;
                 previous_was_row = false;
             }
-            BlockSpec::Row { control, two_lines } => {
+            BlockSpec::Row {
+                control,
+                two_lines,
+                reason,
+            } => {
                 if previous_was_row {
                     y += m.row_gap;
                 }
-                let left_height = m.name_size
-                    + if two_lines {
-                        NAME_DESCRIPTION_GAP + m.description_size
-                    } else {
-                        0.0
-                    };
+                // Nome, depois a descrição e a razão, cada uma sob a
+                // anterior com o vão do nome.
+                let description_y = m.name_size + NAME_DESCRIPTION_GAP;
+                let mut left_height = m.name_size;
+                if two_lines {
+                    left_height = description_y + m.description_size;
+                }
+                let reason_y = left_height + NAME_DESCRIPTION_GAP;
+                if reason {
+                    left_height = reason_y + m.description_size;
+                }
                 let inner = left_height.max(control.1).max(m.restore_height);
                 let height = m.row_padding_y * 2.0 + inner;
                 let rect = Rect {
@@ -382,7 +395,8 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 blocks.push(BlockGeometry::Row(RowGeometry {
                     rect,
                     name_origin: (inner_x, top),
-                    description_origin: (inner_x, top + m.name_size + NAME_DESCRIPTION_GAP),
+                    description_origin: (inner_x, top + description_y),
+                    reason_origin: (inner_x, top + reason_y),
                     control: control_rect,
                     dot,
                     restore,
@@ -461,9 +475,38 @@ pub(crate) fn footer_buttons(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Hit {
     Group(Group),
-    /// Índice do bloco no painel (sempre uma linha de opção).
+    /// Índice do bloco no painel (sempre uma linha de opção): o fundo da
+    /// linha, fora de controle e de botão de restaurar.
     Row(usize),
+    /// Uma parte do controle da linha.
+    Control(usize, ControlPart),
+    /// O botão de restaurar padrão da linha.
+    Restore(usize),
     Footer(FooterButton),
+}
+
+impl Hit {
+    /// A linha de opção que este alvo toca, se tocar alguma: o realce do
+    /// fundo e o botão de restaurar valem para a linha inteira.
+    pub(crate) fn row_index(self) -> Option<usize> {
+        match self {
+            Hit::Row(index) | Hit::Control(index, _) | Hit::Restore(index) => Some(index),
+            Hit::Group(_) | Hit::Footer(_) => None,
+        }
+    }
+}
+
+/// A parte de um controle que recebe o clique. Os controles de uma peça só
+/// (alternância, campo, botão de escolha) são `Whole`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlPart {
+    Whole,
+    /// O segmento `n` de uma escolha de até três valores.
+    Segment(usize),
+    /// A alternância de `git.remote_poll_interval_secs`.
+    GitToggle,
+    /// O número de `git.remote_poll_interval_secs`.
+    GitNumber,
 }
 
 /// O alvo sob `point` (coordenadas lógicas de janela): guia, rodapé ou linha
@@ -638,7 +681,11 @@ mod tests {
     const PANEL_WIDTH: f32 = 700.0;
 
     fn row(control: (f32, f32), two_lines: bool) -> BlockSpec {
-        BlockSpec::Row { control, two_lines }
+        BlockSpec::Row {
+            control,
+            two_lines,
+            reason: false,
+        }
     }
 
     fn row_of(block: &BlockGeometry) -> RowGeometry {
@@ -676,6 +723,55 @@ mod tests {
             panic!()
         };
         assert_eq!(label_origin, (18.0, 18.0 + 15.0 + TITLE_GAP));
+    }
+
+    #[test]
+    fn a_refused_value_adds_a_reason_line_below_the_description() {
+        let m = metrics();
+        // Controle baixo: a altura da linha é a do texto à esquerda.
+        let control = (88.0, 10.0);
+        let plain = panel_geometry(&m, PANEL_WIDTH, &[row(control, true)]);
+        let with_reason = panel_geometry(
+            &m,
+            PANEL_WIDTH,
+            &[BlockSpec::Row {
+                control,
+                two_lines: true,
+                reason: true,
+            }],
+        );
+        let plain = row_of(&plain.blocks[0]);
+        let with_reason = row_of(&with_reason.blocks[0]);
+        // A linha cresce o vão do nome mais a altura de uma linha de 11px, e a
+        // razão começa abaixo da descrição.
+        assert_eq!(
+            with_reason.rect.height - plain.rect.height,
+            NAME_DESCRIPTION_GAP + m.description_size
+        );
+        assert_eq!(
+            with_reason.reason_origin.1,
+            with_reason.description_origin.1 + m.description_size + NAME_DESCRIPTION_GAP
+        );
+        assert_eq!(with_reason.reason_origin.0, with_reason.name_origin.0);
+    }
+
+    #[test]
+    fn a_reason_with_no_description_sits_right_under_the_name() {
+        let m = metrics();
+        let geometry = panel_geometry(
+            &m,
+            PANEL_WIDTH,
+            &[BlockSpec::Row {
+                control: (88.0, 30.0),
+                two_lines: false,
+                reason: true,
+            }],
+        );
+        let row = row_of(&geometry.blocks[0]);
+        assert_eq!(
+            row.reason_origin.1,
+            row.name_origin.1 + m.name_size + NAME_DESCRIPTION_GAP
+        );
     }
 
     #[test]

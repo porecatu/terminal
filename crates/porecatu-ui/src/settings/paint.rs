@@ -16,15 +16,19 @@ use porecatu_render::{
 };
 
 use super::content::{Block, Content, ControlView, RowView, SWATCH_COUNT, SWATCH_GAP};
+use super::field_edit::{EditPart, Editing};
 use super::layout::{
     BlockGeometry, FOOTER_BUTTONS, Focus, FooterButton, Hit, Layout, Metrics, RowGeometry,
 };
-use super::{Group, ROW_BACKGROUND, TOGGLE_OFF, TOGGLE_ON};
+use super::{
+    Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON, RESTORE_ICON, RESTORE_RADIUS,
+    ROW_BACKGROUND, TOGGLE_OFF, TOGGLE_ON,
+};
 use crate::chrome::{ICON_FONT, centered_glyph};
 use crate::messages::msg;
 use crate::overlay::{BODY_FONT, TITLE_FONT};
 use crate::palette::{self, ResolvedPalette};
-use crate::tab_bar::TabBarStyle;
+use crate::tab_bar::{TabBarStyle, scrolled_text_x};
 use crate::toggle::{TOGGLE_KNOB_COLOR, push_toggle};
 
 /// Espaçamento entre letras do rótulo de seção: `letter-spacing: .8px`
@@ -47,8 +51,12 @@ pub(crate) struct Input<'a> {
     pub focus: Focus,
     pub hovered: Option<Hit>,
     pub scroll: f32,
-    /// Grupos com alteração pendente (o ponto ao lado do nome); ainda nenhum.
+    /// Grupos com alteração pendente: o ponto ao lado do nome.
     pub pending_groups: &'a [Group],
+    /// O campo em edição, se algum.
+    pub editing: Option<&'a Editing>,
+    /// Cor do fundo da seleção de texto de um campo em edição.
+    pub selection_color: Color,
     /// Quais botões do rodapé estão disponíveis, na ordem de `FOOTER_BUTTONS`.
     pub footer_available: [bool; 3],
     pub style: &'a TabBarStyle,
@@ -220,7 +228,7 @@ fn paint_panel(input: &Input<'_>, measurer: &mut TextMeasurer, out: &mut Vec<Pri
                 if rect.y + rect.height < body.y || rect.y > body.y + body.height {
                     continue;
                 }
-                paint_row(input, index, row, geometry, dx, dy, out);
+                paint_row(input, index, row, geometry, dx, dy, measurer, out);
             }
             _ => unreachable!("conteúdo e geometria saem do mesmo laço"),
         }
@@ -256,6 +264,7 @@ fn paint_section_label(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_row(
     input: &Input<'_>,
     index: usize,
@@ -263,6 +272,7 @@ fn paint_row(
     geometry: &RowGeometry,
     dx: f32,
     dy: f32,
+    measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
     let m = input.metrics;
@@ -309,19 +319,100 @@ fn paint_row(
             pal.editor_section_text,
         ));
     }
+    // A razão de um valor recusado, abaixo da descrição, em Erro (RF-16.18).
+    if let Some(reason) = &row.invalid {
+        out.push(text(
+            (geometry.reason_origin.0 + dx, geometry.reason_origin.1 + dy),
+            reason,
+            BODY_FONT,
+            m.description_size,
+            pal.warning_severity_error,
+        ));
+    }
 
-    paint_control(input, &row.control, shift(geometry.control, dx, dy), out);
+    paint_control(
+        input,
+        index,
+        row,
+        shift(geometry.control, dx, dy),
+        measurer,
+        out,
+    );
+
+    // O ponto de pendente 6×6, em Acento, entre o controle e o botão de
+    // restaurar (ADR-0060 §2).
+    if row.pending {
+        out.push(rounded(
+            shift(geometry.dot, dx, dy),
+            m.dot_size / 2.0,
+            pal.dialog_focus_ring,
+            palette::TRANSPARENT,
+            0.0,
+        ));
+    }
+    paint_restore(input, index, row, shift(geometry.restore, dx, dy), out);
 
     if input.focus == Focus::Row(index) {
         out.push(ring(rect, m.row_radius, pal));
     }
 }
 
-// ---- controles (só leitura nesta etapa)
+/// "Restaurar padrão": botão de ícone `rotate-ccw` com a anatomia do botão de
+/// fechar da aba -- 25×17 de alvo, raio 4, ícone `#727a86`, e no hover fundo
+/// `#39404b` com o ícone `#e4e8ee` --, visível só com a linha sob o cursor ou
+/// focada, e só quando a opção difere do padrão (ADR-0060 §2).
+fn paint_restore(
+    input: &Input<'_>,
+    index: usize,
+    row: &RowView,
+    rect: Rect,
+    out: &mut Vec<Primitive>,
+) {
+    let row_active =
+        input.hovered.and_then(Hit::row_index) == Some(index) || input.focus == Focus::Row(index);
+    if !row.can_reset || !row_active {
+        return;
+    }
+    let hovered = input.hovered == Some(Hit::Restore(index));
+    if hovered {
+        out.push(rounded(
+            rect,
+            RESTORE_RADIUS,
+            RESTORE_HOVER_BACKGROUND,
+            palette::TRANSPARENT,
+            0.0,
+        ));
+    }
+    out.push(centered_glyph(
+        icon::ROTATE_CCW,
+        rect,
+        input.style.icon_em_size,
+        if hovered {
+            RESTORE_HOVER_ICON
+        } else {
+            RESTORE_ICON
+        },
+    ));
+}
 
-fn paint_control(input: &Input<'_>, control: &ControlView, rect: Rect, out: &mut Vec<Primitive>) {
+// ---- controles
+
+fn paint_control(
+    input: &Input<'_>,
+    index: usize,
+    row: &RowView,
+    rect: Rect,
+    measurer: &mut TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
     let m = input.metrics;
-    match control {
+    let invalid = row.invalid.is_some();
+    let editing = |part: EditPart| {
+        input
+            .editing
+            .filter(|editing| editing.block == index && editing.part == part)
+    };
+    match &row.control {
         ControlView::Toggle { on } => push_toggle(rect, *on, TOGGLE_ON, TOGGLE_OFF, out),
         ControlView::Field {
             text: value,
@@ -329,13 +420,17 @@ fn paint_control(input: &Input<'_>, control: &ControlView, rect: Rect, out: &mut
             text_width,
             ..
         } => {
-            paint_field_box(input, rect, out);
-            let x = if *right_aligned {
-                rect.x + rect.width - m.field_padding_x - text_width
+            if let Some(editing) = editing(EditPart::Field) {
+                paint_editing_field(input, rect, editing, invalid, measurer, out);
             } else {
-                rect.x + m.field_padding_x
-            };
-            paint_field_text(input, value, x, rect, out);
+                paint_field_box(input, rect, invalid, out);
+                let x = if *right_aligned {
+                    rect.x + rect.width - m.field_padding_x - text_width
+                } else {
+                    rect.x + m.field_padding_x
+                };
+                paint_field_text(input, value, x, rect, out);
+            }
         }
         ControlView::Segmented {
             labels,
@@ -343,7 +438,7 @@ fn paint_control(input: &Input<'_>, control: &ControlView, rect: Rect, out: &mut
             selected,
         } => paint_segmented(input, labels, widths, *selected, rect, out),
         ControlView::Choice { text: value } => {
-            paint_field_box(input, rect, out);
+            paint_field_box(input, rect, false, out);
             paint_field_text(input, value, rect.x + m.field_padding_x, rect, out);
             paint_caret(input, rect, out);
         }
@@ -382,22 +477,31 @@ fn paint_control(input: &Input<'_>, control: &ControlView, rect: Rect, out: &mut
                 width: m.number_field_width,
                 ..rect
             };
-            paint_field_box(input, number, out);
-            // O número vem alinhado à direita, como todo campo numérico.
-            let x = number.x + number.width - m.field_padding_x - text_width;
-            paint_field_text(input, seconds, x, number, out);
+            if let Some(editing) = editing(EditPart::GitSeconds) {
+                paint_editing_field(input, number, editing, invalid, measurer, out);
+            } else {
+                paint_field_box(input, number, invalid, out);
+                // O número vem alinhado à direita, como todo campo numérico.
+                let x = number.x + number.width - m.field_padding_x - text_width;
+                paint_field_text(input, seconds, x, number, out);
+            }
         }
     }
 }
 
-/// O campo de texto: fundo, borda e raio do editor de grupo (ADR-0060 §3).
-fn paint_field_box(input: &Input<'_>, rect: Rect, out: &mut Vec<Primitive>) {
+/// O campo de texto: fundo, borda e raio do editor de grupo (ADR-0060 §3). A
+/// borda fica em Erro quando o valor foi recusado (RF-16.18).
+fn paint_field_box(input: &Input<'_>, rect: Rect, invalid: bool, out: &mut Vec<Primitive>) {
     let pal = input.pal;
     out.push(rounded(
         rect,
         input.metrics.field_radius,
         pal.editor_input_background,
-        pal.editor_input_border,
+        if invalid {
+            pal.warning_severity_error
+        } else {
+            pal.editor_input_border
+        },
         1.0,
     ));
 }
@@ -418,6 +522,90 @@ fn paint_field_text(input: &Input<'_>, value: &str, x: f32, rect: Rect, out: &mu
         m.field_font_size,
         input.pal.editor_input_text,
     ));
+    out.push(Primitive::PopClip);
+}
+
+/// Onde o texto de um campo em edição começa em x: o campo rola para manter o
+/// cursor à vista (`scrolled_text_x`, o mesmo do rename e da busca). Compartilhado
+/// com o clique, que converte o x do mouse em posição de cursor -- os dois nunca
+/// discordam.
+pub(crate) fn editing_text_x(m: &Metrics, field: Rect, text_width: f32) -> f32 {
+    let text_area = (field.width - m.field_padding_x * 2.0).max(0.0);
+    scrolled_text_x(field.x, m.field_padding_x, text_width, text_area)
+}
+
+/// Campo em edição: foco no anel de Acento (ou Erro, se o valor recusado
+/// continua), texto à esquerda, seleção e cursor do ADR-0035. Mede o texto
+/// deste campo por quadro -- um só, o que está recebendo teclas, como o campo
+/// de rename da barra de abas.
+fn paint_editing_field(
+    input: &Input<'_>,
+    rect: Rect,
+    editing: &Editing,
+    invalid: bool,
+    measurer: &mut TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    let m = input.metrics;
+    let pal = input.pal;
+    out.push(rounded(
+        rect,
+        m.field_radius,
+        pal.editor_input_background,
+        if invalid {
+            pal.warning_severity_error
+        } else {
+            pal.dialog_focus_ring
+        },
+        1.0,
+    ));
+    let buffer = editing.state.text();
+    let size = m.field_font_size;
+    let text_width = measurer.measure_width(buffer, BODY_FONT, size);
+    let text_x = editing_text_x(m, rect, text_width);
+    let inner = Rect {
+        x: rect.x + m.field_padding_x,
+        y: rect.y,
+        width: (rect.width - m.field_padding_x * 2.0).max(0.0),
+        height: rect.height,
+    };
+    let bar_y = rect.y + 3.0;
+    let bar_height = (rect.height - 6.0).max(0.0);
+    out.push(Primitive::PushClip(inner));
+    let selection = editing.state.selection_range();
+    if let Some((start, end)) = selection {
+        let x0 = text_x + measurer.measure_width(&buffer[..start], BODY_FONT, size);
+        let x1 = text_x + measurer.measure_width(&buffer[..end], BODY_FONT, size);
+        out.push(quad(
+            Rect {
+                x: x0,
+                y: bar_y,
+                width: x1 - x0,
+                height: bar_height,
+            },
+            input.selection_color,
+        ));
+    }
+    out.push(text(
+        (text_x, centered_y(rect, size)),
+        buffer,
+        BODY_FONT,
+        size,
+        pal.editor_input_text,
+    ));
+    if selection.is_none() {
+        let before = measurer.measure_width(&buffer[..editing.state.cursor()], BODY_FONT, size);
+        let caret_x = (text_x + before).min(inner.x + inner.width - 1.0);
+        out.push(quad(
+            Rect {
+                x: caret_x,
+                y: bar_y,
+                width: 1.0,
+                height: bar_height,
+            },
+            pal.editor_input_text,
+        ));
+    }
     out.push(Primitive::PopClip);
 }
 
@@ -524,7 +712,7 @@ fn paint_list(
             width: m.text_field_width,
             height: m.field_height,
         };
-        paint_field_box(input, field, out);
+        paint_field_box(input, field, false, out);
         paint_field_text(input, item, field.x + m.field_padding_x, field, out);
         let close = Rect {
             x: field.x + field.width + m.list_gap,
@@ -644,4 +832,253 @@ fn paint_footer(input: &Input<'_>, out: &mut Vec<Primitive>) {
         }
     }
     debug_assert_eq!(input.footer.len(), FOOTER_BUTTONS.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use porecatu_render::TextMeasurer;
+
+    use super::super::catalog::{self, option};
+    use super::super::content::{self, ContentKey};
+    use super::super::draft::Draft;
+    use super::super::field_edit::{EditPart, Editing};
+    use super::super::interact;
+    use super::super::layout::{self, footer_buttons, group_items};
+    use super::*;
+    use crate::messages::test_support;
+
+    struct Fixture {
+        config: Config,
+        pal: ResolvedPalette,
+        style: TabBarStyle,
+        catalog: Catalog,
+    }
+
+    fn fixture() -> Fixture {
+        let config = Config::default();
+        Fixture {
+            pal: ResolvedPalette::from_config(&config),
+            style: TabBarStyle::from_config(&config),
+            catalog: test_support::pt_br(),
+            config,
+        }
+    }
+
+    /// Pinta o grupo Terminal sobre `draft`, com o foco, o realce e a edição
+    /// dados. Devolve também o índice do bloco de `font_size`.
+    fn paint_terminal(
+        f: &Fixture,
+        draft: &Draft,
+        focus_font_size: bool,
+        hovered: impl Fn(usize) -> Option<Hit>,
+        editing: Option<&Editing>,
+    ) -> (Vec<Primitive>, usize) {
+        let m = Metrics::from_config(&f.config, 52.0);
+        let layout = layout::layout(900.0, 640.0, 52.0, 200.0, m.footer_height());
+        let key = ContentKey {
+            group: Group::Terminal,
+            panel_width_bits: layout.panel.width.to_bits(),
+            generation: 0,
+        };
+        let mut measurer = TextMeasurer::new();
+        let content = content::build(key, draft, &f.catalog, &m, &mut measurer);
+        let index = content
+            .blocks
+            .iter()
+            .position(|block| matches!(block, Block::Row(row) if row.option == Some("font_size")))
+            .unwrap();
+        let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
+        let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        let out = paint_body(
+            &Input {
+                layout: &layout,
+                metrics: &m,
+                content: &content,
+                items: &items,
+                footer: &footer,
+                selected: Group::Terminal,
+                focus: if focus_font_size {
+                    Focus::Row(index)
+                } else {
+                    Focus::Sidebar
+                },
+                hovered: hovered(index),
+                scroll: 0.0,
+                pending_groups: &[],
+                editing,
+                selection_color: palette::hex(1, 2, 3),
+                footer_available: [true, false, false],
+                style: &f.style,
+                pal: &f.pal,
+                config: &f.config,
+                catalog: &f.catalog,
+            },
+            &mut measurer,
+        );
+        (out, index)
+    }
+
+    fn pending_size() -> Draft {
+        let mut draft = Draft::new(&Config::default());
+        interact::commit_text(&mut draft, option("font_size").unwrap(), "18");
+        draft
+    }
+
+    fn has_restore_icon(out: &[Primitive]) -> bool {
+        out.iter()
+            .any(|p| matches!(p, Primitive::Text(run) if run.text == icon::ROTATE_CCW.glyph))
+    }
+
+    fn dots(out: &[Primitive], f: &Fixture) -> usize {
+        out.iter()
+            .filter(|p| {
+                matches!(p, Primitive::RoundedQuad(q)
+                    if q.rect.width == 6.0 && q.rect.height == 6.0 && q.color == f.pal.dialog_focus_ring)
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_pending_option_paints_the_accent_dot_and_a_clean_one_does_not() {
+        let f = fixture();
+        let (clean, _) = paint_terminal(&f, &Draft::new(&f.config), false, |_| None, None);
+        assert_eq!(dots(&clean, &f), 0);
+        let (pending, _) = paint_terminal(&f, &pending_size(), false, |_| None, None);
+        assert_eq!(dots(&pending, &f), 1);
+    }
+
+    #[test]
+    fn restore_shows_only_on_a_row_that_differs_and_is_hovered_or_focused() {
+        let f = fixture();
+        let clean = Draft::new(&f.config);
+        let pending = pending_size();
+        // Nada a restaurar: nunca aparece, nem com foco e cursor.
+        let (out, _) = paint_terminal(&f, &clean, true, |i| Some(Hit::Row(i)), None);
+        assert!(!has_restore_icon(&out));
+        // Diferente do padrão, mas sem cursor nem foco: escondido.
+        let (out, _) = paint_terminal(&f, &pending, false, |_| None, None);
+        assert!(!has_restore_icon(&out));
+        // Sob o cursor: aparece.
+        let (out, _) = paint_terminal(&f, &pending, false, |i| Some(Hit::Row(i)), None);
+        assert!(has_restore_icon(&out));
+        // Com o cursor num controle da mesma linha, também.
+        let (out, _) = paint_terminal(
+            &f,
+            &pending,
+            false,
+            |i| Some(Hit::Control(i, layout::ControlPart::Whole)),
+            None,
+        );
+        assert!(has_restore_icon(&out));
+        // Com o foco do teclado: aparece.
+        let (out, _) = paint_terminal(&f, &pending, true, |_| None, None);
+        assert!(has_restore_icon(&out));
+        // Cursor numa outra linha: não aparece.
+        let (out, index) = paint_terminal(&f, &pending, false, |i| Some(Hit::Row(i + 2)), None);
+        assert!(!has_restore_icon(&out), "linha {index}");
+    }
+
+    #[test]
+    fn hovering_the_restore_button_gives_it_the_hover_background_and_icon() {
+        let f = fixture();
+        let (out, _) = paint_terminal(&f, &pending_size(), false, |i| Some(Hit::Restore(i)), None);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == RESTORE_HOVER_BACKGROUND
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == icon::ROTATE_CCW.glyph && run.color == RESTORE_HOVER_ICON
+        )));
+        // Sem o cursor em cima do botão, o ícone é o do repouso.
+        let (out, _) = paint_terminal(&f, &pending_size(), false, |i| Some(Hit::Row(i)), None);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == icon::ROTATE_CCW.glyph && run.color == RESTORE_ICON
+        )));
+        assert!(!out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == RESTORE_HOVER_BACKGROUND
+        )));
+    }
+
+    #[test]
+    fn a_refused_value_paints_the_error_border_and_the_reason_in_error_color() {
+        let f = fixture();
+        let mut draft = Draft::new(&f.config);
+        interact::commit_text(&mut draft, option("font_size").unwrap(), "900");
+        let (out, _) = paint_terminal(&f, &draft, false, |_| None, None);
+        let error = f.pal.warning_severity_error;
+        assert!(
+            out.iter().any(|p| matches!(
+                p,
+                Primitive::RoundedQuad(q) if q.border_color == error && q.border_width == 1.0
+            )),
+            "borda do controle em Erro"
+        );
+        let reason = out.iter().find_map(|p| match p {
+            Primitive::Text(run) if run.color == error => Some(run),
+            _ => None,
+        });
+        let reason = reason.expect("a razão em Erro");
+        assert_eq!(reason.size_px, 11.0);
+        assert!(reason.text.starts_with("Valor fora da faixa"));
+    }
+
+    #[test]
+    fn an_edited_field_paints_the_focus_border_the_text_and_a_caret() {
+        let f = fixture();
+        let draft = Draft::new(&f.config);
+        let mut editing = Editing::new(0, EditPart::Field, "14".to_owned());
+        // O índice do bloco de `font_size` vem do conteúdo.
+        let (_, index) = paint_terminal(&f, &draft, false, |_| None, None);
+        editing.block = index;
+        editing.state.insert_char('5');
+        let (out, _) = paint_terminal(&f, &draft, false, |_| None, Some(&editing));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.border_color == f.pal.dialog_focus_ring
+                && q.rect.width == 88.0
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "145"
+        )));
+        // Cursor de 1px de largura, na cor do texto.
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Quad(q) if q.rect.width == 1.0 && q.color == f.pal.editor_input_text
+        )));
+    }
+
+    #[test]
+    fn a_selection_in_the_edited_field_paints_the_selection_background() {
+        let f = fixture();
+        let draft = Draft::new(&f.config);
+        let (_, index) = paint_terminal(&f, &draft, false, |_| None, None);
+        let mut editing = Editing::new(index, EditPart::Field, "1234".to_owned());
+        editing.state.select_all();
+        let (out, _) = paint_terminal(&f, &draft, false, |_| None, Some(&editing));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Quad(q) if q.color == palette::hex(1, 2, 3)
+        )));
+        // Com seleção não há cursor de 1px.
+        assert!(!out.iter().any(|p| matches!(
+            p,
+            Primitive::Quad(q) if q.rect.width == 1.0 && q.color == f.pal.editor_input_text
+        )));
+    }
+
+    #[test]
+    fn every_catalog_option_still_paints_with_a_pending_value() {
+        // Nenhum controle quebra a pintura com um valor pendente.
+        let f = fixture();
+        let mut draft = Draft::new(&f.config);
+        for option in catalog::OPTIONS {
+            let _ = draft.set(option, catalog::probe_value(option));
+        }
+        let (out, _) = paint_terminal(&f, &draft, false, |_| None, None);
+        assert!(!out.is_empty());
+    }
 }

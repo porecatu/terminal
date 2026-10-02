@@ -7323,7 +7323,7 @@ impl App {
         // janela de configurações, que lê a mesma paleta e o mesmo estilo; o
         // conteúdo medido dela, esse, depende do `Config` e é refeito.
         if let Some(settings) = &mut self.settings {
-            settings.invalidate();
+            settings.config_reloaded(&self.config);
         }
         self.for_each_surface(|surface| surface.request_redraw());
     }
@@ -7411,6 +7411,8 @@ impl App {
             Arc::clone(&self.catalog),
             access_adapter,
             self.settings_last_group,
+            &self.config,
+            language::locale_dirs(self.config_path.as_deref()),
         ))
     }
 
@@ -7440,6 +7442,50 @@ impl App {
         state.window.request_redraw();
     }
 
+    /// Salvar da tela de configurações (RF-16.14, RF-16.19): grava as edições
+    /// do rascunho no arquivo resolvido no arranque -- o mesmo caminho que
+    /// `open_config_file` usa. Sucesso limpa as pendências; falha de
+    /// revalidação ou de disco vira **aviso** na primeira janela de terminal
+    /// (a de configurações não tem pilha de avisos) e as pendências ficam.
+    /// Nada é aplicado ao `Config` daqui: o watcher vê o arquivo mudar e a
+    /// recarga a quente aplica, como a qualquer editor (ADR-0058 §6).
+    fn save_settings(&mut self) {
+        let Some(settings) = &mut self.settings else {
+            return;
+        };
+        if !settings.can_save() {
+            return;
+        }
+        let edits = settings.edits();
+        let now = Instant::now();
+        let Some(path) = self.config_path.clone() else {
+            if let Some(state) = self.windows.values_mut().next() {
+                state.warnings.push(
+                    Severity::Warning,
+                    msg::notice::config_path_unresolved::title(&self.catalog),
+                    msg::notice::config_path_unresolved::body(&self.catalog),
+                    now,
+                );
+                state.window.request_redraw();
+            }
+            return;
+        };
+        match settings::save::save(&path, &edits) {
+            Ok(saved) => settings.save_succeeded(&saved),
+            Err(error) => {
+                if let Some(state) = self.windows.values_mut().next() {
+                    state.warnings.push(
+                        Severity::Error,
+                        msg::notice::settings_save_failed::title(&self.catalog),
+                        messages::settings_save_error(&self.catalog, &error),
+                        now,
+                    );
+                    state.window.request_redraw();
+                }
+            }
+        }
+    }
+
     /// Evento de uma janela que é a de configurações -- o roteamento do
     /// topo de `window_event` (ADR-0059 §1). Modo de captura: o `keymap` do
     /// processo não é consultado (ADR-0059 §3).
@@ -7462,7 +7508,7 @@ impl App {
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 if let Some(settings) = &mut self.settings {
-                    settings.modifiers_changed(modifiers.state().shift_key());
+                    settings.modifiers_changed(modifiers.state());
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -7501,6 +7547,15 @@ impl App {
                     press = settings.left_pressed(env, gpu.text_measurer());
                 }
             }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(settings) = &mut self.settings {
+                    settings.left_released();
+                }
+            }
             WindowEvent::KeyboardInput { event: key, .. } => {
                 if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
                     let env = settings::Env {
@@ -7517,6 +7572,7 @@ impl App {
             settings::Press::Nothing => {}
             settings::Press::Close => self.close_settings(),
             settings::Press::OpenFile => self.open_config_file_from_settings(),
+            settings::Press::Save => self.save_settings(),
         }
     }
 
@@ -7528,7 +7584,7 @@ impl App {
             style: &self.style,
             config: &self.config,
         };
-        let frame = settings.paint(env, &self.pal, gpu.text_measurer());
+        let frame = settings.paint(env, &self.pal, &self.term_pal, gpu.text_measurer());
         settings.render(gpu, &frame);
     }
 

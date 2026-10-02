@@ -3,45 +3,63 @@
 //! `SettingsWindow`: a janela do SO da tela de configurações (ADR-0059 §1).
 //! Guarda a própria `WindowSurface` -- o `GpuContext` e o atlas de glyphs são
 //! os do processo, como para toda janela (ADR-0015) --, a geometria, o estado
-//! de ponteiro e de teclado, e o conteúdo medido do grupo em vista; o desenho
-//! sai pela mesma pipeline de camadas das janelas de terminal (ADR-0018), só
-//! que sem workspace do outro lado.
+//! de ponteiro e de teclado, o rascunho das alterações e o conteúdo medido do
+//! grupo em vista; o desenho sai pela mesma pipeline de camadas das janelas de
+//! terminal (ADR-0018), só que sem workspace do outro lado.
 //!
 //! Fora do macOS a janela não tem decoração nativa (ADR-0027): o cabeçalho
 //! carrega o título, a drag region e os três botões de janela, com a mesma
 //! geometria e o mesmo `resize_direction_at` da barra de abas. No macOS a
 //! decoração é nativa e esta janela só desenha guia e painel.
 //!
+//! **A janela só produz edições.** Alterar um controle muda o rascunho
+//! (`Draft`); gravar é do Salvar, que devolve `Press::Save` a quem possui a
+//! janela -- ela não sabe onde o arquivo está, nem tem canal de avisos. Nada é
+//! aplicado ao `Config` daqui: a recarga a quente é quem aplica (ADR-0058 §6).
+//!
 //! **Medir texto é caro.** O conteúdo do painel (texto cortado, larguras de
 //! botão e de segmento) é medido por `content::build` uma vez e guardado; só
-//! volta a ser medido quando a chave muda -- grupo, largura do painel, idioma
-//! ou config. Nenhum caminho de pintura ou de hit-test mede texto.
+//! volta a ser medido quando a chave muda -- grupo, largura do painel, idioma,
+//! config, ou uma mudança no rascunho. Nenhum caminho de pintura ou de hit-test
+//! mede texto, salvo o do campo que está recebendo teclas.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use porecatu_config::Config;
+use porecatu_config::{Config, Edit, EditValue};
 use porecatu_locale::Catalog;
 use porecatu_render::{
     Frame, GpuContext, Layer, Primitive, Quad, Rect, TextMeasurer, TextRun, WindowSurface, icon,
 };
+use porecatu_term::Modifiers;
 use winit::dpi::PhysicalPosition;
 use winit::event::{KeyEvent, MouseScrollDelta, WindowEvent};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
-use super::content::{self, Block, Content, ContentKey, RowView};
+use super::catalog::{self, Control, OptionDef};
+use super::choice_list::{self, ChoiceItem, ChoiceLayout, ChoiceList};
+use super::content::{self, Block, Content, ContentKey, ControlView, RowView, choice_label};
+use super::draft::Draft;
+use super::field_edit::{EditPart, Editing};
+use super::interact;
 use super::layout::{
-    self, BlockGeometry, Focus, FooterButton, Hit, Layout, Metrics, focus_order, footer_buttons,
-    group_items, hit_test, next_focus,
+    self, BlockGeometry, ControlPart, Focus, FooterButton, Hit, Layout, Metrics, focus_order,
+    footer_buttons, group_items, hit_test, next_focus,
 };
 use super::paint;
 use super::{Group, HEADER_GAP_PX, PANEL_BACKGROUND, TITLE_SIZE_PX};
+use crate::input::modifiers_from;
 use crate::messages::msg;
-use crate::palette::ResolvedPalette;
+use crate::overlay::BODY_FONT;
+use crate::palette::{ResolvedPalette, ResolvedTermPalette};
 use crate::tab_bar::{self, TabBarStyle, WindowButtonHit};
+use crate::text_field::apply_text_field_key;
 use crate::tooltip::{Hover, HoverKey};
-use crate::{DOUBLE_CLICK_THRESHOLD, access, bar_height, chrome, is_macos, overlay, titlebar};
+use crate::{
+    DOUBLE_CLICK_THRESHOLD, access, bar_height, chrome, is_macos, language, overlay, titlebar,
+};
 
 /// O que a janela de configurações lê do processo, por chamada: o estilo da
 /// barra (que ela reaproveita para o cabeçalho) e o `Config` em vigor.
@@ -52,14 +70,21 @@ pub(crate) struct Env<'a> {
 }
 
 /// O que um clique ou uma tecla pede a quem possui a janela. A janela não se
-/// fecha nem abre arquivo sozinha: quem a guarda (`App`) é quem sabe.
+/// fecha, não abre arquivo nem grava sozinha: quem a guarda (`App`) é quem
+/// sabe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Press {
     Nothing,
     /// Botão de fechar do cabeçalho, ou `Esc`.
+    // TODO(tarefa 09): com pendências, fechar pergunta (RF-16.4); hoje fecha e
+    // descarta sem perguntar.
     Close,
     /// "Abrir arquivo no editor" (RF-16.14).
     OpenFile,
+    /// Salvar, pelo botão ou por `Ctrl+S`/`Cmd+S` (RF-16.14). Só sai com
+    /// pendência e nenhuma recusada; as edições estão em
+    /// [`SettingsWindow::edits`].
+    Save,
 }
 
 pub(crate) struct SettingsWindow {
@@ -92,20 +117,34 @@ pub(crate) struct SettingsWindow {
     focus: Focus,
     /// Rolagem vertical do painel, em pixels lógicos de conteúdo.
     scroll: f32,
-    /// `Shift` pressionado, para `Shift+Tab`.
-    shift: bool,
+    /// Modificadores do teclado: `Shift+Tab`, `Ctrl+S`, e os do campo de
+    /// texto.
+    modifiers: Modifiers,
     /// O alvo sob o cursor: realce de item e de botão.
     hovered: Option<Hit>,
-    /// Tooltip da descrição cortada (ADR-0019, ADR-0060 §2).
+    /// Tooltip da descrição cortada e do botão de restaurar (ADR-0019,
+    /// ADR-0060 §2).
     hover: Hover,
     /// O conteúdo medido do grupo em vista; refeito quando a chave muda.
     content: Option<Content>,
-    /// Sobe a cada troca de catálogo e a cada recarga de config, e invalida o
-    /// conteúdo guardado.
+    /// Sobe a cada troca de catálogo, a cada recarga de config e a cada
+    /// mudança no rascunho, e invalida o conteúdo guardado.
     generation: u64,
+    /// O que o usuário mudou e ainda não gravou (RF-16.15).
+    draft: Draft,
+    /// O campo que está recebendo teclas, se algum.
+    editing: Option<Editing>,
+    /// O botão do mouse segue apertado dentro de um campo em edição: o
+    /// arraste seleciona texto (ADR-0035).
+    dragging_field: bool,
+    /// A lista de um botão de escolha, aberta.
+    choice: Option<ChoiceList>,
+    /// Onde procurar arquivos de idioma, para a lista do idioma.
+    locale_dirs: Vec<PathBuf>,
 }
 
 impl SettingsWindow {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         window: Arc<Window>,
         surface: WindowSurface,
@@ -113,6 +152,8 @@ impl SettingsWindow {
         catalog: Arc<Catalog>,
         access_adapter: accesskit_winit::Adapter,
         initial_group: Group,
+        config: &Config,
+        locale_dirs: Vec<PathBuf>,
     ) -> Self {
         let size = window.inner_size();
         Self {
@@ -129,11 +170,16 @@ impl SettingsWindow {
             selected_group: initial_group,
             focus: Focus::Sidebar,
             scroll: 0.0,
-            shift: false,
+            modifiers: Modifiers::NONE,
             hovered: None,
             hover: Hover::default(),
             content: None,
             generation: 0,
+            draft: Draft::new(config),
+            editing: None,
+            dragging_field: false,
+            choice: None,
+            locale_dirs,
         }
     }
 
@@ -163,10 +209,38 @@ impl SettingsWindow {
     }
 
     /// Há alteração não gravada? É a pergunta que `App` faz antes de
-    /// encerrar o processo (ADR-0059 §2) e que a tarefa de pendências
-    /// responde de verdade. Hoje a tela não edita nada, então nunca.
+    /// encerrar o processo (ADR-0059 §2). Um campo em edição com o texto
+    /// mexido conta: é uma alteração que só falta confirmar.
     pub(crate) fn has_pending_changes(&self) -> bool {
-        false
+        self.draft.is_dirty() || self.editing.as_ref().is_some_and(Editing::changed)
+    }
+
+    /// O Salvar tem o que gravar e nada que o bloqueie: há pendência, e
+    /// nenhuma foi recusada (RF-16.18).
+    pub(crate) fn can_save(&self) -> bool {
+        self.draft.is_dirty() && !self.draft.has_invalid()
+    }
+
+    /// As edições do rascunho, na ordem do catálogo: o que o Salvar grava.
+    pub(crate) fn edits(&self) -> Vec<Edit> {
+        self.draft.edits()
+    }
+
+    /// O Salvar gravou: o arquivo agora diz `saved`, e nenhuma pendência
+    /// sobra. A tela mostra isso na hora, sem esperar a recarga a quente.
+    pub(crate) fn save_succeeded(&mut self, saved: &Config) {
+        self.editing = None;
+        self.choice = None;
+        self.draft.commit(saved);
+        self.invalidate();
+    }
+
+    /// A config foi recarregada (a gravação da própria tela, ou um editor): a
+    /// base do rascunho troca, e uma pendência que agora coincide com o
+    /// arquivo deixa de ser pendência.
+    pub(crate) fn config_reloaded(&mut self, config: &Config) {
+        self.draft.rebase(config);
+        self.invalidate();
     }
 
     /// Troca de idioma ao vivo (ADR-0056 §9): o catálogo novo vale no próximo
@@ -178,13 +252,21 @@ impl SettingsWindow {
         self.catalog = Arc::clone(catalog);
         self.window
             .set_title(&msg::settings::window_title(&self.catalog));
+        // A lista aberta tem os rótulos cortados no idioma antigo.
+        self.choice = None;
         self.invalidate();
     }
 
-    /// A config mudou (recarga): os valores mostrados e a lista de temas
-    /// podem ter mudado.
+    /// O conteúdo mostrado mudou -- config, idioma, ou rascunho --, e o
+    /// medido é refeito no próximo quadro.
     pub(crate) fn invalidate(&mut self) {
         self.generation += 1;
+        // Um botão de rodapé que deixou de estar disponível não segura foco.
+        if let Focus::Footer(button) = self.focus
+            && !self.available_buttons().contains(&button)
+        {
+            self.focus = Focus::Sidebar;
+        }
         self.window.request_redraw();
     }
 
@@ -197,6 +279,7 @@ impl SettingsWindow {
         self.surface.resize(gpu, width, height, self.scale);
         self.logical_width = width as f32 / self.scale;
         self.logical_height = height as f32 / self.scale;
+        self.choice = None;
         self.window.request_redraw();
     }
 
@@ -249,7 +332,13 @@ impl SettingsWindow {
             generation: self.generation,
         };
         if self.content.as_ref().map(|c| c.key) != Some(key) {
-            self.content = Some(content::build(key, env.config, &self.catalog, &m, measurer));
+            self.content = Some(content::build(
+                key,
+                &self.draft,
+                &self.catalog,
+                &m,
+                measurer,
+            ));
         }
         if let Some(content) = &self.content {
             self.scroll = layout::clamp_scroll(
@@ -266,11 +355,18 @@ impl SettingsWindow {
             .expect("ensure_content roda antes de qualquer leitura")
     }
 
+    /// A opção que a linha `block` edita, se ela é de opção.
+    fn option_at(&self, block: usize) -> Option<&'static OptionDef> {
+        let id = self.content.as_ref()?.row(block)?.option?;
+        catalog::option(id)
+    }
+
     /// Quais botões do rodapé estão disponíveis, na ordem de
-    /// `FOOTER_BUTTONS`: só Abrir arquivo, até haver pendência (RF-16.14).
+    /// `FOOTER_BUTTONS`: Abrir arquivo sempre; Descartar com pendência;
+    /// Salvar com pendência e nenhuma recusada (RF-16.14, RF-16.18).
     fn available_footer(&self) -> [bool; 3] {
         let pending = self.has_pending_changes();
-        [true, pending, pending]
+        [true, pending, pending && !self.draft.has_invalid()]
     }
 
     fn available_buttons(&self) -> Vec<FooterButton> {
@@ -282,20 +378,82 @@ impl SettingsWindow {
             .collect()
     }
 
+    /// O alvo sob `point`: guia, rodapé, ou -- numa linha do painel -- o botão
+    /// de restaurar, uma parte do controle, ou o fundo da linha.
     fn hit_at(&self, env: Env<'_>, point: (f32, f32)) -> Option<Hit> {
         let m = self.metrics(env);
         let layout = self.layout(env);
         let content = self.content();
         let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
         let footer = footer_buttons(&m, layout.footer, content.footer_widths);
-        hit_test(
+        let hit = hit_test(
             &layout,
             &items,
             &footer,
             &content.geometry,
             self.scroll,
             point,
-        )
+        );
+        match hit {
+            Some(Hit::Row(index)) => Some(self.refine_row_hit(env, index, point)),
+            other => other,
+        }
+    }
+
+    /// Dentro de uma linha: o botão de restaurar vence o controle, que vence o
+    /// fundo.
+    fn refine_row_hit(&self, env: Env<'_>, index: usize, point: (f32, f32)) -> Hit {
+        let m = self.metrics(env);
+        let layout = self.layout(env);
+        let content = self.content();
+        let (Some(row), Some(BlockGeometry::Row(geometry))) =
+            (content.row(index), content.geometry.blocks.get(index))
+        else {
+            return Hit::Row(index);
+        };
+        let (dx, dy) = (layout.panel_body.x, layout.panel_body.y - self.scroll);
+        let shift = |rect: Rect| Rect {
+            x: rect.x + dx,
+            y: rect.y + dy,
+            ..rect
+        };
+        if row.can_reset && tab_bar::rect_contains(shift(geometry.restore), point) {
+            return Hit::Restore(index);
+        }
+        match row.control.part_at(shift(geometry.control), &m, point) {
+            Some(part) => Hit::Control(index, part),
+            None => Hit::Row(index),
+        }
+    }
+
+    /// O retângulo de um controle da linha `block`, em coordenadas de janela.
+    fn control_rect(&self, env: Env<'_>, block: usize) -> Option<Rect> {
+        let layout = self.layout(env);
+        let BlockGeometry::Row(geometry) = self.content().geometry.blocks.get(block)? else {
+            return None;
+        };
+        Some(Rect {
+            x: geometry.control.x + layout.panel_body.x,
+            y: geometry.control.y + layout.panel_body.y - self.scroll,
+            ..geometry.control
+        })
+    }
+
+    /// O campo que recebe o texto de `part`, em coordenadas de janela: o
+    /// controle inteiro, ou -- no Git -- o número, à direita da alternância.
+    fn field_rect(&self, env: Env<'_>, block: usize, part: EditPart) -> Option<Rect> {
+        let control = self.control_rect(env, block)?;
+        Some(match part {
+            EditPart::Field => control,
+            EditPart::GitSeconds => {
+                let width = self.metrics(env).number_field_width;
+                Rect {
+                    x: control.x + control.width - width,
+                    width,
+                    ..control
+                }
+            }
+        })
     }
 
     // ---- ponteiro
@@ -333,8 +491,9 @@ impl SettingsWindow {
     }
 
     /// Movimento do cursor: guarda a posição, escolhe a forma do cursor (setas
-    /// de resize nas bordas, mão sobre o que se clica), atualiza o realce e o
-    /// tooltip, e pede quadro só se algo visível mudou.
+    /// de resize nas bordas, mão sobre o que se clica, I sobre campo de
+    /// texto), atualiza o realce e o tooltip, arrasta a seleção de um campo em
+    /// edição, e pede quadro só se algo visível mudou.
     pub(crate) fn cursor_moved(
         &mut self,
         position: PhysicalPosition<f64>,
@@ -347,6 +506,11 @@ impl SettingsWindow {
         let point = self.cursor_logical();
         let resize_border = env.config.appearance.window_controls.resize_border as f32;
 
+        if self.dragging_field {
+            self.drag_selection(env, measurer, point);
+            return;
+        }
+
         let hovered_button = if is_macos() {
             None
         } else {
@@ -358,6 +522,22 @@ impl SettingsWindow {
                 point,
             )
         };
+
+        // A lista aberta cobre o resto: só ela reage ao ponteiro.
+        if self.choice.is_some() {
+            let highlighted_before = self.choice.as_ref().map(|list| list.highlighted);
+            if let (Some(layout), Some(list)) = (self.choice_layout(env), self.choice.as_mut())
+                && let Some(index) = choice_list::hit(&layout, point)
+            {
+                list.highlighted = index;
+            }
+            self.window.set_cursor(CursorIcon::Default);
+            if highlighted_before != self.choice.as_ref().map(|list| list.highlighted) {
+                self.window.request_redraw();
+            }
+            return;
+        }
+
         let hit = self.hit_at(env, point);
         // Descartar e Salvar indisponíveis não realçam.
         let hit = match hit {
@@ -366,8 +546,7 @@ impl SettingsWindow {
         };
         let cursor = match self.resize_direction(env.style, resize_border, point) {
             Some(direction) => CursorIcon::from(direction),
-            None if matches!(hit, Some(Hit::Group(_) | Hit::Footer(_))) => CursorIcon::Pointer,
-            None => CursorIcon::Default,
+            None => self.cursor_for(hit),
         };
         self.window.set_cursor(cursor);
 
@@ -390,40 +569,76 @@ impl SettingsWindow {
         }
     }
 
-    /// O alvo do tooltip: a descrição de uma linha cujo texto foi cortado, sob
-    /// o cursor. Descrição que cabe inteira não tem tooltip (ADR-0019).
+    /// A forma do cursor sobre `hit`: I sobre campo de texto, mão sobre o que
+    /// se clica.
+    fn cursor_for(&self, hit: Option<Hit>) -> CursorIcon {
+        match hit {
+            Some(Hit::Group(_) | Hit::Footer(_) | Hit::Restore(_)) => CursorIcon::Pointer,
+            Some(Hit::Control(index, _)) => {
+                match self.content().row(index).map(|row| &row.control) {
+                    Some(ControlView::Field { .. }) => CursorIcon::Text,
+                    Some(ControlView::Themes { .. } | ControlView::List { .. }) | None => {
+                        CursorIcon::Default
+                    }
+                    Some(_) => CursorIcon::Pointer,
+                }
+            }
+            Some(Hit::Row(_)) | None => CursorIcon::Default,
+        }
+    }
+
+    /// O alvo do tooltip: o botão de restaurar sob o cursor (um ícone sem
+    /// texto) ou a descrição de uma linha cujo texto foi cortado. Descrição que
+    /// cabe inteira não tem tooltip (ADR-0019).
     fn tooltip_target(
         &self,
         env: Env<'_>,
         point: (f32, f32),
         hit: Option<Hit>,
     ) -> Option<(HoverKey, Rect, String)> {
-        let Some(Hit::Row(index)) = hit else {
-            return None;
-        };
         let m = self.metrics(env);
         let layout = self.layout(env);
         let content = self.content();
-        let row = content.row(index)?;
-        if !row.description_truncated {
-            return None;
+        match hit? {
+            Hit::Restore(index) => {
+                let BlockGeometry::Row(geometry) = content.geometry.blocks.get(index)? else {
+                    return None;
+                };
+                let area = Rect {
+                    x: geometry.restore.x + layout.panel_body.x,
+                    y: geometry.restore.y + layout.panel_body.y - self.scroll,
+                    ..geometry.restore
+                };
+                Some((
+                    HoverKey::SettingsRestore(index),
+                    area,
+                    msg::settings::button::restore_default(&self.catalog),
+                ))
+            }
+            Hit::Row(index) => {
+                let row = content.row(index)?;
+                if !row.description_truncated {
+                    return None;
+                }
+                let BlockGeometry::Row(geometry) = content.geometry.blocks.get(index)? else {
+                    return None;
+                };
+                let area = Rect {
+                    x: geometry.description_origin.0 + layout.panel_body.x,
+                    y: geometry.description_origin.1 + layout.panel_body.y - self.scroll,
+                    width: geometry.left_width,
+                    height: m.description_size,
+                };
+                tab_bar::rect_contains(area, point).then(|| {
+                    (
+                        HoverKey::SettingsRow(index),
+                        area,
+                        row.description_full.clone(),
+                    )
+                })
+            }
+            _ => None,
         }
-        let BlockGeometry::Row(geometry) = content.geometry.blocks.get(index)? else {
-            return None;
-        };
-        let area = Rect {
-            x: geometry.description_origin.0 + layout.panel_body.x,
-            y: geometry.description_origin.1 + layout.panel_body.y - self.scroll,
-            width: geometry.left_width,
-            height: m.description_size,
-        };
-        tab_bar::rect_contains(area, point).then(|| {
-            (
-                HoverKey::SettingsRow(index),
-                area,
-                row.description_full.clone(),
-            )
-        })
     }
 
     /// O cursor saiu da janela: somem os realces e o tooltip.
@@ -460,13 +675,15 @@ impl SettingsWindow {
             content_height,
             layout.panel_body.height,
         );
+        // A lista é ancorada à linha: rolar a deixaria solta.
+        self.choice = None;
         self.hover.dismiss();
         self.window.request_redraw();
     }
 
     /// Clique esquerdo (ADR-0027): botão de janela, borda de resize ou drag
     /// region do cabeçalho; depois o que o painel tem -- um grupo da guia, o
-    /// rodapé, uma linha.
+    /// rodapé, o controle de uma linha.
     pub(crate) fn left_pressed(&mut self, env: Env<'_>, measurer: &mut TextMeasurer) -> Press {
         self.ensure_content(env, measurer);
         self.hover.dismiss();
@@ -502,25 +719,364 @@ impl SettingsWindow {
                 return Press::Nothing;
             }
         }
+        // A lista aberta é modal: um clique escolhe um item ou a fecha, e em
+        // nenhum dos dois casos chega ao que está por baixo.
+        if self.choice.is_some() {
+            self.click_choice(env, point);
+            return Press::Nothing;
+        }
         match self.hit_at(env, point) {
             Some(Hit::Group(group)) => {
                 self.focus = Focus::Sidebar;
                 self.select_group(group);
                 Press::Nothing
             }
-            Some(Hit::Footer(FooterButton::OpenFile)) => {
-                self.focus = Focus::Footer(FooterButton::OpenFile);
-                self.window.request_redraw();
-                Press::OpenFile
+            Some(Hit::Footer(button)) => self.press_footer(button),
+            Some(Hit::Restore(index)) => {
+                self.commit_edit();
+                self.focus = Focus::Row(index);
+                if let Some(option) = self.option_at(index) {
+                    self.draft.reset(option);
+                }
+                self.invalidate();
+                Press::Nothing
             }
-            // Descartar e Salvar existem, mas sem pendência não fazem nada.
-            Some(Hit::Footer(_)) | None => Press::Nothing,
+            Some(Hit::Control(index, part)) => {
+                self.click_control(env, measurer, index, part, point);
+                Press::Nothing
+            }
             Some(Hit::Row(index)) => {
+                self.commit_edit();
                 self.focus = Focus::Row(index);
                 self.window.request_redraw();
                 Press::Nothing
             }
+            None => {
+                self.commit_edit();
+                Press::Nothing
+            }
         }
+    }
+
+    /// O botão esquerdo foi solto: acaba o arraste de seleção de um campo.
+    pub(crate) fn left_released(&mut self) {
+        self.dragging_field = false;
+    }
+
+    /// Clique num botão do rodapé. Descartar e Salvar indisponíveis não fazem
+    /// nada. Salvar confirma antes o campo em edição -- o que está digitado
+    /// entra no que se grava -- e só sai se nada ficou recusado.
+    fn press_footer(&mut self, button: FooterButton) -> Press {
+        match button {
+            FooterButton::OpenFile => {
+                self.focus = Focus::Footer(FooterButton::OpenFile);
+                self.window.request_redraw();
+                Press::OpenFile
+            }
+            FooterButton::Discard if self.available_buttons().contains(&button) => {
+                self.focus = Focus::Footer(button);
+                self.discard();
+                Press::Nothing
+            }
+            FooterButton::Save if self.available_buttons().contains(&button) => {
+                self.focus = Focus::Footer(button);
+                self.commit_edit();
+                if self.can_save() {
+                    Press::Save
+                } else {
+                    Press::Nothing
+                }
+            }
+            FooterButton::Discard | FooterButton::Save => Press::Nothing,
+        }
+    }
+
+    /// Descartar (RF-16.15): nenhuma pendência, e a tela volta a mostrar o que
+    /// o arquivo diz.
+    fn discard(&mut self) {
+        self.editing = None;
+        self.choice = None;
+        self.dragging_field = false;
+        self.draft.discard();
+        self.invalidate();
+    }
+
+    /// Clique numa parte do controle da linha `index`.
+    fn click_control(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        index: usize,
+        part: ControlPart,
+        point: (f32, f32),
+    ) {
+        self.focus = Focus::Row(index);
+        let Some(option) = self.option_at(index) else {
+            self.commit_edit();
+            return;
+        };
+        let control = self.content().row(index).map(|row| row.control.clone());
+        match (control, part) {
+            (Some(ControlView::Toggle { .. }), _) => {
+                self.commit_edit();
+                self.toggle(option);
+            }
+            (Some(ControlView::Segmented { .. }), ControlPart::Segment(segment)) => {
+                self.commit_edit();
+                self.choose_segment(option, segment);
+            }
+            (Some(ControlView::Field { .. }), _) => {
+                self.begin_or_continue_edit(env, measurer, index, EditPart::Field, point);
+            }
+            (Some(ControlView::Choice { .. }), _) => {
+                self.commit_edit();
+                self.open_choice(env, measurer, index);
+            }
+            (Some(ControlView::GitPoll { .. }), ControlPart::GitToggle) => {
+                self.commit_edit();
+                self.toggle_git(option);
+            }
+            (Some(ControlView::GitPoll { on: true, .. }), ControlPart::GitNumber) => {
+                self.begin_or_continue_edit(env, measurer, index, EditPart::GitSeconds, point);
+            }
+            _ => self.commit_edit(),
+        }
+        self.window.request_redraw();
+    }
+
+    /// Clique na lista aberta: um item a escolhe; fora do menu a fecha.
+    fn click_choice(&mut self, env: Env<'_>, point: (f32, f32)) {
+        let Some(layout) = self.choice_layout(env) else {
+            self.choice = None;
+            return;
+        };
+        match choice_list::hit(&layout, point) {
+            Some(index) => {
+                if let Some(list) = &mut self.choice {
+                    list.highlighted = index;
+                }
+                self.select_choice();
+            }
+            None if choice_list::contains(&layout, point) => {}
+            None => {
+                self.choice = None;
+                self.window.request_redraw();
+            }
+        }
+    }
+
+    /// Clique na parte de um campo: se o campo já é o que está em edição, só
+    /// move o cursor (e arma o arraste); senão confirma o outro e começa a
+    /// editar este, com o cursor onde se clicou.
+    fn begin_or_continue_edit(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        index: usize,
+        part: EditPart,
+        point: (f32, f32),
+    ) {
+        let already = self
+            .editing
+            .as_ref()
+            .is_some_and(|editing| editing.block == index && editing.part == part);
+        if !already {
+            self.commit_edit();
+            let Some(initial) = self.edit_initial(index, part) else {
+                return;
+            };
+            self.editing = Some(Editing::new(index, part, initial));
+        }
+        if let Some(byte) = self.byte_at(env, measurer, point)
+            && let Some(editing) = &mut self.editing
+        {
+            editing.state.click_at(byte);
+            self.dragging_field = true;
+        }
+    }
+
+    /// O texto com que a edição de `part` na linha `index` começa: o que o
+    /// campo mostra (escrito, se a opção escreve os controles; o digitado, se
+    /// foi recusado).
+    fn edit_initial(&self, index: usize, part: EditPart) -> Option<String> {
+        match (&self.content().row(index)?.control, part) {
+            (ControlView::Field { text, .. }, EditPart::Field) => Some(text.clone()),
+            (ControlView::GitPoll { seconds, .. }, EditPart::GitSeconds) => Some(seconds.clone()),
+            _ => None,
+        }
+    }
+
+    /// A posição, em bytes, do texto do campo em edição que o ponteiro
+    /// aponta. Converte o x do mouse com o **mesmo** `editing_text_x` que a
+    /// pintura usa.
+    fn byte_at(
+        &self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        point: (f32, f32),
+    ) -> Option<usize> {
+        let editing = self.editing.as_ref()?;
+        let rect = self.field_rect(env, editing.block, editing.part)?;
+        let m = self.metrics(env);
+        let text = editing.state.text();
+        let width = measurer.measure_width(text, BODY_FONT, m.field_font_size);
+        let text_x = paint::editing_text_x(&m, rect, width);
+        Some(measurer.index_at_offset(text, BODY_FONT, m.field_font_size, point.0 - text_x))
+    }
+
+    /// O arraste com o botão apertado dentro de um campo: estende a seleção.
+    fn drag_selection(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, point: (f32, f32)) {
+        if let Some(byte) = self.byte_at(env, measurer, point)
+            && let Some(editing) = &mut self.editing
+        {
+            editing.state.drag_to(byte);
+            self.window.request_redraw();
+        }
+    }
+
+    /// Confirma o campo em edição: o texto vira pendência (ou recusa) no
+    /// rascunho. Texto que não mudou desde o começo não cria nada.
+    fn commit_edit(&mut self) {
+        self.dragging_field = false;
+        let Some(editing) = self.editing.take() else {
+            return;
+        };
+        if editing.changed()
+            && let Some(option) = self.option_at(editing.block)
+        {
+            // Um valor recusado fica no rascunho, marcado na linha.
+            interact::commit_text(&mut self.draft, option, editing.state.text());
+            self.invalidate();
+        } else {
+            self.window.request_redraw();
+        }
+    }
+
+    /// `Up`/`Down` num campo numérico: o passo da opção sobre o texto, que é
+    /// confirmado na hora -- o campo segue em edição.
+    fn step_edit(&mut self, direction: i32) {
+        let Some(editing) = &self.editing else {
+            return;
+        };
+        let Some(option) = self.option_at(editing.block) else {
+            return;
+        };
+        let (block, part) = (editing.block, editing.part);
+        let Some(next) =
+            interact::step_text(&mut self.draft, option, editing.state.text(), direction)
+        else {
+            return;
+        };
+        let mut stepped = Editing::new(block, part, next.clone());
+        stepped.initial = next;
+        self.editing = Some(stepped);
+        self.invalidate();
+    }
+
+    /// `Up`/`Down` numa linha numérica com o foco, fora de edição.
+    fn step_row(&mut self, index: usize, direction: i32) {
+        let Some(option) = self.option_at(index) else {
+            return;
+        };
+        let Some(ControlView::Field { text, .. }) = self.content().row(index).map(|r| &r.control)
+        else {
+            return;
+        };
+        let text = text.clone();
+        if interact::step_text(&mut self.draft, option, &text, direction).is_some() {
+            self.invalidate();
+        }
+    }
+
+    /// Alterna uma opção booleana.
+    fn toggle(&mut self, option: &OptionDef) {
+        if interact::toggle(&mut self.draft, option) {
+            self.invalidate();
+        }
+    }
+
+    /// Escolhe o valor `segment` de um segmentado.
+    fn choose_segment(&mut self, option: &OptionDef, segment: usize) {
+        if interact::choose_segment(&mut self.draft, option, segment) {
+            self.invalidate();
+        }
+    }
+
+    /// A alternância do Git: desligar grava `0`; ligar volta ao padrão.
+    fn toggle_git(&mut self, option: &OptionDef) {
+        if interact::toggle_git(&mut self.draft, option) {
+            self.invalidate();
+        }
+    }
+
+    // ---- lista de escolha
+
+    /// Abre a lista da linha `index`: os idiomas achados nos diretórios de
+    /// `locales/` (com o do valor em vista, mesmo que o arquivo dele tenha
+    /// sumido), ou os valores nomeados da opção.
+    fn open_choice(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, index: usize) {
+        let Some(option) = self.option_at(index) else {
+            return;
+        };
+        let EditValue::String(current) = self.draft.value(option) else {
+            return;
+        };
+        let values: Vec<String> = match option.control {
+            Control::Language => {
+                let mut found = language::available_languages(&self.locale_dirs);
+                if !found.contains(&current) {
+                    found.push(current.clone());
+                    found.sort();
+                }
+                found
+            }
+            Control::Choice(choices) => choices.iter().map(|c| (*c).to_owned()).collect(),
+            _ => return,
+        };
+        let Some(anchor) = self.control_rect(env, index) else {
+            return;
+        };
+        let items = values
+            .into_iter()
+            .map(|value| {
+                let label = match option.control {
+                    Control::Language => value.clone(),
+                    _ => choice_label(&self.catalog, &value),
+                };
+                ChoiceItem {
+                    label: choice_list::fit_label(&label, env.config, anchor.width, measurer),
+                    value,
+                }
+            })
+            .collect();
+        self.choice = Some(ChoiceList::open(index, items, &current));
+        self.window.request_redraw();
+    }
+
+    /// Onde a lista aberta fica, ancorada ao controle da linha dela.
+    fn choice_layout(&self, env: Env<'_>) -> Option<ChoiceLayout> {
+        let list = self.choice.as_ref()?;
+        let anchor = self.control_rect(env, list.block)?;
+        Some(choice_list::layout(
+            list,
+            anchor,
+            env.config,
+            self.logical_width,
+            self.logical_height,
+        ))
+    }
+
+    /// Escolhe o item realçado da lista e a fecha.
+    fn select_choice(&mut self) {
+        let Some(list) = self.choice.take() else {
+            return;
+        };
+        if let (Some(option), Some(value)) = (self.option_at(list.block), list.highlighted_value())
+        {
+            interact::choose_value(&mut self.draft, option, value);
+            self.invalidate();
+        }
+        self.window.request_redraw();
     }
 
     /// Clique na drag region: duplo clique maximiza/restaura, e o resto
@@ -542,14 +1098,25 @@ impl SettingsWindow {
 
     // ---- teclado
 
-    pub(crate) fn modifiers_changed(&mut self, shift: bool) {
-        self.shift = shift;
+    pub(crate) fn modifiers_changed(&mut self, state: ModifiersState) {
+        self.modifiers = modifiers_from(state);
+    }
+
+    /// `Ctrl` no Windows e no Linux, `Cmd` no macOS: o modificador de
+    /// `Ctrl+S` (RF-16.10), o mesmo que o campo de texto lê para `Ctrl+A`.
+    fn primary(&self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.modifiers.super_
+        } else {
+            self.modifiers.ctrl
+        }
     }
 
     /// Teclas da janela (RF-16.10, ADR-0059 §3): modo de captura -- o mapa de
     /// teclas do processo não é consultado aqui. `Tab`/`Shift+Tab` percorrem
-    /// guia, linhas e rodapé; as setas andam na guia; `Enter`/`Espaço` aciona
-    /// o botão focado; `Esc` fecha.
+    /// guia, linhas e rodapé; as setas andam na guia e entre as opções de uma
+    /// escolha; `Espaço` alterna; `Enter` confirma campo; `Ctrl+S` salva;
+    /// `Esc` fecha -- ou, com um campo ou uma lista abertos, cancela só eles.
     pub(crate) fn key(
         &mut self,
         event: &KeyEvent,
@@ -561,10 +1128,32 @@ impl SettingsWindow {
         }
         self.ensure_content(env, measurer);
         self.hover.dismiss();
+
+        let is_save = matches!(
+            &event.logical_key,
+            Key::Character(text) if text.eq_ignore_ascii_case("s")
+        );
+        if self.primary() && is_save {
+            self.commit_edit();
+            return if self.can_save() {
+                Press::Save
+            } else {
+                Press::Nothing
+            };
+        }
+        if self.choice.is_some() {
+            self.key_choice(&event.logical_key);
+            return Press::Nothing;
+        }
+        if self.editing.is_some() {
+            self.key_editing(event, env);
+            return Press::Nothing;
+        }
+
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => Press::Close,
             Key::Named(NamedKey::Tab) => {
-                self.move_focus(env, self.shift);
+                self.move_focus(env, self.modifiers.shift);
                 Press::Nothing
             }
             Key::Named(NamedKey::ArrowDown) if self.focus == Focus::Sidebar => {
@@ -575,12 +1164,155 @@ impl SettingsWindow {
                 self.step_group(-1);
                 Press::Nothing
             }
-            Key::Named(NamedKey::Enter | NamedKey::Space)
-                if self.focus == Focus::Footer(FooterButton::OpenFile) =>
-            {
-                Press::OpenFile
+            Key::Named(NamedKey::Enter | NamedKey::Space) => self.activate(env, measurer),
+            Key::Named(NamedKey::ArrowLeft) => {
+                self.step_segmented(-1);
+                Press::Nothing
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                self.step_segmented(1);
+                Press::Nothing
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                if let Focus::Row(index) = self.focus {
+                    self.step_row(index, 1);
+                }
+                Press::Nothing
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                if let Focus::Row(index) = self.focus {
+                    self.step_row(index, -1);
+                }
+                Press::Nothing
             }
             _ => Press::Nothing,
+        }
+    }
+
+    /// `Enter`/`Espaço` no que tem o foco: o botão do rodapé, ou o controle da
+    /// linha -- alterna, começa a editar o campo, abre a lista.
+    fn activate(&mut self, env: Env<'_>, measurer: &mut TextMeasurer) -> Press {
+        match self.focus {
+            Focus::Footer(button) => self.press_footer(button),
+            Focus::Row(index) => {
+                self.activate_row(env, measurer, index);
+                Press::Nothing
+            }
+            Focus::Sidebar => Press::Nothing,
+        }
+    }
+
+    fn activate_row(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, index: usize) {
+        let Some(option) = self.option_at(index) else {
+            return;
+        };
+        let Some(control) = self.content().row(index).map(|row| row.control.clone()) else {
+            return;
+        };
+        match control {
+            ControlView::Toggle { .. } => self.toggle(option),
+            ControlView::GitPoll { on, .. } => {
+                if on {
+                    self.start_edit(index, EditPart::GitSeconds);
+                } else {
+                    self.toggle_git(option);
+                }
+            }
+            ControlView::Field { .. } => self.start_edit(index, EditPart::Field),
+            ControlView::Choice { .. } => self.open_choice(env, measurer, index),
+            ControlView::Segmented { .. }
+            | ControlView::List { .. }
+            | ControlView::Themes { .. } => {}
+        }
+        self.window.request_redraw();
+    }
+
+    /// Começa a editar o campo da linha pelo teclado: o cursor no fim.
+    fn start_edit(&mut self, index: usize, part: EditPart) {
+        if let Some(initial) = self.edit_initial(index, part) {
+            self.editing = Some(Editing::new(index, part, initial));
+        }
+    }
+
+    /// Setas esquerda e direita sobre um segmentado com o foco.
+    fn step_segmented(&mut self, delta: i32) {
+        let Focus::Row(index) = self.focus else {
+            return;
+        };
+        let Some(ControlView::Segmented {
+            selected, labels, ..
+        }) = self.content().row(index).map(|row| row.control.clone())
+        else {
+            return;
+        };
+        let next = (selected as i32 + delta).clamp(0, labels.len() as i32 - 1) as usize;
+        if next != selected
+            && let Some(option) = self.option_at(index)
+        {
+            self.choose_segment(option, next);
+        }
+    }
+
+    /// Teclas com a lista aberta: setas movem o realce, `Enter` e `Espaço`
+    /// escolhem, `Esc` fecha. O resto é engolido.
+    fn key_choice(&mut self, key: &Key) {
+        match key {
+            Key::Named(NamedKey::Escape) => {
+                self.choice = None;
+                self.window.request_redraw();
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                if let Some(list) = &mut self.choice {
+                    list.move_highlight(-1);
+                }
+                self.window.request_redraw();
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                if let Some(list) = &mut self.choice {
+                    list.move_highlight(1);
+                }
+                self.window.request_redraw();
+            }
+            Key::Named(NamedKey::Enter | NamedKey::Space) => self.select_choice(),
+            _ => {}
+        }
+    }
+
+    /// Teclas com um campo em edição: `Enter` confirma, `Esc` descarta a
+    /// digitação, `Tab` confirma e segue, `Up`/`Down` somam o passo num campo
+    /// numérico, e o resto edita o texto.
+    fn key_editing(&mut self, event: &KeyEvent, env: Env<'_>) {
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.editing = None;
+                self.dragging_field = false;
+                self.window.request_redraw();
+            }
+            Key::Named(NamedKey::Enter) => self.commit_edit(),
+            Key::Named(NamedKey::Tab) => {
+                self.commit_edit();
+                self.move_focus(env, self.modifiers.shift);
+            }
+            Key::Named(NamedKey::ArrowUp) => self.step_edit(1),
+            Key::Named(NamedKey::ArrowDown) => self.step_edit(-1),
+            Key::Named(NamedKey::Backspace) => {
+                if let Some(editing) = &mut self.editing {
+                    editing.state.backspace();
+                }
+                self.window.request_redraw();
+            }
+            key => {
+                if let Some(editing) = &mut self.editing
+                    && apply_text_field_key(
+                        &mut editing.state,
+                        key,
+                        event.text.as_deref(),
+                        self.modifiers,
+                    )
+                {
+                    self.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -618,9 +1350,12 @@ impl SettingsWindow {
         self.select_group(Group::ALL[next]);
     }
 
-    /// Escolhe o grupo: o painel volta ao topo (RF-16.9).
+    /// Escolhe o grupo: o painel volta ao topo (RF-16.9). O campo em edição
+    /// é confirmado antes -- ele é do grupo que se deixa.
     fn select_group(&mut self, group: Group) {
         if group != self.selected_group {
+            self.commit_edit();
+            self.choice = None;
             self.selected_group = group;
             self.scroll = 0.0;
             self.hover.dismiss();
@@ -675,7 +1410,7 @@ impl SettingsWindow {
                     .blocks
                     .iter()
                     .filter_map(|block| match block {
-                        Block::Row(row) => Some(row),
+                        Block::Row(row) => Some(&**row),
                         Block::Section(_) => None,
                     })
                     .collect()
@@ -698,11 +1433,12 @@ impl SettingsWindow {
 
     /// Pinta o quadro: painel ao fundo, guia, corpo e rodapé, e -- fora do
     /// macOS -- o cabeçalho por cima. Tudo na camada `Chrome` (ADR-0060 §4); o
-    /// tooltip na `Popover`. Camada nova nenhuma.
+    /// tooltip e a lista de escolha na `Popover`. Camada nova nenhuma.
     pub(crate) fn paint(
         &mut self,
         env: Env<'_>,
         pal: &ResolvedPalette,
+        term_pal: &ResolvedTermPalette,
         measurer: &mut TextMeasurer,
     ) -> Frame {
         self.ensure_content(env, measurer);
@@ -711,6 +1447,7 @@ impl SettingsWindow {
         let content = self.content();
         let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
         let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        let pending_groups = self.draft.pending_groups();
 
         let mut out = vec![
             quad(layout.panel, PANEL_BACKGROUND),
@@ -728,7 +1465,9 @@ impl SettingsWindow {
                 focus: self.focus,
                 hovered: self.hovered,
                 scroll: self.scroll,
-                pending_groups: &[],
+                pending_groups: &pending_groups,
+                editing: self.editing.as_ref(),
+                selection_color: term_pal.selection_background,
                 footer_available: self.available_footer(),
                 style: env.style,
                 pal,
@@ -752,19 +1491,23 @@ impl SettingsWindow {
         }
         let mut frame = Frame::new();
         frame.set_layer(Layer::Chrome, out);
+        let mut popover = Vec::new();
         if let Some((anchor, text)) = self.hover.visible() {
-            frame.set_layer(
-                Layer::Popover,
-                overlay::paint_tooltip(
-                    anchor,
-                    text,
-                    env.config,
-                    pal,
-                    self.logical_width,
-                    self.logical_height,
-                    measurer,
-                ),
-            );
+            popover.extend(overlay::paint_tooltip(
+                anchor,
+                text,
+                env.config,
+                pal,
+                self.logical_width,
+                self.logical_height,
+                measurer,
+            ));
+        }
+        if let (Some(list), Some(list_layout)) = (&self.choice, self.choice_layout(env)) {
+            popover.extend(choice_list::paint(list, &list_layout, env.config, pal));
+        }
+        if !popover.is_empty() {
+            frame.set_layer(Layer::Popover, popover);
         }
         frame
     }

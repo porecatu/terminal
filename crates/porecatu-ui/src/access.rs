@@ -1001,6 +1001,10 @@ fn settings_row_node(index: usize, row: &RowView, nodes: &mut Vec<(NodeId, Node)
         if !description.is_empty() {
             node.set_description(description.clone());
         }
+        // Valor recusado (RF-16.18): o leitor de tela o anuncia como inválido.
+        if row.invalid.is_some() {
+            node.set_invalid(accesskit::Invalid::True);
+        }
     };
     match &row.control {
         ControlView::Toggle { on } => {
@@ -1902,6 +1906,23 @@ mod settings_tree_tests {
         assert_eq!(labelled(&nodes, "Tamanho").role(), Role::SpinButton);
         assert_eq!(labelled(&nodes, "Família").role(), Role::TextInput);
         assert_eq!(labelled(&nodes, "Forma").role(), Role::ComboBox);
+    }
+
+    #[test]
+    fn a_row_with_a_refused_value_is_announced_as_invalid() {
+        let mut rows = rows_for_test(Group::Terminal);
+        let size = rows
+            .iter_mut()
+            .find(|row| row.option == Some("font_size"))
+            .unwrap();
+        size.invalid = Some("Número inválido.".to_owned());
+        let update = tree_with_rows(Group::Terminal, true, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        assert_eq!(
+            labelled(&nodes, "Tamanho").invalid(),
+            Some(accesskit::Invalid::True)
+        );
+        assert_eq!(labelled(&nodes, "Piscar").invalid(), None);
     }
 
     #[test]

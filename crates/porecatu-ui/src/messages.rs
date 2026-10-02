@@ -60,6 +60,44 @@ pub(crate) fn config_error(catalog: &Catalog, error: &ConfigError) -> String {
     }
 }
 
+/// Corpo do aviso de Salvar que não gravou (RF-16.19): o texto que o
+/// carregador recusaria cita linha e coluna como o aviso de config inválida, a
+/// falha de disco cita a causa do sistema, e o resto diz por que a edição não
+/// se aplica.
+pub(crate) fn settings_save_error(
+    catalog: &Catalog,
+    error: &crate::settings::save::SaveError,
+) -> String {
+    use crate::settings::save::SaveError as Failure;
+    use porecatu_config::EditError;
+
+    match error {
+        Failure::Read { path, cause } => {
+            msg::notice::config_invalid::unreadable(catalog, path.display(), cause)
+        }
+        Failure::Edit(edit) => match edit {
+            EditError::Invalid(error) => config_error(catalog, error),
+            EditError::Syntax {
+                line: Some(line),
+                column: Some(column),
+                detail,
+            } => msg::notice::config_invalid::body_at(catalog, line, column, detail),
+            EditError::Syntax { detail, .. } => msg::notice::config_invalid::body(catalog, detail),
+            EditError::Changed { .. } => msg::notice::settings_save_failed::changed(catalog),
+            EditError::Io { path, cause, .. } => {
+                msg::notice::settings_save_failed::io(catalog, path.display(), cause)
+            }
+            EditError::NotATable { path } | EditError::NotAValue { path } => {
+                msg::notice::settings_save_failed::structure(catalog, path)
+            }
+            // Erros de quem monta a edição, nunca do usuário.
+            EditError::EmptyKeyPath | EditError::InvalidKeyPath { .. } => {
+                msg::notice::settings_save_failed::structure(catalog, edit)
+            }
+        },
+    }
+}
+
 /// Nota no grid de uma aba cujo `.porecatu` existe, é de diretório
 /// autorizado e não pôde ser lido. `reason` é o texto do `io::Error`.
 pub(crate) fn project_file_unreadable(catalog: &Catalog, path: &Path, reason: &str) -> String {
@@ -682,6 +720,12 @@ registry! {
         },
         config_open_failed {
             title(),
+        },
+        settings_save_failed {
+            title(),
+            changed(),
+            io(path, cause),
+            structure(path),
         },
         link_open_failed {
             title(),

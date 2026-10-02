@@ -99,6 +99,41 @@ fn app_dir() -> Option<PathBuf> {
     first_existing(candidates, Path::is_dir)
 }
 
+/// Os diretórios de idioma que existem neste processo -- o do app e o do
+/// usuário --, os mesmos que `load_catalog` procura. A tela de configurações
+/// lista os arquivos deles (RF-16.12).
+pub(crate) fn locale_dirs(config_path: Option<&Path>) -> Vec<PathBuf> {
+    [app_dir(), user_dir(config_path)]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Os idiomas que `dirs` têm, pelo nome do arquivo (`pt_BR` de `pt_BR.toml`),
+/// sem repetição e em ordem alfabética. Arquivo cujo nome não é um idioma
+/// válido (`LocaleName`) fica de fora, como o carregador o ignoraria.
+/// Diretório ilegível ou ausente conta como vazio.
+pub(crate) fn available_languages(dirs: &[PathBuf]) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(OsStr::to_str) != Some("toml") {
+                continue;
+            }
+            if let Some(stem) = path.file_stem().and_then(OsStr::to_str)
+                && LocaleName::parse(stem).is_ok()
+            {
+                names.insert(stem.to_owned());
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
 /// Monta o catálogo do processo: `language` da config, os dois diretórios
 /// reais, o esquema do registro.
 pub(crate) fn load_catalog(language: &str, config_path: Option<&Path>) -> CatalogOutcome {
@@ -215,6 +250,43 @@ mod tests {
 
     fn exe() -> PathBuf {
         PathBuf::from("/opt/porecatu/bin/porecatu")
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "porecatu-language-test-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn available_languages_lists_valid_locale_files_once_and_sorted() {
+        let app = scratch_dir("app");
+        let user = scratch_dir("user");
+        for name in [
+            "pt_BR.toml",
+            "en_US.toml",
+            "notes.txt",
+            "Bad.toml",
+            "pt.toml",
+        ] {
+            std::fs::write(app.join(name), "").unwrap();
+        }
+        // O usuário repete um e traz outro.
+        for name in ["en_US.toml", "es_ES.toml"] {
+            std::fs::write(user.join(name), "").unwrap();
+        }
+        let missing = std::env::temp_dir().join("porecatu-language-test-missing-dir");
+        let found = available_languages(&[app.clone(), missing, user.clone()]);
+        assert_eq!(found, ["en_US", "es_ES", "pt_BR"]);
+        std::fs::remove_dir_all(app).unwrap();
+        std::fs::remove_dir_all(user).unwrap();
     }
 
     #[test]
