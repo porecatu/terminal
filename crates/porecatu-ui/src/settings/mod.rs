@@ -10,6 +10,8 @@
 //! encerrar o app). Itens, opções, rodapé, acessibilidade e pendências entram
 //! com as tarefas seguintes.
 
+mod catalog;
+mod draft;
 mod layout;
 mod window;
 
