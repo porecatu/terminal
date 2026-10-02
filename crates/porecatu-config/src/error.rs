@@ -66,7 +66,7 @@ impl ConfigError {
 
 /// Linha e coluna (ambas contadas a partir de 1) do byte offset `pos` em
 /// `source`.
-fn line_column_at(source: &str, pos: usize) -> (usize, usize) {
+pub(crate) fn line_column_at(source: &str, pos: usize) -> (usize, usize) {
     let pos = pos.min(source.len());
     let prefix = &source[..pos];
     let line = prefix.bytes().filter(|&b| b == b'\n').count() + 1;
