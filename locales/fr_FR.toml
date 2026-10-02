@@ -41,6 +41,9 @@ save_item = "Enregistrer cette fenêtre…"
 empty_list = "aucune session enregistrée"
 name_placeholder = "nom de la session"
 
+[settings]
+window_title = "Paramètres"
+
 [search_bar]
 invalid_pattern = "motif invalide"
 no_results = "aucun résultat"

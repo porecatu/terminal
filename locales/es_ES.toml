@@ -41,6 +41,9 @@ save_item = "Guardar esta ventana…"
 empty_list = "no hay sesiones guardadas"
 name_placeholder = "nombre de la sesión"
 
+[settings]
+window_title = "Configuración"
+
 [search_bar]
 invalid_pattern = "patrón no válido"
 no_results = "sin resultados"

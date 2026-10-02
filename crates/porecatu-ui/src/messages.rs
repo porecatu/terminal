@@ -270,6 +270,9 @@ registry! {
         empty_list(),
         name_placeholder(),
     }
+    settings {
+        window_title(),
+    }
     search_bar {
         invalid_pattern(),
         no_results(),

@@ -57,6 +57,7 @@ mod search_bar;
 mod selection;
 mod session_picker;
 mod session_writer;
+mod settings;
 mod shell_integration;
 mod status_bar;
 mod tab_bar;
@@ -86,6 +87,7 @@ use session_picker::{
     Highlight as SessionHighlight, Mode as SessionMode, PickerOutcome, SessionPicker,
 };
 use session_writer::SessionScheduler;
+use settings::SettingsWindow;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
 use terminal_menu::{
     TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
@@ -771,6 +773,9 @@ fn ensure_config_file_exists(path: &Path) -> std::io::Result<()> {
 /// nunca um `unsafe` novo nem uma string de shell montada com o caminho.
 /// Sem `config_path` resolvido (rara: falha da API de diretórios da
 /// plataforma), avisa e desiste.
+// Sem chamador até o botão "Abrir arquivo no editor" da tela (RF-16.14, ADR-0059
+// §6): a engrenagem já não abre o arquivo, abre a janela.
+#[allow(dead_code)]
 fn open_config_file(
     config_path: Option<&Path>,
     warnings: &mut WarningStack,
@@ -860,6 +865,31 @@ enum WindowPlacement {
     /// `App::restore_named_session`, o único lugar que constrói esta
     /// variante.
     CascadeFrom(WindowId),
+}
+
+/// Uma superfície do app que desenha um quadro: janela de terminal ou a de
+/// configurações. É o que `App::for_each_surface` entrega, e só tem as
+/// operações que as duas têm em comum -- o que é de uma só fica fora.
+enum Surface<'a> {
+    Terminal(&'a mut WindowState),
+    Settings(&'a mut SettingsWindow),
+}
+
+impl Surface<'_> {
+    fn request_redraw(&self) {
+        match self {
+            Surface::Terminal(state) => state.window.request_redraw(),
+            Surface::Settings(settings) => settings.request_redraw(),
+        }
+    }
+
+    /// Troca de idioma (ADR-0056 §9): duas janelas, um catálogo.
+    fn set_catalog(&mut self, catalog: &Arc<Catalog>) {
+        match self {
+            Surface::Terminal(state) => state.catalog = Arc::clone(catalog),
+            Surface::Settings(settings) => settings.set_catalog(catalog),
+        }
+    }
 }
 
 /// O que `WindowState::handle_tab_action_key` não pode resolver sozinho --
@@ -5046,6 +5076,10 @@ struct App {
     /// árvore de comparação.
     keymap: HashMap<Chord, Action>,
     windows: HashMap<WindowId, WindowState>,
+    /// A janela de configurações (ADR-0059 §1): no máximo uma, **fora** de
+    /// `windows` -- sessão, wakeup de PTY e contagem de abas nunca a veem. O
+    /// estado dela morre com a janela.
+    settings: Option<SettingsWindow>,
     /// Debounce da gravação de sessão (RF-3.3, ADR-0036) -- por
     /// **processo**, não por janela: o arquivo é um só para todas
     /// (RF-3.17). Drenado em `schedule_next_wake`, disparado em
@@ -5253,8 +5287,8 @@ impl App {
                     now,
                 );
             }
-            state.window.request_redraw();
         }
+        self.for_each_surface(|surface| surface.request_redraw());
     }
 
     /// `cli_config`/`cli_directory` vêm do parse de `argv` em `src/main.rs`
@@ -5369,6 +5403,7 @@ impl App {
             term_params,
             keymap,
             windows: HashMap::new(),
+            settings: None,
             session: SessionScheduler::default(),
             pending_session,
             positional_directory: cli_directory,
@@ -6005,6 +6040,17 @@ impl App {
             wait.wait();
         }
         if self.windows.is_empty() {
+            // ADR-0059 §2: a janela de configurações não segura o processo.
+            // É aqui que o encerramento pergunta a ela se há pendências e,
+            // com elas, deixa de ser imediato (tarefa 09) -- hoje a tela não
+            // edita nada, então a resposta é sempre não.
+            debug_assert!(
+                !self
+                    .settings
+                    .as_ref()
+                    .is_some_and(SettingsWindow::has_pending_changes)
+            );
+            self.settings = None;
             self.session.clear();
             event_loop.exit();
         }
@@ -7045,9 +7091,8 @@ impl App {
             } => {
                 self.catalog = catalog;
                 self.language_tag = language::language_tag(locale.as_ref());
-                for state in self.windows.values_mut() {
-                    state.catalog = Arc::clone(&self.catalog);
-                }
+                let catalog = Arc::clone(&self.catalog);
+                self.for_each_surface(|mut surface| surface.set_catalog(&catalog));
                 diagnostics
             }
             LanguageReload::Keep { diagnostics } => diagnostics,
@@ -7060,9 +7105,7 @@ impl App {
                     .push(severity, title.clone(), body.clone(), now);
             }
         }
-        for state in self.windows.values() {
-            state.window.request_redraw();
-        }
+        self.for_each_surface(|surface| surface.request_redraw());
     }
 
     /// Aplica o resultado de uma recarga de config (F4 etapa 4,
@@ -7252,27 +7295,159 @@ impl App {
                     now,
                 );
             }
-            // Classe A: o layout da barra é função pura de
-            // `(Workspace, Config, largura)` -- só redesenhar já aplica.
-            state.window.request_redraw();
         }
+        // Classe A: o layout da barra é função pura de
+        // `(Workspace, Config, largura)` -- só redesenhar já aplica. Inclui a
+        // janela de configurações, que lê a mesma paleta e o mesmo estilo.
+        self.for_each_surface(|surface| surface.request_redraw());
     }
 
     /// `settings.open` do catálogo (RF-16.1, ADR-0059 §6), disparada pelo
-    /// atalho e pela engrenagem. **Provisório**: enquanto a janela de
-    /// configurações não existe, faz o que a engrenagem sempre fez -- abre o
-    /// arquivo no editor, avisando na janela de origem se falhar.
-    fn open_settings(&mut self, window_id: WindowId) {
-        let Some(state) = self.windows.get_mut(&window_id) else {
+    /// atalho e pela engrenagem. Singleton (RF-16.2): com a janela aberta,
+    /// traz a mesma para a frente; fechada, cria uma centrada sobre
+    /// `origin`, no monitor dela.
+    fn open_settings(&mut self, event_loop: &ActiveEventLoop, origin: WindowId) {
+        if let Some(settings) = &self.settings {
+            settings.bring_to_front();
+            return;
+        }
+        let origin_window = self.windows.get(&origin).map(|state| &state.window);
+        let size = (
+            (settings::WINDOW_WIDTH * origin_window.map_or(1.0, |w| w.scale_factor() as f32))
+                .round() as u32,
+            (settings::WINDOW_HEIGHT * origin_window.map_or(1.0, |w| w.scale_factor() as f32))
+                .round() as u32,
+        );
+        let position = origin_window.and_then(|window| {
+            let origin_position = window.outer_position().ok()?;
+            let origin_size = window.outer_size();
+            let monitor = window.current_monitor().map(|m| {
+                let position = m.position();
+                let size = m.size();
+                ((position.x, position.y), (size.width, size.height))
+            });
+            Some(settings::centered_position(
+                (origin_position.x, origin_position.y),
+                (origin_size.width, origin_size.height),
+                size,
+                monitor,
+            ))
+        });
+        let attributes =
+            settings::window_attributes(&msg::settings::window_title(&self.catalog), position);
+        self.settings = self.create_settings_window(event_loop, attributes);
+    }
+
+    /// Cria a janela do SO e a surface `wgpu` da tela de configurações. O
+    /// `GpuContext` já existe (há ao menos uma janela de terminal, que é de
+    /// onde `settings.open` vem), então diferente de
+    /// `create_window_with_attributes` não há primeira janela a tratar nem
+    /// métrica de célula a medir. `None` na falha rara de criar a surface,
+    /// com o mesmo tratamento: sem janela, e uma linha em `stderr`.
+    fn create_settings_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        attributes: WindowAttributes,
+    ) -> Option<SettingsWindow> {
+        let gpu = self.gpu.as_mut()?;
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => Arc::new(window),
+            Err(err) => {
+                eprintln!("porecatu: falha ao criar a janela de configurações: {err}");
+                return None;
+            }
+        };
+        window.set_visible(true);
+        let size = window.inner_size();
+        let scale = window.scale_factor() as f32;
+        let mut surface =
+            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
+                Ok(surface) => surface,
+                Err(err) => {
+                    eprintln!("porecatu: falha ao criar surface da janela de configurações: {err}");
+                    return None;
+                }
+            };
+        surface.resize(gpu, size.width, size.height, scale);
+        Some(SettingsWindow::new(
+            window,
+            surface,
+            scale,
+            Arc::clone(&self.catalog),
+        ))
+    }
+
+    /// Fecha a janela de configurações sem encerrar o app (ADR-0059 §2).
+    /// Soltar o `SettingsWindow` fecha a janela do SO.
+    fn close_settings(&mut self) {
+        self.settings = None;
+    }
+
+    /// Evento de uma janela que é a de configurações -- o roteamento do
+    /// topo de `window_event` (ADR-0059 §1). Só o que esta etapa desenha e
+    /// aceita; o resto é ignorado.
+    fn settings_window_event(&mut self, event: WindowEvent) {
+        let resize_border = self.config.appearance.window_controls.resize_border as f32;
+        match event {
+            WindowEvent::CloseRequested => self.close_settings(),
+            WindowEvent::Resized(size) => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &self.gpu) {
+                    settings.resize(gpu, size.width, size.height);
+                }
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &self.gpu) {
+                    settings.rescale(gpu, scale_factor as f32);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(settings) = &mut self.settings {
+                    settings.cursor_moved(position, &self.style, resize_border);
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                if let Some(settings) = &mut self.settings {
+                    settings.cursor_left();
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                let press = self
+                    .settings
+                    .as_mut()
+                    .map(|settings| settings.left_pressed(&self.style, resize_border));
+                if press == Some(settings::Press::Close) {
+                    self.close_settings();
+                }
+            }
+            WindowEvent::RedrawRequested => self.redraw_settings(),
+            _ => {}
+        }
+    }
+
+    fn redraw_settings(&mut self) {
+        let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
             return;
         };
-        open_config_file(
-            self.config_path.as_deref(),
-            &mut state.warnings,
-            &self.catalog,
-            Instant::now(),
-        );
-        state.window.request_redraw();
+        let frame = settings.paint(&self.style, &self.pal);
+        settings.render(gpu, &frame);
+    }
+
+    /// O ponto único de "para cada janela" que inclui a de configurações
+    /// (ADR-0059, riscos): recarga de config, troca de tema e troca de idioma
+    /// passam por aqui, então nenhuma delas esquece a tela. O que só faz
+    /// sentido numa janela de terminal (aviso empilhado, sessão, PTY) continua
+    /// iterando `windows` direto.
+    fn for_each_surface(&mut self, mut f: impl FnMut(Surface<'_>)) {
+        for state in self.windows.values_mut() {
+            f(Surface::Terminal(state));
+        }
+        if let Some(settings) = &mut self.settings {
+            f(Surface::Settings(settings));
+        }
     }
 
     /// `config.reload` do catálogo (`docs/reference/acoes.md`, ADR-0003):
@@ -7638,6 +7813,16 @@ impl ApplicationHandler<Wakeup> for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // ADR-0059 §1: a janela de configurações é roteada aqui, no topo, e
+        // nenhum handler de janela de terminal a vê.
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.window_id() == window_id)
+        {
+            self.settings_window_event(event);
+            return;
+        }
         // ADR-0043 §1: "deve ser chamado sempre que um evento de janela
         // novo é recebido e antes dele ser tratado pela aplicação" -- o
         // adaptador precisa ver todo `WindowEvent`, mesmo os que `App`
@@ -8081,7 +8266,7 @@ impl App {
                     state.window.request_redraw();
                 }
             }
-            ActionOutcome::OpenSettings => self.open_settings(window_id),
+            ActionOutcome::OpenSettings => self.open_settings(event_loop, window_id),
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
             ActionOutcome::CycleTheme => self.cycle_theme(Instant::now()),
             // ADR-0055 §3: `session.save_named` abre em edição (campo em
@@ -9551,7 +9736,7 @@ impl App {
                 NewTabRequest::CloseWindowRequested => {
                     self.request_close_window(window_id, event_loop);
                 }
-                NewTabRequest::OpenSettings => self.open_settings(window_id),
+                NewTabRequest::OpenSettings => self.open_settings(event_loop, window_id),
                 // ADR-0055 §3: clique no botão abre em navegação. "Clicar
                 // de novo com ele aberto fecha" já sai de graça: com o
                 // popover aberto, `dispatch_session_picker_click`

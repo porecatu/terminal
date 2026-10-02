@@ -41,6 +41,9 @@ save_item = "Dieses Fenster speichern…"
 empty_list = "keine gespeicherten Sitzungen"
 name_placeholder = "Sitzungsname"
 
+[settings]
+window_title = "Einstellungen"
+
 [search_bar]
 invalid_pattern = "ungültiges Muster"
 no_results = "keine Treffer"

@@ -63,7 +63,7 @@ use crate::tab_bar::{self, TabBarStyle, rect_contains};
 use crate::terminal_menu::{TerminalContextMenu, TerminalMenuItem};
 use crate::warning::{Severity, WarningStack};
 
-const TITLE_FONT: FontFace = FontFace::Sans {
+pub(crate) const TITLE_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Medium,
 };
 // `pub(crate)`: `lib.rs::dispatch_group_editor_click` mede o mesmo texto

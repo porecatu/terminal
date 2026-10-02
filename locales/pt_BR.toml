@@ -59,6 +59,9 @@ save_item = "Salvar esta janela…"
 empty_list = "nenhuma sessão salva"
 name_placeholder = "nome da sessão"
 
+[settings]
+window_title = "Configurações"
+
 [search_bar]
 invalid_pattern = "padrão inválido"
 no_results = "nenhum resultado"

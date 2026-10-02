@@ -57,6 +57,9 @@ save_item = "Save this window…"
 empty_list = "no saved sessions"
 name_placeholder = "session name"
 
+[settings]
+window_title = "Settings"
+
 [search_bar]
 invalid_pattern = "invalid pattern"
 no_results = "no results"
