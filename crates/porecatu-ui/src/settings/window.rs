@@ -50,6 +50,7 @@ use super::layout::{
 };
 use super::paint;
 use super::{Group, HEADER_GAP_PX, PANEL_BACKGROUND, TITLE_SIZE_PX};
+use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::input::modifiers_from;
 use crate::messages::msg;
 use crate::overlay::BODY_FONT;
@@ -75,15 +76,31 @@ pub(crate) struct Env<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Press {
     Nothing,
-    /// Botão de fechar do cabeçalho, ou `Esc`.
-    // TODO(tarefa 09): com pendências, fechar pergunta (RF-16.4); hoje fecha e
-    // descarta sem perguntar.
+    /// Pedido de fechar sem nada pendente: o botão de fechar do cabeçalho, o
+    /// gesto do sistema ou `Esc`. Com pendências a janela abre o diálogo de
+    /// três saídas (RF-16.4) e responde por [`Press::Answer`].
     Close,
+    /// A resposta do diálogo de pendências.
+    Answer(DialogAnswer),
     /// "Abrir arquivo no editor" (RF-16.14).
     OpenFile,
     /// Salvar, pelo botão ou por `Ctrl+S`/`Cmd+S` (RF-16.14). Só sai com
     /// pendência e nenhuma recusada; as edições estão em
     /// [`SettingsWindow::edits`].
+    Save,
+}
+
+/// O que o usuário respondeu ao diálogo de pendências (RF-16.4). Cancelar
+/// vale também para fechar a janela do sistema durante o diálogo, e para
+/// "Salvar e fechar" com um valor recusado -- a tela volta para o usuário
+/// corrigi-lo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DialogAnswer {
+    Cancel,
+    /// O rascunho já foi descartado; quem recebe conclui o fechamento.
+    Discard,
+    /// As edições estão em [`SettingsWindow::edits`]; quem recebe grava e,
+    /// se deu certo, conclui o fechamento.
     Save,
 }
 
@@ -141,6 +158,12 @@ pub(crate) struct SettingsWindow {
     choice: Option<ChoiceList>,
     /// Onde procurar arquivos de idioma, para a lista do idioma.
     locale_dirs: Vec<PathBuf>,
+    /// O tema que `theme.cycle` pôs na sessão, se pôs: não é pendência, só a
+    /// linha abaixo da lista de temas (RF-16.25).
+    session_theme: Option<String>,
+    /// O diálogo de pendências, aberto ao fechar com alterações (RF-16.4).
+    /// Modal: enquanto existe, só ele recebe ponteiro e teclado.
+    dialog: Option<ConfirmDialog>,
 }
 
 impl SettingsWindow {
@@ -180,6 +203,8 @@ impl SettingsWindow {
             dragging_field: false,
             choice: None,
             locale_dirs,
+            session_theme: None,
+            dialog: None,
         }
     }
 
@@ -231,8 +256,165 @@ impl SettingsWindow {
     pub(crate) fn save_succeeded(&mut self, saved: &Config) {
         self.editing = None;
         self.choice = None;
+        self.dialog = None;
         self.draft.commit(saved);
         self.invalidate();
+    }
+
+    /// O tema que a sessão usa mudou (`theme.cycle`, restauração, ou o tema
+    /// que sumiu do arquivo): a linha abaixo da lista de temas acompanha
+    /// (RF-16.25). Sem mudança, nada é refeito.
+    pub(crate) fn set_session_theme(&mut self, theme: Option<&str>) {
+        if self.session_theme.as_deref() != theme {
+            self.session_theme = theme.map(str::to_owned);
+            self.invalidate();
+        }
+    }
+
+    // ---- fechar com pendências (RF-16.4, RF-16.5)
+
+    /// O usuário pediu para fechar -- botão do cabeçalho, gesto do sistema ou
+    /// `Esc`. Sem pendências fecha; com elas abre o diálogo de três saídas, e
+    /// com o diálogo já aberto o pedido conta como Cancelar.
+    pub(crate) fn request_close(&mut self) -> Press {
+        if self.dialog.is_some() {
+            return self.answer(DialogAnswer::Cancel);
+        }
+        self.commit_edit();
+        if self.draft.is_dirty() {
+            self.open_dialog();
+            Press::Nothing
+        } else {
+            Press::Close
+        }
+    }
+
+    /// O app vai encerrar (a última janela de terminal fechou, ou `app.quit`):
+    /// com pendências a janela vem para a frente com o diálogo e o
+    /// encerramento espera pela resposta (RF-16.5). Devolve se há o que
+    /// perguntar; sem pendências, quem chama encerra direto.
+    pub(crate) fn ask_before_quit(&mut self) -> bool {
+        self.commit_edit();
+        if !self.draft.is_dirty() {
+            return false;
+        }
+        self.bring_to_front();
+        if self.dialog.is_none() {
+            self.open_dialog();
+        }
+        true
+    }
+
+    fn open_dialog(&mut self) {
+        self.choice = None;
+        self.editing = None;
+        self.dialog = Some(ConfirmDialog::settings_pending(
+            &self.catalog,
+            self.draft.pending_count(),
+        ));
+        self.hover.dismiss();
+        self.window.request_redraw();
+    }
+
+    /// Fecha o diálogo com a resposta `answer`. "Descartar e fechar" descarta
+    /// o rascunho aqui mesmo; "Salvar e fechar" com um valor recusado volta à
+    /// tela como Cancelar (nada a gravar enquanto houver recusa).
+    fn answer(&mut self, answer: DialogAnswer) -> Press {
+        self.dialog = None;
+        self.window.request_redraw();
+        match answer {
+            DialogAnswer::Discard => {
+                self.discard();
+                Press::Answer(DialogAnswer::Discard)
+            }
+            DialogAnswer::Save if !self.can_save() => Press::Answer(DialogAnswer::Cancel),
+            other => Press::Answer(other),
+        }
+    }
+
+    /// A resposta que o botão `button` do diálogo dá.
+    fn button_answer(button: DialogButton) -> DialogAnswer {
+        match button {
+            DialogButton::Cancel => DialogAnswer::Cancel,
+            DialogButton::Discard => DialogAnswer::Discard,
+            DialogButton::Confirm => DialogAnswer::Save,
+        }
+    }
+
+    /// Onde o diálogo aberto fica. Mede o texto dos botões -- o diálogo é
+    /// transitório, e a pintura dele sempre mediu, como a dos de terminal.
+    fn dialog_layout(
+        &self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+    ) -> Option<overlay::DialogLayout> {
+        let dialog = self.dialog.as_ref()?;
+        Some(overlay::layout_dialog(
+            self.logical_width,
+            self.logical_height,
+            dialog,
+            env.config,
+            measurer,
+        ))
+    }
+
+    /// Ponteiro com o diálogo aberto: o realce acompanha o botão sob o cursor.
+    fn dialog_hover(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, point: (f32, f32)) {
+        let Some(layout) = self.dialog_layout(env, measurer) else {
+            return;
+        };
+        let hit = overlay::dialog_hit(&layout, point);
+        if let Some(dialog) = &mut self.dialog
+            && dialog.hovered() != hit
+        {
+            dialog.set_hovered(hit);
+            self.window.request_redraw();
+        }
+        self.window.set_cursor(if hit.is_some() {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        });
+    }
+
+    /// Clique com o diálogo aberto: um botão responde; fora dele, nada.
+    fn dialog_click(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        point: (f32, f32),
+    ) -> Press {
+        let Some(layout) = self.dialog_layout(env, measurer) else {
+            return Press::Nothing;
+        };
+        match overlay::dialog_hit(&layout, point) {
+            Some(button) => self.answer(Self::button_answer(button)),
+            None => Press::Nothing,
+        }
+    }
+
+    /// Teclas com o diálogo aberto (ADR-0014): `Esc` cancela, `Enter` aciona o
+    /// botão focado -- o Cancelar, de início --, e `Tab`/setas andam entre os
+    /// três.
+    fn dialog_key(&mut self, key: &Key) -> Press {
+        let Some(dialog) = &mut self.dialog else {
+            return Press::Nothing;
+        };
+        match key {
+            Key::Named(NamedKey::Escape) => return self.answer(DialogAnswer::Cancel),
+            Key::Named(NamedKey::Enter) => {
+                let answer = Self::button_answer(dialog.focused());
+                return self.answer(answer);
+            }
+            Key::Named(NamedKey::Tab) => {
+                dialog.step_focus(if self.modifiers.shift { -1 } else { 1 });
+            }
+            Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown) => dialog.step_focus(1),
+            Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) => dialog.step_focus(-1),
+            _ => return Press::Nothing,
+        }
+        self.window.request_redraw();
+        Press::Nothing
     }
 
     /// A config foi recarregada (a gravação da própria tela, ou um editor): a
@@ -335,6 +517,7 @@ impl SettingsWindow {
             self.content = Some(content::build(
                 key,
                 &self.draft,
+                self.session_theme.as_deref(),
                 &self.catalog,
                 &m,
                 measurer,
@@ -453,6 +636,22 @@ impl SettingsWindow {
                     ..control
                 }
             }
+            EditPart::ListFirst(item) | EditPart::ListSecond(item) => {
+                let ControlView::List {
+                    items, two_fields, ..
+                } = &self.content().row(block)?.control
+                else {
+                    return None;
+                };
+                let geometry =
+                    layout::list_geometry(control, &self.metrics(env), items.len(), *two_fields);
+                let rects = geometry.items.get(item)?;
+                if matches!(part, EditPart::ListSecond(_)) {
+                    rects.second?
+                } else {
+                    rects.first
+                }
+            }
         })
     }
 
@@ -523,6 +722,12 @@ impl SettingsWindow {
             )
         };
 
+        // O diálogo de pendências cobre a janela: só ele reage ao ponteiro.
+        if self.dialog.is_some() {
+            self.dialog_hover(env, measurer, point);
+            return;
+        }
+
         // A lista aberta cobre o resto: só ela reage ao ponteiro.
         if self.choice.is_some() {
             let highlighted_before = self.choice.as_ref().map(|list| list.highlighted);
@@ -574,16 +779,29 @@ impl SettingsWindow {
     fn cursor_for(&self, hit: Option<Hit>) -> CursorIcon {
         match hit {
             Some(Hit::Group(_) | Hit::Footer(_) | Hit::Restore(_)) => CursorIcon::Pointer,
-            Some(Hit::Control(index, _)) => {
+            Some(Hit::Control(index, part)) => {
                 match self.content().row(index).map(|row| &row.control) {
                     Some(ControlView::Field { .. }) => CursorIcon::Text,
-                    Some(ControlView::Themes { .. } | ControlView::List { .. }) | None => {
-                        CursorIcon::Default
-                    }
+                    Some(ControlView::List { .. }) => match part {
+                        ControlPart::ListField { .. } => CursorIcon::Text,
+                        _ => CursorIcon::Pointer,
+                    },
+                    Some(ControlView::Themes { .. }) | None => CursorIcon::Default,
                     Some(_) => CursorIcon::Pointer,
                 }
             }
-            Some(Hit::Row(_)) | None => CursorIcon::Default,
+            // A linha de um tema é toda alvo do clique (RF-16.24).
+            Some(Hit::Row(index)) => {
+                if matches!(
+                    self.content().row(index).map(|row| &row.control),
+                    Some(ControlView::Themes { .. })
+                ) {
+                    CursorIcon::Pointer
+                } else {
+                    CursorIcon::Default
+                }
+            }
+            None => CursorIcon::Default,
         }
     }
 
@@ -707,7 +925,7 @@ impl SettingsWindow {
                         self.window.set_maximized(!self.window.is_maximized());
                         Press::Nothing
                     }
-                    WindowButtonHit::Close => Press::Close,
+                    WindowButtonHit::Close => self.request_close(),
                 };
             }
             if let Some(direction) = self.resize_direction(style, resize_border, point) {
@@ -718,6 +936,11 @@ impl SettingsWindow {
                 self.resolve_titlebar_drag();
                 return Press::Nothing;
             }
+        }
+        // O diálogo de pendências cobre a janela inteira: só ele recebe o
+        // clique.
+        if self.dialog.is_some() {
+            return self.dialog_click(env, measurer, point);
         }
         // A lista aberta é modal: um clique escolhe um item ou a fecha, e em
         // nenhum dos dois casos chega ao que está por baixo.
@@ -748,7 +971,9 @@ impl SettingsWindow {
             Some(Hit::Row(index)) => {
                 self.commit_edit();
                 self.focus = Focus::Row(index);
-                self.window.request_redraw();
+                if !self.choose_theme(index) {
+                    self.window.request_redraw();
+                }
                 Press::Nothing
             }
             None => {
@@ -839,9 +1064,57 @@ impl SettingsWindow {
             (Some(ControlView::GitPoll { on: true, .. }), ControlPart::GitNumber) => {
                 self.begin_or_continue_edit(env, measurer, index, EditPart::GitSeconds, point);
             }
+            (Some(ControlView::List { .. }), ControlPart::ListField { item, second }) => {
+                let part = if second {
+                    EditPart::ListSecond(item)
+                } else {
+                    EditPart::ListFirst(item)
+                };
+                self.begin_or_continue_edit(env, measurer, index, part, point);
+            }
+            (Some(ControlView::List { .. }), ControlPart::ListRemove(item)) => {
+                self.commit_edit();
+                if interact::list_remove(&mut self.draft, option, item) {
+                    self.invalidate();
+                }
+            }
+            (Some(ControlView::List { .. }), ControlPart::ListAdd) => {
+                self.commit_edit();
+                self.add_list_item(index, option);
+            }
             _ => self.commit_edit(),
         }
         self.window.request_redraw();
+    }
+
+    /// Acrescenta um item vazio ao fim da lista da linha `index` e põe o
+    /// primeiro campo dele em edição. O conteúdo medido ainda é o antigo --
+    /// a edição nasce direto, sem lê-lo.
+    fn add_list_item(&mut self, index: usize, option: &OptionDef) {
+        if let Some(item) = interact::list_add(&mut self.draft, option) {
+            self.invalidate();
+            self.editing = Some(Editing::new(
+                index,
+                EditPart::ListFirst(item),
+                String::new(),
+            ));
+        }
+    }
+
+    /// Escolhe o tema da linha `index`, se a linha é de tema (RF-16.24): a
+    /// linha inteira é o alvo do clique.
+    fn choose_theme(&mut self, index: usize) -> bool {
+        let Some(ControlView::Themes { name, .. }) =
+            self.content().row(index).map(|row| row.control.clone())
+        else {
+            return false;
+        };
+        let Some(option) = self.option_at(index) else {
+            return false;
+        };
+        interact::choose_value(&mut self.draft, option, &name);
+        self.invalidate();
+        true
     }
 
     /// Clique na lista aberta: um item a escolhe; fora do menu a fecha.
@@ -902,6 +1175,12 @@ impl SettingsWindow {
         match (&self.content().row(index)?.control, part) {
             (ControlView::Field { text, .. }, EditPart::Field) => Some(text.clone()),
             (ControlView::GitPoll { seconds, .. }, EditPart::GitSeconds) => Some(seconds.clone()),
+            (ControlView::List { items, .. }, EditPart::ListFirst(item)) => {
+                items.get(item).map(|item| item.first.clone())
+            }
+            (ControlView::List { items, .. }, EditPart::ListSecond(item)) => {
+                items.get(item).map(|item| item.second.clone())
+            }
             _ => None,
         }
     }
@@ -945,7 +1224,29 @@ impl SettingsWindow {
             && let Some(option) = self.option_at(editing.block)
         {
             // Um valor recusado fica no rascunho, marcado na linha.
-            interact::commit_text(&mut self.draft, option, editing.state.text());
+            match editing.part {
+                EditPart::ListFirst(item) => {
+                    interact::list_set_text(
+                        &mut self.draft,
+                        option,
+                        item,
+                        false,
+                        editing.state.text(),
+                    );
+                }
+                EditPart::ListSecond(item) => {
+                    interact::list_set_text(
+                        &mut self.draft,
+                        option,
+                        item,
+                        true,
+                        editing.state.text(),
+                    );
+                }
+                EditPart::Field | EditPart::GitSeconds => {
+                    interact::commit_text(&mut self.draft, option, editing.state.text());
+                }
+            }
             self.invalidate();
         } else {
             self.window.request_redraw();
@@ -1129,6 +1430,11 @@ impl SettingsWindow {
         self.ensure_content(env, measurer);
         self.hover.dismiss();
 
+        // O diálogo de pendências é modal: só ele lê o teclado.
+        if self.dialog.is_some() {
+            return self.dialog_key(&event.logical_key);
+        }
+
         let is_save = matches!(
             &event.logical_key,
             Key::Character(text) if text.eq_ignore_ascii_case("s")
@@ -1151,7 +1457,7 @@ impl SettingsWindow {
         }
 
         match &event.logical_key {
-            Key::Named(NamedKey::Escape) => Press::Close,
+            Key::Named(NamedKey::Escape) => self.request_close(),
             Key::Named(NamedKey::Tab) => {
                 self.move_focus(env, self.modifiers.shift);
                 Press::Nothing
@@ -1220,9 +1526,19 @@ impl SettingsWindow {
             }
             ControlView::Field { .. } => self.start_edit(index, EditPart::Field),
             ControlView::Choice { .. } => self.open_choice(env, measurer, index),
-            ControlView::Segmented { .. }
-            | ControlView::List { .. }
-            | ControlView::Themes { .. } => {}
+            // Uma lista com itens abre o primeiro para edição; vazia, ganha o
+            // primeiro item -- é o caminho do teclado até o "Adicionar".
+            ControlView::List { items, .. } => {
+                if items.is_empty() {
+                    self.add_list_item(index, option);
+                } else {
+                    self.start_edit(index, EditPart::ListFirst(0));
+                }
+            }
+            ControlView::Themes { .. } => {
+                self.choose_theme(index);
+            }
+            ControlView::Segmented { .. } => {}
         }
         self.window.request_redraw();
     }
@@ -1290,9 +1606,16 @@ impl SettingsWindow {
             }
             Key::Named(NamedKey::Enter) => self.commit_edit(),
             Key::Named(NamedKey::Tab) => {
-                self.commit_edit();
-                self.move_focus(env, self.modifiers.shift);
+                // Numa lista, `Tab` anda pelos campos dos itens; nas pontas
+                // dela sai como de qualquer campo.
+                if !self.walk_list_field(self.modifiers.shift) {
+                    self.commit_edit();
+                    self.move_focus(env, self.modifiers.shift);
+                }
             }
+            // `Alt+Up`/`Alt+Down` reordenam o item em edição (RF-16.26).
+            Key::Named(NamedKey::ArrowUp) if self.modifiers.alt => self.move_list_item(-1),
+            Key::Named(NamedKey::ArrowDown) if self.modifiers.alt => self.move_list_item(1),
             Key::Named(NamedKey::ArrowUp) => self.step_edit(1),
             Key::Named(NamedKey::ArrowDown) => self.step_edit(-1),
             Key::Named(NamedKey::Backspace) => {
@@ -1314,6 +1637,57 @@ impl SettingsWindow {
                 }
             }
         }
+    }
+
+    /// `Tab`/`Shift+Tab` num campo de lista: confirma o campo e passa para o
+    /// próximo -- nome, valor, próximo item. Devolve `false` nas pontas da
+    /// lista, ou fora de uma, e quem chama segue como de qualquer campo.
+    fn walk_list_field(&mut self, backwards: bool) -> bool {
+        let Some(editing) = &self.editing else {
+            return false;
+        };
+        let block = editing.block;
+        let Some(ControlView::List {
+            items, two_fields, ..
+        }) = self.content().row(block).map(|row| &row.control)
+        else {
+            return false;
+        };
+        let Some(next) = editing
+            .part
+            .next_in_list(items.len(), *two_fields, backwards)
+        else {
+            return false;
+        };
+        self.commit_edit();
+        if let Some(initial) = self.edit_initial(block, next) {
+            self.editing = Some(Editing::new(block, next, initial));
+        }
+        self.window.request_redraw();
+        true
+    }
+
+    /// `Alt+Up`/`Alt+Down` com um item de lista em edição: o confirma e o move
+    /// uma posição, e a edição o segue. Na ponta da lista não faz nada.
+    fn move_list_item(&mut self, delta: i32) {
+        let Some(editing) = &self.editing else {
+            return;
+        };
+        let (block, part) = (editing.block, editing.part);
+        let Some(item) = part.list_item() else {
+            return;
+        };
+        let Some(option) = self.option_at(block) else {
+            return;
+        };
+        let text = editing.state.text().to_owned();
+        let second = matches!(part, EditPart::ListSecond(_));
+        interact::list_set_text(&mut self.draft, option, item, second, &text);
+        let moved = interact::list_move(&mut self.draft, option, item, delta);
+        let part = part.at_item(moved.unwrap_or(item));
+        // O texto já está no rascunho: a edição recomeça dele, no item novo.
+        self.editing = Some(Editing::new(block, part, text));
+        self.invalidate();
     }
 
     /// Passa o foco ao próximo ponto de parada e leva a linha à vista.
@@ -1402,6 +1776,7 @@ impl SettingsWindow {
         let selected = self.selected_group;
         let has_pending = self.has_pending_changes();
         let catalog = &self.catalog;
+        let dialog = self.dialog.as_ref();
         let rows: Vec<&RowView> = self
             .content
             .as_ref()
@@ -1411,7 +1786,7 @@ impl SettingsWindow {
                     .iter()
                     .filter_map(|block| match block {
                         Block::Row(row) => Some(&**row),
-                        Block::Section(_) => None,
+                        Block::Section(_) | Block::Note { .. } => None,
                     })
                     .collect()
             })
@@ -1423,6 +1798,7 @@ impl SettingsWindow {
                 selected,
                 has_pending,
                 &rows,
+                dialog,
                 catalog,
                 language,
             )
@@ -1508,6 +1884,21 @@ impl SettingsWindow {
         }
         if !popover.is_empty() {
             frame.set_layer(Layer::Popover, popover);
+        }
+        // O diálogo de pendências, na camada modal desta janela (ADR-0060 §4).
+        if let (Some(dialog), Some(layout)) = (&self.dialog, self.dialog_layout(env, measurer)) {
+            frame.set_layer(
+                Layer::Modal,
+                overlay::paint_dialog(
+                    &layout,
+                    dialog,
+                    env.config,
+                    pal,
+                    self.logical_width,
+                    self.logical_height,
+                    measurer,
+                ),
+            );
         }
         frame
     }

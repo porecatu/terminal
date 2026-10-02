@@ -12,7 +12,7 @@
 //! uma mudança de chave, não de quadro, então o custo de medir fica fora do
 //! caminho de pintura.
 
-use porecatu_config::{Config, EditValue};
+use porecatu_config::EditValue;
 use porecatu_locale::Catalog;
 use porecatu_render::{Color, Rect, TextMeasurer};
 use porecatu_term::TermColor;
@@ -31,6 +31,17 @@ use crate::tab_bar::rect_contains;
 pub(crate) const SWATCH_COUNT: usize = 10;
 /// Vão entre os quadrados da amostra (ADR-0060 §3: `gap: 2`).
 pub(crate) const SWATCH_GAP: f32 = 2.0;
+
+/// Um item de lista como a tela o mostra.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ListItemView {
+    /// O texto, ou o nome da variável.
+    pub first: String,
+    /// O valor da variável; vazio numa lista de textos.
+    pub second: String,
+    /// Nome vazio ou repetido (RF-16.18): a borda do campo fica em Erro.
+    pub invalid: bool,
+}
 
 /// O desenho do controle de uma linha, com o valor em vigor.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,14 +69,18 @@ pub(crate) enum ControlView {
         text: String,
     },
     /// Lista de textos (`shell.args`, `trusted_paths`) ou de nome e valor
-    /// (`shell.env`, como `NOME=valor`): um campo por item e o item
-    /// "Adicionar" no fim.
+    /// (`shell.env`): um campo -- dois, na de nome e valor -- por item, com o
+    /// `X` à direita, e o item "Adicionar" no fim.
     List {
-        items: Vec<String>,
+        items: Vec<ListItemView>,
+        /// Dois campos por item: nome e valor.
+        two_fields: bool,
         add_label: String,
     },
     /// Amostra de um tema.
     Themes {
+        /// O nome do tema como o arquivo o grava; vazio é "sem tema".
+        name: String,
         colors: Box<[Color; SWATCH_COUNT]>,
         selected: bool,
     },
@@ -106,8 +121,7 @@ impl ControlView {
     }
 
     /// A parte do controle sob `point`, com o controle em `rect` (coordenadas
-    /// de janela). `None` fora dele, e nos controles que ainda não reagem a
-    /// clique (listas e temas, da tarefa 09).
+    /// de janela). `None` fora dele, e no tema, que é a linha inteira.
     pub(crate) fn part_at(
         &self,
         rect: Rect,
@@ -140,7 +154,32 @@ impl ControlView {
                     None
                 }
             }
-            ControlView::List { .. } | ControlView::Themes { .. } => None,
+            ControlView::List {
+                items, two_fields, ..
+            } => {
+                let geometry = layout::list_geometry(rect, m, items.len(), *two_fields);
+                if rect_contains(geometry.add, point) {
+                    return Some(ControlPart::ListAdd);
+                }
+                geometry.items.iter().enumerate().find_map(|(item, rects)| {
+                    if rect_contains(rects.remove, point) {
+                        Some(ControlPart::ListRemove(item))
+                    } else if rect_contains(rects.first, point) {
+                        Some(ControlPart::ListField {
+                            item,
+                            second: false,
+                        })
+                    } else if rects
+                        .second
+                        .is_some_and(|second| rect_contains(second, point))
+                    {
+                        Some(ControlPart::ListField { item, second: true })
+                    } else {
+                        None
+                    }
+                })
+            }
+            ControlView::Themes { .. } => None,
         }
     }
 }
@@ -177,6 +216,20 @@ pub(crate) struct RowView {
 pub(crate) enum Block {
     Section(String),
     Row(Box<RowView>),
+    /// Texto solto entre as linhas, já quebrado nas linhas que cabem.
+    Note {
+        lines: Vec<String>,
+        tone: NoteTone,
+    },
+}
+
+/// De que cor é uma nota.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NoteTone {
+    /// O aviso dos diretórios autorizados (RF-16.27): o tom de Aviso.
+    Warning,
+    /// A linha do tema da sessão (RF-16.25): o Terciário `#828a96`.
+    Muted,
 }
 
 /// O que invalida o conteúdo guardado.
@@ -213,15 +266,41 @@ impl Content {
     pub(crate) fn row(&self, block: usize) -> Option<&RowView> {
         match self.blocks.get(block)? {
             Block::Row(row) => Some(row),
-            Block::Section(_) => None,
+            Block::Section(_) | Block::Note { .. } => None,
         }
     }
 }
 
+/// Quebra `text` em linhas de no máximo `width` px, entre palavras. Uma
+/// palavra mais larga que a linha fica sozinha, inteira: o corte seria pior
+/// que o estouro de uma palavra.
+fn wrap(text: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if current.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{current} {word}")
+        };
+        if current.is_empty() || measurer.measure_width(&candidate, BODY_FONT, size) <= width {
+            current = candidate;
+        } else {
+            lines.push(std::mem::replace(&mut current, word.to_owned()));
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 /// Monta o conteúdo de `group`: mede o texto uma vez e guarda o resultado.
+/// `session_theme` é o tema que `theme.cycle` pôs na sessão, se pôs.
 pub(crate) fn build(
     key: ContentKey,
     draft: &Draft,
+    session_theme: Option<&str>,
     catalog: &Catalog,
     m: &Metrics,
     measurer: &mut TextMeasurer,
@@ -234,11 +313,21 @@ pub(crate) fn build(
             blocks.push(Block::Section(option.section.label(catalog)));
             current_section = Some(option.section);
         }
+        if option.id == "trusted_paths" {
+            // RF-16.27: o aviso fica acima da lista, onde ela é editada.
+            let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+            let text = msg::settings::option::trusted_paths_warning(catalog);
+            blocks.push(Block::Note {
+                lines: wrap(&text, m.description_size, width, measurer),
+                tone: NoteTone::Warning,
+            });
+        }
         if option.control == Control::Theme {
             push_theme_rows(
                 &mut blocks,
                 option,
-                draft.file_config(),
+                draft,
+                session_theme,
                 catalog,
                 m,
                 panel_width,
@@ -260,6 +349,7 @@ pub(crate) fn build(
         .iter()
         .map(|block| match block {
             Block::Section(_) => BlockSpec::Section,
+            Block::Note { lines, .. } => BlockSpec::Note { lines: lines.len() },
             Block::Row(row) => BlockSpec::Row {
                 control: row.control.size(m),
                 two_lines: !row.description.is_empty(),
@@ -296,7 +386,19 @@ fn option_row(
     measurer: &mut TextMeasurer,
 ) -> RowView {
     let value = draft.value(option);
-    let control = control_view(option, &value, draft.raw(option), catalog, m, measurer);
+    let rows = match option.control {
+        Control::StringList | Control::StringMap => draft.rows(option),
+        _ => Vec::new(),
+    };
+    let control = control_view(
+        option,
+        &value,
+        draft.raw(option),
+        &rows,
+        catalog,
+        m,
+        measurer,
+    );
     let budget = layout::row_left_width(m, panel_width, control.size(m).0);
 
     let scope_text = match option.reload_scope() {
@@ -381,11 +483,13 @@ fn plain_number(value: f64) -> String {
 }
 
 /// `raw` é o texto de um valor recusado: o campo continua mostrando o que o
-/// usuário digitou, em vez do valor que está valendo.
+/// usuário digitou, em vez do valor que está valendo. `rows` são as linhas de
+/// uma lista, na ordem em que a tela as mostra (o rascunho as guarda).
 fn control_view(
     option: &OptionDef,
     value: &EditValue,
     raw: Option<&str>,
+    rows: &[(String, String)],
     catalog: &Catalog,
     m: &Metrics,
     measurer: &mut TextMeasurer,
@@ -442,17 +546,22 @@ fn control_view(
                 ControlView::Choice { text }
             }
         }
-        (Control::StringList, EditValue::StringList(items)) => ControlView::List {
-            items: items.clone(),
-            add_label: msg::settings::button::add_item(catalog),
-        },
-        (Control::StringMap, EditValue::StringMap(map)) => ControlView::List {
-            items: map
-                .iter()
-                .map(|(name, value)| format!("{name}={value}"))
-                .collect(),
-            add_label: msg::settings::button::add_item(catalog),
-        },
+        (Control::StringList | Control::StringMap, _) => {
+            let invalid = Draft::invalid_rows(option, rows);
+            ControlView::List {
+                items: rows
+                    .iter()
+                    .zip(invalid)
+                    .map(|((first, second), invalid)| ListItemView {
+                        first: first.clone(),
+                        second: second.clone(),
+                        invalid,
+                    })
+                    .collect(),
+                two_fields: option.control == Control::StringMap,
+                add_label: msg::settings::button::add_item(catalog),
+            }
+        }
         (Control::GitPoll, EditValue::Integer(seconds)) => {
             let text = match raw {
                 Some(raw) => raw.to_owned(),
@@ -522,17 +631,26 @@ fn value_text(option: &OptionDef, value: &EditValue, catalog: &Catalog) -> Strin
 
 /// RF-16.24: uma linha por tema -- "sem tema", depois os de `[[themes]]` na
 /// ordem do ciclo -- com a amostra de dez quadrados. O escolhido é o do
-/// arquivo.
+/// rascunho (o do arquivo, até o usuário mexer). O tema de sessão
+/// (`theme.cycle`) **não** é escolha nem pendência (RF-16.25): se difere do
+/// arquivo, uma linha abaixo da lista diz qual está em uso.
+#[allow(clippy::too_many_arguments)]
 fn push_theme_rows(
     blocks: &mut Vec<Block>,
     option: &OptionDef,
-    config: &Config,
+    draft: &Draft,
+    session_theme: Option<&str>,
     catalog: &Catalog,
     m: &Metrics,
     panel_width: f32,
     measurer: &mut TextMeasurer,
 ) {
-    let chosen = config.terminal.theme.as_str();
+    let config = draft.file_config();
+    let chosen = match draft.value(option) {
+        EditValue::String(name) => name,
+        _ => String::new(),
+    };
+    let pending = draft.is_pending(option);
     let mut names: Vec<(String, &str)> = vec![(msg::settings::theme::none(catalog), "")];
     names.extend(
         config
@@ -548,9 +666,11 @@ fn push_theme_rows(
         for (index, slot) in colors.iter_mut().skip(2).enumerate() {
             *slot = palette.resolve(TermColor::Indexed(index as u8), true, false);
         }
+        let selected = name == chosen;
         let control = ControlView::Themes {
+            name: name.to_owned(),
             colors: Box::new(colors),
-            selected: name == chosen,
+            selected,
         };
         let budget = layout::row_left_width(m, panel_width, control.size(m).0);
         let (name_text, _) = measurer.truncate(&label, BODY_FONT, m.name_size, budget);
@@ -563,18 +683,42 @@ fn push_theme_rows(
             scope: None,
             value_text: label,
             control,
-            // Escolher tema é da tarefa 09: a linha ainda não edita.
-            pending: false,
+            // O ponto de pendente fica na linha escolhida: é ela que vai ser
+            // gravada.
+            pending: pending && selected,
             invalid: None,
+            // Sem botão de restaurar por linha (ADR-0060 §3).
             can_reset: false,
         })));
+    }
+    if let Some(session) = session_theme
+        && session != config.terminal.theme
+    {
+        let shown = if session.is_empty() {
+            msg::settings::theme::none(catalog)
+        } else {
+            session.to_owned()
+        };
+        let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+        blocks.push(Block::Note {
+            lines: wrap(
+                &msg::settings::theme::session_using(catalog, &shown),
+                m.description_size,
+                width,
+                measurer,
+            ),
+            tone: NoteTone::Muted,
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use porecatu_config::Config;
+
     use super::*;
     use crate::messages::test_support;
+    use crate::palette;
 
     fn metrics() -> Metrics {
         Metrics::from_config(&Config::default(), 52.0)
@@ -592,6 +736,7 @@ mod tests {
         build(
             key(group),
             &Draft::new(config),
+            None,
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -604,7 +749,7 @@ mod tests {
             .iter()
             .filter_map(|block| match block {
                 Block::Row(row) => Some(&**row),
-                Block::Section(_) => None,
+                Block::Section(_) | Block::Note { .. } => None,
             })
             .collect()
     }
@@ -618,7 +763,7 @@ mod tests {
             .iter()
             .filter_map(|block| match block {
                 Block::Section(label) => Some(label.as_str()),
-                Block::Row(_) => None,
+                Block::Row(_) | Block::Note { .. } => None,
             })
             .collect();
         assert_eq!(sections, ["IDIOMA", "INÍCIO", "CONFIRMAÇÕES"]);
@@ -735,6 +880,7 @@ mod tests {
         let c = build(
             narrow,
             &Draft::new(&Config::default()),
+            None,
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -823,17 +969,27 @@ mod tests {
                 .control
                 .clone()
         };
+        let item = |first: &str, second: &str| ListItemView {
+            first: first.to_owned(),
+            second: second.to_owned(),
+            invalid: false,
+        };
         assert_eq!(
             by_id("shell_args"),
             ControlView::List {
-                items: vec!["-l".to_owned(), "-i".to_owned()],
+                items: vec![item("-l", ""), item("-i", "")],
+                two_fields: false,
                 add_label: "Adicionar".to_owned()
             }
         );
-        let ControlView::List { items, .. } = by_id("shell_env") else {
+        let ControlView::List {
+            items, two_fields, ..
+        } = by_id("shell_env")
+        else {
             panic!()
         };
-        assert_eq!(items, ["EDITOR=vim"]);
+        assert!(two_fields, "a lista de variáveis tem nome e valor");
+        assert_eq!(items, [item("EDITOR", "vim")]);
     }
 
     #[test]
@@ -899,6 +1055,7 @@ mod tests {
         build(
             key(group),
             draft,
+            None,
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1084,19 +1241,284 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lists_and_themes_do_not_react_to_clicks_yet() {
+    fn list_of(count: usize, two_fields: bool) -> (ControlView, Rect) {
         let m = metrics();
+        let item = ListItemView {
+            first: "a".to_owned(),
+            second: "b".to_owned(),
+            invalid: false,
+        };
+        let list = ControlView::List {
+            items: vec![item; count],
+            two_fields,
+            add_label: String::new(),
+        };
+        let (width, height) = list.size(&m);
+        (
+            list,
+            Rect {
+                x: 100.0,
+                y: 50.0,
+                width,
+                height,
+            },
+        )
+    }
+
+    #[test]
+    fn a_list_click_finds_the_field_the_remove_button_and_the_add_item() {
+        let m = metrics();
+        let (list, rect) = list_of(2, false);
+        let at = |x: f32, y: f32| list.part_at(rect, &m, (x, y));
+        // Primeiro item: campo e `X`.
+        assert_eq!(
+            at(110.0, 50.0 + m.field_height / 2.0),
+            Some(ControlPart::ListField {
+                item: 0,
+                second: false
+            })
+        );
+        let remove_x = rect.x + m.text_field_width + m.list_gap + m.restore_width / 2.0;
+        assert_eq!(
+            at(remove_x, 50.0 + m.field_height / 2.0),
+            Some(ControlPart::ListRemove(0))
+        );
+        // Segundo item.
+        let second_y = 50.0 + (m.field_height + m.list_gap) + m.field_height / 2.0;
+        assert_eq!(
+            at(110.0, second_y),
+            Some(ControlPart::ListField {
+                item: 1,
+                second: false
+            })
+        );
+        assert_eq!(at(remove_x, second_y), Some(ControlPart::ListRemove(1)));
+        // O item "Adicionar" logo abaixo.
+        let add_y = 50.0 + 2.0 * (m.field_height + m.list_gap) + m.sidebar_item_height / 2.0;
+        assert_eq!(at(110.0, add_y), Some(ControlPart::ListAdd));
+        // O vão entre o campo e o `X` não é nada.
+        assert_eq!(
+            at(
+                rect.x + m.text_field_width + m.list_gap / 2.0,
+                50.0 + m.field_height / 2.0
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_env_list_splits_the_field_into_name_and_value() {
+        let m = metrics();
+        let (list, rect) = list_of(1, true);
+        let y = 50.0 + m.field_height / 2.0;
+        assert_eq!(
+            list.part_at(rect, &m, (rect.x + 4.0, y)),
+            Some(ControlPart::ListField {
+                item: 0,
+                second: false
+            })
+        );
+        assert_eq!(
+            list.part_at(rect, &m, (rect.x + m.text_field_width - 4.0, y)),
+            Some(ControlPart::ListField {
+                item: 0,
+                second: true
+            })
+        );
+    }
+
+    #[test]
+    fn an_empty_list_still_has_the_add_item() {
+        let m = metrics();
+        let (list, rect) = list_of(0, false);
+        assert_eq!(
+            list.part_at(rect, &m, (rect.x + 10.0, rect.y + 5.0)),
+            Some(ControlPart::ListAdd)
+        );
+    }
+
+    #[test]
+    fn a_theme_row_is_the_target_as_a_whole() {
+        let m = metrics();
+        let themes = ControlView::Themes {
+            name: "nord".to_owned(),
+            colors: Box::new([palette::TRANSPARENT; SWATCH_COUNT]),
+            selected: false,
+        };
         let rect = Rect {
             x: 0.0,
             y: 0.0,
-            width: 300.0,
-            height: 100.0,
+            width: 100.0,
+            height: 12.0,
         };
-        let list = ControlView::List {
-            items: vec![],
-            add_label: String::new(),
+        assert_eq!(themes.part_at(rect, &m, (10.0, 5.0)), None);
+    }
+
+    // ---- listas, temas e notas
+
+    #[test]
+    fn a_list_in_the_draft_shows_the_order_the_user_built_and_marks_refused_rows() {
+        let mut draft = Draft::new(&Config::default());
+        let env = super::super::catalog::option("shell_env").unwrap();
+        let row = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        let _ = draft.set_rows(env, &[row("B", "2"), row("", ""), row("A", "1")]);
+        let c = draft_content(Group::Shell, &draft);
+        let r = row_of(&c, "shell_env");
+        let ControlView::List { items, .. } = &r.control else {
+            panic!()
         };
-        assert_eq!(list.part_at(rect, &m, (10.0, 10.0)), None);
+        let names: Vec<&str> = items.iter().map(|item| item.first.as_str()).collect();
+        assert_eq!(names, ["B", "", "A"]);
+        let flags: Vec<bool> = items.iter().map(|item| item.invalid).collect();
+        assert_eq!(flags, [false, true, false]);
+        assert!(r.invalid.is_some(), "a razão aparece na linha");
+        assert!(r.pending);
+    }
+
+    #[test]
+    fn the_chosen_theme_follows_the_draft_and_carries_the_pending_dot() {
+        let mut config = Config::default();
+        let first = config.themes[0].name.clone();
+        let second = config.themes[1].name.clone();
+        config.terminal.theme = first.clone();
+        let mut draft = Draft::new(&config);
+        let theme = super::super::catalog::option("theme").unwrap();
+        let c = draft_content(Group::Appearance, &draft);
+        let chosen = |c: &Content| -> Vec<(String, bool)> {
+            rows(c)
+                .into_iter()
+                .filter_map(|row| match &row.control {
+                    ControlView::Themes { name, selected, .. } if *selected => {
+                        Some((name.clone(), row.pending))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(chosen(&c), [(first.clone(), false)]);
+        draft.set(theme, EditValue::String(second.clone())).unwrap();
+        let c = draft_content(Group::Appearance, &draft);
+        assert_eq!(chosen(&c), [(second, true)], "o ponto fica na escolhida");
+        // Uma linha de tema não tem botão de restaurar.
+        assert!(
+            rows(&c).iter().all(|row| {
+                !matches!(row.control, ControlView::Themes { .. }) || !row.can_reset
+            })
+        );
+    }
+
+    #[test]
+    fn the_session_theme_is_a_note_under_the_list_only_when_it_differs_from_the_file() {
+        let config = Config::default();
+        let theme_notes = |session: Option<&str>| -> Vec<(Vec<String>, NoteTone)> {
+            let c = build(
+                key(Group::Appearance),
+                &Draft::new(&config),
+                session,
+                &test_support::pt_br(),
+                &metrics(),
+                &mut TextMeasurer::new(),
+            );
+            c.blocks
+                .iter()
+                .filter_map(|block| match block {
+                    Block::Note { lines, tone } => Some((lines.clone(), *tone)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert!(theme_notes(None).is_empty());
+        // Igual ao do arquivo: nada a dizer.
+        assert!(theme_notes(Some("")).is_empty());
+        let notes = theme_notes(Some("nord"));
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].1, NoteTone::Muted);
+        assert_eq!(notes[0].0.join(" "), "Esta sessão está usando o tema nord.");
+        // "Sem tema" na sessão, com um tema no arquivo, também é dito.
+        let mut named = Config::default();
+        named.terminal.theme = named.themes[0].name.clone();
+        let c = build(
+            key(Group::Appearance),
+            &Draft::new(&named),
+            Some(""),
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        );
+        let text: String = c
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Note { lines, .. } => Some(lines.join(" ")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Esta sessão está usando o tema Sem tema.");
+    }
+
+    #[test]
+    fn the_session_theme_is_never_a_pending_change() {
+        let config = Config::default();
+        let draft = Draft::new(&config);
+        let c = build(
+            key(Group::Appearance),
+            &draft,
+            Some("nord"),
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        );
+        assert!(rows(&c).iter().all(|row| !row.pending));
+        assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn the_trusted_paths_warning_sits_above_the_list_in_the_project_group() {
+        let c = content(Group::Project, &Config::default());
+        let note = c
+            .blocks
+            .iter()
+            .position(|block| matches!(block, Block::Note { .. }))
+            .expect("o aviso do RF-16.27");
+        let list = c
+            .blocks
+            .iter()
+            .position(|block| match block {
+                Block::Row(row) => row.option == Some("trusted_paths"),
+                _ => false,
+            })
+            .unwrap();
+        assert!(note < list, "acima da lista");
+        let Block::Note { lines, tone } = &c.blocks[note] else {
+            unreachable!()
+        };
+        assert_eq!(*tone, NoteTone::Warning);
+        assert!(
+            lines.len() > 1,
+            "o aviso é longo e quebra em mais de uma linha"
+        );
+        let joined = lines.join(" ");
+        assert!(joined.contains(".porecatu"));
+    }
+
+    #[test]
+    fn wrapping_breaks_between_words_and_never_loses_one() {
+        let mut measurer = TextMeasurer::new();
+        let text = "um dois tres quatro cinco seis sete oito nove dez";
+        let lines = wrap(text, 11.0, 90.0, &mut measurer);
+        assert!(lines.len() > 1);
+        assert_eq!(lines.join(" "), text);
+        for line in &lines {
+            let words = line.split(' ').count();
+            assert!(
+                words == 1 || measurer.measure_width(line, BODY_FONT, 11.0) <= 90.0,
+                "{line}"
+            );
+        }
+        // Uma palavra mais larga que a linha fica inteira, sozinha.
+        let lines = wrap("pneumoultramicroscopico fim", 11.0, 20.0, &mut measurer);
+        assert_eq!(lines[0], "pneumoultramicroscopico");
+        // Texto vazio não gera linha.
+        assert!(wrap("", 11.0, 90.0, &mut measurer).is_empty());
     }
 }

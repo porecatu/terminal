@@ -17,6 +17,9 @@ use crate::messages::msg;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogButton {
     Cancel,
+    /// O botão do meio do diálogo de três saídas (RF-16.4); os de dois
+    /// botões nunca o têm.
+    Discard,
     Confirm,
 }
 
@@ -49,6 +52,10 @@ pub enum DialogAction {
     OverwriteNamedSession(String),
     /// RF-14.16: exclui de verdade o arquivo da sessão nomeada.
     DeleteNamedSession(PathBuf),
+    /// RF-16.4: fechar a janela de configurações (ou encerrar o app) com
+    /// alterações pendentes. Quem responde é a própria janela de
+    /// configurações, que guarda o rascunho; `App` só vê a resposta.
+    SettingsPending,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,8 +66,14 @@ pub struct ConfirmDialog {
     /// Copiado na abertura junto com os outros três textos: um diálogo
     /// aberto não muda de idioma no meio (ADR-0056 §9).
     pub cancel_label: String,
+    /// O botão do meio, só no diálogo de três saídas (RF-16.4); `None` nos
+    /// outros, que continuam com dois botões.
+    pub discard_label: Option<String>,
     pub action: DialogAction,
     focused: DialogButton,
+    /// O botão sob o cursor, só no diálogo de três saídas: os de dois botões
+    /// não têm realce de hover.
+    hovered: Option<DialogButton>,
 }
 
 impl ConfirmDialog {
@@ -76,8 +89,10 @@ impl ConfirmDialog {
             body: body.into(),
             confirm_label: confirm_label.into(),
             cancel_label: cancel_label.into(),
+            discard_label: None,
             action,
             focused: DialogButton::Cancel,
+            hovered: None,
         }
     }
 
@@ -162,15 +177,57 @@ impl ConfirmDialog {
         )
     }
 
-    /// Navegação por teclado entre os dois botões -- a espec. não descreve
-    /// a tecla, mas um diálogo só-mouse não seria alcançável do teclado
-    /// além do default seguro (`Enter` = cancelar). `Tab`, `Left` e `Right`
-    /// alternam; são só dois estados, então "alternar" é "trocar".
+    /// RF-16.4 (ADR-0060 §4): fechar a janela de configurações com
+    /// `changes` alterações pendentes. Três saídas, foco inicial no cancelar.
+    pub fn settings_pending(catalog: &Catalog, changes: usize) -> Self {
+        let mut dialog = Self::new(
+            msg::settings::dialog::close_title(catalog),
+            msg::settings::dialog::close_body(catalog, changes),
+            msg::settings::dialog::save_and_close(catalog),
+            msg::settings::dialog::cancel(catalog),
+            DialogAction::SettingsPending,
+        );
+        dialog.discard_label = Some(msg::settings::dialog::discard_and_close(catalog));
+        dialog
+    }
+
+    /// O botão sob o cursor, realçado só no diálogo de três saídas.
+    pub const fn hovered(&self) -> Option<DialogButton> {
+        self.hovered
+    }
+
+    pub fn set_hovered(&mut self, button: Option<DialogButton>) {
+        self.hovered = button;
+    }
+
+    /// Os botões do diálogo, da esquerda para a direita: a ordem de leitura e
+    /// de `Tab`.
+    pub fn buttons(&self) -> Vec<DialogButton> {
+        let mut buttons = vec![DialogButton::Cancel];
+        if self.discard_label.is_some() {
+            buttons.push(DialogButton::Discard);
+        }
+        buttons.push(DialogButton::Confirm);
+        buttons
+    }
+
+    /// Navegação por teclado entre os botões -- a espec. não descreve a
+    /// tecla, mas um diálogo só-mouse não seria alcançável do teclado além
+    /// do default seguro (`Enter` = cancelar). `Tab`, `Left` e `Right`
+    /// andam em círculo: com dois botões é "trocar".
     pub fn toggle_focus(&mut self) {
-        self.focused = match self.focused {
-            DialogButton::Cancel => DialogButton::Confirm,
-            DialogButton::Confirm => DialogButton::Cancel,
-        };
+        self.step_focus(1);
+    }
+
+    /// Anda `delta` botões, em círculo (`Shift+Tab` e `Left` usam -1).
+    pub fn step_focus(&mut self, delta: i32) {
+        let buttons = self.buttons();
+        let at = buttons
+            .iter()
+            .position(|button| *button == self.focused)
+            .unwrap_or(0) as i32;
+        let next = (at + delta).rem_euclid(buttons.len() as i32) as usize;
+        self.focused = buttons[next];
     }
 }
 
@@ -271,6 +328,52 @@ mod tests {
         dialog.toggle_focus();
         assert_eq!(dialog.focused(), DialogButton::Confirm);
         dialog.toggle_focus();
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+    }
+
+    #[test]
+    fn the_settings_dialog_has_three_buttons_and_starts_on_cancel() {
+        let dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 3);
+        assert_eq!(dialog.title, "Fechar com alterações pendentes?");
+        assert_eq!(dialog.body, "Há 3 alterações não salvas.");
+        assert_eq!(dialog.confirm_label, "Salvar e fechar");
+        assert_eq!(dialog.discard_label.as_deref(), Some("Descartar e fechar"));
+        assert_eq!(dialog.cancel_label, "Cancelar");
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        assert_eq!(
+            dialog.buttons(),
+            [
+                DialogButton::Cancel,
+                DialogButton::Discard,
+                DialogButton::Confirm
+            ]
+        );
+    }
+
+    #[test]
+    fn focus_goes_around_all_three_buttons_both_ways() {
+        let mut dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 1);
+        dialog.step_focus(1);
+        assert_eq!(dialog.focused(), DialogButton::Discard);
+        dialog.step_focus(1);
+        assert_eq!(dialog.focused(), DialogButton::Confirm);
+        dialog.step_focus(1);
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        dialog.step_focus(-1);
+        assert_eq!(dialog.focused(), DialogButton::Confirm);
+    }
+
+    #[test]
+    fn a_two_button_dialog_never_reaches_the_discard_button() {
+        let mut dialog =
+            ConfirmDialog::new("t", "b", "Fechar", "Cancelar", DialogAction::CloseWindow);
+        assert_eq!(
+            dialog.buttons(),
+            [DialogButton::Cancel, DialogButton::Confirm]
+        );
+        dialog.step_focus(-1);
+        assert_eq!(dialog.focused(), DialogButton::Confirm);
+        dialog.step_focus(1);
         assert_eq!(dialog.focused(), DialogButton::Cancel);
     }
 }

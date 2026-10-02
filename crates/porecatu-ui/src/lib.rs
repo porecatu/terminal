@@ -5082,6 +5082,11 @@ struct App {
     /// até o fim da execução e é onde a janela reabre. O resto do estado dela
     /// morre com ela.
     settings_last_group: settings::Group,
+    /// O encerramento que espera a resposta da janela de configurações
+    /// (RF-16.5, ADR-0059 §2): a janela de terminal que ia ser a última a
+    /// fechar. `Some` só enquanto o diálogo de pendências está aberto por
+    /// causa dele; Cancelar o apaga e a janela continua.
+    deferred_quit: Option<WindowId>,
     /// Debounce da gravação de sessão (RF-3.3, ADR-0036) -- por
     /// **processo**, não por janela: o arquivo é um só para todas
     /// (RF-3.17). Drenado em `schedule_next_wake`, disparado em
@@ -5407,6 +5412,7 @@ impl App {
             windows: HashMap::new(),
             settings: None,
             settings_last_group: settings::Group::General,
+            deferred_quit: None,
             session: SessionScheduler::default(),
             pending_session,
             positional_directory: cli_directory,
@@ -6021,6 +6027,23 @@ impl App {
     /// encerra o event loop (RF-1.4: fechar a última janela encerra o
     /// app).
     fn close_window_unconditionally(&mut self, window_id: WindowId, event_loop: &ActiveEventLoop) {
+        // RF-16.5, ADR-0059 §2: a janela de configurações não segura o
+        // processo, mas com alterações pendentes o encerramento espera. É a
+        // última janela de terminal que fecharia: a de configurações vem para
+        // a frente com o diálogo, e só a resposta dele conclui (Salvar e
+        // fechar, Descartar e fechar) ou cancela (Cancelar) o encerramento.
+        if self.windows.contains_key(&window_id)
+            && self.settings.as_ref().is_some_and(|settings| {
+                settings::closing::defers_quit(self.windows.len(), settings.has_pending_changes())
+            })
+            && self
+                .settings
+                .as_mut()
+                .is_some_and(SettingsWindow::ask_before_quit)
+        {
+            self.deferred_quit = Some(window_id);
+            return;
+        }
         let Some(state) = self.windows.remove(&window_id) else {
             return;
         };
@@ -6043,16 +6066,10 @@ impl App {
             wait.wait();
         }
         if self.windows.is_empty() {
-            // ADR-0059 §2: a janela de configurações não segura o processo.
-            // É aqui que o encerramento pergunta a ela se há pendências e,
-            // com elas, deixa de ser imediato (tarefa 09) -- hoje a tela não
-            // edita nada, então a resposta é sempre não.
-            debug_assert!(
-                !self
-                    .settings
-                    .as_ref()
-                    .is_some_and(SettingsWindow::has_pending_changes)
-            );
+            // ADR-0059 §2: a janela de configurações não segura o processo. A
+            // pergunta sobre pendências já foi feita no topo desta função;
+            // chegar aqui é ela ter respondido que não há (ou ter sido
+            // respondida).
             self.settings = None;
             self.session.clear();
             event_loop.exit();
@@ -6161,6 +6178,9 @@ impl App {
             DialogAction::DeleteNamedSession(file) => {
                 self.commit_named_session_delete(window_id, &file);
             }
+            // Vive na janela de configurações, que a resolve sozinha: um
+            // diálogo de `WindowState` nunca o carrega.
+            DialogAction::SettingsPending => {}
         }
     }
 
@@ -6805,6 +6825,7 @@ impl App {
             style: &self.style,
             config: &self.config,
         };
+        settings.set_session_theme(self.session_theme.as_deref());
         settings.refresh_access_tree(env, gpu.text_measurer(), &self.language_tag);
     }
 
@@ -7489,13 +7510,19 @@ impl App {
     /// Evento de uma janela que é a de configurações -- o roteamento do
     /// topo de `window_event` (ADR-0059 §1). Modo de captura: o `keymap` do
     /// processo não é consultado (ADR-0059 §3).
-    fn settings_window_event(&mut self, event: WindowEvent) {
+    fn settings_window_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
         if let Some(settings) = &mut self.settings {
             settings.process_access_event(&event);
         }
         let mut press = settings::Press::Nothing;
         match event {
-            WindowEvent::CloseRequested => press = settings::Press::Close,
+            // Fechar pelo sistema: com pendências abre o diálogo, e com o
+            // diálogo já aberto conta como Cancelar (RF-16.4).
+            WindowEvent::CloseRequested => {
+                if let Some(settings) = &mut self.settings {
+                    press = settings.request_close();
+                }
+            }
             WindowEvent::Resized(size) => {
                 if let (Some(settings), Some(gpu)) = (&mut self.settings, &self.gpu) {
                     settings.resize(gpu, size.width, size.height);
@@ -7571,8 +7598,39 @@ impl App {
         match press {
             settings::Press::Nothing => {}
             settings::Press::Close => self.close_settings(),
+            settings::Press::Answer(answer) => self.settings_dialog_answer(answer, event_loop),
             settings::Press::OpenFile => self.open_config_file_from_settings(),
             settings::Press::Save => self.save_settings(),
+        }
+    }
+
+    /// A resposta ao diálogo de pendências da janela de configurações
+    /// (RF-16.4, RF-16.5). Cancelar apaga o encerramento que esperava, e
+    /// nada mais acontece. Descartar e fechar conclui. Salvar e fechar grava e
+    /// só conclui se gravou -- falha vira o aviso de sempre e as pendências
+    /// ficam, com o encerramento cancelado. Concluir é fechar a janela de
+    /// configurações ou, se o diálogo veio de um encerramento, a janela de
+    /// terminal que o esperava (com a gravação de sessão de sempre).
+    fn settings_dialog_answer(
+        &mut self,
+        answer: settings::DialogAnswer,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let quitting = self.deferred_quit.take();
+        let conclusion = settings::closing::conclude(answer, quitting.is_some(), || {
+            self.save_settings();
+            self.settings
+                .as_ref()
+                .is_none_or(|settings| !settings.has_pending_changes())
+        });
+        match (conclusion, quitting) {
+            (settings::closing::Conclusion::Stay, _) => {}
+            (settings::closing::Conclusion::CloseSettings, _) => self.close_settings(),
+            (settings::closing::Conclusion::Quit, Some(window_id)) => {
+                self.close_window_unconditionally(window_id, event_loop);
+            }
+            // `Quit` só sai de um diálogo que veio de um encerramento.
+            (settings::closing::Conclusion::Quit, None) => self.close_settings(),
         }
     }
 
@@ -7584,6 +7642,8 @@ impl App {
             style: &self.style,
             config: &self.config,
         };
+        // O tema da sessão entra na linha abaixo da lista de temas (RF-16.25).
+        settings.set_session_theme(self.session_theme.as_deref());
         let frame = settings.paint(env, &self.pal, &self.term_pal, gpu.text_measurer());
         settings.render(gpu, &frame);
     }
@@ -7972,7 +8032,7 @@ impl ApplicationHandler<Wakeup> for App {
             .as_ref()
             .is_some_and(|settings| settings.window_id() == window_id)
         {
-            self.settings_window_event(event);
+            self.settings_window_event(event, event_loop);
             return;
         }
         // ADR-0043 §1: "deve ser chamado sempre que um evento de janela

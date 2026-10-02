@@ -810,12 +810,12 @@ Registrada ao fim da tarefa 08 (edição, Salvar e Descartar). Dívida assumida,
 - **Borda de retângulo arredondado nunca é desenhada.** `quad.wgsl`, ramo `radius > 0`: `border_alpha` cobre a região interna e a conta `border_alpha - fill_alpha` dá sempre zero; vale desde a F1. Medido em pixels nas capturas das tarefas 07 e 08. Efeito: borda de campo, borda `#ef8a8a` de valor recusado, borda Acento de campo em edição e anel de foco não aparecem; o que aparece é a razão em vermelho, o cursor e o ponto de pendente. Corrigir muda a aparência do app inteiro (abas, diálogos, menus), então **depende de aval do dono do produto**; o aval visual da tarefa 09 deve decidir.
 - **Só Windows.** Edição, Salvar, lista de idioma e restaurar foram exercitados ao vivo apenas no Windows, com input sintético. macOS e Linux sem verificação.
 - **Sem arquivo, Salvar mostra aviso de leitura.** Arquivo inexistente, inválido e alterado fora do app têm `TODO(tarefa 11)` em `settings/save.rs` e `Draft::rebase`.
-- **Fechar com pendências descarta sem perguntar** até a tarefa 09 (`TODO(tarefa 09)`).
+- **Tarefa 09 entregue** (listas, temas, diálogo de três saídas, encerramento adiado). Dívida dela: sem arraste para reordenar item de lista (só `Alt+Up`/`Alt+Down` com o item em edição); sem tecla para remover item (só o `X`) nem para acrescentar além do caso da lista vazia; fechar a última aba (ou o shell sair) com pendências e responder Cancelar deixa a janela de terminal vazia, porque a aba já fechou; só Windows.
 - **Passo numérico confirma na hora.** `Up`/`Down` num campo numérico confirmam o valor e o campo segue em edição; `Esc` depois não desfaz o passo.
 - **Restaurar padrão sem tecla.** O RF-16.10 não especifica caminho de teclado; só mouse.
 - **As quatro chaves de tamanho de janela** (`window_width`, `window_height`, `min_width`, `min_height`) de `[appearance.settings]` são classe C e **não têm aviso de recarga adiado**: valem na próxima abertura, em silêncio.
 - **Lista de idioma mostra o código do locale** (`pt_BR`), sem nome legível.
-- **Linha "sessão usando tema X" (RF-16.25) ainda não desenhada** — tarefa 09. **§2.12 da especificação** segue com o texto do drawer — tarefa 11. Temas, listas e `shell.env` seguem inertes até a 09.
+- **§2.12 da especificação** segue com o texto do drawer — tarefa 11.
 - **Texto do roadmap desatualizado:** a etapa 1 acima diz que `[appearance.settings]` não entra no arquivo de exemplo; entrou na tarefa 08, junto do código e da §1.7, porque o teste de exemplo passou a cobrir a chave.
 - **Teste instável pré-existente:** `kill_tree_kills_the_whole_tree_via_job` (`porecatu-pty`) falhou uma vez sob carga paralela; passou sozinho e nas rodadas seguintes. Sem relação com a tela.
 

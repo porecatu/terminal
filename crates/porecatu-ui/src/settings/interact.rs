@@ -69,6 +69,70 @@ pub(crate) fn commit_text(draft: &mut Draft, option: &OptionDef, text: &str) -> 
     true
 }
 
+/// Muda o texto de um campo de um item de lista (RF-16.26): o primeiro campo
+/// é o texto -- ou o nome da variável --, o segundo o valor dela. Texto igual
+/// ao que já estava não toca em nada.
+pub(crate) fn list_set_text(
+    draft: &mut Draft,
+    option: &OptionDef,
+    item: usize,
+    second: bool,
+    text: &str,
+) -> bool {
+    let mut rows = draft.rows(option);
+    let Some(row) = rows.get_mut(item) else {
+        return false;
+    };
+    let field = if second { &mut row.1 } else { &mut row.0 };
+    if field == text {
+        return false;
+    }
+    *field = text.to_owned();
+    let _ = draft.set_rows(option, &rows);
+    true
+}
+
+/// Acrescenta um item vazio no fim da lista e devolve o índice dele. Numa
+/// lista de nome e valor ele nasce recusado (nome vazio) até receber um nome.
+pub(crate) fn list_add(draft: &mut Draft, option: &OptionDef) -> Option<usize> {
+    if !matches!(option.control, Control::StringList | Control::StringMap) {
+        return None;
+    }
+    let mut rows = draft.rows(option);
+    rows.push((String::new(), String::new()));
+    let _ = draft.set_rows(option, &rows);
+    Some(rows.len() - 1)
+}
+
+/// Remove o item `item` da lista.
+pub(crate) fn list_remove(draft: &mut Draft, option: &OptionDef, item: usize) -> bool {
+    let mut rows = draft.rows(option);
+    if item >= rows.len() {
+        return false;
+    }
+    rows.remove(item);
+    let _ = draft.set_rows(option, &rows);
+    true
+}
+
+/// Move o item `item` uma posição (`delta` -1 sobe, 1 desce) e devolve o
+/// índice novo, ou `None` na ponta da lista (`Alt+Up`/`Alt+Down`, RF-16.26).
+pub(crate) fn list_move(
+    draft: &mut Draft,
+    option: &OptionDef,
+    item: usize,
+    delta: i32,
+) -> Option<usize> {
+    let mut rows = draft.rows(option);
+    let target = item.checked_add_signed(delta as isize)?;
+    if item >= rows.len() || target >= rows.len() {
+        return None;
+    }
+    rows.swap(item, target);
+    let _ = draft.set_rows(option, &rows);
+    Some(target)
+}
+
 /// `Up`/`Down` num campo numérico: o passo da opção sobre `text`, posto no
 /// rascunho. Devolve o texto novo, ou `None` se `text` não é número -- não há
 /// de onde partir -- ou a opção não é numérica.
@@ -338,5 +402,128 @@ copy_on_select = false
         assert!(!d.is_dirty());
         assert!(d.edits().is_empty());
         assert_eq!(d.value(opt("font_size")), EditValue::Float(14.0));
+    }
+
+    // ---- listas
+
+    fn row(first: &str, second: &str) -> (String, String) {
+        (first.to_owned(), second.to_owned())
+    }
+
+    #[test]
+    fn adding_an_env_item_creates_a_refused_row_until_it_has_a_name() {
+        let mut d = draft();
+        let env = opt("shell_env");
+        assert_eq!(list_add(&mut d, env), Some(0));
+        assert!(d.has_invalid());
+        assert!(d.edits().is_empty());
+        assert!(list_set_text(&mut d, env, 0, false, "EDITOR"));
+        assert!(!d.has_invalid());
+        assert!(list_set_text(&mut d, env, 0, true, "vim"));
+        let edits = d.edits();
+        assert_eq!(edits.len(), 1);
+        let Edit::Set(path, EditValue::StringMap(map)) = &edits[0] else {
+            panic!("esperava um Set de mapa: {edits:?}");
+        };
+        assert_eq!(*path, env.key_path());
+        assert_eq!(map.get("EDITOR").map(String::as_str), Some("vim"));
+    }
+
+    #[test]
+    fn a_repeated_env_name_is_refused_on_the_row_and_blocks_save() {
+        let mut d = draft();
+        let env = opt("shell_env");
+        list_add(&mut d, env);
+        list_set_text(&mut d, env, 0, false, "A");
+        list_add(&mut d, env);
+        list_set_text(&mut d, env, 1, false, "A");
+        assert!(d.has_invalid());
+        assert_eq!(
+            d.invalid(env),
+            Some(&ValueError::DuplicateName("A".to_owned()))
+        );
+        assert_eq!(Draft::invalid_rows(env, &d.rows(env)), [true, true]);
+        list_set_text(&mut d, env, 1, false, "B");
+        assert!(!d.has_invalid());
+    }
+
+    #[test]
+    fn removing_the_last_item_of_a_file_list_is_a_pending_edit() {
+        let mut d = Draft::new(
+            &porecatu_config::parse("[shell]\nargs = [\"-l\"]\n")
+                .unwrap()
+                .0,
+        );
+        let args = opt("shell_args");
+        assert!(list_remove(&mut d, args, 0));
+        assert!(d.is_pending(args));
+        assert_eq!(
+            d.edits(),
+            [Edit::Set(args.key_path(), EditValue::StringList(vec![]))]
+        );
+        assert!(!list_remove(&mut d, args, 0), "não há mais itens");
+    }
+
+    #[test]
+    fn moving_an_item_swaps_it_with_its_neighbour_and_stops_at_the_ends() {
+        let mut d = draft();
+        let args = opt("shell_args");
+        d.set_rows(args, &[row("a", ""), row("b", ""), row("c", "")])
+            .unwrap();
+        assert_eq!(list_move(&mut d, args, 1, -1), Some(0));
+        assert_eq!(d.rows(args), [row("b", ""), row("a", ""), row("c", "")]);
+        assert_eq!(list_move(&mut d, args, 0, -1), None);
+        assert_eq!(list_move(&mut d, args, 2, 1), None);
+        assert_eq!(list_move(&mut d, args, 1, 1), Some(2));
+        assert_eq!(d.rows(args), [row("b", ""), row("c", ""), row("a", "")]);
+        assert_eq!(
+            d.edits(),
+            [Edit::Set(
+                args.key_path(),
+                EditValue::StringList(vec!["b".into(), "c".into(), "a".into()])
+            )]
+        );
+    }
+
+    #[test]
+    fn an_unchanged_item_text_touches_nothing() {
+        let mut d = draft();
+        let args = opt("shell_args");
+        list_add(&mut d, args);
+        list_set_text(&mut d, args, 0, false, "x");
+        assert!(!list_set_text(&mut d, args, 0, false, "x"));
+        assert!(!list_set_text(&mut d, args, 7, false, "x"));
+    }
+
+    #[test]
+    fn a_trusted_paths_item_is_a_text_list_item() {
+        let mut d = draft();
+        let paths = opt("trusted_paths");
+        assert_eq!(list_add(&mut d, paths), Some(0));
+        list_set_text(&mut d, paths, 0, false, "C:\\Projetos");
+        assert_eq!(
+            d.edits(),
+            [Edit::Set(
+                paths.key_path(),
+                EditValue::StringList(vec!["C:\\Projetos".into()])
+            )]
+        );
+    }
+
+    #[test]
+    fn a_non_list_option_cannot_get_an_item() {
+        let mut d = draft();
+        assert_eq!(list_add(&mut d, opt("font_size")), None);
+    }
+
+    #[test]
+    fn choosing_a_theme_is_a_pending_string_and_choosing_the_file_one_clears_it() {
+        let mut d = draft();
+        let theme = opt("theme");
+        assert!(choose_value(&mut d, theme, "nord"));
+        assert!(d.is_pending(theme));
+        assert_eq!(d.value(theme), EditValue::String("nord".to_owned()));
+        assert!(choose_value(&mut d, theme, ""));
+        assert!(!d.is_pending(theme));
     }
 }

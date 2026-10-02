@@ -13,6 +13,7 @@
 mod actions;
 mod catalog;
 mod choice_list;
+pub(crate) mod closing;
 mod content;
 mod draft;
 mod field_edit;
@@ -29,9 +30,11 @@ use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::window::WindowAttributes;
 
 pub(crate) use catalog::Group;
+#[cfg(test)]
+pub(crate) use content::ListItemView;
 pub(crate) use content::{ControlView, RowView};
 pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
-pub(crate) use window::{Env, Press, SettingsWindow};
+pub(crate) use window::{DialogAnswer, Env, Press, SettingsWindow};
 
 use crate::palette;
 
@@ -201,6 +204,7 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
     content::build(
         key,
         &draft::Draft::new(&config),
+        None,
         &crate::messages::test_support::pt_br(),
         &metrics,
         &mut TextMeasurer::new(),
@@ -209,7 +213,7 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
     .into_iter()
     .filter_map(|block| match block {
         content::Block::Row(row) => Some(*row),
-        content::Block::Section(_) => None,
+        content::Block::Section(_) | content::Block::Note { .. } => None,
     })
     .collect()
 }

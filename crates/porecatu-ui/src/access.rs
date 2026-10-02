@@ -87,6 +87,9 @@ const SESSION_PICKER_ID: NodeId = NodeId(101);
 /// dividir o `id` entre os dois estados não colide.
 const SESSION_PICKER_FIELD_ID: NodeId = NodeId(102);
 const SESSION_PICKER_SAVE_ITEM_ID: NodeId = NodeId(103);
+/// O botão do meio do diálogo de três saídas (RF-16.4): fora da faixa dos
+/// dois fixos, que ficam juntos em 14 e 15.
+const DIALOG_DISCARD_ID: NodeId = NodeId(104);
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -572,22 +575,29 @@ fn build_dialog(
     // abaixo).
     let focused_id = match dialog.focused() {
         DialogButton::Cancel => DIALOG_CANCEL_ID,
+        DialogButton::Discard => DIALOG_DISCARD_ID,
         DialogButton::Confirm => DIALOG_CONFIRM_ID,
     };
+    let mut buttons = vec![DIALOG_CANCEL_ID];
     nodes.push((
         DIALOG_CANCEL_ID,
         leaf(Role::Button, dialog.cancel_label.clone()),
     ));
+    if let Some(label) = &dialog.discard_label {
+        nodes.push((DIALOG_DISCARD_ID, leaf(Role::Button, label.clone())));
+        buttons.push(DIALOG_DISCARD_ID);
+    }
     nodes.push((
         DIALOG_CONFIRM_ID,
         leaf(Role::Button, dialog.confirm_label.clone()),
     ));
+    buttons.push(DIALOG_CONFIRM_ID);
 
     let mut node = Node::new(Role::Dialog);
     node.set_modal();
     node.set_label(dialog.title.clone());
     node.set_description(dialog.body.clone());
-    node.set_children(vec![DIALOG_CANCEL_ID, DIALOG_CONFIRM_ID]);
+    node.set_children(buttons);
     nodes.push((DIALOG_ID, node));
     root_children.push(DIALOG_ID);
     focused_id
@@ -889,12 +899,14 @@ fn settings_footer_button_id(button: FooterButton) -> NodeId {
 /// ausentes"). `rows` são as linhas de opção do grupo em vista, as mesmas que
 /// a pintura lê: cada uma vira um nó com o papel do controle, o nome, a
 /// descrição inteira (a pintura a corta, a árvore não) e o valor.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_settings_tree(
     layout: &SettingsLayout,
     groups: &[Group],
     selected: Group,
     has_pending: bool,
     rows: &[&RowView],
+    dialog: Option<&ConfirmDialog>,
     catalog: &Catalog,
     language: &str,
 ) -> TreeUpdate {
@@ -967,6 +979,13 @@ pub(crate) fn build_settings_tree(
     nodes.push((SETTINGS_PANEL_ID, panel));
     root_children.push(SETTINGS_PANEL_ID);
 
+    // O diálogo de pendências (RF-16.4) é modal: o foco vai para o botão
+    // focado dele, como nas janelas de terminal.
+    let focus = match dialog {
+        Some(dialog) => build_dialog(dialog, &mut nodes, &mut root_children),
+        None => SETTINGS_ROOT_ID,
+    };
+
     let mut root = Node::new(Role::Window);
     root.set_label(msg::settings::window_title(catalog));
     // ADR-0056 §11: o idioma do catálogo **efetivamente carregado**.
@@ -978,7 +997,7 @@ pub(crate) fn build_settings_tree(
         nodes,
         tree: Some(TreeInfo::new(SETTINGS_ROOT_ID)),
         tree_id: TreeId::ROOT,
-        focus: SETTINGS_ROOT_ID,
+        focus,
     }
 }
 
@@ -1049,11 +1068,23 @@ fn settings_row_node(index: usize, row: &RowView, nodes: &mut Vec<(NodeId, Node)
             describe(&mut node);
             nodes.push((id, node));
         }
-        ControlView::List { items, .. } => {
+        ControlView::List {
+            items, two_fields, ..
+        } => {
             let mut children = Vec::new();
             for (item_index, item) in items.iter().enumerate() {
                 let item_id = NodeId(id.0 + 1 + item_index as u64);
-                nodes.push((item_id, leaf(Role::ListItem, item.clone())));
+                // Uma variável de ambiente é lida como `NOME=valor`.
+                let label = if *two_fields {
+                    format!("{}={}", item.first, item.second)
+                } else {
+                    item.first.clone()
+                };
+                let mut node = leaf(Role::ListItem, label);
+                if item.invalid {
+                    node.set_invalid(accesskit::Invalid::True);
+                }
+                nodes.push((item_id, node));
                 children.push(item_id);
             }
             let mut node = container(Role::List, children);
@@ -1703,7 +1734,7 @@ mod tests {
 mod settings_tree_tests {
     use super::*;
     use crate::messages::test_support;
-    use crate::settings::{layout_for_test, rows_for_test};
+    use crate::settings::{ListItemView, layout_for_test, rows_for_test};
 
     fn tree(selected: Group, has_pending: bool, with_header: bool, language: &str) -> TreeUpdate {
         tree_with_rows(selected, has_pending, with_header, language, &[])
@@ -1724,6 +1755,7 @@ mod settings_tree_tests {
             selected,
             has_pending,
             &refs,
+            None,
             &test_support::pt_br(),
             language,
         )
@@ -1865,6 +1897,7 @@ mod settings_tree_tests {
             Group::General,
             false,
             &[],
+            None,
             &test_support::en_us(),
             "en-US",
         );
@@ -1965,8 +1998,14 @@ mod settings_tree_tests {
             .iter_mut()
             .find(|row| row.option == Some("shell_args"))
             .unwrap();
+        let item = |first: &str, second: &str, invalid: bool| ListItemView {
+            first: first.to_owned(),
+            second: second.to_owned(),
+            invalid,
+        };
         args.control = ControlView::List {
-            items: vec!["-l".to_owned(), "-i".to_owned()],
+            items: vec![item("-l", "", false), item("-i", "", false)],
+            two_fields: false,
             add_label: "Adicionar".to_owned(),
         };
         let update = tree_with_rows(Group::Shell, false, true, "pt-BR", &rows);
@@ -1979,6 +2018,87 @@ mod settings_tree_tests {
             .map(|id| node(&update, *id).label().unwrap())
             .collect();
         assert_eq!(items, ["-l", "-i"]);
+    }
+
+    #[test]
+    fn an_env_item_is_read_as_name_equals_value_and_a_refused_one_is_invalid() {
+        let mut rows = rows_for_test(Group::Shell);
+        let env = rows
+            .iter_mut()
+            .find(|row| row.option == Some("shell_env"))
+            .unwrap();
+        env.control = ControlView::List {
+            items: vec![
+                ListItemView {
+                    first: "EDITOR".to_owned(),
+                    second: "vim".to_owned(),
+                    invalid: false,
+                },
+                ListItemView {
+                    first: String::new(),
+                    second: "x".to_owned(),
+                    invalid: true,
+                },
+            ],
+            two_fields: true,
+            add_label: "Adicionar".to_owned(),
+        };
+        let update = tree_with_rows(Group::Shell, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let list = nodes
+            .iter()
+            .find(|node| node.role() == Role::List && node.children().len() == 2)
+            .expect("a lista de variáveis");
+        let items: Vec<&Node> = list
+            .children()
+            .iter()
+            .map(|id| node(&update, *id))
+            .collect();
+        assert_eq!(items[0].label(), Some("EDITOR=vim"));
+        assert_eq!(items[0].invalid(), None);
+        assert_eq!(items[1].invalid(), Some(accesskit::Invalid::True));
+    }
+
+    #[test]
+    fn the_pending_dialog_adds_three_buttons_and_moves_the_focus_to_the_focused_one() {
+        let layout = layout_for_test(true);
+        let dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 2);
+        let update = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::General,
+            true,
+            &[],
+            Some(&dialog),
+            &test_support::pt_br(),
+            "pt-BR",
+        );
+        let node_of = |id: NodeId| node(&update, id);
+        let dialog_node = node_of(DIALOG_ID);
+        assert_eq!(dialog_node.role(), Role::Dialog);
+        assert!(dialog_node.is_modal());
+        let buttons: Vec<&str> = dialog_node
+            .children()
+            .iter()
+            .map(|id| node_of(*id).label().unwrap())
+            .collect();
+        assert_eq!(
+            buttons,
+            ["Cancelar", "Descartar e fechar", "Salvar e fechar"]
+        );
+        assert_eq!(update.focus, DIALOG_CANCEL_ID, "foco inicial no cancelar");
+        // Sem diálogo o foco é da janela.
+        let without = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::General,
+            true,
+            &[],
+            None,
+            &test_support::pt_br(),
+            "pt-BR",
+        );
+        assert_eq!(without.focus, SETTINGS_ROOT_ID);
     }
 
     #[test]

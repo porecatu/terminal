@@ -15,16 +15,19 @@ use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun, icon,
 };
 
-use super::content::{Block, Content, ControlView, RowView, SWATCH_COUNT, SWATCH_GAP};
+use super::content::{
+    Block, Content, ControlView, ListItemView, NoteTone, RowView, SWATCH_COUNT, SWATCH_GAP,
+};
 use super::field_edit::{EditPart, Editing};
 use super::layout::{
-    BlockGeometry, FOOTER_BUTTONS, Focus, FooterButton, Hit, Layout, Metrics, RowGeometry,
+    BlockGeometry, ControlPart, FOOTER_BUTTONS, Focus, FooterButton, Hit, Layout, Metrics,
+    RowGeometry, list_geometry,
 };
 use super::{
     Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON, RESTORE_ICON, RESTORE_RADIUS,
     ROW_BACKGROUND, TOGGLE_OFF, TOGGLE_ON,
 };
-use crate::chrome::{ICON_FONT, centered_glyph};
+use crate::chrome::centered_glyph;
 use crate::messages::msg;
 use crate::overlay::{BODY_FONT, TITLE_FONT};
 use crate::palette::{self, ResolvedPalette};
@@ -229,6 +232,30 @@ fn paint_panel(input: &Input<'_>, measurer: &mut TextMeasurer, out: &mut Vec<Pri
                     continue;
                 }
                 paint_row(input, index, row, geometry, dx, dy, measurer, out);
+            }
+            (
+                Block::Note { lines, tone },
+                BlockGeometry::Note {
+                    origin,
+                    line_height,
+                },
+            ) => {
+                let color = match tone {
+                    NoteTone::Warning => pal.warning_severity_warning,
+                    NoteTone::Muted => pal.status_bar_stale_cwd,
+                };
+                for (line_index, line) in lines.iter().enumerate() {
+                    out.push(text(
+                        (
+                            origin.0 + dx,
+                            origin.1 + dy + line_index as f32 * line_height,
+                        ),
+                        line,
+                        BODY_FONT,
+                        m.description_size,
+                        color,
+                    ));
+                }
             }
             _ => unreachable!("conteúdo e geometria saem do mesmo laço"),
         }
@@ -442,7 +469,18 @@ fn paint_control(
             paint_field_text(input, value, rect.x + m.field_padding_x, rect, out);
             paint_caret(input, rect, out);
         }
-        ControlView::List { items, add_label } => paint_list(input, items, add_label, rect, out),
+        ControlView::List {
+            items,
+            two_fields,
+            add_label,
+        } => paint_list(
+            input,
+            index,
+            (items, *two_fields, add_label),
+            rect,
+            measurer,
+            out,
+        ),
         ControlView::Themes { colors, .. } => {
             for (index, color) in colors.iter().enumerate().take(SWATCH_COUNT) {
                 let x = rect.x + index as f32 * (m.swatch_size + SWATCH_GAP);
@@ -691,50 +729,89 @@ fn paint_segmented(
     }
 }
 
-/// Lista editável, inerte: um campo por item com o `X` à direita, e o item
-/// "Adicionar" -- ícone `PLUS` e texto de item de menu -- logo abaixo
-/// (ADR-0060 §3).
+/// Lista editável: um campo por item -- dois, na de nome e valor -- com o `X`
+/// do botão de fechar da aba à direita, e o item "Adicionar" -- ícone `PLUS`
+/// e texto de item de menu -- logo abaixo (ADR-0060 §3). `list` é o que a
+/// linha mostra: os itens, se há dois campos por item, e o texto do
+/// "Adicionar".
 fn paint_list(
     input: &Input<'_>,
-    items: &[String],
-    add_label: &str,
+    index: usize,
+    list: (&[ListItemView], bool, &str),
     rect: Rect,
+    measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
+    let (items, two_fields, add_label) = list;
     let m = input.metrics;
     let pal = input.pal;
     let style = input.style;
-    let mut y = rect.y;
-    for item in items {
-        let field = Rect {
-            x: rect.x,
-            y,
-            width: m.text_field_width,
-            height: m.field_height,
-        };
-        paint_field_box(input, field, false, out);
-        paint_field_text(input, item, field.x + m.field_padding_x, field, out);
-        let close = Rect {
-            x: field.x + field.width + m.list_gap,
-            y: y + (m.field_height - m.restore_height) / 2.0,
-            width: m.restore_width,
-            height: m.restore_height,
-        };
-        out.push(Primitive::Text(TextRun {
-            origin: icon::X.centered_origin(close, style.icon_em_size),
-            text: icon::X.glyph.to_string(),
-            font: ICON_FONT,
-            size_px: style.icon_em_size,
-            color: pal.chrome_icon,
-        }));
-        y += m.field_height + m.list_gap;
-    }
-    let add = Rect {
-        x: rect.x,
-        y,
-        width: m.text_field_width,
-        height: m.sidebar_item_height,
+    let geometry = list_geometry(rect, m, items.len(), two_fields);
+    let editing = |part: EditPart| {
+        input
+            .editing
+            .filter(|editing| editing.block == index && editing.part == part)
     };
+    let hovered_part = match input.hovered {
+        Some(Hit::Control(hit_index, part)) if hit_index == index => Some(part),
+        _ => None,
+    };
+    for (item_index, (item, rects)) in items.iter().zip(&geometry.items).enumerate() {
+        let fields = [
+            (rects.first, &item.first, EditPart::ListFirst(item_index)),
+            (
+                rects.second.unwrap_or(rects.first),
+                &item.second,
+                EditPart::ListSecond(item_index),
+            ),
+        ];
+        for (field_index, (field, value, part)) in fields.into_iter().enumerate() {
+            if field_index == 1 && rects.second.is_none() {
+                break;
+            }
+            // O nome é o que está errado (vazio ou repetido): só a borda do
+            // campo do nome fica em Erro, a do valor não.
+            let invalid = item.invalid && field_index == 0;
+            if let Some(editing) = editing(part) {
+                paint_editing_field(input, field, editing, invalid, measurer, out);
+            } else {
+                paint_field_box(input, field, invalid, out);
+                paint_field_text(input, value, field.x + m.field_padding_x, field, out);
+            }
+        }
+        // O `X`: a anatomia do botão de fechar da aba -- ícone `#727a86`, e
+        // no hover fundo `#39404b` com o ícone `#e4e8ee`.
+        let hovered = hovered_part == Some(ControlPart::ListRemove(item_index));
+        if hovered {
+            out.push(rounded(
+                rects.remove,
+                RESTORE_RADIUS,
+                RESTORE_HOVER_BACKGROUND,
+                palette::TRANSPARENT,
+                0.0,
+            ));
+        }
+        out.push(centered_glyph(
+            icon::X,
+            rects.remove,
+            style.icon_em_size,
+            if hovered {
+                RESTORE_HOVER_ICON
+            } else {
+                RESTORE_ICON
+            },
+        ));
+    }
+    let add = geometry.add;
+    if hovered_part == Some(ControlPart::ListAdd) {
+        out.push(rounded(
+            add,
+            input.config.appearance.context_menu.item_corner_radius as f32,
+            pal.menu_item_hover,
+            palette::TRANSPARENT,
+            0.0,
+        ));
+    }
     let plus = Rect {
         x: add.x + m.field_padding_x,
         y: add.y,
@@ -881,7 +958,7 @@ mod tests {
             generation: 0,
         };
         let mut measurer = TextMeasurer::new();
-        let content = content::build(key, draft, &f.catalog, &m, &mut measurer);
+        let content = content::build(key, draft, None, &f.catalog, &m, &mut measurer);
         let index = content
             .blocks
             .iter()
@@ -1080,5 +1157,261 @@ mod tests {
         }
         let (out, _) = paint_terminal(&f, &draft, false, |_| None, None);
         assert!(!out.is_empty());
+    }
+
+    // ---- listas, temas e notas
+
+    /// Pinta `group` sobre `draft`. `hovered` recebe o índice da linha de
+    /// `option` e devolve o alvo sob o cursor. Devolve a pintura e o conteúdo.
+    fn paint_group(
+        f: &Fixture,
+        group: Group,
+        draft: &Draft,
+        session_theme: Option<&str>,
+        option_id: &str,
+        hovered: impl Fn(usize) -> Option<Hit>,
+        editing: Option<&Editing>,
+    ) -> (Vec<Primitive>, Content, usize) {
+        let m = Metrics::from_config(&f.config, 52.0);
+        let layout = layout::layout(900.0, 2000.0, 52.0, 200.0, m.footer_height());
+        let key = ContentKey {
+            group,
+            panel_width_bits: layout.panel.width.to_bits(),
+            generation: 0,
+        };
+        let mut measurer = TextMeasurer::new();
+        let content = content::build(key, draft, session_theme, &f.catalog, &m, &mut measurer);
+        let index = content
+            .blocks
+            .iter()
+            .position(|block| matches!(block, Block::Row(row) if row.option == Some(option_id)))
+            .unwrap();
+        let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
+        let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        let out = paint_body(
+            &Input {
+                layout: &layout,
+                metrics: &m,
+                content: &content,
+                items: &items,
+                footer: &footer,
+                selected: group,
+                focus: Focus::Sidebar,
+                hovered: hovered(index),
+                scroll: 0.0,
+                pending_groups: &[],
+                editing,
+                selection_color: palette::hex(1, 2, 3),
+                footer_available: [true, false, false],
+                style: &f.style,
+                pal: &f.pal,
+                config: &f.config,
+                catalog: &f.catalog,
+            },
+            &mut measurer,
+        );
+        (out, content, index)
+    }
+
+    fn env_draft(f: &Fixture, rows: &[(&str, &str)]) -> Draft {
+        let mut draft = Draft::new(&f.config);
+        let rows: Vec<(String, String)> = rows
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        let _ = draft.set_rows(option("shell_env").unwrap(), &rows);
+        draft
+    }
+
+    #[test]
+    fn a_refused_env_name_paints_that_field_with_the_error_border_only() {
+        let f = fixture();
+        let draft = env_draft(&f, &[("A", "1"), ("", "2")]);
+        let (out, ..) = paint_group(&f, Group::Shell, &draft, None, "shell_env", |_| None, None);
+        let error = f.pal.warning_severity_error;
+        let red_fields = out
+            .iter()
+            .filter(|p| {
+                matches!(p, Primitive::RoundedQuad(q)
+                    if q.border_color == error && q.rect.height == 30.0 && q.rect.width < 240.0)
+            })
+            .count();
+        // Só o campo do nome da linha recusada: a do valor e a outra linha
+        // seguem na borda comum.
+        assert_eq!(red_fields, 1);
+    }
+
+    #[test]
+    fn a_list_item_paints_two_fields_for_env_and_one_for_args() {
+        let f = fixture();
+        let m = Metrics::from_config(&f.config, 52.0);
+        let field_boxes = |out: &[Primitive]| {
+            out.iter()
+                .filter(|p| {
+                    matches!(p, Primitive::RoundedQuad(q)
+                        if q.color == f.pal.editor_input_background && q.rect.height == m.field_height)
+                })
+                .count()
+        };
+        let mut draft = env_draft(&f, &[("A", "1")]);
+        let args = option("shell_args").unwrap();
+        let _ = draft.set_rows(args, &[("-l".to_owned(), String::new())]);
+        let (out, ..) = paint_group(&f, Group::Shell, &draft, None, "shell_env", |_| None, None);
+        // `shell.program` (1 campo), `shell.args` (1) e `shell.env` (2).
+        let text_fields = out
+            .iter()
+            .filter(|p| matches!(p, Primitive::RoundedQuad(q) if q.rect.width == m.text_field_width && q.color == f.pal.editor_input_background))
+            .count();
+        assert_eq!(text_fields, 2, "program e o item de args");
+        assert_eq!(field_boxes(&out), 4);
+    }
+
+    #[test]
+    fn hovering_a_list_x_gives_it_the_close_button_hover_and_the_add_item_the_menu_hover() {
+        let f = fixture();
+        let draft = env_draft(&f, &[("A", "1")]);
+        let hovered = |part: layout::ControlPart| move |i| Some(Hit::Control(i, part));
+        let (out, ..) = paint_group(
+            &f,
+            Group::Shell,
+            &draft,
+            None,
+            "shell_env",
+            hovered(layout::ControlPart::ListRemove(0)),
+            None,
+        );
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == RESTORE_HOVER_BACKGROUND
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == icon::X.glyph && run.color == RESTORE_HOVER_ICON
+        )));
+        // Sem o cursor no `X`, ele é o ícone do repouso `#727a86`.
+        let (out, ..) = paint_group(&f, Group::Shell, &draft, None, "shell_env", |_| None, None);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == icon::X.glyph && run.color == RESTORE_ICON
+        )));
+        let (out, ..) = paint_group(
+            &f,
+            Group::Shell,
+            &draft,
+            None,
+            "shell_env",
+            hovered(layout::ControlPart::ListAdd),
+            None,
+        );
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == f.pal.menu_item_hover
+        )));
+    }
+
+    #[test]
+    fn an_edited_list_field_paints_the_accent_ring_and_the_cursor() {
+        let f = fixture();
+        let draft = env_draft(&f, &[("A", "1")]);
+        let (_, _, index) =
+            paint_group(&f, Group::Shell, &draft, None, "shell_env", |_| None, None);
+        let editing = Editing::new(index, EditPart::ListSecond(0), "1".to_owned());
+        let (out, ..) = paint_group(
+            &f,
+            Group::Shell,
+            &draft,
+            None,
+            "shell_env",
+            |_| None,
+            Some(&editing),
+        );
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.border_color == f.pal.dialog_focus_ring
+                && q.color == f.pal.editor_input_background
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Quad(q) if q.rect.width == 1.0 && q.color == f.pal.editor_input_text
+        )));
+    }
+
+    #[test]
+    fn the_trusted_paths_warning_paints_in_the_warning_color_line_by_line() {
+        let f = fixture();
+        let draft = Draft::new(&f.config);
+        let (out, content, _) = paint_group(
+            &f,
+            Group::Project,
+            &draft,
+            None,
+            "trusted_paths",
+            |_| None,
+            None,
+        );
+        let lines = content
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::Note { lines, .. } => Some(lines.clone()),
+                _ => None,
+            })
+            .unwrap();
+        for line in &lines {
+            assert!(
+                out.iter().any(|p| matches!(
+                    p,
+                    Primitive::Text(run) if &run.text == line
+                        && run.color == f.pal.warning_severity_warning
+                )),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_session_theme_note_paints_muted_and_the_chosen_theme_gets_the_accent_border() {
+        let f = fixture();
+        let mut draft = Draft::new(&f.config);
+        let second = f.config.themes[1].name.clone();
+        draft
+            .set(
+                option("theme").unwrap(),
+                porecatu_config::EditValue::String(second),
+            )
+            .unwrap();
+        let (out, content, _) = paint_group(
+            &f,
+            Group::Appearance,
+            &draft,
+            Some("nord"),
+            "theme",
+            |_| None,
+            None,
+        );
+        let note = content
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::Note { lines, .. } => Some(lines.join(" ")),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(note, "Esta sessão está usando o tema nord.");
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == note && run.color == f.pal.status_bar_stale_cwd
+        )));
+        // Uma linha só leva a borda de Acento: a do tema escolhido.
+        let accent_rows = out
+            .iter()
+            .filter(|p| {
+                matches!(p, Primitive::RoundedQuad(q)
+                if q.color == ROW_BACKGROUND && q.border_color == f.pal.dialog_focus_ring)
+            })
+            .count();
+        assert_eq!(accent_rows, 1);
+        // E o ponto de pendente fica nela.
+        assert_eq!(dots(&out, &f), 1);
     }
 }

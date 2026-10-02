@@ -14,14 +14,71 @@ use porecatu_config::EditValue;
 use super::catalog::{Control, OptionDef};
 use crate::text_field::TextFieldState;
 
-/// Qual campo de uma linha está em edição. Só `git.remote_poll_interval_secs`
-/// tem dois controles na mesma linha.
+/// Qual campo de uma linha está em edição. `git.remote_poll_interval_secs`
+/// tem dois controles na mesma linha, e as listas têm um ou dois campos por
+/// item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EditPart {
     /// O campo de texto ou numérico da linha.
     Field,
     /// O número de segundos de `git.remote_poll_interval_secs`.
     GitSeconds,
+    /// O primeiro campo do item `n` de uma lista: o texto, ou o nome de uma
+    /// variável de ambiente.
+    ListFirst(usize),
+    /// O valor do item `n` da lista de nome e valor.
+    ListSecond(usize),
+}
+
+impl EditPart {
+    /// O item da lista que este campo é, se for de lista.
+    pub(crate) fn list_item(self) -> Option<usize> {
+        match self {
+            EditPart::ListFirst(item) | EditPart::ListSecond(item) => Some(item),
+            EditPart::Field | EditPart::GitSeconds => None,
+        }
+    }
+
+    /// O mesmo campo, no item `item`.
+    pub(crate) fn at_item(self, item: usize) -> Self {
+        match self {
+            EditPart::ListFirst(_) => EditPart::ListFirst(item),
+            EditPart::ListSecond(_) => EditPart::ListSecond(item),
+            other => other,
+        }
+    }
+
+    /// O campo seguinte (ou anterior) de uma lista de `count` itens, com
+    /// `two_fields` campos por item -- a ordem de leitura: nome, valor,
+    /// próximo item. `None` nas pontas: quem chama sai da lista.
+    pub(crate) fn next_in_list(
+        self,
+        count: usize,
+        two_fields: bool,
+        backwards: bool,
+    ) -> Option<Self> {
+        let (item, second) = match self {
+            EditPart::ListFirst(item) => (item, false),
+            EditPart::ListSecond(item) => (item, true),
+            EditPart::Field | EditPart::GitSeconds => return None,
+        };
+        let per_item = if two_fields { 2 } else { 1 };
+        let at = item * per_item + usize::from(second);
+        let next = if backwards {
+            at.checked_sub(1)?
+        } else {
+            at + 1
+        };
+        if next >= count * per_item {
+            return None;
+        }
+        let (item, second) = (next / per_item, next % per_item == 1);
+        Some(if second {
+            EditPart::ListSecond(item)
+        } else {
+            EditPart::ListFirst(item)
+        })
+    }
 }
 
 /// Um campo em edição.
@@ -223,5 +280,31 @@ mod tests {
         assert!(!editing.changed());
         editing.state.insert_char('5');
         assert!(editing.changed());
+    }
+
+    #[test]
+    fn list_fields_walk_name_value_then_the_next_item() {
+        use EditPart::{ListFirst as First, ListSecond as Second};
+        // Dois itens de nome e valor: nome, valor, nome, valor.
+        assert_eq!(First(0).next_in_list(2, true, false), Some(Second(0)));
+        assert_eq!(Second(0).next_in_list(2, true, false), Some(First(1)));
+        assert_eq!(Second(1).next_in_list(2, true, false), None);
+        assert_eq!(First(1).next_in_list(2, true, true), Some(Second(0)));
+        assert_eq!(First(0).next_in_list(2, true, true), None);
+        // Uma lista de textos tem um campo por item.
+        assert_eq!(First(0).next_in_list(3, false, false), Some(First(1)));
+        assert_eq!(First(2).next_in_list(3, false, false), None);
+        assert_eq!(First(2).next_in_list(3, false, true), Some(First(1)));
+        // Campo que não é de lista não anda.
+        assert_eq!(EditPart::Field.next_in_list(3, false, false), None);
+    }
+
+    #[test]
+    fn a_list_field_moves_to_another_item_keeping_its_column() {
+        assert_eq!(EditPart::ListSecond(1).at_item(4), EditPart::ListSecond(4));
+        assert_eq!(EditPart::ListFirst(1).at_item(0), EditPart::ListFirst(0));
+        assert_eq!(EditPart::Field.at_item(3), EditPart::Field);
+        assert_eq!(EditPart::ListSecond(2).list_item(), Some(2));
+        assert_eq!(EditPart::GitSeconds.list_item(), None);
     }
 }

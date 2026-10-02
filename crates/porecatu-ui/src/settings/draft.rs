@@ -71,6 +71,12 @@ pub(crate) struct Draft {
     /// Por identificador de opção. `Vec` e não mapa: são poucas, e a ordem de
     /// `edits` sai da tabela, não da inserção.
     pending: Vec<(&'static str, Pending)>,
+    /// As linhas de uma lista (`shell.args`, `trusted_paths`, `shell.env`)
+    /// **como a tela as mostra**: na ordem em que o usuário as pôs, e com o
+    /// que o `EditValue` já não comporta -- nome vazio, nome repetido, a
+    /// ordem de um mapa. Guardadas enquanto a lista é editada; Descartar,
+    /// Restaurar e Salvar as soltam.
+    rows: Vec<(&'static str, Vec<(String, String)>)>,
 }
 
 impl Draft {
@@ -79,6 +85,7 @@ impl Draft {
         Self {
             file: file.clone(),
             pending: Vec::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -233,32 +240,65 @@ impl Draft {
         }
     }
 
-    /// Lista de nome e valor (`shell.env`), como as linhas que a tela mostra:
-    /// aqui é que nome vazio e nome repetido são vistos, porque o mapa do
-    /// `EditValue` já não os pode ter.
+    /// As linhas de uma lista como a tela as mostra: as que o usuário
+    /// montou, ou -- sem edição -- as do valor em vista. Uma lista de textos
+    /// (`shell.args`, `trusted_paths`) tem o texto no primeiro campo e o
+    /// segundo vazio; a de nome e valor (`shell.env`), o nome e o valor.
+    pub(crate) fn rows(&self, option: &OptionDef) -> Vec<(String, String)> {
+        if let Some((_, rows)) = self.rows.iter().find(|(id, _)| *id == option.id) {
+            return rows.clone();
+        }
+        match self.value(option) {
+            EditValue::StringList(items) => items
+                .into_iter()
+                .map(|item| (item, String::new()))
+                .collect(),
+            EditValue::StringMap(map) => map.into_iter().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Quais `rows` da lista estão recusadas: nome vazio ou repetido
+    /// (RF-16.18, RF-16.26). Só a lista de nome e valor recusa linha; a de
+    /// textos aceita qualquer uma.
+    pub(crate) fn invalid_rows(option: &OptionDef, rows: &[(String, String)]) -> Vec<bool> {
+        if option.control != Control::StringMap {
+            return vec![false; rows.len()];
+        }
+        rows.iter()
+            .map(|(name, _)| {
+                name.is_empty() || rows.iter().filter(|(other, _)| other == name).count() > 1
+            })
+            .collect()
+    }
+
+    /// Põe as linhas de uma lista (RF-16.26): guarda a ordem e o que foi
+    /// digitado, e valida -- é aqui que nome vazio e nome repetido são vistos,
+    /// porque o mapa do `EditValue` já não os pode ter. Recusadas, ficam no
+    /// rascunho, marcadas, e bloqueiam o Salvar.
     pub(crate) fn set_rows(
         &mut self,
         option: &OptionDef,
         rows: &[(String, String)],
     ) -> Result<(), ValueError> {
-        let mut seen = HashSet::new();
-        let mut error = None;
-        for (name, _) in rows {
-            if name.is_empty() {
-                error = Some(ValueError::EmptyName);
-                break;
-            }
-            if !seen.insert(name.as_str()) {
-                error = Some(ValueError::DuplicateName(name.clone()));
-                break;
-            }
+        match self.rows.iter_mut().find(|(id, _)| *id == option.id) {
+            Some((_, slot)) => *slot = rows.to_vec(),
+            None => self.rows.push((option.id, rows.to_vec())),
         }
-        match error {
-            None => {
-                let map: BTreeMap<String, String> = rows.iter().cloned().collect();
-                self.set(option, EditValue::StringMap(map))
+        if option.control == Control::StringMap {
+            let mut seen = HashSet::new();
+            let mut error = None;
+            for (name, _) in rows {
+                if name.is_empty() {
+                    error = Some(ValueError::EmptyName);
+                    break;
+                }
+                if !seen.insert(name.as_str()) {
+                    error = Some(ValueError::DuplicateName(name.clone()));
+                    break;
+                }
             }
-            Some(error) => {
+            if let Some(error) = error {
                 self.put(
                     option,
                     Pending::Invalid {
@@ -266,8 +306,13 @@ impl Draft {
                         error: error.clone(),
                     },
                 );
-                Err(error)
+                return Err(error);
             }
+            let map: BTreeMap<String, String> = rows.iter().cloned().collect();
+            self.set(option, EditValue::StringMap(map))
+        } else {
+            let items = rows.iter().map(|(item, _)| item.clone()).collect();
+            self.set(option, EditValue::StringList(items))
         }
     }
 
@@ -282,17 +327,20 @@ impl Draft {
             self.clear(option);
         } else {
             self.put(option, Pending::Reset);
+            self.rows.retain(|(id, _)| *id != option.id);
         }
     }
 
     /// Desfaz a pendência de `option`.
     pub(crate) fn clear(&mut self, option: &OptionDef) {
         self.pending.retain(|(id, _)| *id != option.id);
+        self.rows.retain(|(id, _)| *id != option.id);
     }
 
     /// Descartar (RF-16.15): nenhuma pendência, de volta ao que o arquivo diz.
     pub(crate) fn discard(&mut self) {
         self.pending.clear();
+        self.rows.clear();
     }
 
     /// O que o arquivo diz mudou -- uma recarga que não veio do Salvar da
@@ -313,6 +361,10 @@ impl Draft {
                 Pending::Invalid { .. } => true,
             }
         });
+        // A ordem montada de uma lista sem pendência é do arquivo antigo.
+        let pending = &self.pending;
+        self.rows
+            .retain(|(id, _)| pending.iter().any(|(pending_id, _)| pending_id == id));
     }
 
     /// Salvar deu certo: o arquivo agora diz `saved` (o texto gravado,
@@ -321,6 +373,7 @@ impl Draft {
     pub(crate) fn commit(&mut self, saved: &Config) {
         self.file = saved.clone();
         self.pending.clear();
+        self.rows.clear();
     }
 
     // ---- internos
@@ -335,7 +388,9 @@ impl Draft {
     /// Grava um valor **válido**: igual ao do arquivo é o mesmo que nada.
     fn record(&mut self, option: &OptionDef, value: EditValue) {
         if value == self.file_value(option) {
-            self.clear(option);
+            // Só a pendência: a ordem montada de uma lista fica, para a tela
+            // não saltar de volta (as linhas saem em `discard`/`commit`).
+            self.pending.retain(|(id, _)| *id != option.id);
         } else {
             self.put(option, Pending::Value(value));
         }
@@ -706,6 +761,86 @@ mod tests {
         // Voltar a nenhuma variável é voltar ao arquivo.
         draft.set_rows(env, &[]).unwrap();
         assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn a_list_keeps_the_order_and_the_refused_rows_the_user_built() {
+        let mut draft = draft();
+        let env = opt("shell_env");
+        let row = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        // Uma linha nova, ainda sem nome: recusada, mas continua na tela.
+        let building = [row("B", "2"), row("", ""), row("A", "1")];
+        assert_eq!(draft.set_rows(env, &building), Err(ValueError::EmptyName));
+        assert_eq!(draft.rows(env), building);
+        assert_eq!(
+            Draft::invalid_rows(env, &building),
+            [false, true, false],
+            "só a linha sem nome é marcada"
+        );
+        // Preenchida, vale, e a ordem montada fica (o mapa gravado é
+        // ordenado, a tela não salta).
+        let built = [row("B", "2"), row("C", "3"), row("A", "1")];
+        draft.set_rows(env, &built).unwrap();
+        assert_eq!(draft.rows(env), built);
+        // Descartar volta ao arquivo.
+        draft.discard();
+        assert!(draft.rows(env).is_empty());
+    }
+
+    #[test]
+    fn repeated_names_are_all_marked() {
+        let env = opt("shell_env");
+        let row = |name: &str| (name.to_owned(), String::new());
+        assert_eq!(
+            Draft::invalid_rows(env, &[row("A"), row("B"), row("A")]),
+            [true, false, true]
+        );
+        // Uma lista de textos aceita linha vazia e repetida.
+        let args = opt("shell_args");
+        assert_eq!(
+            Draft::invalid_rows(args, &[row(""), row("")]),
+            [false, false]
+        );
+    }
+
+    #[test]
+    fn a_text_list_is_edited_as_rows_with_an_empty_second_field() {
+        let mut draft = draft_from(
+            "[shell]
+args = [\"-l\", \"-i\"]
+",
+        );
+        let args = opt("shell_args");
+        let row = |item: &str| (item.to_owned(), String::new());
+        assert_eq!(draft.rows(args), [row("-l"), row("-i")]);
+        draft.set_rows(args, &[row("-i"), row("-l")]).unwrap();
+        assert!(draft.is_pending(args), "a ordem de shell.args importa");
+        assert_eq!(
+            draft.edits(),
+            [Edit::Set(
+                args.key_path(),
+                EditValue::StringList(vec!["-i".into(), "-l".into()])
+            )]
+        );
+        draft.set_rows(args, &[row("-l"), row("-i")]).unwrap();
+        assert!(!draft.is_pending(args));
+    }
+
+    #[test]
+    fn reordering_an_env_list_is_not_a_pending_change() {
+        let mut draft = draft_from(
+            "[shell.env]
+A = \"1\"
+B = \"2\"
+",
+        );
+        let env = opt("shell_env");
+        let row = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        draft
+            .set_rows(env, &[row("B", "2"), row("A", "1")])
+            .unwrap();
+        assert!(!draft.is_pending(env), "o mapa gravado é o mesmo");
+        assert_eq!(draft.rows(env), [row("B", "2"), row("A", "1")]);
     }
 
     #[test]

@@ -274,6 +274,10 @@ pub(crate) enum BlockSpec {
         two_lines: bool,
         reason: bool,
     },
+    /// Uma nota de `lines` linhas de 11px, fora de qualquer linha de opção: o
+    /// aviso dos diretórios autorizados (RF-16.27) e a linha do tema da
+    /// sessão (RF-16.25).
+    Note { lines: usize },
 }
 
 /// A geometria de uma linha de opção, em coordenadas de **conteúdo** (ver
@@ -296,8 +300,15 @@ pub(crate) struct RowGeometry {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum BlockGeometry {
-    Section { label_origin: (f32, f32) },
+    Section {
+        label_origin: (f32, f32),
+    },
     Row(RowGeometry),
+    /// Uma nota: onde a primeira linha começa e a altura de cada uma.
+    Note {
+        origin: (f32, f32),
+        line_height: f32,
+    },
 }
 
 /// O painel inteiro, sem rolagem: `x` é relativo à borda esquerda do painel e
@@ -405,6 +416,20 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 y += height;
                 previous_was_row = true;
             }
+            BlockSpec::Note { lines } => {
+                // Como uma linha de opção para o espaçamento: o vão do que
+                // vem antes e do que vem depois é o `row_gap`.
+                if previous_was_row {
+                    y += m.row_gap;
+                }
+                let line_height = m.description_size + NAME_DESCRIPTION_GAP;
+                blocks.push(BlockGeometry::Note {
+                    origin: (x, y),
+                    line_height,
+                });
+                y += lines as f32 * line_height;
+                previous_was_row = true;
+            }
         }
         first = false;
     }
@@ -507,6 +532,94 @@ pub(crate) enum ControlPart {
     GitToggle,
     /// O número de `git.remote_poll_interval_secs`.
     GitNumber,
+    /// O campo `second` (o valor, não o nome) do item `item` de uma lista.
+    ListField {
+        item: usize,
+        second: bool,
+    },
+    /// O `X` que remove o item.
+    ListRemove(usize),
+    /// O item "Adicionar" no fim da lista.
+    ListAdd,
+}
+
+/// Onde ficam os campos e o `X` de um item de lista.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ListItemRects {
+    /// O campo do texto, ou o do nome da variável.
+    pub first: Rect,
+    /// O campo do valor, só na lista de nome e valor.
+    pub second: Option<Rect>,
+    pub remove: Rect,
+}
+
+/// A geometria de uma lista dentro do retângulo do controle dela: um item por
+/// linha -- campo de `text_field_width` (dividido em nome, `text_field_width
+/// / 2`, e valor, o resto, quando `two_fields`) e o `X` à direita do campo,
+/// com `list_gap` entre as partes -- e o item "Adicionar" logo abaixo
+/// (ADR-0060 §3). A conta de [`ControlView::size`](super::content::ControlView::size).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ListGeometry {
+    pub items: Vec<ListItemRects>,
+    pub add: Rect,
+}
+
+pub(crate) fn list_geometry(
+    control: Rect,
+    m: &Metrics,
+    count: usize,
+    two_fields: bool,
+) -> ListGeometry {
+    let mut items = Vec::with_capacity(count);
+    for index in 0..count {
+        let y = control.y + index as f32 * (m.field_height + m.list_gap);
+        let (first, second) = if two_fields {
+            let name_width = (m.text_field_width / 2.0).floor();
+            let value_width = (m.text_field_width - name_width - m.list_gap).max(0.0);
+            (
+                Rect {
+                    x: control.x,
+                    y,
+                    width: name_width,
+                    height: m.field_height,
+                },
+                Some(Rect {
+                    x: control.x + name_width + m.list_gap,
+                    y,
+                    width: value_width,
+                    height: m.field_height,
+                }),
+            )
+        } else {
+            (
+                Rect {
+                    x: control.x,
+                    y,
+                    width: m.text_field_width,
+                    height: m.field_height,
+                },
+                None,
+            )
+        };
+        let remove = Rect {
+            x: control.x + m.text_field_width + m.list_gap,
+            y: y + (m.field_height - m.restore_height) / 2.0,
+            width: m.restore_width,
+            height: m.restore_height,
+        };
+        items.push(ListItemRects {
+            first,
+            second,
+            remove,
+        });
+    }
+    let add = Rect {
+        x: control.x,
+        y: control.y + count as f32 * (m.field_height + m.list_gap),
+        width: m.text_field_width,
+        height: m.sidebar_item_height,
+    };
+    ListGeometry { items, add }
 }
 
 /// O alvo sob `point` (coordenadas lógicas de janela): guia, rodapé ou linha
@@ -1026,5 +1139,116 @@ mod tests {
     fn a_focus_that_vanished_restarts_at_the_sidebar() {
         let order = focus_order(&[1], &[FooterButton::OpenFile]);
         assert_eq!(next_focus(&order, Focus::Row(9), false), Focus::Sidebar);
+    }
+
+    // ---- listas e notas
+
+    fn control_rect() -> Rect {
+        Rect {
+            x: 300.0,
+            y: 100.0,
+            width: 280.0,
+            height: 200.0,
+        }
+    }
+
+    #[test]
+    fn list_items_stack_with_the_gap_and_the_remove_button_sits_beside_the_field() {
+        let m = metrics();
+        let geometry = list_geometry(control_rect(), &m, 3, false);
+        assert_eq!(geometry.items.len(), 3);
+        for (index, item) in geometry.items.iter().enumerate() {
+            assert_eq!(
+                item.first.y,
+                100.0 + index as f32 * (m.field_height + m.list_gap)
+            );
+            assert_eq!(item.first.width, m.text_field_width);
+            assert_eq!(item.second, None);
+            // O `X` fica depois do campo, com o vão, e centrado nele.
+            assert_eq!(item.remove.x, item.first.x + item.first.width + m.list_gap);
+            assert_eq!(
+                item.remove.y + item.remove.height / 2.0,
+                item.first.y + item.first.height / 2.0
+            );
+            assert_eq!(
+                (item.remove.width, item.remove.height),
+                (m.restore_width, m.restore_height)
+            );
+        }
+        // O "Adicionar" vem logo depois do último item, na largura do campo.
+        let last = geometry.items[2].first;
+        assert_eq!(geometry.add.y, last.y + m.field_height + m.list_gap);
+        assert_eq!(geometry.add.width, m.text_field_width);
+        assert_eq!(geometry.add.height, m.sidebar_item_height);
+    }
+
+    #[test]
+    fn the_list_geometry_matches_the_height_the_control_reserves() {
+        let m = metrics();
+        for count in [0, 1, 4] {
+            let geometry = list_geometry(control_rect(), &m, count, true);
+            let bottom = geometry.add.y + geometry.add.height;
+            let reserved = count as f32 * (m.field_height + m.list_gap) + m.sidebar_item_height;
+            assert_eq!(bottom - control_rect().y, reserved);
+        }
+    }
+
+    #[test]
+    fn an_env_item_splits_name_half_and_value_the_rest_with_the_gap_between() {
+        let m = metrics();
+        let item = list_geometry(control_rect(), &m, 1, true).items[0];
+        let second = item.second.expect("o valor");
+        assert_eq!(item.first.width, (m.text_field_width / 2.0).floor());
+        assert_eq!(second.x, item.first.x + item.first.width + m.list_gap);
+        // Nome, vão e valor ocupam exatamente a largura do campo.
+        assert_eq!(
+            second.x + second.width,
+            control_rect().x + m.text_field_width
+        );
+        assert_eq!(second.y, item.first.y);
+    }
+
+    #[test]
+    fn a_note_takes_its_lines_and_spaces_like_a_row() {
+        let m = metrics();
+        let row = BlockSpec::Row {
+            control: (m.text_field_width, m.field_height),
+            two_lines: true,
+            reason: false,
+        };
+        let specs = [
+            BlockSpec::Section,
+            BlockSpec::Note { lines: 3 },
+            row,
+            row,
+            BlockSpec::Note { lines: 1 },
+        ];
+        let geometry = panel_geometry(&m, 700.0, &specs);
+        let BlockGeometry::Note {
+            origin,
+            line_height,
+        } = geometry.blocks[1]
+        else {
+            panic!()
+        };
+        assert_eq!(line_height, m.description_size + NAME_DESCRIPTION_GAP);
+        assert_eq!(origin.0, m.panel_padding);
+        let (BlockGeometry::Row(first), BlockGeometry::Row(second)) =
+            (geometry.blocks[2], geometry.blocks[3])
+        else {
+            panic!()
+        };
+        // A linha vem depois das três linhas da nota, com o vão entre linhas.
+        assert_eq!(first.rect.y, origin.1 + 3.0 * line_height + m.row_gap);
+        assert_eq!(second.rect.y, first.rect.y + first.rect.height + m.row_gap);
+        // A nota depois da última linha também guarda o vão.
+        let BlockGeometry::Note { origin: last, .. } = geometry.blocks[4] else {
+            panic!()
+        };
+        assert_eq!(last.1, second.rect.y + second.rect.height + m.row_gap);
+        assert_eq!(
+            geometry.content_height,
+            last.1 + line_height + m.panel_padding
+        );
     }
 }

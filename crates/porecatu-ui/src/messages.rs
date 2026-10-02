@@ -436,6 +436,7 @@ registry! {
             project_file_enabled_description(),
             trusted_paths_label(),
             trusted_paths_description(),
+            trusted_paths_warning(),
             git_remote_poll_label(),
             git_remote_poll_description(),
             min_columns_label(),
