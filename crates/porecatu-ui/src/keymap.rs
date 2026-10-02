@@ -734,6 +734,38 @@ mod tests {
         );
     }
 
+    /// ADR-0059 §6: `settings.open` e `config.reload` nunca dividem a tecla,
+    /// e no macOS `Cmd+,` é a convenção de "Ajustes…".
+    #[test]
+    fn settings_open_and_config_reload_defaults() {
+        let empty = keybindings_with(&[]);
+        let action_of = |platform, chord: &str| {
+            resolve(&empty, platform)
+                .bindings
+                .get(&Chord::parse(chord).unwrap())
+                .copied()
+        };
+        for platform in [Platform::Windows, Platform::Linux] {
+            assert_eq!(
+                action_of(platform, "ctrl+shift+o"),
+                Some(Action::SettingsOpen)
+            );
+            assert_eq!(
+                action_of(platform, "ctrl+shift+comma"),
+                Some(Action::ConfigReload)
+            );
+            assert_eq!(action_of(platform, "cmd+comma"), None);
+        }
+        assert_eq!(
+            action_of(Platform::Macos, "cmd+comma"),
+            Some(Action::SettingsOpen)
+        );
+        assert_eq!(
+            action_of(Platform::Macos, "cmd+shift+comma"),
+            Some(Action::ConfigReload)
+        );
+    }
+
     #[test]
     fn app_quit_only_has_a_default_on_macos() {
         let empty = keybindings_with(&[]);

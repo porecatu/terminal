@@ -77,6 +77,11 @@ fn common_defaults() -> BTreeMap<String, String> {
         ("ctrl+0", "font.reset"),
         ("ctrl+shift+y", "theme.cycle"),
         ("ctrl+shift+comma", "config.reload"),
+        // Janela de configurações (RF-16.1, ADR-0059 §6). `ctrl+,` sozinho
+        // sairia da regra do ADR-0008 e `ctrl+shift+comma` já é
+        // `config.reload`; no macOS a entrada própria está em
+        // `macos_defaults`.
+        ("ctrl+shift+o", "settings.open"),
         // "ctrl+shift+p" fica reservado pra `command.palette` (PRD-008,
         // [v2]) no arquivo de exemplo, comentado -- a ação não existe no
         // catálogo fechado da F4 (etapa 5, docs/reference/acoes.md), só o
@@ -141,7 +146,11 @@ fn macos_defaults() -> BTreeMap<String, String> {
         ("cmd+minus", "font.decrease"),
         ("cmd+0", "font.reset"),
         ("cmd+shift+y", "theme.cycle"),
-        ("cmd+comma", "config.reload"),
+        // `cmd+comma` é a convenção do sistema para "Ajustes…": passou de
+        // `config.reload` a `settings.open`, e o reload foi para
+        // `cmd+shift+comma` (RF-16.1, ADR-0059 §6).
+        ("cmd+comma", "settings.open"),
+        ("cmd+shift+comma", "config.reload"),
         ("cmd+q", "app.quit"),
         // Mesma reserva de nome sem default embutido -- ver comentário em
         // `common_defaults`.
@@ -169,13 +178,29 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         let bindings = Keybindings::default();
-        assert_eq!(bindings.common.len(), 40);
+        assert_eq!(bindings.common.len(), 41);
         assert_eq!(
             bindings.common.get("ctrl+shift+t"),
             Some(&"tab.new".to_owned())
         );
-        assert_eq!(bindings.macos.len(), 36);
+        assert_eq!(bindings.macos.len(), 37);
         assert_eq!(bindings.macos.get("cmd+q"), Some(&"app.quit".to_owned()));
+        assert_eq!(
+            bindings.common.get("ctrl+shift+o"),
+            Some(&"settings.open".to_owned())
+        );
+        assert_eq!(
+            bindings.common.get("ctrl+shift+comma"),
+            Some(&"config.reload".to_owned())
+        );
+        assert_eq!(
+            bindings.macos.get("cmd+comma"),
+            Some(&"settings.open".to_owned())
+        );
+        assert_eq!(
+            bindings.macos.get("cmd+shift+comma"),
+            Some(&"config.reload".to_owned())
+        );
         assert!(bindings.windows.is_empty());
         assert!(bindings.linux.is_empty());
     }

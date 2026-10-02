@@ -230,7 +230,8 @@ usados, no default de fábrica:
 | `F3` / `Shift+F3` | igual | Próxima/anterior ocorrência da busca |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | `Cmd++` / `Cmd+-` / `Cmd+0` | Zoom da fonte (aumentar/diminuir/resetar) |
 | `Ctrl+Shift+Y` | `Cmd+Y` | Alternar tema |
-| `Ctrl+Shift+,` | `Cmd+,` | Recarregar config na hora |
+| `Ctrl+Shift+O` | `Cmd+,` | Abrir as configurações (por ora, o arquivo no editor) |
+| `Ctrl+Shift+,` | `Cmd+Shift+,` | Recarregar config na hora |
 
 Todo atalho é reconfigurável na seção `[keybindings]` (e
 `[keybindings.macos]`/`[keybindings.linux]`/`[keybindings.windows]` para

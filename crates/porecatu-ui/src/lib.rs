@@ -876,6 +876,10 @@ enum ActionOutcome {
     /// `config.reload` (ADR-0003, F4 etapa 5): o `Arc<Config>` e o watcher
     /// são do processo, não da janela -- só `App` sabe relê-lo.
     ReloadConfig,
+    /// `settings.open` (RF-16.1, ADR-0059 §6): a janela de configurações é
+    /// do processo, não de uma janela de terminal -- e o caminho do arquivo
+    /// só `App` tem. Também é o que a engrenagem dispara.
+    OpenSettings,
     /// `font.increase`/`decrease`/`reset` (RF-5.9, F4 etapa 6): a métrica
     /// de célula é do processo (ADR-0015), então só `App` recalcula e
     /// redimensiona todos os PTYs.
@@ -937,10 +941,11 @@ enum NewTabRequest {
     /// vive em `App` -- `WindowState` não pode resolver isto sozinho, mesmo
     /// motivo de `WindowEmptied`.
     CloseWindowRequested,
-    /// Botão de configurações (RF-11.27): `self.config_path` (o caminho já
-    /// resolvido no arranque, ADR-0003) só existe em `App`, não em
-    /// `WindowState` -- mesmo motivo de `CloseWindowRequested`.
-    OpenConfigFile,
+    /// Botão de configurações (RF-16.1, ADR-0059 §6): dispara `settings.open`,
+    /// que `App` resolve -- o mesmo caminho do atalho, `ActionOutcome::
+    /// OpenSettings`. `WindowState` não pode, pelo mesmo motivo de
+    /// `CloseWindowRequested`.
+    OpenSettings,
     /// Botão de sessões nomeadas (ADR-0054/ADR-0055): `WindowState::
     /// open_session_picker` resolve sozinho, mas o hit-test do botão só
     /// devolve `NewTabRequest` -- vive na mesma enumeração dos outros
@@ -3583,6 +3588,9 @@ impl WindowState {
             // `Arc<Config>` são do processo, não da janela) -- bubble
             // igual a `OpenWindow`/`CloseWindowRequested`.
             Action::ConfigReload => ActionOutcome::ReloadConfig,
+            // `settings.open` (RF-16.1): a janela é do processo -- bubble
+            // pra `App`, mesmo caminho de `ReloadConfig`.
+            Action::SettingsOpen => ActionOutcome::OpenSettings,
             // RF-5.9: a métrica de célula é do processo (ADR-0015) --
             // bubble pra `App`, mesmo caminho de `ReloadConfig`.
             Action::FontIncrease => ActionOutcome::Zoom(Zoom::Increase),
@@ -3803,10 +3811,10 @@ impl WindowState {
             // Botão de configurações (RF-11.27): zona fixa à direita, fora
             // da trilha que rola -- resolvido em coordenadas de tela, como
             // as pílulas de overflow logo abaixo, não pelo hit-test de
-            // conteúdo. Abrir o arquivo é decisão de `App` (precisa de
-            // `config_path`), então só sobe o pedido.
+            // conteúdo. Dispara `settings.open` (ADR-0059 §6), que é decisão
+            // de `App`, então só sobe o pedido.
             if tab_bar::point_in_settings_button(style, bar_width, h, is_macos(), logical_point) {
-                return NewTabRequest::OpenConfigFile;
+                return NewTabRequest::OpenSettings;
             }
             if overflow.hidden_left > 0
                 && tab_bar::point_in_overflow_pill(
@@ -7250,11 +7258,28 @@ impl App {
         }
     }
 
+    /// `settings.open` do catálogo (RF-16.1, ADR-0059 §6), disparada pelo
+    /// atalho e pela engrenagem. **Provisório**: enquanto a janela de
+    /// configurações não existe, faz o que a engrenagem sempre fez -- abre o
+    /// arquivo no editor, avisando na janela de origem se falhar.
+    fn open_settings(&mut self, window_id: WindowId) {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        open_config_file(
+            self.config_path.as_deref(),
+            &mut state.warnings,
+            &self.catalog,
+            Instant::now(),
+        );
+        state.window.request_redraw();
+    }
+
     /// `config.reload` do catálogo (`docs/reference/acoes.md`, ADR-0003):
     /// relê o arquivo na hora, sem esperar o `notify` -- útil quando o
     /// watcher não disparou (editor que grava por outro caminho, arquivo
-    /// em rede). Ligado a `ctrl+shift+comma`/`cmd+comma` desde a F4 etapa
-    /// 5, via `ActionOutcome::ReloadConfig`.
+    /// em rede). Ligado a `ctrl+shift+comma`/`cmd+shift+comma` (era
+    /// `cmd+comma` até o ADR-0059), via `ActionOutcome::ReloadConfig`.
     fn reload_config_now(&mut self, now: Instant) {
         let Some(path) = self.config_path.clone() else {
             return;
@@ -8056,6 +8081,7 @@ impl App {
                     state.window.request_redraw();
                 }
             }
+            ActionOutcome::OpenSettings => self.open_settings(window_id),
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
             ActionOutcome::CycleTheme => self.cycle_theme(Instant::now()),
             // ADR-0055 §3: `session.save_named` abre em edição (campo em
@@ -9525,15 +9551,7 @@ impl App {
                 NewTabRequest::CloseWindowRequested => {
                     self.request_close_window(window_id, event_loop);
                 }
-                NewTabRequest::OpenConfigFile => {
-                    open_config_file(
-                        self.config_path.as_deref(),
-                        &mut state.warnings,
-                        &self.catalog,
-                        Instant::now(),
-                    );
-                    state.window.request_redraw();
-                }
+                NewTabRequest::OpenSettings => self.open_settings(window_id),
                 // ADR-0055 §3: clique no botão abre em navegação. "Clicar
                 // de novo com ele aberto fecha" já sai de graça: com o
                 // popover aberto, `dispatch_session_picker_click`
