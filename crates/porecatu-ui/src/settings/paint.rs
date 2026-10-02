@@ -16,7 +16,8 @@ use porecatu_render::{
 };
 
 use super::content::{
-    Block, Content, ControlView, ListItemView, NoteTone, RowView, SWATCH_COUNT, SWATCH_GAP,
+    Block, CHIP_FONT, ChipTone, ChipView, Content, ControlView, ListItemView, NoteTone, RowView,
+    SWATCH_COUNT, SWATCH_GAP,
 };
 use super::field_edit::{EditPart, Editing};
 use super::layout::{
@@ -24,8 +25,8 @@ use super::layout::{
     RowGeometry, list_geometry,
 };
 use super::{
-    Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON, RESTORE_ICON, RESTORE_RADIUS,
-    ROW_BACKGROUND, TOGGLE_OFF, TOGGLE_ON,
+    CHIP_BACKGROUND, CHIP_BORDER, Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON,
+    RESTORE_ICON, RESTORE_RADIUS, ROW_BACKGROUND, TOGGLE_OFF, TOGGLE_ON,
 };
 use crate::chrome::centered_glyph;
 use crate::messages::msg;
@@ -233,6 +234,13 @@ fn paint_panel(input: &Input<'_>, measurer: &mut TextMeasurer, out: &mut Vec<Pri
                 }
                 paint_row(input, index, row, geometry, dx, dy, measurer, out);
             }
+            (Block::Filter { text, placeholder }, BlockGeometry::Filter { rect }) => {
+                let rect = shift(*rect, dx, dy);
+                if rect.y + rect.height < body.y || rect.y > body.y + body.height {
+                    continue;
+                }
+                paint_filter(input, index, rect, (text, placeholder), measurer, out);
+            }
             (
                 Block::Note { lines, tone },
                 BlockGeometry::Note {
@@ -354,6 +362,18 @@ fn paint_row(
             BODY_FONT,
             m.description_size,
             pal.warning_severity_error,
+        ));
+    }
+
+    // O aviso de uma linha de atalho -- conflito, ou a combinação que o
+    // terminal perde --, abaixo do nome, no tom de Aviso.
+    if let Some(notice) = &row.notice {
+        out.push(text(
+            (geometry.reason_origin.0 + dx, geometry.reason_origin.1 + dy),
+            notice,
+            BODY_FONT,
+            m.description_size,
+            pal.warning_severity_warning,
         ));
     }
 
@@ -498,6 +518,7 @@ fn paint_control(
                 ));
             }
         }
+        ControlView::Chips { chips } => paint_chips(input, chips, rect, measurer, out),
         ControlView::GitPoll {
             on,
             seconds,
@@ -726,6 +747,97 @@ fn paint_segmented(
             },
         ));
         x += width;
+    }
+}
+
+/// O campo de filtro do grupo Atalhos: o campo de texto da tela, com a frase
+/// esmaecida enquanto está vazio e o anel de foco do teclado (ADR-0060 §3).
+fn paint_filter(
+    input: &Input<'_>,
+    index: usize,
+    rect: Rect,
+    (value, placeholder): (&str, &str),
+    measurer: &mut TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    let m = input.metrics;
+    let pal = input.pal;
+    let editing = input
+        .editing
+        .filter(|editing| editing.block == index && editing.part == EditPart::Filter);
+    if let Some(editing) = editing {
+        paint_editing_field(input, rect, editing, false, measurer, out);
+    } else {
+        paint_field_box(input, rect, false, out);
+        if value.is_empty() {
+            let inner = Rect {
+                x: rect.x + m.field_padding_x,
+                y: rect.y,
+                width: (rect.width - m.field_padding_x * 2.0).max(0.0),
+                height: rect.height,
+            };
+            out.push(Primitive::PushClip(inner));
+            out.push(text(
+                (inner.x, centered_y(rect, m.field_font_size)),
+                placeholder,
+                BODY_FONT,
+                m.field_font_size,
+                pal.editor_section_text,
+            ));
+            out.push(Primitive::PopClip);
+        } else {
+            paint_field_text(input, value, rect.x + m.field_padding_x, rect, out);
+        }
+    }
+    if input.focus == Focus::Row(index) {
+        out.push(ring(rect, m.field_radius, pal));
+    }
+}
+
+/// Os atalhos de uma ação: o chip do drawer -- mono 10.5px sobre `#1e232b`,
+/// borda `#2a2f38`, raio 4 -- lado a lado com o `gap: 6`; "Nenhum atalho"
+/// esmaecido; e o chip em captura com a borda Acento e a frase esmaecida
+/// (ADR-0060 §3).
+fn paint_chips(
+    input: &Input<'_>,
+    chips: &[ChipView],
+    rect: Rect,
+    _measurer: &mut TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    let m = input.metrics;
+    let pal = input.pal;
+    let mut x = rect.x;
+    for chip in chips {
+        let chip_rect = Rect {
+            x,
+            y: rect.y + (rect.height - m.chip_height) / 2.0,
+            width: chip.width,
+            height: m.chip_height,
+        };
+        let (border, color) = match chip.tone {
+            ChipTone::Normal => (CHIP_BORDER, pal.menu_item_text),
+            ChipTone::Muted => (CHIP_BORDER, pal.editor_section_text),
+            ChipTone::Capturing => (pal.dialog_focus_ring, pal.editor_section_text),
+        };
+        out.push(rounded(
+            chip_rect,
+            m.chip_radius,
+            CHIP_BACKGROUND,
+            border,
+            1.0,
+        ));
+        out.push(text(
+            (
+                chip_rect.x + 1.0 + m.chip_padding_x,
+                centered_y(chip_rect, m.chip_font_size),
+            ),
+            &chip.text,
+            CHIP_FONT,
+            m.chip_font_size,
+            color,
+        ));
+        x += chip.width + m.list_gap;
     }
 }
 
@@ -958,7 +1070,7 @@ mod tests {
             generation: 0,
         };
         let mut measurer = TextMeasurer::new();
-        let content = content::build(key, draft, None, &f.catalog, &m, &mut measurer);
+        let content = content::build(key, draft, None, None, &f.catalog, &m, &mut measurer);
         let index = content
             .blocks
             .iter()
@@ -1180,7 +1292,15 @@ mod tests {
             generation: 0,
         };
         let mut measurer = TextMeasurer::new();
-        let content = content::build(key, draft, session_theme, &f.catalog, &m, &mut measurer);
+        let content = content::build(
+            key,
+            draft,
+            session_theme,
+            None,
+            &f.catalog,
+            &m,
+            &mut measurer,
+        );
         let index = content
             .blocks
             .iter()
@@ -1413,5 +1533,200 @@ mod tests {
         assert_eq!(accent_rows, 1);
         // E o ponto de pendente fica nela.
         assert_eq!(dots(&out, &f), 1);
+    }
+
+    // ---- grupo Atalhos
+
+    use super::super::content::ShortcutsView;
+    use super::super::shortcuts::{Capturing, Conflict, Shortcuts};
+    use crate::keymap::{Chord, Platform};
+    use porecatu_core::Action;
+
+    fn paint_shortcuts(
+        f: &Fixture,
+        state: &Shortcuts,
+        filter: &str,
+        capturing: Option<&Capturing>,
+        editing: Option<&Editing>,
+        focus: Focus,
+    ) -> Vec<Primitive> {
+        let m = Metrics::from_config(&f.config, 52.0);
+        let layout = layout::layout(900.0, 4000.0, 52.0, 200.0, m.footer_height());
+        let key = ContentKey {
+            group: Group::Shortcuts,
+            panel_width_bits: layout.panel.width.to_bits(),
+            generation: 0,
+        };
+        let mut measurer = TextMeasurer::new();
+        let view = ShortcutsView {
+            state,
+            filter,
+            capturing,
+        };
+        let content = content::build(
+            key,
+            &Draft::new(&f.config),
+            None,
+            Some(&view),
+            &f.catalog,
+            &m,
+            &mut measurer,
+        );
+        let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
+        let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        paint_body(
+            &Input {
+                layout: &layout,
+                metrics: &m,
+                content: &content,
+                items: &items,
+                footer: &footer,
+                selected: Group::Shortcuts,
+                focus,
+                hovered: None,
+                scroll: 0.0,
+                pending_groups: &[],
+                editing,
+                selection_color: palette::hex(1, 2, 3),
+                footer_available: [true, false, false],
+                style: &f.style,
+                pal: &f.pal,
+                config: &f.config,
+                catalog: &f.catalog,
+            },
+            &mut measurer,
+        )
+    }
+
+    fn chip_boxes(out: &[Primitive]) -> Vec<(Rect, Color)> {
+        out.iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.color == CHIP_BACKGROUND => {
+                    Some((q.rect, q.border_color))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_shortcut_row_paints_its_chips_with_the_drawer_chip_and_the_chord_label() {
+        let f = fixture();
+        let state = Shortcuts::new(&f.config, Platform::Windows);
+        let out = paint_shortcuts(&f, &state, "", None, None, Focus::Sidebar);
+        assert!(!chip_boxes(&out).is_empty());
+        // `Nova aba` leva o chip `Ctrl+Shift+T` em mono 10.5px.
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Ctrl+Shift+T"
+                && run.font == CHIP_FONT
+                && run.size_px == 10.5
+                && run.color == f.pal.menu_item_text
+        )));
+        // O chip fica na borda comum; sem captura nenhuma leva o Acento.
+        assert!(
+            chip_boxes(&out)
+                .iter()
+                .all(|(_, border)| *border == CHIP_BORDER)
+        );
+        // "Nenhum atalho" esmaecido.
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Nenhum atalho"
+                && run.color == f.pal.editor_section_text
+        )));
+    }
+
+    #[test]
+    fn the_capturing_chip_takes_the_accent_border_and_the_dim_phrase() {
+        let f = fixture();
+        let state = Shortcuts::new(&f.config, Platform::Windows);
+        let chord = Chord::parse("ctrl+shift+t").unwrap();
+        let capturing = Capturing {
+            action: Action::TabNew,
+            replacing: Some(chord),
+            frozen: vec![chord],
+            conflict: None,
+        };
+        let out = paint_shortcuts(&f, &state, "", Some(&capturing), None, Focus::Sidebar);
+        let accent: Vec<_> = chip_boxes(&out)
+            .into_iter()
+            .filter(|(_, border)| *border == f.pal.dialog_focus_ring)
+            .collect();
+        assert_eq!(accent.len(), 1);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Pressione a combinação de teclas…"
+                && run.color == f.pal.editor_section_text
+        )));
+        assert!(!out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Ctrl+Shift+T"
+        )));
+    }
+
+    #[test]
+    fn a_conflict_paints_the_warning_line_and_the_two_buttons() {
+        let f = fixture();
+        let state = Shortcuts::new(&f.config, Platform::Windows);
+        let old = Chord::parse("ctrl+shift+f").unwrap();
+        let capturing = Capturing {
+            action: Action::SearchOpen,
+            replacing: Some(old),
+            frozen: vec![old],
+            conflict: Some(Conflict {
+                chord: Chord::parse("ctrl+shift+r").unwrap(),
+                other: Action::TabRename,
+            }),
+        };
+        let out = paint_shortcuts(&f, &state, "", Some(&capturing), None, Focus::Sidebar);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Já em uso por Renomear aba."
+                && run.color == f.pal.warning_severity_warning
+                && run.size_px == 11.0
+        )));
+        for label in ["Substituir", "Cancelar"] {
+            assert!(
+                out.iter()
+                    .any(|p| matches!(p, Primitive::Text(run) if run.text == label)),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_filter_paints_its_placeholder_then_its_text_and_the_focus_ring() {
+        let f = fixture();
+        let state = Shortcuts::new(&f.config, Platform::Windows);
+        let out = paint_shortcuts(&f, &state, "", None, None, Focus::Sidebar);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Filtrar por nome ou tecla…"
+                && run.color == f.pal.editor_section_text
+        )));
+        let out = paint_shortcuts(&f, &state, "aba", None, None, Focus::Sidebar);
+        assert!(!out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Filtrar por nome ou tecla…"
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "aba" && run.color == f.pal.editor_input_text
+        )));
+        // Foco do teclado no filtro (bloco 0): o anel de Acento.
+        let focused = paint_shortcuts(&f, &state, "aba", None, None, Focus::Row(0));
+        assert!(focused.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == palette::TRANSPARENT
+                && q.border_color == f.pal.dialog_focus_ring
+        )));
+        // Em edição: o campo com a borda de Acento e o cursor.
+        let editing = Editing::new(0, EditPart::Filter, "aba".to_owned());
+        let editing_out = paint_shortcuts(&f, &state, "aba", None, Some(&editing), Focus::Sidebar);
+        assert!(editing_out.iter().any(|p| matches!(
+            p,
+            Primitive::Quad(q) if q.rect.width == 1.0 && q.color == f.pal.editor_input_text
+        )));
     }
 }

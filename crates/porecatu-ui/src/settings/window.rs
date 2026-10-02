@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use porecatu_config::{Config, Edit, EditValue};
+use porecatu_core::Action;
 use porecatu_locale::Catalog;
 use porecatu_render::{
     Frame, GpuContext, Layer, Primitive, Quad, Rect, TextMeasurer, TextRun, WindowSurface, icon,
@@ -40,7 +41,9 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 use super::catalog::{self, Control, OptionDef};
 use super::choice_list::{self, ChoiceItem, ChoiceLayout, ChoiceList};
-use super::content::{self, Block, Content, ContentKey, ControlView, RowView, choice_label};
+use super::content::{
+    self, Block, ChipTone, Content, ContentKey, ControlView, RowView, ShortcutsView, choice_label,
+};
 use super::draft::Draft;
 use super::field_edit::{EditPart, Editing};
 use super::interact;
@@ -49,9 +52,11 @@ use super::layout::{
     footer_buttons, group_items, hit_test, next_focus,
 };
 use super::paint;
+use super::shortcuts::{Capturing, Conflict, Shortcuts};
 use super::{Group, HEADER_GAP_PX, PANEL_BACKGROUND, TITLE_SIZE_PX};
 use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::input::modifiers_from;
+use crate::keymap::{Capture, Chord, Platform};
 use crate::messages::msg;
 use crate::overlay::BODY_FONT;
 use crate::palette::{ResolvedPalette, ResolvedTermPalette};
@@ -164,6 +169,13 @@ pub(crate) struct SettingsWindow {
     /// O diálogo de pendências, aberto ao fechar com alterações (RF-16.4).
     /// Modal: enquanto existe, só ele recebe ponteiro e teclado.
     dialog: Option<ConfirmDialog>,
+    /// O grupo Atalhos: a tabela da plataforma em edição (RF-16.31).
+    shortcuts: Shortcuts,
+    /// O texto do filtro do grupo Atalhos (RF-16.28); vale a cada tecla e
+    /// vive enquanto a janela vive.
+    filter: String,
+    /// A captura de atalho em curso, se alguma (RF-16.29).
+    capturing: Option<Capturing>,
 }
 
 impl SettingsWindow {
@@ -205,6 +217,9 @@ impl SettingsWindow {
             locale_dirs,
             session_theme: None,
             dialog: None,
+            shortcuts: Shortcuts::new(config, Platform::current()),
+            filter: String::new(),
+            capturing: None,
         }
     }
 
@@ -237,18 +252,31 @@ impl SettingsWindow {
     /// encerrar o processo (ADR-0059 §2). Um campo em edição com o texto
     /// mexido conta: é uma alteração que só falta confirmar.
     pub(crate) fn has_pending_changes(&self) -> bool {
-        self.draft.is_dirty() || self.editing.as_ref().is_some_and(Editing::changed)
+        self.draft.is_dirty()
+            || self.shortcuts.is_dirty()
+            || self
+                .editing
+                .as_ref()
+                .is_some_and(|editing| editing.part != EditPart::Filter && editing.changed())
+    }
+
+    /// Há alteração no rascunho ou nos atalhos, com nenhum campo em edição por
+    /// confirmar: o que o diálogo de pendências conta.
+    fn has_unsaved(&self) -> bool {
+        self.draft.is_dirty() || self.shortcuts.is_dirty()
     }
 
     /// O Salvar tem o que gravar e nada que o bloqueie: há pendência, e
     /// nenhuma foi recusada (RF-16.18).
     pub(crate) fn can_save(&self) -> bool {
-        self.draft.is_dirty() && !self.draft.has_invalid()
+        (self.draft.is_dirty() || self.shortcuts.is_dirty()) && !self.draft.has_invalid()
     }
 
     /// As edições do rascunho, na ordem do catálogo: o que o Salvar grava.
     pub(crate) fn edits(&self) -> Vec<Edit> {
-        self.draft.edits()
+        let mut edits = self.draft.edits();
+        edits.extend(self.shortcuts.edits());
+        edits
     }
 
     /// O Salvar gravou: o arquivo agora diz `saved`, e nenhuma pendência
@@ -257,7 +285,9 @@ impl SettingsWindow {
         self.editing = None;
         self.choice = None;
         self.dialog = None;
+        self.capturing = None;
         self.draft.commit(saved);
+        self.shortcuts.commit(saved);
         self.invalidate();
     }
 
@@ -281,7 +311,7 @@ impl SettingsWindow {
             return self.answer(DialogAnswer::Cancel);
         }
         self.commit_edit();
-        if self.draft.is_dirty() {
+        if self.has_unsaved() {
             self.open_dialog();
             Press::Nothing
         } else {
@@ -295,7 +325,7 @@ impl SettingsWindow {
     /// perguntar; sem pendências, quem chama encerra direto.
     pub(crate) fn ask_before_quit(&mut self) -> bool {
         self.commit_edit();
-        if !self.draft.is_dirty() {
+        if !self.has_unsaved() {
             return false;
         }
         self.bring_to_front();
@@ -310,7 +340,7 @@ impl SettingsWindow {
         self.editing = None;
         self.dialog = Some(ConfirmDialog::settings_pending(
             &self.catalog,
-            self.draft.pending_count(),
+            self.draft.pending_count() + self.shortcuts.pending_actions().len(),
         ));
         self.hover.dismiss();
         self.window.request_redraw();
@@ -422,6 +452,9 @@ impl SettingsWindow {
     /// arquivo deixa de ser pendência.
     pub(crate) fn config_reloaded(&mut self, config: &Config) {
         self.draft.rebase(config);
+        // A linha em captura não muda com a recarga (ADR-0059 §3): ela guarda
+        // os atalhos que tinha ao começar.
+        self.shortcuts.rebase(config);
         self.invalidate();
     }
 
@@ -514,10 +547,16 @@ impl SettingsWindow {
             generation: self.generation,
         };
         if self.content.as_ref().map(|c| c.key) != Some(key) {
+            let view = ShortcutsView {
+                state: &self.shortcuts,
+                filter: &self.filter,
+                capturing: self.capturing.as_ref(),
+            };
             self.content = Some(content::build(
                 key,
                 &self.draft,
                 self.session_theme.as_deref(),
+                Some(&view),
                 &self.catalog,
                 &m,
                 measurer,
@@ -625,6 +664,17 @@ impl SettingsWindow {
     /// O campo que recebe o texto de `part`, em coordenadas de janela: o
     /// controle inteiro, ou -- no Git -- o número, à direita da alternância.
     fn field_rect(&self, env: Env<'_>, block: usize, part: EditPart) -> Option<Rect> {
+        if part == EditPart::Filter {
+            let layout = self.layout(env);
+            let BlockGeometry::Filter { rect } = self.content().geometry.blocks.get(block)? else {
+                return None;
+            };
+            return Some(Rect {
+                x: rect.x + layout.panel_body.x,
+                y: rect.y + layout.panel_body.y - self.scroll,
+                ..*rect
+            });
+        }
         let control = self.control_rect(env, block)?;
         Some(match part {
             EditPart::Field => control,
@@ -636,6 +686,7 @@ impl SettingsWindow {
                     ..control
                 }
             }
+            EditPart::Filter => return None,
             EditPart::ListFirst(item) | EditPart::ListSecond(item) => {
                 let ControlView::List {
                     items, two_fields, ..
@@ -948,7 +999,21 @@ impl SettingsWindow {
             self.click_choice(env, point);
             return Press::Nothing;
         }
-        match self.hit_at(env, point) {
+        let hit = self.hit_at(env, point);
+        // Um clique fora do chip e dos botões do conflito cancela a captura.
+        if self.capturing.is_some()
+            && !matches!(
+                hit,
+                Some(Hit::Control(
+                    _,
+                    ControlPart::Chip(_) | ControlPart::Segment(_)
+                ))
+            )
+        {
+            self.capturing = None;
+            self.invalidate();
+        }
+        match hit {
             Some(Hit::Group(group)) => {
                 self.focus = Focus::Sidebar;
                 self.select_group(group);
@@ -958,7 +1023,9 @@ impl SettingsWindow {
             Some(Hit::Restore(index)) => {
                 self.commit_edit();
                 self.focus = Focus::Row(index);
-                if let Some(option) = self.option_at(index) {
+                if let Some(action) = self.content().row(index).and_then(|row| row.action) {
+                    self.shortcuts.reset(action);
+                } else if let Some(option) = self.option_at(index) {
                     self.draft.reset(option);
                 }
                 self.invalidate();
@@ -969,6 +1036,13 @@ impl SettingsWindow {
                 Press::Nothing
             }
             Some(Hit::Row(index)) => {
+                // O campo de filtro: o clique começa a digitar.
+                if matches!(self.content().blocks.get(index), Some(Block::Filter { .. })) {
+                    self.focus = Focus::Row(index);
+                    self.begin_or_continue_edit(env, measurer, index, EditPart::Filter, point);
+                    self.window.request_redraw();
+                    return Press::Nothing;
+                }
                 self.commit_edit();
                 self.focus = Focus::Row(index);
                 if !self.choose_theme(index) {
@@ -1022,7 +1096,9 @@ impl SettingsWindow {
         self.editing = None;
         self.choice = None;
         self.dragging_field = false;
+        self.capturing = None;
         self.draft.discard();
+        self.shortcuts.discard();
         self.invalidate();
     }
 
@@ -1036,6 +1112,18 @@ impl SettingsWindow {
         point: (f32, f32),
     ) {
         self.focus = Focus::Row(index);
+        // Uma linha de atalho: o chip entra em captura, e os dois botões do
+        // conflito respondem (RF-16.29, RF-16.30).
+        if let Some(action) = self.content().row(index).and_then(|row| row.action) {
+            self.commit_edit();
+            match part {
+                ControlPart::Chip(chip) => self.click_chip(index, chip, action),
+                ControlPart::Segment(button) => self.answer_conflict(button == 0),
+                _ => {}
+            }
+            self.window.request_redraw();
+            return;
+        }
         let Some(option) = self.option_at(index) else {
             self.commit_edit();
             return;
@@ -1172,6 +1260,9 @@ impl SettingsWindow {
     /// campo mostra (escrito, se a opção escreve os controles; o digitado, se
     /// foi recusado).
     fn edit_initial(&self, index: usize, part: EditPart) -> Option<String> {
+        if part == EditPart::Filter {
+            return Some(self.filter.clone());
+        }
         match (&self.content().row(index)?.control, part) {
             (ControlView::Field { text, .. }, EditPart::Field) => Some(text.clone()),
             (ControlView::GitPoll { seconds, .. }, EditPart::GitSeconds) => Some(seconds.clone()),
@@ -1220,6 +1311,11 @@ impl SettingsWindow {
         let Some(editing) = self.editing.take() else {
             return;
         };
+        // O filtro já valeu a cada tecla: nada a confirmar no rascunho.
+        if editing.part == EditPart::Filter {
+            self.window.request_redraw();
+            return;
+        }
         if editing.changed()
             && let Some(option) = self.option_at(editing.block)
         {
@@ -1243,7 +1339,7 @@ impl SettingsWindow {
                         editing.state.text(),
                     );
                 }
-                EditPart::Field | EditPart::GitSeconds => {
+                EditPart::Field | EditPart::GitSeconds | EditPart::Filter => {
                     interact::commit_text(&mut self.draft, option, editing.state.text());
                 }
             }
@@ -1434,6 +1530,11 @@ impl SettingsWindow {
         if self.dialog.is_some() {
             return self.dialog_key(&event.logical_key);
         }
+        // A captura de atalho consome a próxima combinação inteira, inclusive
+        // o que seria tecla da própria tela -- `Ctrl+S`, `Esc` (ADR-0059 §3).
+        if self.capturing.is_some() {
+            return self.capture_key(event);
+        }
 
         let is_save = matches!(
             &event.logical_key,
@@ -1509,6 +1610,19 @@ impl SettingsWindow {
     }
 
     fn activate_row(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, index: usize) {
+        // O filtro do grupo Atalhos: `Enter` começa a digitar.
+        if matches!(self.content().blocks.get(index), Some(Block::Filter { .. })) {
+            self.start_edit(index, EditPart::Filter);
+            self.window.request_redraw();
+            return;
+        }
+        // Uma linha de atalho: `Enter` entra em captura do primeiro atalho --
+        // ou acrescenta um, se a ação não tem nenhum (RF-16.29).
+        if let Some(action) = self.content().row(index).and_then(|row| row.action) {
+            let first = self.shortcuts.chords(action).first().copied();
+            self.start_capture(action, first);
+            return;
+        }
         let Some(option) = self.option_at(index) else {
             return;
         };
@@ -1538,7 +1652,7 @@ impl SettingsWindow {
             ControlView::Themes { .. } => {
                 self.choose_theme(index);
             }
-            ControlView::Segmented { .. } => {}
+            ControlView::Segmented { .. } | ControlView::Chips { .. } => {}
         }
         self.window.request_redraw();
     }
@@ -1637,6 +1751,114 @@ impl SettingsWindow {
                 }
             }
         }
+        self.sync_filter();
+    }
+
+    /// O filtro vale a cada tecla: o texto do campo em edição vira o filtro e
+    /// a lista é refeita (RF-16.28).
+    fn sync_filter(&mut self) {
+        let Some(editing) = &self.editing else {
+            return;
+        };
+        if editing.part == EditPart::Filter && editing.state.text() != self.filter {
+            self.filter = editing.state.text().to_owned();
+            self.scroll = 0.0;
+            self.invalidate();
+        }
+    }
+
+    // ---- atalhos (RF-16.28 a RF-16.31)
+
+    /// Entra em captura na linha de `action`: o chip `replacing` é o que a
+    /// próxima combinação substitui, ou -- sem ele -- um atalho a acrescentar.
+    fn start_capture(&mut self, action: Action, replacing: Option<Chord>) {
+        self.commit_edit();
+        self.choice = None;
+        self.capturing = Some(Capturing {
+            action,
+            replacing,
+            frozen: self.shortcuts.chords(action),
+            conflict: None,
+        });
+        self.invalidate();
+    }
+
+    /// Clique no chip `chip` da linha `block`: o chip que mostra uma combinação
+    /// a substitui; o "Nenhum atalho" e o chip em captura acrescentam um.
+    fn click_chip(&mut self, block: usize, chip: usize, action: Action) {
+        let shown = match &self.capturing {
+            Some(capturing) if capturing.action == action => capturing.frozen.clone(),
+            _ => self.shortcuts.chords(action),
+        };
+        let tone = match self.content().row(block).map(|row| &row.control) {
+            Some(ControlView::Chips { chips }) => chips.get(chip).map(|chip| chip.tone),
+            _ => None,
+        };
+        let replacing = match tone {
+            Some(ChipTone::Normal) => shown.get(chip).copied(),
+            _ => None,
+        };
+        self.start_capture(action, replacing);
+    }
+
+    /// Substituir (`true`) ou Cancelar (`false`) o conflito pendente
+    /// (RF-16.30): substituir dá a combinação à ação e a tira da outra.
+    fn answer_conflict(&mut self, replace: bool) {
+        let Some(capturing) = self.capturing.take() else {
+            return;
+        };
+        if replace && let Some(conflict) = capturing.conflict {
+            self.shortcuts
+                .bind(capturing.action, capturing.replacing, conflict.chord);
+        }
+        self.invalidate();
+    }
+
+    /// Uma tecla com a captura em curso (RF-16.29): `Esc` cancela, `Backspace`
+    /// remove o atalho, modificador sozinho, tecla morta e o que a gramática
+    /// não escreve são ignorados, e uma combinação vira o atalho -- ou, se é
+    /// de outra ação, um conflito à espera de resposta.
+    fn capture_key(&mut self, event: &KeyEvent) -> Press {
+        if event.repeat {
+            return Press::Nothing;
+        }
+        let Some(capturing) = self.capturing.clone() else {
+            return Press::Nothing;
+        };
+        if capturing.conflict.is_some() {
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => self.answer_conflict(false),
+                Key::Named(NamedKey::Enter) => self.answer_conflict(true),
+                _ => {}
+            }
+            return Press::Nothing;
+        }
+        match Chord::capture(&event.logical_key, self.modifiers) {
+            Capture::Ignored => return Press::Nothing,
+            Capture::Cancel => self.capturing = None,
+            Capture::Remove => {
+                if let Some(old) = capturing.replacing {
+                    self.shortcuts.unbind(capturing.action, old);
+                }
+                self.capturing = None;
+            }
+            Capture::Chord(chord) => match self.shortcuts.holder(chord) {
+                // Já é dela: nada muda.
+                Some(holder) if holder == capturing.action => self.capturing = None,
+                Some(other) => {
+                    if let Some(state) = &mut self.capturing {
+                        state.conflict = Some(Conflict { chord, other });
+                    }
+                }
+                None => {
+                    self.shortcuts
+                        .bind(capturing.action, capturing.replacing, chord);
+                    self.capturing = None;
+                }
+            },
+        }
+        self.invalidate();
+        Press::Nothing
     }
 
     /// `Tab`/`Shift+Tab` num campo de lista: confirma o campo e passa para o
@@ -1730,6 +1952,7 @@ impl SettingsWindow {
         if group != self.selected_group {
             self.commit_edit();
             self.choice = None;
+            self.capturing = None;
             self.selected_group = group;
             self.scroll = 0.0;
             self.hover.dismiss();
@@ -1777,6 +2000,7 @@ impl SettingsWindow {
         let has_pending = self.has_pending_changes();
         let catalog = &self.catalog;
         let dialog = self.dialog.as_ref();
+        let filter = (selected == Group::Shortcuts).then_some(self.filter.as_str());
         let rows: Vec<&RowView> = self
             .content
             .as_ref()
@@ -1786,7 +2010,7 @@ impl SettingsWindow {
                     .iter()
                     .filter_map(|block| match block {
                         Block::Row(row) => Some(&**row),
-                        Block::Section(_) | Block::Note { .. } => None,
+                        Block::Section(_) | Block::Note { .. } | Block::Filter { .. } => None,
                     })
                     .collect()
             })
@@ -1798,6 +2022,7 @@ impl SettingsWindow {
                 selected,
                 has_pending,
                 &rows,
+                filter,
                 dialog,
                 catalog,
                 language,
@@ -1823,7 +2048,10 @@ impl SettingsWindow {
         let content = self.content();
         let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
         let footer = footer_buttons(&m, layout.footer, content.footer_widths);
-        let pending_groups = self.draft.pending_groups();
+        let mut pending_groups = self.draft.pending_groups();
+        if self.shortcuts.is_dirty() {
+            pending_groups.push(Group::Shortcuts);
+        }
 
         let mut out = vec![
             quad(layout.panel, PANEL_BACKGROUND),

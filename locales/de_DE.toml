@@ -232,6 +232,8 @@ none = "Kein Kürzel"
 press_keys = "Tastenkombination drücken…"
 conflict = "Bereits belegt durch {action}."
 replace = "Ersetzen"
+filter_placeholder = "Nach Name oder Taste filtern…"
+reserved = "Das Terminal erhält {chord} nicht mehr."
 
 [action]
 tab_new = "Neuer Tab"

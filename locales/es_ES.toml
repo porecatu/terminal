@@ -232,6 +232,8 @@ none = "Sin atajo"
 press_keys = "Pulsa la combinación de teclas…"
 conflict = "Ya lo usa {action}."
 replace = "Reemplazar"
+filter_placeholder = "Filtrar por nombre o tecla…"
+reserved = "El terminal deja de recibir {chord}."
 
 [action]
 tab_new = "Nueva pestaña"

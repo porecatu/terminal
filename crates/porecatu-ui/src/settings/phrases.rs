@@ -104,6 +104,14 @@ pub(crate) fn all(catalog: &Catalog) -> Vec<(&'static str, String)> {
             s::shortcut::conflict(catalog, "Sample"),
         ),
         ("settings.shortcut.replace", s::shortcut::replace(catalog)),
+        (
+            "settings.shortcut.filter_placeholder",
+            s::shortcut::filter_placeholder(catalog),
+        ),
+        (
+            "settings.shortcut.reserved",
+            s::shortcut::reserved(catalog, "Ctrl+R"),
+        ),
     ]
 }
 
@@ -139,6 +147,7 @@ mod tests {
             assert!(text("settings.validation.duplicate_name").contains("EDITOR"));
             assert!(text("settings.theme.session_using").contains("Solar"));
             assert!(text("settings.shortcut.conflict").contains("Sample"));
+            assert!(text("settings.shortcut.reserved").contains("Ctrl+R"));
             assert!(
                 phrases
                     .iter()

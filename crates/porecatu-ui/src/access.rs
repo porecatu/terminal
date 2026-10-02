@@ -866,6 +866,7 @@ const SETTINGS_ROOT_ID: NodeId = NodeId(SETTINGS_ID_BASE);
 const SETTINGS_GROUP_LIST_ID: NodeId = NodeId(SETTINGS_ID_BASE + 1);
 const SETTINGS_PANEL_ID: NodeId = NodeId(SETTINGS_ID_BASE + 2);
 const SETTINGS_FOOTER_ID: NodeId = NodeId(SETTINGS_ID_BASE + 3);
+const SETTINGS_FILTER_ID: NodeId = NodeId(SETTINGS_ID_BASE + 4);
 const SETTINGS_FOOTER_BUTTON_BASE: u64 = SETTINGS_ID_BASE + 10;
 const SETTINGS_WINDOW_MINIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 20);
 const SETTINGS_WINDOW_MAXIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 21);
@@ -906,6 +907,7 @@ pub(crate) fn build_settings_tree(
     selected: Group,
     has_pending: bool,
     rows: &[&RowView],
+    filter: Option<&str>,
     dialog: Option<&ConfirmDialog>,
     catalog: &Catalog,
     language: &str,
@@ -964,6 +966,16 @@ pub(crate) fn build_settings_tree(
     nodes.push((SETTINGS_FOOTER_ID, container(Role::Group, footer_children)));
 
     let mut panel_children = Vec::new();
+    // O filtro do grupo Atalhos (RF-16.28).
+    if let Some(value) = filter {
+        let mut node = leaf(
+            Role::SearchInput,
+            msg::settings::shortcut::filter_placeholder(catalog),
+        );
+        node.set_value(value.to_owned());
+        nodes.push((SETTINGS_FILTER_ID, node));
+        panel_children.push(SETTINGS_FILTER_ID);
+    }
     for (index, row) in rows.iter().enumerate() {
         panel_children.push(settings_row_node(index, row, &mut nodes));
     }
@@ -1015,6 +1027,13 @@ fn settings_row_node(index: usize, row: &RowView, nodes: &mut Vec<(NodeId, Node)
         }
         Some((scope, _)) => scope.clone(),
         None => row.description_full.clone(),
+    };
+    // O aviso de uma linha de atalho (conflito, tecla perdida pelo terminal)
+    // é lido junto da descrição.
+    let description = match &row.notice {
+        Some(notice) if description.is_empty() => notice.clone(),
+        Some(notice) => format!("{description} {notice}"),
+        None => description,
     };
     let describe = |node: &mut Node| {
         if !description.is_empty() {
@@ -1088,6 +1107,20 @@ fn settings_row_node(index: usize, row: &RowView, nodes: &mut Vec<(NodeId, Node)
                 children.push(item_id);
             }
             let mut node = container(Role::List, children);
+            node.set_label(row.name.clone());
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+        ControlView::Chips { chips } => {
+            // Os atalhos da ação, um botão por chip (RF-16.29: clicar entra
+            // em captura).
+            let mut children = Vec::new();
+            for (chip_index, chip) in chips.iter().enumerate() {
+                let chip_id = NodeId(id.0 + 1 + chip_index as u64);
+                nodes.push((chip_id, leaf(Role::Button, chip.text.clone())));
+                children.push(chip_id);
+            }
+            let mut node = container(Role::Group, children);
             node.set_label(row.name.clone());
             describe(&mut node);
             nodes.push((id, node));
@@ -1756,6 +1789,7 @@ mod settings_tree_tests {
             has_pending,
             &refs,
             None,
+            None,
             &test_support::pt_br(),
             language,
         )
@@ -1897,6 +1931,7 @@ mod settings_tree_tests {
             Group::General,
             false,
             &[],
+            None,
             None,
             &test_support::en_us(),
             "en-US",
@@ -2060,6 +2095,62 @@ mod settings_tree_tests {
     }
 
     #[test]
+    fn a_shortcut_row_has_its_chips_as_buttons_and_the_group_has_a_filter() {
+        use crate::settings::{ChipTone, ChipView};
+        let mut rows = rows_for_test(Group::Shell);
+        let program = rows
+            .iter_mut()
+            .find(|row| row.option == Some("shell_program"))
+            .unwrap();
+        program.control = ControlView::Chips {
+            chips: vec![
+                ChipView {
+                    text: "Ctrl+Shift+T".to_owned(),
+                    width: 80.0,
+                    tone: ChipTone::Normal,
+                },
+                ChipView {
+                    text: "Ctrl+Shift+J".to_owned(),
+                    width: 80.0,
+                    tone: ChipTone::Normal,
+                },
+            ],
+        };
+        program.notice = Some("Já em uso por Renomear aba.".to_owned());
+        let layout = layout_for_test(true);
+        let refs: Vec<&RowView> = rows.iter().collect();
+        let update = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::Shortcuts,
+            false,
+            &refs,
+            Some("aba"),
+            None,
+            &test_support::pt_br(),
+            "pt-BR",
+        );
+        let group = row_nodes(&update)
+            .into_iter()
+            .find(|node| node.role() == Role::Group && node.children().len() == 2)
+            .expect("a linha de atalho");
+        let chips: Vec<&str> = group
+            .children()
+            .iter()
+            .map(|id| node(&update, *id).label().unwrap())
+            .collect();
+        assert_eq!(chips, ["Ctrl+Shift+T", "Ctrl+Shift+J"]);
+        assert!(
+            group
+                .description()
+                .is_some_and(|text| text.contains("Já em uso por Renomear aba."))
+        );
+        let filter = node(&update, SETTINGS_FILTER_ID);
+        assert_eq!(filter.role(), Role::SearchInput);
+        assert_eq!(filter.value(), Some("aba"));
+    }
+
+    #[test]
     fn the_pending_dialog_adds_three_buttons_and_moves_the_focus_to_the_focused_one() {
         let layout = layout_for_test(true);
         let dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 2);
@@ -2069,6 +2160,7 @@ mod settings_tree_tests {
             Group::General,
             true,
             &[],
+            None,
             Some(&dialog),
             &test_support::pt_br(),
             "pt-BR",
@@ -2094,6 +2186,7 @@ mod settings_tree_tests {
             Group::General,
             true,
             &[],
+            None,
             None,
             &test_support::pt_br(),
             "pt-BR",

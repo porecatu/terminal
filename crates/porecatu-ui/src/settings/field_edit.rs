@@ -28,6 +28,8 @@ pub(crate) enum EditPart {
     ListFirst(usize),
     /// O valor do item `n` da lista de nome e valor.
     ListSecond(usize),
+    /// O filtro do grupo Atalhos (RF-16.28): vale a cada tecla.
+    Filter,
 }
 
 impl EditPart {
@@ -35,7 +37,7 @@ impl EditPart {
     pub(crate) fn list_item(self) -> Option<usize> {
         match self {
             EditPart::ListFirst(item) | EditPart::ListSecond(item) => Some(item),
-            EditPart::Field | EditPart::GitSeconds => None,
+            EditPart::Field | EditPart::GitSeconds | EditPart::Filter => None,
         }
     }
 
@@ -60,7 +62,7 @@ impl EditPart {
         let (item, second) = match self {
             EditPart::ListFirst(item) => (item, false),
             EditPart::ListSecond(item) => (item, true),
-            EditPart::Field | EditPart::GitSeconds => return None,
+            EditPart::Field | EditPart::GitSeconds | EditPart::Filter => return None,
         };
         let per_item = if two_fields { 2 } else { 1 };
         let at = item * per_item + usize::from(second);

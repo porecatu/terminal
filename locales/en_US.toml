@@ -248,6 +248,8 @@ none = "No shortcut"
 press_keys = "Press the key combination…"
 conflict = "Already used by {action}."
 replace = "Replace"
+filter_placeholder = "Filter by name or key…"
+reserved = "The terminal stops receiving {chord}."
 
 [action]
 tab_new = "New tab"

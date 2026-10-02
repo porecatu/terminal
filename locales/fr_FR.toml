@@ -232,6 +232,8 @@ none = "Aucun raccourci"
 press_keys = "Appuyez sur la combinaison de touches…"
 conflict = "Déjà utilisé par {action}."
 replace = "Remplacer"
+filter_placeholder = "Filtrer par nom ou touche…"
+reserved = "Le terminal ne reçoit plus {chord}."
 
 [action]
 tab_new = "Nouvel onglet"

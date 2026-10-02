@@ -200,6 +200,12 @@ pub(crate) struct Metrics {
     /// `gap: 6` entre itens de lista e entre campos de nome e valor
     /// (ADR-0060 §3: o `trilha_gap`).
     pub list_gap: f32,
+    /// O chip de atalho (ADR-0060 §3, o do drawer): mono 10.5px,
+    /// `padding: 3px 7px`, borda de 1px, raio 4, `gap: 6` entre chips.
+    pub chip_font_size: f32,
+    pub chip_padding_x: f32,
+    pub chip_height: f32,
+    pub chip_radius: f32,
 }
 
 /// Espaço entre o nome e a descrição dentro da linha. O ADR-0060 §2 posiciona
@@ -249,6 +255,10 @@ impl Metrics {
             restore_height: 17.0,
             dot_size: 6.0,
             list_gap: 6.0,
+            chip_font_size: 10.5,
+            chip_padding_x: 7.0,
+            chip_height: 10.5 + 3.0 * 2.0 + 2.0,
+            chip_radius: 4.0,
         }
     }
 
@@ -274,6 +284,9 @@ pub(crate) enum BlockSpec {
         two_lines: bool,
         reason: bool,
     },
+    /// O campo de filtro do grupo Atalhos (RF-16.28), em largura cheia no
+    /// topo.
+    Filter,
     /// Uma nota de `lines` linhas de 11px, fora de qualquer linha de opção: o
     /// aviso dos diretórios autorizados (RF-16.27) e a linha do tema da
     /// sessão (RF-16.25).
@@ -304,6 +317,10 @@ pub(crate) enum BlockGeometry {
         label_origin: (f32, f32),
     },
     Row(RowGeometry),
+    /// O campo de filtro.
+    Filter {
+        rect: Rect,
+    },
     /// Uma nota: onde a primeira linha começa e a altura de cada uma.
     Note {
         origin: (f32, f32),
@@ -414,6 +431,17 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                     left_width: (control_rect.x - m.row_gap - inner_x).max(0.0),
                 }));
                 y += height;
+                previous_was_row = true;
+            }
+            BlockSpec::Filter => {
+                let rect = Rect {
+                    x,
+                    y,
+                    width,
+                    height: m.field_height,
+                };
+                blocks.push(BlockGeometry::Filter { rect });
+                y += m.field_height;
                 previous_was_row = true;
             }
             BlockSpec::Note { lines } => {
@@ -541,6 +569,9 @@ pub(crate) enum ControlPart {
     ListRemove(usize),
     /// O item "Adicionar" no fim da lista.
     ListAdd,
+    /// O chip `n` de uma linha de atalho: clicar nele entra em captura
+    /// (RF-16.29).
+    Chip(usize),
 }
 
 /// Onde ficam os campos e o `X` de um item de lista.
@@ -642,15 +673,18 @@ pub(crate) fn hit_test(
     if contains(layout.panel_body, point) {
         let (dx, dy) = (layout.panel_body.x, layout.panel_body.y - scroll);
         for (index, block) in geometry.blocks.iter().enumerate() {
-            if let BlockGeometry::Row(row) = block {
-                let rect = Rect {
-                    x: row.rect.x + dx,
-                    y: row.rect.y + dy,
-                    ..row.rect
-                };
-                if contains(rect, point) {
-                    return Some(Hit::Row(index));
-                }
+            let rect = match block {
+                BlockGeometry::Row(row) => row.rect,
+                BlockGeometry::Filter { rect } => *rect,
+                _ => continue,
+            };
+            let rect = Rect {
+                x: rect.x + dx,
+                y: rect.y + dy,
+                ..rect
+            };
+            if contains(rect, point) {
+                return Some(Hit::Row(index));
             }
         }
     }

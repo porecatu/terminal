@@ -498,6 +498,8 @@ registry! {
             press_keys(),
             conflict(action),
             replace(),
+            filter_placeholder(),
+            reserved(chord),
         },
     }
     action {

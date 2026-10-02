@@ -10,9 +10,6 @@
 //! `porecatu_core::Action` não compila até ganhar frase aqui, que é a forma de
 //! o catálogo de textos nunca ficar atrás do catálogo de ações.
 
-// Sem consumidor até a tarefa que desenha o grupo Atalhos (10).
-#![allow(dead_code)]
-
 use porecatu_core::{Action, CATALOG};
 use porecatu_locale::Catalog;
 

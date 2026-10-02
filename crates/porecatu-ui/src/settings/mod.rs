@@ -22,6 +22,7 @@ mod layout;
 mod paint;
 mod phrases;
 pub(crate) mod save;
+mod shortcuts;
 mod window;
 
 use porecatu_config::Config;
@@ -31,7 +32,7 @@ use winit::window::WindowAttributes;
 
 pub(crate) use catalog::Group;
 #[cfg(test)]
-pub(crate) use content::ListItemView;
+pub(crate) use content::{ChipTone, ChipView, ListItemView};
 pub(crate) use content::{ControlView, RowView};
 pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
 pub(crate) use window::{DialogAnswer, Env, Press, SettingsWindow};
@@ -45,6 +46,12 @@ pub(crate) const ROW_BACKGROUND: Color = palette::hex(0x1c, 0x20, 0x28);
 pub(crate) const TOGGLE_ON: Color = palette::hex(0x3f, 0x8f, 0x80);
 /// Trilho da alternância desligada, `#2a3038` (espec. §1.5, ADR-0060 §3).
 pub(crate) const TOGGLE_OFF: Color = palette::hex(0x2a, 0x30, 0x38);
+
+/// Fundo do chip de atalho: `#1e232b`, o chip do drawer (espec. §2.12,
+/// ADR-0060 §3). `ResolvedPalette` não o carrega.
+pub(crate) const CHIP_BACKGROUND: Color = palette::hex(0x1e, 0x23, 0x2b);
+/// Borda do chip de atalho: `#2a2f38` (espec. §2.12, ADR-0060 §3).
+pub(crate) const CHIP_BORDER: Color = palette::hex(0x2a, 0x2f, 0x38);
 
 /// Ícone do botão de restaurar padrão: `#727a86` (ADR-0060 §2, o do botão de
 /// fechar da aba, espec. §1.7 e §2.14). `ResolvedPalette` o carrega com outro
@@ -205,6 +212,7 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
         key,
         &draft::Draft::new(&config),
         None,
+        None,
         &crate::messages::test_support::pt_br(),
         &metrics,
         &mut TextMeasurer::new(),
@@ -213,7 +221,9 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
     .into_iter()
     .filter_map(|block| match block {
         content::Block::Row(row) => Some(*row),
-        content::Block::Section(_) | content::Block::Note { .. } => None,
+        content::Block::Section(_)
+        | content::Block::Note { .. }
+        | content::Block::Filter { .. } => None,
     })
     .collect()
 }

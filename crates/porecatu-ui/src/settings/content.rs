@@ -13,14 +13,18 @@
 //! caminho de pintura.
 
 use porecatu_config::EditValue;
+use porecatu_core::Action;
 use porecatu_locale::Catalog;
-use porecatu_render::{Color, Rect, TextMeasurer};
+use porecatu_render::{Color, FontFace, Rect, TextMeasurer};
 use porecatu_term::TermColor;
 
+use super::actions::label as action_label;
 use super::catalog::{Control, Group, OptionDef, ReloadScope, Section, options_in};
 use super::draft::{Draft, ValueError};
 use super::field_edit::{display_text, number_text};
 use super::layout::{self, BlockSpec, ControlPart, Metrics, PanelGeometry};
+use super::shortcuts::{Capturing, Shortcuts};
+use crate::keymap::Chord;
 use crate::messages::msg;
 use crate::overlay::BODY_FONT;
 use crate::palette::ResolvedTermPalette;
@@ -31,6 +35,36 @@ use crate::tab_bar::rect_contains;
 pub(crate) const SWATCH_COUNT: usize = 10;
 /// Vão entre os quadrados da amostra (ADR-0060 §3: `gap: 2`).
 pub(crate) const SWATCH_GAP: f32 = 2.0;
+
+/// A fonte do chip de atalho: mono, 400 (ADR-0060 §3).
+pub(crate) const CHIP_FONT: FontFace = FontFace::Mono { bold: false };
+
+/// Como um chip de atalho se desenha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChipTone {
+    /// Uma combinação: o texto do chip.
+    Normal,
+    /// "Nenhum atalho", esmaecido.
+    Muted,
+    /// Em captura (RF-16.29): borda Acento e "pressione as teclas…".
+    Capturing,
+}
+
+/// Um chip de atalho: o texto, a largura já medida e o tom.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChipView {
+    pub text: String,
+    pub width: f32,
+    pub tone: ChipTone,
+}
+
+/// O que o grupo Atalhos lê para montar o conteúdo: o estado da edição, o
+/// filtro e a captura em curso.
+pub(crate) struct ShortcutsView<'a> {
+    pub state: &'a Shortcuts,
+    pub filter: &'a str,
+    pub capturing: Option<&'a Capturing>,
+}
 
 /// Um item de lista como a tela o mostra.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,6 +125,10 @@ pub(crate) enum ControlView {
         /// Largura do número, medida uma vez (o campo alinha à direita).
         text_width: f32,
     },
+    /// Os atalhos de uma ação, lado a lado (RF-16.28).
+    Chips {
+        chips: Vec<ChipView>,
+    },
 }
 
 impl ControlView {
@@ -116,6 +154,11 @@ impl ControlView {
             ControlView::GitPoll { .. } => (
                 crate::toggle::TOGGLE_TRACK_WIDTH + m.row_gap + m.number_field_width,
                 m.field_height,
+            ),
+            ControlView::Chips { chips } => (
+                chips.iter().map(|chip| chip.width).sum::<f32>()
+                    + chips.len().saturating_sub(1) as f32 * m.list_gap,
+                m.chip_height,
             ),
         }
     }
@@ -180,6 +223,20 @@ impl ControlView {
                 })
             }
             ControlView::Themes { .. } => None,
+            ControlView::Chips { chips } => {
+                let mut x = rect.x;
+                for (index, chip) in chips.iter().enumerate() {
+                    if point.0 < x {
+                        // No vão entre dois chips.
+                        return None;
+                    }
+                    if point.0 < x + chip.width {
+                        return Some(ControlPart::Chip(index));
+                    }
+                    x += chip.width + m.list_gap;
+                }
+                None
+            }
         }
     }
 }
@@ -210,6 +267,12 @@ pub(crate) struct RowView {
     pub invalid: Option<String>,
     /// "Restaurar padrão" está disponível: o valor em vista difere do padrão.
     pub can_reset: bool,
+    /// A ação de uma linha do grupo Atalhos; `None` nas linhas de opção.
+    pub action: Option<Action>,
+    /// Uma linha de aviso em 11px na cor de Aviso, abaixo do nome: o conflito
+    /// de atalho (RF-16.30) e a combinação que o terminal perde (RF-16.29).
+    /// Cortada ao orçamento da linha, como a razão de um valor recusado.
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,6 +283,12 @@ pub(crate) enum Block {
     Note {
         lines: Vec<String>,
         tone: NoteTone,
+    },
+    /// O campo de filtro do grupo Atalhos: o texto digitado e a frase que
+    /// aparece enquanto ele está vazio.
+    Filter {
+        text: String,
+        placeholder: String,
     },
 }
 
@@ -258,7 +327,7 @@ impl Content {
         self.blocks
             .iter()
             .enumerate()
-            .filter(|(_, block)| matches!(block, Block::Row(_)))
+            .filter(|(_, block)| matches!(block, Block::Row(_) | Block::Filter { .. }))
             .map(|(index, _)| index)
             .collect()
     }
@@ -266,7 +335,7 @@ impl Content {
     pub(crate) fn row(&self, block: usize) -> Option<&RowView> {
         match self.blocks.get(block)? {
             Block::Row(row) => Some(row),
-            Block::Section(_) | Block::Note { .. } => None,
+            Block::Section(_) | Block::Note { .. } | Block::Filter { .. } => None,
         }
     }
 }
@@ -301,6 +370,7 @@ pub(crate) fn build(
     key: ContentKey,
     draft: &Draft,
     session_theme: Option<&str>,
+    shortcuts: Option<&ShortcutsView<'_>>,
     catalog: &Catalog,
     m: &Metrics,
     measurer: &mut TextMeasurer,
@@ -308,6 +378,9 @@ pub(crate) fn build(
     let panel_width = f32::from_bits(key.panel_width_bits);
     let mut blocks = Vec::new();
     let mut current_section: Option<Section> = None;
+    if let (Group::Shortcuts, Some(view)) = (key.group, shortcuts) {
+        push_shortcut_blocks(&mut blocks, view, catalog, m, panel_width, measurer);
+    }
     for option in options_in(key.group) {
         if current_section != Some(option.section) {
             blocks.push(Block::Section(option.section.label(catalog)));
@@ -350,10 +423,11 @@ pub(crate) fn build(
         .map(|block| match block {
             Block::Section(_) => BlockSpec::Section,
             Block::Note { lines, .. } => BlockSpec::Note { lines: lines.len() },
+            Block::Filter { .. } => BlockSpec::Filter,
             Block::Row(row) => BlockSpec::Row {
                 control: row.control.size(m),
                 two_lines: !row.description.is_empty(),
-                reason: row.invalid.is_some(),
+                reason: row.invalid.is_some() || row.notice.is_some(),
             },
         })
         .collect();
@@ -454,6 +528,8 @@ fn option_row(
         pending: draft.is_pending(option),
         invalid,
         can_reset: draft.can_reset(option),
+        action: None,
+        notice: None,
     }
 }
 
@@ -629,6 +705,150 @@ fn value_text(option: &OptionDef, value: &EditValue, catalog: &Catalog) -> Strin
     }
 }
 
+/// Um chip de `text` com a largura já medida: o texto mais o `padding: 3px 7px`
+/// e a borda de 1px (ADR-0060 §3).
+fn chip(text: String, tone: ChipTone, m: &Metrics, measurer: &mut TextMeasurer) -> ChipView {
+    let width =
+        measurer.measure_width(&text, CHIP_FONT, m.chip_font_size) + m.chip_padding_x * 2.0 + 2.0;
+    ChipView { text, width, tone }
+}
+
+/// RF-16.28 a RF-16.30: o filtro no topo e, por domínio, um cabeçalho e uma
+/// linha por ação -- o nome legível e os atalhos efetivos como chips ou
+/// "Nenhum atalho". A linha em captura mostra os atalhos de quando a captura
+/// começou, com o chip em captura no lugar do substituído; com um conflito
+/// pendente, a razão no tom de Aviso e Substituir/Cancelar no lugar dos chips.
+fn push_shortcut_blocks(
+    blocks: &mut Vec<Block>,
+    view: &ShortcutsView<'_>,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    blocks.push(Block::Filter {
+        text: view.filter.to_owned(),
+        placeholder: msg::settings::shortcut::filter_placeholder(catalog),
+    });
+    let pending = view.state.pending_actions();
+    for (domain, actions) in view.state.rows(catalog, view.filter) {
+        blocks.push(Block::Section(domain.title(catalog)));
+        for action in actions {
+            let capturing = view
+                .capturing
+                .filter(|capturing| capturing.action == action);
+            let chords = match capturing {
+                Some(capturing) => capturing.frozen.clone(),
+                None => view.state.chords(action),
+            };
+            let name_full = action_label(catalog, action).unwrap_or_else(|| action.to_string());
+            let mut notice_text = None;
+            let control = match capturing.and_then(|capturing| capturing.conflict) {
+                Some(conflict) => {
+                    let other = action_label(catalog, conflict.other)
+                        .unwrap_or_else(|| conflict.other.to_string());
+                    notice_text = Some(msg::settings::shortcut::conflict(catalog, &other));
+                    let labels = vec![
+                        msg::settings::shortcut::replace(catalog),
+                        msg::settings::dialog::cancel(catalog),
+                    ];
+                    let widths = labels
+                        .iter()
+                        .map(|label| {
+                            measurer.measure_width(label, BODY_FONT, m.button_font_size)
+                                + m.button_padding_x * 2.0
+                        })
+                        .collect();
+                    // Nenhum dos dois é "o escolhido": são botões, não uma
+                    // escolha.
+                    ControlView::Segmented {
+                        labels,
+                        widths,
+                        selected: usize::MAX,
+                    }
+                }
+                None => {
+                    let mut chips: Vec<ChipView> = chords
+                        .iter()
+                        .map(|chord| {
+                            let replaced = capturing
+                                .is_some_and(|capturing| capturing.replacing == Some(*chord));
+                            if replaced {
+                                chip(
+                                    msg::settings::shortcut::press_keys(catalog),
+                                    ChipTone::Capturing,
+                                    m,
+                                    measurer,
+                                )
+                            } else {
+                                chip(chord.label(), ChipTone::Normal, m, measurer)
+                            }
+                        })
+                        .collect();
+                    if let Some(capturing) = capturing
+                        && capturing.replacing.is_none()
+                    {
+                        chips.push(chip(
+                            msg::settings::shortcut::press_keys(catalog),
+                            ChipTone::Capturing,
+                            m,
+                            measurer,
+                        ));
+                    }
+                    if chips.is_empty() {
+                        chips.push(chip(
+                            msg::settings::shortcut::none(catalog),
+                            ChipTone::Muted,
+                            m,
+                            measurer,
+                        ));
+                    }
+                    ControlView::Chips { chips }
+                }
+            };
+            // O terminal deixa de receber `Ctrl+<letra>` sozinho: aceito, com
+            // a advertência (RF-16.29).
+            if notice_text.is_none()
+                && capturing.is_none()
+                && let Some(reserved) = view.state.reserved_chords(action).first()
+            {
+                notice_text = Some(msg::settings::shortcut::reserved(catalog, reserved.label()));
+            }
+            let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+            let (name, _) = measurer.truncate(&name_full, BODY_FONT, m.name_size, budget);
+            let notice = notice_text.map(|text| {
+                measurer
+                    .truncate(&text, BODY_FONT, m.description_size, budget)
+                    .0
+            });
+            let value_text = if chords.is_empty() {
+                msg::settings::shortcut::none(catalog)
+            } else {
+                chords
+                    .iter()
+                    .map(Chord::label)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            blocks.push(Block::Row(Box::new(RowView {
+                option: None,
+                name,
+                description: String::new(),
+                description_full: String::new(),
+                description_truncated: false,
+                scope: None,
+                control,
+                value_text,
+                pending: pending.contains(&action),
+                invalid: None,
+                can_reset: view.state.can_reset(action),
+                action: Some(action),
+                notice,
+            })));
+        }
+    }
+}
+
 /// RF-16.24: uma linha por tema -- "sem tema", depois os de `[[themes]]` na
 /// ordem do ciclo -- com a amostra de dez quadrados. O escolhido é o do
 /// rascunho (o do arquivo, até o usuário mexer). O tema de sessão
@@ -689,6 +909,8 @@ fn push_theme_rows(
             invalid: None,
             // Sem botão de restaurar por linha (ADR-0060 §3).
             can_reset: false,
+            action: None,
+            notice: None,
         })));
     }
     if let Some(session) = session_theme
@@ -737,6 +959,7 @@ mod tests {
             key(group),
             &Draft::new(config),
             None,
+            None,
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -749,7 +972,7 @@ mod tests {
             .iter()
             .filter_map(|block| match block {
                 Block::Row(row) => Some(&**row),
-                Block::Section(_) | Block::Note { .. } => None,
+                Block::Section(_) | Block::Note { .. } | Block::Filter { .. } => None,
             })
             .collect()
     }
@@ -763,7 +986,7 @@ mod tests {
             .iter()
             .filter_map(|block| match block {
                 Block::Section(label) => Some(label.as_str()),
-                Block::Row(_) | Block::Note { .. } => None,
+                Block::Row(_) | Block::Note { .. } | Block::Filter { .. } => None,
             })
             .collect();
         assert_eq!(sections, ["IDIOMA", "INÍCIO", "CONFIRMAÇÕES"]);
@@ -880,6 +1103,7 @@ mod tests {
         let c = build(
             narrow,
             &Draft::new(&Config::default()),
+            None,
             None,
             &test_support::pt_br(),
             &metrics(),
@@ -1055,6 +1279,7 @@ mod tests {
         build(
             key(group),
             draft,
+            None,
             None,
             &test_support::pt_br(),
             &metrics(),
@@ -1415,6 +1640,7 @@ mod tests {
                 key(Group::Appearance),
                 &Draft::new(&config),
                 session,
+                None,
                 &test_support::pt_br(),
                 &metrics(),
                 &mut TextMeasurer::new(),
@@ -1441,6 +1667,7 @@ mod tests {
             key(Group::Appearance),
             &Draft::new(&named),
             Some(""),
+            None,
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1464,6 +1691,7 @@ mod tests {
             key(Group::Appearance),
             &draft,
             Some("nord"),
+            None,
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1520,5 +1748,295 @@ mod tests {
         assert_eq!(lines[0], "pneumoultramicroscopico");
         // Texto vazio não gera linha.
         assert!(wrap("", 11.0, 90.0, &mut measurer).is_empty());
+    }
+
+    // ---- grupo Atalhos
+
+    use crate::keymap::Platform;
+    use crate::settings::shortcuts::{Capturing, Conflict};
+
+    fn shortcut_content(state: &Shortcuts, filter: &str, capturing: Option<&Capturing>) -> Content {
+        build(
+            key(Group::Shortcuts),
+            &Draft::new(&Config::default()),
+            None,
+            Some(&ShortcutsView {
+                state,
+                filter,
+                capturing,
+            }),
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        )
+    }
+
+    fn windows() -> Shortcuts {
+        Shortcuts::new(&Config::default(), Platform::Windows)
+    }
+
+    fn row_for(content: &Content, action: Action) -> &RowView {
+        rows(content)
+            .into_iter()
+            .find(|row| row.action == Some(action))
+            .unwrap_or_else(|| panic!("{action}"))
+    }
+
+    fn chip_texts(row: &RowView) -> Vec<(String, ChipTone)> {
+        let ControlView::Chips { chips } = &row.control else {
+            panic!("{:?}", row.control)
+        };
+        chips.iter().map(|c| (c.text.clone(), c.tone)).collect()
+    }
+
+    #[test]
+    fn the_shortcuts_group_starts_with_the_filter_then_a_header_per_domain() {
+        let c = shortcut_content(&windows(), "", None);
+        assert!(matches!(&c.blocks[0], Block::Filter { text, .. } if text.is_empty()));
+        let Block::Filter { placeholder, .. } = &c.blocks[0] else {
+            unreachable!()
+        };
+        assert_eq!(placeholder, "Filtrar por nome ou tecla…");
+        let headers: Vec<&str> = c
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Section(label) => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(headers.len(), crate::settings::actions::Domain::ALL.len());
+        assert_eq!(headers[0], "Abas");
+        // O filtro e as linhas são paradas do `Tab`.
+        let stops = c.row_indices();
+        assert_eq!(stops[0], 0);
+        assert_eq!(stops.len(), 1 + rows(&c).len());
+    }
+
+    #[test]
+    fn a_row_shows_the_name_and_the_effective_chips_or_no_shortcut() {
+        let c = shortcut_content(&windows(), "", None);
+        let tab_new = row_for(&c, Action::TabNew);
+        assert_eq!(tab_new.name, "Nova aba");
+        assert_eq!(
+            chip_texts(tab_new),
+            [("Ctrl+Shift+T".to_owned(), ChipTone::Normal)]
+        );
+        let none = row_for(&c, Action::GroupNewTab);
+        assert_eq!(
+            chip_texts(none),
+            [("Nenhum atalho".to_owned(), ChipTone::Muted)]
+        );
+        assert!(!tab_new.pending && !tab_new.can_reset);
+        assert!(tab_new.notice.is_none() && tab_new.invalid.is_none());
+    }
+
+    #[test]
+    fn the_filter_leaves_only_the_matching_rows_and_their_headers() {
+        let c = shortcut_content(&windows(), "ir para a aba 3", None);
+        let actions: Vec<Option<Action>> = rows(&c).iter().map(|r| r.action).collect();
+        assert_eq!(actions, [Some(Action::TabGoto(3))]);
+        let headers = c
+            .blocks
+            .iter()
+            .filter(|block| matches!(block, Block::Section(_)))
+            .count();
+        assert_eq!(headers, 1);
+        let Block::Filter { text, .. } = &c.blocks[0] else {
+            panic!()
+        };
+        assert_eq!(text, "ir para a aba 3");
+    }
+
+    #[test]
+    fn a_changed_row_is_pending_and_can_be_restored() {
+        let mut state = windows();
+        let chord = |t: &str| Chord::parse(t).unwrap();
+        state.bind(
+            Action::TabNew,
+            Some(chord("ctrl+shift+t")),
+            chord("ctrl+shift+j"),
+        );
+        let c = shortcut_content(&state, "", None);
+        let row = row_for(&c, Action::TabNew);
+        assert!(row.pending && row.can_reset);
+        assert_eq!(
+            chip_texts(row),
+            [("Ctrl+Shift+J".to_owned(), ChipTone::Normal)]
+        );
+    }
+
+    #[test]
+    fn the_capturing_row_shows_the_capture_chip_in_place_of_the_replaced_one() {
+        let state = windows();
+        let chord = Chord::parse("ctrl+shift+t").unwrap();
+        let capturing = Capturing {
+            action: Action::TabNew,
+            replacing: Some(chord),
+            frozen: vec![chord],
+            conflict: None,
+        };
+        let c = shortcut_content(&state, "", Some(&capturing));
+        assert_eq!(
+            chip_texts(row_for(&c, Action::TabNew)),
+            [(
+                "Pressione a combinação de teclas…".to_owned(),
+                ChipTone::Capturing
+            )]
+        );
+        // As outras linhas seguem como estavam.
+        assert_eq!(
+            chip_texts(row_for(&c, Action::TabClose))[0].1,
+            ChipTone::Normal
+        );
+    }
+
+    #[test]
+    fn adding_a_shortcut_to_an_action_without_one_replaces_the_no_shortcut_chip() {
+        let state = windows();
+        let capturing = Capturing {
+            action: Action::GroupNewTab,
+            replacing: None,
+            frozen: vec![],
+            conflict: None,
+        };
+        let c = shortcut_content(&state, "", Some(&capturing));
+        assert_eq!(
+            chip_texts(row_for(&c, Action::GroupNewTab)),
+            [(
+                "Pressione a combinação de teclas…".to_owned(),
+                ChipTone::Capturing
+            )]
+        );
+        // Com um atalho já, o chip em captura vem depois dele.
+        let chord = Chord::parse("ctrl+shift+t").unwrap();
+        let capturing = Capturing {
+            action: Action::TabNew,
+            replacing: None,
+            frozen: vec![chord],
+            conflict: None,
+        };
+        let c = shortcut_content(&state, "", Some(&capturing));
+        let chips = chip_texts(row_for(&c, Action::TabNew));
+        assert_eq!(chips.len(), 2);
+        assert_eq!(chips[1].1, ChipTone::Capturing);
+    }
+
+    #[test]
+    fn a_conflict_names_the_other_action_and_offers_replace_and_cancel() {
+        let state = windows();
+        let chord = Chord::parse("ctrl+shift+r").unwrap();
+        let capturing = Capturing {
+            action: Action::SearchOpen,
+            replacing: Some(Chord::parse("ctrl+shift+f").unwrap()),
+            frozen: vec![Chord::parse("ctrl+shift+f").unwrap()],
+            conflict: Some(Conflict {
+                chord,
+                other: Action::TabRename,
+            }),
+        };
+        let c = shortcut_content(&state, "", Some(&capturing));
+        let row = row_for(&c, Action::SearchOpen);
+        assert_eq!(row.notice.as_deref(), Some("Já em uso por Renomear aba."));
+        let ControlView::Segmented {
+            labels, selected, ..
+        } = &row.control
+        else {
+            panic!("{:?}", row.control)
+        };
+        assert_eq!(labels, &["Substituir", "Cancelar"]);
+        assert_eq!(*selected, usize::MAX, "nenhum dos dois é o escolhido");
+    }
+
+    #[test]
+    fn a_reserved_key_adds_the_terminal_notice_and_a_clean_row_has_none() {
+        let mut state = windows();
+        state.bind(
+            Action::SearchOpen,
+            Some(Chord::parse("ctrl+shift+f").unwrap()),
+            Chord::parse("ctrl+r").unwrap(),
+        );
+        let c = shortcut_content(&state, "", None);
+        assert_eq!(
+            row_for(&c, Action::SearchOpen).notice.as_deref(),
+            Some("O terminal deixa de receber Ctrl+R.")
+        );
+        assert!(row_for(&c, Action::TabNew).notice.is_none());
+    }
+
+    #[test]
+    fn a_reload_during_the_capture_does_not_change_the_capturing_row() {
+        let mut state = windows();
+        let chord = Chord::parse("ctrl+shift+t").unwrap();
+        let capturing = Capturing {
+            action: Action::TabNew,
+            replacing: Some(chord),
+            frozen: vec![chord],
+            conflict: None,
+        };
+        // O arquivo passa a dar outra tecla a `tab.new`.
+        let reloaded = porecatu_config::parse(
+            "[keybindings.windows]\n\"ctrl+shift+t\" = \"none\"\n\"ctrl+shift+j\" = \"tab.new\"\n",
+        )
+        .unwrap()
+        .0;
+        state.rebase(&reloaded);
+        let c = shortcut_content(&state, "", Some(&capturing));
+        // A linha em captura ainda tem o chip em captura no lugar de antes...
+        assert_eq!(
+            chip_texts(row_for(&c, Action::TabNew)),
+            [(
+                "Pressione a combinação de teclas…".to_owned(),
+                ChipTone::Capturing
+            )]
+        );
+        // ...e a de fora da captura já mostra o arquivo novo.
+        let c = shortcut_content(&state, "", None);
+        assert_eq!(
+            chip_texts(row_for(&c, Action::TabNew)),
+            [("Ctrl+Shift+J".to_owned(), ChipTone::Normal)]
+        );
+    }
+
+    #[test]
+    fn a_chip_click_finds_the_chip_under_the_point() {
+        let m = metrics();
+        let chips = ControlView::Chips {
+            chips: vec![
+                ChipView {
+                    text: "Ctrl+A".to_owned(),
+                    width: 50.0,
+                    tone: ChipTone::Normal,
+                },
+                ChipView {
+                    text: "Ctrl+B".to_owned(),
+                    width: 50.0,
+                    tone: ChipTone::Normal,
+                },
+            ],
+        };
+        let (width, height) = chips.size(&m);
+        assert_eq!(width, 50.0 + m.list_gap + 50.0);
+        let rect = Rect {
+            x: 10.0,
+            y: 10.0,
+            width,
+            height,
+        };
+        assert_eq!(
+            chips.part_at(rect, &m, (20.0, 15.0)),
+            Some(ControlPart::Chip(0))
+        );
+        assert_eq!(
+            chips.part_at(rect, &m, (10.0 + 50.0 + m.list_gap + 5.0, 15.0)),
+            Some(ControlPart::Chip(1))
+        );
+        assert_eq!(chips.part_at(rect, &m, (10.0 + 50.0 + 2.0, 15.0)), None);
+    }
+
+    #[test]
+    fn the_shortcuts_group_without_a_view_is_empty_like_before() {
+        let c = content(Group::Shortcuts, &Config::default());
+        assert!(rows(&c).is_empty());
     }
 }

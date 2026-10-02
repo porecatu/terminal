@@ -250,6 +250,8 @@ none = "Nenhum atalho"
 press_keys = "Pressione a combinação de teclas…"
 conflict = "Já em uso por {action}."
 replace = "Substituir"
+filter_placeholder = "Filtrar por nome ou tecla…"
+reserved = "O terminal deixa de receber {chord}."
 
 [action]
 tab_new = "Nova aba"
