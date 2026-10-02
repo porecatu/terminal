@@ -345,10 +345,8 @@ impl Shortcuts {
     }
 
     /// O arquivo mudou por outro caminho. Sem edição a tela acompanha; com
-    /// edição ela fica como está, só com a base nova (a faixa de conflito é da
-    /// tarefa 11).
-    // TODO(tarefa 11): arquivo alterado fora com pendências é a faixa do
-    // RF-16.23; aqui a base só troca.
+    /// edição ela fica como está, só com a base nova. Quem decide **se** isto
+    /// roda é `FileState` (RF-16.23): a faixa de conflito pergunta antes.
     pub(crate) fn rebase(&mut self, config: &Config) {
         let clean = !self.is_dirty();
         self.common = config.keybindings.common.clone();

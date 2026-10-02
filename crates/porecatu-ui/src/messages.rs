@@ -72,9 +72,6 @@ pub(crate) fn settings_save_error(
     use porecatu_config::EditError;
 
     match error {
-        Failure::Read { path, cause } => {
-            msg::notice::config_invalid::unreadable(catalog, path.display(), cause)
-        }
         Failure::Edit(edit) => match edit {
             EditError::Invalid(error) => config_error(catalog, error),
             EditError::Syntax {

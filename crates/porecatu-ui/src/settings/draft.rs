@@ -346,8 +346,9 @@ impl Draft {
     /// O que o arquivo diz mudou -- uma recarga que não veio do Salvar da
     /// própria tela. A base troca; uma pendência que agora coincide com o
     /// arquivo deixa de ser pendência (RF-16.15), e as outras ficam.
-    // TODO(tarefa 11): arquivo alterado fora com pendências é a faixa do
-    // RF-16.23 (Recarregar / Manter minhas alterações); aqui a base só troca.
+    /// Quem decide **se** troca é `FileState` (RF-16.23): com pendências e o
+    /// arquivo mudado por fora a faixa de conflito pergunta antes, e só a
+    /// resposta chega aqui.
     pub(crate) fn rebase(&mut self, file: &Config) {
         self.file = file.clone();
         let file = &self.file;

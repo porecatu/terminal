@@ -17,6 +17,7 @@ pub(crate) mod closing;
 mod content;
 mod draft;
 mod field_edit;
+mod file_state;
 mod interact;
 mod layout;
 mod paint;
@@ -31,9 +32,10 @@ use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::window::WindowAttributes;
 
 pub(crate) use catalog::Group;
+pub(crate) use content::{BannerView, ControlView, RowView};
 #[cfg(test)]
 pub(crate) use content::{ChipTone, ChipView, ListItemView};
-pub(crate) use content::{ControlView, RowView};
+pub(crate) use file_state::Disk;
 pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
 pub(crate) use window::{DialogAnswer, Env, Press, SettingsWindow};
 
@@ -140,6 +142,93 @@ pub(crate) fn window_attributes(
     attributes
 }
 
+/// As linhas de opção de `group`, montadas sobre o `Config` padrão e o
+/// catálogo pt_BR, para os testes da árvore de acessibilidade.
+#[cfg(test)]
+pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
+    use porecatu_render::TextMeasurer;
+
+    let config = porecatu_config::Config::default();
+    let metrics = layout::Metrics::from_config(&config, 52.0);
+    let key = content::ContentKey {
+        group,
+        panel_width_bits: (config.appearance.settings.window_width as f32 - metrics.sidebar_width)
+            .to_bits(),
+        generation: 0,
+    };
+    content::build(
+        key,
+        &draft::Draft::new(&config),
+        &content::ViewExtras::default(),
+        &crate::messages::test_support::pt_br(),
+        &metrics,
+        &mut TextMeasurer::new(),
+    )
+    .blocks
+    .into_iter()
+    .filter_map(|block| match block {
+        content::Block::Row(row) => Some(*row),
+        content::Block::Section(_)
+        | content::Block::Note { .. }
+        | content::Block::Filter { .. } => None,
+    })
+    .collect()
+}
+
+/// Um `Layout` de tamanho fixo para os testes da árvore de acessibilidade,
+/// com ou sem o cabeçalho nosso (sem ele é o macOS).
+#[cfg(test)]
+pub(crate) fn layout_for_test(with_header: bool) -> Layout {
+    let settings = porecatu_config::Config::default().appearance.settings;
+    layout::layout(
+        settings.window_width as f32,
+        settings.window_height as f32,
+        if with_header { 52.0 } else { 0.0 },
+        settings.sidebar_width as f32,
+        54.0,
+    )
+}
+
+/// Uma faixa montada sobre o `Config` padrão e o catálogo pt_BR, para os testes
+/// da árvore de acessibilidade: a de arquivo inválido (`invalid`) ou a de
+/// conflito.
+#[cfg(test)]
+pub(crate) fn content_banner_for_test(invalid: bool) -> BannerView {
+    use porecatu_render::TextMeasurer;
+
+    let config = porecatu_config::Config::default();
+    let metrics = layout::Metrics::from_config(&config, 52.0);
+    let banner = if invalid {
+        file_state::Banner::Invalid(
+            porecatu_config::parse(
+                "[terminal.font
+",
+            )
+            .unwrap_err(),
+        )
+    } else {
+        file_state::Banner::Conflict
+    };
+    let key = content::ContentKey {
+        group: Group::General,
+        panel_width_bits: 700.0_f32.to_bits(),
+        generation: 0,
+    };
+    content::build(
+        key,
+        &draft::Draft::new(&config),
+        &content::ViewExtras {
+            banner: Some(&banner),
+            ..content::ViewExtras::default()
+        },
+        &crate::messages::test_support::pt_br(),
+        &metrics,
+        &mut TextMeasurer::new(),
+    )
+    .banner
+    .expect("a faixa")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,52 +281,4 @@ mod tests {
             (10, 20)
         );
     }
-}
-
-/// As linhas de opção de `group`, montadas sobre o `Config` padrão e o
-/// catálogo pt_BR, para os testes da árvore de acessibilidade.
-#[cfg(test)]
-pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
-    use porecatu_render::TextMeasurer;
-
-    let config = porecatu_config::Config::default();
-    let metrics = layout::Metrics::from_config(&config, 52.0);
-    let key = content::ContentKey {
-        group,
-        panel_width_bits: (config.appearance.settings.window_width as f32 - metrics.sidebar_width)
-            .to_bits(),
-        generation: 0,
-    };
-    content::build(
-        key,
-        &draft::Draft::new(&config),
-        None,
-        None,
-        &crate::messages::test_support::pt_br(),
-        &metrics,
-        &mut TextMeasurer::new(),
-    )
-    .blocks
-    .into_iter()
-    .filter_map(|block| match block {
-        content::Block::Row(row) => Some(*row),
-        content::Block::Section(_)
-        | content::Block::Note { .. }
-        | content::Block::Filter { .. } => None,
-    })
-    .collect()
-}
-
-/// Um `Layout` de tamanho fixo para os testes da árvore de acessibilidade,
-/// com ou sem o cabeçalho nosso (sem ele é o macOS).
-#[cfg(test)]
-pub(crate) fn layout_for_test(with_header: bool) -> Layout {
-    let settings = porecatu_config::Config::default().appearance.settings;
-    layout::layout(
-        settings.window_width as f32,
-        settings.window_height as f32,
-        if with_header { 52.0 } else { 0.0 },
-        settings.sidebar_width as f32,
-        54.0,
-    )
 }

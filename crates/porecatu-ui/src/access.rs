@@ -39,7 +39,7 @@ use crate::move_to_group::MoveToGroupPopover;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
 use crate::settings::{
-    ControlView, FOOTER_BUTTONS, FooterButton, Group, Layout as SettingsLayout, RowView,
+    BannerView, ControlView, FOOTER_BUTTONS, FooterButton, Group, Layout as SettingsLayout, RowView,
 };
 use crate::status_bar::{SegmentRole, StatusBarLayout};
 use crate::tab_bar::{self, Indicator, TabBarStyle};
@@ -867,6 +867,8 @@ const SETTINGS_GROUP_LIST_ID: NodeId = NodeId(SETTINGS_ID_BASE + 1);
 const SETTINGS_PANEL_ID: NodeId = NodeId(SETTINGS_ID_BASE + 2);
 const SETTINGS_FOOTER_ID: NodeId = NodeId(SETTINGS_ID_BASE + 3);
 const SETTINGS_FILTER_ID: NodeId = NodeId(SETTINGS_ID_BASE + 4);
+/// A faixa de arquivo e, logo depois, os botões dela (um id por botão).
+const SETTINGS_BANNER_ID: NodeId = NodeId(SETTINGS_ID_BASE + 5);
 const SETTINGS_FOOTER_BUTTON_BASE: u64 = SETTINGS_ID_BASE + 10;
 const SETTINGS_WINDOW_MINIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 20);
 const SETTINGS_WINDOW_MAXIMIZE_ID: NodeId = NodeId(SETTINGS_ID_BASE + 21);
@@ -908,6 +910,7 @@ pub(crate) fn build_settings_tree(
     has_pending: bool,
     rows: &[&RowView],
     filter: Option<&str>,
+    banner: Option<&BannerView>,
     dialog: Option<&ConfirmDialog>,
     catalog: &Catalog,
     language: &str,
@@ -966,6 +969,25 @@ pub(crate) fn build_settings_tree(
     nodes.push((SETTINGS_FOOTER_ID, container(Role::Group, footer_children)));
 
     let mut panel_children = Vec::new();
+    // A faixa de arquivo alterado fora ou inválido (RF-16.22, RF-16.23): um
+    // alerta com os botões dela, antes de tudo -- é o que se decide primeiro.
+    // Em somente leitura (arquivo inválido) os controles dizem que o são.
+    let read_only = banner.is_some_and(|banner| banner.error);
+    if let Some(banner) = banner {
+        let mut children = Vec::new();
+        for (index, button) in banner.buttons.iter().enumerate() {
+            let id = NodeId(SETTINGS_BANNER_ID.0 + 1 + index as u64);
+            nodes.push((id, leaf(Role::Button, button.label.clone())));
+            children.push(id);
+        }
+        let mut node = container(Role::Alert, children);
+        node.set_label(banner.title.clone());
+        if let Some(body) = &banner.body {
+            node.set_description(body.clone());
+        }
+        nodes.push((SETTINGS_BANNER_ID, node));
+        panel_children.push(SETTINGS_BANNER_ID);
+    }
     // O filtro do grupo Atalhos (RF-16.28).
     if let Some(value) = filter {
         let mut node = leaf(
@@ -977,7 +999,7 @@ pub(crate) fn build_settings_tree(
         panel_children.push(SETTINGS_FILTER_ID);
     }
     for (index, row) in rows.iter().enumerate() {
-        panel_children.push(settings_row_node(index, row, &mut nodes));
+        panel_children.push(settings_row_node(index, row, read_only, &mut nodes));
     }
     panel_children.push(SETTINGS_FOOTER_ID);
 
@@ -1017,7 +1039,12 @@ pub(crate) fn build_settings_tree(
 /// alternância é `Switch`, campo de texto `TextInput`, numérico `SpinButton`,
 /// escolha `ComboBox`, lista `List`. Devolve o id do nó da linha e empilha os
 /// nós dela em `nodes`.
-fn settings_row_node(index: usize, row: &RowView, nodes: &mut Vec<(NodeId, Node)>) -> NodeId {
+fn settings_row_node(
+    index: usize,
+    row: &RowView,
+    read_only: bool,
+    nodes: &mut Vec<(NodeId, Node)>,
+) -> NodeId {
     let id = NodeId(SETTINGS_ROW_BASE + index as u64 * SETTINGS_ROW_STRIDE);
     // A descrição inteira, com o escopo de classe C depois dela: quem ouve o
     // leitor de tela não vê o corte nem a posição do escopo.
@@ -1042,6 +1069,9 @@ fn settings_row_node(index: usize, row: &RowView, nodes: &mut Vec<(NodeId, Node)
         // Valor recusado (RF-16.18): o leitor de tela o anuncia como inválido.
         if row.invalid.is_some() {
             node.set_invalid(accesskit::Invalid::True);
+        }
+        if read_only {
+            node.set_read_only();
         }
     };
     match &row.control {
@@ -1790,6 +1820,7 @@ mod settings_tree_tests {
             &refs,
             None,
             None,
+            None,
             &test_support::pt_br(),
             language,
         )
@@ -1908,7 +1939,7 @@ mod settings_tree_tests {
         ids.dedup();
         assert_eq!(ids.len(), total);
         // Acima de todo bloco da janela de terminal.
-        assert!(SETTINGS_ID_BASE > PANE_ID_BASE + 1_000 * 1_000);
+        const { assert!(SETTINGS_ID_BASE > PANE_ID_BASE + 1_000 * 1_000) };
     }
 
     #[test]
@@ -1931,6 +1962,7 @@ mod settings_tree_tests {
             Group::General,
             false,
             &[],
+            None,
             None,
             None,
             &test_support::en_us(),
@@ -2127,6 +2159,7 @@ mod settings_tree_tests {
             &refs,
             Some("aba"),
             None,
+            None,
             &test_support::pt_br(),
             "pt-BR",
         );
@@ -2151,6 +2184,67 @@ mod settings_tree_tests {
     }
 
     #[test]
+    fn a_banner_is_an_alert_with_its_buttons_and_an_invalid_file_makes_the_rows_read_only() {
+        use crate::settings::{BannerView, content_banner_for_test};
+        let rows = rows_for_test(Group::Terminal);
+        let layout = layout_for_test(true);
+        let refs: Vec<&RowView> = rows.iter().collect();
+        let banner: BannerView = content_banner_for_test(true);
+        let update = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::Terminal,
+            false,
+            &refs,
+            None,
+            Some(&banner),
+            None,
+            &test_support::pt_br(),
+            "pt-BR",
+        );
+        let alert = node(&update, SETTINGS_BANNER_ID);
+        assert_eq!(alert.role(), Role::Alert);
+        assert!(alert.label().is_some_and(|l| l.contains("inválido")));
+        assert!(
+            alert
+                .description()
+                .is_some_and(|d| d.starts_with("linha 1"))
+        );
+        let buttons: Vec<&str> = alert
+            .children()
+            .iter()
+            .map(|id| node(&update, *id).label().unwrap())
+            .collect();
+        assert_eq!(buttons, ["Abrir arquivo no editor"]);
+        // Arquivo inválido: toda linha é somente leitura.
+        let rows_only = |update: &TreeUpdate| -> Vec<bool> {
+            row_nodes(update)
+                .into_iter()
+                .filter(|node| node.role() != Role::Alert)
+                .map(|node| node.is_read_only())
+                .collect()
+        };
+        let flags = rows_only(&update);
+        assert!(!flags.is_empty());
+        assert!(flags.iter().all(|read_only| *read_only));
+        // Conflito não bloqueia: as linhas seguem editáveis.
+        let conflict = content_banner_for_test(false);
+        let update = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::Terminal,
+            false,
+            &refs,
+            None,
+            Some(&conflict),
+            None,
+            &test_support::pt_br(),
+            "pt-BR",
+        );
+        assert!(rows_only(&update).iter().all(|read_only| !read_only));
+    }
+
+    #[test]
     fn the_pending_dialog_adds_three_buttons_and_moves_the_focus_to_the_focused_one() {
         let layout = layout_for_test(true);
         let dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 2);
@@ -2160,6 +2254,7 @@ mod settings_tree_tests {
             Group::General,
             true,
             &[],
+            None,
             None,
             Some(&dialog),
             &test_support::pt_br(),
@@ -2186,6 +2281,7 @@ mod settings_tree_tests {
             Group::General,
             true,
             &[],
+            None,
             None,
             None,
             &test_support::pt_br(),

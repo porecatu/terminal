@@ -7158,6 +7158,9 @@ impl App {
     fn apply_config_reload(&mut self, outcome: ConfigReload, now: Instant) {
         let (new_config, unknown_keys) = match outcome {
             ConfigReload::Invalid { error } => {
+                // A tela de configurações também vê o arquivo (ADR-0059 §4):
+                // inválido, ela passa a somente leitura.
+                self.observe_config_file();
                 for state in self.windows.values_mut() {
                     state.warnings.push(
                         Severity::Error,
@@ -7343,10 +7346,19 @@ impl App {
         // `(Workspace, Config, largura)` -- só redesenhar já aplica. Inclui a
         // janela de configurações, que lê a mesma paleta e o mesmo estilo; o
         // conteúdo medido dela, esse, depende do `Config` e é refeito.
-        if let Some(settings) = &mut self.settings {
-            settings.config_reloaded(&self.config);
-        }
+        self.observe_config_file();
         self.for_each_surface(|surface| surface.request_redraw());
+    }
+
+    /// Entrega à janela de configurações o arquivo como está no disco agora
+    /// (ADR-0059 §4): ela decide por conteúdo se foi a própria gravação, uma
+    /// troca silenciosa ou um conflito. Sem arquivo resolvido não há o que
+    /// entregar.
+    fn observe_config_file(&mut self) {
+        let (Some(settings), Some(path)) = (&mut self.settings, &self.config_path) else {
+            return;
+        };
+        settings.observe_disk(&settings::Disk::observe(path));
     }
 
     /// `settings.open` do catálogo (RF-16.1, ADR-0059 §6), disparada pelo
@@ -7434,6 +7446,10 @@ impl App {
             self.settings_last_group,
             &self.config,
             language::locale_dirs(self.config_path.as_deref()),
+            &self
+                .config_path
+                .as_deref()
+                .map_or(settings::Disk::Missing, settings::Disk::observe),
         ))
     }
 
@@ -7474,10 +7490,11 @@ impl App {
         let Some(settings) = &mut self.settings else {
             return;
         };
-        if !settings.can_save() {
+        // Com a faixa de conflito à vista, Salvar equivale a Manter minhas
+        // alterações (RF-16.23): `prepare_save` já trocou a base.
+        let Some(plan) = settings.prepare_save() else {
             return;
-        }
-        let edits = settings.edits();
+        };
         let now = Instant::now();
         let Some(path) = self.config_path.clone() else {
             if let Some(state) = self.windows.values_mut().next() {
@@ -7491,8 +7508,18 @@ impl App {
             }
             return;
         };
-        match settings::save::save(&path, &edits) {
+        match settings::save::save(
+            &path,
+            plan.base.as_deref(),
+            EXAMPLE_CONFIG_TOML,
+            &plan.edits,
+        ) {
             Ok(saved) => settings.save_succeeded(&saved),
+            // O arquivo mudou por fora desde o que a tela viu: nada foi
+            // gravado, e a faixa de conflito sobe (RF-16.23).
+            Err(error) if error.is_conflict() => {
+                settings.observe_disk(&settings::Disk::observe(&path));
+            }
             Err(error) => {
                 if let Some(state) = self.windows.values_mut().next() {
                     state.warnings.push(

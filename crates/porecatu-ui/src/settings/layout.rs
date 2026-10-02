@@ -29,7 +29,10 @@ pub(crate) struct Layout {
     pub sidebar_separator: Rect,
     /// Painel (opções e rodapé), ocupando o resto.
     pub panel: Rect,
-    /// A parte do painel que rola: o painel menos o rodapé.
+    /// A faixa de arquivo alterado fora ou inválido (ADR-0060 §2), no topo do
+    /// painel, de largura cheia entre as margens. `None` sem faixa.
+    pub banner: Option<Rect>,
+    /// A parte do painel que rola: o painel menos a faixa e o rodapé.
     pub panel_body: Rect,
     /// Rodapé fixo na base do painel (ADR-0060 §1).
     pub footer: Rect,
@@ -64,12 +67,37 @@ const SEPARATOR_WIDTH: f32 = 1.0;
 /// grampeada à largura da janela: uma janela mais estreita que a guia (o
 /// mínimo é maior que ela, mas o SO pode entregar menos) não produz retângulo
 /// de largura negativa.
+#[cfg(test)]
 pub(crate) fn layout(
     width: f32,
     height: f32,
     header_height: f32,
     sidebar_width: f32,
     footer_height: f32,
+) -> Layout {
+    layout_with_banner(
+        width,
+        height,
+        header_height,
+        sidebar_width,
+        footer_height,
+        0.0,
+    )
+}
+
+/// Margem acima e abaixo da faixa: o `padding: 12` vertical do rodapé
+/// (ADR-0060 §1), o mesmo respiro do outro lado do painel.
+pub(crate) const BANNER_MARGIN: f32 = 12.0;
+
+/// [`layout`] com uma faixa de `banner_height` no topo do painel (zero, sem
+/// faixa). A faixa não rola: o corpo rolável começa embaixo dela.
+pub(crate) fn layout_with_banner(
+    width: f32,
+    height: f32,
+    header_height: f32,
+    sidebar_width: f32,
+    footer_height: f32,
+    banner_height: f32,
 ) -> Layout {
     let header_height = header_height.min(height).max(0.0);
     let sidebar_width = sidebar_width.min(width).max(0.0);
@@ -100,12 +128,24 @@ pub(crate) fn layout(
         height: body_height,
     };
     let footer_height = footer_height.min(body_height).max(0.0);
+    let banner = (banner_height > 0.0).then(|| Rect {
+        x: panel.x + PANEL_SIDE_PADDING,
+        y: panel.y + BANNER_MARGIN,
+        width: (panel.width - PANEL_SIDE_PADDING * 2.0).max(0.0),
+        height: banner_height,
+    });
+    let banner_space = if banner_height > 0.0 {
+        (BANNER_MARGIN * 2.0 + banner_height).min(body_height - footer_height)
+    } else {
+        0.0
+    };
     let panel_body = Rect {
-        height: body_height - footer_height,
+        y: panel.y + banner_space,
+        height: body_height - footer_height - banner_space,
         ..panel
     };
     let footer = Rect {
-        y: panel.y + panel_body.height,
+        y: panel_body.y + panel_body.height,
         height: footer_height,
         ..panel
     };
@@ -114,10 +154,15 @@ pub(crate) fn layout(
         sidebar,
         sidebar_separator,
         panel,
+        banner,
         panel_body,
         footer,
     }
 }
+
+/// O `padding: 18` das laterais do painel (ADR-0060 §1): a faixa alinha com as
+/// linhas.
+const PANEL_SIDE_PADDING: f32 = 18.0;
 
 /// Os itens da guia: um retângulo por grupo, de cima para baixo, dentro do
 /// `padding` da guia (ADR-0060 §1: 6) e com `SIDEBAR_ITEM_GAP` entre eles.
@@ -206,6 +251,12 @@ pub(crate) struct Metrics {
     pub chip_padding_x: f32,
     pub chip_height: f32,
     pub chip_radius: f32,
+    /// A faixa de arquivo alterado fora ou inválido (ADR-0060 §2):
+    /// `padding: 11px 12px`, barra de severidade de 2px, raio 8.
+    pub banner_padding_y: f32,
+    pub banner_padding_x: f32,
+    pub banner_bar_width: f32,
+    pub banner_radius: f32,
 }
 
 /// Espaço entre o nome e a descrição dentro da linha. O ADR-0060 §2 posiciona
@@ -259,7 +310,26 @@ impl Metrics {
             chip_padding_x: 7.0,
             chip_height: 10.5 + 3.0 * 2.0 + 2.0,
             chip_radius: 4.0,
+            banner_padding_y: 11.0,
+            banner_padding_x: 12.0,
+            banner_bar_width: 2.0,
+            banner_radius: 8.0,
         }
+    }
+
+    /// Altura do bloco de texto da faixa: o título, e o corpo sob ele quando há.
+    pub(crate) fn banner_text_height(&self, has_body: bool) -> f32 {
+        if has_body {
+            self.name_size + NAME_DESCRIPTION_GAP + self.description_size
+        } else {
+            self.name_size
+        }
+    }
+
+    /// Altura da faixa: o maior entre o texto e o botão, mais o `padding`
+    /// vertical de 11 de cada lado.
+    pub(crate) fn banner_height(&self, has_body: bool) -> f32 {
+        self.banner_padding_y * 2.0 + self.banner_text_height(has_body).max(self.button_height)
     }
 
     /// Altura do rodapé: `padding: 12px` em cima e embaixo de um botão.
@@ -492,6 +562,74 @@ pub(crate) fn scroll_to_reveal(scroll: f32, top: f32, height: f32, viewport_heig
     }
 }
 
+// ---- faixa
+
+/// Os botões de uma faixa, da esquerda para a direita (ADR-0060 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BannerButton {
+    /// Conflito: descarta as pendências e mostra o arquivo novo.
+    Reload,
+    /// Conflito: some a faixa; o Salvar aplica as pendências sobre o arquivo
+    /// novo.
+    Keep,
+    /// Arquivo inválido: abre o arquivo no editor.
+    OpenFile,
+}
+
+/// A geometria interna de uma faixa de `rect`, com `widths` os botões já
+/// medidos: a barra de severidade de 2px à esquerda, o texto depois do
+/// `padding: 11px 12px`, e os botões à direita com o `gap` do diálogo.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BannerGeometry {
+    pub bar: Rect,
+    pub title_origin: (f32, f32),
+    pub body_origin: (f32, f32),
+    pub buttons: Vec<Rect>,
+    /// Largura que sobra ao texto, entre a barra e o primeiro botão.
+    pub text_width: f32,
+}
+
+pub(crate) fn banner_geometry(
+    m: &Metrics,
+    rect: Rect,
+    widths: &[f32],
+    has_body: bool,
+) -> BannerGeometry {
+    let bar = Rect {
+        width: m.banner_bar_width,
+        ..rect
+    };
+    let buttons_width: f32 =
+        widths.iter().sum::<f32>() + widths.len().saturating_sub(1) as f32 * m.button_gap;
+    let mut x = rect.x + rect.width - m.banner_padding_x - buttons_width;
+    let buttons: Vec<Rect> = widths
+        .iter()
+        .map(|width| {
+            let button = Rect {
+                x,
+                y: rect.y + (rect.height - m.button_height) / 2.0,
+                width: *width,
+                height: m.button_height,
+            };
+            x += width + m.button_gap;
+            button
+        })
+        .collect();
+    let text_x = rect.x + m.banner_bar_width + m.banner_padding_x;
+    let text_height = m.banner_text_height(has_body);
+    let top = rect.y + (rect.height - text_height) / 2.0;
+    let first_button = buttons
+        .first()
+        .map_or(rect.x + rect.width - m.banner_padding_x, |button| button.x);
+    BannerGeometry {
+        bar,
+        title_origin: (text_x, top),
+        body_origin: (text_x, top + m.name_size + NAME_DESCRIPTION_GAP),
+        buttons,
+        text_width: (first_button - m.banner_padding_x - text_x).max(0.0),
+    }
+}
+
 // ---- rodapé
 
 /// Os retângulos dos três botões do rodapé: Abrir arquivo à esquerda, Descartar
@@ -536,6 +674,8 @@ pub(crate) enum Hit {
     /// O botão de restaurar padrão da linha.
     Restore(usize),
     Footer(FooterButton),
+    /// Um botão da faixa.
+    Banner(BannerButton),
 }
 
 impl Hit {
@@ -544,7 +684,7 @@ impl Hit {
     pub(crate) fn row_index(self) -> Option<usize> {
         match self {
             Hit::Row(index) | Hit::Control(index, _) | Hit::Restore(index) => Some(index),
-            Hit::Group(_) | Hit::Footer(_) => None,
+            Hit::Group(_) | Hit::Footer(_) | Hit::Banner(_) => None,
         }
     }
 }
@@ -700,6 +840,8 @@ fn contains(rect: Rect, (x, y): (f32, f32)) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Focus {
     Sidebar,
+    /// Um botão da faixa (ADR-0060 §2): vem logo depois da guia.
+    Banner(BannerButton),
     Row(usize),
     Footer(FooterButton),
 }
@@ -707,8 +849,20 @@ pub(crate) enum Focus {
 /// A ordem do foco: guia, linhas do painel, rodapé. `available` são os
 /// botões do rodapé que podem receber foco -- um botão indisponível não é
 /// parada (esmaecido, nunca ausente, mas também nunca focável).
+#[cfg(test)]
 pub(crate) fn focus_order(rows: &[usize], available: &[FooterButton]) -> Vec<Focus> {
+    focus_order_with_banner(&[], rows, available)
+}
+
+/// [`focus_order`] com os botões da faixa, que vêm logo depois da guia: é o
+/// que o usuário precisa decidir antes de mexer no resto.
+pub(crate) fn focus_order_with_banner(
+    banner: &[BannerButton],
+    rows: &[usize],
+    available: &[FooterButton],
+) -> Vec<Focus> {
     let mut order = vec![Focus::Sidebar];
+    order.extend(banner.iter().map(|button| Focus::Banner(*button)));
     order.extend(rows.iter().map(|index| Focus::Row(*index)));
     order.extend(
         FOOTER_BUTTONS
@@ -1283,6 +1437,110 @@ mod tests {
         assert_eq!(
             geometry.content_height,
             last.1 + line_height + m.panel_padding
+        );
+    }
+
+    // ---- faixa
+
+    #[test]
+    fn without_a_banner_the_layout_is_the_one_from_before() {
+        let m = metrics();
+        let plain = layout(900.0, 640.0, 52.0, 200.0, m.footer_height());
+        let zero = layout_with_banner(900.0, 640.0, 52.0, 200.0, m.footer_height(), 0.0);
+        assert_eq!(plain, zero);
+        assert!(plain.banner.is_none());
+        assert_eq!(plain.panel_body.y, plain.panel.y);
+    }
+
+    #[test]
+    fn a_banner_sits_at_the_top_of_the_panel_and_the_body_starts_below_it() {
+        let m = metrics();
+        let height = m.banner_height(false);
+        let with = layout_with_banner(900.0, 640.0, 52.0, 200.0, m.footer_height(), height);
+        let plain = layout(900.0, 640.0, 52.0, 200.0, m.footer_height());
+        let banner = with.banner.expect("a faixa");
+        // Alinhada às linhas: 18 de cada lado, e a margem de 12 em cima.
+        assert_eq!(banner.x, with.panel.x + 18.0);
+        assert_eq!(banner.width, with.panel.width - 36.0);
+        assert_eq!(banner.y, with.panel.y + BANNER_MARGIN);
+        assert_eq!(banner.height, height);
+        // O corpo rolável começa depois dela e da margem de baixo, e o fim
+        // dele (o rodapé) não mexe.
+        assert_eq!(with.panel_body.y, banner.y + banner.height + BANNER_MARGIN);
+        assert_eq!(
+            with.panel_body.y + with.panel_body.height,
+            plain.panel_body.y + plain.panel_body.height
+        );
+        assert_eq!(with.footer, plain.footer);
+    }
+
+    #[test]
+    fn the_banner_height_fits_the_dialog_button_with_the_padding_of_eleven() {
+        let m = metrics();
+        // Sem corpo o texto é só o título (12.5), menor que o botão (30): o
+        // botão manda.
+        assert_eq!(m.banner_height(false), 11.0 * 2.0 + m.button_height);
+        // Com corpo, o texto passa de 30? título + vão + corpo = 15.5+... não.
+        let text = m.banner_text_height(true);
+        assert_eq!(
+            m.banner_height(true),
+            11.0 * 2.0 + text.max(m.button_height)
+        );
+    }
+
+    #[test]
+    fn the_banner_geometry_puts_the_bar_left_the_text_after_it_and_the_buttons_right() {
+        let m = metrics();
+        let rect = Rect {
+            x: 218.0,
+            y: 12.0,
+            width: 664.0,
+            height: m.banner_height(false),
+        };
+        let geometry = banner_geometry(&m, rect, &[70.0, 150.0], false);
+        assert_eq!(geometry.bar.width, 2.0);
+        assert_eq!(geometry.bar.x, rect.x);
+        assert_eq!(geometry.title_origin.0, rect.x + 2.0 + 12.0);
+        assert_eq!(geometry.buttons.len(), 2);
+        // Os botões ficam rentes ao padding da direita, com o gap do diálogo
+        // entre eles, e centrados na vertical.
+        let last = geometry.buttons[1];
+        assert_eq!(last.x + last.width, rect.x + rect.width - 12.0);
+        assert_eq!(
+            geometry.buttons[1].x - (geometry.buttons[0].x + geometry.buttons[0].width),
+            m.button_gap
+        );
+        assert_eq!(last.height, m.button_height);
+        assert_eq!(last.y + last.height / 2.0, rect.y + rect.height / 2.0);
+        // O texto cabe entre a barra e o primeiro botão.
+        assert_eq!(
+            geometry.text_width,
+            geometry.buttons[0].x - 12.0 - geometry.title_origin.0
+        );
+    }
+
+    #[test]
+    fn the_banner_buttons_come_right_after_the_sidebar_in_the_tab_order() {
+        let order = focus_order_with_banner(
+            &[BannerButton::Reload, BannerButton::Keep],
+            &[3, 5],
+            &[FooterButton::OpenFile],
+        );
+        assert_eq!(
+            order,
+            [
+                Focus::Sidebar,
+                Focus::Banner(BannerButton::Reload),
+                Focus::Banner(BannerButton::Keep),
+                Focus::Row(3),
+                Focus::Row(5),
+                Focus::Footer(FooterButton::OpenFile),
+            ]
+        );
+        // Sem faixa é a ordem de sempre.
+        assert_eq!(
+            focus_order_with_banner(&[], &[3], &[FooterButton::OpenFile]),
+            focus_order(&[3], &[FooterButton::OpenFile])
         );
     }
 }

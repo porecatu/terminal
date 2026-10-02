@@ -22,7 +22,7 @@ use super::content::{
 use super::field_edit::{EditPart, Editing};
 use super::layout::{
     BlockGeometry, ControlPart, FOOTER_BUTTONS, Focus, FooterButton, Hit, Layout, Metrics,
-    RowGeometry, list_geometry,
+    RowGeometry, banner_geometry, list_geometry,
 };
 use super::{
     CHIP_BACKGROUND, CHIP_BORDER, Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON,
@@ -63,10 +63,36 @@ pub(crate) struct Input<'a> {
     pub selection_color: Color,
     /// Quais botões do rodapé estão disponíveis, na ordem de `FOOTER_BUTTONS`.
     pub footer_available: [bool; 3],
+    /// A tela está em somente leitura (RF-16.22): controles e textos das
+    /// linhas em `#5c646f`, "indisponível fica esmaecido, nunca ausente".
+    pub read_only: bool,
     pub style: &'a TabBarStyle,
     pub pal: &'a ResolvedPalette,
     pub config: &'a Config,
     pub catalog: &'a Catalog,
+}
+
+impl Input<'_> {
+    /// A cor de um texto ou controle de linha: a do desenho, ou `#5c646f`
+    /// (o esmaecido da §2.16) em somente leitura.
+    fn ink(&self, color: Color) -> Color {
+        if self.read_only {
+            self.pal.editor_section_text
+        } else {
+            color
+        }
+    }
+
+    /// O trilho de uma alternância: em somente leitura o ligado escurece, para
+    /// o estado continuar legível sem parecer clicável.
+    fn track(&self, on: bool) -> (Color, Color) {
+        if self.read_only {
+            (crate::chrome::brighten(TOGGLE_ON, 0.45), TOGGLE_OFF)
+        } else {
+            let _ = on;
+            (TOGGLE_ON, TOGGLE_OFF)
+        }
+    }
 }
 
 fn quad(rect: Rect, color: Color) -> Primitive {
@@ -122,8 +148,90 @@ pub(crate) fn paint_body(input: &Input<'_>, measurer: &mut TextMeasurer) -> Vec<
     let mut out = Vec::new();
     paint_sidebar(input, &mut out);
     paint_panel(input, measurer, &mut out);
+    paint_banner(input, &mut out);
     paint_footer(input, &mut out);
     out
+}
+
+// ---- faixa
+
+/// A faixa de arquivo alterado fora ou inválido (ADR-0060 §2): o aviso do app
+/// embutido no topo do painel -- fundo `#1a1e25`, borda `1px #2e343e`, raio 8,
+/// barra de severidade de 2px --, largura cheia e sem sombra, com os botões à
+/// direita na anatomia do botão do diálogo.
+fn paint_banner(input: &Input<'_>, out: &mut Vec<Primitive>) {
+    let (Some(rect), Some(banner)) = (input.layout.banner, input.content.banner.as_ref()) else {
+        return;
+    };
+    let m = input.metrics;
+    let pal = input.pal;
+    let widths: Vec<f32> = banner.buttons.iter().map(|button| button.width).collect();
+    let geometry = banner_geometry(m, rect, &widths, banner.body.is_some());
+    out.push(rounded(
+        rect,
+        m.banner_radius,
+        pal.dialog_background,
+        pal.dialog_border,
+        1.0,
+    ));
+    // A barra de severidade: o mesmo recorte do aviso do app, que curva junto
+    // com os cantos da esquerda.
+    out.push(Primitive::PushClip(geometry.bar));
+    out.push(rounded(
+        rect,
+        m.banner_radius,
+        if banner.error {
+            pal.warning_severity_error
+        } else {
+            pal.warning_severity_warning
+        },
+        palette::TRANSPARENT,
+        0.0,
+    ));
+    out.push(Primitive::PopClip);
+    out.push(text(
+        geometry.title_origin,
+        &banner.title,
+        TITLE_FONT,
+        m.name_size,
+        pal.warning_title_text,
+    ));
+    if let Some(body) = &banner.body {
+        out.push(text(
+            geometry.body_origin,
+            body,
+            BODY_FONT,
+            m.description_size,
+            pal.warning_body_text,
+        ));
+    }
+    for (view, button_rect) in banner.buttons.iter().zip(&geometry.buttons) {
+        let hovered = input.hovered == Some(Hit::Banner(view.button));
+        out.push(rounded(
+            *button_rect,
+            m.button_radius,
+            if hovered {
+                pal.dialog_cancel_border
+            } else {
+                palette::TRANSPARENT
+            },
+            pal.dialog_cancel_border,
+            1.0,
+        ));
+        out.push(text(
+            (
+                button_rect.x + m.button_padding_x,
+                centered_y(*button_rect, m.button_font_size),
+            ),
+            &view.label,
+            BODY_FONT,
+            m.button_font_size,
+            pal.dialog_cancel_text,
+        ));
+        if input.focus == Focus::Banner(view.button) {
+            out.push(ring(*button_rect, m.button_radius, pal));
+        }
+    }
 }
 
 // ---- guia
@@ -328,7 +436,7 @@ fn paint_row(
         &row.name,
         BODY_FONT,
         m.name_size,
-        pal.menu_item_text,
+        input.ink(pal.menu_item_text),
     ));
     if let Some((scope, x)) = &row.scope {
         out.push(text(
@@ -460,7 +568,10 @@ fn paint_control(
             .filter(|editing| editing.block == index && editing.part == part)
     };
     match &row.control {
-        ControlView::Toggle { on } => push_toggle(rect, *on, TOGGLE_ON, TOGGLE_OFF, out),
+        ControlView::Toggle { on } => {
+            let (track_on, track_off) = input.track(*on);
+            push_toggle(rect, *on, track_on, track_off, out);
+        }
         ControlView::Field {
             text: value,
             right_aligned,
@@ -530,7 +641,8 @@ fn paint_control(
                 width: crate::toggle::TOGGLE_TRACK_WIDTH,
                 height: crate::toggle::TOGGLE_TRACK_HEIGHT,
             };
-            push_toggle(toggle, *on, TOGGLE_ON, TOGGLE_OFF, out);
+            let (track_on, track_off) = input.track(*on);
+            push_toggle(toggle, *on, track_on, track_off, out);
             let number = Rect {
                 x: rect.x + rect.width - m.number_field_width,
                 width: m.number_field_width,
@@ -579,7 +691,7 @@ fn paint_field_text(input: &Input<'_>, value: &str, x: f32, rect: Rect, out: &mu
         value,
         BODY_FONT,
         m.field_font_size,
-        input.pal.editor_input_text,
+        input.ink(input.pal.editor_input_text),
     ));
     out.push(Primitive::PopClip);
 }
@@ -740,11 +852,11 @@ fn paint_segmented(
             label,
             BODY_FONT,
             m.button_font_size,
-            if index == selected {
+            input.ink(if index == selected {
                 pal.tab_active_text
             } else {
                 pal.dialog_cancel_text
-            },
+            }),
         ));
         x += width;
     }
@@ -816,7 +928,7 @@ fn paint_chips(
             height: m.chip_height,
         };
         let (border, color) = match chip.tone {
-            ChipTone::Normal => (CHIP_BORDER, pal.menu_item_text),
+            ChipTone::Normal => (CHIP_BORDER, input.ink(pal.menu_item_text)),
             ChipTone::Muted => (CHIP_BORDER, pal.editor_section_text),
             ChipTone::Capturing => (pal.dialog_focus_ring, pal.editor_section_text),
         };
@@ -934,7 +1046,7 @@ fn paint_list(
         icon::PLUS,
         plus,
         style.icon_em_size,
-        pal.menu_item_text,
+        input.ink(pal.menu_item_text),
     ));
     out.push(text(
         (
@@ -944,7 +1056,7 @@ fn paint_list(
         add_label,
         BODY_FONT,
         m.name_size,
-        pal.menu_item_text,
+        input.ink(pal.menu_item_text),
     ));
 }
 
@@ -1028,7 +1140,7 @@ mod tests {
     use porecatu_render::TextMeasurer;
 
     use super::super::catalog::{self, option};
-    use super::super::content::{self, ContentKey};
+    use super::super::content::{self, ContentKey, ViewExtras};
     use super::super::draft::Draft;
     use super::super::field_edit::{EditPart, Editing};
     use super::super::interact;
@@ -1070,7 +1182,14 @@ mod tests {
             generation: 0,
         };
         let mut measurer = TextMeasurer::new();
-        let content = content::build(key, draft, None, None, &f.catalog, &m, &mut measurer);
+        let content = content::build(
+            key,
+            draft,
+            &ViewExtras::default(),
+            &f.catalog,
+            &m,
+            &mut measurer,
+        );
         let index = content
             .blocks
             .iter()
@@ -1097,6 +1216,7 @@ mod tests {
                 editing,
                 selection_color: palette::hex(1, 2, 3),
                 footer_available: [true, false, false],
+                read_only: false,
                 style: &f.style,
                 pal: &f.pal,
                 config: &f.config,
@@ -1295,8 +1415,10 @@ mod tests {
         let content = content::build(
             key,
             draft,
-            session_theme,
-            None,
+            &ViewExtras {
+                session_theme,
+                ..ViewExtras::default()
+            },
             &f.catalog,
             &m,
             &mut measurer,
@@ -1323,6 +1445,7 @@ mod tests {
                 editing,
                 selection_color: palette::hex(1, 2, 3),
                 footer_available: [true, false, false],
+                read_only: false,
                 style: &f.style,
                 pal: &f.pal,
                 config: &f.config,
@@ -1566,8 +1689,10 @@ mod tests {
         let content = content::build(
             key,
             &Draft::new(&f.config),
-            None,
-            Some(&view),
+            &ViewExtras {
+                shortcuts: Some(&view),
+                ..ViewExtras::default()
+            },
             &f.catalog,
             &m,
             &mut measurer,
@@ -1589,6 +1714,7 @@ mod tests {
                 editing,
                 selection_color: palette::hex(1, 2, 3),
                 footer_available: [true, false, false],
+                read_only: false,
                 style: &f.style,
                 pal: &f.pal,
                 config: &f.config,
@@ -1728,5 +1854,215 @@ mod tests {
             p,
             Primitive::Quad(q) if q.rect.width == 1.0 && q.color == f.pal.editor_input_text
         )));
+    }
+
+    // ---- faixa e somente leitura
+
+    use super::super::file_state::Banner;
+    use super::super::layout::BannerButton;
+
+    /// Pinta o grupo Terminal com a faixa `banner` no topo e `read_only`.
+    fn paint_with_banner(
+        f: &Fixture,
+        banner: &Banner,
+        read_only: bool,
+        hovered: Option<Hit>,
+        focus: Focus,
+    ) -> (Vec<Primitive>, Layout) {
+        let m = Metrics::from_config(&f.config, 52.0);
+        let has_body = matches!(banner, Banner::Invalid(_));
+        let layout = layout::layout_with_banner(
+            900.0,
+            700.0,
+            52.0,
+            200.0,
+            m.footer_height(),
+            m.banner_height(has_body),
+        );
+        let key = ContentKey {
+            group: Group::Terminal,
+            panel_width_bits: layout.panel.width.to_bits(),
+            generation: 0,
+        };
+        let mut measurer = TextMeasurer::new();
+        let content = content::build(
+            key,
+            &Draft::new(&f.config),
+            &ViewExtras {
+                banner: Some(banner),
+                ..ViewExtras::default()
+            },
+            &f.catalog,
+            &m,
+            &mut measurer,
+        );
+        let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
+        let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        let out = paint_body(
+            &Input {
+                layout: &layout,
+                metrics: &m,
+                content: &content,
+                items: &items,
+                footer: &footer,
+                selected: Group::Terminal,
+                focus,
+                hovered,
+                scroll: 0.0,
+                pending_groups: &[],
+                editing: None,
+                selection_color: palette::hex(1, 2, 3),
+                footer_available: [true, false, false],
+                read_only,
+                style: &f.style,
+                pal: &f.pal,
+                config: &f.config,
+                catalog: &f.catalog,
+            },
+            &mut measurer,
+        );
+        (out, layout)
+    }
+
+    fn invalid_banner() -> Banner {
+        Banner::Invalid(porecatu_config::parse("[terminal.font\nsize = 14.0\n").unwrap_err())
+    }
+
+    #[test]
+    fn the_conflict_banner_paints_the_app_warning_with_the_amber_bar_and_two_buttons() {
+        let f = fixture();
+        let (out, layout) = paint_with_banner(&f, &Banner::Conflict, false, None, Focus::Sidebar);
+        let rect = layout.banner.unwrap();
+        // O corpo do aviso do app: `#1a1e25`, borda `#2e343e`, raio 8.
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.rect == rect
+                && q.color == f.pal.dialog_background
+                && q.border_color == f.pal.dialog_border
+                && q.radius == 8.0
+        )));
+        // A barra de severidade: o tom de Aviso, recortada a 2px.
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::PushClip(clip) if clip.width == 2.0 && clip.x == rect.x
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.rect == rect && q.color == f.pal.warning_severity_warning
+        )));
+        for label in ["Recarregar", "Manter minhas alterações"] {
+            assert!(
+                out.iter().any(|p| matches!(
+                    p,
+                    Primitive::Text(run) if run.text == label
+                        && run.color == f.pal.dialog_cancel_text
+                )),
+                "{label}"
+            );
+        }
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "O arquivo mudou fora daqui."
+                && run.color == f.pal.warning_title_text
+                && run.size_px == 12.5
+        )));
+    }
+
+    #[test]
+    fn the_invalid_banner_is_the_error_color_with_the_position_in_the_body() {
+        let f = fixture();
+        let (out, layout) = paint_with_banner(&f, &invalid_banner(), true, None, Focus::Sidebar);
+        let rect = layout.banner.unwrap();
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.rect == rect && q.color == f.pal.warning_severity_error
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text.starts_with("linha 1, coluna")
+                && run.color == f.pal.warning_body_text
+                && run.size_px == 11.0
+        )));
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Abrir arquivo no editor"
+        )));
+    }
+
+    #[test]
+    fn a_hovered_banner_button_takes_the_cancel_hover_and_a_focused_one_the_ring() {
+        let f = fixture();
+        let hover = Some(Hit::Banner(BannerButton::Keep));
+        let (out, _) = paint_with_banner(&f, &Banner::Conflict, false, hover, Focus::Sidebar);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == f.pal.dialog_cancel_border
+                && q.border_color == f.pal.dialog_cancel_border
+        )));
+        let (out, _) = paint_with_banner(
+            &f,
+            &Banner::Conflict,
+            false,
+            None,
+            Focus::Banner(BannerButton::Reload),
+        );
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == palette::TRANSPARENT
+                && q.border_color == f.pal.dialog_focus_ring
+        )));
+    }
+
+    #[test]
+    fn read_only_paints_row_names_and_field_texts_in_the_dim_color() {
+        let f = fixture();
+        let dim = f.pal.editor_section_text;
+        let (normal, _) = paint_with_banner(&f, &Banner::Conflict, false, None, Focus::Sidebar);
+        let (muted, _) = paint_with_banner(&f, &invalid_banner(), true, None, Focus::Sidebar);
+        // O nome de uma linha e o texto do campo de tamanho.
+        let colors_of = |out: &[Primitive], text: &str| -> Vec<Color> {
+            out.iter()
+                .filter_map(|p| match p {
+                    Primitive::Text(run) if run.text == text => Some(run.color),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(colors_of(&normal, "Tamanho"), [f.pal.menu_item_text]);
+        assert_eq!(colors_of(&muted, "Tamanho"), [dim]);
+        assert_eq!(colors_of(&normal, "14"), [f.pal.editor_input_text]);
+        assert_eq!(colors_of(&muted, "14"), [dim]);
+        // Nenhum texto de linha ficou na cor normal.
+        assert!(!muted.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == "Tamanho" && run.color == f.pal.menu_item_text
+        )));
+    }
+
+    #[test]
+    fn read_only_dims_the_toggle_track_but_keeps_its_state_readable() {
+        let f = fixture();
+        let toggle_tracks = |out: &[Primitive]| -> Vec<Color> {
+            out.iter()
+                .filter_map(|p| match p {
+                    Primitive::RoundedQuad(q)
+                        if q.rect.width == crate::toggle::TOGGLE_TRACK_WIDTH
+                            && q.rect.height == crate::toggle::TOGGLE_TRACK_HEIGHT =>
+                    {
+                        Some(q.color)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let (normal, _) = paint_with_banner(&f, &Banner::Conflict, false, None, Focus::Sidebar);
+        let (muted, _) = paint_with_banner(&f, &invalid_banner(), true, None, Focus::Sidebar);
+        let normal = toggle_tracks(&normal);
+        let muted = toggle_tracks(&muted);
+        assert_eq!(normal.len(), muted.len());
+        assert!(normal.contains(&TOGGLE_ON));
+        assert!(!muted.contains(&TOGGLE_ON), "o ligado escurece");
+        // O desligado segue sendo o desligado: o estado continua legível.
+        assert!(muted.contains(&TOGGLE_OFF));
     }
 }

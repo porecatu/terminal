@@ -42,16 +42,19 @@ use winit::window::{CursorIcon, Window, WindowId};
 use super::catalog::{self, Control, OptionDef};
 use super::choice_list::{self, ChoiceItem, ChoiceLayout, ChoiceList};
 use super::content::{
-    self, Block, ChipTone, Content, ContentKey, ControlView, RowView, ShortcutsView, choice_label,
+    self, Block, ChipTone, Content, ContentKey, ControlView, RowView, ShortcutsView, ViewExtras,
+    choice_label,
 };
 use super::draft::Draft;
 use super::field_edit::{EditPart, Editing};
+use super::file_state::{Banner, Disk, Effect, FileState};
 use super::interact;
 use super::layout::{
-    self, BlockGeometry, ControlPart, Focus, FooterButton, Hit, Layout, Metrics, focus_order,
-    footer_buttons, group_items, hit_test, next_focus,
+    self, BannerButton, BlockGeometry, ControlPart, Focus, FooterButton, Hit, Layout, Metrics,
+    banner_geometry, focus_order_with_banner, footer_buttons, group_items, hit_test, next_focus,
 };
 use super::paint;
+use super::save::Saved;
 use super::shortcuts::{Capturing, Conflict, Shortcuts};
 use super::{Group, HEADER_GAP_PX, PANEL_BACKGROUND, TITLE_SIZE_PX};
 use crate::dialog::{ConfirmDialog, DialogButton};
@@ -107,6 +110,15 @@ pub(crate) enum DialogAnswer {
     /// As edições estão em [`SettingsWindow::edits`]; quem recebe grava e,
     /// se deu certo, conclui o fechamento.
     Save,
+}
+
+/// O que o Salvar grava e sobre o quê.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SavePlan {
+    /// O texto que a tela viu do arquivo; `None` se ele não existia, e aí o
+    /// Salvar parte do exemplo embutido (RF-16.21).
+    pub base: Option<String>,
+    pub edits: Vec<Edit>,
 }
 
 pub(crate) struct SettingsWindow {
@@ -176,6 +188,9 @@ pub(crate) struct SettingsWindow {
     filter: String,
     /// A captura de atalho em curso, se alguma (RF-16.29).
     capturing: Option<Capturing>,
+    /// O que a tela sabe do arquivo: a base do Salvar e a faixa (RF-16.21 a
+    /// RF-16.23).
+    file: FileState,
 }
 
 impl SettingsWindow {
@@ -189,6 +204,7 @@ impl SettingsWindow {
         initial_group: Group,
         config: &Config,
         locale_dirs: Vec<PathBuf>,
+        disk: &Disk,
     ) -> Self {
         let size = window.inner_size();
         Self {
@@ -220,6 +236,7 @@ impl SettingsWindow {
             shortcuts: Shortcuts::new(config, Platform::current()),
             filter: String::new(),
             capturing: None,
+            file: FileState::new(disk),
         }
     }
 
@@ -269,7 +286,9 @@ impl SettingsWindow {
     /// O Salvar tem o que gravar e nada que o bloqueie: há pendência, e
     /// nenhuma foi recusada (RF-16.18).
     pub(crate) fn can_save(&self) -> bool {
-        (self.draft.is_dirty() || self.shortcuts.is_dirty()) && !self.draft.has_invalid()
+        self.file.allows_edit()
+            && (self.draft.is_dirty() || self.shortcuts.is_dirty())
+            && !self.draft.has_invalid()
     }
 
     /// As edições do rascunho, na ordem do catálogo: o que o Salvar grava.
@@ -281,14 +300,86 @@ impl SettingsWindow {
 
     /// O Salvar gravou: o arquivo agora diz `saved`, e nenhuma pendência
     /// sobra. A tela mostra isso na hora, sem esperar a recarga a quente.
-    pub(crate) fn save_succeeded(&mut self, saved: &Config) {
+    pub(crate) fn save_succeeded(&mut self, saved: &Saved) {
         self.editing = None;
         self.choice = None;
         self.dialog = None;
         self.capturing = None;
-        self.draft.commit(saved);
-        self.shortcuts.commit(saved);
+        // O texto gravado é a base de agora: a recarga que ele dispara chega
+        // igual a ela e nunca é lida como conflito (ADR-0058 §3).
+        self.file.saved(saved.text.clone());
+        self.draft.commit(&saved.config);
+        self.shortcuts.commit(&saved.config);
         self.invalidate();
+    }
+
+    /// O que o Salvar vai gravar e sobre qual texto -- ou `None` se não há o
+    /// que gravar. Com a faixa de conflito à vista, Salvar equivale a Manter
+    /// minhas alterações (RF-16.23): a base passa a ser o arquivo como está, e
+    /// as pendências se aplicam por cima, chave a chave.
+    pub(crate) fn prepare_save(&mut self) -> Option<SavePlan> {
+        if !self.can_save() {
+            return None;
+        }
+        self.keep_my_changes();
+        let edits = self.edits();
+        if edits.is_empty() {
+            return None;
+        }
+        Some(SavePlan {
+            base: self.file.base().map(str::to_owned),
+            edits,
+        })
+    }
+
+    /// O disco foi lido de novo (uma recarga, ou um Salvar que achou o arquivo
+    /// mudado): a decisão é por conteúdo (ADR-0059 §4) -- a própria gravação
+    /// só atualiza o que se mostra, sem pendências a base troca em silêncio, e
+    /// com pendências sobe a faixa de conflito. Arquivo inválido põe a tela
+    /// em somente leitura até um texto válido (RF-16.22).
+    pub(crate) fn observe_disk(&mut self, disk: &Disk) {
+        let pending = self.has_pending_changes();
+        match self.file.observe(disk, pending) {
+            Effect::Show(config) => {
+                self.draft.rebase(&config);
+                // A linha em captura não muda com a recarga (ADR-0059 §3): ela
+                // guarda os atalhos que tinha ao começar.
+                self.shortcuts.rebase(&config);
+            }
+            Effect::Conflict => {}
+            Effect::ReadOnly => {
+                self.editing = None;
+                self.choice = None;
+                self.capturing = None;
+                self.dragging_field = false;
+            }
+        }
+        self.invalidate();
+    }
+
+    /// Manter minhas alterações: o arquivo como está vira a base, e as
+    /// pendências ficam (as que o arquivo novo já tem somem).
+    fn keep_my_changes(&mut self) {
+        if let Some(config) = self.file.accept_disk() {
+            self.draft.rebase(&config);
+            self.shortcuts.rebase(&config);
+            self.invalidate();
+        }
+    }
+
+    /// Recarregar: o arquivo como está vira a base, e as pendências são
+    /// descartadas.
+    fn reload_from_disk(&mut self) {
+        if let Some(config) = self.file.accept_disk() {
+            self.editing = None;
+            self.choice = None;
+            self.capturing = None;
+            self.draft.discard();
+            self.shortcuts.discard();
+            self.draft.rebase(&config);
+            self.shortcuts.rebase(&config);
+            self.invalidate();
+        }
     }
 
     /// O tema que a sessão usa mudou (`theme.cycle`, restauração, ou o tema
@@ -447,17 +538,6 @@ impl SettingsWindow {
         Press::Nothing
     }
 
-    /// A config foi recarregada (a gravação da própria tela, ou um editor): a
-    /// base do rascunho troca, e uma pendência que agora coincide com o
-    /// arquivo deixa de ser pendência.
-    pub(crate) fn config_reloaded(&mut self, config: &Config) {
-        self.draft.rebase(config);
-        // A linha em captura não muda com a recarga (ADR-0059 §3): ela guarda
-        // os atalhos que tinha ao começar.
-        self.shortcuts.rebase(config);
-        self.invalidate();
-    }
-
     /// Troca de idioma ao vivo (ADR-0056 §9): o catálogo novo vale no próximo
     /// quadro, e o título da janela do SO -- que não é desenhado, é do
     /// sistema -- acompanha agora. O conteúdo medido é refeito, porque o texto
@@ -476,9 +556,15 @@ impl SettingsWindow {
     /// medido é refeito no próximo quadro.
     pub(crate) fn invalidate(&mut self) {
         self.generation += 1;
-        // Um botão de rodapé que deixou de estar disponível não segura foco.
+        // Um botão de rodapé que deixou de estar disponível não segura foco, e
+        // nem um da faixa que já não existe.
         if let Focus::Footer(button) = self.focus
             && !self.available_buttons().contains(&button)
+        {
+            self.focus = Focus::Sidebar;
+        }
+        if let Focus::Banner(button) = self.focus
+            && !self.banner_kinds().contains(&button)
         {
             self.focus = Focus::Sidebar;
         }
@@ -520,13 +606,56 @@ impl SettingsWindow {
 
     fn layout(&self, env: Env<'_>) -> Layout {
         let m = self.metrics(env);
-        layout::layout(
+        let banner_height = self.file.banner().map_or(0.0, |banner| {
+            m.banner_height(matches!(banner, Banner::Invalid(_)))
+        });
+        layout::layout_with_banner(
             self.logical_width,
             self.logical_height,
             m.header_height,
             m.sidebar_width,
             m.footer_height(),
+            banner_height,
         )
+    }
+
+    /// Os botões que a faixa do estado do arquivo oferece, na ordem.
+    fn banner_kinds(&self) -> Vec<BannerButton> {
+        match self.file.banner() {
+            None => Vec::new(),
+            Some(Banner::Conflict) => vec![BannerButton::Reload, BannerButton::Keep],
+            Some(Banner::Invalid(_)) => vec![BannerButton::OpenFile],
+        }
+    }
+
+    /// Os retângulos dos botões da faixa, em coordenadas de janela.
+    fn banner_buttons(&self, env: Env<'_>) -> Vec<(BannerButton, Rect)> {
+        let (Some(banner), Some(rect)) = (
+            self.content.as_ref().and_then(|c| c.banner.as_ref()),
+            self.layout(env).banner,
+        ) else {
+            return Vec::new();
+        };
+        let widths: Vec<f32> = banner.buttons.iter().map(|b| b.width).collect();
+        let geometry = banner_geometry(&self.metrics(env), rect, &widths, banner.body.is_some());
+        banner
+            .buttons
+            .iter()
+            .zip(geometry.buttons)
+            .map(|(view, rect)| (view.button, rect))
+            .collect()
+    }
+
+    /// Um clique (ou `Enter`) num botão da faixa (RF-16.22, RF-16.23).
+    fn press_banner(&mut self, button: BannerButton) -> Press {
+        self.focus = Focus::Banner(button);
+        match button {
+            BannerButton::Reload => self.reload_from_disk(),
+            BannerButton::Keep => self.keep_my_changes(),
+            BannerButton::OpenFile => return Press::OpenFile,
+        }
+        self.window.request_redraw();
+        Press::Nothing
     }
 
     fn cursor_logical(&self) -> (f32, f32) {
@@ -552,11 +681,16 @@ impl SettingsWindow {
                 filter: &self.filter,
                 capturing: self.capturing.as_ref(),
             };
+            let banner = self.file.banner();
+            let extras = ViewExtras {
+                session_theme: self.session_theme.as_deref(),
+                shortcuts: Some(&view),
+                banner: banner.as_ref(),
+            };
             self.content = Some(content::build(
                 key,
                 &self.draft,
-                self.session_theme.as_deref(),
-                Some(&view),
+                &extras,
                 &self.catalog,
                 &m,
                 measurer,
@@ -587,7 +721,7 @@ impl SettingsWindow {
     /// `FOOTER_BUTTONS`: Abrir arquivo sempre; Descartar com pendência;
     /// Salvar com pendência e nenhuma recusada (RF-16.14, RF-16.18).
     fn available_footer(&self) -> [bool; 3] {
-        let pending = self.has_pending_changes();
+        let pending = self.has_pending_changes() && self.file.allows_edit();
         [true, pending, pending && !self.draft.has_invalid()]
     }
 
@@ -608,6 +742,13 @@ impl SettingsWindow {
         let content = self.content();
         let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
         let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        if let Some((button, _)) = self
+            .banner_buttons(env)
+            .into_iter()
+            .find(|(_, rect)| tab_bar::rect_contains(*rect, point))
+        {
+            return Some(Hit::Banner(button));
+        }
         let hit = hit_test(
             &layout,
             &items,
@@ -829,7 +970,9 @@ impl SettingsWindow {
     /// se clica.
     fn cursor_for(&self, hit: Option<Hit>) -> CursorIcon {
         match hit {
-            Some(Hit::Group(_) | Hit::Footer(_) | Hit::Restore(_)) => CursorIcon::Pointer,
+            Some(Hit::Group(_) | Hit::Footer(_) | Hit::Restore(_) | Hit::Banner(_)) => {
+                CursorIcon::Pointer
+            }
             Some(Hit::Control(index, part)) => {
                 match self.content().row(index).map(|row| &row.control) {
                     Some(ControlView::Field { .. }) => CursorIcon::Text,
@@ -1020,6 +1163,17 @@ impl SettingsWindow {
                 Press::Nothing
             }
             Some(Hit::Footer(button)) => self.press_footer(button),
+            Some(Hit::Banner(button)) => {
+                self.commit_edit();
+                self.press_banner(button)
+            }
+            // Somente leitura (RF-16.22): o clique só leva o foco à linha.
+            Some(Hit::Restore(index) | Hit::Control(index, _)) if !self.file.allows_edit() => {
+                self.commit_edit();
+                self.focus = Focus::Row(index);
+                self.window.request_redraw();
+                Press::Nothing
+            }
             Some(Hit::Restore(index)) => {
                 self.commit_edit();
                 self.focus = Focus::Row(index);
@@ -1045,7 +1199,7 @@ impl SettingsWindow {
                 }
                 self.commit_edit();
                 self.focus = Focus::Row(index);
-                if !self.choose_theme(index) {
+                if !(self.file.allows_edit() && self.choose_theme(index)) {
                     self.window.request_redraw();
                 }
                 Press::Nothing
@@ -1372,6 +1526,9 @@ impl SettingsWindow {
 
     /// `Up`/`Down` numa linha numérica com o foco, fora de edição.
     fn step_row(&mut self, index: usize, direction: i32) {
+        if !self.file.allows_edit() {
+            return;
+        }
         let Some(option) = self.option_at(index) else {
             return;
         };
@@ -1601,6 +1758,7 @@ impl SettingsWindow {
     fn activate(&mut self, env: Env<'_>, measurer: &mut TextMeasurer) -> Press {
         match self.focus {
             Focus::Footer(button) => self.press_footer(button),
+            Focus::Banner(button) => self.press_banner(button),
             Focus::Row(index) => {
                 self.activate_row(env, measurer, index);
                 Press::Nothing
@@ -1614,6 +1772,10 @@ impl SettingsWindow {
         if matches!(self.content().blocks.get(index), Some(Block::Filter { .. })) {
             self.start_edit(index, EditPart::Filter);
             self.window.request_redraw();
+            return;
+        }
+        // Somente leitura (RF-16.22): nada abre nem alterna.
+        if !self.file.allows_edit() {
             return;
         }
         // Uma linha de atalho: `Enter` entra em captura do primeiro atalho --
@@ -1666,6 +1828,9 @@ impl SettingsWindow {
 
     /// Setas esquerda e direita sobre um segmentado com o foco.
     fn step_segmented(&mut self, delta: i32) {
+        if !self.file.allows_edit() {
+            return;
+        }
         let Focus::Row(index) = self.focus else {
             return;
         };
@@ -1915,7 +2080,11 @@ impl SettingsWindow {
     /// Passa o foco ao próximo ponto de parada e leva a linha à vista.
     fn move_focus(&mut self, env: Env<'_>, backwards: bool) {
         let content = self.content();
-        let order = focus_order(&content.row_indices(), &self.available_buttons());
+        let order = focus_order_with_banner(
+            &self.banner_kinds(),
+            &content.row_indices(),
+            &self.available_buttons(),
+        );
         self.focus = next_focus(&order, self.focus, backwards);
         if let Focus::Row(index) = self.focus {
             let layout = self.layout(env);
@@ -2001,6 +2170,10 @@ impl SettingsWindow {
         let catalog = &self.catalog;
         let dialog = self.dialog.as_ref();
         let filter = (selected == Group::Shortcuts).then_some(self.filter.as_str());
+        let banner = self
+            .content
+            .as_ref()
+            .and_then(|content| content.banner.as_ref());
         let rows: Vec<&RowView> = self
             .content
             .as_ref()
@@ -2023,6 +2196,7 @@ impl SettingsWindow {
                 has_pending,
                 &rows,
                 filter,
+                banner,
                 dialog,
                 catalog,
                 language,
@@ -2073,6 +2247,7 @@ impl SettingsWindow {
                 editing: self.editing.as_ref(),
                 selection_color: term_pal.selection_background,
                 footer_available: self.available_footer(),
+                read_only: !self.file.allows_edit(),
                 style: env.style,
                 pal,
                 config: env.config,

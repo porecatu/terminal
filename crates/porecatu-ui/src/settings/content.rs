@@ -22,7 +22,8 @@ use super::actions::label as action_label;
 use super::catalog::{Control, Group, OptionDef, ReloadScope, Section, options_in};
 use super::draft::{Draft, ValueError};
 use super::field_edit::{display_text, number_text};
-use super::layout::{self, BlockSpec, ControlPart, Metrics, PanelGeometry};
+use super::file_state::Banner;
+use super::layout::{self, BannerButton, BlockSpec, ControlPart, Metrics, PanelGeometry};
 use super::shortcuts::{Capturing, Shortcuts};
 use crate::keymap::Chord;
 use crate::messages::msg;
@@ -56,6 +57,36 @@ pub(crate) struct ChipView {
     pub text: String,
     pub width: f32,
     pub tone: ChipTone,
+}
+
+/// O que mais o conteúdo lê além do rascunho: o tema da sessão (RF-16.25), o
+/// grupo Atalhos e a faixa de arquivo (ADR-0060 §2). Tudo opcional: sem nada
+/// é o conteúdo de um grupo de opções com o arquivo em ordem.
+#[derive(Default)]
+pub(crate) struct ViewExtras<'a> {
+    /// O tema que `theme.cycle` pôs na sessão, se pôs.
+    pub session_theme: Option<&'a str>,
+    pub shortcuts: Option<&'a ShortcutsView<'a>>,
+    pub banner: Option<&'a Banner>,
+}
+
+/// Um botão da faixa, com a largura já medida.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BannerButtonView {
+    pub button: BannerButton,
+    pub label: String,
+    pub width: f32,
+}
+
+/// A faixa como a tela a desenha: o tom, o título, o corpo (o erro, na de
+/// arquivo inválido) já cortados ao que cabe, e os botões.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BannerView {
+    /// Erro (arquivo inválido) ou aviso (arquivo alterado fora).
+    pub error: bool,
+    pub title: String,
+    pub body: Option<String>,
+    pub buttons: Vec<BannerButtonView>,
 }
 
 /// O que o grupo Atalhos lê para montar o conteúdo: o estado da edição, o
@@ -316,6 +347,8 @@ pub(crate) struct Content {
     pub key: ContentKey,
     pub title: String,
     pub blocks: Vec<Block>,
+    /// A faixa do topo do painel, se a há.
+    pub banner: Option<BannerView>,
     pub geometry: PanelGeometry,
     /// A largura de cada botão do rodapé, na ordem de `FOOTER_BUTTONS`.
     pub footer_widths: [f32; 3],
@@ -365,16 +398,16 @@ fn wrap(text: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> Vec<S
 }
 
 /// Monta o conteúdo de `group`: mede o texto uma vez e guarda o resultado.
-/// `session_theme` é o tema que `theme.cycle` pôs na sessão, se pôs.
 pub(crate) fn build(
     key: ContentKey,
     draft: &Draft,
-    session_theme: Option<&str>,
-    shortcuts: Option<&ShortcutsView<'_>>,
+    extras: &ViewExtras<'_>,
     catalog: &Catalog,
     m: &Metrics,
     measurer: &mut TextMeasurer,
 ) -> Content {
+    let session_theme = extras.session_theme;
+    let shortcuts = extras.shortcuts;
     let panel_width = f32::from_bits(key.panel_width_bits);
     let mut blocks = Vec::new();
     let mut current_section: Option<Section> = None;
@@ -442,12 +475,82 @@ pub(crate) fn build(
         measurer.measure_width(&label, BODY_FONT, m.button_font_size) + m.button_padding_x * 2.0
     });
 
+    let banner = extras
+        .banner
+        .map(|banner| banner_view(banner, catalog, m, panel_width, measurer));
+
     Content {
         key,
         title: key.group.label(catalog),
         blocks,
+        banner,
         geometry,
         footer_widths,
+    }
+}
+
+/// A faixa de `banner`: título e corpo cortados ao que sobra entre a barra e o
+/// primeiro botão, e os botões medidos como os do diálogo.
+fn banner_view(
+    banner: &Banner,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) -> BannerView {
+    let (error, title, body, buttons) = match banner {
+        Banner::Conflict => (
+            false,
+            msg::settings::banner::file_changed(catalog),
+            None,
+            vec![
+                (BannerButton::Reload, msg::settings::banner::reload(catalog)),
+                (
+                    BannerButton::Keep,
+                    msg::settings::banner::keep_mine(catalog),
+                ),
+            ],
+        ),
+        Banner::Invalid(error) => (
+            true,
+            msg::settings::banner::invalid_file(catalog),
+            Some(crate::messages::config_error(catalog, error)),
+            vec![(
+                BannerButton::OpenFile,
+                msg::settings::button::open_file(catalog),
+            )],
+        ),
+    };
+    let buttons: Vec<BannerButtonView> = buttons
+        .into_iter()
+        .map(|(button, label)| BannerButtonView {
+            width: measurer.measure_width(&label, BODY_FONT, m.button_font_size)
+                + m.button_padding_x * 2.0,
+            button,
+            label,
+        })
+        .collect();
+    // O texto cabe entre a barra e o primeiro botão: a mesma conta de
+    // `layout::banner_geometry`, sobre a largura que a faixa terá.
+    let widths: Vec<f32> = buttons.iter().map(|button| button.width).collect();
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: (panel_width - m.panel_padding * 2.0).max(0.0),
+        height: m.banner_height(body.is_some()),
+    };
+    let budget = layout::banner_geometry(m, rect, &widths, body.is_some()).text_width;
+    let title = measurer.truncate(&title, BODY_FONT, m.name_size, budget).0;
+    let body = body.map(|text| {
+        measurer
+            .truncate(&text, BODY_FONT, m.description_size, budget)
+            .0
+    });
+    BannerView {
+        error,
+        title,
+        body,
+        buttons,
     }
 }
 
@@ -958,8 +1061,7 @@ mod tests {
         build(
             key(group),
             &Draft::new(config),
-            None,
-            None,
+            &ViewExtras::default(),
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1103,8 +1205,7 @@ mod tests {
         let c = build(
             narrow,
             &Draft::new(&Config::default()),
-            None,
-            None,
+            &ViewExtras::default(),
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1279,8 +1380,7 @@ mod tests {
         build(
             key(group),
             draft,
-            None,
-            None,
+            &ViewExtras::default(),
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1639,8 +1739,10 @@ mod tests {
             let c = build(
                 key(Group::Appearance),
                 &Draft::new(&config),
-                session,
-                None,
+                &ViewExtras {
+                    session_theme: session,
+                    ..ViewExtras::default()
+                },
                 &test_support::pt_br(),
                 &metrics(),
                 &mut TextMeasurer::new(),
@@ -1666,8 +1768,10 @@ mod tests {
         let c = build(
             key(Group::Appearance),
             &Draft::new(&named),
-            Some(""),
-            None,
+            &ViewExtras {
+                session_theme: Some(""),
+                ..ViewExtras::default()
+            },
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1690,8 +1794,10 @@ mod tests {
         let c = build(
             key(Group::Appearance),
             &draft,
-            Some("nord"),
-            None,
+            &ViewExtras {
+                session_theme: Some("nord"),
+                ..ViewExtras::default()
+            },
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -1759,12 +1865,14 @@ mod tests {
         build(
             key(Group::Shortcuts),
             &Draft::new(&Config::default()),
-            None,
-            Some(&ShortcutsView {
-                state,
-                filter,
-                capturing,
-            }),
+            &ViewExtras {
+                shortcuts: Some(&ShortcutsView {
+                    state,
+                    filter,
+                    capturing,
+                }),
+                ..ViewExtras::default()
+            },
             &test_support::pt_br(),
             &metrics(),
             &mut TextMeasurer::new(),
@@ -2038,5 +2146,90 @@ mod tests {
     fn the_shortcuts_group_without_a_view_is_empty_like_before() {
         let c = content(Group::Shortcuts, &Config::default());
         assert!(rows(&c).is_empty());
+    }
+
+    // ---- faixa
+
+    fn banner_content(banner: &Banner) -> Content {
+        build(
+            key(Group::General),
+            &Draft::new(&Config::default()),
+            &ViewExtras {
+                banner: Some(banner),
+                ..ViewExtras::default()
+            },
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        )
+    }
+
+    #[test]
+    fn no_banner_means_no_banner_view() {
+        assert!(content(Group::General, &Config::default()).banner.is_none());
+    }
+
+    #[test]
+    fn the_conflict_banner_is_a_warning_with_reload_and_keep() {
+        let c = banner_content(&Banner::Conflict);
+        let banner = c.banner.expect("a faixa");
+        assert!(!banner.error, "conflito é aviso, não erro");
+        assert_eq!(banner.title, "O arquivo mudou fora daqui.");
+        assert!(banner.body.is_none());
+        let buttons: Vec<(BannerButton, &str)> = banner
+            .buttons
+            .iter()
+            .map(|b| (b.button, b.label.as_str()))
+            .collect();
+        assert_eq!(
+            buttons,
+            [
+                (BannerButton::Reload, "Recarregar"),
+                (BannerButton::Keep, "Manter minhas alterações")
+            ]
+        );
+        // Larguras medidas como as do diálogo: texto + `padding: 0 12`.
+        assert!(banner.buttons.iter().all(|b| b.width > 24.0));
+    }
+
+    #[test]
+    fn the_invalid_banner_is_an_error_with_the_position_and_the_open_file_button() {
+        let error = porecatu_config::parse("[terminal.font\nsize = 14.0\n").unwrap_err();
+        let c = banner_content(&Banner::Invalid(error));
+        let banner = c.banner.expect("a faixa");
+        assert!(banner.error);
+        assert!(
+            banner
+                .title
+                .starts_with("O arquivo de configuração é inválido")
+        );
+        let body = banner.body.expect("o erro");
+        assert!(body.starts_with("linha 1, coluna"), "{body}");
+        assert_eq!(banner.buttons.len(), 1);
+        assert_eq!(banner.buttons[0].button, BannerButton::OpenFile);
+        assert_eq!(banner.buttons[0].label, "Abrir arquivo no editor");
+    }
+
+    #[test]
+    fn a_long_banner_text_is_cut_to_what_fits_before_the_buttons() {
+        // Painel estreito: o texto não cabe inteiro e termina em reticências.
+        let narrow = ContentKey {
+            panel_width_bits: 560.0_f32.to_bits(),
+            ..key(Group::General)
+        };
+        let error = porecatu_config::parse("[terminal.font\nsize = 14.0\n").unwrap_err();
+        let c = build(
+            narrow,
+            &Draft::new(&Config::default()),
+            &ViewExtras {
+                banner: Some(&Banner::Invalid(error)),
+                ..ViewExtras::default()
+            },
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        );
+        let banner = c.banner.unwrap();
+        assert!(banner.title.ends_with('…'), "{}", banner.title);
     }
 }
