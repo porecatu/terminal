@@ -13,10 +13,14 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use toml_edit::{Decor, DocumentMut, InlineTable, Item, Key, RawString, Table, TableLike, Value};
 
+use crate::ConfigError;
 use crate::error::line_column_at;
 
 /// Dotted path of a key, e.g. `terminal.font.size` or
@@ -131,6 +135,20 @@ pub enum EditError {
     /// `path` names a table where a value was expected (`Set` of a scalar,
     /// `Remove`).
     NotAValue { path: KeyPath },
+    /// The edited text would not load as a config (ADR-0058 §4): the same
+    /// typed error `parse` gives the loader, with line and column. Nothing
+    /// was written.
+    Invalid(ConfigError),
+    /// The file on disk no longer matches the base (ADR-0058 §3): somebody
+    /// else wrote it. `current` is its text now (empty if it vanished).
+    /// Nothing was written.
+    Changed { current: String },
+    /// Reading or writing failed. `cause` is the operating system's text.
+    Io {
+        path: PathBuf,
+        kind: io::ErrorKind,
+        cause: String,
+    },
 }
 
 impl fmt::Display for EditError {
@@ -146,6 +164,9 @@ impl fmt::Display for EditError {
             Self::Syntax { detail, .. } => f.write_str(detail),
             Self::NotATable { path } => write!(f, "`{path}` is not a table"),
             Self::NotAValue { path } => write!(f, "`{path}` is a table, not a value"),
+            Self::Invalid(error) => write!(f, "edited text does not load: {error}"),
+            Self::Changed { .. } => f.write_str("file changed on disk"),
+            Self::Io { path, cause, .. } => write!(f, "{}: {cause}", path.display()),
         }
     }
 }
@@ -161,9 +182,21 @@ pub struct ConfigDocument {
     base: String,
     doc: DocumentMut,
     crlf: bool,
+    /// The base is a model text, not the file's: the file is expected to be
+    /// absent until the first save (RF-16.21).
+    from_template: bool,
+}
+
+/// What a successful [`ConfigDocument::save`] tells the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveOutcome {
+    /// Unknown keys `parse` found in the written text. They were already in
+    /// the file; they do not block (ADR-0058 §4).
+    pub unknown_keys: Vec<String>,
 }
 
 impl ConfigDocument {
+    /// A document whose base is the file's own text.
     pub fn parse(text: &str) -> Result<Self, EditError> {
         let doc: DocumentMut = text.parse().map_err(|err: toml_edit::TomlError| {
             let position = err.span().map(|span| line_column_at(text, span.start));
@@ -181,12 +214,77 @@ impl ConfigDocument {
             base: text.to_owned(),
             doc,
             crlf,
+            from_template: false,
+        })
+    }
+
+    /// A document for a file that does not exist yet: `template` (the example
+    /// file, which the caller embeds) is the base, and the first save creates
+    /// the file from it plus the edits. A file that shows up in the meantime
+    /// is a conflict.
+    pub fn from_template(template: &str) -> Result<Self, EditError> {
+        Ok(Self {
+            from_template: true,
+            ..Self::parse(template)?
         })
     }
 
     /// The text this document was parsed from.
     pub fn base(&self) -> &str {
         &self.base
+    }
+
+    /// Swaps the base for `text` (the file as somebody else left it, usually
+    /// the `current` of [`EditError::Changed`]). The same edits applied again
+    /// land on top of it, key by key (RF-16.23, "keep my changes").
+    pub fn rebase(&mut self, text: &str) -> Result<(), EditError> {
+        *self = Self::parse(text)?;
+        Ok(())
+    }
+
+    /// [`apply`](Self::apply), then the loader's own `parse` on the result
+    /// (ADR-0058 §4): the text is only returned if the app would accept it,
+    /// together with the unknown keys `parse` reported.
+    pub fn apply_checked(&self, edits: &[Edit]) -> Result<(String, Vec<String>), EditError> {
+        let text = self.apply(edits)?;
+        let (_, unknown_keys) = crate::parse(&text).map_err(EditError::Invalid)?;
+        Ok((text, unknown_keys))
+    }
+
+    /// Revalidates, checks that the file is still what the base says, and
+    /// writes atomically to the real target of `path` (ADR-0058 §3, §4). On
+    /// success the base becomes the written text, so saving again never
+    /// conflicts with itself. On any error nothing was written and `self` is
+    /// unchanged.
+    pub fn save(&mut self, path: &Path, edits: &[Edit]) -> Result<SaveOutcome, EditError> {
+        let (text, unknown_keys) = self.apply_checked(edits)?;
+        let next = Self {
+            from_template: false,
+            ..Self::parse(&text)?
+        };
+
+        // Follow a symlink to the file it stands for; a path that does not
+        // exist yet is its own target.
+        let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let current = match fs::read_to_string(&target) {
+            Ok(current) => Some(current),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(io_error(&target, &err)),
+        };
+        let unchanged = if self.from_template {
+            current.is_none()
+        } else {
+            current.as_deref().unwrap_or("") == self.base
+        };
+        if !unchanged {
+            return Err(EditError::Changed {
+                current: current.unwrap_or_default(),
+            });
+        }
+
+        write_atomically(&target, &text)?;
+        *self = next;
+        Ok(SaveOutcome { unknown_keys })
     }
 
     /// Applies `edits` in order over the base and returns the new text. Fails
@@ -221,6 +319,41 @@ impl ConfigDocument {
         }
         text
     }
+}
+
+// ---------------------------------------------------------------------------
+// Disk
+// ---------------------------------------------------------------------------
+
+fn io_error(path: &Path, err: &io::Error) -> EditError {
+    EditError::Io {
+        path: path.to_path_buf(),
+        kind: err.kind(),
+        cause: err.to_string(),
+    }
+}
+
+/// `<name>.tmp` beside `target`, `sync_all`, `rename` over it: a crash in the
+/// middle leaves the previous file intact (same recipe as the session file).
+fn write_atomically(target: &Path, text: &str) -> Result<(), EditError> {
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir).map_err(|err| io_error(dir, &err))?;
+    }
+    let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = target.with_file_name(tmp_name);
+
+    let written = (|| {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, target)
+    })();
+    written.map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        io_error(target, &err)
+    })
 }
 
 // ---------------------------------------------------------------------------
