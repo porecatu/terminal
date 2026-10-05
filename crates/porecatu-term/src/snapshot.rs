@@ -72,6 +72,8 @@ pub struct Cursor {
     pub position: Option<(usize, usize)>,
     pub shape: CursorShape,
     pub visible: bool,
+    /// Estilo vigente pisca (default da config ou bit de blink do DECSCUSR).
+    pub blinking: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -194,6 +196,7 @@ impl Default for Cursor {
             position: None,
             shape: CursorShape::Hidden,
             visible: false,
+            blinking: false,
         }
     }
 }

@@ -51,6 +51,9 @@ pub struct CursorAppearance {
     pub color: Color,
     pub width: f32,
     pub hollow: bool,
+    /// Fase do piscar (`cursor_blink`): `false` = quadro em que o cursor
+    /// pisca apagado. Cursor que não pisca passa sempre `true`.
+    pub blink_on: bool,
 }
 
 /// Altura do cursor bloco, em fração de `font_size_px` -- **não**
@@ -253,6 +256,7 @@ pub fn build_primitives(
 
     if let Some((row, col)) = snapshot.cursor.position
         && snapshot.cursor.visible
+        && cursor.blink_on
     {
         // Sem centralizar em `metrics.height`: o glyph não ocupa a linha
         // inteira (ela tem `line_height` de folga, toda embaixo). `text.rs`
@@ -286,12 +290,29 @@ fn cursor_primitive(shape: CursorShape, cursor: CursorAppearance, cell_rect: Rec
     // `HollowBlock` é o que o próprio DECSCUSR pode pedir (motor completo,
     // mesmo sem uso hoje) -- vazado independente de `cursor.hollow`
     // (RF-5.24 é só o efeito de "sem foco" sobre a forma configurada).
+    // Sem foco (`cursor.hollow`), qualquer forma vira o contorno do bloco --
+    // como xterm/Alacritty/WezTerm; só o bloco virava, e com barra ou
+    // sublinhado a opção parecia morta.
     match shape {
         CursorShape::Hidden => unreachable!("chamado só com `visible == true`"),
         CursorShape::Block if !cursor.hollow => Primitive::Quad(Quad {
             rect: cell_rect,
             color: cursor.color,
         }),
+        CursorShape::Block
+        | CursorShape::HollowBlock
+        | CursorShape::Beam
+        | CursorShape::Underline
+            if cursor.hollow =>
+        {
+            Primitive::RoundedQuad(RoundedQuad {
+                rect: cell_rect,
+                radius: 0.0,
+                color: TRANSPARENT,
+                border_color: cursor.color,
+                border_width: cursor.width,
+            })
+        }
         CursorShape::Block | CursorShape::HollowBlock => Primitive::RoundedQuad(RoundedQuad {
             rect: cell_rect,
             radius: 0.0,
@@ -865,6 +886,7 @@ mod tests {
             color: TRANSPARENT,
             width: 7.0,
             hollow: false,
+            blink_on: true,
         }
     }
 
@@ -1108,6 +1130,7 @@ mod tests {
             position: Some((0, 0)),
             shape,
             visible: true,
+            blinking: false,
         };
         snap
     }
@@ -1138,6 +1161,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 7.0,
                 hollow: false,
+                blink_on: true,
             },
         );
         assert!(matches!(out.last(), Some(Primitive::Quad(_))));
@@ -1153,6 +1177,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 7.0,
                 hollow: true,
+                blink_on: true,
             },
         );
         match out.last() {
@@ -1174,6 +1199,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 7.0,
                 hollow: false,
+                blink_on: true,
             },
         );
         assert!(matches!(out.last(), Some(Primitive::RoundedQuad(_))));
@@ -1189,6 +1215,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 3.0,
                 hollow: false,
+                blink_on: true,
             },
         );
         match out.last() {
@@ -1214,6 +1241,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 2.0,
                 hollow: false,
+                blink_on: true,
             },
             &mut m,
             &[],
@@ -1229,5 +1257,40 @@ mod tests {
             }
             other => panic!("esperava Quad do sublinhado, veio {other:?}"),
         }
+    }
+
+    /// Sem foco, barra e sublinhado também viram o contorno do bloco --
+    /// `unfocused_hollow` não pode parecer morta nessas duas formas.
+    #[test]
+    fn unfocused_beam_and_underline_become_the_hollow_block() {
+        for shape in [CursorShape::Beam, CursorShape::Underline] {
+            let out = cursor_primitives(
+                &snapshot_with_cursor(shape),
+                CursorAppearance {
+                    color: TRANSPARENT,
+                    width: 2.0,
+                    hollow: true,
+                    blink_on: true,
+                },
+            );
+            assert!(
+                matches!(out.last(), Some(Primitive::RoundedQuad(_))),
+                "{shape:?} sem foco deveria sair como contorno de bloco"
+            );
+        }
+    }
+
+    /// Fase apagada do piscar: o cursor não é desenhado nesse quadro.
+    #[test]
+    fn cursor_is_not_drawn_in_the_off_blink_phase() {
+        let appearance = |blink_on| CursorAppearance {
+            color: TRANSPARENT,
+            width: 2.0,
+            hollow: false,
+            blink_on,
+        };
+        let on = cursor_primitives(&snapshot_with_cursor(CursorShape::Block), appearance(true));
+        let off = cursor_primitives(&snapshot_with_cursor(CursorShape::Block), appearance(false));
+        assert_eq!(on.len(), off.len() + 1);
     }
 }

@@ -413,6 +413,52 @@ fn decscusr_do_programa_sobrepoe_o_default_da_config() {
     assert_eq!(snapshot.cursor.shape, CursorShape::Beam);
 }
 
+/// Hot reload de `[terminal.cursor]` (classe A): o default novo aparece no
+/// snapshot de um motor já vivo, sem DECSCUSR emitido.
+#[test]
+fn reload_troca_o_cursor_default_de_motor_vivo() {
+    use porecatu_term::CursorShape;
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let (pty_writer, _pty_writer_rx) = std::sync::mpsc::channel();
+    let mut term = TermEngine::new(
+        TermParams::default(),
+        TermSize { rows: 2, cols: 10 },
+        tx,
+        pty_writer,
+    );
+    term.set_default_cursor_style(CursorShape::Underline, true);
+
+    let mut snapshot = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snapshot);
+    assert_eq!(snapshot.cursor.shape, CursorShape::Underline);
+    assert!(snapshot.cursor.blinking);
+}
+
+/// RF-5.25 após reload: o que o programa definiu por DECSCUSR continua
+/// valendo; só o default muda.
+#[test]
+fn reload_nao_atropela_decscusr_do_programa() {
+    use porecatu_term::CursorShape;
+
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let (pty_writer, _pty_writer_rx) = std::sync::mpsc::channel();
+    let mut term = TermEngine::new(
+        TermParams::default(),
+        TermSize { rows: 2, cols: 10 },
+        tx,
+        pty_writer,
+    );
+    // CSI 6 SP q: barra fixa.
+    term.advance(b"[6 q");
+    term.set_default_cursor_style(CursorShape::Underline, true);
+
+    let mut snapshot = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snapshot);
+    assert_eq!(snapshot.cursor.shape, CursorShape::Beam);
+    assert!(!snapshot.cursor.blinking);
+}
+
 /// ADR-0042 §1: OSC 8 vira um span ao lado do snapshot, não um bit em
 /// `Cell`. Sem link nenhum, a lista sai vazia.
 #[test]

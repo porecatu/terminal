@@ -139,6 +139,9 @@ pub struct TermEngine {
     /// não é despachado a nenhum método de `Handler`, ver `crate::osc7`),
     /// então `advance` manda direto por aqui, fora de `EventProxy`.
     events: mpsc::Sender<TermEvent>,
+    /// Config atual do motor, guardada para `set_default_cursor_style`:
+    /// `Term::set_options` troca a config inteira, não um campo.
+    config: AlacConfig,
 }
 
 impl TermEngine {
@@ -173,14 +176,27 @@ impl TermEngine {
             clipboard_write_max_bytes: params.clipboard_write_max_bytes,
         };
 
-        let term = Term::new(config, &size, proxy);
+        let term = Term::new(config.clone(), &size, proxy);
         Self {
             term,
             parser: Processor::new(),
             osc7: Osc7Watcher::new(),
             dismiss: DismissWatcher::new(),
             events,
+            config,
         }
+    }
+
+    /// Troca o cursor de **default** do motor (hot reload de
+    /// `[terminal.cursor]`, classe A). DECSCUSR emitido pelo programa
+    /// continua valendo: `Term::set_options` não toca o estilo que o
+    /// programa definiu (RF-5.25).
+    pub fn set_default_cursor_style(&mut self, shape: CursorShape, blinking: bool) {
+        self.config.default_cursor_style = AnsiCursorStyle {
+            shape: ansi_cursor_shape(shape),
+            blinking,
+        };
+        self.term.set_options(self.config.clone());
     }
 
     /// Alimenta o parser VT com bytes crus do PTY, e em paralelo os dois
@@ -374,6 +390,7 @@ impl TermEngine {
                 .map(|p| (p.line, p.column.0)),
             shape,
             visible: shape != CursorShape::Hidden,
+            blinking: self.term.cursor_style().blinking,
         };
         out.scroll_offset = display_offset;
         out.selection = content

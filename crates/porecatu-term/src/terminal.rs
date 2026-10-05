@@ -28,7 +28,7 @@ use crate::params::TermParams;
 use crate::scroll::TermScroll;
 use crate::search::{InvalidPattern, SearchJob, SearchMode, SearchStep};
 use crate::selection::{SelectionKind, SelectionSide};
-use crate::snapshot::{GridSnapshot, TermModes};
+use crate::snapshot::{CursorShape, GridSnapshot, TermModes};
 
 /// Intervalo de checagem de `try_wait` na thread de observação do processo.
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -294,6 +294,12 @@ impl Terminal {
     pub fn resize(&self, rows: usize, cols: usize) {
         lock(&self.engine).resize(rows, cols);
         let _ = self.resize.send((rows as u16, cols as u16));
+    }
+
+    /// Hot reload de `[terminal.cursor]`: troca o cursor de default sem
+    /// tocar o que o programa definiu por DECSCUSR (RF-5.25).
+    pub fn set_default_cursor_style(&self, shape: CursorShape, blinking: bool) {
+        lock(&self.engine).set_default_cursor_style(shape, blinking);
     }
 
     /// Injeta uma nota estilizada no grid, como se fosse saída do programa

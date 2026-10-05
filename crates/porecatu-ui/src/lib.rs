@@ -37,6 +37,7 @@ mod box_glyphs;
 mod chrome;
 mod clipboard;
 mod context_menu;
+mod cursor_blink;
 mod dialog;
 mod git;
 mod group_editor;
@@ -345,6 +346,10 @@ enum Drag {
 /// Grade mínima -- uma célula em cada direção, no pior caso de janela
 /// minúscula ou métrica de fonte falhando.
 const MIN_GRID: usize = 1;
+
+/// Piso do intervalo do piscar: `blink_interval_ms = 0` viraria um redraw por
+/// volta do event loop, o oposto do render damage-driven (ADR-0007).
+const MIN_CURSOR_BLINK_MS: u64 = 50;
 
 /// Evento de usuário do event loop -- o mesmo caminho serve os fatos que
 /// só podem chegar de fora da main thread (ADR-0007): aba suja, recarga de
@@ -1081,6 +1086,8 @@ struct WindowState {
     /// não garante um `Focused(true)` inicial em toda plataforma, e a
     /// janela recém-criada tipicamente já nasce em primeiro plano.
     focused: bool,
+    /// Fase do piscar do cursor do painel focado (RF-5.22 `blink`).
+    cursor_blink: cursor_blink::CursorBlink,
     /// RF-3.2 (ADR-0036): `true` quando alguma mudança estrutural desta
     /// janela ainda não entrou no debounce de gravação da sessão (`App::
     /// session`). Drenado a cada volta do event loop em
@@ -1885,6 +1892,7 @@ impl WindowState {
             window_surface,
             scale,
             focused: true,
+            cursor_blink: cursor_blink::CursorBlink::new(Instant::now()),
             logical_width: size.width as f32 / scale,
             logical_height: size.height as f32 / scale,
             workspace: Workspace::new(),
@@ -4955,6 +4963,7 @@ impl WindowState {
             self.warnings.next_deadline(),
             self.hover.next_deadline(),
             self.animations.next_deadline(now),
+            self.cursor_blink.next_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -6874,7 +6883,9 @@ impl App {
             let had_tooltip = state.hover.visible().is_some();
             let was_animating = !state.animations.is_empty();
             state.tick(now);
+            let blinked = state.cursor_blink.tick(now);
             if was_animating
+                || blinked
                 || had_warnings != !state.warnings.is_empty()
                 || had_tooltip != state.hover.visible().is_some()
             {
@@ -7205,6 +7216,14 @@ impl App {
         let overridden = self.recompute_palettes();
 
         self.term_params = term_params_from_config(&self.config);
+        // `[terminal.cursor]` é classe A: o default novo chega também aos
+        // painéis já vivos (DECSCUSR do programa continua valendo, RF-5.25).
+        for runtime in self.windows.values().flat_map(|w| w.panes.values()) {
+            runtime.terminal.set_default_cursor_style(
+                self.term_params.default_cursor_shape,
+                self.term_params.cursor_blinking,
+            );
+        }
         // `[keybindings]` é classe A (ADR-0029 §3): o mapa novo vale
         // imediatamente. Um modo de captura em curso (rename, diálogo,
         // menu) não é afetado -- ele nem chega a consultar `keymap`,
@@ -8149,6 +8168,7 @@ impl ApplicationHandler<Wakeup> for App {
                 // RF-5.24: cursor volta de vazado para cheio ao ganhar foco.
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.focused = true;
+                    state.cursor_blink.reset(Instant::now());
                     state.window.request_redraw();
                 }
             }
@@ -8317,6 +8337,10 @@ impl App {
         // ADR-0022: qualquer tecla descarta animação em curso e aplica o
         // estado final na hora -- a animação nunca bloqueia input.
         state.animations.clear();
+        // Tecla: o cursor reaparece aceso e o ciclo do piscar recomeça.
+        if state.cursor_blink.reset(Instant::now()) {
+            state.window.request_redraw();
+        }
 
         // Cadeia de captura (ADR-0008 passo 1): diálogo modal > menu de
         // contexto > cancelamento de arraste > rename > aviso > seleção
@@ -10373,6 +10397,7 @@ impl App {
             .unwrap_or(self.term_pal.cursor);
 
             let mut grid_primitives = Vec::new();
+            let mut cursor_blinks = false;
             for (pane_id, pane_rect) in &pane_layout {
                 let pane_id = *pane_id;
                 let Some(runtime) = state.panes.get_mut(&(id, pane_id)) else {
@@ -10409,10 +10434,16 @@ impl App {
                 // `RoundedQuad` de raio 0 com borda, sem primitiva nova.
                 let hollow =
                     pane_id != focused_pane || (!state.focused && cursor_config.unfocused_hollow);
+                // Só o cursor cheio do painel focado, numa janela com foco,
+                // pisca; vazado fica fixo (sem foco o ciclo nem corre).
+                let blinking =
+                    !hollow && runtime.snapshot.cursor.visible && runtime.snapshot.cursor.blinking;
+                cursor_blinks |= blinking;
                 let cursor = paint::CursorAppearance {
                     color: cursor_color,
                     width: cursor_config.width as f32,
                     hollow,
+                    blink_on: !blinking || state.cursor_blink.is_on(),
                 };
 
                 let hyperlink_hover: Vec<HyperlinkSpan> = if Some(pane_id) == hover_pane
@@ -10450,6 +10481,15 @@ impl App {
                 ));
             }
             frame.set_layer(Layer::Grid, grid_primitives);
+            // Liga/desliga o relógio do piscar conforme o que acabou de ser
+            // desenhado; o prazo entra em `next_wake`, então cursor fixo
+            // continua custando zero frame.
+            let blink_interval = cursor_blinks.then(|| {
+                Duration::from_millis(cursor_config.blink_interval_ms.max(MIN_CURSOR_BLINK_MS))
+            });
+            state
+                .cursor_blink
+                .set_interval(blink_interval, Instant::now());
 
             if let Some(search) = &state.search {
                 let search_layout = search_bar::layout_search_bar(box_rect, style);
