@@ -64,7 +64,10 @@ impl WindowSurface {
     /// (`PreMultiplied`). Só então opacidade < 1 tem efeito; numa surface
     /// opaca o canal alfa é ignorado pelo compositor.
     pub fn is_transparent(&self) -> bool {
-        self.config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied
+        matches!(
+            self.config.alpha_mode,
+            wgpu::CompositeAlphaMode::PreMultiplied | wgpu::CompositeAlphaMode::Inherit
+        )
     }
 
     /// Reconfigura a surface para o novo tamanho físico (px) e escala --

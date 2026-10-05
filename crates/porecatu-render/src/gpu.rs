@@ -62,17 +62,24 @@ pub struct GpuContext {
 }
 
 /// Modo de composição alfa da surface. Janela opaca fica com o default do
-/// `wgpu` (o que ela sempre usou). Janela transparente precisa de
-/// `PreMultiplied` -- é o que o shader devolve (`quad.wgsl`) -- e, se a
-/// plataforma não oferece, cai no default: o app segue opaco em vez de
-/// quebrar (quem chama pergunta `WindowSurface::is_transparent`).
+/// `wgpu` (o que ela sempre usou). Janela transparente quer `PreMultiplied`
+/// -- é o que o shader devolve (`quad.wgsl`). Windows (Vulkan/DX12 por HWND)
+/// só oferece `Opaque` e `Inherit`: lá o `winit` liga a transparência do DWM
+/// ao criar a janela e `Inherit` entrega o canal alfa premultiplicado a ele
+/// (verificado ao vivo contra um fundo vermelho). Sem nenhum dos dois, cai
+/// no default: o app segue opaco em vez de quebrar (quem chama pergunta
+/// `WindowSurface::is_transparent`).
 pub(crate) fn pick_alpha_mode(
     supported: &[wgpu::CompositeAlphaMode],
     transparent: bool,
     default: wgpu::CompositeAlphaMode,
 ) -> wgpu::CompositeAlphaMode {
-    if transparent && supported.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+    if !transparent {
+        default
+    } else if supported.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
         wgpu::CompositeAlphaMode::PreMultiplied
+    } else if supported.contains(&wgpu::CompositeAlphaMode::Inherit) {
+        wgpu::CompositeAlphaMode::Inherit
     } else {
         default
     }
@@ -301,6 +308,12 @@ mod tests {
 
     /// `PostMultiplied` espera cor reta e o shader devolve premultiplicada:
     /// melhor ficar opaco do que desenhar com a cor errada.
+    #[test]
+    fn transparent_window_takes_inherit_when_premultiplied_is_missing() {
+        let supported = [Mode::Opaque, Mode::Inherit];
+        assert_eq!(pick_alpha_mode(&supported, true, Mode::Auto), Mode::Inherit);
+    }
+
     #[test]
     fn transparent_window_without_premultiplied_falls_back_to_the_default() {
         let supported = [Mode::Opaque, Mode::PostMultiplied];

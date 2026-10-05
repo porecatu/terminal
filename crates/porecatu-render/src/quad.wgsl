@@ -101,9 +101,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let aa = max(fwidth(dist) * 0.5, 0.0001);
         fill_alpha = 1.0 - smoothstep(-aa, aa, dist);
         if in.border_width > 0.0 {
-            let border_dist = dist + in.border_width;
-            let border_alpha = 1.0 - smoothstep(-aa, aa, border_dist);
-            border_frac = clamp(border_alpha - fill_alpha, 0.0, 1.0);
+            // A borda é o anel de `border_width` por dentro do contorno: o que
+            // está dentro do retângulo e fora do mesmo retângulo encolhido.
+            // (`border_alpha - fill_alpha` dava sempre <= 0 -- a área
+            // encolhida é a menor --, então a borda nunca era pintada.)
+            let inner_alpha = 1.0 - smoothstep(-aa, aa, dist + in.border_width);
+            // Premultiplicado: miolo na cor de preenchimento, anel na cor da
+            // borda **sobre** o preenchimento. Borda transparente deixa o
+            // preenchimento como está, em vez de abrir um anel vazio.
+            let fill_p = vec4<f32>(in.color.rgb * in.color.a, in.color.a);
+            let border_p = vec4<f32>(in.border_color.rgb * in.border_color.a, in.border_color.a);
+            let ring_p = border_p + fill_p * (1.0 - in.border_color.a);
+            let ring_cov = clamp(fill_alpha - inner_alpha, 0.0, 1.0);
+            return fill_p * clamp(inner_alpha, 0.0, 1.0) + ring_p * ring_cov;
         }
     }
 
