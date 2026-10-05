@@ -33,7 +33,7 @@ notify = "8.2.0"
 # com GPLv3. `reveal` é a operação que decide `file` -- sem ela, `file`
 # cairia no handler por extensão como fallback, que é exatamente o que o
 # ADR proíbe.
-opener = { version = "0.8", features = ["reveal"] }
+opener = { version = "0.9", features = ["reveal"] }
 png = "0.18"
 porecatu-config = { path = "../porecatu-config" }
 porecatu-core = { path = "../porecatu-core" }
