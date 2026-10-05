@@ -195,6 +195,10 @@ pub(crate) struct SettingsWindow {
     /// O que a tela sabe do arquivo: a base do Salvar e a faixa (RF-16.21 a
     /// RF-16.23).
     file: FileState,
+    /// O arquivo de configuração em uso (`App::config_path`): a base de um
+    /// caminho relativo da imagem de fundo, para a nota de "não encontrado"
+    /// (RF-17.21).
+    config_path: Option<PathBuf>,
 }
 
 impl SettingsWindow {
@@ -208,6 +212,7 @@ impl SettingsWindow {
         initial_group: Group,
         config: &Config,
         locale_dirs: Vec<PathBuf>,
+        config_path: Option<PathBuf>,
         disk: &Disk,
     ) -> Self {
         let size = window.inner_size();
@@ -242,6 +247,7 @@ impl SettingsWindow {
             filter: String::new(),
             capturing: None,
             file: FileState::new(disk),
+            config_path,
         }
     }
 
@@ -691,6 +697,7 @@ impl SettingsWindow {
                 session_theme: self.session_theme.as_deref(),
                 shortcuts: Some(&view),
                 banner: banner.as_ref(),
+                config_path: self.config_path.as_deref(),
             };
             self.content = Some(content::build(
                 key,

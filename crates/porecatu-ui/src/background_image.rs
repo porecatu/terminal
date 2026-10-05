@@ -134,6 +134,17 @@ pub(crate) fn placement(
     }
 }
 
+/// O caminho resolvido de `raw` (o texto do campo da tela de configurações,
+/// RF-17.3) **se** ele não existe no disco (RF-17.21); `None` com o campo
+/// vazio ou com o arquivo presente. A tela chama isto a cada edição do campo:
+/// é só um `exists`, sem decodificar -- formato e corrupção só saem no aviso
+/// da recarga (RF-17.14). `config_path` é o arquivo de configuração em uso, base
+/// de um caminho relativo.
+pub(crate) fn missing_file(config_path: Option<&Path>, raw: &str) -> Option<PathBuf> {
+    let resolved = porecatu_config::resolve_background_image_path(config_path, raw)?;
+    (!resolved.exists()).then_some(resolved)
+}
+
 /// Maior lado de textura que o `Device` aceita com o `DeviceDescriptor::
 /// default()` que o projeto pede (`max_texture_dimension_2d`). Só vale
 /// enquanto não há `GpuContext` (a carga do arranque começa antes da primeira
@@ -901,6 +912,54 @@ mod tests {
             first[0] > 200 && first[1] < 30,
             "sem verde vazando: {first:?}"
         );
+    }
+
+    // ---- nota de "arquivo não encontrado" (RF-17.21), função pura ------
+
+    #[test]
+    fn missing_file_is_none_for_an_empty_path_or_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        std::fs::write(dir.path().join("fundo.png"), b"x").unwrap();
+        assert_eq!(missing_file(Some(&config), ""), None);
+        assert_eq!(missing_file(Some(&config), "  "), None);
+        // Relativo, existente.
+        assert_eq!(missing_file(Some(&config), "fundo.png"), None);
+        // Absoluto, existente.
+        let absolute = dir.path().join("fundo.png");
+        assert_eq!(missing_file(None, absolute.to_str().unwrap()), None);
+    }
+
+    #[test]
+    fn missing_file_gives_the_resolved_path_when_it_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        // Relativo: resolvido contra a pasta do config, não contra onde o app
+        // foi lançado.
+        assert_eq!(
+            missing_file(Some(&config), "imagens/sumiu.png"),
+            Some(dir.path().join("imagens/sumiu.png"))
+        );
+        // Absoluto: como está.
+        let absolute = dir.path().join("sumiu.jpg");
+        assert_eq!(
+            missing_file(None, absolute.to_str().unwrap()),
+            Some(absolute.clone())
+        );
+        // O mesmo nome, relativo, existindo noutra pasta: continua faltando
+        // (a regra é a pasta do config).
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join("so-aqui.png"), b"x").unwrap();
+        assert!(missing_file(Some(&config), "so-aqui.png").is_some());
+    }
+
+    #[test]
+    fn missing_file_sees_a_directory_as_present() {
+        // `exists` não distingue; a recarga é quem avisa que não é imagem.
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        std::fs::create_dir(dir.path().join("pasta")).unwrap();
+        assert_eq!(missing_file(Some(&config), "pasta"), None);
     }
 
     // ---- placement (função pura, sem GPU) ------------------------------

@@ -857,7 +857,7 @@ O ponto de partida: `porecatu-render` não amostra textura nenhuma além do atla
    - `alpha = opacity × background_opacity` na paleta resolvida.
    - A recarga a quente aplicando os três campos.
    - A §2.7 da especificação reescrita e a entrada na §4.4. **Aval visual pedido aqui**, sobre a build.
-5. **Tela de configurações.** As três opções no grupo Terminal (`settings/catalog.rs`), a nota de "arquivo não encontrado", rótulos e frases em todo arquivo de `locales/`.
+5. **Tela de configurações — feita.** `background_image` (campo de texto), `background_image_mode` (escolha entre Esticar, Ladrilho e Centralizar, em botões colados) e `background_image_opacity` (campo numérico de `0.0` a `1.0`, no passo de `background_opacity`) entram no grupo Terminal logo depois dela, com escopo `Live` e Restaurar padrão; o catálogo passa a ter 52 opções. A nota de "arquivo não encontrado" (`background_image::missing_file`, só um `exists` sobre o caminho resolvido contra o config em uso) sai como nota de Aviso abaixo do campo, a cada edição, e não impede o Salvar. As frases estão nos cinco arquivos de `locales/`. O que a etapa pedia: As três opções no grupo Terminal (`settings/catalog.rs`), a nota de "arquivo não encontrado", rótulos e frases em todo arquivo de `locales/`.
 6. **Verificação ao vivo e fechamento.**
    - Os cenários do PRD-017 numa instância isolada por cenário.
    - Os três modos em janela opaca e transparente, numa aba dividida.

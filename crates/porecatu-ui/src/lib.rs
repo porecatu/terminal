@@ -7634,6 +7634,7 @@ impl App {
             self.settings_last_group,
             &self.config,
             language::locale_dirs(self.config_path.as_deref()),
+            self.config_path.clone(),
             &self
                 .config_path
                 .as_deref()

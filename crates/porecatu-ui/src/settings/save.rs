@@ -121,6 +121,105 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    /// Salvar o caminho, o modo e a opacidade da imagem de fundo pela tela
+    /// (rascunho -> edições -> `save`) muda **só** essas linhas: todo o resto
+    /// do arquivo, comentários e ordem inclusive, sai igual.
+    #[test]
+    fn saving_the_three_image_options_adds_only_their_own_lines() {
+        use crate::settings::catalog::option;
+        use crate::settings::draft::Draft;
+
+        let original = "# meu arquivo\n\n[terminal]\nbackground_opacity = 0.8   # RF-5.15\n\n[terminal.font]\nsize = 14.0   # RF-5.3\n";
+        let path = file_with("image-three.toml", original);
+        let (config, _) = porecatu_config::parse(original).unwrap();
+
+        let mut draft = Draft::new(&config);
+        draft
+            .set(
+                option("background_image").unwrap(),
+                EditValue::String("imagens/montanha.jpg".to_owned()),
+            )
+            .unwrap();
+        draft
+            .set(
+                option("background_image_mode").unwrap(),
+                EditValue::String("tile".to_owned()),
+            )
+            .unwrap();
+        draft
+            .set(
+                option("background_image_opacity").unwrap(),
+                EditValue::Float(0.35),
+            )
+            .unwrap();
+        let edits = draft.edits();
+        assert_eq!(edits.len(), 3, "uma edição por opção, nenhuma outra");
+
+        let saved = save(&path, Some(original), EXAMPLE, &edits).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert_eq!(saved.text, written);
+
+        // Toda linha do original continua lá, na mesma ordem...
+        let before: Vec<&str> = original.lines().collect();
+        let after: Vec<&str> = written.lines().collect();
+        let mut cursor = 0;
+        for line in &before {
+            let found = after[cursor..]
+                .iter()
+                .position(|candidate| candidate == line)
+                .unwrap_or_else(|| panic!("linha perdida ou fora de ordem: {line:?}"));
+            cursor += found + 1;
+        }
+        // ...e as únicas novas são a tabela e as três chaves.
+        let added: Vec<&str> = after
+            .iter()
+            .copied()
+            .filter(|line| !before.contains(line))
+            .collect();
+        assert_eq!(
+            added,
+            [
+                "[terminal.background_image]",
+                "path = \"imagens/montanha.jpg\"",
+                "mode = \"tile\"",
+                "opacity = 0.35",
+            ]
+        );
+        // O arquivo gravado é lido de volta como o rascunho pediu.
+        let image = &saved.config.terminal.background_image;
+        assert_eq!(image.path, "imagens/montanha.jpg");
+        assert_eq!(image.mode, porecatu_config::BackgroundImageMode::Tile);
+        assert_eq!(image.opacity, 0.35);
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// Restaurar padrão **remove** a chave (preservando o resto), como nas
+    /// demais opções.
+    #[test]
+    fn restoring_an_image_option_removes_only_its_key() {
+        use crate::settings::catalog::option;
+        use crate::settings::draft::Draft;
+
+        let original =
+            "[terminal.background_image]\npath = \"a.png\"\nmode = \"center\"\nopacity = 0.5\n";
+        let path = file_with("image-reset.toml", original);
+        let (config, _) = porecatu_config::parse(original).unwrap();
+        let mut draft = Draft::new(&config);
+        draft.reset(option("background_image_mode").unwrap());
+        let edits = draft.edits();
+        assert_eq!(edits.len(), 1);
+        let saved = save(&path, Some(original), EXAMPLE, &edits).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[terminal.background_image]\npath = \"a.png\"\nopacity = 0.5\n"
+        );
+        assert_eq!(
+            saved.config.terminal.background_image.mode,
+            porecatu_config::BackgroundImageMode::Stretch
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
     #[test]
     fn a_remove_drops_the_key_and_keeps_the_comment_above_it() {
         let original = "[terminal.font]\n# tamanho em pixels\nsize = 16.0\nfamily = \"X\"\n";

@@ -411,6 +411,9 @@ label_modules! {
     osc52_max_bytes => (osc52_max_bytes_label, osc52_max_bytes_description),
     hyperlinks_enabled => (hyperlinks_enabled_label, hyperlinks_enabled_description),
     background_opacity => (background_opacity_label, background_opacity_description),
+    background_image => (background_image_label, background_image_description),
+    background_image_mode => (background_image_mode_label, background_image_mode_description),
+    background_image_opacity => (background_image_opacity_label, background_image_opacity_description),
     theme => (theme_label, theme_description),
     animations => (animations_label, animations_description),
     window_opacity => (window_opacity_label, window_opacity_description),
@@ -438,6 +441,24 @@ label_modules! {
 const CURSOR_SHAPES: &[&str] = &["block", "beam", "underline"];
 const CLOSE_BUTTON: &[&str] = &["always", "hover", "never"];
 const TAB_BAR_POSITIONS: &[&str] = &["top", "bottom"];
+const BACKGROUND_IMAGE_MODES: &[&str] = &["stretch", "tile", "center"];
+
+fn background_image_mode(config: &Config) -> EditValue {
+    string(match config.terminal.background_image.mode {
+        porecatu_config::BackgroundImageMode::Stretch => "stretch",
+        porecatu_config::BackgroundImageMode::Tile => "tile",
+        porecatu_config::BackgroundImageMode::Center => "center",
+    })
+}
+
+/// A opacidade da imagem é `f32` no arquivo e `f64` no rascunho: `0.35` lido
+/// como `f32` e alargado dá `0.3499999940...`, e o valor digitado (`0.35`)
+/// pareceria uma alteração pendente mesmo igual ao do arquivo. Seis casas
+/// bastam para devolver o que foi escrito (um `f32` tem ~7 dígitos).
+fn image_opacity(config: &Config) -> EditValue {
+    let value = f64::from(config.terminal.background_image.opacity);
+    EditValue::Float((value * 1_000_000.0).round() / 1_000_000.0)
+}
 
 fn cursor_shape(config: &Config) -> EditValue {
     string(match config.terminal.cursor.shape {
@@ -462,7 +483,7 @@ fn tab_bar_position(config: &Config) -> EditValue {
     })
 }
 
-/// As 49 opções do RF-16.11.
+/// As 52 opções do RF-16.11 (49 e as três da imagem de fundo, RF-17.20).
 pub(crate) static OPTIONS: &[OptionDef] = &[
     // ---- Geral
     option!(
@@ -691,6 +712,33 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         float(0.0, 1.0, 0.05),
         |c| EditValue::Float(c.terminal.background_opacity)
     ),
+    // PRD-017 RF-17.20: o caminho é texto (sem seletor de arquivo, RF-16.12),
+    // o modo uma escolha de três e a opacidade um número de 0.0 a 1.0 no passo
+    // e na precisão de `background_opacity`.
+    option!(
+        background_image,
+        Terminal,
+        Background,
+        "terminal.background_image.path",
+        Control::Text,
+        |c| string(&c.terminal.background_image.path)
+    ),
+    option!(
+        background_image_mode,
+        Terminal,
+        Background,
+        "terminal.background_image.mode",
+        Control::Choice(BACKGROUND_IMAGE_MODES),
+        background_image_mode
+    ),
+    option!(
+        background_image_opacity,
+        Terminal,
+        Background,
+        "terminal.background_image.opacity",
+        float(0.0, 1.0, 0.05),
+        image_opacity
+    ),
     // ---- Aparência
     option!(
         theme,
@@ -886,12 +934,97 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        assert_eq!(OPTIONS.len(), 49);
+        assert_eq!(OPTIONS.len(), 52);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 21, 12, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 24, 12, 4, 2, 1, 2, 0]);
+    }
+
+    /// RF-17.20: as três opções da imagem de fundo ficam no grupo Terminal,
+    /// no subgrupo do fundo, logo depois de `background_opacity` e nesta
+    /// ordem, todas com recarga na hora (classe A, ADR-0061 §9).
+    #[test]
+    fn the_background_image_options_follow_background_opacity_in_the_terminal_group() {
+        let ids: Vec<&str> = options_in(Group::Terminal).map(|o| o.id).collect();
+        let at = ids
+            .iter()
+            .position(|id| *id == "background_opacity")
+            .unwrap();
+        assert_eq!(
+            &ids[at..at + 4],
+            [
+                "background_opacity",
+                "background_image",
+                "background_image_mode",
+                "background_image_opacity"
+            ]
+        );
+        for id in [
+            "background_image",
+            "background_image_mode",
+            "background_image_opacity",
+        ] {
+            let option = option(id).unwrap();
+            assert_eq!(option.group, Group::Terminal, "{id}");
+            assert_eq!(option.section, Section::Background, "{id}");
+            assert_eq!(option.reload_scope(), ReloadScope::Live, "{id}");
+        }
+        assert_eq!(
+            option("background_image").unwrap().path,
+            "terminal.background_image.path"
+        );
+        assert_eq!(
+            option("background_image_mode").unwrap().path,
+            "terminal.background_image.mode"
+        );
+        assert_eq!(
+            option("background_image_opacity").unwrap().path,
+            "terminal.background_image.opacity"
+        );
+    }
+
+    #[test]
+    fn the_image_controls_are_a_text_field_a_choice_of_three_and_the_same_number_as_the_background()
+    {
+        assert_eq!(option("background_image").unwrap().control, Control::Text);
+        assert_eq!(
+            option("background_image_mode").unwrap().control,
+            Control::Choice(&["stretch", "tile", "center"])
+        );
+        // Mesmo passo e mesma precisão de `background_opacity`.
+        assert_eq!(
+            option("background_image_opacity").unwrap().control,
+            option("background_opacity").unwrap().control
+        );
+    }
+
+    #[test]
+    fn the_image_defaults_are_the_config_defaults() {
+        assert_eq!(
+            option("background_image").unwrap().default_value(),
+            string("")
+        );
+        assert_eq!(
+            option("background_image_mode").unwrap().default_value(),
+            string("stretch")
+        );
+        assert_eq!(
+            option("background_image_opacity").unwrap().default_value(),
+            EditValue::Float(1.0)
+        );
+    }
+
+    /// `0.35` no arquivo é `f32`; a tela tem de lê-lo como `0.35`, não como
+    /// `0.3499999940...`, ou o valor digitado pareceria pendente.
+    #[test]
+    fn the_image_opacity_reads_back_as_written() {
+        let option = option("background_image_opacity").unwrap();
+        for written in [0.35, 0.05, 0.6, 0.95, 1.0, 0.0, 0.123456] {
+            let config = config_with(option, &EditValue::Float(written)).expect("valor na faixa");
+            assert_eq!(option.read(&config), EditValue::Float(written), "{written}");
+        }
     }
 
     #[test]
