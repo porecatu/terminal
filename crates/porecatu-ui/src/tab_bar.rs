@@ -778,18 +778,17 @@ fn layout_inset(
                 width: close_width,
                 height: style.close_button_size,
             };
-            let close_hit_rect = if style.show_close_button
-                == porecatu_config::CloseButtonVisibility::Never
-            {
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                }
-            } else {
-                expand(close_button, style.close_button_hit_slop)
-            };
+            let close_hit_rect =
+                if style.show_close_button == porecatu_config::CloseButtonVisibility::Never {
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 0.0,
+                    }
+                } else {
+                    expand(close_button, style.close_button_hit_slop)
+                };
 
             let hit_left = if index == 0 {
                 rect.x
