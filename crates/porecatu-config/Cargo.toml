@@ -16,7 +16,7 @@ dirs = "7"
 serde_ignored = "0.1"
 # ADR-0058 §1: pinned, still 0.x and breaks API between versions. Only
 # `edit.rs` names its types; none crosses into `porecatu-ui`.
-toml_edit = "=0.25.13"
+toml_edit = "=0.25.15"
 
 [dev-dependencies]
 tempfile = "3"
