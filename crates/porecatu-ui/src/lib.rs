@@ -10579,6 +10579,20 @@ impl App {
             // janela compõe com o desktop.
             let mut window_term_pal = self.term_pal.clone();
             window_term_pal.backdrop_punch = state.window_surface.is_transparent();
+            // PRD-017: a textura do processo, a mesma em toda janela e todo
+            // painel (RF-17.18). `displayed` é a da chave atual se `Ready`, ou
+            // a anterior enquanto a nova carrega; `Loading` sem anterior e
+            // `Failed` dão `None`, e o painel desenha como sempre. Só o
+            // `scale` é da janela -- ele decide o tamanho natural, e mudar de
+            // monitor refaz a conta sem recarregar nada (RF-17.6).
+            let background_image =
+                self.background_image
+                    .displayed()
+                    .map(|texture| paint::BackgroundImagePaint {
+                        image: texture.id,
+                        size_px: texture.size,
+                        scale: state.scale,
+                    });
             for (pane_id, pane_rect) in &pane_layout {
                 let pane_id = *pane_id;
                 let Some(runtime) = state.panes.get_mut(&(id, pane_id)) else {
@@ -10649,7 +10663,7 @@ impl App {
                 } else {
                     Vec::new()
                 };
-                grid_primitives.extend(paint::build_primitives(
+                grid_primitives.extend(paint::build_primitives_with_image(
                     &runtime.snapshot,
                     self.cell_metrics,
                     font_size_px,
@@ -10659,6 +10673,7 @@ impl App {
                     cursor,
                     gpu.text_measurer(),
                     &hyperlink_hover,
+                    background_image,
                 ));
             }
             frame.set_layer(Layer::Grid, grid_primitives);

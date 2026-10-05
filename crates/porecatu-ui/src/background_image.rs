@@ -24,10 +24,115 @@ use std::time::SystemTime;
 
 use image::imageops::{self, FilterType};
 use image::{ImageError, ImageFormat, ImageReader, Limits, RgbaImage};
+use porecatu_config::BackgroundImageMode;
 use porecatu_locale::Catalog;
-use porecatu_render::ImageId;
+use porecatu_render::{ImageId, Rect};
 
 use crate::messages::msg;
+
+/// Onde e como a textura cobre o quadro de um painel (ADR-0061 §6): os três
+/// campos da `Primitive::Image` que dependem do modo. Tudo lógico, `uv` em
+/// coordenadas de textura.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Placement {
+    pub(crate) rect: Rect,
+    pub(crate) uv: Rect,
+    pub(crate) repeat: bool,
+}
+
+/// Geometria dos três modos, sem GPU (ADR-0061 §6, RF-17.5 e RF-17.6).
+///
+/// **Tamanho natural** é um pixel da imagem por pixel físico: `image_px /
+/// scale` em lógico. A conta é feita em pixels **físicos**, depois de arredondar
+/// as bordas do quadro ao pixel como `quad.rs` faz com todo retângulo
+/// (`snap_rect_to_physical_pixels`: os dois cantos, não a largura isolada) --
+/// assim a origem do `tile` e do `center` cai num pixel inteiro, cada texel
+/// cai num pixel e a imagem sai nítida em tamanho natural.
+///
+/// - `stretch`: o quadro inteiro, `uv` `(0,0)-(1,1)`, sem repetir -- distorce.
+/// - `tile`: o quadro inteiro, `uv` de `0` a `quadro / natural`, repetindo, a
+///   partir do canto superior esquerdo.
+/// - `center`: o tamanho natural, centrado no quadro e **intersectado** com ele
+///   (maior que o quadro, é cortada nas bordas); `uv` é a fração da imagem
+///   que cai dentro. Cada eixo é independente: maior num e menor no outro dá
+///   um retângulo cortado de um lado e solto do outro.
+///
+/// Imagem de lado zero ou escala inválida cai no `stretch` (não há tamanho
+/// natural a respeitar).
+pub(crate) fn placement(
+    mode: BackgroundImageMode,
+    frame: Rect,
+    image_px: (u32, u32),
+    scale: f32,
+) -> Placement {
+    let whole = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    };
+    let stretch = Placement {
+        rect: frame,
+        uv: whole,
+        repeat: false,
+    };
+    let (image_w, image_h) = (image_px.0 as f32, image_px.1 as f32);
+    if mode == BackgroundImageMode::Stretch
+        || image_px.0 == 0
+        || image_px.1 == 0
+        || !(scale.is_finite() && scale > 0.0)
+    {
+        return stretch;
+    }
+    // O quadro em pixels físicos inteiros, como o `quad.rs` o vai arredondar.
+    let (left, right) = (
+        (frame.x * scale).round(),
+        ((frame.x + frame.width) * scale).round(),
+    );
+    let (top, bottom) = (
+        (frame.y * scale).round(),
+        ((frame.y + frame.height) * scale).round(),
+    );
+    let (frame_w, frame_h) = (right - left, bottom - top);
+    match mode {
+        BackgroundImageMode::Stretch => stretch,
+        BackgroundImageMode::Tile => Placement {
+            rect: frame,
+            uv: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: frame_w / image_w,
+                height: frame_h / image_h,
+            },
+            repeat: true,
+        },
+        BackgroundImageMode::Center => {
+            // Origem da imagem inteira, em pixel físico inteiro (pode ser
+            // negativa: imagem maior que o quadro).
+            let origin_x = left + ((frame_w - image_w) / 2.0).round();
+            let origin_y = top + ((frame_h - image_h) / 2.0).round();
+            let visible_left = origin_x.max(left);
+            let visible_right = (origin_x + image_w).min(right);
+            let visible_top = origin_y.max(top);
+            let visible_bottom = (origin_y + image_h).min(bottom);
+            Placement {
+                rect: Rect {
+                    x: visible_left / scale,
+                    y: visible_top / scale,
+                    width: (visible_right - visible_left).max(0.0) / scale,
+                    height: (visible_bottom - visible_top).max(0.0) / scale,
+                },
+                uv: Rect {
+                    x: (visible_left - origin_x) / image_w,
+                    y: (visible_top - origin_y) / image_h,
+                    width: (visible_right - visible_left).max(0.0) / image_w,
+                    height: (visible_bottom - visible_top).max(0.0) / image_h,
+                },
+                repeat: false,
+            }
+        }
+    }
+}
 
 /// Maior lado de textura que o `Device` aceita com o `DeviceDescriptor::
 /// default()` que o projeto pede (`max_texture_dimension_2d`). Só vale
@@ -270,7 +375,6 @@ impl<H: Copy> BackgroundImageStore<H> {
 
     /// A textura que deve ser desenhada agora: a da chave atual, se pronta;
     /// senão a anterior, enquanto a nova carrega; senão nenhuma.
-    #[allow(dead_code)] // Lido pela pintura (etapa 4) e pelos testes.
     pub(crate) fn displayed(&self) -> Option<BackgroundTexture<H>> {
         match self.state()? {
             BackgroundImageState::Ready(texture) => Some(*texture),
@@ -797,6 +901,246 @@ mod tests {
             first[0] > 200 && first[1] < 30,
             "sem verde vazando: {first:?}"
         );
+    }
+
+    // ---- placement (função pura, sem GPU) ------------------------------
+
+    const SCALES: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
+
+    fn r(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn assert_rect_near(actual: Rect, expected: Rect, what: &str) {
+        assert_rect_within(actual, expected, 1e-3, what);
+    }
+
+    /// A origem do `center` é arredondada ao pixel físico, então o desenho
+    /// pode ficar até meio pixel do centro exato: `tolerance` é esse meio
+    /// pixel (com folga) na unidade do campo comparado.
+    fn assert_rect_within(actual: Rect, expected: Rect, tolerance: f32, what: &str) {
+        let close = |a: f32, e: f32| (a - e).abs() <= tolerance;
+        assert!(
+            close(actual.x, expected.x)
+                && close(actual.y, expected.y)
+                && close(actual.width, expected.width)
+                && close(actual.height, expected.height),
+            "{what}: {actual:?} != {expected:?}"
+        );
+    }
+
+    #[test]
+    fn stretch_is_the_whole_frame_and_the_whole_texture_at_every_scale() {
+        let frame = r(6.0, 52.0, 400.0, 300.0);
+        for scale in SCALES {
+            for image in [(10, 10), (4000, 3000)] {
+                let p = placement(BackgroundImageMode::Stretch, frame, image, scale);
+                assert_eq!(p.rect, frame, "escala {scale}");
+                assert_eq!(p.uv, r(0.0, 0.0, 1.0, 1.0));
+                assert!(!p.repeat);
+            }
+        }
+    }
+
+    #[test]
+    fn tile_covers_the_frame_with_one_texel_per_physical_pixel() {
+        // Quadro com bordas em pixel inteiro em toda escala testada.
+        let frame = r(8.0, 40.0, 400.0, 200.0);
+        for scale in SCALES {
+            let p = placement(BackgroundImageMode::Tile, frame, (200, 100), scale);
+            assert_eq!(p.rect, frame, "o `rect` é o quadro, escala {scale}");
+            assert!(p.repeat);
+            assert_eq!(
+                (p.uv.x, p.uv.y),
+                (0.0, 0.0),
+                "ancorado no canto superior esquerdo"
+            );
+            // Um texel por pixel físico: o quadro tem `400 * scale` pixels, e a
+            // imagem 200 -- `uv.width` repetições.
+            assert!(
+                (p.uv.width - 400.0 * scale / 200.0).abs() < 1e-4,
+                "escala {scale}: {}",
+                p.uv.width
+            );
+            assert!((p.uv.height - 200.0 * scale / 100.0).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn tile_with_a_frame_edge_between_pixels_uses_the_snapped_extent() {
+        // Largura 100.3 a escala 1.0: o quad vai de x=10 a x=111 (os dois
+        // cantos arredondados), 101 pixels -- o `uv` tem de contar esses 101,
+        // não 100.3, ou o último texel sai esticado.
+        let frame = r(10.4, 0.0, 100.3, 50.0);
+        let p = placement(BackgroundImageMode::Tile, frame, (10, 10), 1.0);
+        let left = (10.4_f32).round();
+        let right = (10.4_f32 + 100.3).round();
+        assert!((p.uv.width - (right - left) / 10.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn center_with_a_smaller_image_is_natural_size_in_the_middle() {
+        let frame = r(0.0, 0.0, 400.0, 200.0);
+        for scale in SCALES {
+            // 200x100 pixels físicos: em lógico, 200/scale x 100/scale.
+            let p = placement(BackgroundImageMode::Center, frame, (200, 100), scale);
+            let natural_w = 200.0 / scale;
+            let natural_h = 100.0 / scale;
+            assert!(!p.repeat);
+            assert_rect_near(p.uv, r(0.0, 0.0, 1.0, 1.0), "a imagem inteira aparece");
+            assert_rect_near(
+                p.rect,
+                r(
+                    (400.0 - natural_w) / 2.0,
+                    (200.0 - natural_h) / 2.0,
+                    natural_w,
+                    natural_h,
+                ),
+                &format!("centrada, escala {scale}"),
+            );
+        }
+    }
+
+    #[test]
+    fn center_with_a_larger_image_is_cropped_keeping_the_middle() {
+        let frame = r(0.0, 0.0, 100.0, 100.0);
+        for scale in SCALES {
+            // A imagem é 400x300 pixels físicos; o quadro, `100 * scale`.
+            let p = placement(BackgroundImageMode::Center, frame, (400, 300), scale);
+            // O desenho é o quadro inteiro...
+            assert_rect_near(p.rect, frame, &format!("escala {scale}"));
+            // ...mostrando a fração central da imagem, simétrica.
+            let frame_px = 100.0 * scale;
+            let shown_w = frame_px / 400.0;
+            let shown_h = frame_px / 300.0;
+            // Meio pixel da imagem (a menor, 300) em coordenada de textura.
+            assert_rect_within(
+                p.uv,
+                r(
+                    (1.0 - shown_w) / 2.0,
+                    (1.0 - shown_h) / 2.0,
+                    shown_w,
+                    shown_h,
+                ),
+                0.6 / 300.0,
+                &format!("uv, escala {scale}"),
+            );
+        }
+    }
+
+    /// O caso difícil: maior num eixo, menor no outro. O retângulo sai do
+    /// quadro por um lado e não chega ao outro, e cada eixo é independente.
+    #[test]
+    fn center_with_the_image_wider_but_shorter_than_the_frame() {
+        let frame = r(0.0, 0.0, 100.0, 100.0);
+        for scale in SCALES {
+            let frame_px = 100.0 * scale;
+            // 500 pixels de largura (maior), 40 de altura (menor).
+            let p = placement(BackgroundImageMode::Center, frame, (500, 40), scale);
+            // Horizontal: o quadro inteiro, cortando a imagem dos dois lados.
+            assert_rect_near(
+                r(p.rect.x, 0.0, p.rect.width, 0.0),
+                r(0.0, 0.0, 100.0, 0.0),
+                &format!("x e largura, escala {scale}"),
+            );
+            let shown_w = frame_px / 500.0;
+            assert_rect_within(
+                r(p.uv.x, 0.0, p.uv.width, 0.0),
+                r((1.0 - shown_w) / 2.0, 0.0, shown_w, 0.0),
+                0.6 / 500.0,
+                &format!("uv horizontal, escala {scale}"),
+            );
+            // Vertical: a imagem inteira (uv 0..1) no meio do quadro, a até
+            // meio pixel físico (0.6 / scale em lógico).
+            let natural_h = 40.0 / scale;
+            assert_rect_within(
+                r(0.0, p.rect.y, 0.0, p.rect.height),
+                r(0.0, (100.0 - natural_h) / 2.0, 0.0, natural_h),
+                0.6 / scale,
+                &format!("y e altura, escala {scale}"),
+            );
+            assert_rect_near(
+                r(0.0, p.uv.y, 0.0, p.uv.height),
+                r(0.0, 0.0, 0.0, 1.0),
+                &format!("uv vertical, escala {scale}"),
+            );
+        }
+    }
+
+    #[test]
+    fn center_and_tile_start_on_a_whole_physical_pixel() {
+        // Quadro em lógico com borda entre pixels: 10.3 * 1.25 = 12.875. A
+        // origem do `center` tem de ser um pixel inteiro (o `rect` volta a
+        // lógico dividindo por `scale`, e `scale * x` é inteiro).
+        let frame = r(10.3, 7.7, 95.2, 60.1);
+        for scale in SCALES {
+            let p = placement(BackgroundImageMode::Center, frame, (30, 20), scale);
+            for edge in [
+                p.rect.x,
+                p.rect.y,
+                p.rect.x + p.rect.width,
+                p.rect.y + p.rect.height,
+            ] {
+                let physical = edge * scale;
+                assert!(
+                    (physical - physical.round()).abs() < 1e-3,
+                    "escala {scale}: borda {edge} cai em {physical}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn center_keeps_the_image_pixel_for_pixel() {
+        // Em qualquer escala, o `rect` físico tem exatamente o tamanho da
+        // imagem quando ela cabe: um pixel da imagem por pixel da tela.
+        let frame = r(0.0, 0.0, 300.0, 300.0);
+        for scale in SCALES {
+            let p = placement(BackgroundImageMode::Center, frame, (123, 77), scale);
+            assert!(
+                (p.rect.width * scale - 123.0).abs() < 1e-3,
+                "escala {scale}"
+            );
+            assert!(
+                (p.rect.height * scale - 77.0).abs() < 1e-3,
+                "escala {scale}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scale_change_only_changes_the_placement_not_the_image() {
+        // O tamanho natural é `px / scale`: a mesma imagem ocupa menos pontos
+        // lógicos em escala maior (RF-17.6), sem nova carga.
+        let frame = r(0.0, 0.0, 400.0, 400.0);
+        let at_1 = placement(BackgroundImageMode::Center, frame, (200, 200), 1.0);
+        let at_2 = placement(BackgroundImageMode::Center, frame, (200, 200), 2.0);
+        assert!((at_1.rect.width - 200.0).abs() < 1e-3);
+        assert!((at_2.rect.width - 100.0).abs() < 1e-3);
+        assert_eq!(at_1.uv, at_2.uv);
+    }
+
+    #[test]
+    fn degenerate_inputs_fall_back_to_stretch() {
+        let frame = r(0.0, 0.0, 100.0, 100.0);
+        for (image, scale) in [
+            ((0, 10), 1.0),
+            ((10, 0), 1.0),
+            ((10, 10), 0.0),
+            ((10, 10), f32::NAN),
+        ] {
+            for mode in [BackgroundImageMode::Tile, BackgroundImageMode::Center] {
+                let p = placement(mode, frame, image, scale);
+                assert_eq!(p.rect, frame);
+                assert_eq!(p.uv, r(0.0, 0.0, 1.0, 1.0));
+                assert!(!p.repeat);
+            }
+        }
     }
 
     // ---- erros ---------------------------------------------------------

@@ -76,6 +76,16 @@ pub struct TextRun {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageId(pub(crate) u32);
 
+impl ImageId {
+    /// Um identificador que o registro **não** criou. Existe para os testes de
+    /// quem monta primitivas (`porecatu-ui` confere a ordem delas sem GPU): um
+    /// id inventado não nomeia textura nenhuma, e a primitiva que o levar não
+    /// desenha nada.
+    pub const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
 /// Uma primitiva de desenho, na ordem em que deve ser processada.
 #[derive(Debug, Clone)]
 pub enum Primitive {

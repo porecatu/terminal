@@ -192,3 +192,7 @@ Decisão do dono do produto: três modos, `stretch` distorcendo. O `placement` d
 | Cantos arredondados vazarem a imagem ou serrilharem | Baixa | Médio | Mesma função SDF e mesma cobertura do `quad.wgsl`, compartilhada, não copiada |
 | Costura ou meio texel borrado no `tile` e no `center` | Média | Baixo | Origem arredondada ao pixel físico; teste de `placement` em `scale` 1.0, 1.25, 1.5 e 2.0, como o de `cell_at` |
 | Imagem maior que o limite do `Device` falhar na criação da textura | Baixa | Médio | Redução na thread de carga até `max_texture_dimension_2d`, lido do `Device` em uso |
+
+## Registro do aval visual
+
+> **Pendente — dívida de verificação (2026-10-05).** A pintura por painel (etapa 4) foi implementada e medida ao vivo: o alfa efetivo bate com `opacity × background_opacity` em janela opaca e transparente, e célula com fundo próprio cobre a imagem. O dono do produto **ainda não viu a aparência** e fará a verificação visual depois, em vez de dar o aval na hora. Até lá, os três modos, o recorte pelo raio do quadro e a opacidade estão **medidos, não aprovados**. Ajuste de aparência pedido na verificação entra aqui e na §4.4 da especificação visual.
