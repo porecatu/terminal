@@ -272,15 +272,14 @@ exited_foreground = "#727a86"
 # por matiz.                                                            RF-4.21
 active_border = "#39404b"
 inactive_border = "#22262e"
-# 2px em TODO estado: 1px do `#22262e` da inativa não se lê contra a
-# cápsula de cor cheia. A espessura é a mesma de `selected_border_width`,
-# abaixo -- não é número novo. Efeito colateral aceito: a
-# aba selecionada deixa de se distinguir por espessura e passa a se
-# distinguir só pela cor do token.
-active_border_width = 2
-inactive_border_width = 2
+# 1px em TODO estado (eram 2px; pedido do dono do produto: a borda de 2px
+# ficava grossa demais). A espessura é a mesma de `selected_border_width`,
+# abaixo -- não é número novo. A aba selecionada continua se distinguindo
+# só pela cor do token.
+active_border_width = 1
+inactive_border_width = 1
 selected_border = "#5ed3bc"   # aba em seleção múltipla; sem desenho     RF-2.2
-selected_border_width = 2
+selected_border_width = 1
 
 # --- indicadores ------------------------------------------------------ RF-4.8
 # Sem desenho aprovado no canvas; ver especificacao-visual.md seção 4.2.

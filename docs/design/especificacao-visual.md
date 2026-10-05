@@ -389,7 +389,7 @@ e o que anima nesse movimento é a largura da cápsula mais a opacidade delas
 ### 2.5 Aba `[v1]`
 
 Altura **34** dentro de um grupo e **40** solta (§1.7), `padding: 0 6px 0 10px`,
-raio 6, `gap: 8`, **borda 2px** em todo estado, **largura fixa de 229px**. Hover
+raio 6, `gap: 8`, **borda 1px** em todo estado, **largura fixa de 229px**. Hover
 `brightness(1.18)` (F4 etapa 6, §1.10).
 
 **A aba solta é mais alta.** Dentro de um grupo ela cede o `wrapper_padding` ao bloco
