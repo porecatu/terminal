@@ -819,6 +819,68 @@ As sete etapas fecham com `cargo build --workspace`, `cargo test --workspace`, `
 
 ---
 
+## Depois do v1 — imagem de fundo do terminal — planejada
+
+Fora da ordem de fases, como as entradas acima, e pelo caminho do arquivo de projeto e das sessões nomeadas: **requisito novo**, pedido do dono do produto, sem elemento do canvas nem rascunho a promover. O [PRD-017](prd/prd-017-imagem-de-fundo-do-terminal.md) pede uma imagem PNG ou JPEG atrás de todo terminal (aba solta, aba de grupo, cada painel de uma aba dividida). Ela vem em três modos (`stretch` distorcendo, `tile`, `center`), com opacidade própria que se multiplica por `[terminal] background_opacity`. O [ADR-0061](adr/0061-imagem-de-fundo-do-terminal.md) decide o resto:
+
+- o crate `image` só com PNG e JPEG;
+- a primitiva `Image` sem domínio em `porecatu-render`, com textura `Rgba8Unorm`, saída premultiplicada e máscara SDF;
+- o lugar dela na ordem de pintura;
+- a composição com o `Backdrop`;
+- a carga numa thread de vida curta, com o resultado chaveado;
+- a classe A da recarga.
+
+O ponto de partida: `porecatu-render` não amostra textura nenhuma além do atlas de glyphs e do blit de opacidade de janela; o único decodificador de imagem do projeto é o `png` do ícone; e nenhuma chave do config tem caminho relativo ao arquivo.
+
+**Seis etapas:**
+
+1. **Documentação e decisão — feita.** Os documentos novos são o PRD-017 e o ADR-0061. Ganharam blockquote de revisão:
+   - o ADR-0018 (primitiva `Image`);
+   - o ADR-0030 (classe A);
+   - o PRD-005 RF-5.15 (a opacidade vale para a imagem);
+   - o PRD-016 RF-16.11 (três opções no grupo Terminal).
+
+   Também foram atualizados o índice de ADRs, a tabela de fases da especificação (só a classificação), a arquitetura §5, o README (stack com `image`) e o CLAUDE.md. **A §2.7 da especificação não é reescrita aqui**: ela descreve o binário até o PR que o muda ([ADR-0028](adr/0028-o-binario-como-referencia-visual.md)). **E `[terminal.background_image]` não entra no arquivo de exemplo aqui**: `tests/example_toml.rs` reprova chave antes do campo.
+2. **Config, caminho e carga.**
+   - O campo `[terminal.background_image]` (`path`, `mode`, `opacity`) em `porecatu-config`, com o bloco comentado no `porecatu.example.toml` na mesma leva.
+   - `resolve_background_image_path` pura, com testes de vazio, relativo ao diretório do config, absoluto e `~`.
+   - `image` pinado em `porecatu-ui` com `default-features = false`.
+   - A thread de carga: formato pelo conteúdo, `Limits`, redução ao limite do `Device`, mips.
+   - `BackgroundImageError` tipado, o estado chaveado no `App`, `Wakeup::BackgroundImageLoaded` e o descarte de resultado de chave velha.
+   - Os avisos com frase em `locales/`.
+
+   Testes de decodificação com PNG e JPEG mínimos gerados no próprio teste. **Sem pixel novo.**
+3. **Primitiva `Image` em `porecatu-render`.** Registro de imagens no `GpuContext`, `image.wgsl` com a SDF extraída do `quad.wgsl` para uma função compartilhada, dois samplers, blend premultiplicado, e `Image` em `resolve_layer` na ordem da lista, com teste de batch sem GPU.
+4. **Pintura por painel e composição.**
+   - `background_image::placement` pura, com teste dos três modos em `scale` 1.0, 1.25, 1.5 e 2.0.
+   - A chamada em `paint::build_primitives`, entre `backdrop_fill` e `paint_row_backgrounds`.
+   - `alpha = opacity × background_opacity` na paleta resolvida.
+   - A recarga a quente aplicando os três campos.
+   - A §2.7 da especificação reescrita e a entrada na §4.4. **Aval visual pedido aqui**, sobre a build.
+5. **Tela de configurações.** As três opções no grupo Terminal (`settings/catalog.rs`), a nota de "arquivo não encontrado", rótulos e frases em todo arquivo de `locales/`.
+6. **Verificação ao vivo e fechamento.**
+   - Os cenários do PRD-017 numa instância isolada por cenário.
+   - Os três modos em janela opaca e transparente, numa aba dividida.
+   - Arquivo inexistente e formato não aceito.
+   - A medição de pixel do alfa efetivo (`opacity × background_opacity`) sobre um fundo de cor conhecida.
+   - `PORECATU_TRACE` com e sem imagem.
+   - Seção no [guia do usuário](guia-do-usuario.md) e entrada no CHANGELOG.
+
+**Escopo:** RF-17.1 a RF-17.22.
+
+**Aparência:** uma camada nova dentro do quadro do terminal, recortada pelo raio que ele já tem. **Nenhuma cor, dimensão, raio ou espaçamento novo**; com `path` vazio, que é o padrão, o binário não muda um pixel. Sujeita ao aval visual da etapa 4.
+
+**Dependências:** uma direta nova, `image`, em `porecatu-ui`, que já estava no `Cargo.lock` como dependência do `arboard`. Ela entra com `default-features = false` e as features `png` e `jpeg`, e a segunda traz `zune-jpeg` (MIT/Apache-2.0/Zlib).
+
+**Critério de saída:**
+- uma imagem PNG e uma JPEG desenhadas em todo quadro de terminal, nos três modos, com o alfa efetivo medido batendo com `opacity × background_opacity` em janela opaca e transparente;
+- arquivo inexistente, ilegível e de formato não aceito virando aviso sem derrubar nada;
+- troca de `path`, `mode` e `opacity` aplicada pela recarga sem redimensionar PTY;
+- tempo até o primeiro prompt e frames ociosos iguais com e sem imagem;
+- `verify-docs.py`, `cargo test --workspace`, `clippy -D warnings` e `cargo fmt --check` verdes.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

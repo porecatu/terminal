@@ -107,6 +107,7 @@ O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alv
 | Consulta ao remoto do Git | o `git` do sistema, lançado como processo pela biblioteca padrão, numa thread de vida curta — sem crate novo e sem `unsafe` | [ADR-0052](docs/adr/0052-sincronizacao-com-o-remoto-do-git.md) |
 | Fontes | Iosevka Fixed (OFL-1.1, terminal e chrome) + Lucide (ISC), embutidas | [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md) |
 | Ícone do app | `png` (decodifica em runtime) + `winres` num `build.rs` (recurso PE no Windows) | — |
+| Imagem de fundo do terminal *(documentada, não implementada)* | `image`, só com as features `png` e `jpeg`, decodificando fora da main thread | [ADR-0061](docs/adr/0061-imagem-de-fundo-do-terminal.md) |
 | Caminhos do usuário | `dirs` (home como diretório inicial de aba; caminho de config) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
 | Referência visual | o binário; design canvas como histórico | [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) |
 | Textos da interface | arquivos TOML por idioma em disco (`locales/`), mesclados por frase; crate próprio `porecatu-locale`, sem crate de i18n | [ADR-0056](docs/adr/0056-catalogo-de-textos-da-interface.md) |

@@ -6,6 +6,8 @@
 
 > **Nota de escopo.** Este ADR **refina a seção 5 da [arquitetura](../arquitetura.md)** e a decisão de stack do [ADR-0001](0001-stack-de-gui.md) sem mudar nenhuma das duas: `winit` + `wgpu` + `glyphon` continuam, `porecatu-render` continua não conhecendo domínio, e as primitivas continuam sendo quad, retângulo arredondado, run de texto e clip. O que muda é a **forma da entrada** do renderer e o que ele exporta. Por isso não há `Supersedes`.
 
+> **Acrescentado pelo [ADR-0061](0061-imagem-de-fundo-do-terminal.md) §2 a §4.** As primitivas ganham `Image`, a primeira que amostra uma textura que não é o atlas de glyphs, e o `GpuContext` ganha um registro de imagens do processo. A regra deste ADR não muda: `Image` é geometria, entra em `resolve_layer` na ordem da lista (quebrando o batch de quads em volta, porque troca de pipeline), e dentro da camada continua valendo geometria antes de texto. O recorte arredondado dela é SDF dentro da própria primitiva, não `PushClip`, que segue sendo só retângulo.
+
 ## Contexto
 
 A F1 entregou um renderer que desenha exatamente uma coisa: a grade do terminal. A F2 pede quatro coisas novas — barra de abas com trilha rolável, menu de contexto, diálogo modal e aviso empilhado — e a API atual não consegue desenhar nenhuma delas corretamente. Não é questão de esforço: são quatro limitações estruturais, e três só ficam visíveis olhando o código.

@@ -290,6 +290,14 @@ Duas passadas de pipeline **por camada**: uma de geometria (quads instanciados, 
 
 A grade do terminal é um caso particular: fundo de célula vira quads em batch, glyphs viram um `TextRun` por run de mesmo estilo — não um por caractere.
 
+> **Imagem de fundo do terminal ([ADR-0061](adr/0061-imagem-de-fundo-do-terminal.md), documentada, não implementada).** Entra uma quinta primitiva de geometria, `Image { rect, uv, repeat, mask, mask_radius, alpha, image }`, e um registro de imagens no `GpuContext` (`create_image`/`remove_image`, uma `ImageId` opaca). Textura `Rgba8Unorm` sem curva de cor, saída premultiplicada, máscara arredondada pela mesma SDF do `quad.wgsl`. `porecatu-render` continua sem domínio: quem traduz `stretch`/`tile`/`center` em `rect`/`uv` é uma função pura de `porecatu-ui`. Em cada painel, a imagem é pintada entre o fundo do quadro e o fundo das células. O fluxo de dados é o do Git ([ADR-0052](adr/0052-sincronizacao-com-o-remoto-do-git.md)):
+>
+> 1. A aplicação da config resolve o caminho e lê o `metadata`.
+> 2. Se a chave (caminho, `mtime`, tamanho) mudou, uma thread detached decodifica com `image` (PNG e JPEG), reduz ao limite do `Device` e gera os mips.
+> 3. O resultado volta como dado chaveado por `Wakeup` para um estado do `App`, do processo, e a main thread cria a textura e redesenha as janelas.
+>
+> Nada disso roda na main thread além do `metadata` e do envio da textura.
+
 **Nenhuma cor, raio ou dimensão é hardcoded no renderer.** Tudo vem de `Config` via `ui`. É isso que torna o requisito de customização (PRD-004, PRD-005) uma questão de configuração e não de recompilação.
 
 > **Na implementação (F2, etapa 2 — camadas, recorte e medidor).** As camadas e o recorte do ADR-0018 estão implementados: `porecatu-render` recebe um `Frame` com cinco `Vec<Primitive>` (uma por [`Layer`](adr/0018-composicao-de-frame.md)) em vez de uma lista só. Dentro de cada camada, uma função pura (`resolve_layer`, testada sem GPU) percorre o stream mantendo a pilha de clip e agrupa quads/arredondados contíguos de mesmo clip em batches — cada batch vira um `draw` com seu próprio `set_scissor_rect`, o que substitui o achatamento em três baldes da F1. Texto não precisa de batch: cada `TextRun` carrega seu próprio `TextBounds`, granular por natureza no `glyphon`.
