@@ -128,6 +128,9 @@ pub struct TabBarStyle {
     /// grupo, que desde a remoção do botão global é o único botão de nova
     /// aba da barra.
     pub show_new_tab_button: bool,
+    /// `[appearance.tabs] show_close_button` -- `Never` tira o `X` do hit
+    /// test; `Hover` só o desenha com o cursor na aba (`chrome::paint`).
+    pub show_close_button: porecatu_config::CloseButtonVisibility,
     /// `[appearance.tabs] font_size`
     pub font_size: f32,
     /// `[appearance.groups] label_padding_left` -- pílula (espec. §2.4).
@@ -271,6 +274,7 @@ impl TabBarStyle {
         trilha_padding: 6.0,
         right_zone_button_size: 30.0,
         show_new_tab_button: true,
+        show_close_button: porecatu_config::CloseButtonVisibility::Always,
         font_size: 13.0, // era 12.5, pedido do usuário
         pill_padding_left: 10.0,
         pill_padding_right: 9.0,
@@ -345,6 +349,7 @@ impl TabBarStyle {
             trilha_padding: tabs.trilha_padding as f32,
             right_zone_button_size: Self::DEFAULT.right_zone_button_size,
             show_new_tab_button: tabs.show_new_tab_button,
+            show_close_button: tabs.show_close_button,
             font_size: tabs.font_size as f32,
             pill_padding_left: groups.label_padding_left as f32,
             pill_padding_right: groups.label_padding_right as f32,
@@ -773,7 +778,18 @@ fn layout_inset(
                 width: close_width,
                 height: style.close_button_size,
             };
-            let close_hit_rect = expand(close_button, style.close_button_hit_slop);
+            let close_hit_rect = if style.show_close_button
+                == porecatu_config::CloseButtonVisibility::Never
+            {
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                }
+            } else {
+                expand(close_button, style.close_button_hit_slop)
+            };
 
             let hit_left = if index == 0 {
                 rect.x
@@ -1894,6 +1910,21 @@ mod tests {
         let close = layout.groups[0].tabs[0].close_button;
         let center = (close.x + close.width / 2.0, close.y + close.height / 2.0);
         assert_eq!(hit_test(&layout, center), Some(TabBarHit::CloseButton(id)));
+    }
+
+    #[test]
+    fn hit_test_never_visibility_makes_close_area_a_tab_hit() {
+        let mut ws = Workspace::new();
+        let id = ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let style = TabBarStyle {
+            show_close_button: porecatu_config::CloseButtonVisibility::Never,
+            ..TabBarStyle::DEFAULT
+        };
+        let layout = layout(&ws, &style, &mut m);
+        let close = layout.groups[0].tabs[0].close_button;
+        let center = (close.x + close.width / 2.0, close.y + close.height / 2.0);
+        assert_eq!(hit_test(&layout, center), Some(TabBarHit::Tab(id)));
     }
 
     #[test]

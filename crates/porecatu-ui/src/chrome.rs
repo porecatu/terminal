@@ -484,12 +484,23 @@ pub fn paint(
                 }));
             }
 
-            out.push(centered_glyph(
-                icon::X,
-                shift(tab.close_button, dx),
-                close_icon_size,
-                scale_alpha(pal.chrome_icon, fade_in),
-            ));
+            let show_close = match style.show_close_button {
+                porecatu_config::CloseButtonVisibility::Always => true,
+                porecatu_config::CloseButtonVisibility::Never => false,
+                porecatu_config::CloseButtonVisibility::Hover => matches!(
+                    hover,
+                    Some(tab_bar::TabBarHit::Tab(id) | tab_bar::TabBarHit::CloseButton(id))
+                        if id == tab.id
+                ),
+            };
+            if show_close {
+                out.push(centered_glyph(
+                    icon::X,
+                    shift(tab.close_button, dx),
+                    close_icon_size,
+                    scale_alpha(pal.chrome_icon, fade_in),
+                ));
+            }
         }
 
         // Botão "+" do próprio grupo (pedido do usuário, fora da espec.):
