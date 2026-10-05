@@ -43,6 +43,8 @@ Isso precisa ser resolvido **antes** da F1, porque o tipo do evento atravessa a 
 | Barra de abas, surface `wgpu` e foco próprios por janela | Janela sem abas |
 | Gravação e restauração do conjunto (RF-3.17) | Menu de janelas |
 
+> **Revisto pelo [ADR-0059](0059-janela-de-configuracoes.md) (2026-10-02).** "Janela sem abas" deixa a coluna da direita para **uma** janela: a de configurações ([PRD-016](../prd/prd-016-tela-de-configuracoes.md)), no máximo uma por processo, guardada fora do mapa de janelas de terminal, fora da sessão, e que não mantém o processo vivo. Toda janela de **terminal** continua sendo um `Workspace`, e o resto da tabela não muda.
+
 Arrastar aba entre janelas continua **fora** — é não-objetivo explícito do PRD-000 e do PRD-001, e nada aqui o reabre. O [ADR-0006](0006-modelo-de-abas-e-grupos.md) já observa que o modelo não impede (*"é `move_tab` com destino em outro `Workspace`"*); continua sendo verdade e continua sendo v2.
 
 ### Ações e defaults

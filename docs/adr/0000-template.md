@@ -12,13 +12,13 @@
 | [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito · Alternativas Superseded by ADR-0053 (**parcial**: só o item "Splits/panes dentro da aba") |
 | [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito · uma linha das Consequências revista por ADR-0052 (**parcial**) |
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
-| [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Superseded by ADR-0027, ADR-0028 e ADR-0032 (parcial) |
+| [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Superseded by ADR-0027, ADR-0028 e ADR-0032 (parcial) · §6 Superseded by ADR-0059 (**parcial**: só a forma do painel, que vira janela própria; escrever no TOML sem segunda fonte de verdade continua) |
 | [0010](0010-licenciamento.md) | Licenciamento sob GPL-3.0-or-later | Aceito |
 | [0011](0011-toolchain-rust.md) | Toolchain Rust pinada e política de versão | Aceito |
 | [0012](0012-identificacao-do-terminal.md) | Identificação do terminal: `TERM` e capacidades anunciadas | Aceito |
 | [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
-| [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito |
+| [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito · "Escopo" Superseded by ADR-0059 (**parcial**: uma janela sem abas, a de configurações) |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 |
 | [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034, ADR-0037 e ADR-0053 (os três **parcialmente**) |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
@@ -59,6 +59,9 @@
 | [0055](0055-botao-e-popover-de-sessoes.md) | Botão e popover de sessões: segundo botão da zona fixa, sétimo widget de chrome | Aceito |
 | [0056](0056-catalogo-de-textos-da-interface.md) | Catálogo de textos da interface: arquivos TOML por idioma em disco, crate `porecatu-locale`, prosa só em `porecatu-ui` | Aceito |
 | [0057](0057-idiomas-nos-artefatos.md) | Idiomas nos artefatos de release: `locales/` dentro de todo instalador, e o binário cru deixa de ser publicado | Aceito |
+| [0058](0058-escrita-do-arquivo-de-configuracao.md) | Escrita do arquivo de configuração: `toml_edit`, edição por chave e gravação atômica | Aceito |
+| [0059](0059-janela-de-configuracoes.md) | Janela de configurações: a primeira janela que não é um workspace de terminal | Aceito |
+| [0060](0060-anatomia-da-tela-de-configuracoes.md) | Anatomia da tela de configurações: guia lateral, painel de opções e os controles que faltavam | Aceito — aval visual em 2026-10-02 |
 
 ## Convenção
 

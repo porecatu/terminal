@@ -181,7 +181,7 @@ Cada item é decisão, não esquecimento.
 - **Traduzir o arquivo de exemplo de config, a documentação ou o guia do usuário.** São documentação, e a documentação do projeto é em português do Brasil.
 - **Idiomas com mais de duas formas de plural** (russo, polonês, árabe). O formato tem `one` e `other`; mais formas pedem ADR próprio ([ADR-0056](../adr/0056-catalogo-de-textos-da-interface.md) §5).
 - **Escrita da direita para a esquerda** e **escritas fora do recorte das fontes embutidas**. O chrome desenha latim, grego e cirílico com a face do design; outras escritas caem na fonte do sistema, com métrica diferente, e isso é limitação registrada, não requisito.
-- **Tela de escolha de idioma.** A escolha é a chave do TOML, como toda escolha do app ([ADR-0003](../adr/0003-formato-de-configuracao.md)); o painel de configuração por GUI continua `[v2]`.
+- **Tela de escolha de idioma.** A escolha é a chave do TOML, como toda escolha do app ([ADR-0003](../adr/0003-formato-de-configuracao.md)); o painel de configuração por GUI continua `[v2]`. *Emenda (2026-10-02): deixou de ser — a tela de configurações do [PRD-016](prd-016-tela-de-configuracoes.md) oferece o idioma como escolha entre os arquivos encontrados, gravando a mesma chave; a escolha continua sendo a do TOML.*
 - **Aviso de "sua interface mudou de idioma"** no primeiro arranque após atualizar. A mudança do default é comunicada no CHANGELOG e no guia do usuário.
 - **Traduzir o texto do `git`, do analisador de TOML ou do sistema operacional.** Chega pronto de fora e é mostrado como chegou.
 

@@ -57,12 +57,14 @@ mod search_bar;
 mod selection;
 mod session_picker;
 mod session_writer;
+mod settings;
 mod shell_integration;
 mod status_bar;
 mod tab_bar;
 mod terminal_menu;
 mod text_field;
 mod titlebar;
+mod toggle;
 mod tooltip;
 mod trace;
 mod warning;
@@ -86,6 +88,7 @@ use session_picker::{
     Highlight as SessionHighlight, Mode as SessionMode, PickerOutcome, SessionPicker,
 };
 use session_writer::SessionScheduler;
+use settings::SettingsWindow;
 use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
 use terminal_menu::{
     TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
@@ -862,6 +865,31 @@ enum WindowPlacement {
     CascadeFrom(WindowId),
 }
 
+/// Uma superfície do app que desenha um quadro: janela de terminal ou a de
+/// configurações. É o que `App::for_each_surface` entrega, e só tem as
+/// operações que as duas têm em comum -- o que é de uma só fica fora.
+enum Surface<'a> {
+    Terminal(&'a mut WindowState),
+    Settings(&'a mut SettingsWindow),
+}
+
+impl Surface<'_> {
+    fn request_redraw(&self) {
+        match self {
+            Surface::Terminal(state) => state.window.request_redraw(),
+            Surface::Settings(settings) => settings.request_redraw(),
+        }
+    }
+
+    /// Troca de idioma (ADR-0056 §9): duas janelas, um catálogo.
+    fn set_catalog(&mut self, catalog: &Arc<Catalog>) {
+        match self {
+            Surface::Terminal(state) => state.catalog = Arc::clone(catalog),
+            Surface::Settings(settings) => settings.set_catalog(catalog),
+        }
+    }
+}
+
 /// O que `WindowState::handle_tab_action_key` não pode resolver sozinho --
 /// `window.new`/`window.close` (ADR-0015) tocam outras janelas, então
 /// precisam voltar pra `App`. `WindowEmptied` é o mesmo caso: fechar a
@@ -876,6 +904,10 @@ enum ActionOutcome {
     /// `config.reload` (ADR-0003, F4 etapa 5): o `Arc<Config>` e o watcher
     /// são do processo, não da janela -- só `App` sabe relê-lo.
     ReloadConfig,
+    /// `settings.open` (RF-16.1, ADR-0059 §6): a janela de configurações é
+    /// do processo, não de uma janela de terminal -- e o caminho do arquivo
+    /// só `App` tem. Também é o que a engrenagem dispara.
+    OpenSettings,
     /// `font.increase`/`decrease`/`reset` (RF-5.9, F4 etapa 6): a métrica
     /// de célula é do processo (ADR-0015), então só `App` recalcula e
     /// redimensiona todos os PTYs.
@@ -937,10 +969,11 @@ enum NewTabRequest {
     /// vive em `App` -- `WindowState` não pode resolver isto sozinho, mesmo
     /// motivo de `WindowEmptied`.
     CloseWindowRequested,
-    /// Botão de configurações (RF-11.27): `self.config_path` (o caminho já
-    /// resolvido no arranque, ADR-0003) só existe em `App`, não em
-    /// `WindowState` -- mesmo motivo de `CloseWindowRequested`.
-    OpenConfigFile,
+    /// Botão de configurações (RF-16.1, ADR-0059 §6): dispara `settings.open`,
+    /// que `App` resolve -- o mesmo caminho do atalho, `ActionOutcome::
+    /// OpenSettings`. `WindowState` não pode, pelo mesmo motivo de
+    /// `CloseWindowRequested`.
+    OpenSettings,
     /// Botão de sessões nomeadas (ADR-0054/ADR-0055): `WindowState::
     /// open_session_picker` resolve sozinho, mas o hit-test do botão só
     /// devolve `NewTabRequest` -- vive na mesma enumeração dos outros
@@ -3583,6 +3616,9 @@ impl WindowState {
             // `Arc<Config>` são do processo, não da janela) -- bubble
             // igual a `OpenWindow`/`CloseWindowRequested`.
             Action::ConfigReload => ActionOutcome::ReloadConfig,
+            // `settings.open` (RF-16.1): a janela é do processo -- bubble
+            // pra `App`, mesmo caminho de `ReloadConfig`.
+            Action::SettingsOpen => ActionOutcome::OpenSettings,
             // RF-5.9: a métrica de célula é do processo (ADR-0015) --
             // bubble pra `App`, mesmo caminho de `ReloadConfig`.
             Action::FontIncrease => ActionOutcome::Zoom(Zoom::Increase),
@@ -3803,10 +3839,10 @@ impl WindowState {
             // Botão de configurações (RF-11.27): zona fixa à direita, fora
             // da trilha que rola -- resolvido em coordenadas de tela, como
             // as pílulas de overflow logo abaixo, não pelo hit-test de
-            // conteúdo. Abrir o arquivo é decisão de `App` (precisa de
-            // `config_path`), então só sobe o pedido.
+            // conteúdo. Dispara `settings.open` (ADR-0059 §6), que é decisão
+            // de `App`, então só sobe o pedido.
             if tab_bar::point_in_settings_button(style, bar_width, h, is_macos(), logical_point) {
-                return NewTabRequest::OpenConfigFile;
+                return NewTabRequest::OpenSettings;
             }
             if overflow.hidden_left > 0
                 && tab_bar::point_in_overflow_pill(
@@ -5038,6 +5074,19 @@ struct App {
     /// árvore de comparação.
     keymap: HashMap<Chord, Action>,
     windows: HashMap<WindowId, WindowState>,
+    /// A janela de configurações (ADR-0059 §1): no máximo uma, **fora** de
+    /// `windows` -- sessão, wakeup de PTY e contagem de abas nunca a veem. O
+    /// estado dela morre com a janela.
+    settings: Option<SettingsWindow>,
+    /// O último grupo escolhido na janela de configurações (RF-16.9): vive
+    /// até o fim da execução e é onde a janela reabre. O resto do estado dela
+    /// morre com ela.
+    settings_last_group: settings::Group,
+    /// O encerramento que espera a resposta da janela de configurações
+    /// (RF-16.5, ADR-0059 §2): a janela de terminal que ia ser a última a
+    /// fechar. `Some` só enquanto o diálogo de pendências está aberto por
+    /// causa dele; Cancelar o apaga e a janela continua.
+    deferred_quit: Option<WindowId>,
     /// Debounce da gravação de sessão (RF-3.3, ADR-0036) -- por
     /// **processo**, não por janela: o arquivo é um só para todas
     /// (RF-3.17). Drenado em `schedule_next_wake`, disparado em
@@ -5245,8 +5294,8 @@ impl App {
                     now,
                 );
             }
-            state.window.request_redraw();
         }
+        self.for_each_surface(|surface| surface.request_redraw());
     }
 
     /// `cli_config`/`cli_directory` vêm do parse de `argv` em `src/main.rs`
@@ -5361,6 +5410,9 @@ impl App {
             term_params,
             keymap,
             windows: HashMap::new(),
+            settings: None,
+            settings_last_group: settings::Group::General,
+            deferred_quit: None,
             session: SessionScheduler::default(),
             pending_session,
             positional_directory: cli_directory,
@@ -5975,6 +6027,23 @@ impl App {
     /// encerra o event loop (RF-1.4: fechar a última janela encerra o
     /// app).
     fn close_window_unconditionally(&mut self, window_id: WindowId, event_loop: &ActiveEventLoop) {
+        // RF-16.5, ADR-0059 §2: a janela de configurações não segura o
+        // processo, mas com alterações pendentes o encerramento espera. É a
+        // última janela de terminal que fecharia: a de configurações vem para
+        // a frente com o diálogo, e só a resposta dele conclui (Salvar e
+        // fechar, Descartar e fechar) ou cancela (Cancelar) o encerramento.
+        if self.windows.contains_key(&window_id)
+            && self.settings.as_ref().is_some_and(|settings| {
+                settings::closing::defers_quit(self.windows.len(), settings.has_pending_changes())
+            })
+            && self
+                .settings
+                .as_mut()
+                .is_some_and(SettingsWindow::ask_before_quit)
+        {
+            self.deferred_quit = Some(window_id);
+            return;
+        }
         let Some(state) = self.windows.remove(&window_id) else {
             return;
         };
@@ -5997,6 +6066,11 @@ impl App {
             wait.wait();
         }
         if self.windows.is_empty() {
+            // ADR-0059 §2: a janela de configurações não segura o processo. A
+            // pergunta sobre pendências já foi feita no topo desta função;
+            // chegar aqui é ela ter respondido que não há (ou ter sido
+            // respondida).
+            self.settings = None;
             self.session.clear();
             event_loop.exit();
         }
@@ -6104,6 +6178,9 @@ impl App {
             DialogAction::DeleteNamedSession(file) => {
                 self.commit_named_session_delete(window_id, &file);
             }
+            // Vive na janela de configurações, que a resolve sozinha: um
+            // diálogo de `WindowState` nunca o carrega.
+            DialogAction::SettingsPending => {}
         }
     }
 
@@ -6413,6 +6490,7 @@ impl App {
             .windows
             .values()
             .filter_map(|w| w.next_wake(now))
+            .chain(self.settings.as_ref().and_then(SettingsWindow::next_wake))
             .chain(self.session.next_deadline())
             .chain(self.shell_integration_invite_deadline())
             .chain(self.project_command_deadline())
@@ -6733,6 +6811,22 @@ impl App {
         for state in self.windows.values_mut() {
             state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
         }
+        self.refresh_settings_access_tree();
+    }
+
+    /// A árvore da janela de configurações, no mesmo ponto único das de
+    /// terminal (ADR-0043 §3). Usa o idioma do catálogo em uso e as métricas
+    /// de item de menu que a guia herda (ADR-0060 §2).
+    fn refresh_settings_access_tree(&mut self) {
+        let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
+            return;
+        };
+        let env = settings::Env {
+            style: &self.style,
+            config: &self.config,
+        };
+        settings.set_session_theme(self.session_theme.as_deref());
+        settings.refresh_access_tree(env, gpu.text_measurer(), &self.language_tag);
     }
 
     /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: mais próxima
@@ -6786,6 +6880,9 @@ impl App {
             {
                 state.window.request_redraw();
             }
+        }
+        if let Some(settings) = &mut self.settings {
+            settings.tick(now);
         }
         self.check_shell_integration_invite_timeout(now);
         self.check_project_commands(now);
@@ -7037,9 +7134,8 @@ impl App {
             } => {
                 self.catalog = catalog;
                 self.language_tag = language::language_tag(locale.as_ref());
-                for state in self.windows.values_mut() {
-                    state.catalog = Arc::clone(&self.catalog);
-                }
+                let catalog = Arc::clone(&self.catalog);
+                self.for_each_surface(|mut surface| surface.set_catalog(&catalog));
                 diagnostics
             }
             LanguageReload::Keep { diagnostics } => diagnostics,
@@ -7052,9 +7148,7 @@ impl App {
                     .push(severity, title.clone(), body.clone(), now);
             }
         }
-        for state in self.windows.values() {
-            state.window.request_redraw();
-        }
+        self.for_each_surface(|surface| surface.request_redraw());
     }
 
     /// Aplica o resultado de uma recarga de config (F4 etapa 4,
@@ -7064,6 +7158,9 @@ impl App {
     fn apply_config_reload(&mut self, outcome: ConfigReload, now: Instant) {
         let (new_config, unknown_keys) = match outcome {
             ConfigReload::Invalid { error } => {
+                // A tela de configurações também vê o arquivo (ADR-0059 §4):
+                // inválido, ela passa a somente leitura.
+                self.observe_config_file();
                 for state in self.windows.values_mut() {
                     state.warnings.push(
                         Severity::Error,
@@ -7244,17 +7341,364 @@ impl App {
                     now,
                 );
             }
-            // Classe A: o layout da barra é função pura de
-            // `(Workspace, Config, largura)` -- só redesenhar já aplica.
-            state.window.request_redraw();
+        }
+        // Classe A: o layout da barra é função pura de
+        // `(Workspace, Config, largura)` -- só redesenhar já aplica. Inclui a
+        // janela de configurações, que lê a mesma paleta e o mesmo estilo; o
+        // conteúdo medido dela, esse, depende do `Config` e é refeito.
+        self.observe_config_file();
+        self.for_each_surface(|surface| surface.request_redraw());
+    }
+
+    /// Entrega à janela de configurações o arquivo como está no disco agora
+    /// (ADR-0059 §4): ela decide por conteúdo se foi a própria gravação, uma
+    /// troca silenciosa ou um conflito. Sem arquivo resolvido não há o que
+    /// entregar.
+    fn observe_config_file(&mut self) {
+        let (Some(settings), Some(path)) = (&mut self.settings, &self.config_path) else {
+            return;
+        };
+        settings.observe_disk(&settings::Disk::observe(path));
+    }
+
+    /// `settings.open` do catálogo (RF-16.1, ADR-0059 §6), disparada pelo
+    /// atalho e pela engrenagem. Singleton (RF-16.2): com a janela aberta,
+    /// traz a mesma para a frente; fechada, cria uma centrada sobre
+    /// `origin`, no monitor dela.
+    fn open_settings(&mut self, event_loop: &ActiveEventLoop, origin: WindowId) {
+        if let Some(settings) = &self.settings {
+            settings.bring_to_front();
+            return;
+        }
+        let origin_window = self.windows.get(&origin).map(|state| &state.window);
+        let scale = origin_window.map_or(1.0, |w| w.scale_factor() as f32);
+        let size = (
+            (self.config.appearance.settings.window_width as f32 * scale).round() as u32,
+            (self.config.appearance.settings.window_height as f32 * scale).round() as u32,
+        );
+        let position = origin_window.and_then(|window| {
+            let origin_position = window.outer_position().ok()?;
+            let origin_size = window.outer_size();
+            let monitor = window.current_monitor().map(|m| {
+                let position = m.position();
+                let size = m.size();
+                ((position.x, position.y), (size.width, size.height))
+            });
+            Some(settings::centered_position(
+                (origin_position.x, origin_position.y),
+                (origin_size.width, origin_size.height),
+                size,
+                monitor,
+            ))
+        });
+        let attributes = settings::window_attributes(
+            &msg::settings::window_title(&self.catalog),
+            position,
+            &self.config,
+        );
+        self.settings = self.create_settings_window(event_loop, attributes);
+    }
+
+    /// Cria a janela do SO e a surface `wgpu` da tela de configurações. O
+    /// `GpuContext` já existe (há ao menos uma janela de terminal, que é de
+    /// onde `settings.open` vem), então diferente de
+    /// `create_window_with_attributes` não há primeira janela a tratar nem
+    /// métrica de célula a medir. `None` na falha rara de criar a surface,
+    /// com o mesmo tratamento: sem janela, e uma linha em `stderr`.
+    fn create_settings_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        attributes: WindowAttributes,
+    ) -> Option<SettingsWindow> {
+        let gpu = self.gpu.as_mut()?;
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => Arc::new(window),
+            Err(err) => {
+                eprintln!("porecatu: falha ao criar a janela de configurações: {err}");
+                return None;
+            }
+        };
+        // ADR-0043 §1: o adaptador exige a janela ainda invisível -- criado
+        // antes de `set_visible`, como em `create_window_with_attributes`.
+        let access_adapter = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        );
+        window.set_visible(true);
+        let size = window.inner_size();
+        let scale = window.scale_factor() as f32;
+        let mut surface =
+            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
+                Ok(surface) => surface,
+                Err(err) => {
+                    eprintln!("porecatu: falha ao criar surface da janela de configurações: {err}");
+                    return None;
+                }
+            };
+        surface.resize(gpu, size.width, size.height, scale);
+        let settings = SettingsWindow::new(
+            window,
+            surface,
+            scale,
+            Arc::clone(&self.catalog),
+            access_adapter,
+            self.settings_last_group,
+            &self.config,
+            language::locale_dirs(self.config_path.as_deref()),
+            &self
+                .config_path
+                .as_deref()
+                .map_or(settings::Disk::Missing, settings::Disk::observe),
+        );
+        // O render é damage-driven: nada garante um `RedrawRequested` do SO
+        // para uma janela recém-criada, e sem este pedido ela fica preta até
+        // a primeira interação que sujar o estado.
+        settings.request_redraw();
+        Some(settings)
+    }
+
+    /// Fecha a janela de configurações sem encerrar o app (ADR-0059 §2) e
+    /// guarda o grupo em que ela estava (RF-16.9). Soltar o `SettingsWindow`
+    /// fecha a janela do SO.
+    fn close_settings(&mut self) {
+        if let Some(settings) = self.settings.take() {
+            self.settings_last_group = settings.selected_group();
+        }
+    }
+
+    /// "Abrir arquivo no editor" (RF-16.14): o comportamento antigo da
+    /// engrenagem, criar o arquivo a partir do exemplo e abri-lo. A falha vira
+    /// aviso na primeira janela de terminal -- a de configurações não tem pilha
+    /// de avisos.
+    fn open_config_file_from_settings(&mut self) {
+        let Some(state) = self.windows.values_mut().next() else {
+            return;
+        };
+        open_config_file(
+            self.config_path.as_deref(),
+            &mut state.warnings,
+            &self.catalog,
+            Instant::now(),
+        );
+        state.window.request_redraw();
+    }
+
+    /// Salvar da tela de configurações (RF-16.14, RF-16.19): grava as edições
+    /// do rascunho no arquivo resolvido no arranque -- o mesmo caminho que
+    /// `open_config_file` usa. Sucesso limpa as pendências; falha de
+    /// revalidação ou de disco vira **aviso** na primeira janela de terminal
+    /// (a de configurações não tem pilha de avisos) e as pendências ficam.
+    /// Nada é aplicado ao `Config` daqui: o watcher vê o arquivo mudar e a
+    /// recarga a quente aplica, como a qualquer editor (ADR-0058 §6).
+    fn save_settings(&mut self) {
+        let Some(settings) = &mut self.settings else {
+            return;
+        };
+        // Com a faixa de conflito à vista, Salvar equivale a Manter minhas
+        // alterações (RF-16.23): `prepare_save` já trocou a base.
+        let Some(plan) = settings.prepare_save() else {
+            return;
+        };
+        let now = Instant::now();
+        let Some(path) = self.config_path.clone() else {
+            if let Some(state) = self.windows.values_mut().next() {
+                state.warnings.push(
+                    Severity::Warning,
+                    msg::notice::config_path_unresolved::title(&self.catalog),
+                    msg::notice::config_path_unresolved::body(&self.catalog),
+                    now,
+                );
+                state.window.request_redraw();
+            }
+            return;
+        };
+        match settings::save::save(
+            &path,
+            plan.base.as_deref(),
+            EXAMPLE_CONFIG_TOML,
+            &plan.edits,
+        ) {
+            Ok(saved) => settings.save_succeeded(&saved),
+            // O arquivo mudou por fora desde o que a tela viu: nada foi
+            // gravado, e a faixa de conflito sobe (RF-16.23).
+            Err(error) if error.is_conflict() => {
+                settings.observe_disk(&settings::Disk::observe(&path));
+            }
+            Err(error) => {
+                if let Some(state) = self.windows.values_mut().next() {
+                    state.warnings.push(
+                        Severity::Error,
+                        msg::notice::settings_save_failed::title(&self.catalog),
+                        messages::settings_save_error(&self.catalog, &error),
+                        now,
+                    );
+                    state.window.request_redraw();
+                }
+            }
+        }
+    }
+
+    /// Evento de uma janela que é a de configurações -- o roteamento do
+    /// topo de `window_event` (ADR-0059 §1). Modo de captura: o `keymap` do
+    /// processo não é consultado (ADR-0059 §3).
+    fn settings_window_event(&mut self, event: WindowEvent, event_loop: &ActiveEventLoop) {
+        if let Some(settings) = &mut self.settings {
+            settings.process_access_event(&event);
+        }
+        let mut press = settings::Press::Nothing;
+        match event {
+            // Fechar pelo sistema: com pendências abre o diálogo, e com o
+            // diálogo já aberto conta como Cancelar (RF-16.4).
+            WindowEvent::CloseRequested => {
+                if let Some(settings) = &mut self.settings {
+                    press = settings.request_close();
+                }
+            }
+            WindowEvent::Resized(size) => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &self.gpu) {
+                    settings.resize(gpu, size.width, size.height);
+                }
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &self.gpu) {
+                    settings.rescale(gpu, scale_factor as f32);
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                if let Some(settings) = &mut self.settings {
+                    settings.modifiers_changed(modifiers.state());
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    settings.cursor_moved(position, env, gpu.text_measurer(), Instant::now());
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                if let Some(settings) = &mut self.settings {
+                    settings.cursor_left();
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    settings.wheel(delta, env, gpu.text_measurer());
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    press = settings.left_pressed(env, gpu.text_measurer());
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(settings) = &mut self.settings {
+                    settings.left_released();
+                }
+            }
+            WindowEvent::KeyboardInput { event: key, .. } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    press = settings.key(&key, env, gpu.text_measurer());
+                }
+            }
+            WindowEvent::RedrawRequested => self.redraw_settings(),
+            _ => {}
+        }
+        match press {
+            settings::Press::Nothing => {}
+            settings::Press::Close => self.close_settings(),
+            settings::Press::Answer(answer) => self.settings_dialog_answer(answer, event_loop),
+            settings::Press::OpenFile => self.open_config_file_from_settings(),
+            settings::Press::Save => self.save_settings(),
+        }
+    }
+
+    /// A resposta ao diálogo de pendências da janela de configurações
+    /// (RF-16.4, RF-16.5). Cancelar apaga o encerramento que esperava, e
+    /// nada mais acontece. Descartar e fechar conclui. Salvar e fechar grava e
+    /// só conclui se gravou -- falha vira o aviso de sempre e as pendências
+    /// ficam, com o encerramento cancelado. Concluir é fechar a janela de
+    /// configurações ou, se o diálogo veio de um encerramento, a janela de
+    /// terminal que o esperava (com a gravação de sessão de sempre).
+    fn settings_dialog_answer(
+        &mut self,
+        answer: settings::DialogAnswer,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let quitting = self.deferred_quit.take();
+        let conclusion = settings::closing::conclude(answer, quitting.is_some(), || {
+            self.save_settings();
+            self.settings
+                .as_ref()
+                .is_none_or(|settings| !settings.has_pending_changes())
+        });
+        match (conclusion, quitting) {
+            (settings::closing::Conclusion::Stay, _) => {}
+            (settings::closing::Conclusion::CloseSettings, _) => self.close_settings(),
+            (settings::closing::Conclusion::Quit, Some(window_id)) => {
+                self.close_window_unconditionally(window_id, event_loop);
+            }
+            // `Quit` só sai de um diálogo que veio de um encerramento.
+            (settings::closing::Conclusion::Quit, None) => self.close_settings(),
+        }
+    }
+
+    fn redraw_settings(&mut self) {
+        let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
+            return;
+        };
+        let env = settings::Env {
+            style: &self.style,
+            config: &self.config,
+        };
+        // O tema da sessão entra na linha abaixo da lista de temas (RF-16.25).
+        settings.set_session_theme(self.session_theme.as_deref());
+        let frame = settings.paint(env, &self.pal, &self.term_pal, gpu.text_measurer());
+        settings.render(gpu, &frame);
+    }
+
+    /// O ponto único de "para cada janela" que inclui a de configurações
+    /// (ADR-0059, riscos): recarga de config, troca de tema e troca de idioma
+    /// passam por aqui, então nenhuma delas esquece a tela. O que só faz
+    /// sentido numa janela de terminal (aviso empilhado, sessão, PTY) continua
+    /// iterando `windows` direto.
+    fn for_each_surface(&mut self, mut f: impl FnMut(Surface<'_>)) {
+        for state in self.windows.values_mut() {
+            f(Surface::Terminal(state));
+        }
+        if let Some(settings) = &mut self.settings {
+            f(Surface::Settings(settings));
         }
     }
 
     /// `config.reload` do catálogo (`docs/reference/acoes.md`, ADR-0003):
     /// relê o arquivo na hora, sem esperar o `notify` -- útil quando o
     /// watcher não disparou (editor que grava por outro caminho, arquivo
-    /// em rede). Ligado a `ctrl+shift+comma`/`cmd+comma` desde a F4 etapa
-    /// 5, via `ActionOutcome::ReloadConfig`.
+    /// em rede). Ligado a `ctrl+shift+comma`/`cmd+shift+comma` (era
+    /// `cmd+comma` até o ADR-0059), via `ActionOutcome::ReloadConfig`.
     fn reload_config_now(&mut self, now: Instant) {
         let Some(path) = self.config_path.clone() else {
             return;
@@ -7613,6 +8057,16 @@ impl ApplicationHandler<Wakeup> for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // ADR-0059 §1: a janela de configurações é roteada aqui, no topo, e
+        // nenhum handler de janela de terminal a vê.
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.window_id() == window_id)
+        {
+            self.settings_window_event(event, event_loop);
+            return;
+        }
         // ADR-0043 §1: "deve ser chamado sempre que um evento de janela
         // novo é recebido e antes dele ser tratado pela aplicação" -- o
         // adaptador precisa ver todo `WindowEvent`, mesmo os que `App`
@@ -7809,6 +8263,14 @@ impl App {
     /// montagem nem roda, custo zero. Nunca chama `request_redraw`: a
     /// árvore e o frame são consumidores independentes do mesmo estado.
     fn refresh_access_tree(&mut self, window_id: WindowId) {
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.window_id() == window_id)
+        {
+            self.refresh_settings_access_tree();
+            return;
+        }
         let Some(gpu) = &mut self.gpu else { return };
         let measurer = gpu.text_measurer();
         let style = &self.style;
@@ -8056,6 +8518,7 @@ impl App {
                     state.window.request_redraw();
                 }
             }
+            ActionOutcome::OpenSettings => self.open_settings(event_loop, window_id),
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
             ActionOutcome::CycleTheme => self.cycle_theme(Instant::now()),
             // ADR-0055 §3: `session.save_named` abre em edição (campo em
@@ -9525,15 +9988,7 @@ impl App {
                 NewTabRequest::CloseWindowRequested => {
                     self.request_close_window(window_id, event_loop);
                 }
-                NewTabRequest::OpenConfigFile => {
-                    open_config_file(
-                        self.config_path.as_deref(),
-                        &mut state.warnings,
-                        &self.catalog,
-                        Instant::now(),
-                    );
-                    state.window.request_redraw();
-                }
+                NewTabRequest::OpenSettings => self.open_settings(event_loop, window_id),
                 // ADR-0055 §3: clique no botão abre em navegação. "Clicar
                 // de novo com ele aberto fecha" já sai de graça: com o
                 // popover aberto, `dispatch_session_picker_click`

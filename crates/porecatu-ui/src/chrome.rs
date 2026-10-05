@@ -234,9 +234,6 @@ pub fn paint(
     // desenharia bem maior que os outros ícones. Reduzida para o desenho
     // bater com o do "+" -- ver `porecatu_render::icon`. Sem chave própria.
     let settings_icon_size = style.icon_em_size * 0.8;
-    // Menor que o "+"/configurações -- convenção Windows: glyphs finos de
-    // minimizar/maximizar/fechar (ADR-0027). Sem chave própria.
-    let window_button_icon_size = style.icon_em_size * 0.7;
 
     out.push(Primitive::Quad(Quad {
         rect: Rect {
@@ -643,41 +640,15 @@ pub fn paint(
     // colados na borda direita. Não existem no macOS -- lá é o semáforo
     // nativo (`left_inset` na trilha, não zona de botão aqui).
     if !is_macos {
-        let buttons = [
-            (0u8, tab_bar::WindowButtonHit::Minimize, icon::MINUS, false),
-            (
-                1u8,
-                tab_bar::WindowButtonHit::MaximizeRestore,
-                if show_restore_icon {
-                    icon::RESTORE
-                } else {
-                    icon::MAXIMIZE
-                },
-                false,
-            ),
-            (2u8, tab_bar::WindowButtonHit::Close, icon::X, true),
-        ];
-        for (index, hit, glyph, is_close) in buttons {
-            let rect = tab_bar::window_button_rect(style, index, bar_width, bar_height);
-            let hovered = hover_window_button == Some(hit);
-            let bg = match (is_close, hovered) {
-                (true, true) => pal.window_close_hover_bg,
-                (false, true) => pal.window_button_hover_bg,
-                (_, false) => palette::TRANSPARENT,
-            };
-            out.push(Primitive::Quad(Quad { rect, color: bg }));
-            let icon_color = if is_close && hovered {
-                pal.window_close_hover_icon
-            } else {
-                pal.chrome_icon
-            };
-            out.push(centered_glyph(
-                glyph,
-                rect,
-                window_button_icon_size,
-                icon_color,
-            ));
-        }
+        paint_window_buttons(
+            style,
+            pal,
+            bar_width,
+            bar_height,
+            show_restore_icon,
+            hover_window_button,
+            &mut out,
+        );
     }
 
     // Pílulas de overflow (espec §2.18) ficam dentro da trilha rolável, não
@@ -1200,6 +1171,62 @@ pub(crate) fn centered_glyph(
         size_px,
         color,
     })
+}
+
+/// Os três botões de janela do ADR-0027 (minimizar, maximizar/restaurar,
+/// fechar), colados na borda direita de uma faixa de `bar_width` ×
+/// `bar_height`. Compartilhado pela barra de abas e pelo cabeçalho da janela
+/// de configurações (ADR-0059 §2): é a mesma geometria
+/// (`tab_bar::window_button_rect`), o mesmo hover e o mesmo desenho, então
+/// os dois nunca divergem. Fora do macOS -- lá o semáforo é nativo e quem
+/// chama não chega aqui.
+pub(crate) fn paint_window_buttons(
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    bar_width: f32,
+    bar_height: f32,
+    show_restore_icon: bool,
+    hover_window_button: Option<tab_bar::WindowButtonHit>,
+    out: &mut Vec<Primitive>,
+) {
+    // Menor que o "+"/configurações -- convenção Windows: glyphs finos de
+    // minimizar/maximizar/fechar (ADR-0027). Sem chave própria.
+    let window_button_icon_size = style.icon_em_size * 0.7;
+    let buttons = [
+        (0u8, tab_bar::WindowButtonHit::Minimize, icon::MINUS, false),
+        (
+            1u8,
+            tab_bar::WindowButtonHit::MaximizeRestore,
+            if show_restore_icon {
+                icon::RESTORE
+            } else {
+                icon::MAXIMIZE
+            },
+            false,
+        ),
+        (2u8, tab_bar::WindowButtonHit::Close, icon::X, true),
+    ];
+    for (index, hit, glyph, is_close) in buttons {
+        let rect = tab_bar::window_button_rect(style, index, bar_width, bar_height);
+        let hovered = hover_window_button == Some(hit);
+        let bg = match (is_close, hovered) {
+            (true, true) => pal.window_close_hover_bg,
+            (false, true) => pal.window_button_hover_bg,
+            (_, false) => palette::TRANSPARENT,
+        };
+        out.push(Primitive::Quad(Quad { rect, color: bg }));
+        let icon_color = if is_close && hovered {
+            pal.window_close_hover_icon
+        } else {
+            pal.chrome_icon
+        };
+        out.push(centered_glyph(
+            glyph,
+            rect,
+            window_button_icon_size,
+            icon_color,
+        ));
+    }
 }
 
 /// Altura total da barra (espec §2.5/§2.3): abas + a folga do wrapper

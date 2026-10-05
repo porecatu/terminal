@@ -16,6 +16,7 @@
 
 mod appearance;
 mod color;
+mod edit;
 mod error;
 mod general;
 mod git;
@@ -34,6 +35,7 @@ pub use appearance::{
     TerminalFrame, Tooltip, Window, WindowControls,
 };
 pub use color::{Color, ColorParseError};
+pub use edit::{ConfigDocument, Edit, EditError, EditValue, KeyPath, SaveOutcome};
 pub use error::{ConfigError, ConfigErrorKind};
 pub use general::General;
 pub use git::Git;

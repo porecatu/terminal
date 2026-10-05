@@ -655,6 +655,42 @@ row_padding_x = 8
 max_visible_rows = 6
 
 
+# Janela de configurações (PRD-016, ADR-0059, ADR-0060 §5). Só dimensões:
+# as cores são os tokens que o canvas já dava ao painel de configurações
+# (espec. §1.2, §1.5), e a tipografia vem de [appearance.context_menu],
+# [appearance.group_editor] e [appearance.dialog] (os widgets que a tela
+# reaproveita).
+# Classe de recarga: [A] para as de dentro da tela -- valem no próximo
+# quadro da janela aberta --; [C] para as quatro de tamanho da janela
+# (window_width, window_height, min_width, min_height): valem na próxima
+# abertura da tela.
+[appearance.settings]
+# Guia de 200 + painel com linha de 640 + os dois padding: 18 do painel +
+# folga para o botão de restaurar.                                    [C]
+window_width = 900
+# Cabeçalho de 52 + rodapé de 54 + ~8 linhas de opção visíveis sem rolar.
+# O grupo Terminal inteiro cabe em duas telas.                        [C]
+window_height = 640
+# Abaixo disso a linha não comporta nome, descrição e o campo de texto
+# lado a lado.                                                        [C]
+min_width = 640
+# Cabeçalho, rodapé e pelo menos três linhas.                         [C]
+min_height = 420
+# = context_menu.width, a largura mínima do menu de contexto: a guia é uma
+# lista de itens de menu.
+sidebar_width = 200
+# Cabe um caminho de projeto comum e `Iosevka Fixed` em 13px sem truncar.
+text_field_width = 240
+# Cabe `102400` (o maior default do catálogo, osc52_max_bytes) com folga
+# para um sétimo dígito, mais o padding do campo.
+number_field_width = 88
+# = o `gap: 8` dos botões do diálogo e dos avisos empilhados. Ganha chave
+# porque é o espaçamento que define a densidade da tela inteira.
+row_gap = 8
+# Dez quadrados mais `gap: 2` em 138px, menos que um campo de texto.
+theme_swatch_size = 12
+
+
 # Quadro arredondado em volta da grade do terminal -- pedido do usuário,
 # sem origem no design (a seção 2.7 da espec. descrevia um retângulo pleno).
 # A margem é o `trilha_padding` da barra e o padding é o `wrapper_padding`
@@ -1461,6 +1497,12 @@ close_hover_foreground = "#ffffff"
 
 "ctrl+shift+comma"    = "config.reload"
 
+# Janela de configurações, RF-16.1, ADR-0059 §6. `Ctrl+,` sozinho ficaria
+# fora da regra do ADR-0008 (Ctrl+<tecla> sem Shift é do terminal), e
+# `ctrl+shift+comma` já é config.reload. A engrenagem da barra de abas
+# dispara esta mesma ação.
+"ctrl+shift+o"        = "settings.open"                      # RF-16.1
+
 # [v2] O design abre a paleta de comandos com Ctrl+Shift+P. PRD-008. Ação
 # fora do catálogo fechado da F4 (docs/reference/acoes.md) -- nome
 # reservado, sem default embutido, comentada como as duas de F6 abaixo.
@@ -1497,7 +1539,7 @@ close_hover_foreground = "#ffffff"
 # Sessões nomeadas (PRD-014, ADR-0054), fora da ordem de fases.
 # session.open_list é vinculável e fica SEM default, de propósito -- mesmo
 # precedente de group.new_tab/pane.close acima. Quem quiser, vincula:
-# "ctrl+shift+o"      = "session.open_list"
+# "ctrl+shift+l"      = "session.open_list"
 "ctrl+shift+s"        = "session.save_named"                  # RF-14.1
 
 # --- defaults de macOS ---------------------------------- ADR-0008, ADR-0029
@@ -1533,7 +1575,11 @@ close_hover_foreground = "#ffffff"
 "cmd+minus"           = "font.decrease"
 "cmd+0"               = "font.reset"
 "cmd+shift+y"         = "theme.cycle"
-"cmd+comma"           = "config.reload"
+# `cmd+comma` é a convenção do sistema para "Ajustes…": era config.reload e
+# passou a settings.open; o reload foi para `cmd+shift+comma`. RF-16.1,
+# ADR-0059 §6.
+"cmd+comma"           = "settings.open"                      # RF-16.1
+"cmd+shift+comma"     = "config.reload"
 "cmd+q"               = "app.quit"     # convenção de plataforma; RF-1.4
 # Busca e "selecionar tudo" no macOS -- mesma razão do bloco comum acima.
 "cmd+f"               = "search.open"                        # RF-11.1

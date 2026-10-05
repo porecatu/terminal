@@ -27,6 +27,13 @@ pub const HOVER_DELAY: Duration = Duration::from_millis(600);
 pub enum HoverKey {
     Tab(TabId),
     SessionRow(usize),
+    /// Descrição truncada de uma linha de opção da janela de configurações
+    /// (ADR-0060 §2); o índice é o do bloco no painel.
+    SettingsRow(usize),
+    /// O botão de restaurar padrão de uma linha da janela de configurações
+    /// (ADR-0060 §2: "Restaurar padrão", espec. §2.20); o índice é o do bloco
+    /// no painel. Ícone sem texto: o tooltip diz o que ele faz.
+    SettingsRestore(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

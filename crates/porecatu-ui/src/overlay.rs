@@ -63,7 +63,7 @@ use crate::tab_bar::{self, TabBarStyle, rect_contains};
 use crate::terminal_menu::{TerminalContextMenu, TerminalMenuItem};
 use crate::warning::{Severity, WarningStack};
 
-const TITLE_FONT: FontFace = FontFace::Sans {
+pub(crate) const TITLE_FONT: FontFace = FontFace::Sans {
     weight: SansWeight::Medium,
 };
 // `pub(crate)`: `lib.rs::dispatch_group_editor_click` mede o mesmo texto
@@ -298,6 +298,8 @@ pub fn hit_test_warnings(layout: &WarningLayout, point: (f32, f32)) -> Option<Wa
 pub struct DialogLayout {
     pub modal_rect: Rect,
     pub cancel_rect: Rect,
+    /// O botão do meio do diálogo de três saídas (RF-16.4).
+    pub discard_rect: Option<Rect>,
     pub confirm_rect: Rect,
 }
 
@@ -323,6 +325,19 @@ pub fn layout_dialog(
     let confirm_width = measurer.measure_width(&dialog.confirm_label, BODY_FONT, body_size)
         + button_padding_x * 2.0;
 
+    let discard_width = dialog
+        .discard_label
+        .as_ref()
+        .map(|label| measurer.measure_width(label, BODY_FONT, body_size) + button_padding_x * 2.0);
+    // Com três botões a fila pode passar da largura do diálogo (frases mais
+    // longas em outro idioma): o diálogo cresce o que for preciso, nunca
+    // corta um botão. Com dois, a largura é sempre a configurada.
+    let buttons_width = cancel_width
+        + confirm_width
+        + button_gap
+        + discard_width.map_or(0.0, |discard| discard + button_gap);
+    let width = width.max(buttons_width + padding * 2.0);
+
     let content_height = title_size + gap + body_size + gap + button_height;
     let modal_height = padding * 2.0 + content_height;
     let modal_rect = Rect {
@@ -339,8 +354,15 @@ pub fn layout_dialog(
         width: confirm_width,
         height: button_height,
     };
+    let discard_rect = discard_width.map(|discard| Rect {
+        x: confirm_rect.x - button_gap - discard,
+        y: buttons_y,
+        width: discard,
+        height: button_height,
+    });
+    let cancel_right = discard_rect.map_or(confirm_rect.x, |discard| discard.x);
     let cancel_rect = Rect {
-        x: confirm_rect.x - button_gap - cancel_width,
+        x: cancel_right - button_gap - cancel_width,
         y: buttons_y,
         width: cancel_width,
         height: button_height,
@@ -349,6 +371,7 @@ pub fn layout_dialog(
     DialogLayout {
         modal_rect,
         cancel_rect,
+        discard_rect,
         confirm_rect,
     }
 }
@@ -409,6 +432,71 @@ pub fn paint_dialog(
         color: pal.dialog_body_text,
     }));
 
+    if let (Some(discard_rect), Some(discard_label)) =
+        (layout.discard_rect, dialog.discard_label.as_ref())
+    {
+        // Três saídas (RF-16.4, ADR-0060 §4): Cancelar no estilo cancelar,
+        // Descartar e fechar destrutivo -- texto `#e08585`, hover `#2e2224`,
+        // as cores do item destrutivo do menu --, e Salvar e fechar
+        // primário, o par ligado da alternância com hover por brilho.
+        let hovered = dialog.hovered();
+        let ring_or = |button: DialogButton, border: Color| {
+            if dialog.focused() == button {
+                pal.dialog_focus_ring
+            } else {
+                border
+            }
+        };
+        paint_dialog_button(
+            layout.cancel_rect,
+            &dialog.cancel_label,
+            if hovered == Some(DialogButton::Cancel) {
+                pal.dialog_cancel_border
+            } else {
+                palette::TRANSPARENT
+            },
+            pal.dialog_cancel_text,
+            ring_or(DialogButton::Cancel, pal.dialog_cancel_border),
+            body_size,
+            button_corner_radius,
+            measurer,
+            &mut out,
+        );
+        paint_dialog_button(
+            discard_rect,
+            discard_label,
+            if hovered == Some(DialogButton::Discard) {
+                pal.menu_item_destructive_hover
+            } else {
+                palette::TRANSPARENT
+            },
+            pal.dialog_confirm_background,
+            ring_or(DialogButton::Discard, pal.dialog_cancel_border),
+            body_size,
+            button_corner_radius,
+            measurer,
+            &mut out,
+        );
+        paint_dialog_button(
+            layout.confirm_rect,
+            &dialog.confirm_label,
+            if hovered == Some(DialogButton::Confirm) {
+                crate::chrome::brighten(
+                    crate::settings::TOGGLE_ON,
+                    config.appearance.tabs.colors.hover_brightness,
+                )
+            } else {
+                crate::settings::TOGGLE_ON
+            },
+            crate::toggle::TOGGLE_KNOB_COLOR,
+            ring_or(DialogButton::Confirm, palette::TRANSPARENT),
+            body_size,
+            button_corner_radius,
+            measurer,
+            &mut out,
+        );
+        return out;
+    }
     paint_dialog_button(
         layout.cancel_rect,
         &dialog.cancel_label,
@@ -478,6 +566,11 @@ fn paint_dialog_button(
 pub fn dialog_hit(layout: &DialogLayout, point: (f32, f32)) -> Option<DialogButton> {
     if rect_contains(layout.cancel_rect, point) {
         Some(DialogButton::Cancel)
+    } else if layout
+        .discard_rect
+        .is_some_and(|discard| rect_contains(discard, point))
+    {
+        Some(DialogButton::Discard)
     } else if rect_contains(layout.confirm_rect, point) {
         Some(DialogButton::Confirm)
     } else {
@@ -2012,5 +2105,207 @@ mod tests {
             let move_budget = menu.width as f32 - move_cfg.row_padding_x as f32 * 2.0;
             assert!(width_of(&new_group, size, &mut measurer) <= move_budget);
         }
+    }
+
+    // ---- diálogo de três saídas (RF-16.4, ADR-0060 §4)
+
+    use crate::dialog::{ConfirmDialog, DialogAction};
+
+    fn two_button_dialog() -> ConfirmDialog {
+        ConfirmDialog::new(
+            "Fechar aba?",
+            "Corpo",
+            "Fechar aba",
+            "Cancelar",
+            DialogAction::CloseWindow,
+        )
+    }
+
+    fn center(rect: Rect) -> (f32, f32) {
+        (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
+    }
+
+    #[test]
+    fn a_two_button_dialog_keeps_its_layout_and_has_no_discard_button() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_dialog(1000.0, 700.0, &two_button_dialog(), &config, &mut measurer);
+        assert_eq!(layout.discard_rect, None);
+        assert_eq!(
+            layout.modal_rect.width,
+            config.appearance.dialog.width as f32
+        );
+        // Cancelar à esquerda de Confirmar, com o vão do botão entre eles.
+        assert_eq!(
+            layout.confirm_rect.x - (layout.cancel_rect.x + layout.cancel_rect.width),
+            config.appearance.dialog.button_gap as f32
+        );
+        assert_eq!(
+            dialog_hit(&layout, center(layout.cancel_rect)),
+            Some(DialogButton::Cancel)
+        );
+        assert_eq!(
+            dialog_hit(&layout, center(layout.confirm_rect)),
+            Some(DialogButton::Confirm)
+        );
+    }
+
+    #[test]
+    fn the_three_button_dialog_lines_up_cancel_discard_save_on_the_right() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let mut measurer = TextMeasurer::new();
+        let dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 2);
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+        let discard = layout.discard_rect.expect("o botão do meio");
+        let gap = cfg.button_gap as f32;
+        assert!(layout.cancel_rect.x < discard.x && discard.x < layout.confirm_rect.x);
+        assert_eq!(
+            discard.x - (layout.cancel_rect.x + layout.cancel_rect.width),
+            gap
+        );
+        assert_eq!(layout.confirm_rect.x - (discard.x + discard.width), gap);
+        // O último fica rente ao padding da direita, como no diálogo de dois.
+        assert_eq!(
+            layout.modal_rect.x + layout.modal_rect.width - cfg.padding as f32,
+            layout.confirm_rect.x + layout.confirm_rect.width
+        );
+        // E os três cabem dentro do diálogo, com a largura de 380 do ADR.
+        assert!(layout.cancel_rect.x >= layout.modal_rect.x + cfg.padding as f32);
+        for (rect, button) in [
+            (layout.cancel_rect, DialogButton::Cancel),
+            (discard, DialogButton::Discard),
+            (layout.confirm_rect, DialogButton::Confirm),
+        ] {
+            assert_eq!(dialog_hit(&layout, center(rect)), Some(button));
+        }
+        assert_eq!(dialog_hit(&layout, (0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn the_three_button_dialog_grows_instead_of_cutting_a_long_button() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let mut measurer = TextMeasurer::new();
+        let mut dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 1);
+        dialog.discard_label = Some("Descartar tudo e fechar a janela de configurações".to_owned());
+        let layout = layout_dialog(1400.0, 700.0, &dialog, &config, &mut measurer);
+        assert!(layout.modal_rect.width > cfg.width as f32);
+        assert!(layout.cancel_rect.x >= layout.modal_rect.x + cfg.padding as f32);
+        // Centrado na janela, como o de largura normal.
+        let (mx, _) = center(layout.modal_rect);
+        assert!((mx - 700.0).abs() < 0.5);
+    }
+
+    fn colors_of(primitives: &[Primitive]) -> Vec<(Rect, Color)> {
+        primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Primitive::RoundedQuad(quad) => Some((quad.rect, quad.color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn text_colors(primitives: &[Primitive]) -> Vec<(String, Color)> {
+        primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Primitive::Text(run) => Some((run.text.clone(), run.color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_three_button_dialog_paints_save_primary_and_discard_destructive() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let mut dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 2);
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+        let paint = |dialog: &ConfirmDialog, measurer: &mut TextMeasurer| {
+            paint_dialog(&layout, dialog, &config, &pal, 1000.0, 700.0, measurer)
+        };
+        let primitives = paint(&dialog, &mut measurer);
+        let fills = colors_of(&primitives);
+        let fill_of = |rect: Rect| fills.iter().find(|(r, _)| *r == rect).unwrap().1;
+        // Salvar e fechar: o par ligado da alternância (`#3f8f80`, texto `#f0f3f6`).
+        assert_eq!(fill_of(layout.confirm_rect), palette::hex(0x3f, 0x8f, 0x80));
+        let texts = text_colors(&primitives);
+        let text_of = |label: &str| texts.iter().find(|(t, _)| t == label).unwrap().1;
+        assert_eq!(text_of("Salvar e fechar"), palette::hex(0xf0, 0xf3, 0xf6));
+        // Descartar e fechar: texto destrutivo `#e08585`, sem fundo.
+        assert_eq!(
+            text_of("Descartar e fechar"),
+            palette::hex(0xe0, 0x85, 0x85)
+        );
+        assert_eq!(fill_of(layout.discard_rect.unwrap()), palette::TRANSPARENT);
+        // Cancelar: o texto do botão cancelar.
+        assert_eq!(text_of("Cancelar"), pal.dialog_cancel_text);
+
+        // Hover: o destrutivo ganha `#2e2224`; o primário clareia.
+        dialog.set_hovered(Some(DialogButton::Discard));
+        let fills = colors_of(&paint(&dialog, &mut measurer));
+        let discard = fills
+            .iter()
+            .find(|(r, _)| *r == layout.discard_rect.unwrap())
+            .unwrap()
+            .1;
+        assert_eq!(discard, palette::hex(0x2e, 0x22, 0x24));
+        dialog.set_hovered(Some(DialogButton::Confirm));
+        let fills = colors_of(&paint(&dialog, &mut measurer));
+        let save = fills
+            .iter()
+            .find(|(r, _)| *r == layout.confirm_rect)
+            .unwrap()
+            .1;
+        assert_eq!(
+            save,
+            crate::chrome::brighten(
+                palette::hex(0x3f, 0x8f, 0x80),
+                config.appearance.tabs.colors.hover_brightness
+            )
+        );
+    }
+
+    #[test]
+    fn a_two_button_dialog_ignores_hover_and_paints_the_destructive_confirm_as_before() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let mut dialog = two_button_dialog();
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+        let plain = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            &mut measurer,
+        );
+        dialog.set_hovered(Some(DialogButton::Confirm));
+        let hovered = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            &mut measurer,
+        );
+        assert_eq!(plain.len(), hovered.len());
+        let fills = colors_of(&plain);
+        // O confirmar segue cheio de `#e08585`, o destrutivo de sempre.
+        assert_eq!(
+            fills
+                .iter()
+                .find(|(r, _)| *r == layout.confirm_rect)
+                .unwrap()
+                .1,
+            pal.dialog_confirm_background
+        );
+        assert_eq!(colors_of(&plain), colors_of(&hovered));
     }
 }

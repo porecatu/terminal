@@ -241,7 +241,7 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 
 ---
 
-## `font.*`, `theme.*`, `config.*`, `search.*`, `app.*`
+## `font.*`, `theme.*`, `config.*`, `settings.*`, `search.*`, `app.*`
 
 | Ação | O que faz | Origem | Fase | Arg |
 |---|---|---|---|---|
@@ -250,6 +250,7 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 | `font.reset` | Volta ao tamanho da config | RF-5.9 | F4 | |
 | `theme.cycle` | Cicla entre os temas nomeados definidos na config | RF-5.21 | F4 | |
 | `config.reload` | Relê o arquivo de config imediatamente | [ADR-0003](../adr/0003-formato-de-configuracao.md) | F4 | |
+| `settings.open` | Abre a janela de configurações, ou a traz para a frente se já aberta | [PRD-016](../prd/prd-016-tela-de-configuracoes.md) RF-16.1, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §6 | fora de fase | |
 | `search.open` | Abre a busca no scrollback | [PRD-011](../prd/prd-011-polimento.md) RF-11.1, [ADR-0041](../adr/0041-busca-no-scrollback.md) | F6 | |
 | `search.next` | Próxima ocorrência | PRD-011 RF-11.5 | F6 | |
 | `search.prev` | Ocorrência anterior | PRD-011 RF-11.5 | F6 | |
@@ -258,7 +259,9 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 
 `app.quit` existe por convenção de plataforma: `Cmd+Q` no macOS é esperado e o [ADR-0008](../adr/0008-teclas-e-roteamento-de-input.md) já define defaults por plataforma. O efeito é o mesmo do RF-1.4 ao fechar a última janela, incluindo a gravação síncrona do RF-3.4.
 
-`config.reload` não substitui o hot reload automático (RF-4.20), que continua acontecendo a cada gravação do arquivo. Existe para o caso em que o watcher não disparou — editor que grava por `rename`, arquivo em rede.
+`config.reload` não substitui o hot reload automático (RF-4.20), que continua acontecendo a cada gravação do arquivo. Existe para o caso em que o watcher não disparou — editor que grava por `rename`, arquivo em rede. Default `Ctrl+Shift+,` em Windows e Linux; no macOS passou de `Cmd+,` a `Cmd+Shift+,` quando `Cmd+,` foi para `settings.open` ([ADR-0059](../adr/0059-janela-de-configuracoes.md) §6).
+
+`settings.open` é fora da ordem de fases ([PRD-016](../prd/prd-016-tela-de-configuracoes.md)), com default `Ctrl+Shift+O` em Windows e Linux e `Cmd+,` no macOS. A engrenagem da barra de abas invoca esta ação. Dentro da janela de configurações o mapa de teclas não é consultado: as teclas dela são fixas (linha da tabela de superfícies abaixo).
 
 ---
 
@@ -291,7 +294,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Dezoito comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os cinco últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Dezenove comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os seis últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -313,5 +316,6 @@ Dezoito comportamentos têm requisito aprovado e **não recebem nome de ação**
 | Clicar no indicador de commits atrás do remoto, na barra de status | [RF-13.12](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §9 | integra commits no repositório da aba ativa, e uma tecla faria isso no repositório que a aba ativa **por acaso** tem — a mesma classe de decisão que o [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md) §4 registrou para `trusted_paths`: tomada uma vez, esquecida depois. O clique mira o que descreve, e só existe quando há o que integrar |
 | Restaurar uma sessão nomeada, por clique ou `Enter` na linha do popover | [RF-14.10](../prd/prd-014-sessoes-nomeadas.md), [ADR-0054](../adr/0054-sessoes-nomeadas.md) §7 | o alvo é a sessão da linha; uma ação precisaria de argumento (qual sessão?), e ação com argumento não é vinculável a tecla. `session.open_list` leva até a lista |
 | Excluir uma sessão nomeada, pelo `X` ou `Delete` na linha do popover | [RF-14.16](../prd/prd-014-sessoes-nomeadas.md), ADR-0054 §7 | idem, e sempre com o diálogo de confirmação por cima |
+| Navegar, salvar, descartar e capturar atalho dentro da janela de configurações | [RF-16.10](../prd/prd-016-tela-de-configuracoes.md), RF-16.29, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §3 | a janela é um modo de captura, como o diálogo: `Tab`, setas, `Espaço`, `Enter`, `Esc` e `Ctrl+S`/`Cmd+S` são consumidos por ela e o mapa de `[keybindings]` não é consultado ali |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

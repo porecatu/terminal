@@ -256,7 +256,112 @@ impl Chord {
     }
 }
 
+/// O que uma tecla pressionada significa para a captura de atalho da tela de
+/// configurações (RF-16.29, ADR-0059 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capture {
+    /// Não pode ser atalho -- modificador sozinho, tecla morta, composição de
+    /// IME, tecla fora da gramática --: a captura continua.
+    Ignored,
+    /// `Esc` sem modificador.
+    Cancel,
+    /// `Backspace` sem modificador.
+    Remove,
+    /// A combinação capturada.
+    Chord(Chord),
+}
+
+impl Chord {
+    /// Lê uma tecla como a captura de atalho a quer. É o **mesmo** caminho de
+    /// [`Chord::from_key`] -- o que casa uma tecla com um atalho no terminal --,
+    /// mais o que a captura exclui: modificador sozinho e o que a gramática de
+    /// texto não escreve de volta (uma combinação que não fizesse a viagem
+    /// ida e volta pelo arquivo não valeria nada).
+    pub fn capture(key: &Key, modifiers: Modifiers) -> Capture {
+        if let Key::Named(named) = key {
+            if matches!(
+                named,
+                NamedKey::Control
+                    | NamedKey::Shift
+                    | NamedKey::Alt
+                    | NamedKey::AltGraph
+                    | NamedKey::Super
+                    | NamedKey::Meta
+                    | NamedKey::Hyper
+                    | NamedKey::CapsLock
+                    | NamedKey::NumLock
+                    | NamedKey::ScrollLock
+                    | NamedKey::Fn
+                    | NamedKey::FnLock
+                    | NamedKey::Symbol
+                    | NamedKey::SymbolLock
+            ) {
+                return Capture::Ignored;
+            }
+            let bare = !(modifiers.ctrl || modifiers.alt || modifiers.shift || modifiers.super_);
+            if bare && *named == NamedKey::Escape {
+                return Capture::Cancel;
+            }
+            if bare && *named == NamedKey::Backspace {
+                return Capture::Remove;
+            }
+        }
+        match Chord::from_key(key, modifiers) {
+            Some(chord) if chord.to_grammar().is_some() => Capture::Chord(chord),
+            _ => Capture::Ignored,
+        }
+    }
+
+    /// A grafia da gramática de texto desta combinação (`ctrl+shift+comma`),
+    /// a que vai para o arquivo: modificadores na ordem `ctrl`, `alt`,
+    /// `shift`, `cmd` e a tecla pela palavra, se ela tem uma. `None` se a
+    /// grafia não volta ao mesmo `Chord` por [`Chord::parse`] -- o `+` como
+    /// tecla, por exemplo, que o separador come.
+    pub fn to_grammar(self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        for (on, name) in [
+            (self.ctrl, "ctrl"),
+            (self.alt, "alt"),
+            (self.shift, "shift"),
+            (self.cmd, "cmd"),
+        ] {
+            if on {
+                parts.push(name.to_owned());
+            }
+        }
+        parts.push(self.key.grammar()?);
+        let text = parts.join("+");
+        (Chord::parse(&text) == Ok(self)).then_some(text)
+    }
+
+    /// O ADR-0008 proíbe `Ctrl+<letra>` sozinho nos defaults do Windows e do
+    /// Linux: esse espaço é do terminal. O arquivo e a tela aceitam, mas quem
+    /// o vincula deixa o programa de dentro do terminal sem a tecla (RF-16.29).
+    pub fn is_terminal_reserved(&self, platform: Platform) -> bool {
+        platform != Platform::Macos
+            && self.ctrl
+            && !self.alt
+            && !self.shift
+            && !self.cmd
+            && matches!(self.key, ChordKey::Char(c) if c.is_ascii_alphabetic())
+    }
+}
+
 impl ChordKey {
+    /// A palavra (ou o caractere) que a gramática de texto escreve para esta
+    /// tecla.
+    fn grammar(&self) -> Option<String> {
+        if let Some((name, _)) = NAMED_KEYS.iter().find(|(_, key)| key == self) {
+            return Some((*name).to_owned());
+        }
+        match self {
+            ChordKey::Char(c) => Some(c.to_string()),
+            ChordKey::Named(_) => (1..=24)
+                .map(|n| format!("f{n}"))
+                .find(|name| named_f_key(name) == Some(*self)),
+        }
+    }
+
     /// Símbolo (`,`, `=`, ...) sai como o próprio caractere maiúsculo --
     /// não a palavra da gramática (`comma`, `equals`): é o que cabe no
     /// chip mono 9.5px sem alargar a linha. Tecla nomeada de verdade
@@ -734,6 +839,38 @@ mod tests {
         );
     }
 
+    /// ADR-0059 §6: `settings.open` e `config.reload` nunca dividem a tecla,
+    /// e no macOS `Cmd+,` é a convenção de "Ajustes…".
+    #[test]
+    fn settings_open_and_config_reload_defaults() {
+        let empty = keybindings_with(&[]);
+        let action_of = |platform, chord: &str| {
+            resolve(&empty, platform)
+                .bindings
+                .get(&Chord::parse(chord).unwrap())
+                .copied()
+        };
+        for platform in [Platform::Windows, Platform::Linux] {
+            assert_eq!(
+                action_of(platform, "ctrl+shift+o"),
+                Some(Action::SettingsOpen)
+            );
+            assert_eq!(
+                action_of(platform, "ctrl+shift+comma"),
+                Some(Action::ConfigReload)
+            );
+            assert_eq!(action_of(platform, "cmd+comma"), None);
+        }
+        assert_eq!(
+            action_of(Platform::Macos, "cmd+comma"),
+            Some(Action::SettingsOpen)
+        );
+        assert_eq!(
+            action_of(Platform::Macos, "cmd+shift+comma"),
+            Some(Action::ConfigReload)
+        );
+    }
+
     #[test]
     fn app_quit_only_has_a_default_on_macos() {
         let empty = keybindings_with(&[]);
@@ -741,5 +878,140 @@ mod tests {
         let win = resolve(&empty, Platform::Windows);
         assert!(mac.bindings.values().any(|a| *a == Action::AppQuit));
         assert!(!win.bindings.values().any(|a| *a == Action::AppQuit));
+    }
+
+    // ---- captura e gramática de volta (RF-16.29)
+
+    #[test]
+    fn every_embedded_default_writes_back_to_the_same_chord() {
+        let defaults = porecatu_config::Keybindings::default();
+        for table in [&defaults.common, &defaults.macos] {
+            for key in table.keys() {
+                let chord = Chord::parse(key).unwrap();
+                let text = chord.to_grammar().unwrap_or_else(|| panic!("{key}"));
+                assert_eq!(Chord::parse(&text), Ok(chord), "{key} -> {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_grammar_uses_the_word_for_a_symbol_and_the_canonical_modifier_order() {
+        let chord = Chord::parse("Shift+Ctrl+,").unwrap();
+        assert_eq!(chord.to_grammar().as_deref(), Some("ctrl+shift+comma"));
+        let chord = Chord::parse("cmd+alt+equals").unwrap();
+        assert_eq!(chord.to_grammar().as_deref(), Some("alt+cmd+equals"));
+        assert_eq!(
+            Chord::parse("f11").unwrap().to_grammar().as_deref(),
+            Some("f11")
+        );
+        assert_eq!(
+            Chord::parse("ctrl+shift+pagedown")
+                .unwrap()
+                .to_grammar()
+                .as_deref(),
+            Some("ctrl+shift+pagedown")
+        );
+    }
+
+    #[test]
+    fn the_plus_sign_cannot_be_a_chord_key_because_the_separator_eats_it() {
+        let chord =
+            Chord::from_key(&Key::Character("+".into()), mods(true, false, false, false)).unwrap();
+        assert_eq!(chord.to_grammar(), None);
+        assert_eq!(
+            Chord::capture(&Key::Character("+".into()), mods(true, false, false, false)),
+            Capture::Ignored
+        );
+    }
+
+    #[test]
+    fn capture_reads_a_key_the_way_the_keymap_does() {
+        let ctrl_shift = mods(true, false, true, false);
+        let key = Key::Character("R".into());
+        let Capture::Chord(chord) = Chord::capture(&key, ctrl_shift) else {
+            panic!()
+        };
+        assert_eq!(Some(chord), Chord::from_key(&key, ctrl_shift));
+        assert_eq!(chord, Chord::parse("ctrl+shift+r").unwrap());
+    }
+
+    #[test]
+    fn capture_ignores_a_modifier_alone_a_dead_key_and_a_composition() {
+        for named in [
+            NamedKey::Control,
+            NamedKey::Shift,
+            NamedKey::Alt,
+            NamedKey::AltGraph,
+            NamedKey::Super,
+            NamedKey::CapsLock,
+        ] {
+            assert_eq!(
+                Chord::capture(&Key::Named(named), mods(true, true, true, false)),
+                Capture::Ignored,
+                "{named:?}"
+            );
+        }
+        assert_eq!(
+            Chord::capture(&Key::Dead(Some('\'')), Modifiers::NONE),
+            Capture::Ignored
+        );
+        assert_eq!(
+            Chord::capture(&Key::Character("ab".into()), Modifiers::NONE),
+            Capture::Ignored
+        );
+        // Uma tecla fora da gramática (menu de contexto) também.
+        assert_eq!(
+            Chord::capture(&Key::Named(NamedKey::ContextMenu), Modifiers::NONE),
+            Capture::Ignored
+        );
+    }
+
+    #[test]
+    fn a_bare_escape_cancels_and_a_bare_backspace_removes_but_with_a_modifier_they_are_keys() {
+        assert_eq!(
+            Chord::capture(&Key::Named(NamedKey::Escape), Modifiers::NONE),
+            Capture::Cancel
+        );
+        assert_eq!(
+            Chord::capture(&Key::Named(NamedKey::Backspace), Modifiers::NONE),
+            Capture::Remove
+        );
+        assert_eq!(
+            Chord::capture(
+                &Key::Named(NamedKey::Backspace),
+                mods(true, false, false, false)
+            ),
+            Capture::Chord(Chord::parse("ctrl+backspace").unwrap())
+        );
+        assert_eq!(
+            Chord::capture(
+                &Key::Named(NamedKey::Escape),
+                mods(false, false, true, false)
+            ),
+            Capture::Chord(Chord::parse("shift+escape").unwrap())
+        );
+    }
+
+    #[test]
+    fn ctrl_plus_a_letter_alone_is_reserved_to_the_terminal_except_on_macos() {
+        let chord = Chord::parse("ctrl+r").unwrap();
+        assert!(chord.is_terminal_reserved(Platform::Windows));
+        assert!(chord.is_terminal_reserved(Platform::Linux));
+        assert!(!chord.is_terminal_reserved(Platform::Macos));
+        for other in [
+            "ctrl+shift+r",
+            "alt+r",
+            "ctrl+alt+r",
+            "ctrl+1",
+            "ctrl+tab",
+            "f3",
+        ] {
+            assert!(
+                !Chord::parse(other)
+                    .unwrap()
+                    .is_terminal_reserved(Platform::Windows),
+                "{other}"
+            );
+        }
     }
 }

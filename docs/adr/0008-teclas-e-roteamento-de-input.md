@@ -51,6 +51,8 @@ A regra que evita a classe inteira de bugs: **um binding que casa nunca cai para
 | Paleta de comandos `[v2]` | `Ctrl+Shift+P` | `Cmd+Shift+P` |
 | Recarregar config | `Ctrl+Shift+,` | `Cmd+,` |
 
+> **Revisto pelo [ADR-0059](0059-janela-de-configuracoes.md) §6 (2026-10-02).** Entra **abrir configurações** (`settings.open`): `Ctrl+Shift+O` no Windows e no Linux, `Cmd+,` no macOS — a convenção do sistema para "Ajustes…". Por isso **recarregar config** passa a `Cmd+Shift+,` no macOS, simétrico ao `Ctrl+Shift+,` das outras plataformas. A regra "nada de `Ctrl+<tecla>` sozinho" continua sem exceção, e é a razão de `Ctrl+,` não ser o default fora do macOS.
+
 Nenhum default usa `Ctrl+<letra>` sozinho em Windows e Linux. Esse espaço pertence ao terminal, sem exceção.
 
 `Ctrl+Tab` é a única exceção ao padrão `Ctrl+Shift`, e é deliberada: é a convenção universal de troca de aba, e poucos programas de terminal a usam.
