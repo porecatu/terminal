@@ -1,8 +1,8 @@
 # Guia do usuário
 
 RF-11.22, escrito no fechamento da F6. Cobre instalação, arquivo de
-configuração, idioma da interface, atalhos, integração de shell e a convenção do `Shift` para
-selecionar texto dentro de um programa que pede o mouse. Para decisões de
+configuração, tela de configurações, idioma da interface, atalhos, integração de shell e a
+convenção do `Shift` para selecionar texto dentro de um programa que pede o mouse. Para decisões de
 arquitetura e o "porquê" de cada coisa, veja os ADRs linkados; este guia é
 só o "como usar".
 
@@ -206,6 +206,148 @@ resolve. Fora de uma instalação, `PORECATU_LOCALES=<pasta>` aponta o app
 para uma pasta de arquivos; é um recurso de teste e desenvolvimento, não um
 contrato.
 
+## Tela de configurações
+
+Para mudar uma opção sem editar o `porecatu.toml` à mão, o Porecatu tem uma
+tela de configurações ([PRD-016](prd/prd-016-tela-de-configuracoes.md)): uma
+janela própria, com a lista de grupos à esquerda e as opções do grupo
+escolhido no resto da janela. O arquivo continua sendo a **única fonte de
+verdade** — a tela só o lê e o grava, e quem aplica a mudança é a recarga a
+quente de sempre. Editar o arquivo à mão continua sendo um caminho completo.
+
+### Como abrir
+
+- clique na **engrenagem**, na zona fixa à direita da barra de abas;
+- ou a ação `settings.open`: `Ctrl+Shift+O` no Windows e no Linux, `Cmd+,` no
+  macOS (no macOS, `config.reload` foi para `Cmd+Shift+,`).
+
+A janela abre centrada sobre a janela de terminal de onde você a pediu, no
+grupo **Geral**. Existe no máximo uma: abrir de novo a traz para a frente,
+no mesmo grupo e com as alterações pendentes intactas. Ela não entra na
+sessão e não volta ao reabrir o app. Fechar a última janela de terminal
+fecha a tela junto, e, se houver alterações pendentes, pergunta antes.
+
+### Os grupos
+
+| Grupo | O que tem |
+|---|---|
+| **Geral** | idioma, diretório inicial, confirmações ao fechar aba e janela |
+| **Shell** | programa, argumentos e variáveis de ambiente do shell |
+| **Terminal** | fonte, cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo |
+| **Aparência** | tema, animações, opacidade e decoração da janela, posição da barra de abas, o que a aba mostra, barra de status |
+| **Sessão** | gravar e restaurar a sessão, restauração preguiçosa, geometria das janelas, convite de integração de shell |
+| **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |
+| **Git** | consultar o remoto e o intervalo |
+| **Painéis** | mínimo de colunas e de linhas de um painel |
+| **Atalhos** | todas as ações vinculáveis, com o atalho em vigor |
+
+Cada opção mostra nome, descrição curta e o controle que o tipo pede:
+alternância, escolha entre valores, campo numérico, campo de texto, lista.
+Quando a mudança não vale na hora, a linha diz o escopo antes de você mexer —
+"applies to new tabs" (vale em aba nova), "applies to the next window"
+(vale na próxima janela) ou a necessidade de reiniciar.
+
+Na **Aparência**, o tema é uma lista com uma amostra das cores de cada um. Um
+tema escolhido na sessão por `theme.cycle` não é pendência nem é gravado: a
+lista mostra o tema do arquivo, e uma linha abaixo diz qual a sessão está
+usando, se for outro.
+
+### Alterar, salvar e descartar
+
+- Mudar uma opção **não grava**: a alteração fica pendente, com um ponto na
+  linha e outro no nome do grupo.
+- **Salvar** (`Ctrl+S`, `Cmd+S` no macOS) grava todas as pendências de uma
+  vez; **Descartar** volta ao que o arquivo diz. Os dois ficam esmaecidos
+  enquanto não há nada pendente.
+- Valor recusado — fora da faixa, número malformado, nome de variável vazio
+  ou repetido — é marcado na própria linha, com a razão, e **Salvar** fica
+  indisponível até ele ser corrigido.
+- Fechar a janela com pendências abre um diálogo com três saídas: salvar e
+  fechar, descartar e fechar, ou cancelar (o foco inicial é o cancelar).
+- Depois de salvar, a recarga a quente aplica a mudança em todas as janelas
+  de terminal, como se você tivesse gravado o arquivo num editor.
+
+Salvar mexe **só nas chaves que você alterou**. Comentários, linhas em
+branco, a ordem das chaves e das tabelas, chaves desconhecidas, tabelas que a
+tela não mostra (`[[themes]]`, os tokens de `[appearance.*]`, os atalhos de
+outras plataformas) e o final de linha do arquivo (CRLF ou LF) ficam como
+estavam: num arquivo versionado, o `git diff` mostra apenas as linhas que você
+mexeu. Chave que ainda não estava no arquivo entra na tabela dela, que é
+criada se não existir. O texto novo é relido como configuração **antes** de ir
+ao disco; se o app o recusaria, nada é gravado e um aviso diz o porquê.
+
+### Restaurar o padrão
+
+Cada opção tem um botão de **restaurar padrão** (a seta circular), visível
+sob o cursor e na linha com o foco. Restaurar é uma pendência como outra: ao
+salvar, a chave **sai do arquivo** em vez de ser regravada com o valor
+padrão, e o arquivo volta a acompanhar o padrão de versões futuras. O
+comentário que estava acima da chave fica.
+
+### Teclado dentro da janela
+
+`Tab` e `Shift+Tab` percorrem a lista de grupos, as opções e os botões do
+rodapé; as setas movem dentro da lista de grupos e entre valores de uma
+escolha; `Espaço` alterna; `Enter` confirma um campo; `Alt+↑` e `Alt+↓`
+reordenam o item de uma lista em edição; `Esc` fecha a janela quando nenhum
+campo, lista ou captura de atalho o está usando. Essas teclas valem só ali:
+não são ações do catálogo, e o mapa de `[keybindings]` não é consultado na
+janela de configurações.
+
+### Atalhos
+
+O grupo **Atalhos** lista as ações agrupadas por domínio (`tab.*`, `group.*`,
+`window.*`, ...) com o atalho **em vigor na sua plataforma** — o que resulta
+da resolução em três níveis, não só o que está no arquivo. Ação sem atalho
+mostra "No shortcut". O campo no topo filtra pelo nome da ação ou pela tecla.
+
+- **Clicar no atalho** (ou `Enter` com ele focado) entra em captura: a
+  próxima combinação vira o atalho novo. `Esc` cancela; `Backspace` remove o
+  atalho. Modificador sozinho, tecla morta e composição de IME são ignorados.
+- Se a combinação já é de outra ação, a linha mostra "Already used by …" e
+  oferece **Substituir** (a outra perde o atalho) ou **Cancelar**. Nenhum
+  atalho fica com duas ações.
+- Combinação `Ctrl+<letra>` sozinha, no Windows e no Linux, é aceita com a
+  advertência de que o terminal deixa de recebê-la.
+- **Restaurar padrão** remove do arquivo o que a tela escreveu para aquela
+  ação.
+
+As mudanças vão para a tabela da **plataforma em uso** — `[keybindings.windows]`,
+`[keybindings.linux]` ou `[keybindings.macos]` —, para nunca alterar o que
+vale nas outras plataformas de quem divide o arquivo entre máquinas. Para dar
+um segundo atalho a uma ação que já tem um, edite o arquivo: clicar no atalho
+existente o substitui.
+
+### O que fica só no arquivo
+
+A tela mostra um catálogo curado, não o arquivo inteiro. Ficam só no arquivo:
+as cores, dimensões, raios e espaçamentos de `[appearance.*]` (tokens de
+design), criar, editar ou apagar temas (`[[themes]]` — a tela só **escolhe**
+qual vale), os atalhos comuns de `[keybindings]` e os de outras plataformas, e
+qualquer chave que o catálogo não cobre. O botão **Open file in editor**, no
+rodapé, abre o arquivo no editor do sistema (e o cria a partir do exemplo, se
+ele não existir). Também não existem pré-visualização antes de salvar nem
+desfazer depois: o arquivo é seu e pode estar versionado.
+
+### Quando o arquivo não está como a tela espera
+
+- **Arquivo inexistente.** A tela abre normalmente, mostrando os padrões. O
+  primeiro Salvar cria o arquivo **a partir do exemplo embutido** — o mesmo
+  que "Open file in editor" cria — e aplica as pendências sobre ele, para você
+  encontrar depois a documentação de cada chave.
+- **Arquivo inválido** (sintaxe quebrada, tipo errado). A tela abre **somente
+  leitura**, com uma faixa no topo do painel com o erro (linha e coluna, quando
+  houver) e o botão para abrir o arquivo. Os controles mostram os valores em
+  vigor e não podem ser alterados; corrigido o arquivo, a tela volta ao normal
+  sozinha.
+- **Arquivo alterado fora da tela** (editor externo, `git pull` nos seus
+  dotfiles). Sem pendências, a tela passa a mostrar o arquivo novo, em
+  silêncio. Com pendências, uma faixa avisa que o arquivo mudou e oferece
+  **Reload** (descarta as pendências e mostra o arquivo novo) e **Keep my
+  changes** (o próximo Salvar aplica as pendências sobre o arquivo novo, chave
+  a chave, sem desfazer o que mudou fora). Salvar com a faixa à vista equivale
+  a manter. A gravação da própria tela nunca dispara a faixa.
+
 ## Atalhos
 
 Catálogo completo e fechado em [docs/reference/acoes.md](reference/acoes.md)
@@ -230,10 +372,11 @@ usados, no default de fábrica:
 | `F3` / `Shift+F3` | igual | Próxima/anterior ocorrência da busca |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | `Cmd++` / `Cmd+-` / `Cmd+0` | Zoom da fonte (aumentar/diminuir/resetar) |
 | `Ctrl+Shift+Y` | `Cmd+Y` | Alternar tema |
-| `Ctrl+Shift+O` | `Cmd+,` | Abrir as configurações (por ora, o arquivo no editor) |
+| `Ctrl+Shift+O` | `Cmd+,` | Abrir a tela de configurações (`settings.open`) |
 | `Ctrl+Shift+,` | `Cmd+Shift+,` | Recarregar config na hora |
 
-Todo atalho é reconfigurável na seção `[keybindings]` (e
+Todo atalho é reconfigurável pela [tela de configurações](#tela-de-configurações),
+no grupo Atalhos, ou na seção `[keybindings]` do arquivo (e
 `[keybindings.macos]`/`[keybindings.linux]`/`[keybindings.windows]` para
 desvio por plataforma) — [`porecatu.example.toml`](config/porecatu.example.toml)
 tem a tabela inteira, comentada.

@@ -14,6 +14,76 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [0.9.0] - 2026-10-05
+
+O app ganha uma **tela de configurações**: uma janela própria, aberta pela
+engrenagem da barra de abas, que muda as opções do dia a dia sem editar o
+`porecatu.toml` à mão e grava no próprio arquivo, só nas chaves alteradas
+([PRD-016](docs/prd/prd-016-tela-de-configuracoes.md),
+[ADR-0058](docs/adr/0058-escrita-do-arquivo-de-configuracao.md),
+[ADR-0059](docs/adr/0059-janela-de-configuracoes.md),
+[ADR-0060](docs/adr/0060-anatomia-da-tela-de-configuracoes.md)).
+
+### Adicionado
+
+- **Tela de configurações.** Guia lateral com nove grupos — Geral, Shell,
+  Terminal, Aparência, Sessão, Projeto, Git, Painéis e Atalhos — e painel de
+  opções, com Abrir arquivo no editor, Descartar e Salvar no rodapé. Mudar
+  uma opção deixa uma pendência; Salvar grava todas de uma vez, Descartar
+  volta ao arquivo, e cada opção tem restaurar padrão (a chave sai do
+  arquivo). Opção que não vale na hora diz o escopo ("applies to new
+  tabs"). Valor fora da faixa é marcado na linha e bloqueia o Salvar
+- **A escrita preserva o arquivo.** Salvar altera só as chaves com pendência:
+  comentários, ordem, chaves desconhecidas, tabelas fora do catálogo e o
+  final de linha (CRLF ou LF) ficam byte a byte como estavam, e o texto é
+  relido como configuração antes de ir ao disco. A gravação é atômica, no
+  alvo real do link simbólico, e a recarga a quente aplica a mudança em todas
+  as janelas
+- **Tema por lista**, com amostra das cores de cada um; o tema de sessão do
+  `theme.cycle` não vira pendência
+- **Atalhos pela tela.** Lista de todas as ações vinculáveis com o atalho em
+  vigor, filtro por nome ou tecla, captura da combinação, conflito com
+  Substituir ou Cancelar e restaurar padrão, gravados em
+  `[keybindings.<plataforma em uso>]`
+- **Arquivo inexistente, inválido ou alterado fora.** Sem arquivo, o primeiro
+  Salvar o cria a partir do exemplo embutido; com arquivo inválido a tela abre
+  somente leitura com o erro (linha e coluna); com o arquivo alterado por fora
+  e pendências, uma faixa oferece Recarregar ou Manter minhas alterações
+- Ação **`settings.open`** (`Ctrl+Shift+O` no Windows e no Linux, `Cmd+,` no
+  macOS), no [catálogo de ações](docs/reference/acoes.md); a janela é única,
+  não entra na sessão e segue o tema e o idioma ao vivo, com árvore de
+  acessibilidade própria
+- Seção "Tela de configurações" no
+  [guia do usuário](docs/guia-do-usuario.md)
+
+### Alterado
+
+- **A engrenagem da barra de abas abre a tela de configurações**, em vez de
+  abrir o arquivo no editor. O comportamento antigo está no botão Abrir
+  arquivo no editor, dentro da tela, que também cria o arquivo a partir do
+  exemplo se ele não existir
+- **`config.reload` passa a `Cmd+Shift+,` no macOS**, porque `Cmd+,` é do
+  `settings.open`. No Windows e no Linux continua `Ctrl+Shift+,`
+
+### Dependências
+
+- `toml_edit` 0.25 (pinada em `=0.25.13`, em `porecatu-config`): é a única
+  dependência nova do workspace e já estava no `Cargo.lock`, como dependência
+  de compilação de `winit` em parte das plataformas
+
+### Dívida de verificação
+
+Os treze cenários do PRD-016 e a métrica do `git diff` (três opções salvas
+num arquivo de exemplo versionado, só as três linhas mudam) foram percorridos
+ao vivo numa instância isolada do Windows, e um bug real — a janela de
+configurações abrindo preta até a primeira interação — foi achado e corrigido
+no caminho. Ficam só por teste automatizado: o botão Recarregar da faixa de
+conflito, tecla morta e IME na captura de atalho, leitor de tela de verdade,
+monitor de DPI diferente, a mudança chegando a várias janelas de terminal e
+macOS/Linux. Segue aberto, sem aval para corrigir, que a borda de retângulo
+arredondado nunca é pintada (some a borda de campo e o anel de foco da tela).
+Detalhe em [docs/roadmap.md](docs/roadmap.md).
+
 ## [0.8.0] - 2026-09-29
 
 A interface passa a ter **idioma escolhido pelo usuário**, e o default passa
