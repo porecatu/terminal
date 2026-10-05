@@ -74,11 +74,22 @@ impl<T> ImageRegistry<T> {
     }
 }
 
-/// O que o registro guarda por imagem: a textura (dona dos mips) e o bind
-/// group que o pipeline usa. A view fica dentro do bind group.
+/// O que o registro guarda por imagem: a textura (dona dos mips) e **dois**
+/// bind groups sobre ela, um com o sampler `ClampToEdge` e outro com o
+/// `Repeat`; `draw` escolhe pelo `repeat` da primitiva ([`Self::bind_group`]).
+/// O shader tem um sampler só (`image.wgsl`): uma textura amostrada por dois
+/// samplers no mesmo shader é recusada pelo Vulkan/naga. A view fica dentro
+/// dos bind groups.
 pub(crate) struct GpuImage {
     _texture: wgpu::Texture,
-    pub(crate) bind_group: wgpu::BindGroup,
+    clamp: wgpu::BindGroup,
+    repeat: wgpu::BindGroup,
+}
+
+impl GpuImage {
+    pub(crate) fn bind_group(&self, repeat: bool) -> &wgpu::BindGroup {
+        if repeat { &self.repeat } else { &self.clamp }
+    }
 }
 
 /// Entrada recusada por [`check_levels`]. `create_image` trata como erro de
@@ -150,8 +161,7 @@ pub(crate) struct ImageInstance {
     mask_size: [f32; 2],
     mask_radius: f32,
     alpha: f32,
-    repeat: f32,
-    _pad: f32,
+    _pad: [f32; 2],
 }
 
 impl ImageInstance {
@@ -171,8 +181,7 @@ impl ImageInstance {
             mask_size,
             mask_radius: image.mask_radius * scale,
             alpha: image.alpha.clamp(0.0, 1.0),
-            repeat: if image.repeat { 1.0 } else { 0.0 },
-            _pad: 0.0,
+            _pad: [0.0, 0.0],
         }
     }
 }
@@ -217,12 +226,6 @@ impl ImageShared {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -248,7 +251,6 @@ impl ImageShared {
                 6 => Float32x2, // mask_size
                 7 => Float32,   // mask_radius
                 8 => Float32,   // alpha
-                9 => Float32,   // repeat
             ],
         };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -355,27 +357,32 @@ impl ImageShared {
             );
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("porecatu-render/image-bind-group"),
-            layout: &self.texture_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.clamp_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.repeat_sampler),
-                },
-            ],
-        });
+        let bind_group = |label: &'static str, sampler: &wgpu::Sampler| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
         GpuImage {
+            clamp: bind_group(
+                "porecatu-render/image-bind-group-clamp",
+                &self.clamp_sampler,
+            ),
+            repeat: bind_group(
+                "porecatu-render/image-bind-group-repeat",
+                &self.repeat_sampler,
+            ),
             _texture: texture,
-            bind_group,
         }
     }
 }
@@ -510,28 +517,45 @@ mod tests {
         // `uv` é de textura, não de pixel: a escala não o toca.
         assert_eq!(instance.uv_origin, [0.0, 0.0]);
         assert_eq!(instance.uv_size, [2.0, 1.0]);
-        assert_eq!(instance.repeat, 1.0);
         assert_eq!(instance.alpha, 0.5);
     }
 
     #[test]
-    fn alpha_is_clamped_and_repeat_is_a_flag() {
+    fn alpha_is_clamped() {
         let mut image = primitive();
-        image.repeat = false;
         image.alpha = 3.0;
-        let instance = ImageInstance::from_primitive(&image, 1.0);
-        assert_eq!(instance.alpha, 1.0);
-        assert_eq!(instance.repeat, 0.0);
+        assert_eq!(ImageInstance::from_primitive(&image, 1.0).alpha, 1.0);
         image.alpha = -1.0;
         assert_eq!(ImageInstance::from_primitive(&image, 1.0).alpha, 0.0);
     }
 
     #[test]
     fn the_instance_layout_matches_the_vertex_attributes() {
-        // 6 x vec2 + 4 x f32 = 64 bytes, sem buraco: o `array_stride` do
-        // pipeline é `size_of`, e os `location`s 1..=9 cobrem 15 floats + 1 de
-        // padding.
+        // 6 x vec2 + 2 x f32 + 8 bytes de padding = 64 bytes: o
+        // `array_stride` do pipeline é `size_of`, e os `location`s 1..=8
+        // cobrem 14 floats.
         assert_eq!(std::mem::size_of::<ImageInstance>(), 64);
+    }
+
+    /// O shader tem de usar **um** sampler (Vulkan/naga recusam uma textura
+    /// amostrada por dois, e o pipeline não nascia no Linux). Valida o WGSL
+    /// concatenado sem GPU: é o teste que teria pegado isto no Windows.
+    #[test]
+    fn the_image_shader_samples_with_a_single_sampler() {
+        let source = SHADER;
+        assert_eq!(
+            source.matches(": sampler;").count(),
+            1,
+            "image.wgsl declara mais de um sampler"
+        );
+        assert!(!source.contains("textureSampleGrad"));
+        let module = wgpu::naga::front::wgsl::parse_str(source).expect("o WGSL de imagem parseia");
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("o WGSL de imagem valida");
     }
 }
 

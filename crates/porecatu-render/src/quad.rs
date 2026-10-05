@@ -315,6 +315,9 @@ enum Draw {
         scissor: ScissorRect,
         index: u32,
         image: ImageId,
+        /// Qual dos dois bind groups da imagem (sampler `Repeat` ou
+        /// `ClampToEdge`).
+        repeat: bool,
     },
 }
 
@@ -436,6 +439,7 @@ impl QuadWindowState {
                         scissor,
                         index: image_instances.len() as u32,
                         image: image.image,
+                        repeat: image.repeat,
                     });
                     image_instances.push(ImageInstance::from_primitive(image, scale));
                 }
@@ -560,6 +564,7 @@ impl QuadWindowState {
                     scissor,
                     index,
                     image,
+                    repeat,
                 } => {
                     // Removida entre o `prepare` e o `render`: não desenha.
                     let Some(gpu_image) = images.get(*image) else {
@@ -567,7 +572,7 @@ impl QuadWindowState {
                     };
                     pass.set_pipeline(&image_shared.pipeline);
                     pass.set_bind_group(0, &self.bind_group, &[]);
-                    pass.set_bind_group(1, &gpu_image.bind_group, &[]);
+                    pass.set_bind_group(1, gpu_image.bind_group(*repeat), &[]);
                     pass.set_vertex_buffer(1, state.image_buffer.slice(..));
                     slot_holds_images = true;
                     pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
