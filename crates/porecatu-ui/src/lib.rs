@@ -232,17 +232,28 @@ mod cascade_position_tests {
     }
 }
 
+/// A janela precisa de surface com canal alfa quando alguma das duas
+/// opacidades pede translucidez. Decidido na criação (winit e `wgpu` não
+/// trocam isso depois): mudar de 1.0 para menos com o app aberto vale na
+/// próxima janela.
+fn wants_transparent(config: &porecatu_config::Config) -> bool {
+    config.appearance.window.opacity < 1.0 || config.terminal.background_opacity < 1.0
+}
+
 /// Atributos comuns a toda janela do Porecatu (ADR-0027: sem decoração
 /// nativa fora do macOS, onde o semáforo continua nativo). Compartilhado
 /// por [`App::open_window`] e [`App::open_window_from_session`] -- cada
 /// um soma por cima só a geometria que decide sozinho (cascata da
 /// origem, ou a gravada na sessão).
-fn base_window_attributes() -> WindowAttributes {
+fn base_window_attributes(transparent: bool) -> WindowAttributes {
     #[allow(unused_mut)]
     let mut attributes = Window::default_attributes()
         .with_title("Porecatu")
         .with_window_icon(Some(app_icon::load()))
         .with_decorations(false)
+        // Surface com canal alfa (`[appearance.window] opacity`, `[terminal]
+        // background_opacity`): decidido na criação, não troca depois.
+        .with_transparent(transparent)
         // ADR-0043 §1: o adaptador `accesskit_winit` tem de ser criado
         // antes da primeira exibição da janela (`panic` se já visível) --
         // `create_window_with_attributes` cria a janela invisível, monta o
@@ -5458,7 +5469,7 @@ impl App {
     /// roadmap descreve.
     fn open_window(&mut self, event_loop: &ActiveEventLoop, origin: Option<WindowId>) {
         let origin_state = origin.and_then(|id| self.windows.get(&id));
-        let mut attributes = base_window_attributes();
+        let mut attributes = base_window_attributes(wants_transparent(&self.config));
         if let Some(origin_window) = origin_state.map(|s| &s.window)
             && let Ok(origin_position) = origin_window.outer_position()
         {
@@ -5550,7 +5561,7 @@ impl App {
         window_v1: &porecatu_session::WindowV1,
         placement: WindowPlacement,
     ) -> Option<WindowId> {
-        let mut attributes = base_window_attributes();
+        let mut attributes = base_window_attributes(wants_transparent(&self.config));
         match placement {
             WindowPlacement::Saved => {
                 if self.config.session.restore_window_geometry {
@@ -5921,6 +5932,7 @@ impl App {
         event_loop: &ActiveEventLoop,
         attributes: WindowAttributes,
     ) -> Option<WindowState> {
+        let transparent = attributes.transparent;
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -5949,7 +5961,12 @@ impl App {
         // sempre).
         let mut first_gpu_warnings: Vec<(Severity, String, String)> = Vec::new();
         let window_surface = if let Some(gpu) = &mut self.gpu {
-            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
+            match gpu.create_window_surface(
+                Arc::clone(&window),
+                size.width,
+                size.height,
+                transparent,
+            ) {
                 Ok(surface) => surface,
                 Err(err) => {
                     // Sem `WindowState` ainda pra guardar um aviso -- é a
@@ -5966,6 +5983,7 @@ impl App {
                 size.width,
                 size.height,
                 font_families_from_config(&self.config),
+                transparent,
             );
             // RF-11.26/ADR-0001: ausência de aceleração detectada no
             // primeiro adapter -- avisa uma vez, nunca `panic`.
@@ -7448,7 +7466,7 @@ impl App {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
         let mut surface =
-            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
+            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height, false) {
                 Ok(surface) => surface,
                 Err(err) => {
                     eprintln!("porecatu: falha ao criar surface da janela de configurações: {err}");
@@ -7814,7 +7832,11 @@ impl ApplicationHandler<Wakeup> for App {
         // `App::new`) -- os avisos de arranque continuam sendo entregues
         // aqui, mesmo que a restauração de sessão nem rode neste modo.
         if let Some(dir) = self.positional_directory.clone() {
-            self.open_window_with(event_loop, base_window_attributes(), Some(dir));
+            self.open_window_with(
+                event_loop,
+                base_window_attributes(wants_transparent(&self.config)),
+                Some(dir),
+            );
             self.deliver_pending_startup_warnings();
             return;
         }
@@ -10398,6 +10420,10 @@ impl App {
 
             let mut grid_primitives = Vec::new();
             let mut cursor_blinks = false;
+            // Fundo translúcido só substitui o que há atrás se a surface desta
+            // janela compõe com o desktop.
+            let mut window_term_pal = self.term_pal.clone();
+            window_term_pal.backdrop_punch = state.window_surface.is_transparent();
             for (pane_id, pane_rect) in &pane_layout {
                 let pane_id = *pane_id;
                 let Some(runtime) = state.panes.get_mut(&(id, pane_id)) else {
@@ -10474,7 +10500,7 @@ impl App {
                     font_size_px,
                     *pane_rect,
                     style,
-                    &self.term_pal,
+                    &window_term_pal,
                     cursor,
                     gpu.text_measurer(),
                     &hyperlink_hover,
@@ -10771,7 +10797,12 @@ impl App {
         // terminal (`style.terminal_frame_margin`): precisa de uma cor
         // diferente da do box para o quadro aparecer -- a mesma da barra de
         // abas, já que os dois formam o "quadro" do app.
-        state.window_surface.render(gpu, pal.bar_background, &frame);
+        state.window_surface.render(
+            gpu,
+            pal.bar_background,
+            &frame,
+            self.config.appearance.window.opacity.clamp(0.0, 1.0) as f32,
+        );
 
         // ADR-0022: enquanto há reflui em curso o próximo quadro sai daqui,
         // não só do `WaitUntil` de `schedule_next_wake`. O prazo dele é

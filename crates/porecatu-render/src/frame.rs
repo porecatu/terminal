@@ -102,6 +102,8 @@ pub(crate) struct ResolvedText {
 pub(crate) enum GeometryPrimitive {
     Quad(Quad),
     Rounded(RoundedQuad),
+    /// [`Primitive::Backdrop`]: desenhado por um pipeline que substitui.
+    Backdrop(RoundedQuad),
 }
 
 /// Quads e retângulos arredondados que compartilham o mesmo clip e são
@@ -162,6 +164,11 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
                 batch_for(&mut resolved.batches, clip_stack.last().copied())
                     .geometry
                     .push(GeometryPrimitive::Rounded(*quad));
+            }
+            Primitive::Backdrop(quad) => {
+                batch_for(&mut resolved.batches, clip_stack.last().copied())
+                    .geometry
+                    .push(GeometryPrimitive::Backdrop(*quad));
             }
             Primitive::Text(run) => resolved.text.push(ResolvedText {
                 run: run.clone(),

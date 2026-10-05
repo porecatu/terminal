@@ -12,6 +12,7 @@
 //! `Queue`, o que torna o layout de chrome uma função pura testável sem
 //! GPU (seção 7 da arquitetura).
 
+mod blit;
 mod frame;
 mod gpu;
 pub mod icon;

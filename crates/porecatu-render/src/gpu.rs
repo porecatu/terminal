@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
+use crate::blit::BlitShared;
 use crate::quad::QuadShared;
 use crate::text_measurer::{FontFamilies, TextMeasurer};
 use crate::window_surface::WindowSurface;
@@ -45,6 +46,7 @@ pub struct GpuContext {
     pub(crate) queue: wgpu::Queue,
     format: wgpu::TextureFormat,
     pub(crate) quad_shared: QuadShared,
+    pub(crate) blit_shared: BlitShared,
     pub(crate) text_cache: glyphon::Cache,
     pub(crate) text_atlas: glyphon::TextAtlas,
     pub(crate) swash_cache: glyphon::SwashCache,
@@ -59,6 +61,23 @@ pub struct GpuContext {
     software_rendering: bool,
 }
 
+/// Modo de composição alfa da surface. Janela opaca fica com o default do
+/// `wgpu` (o que ela sempre usou). Janela transparente precisa de
+/// `PreMultiplied` -- é o que o shader devolve (`quad.wgsl`) -- e, se a
+/// plataforma não oferece, cai no default: o app segue opaco em vez de
+/// quebrar (quem chama pergunta `WindowSurface::is_transparent`).
+pub(crate) fn pick_alpha_mode(
+    supported: &[wgpu::CompositeAlphaMode],
+    transparent: bool,
+    default: wgpu::CompositeAlphaMode,
+) -> wgpu::CompositeAlphaMode {
+    if transparent && supported.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        wgpu::CompositeAlphaMode::PreMultiplied
+    } else {
+        default
+    }
+}
+
 impl GpuContext {
     /// Cria o contexto do processo e a `WindowSurface` da primeira janela
     /// juntos -- o `Adapter` é escolhido compatível com a surface dela
@@ -68,11 +87,12 @@ impl GpuContext {
         width: u32,
         height: u32,
         fonts: FontFamilies,
+        transparent: bool,
     ) -> (Self, WindowSurface)
     where
         W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
     {
-        pollster::block_on(Self::new_async(window, width, height, fonts))
+        pollster::block_on(Self::new_async(window, width, height, fonts, transparent))
     }
 
     async fn new_async<W>(
@@ -80,6 +100,7 @@ impl GpuContext {
         width: u32,
         height: u32,
         fonts: FontFamilies,
+        transparent: bool,
     ) -> (Self, WindowSurface)
     where
         W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
@@ -135,10 +156,16 @@ impl GpuContext {
         // do design) -- dupla conversão que lava as cores escuras. Unorm
         // grava os bytes como pedimos, sem reinterpretar.
         config.format = config.format.remove_srgb_suffix();
+        config.alpha_mode = pick_alpha_mode(
+            &surface.get_capabilities(&adapter).alpha_modes,
+            transparent,
+            config.alpha_mode,
+        );
         let format = config.format;
         surface.configure(&device, &config);
 
         let quad_shared = QuadShared::new(&device, format);
+        let blit_shared = BlitShared::new(&device, format);
         let text_cache = glyphon::Cache::new(&device);
         // `ColorMode::Accurate` (o default de `TextAtlas::new`) faz o
         // glyphon decodificar a cor de todo glyph de sRGB pra linear antes
@@ -180,6 +207,7 @@ impl GpuContext {
             queue,
             format,
             quad_shared,
+            blit_shared,
             text_cache,
             text_atlas,
             swash_cache,
@@ -198,6 +226,7 @@ impl GpuContext {
         window: Arc<W>,
         width: u32,
         height: u32,
+        transparent: bool,
     ) -> Result<WindowSurface, SurfaceError>
     where
         W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
@@ -213,6 +242,11 @@ impl GpuContext {
         if config.format != self.format {
             return Err(SurfaceError::Incompatible);
         }
+        config.alpha_mode = pick_alpha_mode(
+            &surface.get_capabilities(&self.adapter).alpha_modes,
+            transparent,
+            config.alpha_mode,
+        );
         surface.configure(&self.device, &config);
 
         Ok(WindowSurface::new(
@@ -239,5 +273,40 @@ impl GpuContext {
     /// nunca troca depois de escolhido.
     pub fn software_rendering(&self) -> bool {
         self.software_rendering
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wgpu::CompositeAlphaMode as Mode;
+
+    #[test]
+    fn opaque_window_keeps_the_default_alpha_mode() {
+        let supported = [Mode::Opaque, Mode::PreMultiplied];
+        assert_eq!(
+            pick_alpha_mode(&supported, false, Mode::Opaque),
+            Mode::Opaque
+        );
+    }
+
+    #[test]
+    fn transparent_window_takes_premultiplied_when_supported() {
+        let supported = [Mode::Opaque, Mode::PostMultiplied, Mode::PreMultiplied];
+        assert_eq!(
+            pick_alpha_mode(&supported, true, Mode::Opaque),
+            Mode::PreMultiplied
+        );
+    }
+
+    /// `PostMultiplied` espera cor reta e o shader devolve premultiplicada:
+    /// melhor ficar opaco do que desenhar com a cor errada.
+    #[test]
+    fn transparent_window_without_premultiplied_falls_back_to_the_default() {
+        let supported = [Mode::Opaque, Mode::PostMultiplied];
+        assert_eq!(
+            pick_alpha_mode(&supported, true, Mode::Opaque),
+            Mode::Opaque
+        );
     }
 }

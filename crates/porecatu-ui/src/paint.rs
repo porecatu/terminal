@@ -200,13 +200,16 @@ pub fn build_primitives(
             style.terminal_frame_corner_radius,
         );
     }
-    primitives.push(Primitive::RoundedQuad(RoundedQuad {
-        rect: box_rect,
-        radius: style.terminal_frame_corner_radius,
-        color: term_pal.background,
-        border_color: TRANSPARENT,
-        border_width: 0.0,
-    }));
+    primitives.push(backdrop_fill(
+        term_pal,
+        RoundedQuad {
+            rect: box_rect,
+            radius: style.terminal_frame_corner_radius,
+            color: term_pal.background,
+            border_color: TRANSPARENT,
+            border_width: 0.0,
+        },
+    ));
 
     let x_offset = box_rect.x + style.terminal_frame_padding;
     let y_offset = box_rect.y + style.terminal_frame_padding;
@@ -363,16 +366,46 @@ fn paint_row_backgrounds(
             // depois do arredondamento em `quad.rs` (ver `row_top`).
             let x0 = col_left(x_offset, col, metrics);
             let x1 = col_left(x_offset, col + 1, metrics);
-            out.push(Primitive::Quad(Quad {
-                rect: Rect {
-                    x: x0,
-                    y: row_y,
-                    width: x1 - x0,
-                    height: row_bottom - row_y,
-                },
-                color: bg,
-            }));
+            let rect = Rect {
+                x: x0,
+                y: row_y,
+                width: x1 - x0,
+                height: row_bottom - row_y,
+            };
+            if term_pal.background_opacity < 1.0 {
+                out.push(backdrop_fill(
+                    term_pal,
+                    RoundedQuad {
+                        rect,
+                        radius: 0.0,
+                        color: bg,
+                        border_color: TRANSPARENT,
+                        border_width: 0.0,
+                    },
+                ));
+            } else {
+                out.push(Primitive::Quad(Quad { rect, color: bg }));
+            }
         }
+    }
+}
+
+/// Fundo do terminal (quadro ou célula) com `background_opacity` aplicada.
+/// Em surface transparente substitui o que há atrás -- é o que deixa o
+/// desktop aparecer; em opaca, mistura à cor da barra. Com opacidade 1.0 é
+/// o `RoundedQuad` de sempre.
+fn backdrop_fill(term_pal: &ResolvedTermPalette, quad: RoundedQuad) -> Primitive {
+    if term_pal.background_opacity >= 1.0 {
+        return Primitive::RoundedQuad(quad);
+    }
+    let quad = RoundedQuad {
+        color: term_pal.with_backdrop_alpha(quad.color),
+        ..quad
+    };
+    if term_pal.backdrop_punch {
+        Primitive::Backdrop(quad)
+    } else {
+        Primitive::RoundedQuad(quad)
     }
 }
 
@@ -1292,5 +1325,59 @@ mod tests {
         let on = cursor_primitives(&snapshot_with_cursor(CursorShape::Block), appearance(true));
         let off = cursor_primitives(&snapshot_with_cursor(CursorShape::Block), appearance(false));
         assert_eq!(on.len(), off.len() + 1);
+    }
+
+    fn box_fill(opacity: f32, punch: bool) -> Primitive {
+        let mut pal = test_term_pal();
+        pal.background_opacity = opacity;
+        pal.backdrop_punch = punch;
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell = cell(&mut m);
+        let out = build_primitives(
+            &snapshot(" "),
+            cell,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &pal,
+            test_cursor(),
+            &mut m,
+            &[],
+        );
+        out.into_iter()
+            .find(|p| match p {
+                Primitive::RoundedQuad(q) | Primitive::Backdrop(q) => q.rect == test_box_rect(),
+                _ => false,
+            })
+            .expect("quadro do terminal")
+    }
+
+    /// `background_opacity = 1.0` é o desenho de sempre: quadro opaco,
+    /// misturado, sem `Backdrop`.
+    #[test]
+    fn full_opacity_keeps_the_opaque_blended_box() {
+        match box_fill(1.0, true) {
+            Primitive::RoundedQuad(q) => assert_eq!(q.color.a, 1.0),
+            other => panic!("esperava RoundedQuad opaco, veio {other:?}"),
+        }
+    }
+
+    /// Surface transparente: o fundo translúcido substitui o destino.
+    #[test]
+    fn translucent_box_on_a_transparent_surface_is_a_backdrop() {
+        match box_fill(0.5, true) {
+            Primitive::Backdrop(q) => assert!((q.color.a - 0.5).abs() < 1e-6),
+            other => panic!("esperava Backdrop, veio {other:?}"),
+        }
+    }
+
+    /// Surface opaca: o alfa seria ignorado pelo compositor e o resultado
+    /// sairia escurecido; o fundo se mistura à barra, sem `Backdrop`.
+    #[test]
+    fn translucent_box_on_an_opaque_surface_only_blends() {
+        match box_fill(0.5, false) {
+            Primitive::RoundedQuad(q) => assert!((q.color.a - 0.5).abs() < 1e-6),
+            other => panic!("esperava RoundedQuad translúcido, veio {other:?}"),
+        }
     }
 }

@@ -2351,7 +2351,7 @@ impl SettingsWindow {
     /// Submete o quadro. O fundo de limpeza é o do painel, que é o que
     /// ocupa a maior parte da janela.
     pub(crate) fn render(&mut self, gpu: &mut GpuContext, frame: &Frame) {
-        self.surface.render(gpu, PANEL_BACKGROUND, frame);
+        self.surface.render(gpu, PANEL_BACKGROUND, frame, 1.0);
         if self.settle_frames > 0 {
             self.settle_frames -= 1;
             self.window.request_redraw();

@@ -103,6 +103,14 @@ pub struct ResolvedTermPalette {
     bright: [Color; 8],
     /// `[terminal.font] bold_is_bright` -- RF-5.5.
     bold_is_bright: bool,
+    /// `[terminal] background_opacity` (RF-5.15), 0.0 a 1.0: alfa do fundo
+    /// do terminal -- o quadro e os fundos de célula; texto não entra.
+    pub background_opacity: f32,
+    /// `true` quando a surface da janela é transparente: o fundo translúcido
+    /// então substitui o que há atrás (`Primitive::Backdrop`) e mostra o
+    /// desktop. `false`, ele só se mistura à cor da barra. Decidido por
+    /// janela, a cada frame, por quem pinta -- não vem da config.
+    pub backdrop_punch: bool,
 }
 
 impl ResolvedTermPalette {
@@ -119,6 +127,16 @@ impl ResolvedTermPalette {
             normal: ansi_octet(&colors.normal),
             bright: ansi_octet(&colors.bright),
             bold_is_bright: config.terminal.font.bold_is_bright,
+            background_opacity: config.terminal.background_opacity.clamp(0.0, 1.0) as f32,
+            backdrop_punch: false,
+        }
+    }
+
+    /// Cor de fundo do terminal com a opacidade aplicada.
+    pub fn with_backdrop_alpha(&self, color: Color) -> Color {
+        Color {
+            a: color.a * f64::from(self.background_opacity),
+            ..color
         }
     }
 
