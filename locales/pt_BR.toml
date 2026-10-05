@@ -596,11 +596,11 @@ no_detail = "o git recusou a integração sem detalhar o motivo."
 # (o caminho já resolvido) e por quê; o terminal segue sem imagem.
 [notice.background_image]
 title = "Imagem de fundo não carregada"
-not_found = "\"{path}\" não foi encontrado."
-unreadable = "\"{path}\" não pôde ser lido."
-unsupported = "\"{path}\" não é de um formato aceito; os aceitos são PNG e JPEG."
-malformed = "\"{path}\" está corrompido ou não é uma imagem válida."
-too_large = "\"{path}\" é grande demais para ser carregado."
+not_found = "Não encontrado: \"{path}\""
+unreadable = "Não pôde ser lido: \"{path}\""
+unsupported = "Formato não aceito (só PNG e JPEG): \"{path}\""
+malformed = "Corrompido ou não é uma imagem válida: \"{path}\""
+too_large = "Grande demais para carregar: \"{path}\""
 
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]

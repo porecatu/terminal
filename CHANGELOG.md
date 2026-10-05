@@ -14,6 +14,71 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [0.9.1] - 2026-10-05
+
+O terminal ganha **imagem de fundo**: uma PNG ou JPEG atrás do texto de todo
+quadro de terminal, em três modos e com opacidade própria
+([PRD-017](docs/prd/prd-017-imagem-de-fundo-do-terminal.md),
+[ADR-0061](docs/adr/0061-imagem-de-fundo-do-terminal.md)).
+
+### Adicionado
+
+- **`[terminal.background_image]`** (`path`, `mode`, `opacity`), com o padrão
+  `path = ""`: sem imagem, o terminal é desenhado exatamente como antes. A
+  imagem aparece em **todo** quadro — aba solta, aba de grupo e cada painel de
+  uma aba dividida, cada um com a imagem inteira — recortada pelo raio do
+  quadro, acima do fundo e abaixo de célula, texto, seleção e cursor. Célula
+  com fundo próprio a cobre
+- **Três modos:** `stretch` (padrão, sem manter a proporção), `tile` e
+  `center`, os dois últimos no tamanho natural (um pixel da imagem por pixel
+  físico)
+- **Opacidade que se multiplica:** a imagem é desenhada a `opacity ×
+  background_opacity`, então um terminal transparente nunca fica opaco por
+  causa dela
+- **Caminho relativo ao `porecatu.toml` em uso**, a primeira chave com essa
+  regra; `~/` é a pasta pessoal e caminho absoluto vale como está. O formato
+  vem do conteúdo, não da extensão
+- **Carga fora da thread da interface**, com recarga a quente (classe A):
+  mudar `path`, `mode` ou `opacity` vale em todas as janelas sem reiniciar e
+  sem redimensionar terminal. Uma textura por processo, qualquer que seja o
+  número de janelas e de painéis. O app não vigia o arquivo da imagem
+- **Erros viram aviso, não queda:** arquivo ausente, ilegível, de formato não
+  aceito, corrompido ou grande demais deixam o terminal sem imagem e avisam
+  uma vez por arquivo e por problema. Imagem maior que a textura da placa é
+  reduzida, sem aviso
+- **Três opções no grupo Terminal da tela de configurações** (caminho, modo e
+  opacidade da imagem), com uma nota de Aviso quando o arquivo não existe, que
+  não impede o Salvar
+- Seção "Imagem de fundo" no [guia do usuário](docs/guia-do-usuario.md)
+
+### Alterado
+
+- **`porecatu-render` ganha a primitiva `Image`**, um registro de texturas no
+  `GpuContext` (`create_image`, `remove_image`, `max_texture_dimension_2d`) e
+  o shader `image.wgsl`, com a SDF de retângulo arredondado extraída do
+  `quad.wgsl` para `sdf.wgsl` e compartilhada pelos dois. O `quad.wgsl` desenha
+  o mesmo que antes
+- **A carga da imagem do arranque espera o primeiro prompt** para começar.
+  Decodificar um JPEG de 8000×6000 durante a subida do shell atrasava o
+  primeiro prompt em ~190 ms (mediana de 631 para 823 ms); com a espera, o
+  prompt volta a 624 ms e a imagem aparece ~450 ms depois
+
+### Dependências
+
+- `image` 0.25 (pinada em `=0.25.10`, com `default-features = false` e só as
+  features `png` e `jpeg`), direta em `porecatu-ui`. Nenhum crate novo entrou
+  no `Cargo.lock`: `image`, `zune-jpeg` e `zune-core` já estavam nele, pelo
+  `arboard`. Licenças MIT/Apache-2.0 (`zune-*` também Zlib), compatíveis com
+  GPLv3
+
+### Dívida de verificação
+
+Os onze cenários do PRD-017 foram percorridos ao vivo no Windows, com medição
+de pixel do alfa efetivo em janela opaca e transparente. **O aval visual do
+dono do produto está pendente**: a aparência foi medida e capturada, não
+aprovada. Ficam só por teste: escala de janela diferente de 100%, macOS e
+Linux. Detalhe em [docs/roadmap.md](docs/roadmap.md).
+
 ## [0.9.0] - 2026-10-05
 
 O app ganha uma **tela de configurações**: uma janela própria, aberta pela

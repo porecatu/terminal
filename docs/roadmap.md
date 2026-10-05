@@ -819,7 +819,7 @@ As sete etapas fecham com `cargo build --workspace`, `cargo test --workspace`, `
 
 ---
 
-## Depois do v1 — imagem de fundo do terminal — planejada
+## Depois do v1 — imagem de fundo do terminal — implementada
 
 Fora da ordem de fases, como as entradas acima, e pelo caminho do arquivo de projeto e das sessões nomeadas: **requisito novo**, pedido do dono do produto, sem elemento do canvas nem rascunho a promover. O [PRD-017](prd/prd-017-imagem-de-fundo-do-terminal.md) pede uma imagem PNG ou JPEG atrás de todo terminal (aba solta, aba de grupo, cada painel de uma aba dividida). Ela vem em três modos (`stretch` distorcendo, `tile`, `center`), com opacidade própria que se multiplica por `[terminal] background_opacity`. O [ADR-0061](adr/0061-imagem-de-fundo-do-terminal.md) decide o resto:
 
@@ -858,7 +858,7 @@ O ponto de partida: `porecatu-render` não amostra textura nenhuma além do atla
    - A recarga a quente aplicando os três campos.
    - A §2.7 da especificação reescrita e a entrada na §4.4. **Aval visual pedido aqui**, sobre a build.
 5. **Tela de configurações — feita.** `background_image` (campo de texto), `background_image_mode` (escolha entre Esticar, Ladrilho e Centralizar, em botões colados) e `background_image_opacity` (campo numérico de `0.0` a `1.0`, no passo de `background_opacity`) entram no grupo Terminal logo depois dela, com escopo `Live` e Restaurar padrão; o catálogo passa a ter 52 opções. A nota de "arquivo não encontrado" (`background_image::missing_file`, só um `exists` sobre o caminho resolvido contra o config em uso) sai como nota de Aviso abaixo do campo, a cada edição, e não impede o Salvar. As frases estão nos cinco arquivos de `locales/`. O que a etapa pedia: As três opções no grupo Terminal (`settings/catalog.rs`), a nota de "arquivo não encontrado", rótulos e frases em todo arquivo de `locales/`.
-6. **Verificação ao vivo e fechamento.**
+6. **Verificação ao vivo e fechamento — feita.** Os onze cenários e as métricas estão em "Dívida de verificação da imagem de fundo", abaixo. A verificação achou um bug real e o corrigiu: decodificar um JPEG de 8000×6000 durante a subida do shell atrasava o primeiro prompt em ~190 ms, e a carga do arranque passou a esperar o primeiro byte do PTY. Também saíram o guia do usuário, o CHANGELOG (entrada `0.9.1`) e a retirada da marca "não implementada" do README, da arquitetura e do CLAUDE.md. O que a etapa pedia:
    - Os cenários do PRD-017 numa instância isolada por cenário.
    - Os três modos em janela opaca e transparente, numa aba dividida.
    - Arquivo inexistente e formato não aceito.
@@ -878,6 +878,42 @@ O ponto de partida: `porecatu-render` não amostra textura nenhuma além do atla
 - troca de `path`, `mode` e `opacity` aplicada pela recarga sem redimensionar PTY;
 - tempo até o primeiro prompt e frames ociosos iguais com e sem imagem;
 - `verify-docs.py`, `cargo test --workspace`, `clippy -D warnings` e `cargo fmt --check` verdes.
+
+### Dívida de verificação da imagem de fundo
+
+Etapa 6, fechada em 2026-10-05, no Windows 11, num release isolado por cenário (`--target-dir` temporário, `PORECATU_LOCALES`, `--config` e `PORECATU_SESSION` numa pasta temporária, PID anotado e conferido contra a cadeia de ancestrais antes de cada encerramento), com captura só da região da janela e, nas janelas transparentes, um fundo de cor conhecida atrás.
+
+**Os onze cenários do PRD-017**
+
+| # | Cenário | Situação |
+|---|---|---|
+| 1 | O caso que motiva o recurso | **Ao vivo.** JPEG e PNG, `stretch`, texto do prompt por cima; o caminho relativo ao `porecatu.toml` pelo fluxo da tela de configurações (cenário 11) |
+| 2 | Todo terminal tem a imagem | **Ao vivo.** Aba solta, grupo com duas abas e uma aba com três painéis (50% · 25% · 25%): imagem inteira em cada painel, vão de 6px sem imagem |
+| 3 | Os três modos | **Ao vivo**, na escala 100%, em dois painéis: `stretch` distorce, `tile` repete a partir do canto superior esquerdo com 200px físicos por ladrilho, `center` mostra 200×200 no meio com o fundo em volta. **Só por teste** nas escalas 125%, 150% e 200% (`placement`) |
+| 4 | Opacidades que se multiplicam | **Ao vivo**, por medição de pixel: opaca com `opacity = 0.5` (mistura 50/50 com o fundo) e transparente com `background_opacity = 0.6` e `opacity = 1.0` (alfa final `b + i·(1 − b)`, cada canal dentro de ±1 do esperado). O par exato do cenário (0.8 × 0.5 = 0.4) está **só por teste** |
+| 5 | A imagem não torna opaco um terminal transparente | **Ao vivo**, pela mesma medição: o magenta atrás da janela ainda contribui com o alfa restante |
+| 6 | Programa que pinta o próprio fundo | **Ao vivo** com cor true color (`ESC[48;2;…m`) em janela transparente: a faixa fica na cor da célula sem a imagem, e as células sem cor própria a mostram. As 16 cores ANSI **não** foram exercitadas |
+| 7 | Arquivo que não existe | **Ao vivo.** Um aviso na primeira janela; uma segunda janela aberta depois não ganha outro |
+| 8 | Formato não aceito | **Ao vivo.** Um GIF trocado pela recarga: aviso, terminal segue sem imagem |
+| 9 | Troca ao vivo | **Ao vivo.** Do `write` do arquivo ao pixel: 257, 275, 268, 265 e 260 ms (mediana 265, máximo 275, a maior parte é o debounce de 200ms da recarga), sem redimensionar terminal |
+| 10 | Arranque não espera | **Ao vivo.** Com um JPEG de 8000×6000 (4,4 MB) a janela aparece em ~120–240 ms, como sem imagem, e o prompt também depois da correção abaixo |
+| 11 | Pela tela de configurações | **Ao vivo.** Caminho inexistente mostra a nota e o Salvar segue disponível; caminho válido, modo e opacidade salvos mudam o terminal sem reiniciar e o `git diff` do config mostra só as quatro linhas |
+
+**Métricas** (mesma máquina, com o navegador e outros programas do usuário abertos, medições intercaladas para cancelar a deriva):
+
+- **Tempo até o primeiro prompt** (`PORECATU_TRACE`: `main` → primeiro byte do PTY → primeiro frame), mediana de 8 rodadas por variante: **631 ms sem imagem; 823 ms com o JPEG de 8000×6000 quando a carga começava no arranque** (mínimo 774, acima do máximo de 690 sem imagem: não é ruído); **624 ms com o JPEG, depois de a carga passar a esperar o primeiro byte do PTY**. Uma imagem pequena (PNG 200×200) já não custava nada (634 contra 634). O custo da correção é a imagem gigante aparecer depois: mediana de 937 para 1385 ms desde o spawn.
+- **Frames com o terminal ocioso:** **0** frames em 12 s, com e sem imagem (CPU gasta idêntica, 47 ms). Contado por instrumentação temporária no `redraw`, removida antes do commit.
+- **Memória:** **uma** textura por processo. Com três janelas e três painéis o registro tinha uma imagem viva (instrumentação temporária em `create_image`/`remove_image`, removida), e trocar `mode` e `opacity` não criou outra. Por leitura de código, `create_image` só é chamada por `App::upload_background_image`, uma vez por chave, e `create_window_surface` não toca o registro.
+
+**Não verificado**
+
+- **O aval visual do dono do produto** (etapa 4): a aparência foi medida e capturada, não aprovada.
+- **macOS e Linux**: só por teste e CI, como as demais features; o shader e o blend premultiplicado nunca rodaram fora do Windows/DX12.
+- **Escala de janela diferente de 100%** ao vivo (125%, 150%, 200%), e a janela mudando de monitor com DPI diferente.
+- **Imagem maior que `max_texture_dimension_2d`** (8192) ao vivo: a redução está só em teste (`fit_dimensions`).
+- **Leitor de tela** de verdade nas três linhas novas da tela de configurações.
+- **Orientação EXIF** de um JPEG: o `image` não a aplica, então uma foto de celular em retrato aparece como o arquivo a grava.
+- **Os testes de GPU** (`image::gpu_tests`) se pulam sem adapter e dizem isso; no CI de Linux/macOS sem GPU eles só rodam se houver adapter de software.
 
 ---
 

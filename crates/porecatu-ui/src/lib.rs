@@ -5227,6 +5227,13 @@ struct App {
     /// `apply_background_image_result` (resultado da thread de carga).
     /// **Nada lê isto para desenhar ainda** (etapas 3 e 4).
     background_image: background_image::BackgroundImageStore,
+    /// `true` depois do primeiro byte de PTY do processo (o prompt chegou).
+    /// Independe de `PORECATU_TRACE`, ao contrário de
+    /// `first_pty_output_reported`.
+    pty_output_seen: bool,
+    /// A carga da imagem do arranque, esperando o prompt
+    /// (`release_deferred_background_load`).
+    deferred_background_load: Option<background_image::BackgroundImageKey>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -5475,6 +5482,8 @@ impl App {
             git_disabled: false,
             git_poll_interval_warned: false,
             background_image: background_image::BackgroundImageStore::default(),
+            pty_output_seen: false,
+            deferred_background_load: None,
         };
         // RF-17.17: o arranque não espera pela imagem -- só um `metadata` aqui,
         // e a decodificação numa thread.
@@ -5500,23 +5509,53 @@ impl App {
                 self.for_each_surface(|surface| surface.request_redraw());
             }
             background_image::SyncOutcome::Load(key) => {
-                // Com `GpuContext`, o teto é o da placa (RF-17.15); sem ele (o
-                // arranque, antes da primeira janela), o do `DeviceDescriptor`
-                // padrão que o projeto pede.
-                let max_dim = self.gpu.as_ref().map_or(
-                    background_image::DEFAULT_MAX_TEXTURE_DIMENSION,
-                    GpuContext::max_texture_dimension_2d,
-                );
-                let proxy = self.proxy.clone();
-                background_image::spawn_load(key, max_dim, move |result| {
-                    let _ = proxy.send_event(Wakeup::BackgroundImageLoaded(Box::new(result)));
-                });
+                // Arranque: a decodificação de uma imagem de dezenas de
+                // megapixels disputa CPU e memória com a subida do shell e
+                // atrasava o primeiro prompt em ~25% (medido: 632 -> 809 ms com
+                // um JPEG de 8000x6000). Antes do primeiro byte do PTY ela só
+                // espera, e começa quando o prompt chega; depois disso (uma
+                // recarga a quente) começa na hora.
+                if self.pty_output_seen {
+                    self.start_background_load(key);
+                } else {
+                    self.deferred_background_load = Some(key);
+                }
             }
             background_image::SyncOutcome::Failed(failure) => {
                 self.release_background_textures();
                 self.warn_background_image(failure);
                 self.for_each_surface(|surface| surface.request_redraw());
             }
+        }
+    }
+
+    /// Abre a thread de carga. Com `GpuContext`, o teto de redução é o da placa
+    /// (RF-17.15); sem ele (o arranque, antes da primeira janela), o do
+    /// `DeviceDescriptor` padrão que o projeto pede.
+    fn start_background_load(&mut self, key: background_image::BackgroundImageKey) {
+        let max_dim = self.gpu.as_ref().map_or(
+            background_image::DEFAULT_MAX_TEXTURE_DIMENSION,
+            GpuContext::max_texture_dimension_2d,
+        );
+        let proxy = self.proxy.clone();
+        background_image::spawn_load(key, max_dim, move |result| {
+            let _ = proxy.send_event(Wakeup::BackgroundImageLoaded(Box::new(result)));
+        });
+    }
+
+    /// Chamado no primeiro byte de PTY do processo (o prompt chegou): solta a
+    /// carga da imagem que o arranque segurou. Só vale se a chave ainda é a
+    /// atual -- uma recarga entre o arranque e o prompt pode ter trocado ou
+    /// apagado o caminho.
+    fn release_deferred_background_load(&mut self) {
+        if self.pty_output_seen {
+            return;
+        }
+        self.pty_output_seen = true;
+        if let Some(key) = self.deferred_background_load.take()
+            && self.background_image.key() == Some(&key)
+        {
+            self.start_background_load(key);
         }
     }
 
@@ -8044,6 +8083,7 @@ impl ApplicationHandler<Wakeup> for App {
         let (window, tab_id, pane_id) = match event {
             Wakeup::TabDirty { window, tab, pane } => {
                 self.mark_first_pty_output();
+                self.release_deferred_background_load();
                 (window, tab, pane)
             }
             Wakeup::ConfigReloaded(reload) => {

@@ -553,11 +553,11 @@ no_detail = "git a refusé l'intégration sans donner de raison."
 
 [notice.background_image]
 title = "Image d'arrière-plan non chargée"
-not_found = "\"{path}\" est introuvable."
-unreadable = "\"{path}\" n'a pas pu être lu."
-unsupported = "\"{path}\" n'est pas dans un format accepté ; les formats acceptés sont PNG et JPEG."
-malformed = "\"{path}\" est corrompu ou n'est pas une image valide."
-too_large = "\"{path}\" est trop volumineux pour être chargé."
+not_found = "Introuvable : \"{path}\""
+unreadable = "Lecture impossible : \"{path}\""
+unsupported = "Format non accepté (PNG et JPEG seulement) : \"{path}\""
+malformed = "Corrompu ou image non valide : \"{path}\""
+too_large = "Trop volumineux pour être chargé : \"{path}\""
 
 [notice.language_not_found]
 title = "Langue introuvable"

@@ -553,11 +553,11 @@ no_detail = "git hat die Integration ohne Begründung abgelehnt."
 
 [notice.background_image]
 title = "Hintergrundbild nicht geladen"
-not_found = "\"{path}\" wurde nicht gefunden."
-unreadable = "\"{path}\" konnte nicht gelesen werden."
-unsupported = "\"{path}\" hat kein unterstütztes Format; unterstützt werden PNG und JPEG."
-malformed = "\"{path}\" ist beschädigt oder kein gültiges Bild."
-too_large = "\"{path}\" ist zu groß, um geladen zu werden."
+not_found = "Nicht gefunden: \"{path}\""
+unreadable = "Konnte nicht gelesen werden: \"{path}\""
+unsupported = "Nicht unterstütztes Format (nur PNG und JPEG): \"{path}\""
+malformed = "Beschädigt oder kein gültiges Bild: \"{path}\""
+too_large = "Zu groß zum Laden: \"{path}\""
 
 [notice.language_not_found]
 title = "Sprache nicht gefunden"
