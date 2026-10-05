@@ -496,6 +496,10 @@ impl Workspace {
                 None => self.active_tab = None,
             }
         }
+        // Expandir seleciona a primeira aba do grupo.
+        if !collapsed && let Some(first) = self.groups[group_index].tabs().first().copied() {
+            self.activate_tab(first);
+        }
         true
     }
 
@@ -1063,6 +1067,23 @@ mod tests {
         // Expandido, a aba volta à ordem navegável -- que é a invariante
         // que o requisito protege: a aba ativa nunca fica fora da trilha.
         assert!(ws.navigable_order().any(|id| id == dentro));
+    }
+
+    #[test]
+    fn expanding_a_group_selects_its_first_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let fora = ws.append_tab("zsh", None);
+        let grupo = ws.group_tabs(&[a, b], "api", GroupColor::Red).unwrap();
+        ws.activate_tab(b);
+        ws.collapse_group(grupo, true);
+        assert_ne!(ws.active_tab(), Some(a));
+
+        assert!(ws.collapse_group(grupo, false));
+        assert!(!ws.group(grupo).unwrap().is_collapsed());
+        assert_eq!(ws.active_tab(), Some(a));
+        let _ = fora;
     }
 
     /// Regressão do laço que a regra do RF-2.17 poderia criar: colapsar um

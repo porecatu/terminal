@@ -139,10 +139,6 @@ corner_radius = 8
 # empilhar uma segunda barra. Ver ADR-0027 e a seção 2.2.1 da espec.
 # [C] "reinicie o app": winit não recria o frame do SO sem recriar a janela.
 decorations = false        # macOS: true                                 RF-4.1
-# [C] "reinicie o app": move a barra de aresta, e com ela a origem de todo
-# hit-testing e o recorte da trilha. Aplicável em teoria; fora do v1 por
-# custo de verificação, não por impossibilidade.
-tab_bar_position = "top"   # "top" | "bottom"                            RF-4.1
 
 # Animação de interface. O v1 tem duas, e as duas são explicativas, não
 # decorativas: a reordenação das abas ao formar grupo (RF-2.5) e o colapso
@@ -232,18 +228,15 @@ show_activity_indicator = true   # RF-1.20 — ponto 6x6, espec. visual §2.17
 show_bell_indicator = true       # RF-1.21 — ponto 6x6, espec. visual §2.17
 show_new_tab_button = true
 show_profile_badge = true    # [v2] badge de perfil na aba   RF-4.23, PRD-007
-# Oculta a barra inteira quando existe apenas uma aba.                   RF-4.2
-hide_when_single_tab = false
 
 
 # Classe de recarga: [A].
 [appearance.tabs.colors]
 # --- barra ------------------------------------------------------------ RF-4.7
 bar_background = "#1b1f26"
-# Separador na base da barra. NÃO é pintado com `tab_bar_position = "top"`:
-# o traço de 1px virava uma linha contra o quadro do terminal, que o
-# usuário pediu para eliminar. Continua governando a aresta oposta quando a
-# barra vai para baixo. Ver seção 4.4 da espec.
+# Separador na base da barra. NÃO é pintado: o traço de 1px virava uma linha
+# contra o quadro do terminal, que o usuário pediu para eliminar. Ver seção
+# 4.4 da espec.
 bar_border = "#23272f"
 # Alfa do fundo da aba, sobre a cápsula do grupo: 15% da cor do grupo passa
 # por baixo de cada aba. Sobre a barra, fora de um grupo, o resultado é

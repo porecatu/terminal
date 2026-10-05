@@ -7,14 +7,6 @@ use serde::Deserialize;
 
 use crate::color::Color;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum TabBarPosition {
-    #[default]
-    Top,
-    Bottom,
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Window {
@@ -33,9 +25,6 @@ pub struct Window {
     /// `cfg(target_os = "macos")` de `porecatu-ui` continua sendo quem
     /// decide o comportamento real no macOS (ver relato de entrega).
     pub decorations: bool,
-    /// [C] "reinicie o app": move a barra de aresta, e com ela a origem de
-    /// todo hit-testing e o recorte da trilha.
-    pub tab_bar_position: TabBarPosition,
     pub animations: bool,
     /// Formar/arrastar grupo (RF-2.5).
     pub animation_reflow_ms: u64,
@@ -53,7 +42,6 @@ impl Default for Window {
             border: Color::hex("#2a2f38"),
             corner_radius: 8,
             decorations: false,
-            tab_bar_position: TabBarPosition::Top,
             animations: true,
             animation_reflow_ms: 180,
             animation_collapse_ms: 150,
@@ -77,7 +65,6 @@ mod tests {
                 border: Color::hex("#2a2f38"),
                 corner_radius: 8,
                 decorations: false,
-                tab_bar_position: TabBarPosition::Top,
                 animations: true,
                 animation_reflow_ms: 180,
                 animation_collapse_ms: 150,

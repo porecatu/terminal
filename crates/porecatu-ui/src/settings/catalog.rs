@@ -418,13 +418,11 @@ label_modules! {
     animations => (animations_label, animations_description),
     window_opacity => (window_opacity_label, window_opacity_description),
     decorations => (decorations_label, decorations_description),
-    tab_bar_position => (tab_bar_position_label, tab_bar_position_description),
     show_close_button => (show_close_button_label, show_close_button_description),
     show_index => (show_index_label, show_index_description),
     show_activity_indicator => (show_activity_indicator_label, show_activity_indicator_description),
     show_bell_indicator => (show_bell_indicator_label, show_bell_indicator_description),
     show_new_tab_button => (show_new_tab_button_label, show_new_tab_button_description),
-    hide_when_single_tab => (hide_when_single_tab_label, hide_when_single_tab_description),
     status_bar_enabled => (status_bar_enabled_label, status_bar_enabled_description),
     session_enabled => (session_enabled_label, session_enabled_description),
     lazy_restore => (lazy_restore_label, lazy_restore_description),
@@ -440,7 +438,6 @@ label_modules! {
 /// Os valores nomeados de cada enum, na grafia do arquivo.
 const CURSOR_SHAPES: &[&str] = &["block", "beam", "underline"];
 const CLOSE_BUTTON: &[&str] = &["always", "hover", "never"];
-const TAB_BAR_POSITIONS: &[&str] = &["top", "bottom"];
 const BACKGROUND_IMAGE_MODES: &[&str] = &["stretch", "tile", "center"];
 
 fn background_image_mode(config: &Config) -> EditValue {
@@ -476,14 +473,7 @@ fn close_button(config: &Config) -> EditValue {
     })
 }
 
-fn tab_bar_position(config: &Config) -> EditValue {
-    string(match config.appearance.window.tab_bar_position {
-        porecatu_config::TabBarPosition::Top => "top",
-        porecatu_config::TabBarPosition::Bottom => "bottom",
-    })
-}
-
-/// As 52 opções do RF-16.11 (49 e as três da imagem de fundo, RF-17.20).
+/// As 50 opções do RF-16.11 (47 e as três da imagem de fundo, RF-17.20).
 pub(crate) static OPTIONS: &[OptionDef] = &[
     // ---- Geral
     option!(
@@ -773,14 +763,6 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         |c| EditValue::Bool(c.appearance.window.decorations)
     ),
     option!(
-        tab_bar_position,
-        Appearance,
-        Window,
-        "appearance.window.tab_bar_position",
-        Control::Choice(TAB_BAR_POSITIONS),
-        tab_bar_position
-    ),
-    option!(
         show_close_button,
         Appearance,
         Tabs,
@@ -819,14 +801,6 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         "appearance.tabs.show_new_tab_button",
         TOGGLE,
         |c| EditValue::Bool(c.appearance.tabs.show_new_tab_button)
-    ),
-    option!(
-        hide_when_single_tab,
-        Appearance,
-        Tabs,
-        "appearance.tabs.hide_when_single_tab",
-        TOGGLE,
-        |c| EditValue::Bool(c.appearance.tabs.hide_when_single_tab)
     ),
     option!(
         status_bar_enabled,
@@ -934,12 +908,12 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        assert_eq!(OPTIONS.len(), 52);
+        assert_eq!(OPTIONS.len(), 50);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 24, 12, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 24, 10, 4, 2, 1, 2, 0]);
     }
 
     /// RF-17.20: as três opções da imagem de fundo ficam no grupo Terminal,
@@ -1158,7 +1132,6 @@ mod tests {
         let scope = |id: &str| option(id).unwrap().reload_scope();
         assert_eq!(scope("window_opacity"), ReloadScope::NextWindow);
         assert_eq!(scope("decorations"), ReloadScope::Restart);
-        assert_eq!(scope("tab_bar_position"), ReloadScope::Restart);
         assert_eq!(scope("scrollback_lines"), ReloadScope::NewTab);
         assert_eq!(scope("session_enabled"), ReloadScope::Restart);
         assert_eq!(scope("project_file_enabled"), ReloadScope::Restart);

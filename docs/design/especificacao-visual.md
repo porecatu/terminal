@@ -283,8 +283,6 @@ Zonas, da esquerda para a direita:
 
 Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
-- **`tab_bar_position = "bottom"`** (RF-4.1): a barra vai para a base da janela e a borda `#23272f` muda para a **aresta superior**. Nada mais muda — mesmos raios, mesmo padding, mesma trilha. A pilha de avisos continua ancorada no alto da área de conteúdo.
-- **`hide_when_single_tab`** (RF-4.2): a barra aparece e desaparece **sem transição**, e a grade é redimensionada no mesmo frame. Animar a altura da barra animaria um resize de PTY, e resize por quadro é uma tempestade de `SIGWINCH` no programa que está rodando.
 - **`show_index`** (RF-4.11): prefixo antes do rótulo, em mono 10px `#7b838f` — os tokens do contador que a pílula tinha —, com o `gap: 8` da aba. Consome largura do rótulo como o ponto de indicador da seção 2.17.
 - **Janela sem foco:** a barra **não muda**. É omissão deliberada, não pendência: o `unfocused_hollow` do cursor (seção 2.7) já diz qual janela tem o foco, e no lugar onde o usuário está olhando. Esmaecer a barra inteira de cada janela inativa é ruído maior que a informação que carrega.
 

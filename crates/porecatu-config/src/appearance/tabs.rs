@@ -48,7 +48,6 @@ pub struct Tabs {
     pub show_new_tab_button: bool,
     /// `[v2]` badge de perfil na aba (PRD-007). Reserva de nome.
     pub show_profile_badge: bool,
-    pub hide_when_single_tab: bool,
     pub colors: TabsColors,
     pub rename: TabsRename,
     pub overflow: TabsOverflow,
@@ -76,7 +75,6 @@ impl Default for Tabs {
             show_bell_indicator: true,
             show_new_tab_button: true,
             show_profile_badge: true,
-            hide_when_single_tab: false,
             colors: TabsColors::default(),
             rename: TabsRename::default(),
             overflow: TabsOverflow::default(),
@@ -88,8 +86,8 @@ impl Default for Tabs {
 #[serde(default)]
 pub struct TabsColors {
     pub bar_background: Color,
-    /// Não pintado com `tab_bar_position = "top"` -- ver comentário do
-    /// arquivo de exemplo e a seção 4.4 da espec.
+    /// Não pintado -- ver comentário do arquivo de exemplo e a seção 4.4
+    /// da espec.
     pub bar_border: Color,
     pub background_alpha: f64,
     pub active_background: Color,

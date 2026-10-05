@@ -510,12 +510,6 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
             scope: DeferredScope::Restart,
         });
     }
-    if old.appearance.window.tab_bar_position != new.appearance.window.tab_bar_position {
-        deferred.push(Deferred {
-            key: "appearance.window.tab_bar_position",
-            scope: DeferredScope::Restart,
-        });
-    }
     if old.shell != new.shell {
         deferred.push(Deferred {
             key: "[shell]",

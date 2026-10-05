@@ -31,8 +31,8 @@ mod theme;
 
 pub use appearance::{
     Appearance, CloseButtonVisibility, ContextMenu, Dialog, GroupEditor, GroupPaletteEntry, Groups,
-    MoveToGroup, Notices, StatusBar, TabBarPosition, Tabs, TabsColors, TabsOverflow, TabsRename,
-    TerminalFrame, Tooltip, Window, WindowControls,
+    MoveToGroup, Notices, StatusBar, Tabs, TabsColors, TabsOverflow, TabsRename, TerminalFrame,
+    Tooltip, Window, WindowControls,
 };
 pub use color::{Color, ColorParseError};
 pub use edit::{ConfigDocument, Edit, EditError, EditValue, KeyPath, SaveOutcome};

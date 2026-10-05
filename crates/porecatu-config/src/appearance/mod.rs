@@ -30,7 +30,7 @@ pub use status_bar::StatusBar;
 pub use tabs::{CloseButtonVisibility, Tabs, TabsColors, TabsOverflow, TabsRename};
 pub use terminal_frame::TerminalFrame;
 pub use tooltip::Tooltip;
-pub use window::{TabBarPosition, Window};
+pub use window::Window;
 pub use window_controls::WindowControls;
 
 use serde::Deserialize;
