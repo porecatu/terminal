@@ -122,6 +122,8 @@ args = []
 padding_x = 0              # [B] muda a área útil, logo colunas e linhas  RF-4.1
 padding_y = 0              # [B] idem
 # [C] "vale na próxima janela": atributo de superfície decidido na criação.
+# Abaixo de 1.0 a janela nasce transparente e é composta inteira com este
+# alfa (chrome e terminal). Sem suporte da plataforma, fica opaca.
 opacity = 1.0              # 0.0 a 1.0; opacidade da janela inteira      RF-4.1
 background = "#15181d"     # corpo da janela, atrás das barras
 border = "#2a2f38"
@@ -272,15 +274,14 @@ exited_foreground = "#727a86"
 # por matiz.                                                            RF-4.21
 active_border = "#39404b"
 inactive_border = "#22262e"
-# 2px em TODO estado: 1px do `#22262e` da inativa não se lê contra a
-# cápsula de cor cheia. A espessura é a mesma de `selected_border_width`,
-# abaixo -- não é número novo. Efeito colateral aceito: a
-# aba selecionada deixa de se distinguir por espessura e passa a se
-# distinguir só pela cor do token.
-active_border_width = 2
-inactive_border_width = 2
+# 1px em TODO estado (eram 2px; pedido do dono do produto: a borda de 2px
+# ficava grossa demais). A espessura é a mesma de `selected_border_width`,
+# abaixo -- não é número novo. A aba selecionada continua se distinguindo
+# só pela cor do token.
+active_border_width = 1
+inactive_border_width = 1
 selected_border = "#5ed3bc"   # aba em seleção múltipla; sem desenho     RF-2.2
-selected_border_width = 2
+selected_border_width = 1
 
 # --- indicadores ------------------------------------------------------ RF-4.8
 # Sem desenho aprovado no canvas; ver especificacao-visual.md seção 4.2.
@@ -757,6 +758,10 @@ ahead_behind = "#5ed3bc"
 # [terminal.colors] diretamente.                                RF-5.18, RF-5.19
 theme = ""
 # Opacidade do fundo do terminal, independente da opacidade da janela.   RF-5.15
+# Só o fundo (quadro e células); texto e cursor ficam opacos. Para mostrar o
+# que há atrás da janela, ela precisa ter nascido transparente (abaixo de 1.0
+# aqui ou em `appearance.window.opacity`); ao sair de 1.0 com o app aberto,
+# vale na próxima janela. Numa janela opaca, o fundo só se mistura à barra.
 background_opacity = 1.0
 
 

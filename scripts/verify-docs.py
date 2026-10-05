@@ -256,7 +256,7 @@ VALORES = [
     ("alfa da pílula", "groups.rs", "label_alpha",
      "appearance.groups.label_alpha", "`.92` da cor cheia"),
     ("borda da aba", "tabs.rs", "active_border_width",
-     "appearance.tabs.colors.active_border_width", "**borda 2px**"),
+     "appearance.tabs.colors.active_border_width", "**borda 1px**"),
     ("raio da cápsula", "groups.rs", "wrapper_corner_radius",
      "appearance.groups.wrapper_corner_radius", None),
     ("altura do rename", "tabs.rs", "height",

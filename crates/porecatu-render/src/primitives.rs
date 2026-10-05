@@ -75,6 +75,13 @@ pub struct TextRun {
 pub enum Primitive {
     Quad(Quad),
     RoundedQuad(RoundedQuad),
+    /// Fundo translúcido que **substitui** o que já estava no destino em vez
+    /// de se misturar a ele (`BlendState::REPLACE`). É o que deixa o fundo do
+    /// terminal (`[terminal] background_opacity`) mostrar o que há atrás da
+    /// janela: misturar só clarearia a cor opaca da barra que já está lá.
+    /// Só faz sentido em surface transparente (`WindowSurface::is_transparent`);
+    /// numa opaca o canal alfa é ignorado e o resultado sairia escurecido.
+    Backdrop(RoundedQuad),
     Text(TextRun),
     PushClip(Rect),
     PopClip,

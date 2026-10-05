@@ -511,13 +511,7 @@ pub fn paint(
             } else {
                 pal.chrome_icon
             };
-            out.push(Primitive::RoundedQuad(RoundedQuad {
-                rect: group_button,
-                radius: style.tab_corner_radius,
-                color: palette::TRANSPARENT,
-                border_color: pal.new_tab_border,
-                border_width: 1.0,
-            }));
+            // Sem borda (pedido do dono do produto): só o ícone.
             out.push(centered_glyph(
                 icon::PLUS,
                 group_button,
@@ -581,13 +575,7 @@ pub fn paint(
     // isso, à vista, que o distingue do "+" que cria dentro de um grupo.
     if let Some(rect) = layout.ungrouped_new_tab_button {
         let button = shift(rect, scroll_dx);
-        out.push(Primitive::RoundedQuad(RoundedQuad {
-            rect: button,
-            radius: style.tab_corner_radius,
-            color: palette::TRANSPARENT,
-            border_color: pal.new_tab_border,
-            border_width: 1.0,
-        }));
+        // Sem borda (pedido do dono do produto): só o ícone.
         out.push(centered_glyph(
             icon::PLUS,
             button,
@@ -860,21 +848,12 @@ fn paint_zone_icon_button(
     pal: &ResolvedPalette,
     out: &mut Vec<Primitive>,
 ) {
-    let (border_color, icon_color) = if hovered {
-        (
-            brighten(pal.new_tab_border, style.tab_hover_brightness),
-            brighten(pal.chrome_icon, style.tab_hover_brightness),
-        )
+    // Sem borda (pedido do dono do produto): só o ícone, que clareia no hover.
+    let icon_color = if hovered {
+        brighten(pal.chrome_icon, style.tab_hover_brightness)
     } else {
-        (pal.new_tab_border, pal.chrome_icon)
+        pal.chrome_icon
     };
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect,
-        radius: style.tab_corner_radius,
-        color: palette::TRANSPARENT,
-        border_color,
-        border_width: 1.0,
-    }));
     out.push(centered_glyph(icon, rect, icon_size, icon_color));
 }
 

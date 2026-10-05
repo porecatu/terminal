@@ -37,6 +37,7 @@ mod box_glyphs;
 mod chrome;
 mod clipboard;
 mod context_menu;
+mod cursor_blink;
 mod dialog;
 mod git;
 mod group_editor;
@@ -231,17 +232,28 @@ mod cascade_position_tests {
     }
 }
 
+/// A janela precisa de surface com canal alfa quando alguma das duas
+/// opacidades pede translucidez. Decidido na criação (winit e `wgpu` não
+/// trocam isso depois): mudar de 1.0 para menos com o app aberto vale na
+/// próxima janela.
+fn wants_transparent(config: &porecatu_config::Config) -> bool {
+    config.appearance.window.opacity < 1.0 || config.terminal.background_opacity < 1.0
+}
+
 /// Atributos comuns a toda janela do Porecatu (ADR-0027: sem decoração
 /// nativa fora do macOS, onde o semáforo continua nativo). Compartilhado
 /// por [`App::open_window`] e [`App::open_window_from_session`] -- cada
 /// um soma por cima só a geometria que decide sozinho (cascata da
 /// origem, ou a gravada na sessão).
-fn base_window_attributes() -> WindowAttributes {
+fn base_window_attributes(transparent: bool) -> WindowAttributes {
     #[allow(unused_mut)]
     let mut attributes = Window::default_attributes()
         .with_title("Porecatu")
         .with_window_icon(Some(app_icon::load()))
         .with_decorations(false)
+        // Surface com canal alfa (`[appearance.window] opacity`, `[terminal]
+        // background_opacity`): decidido na criação, não troca depois.
+        .with_transparent(transparent)
         // ADR-0043 §1: o adaptador `accesskit_winit` tem de ser criado
         // antes da primeira exibição da janela (`panic` se já visível) --
         // `create_window_with_attributes` cria a janela invisível, monta o
@@ -345,6 +357,10 @@ enum Drag {
 /// Grade mínima -- uma célula em cada direção, no pior caso de janela
 /// minúscula ou métrica de fonte falhando.
 const MIN_GRID: usize = 1;
+
+/// Piso do intervalo do piscar: `blink_interval_ms = 0` viraria um redraw por
+/// volta do event loop, o oposto do render damage-driven (ADR-0007).
+const MIN_CURSOR_BLINK_MS: u64 = 50;
 
 /// Evento de usuário do event loop -- o mesmo caminho serve os fatos que
 /// só podem chegar de fora da main thread (ADR-0007): aba suja, recarga de
@@ -1081,6 +1097,8 @@ struct WindowState {
     /// não garante um `Focused(true)` inicial em toda plataforma, e a
     /// janela recém-criada tipicamente já nasce em primeiro plano.
     focused: bool,
+    /// Fase do piscar do cursor do painel focado (RF-5.22 `blink`).
+    cursor_blink: cursor_blink::CursorBlink,
     /// RF-3.2 (ADR-0036): `true` quando alguma mudança estrutural desta
     /// janela ainda não entrou no debounce de gravação da sessão (`App::
     /// session`). Drenado a cada volta do event loop em
@@ -1885,6 +1903,7 @@ impl WindowState {
             window_surface,
             scale,
             focused: true,
+            cursor_blink: cursor_blink::CursorBlink::new(Instant::now()),
             logical_width: size.width as f32 / scale,
             logical_height: size.height as f32 / scale,
             workspace: Workspace::new(),
@@ -4955,6 +4974,7 @@ impl WindowState {
             self.warnings.next_deadline(),
             self.hover.next_deadline(),
             self.animations.next_deadline(now),
+            self.cursor_blink.next_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -5449,7 +5469,7 @@ impl App {
     /// roadmap descreve.
     fn open_window(&mut self, event_loop: &ActiveEventLoop, origin: Option<WindowId>) {
         let origin_state = origin.and_then(|id| self.windows.get(&id));
-        let mut attributes = base_window_attributes();
+        let mut attributes = base_window_attributes(wants_transparent(&self.config));
         if let Some(origin_window) = origin_state.map(|s| &s.window)
             && let Ok(origin_position) = origin_window.outer_position()
         {
@@ -5541,7 +5561,7 @@ impl App {
         window_v1: &porecatu_session::WindowV1,
         placement: WindowPlacement,
     ) -> Option<WindowId> {
-        let mut attributes = base_window_attributes();
+        let mut attributes = base_window_attributes(wants_transparent(&self.config));
         match placement {
             WindowPlacement::Saved => {
                 if self.config.session.restore_window_geometry {
@@ -5912,6 +5932,7 @@ impl App {
         event_loop: &ActiveEventLoop,
         attributes: WindowAttributes,
     ) -> Option<WindowState> {
+        let transparent = attributes.transparent;
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
@@ -5940,7 +5961,12 @@ impl App {
         // sempre).
         let mut first_gpu_warnings: Vec<(Severity, String, String)> = Vec::new();
         let window_surface = if let Some(gpu) = &mut self.gpu {
-            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
+            match gpu.create_window_surface(
+                Arc::clone(&window),
+                size.width,
+                size.height,
+                transparent,
+            ) {
                 Ok(surface) => surface,
                 Err(err) => {
                     // Sem `WindowState` ainda pra guardar um aviso -- é a
@@ -5957,6 +5983,7 @@ impl App {
                 size.width,
                 size.height,
                 font_families_from_config(&self.config),
+                transparent,
             );
             // RF-11.26/ADR-0001: ausência de aceleração detectada no
             // primeiro adapter -- avisa uma vez, nunca `panic`.
@@ -6874,7 +6901,9 @@ impl App {
             let had_tooltip = state.hover.visible().is_some();
             let was_animating = !state.animations.is_empty();
             state.tick(now);
+            let blinked = state.cursor_blink.tick(now);
             if was_animating
+                || blinked
                 || had_warnings != !state.warnings.is_empty()
                 || had_tooltip != state.hover.visible().is_some()
             {
@@ -7205,6 +7234,14 @@ impl App {
         let overridden = self.recompute_palettes();
 
         self.term_params = term_params_from_config(&self.config);
+        // `[terminal.cursor]` é classe A: o default novo chega também aos
+        // painéis já vivos (DECSCUSR do programa continua valendo, RF-5.25).
+        for runtime in self.windows.values().flat_map(|w| w.panes.values()) {
+            runtime.terminal.set_default_cursor_style(
+                self.term_params.default_cursor_shape,
+                self.term_params.cursor_blinking,
+            );
+        }
         // `[keybindings]` é classe A (ADR-0029 §3): o mapa novo vale
         // imediatamente. Um modo de captura em curso (rename, diálogo,
         // menu) não é afetado -- ele nem chega a consultar `keymap`,
@@ -7429,7 +7466,7 @@ impl App {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
         let mut surface =
-            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height) {
+            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height, false) {
                 Ok(surface) => surface,
                 Err(err) => {
                     eprintln!("porecatu: falha ao criar surface da janela de configurações: {err}");
@@ -7795,7 +7832,11 @@ impl ApplicationHandler<Wakeup> for App {
         // `App::new`) -- os avisos de arranque continuam sendo entregues
         // aqui, mesmo que a restauração de sessão nem rode neste modo.
         if let Some(dir) = self.positional_directory.clone() {
-            self.open_window_with(event_loop, base_window_attributes(), Some(dir));
+            self.open_window_with(
+                event_loop,
+                base_window_attributes(wants_transparent(&self.config)),
+                Some(dir),
+            );
             self.deliver_pending_startup_warnings();
             return;
         }
@@ -8149,6 +8190,7 @@ impl ApplicationHandler<Wakeup> for App {
                 // RF-5.24: cursor volta de vazado para cheio ao ganhar foco.
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.focused = true;
+                    state.cursor_blink.reset(Instant::now());
                     state.window.request_redraw();
                 }
             }
@@ -8317,6 +8359,10 @@ impl App {
         // ADR-0022: qualquer tecla descarta animação em curso e aplica o
         // estado final na hora -- a animação nunca bloqueia input.
         state.animations.clear();
+        // Tecla: o cursor reaparece aceso e o ciclo do piscar recomeça.
+        if state.cursor_blink.reset(Instant::now()) {
+            state.window.request_redraw();
+        }
 
         // Cadeia de captura (ADR-0008 passo 1): diálogo modal > menu de
         // contexto > cancelamento de arraste > rename > aviso > seleção
@@ -10373,6 +10419,11 @@ impl App {
             .unwrap_or(self.term_pal.cursor);
 
             let mut grid_primitives = Vec::new();
+            let mut cursor_blinks = false;
+            // Fundo translúcido só substitui o que há atrás se a surface desta
+            // janela compõe com o desktop.
+            let mut window_term_pal = self.term_pal.clone();
+            window_term_pal.backdrop_punch = state.window_surface.is_transparent();
             for (pane_id, pane_rect) in &pane_layout {
                 let pane_id = *pane_id;
                 let Some(runtime) = state.panes.get_mut(&(id, pane_id)) else {
@@ -10409,10 +10460,16 @@ impl App {
                 // `RoundedQuad` de raio 0 com borda, sem primitiva nova.
                 let hollow =
                     pane_id != focused_pane || (!state.focused && cursor_config.unfocused_hollow);
+                // Só o cursor cheio do painel focado, numa janela com foco,
+                // pisca; vazado fica fixo (sem foco o ciclo nem corre).
+                let blinking =
+                    !hollow && runtime.snapshot.cursor.visible && runtime.snapshot.cursor.blinking;
+                cursor_blinks |= blinking;
                 let cursor = paint::CursorAppearance {
                     color: cursor_color,
                     width: cursor_config.width as f32,
                     hollow,
+                    blink_on: !blinking || state.cursor_blink.is_on(),
                 };
 
                 let hyperlink_hover: Vec<HyperlinkSpan> = if Some(pane_id) == hover_pane
@@ -10443,13 +10500,22 @@ impl App {
                     font_size_px,
                     *pane_rect,
                     style,
-                    &self.term_pal,
+                    &window_term_pal,
                     cursor,
                     gpu.text_measurer(),
                     &hyperlink_hover,
                 ));
             }
             frame.set_layer(Layer::Grid, grid_primitives);
+            // Liga/desliga o relógio do piscar conforme o que acabou de ser
+            // desenhado; o prazo entra em `next_wake`, então cursor fixo
+            // continua custando zero frame.
+            let blink_interval = cursor_blinks.then(|| {
+                Duration::from_millis(cursor_config.blink_interval_ms.max(MIN_CURSOR_BLINK_MS))
+            });
+            state
+                .cursor_blink
+                .set_interval(blink_interval, Instant::now());
 
             if let Some(search) = &state.search {
                 let search_layout = search_bar::layout_search_bar(box_rect, style);
@@ -10731,7 +10797,12 @@ impl App {
         // terminal (`style.terminal_frame_margin`): precisa de uma cor
         // diferente da do box para o quadro aparecer -- a mesma da barra de
         // abas, já que os dois formam o "quadro" do app.
-        state.window_surface.render(gpu, pal.bar_background, &frame);
+        state.window_surface.render(
+            gpu,
+            pal.bar_background,
+            &frame,
+            self.config.appearance.window.opacity.clamp(0.0, 1.0) as f32,
+        );
 
         // ADR-0022: enquanto há reflui em curso o próximo quadro sai daqui,
         // não só do `WaitUntil` de `schedule_next_wake`. O prazo dele é

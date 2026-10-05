@@ -158,4 +158,4 @@ Ver §1: seria o primeiro widget do tipo no app, e a rolagem já se lê pela lin
 - Só o campo do **nome** de uma variável recusada leva a borda de Erro; o do valor não.
 - A frase do aviso do RF-16.27 chama-se `settings.option.trusted_paths_warning` (o carregador de `locales/` recusa tabela com mais de dois níveis).
 
-**Pendente, fora do aval:** a borda de retângulo arredondado não é pintada pelo renderizador (`quad.wgsl`, anterior a esta tela); corrigi-la muda a aparência do app inteiro e depende de aval próprio.
+**Resolvido:** a borda de retângulo arredondado não era pintada pelo renderizador (`quad.wgsl` subtraía a área encolhida da cheia, sempre <= 0). Corrigida a pedido do dono do produto; o anel de `border_width` desenha por dentro do contorno, sobre o preenchimento.

@@ -51,6 +51,9 @@ pub struct CursorAppearance {
     pub color: Color,
     pub width: f32,
     pub hollow: bool,
+    /// Fase do piscar (`cursor_blink`): `false` = quadro em que o cursor
+    /// pisca apagado. Cursor que não pisca passa sempre `true`.
+    pub blink_on: bool,
 }
 
 /// Altura do cursor bloco, em fração de `font_size_px` -- **não**
@@ -197,13 +200,16 @@ pub fn build_primitives(
             style.terminal_frame_corner_radius,
         );
     }
-    primitives.push(Primitive::RoundedQuad(RoundedQuad {
-        rect: box_rect,
-        radius: style.terminal_frame_corner_radius,
-        color: term_pal.background,
-        border_color: TRANSPARENT,
-        border_width: 0.0,
-    }));
+    primitives.push(backdrop_fill(
+        term_pal,
+        RoundedQuad {
+            rect: box_rect,
+            radius: style.terminal_frame_corner_radius,
+            color: term_pal.background,
+            border_color: TRANSPARENT,
+            border_width: 0.0,
+        },
+    ));
 
     let x_offset = box_rect.x + style.terminal_frame_padding;
     let y_offset = box_rect.y + style.terminal_frame_padding;
@@ -253,6 +259,7 @@ pub fn build_primitives(
 
     if let Some((row, col)) = snapshot.cursor.position
         && snapshot.cursor.visible
+        && cursor.blink_on
     {
         // Sem centralizar em `metrics.height`: o glyph não ocupa a linha
         // inteira (ela tem `line_height` de folga, toda embaixo). `text.rs`
@@ -286,12 +293,29 @@ fn cursor_primitive(shape: CursorShape, cursor: CursorAppearance, cell_rect: Rec
     // `HollowBlock` é o que o próprio DECSCUSR pode pedir (motor completo,
     // mesmo sem uso hoje) -- vazado independente de `cursor.hollow`
     // (RF-5.24 é só o efeito de "sem foco" sobre a forma configurada).
+    // Sem foco (`cursor.hollow`), qualquer forma vira o contorno do bloco --
+    // como xterm/Alacritty/WezTerm; só o bloco virava, e com barra ou
+    // sublinhado a opção parecia morta.
     match shape {
         CursorShape::Hidden => unreachable!("chamado só com `visible == true`"),
         CursorShape::Block if !cursor.hollow => Primitive::Quad(Quad {
             rect: cell_rect,
             color: cursor.color,
         }),
+        CursorShape::Block
+        | CursorShape::HollowBlock
+        | CursorShape::Beam
+        | CursorShape::Underline
+            if cursor.hollow =>
+        {
+            Primitive::RoundedQuad(RoundedQuad {
+                rect: cell_rect,
+                radius: 0.0,
+                color: TRANSPARENT,
+                border_color: cursor.color,
+                border_width: cursor.width,
+            })
+        }
         CursorShape::Block | CursorShape::HollowBlock => Primitive::RoundedQuad(RoundedQuad {
             rect: cell_rect,
             radius: 0.0,
@@ -342,16 +366,46 @@ fn paint_row_backgrounds(
             // depois do arredondamento em `quad.rs` (ver `row_top`).
             let x0 = col_left(x_offset, col, metrics);
             let x1 = col_left(x_offset, col + 1, metrics);
-            out.push(Primitive::Quad(Quad {
-                rect: Rect {
-                    x: x0,
-                    y: row_y,
-                    width: x1 - x0,
-                    height: row_bottom - row_y,
-                },
-                color: bg,
-            }));
+            let rect = Rect {
+                x: x0,
+                y: row_y,
+                width: x1 - x0,
+                height: row_bottom - row_y,
+            };
+            if term_pal.background_opacity < 1.0 {
+                out.push(backdrop_fill(
+                    term_pal,
+                    RoundedQuad {
+                        rect,
+                        radius: 0.0,
+                        color: bg,
+                        border_color: TRANSPARENT,
+                        border_width: 0.0,
+                    },
+                ));
+            } else {
+                out.push(Primitive::Quad(Quad { rect, color: bg }));
+            }
         }
+    }
+}
+
+/// Fundo do terminal (quadro ou célula) com `background_opacity` aplicada.
+/// Em surface transparente substitui o que há atrás -- é o que deixa o
+/// desktop aparecer; em opaca, mistura à cor da barra. Com opacidade 1.0 é
+/// o `RoundedQuad` de sempre.
+fn backdrop_fill(term_pal: &ResolvedTermPalette, quad: RoundedQuad) -> Primitive {
+    if term_pal.background_opacity >= 1.0 {
+        return Primitive::RoundedQuad(quad);
+    }
+    let quad = RoundedQuad {
+        color: term_pal.with_backdrop_alpha(quad.color),
+        ..quad
+    };
+    if term_pal.backdrop_punch {
+        Primitive::Backdrop(quad)
+    } else {
+        Primitive::RoundedQuad(quad)
     }
 }
 
@@ -865,6 +919,7 @@ mod tests {
             color: TRANSPARENT,
             width: 7.0,
             hollow: false,
+            blink_on: true,
         }
     }
 
@@ -1108,6 +1163,7 @@ mod tests {
             position: Some((0, 0)),
             shape,
             visible: true,
+            blinking: false,
         };
         snap
     }
@@ -1138,6 +1194,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 7.0,
                 hollow: false,
+                blink_on: true,
             },
         );
         assert!(matches!(out.last(), Some(Primitive::Quad(_))));
@@ -1153,6 +1210,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 7.0,
                 hollow: true,
+                blink_on: true,
             },
         );
         match out.last() {
@@ -1174,6 +1232,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 7.0,
                 hollow: false,
+                blink_on: true,
             },
         );
         assert!(matches!(out.last(), Some(Primitive::RoundedQuad(_))));
@@ -1189,6 +1248,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 3.0,
                 hollow: false,
+                blink_on: true,
             },
         );
         match out.last() {
@@ -1214,6 +1274,7 @@ mod tests {
                 color: TRANSPARENT,
                 width: 2.0,
                 hollow: false,
+                blink_on: true,
             },
             &mut m,
             &[],
@@ -1228,6 +1289,95 @@ mod tests {
                 );
             }
             other => panic!("esperava Quad do sublinhado, veio {other:?}"),
+        }
+    }
+
+    /// Sem foco, barra e sublinhado também viram o contorno do bloco --
+    /// `unfocused_hollow` não pode parecer morta nessas duas formas.
+    #[test]
+    fn unfocused_beam_and_underline_become_the_hollow_block() {
+        for shape in [CursorShape::Beam, CursorShape::Underline] {
+            let out = cursor_primitives(
+                &snapshot_with_cursor(shape),
+                CursorAppearance {
+                    color: TRANSPARENT,
+                    width: 2.0,
+                    hollow: true,
+                    blink_on: true,
+                },
+            );
+            assert!(
+                matches!(out.last(), Some(Primitive::RoundedQuad(_))),
+                "{shape:?} sem foco deveria sair como contorno de bloco"
+            );
+        }
+    }
+
+    /// Fase apagada do piscar: o cursor não é desenhado nesse quadro.
+    #[test]
+    fn cursor_is_not_drawn_in_the_off_blink_phase() {
+        let appearance = |blink_on| CursorAppearance {
+            color: TRANSPARENT,
+            width: 2.0,
+            hollow: false,
+            blink_on,
+        };
+        let on = cursor_primitives(&snapshot_with_cursor(CursorShape::Block), appearance(true));
+        let off = cursor_primitives(&snapshot_with_cursor(CursorShape::Block), appearance(false));
+        assert_eq!(on.len(), off.len() + 1);
+    }
+
+    fn box_fill(opacity: f32, punch: bool) -> Primitive {
+        let mut pal = test_term_pal();
+        pal.background_opacity = opacity;
+        pal.backdrop_punch = punch;
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell = cell(&mut m);
+        let out = build_primitives(
+            &snapshot(" "),
+            cell,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &pal,
+            test_cursor(),
+            &mut m,
+            &[],
+        );
+        out.into_iter()
+            .find(|p| match p {
+                Primitive::RoundedQuad(q) | Primitive::Backdrop(q) => q.rect == test_box_rect(),
+                _ => false,
+            })
+            .expect("quadro do terminal")
+    }
+
+    /// `background_opacity = 1.0` é o desenho de sempre: quadro opaco,
+    /// misturado, sem `Backdrop`.
+    #[test]
+    fn full_opacity_keeps_the_opaque_blended_box() {
+        match box_fill(1.0, true) {
+            Primitive::RoundedQuad(q) => assert_eq!(q.color.a, 1.0),
+            other => panic!("esperava RoundedQuad opaco, veio {other:?}"),
+        }
+    }
+
+    /// Surface transparente: o fundo translúcido substitui o destino.
+    #[test]
+    fn translucent_box_on_a_transparent_surface_is_a_backdrop() {
+        match box_fill(0.5, true) {
+            Primitive::Backdrop(q) => assert!((q.color.a - 0.5).abs() < 1e-6),
+            other => panic!("esperava Backdrop, veio {other:?}"),
+        }
+    }
+
+    /// Surface opaca: o alfa seria ignorado pelo compositor e o resultado
+    /// sairia escurecido; o fundo se mistura à barra, sem `Backdrop`.
+    #[test]
+    fn translucent_box_on_an_opaque_surface_only_blends() {
+        match box_fill(0.5, false) {
+            Primitive::RoundedQuad(q) => assert!((q.color.a - 0.5).abs() < 1e-6),
+            other => panic!("esperava RoundedQuad translúcido, veio {other:?}"),
         }
     }
 }

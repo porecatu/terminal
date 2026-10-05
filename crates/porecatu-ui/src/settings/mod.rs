@@ -115,7 +115,7 @@ pub(crate) fn window_attributes(
 ) -> WindowAttributes {
     let settings = &config.appearance.settings;
     #[allow(unused_mut)]
-    let mut attributes = crate::base_window_attributes()
+    let mut attributes = crate::base_window_attributes(false)
         .with_title(title)
         .with_inner_size(LogicalSize::new(
             settings.window_width as f32,

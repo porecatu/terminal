@@ -6,6 +6,7 @@
 //! [`crate::Primitive`]) para físicos: todo o resto do crate, e tudo o
 //! que `porecatu-ui` monta, fica em lógico.
 
+use crate::blit::Offscreen;
 use crate::frame::{Frame, Layer, resolve_layer};
 use crate::gpu::GpuContext;
 use crate::primitives::Color;
@@ -21,6 +22,9 @@ pub struct WindowSurface {
     /// Pixels físicos por pixel lógico -- `window.scale_factor()` do
     /// `winit`. Aplicado uma vez aqui, nunca mais adiante.
     scale: f32,
+    /// Textura onde o frame é desenhado quando a janela tem opacidade < 1
+    /// (`blit.rs`); criada sob demanda e refeita no resize.
+    offscreen: Option<Offscreen>,
 }
 
 impl WindowSurface {
@@ -52,7 +56,18 @@ impl WindowSurface {
             quad_state,
             text_state,
             scale: 1.0,
+            offscreen: None,
         }
+    }
+
+    /// `true` se a surface compõe com o que está atrás da janela
+    /// (`PreMultiplied`). Só então opacidade < 1 tem efeito; numa surface
+    /// opaca o canal alfa é ignorado pelo compositor.
+    pub fn is_transparent(&self) -> bool {
+        matches!(
+            self.config.alpha_mode,
+            wgpu::CompositeAlphaMode::PreMultiplied | wgpu::CompositeAlphaMode::Inherit
+        )
     }
 
     /// Reconfigura a surface para o novo tamanho físico (px) e escala --
@@ -64,6 +79,7 @@ impl WindowSurface {
         self.config.width = width;
         self.config.height = height;
         self.scale = scale;
+        self.offscreen = None;
         self.surface.configure(&gpu.device, &self.config);
         self.quad_state.resize(&gpu.queue, width, height);
         self.viewport
@@ -74,7 +90,23 @@ impl WindowSurface {
     /// `frame`, na ordem de [`Layer::ORDER`] -- cada camada inteira cobre
     /// a anterior inteira, e dentro dela quads/arredondados desenham antes
     /// do texto (ADR-0018).
-    pub fn render(&mut self, gpu: &mut GpuContext, clear_color: Color, frame: &Frame) {
+    ///
+    /// `opacity` (0.0 a 1.0) é a opacidade da janela inteira; só vale em
+    /// surface transparente ([`Self::is_transparent`]) e com `1.0` o frame
+    /// vai direto à surface, como sempre foi.
+    pub fn render(
+        &mut self,
+        gpu: &mut GpuContext,
+        clear_color: Color,
+        frame: &Frame,
+        opacity: f32,
+    ) {
+        let opacity = if self.is_transparent() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let composited = opacity < 1.0;
         // Cada chamada usa caminhos de campo diretos (`gpu.device`,
         // `gpu.text_atlas`, ...) em vez de desestruturar `gpu` numa
         // variável só -- é o que deixa o borrow checker ver que os campos
@@ -122,6 +154,24 @@ impl WindowSurface {
         let view = frame_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        if composited
+            && !self
+                .offscreen
+                .as_ref()
+                .is_some_and(|o| o.matches(self.config.width, self.config.height))
+        {
+            self.offscreen = Some(Offscreen::new(
+                &gpu.device,
+                &gpu.blit_shared,
+                self.config.format,
+                self.config.width,
+                self.config.height,
+            ));
+        }
+        let scene_view = match (&self.offscreen, composited) {
+            (Some(offscreen), true) => offscreen.view(),
+            _ => &view,
+        };
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -129,7 +179,7 @@ impl WindowSurface {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("porecatu-render/frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: scene_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -160,6 +210,26 @@ impl WindowSurface {
                 self.text_state
                     .render_layer(layer, &gpu.text_atlas, &self.viewport, &mut pass);
             }
+        }
+        if composited && let Some(offscreen) = &self.offscreen {
+            offscreen.set_opacity(&gpu.queue, opacity);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("porecatu-render/blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            offscreen.draw(&gpu.blit_shared, &mut pass);
         }
         gpu.queue.submit(Some(encoder.finish()));
         gpu.queue.present(frame_texture);

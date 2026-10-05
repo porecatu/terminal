@@ -123,6 +123,8 @@ struct Uniforms {
 /// (ADR-0018), dono de `GpuContext`.
 pub(crate) struct QuadShared {
     pipeline: wgpu::RenderPipeline,
+    /// Mesmo shader, `BlendState::REPLACE` (`Primitive::Backdrop`).
+    backdrop_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     vertex_buffer: wgpu::Buffer,
 }
@@ -179,46 +181,57 @@ impl QuadShared {
             ],
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("porecatu-render/quad-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(vertex_layout), Some(instance_layout)],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // O fragment shader devolve cor premultiplicada
-                    // (`color.rgb * alpha, alpha`, quad.wgsl) -- o blend
-                    // tem que ser o par certo, não `ALPHA_BLENDING`
-                    // (straight). Com o par errado o alpha era aplicado em
-                    // dobro na faixa de antialiasing do SDF, escurecendo um
-                    // anel exatamente no contorno de todo canto arredondado
-                    // -- mascarado enquanto havia borda ali, visível assim
-                    // que a pílula do grupo (cor cheia, sem borda) passou a
-                    // ficar sobre a cápsula da mesma cor.
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let make_pipeline = |label: &'static str, blend: wgpu::BlendState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(vertex_layout.clone()), Some(instance_layout.clone())],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        // O fragment shader devolve cor premultiplicada
+                        // (`color.rgb * alpha, alpha`, quad.wgsl) -- o blend
+                        // tem que ser o par certo, não `ALPHA_BLENDING`
+                        // (straight). Com o par errado o alpha era aplicado em
+                        // dobro na faixa de antialiasing do SDF, escurecendo um
+                        // anel exatamente no contorno de todo canto arredondado
+                        // -- mascarado enquanto havia borda ali, visível assim
+                        // que a pílula do grupo (cor cheia, sem borda) passou a
+                        // ficar sobre a cápsula da mesma cor.
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline(
+            "porecatu-render/quad-pipeline",
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        );
+        let backdrop_pipeline = make_pipeline(
+            "porecatu-render/backdrop-pipeline",
+            wgpu::BlendState::REPLACE,
+        );
 
         Self {
             pipeline,
+            backdrop_pipeline,
             bind_group_layout,
             vertex_buffer,
         }
@@ -275,7 +288,8 @@ impl ScissorRect {
 struct QuadLayerBuffer {
     instance_buffer: wgpu::Buffer,
     instance_capacity: u64,
-    draws: Vec<(ScissorRect, Range<u32>)>,
+    /// O `bool` é "backdrop": desenha com o pipeline que substitui.
+    draws: Vec<(ScissorRect, Range<u32>, bool)>,
 }
 
 impl QuadLayerBuffer {
@@ -382,13 +396,30 @@ impl QuadWindowState {
             // cima de todo quad do batch, não importa quem foi pushado
             // primeiro (era o que escondia o cursor atrás do quadro do
             // terminal).
-            instances.extend(batch.geometry.iter().map(|g| match g {
-                GeometryPrimitive::Quad(q) => Instance::from_quad(q, scale),
-                GeometryPrimitive::Rounded(q) => Instance::from_rounded_quad(q, scale),
-            }));
+            // Uma execução por tipo de blend: `Backdrop` troca de pipeline, e
+            // a ordem do stream continua valendo.
+            let mut run_start = start;
+            let mut run_backdrop = matches!(batch.geometry[0], GeometryPrimitive::Backdrop(_));
+            for g in &batch.geometry {
+                let backdrop = matches!(g, GeometryPrimitive::Backdrop(_));
+                if backdrop != run_backdrop {
+                    let at = instances.len() as u32;
+                    if !scissor.is_empty() {
+                        state.draws.push((scissor, run_start..at, run_backdrop));
+                    }
+                    run_start = at;
+                    run_backdrop = backdrop;
+                }
+                instances.push(match g {
+                    GeometryPrimitive::Quad(q) => Instance::from_quad(q, scale),
+                    GeometryPrimitive::Rounded(q) | GeometryPrimitive::Backdrop(q) => {
+                        Instance::from_rounded_quad(q, scale)
+                    }
+                });
+            }
             let end = instances.len() as u32;
             if !scissor.is_empty() {
-                state.draws.push((scissor, start..end));
+                state.draws.push((scissor, run_start..end, run_backdrop));
             }
         }
 
@@ -422,11 +453,15 @@ impl QuadWindowState {
         if state.draws.is_empty() {
             return;
         }
-        pass.set_pipeline(&shared.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, shared.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, state.instance_buffer.slice(..));
-        for (scissor, range) in &state.draws {
+        for (scissor, range, backdrop) in &state.draws {
+            pass.set_pipeline(if *backdrop {
+                &shared.backdrop_pipeline
+            } else {
+                &shared.pipeline
+            });
             pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
             pass.draw(0..4, range.clone());
         }
