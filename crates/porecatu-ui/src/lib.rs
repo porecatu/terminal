@@ -412,7 +412,7 @@ enum Wakeup {
     /// apply_background_image_result` o descarta se a chave já não é a
     /// atual. `Box` porque `BackgroundImageResult` (chave com `PathBuf`,
     /// mais `Result<DecodedImage, _>`) passa dos 80 bytes que `AccessKit` já
-    /// reserva -- medido em `background_image_result_is_boxed`, que reprova
+    /// reserva -- medido em `the_image_result_does_not_widen_wakeup`, que reprova
     /// se a conta mudar.
     BackgroundImageLoaded(Box<background_image::BackgroundImageResult>),
 }
@@ -11141,22 +11141,29 @@ mod wakeup_size_tests {
 
     use super::{Wakeup, background_image::BackgroundImageResult};
 
-    /// A conta que decide o `Box` de `Wakeup::BackgroundImageLoaded` (mesma
-    /// medição do comentário de `GitQueryResult`): `AccessKit` já faz o
-    /// `Wakeup` ter 80 bytes, e o resultado da imagem (88) passa disso -- sem
-    /// `Box` todo `Wakeup::TabDirty` do processo ficaria maior. Se a conta
-    /// mudar, o teste diz qual lado.
+    /// O que o `Box` de `Wakeup::BackgroundImageLoaded` garante (mesma
+    /// medição do comentário de `GitQueryResult`): a variante não alarga o
+    /// `Wakeup`, que continua do tamanho da maior das outras (mais, no máximo,
+    /// a etiqueta). O resultado sem `Box` mede 88 bytes no Windows, contra 80
+    /// do `AccessKit` -- mas `PathBuf` e `SystemTime` têm outro tamanho em
+    /// cada plataforma (no macOS ele cabia em 80), então o teste confere o
+    /// que importa em toda plataforma, e não o número do Windows.
     #[test]
-    fn background_image_result_is_boxed() {
-        let widest_other = size_of::<accesskit_winit::Event>();
+    fn the_image_result_does_not_widen_wakeup() {
+        let widest_other = [
+            size_of::<accesskit_winit::Event>(),
+            size_of::<crate::git::RemoteQueryResult>(),
+            size_of::<crate::git::RemoteIntegrationResult>(),
+        ]
+        .into_iter()
+        .max()
+        .unwrap();
         assert!(
-            size_of::<BackgroundImageResult>() > widest_other,
-            "o resultado cabe na variante mais larga ({widest_other} bytes): o `Box` já não se justifica"
+            size_of::<Wakeup>() <= widest_other + size_of::<usize>(),
+            "o `Wakeup` ({} bytes) passou da maior variante que já existia ({widest_other}): o resultado da imagem precisa ir em `Box`",
+            size_of::<Wakeup>()
         );
-        assert_eq!(
-            size_of::<Wakeup>(),
-            widest_other,
-            "o `Wakeup` cresceu além da variante mais larga que já existia"
-        );
+        // E o `Box` é um ponteiro, qualquer que seja o resultado.
+        assert_eq!(size_of::<Box<BackgroundImageResult>>(), size_of::<usize>());
     }
 }

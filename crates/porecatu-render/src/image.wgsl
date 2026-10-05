@@ -14,9 +14,13 @@ struct Uniforms {
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
+// UM sampler só: o endereçamento (ClampToEdge ou Repeat) é o do sampler que o
+// bind group da imagem traz, escolhido no `draw` (`image.rs`: dois bind groups
+// por imagem). Uma textura amostrada por DOIS samplers no mesmo shader é
+// recusada pelo Vulkan/naga ("an image was used with multiple samplers") e
+// derrubava a criação do pipeline no Linux.
 @group(1) @binding(0) var image_texture: texture_2d<f32>;
-@group(1) @binding(1) var clamp_sampler: sampler;
-@group(1) @binding(2) var repeat_sampler: sampler;
+@group(1) @binding(1) var image_sampler: sampler;
 
 struct VertexInput {
     @location(0) corner: vec2<f32>,
@@ -31,7 +35,6 @@ struct InstanceInput {
     @location(6) mask_size: vec2<f32>,
     @location(7) mask_radius: f32,
     @location(8) alpha: f32,
-    @location(9) repeat: f32,
 };
 
 struct VertexOutput {
@@ -41,7 +44,6 @@ struct VertexOutput {
     @location(2) mask_half: vec2<f32>,
     @location(3) mask_radius: f32,
     @location(4) alpha: f32,
-    @location(5) repeat: f32,
 };
 
 @vertex
@@ -65,22 +67,12 @@ fn vs_main(vert: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.mask_half = mask_half;
     out.mask_radius = inst.mask_radius;
     out.alpha = inst.alpha;
-    out.repeat = inst.repeat;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // As derivadas saem do fluxo uniforme; `textureSampleGrad` pode então ficar
-    // dentro do `if` sem a restrição de derivada implícita.
-    let ddx = dpdx(in.uv);
-    let ddy = dpdy(in.uv);
-    var texel: vec4<f32>;
-    if in.repeat > 0.5 {
-        texel = textureSampleGrad(image_texture, repeat_sampler, in.uv, ddx, ddy);
-    } else {
-        texel = textureSampleGrad(image_texture, clamp_sampler, in.uv, ddx, ddy);
-    }
+    let texel = textureSample(image_texture, image_sampler, in.uv);
 
     let coverage = shape_coverage(in.mask_local, in.mask_half, in.mask_radius);
     // O alfa do arquivo é reto; aqui ele entra na conta e o rgb é premultiplicado.
