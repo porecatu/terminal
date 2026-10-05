@@ -3,11 +3,11 @@
 //! Imagem de fundo do terminal: chave, estado e carga (PRD-017, ADR-0061
 //! §1, §7 e §8).
 //!
-//! **Nada é desenhado aqui** (etapa 2 de 6). O módulo decide *quando* ler uma
-//! imagem e *o que* fazer com o resultado; a textura (etapa 3) e a pintura
-//! (etapa 4) vêm depois. Por isso `Ready` guarda os bytes RGBA8 e a cadeia de
-//! mips já prontos: a etapa 3 troca isso por um `ImageId` do registro de
-//! imagens do `GpuContext`.
+//! **Nada é desenhado aqui** (etapas 2 e 3 de 6). O módulo decide *quando* ler
+//! uma imagem e *o que* fazer com o resultado; a pintura (etapa 4) vem depois.
+//! A thread entrega os bytes RGBA8 e a cadeia de mips (`Decoded`); o `App` os
+//! sobe para uma textura do `GpuContext` (`create_image`) e o estado passa a
+//! guardar só o `ImageId` (`Ready`), com os bytes descartados.
 //!
 //! O desenho segue o das consultas ao Git (`git.rs`, ADR-0052): o estado é do
 //! **processo** (`App`), nunca da janela; a carga roda numa thread de vida
@@ -25,12 +25,15 @@ use std::time::SystemTime;
 use image::imageops::{self, FilterType};
 use image::{ImageError, ImageFormat, ImageReader, Limits, RgbaImage};
 use porecatu_locale::Catalog;
+use porecatu_render::ImageId;
 
 use crate::messages::msg;
 
 /// Maior lado de textura que o `Device` aceita com o `DeviceDescriptor::
-/// default()` que o projeto pede (`max_texture_dimension_2d`). O chamador
-/// passará o valor lido do `Device` em uso (etapa 3); até lá, este.
+/// default()` que o projeto pede (`max_texture_dimension_2d`). Só vale
+/// enquanto não há `GpuContext` (a carga do arranque começa antes da primeira
+/// janela, RF-17.17): com ele, `App` passa `GpuContext::
+/// max_texture_dimension_2d()`.
 pub(crate) const DEFAULT_MAX_TEXTURE_DIMENSION: u32 = 8192;
 
 /// Por que a imagem não foi carregada (ADR-0061 §8). Sempre viaja ao lado do
@@ -148,12 +151,27 @@ pub(crate) struct DecodedImage {
     pub(crate) levels: Vec<MipLevel>,
 }
 
-/// Estado da imagem da chave atual (ADR-0061 §7). A etapa 3 troca o
-/// conteúdo de `Ready` por `{ id, size }`.
+/// A imagem já na GPU: o identificador do registro de `porecatu-render`
+/// (`GpuContext::create_image`) e o tamanho do nível 0. Os bytes ficaram para
+/// trás -- a textura é do processo, e toda janela desenha com ela (RF-17.18).
+///
+/// Genérico no handle (`H`, o `ImageId` por padrão) só para que o store seja
+/// testável sem GPU: `ImageId` é opaco e só o registro cria um.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BackgroundTexture<H = ImageId> {
+    pub(crate) id: H,
+    pub(crate) size: (u32, u32),
+}
+
+/// Estado da imagem da chave atual (ADR-0061 §7).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BackgroundImageState {
+pub(crate) enum BackgroundImageState<H = ImageId> {
     Loading,
-    Ready(DecodedImage),
+    /// A thread entregou os bytes e a textura ainda não foi criada -- por não
+    /// haver `GpuContext` ainda (a carga acabou antes da primeira janela). É
+    /// um intervalo, não um estado de repouso: `upload` o resolve.
+    Decoded(DecodedImage),
+    Ready(BackgroundTexture<H>),
     Failed(BackgroundImageError),
 }
 
@@ -182,9 +200,20 @@ pub(crate) enum SyncOutcome {
 pub(crate) enum ApplyOutcome {
     /// A chave do resultado não é mais a atual: descartado, nada mudou.
     Discarded,
-    /// A imagem da chave atual ficou pronta.
-    Ready,
+    /// Os bytes da chave atual chegaram: falta criar a textura (`upload`).
+    Decoded,
     /// A carga da chave atual falhou: avisar, uma vez.
+    Failed(BackgroundImageFailure),
+}
+
+/// O que `BackgroundImageStore::upload` conta.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UploadOutcome {
+    /// Nada esperando textura (estado que não é `Decoded`).
+    Nothing,
+    /// A textura foi criada: a imagem da chave atual está pronta.
+    Ready,
+    /// A textura não pôde ser criada (maior que o limite da placa): avisar.
     Failed(BackgroundImageFailure),
 }
 
@@ -200,18 +229,34 @@ pub(crate) fn result_is_current(
 /// A imagem de fundo do **processo** (`App`), nunca da janela: uma decodificação
 /// por processo, qualquer que seja o número de janelas e de painéis (RF-17.18).
 ///
-/// Puro: não toca o disco nem abre thread -- quem faz isso é o `App`, a partir
-/// do que `sync` e `apply` devolvem. É o que o torna testável sem janela.
-#[derive(Debug, Default)]
-pub(crate) struct BackgroundImageStore {
-    current: Option<(BackgroundImageKey, BackgroundImageState)>,
-    /// A última imagem `Ready`, mantida **enquanto a chave nova carrega**:
-    /// trocar de imagem não pisca sem imagem no meio (ADR-0061 §7). Falha e
-    /// `path` vazio a descartam.
-    previous: Option<DecodedImage>,
+/// Puro: não toca o disco, a GPU nem abre thread -- quem faz isso é o `App`, a
+/// partir do que `sync`, `apply` e `upload` devolvem. É o que o torna testável
+/// sem janela. A GPU entra por um fecho (`upload`) e pela lista de texturas a
+/// soltar (`drain_released`).
+#[derive(Debug)]
+pub(crate) struct BackgroundImageStore<H = ImageId> {
+    current: Option<(BackgroundImageKey, BackgroundImageState<H>)>,
+    /// A última textura `Ready`, mantida **enquanto a chave nova carrega**:
+    /// trocar de imagem não pisca sem imagem no meio (ADR-0061 §7). Sai
+    /// quando a nova fica pronta, falha, ou `path` fica vazio.
+    previous: Option<BackgroundTexture<H>>,
+    /// Texturas que o store largou e que a GPU ainda guarda: o `App` chama
+    /// `remove_image` para cada uma (`drain_released`).
+    released: Vec<H>,
 }
 
-impl BackgroundImageStore {
+// À mão: o `derive` exigiria `H: Default`, e `ImageId` não é.
+impl<H> Default for BackgroundImageStore<H> {
+    fn default() -> Self {
+        Self {
+            current: None,
+            previous: None,
+            released: Vec::new(),
+        }
+    }
+}
+
+impl<H: Copy> BackgroundImageStore<H> {
     /// Chave da carga atual, `None` sem imagem configurada.
     pub(crate) fn key(&self) -> Option<&BackgroundImageKey> {
         self.current.as_ref().map(|(key, _)| key)
@@ -219,18 +264,31 @@ impl BackgroundImageStore {
 
     /// Estado da chave atual.
     #[allow(dead_code)] // Lido pela pintura (etapa 4) e pelos testes.
-    pub(crate) fn state(&self) -> Option<&BackgroundImageState> {
+    pub(crate) fn state(&self) -> Option<&BackgroundImageState<H>> {
         self.current.as_ref().map(|(_, state)| state)
     }
 
-    /// A imagem que deve ser desenhada agora: a da chave atual, se pronta;
+    /// A textura que deve ser desenhada agora: a da chave atual, se pronta;
     /// senão a anterior, enquanto a nova carrega; senão nenhuma.
-    #[allow(dead_code)] // Lido pela criação de textura (etapa 3).
-    pub(crate) fn displayed(&self) -> Option<&DecodedImage> {
+    #[allow(dead_code)] // Lido pela pintura (etapa 4) e pelos testes.
+    pub(crate) fn displayed(&self) -> Option<BackgroundTexture<H>> {
         match self.state()? {
-            BackgroundImageState::Ready(image) => Some(image),
-            BackgroundImageState::Loading => self.previous.as_ref(),
+            BackgroundImageState::Ready(texture) => Some(*texture),
+            BackgroundImageState::Loading | BackgroundImageState::Decoded(_) => self.previous,
             BackgroundImageState::Failed(_) => None,
+        }
+    }
+
+    /// Texturas que o store largou desde a última chamada, para o `App`
+    /// soltar na GPU (`remove_image`). Sem `GpuContext` (nunca houve textura)
+    /// a lista fica vazia.
+    pub(crate) fn drain_released(&mut self) -> Vec<H> {
+        std::mem::take(&mut self.released)
+    }
+
+    fn release_previous(&mut self) {
+        if let Some(texture) = self.previous.take() {
+            self.released.push(texture.id);
         }
     }
 
@@ -243,24 +301,31 @@ impl BackgroundImageStore {
         wanted: Option<(BackgroundImageKey, Option<BackgroundImageError>)>,
     ) -> SyncOutcome {
         let Some((key, probe_error)) = wanted else {
-            self.previous = None;
-            return if self.current.take().is_some() {
-                SyncOutcome::Cleared
-            } else {
-                SyncOutcome::Unchanged
+            self.release_previous();
+            return match self.current.take() {
+                Some((_, state)) => {
+                    if let BackgroundImageState::Ready(texture) = state {
+                        self.released.push(texture.id);
+                    }
+                    SyncOutcome::Cleared
+                }
+                None => SyncOutcome::Unchanged,
             };
         };
         if self.key() == Some(&key) {
             return SyncOutcome::Unchanged;
         }
-        // Chave nova. A imagem pronta da chave que sai passa a ser a
+        // Chave nova. A textura pronta da chave que sai passa a ser a
         // "anterior", mantida até a nova ficar pronta; `previous` que já
-        // existia (carga em andamento que foi trocada) continua valendo.
-        if let Some((_, BackgroundImageState::Ready(image))) = self.current.take() {
-            self.previous = Some(image);
+        // existia (carga em andamento que foi trocada) continua valendo, e a
+        // que sobraria é solta (não acontece: `previous` só existe enquanto a
+        // atual não está `Ready`).
+        if let Some((_, BackgroundImageState::Ready(texture))) = self.current.take() {
+            self.release_previous();
+            self.previous = Some(texture);
         }
         if let Some(error) = probe_error {
-            self.previous = None;
+            self.release_previous();
             self.current = Some((key.clone(), BackgroundImageState::Failed(error)));
             return SyncOutcome::Failed(BackgroundImageFailure {
                 path: key.path,
@@ -285,20 +350,55 @@ impl BackgroundImageStore {
         if !matches!(state, BackgroundImageState::Loading) {
             return ApplyOutcome::Discarded;
         }
-        self.previous = None;
         match result.outcome {
             Ok(image) => {
-                *state = BackgroundImageState::Ready(image);
-                ApplyOutcome::Ready
+                // A anterior fica até `upload` criar a textura nova.
+                *state = BackgroundImageState::Decoded(image);
+                ApplyOutcome::Decoded
             }
             Err(error) => {
                 *state = BackgroundImageState::Failed(error);
+                self.release_previous();
                 ApplyOutcome::Failed(BackgroundImageFailure {
                     path: result.key.path,
                     error,
                 })
             }
         }
+    }
+
+    /// Cria a textura da imagem decodificada, se há uma esperando: `create`
+    /// recebe os bytes e devolve o `ImageId` do registro de `porecatu-render`.
+    /// Os bytes saem do estado (só o `id` e o tamanho ficam) e a textura
+    /// anterior é solta. Chamado logo depois de `apply` e, se ainda não havia
+    /// `GpuContext`, quando ele passa a existir.
+    pub(crate) fn upload(
+        &mut self,
+        create: impl FnOnce(&DecodedImage) -> Result<H, BackgroundImageError>,
+    ) -> UploadOutcome {
+        let Some((key, state)) = self.current.as_mut() else {
+            return UploadOutcome::Nothing;
+        };
+        let BackgroundImageState::Decoded(image) = &*state else {
+            return UploadOutcome::Nothing;
+        };
+        let size = image.size;
+        let outcome = match create(image) {
+            Ok(id) => {
+                *state = BackgroundImageState::Ready(BackgroundTexture { id, size });
+                UploadOutcome::Ready
+            }
+            Err(error) => {
+                let failure = BackgroundImageFailure {
+                    path: key.path.clone(),
+                    error,
+                };
+                *state = BackgroundImageState::Failed(error);
+                UploadOutcome::Failed(failure)
+            }
+        };
+        self.release_previous();
+        outcome
     }
 }
 
@@ -876,16 +976,30 @@ mod tests {
 
     // ---- estado --------------------------------------------------------
 
+    /// O handle de teste é um `u32`: `ImageId` é opaco, e o store não liga.
+    type Store = BackgroundImageStore<u32>;
+
+    /// O resultado de `key` chega e a textura `id` é criada.
+    #[track_caller]
+    fn finish(store: &mut Store, key: &BackgroundImageKey, id: u32) {
+        assert_eq!(store.apply(loaded(key)), ApplyOutcome::Decoded);
+        assert_eq!(store.upload(|_| Ok(id)), UploadOutcome::Ready);
+    }
+
+    fn ready(id: u32) -> BackgroundImageState<u32> {
+        BackgroundImageState::Ready(BackgroundTexture { id, size: (1, 1) })
+    }
+
     #[test]
     fn no_image_configured_stays_unchanged() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         assert_eq!(store.sync(None), SyncOutcome::Unchanged);
         assert!(store.displayed().is_none());
     }
 
     #[test]
     fn a_new_key_loads_and_the_same_key_does_nothing() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let a = key("a.png", 1);
         assert_eq!(
             store.sync(Some((a.clone(), None))),
@@ -894,18 +1008,67 @@ mod tests {
         assert_eq!(store.state(), Some(&BackgroundImageState::Loading));
         // Mudar só `mode`/`opacity` refaz a conta e não a carga: mesma chave.
         assert_eq!(store.sync(Some((a.clone(), None))), SyncOutcome::Unchanged);
-        assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Ready);
-        assert_eq!(store.sync(Some((a, None))), SyncOutcome::Unchanged);
+        assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Decoded);
+        // Os bytes esperam a textura; nada se desenha ainda.
         assert!(matches!(
             store.state(),
-            Some(BackgroundImageState::Ready(_))
+            Some(BackgroundImageState::Decoded(_))
         ));
-        assert!(store.displayed().is_some());
+        assert!(store.displayed().is_none());
+        assert_eq!(store.upload(|_| Ok(9)), UploadOutcome::Ready);
+        assert_eq!(store.sync(Some((a, None))), SyncOutcome::Unchanged);
+        // Só o handle e o tamanho ficam: os bytes saíram do estado.
+        assert_eq!(store.state(), Some(&ready(9)));
+        assert_eq!(
+            store.displayed(),
+            Some(BackgroundTexture {
+                id: 9,
+                size: (1, 1)
+            })
+        );
+        assert!(store.drain_released().is_empty());
+    }
+
+    #[test]
+    fn upload_without_a_decoded_image_does_nothing() {
+        let mut store = Store::default();
+        assert_eq!(store.upload(|_| Ok(1)), UploadOutcome::Nothing);
+        let a = key("a.png", 1);
+        store.sync(Some((a, None)));
+        // Ainda `Loading`: a closure nem é chamada.
+        assert_eq!(
+            store.upload(|_| panic!("não devia criar textura")),
+            UploadOutcome::Nothing
+        );
+    }
+
+    #[test]
+    fn a_texture_the_gpu_refuses_is_a_failure_with_a_warning() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        store.sync(Some((a.clone(), None)));
+        store.apply(loaded(&a));
+        let outcome = store.upload(|_| Err(BackgroundImageError::TooLarge));
+        assert_eq!(
+            outcome,
+            UploadOutcome::Failed(BackgroundImageFailure {
+                path: PathBuf::from("a.png"),
+                error: BackgroundImageError::TooLarge,
+            })
+        );
+        assert_eq!(
+            store.state(),
+            Some(&BackgroundImageState::Failed(
+                BackgroundImageError::TooLarge
+            ))
+        );
+        // Mesma chave na recarga seguinte: sem carga nova nem aviso novo.
+        assert_eq!(store.sync(Some((a, None))), SyncOutcome::Unchanged);
     }
 
     #[test]
     fn a_result_with_an_old_key_is_discarded() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
         store.sync(Some((a.clone(), None)));
@@ -913,13 +1076,13 @@ mod tests {
         // A carga de `a` termina depois de `b` já ter sido pedida.
         assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Discarded);
         assert_eq!(store.state(), Some(&BackgroundImageState::Loading));
-        assert_eq!(store.apply(loaded(&b)), ApplyOutcome::Ready);
+        assert_eq!(store.apply(loaded(&b)), ApplyOutcome::Decoded);
         assert_eq!(store.key(), Some(&b));
     }
 
     #[test]
     fn a_failed_result_with_an_old_key_does_not_warn() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
         store.sync(Some((a.clone(), None)));
@@ -933,7 +1096,7 @@ mod tests {
 
     #[test]
     fn a_result_with_no_image_configured_is_discarded() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let a = key("a.png", 1);
         store.sync(Some((a.clone(), None)));
         assert_eq!(store.sync(None), SyncOutcome::Cleared);
@@ -943,36 +1106,55 @@ mod tests {
 
     #[test]
     fn the_previous_image_stays_until_the_new_one_is_ready() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
         store.sync(Some((a.clone(), None)));
-        store.apply(loaded(&a));
+        finish(&mut store, &a, 1);
         assert_eq!(
             store.sync(Some((b.clone(), None))),
             SyncOutcome::Load(b.clone())
         );
-        // `b` ainda carrega: continua a de `a`, sem piscar sem imagem.
+        // `b` ainda carrega: continua a textura de `a`, sem piscar sem imagem.
         assert_eq!(store.state(), Some(&BackgroundImageState::Loading));
-        assert!(store.displayed().is_some());
+        assert_eq!(store.displayed().map(|t| t.id), Some(1));
         // Uma terceira troca no meio da carga mantém a mesma "anterior".
         let c = key("c.png", 1);
         store.sync(Some((c.clone(), None)));
-        assert!(store.displayed().is_some());
-        assert_eq!(store.apply(loaded(&c)), ApplyOutcome::Ready);
-        assert!(matches!(
-            store.state(),
-            Some(BackgroundImageState::Ready(_))
-        ));
+        assert_eq!(store.displayed().map(|t| t.id), Some(1));
+        // Os bytes de `c` chegaram, mas a textura ainda não: segue a de `a`.
+        assert_eq!(store.apply(loaded(&c)), ApplyOutcome::Decoded);
+        assert_eq!(store.displayed().map(|t| t.id), Some(1));
+        assert!(store.drain_released().is_empty());
+        // A textura nova entra, e só então a de `a` é solta na GPU.
+        assert_eq!(store.upload(|_| Ok(2)), UploadOutcome::Ready);
+        assert_eq!(store.state(), Some(&ready(2)));
+        assert_eq!(store.displayed().map(|t| t.id), Some(2));
+        assert_eq!(store.drain_released(), vec![1]);
+        assert!(store.drain_released().is_empty());
+    }
+
+    #[test]
+    fn replacing_a_ready_texture_releases_exactly_the_old_one() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        let b = key("b.png", 1);
+        store.sync(Some((a.clone(), None)));
+        finish(&mut store, &a, 10);
+        store.sync(Some((b.clone(), None)));
+        finish(&mut store, &b, 11);
+        assert_eq!(store.drain_released(), vec![10]);
+        // A de `b` segue viva.
+        assert_eq!(store.displayed().map(|t| t.id), Some(11));
     }
 
     #[test]
     fn a_failure_removes_the_previous_image_and_warns_once() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
         store.sync(Some((a.clone(), None)));
-        store.apply(loaded(&a));
+        finish(&mut store, &a, 5);
         store.sync(Some((b.clone(), None)));
         let failed = BackgroundImageResult {
             key: b.clone(),
@@ -986,6 +1168,8 @@ mod tests {
             })
         );
         assert!(store.displayed().is_none());
+        // A textura anterior foi solta na GPU.
+        assert_eq!(store.drain_released(), vec![5]);
         // Recarga com a mesma chave quebrada: nada, e portanto nenhum aviso
         // novo (RF-17.14: uma vez por arquivo e por problema).
         assert_eq!(store.sync(Some((b.clone(), None))), SyncOutcome::Unchanged);
@@ -999,7 +1183,7 @@ mod tests {
 
     #[test]
     fn a_probe_failure_fails_at_once_and_warns_once() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let missing = BackgroundImageKey {
             path: PathBuf::from("nao-existe.png"),
             mtime: None,
@@ -1029,7 +1213,7 @@ mod tests {
 
     #[test]
     fn the_file_appearing_after_a_failure_loads() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let missing = BackgroundImageKey {
             path: PathBuf::from("a.png"),
             mtime: None,
@@ -1045,14 +1229,62 @@ mod tests {
 
     #[test]
     fn clearing_the_path_drops_everything() {
-        let mut store = BackgroundImageStore::default();
+        let mut store = Store::default();
         let a = key("a.png", 1);
         store.sync(Some((a.clone(), None)));
-        store.apply(loaded(&a));
+        finish(&mut store, &a, 3);
         assert_eq!(store.sync(None), SyncOutcome::Cleared);
         assert!(store.key().is_none());
         assert!(store.displayed().is_none());
+        // A textura de `a` sai da GPU.
+        assert_eq!(store.drain_released(), vec![3]);
         assert_eq!(store.sync(None), SyncOutcome::Unchanged);
+    }
+
+    #[test]
+    fn clearing_while_a_new_image_loads_releases_the_previous_texture() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        let b = key("b.png", 1);
+        store.sync(Some((a.clone(), None)));
+        finish(&mut store, &a, 4);
+        store.sync(Some((b, None)));
+        assert_eq!(store.sync(None), SyncOutcome::Cleared);
+        assert_eq!(store.drain_released(), vec![4]);
+        assert!(store.displayed().is_none());
+    }
+
+    #[test]
+    fn a_probe_failure_releases_the_ready_texture() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        store.sync(Some((a.clone(), None)));
+        finish(&mut store, &a, 6);
+        let gone = BackgroundImageKey {
+            path: PathBuf::from("a.png"),
+            mtime: None,
+            len: 0,
+        };
+        let outcome = store.sync(Some((gone, Some(BackgroundImageError::NotFound))));
+        assert!(matches!(outcome, SyncOutcome::Failed(_)));
+        assert_eq!(store.drain_released(), vec![6]);
+        assert!(store.displayed().is_none());
+    }
+
+    #[test]
+    fn the_file_changing_on_disk_keeps_the_texture_until_the_new_one_is_up() {
+        let mut store = Store::default();
+        let before = key("a.png", 1);
+        let after = key("a.png", 2); // mesmo caminho, outro mtime/tamanho
+        store.sync(Some((before.clone(), None)));
+        finish(&mut store, &before, 7);
+        assert_eq!(
+            store.sync(Some((after.clone(), None))),
+            SyncOutcome::Load(after.clone())
+        );
+        assert_eq!(store.displayed().map(|t| t.id), Some(7));
+        finish(&mut store, &after, 8);
+        assert_eq!(store.drain_released(), vec![7]);
     }
 
     // ---- frases --------------------------------------------------------

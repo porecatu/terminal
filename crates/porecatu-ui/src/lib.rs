@@ -5496,19 +5496,24 @@ impl App {
         match self.background_image.sync(wanted) {
             background_image::SyncOutcome::Unchanged => {}
             background_image::SyncOutcome::Cleared => {
+                self.release_background_textures();
                 self.for_each_surface(|surface| surface.request_redraw());
             }
             background_image::SyncOutcome::Load(key) => {
-                let proxy = self.proxy.clone();
-                background_image::spawn_load(
-                    key,
+                // Com `GpuContext`, o teto é o da placa (RF-17.15); sem ele (o
+                // arranque, antes da primeira janela), o do `DeviceDescriptor`
+                // padrão que o projeto pede.
+                let max_dim = self.gpu.as_ref().map_or(
                     background_image::DEFAULT_MAX_TEXTURE_DIMENSION,
-                    move |result| {
-                        let _ = proxy.send_event(Wakeup::BackgroundImageLoaded(Box::new(result)));
-                    },
+                    GpuContext::max_texture_dimension_2d,
                 );
+                let proxy = self.proxy.clone();
+                background_image::spawn_load(key, max_dim, move |result| {
+                    let _ = proxy.send_event(Wakeup::BackgroundImageLoaded(Box::new(result)));
+                });
             }
             background_image::SyncOutcome::Failed(failure) => {
+                self.release_background_textures();
                 self.warn_background_image(failure);
                 self.for_each_surface(|surface| surface.request_redraw());
             }
@@ -5516,17 +5521,62 @@ impl App {
     }
 
     /// Aplica o resultado da thread de carga (ADR-0061 §7): chave que já não
-    /// é a atual é descartada sem efeito; a atual guarda a imagem (a anterior,
-    /// mantida até aqui, sai) ou avisa a falha.
+    /// é a atual é descartada sem efeito; a atual vira textura (`upload`) ou
+    /// avisa a falha.
     fn apply_background_image_result(&mut self, result: background_image::BackgroundImageResult) {
         match self.background_image.apply(result) {
             background_image::ApplyOutcome::Discarded => {}
-            background_image::ApplyOutcome::Ready => {
-                self.for_each_surface(|surface| surface.request_redraw());
-            }
+            background_image::ApplyOutcome::Decoded => self.upload_background_image(),
             background_image::ApplyOutcome::Failed(failure) => {
+                self.release_background_textures();
                 self.warn_background_image(failure);
                 self.for_each_surface(|surface| surface.request_redraw());
+            }
+        }
+    }
+
+    /// Cria a textura da imagem decodificada no `GpuContext` do processo
+    /// (`create_image`), solta a anterior (`remove_image`) e deixa só o
+    /// `ImageId` no estado -- os bytes saem. Chamado quando o resultado chega
+    /// e, se ele chegou antes de haver GPU, quando o `GpuContext` é criado.
+    /// Uma textura serve a toda janela: quem desenhar (etapa 4) lê o mesmo id.
+    fn upload_background_image(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        let outcome = self.background_image.upload(|decoded| {
+            let (width, height) = decoded.size;
+            // A thread já reduziu ao teto que conhecia (o da placa, ou 8192 no
+            // arranque); se a placa aceita menos que isso, a imagem é grande
+            // demais para ela.
+            if width.max(height) > gpu.max_texture_dimension_2d() {
+                return Err(background_image::BackgroundImageError::TooLarge);
+            }
+            let levels: Vec<&[u8]> = decoded
+                .levels
+                .iter()
+                .map(|level| level.rgba.as_slice())
+                .collect();
+            Ok(gpu.create_image(width, height, &levels))
+        });
+        self.release_background_textures();
+        match outcome {
+            background_image::UploadOutcome::Nothing => {}
+            background_image::UploadOutcome::Ready => {
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+            background_image::UploadOutcome::Failed(failure) => {
+                self.warn_background_image(failure);
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+        }
+    }
+
+    /// Solta na GPU as texturas que o estado largou (`remove_image`).
+    fn release_background_textures(&mut self) {
+        for id in self.background_image.drain_released() {
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.remove_image(id);
             }
         }
     }
@@ -6100,6 +6150,9 @@ impl App {
                 ));
             }
             self.gpu = Some(gpu);
+            // RF-17.17: a carga do arranque pode ter terminado antes de haver
+            // `GpuContext`; a textura sai agora.
+            self.upload_background_image();
             window_surface
         };
 

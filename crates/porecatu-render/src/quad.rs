@@ -17,10 +17,12 @@ use std::ops::Range;
 use wgpu::util::DeviceExt;
 
 use crate::frame::{GeometryBatch, GeometryPrimitive, Layer};
-use crate::primitives::{Quad, Rect, RoundedQuad, scale_rect};
+use crate::image::{GpuImage, ImageInstance, ImageRegistry, ImageShared};
+use crate::primitives::{ImageId, Quad, Rect, RoundedQuad, scale_rect};
 
-const SHADER: &str = include_str!("quad.wgsl");
+const SHADER: &str = concat!(include_str!("sdf.wgsl"), include_str!("quad.wgsl"));
 const INITIAL_INSTANCE_CAPACITY: u64 = 64;
+const INITIAL_IMAGE_CAPACITY: u64 = 4;
 
 /// Vértice estático do quad unitário (-1..1), compartilhado por toda
 /// instância -- a instância escala e posiciona via `Instance`.
@@ -67,7 +69,7 @@ struct Instance {
 /// transparentes não soma cobertura total, e sobra uma linha fina da cor de
 /// trás (a costura de blocos/box-drawing que motivou isto; ver `paint.rs`).
 /// Mesma razão que `text.rs` já arredonda a origem de todo `TextRun`.
-fn snap_rect_to_physical_pixels(rect: Rect, scale: f32) -> ([f32; 2], [f32; 2]) {
+pub(crate) fn snap_rect_to_physical_pixels(rect: Rect, scale: f32) -> ([f32; 2], [f32; 2]) {
     let x0 = (rect.x * scale).round();
     let y0 = (rect.y * scale).round();
     let x1 = ((rect.x + rect.width) * scale).round();
@@ -125,8 +127,10 @@ pub(crate) struct QuadShared {
     pipeline: wgpu::RenderPipeline,
     /// Mesmo shader, `BlendState::REPLACE` (`Primitive::Backdrop`).
     backdrop_pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    vertex_buffer: wgpu::Buffer,
+    /// Grupo 0 (uniforme de resolução da janela): o pipeline de imagem usa o
+    /// mesmo layout, e portanto o mesmo bind group de cada janela.
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) vertex_buffer: wgpu::Buffer,
 }
 
 impl QuadShared {
@@ -288,8 +292,30 @@ impl ScissorRect {
 struct QuadLayerBuffer {
     instance_buffer: wgpu::Buffer,
     instance_capacity: u64,
-    /// O `bool` é "backdrop": desenha com o pipeline que substitui.
-    draws: Vec<(ScissorRect, Range<u32>, bool)>,
+    /// Instâncias das imagens da camada: outro layout de vértice, outro
+    /// buffer (ADR-0061 §2).
+    image_buffer: wgpu::Buffer,
+    image_capacity: u64,
+    /// Na ordem do stream: quads e imagens se intercalam.
+    draws: Vec<Draw>,
+}
+
+/// Um `draw` da camada.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Draw {
+    /// Execução contígua de quads de um batch, num pipeline só. `backdrop`
+    /// desenha com o que substitui.
+    Quads {
+        scissor: ScissorRect,
+        range: Range<u32>,
+        backdrop: bool,
+    },
+    /// Uma imagem: `index` é a posição dela em `image_buffer`.
+    Image {
+        scissor: ScissorRect,
+        index: u32,
+        image: ImageId,
+    },
 }
 
 impl QuadLayerBuffer {
@@ -301,9 +327,18 @@ impl QuadLayerBuffer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let image_capacity = INITIAL_IMAGE_CAPACITY;
+        let image_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("porecatu-render/image-instances"),
+            size: std::mem::size_of::<ImageInstance>() as u64 * image_capacity,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Self {
             instance_buffer,
             instance_capacity,
+            image_buffer,
+            image_capacity,
             draws: Vec::new(),
         }
     }
@@ -372,6 +407,7 @@ impl QuadWindowState {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         batches: &[GeometryBatch],
+        images: &ImageRegistry<GpuImage>,
         scale: f32,
         surface_width: u32,
         surface_height: u32,
@@ -379,6 +415,7 @@ impl QuadWindowState {
         let state = &mut self.layers[layer.index()];
         state.draws.clear();
         let mut instances: Vec<Instance> = Vec::new();
+        let mut image_instances: Vec<ImageInstance> = Vec::new();
 
         for batch in batches {
             if batch.geometry.is_empty() {
@@ -390,6 +427,20 @@ impl QuadWindowState {
                 }
                 None => ScissorRect::full(surface_width, surface_height),
             };
+            // `resolve_layer` põe cada imagem sozinha num batch (troca de
+            // pipeline e de bind group): aqui ela vira um `draw` próprio, na
+            // ordem do stream. Id de imagem já removida não desenha nada.
+            if let [GeometryPrimitive::Image(image)] = batch.geometry.as_slice() {
+                if !scissor.is_empty() && images.contains(image.image) {
+                    state.draws.push(Draw::Image {
+                        scissor,
+                        index: image_instances.len() as u32,
+                        image: image.image,
+                    });
+                    image_instances.push(ImageInstance::from_primitive(image, scale));
+                }
+                continue;
+            }
             let start = instances.len() as u32;
             // Na ordem de chegada -- não por tipo. Separar quad e
             // arredondado em dois `extend` desenhava todo arredondado por
@@ -405,7 +456,11 @@ impl QuadWindowState {
                 if backdrop != run_backdrop {
                     let at = instances.len() as u32;
                     if !scissor.is_empty() {
-                        state.draws.push((scissor, run_start..at, run_backdrop));
+                        state.draws.push(Draw::Quads {
+                            scissor,
+                            range: run_start..at,
+                            backdrop: run_backdrop,
+                        });
                     }
                     run_start = at;
                     run_backdrop = backdrop;
@@ -415,16 +470,21 @@ impl QuadWindowState {
                     GeometryPrimitive::Rounded(q) | GeometryPrimitive::Backdrop(q) => {
                         Instance::from_rounded_quad(q, scale)
                     }
+                    // Nunca num batch com quads (ver acima); se algum dia
+                    // chegar, desenhar como quad seria errado, e calar também.
+                    GeometryPrimitive::Image(_) => {
+                        unreachable!("imagem sempre sozinha no batch (resolve_layer)")
+                    }
                 });
             }
             let end = instances.len() as u32;
             if !scissor.is_empty() {
-                state.draws.push((scissor, run_start..end, run_backdrop));
+                state.draws.push(Draw::Quads {
+                    scissor,
+                    range: run_start..end,
+                    backdrop: run_backdrop,
+                });
             }
-        }
-
-        if instances.is_empty() {
-            return;
         }
 
         let needed = instances.len() as u64;
@@ -435,8 +495,24 @@ impl QuadWindowState {
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
             state.instance_capacity = needed;
-        } else {
+        } else if needed > 0 {
             queue.write_buffer(&state.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        }
+
+        let needed = image_instances.len() as u64;
+        if needed > state.image_capacity {
+            state.image_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("porecatu-render/image-instances"),
+                contents: bytemuck::cast_slice(&image_instances),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
+            state.image_capacity = needed;
+        } else if needed > 0 {
+            queue.write_buffer(
+                &state.image_buffer,
+                0,
+                bytemuck::cast_slice(&image_instances),
+            );
         }
     }
 
@@ -447,6 +523,8 @@ impl QuadWindowState {
         &'pass self,
         layer: Layer,
         shared: &'pass QuadShared,
+        image_shared: &'pass ImageShared,
+        images: &'pass ImageRegistry<GpuImage>,
         pass: &mut wgpu::RenderPass<'pass>,
     ) {
         let state = &self.layers[layer.index()];
@@ -456,14 +534,46 @@ impl QuadWindowState {
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, shared.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, state.instance_buffer.slice(..));
-        for (scissor, range, backdrop) in &state.draws {
-            pass.set_pipeline(if *backdrop {
-                &shared.backdrop_pipeline
-            } else {
-                &shared.pipeline
-            });
-            pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
-            pass.draw(0..4, range.clone());
+        // O slot 1 de vértice é o buffer de instâncias do último pipeline: uma
+        // imagem o troca, e o quad que vem depois precisa do seu de volta.
+        let mut slot_holds_images = false;
+        for draw in &state.draws {
+            match draw {
+                Draw::Quads {
+                    scissor,
+                    range,
+                    backdrop,
+                } => {
+                    if slot_holds_images {
+                        pass.set_vertex_buffer(1, state.instance_buffer.slice(..));
+                        slot_holds_images = false;
+                    }
+                    pass.set_pipeline(if *backdrop {
+                        &shared.backdrop_pipeline
+                    } else {
+                        &shared.pipeline
+                    });
+                    pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+                    pass.draw(0..4, range.clone());
+                }
+                Draw::Image {
+                    scissor,
+                    index,
+                    image,
+                } => {
+                    // Removida entre o `prepare` e o `render`: não desenha.
+                    let Some(gpu_image) = images.get(*image) else {
+                        continue;
+                    };
+                    pass.set_pipeline(&image_shared.pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_bind_group(1, &gpu_image.bind_group, &[]);
+                    pass.set_vertex_buffer(1, state.image_buffer.slice(..));
+                    slot_holds_images = true;
+                    pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+                    pass.draw(0..4, *index..*index + 1);
+                }
+            }
         }
     }
 }

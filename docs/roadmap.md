@@ -850,7 +850,7 @@ O ponto de partida: `porecatu-render` não amostra textura nenhuma além do atla
    - Os avisos com frase em `locales/`.
 
    Testes de decodificação com PNG e JPEG mínimos gerados no próprio teste. **Sem pixel novo.**
-3. **Primitiva `Image` em `porecatu-render`.** Registro de imagens no `GpuContext`, `image.wgsl` com a SDF extraída do `quad.wgsl` para uma função compartilhada, dois samplers, blend premultiplicado, e `Image` em `resolve_layer` na ordem da lista, com teste de batch sem GPU.
+3. **Primitiva `Image` em `porecatu-render` — feita.** `Primitive::Image`, o registro de imagens do `GpuContext` (`create_image`, `remove_image`, `max_texture_dimension_2d`), `image.wgsl` com a SDF extraída para `sdf.wgsl` (compartilhada com o `quad.wgsl`), dois samplers, blend premultiplicado e `Image` como geometria em `resolve_layer` (sozinha num batch). Provada por testes com GPU de verdade (alvo 8x8: alfa premultiplicado, máscara, clamp/repeat e mips, que se pulam sem adapter) e, em `porecatu-ui`, o estado do `App` guarda o `ImageId` no lugar dos bytes. Nada é desenhado no terminal ainda. O que a etapa pedia: Registro de imagens no `GpuContext`, `image.wgsl` com a SDF extraída do `quad.wgsl` para uma função compartilhada, dois samplers, blend premultiplicado, e `Image` em `resolve_layer` na ordem da lista, com teste de batch sem GPU.
 4. **Pintura por painel e composição.**
    - `background_image::placement` pura, com teste dos três modos em `scale` 1.0, 1.25, 1.5 e 2.0.
    - A chamada em `paint::build_primitives`, entre `backdrop_fill` e `paint_row_backgrounds`.
