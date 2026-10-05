@@ -1408,6 +1408,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2488,6 +2490,7 @@ dependencies = [
  "accesskit_winit",
  "arboard",
  "dirs",
+ "image",
  "notify",
  "opener",
  "png",
@@ -2497,6 +2500,7 @@ dependencies = [
  "porecatu-render",
  "porecatu-session",
  "porecatu-term",
+ "tempfile",
  "winit",
 ]
 

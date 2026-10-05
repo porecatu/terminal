@@ -841,7 +841,7 @@ O ponto de partida: `porecatu-render` não amostra textura nenhuma além do atla
    - o PRD-016 RF-16.11 (três opções no grupo Terminal).
 
    Também foram atualizados o índice de ADRs, a tabela de fases da especificação (só a classificação), a arquitetura §5, o README (stack com `image`) e o CLAUDE.md. **A §2.7 da especificação não é reescrita aqui**: ela descreve o binário até o PR que o muda ([ADR-0028](adr/0028-o-binario-como-referencia-visual.md)). **E `[terminal.background_image]` não entra no arquivo de exemplo aqui**: `tests/example_toml.rs` reprova chave antes do campo.
-2. **Config, caminho e carga.**
+2. **Config, caminho e carga — feita.** `[terminal.background_image]` (`path`, `mode`, `opacity`) existe em `porecatu-config`, com o bloco comentado no arquivo de exemplo; `resolve_background_image_path` é pura; `porecatu-ui` ganhou `image` pinado (nenhum crate novo no `Cargo.lock`), o módulo `background_image` (chave, estado, thread de carga com mips) e o estado do `App`, que dispara a carga no arranque e a cada recarga, descarta resultado de chave velha e avisa a falha uma vez, com as frases nos cinco arquivos de `locales/`. Nada é lido para desenhar ainda: **sem pixel novo**. O que a etapa pedia:
    - O campo `[terminal.background_image]` (`path`, `mode`, `opacity`) em `porecatu-config`, com o bloco comentado no `porecatu.example.toml` na mesma leva.
    - `resolve_background_image_path` pura, com testes de vazio, relativo ao diretório do config, absoluto e `~`.
    - `image` pinado em `porecatu-ui` com `default-features = false`.

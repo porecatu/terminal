@@ -541,6 +541,14 @@ missing = "git no se encontró en el sistema."
 timed_out = "git no respondió a tiempo."
 no_detail = "git rechazó la integración sin dar motivo."
 
+[notice.background_image]
+title = "Imagen de fondo no cargada"
+not_found = "No se encontró \"{path}\"."
+unreadable = "No se pudo leer \"{path}\"."
+unsupported = "\"{path}\" no tiene un formato admitido; los admitidos son PNG y JPEG."
+malformed = "\"{path}\" está dañado o no es una imagen válida."
+too_large = "\"{path}\" es demasiado grande para cargarse."
+
 [notice.language_not_found]
 title = "Idioma no encontrado"
 body = "No hay archivo para \"{language}\" (buscado en: {searched})."

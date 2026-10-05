@@ -33,6 +33,7 @@ use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId};
 mod access;
 mod animation;
 mod app_icon;
+mod background_image;
 mod box_glyphs;
 mod chrome;
 mod clipboard;
@@ -406,6 +407,14 @@ enum Wakeup {
     /// `RemoteIntegrationResult` não passa dos 56 bytes (`PathBuf` mais um
     /// enum com `String`), bem dentro dos 80 que `AccessKit` já reserva.
     GitIntegrationResult(git::RemoteIntegrationResult),
+    /// A thread de carga da imagem de fundo terminou (PRD-017, ADR-0061 §7):
+    /// dado chaveado por caminho, `mtime` e tamanho -- `App::
+    /// apply_background_image_result` o descarta se a chave já não é a
+    /// atual. `Box` porque `BackgroundImageResult` (chave com `PathBuf`,
+    /// mais `Result<DecodedImage, _>`) passa dos 80 bytes que `AccessKit` já
+    /// reserva -- medido em `background_image_result_is_boxed`, que reprova
+    /// se a conta mudar.
+    BackgroundImageLoaded(Box<background_image::BackgroundImageResult>),
 }
 
 impl From<accesskit_winit::Event> for Wakeup {
@@ -5002,6 +5011,10 @@ enum StartupNotice {
     KeybindingInvalid(keymap::KeymapIssue),
     /// ADR-0056 §8: o que `build_catalog` tem a dizer sobre os arquivos.
     Language(porecatu_locale::Diagnostic),
+    /// RF-17.14: a imagem de fundo falhou **antes** de haver janela (falha do
+    /// `metadata` no arranque, ou uma carga rápida que terminou antes de
+    /// `resumed`).
+    BackgroundImage(background_image::BackgroundImageFailure),
 }
 
 impl StartupNotice {
@@ -5028,6 +5041,10 @@ impl StartupNotice {
                 messages::keymap_issue(catalog, issue),
             ),
             StartupNotice::Language(diagnostic) => language::diagnostic_notice(diagnostic, catalog),
+            StartupNotice::BackgroundImage(failure) => {
+                let (title, body) = failure.notice_text(catalog);
+                (Severity::Warning, title, body)
+            }
         }
     }
 }
@@ -5204,6 +5221,12 @@ struct App {
     /// RF-13.3: `true` depois do primeiro aviso de intervalo elevado ao
     /// piso -- uma vez por execução, mesmo padrão do campo acima.
     git_poll_interval_warned: bool,
+    /// PRD-017/ADR-0061 §7: a imagem de fundo do terminal, do **processo**,
+    /// nunca da janela -- uma decodificação por processo (RF-17.18). Escrito
+    /// só em `sync_background_image` (a cada aplicação de config) e
+    /// `apply_background_image_result` (resultado da thread de carga).
+    /// **Nada lê isto para desenhar ainda** (etapas 3 e 4).
+    background_image: background_image::BackgroundImageStore,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -5412,7 +5435,7 @@ impl App {
         let pending_session =
             (config.session.enabled && cli_directory.is_none()).then(porecatu_session::load);
 
-        Self {
+        let mut app = Self {
             gpu: None,
             proxy,
             config_path,
@@ -5451,7 +5474,79 @@ impl App {
             git_remotes: HashMap::new(),
             git_disabled: false,
             git_poll_interval_warned: false,
+            background_image: background_image::BackgroundImageStore::default(),
+        };
+        // RF-17.17: o arranque não espera pela imagem -- só um `metadata` aqui,
+        // e a decodificação numa thread.
+        app.sync_background_image();
+        app
+    }
+
+    /// Reconcilia a imagem de fundo com a config em uso (ADR-0061 §7):
+    /// chamado no arranque e a cada recarga aplicada. Resolve o caminho
+    /// (RF-17.3), faz o `metadata`, e só então decide -- chave igual, nada;
+    /// chave nova, uma thread de carga; `path` vazio, sem imagem. Mudar só
+    /// `mode` ou `opacity` não muda a chave, então não relê nada.
+    fn sync_background_image(&mut self) {
+        let wanted = porecatu_config::resolve_background_image_path(
+            self.config_path.as_deref(),
+            &self.config.terminal.background_image.path,
+        )
+        .map(|path| background_image::BackgroundImageKey::probe(&path));
+        match self.background_image.sync(wanted) {
+            background_image::SyncOutcome::Unchanged => {}
+            background_image::SyncOutcome::Cleared => {
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+            background_image::SyncOutcome::Load(key) => {
+                let proxy = self.proxy.clone();
+                background_image::spawn_load(
+                    key,
+                    background_image::DEFAULT_MAX_TEXTURE_DIMENSION,
+                    move |result| {
+                        let _ = proxy.send_event(Wakeup::BackgroundImageLoaded(Box::new(result)));
+                    },
+                );
+            }
+            background_image::SyncOutcome::Failed(failure) => {
+                self.warn_background_image(failure);
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
         }
+    }
+
+    /// Aplica o resultado da thread de carga (ADR-0061 §7): chave que já não
+    /// é a atual é descartada sem efeito; a atual guarda a imagem (a anterior,
+    /// mantida até aqui, sai) ou avisa a falha.
+    fn apply_background_image_result(&mut self, result: background_image::BackgroundImageResult) {
+        match self.background_image.apply(result) {
+            background_image::ApplyOutcome::Discarded => {}
+            background_image::ApplyOutcome::Ready => {
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+            background_image::ApplyOutcome::Failed(failure) => {
+                self.warn_background_image(failure);
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+        }
+    }
+
+    /// RF-17.14: a falha da imagem de fundo é **um** aviso, não um por janela
+    /// -- vai para a primeira janela, como os avisos de sessão do arranque; sem
+    /// janela ainda, espera `resumed` em `pending_startup_warnings`. Quem
+    /// chama garante que é uma transição para `Failed` de uma chave nova
+    /// (`BackgroundImageStore`), então o aviso sai uma vez por arquivo e por
+    /// problema, não a cada recarga.
+    fn warn_background_image(&mut self, failure: background_image::BackgroundImageFailure) {
+        let Some(state) = self.windows.values_mut().next() else {
+            self.pending_startup_warnings
+                .push(StartupNotice::BackgroundImage(failure));
+            return;
+        };
+        let (title, body) = failure.notice_text(&self.catalog);
+        state
+            .warnings
+            .push(Severity::Warning, title, body, Instant::now());
     }
 
     /// ADR-0015: cria uma janela nova com uma aba, herdando o `cwd` da aba
@@ -7210,6 +7305,9 @@ impl App {
         let effects = reload::diff(&self.config, &new_config);
         self.config = Arc::new(*new_config);
         self.style = TabBarStyle::from_config(&self.config);
+        // PRD-017, classe A (ADR-0061 §9): a chave é reavaliada a cada recarga
+        // aplicada; só `path` novo, ou arquivo trocado no disco, abre carga.
+        self.sync_background_image();
 
         // ADR-0031 §4: tema de sessão sobrevive à recarga enquanto
         // existir; se sumiu do arquivo, volta ao `theme` declarado (ou a
@@ -7908,6 +8006,10 @@ impl ApplicationHandler<Wakeup> for App {
             }
             Wakeup::GitIntegrationResult(result) => {
                 self.apply_git_integration_result(result);
+                return;
+            }
+            Wakeup::BackgroundImageLoaded(result) => {
+                self.apply_background_image_result(*result);
                 return;
             }
         };
@@ -10922,4 +11024,30 @@ pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>, process_
     event_loop
         .run_app(&mut app)
         .expect("event loop terminou com erro");
+}
+
+#[cfg(test)]
+mod wakeup_size_tests {
+    use std::mem::size_of;
+
+    use super::{Wakeup, background_image::BackgroundImageResult};
+
+    /// A conta que decide o `Box` de `Wakeup::BackgroundImageLoaded` (mesma
+    /// medição do comentário de `GitQueryResult`): `AccessKit` já faz o
+    /// `Wakeup` ter 80 bytes, e o resultado da imagem (88) passa disso -- sem
+    /// `Box` todo `Wakeup::TabDirty` do processo ficaria maior. Se a conta
+    /// mudar, o teste diz qual lado.
+    #[test]
+    fn background_image_result_is_boxed() {
+        let widest_other = size_of::<accesskit_winit::Event>();
+        assert!(
+            size_of::<BackgroundImageResult>() > widest_other,
+            "o resultado cabe na variante mais larga ({widest_other} bytes): o `Box` já não se justifica"
+        );
+        assert_eq!(
+            size_of::<Wakeup>(),
+            widest_other,
+            "o `Wakeup` cresceu além da variante mais larga que já existia"
+        );
+    }
 }

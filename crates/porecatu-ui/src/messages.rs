@@ -806,6 +806,14 @@ registry! {
             timed_out(),
             no_detail(),
         },
+        background_image {
+            title(),
+            not_found(path),
+            unreadable(path),
+            unsupported(path),
+            malformed(path),
+            too_large(path),
+        },
         language_not_found {
             title(),
             body(language, searched),

@@ -580,6 +580,16 @@ missing = "git was not found on the system."
 timed_out = "git did not respond in time."
 no_detail = "git refused the integration without giving a reason."
 
+# Imagem de fundo do terminal (PRD-017, RF-17.14): o aviso diz qual arquivo
+# (o caminho já resolvido) e por quê; o terminal segue sem imagem.
+[notice.background_image]
+title = "Background image not loaded"
+not_found = "\"{path}\" was not found."
+unreadable = "\"{path}\" could not be read."
+unsupported = "\"{path}\" is not a supported format; the accepted ones are PNG and JPEG."
+malformed = "\"{path}\" is corrupted or is not a valid image."
+too_large = "\"{path}\" is too large to be loaded."
+
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]
 title = "Language not found"

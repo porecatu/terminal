@@ -764,6 +764,43 @@ theme = ""
 # vale na próxima janela. Numa janela opaca, o fundo só se mistura à barra.
 background_opacity = 1.0
 
+# Imagem de fundo do terminal: PNG ou JPEG atrás de TODO quadro de terminal
+# (aba solta, aba de grupo e cada painel de uma aba dividida, cada um com a
+# imagem inteira). Fica acima do fundo do quadro e abaixo de células, texto,
+# seleção e cursor. Bloco comentado: o padrão é não ter imagem, e com `path`
+# vazio o terminal é desenhado exatamente como sem este bloco.
+# Classe de recarga: [A] -- as três chaves valem na hora, em todas as janelas,
+# sem reiniciar nem redimensionar terminal. Trocar o conteúdo do arquivo de
+# imagem, mantendo o caminho, vale na próxima recarga da config: o app não
+# vigia o arquivo.
+#
+# [terminal.background_image]
+# Caminho da imagem. Vazio = sem imagem.                    [A] RF-17.1, RF-17.2
+# Formato reconhecido pelo conteúdo, não pela extensão; só PNG e JPEG. Relativo
+# vale a partir do diretório DESTE arquivo (o do --config, de PORECATU_CONFIG
+# ou o padrão da plataforma), não de onde o app foi lançado. Essa regra é
+# diferente da de `startup_directory` e `trusted_paths`, que não mudam.
+# `~/` ou `~\` no início é a pasta pessoal; absoluto vale como está. Arquivo
+# ausente, ilegível, de outro formato ou corrompido vira aviso, sem imagem.
+#                                                                       RF-17.3
+# path = ""
+# Como a imagem ocupa o quadro.                             [A] RF-17.5, RF-17.6
+#   "stretch" -- estica até o quadro inteiro, nos dois eixos, SEM manter a
+#                proporção (um quadro largo achata a imagem).
+#   "tile"    -- repete lado a lado no tamanho natural, a partir do canto
+#                superior esquerdo; o que passa da borda é cortado.
+#   "center"  -- tamanho natural, centralizada; menor que o quadro, sobra o
+#                fundo do terminal em volta; maior, corta nas bordas.
+# Tamanho natural = um pixel da imagem por pixel físico da tela.
+# mode = "stretch"
+# Opacidade da imagem, de 0.0 a 1.0.                       [A] RF-17.11, RF-17.12
+# A opacidade EFETIVA é `opacity × background_opacity` (acima): com o terminal
+# a 0.8 e a imagem a 0.5, a imagem sai a 0.4. Assim terminal transparente nunca
+# fica opaco por causa da imagem. Imagem forte atrás do texto atrapalha a
+# leitura; esta é a chave que a devolve. `0.0` não desenha a imagem, mas a
+# carrega.
+# opacity = 1.0
+
 
 # Classe de recarga: [B] -- métrica de fonte decide a largura de célula, logo
 # colunas e linhas. É o caso que o RF-5.28 nomeia.
