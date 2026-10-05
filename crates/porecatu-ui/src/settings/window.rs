@@ -129,6 +129,10 @@ pub(crate) struct SettingsWindow {
     scale: f32,
     logical_width: f32,
     logical_height: f32,
+    /// Quadros que ainda faltam redesenhar sem que nada tenha mudado: o
+    /// primeiro present de uma surface recém-criada não chega à tela no
+    /// Windows (janela preta até a primeira interação), o segundo chega.
+    settle_frames: u8,
     /// Última posição do cursor, em pixels físicos -- `winit` só a entrega em
     /// `CursorMoved`, não em `MouseInput`.
     cursor_position: (f64, f64),
@@ -213,6 +217,7 @@ impl SettingsWindow {
             scale,
             logical_width: size.width as f32 / scale,
             logical_height: size.height as f32 / scale,
+            settle_frames: 1,
             cursor_position: (0.0, 0.0),
             hovered_button: None,
             last_titlebar_click: None,
@@ -2347,6 +2352,10 @@ impl SettingsWindow {
     /// ocupa a maior parte da janela.
     pub(crate) fn render(&mut self, gpu: &mut GpuContext, frame: &Frame) {
         self.surface.render(gpu, PANEL_BACKGROUND, frame);
+        if self.settle_frames > 0 {
+            self.settle_frames -= 1;
+            self.window.request_redraw();
+        }
     }
 }
 

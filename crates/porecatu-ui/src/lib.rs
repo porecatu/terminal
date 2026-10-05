@@ -7437,7 +7437,7 @@ impl App {
                 }
             };
         surface.resize(gpu, size.width, size.height, scale);
-        Some(SettingsWindow::new(
+        let settings = SettingsWindow::new(
             window,
             surface,
             scale,
@@ -7450,7 +7450,12 @@ impl App {
                 .config_path
                 .as_deref()
                 .map_or(settings::Disk::Missing, settings::Disk::observe),
-        ))
+        );
+        // O render é damage-driven: nada garante um `RedrawRequested` do SO
+        // para uma janela recém-criada, e sem este pedido ela fica preta até
+        // a primeira interação que sujar o estado.
+        settings.request_redraw();
+        Some(settings)
     }
 
     /// Fecha a janela de configurações sem encerrar o app (ADR-0059 §2) e
