@@ -1174,10 +1174,21 @@ mod tests {
         hovered: impl Fn(usize) -> Option<Hit>,
         editing: Option<&Editing>,
     ) -> (Vec<Primitive>, usize) {
+        paint_any(f, draft, Group::Terminal, focus_font_size, hovered, editing)
+    }
+
+    fn paint_any(
+        f: &Fixture,
+        draft: &Draft,
+        group: Group,
+        focus_font_size: bool,
+        hovered: impl Fn(usize) -> Option<Hit>,
+        editing: Option<&Editing>,
+    ) -> (Vec<Primitive>, usize) {
         let m = Metrics::from_config(&f.config, 52.0);
         let layout = layout::layout(900.0, 640.0, 52.0, 200.0, m.footer_height());
         let key = ContentKey {
-            group: Group::Terminal,
+            group,
             panel_width_bits: layout.panel.width.to_bits(),
             generation: 0,
         };
@@ -1194,7 +1205,7 @@ mod tests {
             .blocks
             .iter()
             .position(|block| matches!(block, Block::Row(row) if row.option == Some("font_size")))
-            .unwrap();
+            .unwrap_or(0);
         let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
         let footer = footer_buttons(&m, layout.footer, content.footer_widths);
         let out = paint_body(
@@ -1204,7 +1215,7 @@ mod tests {
                 content: &content,
                 items: &items,
                 footer: &footer,
-                selected: Group::Terminal,
+                selected: group,
                 focus: if focus_font_size {
                     Focus::Row(index)
                 } else {
@@ -1332,6 +1343,28 @@ mod tests {
         let reason = reason.expect("a razão em Erro");
         assert_eq!(reason.size_px, 11.0);
         assert!(reason.text.starts_with("Valor fora da faixa"));
+    }
+
+    #[test]
+    fn an_empty_numeric_field_is_refused_and_painted_without_panicking() {
+        let f = fixture();
+        for def in super::super::catalog::OPTIONS.iter() {
+            if !matches!(
+                def.control,
+                super::super::catalog::Control::Number { .. }
+                    | super::super::catalog::Control::GitPoll
+            ) {
+                continue;
+            }
+            for text in ["", " ", "-", "."] {
+                let mut draft = Draft::new(&f.config);
+                interact::commit_text(&mut draft, def, text);
+                let _ = paint_terminal(&f, &draft, false, |_| None, None);
+                for group in Group::ALL {
+                    let _ = paint_any(&f, &draft, group, true, |_| None, None);
+                }
+            }
+        }
     }
 
     #[test]

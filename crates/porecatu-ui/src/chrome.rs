@@ -871,6 +871,43 @@ pub(crate) fn brighten(color: Color, mult: f64) -> Color {
     }
 }
 
+/// Espessura da borda de janela, em pixels lógicos.
+pub(crate) const WINDOW_BORDER_WIDTH: f32 = 1.0;
+
+/// Fator que escurece o fundo da janela para a cor da borda dela.
+const WINDOW_BORDER_DARKEN: f64 = 0.7;
+
+/// A borda de 1px em volta de uma janela de `width` x `height` pixels
+/// lógicos: quatro quads nas bordas, de uma cor um pouco mais escura que
+/// `background`. Vai por cima de tudo, então a camada mais alta é quem a
+/// recebe.
+pub(crate) fn window_border(width: f32, height: f32, background: Color) -> Vec<Primitive> {
+    let color = Color {
+        r: background.r * WINDOW_BORDER_DARKEN,
+        g: background.g * WINDOW_BORDER_DARKEN,
+        b: background.b * WINDOW_BORDER_DARKEN,
+        a: 1.0,
+    };
+    let t = WINDOW_BORDER_WIDTH;
+    let edge = |x: f32, y: f32, w: f32, h: f32| {
+        Primitive::Quad(Quad {
+            rect: Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            },
+            color,
+        })
+    };
+    vec![
+        edge(0.0, 0.0, width, t),
+        edge(0.0, height - t, width, t),
+        edge(0.0, t, t, height - 2.0 * t),
+        edge(width - t, t, t, height - 2.0 * t),
+    ]
+}
+
 /// Multiplica o alfa que a cor já tem por `mult` -- diferente de
 /// `with_alpha`, que substitui. É o que faz a aba esmaecer em cima do
 /// alfa `background_alpha` que `tab_active_background`/
@@ -1217,6 +1254,25 @@ pub fn bar_height(style: &TabBarStyle) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn window_border_is_four_one_pixel_quads_darker_than_the_background() {
+        let bg = Color {
+            r: 0.5,
+            g: 0.5,
+            b: 0.5,
+            a: 1.0,
+        };
+        let border = window_border(100.0, 50.0, bg);
+        assert_eq!(border.len(), 4);
+        for primitive in &border {
+            let Primitive::Quad(quad) = primitive else {
+                panic!("a borda é feita de quads");
+            };
+            assert!(quad.color.r < bg.r && quad.color.g < bg.g && quad.color.b < bg.b);
+            assert!(quad.rect.width == 1.0 || quad.rect.height == 1.0);
+        }
+    }
+
     use super::*;
     use porecatu_core::GroupColor;
     use porecatu_render::TextMeasurer;

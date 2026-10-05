@@ -2283,6 +2283,10 @@ impl SettingsWindow {
         let mut frame = Frame::new();
         frame.set_layer(Layer::Chrome, out);
         let mut popover = Vec::new();
+        // Borda de 1px da janela, na camada mais alta (um pouco mais escura
+        // que o fundo do painel).
+        let border =
+            chrome::window_border(self.logical_width, self.logical_height, PANEL_BACKGROUND);
         if let Some((anchor, text)) = self.hover.visible() {
             popover.extend(overlay::paint_tooltip(
                 anchor,
@@ -2314,6 +2318,9 @@ impl SettingsWindow {
                     measurer,
                 ),
             );
+        }
+        for primitive in border {
+            frame.push(Layer::Modal, primitive);
         }
         frame
     }

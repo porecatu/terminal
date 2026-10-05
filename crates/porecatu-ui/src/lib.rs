@@ -11004,6 +11004,16 @@ impl App {
             frame.set_layer(Layer::Modal, primitives);
         }
 
+        // Borda de 1px da janela, por cima de tudo (um pouco mais escura que
+        // o fundo da janela).
+        for primitive in chrome::window_border(
+            state.logical_width,
+            state.logical_height,
+            pal.bar_background,
+        ) {
+            frame.push(Layer::Modal, primitive);
+        }
+
         // Fundo da margem entre a borda da janela e o box arredondado do
         // terminal (`style.terminal_frame_margin`): precisa de uma cor
         // diferente da do box para o quadro aparecer -- a mesma da barra de
