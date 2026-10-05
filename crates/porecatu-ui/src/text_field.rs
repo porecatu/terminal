@@ -73,6 +73,10 @@ impl TextFieldState {
     /// isso pra saber se ainda precisa apagar mais um caractere.
     fn delete_selection(&mut self) -> bool {
         let Some((start, end)) = self.selection_range() else {
+            // An armed anchor with no visible selection (a click-drag that
+            // came back to its start) must not survive an edit: the text
+            // shifts under it and it ends up past the end of the buffer.
+            self.anchor = None;
             return false;
         };
         self.buffer.drain(start..end);
@@ -331,6 +335,35 @@ mod tests {
         field.backspace();
         assert_eq!(field.text(), "aef");
         assert_eq!(field.cursor(), 1);
+        assert_eq!(field.selection_range(), None);
+    }
+
+    #[test]
+    fn edits_drop_an_armed_anchor_so_the_selection_never_leaves_the_buffer() {
+        // Drag that returns to its start leaves `anchor == cursor`.
+        let armed = || {
+            let mut field = TextFieldState::new("0.1");
+            field.click_at(3);
+            field.drag_to(2);
+            field.drag_to(3);
+            assert_eq!(field.selection_range(), None);
+            field
+        };
+        let mut field = armed();
+        field.backspace();
+        assert_eq!(field.text(), "0.");
+        assert_eq!(field.selection_range(), None);
+        field.backspace();
+        assert_eq!(field.selection_range(), None);
+
+        let mut field = armed();
+        field.insert_char('9');
+        assert_eq!(field.selection_range(), None);
+
+        let mut field = armed();
+        field.click_at(0);
+        field.drag_to(0);
+        field.delete_forward();
         assert_eq!(field.selection_range(), None);
     }
 
