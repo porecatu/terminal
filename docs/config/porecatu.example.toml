@@ -122,6 +122,8 @@ args = []
 padding_x = 0              # [B] muda a área útil, logo colunas e linhas  RF-4.1
 padding_y = 0              # [B] idem
 # [C] "vale na próxima janela": atributo de superfície decidido na criação.
+# Abaixo de 1.0 a janela nasce transparente e é composta inteira com este
+# alfa (chrome e terminal). Sem suporte da plataforma, fica opaca.
 opacity = 1.0              # 0.0 a 1.0; opacidade da janela inteira      RF-4.1
 background = "#15181d"     # corpo da janela, atrás das barras
 border = "#2a2f38"
@@ -756,6 +758,10 @@ ahead_behind = "#5ed3bc"
 # [terminal.colors] diretamente.                                RF-5.18, RF-5.19
 theme = ""
 # Opacidade do fundo do terminal, independente da opacidade da janela.   RF-5.15
+# Só o fundo (quadro e células); texto e cursor ficam opacos. Para mostrar o
+# que há atrás da janela, ela precisa ter nascido transparente (abaixo de 1.0
+# aqui ou em `appearance.window.opacity`); ao sair de 1.0 com o app aberto,
+# vale na próxima janela. Numa janela opaca, o fundo só se mistura à barra.
 background_opacity = 1.0
 
 

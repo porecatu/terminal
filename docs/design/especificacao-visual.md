@@ -701,7 +701,7 @@ Valor **recusado** (fora da faixa, número malformado, nome de variável vazio o
 
 **Diálogo de pendências** — o da §2.15, largura 380 (cresce o que for preciso se os três botões não couberem), com **três** botões: **Cancelar** (foco inicial), **Descartar e fechar** (destrutivo: texto `#e08585`, sem fundo, hover `#2e2224`) e **Salvar e fechar** (primário, como o Salvar do rodapé). Abre ao fechar a janela, ou ao encerrar o app com a última janela de terminal, com alterações pendentes.
 
-**Bordas.** As bordas de 1px descritas acima — a da linha, a do campo, o anel de foco, a do tema escolhido, a do chip em captura — são o desenho; hoje o renderizador **não pinta a borda de retângulo arredondado** (defeito do `quad.wgsl` anterior à tela, que vale para o app inteiro e está registrado na dívida de verificação do [roadmap](../roadmap.md)), então elas só aparecem quando ele for corrigido.
+**Bordas.** As bordas de 1px descritas acima — a da linha, a do campo, o anel de foco, a do tema escolhido, a do chip em captura — são o desenho; o renderizador passou a pintar a borda de retângulo arredondado (o `quad.wgsl` não o fazia desde a F1), então elas aparecem. A borda da aba também foi de 2px para **1px** a pedido do dono do produto.
 
 ### 2.13 Tela de nova aba `[v2]`
 

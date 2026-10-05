@@ -37,6 +37,8 @@ O resize é **um por recarga**, coalescido com o debounce de ~200 ms do ADR-0003
 | `decorations` | A janela já foi criada com ou sem decoração nativa; `winit` não recria o frame do SO sem recriar a janela ([ADR-0027](0027-controles-de-janela-e-resize-proprios.md)) |
 | `tab_bar_position` | Move a barra de aresta, e com ela a origem de todo hit-testing e o recorte da trilha. Aplicável em teoria; fora do v1 por custo de verificação, não por impossibilidade |
 | `[appearance.window] opacity` | Atributo de superfície decidido na criação da janela |
+
+> **Revisão (opacidade implementada).** A janela nasce transparente quando `[appearance.window] opacity` **ou** `[terminal] background_opacity` é menor que 1.0, e isso continua sendo decidido na criação. Numa janela já transparente, o valor novo de `opacity` passa a valer sem recriá-la; de 1.0 para menos, só na próxima. `[terminal] background_opacity` segue classe A.
 | `[shell] program`, `args`, `env` | Aba já aberta tem processo já lançado. A mudança vale para **aba nova**, e isso não é "exige reinício" — é escopo: nada muda nas abas existentes, e é isso que o aviso diz |
 | `[session] enabled`, caminho | Gravação de sessão é F5; trocar o destino com sessão em memória pediria migração de arquivo |
 
