@@ -118,10 +118,47 @@ impl GpuContext {
     where
         W: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static,
     {
-        let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(window)
-            .expect("criação da surface wgpu falhou");
+        // Windows, janela transparente: o swapchain DXGI direto do HWND só
+        // oferece `Opaque`, e o Vulkan dos drivers atuais (AMD verificado)
+        // também -- `[appearance.window] opacity` ficava sem efeito. O DX12
+        // com swapchain de DirectComposition (`DxgiFromVisual`) oferece
+        // `PreMultiplied`/`Inherit`. Sem adapter compatível, volta ao default.
+        #[cfg(windows)]
+        let preferred = if transparent {
+            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            descriptor.backends = wgpu::Backends::DX12;
+            descriptor.backend_options.dx12.presentation_system =
+                wgpu::Dx12SwapchainKind::DxgiFromVisual;
+            let instance = wgpu::Instance::new(descriptor);
+            match instance.create_surface(window.clone()) {
+                Ok(surface)
+                    if instance
+                        .request_adapter(&wgpu::RequestAdapterOptions {
+                            compatible_surface: Some(&surface),
+                            ..Default::default()
+                        })
+                        .await
+                        .is_ok() =>
+                {
+                    Some((instance, surface))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        #[cfg(not(windows))]
+        let preferred: Option<(wgpu::Instance, wgpu::Surface<'static>)> = None;
+        let (instance, surface) = match preferred {
+            Some(pair) => pair,
+            None => {
+                let instance = wgpu::Instance::default();
+                let surface = instance
+                    .create_surface(window)
+                    .expect("criação da surface wgpu falhou");
+                (instance, surface)
+            }
+        };
         // RF-11.26/ADR-0001 (tabela de riscos: "driver GPU ruim / VM sem
         // aceleração ... wgpu cai para backend software; detectar e avisar
         // no primeiro start"): a primeira tentativa pede hardware; se ela
