@@ -33,6 +33,7 @@ use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId};
 mod access;
 mod animation;
 mod app_icon;
+mod background_image;
 mod box_glyphs;
 mod chrome;
 mod clipboard;
@@ -406,6 +407,14 @@ enum Wakeup {
     /// `RemoteIntegrationResult` não passa dos 56 bytes (`PathBuf` mais um
     /// enum com `String`), bem dentro dos 80 que `AccessKit` já reserva.
     GitIntegrationResult(git::RemoteIntegrationResult),
+    /// A thread de carga da imagem de fundo terminou (PRD-017, ADR-0061 §7):
+    /// dado chaveado por caminho, `mtime` e tamanho -- `App::
+    /// apply_background_image_result` o descarta se a chave já não é a
+    /// atual. `Box` porque `BackgroundImageResult` (chave com `PathBuf`,
+    /// mais `Result<DecodedImage, _>`) passa dos 80 bytes que `AccessKit` já
+    /// reserva -- medido em `background_image_result_is_boxed`, que reprova
+    /// se a conta mudar.
+    BackgroundImageLoaded(Box<background_image::BackgroundImageResult>),
 }
 
 impl From<accesskit_winit::Event> for Wakeup {
@@ -5002,6 +5011,10 @@ enum StartupNotice {
     KeybindingInvalid(keymap::KeymapIssue),
     /// ADR-0056 §8: o que `build_catalog` tem a dizer sobre os arquivos.
     Language(porecatu_locale::Diagnostic),
+    /// RF-17.14: a imagem de fundo falhou **antes** de haver janela (falha do
+    /// `metadata` no arranque, ou uma carga rápida que terminou antes de
+    /// `resumed`).
+    BackgroundImage(background_image::BackgroundImageFailure),
 }
 
 impl StartupNotice {
@@ -5028,6 +5041,10 @@ impl StartupNotice {
                 messages::keymap_issue(catalog, issue),
             ),
             StartupNotice::Language(diagnostic) => language::diagnostic_notice(diagnostic, catalog),
+            StartupNotice::BackgroundImage(failure) => {
+                let (title, body) = failure.notice_text(catalog);
+                (Severity::Warning, title, body)
+            }
         }
     }
 }
@@ -5204,6 +5221,19 @@ struct App {
     /// RF-13.3: `true` depois do primeiro aviso de intervalo elevado ao
     /// piso -- uma vez por execução, mesmo padrão do campo acima.
     git_poll_interval_warned: bool,
+    /// PRD-017/ADR-0061 §7: a imagem de fundo do terminal, do **processo**,
+    /// nunca da janela -- uma decodificação por processo (RF-17.18). Escrito
+    /// só em `sync_background_image` (a cada aplicação de config) e
+    /// `apply_background_image_result` (resultado da thread de carga).
+    /// **Nada lê isto para desenhar ainda** (etapas 3 e 4).
+    background_image: background_image::BackgroundImageStore,
+    /// `true` depois do primeiro byte de PTY do processo (o prompt chegou).
+    /// Independe de `PORECATU_TRACE`, ao contrário de
+    /// `first_pty_output_reported`.
+    pty_output_seen: bool,
+    /// A carga da imagem do arranque, esperando o prompt
+    /// (`release_deferred_background_load`).
+    deferred_background_load: Option<background_image::BackgroundImageKey>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -5412,7 +5442,7 @@ impl App {
         let pending_session =
             (config.session.enabled && cli_directory.is_none()).then(porecatu_session::load);
 
-        Self {
+        let mut app = Self {
             gpu: None,
             proxy,
             config_path,
@@ -5451,7 +5481,161 @@ impl App {
             git_remotes: HashMap::new(),
             git_disabled: false,
             git_poll_interval_warned: false,
+            background_image: background_image::BackgroundImageStore::default(),
+            pty_output_seen: false,
+            deferred_background_load: None,
+        };
+        // RF-17.17: o arranque não espera pela imagem -- só um `metadata` aqui,
+        // e a decodificação numa thread.
+        app.sync_background_image();
+        app
+    }
+
+    /// Reconcilia a imagem de fundo com a config em uso (ADR-0061 §7):
+    /// chamado no arranque e a cada recarga aplicada. Resolve o caminho
+    /// (RF-17.3), faz o `metadata`, e só então decide -- chave igual, nada;
+    /// chave nova, uma thread de carga; `path` vazio, sem imagem. Mudar só
+    /// `mode` ou `opacity` não muda a chave, então não relê nada.
+    fn sync_background_image(&mut self) {
+        let wanted = porecatu_config::resolve_background_image_path(
+            self.config_path.as_deref(),
+            &self.config.terminal.background_image.path,
+        )
+        .map(|path| background_image::BackgroundImageKey::probe(&path));
+        match self.background_image.sync(wanted) {
+            background_image::SyncOutcome::Unchanged => {}
+            background_image::SyncOutcome::Cleared => {
+                self.release_background_textures();
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+            background_image::SyncOutcome::Load(key) => {
+                // Arranque: a decodificação de uma imagem de dezenas de
+                // megapixels disputa CPU e memória com a subida do shell e
+                // atrasava o primeiro prompt em ~25% (medido: 632 -> 809 ms com
+                // um JPEG de 8000x6000). Antes do primeiro byte do PTY ela só
+                // espera, e começa quando o prompt chega; depois disso (uma
+                // recarga a quente) começa na hora.
+                if self.pty_output_seen {
+                    self.start_background_load(key);
+                } else {
+                    self.deferred_background_load = Some(key);
+                }
+            }
+            background_image::SyncOutcome::Failed(failure) => {
+                self.release_background_textures();
+                self.warn_background_image(failure);
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
         }
+    }
+
+    /// Abre a thread de carga. Com `GpuContext`, o teto de redução é o da placa
+    /// (RF-17.15); sem ele (o arranque, antes da primeira janela), o do
+    /// `DeviceDescriptor` padrão que o projeto pede.
+    fn start_background_load(&mut self, key: background_image::BackgroundImageKey) {
+        let max_dim = self.gpu.as_ref().map_or(
+            background_image::DEFAULT_MAX_TEXTURE_DIMENSION,
+            GpuContext::max_texture_dimension_2d,
+        );
+        let proxy = self.proxy.clone();
+        background_image::spawn_load(key, max_dim, move |result| {
+            let _ = proxy.send_event(Wakeup::BackgroundImageLoaded(Box::new(result)));
+        });
+    }
+
+    /// Chamado no primeiro byte de PTY do processo (o prompt chegou): solta a
+    /// carga da imagem que o arranque segurou. Só vale se a chave ainda é a
+    /// atual -- uma recarga entre o arranque e o prompt pode ter trocado ou
+    /// apagado o caminho.
+    fn release_deferred_background_load(&mut self) {
+        if self.pty_output_seen {
+            return;
+        }
+        self.pty_output_seen = true;
+        if let Some(key) = self.deferred_background_load.take()
+            && self.background_image.key() == Some(&key)
+        {
+            self.start_background_load(key);
+        }
+    }
+
+    /// Aplica o resultado da thread de carga (ADR-0061 §7): chave que já não
+    /// é a atual é descartada sem efeito; a atual vira textura (`upload`) ou
+    /// avisa a falha.
+    fn apply_background_image_result(&mut self, result: background_image::BackgroundImageResult) {
+        match self.background_image.apply(result) {
+            background_image::ApplyOutcome::Discarded => {}
+            background_image::ApplyOutcome::Decoded => self.upload_background_image(),
+            background_image::ApplyOutcome::Failed(failure) => {
+                self.release_background_textures();
+                self.warn_background_image(failure);
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+        }
+    }
+
+    /// Cria a textura da imagem decodificada no `GpuContext` do processo
+    /// (`create_image`), solta a anterior (`remove_image`) e deixa só o
+    /// `ImageId` no estado -- os bytes saem. Chamado quando o resultado chega
+    /// e, se ele chegou antes de haver GPU, quando o `GpuContext` é criado.
+    /// Uma textura serve a toda janela: quem desenhar (etapa 4) lê o mesmo id.
+    fn upload_background_image(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        let outcome = self.background_image.upload(|decoded| {
+            let (width, height) = decoded.size;
+            // A thread já reduziu ao teto que conhecia (o da placa, ou 8192 no
+            // arranque); se a placa aceita menos que isso, a imagem é grande
+            // demais para ela.
+            if width.max(height) > gpu.max_texture_dimension_2d() {
+                return Err(background_image::BackgroundImageError::TooLarge);
+            }
+            let levels: Vec<&[u8]> = decoded
+                .levels
+                .iter()
+                .map(|level| level.rgba.as_slice())
+                .collect();
+            Ok(gpu.create_image(width, height, &levels))
+        });
+        self.release_background_textures();
+        match outcome {
+            background_image::UploadOutcome::Nothing => {}
+            background_image::UploadOutcome::Ready => {
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+            background_image::UploadOutcome::Failed(failure) => {
+                self.warn_background_image(failure);
+                self.for_each_surface(|surface| surface.request_redraw());
+            }
+        }
+    }
+
+    /// Solta na GPU as texturas que o estado largou (`remove_image`).
+    fn release_background_textures(&mut self) {
+        for id in self.background_image.drain_released() {
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.remove_image(id);
+            }
+        }
+    }
+
+    /// RF-17.14: a falha da imagem de fundo é **um** aviso, não um por janela
+    /// -- vai para a primeira janela, como os avisos de sessão do arranque; sem
+    /// janela ainda, espera `resumed` em `pending_startup_warnings`. Quem
+    /// chama garante que é uma transição para `Failed` de uma chave nova
+    /// (`BackgroundImageStore`), então o aviso sai uma vez por arquivo e por
+    /// problema, não a cada recarga.
+    fn warn_background_image(&mut self, failure: background_image::BackgroundImageFailure) {
+        let Some(state) = self.windows.values_mut().next() else {
+            self.pending_startup_warnings
+                .push(StartupNotice::BackgroundImage(failure));
+            return;
+        };
+        let (title, body) = failure.notice_text(&self.catalog);
+        state
+            .warnings
+            .push(Severity::Warning, title, body, Instant::now());
     }
 
     /// ADR-0015: cria uma janela nova com uma aba, herdando o `cwd` da aba
@@ -6005,6 +6189,9 @@ impl App {
                 ));
             }
             self.gpu = Some(gpu);
+            // RF-17.17: a carga do arranque pode ter terminado antes de haver
+            // `GpuContext`; a textura sai agora.
+            self.upload_background_image();
             window_surface
         };
 
@@ -7210,6 +7397,9 @@ impl App {
         let effects = reload::diff(&self.config, &new_config);
         self.config = Arc::new(*new_config);
         self.style = TabBarStyle::from_config(&self.config);
+        // PRD-017, classe A (ADR-0061 §9): a chave é reavaliada a cada recarga
+        // aplicada; só `path` novo, ou arquivo trocado no disco, abre carga.
+        self.sync_background_image();
 
         // ADR-0031 §4: tema de sessão sobrevive à recarga enquanto
         // existir; se sumiu do arquivo, volta ao `theme` declarado (ou a
@@ -7483,6 +7673,7 @@ impl App {
             self.settings_last_group,
             &self.config,
             language::locale_dirs(self.config_path.as_deref()),
+            self.config_path.clone(),
             &self
                 .config_path
                 .as_deref()
@@ -7892,6 +8083,7 @@ impl ApplicationHandler<Wakeup> for App {
         let (window, tab_id, pane_id) = match event {
             Wakeup::TabDirty { window, tab, pane } => {
                 self.mark_first_pty_output();
+                self.release_deferred_background_load();
                 (window, tab, pane)
             }
             Wakeup::ConfigReloaded(reload) => {
@@ -7908,6 +8100,10 @@ impl ApplicationHandler<Wakeup> for App {
             }
             Wakeup::GitIntegrationResult(result) => {
                 self.apply_git_integration_result(result);
+                return;
+            }
+            Wakeup::BackgroundImageLoaded(result) => {
+                self.apply_background_image_result(*result);
                 return;
             }
         };
@@ -10424,6 +10620,20 @@ impl App {
             // janela compõe com o desktop.
             let mut window_term_pal = self.term_pal.clone();
             window_term_pal.backdrop_punch = state.window_surface.is_transparent();
+            // PRD-017: a textura do processo, a mesma em toda janela e todo
+            // painel (RF-17.18). `displayed` é a da chave atual se `Ready`, ou
+            // a anterior enquanto a nova carrega; `Loading` sem anterior e
+            // `Failed` dão `None`, e o painel desenha como sempre. Só o
+            // `scale` é da janela -- ele decide o tamanho natural, e mudar de
+            // monitor refaz a conta sem recarregar nada (RF-17.6).
+            let background_image =
+                self.background_image
+                    .displayed()
+                    .map(|texture| paint::BackgroundImagePaint {
+                        image: texture.id,
+                        size_px: texture.size,
+                        scale: state.scale,
+                    });
             for (pane_id, pane_rect) in &pane_layout {
                 let pane_id = *pane_id;
                 let Some(runtime) = state.panes.get_mut(&(id, pane_id)) else {
@@ -10494,7 +10704,7 @@ impl App {
                 } else {
                     Vec::new()
                 };
-                grid_primitives.extend(paint::build_primitives(
+                grid_primitives.extend(paint::build_primitives_with_image(
                     &runtime.snapshot,
                     self.cell_metrics,
                     font_size_px,
@@ -10504,6 +10714,7 @@ impl App {
                     cursor,
                     gpu.text_measurer(),
                     &hyperlink_hover,
+                    background_image,
                 ));
             }
             frame.set_layer(Layer::Grid, grid_primitives);
@@ -10922,4 +11133,30 @@ pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>, process_
     event_loop
         .run_app(&mut app)
         .expect("event loop terminou com erro");
+}
+
+#[cfg(test)]
+mod wakeup_size_tests {
+    use std::mem::size_of;
+
+    use super::{Wakeup, background_image::BackgroundImageResult};
+
+    /// A conta que decide o `Box` de `Wakeup::BackgroundImageLoaded` (mesma
+    /// medição do comentário de `GitQueryResult`): `AccessKit` já faz o
+    /// `Wakeup` ter 80 bytes, e o resultado da imagem (88) passa disso -- sem
+    /// `Box` todo `Wakeup::TabDirty` do processo ficaria maior. Se a conta
+    /// mudar, o teste diz qual lado.
+    #[test]
+    fn background_image_result_is_boxed() {
+        let widest_other = size_of::<accesskit_winit::Event>();
+        assert!(
+            size_of::<BackgroundImageResult>() > widest_other,
+            "o resultado cabe na variante mais larga ({widest_other} bytes): o `Box` já não se justifica"
+        );
+        assert_eq!(
+            size_of::<Wakeup>(),
+            widest_other,
+            "o `Wakeup` cresceu além da variante mais larga que já existia"
+        );
+    }
 }

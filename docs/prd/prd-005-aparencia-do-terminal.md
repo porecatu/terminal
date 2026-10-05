@@ -56,6 +56,8 @@ Todo usuário. Defaults com boa legibilidade e contraste adequado, sem exigir ne
 
 **RF-5.15** — Configurável: opacidade do fundo do terminal, independente da opacidade da janela.
 
+> **Emenda ([PRD-017](prd-017-imagem-de-fundo-do-terminal.md)).** O fundo pode ter uma **imagem** por cima da cor, com opacidade própria. A opacidade deste requisito vale também para ela: a opacidade efetiva da imagem é a dela multiplicada por esta (RF-17.12), e um terminal transparente continua transparente com imagem.
+
 **RF-5.16** — Cores aceitam hexadecimal (`#rrggbb`, `#rrggbbaa`) e o valor `"transparent"`.
 
 **RF-5.17** — Cores definidas pelo programa em execução — 256 cores e true color — funcionam sempre, sem configuração, e não são afetadas pela paleta.

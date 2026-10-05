@@ -21,12 +21,15 @@
 //! A quebra é por caractere que precisa dela, não por célula: uma linha de
 //! ASCII continua sendo um run só.
 
-use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun};
+use porecatu_render::{
+    Color, FontFace, ImageId, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun,
+};
 use porecatu_term::{
     Cell, CellFlags, CellText, CursorShape, GridSnapshot, HyperlinkSpan, OccurrenceSpan,
     SelectionSpan,
 };
 
+use crate::background_image;
 use crate::box_glyphs;
 use crate::chrome::push_shadow;
 use crate::palette::{self, ResolvedTermPalette, TRANSPARENT};
@@ -178,6 +181,9 @@ fn col_left(x_offset: f32, col: usize, metrics: CellMetrics) -> f32 {
 /// Constrói as primitivas do box arredondado do terminal e da grade lá
 /// dentro. `box_rect`: [`terminal_box_rect`] -- a grade começa
 /// `style.terminal_frame_padding` adiante da borda do box, nos dois eixos.
+/// Sem imagem de fundo: o caso dos testes de pintura que não a tocam. O app
+/// chama [`build_primitives_with_image`] direto.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn build_primitives(
     snapshot: &GridSnapshot,
@@ -189,6 +195,47 @@ pub fn build_primitives(
     cursor: CursorAppearance,
     measurer: &mut TextMeasurer,
     hyperlink_hover: &[HyperlinkSpan],
+) -> Vec<Primitive> {
+    build_primitives_with_image(
+        snapshot,
+        metrics,
+        font_size_px,
+        box_rect,
+        style,
+        term_pal,
+        cursor,
+        measurer,
+        hyperlink_hover,
+        None,
+    )
+}
+
+/// A imagem de fundo pronta para ser pintada num painel (PRD-017): a textura
+/// do processo, o tamanho dela em pixels e a escala da janela, que decide o
+/// "tamanho natural" (`placement`). O alfa e o modo vêm da paleta resolvida.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundImagePaint {
+    pub image: ImageId,
+    pub size_px: (u32, u32),
+    pub scale: f32,
+}
+
+/// [`build_primitives`] com a imagem de fundo, se houver. `background_image`
+/// é `Some` só com a textura `Ready` -- `Loading` e `Failed` chegam como
+/// `None` e o painel desenha como sempre, e a imagem anterior continua
+/// enquanto a nova carrega (ADR-0061 §7, quem decide é `lib.rs`).
+#[allow(clippy::too_many_arguments)]
+pub fn build_primitives_with_image(
+    snapshot: &GridSnapshot,
+    metrics: CellMetrics,
+    font_size_px: f32,
+    box_rect: Rect,
+    style: &TabBarStyle,
+    term_pal: &ResolvedTermPalette,
+    cursor: CursorAppearance,
+    measurer: &mut TextMeasurer,
+    hyperlink_hover: &[HyperlinkSpan],
+    background_image: Option<BackgroundImagePaint>,
 ) -> Vec<Primitive> {
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
@@ -210,6 +257,32 @@ pub fn build_primitives(
             border_width: 0.0,
         },
     ));
+    // PRD-017/ADR-0061 §4: a imagem fica **acima** do fundo do quadro e
+    // **abaixo** de tudo que a grade desenha (fundo de célula, texto,
+    // seleção, busca, hyperlink, cursor) -- por isso é empurrada aqui, entre o
+    // `backdrop_fill` e o primeiro `paint_row_backgrounds`. O retângulo é o
+    // quadro inteiro do painel, padding incluído (RF-17.8), e a máscara é o
+    // mesmo quadro com o raio dele.
+    if let Some(paint) = background_image {
+        let alpha = term_pal.background_image_alpha();
+        if alpha > 0.0 {
+            let placement = background_image::placement(
+                term_pal.background_image_mode,
+                box_rect,
+                paint.size_px,
+                paint.scale,
+            );
+            primitives.push(Primitive::Image {
+                rect: placement.rect,
+                uv: placement.uv,
+                repeat: placement.repeat,
+                mask: box_rect,
+                mask_radius: style.terminal_frame_corner_radius,
+                alpha,
+                image: paint.image,
+            });
+        }
+    }
 
     let x_offset = box_rect.x + style.terminal_frame_padding;
     let y_offset = box_rect.y + style.terminal_frame_padding;
@@ -921,6 +994,218 @@ mod tests {
             hollow: false,
             blink_on: true,
         }
+    }
+
+    fn image_paint() -> BackgroundImagePaint {
+        BackgroundImagePaint {
+            image: ImageId::from_raw(1),
+            size_px: (200, 100),
+            scale: 1.0,
+        }
+    }
+
+    /// Índice da primeira primitiva que satisfaz `f`.
+    fn position(primitives: &[Primitive], f: impl Fn(&Primitive) -> bool) -> Option<usize> {
+        primitives.iter().position(f)
+    }
+
+    /// Fundo do quadro, depois a imagem, depois os fundos de célula, depois o
+    /// texto (RF-17.9, ADR-0061 §4).
+    #[test]
+    fn the_image_sits_between_the_frame_backdrop_and_the_cell_backgrounds() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell_metrics = cell(&mut m);
+        let mut snap = snapshot("ab");
+        snap.cells[0].bg = porecatu_term::TermColor::Rgb {
+            r: 200,
+            g: 60,
+            b: 60,
+        };
+        let out = build_primitives_with_image(
+            &snap,
+            cell_metrics,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            test_cursor(),
+            &mut m,
+            &[],
+            Some(image_paint()),
+        );
+        let frame = position(&out, |p| matches!(p, Primitive::RoundedQuad(_))).unwrap();
+        let image = position(&out, |p| matches!(p, Primitive::Image { .. })).unwrap();
+        let cell_bg = position(&out, |p| matches!(p, Primitive::Quad(_))).unwrap();
+        let text = position(&out, |p| matches!(p, Primitive::Text(_))).unwrap();
+        assert!(frame < image, "imagem acima do fundo do quadro");
+        assert!(image < cell_bg, "fundo de célula acima da imagem");
+        assert!(cell_bg < text, "texto acima do fundo de célula");
+        assert_eq!(
+            out.iter()
+                .filter(|p| matches!(p, Primitive::Image { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_image_is_the_whole_frame_masked_by_the_frame_radius() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell_metrics = cell(&mut m);
+        let style = TabBarStyle::DEFAULT;
+        let box_rect = Rect {
+            x: 6.0,
+            y: 52.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        let out = build_primitives_with_image(
+            &snapshot("a"),
+            cell_metrics,
+            SIZE,
+            box_rect,
+            &style,
+            &test_term_pal(),
+            test_cursor(),
+            &mut m,
+            &[],
+            Some(image_paint()),
+        );
+        let Some(Primitive::Image {
+            rect,
+            mask,
+            mask_radius,
+            repeat,
+            alpha,
+            image,
+            ..
+        }) = out
+            .iter()
+            .find(|p| matches!(p, Primitive::Image { .. }))
+            .cloned()
+        else {
+            panic!("sem imagem");
+        };
+        // `stretch` (o padrão): o quadro inteiro, padding incluído.
+        assert_eq!(rect, box_rect);
+        assert_eq!(mask, box_rect);
+        assert_eq!(mask_radius, style.terminal_frame_corner_radius);
+        assert!(!repeat);
+        assert_eq!(alpha, 1.0);
+        assert_eq!(image, ImageId::from_raw(1));
+    }
+
+    #[test]
+    fn without_a_ready_image_the_pane_paints_as_before() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell_metrics = cell(&mut m);
+        let args = |m: &mut porecatu_render::TextMeasurer, image| {
+            build_primitives_with_image(
+                &snapshot("ab"),
+                cell_metrics,
+                SIZE,
+                test_box_rect(),
+                &TabBarStyle::DEFAULT,
+                &test_term_pal(),
+                test_cursor(),
+                m,
+                &[],
+                image,
+            )
+        };
+        let without = args(&mut m, None);
+        assert!(!without.iter().any(|p| matches!(p, Primitive::Image { .. })));
+        // E é pixel por pixel a lista de `build_primitives`.
+        let plain = build_primitives(
+            &snapshot("ab"),
+            cell_metrics,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &test_term_pal(),
+            test_cursor(),
+            &mut m,
+            &[],
+        );
+        assert_eq!(format!("{without:?}"), format!("{plain:?}"));
+    }
+
+    #[test]
+    fn zero_effective_alpha_paints_no_image() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell_metrics = cell(&mut m);
+        let mut config = porecatu_config::Config::default();
+        config.terminal.background_image.opacity = 0.0;
+        let pal = ResolvedTermPalette::from_config(&config);
+        let out = build_primitives_with_image(
+            &snapshot("a"),
+            cell_metrics,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &pal,
+            test_cursor(),
+            &mut m,
+            &[],
+            Some(image_paint()),
+        );
+        assert!(!out.iter().any(|p| matches!(p, Primitive::Image { .. })));
+    }
+
+    #[test]
+    fn the_image_alpha_is_opacity_times_background_opacity() {
+        let alpha = |opacity: f32, background: f64| {
+            let mut config = porecatu_config::Config::default();
+            config.terminal.background_image.opacity = opacity;
+            config.terminal.background_opacity = background;
+            ResolvedTermPalette::from_config(&config).background_image_alpha()
+        };
+        // O exemplo do RF-17.12: terminal a 0.8, imagem a 0.5 -> 0.4.
+        assert!((alpha(0.5, 0.8) - 0.4).abs() < 1e-6);
+        assert_eq!(alpha(1.0, 1.0), 1.0);
+        assert!((alpha(1.0, 0.5) - 0.5).abs() < 1e-6, "nunca opaca");
+        assert!((alpha(0.35, 0.6) - 0.21).abs() < 1e-6);
+        assert_eq!(alpha(0.0, 0.7), 0.0);
+        assert_eq!(alpha(0.9, 0.0), 0.0);
+        // Fora da faixa é limitada, não propaga.
+        assert_eq!(alpha(5.0, 1.0), 1.0);
+        assert_eq!(alpha(-1.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn the_mode_and_opacity_come_from_the_resolved_palette() {
+        let mut config = porecatu_config::Config::default();
+        config.terminal.background_image.mode = porecatu_config::BackgroundImageMode::Tile;
+        let pal = ResolvedTermPalette::from_config(&config);
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell_metrics = cell(&mut m);
+        let out = build_primitives_with_image(
+            &snapshot("a"),
+            cell_metrics,
+            SIZE,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 200.0,
+            },
+            &TabBarStyle::DEFAULT,
+            &pal,
+            test_cursor(),
+            &mut m,
+            &[],
+            Some(image_paint()),
+        );
+        let Some(Primitive::Image { repeat, uv, .. }) = out
+            .iter()
+            .find(|p| matches!(p, Primitive::Image { .. }))
+            .cloned()
+        else {
+            panic!("sem imagem");
+        };
+        // 400x200 de quadro sobre uma imagem natural de 200x100: 2x2 ladrilhos.
+        assert!(repeat);
+        assert_eq!((uv.width, uv.height), (2.0, 2.0));
     }
 
     /// Regressão: `row_y + metrics.height` (fim de uma linha) e `y_offset +

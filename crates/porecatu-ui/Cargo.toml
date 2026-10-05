@@ -20,6 +20,12 @@ accesskit = "0.25"
 accesskit_winit = "0.34"
 arboard = "3"
 dirs = "7"
+# Decodifica a imagem de fundo do terminal (ADR-0061 §1): só PNG e JPEG, sem
+# as features padrão (GIF, WebP, TIFF... ficam de fora). Pinada na versão que
+# o `Cargo.lock` já tinha (dependência do `arboard`); subir é tarefa própria,
+# como `wgpu` e `toml_edit`. MIT OR Apache-2.0; o `zune-jpeg` que a feature
+# `jpeg` traz é MIT OR Apache-2.0 OR Zlib. Compatíveis com GPLv3.
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 notify = "8.2.0"
 # Abre/revela hyperlinks OSC 8 (ADR-0042 §6): `unsafe` da chamada de
 # plataforma (ShellExecuteW/xdg-open/open) fica dentro do crate, como
@@ -36,3 +42,6 @@ porecatu-render = { path = "../porecatu-render" }
 porecatu-session = { path = "../porecatu-session" }
 porecatu-term = { path = "../porecatu-term" }
 winit = "0.30.13"
+
+[dev-dependencies]
+tempfile = "3"

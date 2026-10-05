@@ -68,6 +68,9 @@ pub(crate) struct ViewExtras<'a> {
     pub session_theme: Option<&'a str>,
     pub shortcuts: Option<&'a ShortcutsView<'a>>,
     pub banner: Option<&'a Banner>,
+    /// O arquivo de configuração em uso: a base de um caminho relativo da
+    /// imagem de fundo (RF-17.3), para a nota de "não encontrado" (RF-17.21).
+    pub config_path: Option<&'a std::path::Path>,
 }
 
 /// Um botão da faixa, com a largura já medida.
@@ -449,6 +452,22 @@ pub(crate) fn build(
                 measurer,
             ))));
         }
+        if option.id == "background_image"
+            && let EditValue::String(raw) = draft.value(option)
+            && let Some(missing) = crate::background_image::missing_file(extras.config_path, &raw)
+        {
+            // RF-17.21: abaixo do campo, no estilo e no lugar do aviso de
+            // `trusted_paths` (nota de Aviso) -- e **não** na razão de um valor
+            // recusado: ela não impede o Salvar. Só a falta do arquivo se sabe
+            // sem decodificar; formato e corrupção só saem no aviso da recarga.
+            let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+            let text =
+                msg::settings::option::background_image_not_found(catalog, missing.display());
+            blocks.push(Block::Note {
+                lines: wrap(&text, m.description_size, width, measurer),
+                tone: NoteTone::Warning,
+            });
+        }
     }
 
     let specs: Vec<BlockSpec> = blocks
@@ -786,6 +805,9 @@ pub(crate) fn choice_label(catalog: &Catalog, choice: &str) -> String {
         "never" => c::never(catalog),
         "top" => c::top(catalog),
         "bottom" => c::bottom(catalog),
+        "stretch" => c::stretch(catalog),
+        "tile" => c::tile(catalog),
+        "center" => c::center(catalog),
         other => other.to_owned(),
     }
 }
@@ -1833,6 +1855,168 @@ mod tests {
         );
         let joined = lines.join(" ");
         assert!(joined.contains(".porecatu"));
+    }
+
+    // ---- imagem de fundo (RF-17.20, RF-17.21)
+
+    fn image_group(path: &str, config_path: Option<&std::path::Path>) -> Content {
+        let mut draft = Draft::new(&Config::default());
+        draft
+            .set(
+                crate::settings::catalog::option("background_image").unwrap(),
+                EditValue::String(path.to_owned()),
+            )
+            .unwrap();
+        build(
+            key(Group::Terminal),
+            &draft,
+            &ViewExtras {
+                config_path,
+                ..ViewExtras::default()
+            },
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        )
+    }
+
+    fn notes(content: &Content) -> Vec<(String, NoteTone)> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Note { lines, tone } => Some((lines.join(" "), *tone)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_three_image_rows_come_after_the_background_opacity_row() {
+        let c = content(Group::Terminal, &Config::default());
+        let ids: Vec<_> = rows(&c).iter().filter_map(|row| row.option).collect();
+        let at = ids
+            .iter()
+            .position(|id| *id == "background_opacity")
+            .unwrap();
+        assert_eq!(
+            &ids[at..at + 4],
+            [
+                "background_opacity",
+                "background_image",
+                "background_image_mode",
+                "background_image_opacity"
+            ]
+        );
+        let mode = rows(&c)
+            .into_iter()
+            .find(|row| row.option == Some("background_image_mode"))
+            .unwrap();
+        // Três valores: botões colados, com os rótulos do catálogo.
+        let ControlView::Segmented {
+            labels, selected, ..
+        } = &mode.control
+        else {
+            panic!("modo deveria ser segmentado: {:?}", mode.control);
+        };
+        assert_eq!(labels, &["Esticar", "Ladrilho", "Centralizar"]);
+        assert_eq!(*selected, 0);
+    }
+
+    #[test]
+    fn a_missing_file_shows_a_warning_note_right_under_the_path_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        let c = image_group("nao-existe.png", Some(&config));
+        let path_row = c
+            .blocks
+            .iter()
+            .position(
+                |block| matches!(block, Block::Row(row) if row.option == Some("background_image")),
+            )
+            .unwrap();
+        let Block::Note { lines, tone } = &c.blocks[path_row + 1] else {
+            panic!(
+                "a nota vem logo abaixo do campo: {:?}",
+                c.blocks[path_row + 1]
+            );
+        };
+        // No estilo e no lugar do aviso de `trusted_paths`, não na razão de
+        // recusa: tom de Aviso, e a linha do campo não ganha `invalid`.
+        assert_eq!(*tone, NoteTone::Warning);
+        let text = lines.join(" ");
+        assert!(text.contains("não foi encontrado"), "{text}");
+        // O caminho resolvido contra a pasta do config, não o texto cru.
+        let resolved = dir.path().join("nao-existe.png");
+        assert!(text.contains(&resolved.display().to_string()), "{text}");
+        let Block::Row(row) = &c.blocks[path_row] else {
+            unreachable!()
+        };
+        assert!(row.invalid.is_none(), "a nota não é uma recusa");
+    }
+
+    #[test]
+    fn the_note_never_blocks_saving() {
+        let mut draft = Draft::new(&Config::default());
+        let option = crate::settings::catalog::option("background_image").unwrap();
+        draft
+            .set(
+                option,
+                EditValue::String("/nao/existe/fundo.png".to_owned()),
+            )
+            .unwrap();
+        // Pendência válida (vira edição), sem recusa.
+        assert!(!draft.has_invalid());
+        assert_eq!(draft.edits().len(), 1);
+    }
+
+    #[test]
+    fn an_existing_file_or_an_empty_path_shows_no_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        std::fs::write(dir.path().join("fundo.png"), b"x").unwrap();
+        assert!(notes(&image_group("fundo.png", Some(&config))).is_empty());
+        assert!(notes(&image_group("", Some(&config))).is_empty());
+        assert!(notes(&image_group("   ", Some(&config))).is_empty());
+    }
+
+    #[test]
+    fn the_note_follows_the_draft_on_every_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        std::fs::write(dir.path().join("existe.png"), b"x").unwrap();
+        assert_eq!(notes(&image_group("falta.png", Some(&config))).len(), 1);
+        assert!(notes(&image_group("existe.png", Some(&config))).is_empty());
+        assert_eq!(notes(&image_group("falta.png", Some(&config))).len(), 1);
+    }
+
+    #[test]
+    fn the_note_is_composed_by_the_catalog_in_every_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        for locale in ["en_US", "pt_BR", "es_ES", "fr_FR", "de_DE"] {
+            let mut draft = Draft::new(&Config::default());
+            draft
+                .set(
+                    crate::settings::catalog::option("background_image").unwrap(),
+                    EditValue::String("x.png".to_owned()),
+                )
+                .unwrap();
+            let c = build(
+                key(Group::Terminal),
+                &draft,
+                &ViewExtras {
+                    config_path: Some(&config),
+                    ..ViewExtras::default()
+                },
+                &test_support::catalog(locale),
+                &metrics(),
+                &mut TextMeasurer::new(),
+            );
+            let text = notes(&c).into_iter().next().expect(locale).0;
+            assert!(!text.contains("settings.option"), "{locale}: {text}");
+            assert!(text.contains("x.png"), "{locale}: {text}");
+        }
     }
 
     #[test]

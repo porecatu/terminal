@@ -7,7 +7,7 @@
 //! pixels físicos é responsabilidade exclusiva de `WindowSurface`, no
 //! único ponto que o ADR exige.
 
-use crate::primitives::{Primitive, Quad, Rect, RoundedQuad, TextRun};
+use crate::primitives::{ImageId, Primitive, Quad, Rect, RoundedQuad, TextRun};
 
 /// As cinco camadas do frame, na ordem em que desenham (ADR-0018): cada
 /// uma inteira cobre a anterior inteira. Camada vazia não custa nada --
@@ -104,6 +104,22 @@ pub(crate) enum GeometryPrimitive {
     Rounded(RoundedQuad),
     /// [`Primitive::Backdrop`]: desenhado por um pipeline que substitui.
     Backdrop(RoundedQuad),
+    /// [`Primitive::Image`]: outro pipeline e outro bind group, então
+    /// `resolve_layer` o põe **sozinho** num batch.
+    Image(ImagePrimitive),
+}
+
+/// Os campos de [`Primitive::Image`], como valor próprio para viajar na
+/// geometria resolvida.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ImagePrimitive {
+    pub rect: Rect,
+    pub uv: Rect,
+    pub repeat: bool,
+    pub mask: Rect,
+    pub mask_radius: f32,
+    pub alpha: f32,
+    pub image: ImageId,
 }
 
 /// Quads e retângulos arredondados que compartilham o mesmo clip e são
@@ -112,6 +128,12 @@ pub(crate) enum GeometryPrimitive {
 /// Duas execuções não-adjacentes com o mesmo clip **não** são mescladas: a
 /// ordem do stream é o que preserva "por cima", e mesclar exigiria provar
 /// que nada entre elas se sobrepõe.
+///
+/// Uma [`Primitive::Image`] **quebra** o batch: ela troca de pipeline e de
+/// bind group, então fica sozinha num batch próprio e os quads antes e depois
+/// dela ficam em batches separados (um quad, uma imagem e um quad, no mesmo
+/// clip, são três batches). A ordem do stream é o que a mantém por cima do
+/// que veio antes e por baixo do que veio depois.
 ///
 /// `geometry` guarda os dois tipos misturados **na ordem de chegada** --
 /// separá-los em dois `Vec` (um por tipo) foi o bug que escondia o cursor:
@@ -170,6 +192,31 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
                     .geometry
                     .push(GeometryPrimitive::Backdrop(*quad));
             }
+            Primitive::Image {
+                rect,
+                uv,
+                repeat,
+                mask,
+                mask_radius,
+                alpha,
+                image,
+            } => {
+                let clip = clip_stack.last().copied();
+                // Sempre um batch novo, e o próximo também (`batch_for` não
+                // reaproveita um batch de imagem).
+                resolved.batches.push(GeometryBatch {
+                    clip,
+                    geometry: vec![GeometryPrimitive::Image(ImagePrimitive {
+                        rect: *rect,
+                        uv: *uv,
+                        repeat: *repeat,
+                        mask: *mask,
+                        mask_radius: *mask_radius,
+                        alpha: *alpha,
+                        image: *image,
+                    })],
+                });
+            }
             Primitive::Text(run) => resolved.text.push(ResolvedText {
                 run: run.clone(),
                 clip: clip_stack.last().copied(),
@@ -181,7 +228,9 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
 }
 
 fn batch_for(batches: &mut Vec<GeometryBatch>, clip: Option<Rect>) -> &mut GeometryBatch {
-    let needs_new = batches.last().is_none_or(|b| b.clip != clip);
+    let needs_new = batches.last().is_none_or(|b| {
+        b.clip != clip || matches!(b.geometry.first(), Some(GeometryPrimitive::Image(_)))
+    });
     if needs_new {
         batches.push(GeometryBatch {
             clip,
@@ -266,6 +315,116 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    fn image(x: f32) -> Primitive {
+        let rect = Rect {
+            x,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        Primitive::Image {
+            rect,
+            uv: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            repeat: false,
+            mask: rect,
+            mask_radius: 0.0,
+            alpha: 1.0,
+            image: ImageId(7),
+        }
+    }
+
+    fn is_image(batch: &GeometryBatch) -> bool {
+        matches!(batch.geometry.as_slice(), [GeometryPrimitive::Image(_)])
+    }
+
+    /// Um quad, uma imagem e um quad no mesmo clip: três batches, porque a
+    /// imagem troca de pipeline e de bind group -- e na ordem do stream.
+    #[test]
+    fn an_image_between_two_quads_makes_three_batches_in_order() {
+        let resolved = resolve_layer(&[quad(0.0), image(5.0), quad(1.0)]);
+        assert_eq!(resolved.batches.len(), 3);
+        assert!(matches!(
+            resolved.batches[0].geometry.as_slice(),
+            [GeometryPrimitive::Quad(_)]
+        ));
+        assert!(is_image(&resolved.batches[1]));
+        assert!(matches!(
+            resolved.batches[2].geometry.as_slice(),
+            [GeometryPrimitive::Quad(_)]
+        ));
+        let GeometryPrimitive::Image(drawn) = resolved.batches[1].geometry[0] else {
+            unreachable!();
+        };
+        assert_eq!(drawn.rect.x, 5.0);
+        assert_eq!(drawn.image, ImageId(7));
+    }
+
+    #[test]
+    fn consecutive_images_are_one_batch_each() {
+        let resolved = resolve_layer(&[image(0.0), image(1.0)]);
+        assert_eq!(resolved.batches.len(), 2);
+        assert!(resolved.batches.iter().all(is_image));
+    }
+
+    #[test]
+    fn an_image_alone_is_a_single_batch_with_no_clip() {
+        let resolved = resolve_layer(&[image(0.0)]);
+        assert_eq!(resolved.batches.len(), 1);
+        assert_eq!(resolved.batches[0].clip, None);
+    }
+
+    #[test]
+    fn an_image_respects_the_clip_stack() {
+        let outer = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let inner = Rect {
+            x: 50.0,
+            y: 50.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let resolved = resolve_layer(&[
+            Primitive::PushClip(outer),
+            Primitive::PushClip(inner),
+            image(0.0),
+            Primitive::PopClip,
+            image(1.0),
+            Primitive::PopClip,
+            image(2.0),
+        ]);
+        let clips: Vec<_> = resolved.batches.iter().map(|b| b.clip).collect();
+        assert_eq!(
+            clips,
+            vec![
+                Some(Rect {
+                    x: 50.0,
+                    y: 50.0,
+                    width: 50.0,
+                    height: 50.0
+                }),
+                Some(outer),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_quad_after_an_image_does_not_join_the_image_batch() {
+        let resolved = resolve_layer(&[image(0.0), quad(0.0), quad(1.0)]);
+        assert_eq!(resolved.batches.len(), 2);
+        assert!(is_image(&resolved.batches[0]));
+        assert_eq!(resolved.batches[1].geometry.len(), 2);
     }
 
     #[test]

@@ -152,6 +152,13 @@ hyperlinks_enabled_label = "Hyperlinks"
 hyperlinks_enabled_description = "Links do terminal abrem com Ctrl+clique (Cmd+clique no macOS)."
 background_opacity_label = "Opacidade do fundo"
 background_opacity_description = "Opacidade do fundo do terminal, de 0.0 a 1.0."
+background_image_label = "Imagem de fundo"
+background_image_description = "Arquivo PNG ou JPEG atrás de todo terminal. Relativo vale a partir da pasta do arquivo de configuração; vazio, sem imagem."
+background_image_not_found = "O arquivo \"{path}\" não foi encontrado; o terminal fica sem imagem."
+background_image_mode_label = "Modo da imagem"
+background_image_mode_description = "Como a imagem ocupa o quadro do terminal."
+background_image_opacity_label = "Opacidade da imagem"
+background_image_opacity_description = "Opacidade da imagem, de 0.0 a 1.0; multiplica a opacidade do fundo."
 theme_label = "Tema"
 theme_description = "Conjunto de cores do terminal. Sem tema usa as cores do arquivo."
 animations_label = "Animações"
@@ -217,6 +224,9 @@ keep_mine = "Manter minhas alterações"
 invalid_file = "O arquivo de configuração é inválido; as opções estão somente para leitura."
 
 [settings.choice]
+stretch = "Esticar"
+tile = "Ladrilho"
+center = "Centralizar"
 block = "Bloco"
 beam = "Barra"
 underline = "Sublinhado"
@@ -581,6 +591,16 @@ title = "Falha ao integrar com o remoto"
 missing = "o git não foi encontrado no sistema."
 timed_out = "o git não respondeu a tempo."
 no_detail = "o git recusou a integração sem detalhar o motivo."
+
+# Imagem de fundo do terminal (PRD-017, RF-17.14): o aviso diz qual arquivo
+# (o caminho já resolvido) e por quê; o terminal segue sem imagem.
+[notice.background_image]
+title = "Imagem de fundo não carregada"
+not_found = "Não encontrado: \"{path}\""
+unreadable = "Não pôde ser lido: \"{path}\""
+unsupported = "Formato não aceito (só PNG e JPEG): \"{path}\""
+malformed = "Corrompido ou não é uma imagem válida: \"{path}\""
+too_large = "Grande demais para carregar: \"{path}\""
 
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]

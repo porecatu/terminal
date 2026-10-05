@@ -49,8 +49,8 @@ pub use project_file::{
 pub use session::Session;
 pub use shell::Shell;
 pub use terminal::{
-    AnsiPalette, Clipboard, Colors as TerminalColors, Cursor, CursorShape, Font, Scrollback,
-    Selection, Terminal, ZoomScope,
+    AnsiPalette, BackgroundImage, BackgroundImageMode, Clipboard, Colors as TerminalColors, Cursor,
+    CursorShape, Font, Scrollback, Selection, Terminal, ZoomScope, resolve_background_image_path,
 };
 pub use theme::{
     Theme, ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeGroupEditor, ThemeGroups,

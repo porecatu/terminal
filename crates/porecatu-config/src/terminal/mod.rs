@@ -4,6 +4,7 @@
 //! PRD-010/ADR-0013 que vivem sob `[terminal.selection]` e
 //! `[terminal.clipboard]`.
 
+mod background_image;
 mod clipboard;
 mod colors;
 mod cursor;
@@ -12,6 +13,7 @@ mod hyperlinks;
 mod scrollback;
 mod selection;
 
+pub use background_image::{BackgroundImage, BackgroundImageMode, resolve_background_image_path};
 pub use clipboard::Clipboard;
 pub use colors::{AnsiPalette, Colors};
 pub use cursor::{Cursor, CursorShape};
@@ -32,6 +34,8 @@ pub struct Terminal {
     /// Opacidade do fundo do terminal, independente da opacidade da
     /// janela. RF-5.15.
     pub background_opacity: f64,
+    /// `[terminal.background_image]` -- PRD-017, ADR-0061.
+    pub background_image: BackgroundImage,
     pub font: Font,
     pub cursor: Cursor,
     pub scrollback: Scrollback,
@@ -46,6 +50,7 @@ impl Default for Terminal {
         Self {
             theme: String::new(),
             background_opacity: 1.0,
+            background_image: BackgroundImage::default(),
             font: Font::default(),
             cursor: Cursor::default(),
             scrollback: Scrollback::default(),

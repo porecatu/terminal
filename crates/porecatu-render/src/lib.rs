@@ -16,6 +16,7 @@ mod blit;
 mod frame;
 mod gpu;
 pub mod icon;
+mod image;
 mod primitives;
 mod quad;
 mod text;
@@ -24,6 +25,8 @@ mod window_surface;
 
 pub use frame::{Frame, Layer};
 pub use gpu::{GpuContext, SurfaceError};
-pub use primitives::{Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun};
+pub use primitives::{
+    Color, FontFace, ImageId, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun,
+};
 pub use text_measurer::{FontFamilies, TextMeasurer};
 pub use window_surface::WindowSurface;

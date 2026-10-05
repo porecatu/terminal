@@ -40,6 +40,13 @@ fn resolve(
     platform_default()
 }
 
+/// Diretório do config padrão da plataforma (o pai de
+/// `platform_default_path`). É a base de um caminho relativo quando não há
+/// arquivo de config em uso (`resolve_background_image_path`).
+pub(crate) fn platform_default_dir() -> Option<PathBuf> {
+    platform_default_path().and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
 #[cfg(not(target_os = "macos"))]
 fn platform_default_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("porecatu").join(FILE_NAME))

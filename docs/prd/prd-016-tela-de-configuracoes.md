@@ -99,6 +99,8 @@ Uma janela própria, aberta pela engrenagem da barra de abas:
 
 Mudar este catálogo — acrescentar ou tirar uma opção — é mudança deste requisito, não decisão de implementação.
 
+> **Emenda ([PRD-017](prd-017-imagem-de-fundo-do-terminal.md) RF-17.20, [ADR-0061](../adr/0061-imagem-de-fundo-do-terminal.md) §10).** O grupo **Terminal** ganha, junto da opacidade do fundo, três opções: imagem de fundo (`terminal.background_image.path`, campo de texto, com a nota de "arquivo não encontrado" do RF-17.21 abaixo dele, que não impede o Salvar), modo da imagem (`terminal.background_image.mode`, escolha entre `stretch`, `tile` e `center`) e opacidade da imagem (`terminal.background_image.opacity`, campo numérico de `0.0` a `1.0`). Caminho continua sendo texto (RF-16.12).
+
 **RF-16.12** — Cada opção usa o controle que o tipo dela pede ([ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md) §3): **alternância** para booleano; **escolha** entre valores nomeados para enum (`shape`, `tab_bar_position`, `show_close_button`) e para idioma; **campo numérico** com faixa para número; **campo de texto** para texto livre; **lista editável** para lista de textos; **lista de nome e valor** para `shell.env`. Nenhum seletor nativo de arquivo, pasta ou fonte: caminho e família de fonte são texto.
 
 **RF-16.13** — Opção cuja mudança **não vale na hora** (classe C do [ADR-0030](../adr/0030-escopo-do-hot-reload.md)) diz o escopo real ao lado do nome, antes de o usuário mudá-la: "vale em aba nova", "vale na próxima janela", "após reiniciar". O aviso que a recarga já mostra depois de gravar continua.

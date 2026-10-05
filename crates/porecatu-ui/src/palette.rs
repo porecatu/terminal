@@ -106,6 +106,11 @@ pub struct ResolvedTermPalette {
     /// `[terminal] background_opacity` (RF-5.15), 0.0 a 1.0: alfa do fundo
     /// do terminal -- o quadro e os fundos de célula; texto não entra.
     pub background_opacity: f32,
+    /// `[terminal.background_image] opacity` (RF-17.11), já limitada a 0.0..=1.0.
+    /// Não é a opacidade que se desenha: veja [`Self::background_image_alpha`].
+    pub background_image_opacity: f32,
+    /// `[terminal.background_image] mode` (RF-17.5).
+    pub background_image_mode: porecatu_config::BackgroundImageMode,
     /// `true` quando a surface da janela é transparente: o fundo translúcido
     /// então substitui o que há atrás (`Primitive::Backdrop`) e mostra o
     /// desktop. `false`, ele só se mistura à cor da barra. Decidido por
@@ -128,8 +133,18 @@ impl ResolvedTermPalette {
             bright: ansi_octet(&colors.bright),
             bold_is_bright: config.terminal.font.bold_is_bright,
             background_opacity: config.terminal.background_opacity.clamp(0.0, 1.0) as f32,
+            background_image_opacity: config.terminal.background_image.clamped_opacity(),
+            background_image_mode: config.terminal.background_image.mode,
             backdrop_punch: false,
         }
+    }
+
+    /// Opacidade **efetiva** da imagem de fundo: `opacity × background_opacity`
+    /// (RF-17.12, ADR-0061 §5). Calculada aqui, com a paleta, e não no shader:
+    /// com o terminal a 0.8 e a imagem a 0.5 ela sai a 0.4, e um terminal
+    /// transparente nunca fica opaco por ter imagem.
+    pub fn background_image_alpha(&self) -> f32 {
+        (self.background_image_opacity * self.background_opacity).clamp(0.0, 1.0)
     }
 
     /// Cor de fundo do terminal com a opacidade aplicada.

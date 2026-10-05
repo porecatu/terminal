@@ -1,7 +1,7 @@
 # Guia do usuário
 
 RF-11.22, escrito no fechamento da F6. Cobre instalação, arquivo de
-configuração, tela de configurações, idioma da interface, atalhos, integração de shell e a
+configuração, tela de configurações, idioma da interface, atalhos, painéis divididos, imagem de fundo, integração de shell e a
 convenção do `Shift` para selecionar texto dentro de um programa que pede o mouse. Para decisões de
 arquitetura e o "porquê" de cada coisa, veja os ADRs linkados; este guia é
 só o "como usar".
@@ -233,7 +233,7 @@ fecha a tela junto, e, se houver alterações pendentes, pergunta antes.
 |---|---|
 | **Geral** | idioma, diretório inicial, confirmações ao fechar aba e janela |
 | **Shell** | programa, argumentos e variáveis de ambiente do shell |
-| **Terminal** | fonte, cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo |
+| **Terminal** | fonte, cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
 | **Aparência** | tema, animações, opacidade e decoração da janela, posição da barra de abas, o que a aba mostra, barra de status |
 | **Sessão** | gravar e restaurar a sessão, restauração preguiçosa, geometria das janelas, convite de integração de shell |
 | **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |
@@ -422,6 +422,89 @@ o último painel fecha a aba. Se preferir uma tecla, vincule a ação
 
 O layout volta quando você reabre o app: a divisão, as proporções e o
 diretório de cada painel fazem parte da sessão.
+
+## Imagem de fundo
+
+Uma imagem **PNG** ou **JPEG** atrás do texto de todo terminal: aba solta,
+aba de grupo e cada painel de uma aba dividida. Cada painel mostra a imagem
+**inteira** no próprio quadro (os painéis não dividem uma imagem só entre
+eles), e o vão entre dois painéis fica sem imagem. Ela aparece também pela
+tela de configurações, no grupo **Terminal**, logo depois da opacidade do
+fundo — mas o arquivo é onde tudo está:
+
+```toml
+[terminal.background_image]
+path = "imagens/montanha.jpg"   # vazio = sem imagem (o padrão)
+mode = "stretch"                # "stretch", "tile" ou "center"
+opacity = 0.35                  # 0.0 a 1.0
+```
+
+**O caminho.** `path` vazio desliga a imagem, e o terminal fica exatamente
+como sempre foi. O formato é reconhecido pelo **conteúdo** do arquivo, não
+pela extensão: um `.jpg` que por dentro é PNG funciona. Qualquer outro
+formato (GIF, WebP, BMP, SVG) é recusado com um aviso. O canal de
+transparência de um PNG é respeitado: onde a imagem é transparente, aparece o
+fundo do terminal.
+
+- **Caminho relativo** vale a partir da pasta do **`porecatu.toml` em uso**
+  (o do `--config`, o de `PORECATU_CONFIG` ou o padrão da plataforma), não da
+  pasta de onde o app foi aberto. É a única chave do arquivo com essa regra:
+  `startup_directory` e `[project_file] trusted_paths` seguem outra.
+- **Caminho absoluto** vale como está.
+- **`~/` ou `~\`** no começo é a sua pasta pessoal.
+
+**Os modos.**
+
+| `mode` | O que faz |
+|---|---|
+| `stretch` (padrão) | Estica a imagem até o quadro, nos dois eixos, **sem manter a proporção**: num quadro largo a imagem sai achatada. |
+| `tile` | Repete a imagem lado a lado, no tamanho natural, a partir do canto superior esquerdo. O que passa da borda fica cortado. |
+| `center` | Põe a imagem no tamanho natural, no meio. Menor que o quadro, sobra o fundo do terminal em volta; maior, é cortada nas bordas, mantendo o centro. |
+
+**Tamanho natural** é um pixel da imagem para um pixel da tela. A imagem não
+cresce com o zoom de fonte nem com a escala da janela (uma imagem de 200 px
+ocupa 200 pixels físicos, em qualquer monitor).
+
+**As duas opacidades se multiplicam.** A opacidade com que a imagem é
+desenhada é `opacity` **vezes** `[terminal] background_opacity`: com o
+terminal a `0.8` e a imagem a `0.5`, a imagem sai a `0.4`. Por isso um
+terminal transparente nunca fica opaco por ter imagem, e o que está atrás da
+janela continua aparecendo através do quadro. A imagem também não faz a
+janela nascer transparente: isso continua sendo decidido por
+`background_opacity` e por `[appearance.window] opacity`.
+
+**Legibilidade.** Imagem forte atrás do texto cansa a leitura, e `opacity` é o
+controle que a devolve: comece **baixo**, entre `0.15` e `0.4`, e suba até a
+imagem aparecer sem competir com o texto. Fotos com muito contraste pedem
+valores mais baixos que ilustrações lisas.
+
+**O que cobre a imagem.** Uma célula com cor de fundo própria, posta pelo
+programa (ANSI, 256 cores ou true color), **cobre** a imagem, como cobre o
+fundo do terminal; um `htop` ou um editor com tema que pintam o próprio
+fundo escondem a imagem onde pintam. As células sem cor própria a deixam
+aparecer. A seleção, o realce de busca, o sublinhado de hyperlink e o cursor
+ficam por cima da imagem.
+
+**Aplicação.** Mudar `path`, `mode` ou `opacity` vale na hora, em todas as
+janelas, sem reiniciar e sem redimensionar terminal nenhum. O app **não
+vigia** o arquivo da imagem: trocar o conteúdo dele, mantendo o caminho, só
+vale na próxima recarga da configuração (salvar o `porecatu.toml`, ou
+`config.reload`).
+
+**Quando algo dá errado.** Arquivo inexistente, ilegível, de formato não
+aceito, corrompido ou grande demais para carregar **não derruba nada**: o
+terminal abre sem imagem e um aviso diz qual arquivo e por quê. O aviso
+aparece uma vez por arquivo e por problema, não por janela nem a cada
+recarga. Na tela de configurações, o campo do caminho mostra uma nota quando o
+arquivo não existe; ela não impede o Salvar, e os outros problemas (formato,
+arquivo corrompido) só aparecem no aviso, depois da recarga, porque descobri-los
+exige abrir a imagem. Uma imagem maior que a textura que a placa de vídeo
+aceita é **reduzida**, mantendo a proporção, sem aviso.
+
+A imagem é lida **fora** da thread da interface: o app abre e o terminal
+funciona sem ela, e ela aparece quando termina de carregar. Imagens muito
+grandes (dezenas de megapixels) demoram um pouco mais para aparecer, e é só
+isso que custam ao arranque.
 
 ## Selecionar texto dentro de um programa que pede o mouse (`Shift`)
 

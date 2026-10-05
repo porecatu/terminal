@@ -119,6 +119,7 @@ impl WindowSurface {
                 &gpu.device,
                 &gpu.queue,
                 &resolved.batches,
+                &gpu.images,
                 self.scale,
                 self.config.width,
                 self.config.height,
@@ -193,8 +194,13 @@ impl WindowSurface {
                 multiview_mask: None,
             });
             for layer in Layer::ORDER {
-                self.quad_state
-                    .render_layer(layer, &gpu.quad_shared, &mut pass);
+                self.quad_state.render_layer(
+                    layer,
+                    &gpu.quad_shared,
+                    &gpu.image_shared,
+                    &gpu.images,
+                    &mut pass,
+                );
                 // `QuadWindowState::render_layer` deixa o `scissor_rect` do
                 // passe no último batch que desenhou -- se for um clip
                 // estreito (a barra de severidade do aviso, 2px, é o caso

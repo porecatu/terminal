@@ -70,9 +70,52 @@ pub struct TextRun {
     pub color: Color,
 }
 
+/// Identificador opaco de uma imagem registrada no `GpuContext`
+/// (`GpuContext::create_image`). Só o registro cria um; `Copy` para viajar nas
+/// primitivas. Id de imagem já removida não desenha nada, nem dá erro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ImageId(pub(crate) u32);
+
+impl ImageId {
+    /// Um identificador que o registro **não** criou. Existe para os testes de
+    /// quem monta primitivas (`porecatu-ui` confere a ordem delas sem GPU): um
+    /// id inventado não nomeia textura nenhuma, e a primitiva que o levar não
+    /// desenha nada.
+    pub const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
 /// Uma primitiva de desenho, na ordem em que deve ser processada.
 #[derive(Debug, Clone)]
 pub enum Primitive {
+    /// Imagem registrada desenhada num retângulo, com recorte arredondado
+    /// (ADR-0061 §2): geometria, na ordem da lista, como o `Backdrop`. Compõe
+    /// em premultiplicado sobre o que já está no destino. Todos os retângulos
+    /// em pixels lógicos, como o resto das primitivas.
+    ///
+    /// `rect` e `mask` são separados de propósito: com a imagem maior que o
+    /// quadro num eixo e menor no outro, o retângulo desenhado sai do quadro
+    /// por um lado e não chega aos cantos pelo outro, e o recorte arredondado
+    /// tem de ser o do **quadro**, não o da imagem.
+    Image {
+        /// Onde a textura é desenhada.
+        rect: Rect,
+        /// Que parte da textura cobre `rect`, em coordenadas de textura
+        /// (`0..1` é a imagem inteira, origem no canto superior esquerdo).
+        /// Pode passar de `0..1`: com `repeat` a textura se repete; sem, a
+        /// borda se estende.
+        uv: Rect,
+        /// `Repeat` (`true`) ou `ClampToEdge` (`false`) no sampler.
+        repeat: bool,
+        /// A forma que recorta o desenho, com o raio abaixo (SDF, a mesma de
+        /// [`RoundedQuad`]).
+        mask: Rect,
+        mask_radius: f32,
+        /// Multiplica a cobertura inteira, `0.0` a `1.0`.
+        alpha: f32,
+        image: ImageId,
+    },
     Quad(Quad),
     RoundedQuad(RoundedQuad),
     /// Fundo translúcido que **substitui** o que já estava no destino em vez

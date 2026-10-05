@@ -10,6 +10,8 @@ use std::sync::Arc;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::blit::BlitShared;
+use crate::image::{GpuImage, ImageRegistry, ImageShared, check_levels};
+use crate::primitives::ImageId;
 use crate::quad::QuadShared;
 use crate::text_measurer::{FontFamilies, TextMeasurer};
 use crate::window_surface::WindowSurface;
@@ -46,6 +48,10 @@ pub struct GpuContext {
     pub(crate) queue: wgpu::Queue,
     format: wgpu::TextureFormat,
     pub(crate) quad_shared: QuadShared,
+    /// Pipeline de imagem e o registro das texturas (ADR-0061 §2): do
+    /// processo, uma textura para todas as janelas (RF-17.18).
+    pub(crate) image_shared: ImageShared,
+    pub(crate) images: ImageRegistry<GpuImage>,
     pub(crate) blit_shared: BlitShared,
     pub(crate) text_cache: glyphon::Cache,
     pub(crate) text_atlas: glyphon::TextAtlas,
@@ -172,6 +178,7 @@ impl GpuContext {
         surface.configure(&device, &config);
 
         let quad_shared = QuadShared::new(&device, format);
+        let image_shared = ImageShared::new(&device, format, &quad_shared);
         let blit_shared = BlitShared::new(&device, format);
         let text_cache = glyphon::Cache::new(&device);
         // `ColorMode::Accurate` (o default de `TextAtlas::new`) faz o
@@ -214,6 +221,8 @@ impl GpuContext {
             queue,
             format,
             quad_shared,
+            image_shared,
+            images: ImageRegistry::new(),
             blit_shared,
             text_cache,
             text_atlas,
@@ -265,6 +274,40 @@ impl GpuContext {
             surface,
             config,
         ))
+    }
+
+    /// Maior lado de textura 2D que o `Device` aceita (ADR-0061 §2): o teto a
+    /// que uma imagem é reduzida antes de [`Self::create_image`].
+    pub fn max_texture_dimension_2d(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
+    /// Cria uma textura `Rgba8Unorm` de `width` x `height` e a registra
+    /// (ADR-0061 §2). `levels` é a cadeia de mips em RGBA8, alfa reto: o
+    /// nível 0 é a imagem (`width * height * 4` bytes), cada seguinte tem a
+    /// metade do lado (piso 1), até no máximo 1x1. Uma textura serve a toda
+    /// janela e a todo `Primitive::Image` que a nomear.
+    ///
+    /// # Panics
+    ///
+    /// Se a entrada for incoerente (lado zero ou acima de
+    /// [`Self::max_texture_dimension_2d`], nenhum nível, nível com o tamanho
+    /// errado): é erro de programação de quem chama, como um `PopClip` sem
+    /// `PushClip`, e `porecatu-ui` já reduziu a imagem ao limite.
+    pub fn create_image(&mut self, width: u32, height: u32, levels: &[&[u8]]) -> ImageId {
+        if let Err(error) = check_levels(width, height, self.max_texture_dimension_2d(), levels) {
+            panic!("create_image com entrada incoerente: {error:?}");
+        }
+        let image =
+            self.image_shared
+                .create_image(&self.device, &self.queue, width, height, levels);
+        self.images.insert(image)
+    }
+
+    /// Solta a textura. `id` desconhecido ou já removido não faz nada; uma
+    /// `Primitive::Image` que ainda o nomeie deixa de desenhar.
+    pub fn remove_image(&mut self, id: ImageId) {
+        self.images.remove(id);
     }
 
     /// O medidor de texto do processo (ADR-0018) -- `porecatu-ui` o usa
