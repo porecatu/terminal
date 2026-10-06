@@ -14,7 +14,7 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
-## [Não lançado]
+## [0.9.2] - 2026-10-06
 
 O app ganha **imagem de fundo da janela**: uma PNG ou JPEG atrás da janela
 inteira — barra de abas, barra de status, margem e vão entre painéis —,
