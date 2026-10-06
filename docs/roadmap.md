@@ -917,7 +917,7 @@ Etapa 6, fechada em 2026-10-05, no Windows 11, num release isolado por cenário 
 
 ---
 
-## Depois do v1 — imagem de fundo da janela — documentada, não implementada
+## Depois do v1 — imagem de fundo da janela — em implementação
 
 Fora da ordem de fases, pelo mesmo caminho da imagem do terminal: **requisito novo**, pedido do dono do produto. O [PRD-018](prd/prd-018-imagem-de-fundo-da-janela.md) pede uma imagem PNG ou JPEG atrás da janela inteira — barra de abas, barra de status, margem e vão entre painéis —, abaixo dos quadros de terminal e visível através deles quando o terminal é translúcido, nos mesmos três modos, com opacidade própria que se multiplica pela da janela. Revoga, por emenda, o "fora de escopo" de imagem na barra de abas do PRD-004 e o de imagem no chrome do PRD-017. O [ADR-0062](adr/0062-imagem-de-fundo-da-janela.md) decide:
 
@@ -933,8 +933,18 @@ O ponto de partida: a janela não pinta fundo (o "quadro do app" é o `clear` em
 **Cinco etapas:**
 
 1. **Documentação e decisão — feita.** Os documentos novos são o PRD-018 e o ADR-0062. Ganharam blockquote de revisão: o PRD-004 (fora de escopo), o PRD-017 (RF-17.8 e fora de escopo), o ADR-0061 (§4 e §7), o ADR-0018 (cabeça de `Grid`), o ADR-0030 (classe A) e o PRD-016 RF-16.11 (três opções em Aparência). Também foram atualizados o índice de ADRs, a tabela de fases da especificação (só a classificação), a arquitetura §5 e o CLAUDE.md. **A §2 da especificação não é reescrita aqui**, e **`[appearance.window.background_image]` não entra no arquivo de exemplo aqui** (`tests/example_toml.rs` reprova chave antes do campo).
-2. **Config e estado em dois slots.** O campo `[appearance.window.background_image]` em `porecatu-config`, reutilizando `BackgroundImage`, com o bloco comentado no exemplo na mesma leva. `BackgroundImageStore` com `BackgroundImageSlot { Terminal, Window }`, chave compartilhada, liberação de textura por uso, `Wakeup::BackgroundImageLoaded` casado por chave, carga do arranque adiada para os dois slots, avisos por slot com frases nos cinco arquivos de `locales/`. **Sem pixel novo.**
-3. **Pintura e composição — aval visual pedido aqui.** A imagem na cabeça de `Layer::Grid` com o `placement` da janela inteira; a barra de abas sem `Quad` de fundo com a imagem exibida; o furo, a imagem recortada e o fundo em blend normal no quadro em janela transparente; teste de `rect`/`uv` iguais entre a imagem da janela e o recorte dela; recarga a quente dos três campos; §2.2, §2.7 e §2.8 da especificação reescritas e entrada na §4.4.
+2. **Config e estado em dois slots — feita.** `[appearance.window.background_image]` (`path`, `mode`, `opacity`) existe em `porecatu-config`, reutilizando `BackgroundImage`, com o bloco comentado no arquivo de exemplo. O `BackgroundImageStore` passou a ter dois slots (`BackgroundImageSlot { Terminal, Window }`) com chave compartilhada: o mesmo arquivo nas duas chaves abre uma thread e guarda uma textura, liberada só quando nenhum slot a usa. O resultado da carga é casado por chave, a carga do arranque adiada ao primeiro byte do PTY vale para os dois slots, e a falha sai por slot (`SlotFailure`), com `notice.window_background_image.*` nos cinco arquivos de `locales/`. **Sem pixel novo.** O que a etapa pedia:
+   - O campo `[appearance.window.background_image]` em `porecatu-config`, com o bloco comentado no exemplo na mesma leva.
+   - `BackgroundImageStore` com `BackgroundImageSlot { Terminal, Window }`, chave compartilhada e liberação de textura por uso.
+   - `Wakeup::BackgroundImageLoaded` casado por chave e a carga do arranque adiada para os dois slots.
+   - Os avisos por slot, com frases em todo `locales/`.
+3. **Pintura e composição — feita; aval visual pendente.** `background_image::window_paint` põe a imagem pelo `placement` da janela inteira, e `WindowImage::primitive` gera a primitiva da janela (raio 0) ou a recortada por cada quadro, com o mesmo `rect`/`uv`. Ela é a primeira primitiva de `Layer::Grid`; a barra de abas não emite o `Quad` de fundo com a imagem exibida; e em janela transparente o fundo do quadro vira furo, imagem recortada e `RoundedQuad` em blend normal (`paint::build_primitives_with_images`), enquanto os outros casos de surface ficam como estavam. A recarga a quente dos três campos é classe A. Medida por pixel numa janela transparente sobre fundo de cor conhecida, a composição bate `fundo·b + imagem·i·(1 − b)` dentro de ±1 por canal. As §2.2, §2.7 e §2.8 da especificação foram reescritas e a §4.4 ganhou a entrada. **O aval visual é do dono do produto e está pendente.** O que a etapa pedia:
+   - A imagem na cabeça de `Layer::Grid` com o `placement` da janela inteira.
+   - A barra de abas sem `Quad` de fundo com a imagem exibida.
+   - O furo, a imagem recortada e o fundo em blend normal no quadro em janela transparente.
+   - Teste de `rect`/`uv` iguais entre a imagem da janela e o recorte dela.
+   - A recarga a quente dos três campos.
+   - As §2.2, §2.7 e §2.8 da especificação reescritas e a entrada na §4.4. **Aval visual pedido aqui.**
 4. **Tela de configurações.** Três opções no grupo Aparência, depois de `window_opacity`, com a nota de arquivo inexistente e frases em todo `locales/`.
 5. **Verificação ao vivo e fechamento.** Os treze cenários do PRD-018 numa instância isolada por cenário, medição de pixel em janela opaca e transparente (fundo de cor conhecida atrás), `PORECATU_TRACE` com e sem imagem, guia do usuário e CHANGELOG.
 
@@ -952,6 +962,14 @@ O ponto de partida: a janela não pinta fundo (o "quadro do app" é o `clear` em
 - troca de `path`, `mode` e `opacity` pela recarga sem redimensionar PTY;
 - tempo até o primeiro prompt e frames ociosos iguais com e sem imagem;
 - `verify-docs.py`, `cargo test --workspace`, `clippy -D warnings` e `cargo fmt --check` verdes.
+
+### Dívida de verificação da imagem de fundo da janela
+
+Registrada na etapa 3, ainda sem as etapas 4 e 5:
+
+- **Aval visual do dono do produto**, pedido em 2026-10-06: os itens estão no registro do aval do [ADR-0062](adr/0062-imagem-de-fundo-da-janela.md). A aparência está medida por pixel e capturada, **não aprovada**.
+- **Defeito conhecido, aberto, pré-existente: o desktop vaza pelos cantos arredondados do quadro do terminal** em janela transparente. O `Backdrop` com `REPLACE` escreve o retângulo inteiro, inclusive os pixels de cobertura zero fora do raio 6, e eles ficam transparentes. O pixel (6,52) saiu igual com e sem imagem da janela (`background_opacity = 0.6`), então não vem desta feature, mas com uma imagem forte atrás o canto fica mais visível do que com a cor da barra. O dono do produto confirmou o sintoma a olho e decidiu **anotar e corrigir depois**. A correção a verificar é descartar o fragmento de cobertura zero no pipeline `REPLACE` do `quad.wgsl`, compartilhado com o app inteiro, e pede aval próprio.
+- **Não verificado ao vivo:** o vão entre painéis (pede input para dividir) e os modos `tile` e `center` da imagem da janela; macOS e Linux; escala diferente de 100%.
 
 ---
 
