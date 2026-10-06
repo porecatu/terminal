@@ -468,10 +468,12 @@ ocupa 200 pixels físicos, em qualquer monitor).
 **As duas opacidades se multiplicam.** A opacidade com que a imagem é
 desenhada é `opacity` **vezes** `[terminal] background_opacity`: com o
 terminal a `0.8` e a imagem a `0.5`, a imagem sai a `0.4`. Por isso um
-terminal transparente nunca fica opaco por ter imagem, e o que está atrás da
-janela continua aparecendo através do quadro. A imagem também não faz a
-janela nascer transparente: isso continua sendo decidido por
-`background_opacity` e por `[appearance.window] opacity`.
+terminal transparente nunca fica opaco por ter imagem, e o que está atrás do
+quadro continua aparecendo através dele: o desktop, ou a imagem da janela, se
+houver uma. A imagem também não faz a janela nascer transparente: isso
+continua sendo decidido por `background_opacity` e por
+`[appearance.window] opacity`, e com imagem da janela configurada só por esta
+última.
 
 **Legibilidade.** Imagem forte atrás do texto cansa a leitura, e `opacity` é o
 controle que a devolve: comece **baixo**, entre `0.15` e `0.4`, e suba até a
@@ -521,13 +523,13 @@ opacity = 1.0                # 0.0 a 1.0
 
 **Onde aparece.** Atrás das abas, das cápsulas e das pílulas de grupo, que continuam translúcidas e deixam a imagem transparecer na medida dos alfas que já têm. Com a imagem exibida, a barra de abas **deixa de pintar o fundo** dela, e por isso a sombra do quadro do terminal passa a aparecer na faixa de baixo da barra. Sem imagem, nada disso muda. A **janela de configurações não recebe** a imagem, nem os avisos, os menus, os tooltips e os diálogos.
 
-**Através do terminal translúcido.** Com `[terminal] background_opacity` abaixo de `1.0`, a imagem da janela aparece **dentro** do quadro do terminal, por baixo do fundo dele e da imagem do terminal, fazendo o papel do que está atrás da janela. Com a imagem da janela a `1.0`, o que está atrás da janela (o desktop) **deixa de aparecer** através do quadro; com a imagem mais transparente, ele volta na medida do que falta. Com o terminal opaco, o quadro cobre a imagem e ela só se vê fora dele.
+**Através do terminal translúcido.** Com `[terminal] background_opacity` abaixo de `1.0`, a imagem da janela aparece **dentro** do quadro do terminal, por baixo do fundo dele e da imagem do terminal. Com a imagem da janela configurada, o terminal translúcido mostra a imagem, **nunca o desktop**, em qualquer janela: com a imagem mais transparente, o que aparece por ela é o fundo da janela. Para ver o que está atrás da janela, use `[appearance.window] opacity` (abaixo). Com o terminal opaco, o quadro cobre a imagem e ela só se vê fora dele.
 
 **As duas imagens juntas.** Se as duas chaves estão configuradas, dentro do quadro a imagem do terminal fica **por cima** do fundo do quadro e a da janela **por baixo** dele; fora dos quadros só aparece a da janela. Se as duas apontam para **o mesmo arquivo**, ele é lido e guardado **uma vez só**.
 
 **As opacidades.** O alfa da imagem da janela é só o `opacity` dela. Quem multiplica é a opacidade da janela: com `[appearance.window] opacity = 0.8` e a imagem a `1.0`, a imagem sai a 80% e o que está atrás da janela continua aparecendo. É diferente da imagem do terminal, que multiplica por `background_opacity`.
 
-**O que cobre a imagem da janela.** Uma célula com cor de fundo própria, posta pelo programa, cobre as duas imagens, como cobre o fundo do terminal. Numa janela transparente, uma célula assim mostra o que está atrás da janela, não a imagem da janela. As células sem cor própria deixam a imagem aparecer.
+**O que cobre a imagem da janela.** Uma célula com cor de fundo própria, posta pelo programa, se mistura sobre a imagem da janela com a transparência de `background_opacity`, como o fundo do terminal, e cobre a imagem do terminal. As células sem cor própria deixam a imagem aparecer.
 
 **Aplicação e erros.** Mudar `path`, `mode` ou `opacity` vale na hora, em todas as janelas, sem reiniciar e sem redimensionar terminal nenhum. Arquivo inexistente, ilegível, de formato não aceito, corrompido ou grande demais **não derruba nada**: a janela abre sem imagem e um aviso diz qual arquivo e por quê, **"da janela"** ou **"do terminal"**. O mesmo arquivo ausente nas duas chaves dá dois avisos, um de cada, porque são duas configurações erradas. Na tela de configurações, o campo do caminho mostra uma nota quando o arquivo não existe, e ela não impede o Salvar.
 
@@ -786,3 +788,12 @@ A única coisa clicável na barra é o número de commits atrás do remoto
 (acima). Em todo o resto dela, a borda inferior da janela continua sendo
 a área de redimensionar, mesmo em cima da barra — inclusive nos cantos,
 que o número nunca alcança.
+
+## Quando o app fecha sozinho
+
+Se o Porecatu fechar de repente, a causa fica registrada em `crash.log`, ao
+lado do `session.json`: no Windows, `%LOCALAPPDATA%\porecatu\crash.log`; no
+Linux, `$XDG_STATE_HOME/porecatu/crash.log`; no macOS,
+`~/Library/Application Support/porecatu/crash.log`. Cada fechamento acrescenta
+uma entrada, em inglês, com a mensagem, o ponto do código e o backtrace. É
+esse arquivo que vale anexar ao relatar o problema.

@@ -65,7 +65,11 @@ O que o usuário vê: a imagem esticada na janela inteira, aparecendo atrás das
 
 **RF-18.11** — **Através do terminal translúcido.** Com `[terminal] background_opacity < 1`, a imagem da janela aparece através do quadro de terminal, no lugar do que hoje aparece ali (o desktop). Ela entra **abaixo** do fundo do quadro, e a imagem do terminal, se houver, fica acima desse fundo (RF-17.9). Com `background_opacity = 1`, o quadro é opaco e a imagem da janela não aparece dentro dele.
 
+> **Emenda ([ADR-0063](../adr/0063-imagem-da-janela-sem-furo-ate-o-desktop.md)):** com imagem da janela configurada, o terminal translúcido revela **só** a imagem, sobre o fundo da janela, e nunca o desktop, em toda janela, tenha ela nascido opaca ou transparente. Com a imagem a `opacity < 1`, o que transparece por ela é o fundo da janela, não o desktop. O desktop só aparece por `[appearance.window] opacity < 1` (RF-18.15). Sem esta emenda, a mesma config desenhava o desktop numa janela e o fundo escuro noutra.
+
 **RF-18.12** — Célula com cor de fundo própria **cobre as duas imagens**, como o RF-17.10 já decide para a do terminal: onde um programa pinta o fundo, aparece a cor dele, com a transparência de `background_opacity`, como sem imagem nenhuma.
+
+> **Emenda ([ADR-0063](../adr/0063-imagem-da-janela-sem-furo-ate-o-desktop.md)):** com imagem da janela configurada, a célula pintada faz blend sobre a imagem da janela, com a transparência de `background_opacity`, como já fazia numa surface opaca. Ela cobre a imagem do terminal como antes (RF-17.10).
 
 **RF-18.13** — A imagem **não aparece na janela de configurações** ([ADR-0059](../adr/0059-janela-de-configuracoes.md)), que segue com o fundo dela.
 

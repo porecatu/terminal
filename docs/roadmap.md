@@ -1007,7 +1007,18 @@ Etapa 5, fechada em 2026-10-06, no Windows 11, num release isolado por cenário 
 - **Leitor de tela** de verdade nas três linhas novas do grupo Aparência.
 - **As 16 cores ANSI** de fundo de célula (só true color foi exercitada) e a nota de arquivo inexistente nos outros quatro idiomas (só por teste).
 - **Orientação EXIF** de um JPEG: o `image` não a aplica, como na imagem do terminal.
-- **Observação, não investigada e sem relação com a imagem:** depois de `Ctrl+Shift+N` enviado por `SendKeys`, o prompt da janela nova apareceu com um `n` digitado, **também sem imagem configurada**. Pode ser o gesto sintético (a janela nova recebe o `n` do mesmo pressionamento) ou um vazamento do atalho; não foi separado.
+- **Observação, não investigada e sem relação com a imagem:** depois de `Ctrl+Shift+N` enviado por `SendKeys`, o prompt da janela nova apareceu com um `n` digitado, **também sem imagem configurada**. Pode ser o gesto sintético (a janela nova recebe o `n` do mesmo pressionamento) ou um vazamento do atalho; não foi separado. Visto de novo em 2026-10-06, em todas as janelas abertas por `Ctrl+Shift+N` sintético: o `n` dispara a sugestão `npm start` do PSReadLine.
+
+### Depois do fechamento — o desktop vazando pela imagem da janela (ADR-0063)
+
+Relato do dono do produto: com imagem da janela e terminal translúcido, às vezes uma janela nova ou uma sessão restaurada mostrava o desktop dentro do quadro do terminal, "com a imagem transparente junto". Uma vez o app também fechou sozinho. Reproduzido ao vivo com a imagem dele, imagem a `0.2` e terminal a `0.5`:
+
+- iniciado opaco e mudado a quente: sem desktop;
+- iniciado já translúcido: 40% de desktop no quadro, nas duas janelas.
+
+A mesma config desenhava de dois jeitos, conforme a janela tivesse nascido com surface opaca ou transparente (o furo do ADR-0062 §4). O [ADR-0063](adr/0063-imagem-da-janela-sem-furo-ate-o-desktop.md) tira o furo quando há imagem da janela e deixa de pedir surface transparente só por causa do terminal. Ele também registra pânico em `crash.log`: o fechamento não foi reproduzido, e sem console ele não deixava rastro.
+
+- **Achado lateral, não corrigido:** restaurar em cascata uma sessão nomeada que foi salva **maximizada** cria a janela com o tamanho gravado (1920×1140 nesta máquina), que passa por baixo da barra de tarefas. `WindowPlacement::CascadeFrom` em `open_window_from_session` ignora o maximizado e não limita o tamanho à área útil do monitor.
 
 ---
 

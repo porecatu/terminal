@@ -148,8 +148,10 @@ pub(crate) fn placement(
 /// conta aqui daria `opacity × window_opacity²` (ADR-0062 §2).
 ///
 /// Devolve a imagem **já posta pela janela** (`WindowImage`), e não a
-/// primitiva: o quadro de terminal translúcido reaproveita o mesmo
-/// `rect`/`uv`/`repeat` com outra máscara (ADR-0062 §4, uma imagem só).
+/// primitiva: quem monta o frame escolhe a máscara. O quadro de terminal não
+/// recorta mais a imagem por conta própria -- com ela configurada, o fundo
+/// translúcido se mistura sobre a que abre `Layer::Grid` (revisão do
+/// ADR-0062 §4).
 pub(crate) fn window_paint(
     config: &porecatu_config::BackgroundImage,
     texture: Option<BackgroundTexture>,
@@ -171,9 +173,8 @@ pub(crate) fn window_paint(
     })
 }
 
-/// A imagem da janela já posta (ADR-0062 §2 e §4): onde a textura cai na
-/// janela inteira, e com que alfa. É a mesma conta para a primitiva da janela
-/// e para a recortada por cada quadro de terminal -- só a máscara muda.
+/// A imagem da janela já posta (ADR-0062 §2): onde a textura cai na janela
+/// inteira, e com que alfa.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WindowImage {
     pub(crate) rect: Rect,
@@ -184,9 +185,8 @@ pub(crate) struct WindowImage {
 }
 
 impl WindowImage {
-    /// A primitiva, recortada por `mask` com `mask_radius`: a janela inteira
-    /// com raio zero na cabeça de `Layer::Grid`, ou o quadro de um terminal
-    /// com o raio dele (ADR-0062 §4).
+    /// A primitiva, recortada por `mask` com `mask_radius`: no app, a janela
+    /// inteira com raio zero, na cabeça de `Layer::Grid`.
     pub(crate) fn primitive(&self, mask: Rect, mask_radius: f32) -> Primitive {
         Primitive::Image {
             rect: self.rect,

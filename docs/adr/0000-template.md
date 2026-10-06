@@ -63,7 +63,8 @@
 | [0059](0059-janela-de-configuracoes.md) | Janela de configurações: a primeira janela que não é um workspace de terminal | Aceito |
 | [0060](0060-anatomia-da-tela-de-configuracoes.md) | Anatomia da tela de configurações: guia lateral, painel de opções e os controles que faltavam | Aceito — aval visual em 2026-10-02 |
 | [0061](0061-imagem-de-fundo-do-terminal.md) | Imagem de fundo do terminal: `image` para decodificar, primitiva de imagem no render, alfa multiplicado | Aceito |
-| [0062](0062-imagem-de-fundo-da-janela.md) | Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots | Aceito |
+| [0062](0062-imagem-de-fundo-da-janela.md) | Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots | Aceito · §4 Superseded by ADR-0063 (**parcial**: sem furo até o desktop com imagem da janela) |
+| [0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) | Imagem da janela sem furo até o desktop | Aceito |
 
 ## Convenção
 

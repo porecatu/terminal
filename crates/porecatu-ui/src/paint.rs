@@ -29,7 +29,7 @@ use porecatu_term::{
     SelectionSpan,
 };
 
-use crate::background_image::{self, WindowImage};
+use crate::background_image;
 use crate::box_glyphs;
 use crate::chrome::push_shadow;
 use crate::palette::{self, ResolvedTermPalette, TRANSPARENT};
@@ -220,9 +220,15 @@ pub struct BackgroundImagePaint {
     pub scale: f32,
 }
 
-/// [`build_primitives`] com a imagem de fundo do terminal, se houver, e sem a
-/// da janela: o caso dos testes que não tocam a composição de ADR-0062 §4.
-#[cfg(test)]
+/// [`build_primitives`] com a imagem de fundo do terminal. `background_image`
+/// é `Some` só com a textura `Ready` -- `Loading` e `Failed` chegam como
+/// `None` e o painel desenha como sempre, e a imagem anterior continua
+/// enquanto a nova carrega (ADR-0061 §7, quem decide é `lib.rs`).
+///
+/// A imagem da janela (PRD-018) não passa por aqui: ela abre `Layer::Grid`,
+/// e com ela configurada `lib.rs` desliga o `backdrop_punch` -- o fundo do
+/// quadro se mistura sobre ela em vez de furar até o desktop (revisão do
+/// ADR-0062 §4).
 #[allow(clippy::too_many_arguments)]
 pub fn build_primitives_with_image(
     snapshot: &GridSnapshot,
@@ -235,43 +241,6 @@ pub fn build_primitives_with_image(
     measurer: &mut TextMeasurer,
     hyperlink_hover: &[HyperlinkSpan],
     background_image: Option<BackgroundImagePaint>,
-) -> Vec<Primitive> {
-    build_primitives_with_images(
-        snapshot,
-        metrics,
-        font_size_px,
-        box_rect,
-        style,
-        term_pal,
-        cursor,
-        measurer,
-        hyperlink_hover,
-        background_image,
-        None,
-    )
-}
-
-/// [`build_primitives`] com as duas imagens de fundo. `background_image` é a
-/// do terminal (PRD-017): `Some` só com a textura `Ready` -- `Loading` e
-/// `Failed` chegam como `None` e o painel desenha como sempre, e a imagem
-/// anterior continua enquanto a nova carrega (ADR-0061 §7, quem decide é
-/// `lib.rs`). `window_image` é a da janela já posta pela janela inteira
-/// (PRD-018): aqui só interessa quando o fundo do quadro precisa deixá-la
-/// aparecer através dele (ADR-0062 §4); a primitiva da janela inteira, na
-/// cabeça de `Layer::Grid`, é de quem monta o frame.
-#[allow(clippy::too_many_arguments)]
-pub fn build_primitives_with_images(
-    snapshot: &GridSnapshot,
-    metrics: CellMetrics,
-    font_size_px: f32,
-    box_rect: Rect,
-    style: &TabBarStyle,
-    term_pal: &ResolvedTermPalette,
-    cursor: CursorAppearance,
-    measurer: &mut TextMeasurer,
-    hyperlink_hover: &[HyperlinkSpan],
-    background_image: Option<BackgroundImagePaint>,
-    window_image: Option<WindowImage>,
 ) -> Vec<Primitive> {
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
@@ -290,36 +259,11 @@ pub fn build_primitives_with_images(
         border_color: TRANSPARENT,
         border_width: 0.0,
     };
-    match window_image {
-        // ADR-0062 §4: surface transparente + terminal translúcido + imagem
-        // da janela. O `Backdrop` com `REPLACE` apagaria a imagem embaixo, que
-        // é justo onde ela deve aparecer (RF-18.11). O fundo vira três
-        // primitivas: o furo transparente (zera o destino, como o `Backdrop`
-        // de hoje), a imagem da janela recortada pelo quadro -- o mesmo
-        // `rect`/`uv`/`repeat` da janela, é uma imagem só (RF-18.6) -- e o
-        // fundo em blend **normal**. Pixel final: `fundo·b + imagem·i·(1 − b)`,
-        // alfa `b + i·(1 − b)`, com `b = background_opacity` e `i` o alfa da
-        // imagem da janela. Com `i = 1` o desktop some de trás do quadro; com
-        // `i < 1` ele volta na medida do que falta.
-        Some(window) if term_pal.backdrop_punch && term_pal.background_opacity < 1.0 => {
-            primitives.push(Primitive::Backdrop(RoundedQuad {
-                color: TRANSPARENT,
-                ..frame_fill
-            }));
-            primitives.push(window.primitive(box_rect, style.terminal_frame_corner_radius));
-            primitives.push(Primitive::RoundedQuad(RoundedQuad {
-                color: term_pal.with_backdrop_alpha(frame_fill.color),
-                ..frame_fill
-            }));
-        }
-        // Qualquer outro caso é o de antes, byte a byte: terminal opaco (o
-        // quadro cobre a imagem), surface opaca (o `RoundedQuad` translúcido
-        // já compõe sobre a imagem que está embaixo) ou sem imagem da janela.
-        _ => primitives.push(backdrop_fill(term_pal, frame_fill)),
-    }
-    // Célula com fundo próprio **não** muda (RF-18.12, ADR-0062 §4): segue
-    // `Backdrop`/`REPLACE` e cobre as duas imagens -- furo e imagem por run de
-    // fundo custariam uma troca de pipeline por run, por frame.
+    // Com imagem da janela, `backdrop_punch` chega `false` (revisão do
+    // ADR-0062 §4): o fundo translúcido e o de cada célula se misturam sobre
+    // a imagem, que abre `Layer::Grid` -- o mesmo pixel numa surface opaca ou
+    // transparente.
+    primitives.push(backdrop_fill(term_pal, frame_fill));
     // PRD-017/ADR-0061 §4: a imagem fica **acima** do fundo do quadro e
     // **abaixo** de tudo que a grade desenha (fundo de célula, texto,
     // seleção, busca, hyperlink, cursor) -- por isso é empurrada aqui, entre o
@@ -1193,31 +1137,9 @@ mod tests {
         assert_eq!(format!("{without:?}"), format!("{plain:?}"));
     }
 
-    // ---- imagem da janela através do quadro (ADR-0062 §4) --------------
+    // ---- imagem da janela sob o quadro (revisão do ADR-0062 §4) -------
 
-    /// A imagem da janela já posta pela janela inteira (1000x700), como
-    /// `window_paint` a entrega.
-    fn window_image() -> WindowImage {
-        WindowImage {
-            rect: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1000.0,
-                height: 700.0,
-            },
-            uv: Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            repeat: false,
-            alpha: 0.8,
-            image: ImageId::from_raw(2),
-        }
-    }
-
-    /// Paleta de janela transparente (`backdrop_punch`) e terminal a `opacity`.
+    /// Paleta de terminal a `opacity`, com ou sem furo até o desktop.
     fn punch_pal(opacity: f64, punch: bool) -> ResolvedTermPalette {
         let mut config = porecatu_config::Config::default();
         config.terminal.background_opacity = opacity;
@@ -1226,250 +1148,48 @@ mod tests {
         pal
     }
 
-    fn frame_rect(x: f32) -> Rect {
-        Rect {
-            x,
-            y: 52.0,
-            width: 300.0,
-            height: 200.0,
-        }
-    }
-
-    fn paint_frame(
-        m: &mut porecatu_render::TextMeasurer,
-        snap: &GridSnapshot,
-        box_rect: Rect,
-        pal: &ResolvedTermPalette,
-        terminal_image: Option<BackgroundImagePaint>,
-        window: Option<WindowImage>,
-    ) -> Vec<Primitive> {
-        let metrics = cell(m);
-        build_primitives_with_images(
-            snap,
-            metrics,
-            SIZE,
-            box_rect,
-            &TabBarStyle::DEFAULT,
-            pal,
-            test_cursor(),
-            m,
-            &[],
-            terminal_image,
-            window,
-        )
-    }
-
-    fn images(out: &[Primitive]) -> Vec<&Primitive> {
-        out.iter()
-            .filter(|p| matches!(p, Primitive::Image { .. }))
-            .collect()
-    }
-
-    /// Janela transparente, terminal translúcido e imagem da janela: o fundo
-    /// do quadro vira furo, imagem recortada e fundo em blend normal, nessa
-    /// ordem (ADR-0062 §4).
+    /// Com imagem da janela, `lib.rs` desliga o furo: o fundo translúcido do
+    /// quadro e o de uma célula com cor própria se misturam (`RoundedQuad`)
+    /// sobre o que está embaixo -- a imagem da janela, na cabeça de
+    /// `Layer::Grid` --, nunca `Backdrop`, e o quadro não desenha imagem
+    /// nenhuma da janela por conta própria.
     #[test]
-    fn a_translucent_frame_on_a_transparent_window_punches_then_shows_the_window_image() {
+    fn without_the_punch_a_translucent_frame_blends_over_what_is_underneath() {
         let mut m = porecatu_render::TextMeasurer::new();
-        let style = TabBarStyle::DEFAULT;
-        let box_rect = frame_rect(6.0);
-        let window = window_image();
-        let out = paint_frame(
-            &mut m,
-            &snapshot("a"),
-            box_rect,
-            &punch_pal(0.6, true),
-            None,
-            Some(window),
-        );
-        let hole = position(&out, |p| matches!(p, Primitive::Backdrop(_))).unwrap();
-        // 1. O furo: transparente, na forma do quadro.
-        let Primitive::Backdrop(hole_quad) = &out[hole] else {
-            unreachable!()
-        };
-        assert_eq!(hole_quad.color.a, 0.0);
-        assert_eq!(hole_quad.rect, box_rect);
-        assert_eq!(hole_quad.radius, style.terminal_frame_corner_radius);
-        // 2. A imagem da janela, recortada pelo quadro, com a posição que ela
-        // tem na janela inteira -- não recalculada pelo quadro.
-        let Primitive::Image {
-            rect,
-            uv,
-            repeat,
-            mask,
-            mask_radius,
-            alpha,
-            image,
-        } = &out[hole + 1]
-        else {
-            panic!("a imagem vem logo depois do furo: {:?}", out[hole + 1]);
-        };
-        assert_eq!(*rect, window.rect);
-        assert_eq!(*uv, window.uv);
-        assert_eq!(*repeat, window.repeat);
-        assert_eq!(*mask, box_rect);
-        assert_eq!(*mask_radius, style.terminal_frame_corner_radius);
-        assert_eq!(*alpha, window.alpha);
-        assert_eq!(*image, window.image);
-        // 3. O fundo, em blend normal (`RoundedQuad`, não `Backdrop`), com o
-        // alfa `background_opacity` que já tinha.
-        let Primitive::RoundedQuad(fill) = &out[hole + 2] else {
-            panic!("o fundo vem depois da imagem: {:?}", out[hole + 2]);
-        };
-        assert_eq!(fill.rect, box_rect);
-        assert!((fill.color.a - 0.6).abs() < 1e-6);
-        // Só o furo é `Backdrop`: nenhuma célula tem fundo próprio aqui.
-        assert_eq!(
-            out.iter()
-                .filter(|p| matches!(p, Primitive::Backdrop(_)))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn the_terminal_image_stays_above_the_frame_fill_with_the_window_image_below() {
-        let mut m = porecatu_render::TextMeasurer::new();
-        let out = paint_frame(
-            &mut m,
-            &snapshot("a"),
-            frame_rect(6.0),
-            &punch_pal(0.6, true),
-            Some(image_paint()),
-            Some(window_image()),
-        );
-        let found = images(&out);
-        assert_eq!(found.len(), 2);
-        let window_at = position(
-            &out,
-            |p| matches!(p, Primitive::Image { image, .. } if *image == ImageId::from_raw(2)),
-        )
-        .unwrap();
-        let terminal_at = position(
-            &out,
-            |p| matches!(p, Primitive::Image { image, .. } if *image == ImageId::from_raw(1)),
-        )
-        .unwrap();
-        // O fundo é o primeiro `RoundedQuad` depois do furo e da imagem da
-        // janela (antes deles vêm só as camadas da sombra).
-        let fill_at = out
-            .iter()
-            .enumerate()
-            .position(|(at, p)| at > window_at && matches!(p, Primitive::RoundedQuad(_)))
-            .unwrap();
-        assert!(window_at < fill_at, "imagem da janela abaixo do fundo");
-        assert!(fill_at < terminal_at, "imagem do terminal acima do fundo");
-    }
-
-    /// RF-18.6: a imagem é uma só. Dois painéis vizinhos recortam **a mesma**
-    /// imagem, cada um com a própria máscara, sem recomeçar em cada quadro.
-    #[test]
-    fn neighbouring_frames_cut_the_same_window_image() {
-        let mut m = porecatu_render::TextMeasurer::new();
-        let pal = punch_pal(0.6, true);
-        let left = frame_rect(6.0);
-        let right = frame_rect(312.0);
-        let cut = |m: &mut porecatu_render::TextMeasurer, box_rect: Rect| {
-            let out = paint_frame(
-                m,
-                &snapshot("a"),
-                box_rect,
-                &pal,
-                None,
-                Some(window_image()),
-            );
-            let Some(Primitive::Image {
-                rect,
-                uv,
-                repeat,
-                mask,
-                ..
-            }) = out
-                .iter()
-                .find(|p| matches!(p, Primitive::Image { .. }))
-                .cloned()
-            else {
-                panic!("sem imagem");
-            };
-            (rect, uv, repeat, mask)
-        };
-        let (left_rect, left_uv, left_repeat, left_mask) = cut(&mut m, left);
-        let (right_rect, right_uv, right_repeat, right_mask) = cut(&mut m, right);
-        assert_eq!(left_rect, right_rect);
-        assert_eq!(left_uv, right_uv);
-        assert_eq!(left_repeat, right_repeat);
-        assert_eq!(left_mask, left);
-        assert_eq!(right_mask, right);
-    }
-
-    /// Fora do caso de ADR-0062 §4 a lista é a de antes, byte a byte, e a
-    /// imagem da janela nem entra nela: terminal opaco (o quadro cobre a
-    /// imagem), surface opaca (o fundo translúcido já compõe sobre ela) e sem
-    /// imagem da janela.
-    #[test]
-    fn outside_the_punch_case_the_list_is_the_one_from_before() {
-        let mut m = porecatu_render::TextMeasurer::new();
-        let snap = snapshot("ab");
         let metrics = cell(&mut m);
-        let cases = [
-            ("terminal opaco", punch_pal(1.0, true), Some(window_image())),
-            ("surface opaca", punch_pal(0.6, false), Some(window_image())),
-            ("sem imagem da janela", punch_pal(0.6, true), None),
-        ];
-        for (what, pal, window) in cases {
-            let with = paint_frame(&mut m, &snap, frame_rect(6.0), &pal, None, window);
-            let before = build_primitives_with_image(
-                &snap,
-                metrics,
-                SIZE,
-                frame_rect(6.0),
-                &TabBarStyle::DEFAULT,
-                &pal,
-                test_cursor(),
-                &mut m,
-                &[],
-                None,
-            );
-            assert_eq!(format!("{with:?}"), format!("{before:?}"), "{what}");
-            assert!(images(&with).is_empty(), "{what}: sem imagem no quadro");
-        }
-    }
-
-    /// RF-18.12: célula com fundo próprio continua `Backdrop`/`REPLACE`, com a
-    /// cor dela, depois do furo e das duas imagens -- cobre tudo que há embaixo.
-    #[test]
-    fn a_cell_with_its_own_background_still_replaces_what_is_underneath() {
-        let mut m = porecatu_render::TextMeasurer::new();
         let mut snap = snapshot("ab");
         snap.cells[0].bg = porecatu_term::TermColor::Rgb {
             r: 200,
             g: 60,
             b: 60,
         };
-        let out = paint_frame(
-            &mut m,
+        let out = build_primitives_with_image(
             &snap,
-            frame_rect(6.0),
-            &punch_pal(0.6, true),
-            Some(image_paint()),
-            Some(window_image()),
+            metrics,
+            SIZE,
+            test_box_rect(),
+            &TabBarStyle::DEFAULT,
+            &punch_pal(0.6, false),
+            test_cursor(),
+            &mut m,
+            &[],
+            None,
         );
-        let backdrops: Vec<usize> = out
+        assert!(
+            !out.iter().any(|p| matches!(p, Primitive::Backdrop(_))),
+            "nada fura até o desktop"
+        );
+        assert!(!out.iter().any(|p| matches!(p, Primitive::Image { .. })));
+        let fill = out
             .iter()
-            .enumerate()
-            .filter(|(_, p)| matches!(p, Primitive::Backdrop(_)))
-            .map(|(at, _)| at)
-            .collect();
-        assert_eq!(backdrops.len(), 2, "o furo e a célula");
-        let Primitive::Backdrop(cell_bg) = &out[backdrops[1]] else {
-            unreachable!()
-        };
-        assert!(cell_bg.color.a > 0.0, "a célula pinta a cor dela");
-        let last_image = out
-            .iter()
-            .rposition(|p| matches!(p, Primitive::Image { .. }))
-            .unwrap();
-        assert!(last_image < backdrops[1], "a célula cobre as duas imagens");
+            .find_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.rect == test_box_rect() && q.color.a > 0.0 => {
+                    Some(q)
+                }
+                _ => None,
+            })
+            .expect("o fundo do quadro");
+        assert!((fill.color.a - 0.6).abs() < 1e-6);
     }
 
     #[test]

@@ -160,6 +160,9 @@ animation_collapse_ms = 150        # colapso e expansão de grupo (RF-2.13)
 # barra de abas, barra de status, margem em volta do quadro e vão entre painéis.
 # Fica abaixo dos quadros de terminal e aparece através deles quando
 # `[terminal] background_opacity < 1`. Não aparece na janela de configurações.
+# Com ela configurada, o terminal translúcido mostra a imagem (sobre o fundo da
+# janela), nunca o desktop: o desktop só aparece por
+# `[appearance.window] opacity < 1`.                                  ADR-0063
 # É independente de `[terminal.background_image]`: cada uma tem as próprias três
 # chaves, e podem apontar para o mesmo arquivo (aí ele é carregado uma vez só).
 # Bloco comentado: o padrão é não ter imagem, e com `path` vazio a janela é
@@ -789,6 +792,8 @@ theme = ""
 # que há atrás da janela, ela precisa ter nascido transparente (abaixo de 1.0
 # aqui ou em `appearance.window.opacity`); ao sair de 1.0 com o app aberto,
 # vale na próxima janela. Numa janela opaca, o fundo só se mistura à barra.
+# Com `[appearance.window.background_image]` configurada, este valor não faz
+# a janela nascer transparente: o fundo se mistura à imagem da janela.
 background_opacity = 1.0
 
 # Imagem de fundo do terminal: PNG ou JPEG atrás de TODO quadro de terminal

@@ -38,6 +38,7 @@ mod box_glyphs;
 mod chrome;
 mod clipboard;
 mod context_menu;
+mod crash_log;
 mod cursor_blink;
 mod dialog;
 mod git;
@@ -237,8 +238,79 @@ mod cascade_position_tests {
 /// opacidades pede translucidez. Decidido na criação (winit e `wgpu` não
 /// trocam isso depois): mudar de 1.0 para menos com o app aberto vale na
 /// próxima janela.
+///
+/// Com imagem da janela configurada, o terminal translúcido mostra a imagem,
+/// nunca o desktop (revisão do ADR-0062 §4): só `[appearance.window] opacity`
+/// pede composição com o que está atrás.
 fn wants_transparent(config: &porecatu_config::Config) -> bool {
-    config.appearance.window.opacity < 1.0 || config.terminal.background_opacity < 1.0
+    config.appearance.window.opacity < 1.0
+        || (config.terminal.background_opacity < 1.0 && !window_image_configured(config))
+}
+
+/// `[appearance.window.background_image] path` não está vazio. Critério da
+/// configuração, não do estado de carga: uma imagem que falhou ou ainda
+/// carrega decide igual a uma pronta, para que toda janela -- a que nasceu
+/// opaca e a que nasceu transparente -- desenhe o terminal do mesmo jeito.
+fn window_image_configured(config: &porecatu_config::Config) -> bool {
+    !config
+        .appearance
+        .window
+        .background_image
+        .path
+        .trim()
+        .is_empty()
+}
+
+/// O fundo translúcido do terminal fura até o desktop (`Primitive::Backdrop`)
+/// só numa surface que compõe com ele **e** sem imagem da janela. Com
+/// imagem, o furo deixaria o desktop voltar na medida em que a imagem é
+/// translúcida -- e só nas janelas que nasceram transparentes, enquanto as
+/// opacas mostravam a imagem sobre o fundo da janela (revisão do ADR-0062 §4).
+fn backdrop_punch(surface_transparent: bool, window_image_configured: bool) -> bool {
+    surface_transparent && !window_image_configured
+}
+
+#[cfg(test)]
+mod transparency_tests {
+    use super::{backdrop_punch, wants_transparent, window_image_configured};
+
+    fn config(window: f64, terminal: f64, image: &str) -> porecatu_config::Config {
+        let mut config = porecatu_config::Config::default();
+        config.appearance.window.opacity = window;
+        config.terminal.background_opacity = terminal;
+        config.appearance.window.background_image.path = image.to_string();
+        config
+    }
+
+    #[test]
+    fn a_translucent_terminal_wants_a_transparent_surface_only_without_a_window_image() {
+        assert!(!wants_transparent(&config(1.0, 1.0, "")));
+        assert!(wants_transparent(&config(1.0, 0.5, "")));
+        assert!(!wants_transparent(&config(1.0, 0.5, "fundo.png")));
+    }
+
+    #[test]
+    fn the_window_opacity_always_wants_a_transparent_surface() {
+        assert!(wants_transparent(&config(0.8, 1.0, "")));
+        assert!(wants_transparent(&config(0.8, 0.5, "fundo.png")));
+    }
+
+    #[test]
+    fn a_blank_path_is_no_window_image() {
+        assert!(!window_image_configured(&config(1.0, 1.0, "")));
+        assert!(!window_image_configured(&config(1.0, 1.0, "   ")));
+        assert!(window_image_configured(&config(1.0, 1.0, "~/fundo.jpg")));
+    }
+
+    /// A janela que nasceu transparente, com imagem, desenha o quadro como a
+    /// que nasceu opaca: sem furo até o desktop.
+    #[test]
+    fn the_window_image_turns_the_punch_off_even_on_a_transparent_surface() {
+        assert!(backdrop_punch(true, false));
+        assert!(!backdrop_punch(true, true));
+        assert!(!backdrop_punch(false, false));
+        assert!(!backdrop_punch(false, true));
+    }
 }
 
 /// Atributos comuns a toda janela do Porecatu (ADR-0027: sem decoração
@@ -10686,9 +10758,12 @@ impl App {
                 .collect();
             let mut cursor_blinks = false;
             // Fundo translúcido só substitui o que há atrás se a surface desta
-            // janela compõe com o desktop.
+            // janela compõe com o desktop e não há imagem da janela.
             let mut window_term_pal = self.term_pal.clone();
-            window_term_pal.backdrop_punch = state.window_surface.is_transparent();
+            window_term_pal.backdrop_punch = backdrop_punch(
+                state.window_surface.is_transparent(),
+                window_image_configured(&self.config),
+            );
             // PRD-017: a textura do processo, a mesma em toda janela e todo
             // painel (RF-17.18). `displayed` é a da chave atual se `Ready`, ou
             // a anterior enquanto a nova carrega; `Loading` sem anterior e
@@ -10773,7 +10848,7 @@ impl App {
                 } else {
                     Vec::new()
                 };
-                grid_primitives.extend(paint::build_primitives_with_images(
+                grid_primitives.extend(paint::build_primitives_with_image(
                     &runtime.snapshot,
                     self.cell_metrics,
                     font_size_px,
@@ -10784,7 +10859,6 @@ impl App {
                     gpu.text_measurer(),
                     &hyperlink_hover,
                     background_image,
-                    window_image,
                 ));
             }
             frame.set_layer(Layer::Grid, grid_primitives);
@@ -11205,6 +11279,8 @@ pub fn message_schema() -> porecatu_locale::Schema {
 }
 
 pub fn run(cli_config: Option<PathBuf>, cli_directory: Option<PathBuf>, process_start: Instant) {
+    // Antes de tudo: sem console, um pânico sem registro some com o processo.
+    crash_log::install();
     let event_loop = EventLoop::<Wakeup>::with_user_event()
         .build()
         .expect("falha ao criar event loop");

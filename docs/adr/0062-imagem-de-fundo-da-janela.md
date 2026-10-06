@@ -1,6 +1,6 @@
 # ADR-0062 — Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots
 
-**Status:** Aceito
+**Status:** Aceito · §4 Superseded by [ADR-0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) (parcial — o furo até o desktop dentro do quadro, a alternativa "Trocar o `REPLACE`…" e a consequência da célula pintada)
 **Data:** 2026-10-06
 **Relacionados:** [ADR-0007](0007-modelo-de-threading.md), [ADR-0014](0014-superficie-de-aviso-e-dialogo.md), [ADR-0015](0015-multiplas-janelas.md), [ADR-0018](0018-composicao-de-frame.md), [ADR-0027](0027-controles-de-janela-e-resize-proprios.md), [ADR-0028](0028-o-binario-como-referencia-visual.md), [ADR-0030](0030-escopo-do-hot-reload.md), [ADR-0032](0032-interface-do-v1-fechada.md), [ADR-0048](0048-barra-de-status.md), [ADR-0053](0053-paineis-divididos.md), [ADR-0056](0056-catalogo-de-textos-da-interface.md), [ADR-0059](0059-janela-de-configuracoes.md), [ADR-0060](0060-anatomia-da-tela-de-configuracoes.md), [ADR-0061](0061-imagem-de-fundo-do-terminal.md), [PRD-016](../prd/prd-016-tela-de-configuracoes.md), [PRD-017](../prd/prd-017-imagem-de-fundo-do-terminal.md), [PRD-018](../prd/prd-018-imagem-de-fundo-da-janela.md)
 
@@ -38,6 +38,8 @@ Tirá-lo não muda a cor de nada fora da imagem: o `clear` é a mesma cor. Muda 
 As abas, cápsulas e pílulas não mudam: continuam com os alfas que têm (`.85`, `.92`), e por isso a imagem transparece por elas na medida desses alfas (RF-18.10).
 
 ### 4. Dentro do quadro, em janela transparente: furo, imagem recortada, fundo
+
+> **Revisto pelo [ADR-0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md).** Com imagem da janela configurada não há mais furo. O fundo do quadro e o de cada célula fazem blend sobre a imagem, como na surface opaca, e o desktop só aparece por `[appearance.window] opacity`. A regra abaixo fazia a mesma config desenhar de dois jeitos, conforme a janela tivesse nascido opaca ou transparente. O texto segue como registro.
 
 O PRD pede que a imagem da janela faça, dentro do quadro translúcido, o papel do desktop (RF-18.11). Nos três casos de surface:
 
@@ -107,6 +109,8 @@ Recortada para nunca aparecer atrás do terminal. Recusada pelo dono do produto:
 
 Uma linha. Recusada: blend normal sobre o `clear` opaco tornaria o quadro opaco em janela transparente — o desktop sumiria de trás do terminal mesmo com a imagem a `opacity < 1`, e mesmo onde um PNG é transparente.
 
+> **Adotada pelo [ADR-0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md).** O desktop sumir de trás do terminal quando há imagem é o que o dono do produto quer. O desktop fica a cargo de `[appearance.window] opacity`.
+
 ### Furo e imagem também embaixo de cada célula com fundo próprio
 
 A imagem da janela continuaria aparecendo através de células pintadas em janela transparente. Recusada pelo custo (§4): uma troca de pipeline por run de fundo de célula, por frame, para um caso estreito, contra a regra do RF-17.10 que o usuário já tem.
@@ -137,6 +141,8 @@ Mais simples de escrever, e recusada pela métrica do PRD: o mesmo JPEG grande n
 - **O fundo do quadro em janela transparente vira três primitivas** quando há imagem de janela, uma delas trocando de pipeline: uma troca a mais por painel por frame, além da do ADR-0061. Só em frame que já ia ser desenhado.
 - **A sombra do quadro passa a aparecer na faixa de baixo da barra de abas** com a imagem exibida (§3). Item do aval visual.
 - **Célula pintada em janela transparente mostra o desktop, não a imagem da janela** (§4). Coerente com a regra de célula pintada, mas é o único lugar da janela em que a imagem não faz o papel do desktop.
+
+  > **Deixou de valer com o [ADR-0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md):** com imagem da janela, a célula faz blend sobre ela.
 - **O estado de carga fica mais complexo**: dois slots, chave compartilhada, liberação por contagem de uso. É o preço da textura única por arquivo.
 - **Duas imagens, dois avisos** para o mesmo arquivo ausente nas duas chaves.
 
