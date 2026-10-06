@@ -10572,16 +10572,17 @@ impl App {
         // (§3), e empurrada depois como a **primeira** primitiva de
         // `Layer::Grid`. A área de conteúdo inteira em lógico, borda de 1px
         // da janela por cima (`Layer::Modal`).
+        let window_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: state.logical_width,
+            height: state.logical_height,
+        };
         let window_image = background_image::window_paint(
             &self.config.appearance.window.background_image,
             self.background_image
                 .displayed(background_image::BackgroundImageSlot::Window),
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: state.logical_width,
-                height: state.logical_height,
-            },
+            window_rect,
             state.scale,
         );
         let chrome_primitives = chrome::paint(
@@ -10679,8 +10680,10 @@ impl App {
 
             // A imagem da janela abre a lista: acima do `clear`, abaixo de
             // sombra, fundo, imagem do terminal e grade de todo quadro.
-            let mut grid_primitives: Vec<porecatu_render::Primitive> =
-                window_image.into_iter().collect();
+            let mut grid_primitives: Vec<porecatu_render::Primitive> = window_image
+                .map(|image| image.primitive(window_rect, 0.0))
+                .into_iter()
+                .collect();
             let mut cursor_blinks = false;
             // Fundo translúcido só substitui o que há atrás se a surface desta
             // janela compõe com o desktop.
@@ -10770,7 +10773,7 @@ impl App {
                 } else {
                     Vec::new()
                 };
-                grid_primitives.extend(paint::build_primitives_with_image(
+                grid_primitives.extend(paint::build_primitives_with_images(
                     &runtime.snapshot,
                     self.cell_metrics,
                     font_size_px,
@@ -10781,6 +10784,7 @@ impl App {
                     gpu.text_measurer(),
                     &hyperlink_hover,
                     background_image,
+                    window_image,
                 ));
             }
             frame.set_layer(Layer::Grid, grid_primitives);
