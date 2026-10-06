@@ -190,6 +190,8 @@ Cenário: chave desconhecida não quebra
 - Temas visuais de chrome distribuídos como arquivo separado e importável (v2)
 - Aparência definida por script ou lógica ([ADR-0003](../adr/0003-formato-de-configuracao.md))
 - Imagem de fundo na barra de abas
+
+  > **Emenda (2026-10-06).** Saiu do fora de escopo, mas não como imagem só da barra: o [PRD-018](prd-018-imagem-de-fundo-da-janela.md) põe **uma** imagem atrás da janela inteira — barra de abas, barra de status, margem e vão entre painéis —, com a anatomia e a composição do [ADR-0062](../adr/0062-imagem-de-fundo-da-janela.md).
 - Animações configuráveis além de ligar e desligar
 - Ícone por aba ou por grupo
 - Herdar o tema claro/escuro do sistema automaticamente (v2)

@@ -298,6 +298,8 @@ A grade do terminal é um caso particular: fundo de célula vira quads em batch,
 >
 > Nada disso roda na main thread além do `metadata` e do envio da textura.
 
+> **Imagem de fundo da janela ([ADR-0062](adr/0062-imagem-de-fundo-da-janela.md), documentada, não implementada).** Reutiliza tudo o que está acima, sem primitiva nova. A imagem é a primeira primitiva de `Layer::Grid`, na janela inteira, e a barra de abas deixa de pintar o fundo opaco quando ela está exibida. Em janela transparente, o fundo de cada quadro vira furo transparente, imagem da janela recortada pelo quadro e fundo em blend normal. O estado do `App` passa a ter dois slots (terminal e janela), com uma textura só quando os dois apontam para o mesmo arquivo.
+
 **Nenhuma cor, raio ou dimensão é hardcoded no renderer.** Tudo vem de `Config` via `ui`. É isso que torna o requisito de customização (PRD-004, PRD-005) uma questão de configuração e não de recompilação.
 
 > **Na implementação (F2, etapa 2 — camadas, recorte e medidor).** As camadas e o recorte do ADR-0018 estão implementados: `porecatu-render` recebe um `Frame` com cinco `Vec<Primitive>` (uma por [`Layer`](adr/0018-composicao-de-frame.md)) em vez de uma lista só. Dentro de cada camada, uma função pura (`resolve_layer`, testada sem GPU) percorre o stream mantendo a pilha de clip e agrupa quads/arredondados contíguos de mesmo clip em batches — cada batch vira um `draw` com seu próprio `set_scissor_rect`, o que substitui o achatamento em três baldes da F1. Texto não precisa de batch: cada `TextRun` carrega seu próprio `TextBounds`, granular por natureza no `glyphon`.
