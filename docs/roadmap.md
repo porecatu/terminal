@@ -917,7 +917,7 @@ Etapa 6, fechada em 2026-10-05, no Windows 11, num release isolado por cenário 
 
 ---
 
-## Depois do v1 — imagem de fundo da janela — em implementação
+## Depois do v1 — imagem de fundo da janela — implementada
 
 Fora da ordem de fases, pelo mesmo caminho da imagem do terminal: **requisito novo**, pedido do dono do produto. O [PRD-018](prd/prd-018-imagem-de-fundo-da-janela.md) pede uma imagem PNG ou JPEG atrás da janela inteira — barra de abas, barra de status, margem e vão entre painéis —, abaixo dos quadros de terminal e visível através deles quando o terminal é translúcido, nos mesmos três modos, com opacidade própria que se multiplica pela da janela. Revoga, por emenda, o "fora de escopo" de imagem na barra de abas do PRD-004 e o de imagem no chrome do PRD-017. O [ADR-0062](adr/0062-imagem-de-fundo-da-janela.md) decide:
 
@@ -945,8 +945,15 @@ O ponto de partida: a janela não pinta fundo (o "quadro do app" é o `clear` em
    - Teste de `rect`/`uv` iguais entre a imagem da janela e o recorte dela.
    - A recarga a quente dos três campos.
    - As §2.2, §2.7 e §2.8 da especificação reescritas e a entrada na §4.4. **Aval visual pedido aqui.**
-4. **Tela de configurações.** Três opções no grupo Aparência, depois de `window_opacity`, com a nota de arquivo inexistente e frases em todo `locales/`.
-5. **Verificação ao vivo e fechamento.** Os treze cenários do PRD-018 numa instância isolada por cenário, medição de pixel em janela opaca e transparente (fundo de cor conhecida atrás), `PORECATU_TRACE` com e sem imagem, guia do usuário e CHANGELOG.
+4. **Tela de configurações — feita.** `window_background_image` (campo de texto), `window_background_image_mode` (Esticar, Ladrilho e Centralizar, em botões colados) e `window_background_image_opacity` (campo numérico de `0.0` a `1.0`, no passo de `window_opacity`) entram no grupo Aparência logo depois de `window_opacity`, com escopo `Live` e Restaurar padrão; o catálogo passa de 50 para 53 opções. A nota de "arquivo não encontrado" é a mesma função das do terminal (`background_image::missing_file`), com a frase da janela, e não impede o Salvar. As frases estão nos cinco arquivos de `locales/`. O que a etapa pedia:
+   - As três opções no grupo Aparência, depois de `window_opacity` (`settings/catalog.rs`).
+   - A nota de arquivo inexistente abaixo do campo, com a mesma `missing_file` e sem impedir o Salvar.
+   - Rótulos e nota em todo arquivo de `locales/`, deixando claro que é a imagem **da janela**.
+5. **Verificação ao vivo e fechamento — feita.** Os treze cenários e as métricas estão em "Dívida de verificação da imagem de fundo da janela", abaixo. A verificação **não achou bug da feature**. Também saíram o guia do usuário, a entrada do CHANGELOG e a retirada da marca "documentada, não implementada" do CLAUDE.md e da arquitetura. O que a etapa pedia:
+   - Os treze cenários do PRD-018 numa instância isolada por cenário.
+   - A medição de pixel em janela opaca e transparente, com fundo de cor conhecida atrás.
+   - `PORECATU_TRACE` com e sem imagem, frames ociosos e memória.
+   - Seção no [guia do usuário](guia-do-usuario.md) e entrada no CHANGELOG.
 
 **Escopo:** RF-18.1 a RF-18.25.
 
@@ -965,11 +972,42 @@ O ponto de partida: a janela não pinta fundo (o "quadro do app" é o `clear` em
 
 ### Dívida de verificação da imagem de fundo da janela
 
-Registrada na etapa 3, ainda sem as etapas 4 e 5:
+Etapa 5, fechada em 2026-10-06, no Windows 11, num release isolado por cenário (`--target-dir` temporário, `PORECATU_LOCALES`, `--config` e `PORECATU_SESSION` numa pasta temporária, PID anotado e conferido contra a cadeia de ancestrais antes de cada encerramento), com captura só da região da janela e, nas janelas transparentes, uma janela de cor sólida conhecida atrás (20, 220, 40). A escala da janela era 100%, e o fundo do quadro do terminal, `#0f1216` (15, 18, 22). Os valores esperados saem da fórmula do ADR-0062 §4, `fundo·b + imagem·i·(1 − b)`, e de `0.8·imagem + 0.2·atrás` para a opacidade da janela.
 
-- **Aval visual do dono do produto**, pedido em 2026-10-06: os itens estão no registro do aval do [ADR-0062](adr/0062-imagem-de-fundo-da-janela.md). A aparência está medida por pixel e capturada, **não aprovada**.
-- **Defeito conhecido, aberto, pré-existente: o desktop vaza pelos cantos arredondados do quadro do terminal** em janela transparente. O `Backdrop` com `REPLACE` escreve o retângulo inteiro, inclusive os pixels de cobertura zero fora do raio 6, e eles ficam transparentes. O pixel (6,52) saiu igual com e sem imagem da janela (`background_opacity = 0.6`), então não vem desta feature, mas com uma imagem forte atrás o canto fica mais visível do que com a cor da barra. O dono do produto confirmou o sintoma a olho e decidiu **anotar e corrigir depois**. A correção a verificar é descartar o fragmento de cobertura zero no pipeline `REPLACE` do `quad.wgsl`, compartilhado com o app inteiro, e pede aval próprio.
-- **Não verificado ao vivo:** o vão entre painéis (pede input para dividir) e os modos `tile` e `center` da imagem da janela; macOS e Linux; escala diferente de 100%.
+**Os treze cenários do PRD-018**
+
+| # | Cenário | Situação |
+|---|---|---|
+| 1 | O caso que motiva o recurso | **Ao vivo.** JPEG em `stretch`, terminal opaco: a imagem aparece atrás das abas (231, 60, 200), na barra de status (39, 210, 230) e na margem (250, 219, 40), tudo dentro de ±1 do JPEG, e o quadro continua opaco por cima (15, 18, 22) |
+| 2 | Através do terminal translúcido | **Ao vivo**, com `background_opacity = 0.7` e a imagem a `1.0`: (22, 76, 84) dentro do quadro, contra (22,5; 75,6; 84,4) esperado. O controle sem imagem da janela dá (16, 79, 27), a cor de trás; com a imagem ela já não contribui |
+| 3 | As duas imagens juntas | **Ao vivo**, imagem do terminal em faixas verticais por cima da da janela em faixas horizontais: (35, 51, 165) dentro do quadro, contra (34,8; 50,7; 165,3) esperado, e só a imagem da janela fora dele |
+| 4 | Uma imagem só pela janela, não por painel | **Ao vivo**, com `Ctrl+Shift+D` e a imagem da janela em faixas verticais: a margem esquerda mostra a faixa da esquerda (200, 40, 40), a direita a da direita (40, 40, 200), e o vão de 6px entre os painéis (x = 398 a 403) a faixa do meio (40, 200, 40) — a mesma imagem, esticada na janela inteira |
+| 5 | Os três modos | **Ao vivo**, na escala 100%, com uma PNG de 200×200 em quatro quadrantes: `tile` repete a partir do canto superior esquerdo (em y = 598, x = 3 / 103 / 203 / 303 dão azul / amarelo / azul / amarelo, o período certo de 200 px) e `center` põe a cópia no meio (dentro do quadro a 0.3, (32, 33, 168) e (165, 166, 35) nos quadrantes de baixo, contra (32,5; 33,4; 167,6) esperado), com o que está atrás em volta. **`stretch` no cenário 1.** **Só por teste** nas escalas 125%, 150% e 200% (`placement`) |
+| 6 | Redimensionar | **Ao vivo.** Maximizada (retângulo de 1936×1048), a imagem cobre a janela inteira em três faixas, e o registro de texturas não mudou (uma criada, nenhuma removida): não recarregou |
+| 7 | Janela transparente | **Ao vivo**, `[appearance.window] opacity = 0.8` e a imagem a `1.0`: a margem sai (204, 220, 40), exatamente `0.8·(250, 220, 40) + 0.2·(20, 220, 40)` |
+| 8 | Programa que pinta o próprio fundo | **Ao vivo** com cor true color (`ESC[48;2;200;30;30m`) em janela transparente: a faixa fica em (146, 87, 33), **igual** com e sem imagem da janela (é a cor da célula sobre o que está atrás da janela, não sobre a imagem), e as células sem cor própria ao lado mostram a imagem (85, 79, 27, contra (16, 79, 27) sem ela). As 16 cores ANSI **não** foram exercitadas |
+| 9 | A janela de configurações não muda | **Ao vivo.** Com a imagem configurada, os pixels da janela de configurações são os do painel ((23, 27, 33), (27, 31, 38)), nenhum da imagem |
+| 10 | Arquivo que não existe | **Ao vivo.** Um aviso na primeira janela, "Imagem de fundo da janela não carregada", "Não encontrado:" e o caminho resolvido; uma segunda janela aberta com `Ctrl+Shift+N` não ganha outro |
+| 11 | Mesmo arquivo nas duas | **Ao vivo**, por instrumentação temporária em `create_image`/`remove_image` (removida): o mesmo arquivo nas duas chaves cria **uma** textura, e dois arquivos diferentes criam duas. Que as duas imagens usem a mesma textura está, além disso, no teste do `BackgroundImageStore` |
+| 12 | Troca ao vivo | **Ao vivo.** Do `write` do arquivo (`stretch` para `center` e de volta) ao pixel: 256, 265, 249, 266, 268, 267, 267, 266, 260, 251, 268 e 266 ms (mediana 266, máximo 268, a maior parte é o debounce de 200ms da recarga). Nenhuma textura nova nas doze trocas. **Terminal sem redimensionar: só por teste** (`window_background_image_change_is_class_a`) |
+| 13 | Pela tela de configurações | **Ao vivo**, na etapa 4 (commit `397fd74`): caminho inexistente mostra a nota e o Salvar segue disponível; caminho válido salvo muda a janela sem reiniciar; e o `git diff` do config mostra só as linhas novas |
+
+**Métricas** (mesma máquina, com o navegador e outros programas do usuário abertos, quatro variantes intercaladas em cada rodada, na mesma build, duas ordens diferentes):
+
+- **Tempo até o primeiro prompt** (`PORECATU_TRACE`: `main` → primeiro byte do PTY → primeiro frame), mediana de **16 rodadas por variante**, 8 em cada ordem: **394 ms sem imagem; 401 ms com uma PNG pequena na janela; 397 ms com o JPEG de 8000×6000 na janela; 412 ms com o mesmo JPEG nas duas chaves**. Até o primeiro byte do PTY: 370, 376, 370 e 381 ms. As faixas se sobrepõem (376 a 444 ms) e a diferença **muda com a ordem** — a PNG pequena ficou 29 ms acima na primeira ordem e 2 ms abaixo na segunda —, então é ruído de posição na rodada, não custo da imagem. A carga espera o primeiro byte do PTY (ADR-0062 §6), o que mantém a imagem grande fora do caminho do prompt.
+- **Frames com o terminal ocioso:** **0** em 12 s, com e sem imagem (nas duas chaves, mesmo arquivo), depois de o app assentar (4 frames de abertura nos dois casos). Contado por instrumentação temporária no `redraw`, removida antes do commit.
+- **Memória:** **uma** textura com o mesmo arquivo nas duas chaves e **duas** com arquivos diferentes; as doze trocas de `mode` e a maximização não criaram nem removeram nenhuma.
+
+**Não verificado**
+
+- **O aval visual do dono do produto**, pedido em 2026-10-06 (etapa 3): a aparência foi medida e capturada, não aprovada. Os itens estão no registro do aval do [ADR-0062](adr/0062-imagem-de-fundo-da-janela.md).
+- **Defeito conhecido, aberto, pré-existente: o desktop vaza pelos cantos arredondados do quadro do terminal** em janela transparente. O `Backdrop` com `REPLACE` escreve o retângulo inteiro, inclusive os pixels de cobertura zero fora do raio 6, e eles ficam transparentes. O pixel (6, 52) saiu igual com e sem imagem da janela (`background_opacity = 0.6`), então não vem desta feature, mas com uma imagem forte atrás o canto fica mais visível do que com a cor da barra. O dono do produto confirmou o sintoma a olho e decidiu **anotar e corrigir depois**. A correção a verificar é descartar o fragmento de cobertura zero no pipeline `REPLACE` do `quad.wgsl`, compartilhado com o app inteiro, e pede aval próprio.
+- **macOS e Linux**: só por teste e CI; o shader e o blend premultiplicado nunca rodaram fora do Windows/DX12.
+- **Escala de janela diferente de 100%** ao vivo (125%, 150%, 200%), e a janela mudando de monitor com DPI diferente.
+- **Leitor de tela** de verdade nas três linhas novas do grupo Aparência.
+- **As 16 cores ANSI** de fundo de célula (só true color foi exercitada) e a nota de arquivo inexistente nos outros quatro idiomas (só por teste).
+- **Orientação EXIF** de um JPEG: o `image` não a aplica, como na imagem do terminal.
+- **Observação, não investigada e sem relação com a imagem:** depois de `Ctrl+Shift+N` enviado por `SendKeys`, o prompt da janela nova apareceu com um `n` digitado, **também sem imagem configurada**. Pode ser o gesto sintético (a janela nova recebe o `n` do mesmo pressionamento) ou um vazamento do atalho; não foi separado.
 
 ---
 
