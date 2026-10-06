@@ -156,6 +156,40 @@ animations = true
 animation_reflow_ms = 180          # formar grupo e arrastar grupo (RF-2.5)
 animation_collapse_ms = 150        # colapso e expansão de grupo (RF-2.13)
 
+# Imagem de fundo da janela: UMA imagem PNG ou JPEG atrás da janela inteira --
+# barra de abas, barra de status, margem em volta do quadro e vão entre painéis.
+# Fica abaixo dos quadros de terminal e aparece através deles quando
+# `[terminal] background_opacity < 1`. Não aparece na janela de configurações.
+# É independente de `[terminal.background_image]`: cada uma tem as próprias três
+# chaves, e podem apontar para o mesmo arquivo (aí ele é carregado uma vez só).
+# Bloco comentado: o padrão é não ter imagem, e com `path` vazio a janela é
+# desenhada exatamente como sem este bloco.
+# Classe de recarga: [A] -- as três chaves valem na hora, em todas as janelas,
+# sem reiniciar nem redimensionar terminal. O app não vigia o arquivo de imagem.
+#
+# [appearance.window.background_image]
+# Caminho da imagem. Vazio = sem imagem.                    [A] RF-18.1, RF-18.2
+# Mesmas regras de `[terminal.background_image] path`: formato reconhecido pelo
+# conteúdo; só PNG e JPEG; relativo vale a partir do diretório DESTE arquivo;
+# `~/` ou `~\` é a pasta pessoal; absoluto vale como está. Arquivo com problema
+# vira aviso, sem imagem.                                              RF-18.3
+# path = ""
+# Como a imagem ocupa a janela (a referência é a janela inteira, não um quadro).
+#                                                           [A] RF-18.6, RF-18.7
+#   "stretch" -- estica até as quatro bordas da janela, SEM manter a proporção.
+#   "tile"    -- repete no tamanho natural, a partir do canto superior esquerdo
+#                da janela.
+#   "center"  -- tamanho natural, centralizada na janela; sobra o fundo da
+#                janela em volta.
+# Tamanho natural = um pixel da imagem por pixel físico da tela.
+# mode = "stretch"
+# Opacidade da imagem, de 0.0 a 1.0.                       [A] RF-18.14, RF-18.15
+# A opacidade EFETIVA é `opacity × [appearance.window] opacity` (acima): com a
+# janela a 0.8 e a imagem a 0.5, a imagem sai a 0.4. `[terminal]
+# background_opacity` não entra nessa conta fora dos quadros. `0.0` não desenha
+# a imagem, mas a carrega.
+# opacity = 1.0
+
 
 # Controles de janela e resize, quando `decorations = false` (ADR-0027,
 # seção 2.2.1 da espec. visual). Nenhum destes tem RF próprio em PRD-004: o
