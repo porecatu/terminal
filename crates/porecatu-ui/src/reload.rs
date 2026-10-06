@@ -688,6 +688,20 @@ mod tests {
         );
     }
 
+    /// PRD-018, RF-18.19, ADR-0062 §9: as três chaves da imagem da janela são
+    /// classe A -- nem resize de PTY (B) nem adiamento (C).
+    #[test]
+    fn window_background_image_change_is_class_a() {
+        let mut new = base();
+        {
+            let image = &mut new.appearance.window.background_image;
+            image.path = "praia.jpg".to_owned();
+            image.mode = porecatu_config::BackgroundImageMode::Tile;
+            image.opacity = 0.4;
+        }
+        assert_eq!(diff(&base(), &new), ReloadEffects::default());
+    }
+
     #[test]
     fn decorations_change_is_deferred() {
         let mut new = base();

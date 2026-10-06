@@ -213,6 +213,11 @@ pub fn paint(
     // não rola com a trilha), por isso um parâmetro à parte, não uma
     // variante de `TabBarHit`.
     hover_sessions_button: bool,
+    // ADR-0062 §3: a imagem de fundo da janela está **exibida** (pronta e com
+    // opacidade > 0). A barra deixa de pintar o `Quad` opaco de
+    // `bar_background` sobre ela; sem imagem, o `Quad` continua e o binário é
+    // o de hoje. Parâmetro explícito, nunca estado lido daqui.
+    window_image_shown: bool,
 ) -> Vec<Primitive> {
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
@@ -235,15 +240,20 @@ pub fn paint(
     // bater com o do "+" -- ver `porecatu_render::icon`. Sem chave própria.
     let settings_icon_size = style.icon_em_size * 0.8;
 
-    out.push(Primitive::Quad(Quad {
-        rect: Rect {
-            x: 0.0,
-            y: 0.0,
-            width: bar_width,
-            height: bar_height,
-        },
-        color: pal.bar_background,
-    }));
+    // Com a imagem da janela exibida o fundo opaco cobriria a imagem; o
+    // `clear` do passe tem a mesma cor, então nada fora da imagem muda
+    // (ADR-0062 §3).
+    if !window_image_shown {
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: bar_width,
+                height: bar_height,
+            },
+            color: pal.bar_background,
+        }));
+    }
     // Sem separador de 1px na base da barra (espec §2.2: "borda #23272f").
     // Pedido do usuário: o box arredondado do terminal (`paint.rs`) começa
     // colado em `bar_height` para ficar seamless contra a barra, e um
@@ -1337,6 +1347,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -1359,6 +1370,79 @@ mod tests {
 
         ws.collapse_group(group, true);
         assert_eq!(paint_capsules(&ws, &mut m), 1, "colapsado");
+    }
+
+    /// ADR-0062 §3, RF-18.10: com a imagem da janela exibida a barra não pinta
+    /// o `Quad` opaco de `bar_background` sobre ela; sem imagem, pinta (o
+    /// binário é o de hoje). O resto da barra -- aba, cápsula, ícones -- não
+    /// depende da flag.
+    #[test]
+    fn the_bar_background_is_skipped_only_when_the_window_image_is_shown() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let term_pal = default_term_palette();
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+        let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m, false);
+
+        let mut paint_bar = |window_image_shown: bool| {
+            paint(
+                &layout,
+                &ws,
+                ws.active_tab(),
+                &RenameState::Idle,
+                &Selection::default(),
+                None,
+                &style,
+                &pal,
+                &term_pal,
+                bar_width,
+                Overflow {
+                    scroll_offset: 0.0,
+                    hidden_left: 0,
+                    hidden_right: 0,
+                },
+                None,
+                None,
+                None,
+                &AnimationClock::default(),
+                Instant::now(),
+                &mut m,
+                false,
+                false,
+                None,
+                None,
+                false,
+                window_image_shown,
+            )
+        };
+        let whole_bar_quads = |out: &[Primitive]| {
+            out.iter()
+                .filter(|p| {
+                    matches!(
+                        p,
+                        Primitive::Quad(q)
+                            if q.color == pal.bar_background
+                                && q.rect.width == bar_width
+                                && q.rect.height == bar_height(&style)
+                    )
+                })
+                .count()
+        };
+
+        let without_image = paint_bar(false);
+        let with_image = paint_bar(true);
+        assert_eq!(whole_bar_quads(&without_image), 1, "sem imagem");
+        assert_eq!(whole_bar_quads(&with_image), 0, "com imagem");
+        // Só esse `Quad` some; todo o resto da barra continua igual.
+        assert_eq!(without_image.len(), with_image.len() + 1);
+        // `Primitive` não tem `PartialEq`: compara pelo `Debug`.
+        assert_eq!(
+            format!("{:?}", &without_image[1..]),
+            format!("{:?}", &with_image[..])
+        );
     }
 
     /// Regressão: `paint` tinha uma cópia local da fórmula da altura da
@@ -1406,6 +1490,7 @@ mod tests {
             false,
             None,
             None,
+            false,
             false,
         );
 
