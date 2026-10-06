@@ -452,7 +452,10 @@ pub(crate) fn build(
                 measurer,
             ))));
         }
-        if option.id == "background_image"
+        // As duas opções de caminho (terminal e janela) levam a mesma nota, com a
+        // frase de cada uma (RF-17.21, RF-18.24).
+        let is_window_image = option.id == "window_background_image";
+        if (is_window_image || option.id == "background_image")
             && let EditValue::String(raw) = draft.value(option)
             && let Some(missing) = crate::background_image::missing_file(extras.config_path, &raw)
         {
@@ -461,8 +464,11 @@ pub(crate) fn build(
             // recusado: ela não impede o Salvar. Só a falta do arquivo se sabe
             // sem decodificar; formato e corrupção só saem no aviso da recarga.
             let width = (panel_width - m.panel_padding * 2.0).max(0.0);
-            let text =
-                msg::settings::option::background_image_not_found(catalog, missing.display());
+            let text = if is_window_image {
+                msg::settings::option::window_background_image_not_found(catalog, missing.display())
+            } else {
+                msg::settings::option::background_image_not_found(catalog, missing.display())
+            };
             blocks.push(Block::Note {
                 lines: wrap(&text, m.description_size, width, measurer),
                 tone: NoteTone::Warning,
@@ -2004,6 +2010,119 @@ mod tests {
                 .unwrap();
             let c = build(
                 key(Group::Terminal),
+                &draft,
+                &ViewExtras {
+                    config_path: Some(&config),
+                    ..ViewExtras::default()
+                },
+                &test_support::catalog(locale),
+                &metrics(),
+                &mut TextMeasurer::new(),
+            );
+            let text = notes(&c).into_iter().next().expect(locale).0;
+            assert!(!text.contains("settings.option"), "{locale}: {text}");
+            assert!(text.contains("x.png"), "{locale}: {text}");
+        }
+    }
+
+    // ---- imagem de fundo da janela (RF-18.23, RF-18.24)
+
+    fn window_image_appearance(path: &str, config_path: Option<&std::path::Path>) -> Content {
+        let mut draft = Draft::new(&Config::default());
+        draft
+            .set(
+                crate::settings::catalog::option("window_background_image").unwrap(),
+                EditValue::String(path.to_owned()),
+            )
+            .unwrap();
+        build(
+            key(Group::Appearance),
+            &draft,
+            &ViewExtras {
+                config_path,
+                ..ViewExtras::default()
+            },
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        )
+    }
+
+    #[test]
+    fn the_three_window_image_rows_come_after_the_window_opacity_row() {
+        let c = content(Group::Appearance, &Config::default());
+        let ids: Vec<_> = rows(&c).iter().filter_map(|row| row.option).collect();
+        let at = ids.iter().position(|id| *id == "window_opacity").unwrap();
+        assert_eq!(
+            &ids[at..at + 4],
+            [
+                "window_opacity",
+                "window_background_image",
+                "window_background_image_mode",
+                "window_background_image_opacity"
+            ]
+        );
+        let mode = rows(&c)
+            .into_iter()
+            .find(|row| row.option == Some("window_background_image_mode"))
+            .unwrap();
+        let ControlView::Segmented { labels, .. } = &mode.control else {
+            panic!("modo deveria ser segmentado: {:?}", mode.control);
+        };
+        assert_eq!(labels, &["Esticar", "Ladrilho", "Centralizar"]);
+    }
+
+    #[test]
+    fn a_missing_window_image_shows_the_window_note_under_its_own_field_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        let c = window_image_appearance("nao-existe.png", Some(&config));
+        let path_row = c
+            .blocks
+            .iter()
+            .position(|block| {
+                matches!(block, Block::Row(row) if row.option == Some("window_background_image"))
+            })
+            .unwrap();
+        let Block::Note { lines, tone } = &c.blocks[path_row + 1] else {
+            panic!(
+                "a nota vem logo abaixo do campo: {:?}",
+                c.blocks[path_row + 1]
+            );
+        };
+        assert_eq!(*tone, NoteTone::Warning);
+        let text = lines.join(" ");
+        // A frase é a da janela, não a do terminal.
+        assert!(text.contains("a janela fica sem imagem"), "{text}");
+        assert!(text.contains(&dir.path().join("nao-existe.png").display().to_string()));
+        assert_eq!(notes(&c).len(), 1);
+        // O campo do terminal não ganha nota por causa do da janela.
+        assert!(notes(&image_group("", Some(&config))).is_empty());
+    }
+
+    #[test]
+    fn an_existing_or_empty_window_image_shows_no_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        std::fs::write(dir.path().join("fundo.png"), b"x").unwrap();
+        assert!(notes(&window_image_appearance("fundo.png", Some(&config))).is_empty());
+        assert!(notes(&window_image_appearance("", Some(&config))).is_empty());
+    }
+
+    #[test]
+    fn the_window_note_is_composed_by_the_catalog_in_every_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("porecatu.toml");
+        for locale in ["en_US", "pt_BR", "es_ES", "fr_FR", "de_DE"] {
+            let mut draft = Draft::new(&Config::default());
+            draft
+                .set(
+                    crate::settings::catalog::option("window_background_image").unwrap(),
+                    EditValue::String("x.png".to_owned()),
+                )
+                .unwrap();
+            let c = build(
+                key(Group::Appearance),
                 &draft,
                 &ViewExtras {
                     config_path: Some(&config),

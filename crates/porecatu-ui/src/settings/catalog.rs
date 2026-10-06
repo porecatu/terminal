@@ -417,6 +417,9 @@ label_modules! {
     theme => (theme_label, theme_description),
     animations => (animations_label, animations_description),
     window_opacity => (window_opacity_label, window_opacity_description),
+    window_background_image => (window_background_image_label, window_background_image_description),
+    window_background_image_mode => (window_background_image_mode_label, window_background_image_mode_description),
+    window_background_image_opacity => (window_background_image_opacity_label, window_background_image_opacity_description),
     decorations => (decorations_label, decorations_description),
     show_close_button => (show_close_button_label, show_close_button_description),
     show_index => (show_index_label, show_index_description),
@@ -440,21 +443,37 @@ const CURSOR_SHAPES: &[&str] = &["block", "beam", "underline"];
 const CLOSE_BUTTON: &[&str] = &["always", "hover", "never"];
 const BACKGROUND_IMAGE_MODES: &[&str] = &["stretch", "tile", "center"];
 
-fn background_image_mode(config: &Config) -> EditValue {
-    string(match config.terminal.background_image.mode {
+fn image_mode(image: &porecatu_config::BackgroundImage) -> EditValue {
+    string(match image.mode {
         porecatu_config::BackgroundImageMode::Stretch => "stretch",
         porecatu_config::BackgroundImageMode::Tile => "tile",
         porecatu_config::BackgroundImageMode::Center => "center",
     })
 }
 
+fn background_image_mode(config: &Config) -> EditValue {
+    image_mode(&config.terminal.background_image)
+}
+
+fn window_background_image_mode(config: &Config) -> EditValue {
+    image_mode(&config.appearance.window.background_image)
+}
+
 /// A opacidade da imagem é `f32` no arquivo e `f64` no rascunho: `0.35` lido
 /// como `f32` e alargado dá `0.3499999940...`, e o valor digitado (`0.35`)
 /// pareceria uma alteração pendente mesmo igual ao do arquivo. Seis casas
 /// bastam para devolver o que foi escrito (um `f32` tem ~7 dígitos).
-fn image_opacity(config: &Config) -> EditValue {
-    let value = f64::from(config.terminal.background_image.opacity);
+fn image_opacity_value(opacity: f32) -> EditValue {
+    let value = f64::from(opacity);
     EditValue::Float((value * 1_000_000.0).round() / 1_000_000.0)
+}
+
+fn image_opacity(config: &Config) -> EditValue {
+    image_opacity_value(config.terminal.background_image.opacity)
+}
+
+fn window_image_opacity(config: &Config) -> EditValue {
+    image_opacity_value(config.appearance.window.background_image.opacity)
 }
 
 fn cursor_shape(config: &Config) -> EditValue {
@@ -473,7 +492,8 @@ fn close_button(config: &Config) -> EditValue {
     })
 }
 
-/// As 50 opções do RF-16.11 (47 e as três da imagem de fundo, RF-17.20).
+/// As 53 opções do RF-16.11 (47, as três da imagem de fundo do terminal, RF-17.20,
+/// e as três da imagem da janela, RF-18.23).
 pub(crate) static OPTIONS: &[OptionDef] = &[
     // ---- Geral
     option!(
@@ -754,6 +774,32 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         float(0.0, 1.0, 0.05),
         |c| EditValue::Float(c.appearance.window.opacity)
     ),
+    // PRD-018 RF-18.23: as mesmas três opções da imagem do terminal, para a
+    // imagem da janela, logo depois de `window_opacity`.
+    option!(
+        window_background_image,
+        Appearance,
+        Window,
+        "appearance.window.background_image.path",
+        Control::Text,
+        |c| string(&c.appearance.window.background_image.path)
+    ),
+    option!(
+        window_background_image_mode,
+        Appearance,
+        Window,
+        "appearance.window.background_image.mode",
+        Control::Choice(BACKGROUND_IMAGE_MODES),
+        window_background_image_mode
+    ),
+    option!(
+        window_background_image_opacity,
+        Appearance,
+        Window,
+        "appearance.window.background_image.opacity",
+        float(0.0, 1.0, 0.05),
+        window_image_opacity
+    ),
     option!(
         decorations,
         Appearance,
@@ -908,12 +954,12 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        assert_eq!(OPTIONS.len(), 50);
+        assert_eq!(OPTIONS.len(), 53);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 24, 10, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 24, 13, 4, 2, 1, 2, 0]);
     }
 
     /// RF-17.20: as três opções da imagem de fundo ficam no grupo Terminal,
@@ -957,6 +1003,73 @@ mod tests {
             option("background_image_opacity").unwrap().path,
             "terminal.background_image.opacity"
         );
+    }
+
+    /// RF-18.23: as três opções da imagem da janela ficam no grupo Aparência,
+    /// logo depois de `window_opacity` e nesta ordem, com recarga na hora
+    /// (classe A, ADR-0062 §9).
+    #[test]
+    fn the_window_image_options_follow_window_opacity_in_the_appearance_group() {
+        let ids: Vec<&str> = options_in(Group::Appearance).map(|o| o.id).collect();
+        let at = ids.iter().position(|id| *id == "window_opacity").unwrap();
+        assert_eq!(
+            &ids[at..at + 4],
+            [
+                "window_opacity",
+                "window_background_image",
+                "window_background_image_mode",
+                "window_background_image_opacity"
+            ]
+        );
+        for (id, path) in [
+            (
+                "window_background_image",
+                "appearance.window.background_image.path",
+            ),
+            (
+                "window_background_image_mode",
+                "appearance.window.background_image.mode",
+            ),
+            (
+                "window_background_image_opacity",
+                "appearance.window.background_image.opacity",
+            ),
+        ] {
+            let option = option(id).unwrap();
+            assert_eq!(option.group, Group::Appearance, "{id}");
+            assert_eq!(option.path, path, "{id}");
+            assert_eq!(option.reload_scope(), ReloadScope::Live, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_window_image_controls_and_defaults_mirror_the_terminal_ones() {
+        for (window, terminal) in [
+            ("window_background_image", "background_image"),
+            ("window_background_image_mode", "background_image_mode"),
+            (
+                "window_background_image_opacity",
+                "background_image_opacity",
+            ),
+        ] {
+            let (window, terminal) = (option(window).unwrap(), option(terminal).unwrap());
+            assert_eq!(window.control, terminal.control, "{}", window.id);
+            assert_eq!(
+                window.default_value(),
+                terminal.default_value(),
+                "{}",
+                window.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_window_image_opacity_reads_back_as_written() {
+        let option = option("window_background_image_opacity").unwrap();
+        for written in [0.35, 0.05, 0.6, 1.0, 0.0] {
+            let config = config_with(option, &EditValue::Float(written)).expect("valor na faixa");
+            assert_eq!(option.read(&config), EditValue::Float(written), "{written}");
+        }
     }
 
     #[test]
