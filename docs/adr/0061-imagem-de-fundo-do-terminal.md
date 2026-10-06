@@ -70,6 +70,8 @@ Em `resolve_layer` a imagem é **geometria**, na ordem da lista, como o `Backdro
 
 O retângulo é o **quadro inteiro** do painel (`terminal_box_rect` numa aba sem divisão, o retângulo de `panes::layout` numa aba dividida), padding incluído (RF-17.8). A máscara é esse mesmo retângulo com `terminal_frame_corner_radius`. O vão entre painéis não é de painel nenhum, e não recebe nada.
 
+> **Revisto pelo [ADR-0062](0062-imagem-de-fundo-da-janela.md) §2 e §4.** A imagem do terminal continua neste lugar, e o vão continua sem ela. Mas `Layer::Grid` passa a abrir com a imagem **da janela**, abaixo de todo quadro, e, em janela transparente com essa imagem exibida, o fundo do quadro vira furo transparente, imagem da janela recortada pelo quadro e fundo em blend normal — esta imagem entra logo depois, como antes.
+
 ### 5. Alfa multiplicado, e a composição com o `Backdrop`
 
 `alpha = image.opacity × terminal.background_opacity` (RF-17.12), calculado em `porecatu-ui` junto da paleta resolvida (`ResolvedTermPalette`), não no shader.
@@ -104,6 +106,8 @@ O estado vive em `App`, **do processo**, nunca da janela (o molde de `App.git_re
 - `Wakeup` leva o resultado em `Box` se ele passar dos 80 bytes que a maior variante já reserva, com a mesma medição feita para `GitQueryResult`.
 
 O arquivo de imagem **não é vigiado** (RF-17.16). O `metadata` na recarga de config é o que pega uma imagem trocada no disco.
+
+> **Revisto pelo [ADR-0062](0062-imagem-de-fundo-da-janela.md) §6.** O estado passa a ter dois slots, `Terminal` e `Window`, cada um com chave, estado e imagem anterior como descrito aqui. O mesmo arquivo nos dois é uma carga e uma textura, liberada quando nenhum slot a usa; `Wakeup::BackgroundImageLoaded` leva a chave, e a chegada é casada pelos slots que a esperam. A carga do arranque adiada ao primeiro byte do PTY vale para os dois.
 
 ### 8. Caminho e erros tipados
 

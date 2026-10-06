@@ -988,6 +988,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Ícone da janela e do executável | fora de fase | estava listado em F6 no roadmap; entregue antes, ver o roadmap |
 | Painéis divididos (§2.7.1): quadro por painel, divisor que é só o vão, cursor vazado no painel sem foco | `[v1]` | [PRD-006](../prd/prd-006-paineis-divididos.md), [ADR-0053](../adr/0053-paineis-divididos.md) — fora da ordem de fases |
 | Imagem de fundo do terminal, dentro do quadro de cada painel (§2.7), recortada pelo raio dele — descrita na §2.7 | `[v1]` | [PRD-017](../prd/prd-017-imagem-de-fundo-do-terminal.md), [ADR-0061](../adr/0061-imagem-de-fundo-do-terminal.md) — fora da ordem de fases; sem representação no canvas |
+| Imagem de fundo da janela, atrás de barra de abas, barra de status, margem e vão, e através do quadro translúcido — **não implementada**; §2.2, §2.7 e §2.8 descrevem o binário até o PR que a pinta | `[v1]` | [PRD-018](../prd/prd-018-imagem-de-fundo-da-janela.md), [ADR-0062](../adr/0062-imagem-de-fundo-da-janela.md) — fora da ordem de fases; sem representação no canvas |
 | Contagem de painéis na barra de status (§2.8), só com dois ou mais | `[v1]` | PRD-006 RF-6.20, ADR-0053 — fora da ordem de fases; cumpre a promessa do [ADR-0048](../adr/0048-barra-de-status.md) §5 |
 | **Cabeçalho e botões do painel** | `[v2]` | recusado pelo [ADR-0053](../adr/0053-paineis-divididos.md) — desenho do canvas sem requisito, ver §4.3 |
 | **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md) *(rascunho)* |

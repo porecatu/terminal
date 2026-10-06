@@ -917,6 +917,44 @@ Etapa 6, fechada em 2026-10-05, no Windows 11, num release isolado por cenário 
 
 ---
 
+## Depois do v1 — imagem de fundo da janela — documentada, não implementada
+
+Fora da ordem de fases, pelo mesmo caminho da imagem do terminal: **requisito novo**, pedido do dono do produto. O [PRD-018](prd/prd-018-imagem-de-fundo-da-janela.md) pede uma imagem PNG ou JPEG atrás da janela inteira — barra de abas, barra de status, margem e vão entre painéis —, abaixo dos quadros de terminal e visível através deles quando o terminal é translúcido, nos mesmos três modos, com opacidade própria que se multiplica pela da janela. Revoga, por emenda, o "fora de escopo" de imagem na barra de abas do PRD-004 e o de imagem no chrome do PRD-017. O [ADR-0062](adr/0062-imagem-de-fundo-da-janela.md) decide:
+
+- nenhuma dependência, primitiva ou shader novo — tudo do ADR-0061;
+- a imagem como primeira primitiva de `Layer::Grid`, sem camada nova;
+- a barra de abas sem o `Quad` de fundo quando a imagem está exibida;
+- em janela transparente, o fundo do quadro como furo, imagem recortada e fundo em blend normal; célula pintada cobre as duas imagens;
+- o estado em dois slots, com textura única para o mesmo arquivo;
+- avisos por slot e classe A da recarga.
+
+O ponto de partida: a janela não pinta fundo (o "quadro do app" é o `clear` em `bar_background`), a barra de abas pinta um `Quad` opaco da mesma cor por cima, não há camada abaixo de `Grid`, e o `BackgroundImageStore` é de um slot só.
+
+**Cinco etapas:**
+
+1. **Documentação e decisão — feita.** Os documentos novos são o PRD-018 e o ADR-0062. Ganharam blockquote de revisão: o PRD-004 (fora de escopo), o PRD-017 (RF-17.8 e fora de escopo), o ADR-0061 (§4 e §7), o ADR-0018 (cabeça de `Grid`), o ADR-0030 (classe A) e o PRD-016 RF-16.11 (três opções em Aparência). Também foram atualizados o índice de ADRs, a tabela de fases da especificação (só a classificação), a arquitetura §5 e o CLAUDE.md. **A §2 da especificação não é reescrita aqui**, e **`[appearance.window.background_image]` não entra no arquivo de exemplo aqui** (`tests/example_toml.rs` reprova chave antes do campo).
+2. **Config e estado em dois slots.** O campo `[appearance.window.background_image]` em `porecatu-config`, reutilizando `BackgroundImage`, com o bloco comentado no exemplo na mesma leva. `BackgroundImageStore` com `BackgroundImageSlot { Terminal, Window }`, chave compartilhada, liberação de textura por uso, `Wakeup::BackgroundImageLoaded` casado por chave, carga do arranque adiada para os dois slots, avisos por slot com frases nos cinco arquivos de `locales/`. **Sem pixel novo.**
+3. **Pintura e composição — aval visual pedido aqui.** A imagem na cabeça de `Layer::Grid` com o `placement` da janela inteira; a barra de abas sem `Quad` de fundo com a imagem exibida; o furo, a imagem recortada e o fundo em blend normal no quadro em janela transparente; teste de `rect`/`uv` iguais entre a imagem da janela e o recorte dela; recarga a quente dos três campos; §2.2, §2.7 e §2.8 da especificação reescritas e entrada na §4.4.
+4. **Tela de configurações.** Três opções no grupo Aparência, depois de `window_opacity`, com a nota de arquivo inexistente e frases em todo `locales/`.
+5. **Verificação ao vivo e fechamento.** Os treze cenários do PRD-018 numa instância isolada por cenário, medição de pixel em janela opaca e transparente (fundo de cor conhecida atrás), `PORECATU_TRACE` com e sem imagem, guia do usuário e CHANGELOG.
+
+**Escopo:** RF-18.1 a RF-18.25.
+
+**Aparência:** uma camada de imagem atrás da janela inteira e a barra de abas sem fundo próprio quando ela está exibida. **Nenhuma cor, dimensão, raio ou espaçamento novo**; com `path` vazio, que é o padrão, o binário não muda um pixel. Sujeita ao aval visual da etapa 3.
+
+**Dependências:** nenhuma nova.
+
+**Critério de saída:**
+- uma imagem PNG e uma JPEG desenhadas na janela inteira, nos três modos, abaixo dos quadros, visíveis através do quadro translúcido e por baixo da imagem do terminal;
+- alfa medido batendo com `opacity × [appearance.window] opacity` e com a composição do ADR-0062 §4 em janela transparente;
+- o mesmo arquivo nas duas chaves carregado uma vez;
+- arquivo inexistente e de formato não aceito virando aviso sem derrubar nada;
+- troca de `path`, `mode` e `opacity` pela recarga sem redimensionar PTY;
+- tempo até o primeiro prompt e frames ociosos iguais com e sem imagem;
+- `verify-docs.py`, `cargo test --workspace`, `clippy -D warnings` e `cargo fmt --check` verdes.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

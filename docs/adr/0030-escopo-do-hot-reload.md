@@ -26,6 +26,8 @@ O layout da barra é função pura de `(Workspace, Config, largura)` desde a F2 
 
 > **Acrescentado pelo [ADR-0061](0061-imagem-de-fundo-do-terminal.md) §9.** `[terminal.background_image] path`, `mode` e `opacity` são classe A. `mode` e `opacity` trocam no frame seguinte. `path` dispara uma carga numa thread de vida curta, e a imagem nova aparece no frame em que a carga chega, com a anterior desenhada até lá. É a primeira chave da classe A cujo efeito não é imediato, e continua sem PTY, sem grade e sem janela recriada. O arquivo de imagem **não** é vigiado: a recarga da config refaz o `metadata` dele, e é isso que pega uma imagem trocada no disco.
 
+> **Acrescentado pelo [ADR-0062](0062-imagem-de-fundo-da-janela.md) §9.** `[appearance.window.background_image] path`, `mode` e `opacity` são classe A, com o mesmo comportamento das três chaves de `[terminal.background_image]`. A imagem da janela não decide a transparência da surface: `[appearance.window] opacity` continua classe C.
+
 ### Classe B — aplica a quente, com recálculo de grade e resize de PTY
 
 `terminal.font.*` (família, tamanho, `line_height`, `letter_spacing`), `[appearance.tabs] height`/`tab_height`/`trilha_padding` (mudam a altura da barra, logo a área do terminal) e `[appearance.terminal_frame]` (mudam a área útil dentro do quadro). Depois da troca do `Arc`, recalcula a métrica de célula, deriva colunas e linhas e **redimensiona todos os PTYs da janela** — o mesmo caminho de um resize de janela, que já existe.

@@ -67,6 +67,8 @@ O que o usuário vê: cada quadro de terminal — de toda aba, de todo grupo, de
 
 **RF-17.8** — A imagem ocupa o **quadro inteiro** do terminal, inclusive o padding entre a borda do quadro e a grade, e é recortada pelo raio do quadro: os cantos arredondados continuam arredondados. Ela nunca sai do quadro. Não aparece na barra de abas, na barra de status, no vão em volta do quadro, nem na janela de configurações.
 
+> **Emenda ([PRD-018](prd-018-imagem-de-fundo-da-janela.md)).** Continua valendo para **esta** imagem, a do terminal. A barra de abas, a barra de status, a margem e o vão podem ter agora uma imagem **da janela**, outra chave, desenhada abaixo dos quadros e, com o terminal translúcido, visível através deles — abaixo do fundo do quadro e, portanto, abaixo desta imagem ([ADR-0062](../adr/0062-imagem-de-fundo-da-janela.md) §4).
+
 **RF-17.9** — A imagem fica **acima** do fundo do quadro e **abaixo** de tudo o que a grade desenha: fundo de célula, texto, sublinhado, seleção, realce de busca, affordance de hyperlink e cursor. A barra de busca, os avisos, os menus e os diálogos continuam por cima de tudo.
 
 **RF-17.10** — Célula sem cor de fundo própria deixa a imagem aparecer. Célula com cor de fundo própria — ANSI, 256 cores ou true color, posta pelo programa — **cobre** a imagem, como cobre o fundo hoje. Programa de tela cheia que pinta o próprio fundo (um `htop`, um editor com tema) esconde a imagem onde pinta, e isso é o esperado.
@@ -191,6 +193,8 @@ Cenário: pela tela de configurações
 - **Seletor de arquivo do sistema.** Nenhum diálogo nativo ([ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md)); caminho é texto (RF-16.12).
 - **Vigiar o arquivo de imagem** e recarregá-lo sozinho quando ele muda.
 - **Imagem no chrome**: barra de abas, barra de status, widgets, janela de configurações.
+
+  > **Emenda (2026-10-06).** A barra de abas e a barra de status saíram daqui pelo [PRD-018](prd-018-imagem-de-fundo-da-janela.md), com uma imagem da janela inteira e chave própria. Widgets e janela de configurações continuam fora.
 - **Imagem de fundo dentro de um tema** (`[[themes]]`). Tema é paleta de cores ([ADR-0031](../adr/0031-temas-nomeados.md)).
 - **Troca periódica de imagem** (slideshow) e imagem baixada de URL.
 
