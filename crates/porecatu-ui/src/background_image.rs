@@ -279,7 +279,7 @@ pub(crate) struct BackgroundTexture<H = ImageId> {
     pub(crate) size: (u32, u32),
 }
 
-/// Estado da imagem da chave atual (ADR-0061 §7).
+/// Estado da imagem de uma chave (ADR-0061 §7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BackgroundImageState<H = ImageId> {
     Loading,
@@ -298,52 +298,114 @@ pub(crate) struct BackgroundImageResult {
     pub(crate) outcome: Result<DecodedImage, BackgroundImageError>,
 }
 
+/// Quem consome uma imagem de fundo (ADR-0062 §6): a do quadro de terminal
+/// (PRD-017) ou a da janela inteira (PRD-018). Cada slot tem a própria chave
+/// desejada e a própria imagem anterior; o que é compartilhado é o estado de
+/// carga **por chave** (ver `BackgroundImageStore`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackgroundImageSlot {
+    Terminal,
+    Window,
+}
+
+impl BackgroundImageSlot {
+    const ALL: [Self; 2] = [Self::Terminal, Self::Window];
+
+    fn index(self) -> usize {
+        match self {
+            Self::Terminal => 0,
+            Self::Window => 1,
+        }
+    }
+}
+
+/// Uma falha de carga **e o slot a que ela vale** (ADR-0062 §7): o aviso sai
+/// uma vez por slot, então a mesma chave quebrada pedida pelos dois slots
+/// devolve duas destas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SlotFailure {
+    pub(crate) slot: BackgroundImageSlot,
+    pub(crate) failure: BackgroundImageFailure,
+}
+
 /// O que `BackgroundImageStore::sync` pede a quem chama.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SyncOutcome {
-    /// Mesma chave (ou continua sem imagem): nada a fazer.
+    /// Mesma chave (ou continua sem imagem), ou chave que outro slot já
+    /// carrega ou carregou: nada a fazer (ADR-0062 §6, uma carga por chave).
     Unchanged,
     /// `path` ficou vazio: a imagem, e a anterior, saíram.
     Cleared,
-    /// Chave nova: abrir a thread de carga com ela.
+    /// Chave nova para o processo: abrir a thread de carga com ela.
     Load(BackgroundImageKey),
-    /// Chave nova que já falhou no `metadata`, sem thread nenhuma: avisar.
+    /// Chave que já falhou -- no `metadata` agora, ou numa carga que o outro
+    /// slot já pediu --, sem thread nenhuma: avisar **este** slot.
     Failed(BackgroundImageFailure),
 }
 
 /// O que `BackgroundImageStore::apply` conta de um resultado que chegou.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ApplyOutcome {
-    /// A chave do resultado não é mais a atual: descartado, nada mudou.
+    /// Nenhum slot deseja a chave do resultado (ou ela já saiu de `Loading`):
+    /// descartado, nada mudou.
     Discarded,
-    /// Os bytes da chave atual chegaram: falta criar a textura (`upload`).
+    /// Os bytes de uma chave desejada chegaram: falta criar a textura
+    /// (`upload`).
     Decoded,
-    /// A carga da chave atual falhou: avisar, uma vez.
-    Failed(BackgroundImageFailure),
+    /// A carga de uma chave desejada falhou: avisar, uma vez por slot que a
+    /// deseja.
+    Failed(Vec<SlotFailure>),
 }
 
 /// O que `BackgroundImageStore::upload` conta.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum UploadOutcome {
-    /// Nada esperando textura (estado que não é `Decoded`).
+    /// Nada esperando textura (nenhuma chave em `Decoded`).
     Nothing,
-    /// A textura foi criada: a imagem da chave atual está pronta.
+    /// Toda textura esperada foi criada.
     Ready,
-    /// A textura não pôde ser criada (maior que o limite da placa): avisar.
-    Failed(BackgroundImageFailure),
+    /// Alguma textura não pôde ser criada (maior que o limite da placa):
+    /// avisar, uma vez por slot. Outra chave `Decoded` pode ter ficado pronta
+    /// na mesma chamada; quem chama redesenha nos dois casos.
+    Failed(Vec<SlotFailure>),
 }
 
-/// Um resultado só vale se a chave dele **ainda é a atual** (ADR-0061 §7).
-/// Função pura: é a que faz a corrida de "duas recargas seguidas" sumir.
-pub(crate) fn result_is_current(
-    current: Option<&BackgroundImageKey>,
-    result: &BackgroundImageKey,
-) -> bool {
-    current == Some(result)
+/// O que o store já sabe de uma chave, sem emprestar o estado.
+enum Known {
+    Ready,
+    Pending,
+    Failed(BackgroundImageError),
+}
+
+/// Estado de um consumidor: o que ele deseja e a imagem que segue desenhada
+/// enquanto a nova não chega.
+#[derive(Debug)]
+struct SlotState<H> {
+    wanted: Option<BackgroundImageKey>,
+    /// A última textura `Ready` deste slot, mantida **enquanto a chave nova
+    /// carrega**: trocar de imagem não pisca sem imagem no meio (ADR-0061
+    /// §7). Sai quando a nova fica pronta, falha, ou `path` fica vazio.
+    previous: Option<BackgroundTexture<H>>,
+}
+
+// À mão: o `derive` exigiria `H: Default`, e `ImageId` não é.
+impl<H> Default for SlotState<H> {
+    fn default() -> Self {
+        Self {
+            wanted: None,
+            previous: None,
+        }
+    }
 }
 
 /// A imagem de fundo do **processo** (`App`), nunca da janela: uma decodificação
 /// por processo, qualquer que seja o número de janelas e de painéis (RF-17.18).
+///
+/// Dois slots (ADR-0062 §6), `Terminal` e `Window`. O estado de carga é **por
+/// chave** e compartilhado: se os dois slots pedem a mesma chave há uma carga
+/// e um handle (RF-18.21). Uma entrada só existe enquanto algum slot a deseja,
+/// e um handle só vai para `drain_released` quando nenhum slot o usa mais --
+/// nem como exibido (entrada `Ready`), nem como anterior.
 ///
 /// Puro: não toca o disco, a GPU nem abre thread -- quem faz isso é o `App`, a
 /// partir do que `sync`, `apply` e `upload` devolvem. É o que o torna testável
@@ -351,45 +413,46 @@ pub(crate) fn result_is_current(
 /// soltar (`drain_released`).
 #[derive(Debug)]
 pub(crate) struct BackgroundImageStore<H = ImageId> {
-    current: Option<(BackgroundImageKey, BackgroundImageState<H>)>,
-    /// A última textura `Ready`, mantida **enquanto a chave nova carrega**:
-    /// trocar de imagem não pisca sem imagem no meio (ADR-0061 §7). Sai
-    /// quando a nova fica pronta, falha, ou `path` fica vazio.
-    previous: Option<BackgroundTexture<H>>,
+    slots: [SlotState<H>; 2],
+    /// No máximo uma por slot; vazio sem imagem configurada.
+    entries: Vec<(BackgroundImageKey, BackgroundImageState<H>)>,
     /// Texturas que o store largou e que a GPU ainda guarda: o `App` chama
     /// `remove_image` para cada uma (`drain_released`).
     released: Vec<H>,
 }
 
-// À mão: o `derive` exigiria `H: Default`, e `ImageId` não é.
+// À mão, como `SlotState`.
 impl<H> Default for BackgroundImageStore<H> {
     fn default() -> Self {
         Self {
-            current: None,
-            previous: None,
+            slots: [SlotState::default(), SlotState::default()],
+            entries: Vec::new(),
             released: Vec::new(),
         }
     }
 }
 
-impl<H: Copy> BackgroundImageStore<H> {
-    /// Chave da carga atual, `None` sem imagem configurada.
-    pub(crate) fn key(&self) -> Option<&BackgroundImageKey> {
-        self.current.as_ref().map(|(key, _)| key)
+impl<H: Copy + PartialEq> BackgroundImageStore<H> {
+    /// Chave desejada pelo slot, `None` sem imagem configurada para ele.
+    pub(crate) fn key(&self, slot: BackgroundImageSlot) -> Option<&BackgroundImageKey> {
+        self.slots[slot.index()].wanted.as_ref()
     }
 
-    /// Estado da chave atual.
+    /// Estado da chave desejada pelo slot.
     #[allow(dead_code)] // Lido pela pintura (etapa 4) e pelos testes.
-    pub(crate) fn state(&self) -> Option<&BackgroundImageState<H>> {
-        self.current.as_ref().map(|(_, state)| state)
+    pub(crate) fn state(&self, slot: BackgroundImageSlot) -> Option<&BackgroundImageState<H>> {
+        self.entry(self.key(slot)?)
     }
 
-    /// A textura que deve ser desenhada agora: a da chave atual, se pronta;
-    /// senão a anterior, enquanto a nova carrega; senão nenhuma.
-    pub(crate) fn displayed(&self) -> Option<BackgroundTexture<H>> {
-        match self.state()? {
+    /// A textura que o slot deve desenhar agora: a da chave desejada, se
+    /// pronta; senão a anterior **dele**, enquanto a nova carrega; senão
+    /// nenhuma.
+    pub(crate) fn displayed(&self, slot: BackgroundImageSlot) -> Option<BackgroundTexture<H>> {
+        match self.state(slot)? {
             BackgroundImageState::Ready(texture) => Some(*texture),
-            BackgroundImageState::Loading | BackgroundImageState::Decoded(_) => self.previous,
+            BackgroundImageState::Loading | BackgroundImageState::Decoded(_) => {
+                self.slots[slot.index()].previous
+            }
             BackgroundImageState::Failed(_) => None,
         }
     }
@@ -401,65 +464,183 @@ impl<H: Copy> BackgroundImageStore<H> {
         std::mem::take(&mut self.released)
     }
 
-    fn release_previous(&mut self) {
-        if let Some(texture) = self.previous.take() {
-            self.released.push(texture.id);
+    fn entry(&self, key: &BackgroundImageKey) -> Option<&BackgroundImageState<H>> {
+        self.entries
+            .iter()
+            .find(|(entry_key, _)| entry_key == key)
+            .map(|(_, state)| state)
+    }
+
+    fn entry_mut(&mut self, key: &BackgroundImageKey) -> Option<&mut BackgroundImageState<H>> {
+        self.entries
+            .iter_mut()
+            .find(|(entry_key, _)| entry_key == key)
+            .map(|(_, state)| state)
+    }
+
+    /// Os slots que desejam `key`, em ordem fixa (`Terminal`, `Window`).
+    fn wanting(&self, key: &BackgroundImageKey) -> Vec<BackgroundImageSlot> {
+        BackgroundImageSlot::ALL
+            .into_iter()
+            .filter(|slot| self.key(*slot) == Some(key))
+            .collect()
+    }
+
+    /// Alguma entrada `Ready` ou alguma imagem anterior ainda usa `id`?
+    fn texture_in_use(&self, id: H) -> bool {
+        self.entries.iter().any(
+            |(_, state)| matches!(state, BackgroundImageState::Ready(texture) if texture.id == id),
+        ) || self
+            .slots
+            .iter()
+            .any(|slot| slot.previous.is_some_and(|texture| texture.id == id))
+    }
+
+    /// Chamado **depois** de largar uma referência a `id`: se nenhuma outra
+    /// sobrou, a GPU pode soltar a textura (ADR-0062 §6).
+    fn release_if_unused(&mut self, id: H) {
+        if !self.texture_in_use(id) {
+            self.released.push(id);
         }
     }
 
-    /// Reconcilia o estado com o que a config pede agora: chamado a cada
+    fn drop_previous(&mut self, slot: BackgroundImageSlot) {
+        if let Some(texture) = self.slots[slot.index()].previous.take() {
+            self.release_if_unused(texture.id);
+        }
+    }
+
+    /// Tira a entrada de `key` se nenhum slot a deseja mais, soltando a
+    /// textura dela se ninguém mais a usa.
+    fn drop_entry_if_unwanted(&mut self, key: &BackgroundImageKey) {
+        if !self.wanting(key).is_empty() {
+            return;
+        }
+        let Some(at) = self
+            .entries
+            .iter()
+            .position(|(entry_key, _)| entry_key == key)
+        else {
+            return;
+        };
+        if let (_, BackgroundImageState::Ready(texture)) = self.entries.remove(at) {
+            self.release_if_unused(texture.id);
+        }
+    }
+
+    /// A chave `key` falhou: cada slot que a deseja perde a imagem anterior e
+    /// ganha o seu aviso (ADR-0062 §7).
+    fn fail_wanting(
+        &mut self,
+        key: &BackgroundImageKey,
+        error: BackgroundImageError,
+    ) -> Vec<SlotFailure> {
+        let slots = self.wanting(key);
+        for slot in &slots {
+            self.drop_previous(*slot);
+        }
+        slots
+            .into_iter()
+            .map(|slot| SlotFailure {
+                slot,
+                failure: BackgroundImageFailure {
+                    path: key.path.clone(),
+                    error,
+                },
+            })
+            .collect()
+    }
+
+    /// Reconcilia o slot com o que a config pede agora: chamado a cada
     /// aplicação de config (arranque e cada recarga). `wanted` é a chave do
     /// caminho resolvido (`None` com `path` vazio), com o erro do `metadata`
     /// quando ele falhou (`BackgroundImageKey::probe`).
+    ///
+    /// Chave que o **outro** slot já pediu não abre carga nova (ADR-0062 §6,
+    /// RF-18.21): este slot passa a esperar a mesma entrada.
     pub(crate) fn sync(
         &mut self,
+        slot: BackgroundImageSlot,
         wanted: Option<(BackgroundImageKey, Option<BackgroundImageError>)>,
     ) -> SyncOutcome {
+        let old = self.slots[slot.index()].wanted.take();
         let Some((key, probe_error)) = wanted else {
-            self.release_previous();
-            return match self.current.take() {
-                Some((_, state)) => {
-                    if let BackgroundImageState::Ready(texture) = state {
-                        self.released.push(texture.id);
-                    }
+            self.drop_previous(slot);
+            return match old {
+                Some(old) => {
+                    self.drop_entry_if_unwanted(&old);
                     SyncOutcome::Cleared
                 }
                 None => SyncOutcome::Unchanged,
             };
         };
-        if self.key() == Some(&key) {
+        if old.as_ref() == Some(&key) {
+            self.slots[slot.index()].wanted = old;
             return SyncOutcome::Unchanged;
         }
         // Chave nova. A textura pronta da chave que sai passa a ser a
-        // "anterior", mantida até a nova ficar pronta; `previous` que já
-        // existia (carga em andamento que foi trocada) continua valendo, e a
-        // que sobraria é solta (não acontece: `previous` só existe enquanto a
-        // atual não está `Ready`).
-        if let Some((_, BackgroundImageState::Ready(texture))) = self.current.take() {
-            self.release_previous();
-            self.previous = Some(texture);
+        // "anterior" deste slot, mantida até a nova ficar pronta; a que já
+        // era anterior (carga em andamento que foi trocada) é solta. Só
+        // existe anterior enquanto a chave do slot não está `Ready`.
+        if let Some(old) = &old
+            && let Some(BackgroundImageState::Ready(texture)) = self.entry(old)
+        {
+            let texture = *texture;
+            if let Some(replaced) = self.slots[slot.index()].previous.replace(texture) {
+                self.release_if_unused(replaced.id);
+            }
         }
-        if let Some(error) = probe_error {
-            self.release_previous();
-            self.current = Some((key.clone(), BackgroundImageState::Failed(error)));
-            return SyncOutcome::Failed(BackgroundImageFailure {
-                path: key.path,
-                error,
-            });
+        self.slots[slot.index()].wanted = Some(key.clone());
+        let known = self.entry(&key).map(|state| match state {
+            BackgroundImageState::Ready(_) => Known::Ready,
+            BackgroundImageState::Loading | BackgroundImageState::Decoded(_) => Known::Pending,
+            BackgroundImageState::Failed(error) => Known::Failed(*error),
+        });
+        let outcome = match (known, probe_error) {
+            // Já pronta, pelo outro slot: não há o que esperar.
+            (Some(Known::Ready), _) => {
+                self.drop_previous(slot);
+                SyncOutcome::Unchanged
+            }
+            // Já carregando, pelo outro slot: esta chave tem uma carga só.
+            (Some(Known::Pending), _) => SyncOutcome::Unchanged,
+            // Já falhou, pelo outro slot: este também recebe o seu aviso.
+            (Some(Known::Failed(error)), _) => {
+                self.drop_previous(slot);
+                SyncOutcome::Failed(BackgroundImageFailure {
+                    path: key.path,
+                    error,
+                })
+            }
+            // Falhou no `metadata`: entra já em `Failed`, sem thread.
+            (None, Some(error)) => {
+                self.entries
+                    .push((key.clone(), BackgroundImageState::Failed(error)));
+                self.drop_previous(slot);
+                SyncOutcome::Failed(BackgroundImageFailure {
+                    path: key.path,
+                    error,
+                })
+            }
+            (None, None) => {
+                self.entries
+                    .push((key.clone(), BackgroundImageState::Loading));
+                SyncOutcome::Load(key)
+            }
+        };
+        if let Some(old) = old {
+            self.drop_entry_if_unwanted(&old);
         }
-        self.current = Some((key.clone(), BackgroundImageState::Loading));
-        SyncOutcome::Load(key)
+        outcome
     }
 
-    /// Aplica o resultado de uma carga: descarta se a chave dele não é mais a
-    /// atual; senão guarda, e uma falha devolve o que avisar. Uma chave só
-    /// sai de `Loading` uma vez, então o aviso sai uma vez por arquivo e por
-    /// problema (RF-17.14).
+    /// Aplica o resultado de uma carga, casado **pela chave** que ele carrega
+    /// (ADR-0062 §6): descarta se nenhum slot a deseja; senão guarda, e uma
+    /// falha devolve o que avisar, por slot. Uma chave só sai de `Loading`
+    /// uma vez, então o aviso sai uma vez por arquivo e por problema
+    /// (RF-17.14).
     pub(crate) fn apply(&mut self, result: BackgroundImageResult) -> ApplyOutcome {
-        if !result_is_current(self.key(), &result.key) {
-            return ApplyOutcome::Discarded;
-        }
-        let Some((_, state)) = &mut self.current else {
+        let Some(state) = self.entry_mut(&result.key) else {
             return ApplyOutcome::Discarded;
         };
         if !matches!(state, BackgroundImageState::Loading) {
@@ -473,47 +654,51 @@ impl<H: Copy> BackgroundImageStore<H> {
             }
             Err(error) => {
                 *state = BackgroundImageState::Failed(error);
-                self.release_previous();
-                ApplyOutcome::Failed(BackgroundImageFailure {
-                    path: result.key.path,
-                    error,
-                })
+                ApplyOutcome::Failed(self.fail_wanting(&result.key, error))
             }
         }
     }
 
-    /// Cria a textura da imagem decodificada, se há uma esperando: `create`
-    /// recebe os bytes e devolve o `ImageId` do registro de `porecatu-render`.
-    /// Os bytes saem do estado (só o `id` e o tamanho ficam) e a textura
-    /// anterior é solta. Chamado logo depois de `apply` e, se ainda não havia
-    /// `GpuContext`, quando ele passa a existir.
+    /// Cria a textura de cada imagem decodificada que espera uma: `create`
+    /// recebe os bytes e devolve o handle do registro de `porecatu-render`.
+    /// Os bytes saem do estado (só o handle e o tamanho ficam) e a textura
+    /// anterior de cada slot que deseja a chave é solta. Chamado logo depois
+    /// de `apply` e, se ainda não havia `GpuContext`, quando ele passa a
+    /// existir.
     pub(crate) fn upload(
         &mut self,
-        create: impl FnOnce(&DecodedImage) -> Result<H, BackgroundImageError>,
+        mut create: impl FnMut(&DecodedImage) -> Result<H, BackgroundImageError>,
     ) -> UploadOutcome {
-        let Some((key, state)) = self.current.as_mut() else {
-            return UploadOutcome::Nothing;
-        };
-        let BackgroundImageState::Decoded(image) = &*state else {
-            return UploadOutcome::Nothing;
-        };
-        let size = image.size;
-        let outcome = match create(image) {
-            Ok(id) => {
-                *state = BackgroundImageState::Ready(BackgroundTexture { id, size });
-                UploadOutcome::Ready
+        let mut any_ready = false;
+        let mut failures = Vec::new();
+        for at in 0..self.entries.len() {
+            let BackgroundImageState::Decoded(image) = &self.entries[at].1 else {
+                continue;
+            };
+            let size = image.size;
+            let key = self.entries[at].0.clone();
+            match create(image) {
+                Ok(id) => {
+                    self.entries[at].1 =
+                        BackgroundImageState::Ready(BackgroundTexture { id, size });
+                    any_ready = true;
+                    for slot in self.wanting(&key) {
+                        self.drop_previous(slot);
+                    }
+                }
+                Err(error) => {
+                    self.entries[at].1 = BackgroundImageState::Failed(error);
+                    failures.extend(self.fail_wanting(&key, error));
+                }
             }
-            Err(error) => {
-                let failure = BackgroundImageFailure {
-                    path: key.path.clone(),
-                    error,
-                };
-                *state = BackgroundImageState::Failed(error);
-                UploadOutcome::Failed(failure)
-            }
-        };
-        self.release_previous();
-        outcome
+        }
+        if !failures.is_empty() {
+            UploadOutcome::Failed(failures)
+        } else if any_ready {
+            UploadOutcome::Ready
+        } else {
+            UploadOutcome::Nothing
+        }
     }
 }
 
@@ -1364,23 +1549,27 @@ mod tests {
         assert_eq!(changed.len, 17);
     }
 
-    // ---- descarte de resultado velho (função pura) ---------------------
-
-    #[test]
-    fn a_result_is_current_only_for_the_current_key() {
-        let a = key("a.png", 1);
-        let b = key("b.png", 1);
-        assert!(result_is_current(Some(&a), &a));
-        assert!(!result_is_current(Some(&b), &a));
-        assert!(!result_is_current(None, &a));
-        // Mesmo caminho, outro `mtime` ou tamanho: arquivo trocado no disco.
-        assert!(!result_is_current(Some(&key("a.png", 2)), &a));
-    }
-
     // ---- estado --------------------------------------------------------
 
     /// O handle de teste é um `u32`: `ImageId` é opaco, e o store não liga.
     type Store = BackgroundImageStore<u32>;
+
+    const T: BackgroundImageSlot = BackgroundImageSlot::Terminal;
+    const W: BackgroundImageSlot = BackgroundImageSlot::Window;
+
+    fn failure_for(
+        slot: BackgroundImageSlot,
+        path: &str,
+        error: BackgroundImageError,
+    ) -> SlotFailure {
+        SlotFailure {
+            slot,
+            failure: BackgroundImageFailure {
+                path: PathBuf::from(path),
+                error,
+            },
+        }
+    }
 
     /// O resultado de `key` chega e a textura `id` é criada.
     #[track_caller]
@@ -1396,8 +1585,8 @@ mod tests {
     #[test]
     fn no_image_configured_stays_unchanged() {
         let mut store = Store::default();
-        assert_eq!(store.sync(None), SyncOutcome::Unchanged);
-        assert!(store.displayed().is_none());
+        assert_eq!(store.sync(T, None), SyncOutcome::Unchanged);
+        assert!(store.displayed(T).is_none());
     }
 
     #[test]
@@ -1405,25 +1594,28 @@ mod tests {
         let mut store = Store::default();
         let a = key("a.png", 1);
         assert_eq!(
-            store.sync(Some((a.clone(), None))),
+            store.sync(T, Some((a.clone(), None))),
             SyncOutcome::Load(a.clone())
         );
-        assert_eq!(store.state(), Some(&BackgroundImageState::Loading));
+        assert_eq!(store.state(T), Some(&BackgroundImageState::Loading));
         // Mudar só `mode`/`opacity` refaz a conta e não a carga: mesma chave.
-        assert_eq!(store.sync(Some((a.clone(), None))), SyncOutcome::Unchanged);
+        assert_eq!(
+            store.sync(T, Some((a.clone(), None))),
+            SyncOutcome::Unchanged
+        );
         assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Decoded);
         // Os bytes esperam a textura; nada se desenha ainda.
         assert!(matches!(
-            store.state(),
+            store.state(T),
             Some(BackgroundImageState::Decoded(_))
         ));
-        assert!(store.displayed().is_none());
+        assert!(store.displayed(T).is_none());
         assert_eq!(store.upload(|_| Ok(9)), UploadOutcome::Ready);
-        assert_eq!(store.sync(Some((a, None))), SyncOutcome::Unchanged);
+        assert_eq!(store.sync(T, Some((a, None))), SyncOutcome::Unchanged);
         // Só o handle e o tamanho ficam: os bytes saíram do estado.
-        assert_eq!(store.state(), Some(&ready(9)));
+        assert_eq!(store.state(T), Some(&ready(9)));
         assert_eq!(
-            store.displayed(),
+            store.displayed(T),
             Some(BackgroundTexture {
                 id: 9,
                 size: (1, 1)
@@ -1437,7 +1629,7 @@ mod tests {
         let mut store = Store::default();
         assert_eq!(store.upload(|_| Ok(1)), UploadOutcome::Nothing);
         let a = key("a.png", 1);
-        store.sync(Some((a, None)));
+        store.sync(T, Some((a, None)));
         // Ainda `Loading`: a closure nem é chamada.
         assert_eq!(
             store.upload(|_| panic!("não devia criar textura")),
@@ -1449,24 +1641,25 @@ mod tests {
     fn a_texture_the_gpu_refuses_is_a_failure_with_a_warning() {
         let mut store = Store::default();
         let a = key("a.png", 1);
-        store.sync(Some((a.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
         store.apply(loaded(&a));
         let outcome = store.upload(|_| Err(BackgroundImageError::TooLarge));
         assert_eq!(
             outcome,
-            UploadOutcome::Failed(BackgroundImageFailure {
-                path: PathBuf::from("a.png"),
-                error: BackgroundImageError::TooLarge,
-            })
+            UploadOutcome::Failed(vec![failure_for(
+                T,
+                "a.png",
+                BackgroundImageError::TooLarge
+            )])
         );
         assert_eq!(
-            store.state(),
+            store.state(T),
             Some(&BackgroundImageState::Failed(
                 BackgroundImageError::TooLarge
             ))
         );
         // Mesma chave na recarga seguinte: sem carga nova nem aviso novo.
-        assert_eq!(store.sync(Some((a, None))), SyncOutcome::Unchanged);
+        assert_eq!(store.sync(T, Some((a, None))), SyncOutcome::Unchanged);
     }
 
     #[test]
@@ -1474,13 +1667,13 @@ mod tests {
         let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
-        store.sync(Some((a.clone(), None)));
-        store.sync(Some((b.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(T, Some((b.clone(), None)));
         // A carga de `a` termina depois de `b` já ter sido pedida.
         assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Discarded);
-        assert_eq!(store.state(), Some(&BackgroundImageState::Loading));
+        assert_eq!(store.state(T), Some(&BackgroundImageState::Loading));
         assert_eq!(store.apply(loaded(&b)), ApplyOutcome::Decoded);
-        assert_eq!(store.key(), Some(&b));
+        assert_eq!(store.key(T), Some(&b));
     }
 
     #[test]
@@ -1488,8 +1681,8 @@ mod tests {
         let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
-        store.sync(Some((a.clone(), None)));
-        store.sync(Some((b, None)));
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(T, Some((b, None)));
         let stale = BackgroundImageResult {
             key: a,
             outcome: Err(BackgroundImageError::Malformed),
@@ -1501,10 +1694,10 @@ mod tests {
     fn a_result_with_no_image_configured_is_discarded() {
         let mut store = Store::default();
         let a = key("a.png", 1);
-        store.sync(Some((a.clone(), None)));
-        assert_eq!(store.sync(None), SyncOutcome::Cleared);
+        store.sync(T, Some((a.clone(), None)));
+        assert_eq!(store.sync(T, None), SyncOutcome::Cleared);
         assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Discarded);
-        assert!(store.displayed().is_none());
+        assert!(store.displayed(T).is_none());
     }
 
     #[test]
@@ -1512,27 +1705,27 @@ mod tests {
         let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
-        store.sync(Some((a.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
         finish(&mut store, &a, 1);
         assert_eq!(
-            store.sync(Some((b.clone(), None))),
+            store.sync(T, Some((b.clone(), None))),
             SyncOutcome::Load(b.clone())
         );
         // `b` ainda carrega: continua a textura de `a`, sem piscar sem imagem.
-        assert_eq!(store.state(), Some(&BackgroundImageState::Loading));
-        assert_eq!(store.displayed().map(|t| t.id), Some(1));
+        assert_eq!(store.state(T), Some(&BackgroundImageState::Loading));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(1));
         // Uma terceira troca no meio da carga mantém a mesma "anterior".
         let c = key("c.png", 1);
-        store.sync(Some((c.clone(), None)));
-        assert_eq!(store.displayed().map(|t| t.id), Some(1));
+        store.sync(T, Some((c.clone(), None)));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(1));
         // Os bytes de `c` chegaram, mas a textura ainda não: segue a de `a`.
         assert_eq!(store.apply(loaded(&c)), ApplyOutcome::Decoded);
-        assert_eq!(store.displayed().map(|t| t.id), Some(1));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(1));
         assert!(store.drain_released().is_empty());
         // A textura nova entra, e só então a de `a` é solta na GPU.
         assert_eq!(store.upload(|_| Ok(2)), UploadOutcome::Ready);
-        assert_eq!(store.state(), Some(&ready(2)));
-        assert_eq!(store.displayed().map(|t| t.id), Some(2));
+        assert_eq!(store.state(T), Some(&ready(2)));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(2));
         assert_eq!(store.drain_released(), vec![1]);
         assert!(store.drain_released().is_empty());
     }
@@ -1542,13 +1735,13 @@ mod tests {
         let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
-        store.sync(Some((a.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
         finish(&mut store, &a, 10);
-        store.sync(Some((b.clone(), None)));
+        store.sync(T, Some((b.clone(), None)));
         finish(&mut store, &b, 11);
         assert_eq!(store.drain_released(), vec![10]);
         // A de `b` segue viva.
-        assert_eq!(store.displayed().map(|t| t.id), Some(11));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(11));
     }
 
     #[test]
@@ -1556,26 +1749,30 @@ mod tests {
         let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
-        store.sync(Some((a.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
         finish(&mut store, &a, 5);
-        store.sync(Some((b.clone(), None)));
+        store.sync(T, Some((b.clone(), None)));
         let failed = BackgroundImageResult {
             key: b.clone(),
             outcome: Err(BackgroundImageError::UnsupportedFormat),
         };
         assert_eq!(
             store.apply(failed),
-            ApplyOutcome::Failed(BackgroundImageFailure {
-                path: PathBuf::from("b.png"),
-                error: BackgroundImageError::UnsupportedFormat,
-            })
+            ApplyOutcome::Failed(vec![failure_for(
+                T,
+                "b.png",
+                BackgroundImageError::UnsupportedFormat
+            )])
         );
-        assert!(store.displayed().is_none());
+        assert!(store.displayed(T).is_none());
         // A textura anterior foi solta na GPU.
         assert_eq!(store.drain_released(), vec![5]);
         // Recarga com a mesma chave quebrada: nada, e portanto nenhum aviso
         // novo (RF-17.14: uma vez por arquivo e por problema).
-        assert_eq!(store.sync(Some((b.clone(), None))), SyncOutcome::Unchanged);
+        assert_eq!(
+            store.sync(T, Some((b.clone(), None))),
+            SyncOutcome::Unchanged
+        );
         // Um resultado repetido para a mesma chave também não avisa de novo.
         let again = BackgroundImageResult {
             key: b,
@@ -1592,10 +1789,10 @@ mod tests {
             mtime: None,
             len: 0,
         };
-        let outcome = store.sync(Some((
-            missing.clone(),
-            Some(BackgroundImageError::NotFound),
-        )));
+        let outcome = store.sync(
+            T,
+            Some((missing.clone(), Some(BackgroundImageError::NotFound))),
+        );
         assert_eq!(
             outcome,
             SyncOutcome::Failed(BackgroundImageFailure {
@@ -1604,13 +1801,13 @@ mod tests {
             })
         );
         assert_eq!(
-            store.state(),
+            store.state(T),
             Some(&BackgroundImageState::Failed(
                 BackgroundImageError::NotFound
             ))
         );
         // Mesmo caminho ainda ausente na recarga seguinte: sem aviso novo.
-        let again = store.sync(Some((missing, Some(BackgroundImageError::NotFound))));
+        let again = store.sync(T, Some((missing, Some(BackgroundImageError::NotFound))));
         assert_eq!(again, SyncOutcome::Unchanged);
     }
 
@@ -1622,10 +1819,10 @@ mod tests {
             mtime: None,
             len: 0,
         };
-        store.sync(Some((missing, Some(BackgroundImageError::NotFound))));
+        store.sync(T, Some((missing, Some(BackgroundImageError::NotFound))));
         let present = key("a.png", 7);
         assert_eq!(
-            store.sync(Some((present.clone(), None))),
+            store.sync(T, Some((present.clone(), None))),
             SyncOutcome::Load(present)
         );
     }
@@ -1634,14 +1831,14 @@ mod tests {
     fn clearing_the_path_drops_everything() {
         let mut store = Store::default();
         let a = key("a.png", 1);
-        store.sync(Some((a.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
         finish(&mut store, &a, 3);
-        assert_eq!(store.sync(None), SyncOutcome::Cleared);
-        assert!(store.key().is_none());
-        assert!(store.displayed().is_none());
+        assert_eq!(store.sync(T, None), SyncOutcome::Cleared);
+        assert!(store.key(T).is_none());
+        assert!(store.displayed(T).is_none());
         // A textura de `a` sai da GPU.
         assert_eq!(store.drain_released(), vec![3]);
-        assert_eq!(store.sync(None), SyncOutcome::Unchanged);
+        assert_eq!(store.sync(T, None), SyncOutcome::Unchanged);
     }
 
     #[test]
@@ -1649,29 +1846,29 @@ mod tests {
         let mut store = Store::default();
         let a = key("a.png", 1);
         let b = key("b.png", 1);
-        store.sync(Some((a.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
         finish(&mut store, &a, 4);
-        store.sync(Some((b, None)));
-        assert_eq!(store.sync(None), SyncOutcome::Cleared);
+        store.sync(T, Some((b, None)));
+        assert_eq!(store.sync(T, None), SyncOutcome::Cleared);
         assert_eq!(store.drain_released(), vec![4]);
-        assert!(store.displayed().is_none());
+        assert!(store.displayed(T).is_none());
     }
 
     #[test]
     fn a_probe_failure_releases_the_ready_texture() {
         let mut store = Store::default();
         let a = key("a.png", 1);
-        store.sync(Some((a.clone(), None)));
+        store.sync(T, Some((a.clone(), None)));
         finish(&mut store, &a, 6);
         let gone = BackgroundImageKey {
             path: PathBuf::from("a.png"),
             mtime: None,
             len: 0,
         };
-        let outcome = store.sync(Some((gone, Some(BackgroundImageError::NotFound))));
+        let outcome = store.sync(T, Some((gone, Some(BackgroundImageError::NotFound))));
         assert!(matches!(outcome, SyncOutcome::Failed(_)));
         assert_eq!(store.drain_released(), vec![6]);
-        assert!(store.displayed().is_none());
+        assert!(store.displayed(T).is_none());
     }
 
     #[test]
@@ -1679,15 +1876,296 @@ mod tests {
         let mut store = Store::default();
         let before = key("a.png", 1);
         let after = key("a.png", 2); // mesmo caminho, outro mtime/tamanho
-        store.sync(Some((before.clone(), None)));
+        store.sync(T, Some((before.clone(), None)));
         finish(&mut store, &before, 7);
         assert_eq!(
-            store.sync(Some((after.clone(), None))),
+            store.sync(T, Some((after.clone(), None))),
             SyncOutcome::Load(after.clone())
         );
-        assert_eq!(store.displayed().map(|t| t.id), Some(7));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(7));
         finish(&mut store, &after, 8);
         assert_eq!(store.drain_released(), vec![7]);
+    }
+
+    // ---- dois slots (ADR-0062 §6) --------------------------------------
+
+    #[test]
+    fn the_same_key_in_both_slots_is_one_load_and_one_handle() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        assert_eq!(
+            store.sync(T, Some((a.clone(), None))),
+            SyncOutcome::Load(a.clone())
+        );
+        // O segundo slot espera a carga que já existe: nenhuma thread nova.
+        assert_eq!(
+            store.sync(W, Some((a.clone(), None))),
+            SyncOutcome::Unchanged
+        );
+        assert_eq!(store.state(W), Some(&BackgroundImageState::Loading));
+        // Um resultado, uma textura.
+        assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Decoded);
+        let mut created = 0;
+        assert_eq!(
+            store.upload(|_| {
+                created += 1;
+                Ok(40)
+            }),
+            UploadOutcome::Ready
+        );
+        assert_eq!(created, 1);
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(40));
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(40));
+        assert!(store.drain_released().is_empty());
+    }
+
+    #[test]
+    fn a_slot_joining_a_ready_key_gets_it_without_a_load() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        finish(&mut store, &a, 41);
+        assert_eq!(store.sync(W, Some((a, None))), SyncOutcome::Unchanged);
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(41));
+        assert_eq!(
+            store.upload(|_| panic!("não devia criar textura")),
+            UploadOutcome::Nothing
+        );
+    }
+
+    #[test]
+    fn a_shared_texture_is_released_only_when_no_slot_uses_it() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        let b = key("b.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(W, Some((a.clone(), None)));
+        finish(&mut store, &a, 50);
+
+        // O terminal troca para `b`: `a` continua em uso pela janela, e é a
+        // anterior do terminal enquanto `b` carrega.
+        assert_eq!(
+            store.sync(T, Some((b.clone(), None))),
+            SyncOutcome::Load(b.clone())
+        );
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(50));
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(50));
+        assert!(store.drain_released().is_empty());
+
+        // `b` fica pronta: a anterior do terminal sai, mas a janela ainda usa
+        // `a` -- nada é solto.
+        finish(&mut store, &b, 51);
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(51));
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(50));
+        assert!(store.drain_released().is_empty());
+
+        // A janela também troca: agora sim ninguém usa `a`.
+        assert_eq!(store.sync(W, Some((b, None))), SyncOutcome::Unchanged);
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(51));
+        assert_eq!(store.drain_released(), vec![50]);
+        assert!(store.drain_released().is_empty());
+    }
+
+    #[test]
+    fn clearing_one_slot_keeps_the_texture_the_other_still_shows() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(W, Some((a.clone(), None)));
+        finish(&mut store, &a, 52);
+        assert_eq!(store.sync(T, None), SyncOutcome::Cleared);
+        assert!(store.displayed(T).is_none());
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(52));
+        assert!(store.drain_released().is_empty());
+        assert_eq!(store.sync(W, None), SyncOutcome::Cleared);
+        assert_eq!(store.drain_released(), vec![52]);
+    }
+
+    #[test]
+    fn a_result_for_a_key_no_slot_wants_is_discarded() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        let b = key("b.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(W, Some((a.clone(), None)));
+        // Os dois deixam `a` antes de ela chegar.
+        store.sync(T, Some((b.clone(), None)));
+        store.sync(W, Some((b.clone(), None)));
+        assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Discarded);
+        let stale_failure = BackgroundImageResult {
+            key: a,
+            outcome: Err(BackgroundImageError::Malformed),
+        };
+        assert_eq!(store.apply(stale_failure), ApplyOutcome::Discarded);
+        assert_eq!(store.state(T), Some(&BackgroundImageState::Loading));
+        assert_eq!(store.state(W), Some(&BackgroundImageState::Loading));
+        assert!(store.displayed(T).is_none() && store.displayed(W).is_none());
+        // E o de `b` ainda vale, para os dois.
+        assert_eq!(store.apply(loaded(&b)), ApplyOutcome::Decoded);
+    }
+
+    #[test]
+    fn a_result_is_matched_by_key_and_updates_only_the_slots_that_want_it() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        let b = key("b.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(W, Some((b.clone(), None)));
+        // Resultado da chave da janela: o terminal não muda.
+        assert_eq!(store.apply(loaded(&b)), ApplyOutcome::Decoded);
+        assert_eq!(store.state(T), Some(&BackgroundImageState::Loading));
+        assert!(matches!(
+            store.state(W),
+            Some(BackgroundImageState::Decoded(_))
+        ));
+        // As duas decodificadas: um `upload` cria as duas texturas.
+        assert_eq!(store.apply(loaded(&a)), ApplyOutcome::Decoded);
+        let mut next = 60;
+        assert_eq!(
+            store.upload(|_| {
+                next += 1;
+                Ok(next)
+            }),
+            UploadOutcome::Ready
+        );
+        assert_ne!(
+            store.displayed(T).map(|t| t.id),
+            store.displayed(W).map(|t| t.id)
+        );
+        assert!(store.displayed(T).is_some() && store.displayed(W).is_some());
+    }
+
+    #[test]
+    fn a_failure_on_a_shared_key_is_reported_once_for_each_slot() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(W, Some((a.clone(), None)));
+        let failed = BackgroundImageResult {
+            key: a.clone(),
+            outcome: Err(BackgroundImageError::Malformed),
+        };
+        assert_eq!(
+            store.apply(failed),
+            ApplyOutcome::Failed(vec![
+                failure_for(T, "a.png", BackgroundImageError::Malformed),
+                failure_for(W, "a.png", BackgroundImageError::Malformed),
+            ])
+        );
+        assert!(store.displayed(T).is_none() && store.displayed(W).is_none());
+        // Recarga com a mesma chave quebrada, nos dois: nada de aviso novo.
+        assert_eq!(
+            store.sync(T, Some((a.clone(), None))),
+            SyncOutcome::Unchanged
+        );
+        assert_eq!(
+            store.sync(W, Some((a.clone(), None))),
+            SyncOutcome::Unchanged
+        );
+        // Um resultado repetido também não avisa de novo.
+        let again = BackgroundImageResult {
+            key: a,
+            outcome: Err(BackgroundImageError::Malformed),
+        };
+        assert_eq!(store.apply(again), ApplyOutcome::Discarded);
+    }
+
+    #[test]
+    fn a_slot_joining_an_already_failed_key_gets_its_own_warning() {
+        let mut store = Store::default();
+        let missing = BackgroundImageKey {
+            path: PathBuf::from("a.png"),
+            mtime: None,
+            len: 0,
+        };
+        let probe = || Some((missing.clone(), Some(BackgroundImageError::NotFound)));
+        // Mesmo arquivo ausente nas duas chaves: dois avisos, um por slot
+        // (ADR-0062 §7).
+        for slot in [T, W] {
+            assert_eq!(
+                store.sync(slot, probe()),
+                SyncOutcome::Failed(BackgroundImageFailure {
+                    path: PathBuf::from("a.png"),
+                    error: BackgroundImageError::NotFound,
+                })
+            );
+        }
+        assert_eq!(store.sync(T, probe()), SyncOutcome::Unchanged);
+        assert_eq!(store.sync(W, probe()), SyncOutcome::Unchanged);
+    }
+
+    #[test]
+    fn a_texture_the_gpu_refuses_warns_every_slot_that_wants_it() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        store.sync(W, Some((a.clone(), None)));
+        store.apply(loaded(&a));
+        assert_eq!(
+            store.upload(|_| Err(BackgroundImageError::TooLarge)),
+            UploadOutcome::Failed(vec![
+                failure_for(T, "a.png", BackgroundImageError::TooLarge),
+                failure_for(W, "a.png", BackgroundImageError::TooLarge),
+            ])
+        );
+    }
+
+    #[test]
+    fn the_previous_image_is_kept_per_slot() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        let b = key("b.png", 1);
+        let c = key("c.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        finish(&mut store, &a, 70);
+        store.sync(W, Some((b.clone(), None)));
+        finish(&mut store, &b, 71);
+
+        // O terminal troca para `c`: segue desenhando `a` até `c` chegar; a
+        // janela não é afetada.
+        store.sync(T, Some((c.clone(), None)));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(70));
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(71));
+        assert!(store.drain_released().is_empty());
+
+        // A janela, sem anterior própria, não herda a do terminal enquanto
+        // espera uma chave nova.
+        let d = key("d.png", 1);
+        store.sync(W, Some((d.clone(), None)));
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(71));
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(70));
+
+        finish(&mut store, &c, 72);
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(72));
+        assert_eq!(store.displayed(W).map(|t| t.id), Some(71));
+        assert_eq!(store.drain_released(), vec![70]);
+        finish(&mut store, &d, 73);
+        assert_eq!(store.drain_released(), vec![71]);
+    }
+
+    #[test]
+    fn a_failure_in_one_slot_leaves_the_other_slots_image_alone() {
+        let mut store = Store::default();
+        let a = key("a.png", 1);
+        let b = key("b.png", 1);
+        store.sync(T, Some((a.clone(), None)));
+        finish(&mut store, &a, 80);
+        store.sync(W, Some((b.clone(), None)));
+        let failed = BackgroundImageResult {
+            key: b,
+            outcome: Err(BackgroundImageError::UnsupportedFormat),
+        };
+        assert_eq!(
+            store.apply(failed),
+            ApplyOutcome::Failed(vec![failure_for(
+                W,
+                "b.png",
+                BackgroundImageError::UnsupportedFormat
+            )])
+        );
+        assert!(store.displayed(W).is_none());
+        assert_eq!(store.displayed(T).map(|t| t.id), Some(80));
+        assert!(store.drain_released().is_empty());
     }
 
     // ---- frases --------------------------------------------------------

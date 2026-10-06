@@ -5502,7 +5502,10 @@ impl App {
             &self.config.terminal.background_image.path,
         )
         .map(|path| background_image::BackgroundImageKey::probe(&path));
-        match self.background_image.sync(wanted) {
+        match self
+            .background_image
+            .sync(background_image::BackgroundImageSlot::Terminal, wanted)
+        {
             background_image::SyncOutcome::Unchanged => {}
             background_image::SyncOutcome::Cleared => {
                 self.release_background_textures();
@@ -5553,7 +5556,10 @@ impl App {
         }
         self.pty_output_seen = true;
         if let Some(key) = self.deferred_background_load.take()
-            && self.background_image.key() == Some(&key)
+            && self
+                .background_image
+                .key(background_image::BackgroundImageSlot::Terminal)
+                == Some(&key)
         {
             self.start_background_load(key);
         }
@@ -5566,9 +5572,11 @@ impl App {
         match self.background_image.apply(result) {
             background_image::ApplyOutcome::Discarded => {}
             background_image::ApplyOutcome::Decoded => self.upload_background_image(),
-            background_image::ApplyOutcome::Failed(failure) => {
+            background_image::ApplyOutcome::Failed(failures) => {
                 self.release_background_textures();
-                self.warn_background_image(failure);
+                for failure in failures {
+                    self.warn_background_image(failure.failure);
+                }
                 self.for_each_surface(|surface| surface.request_redraw());
             }
         }
@@ -5604,8 +5612,10 @@ impl App {
             background_image::UploadOutcome::Ready => {
                 self.for_each_surface(|surface| surface.request_redraw());
             }
-            background_image::UploadOutcome::Failed(failure) => {
-                self.warn_background_image(failure);
+            background_image::UploadOutcome::Failed(failures) => {
+                for failure in failures {
+                    self.warn_background_image(failure.failure);
+                }
                 self.for_each_surface(|surface| surface.request_redraw());
             }
         }
@@ -10626,14 +10636,14 @@ impl App {
             // `Failed` dão `None`, e o painel desenha como sempre. Só o
             // `scale` é da janela -- ele decide o tamanho natural, e mudar de
             // monitor refaz a conta sem recarregar nada (RF-17.6).
-            let background_image =
-                self.background_image
-                    .displayed()
-                    .map(|texture| paint::BackgroundImagePaint {
-                        image: texture.id,
-                        size_px: texture.size,
-                        scale: state.scale,
-                    });
+            let background_image = self
+                .background_image
+                .displayed(background_image::BackgroundImageSlot::Terminal)
+                .map(|texture| paint::BackgroundImagePaint {
+                    image: texture.id,
+                    size_px: texture.size,
+                    scale: state.scale,
+                });
             for (pane_id, pane_rect) in &pane_layout {
                 let pane_id = *pane_id;
                 let Some(runtime) = state.panes.get_mut(&(id, pane_id)) else {
