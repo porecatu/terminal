@@ -598,6 +598,15 @@ unsupported = "Formato não aceito (só PNG e JPEG): \"{path}\""
 malformed = "Corrompido ou não é uma imagem válida: \"{path}\""
 too_large = "Grande demais para carregar: \"{path}\""
 
+# Mesmas frases, para a imagem da janela (ADR-0062 §7, RF-18.17).
+[notice.window_background_image]
+title = "Imagem de fundo da janela não carregada"
+not_found = "Não encontrado: \"{path}\""
+unreadable = "Não pôde ser lido: \"{path}\""
+unsupported = "Formato não aceito (só PNG e JPEG): \"{path}\""
+malformed = "Corrompido ou não é uma imagem válida: \"{path}\""
+too_large = "Grande demais para carregar: \"{path}\""
+
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]
 title = "Idioma não encontrado"

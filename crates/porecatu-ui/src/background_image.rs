@@ -184,26 +184,40 @@ impl BackgroundImageFailure {
     /// Título e corpo do aviso, pelo catálogo (ADR-0056). Para o
     /// `unreadable` a frase não repete o `ErrorKind`: o `Display` dele é
     /// prosa em inglês da biblioteca padrão.
-    pub(crate) fn notice_text(&self, catalog: &Catalog) -> (String, String) {
+    ///
+    /// O slot escolhe o **bloco** de frases (`notice.background_image` ou
+    /// `notice.window_background_image`), nunca uma concatenação: o aviso diz
+    /// de qual das duas imagens fala (ADR-0062 §7, RF-18.17).
+    pub(crate) fn notice_text(
+        &self,
+        slot: BackgroundImageSlot,
+        catalog: &Catalog,
+    ) -> (String, String) {
         let path = self.path.display();
-        let body = match self.error {
-            BackgroundImageError::NotFound => {
-                msg::notice::background_image::not_found(catalog, path)
+        match slot {
+            BackgroundImageSlot::Terminal => {
+                use msg::notice::background_image as phrases;
+                let body = match self.error {
+                    BackgroundImageError::NotFound => phrases::not_found(catalog, path),
+                    BackgroundImageError::Unreadable(_) => phrases::unreadable(catalog, path),
+                    BackgroundImageError::UnsupportedFormat => phrases::unsupported(catalog, path),
+                    BackgroundImageError::Malformed => phrases::malformed(catalog, path),
+                    BackgroundImageError::TooLarge => phrases::too_large(catalog, path),
+                };
+                (phrases::title(catalog), body)
             }
-            BackgroundImageError::Unreadable(_) => {
-                msg::notice::background_image::unreadable(catalog, path)
+            BackgroundImageSlot::Window => {
+                use msg::notice::window_background_image as phrases;
+                let body = match self.error {
+                    BackgroundImageError::NotFound => phrases::not_found(catalog, path),
+                    BackgroundImageError::Unreadable(_) => phrases::unreadable(catalog, path),
+                    BackgroundImageError::UnsupportedFormat => phrases::unsupported(catalog, path),
+                    BackgroundImageError::Malformed => phrases::malformed(catalog, path),
+                    BackgroundImageError::TooLarge => phrases::too_large(catalog, path),
+                };
+                (phrases::title(catalog), body)
             }
-            BackgroundImageError::UnsupportedFormat => {
-                msg::notice::background_image::unsupported(catalog, path)
-            }
-            BackgroundImageError::Malformed => {
-                msg::notice::background_image::malformed(catalog, path)
-            }
-            BackgroundImageError::TooLarge => {
-                msg::notice::background_image::too_large(catalog, path)
-            }
-        };
-        (msg::notice::background_image::title(catalog), body)
+        }
     }
 }
 
@@ -309,7 +323,7 @@ pub(crate) enum BackgroundImageSlot {
 }
 
 impl BackgroundImageSlot {
-    const ALL: [Self; 2] = [Self::Terminal, Self::Window];
+    pub(crate) const ALL: [Self; 2] = [Self::Terminal, Self::Window];
 
     fn index(self) -> usize {
         match self {
@@ -2186,14 +2200,19 @@ mod tests {
         });
         for locale in ["en_US", "pt_BR", "es_ES", "de_DE", "fr_FR"] {
             let catalog = test_support::catalog(locale);
-            for failure in &failures {
-                let (title, body) = failure.notice_text(&catalog);
-                assert!(
-                    !title.is_empty() && !title.contains("notice."),
-                    "{locale} {title}"
-                );
-                assert!(body.contains("imagens/fundo.png"), "{locale}: {body}");
-                assert!(!body.contains("notice."), "{locale}: {body}");
+            for slot in BackgroundImageSlot::ALL {
+                for failure in &failures {
+                    let (title, body) = failure.notice_text(slot, &catalog);
+                    assert!(
+                        !title.is_empty() && !title.contains("notice."),
+                        "{locale} {slot:?} {title}"
+                    );
+                    assert!(
+                        body.contains("imagens/fundo.png"),
+                        "{locale} {slot:?}: {body}"
+                    );
+                    assert!(!body.contains("notice."), "{locale} {slot:?}: {body}");
+                }
             }
         }
     }
@@ -2205,7 +2224,27 @@ mod tests {
             path: PathBuf::from("a.gif"),
             error: BackgroundImageError::UnsupportedFormat,
         };
-        let (_, body) = failure.notice_text(&catalog);
-        assert!(body.contains("PNG") && body.contains("JPEG"), "{body}");
+        for slot in BackgroundImageSlot::ALL {
+            let (_, body) = failure.notice_text(slot, &catalog);
+            assert!(body.contains("PNG") && body.contains("JPEG"), "{body}");
+        }
+    }
+
+    #[test]
+    fn the_notice_title_depends_on_the_slot() {
+        // RF-18.17: o aviso diz de qual imagem fala, em todo idioma.
+        let failure = BackgroundImageFailure {
+            path: PathBuf::from("a.png"),
+            error: BackgroundImageError::NotFound,
+        };
+        for locale in ["en_US", "pt_BR", "es_ES", "de_DE", "fr_FR"] {
+            let catalog = crate::messages::test_support::catalog(locale);
+            let (terminal, _) = failure.notice_text(BackgroundImageSlot::Terminal, &catalog);
+            let (window, _) = failure.notice_text(BackgroundImageSlot::Window, &catalog);
+            assert_ne!(terminal, window, "{locale}");
+        }
+        let pt = crate::messages::test_support::pt_br();
+        let (window, _) = failure.notice_text(BackgroundImageSlot::Window, &pt);
+        assert!(window.contains("janela"), "{window}");
     }
 }

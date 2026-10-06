@@ -820,6 +820,14 @@ registry! {
             malformed(path),
             too_large(path),
         },
+        window_background_image {
+            title(),
+            not_found(path),
+            unreadable(path),
+            unsupported(path),
+            malformed(path),
+            too_large(path),
+        },
         language_not_found {
             title(),
             body(language, searched),

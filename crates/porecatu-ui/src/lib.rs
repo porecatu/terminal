@@ -5011,10 +5011,13 @@ enum StartupNotice {
     KeybindingInvalid(keymap::KeymapIssue),
     /// ADR-0056 §8: o que `build_catalog` tem a dizer sobre os arquivos.
     Language(porecatu_locale::Diagnostic),
-    /// RF-17.14: a imagem de fundo falhou **antes** de haver janela (falha do
-    /// `metadata` no arranque, ou uma carga rápida que terminou antes de
-    /// `resumed`).
-    BackgroundImage(background_image::BackgroundImageFailure),
+    /// RF-17.14, RF-18.17: a imagem de fundo (a do slot indicado) falhou
+    /// **antes** de haver janela (falha do `metadata` no arranque, ou uma
+    /// carga rápida que terminou antes de `resumed`).
+    BackgroundImage(
+        background_image::BackgroundImageSlot,
+        background_image::BackgroundImageFailure,
+    ),
 }
 
 impl StartupNotice {
@@ -5041,8 +5044,8 @@ impl StartupNotice {
                 messages::keymap_issue(catalog, issue),
             ),
             StartupNotice::Language(diagnostic) => language::diagnostic_notice(diagnostic, catalog),
-            StartupNotice::BackgroundImage(failure) => {
-                let (title, body) = failure.notice_text(catalog);
+            StartupNotice::BackgroundImage(slot, failure) => {
+                let (title, body) = failure.notice_text(*slot, catalog);
                 (Severity::Warning, title, body)
             }
         }
@@ -5225,15 +5228,16 @@ struct App {
     /// nunca da janela -- uma decodificação por processo (RF-17.18). Escrito
     /// só em `sync_background_image` (a cada aplicação de config) e
     /// `apply_background_image_result` (resultado da thread de carga).
-    /// **Nada lê isto para desenhar ainda** (etapas 3 e 4).
+    /// Dois slots, `Terminal` e `Window` (ADR-0062 §6); só o do terminal é
+    /// lido para desenhar por enquanto.
     background_image: background_image::BackgroundImageStore,
     /// `true` depois do primeiro byte de PTY do processo (o prompt chegou).
     /// Independe de `PORECATU_TRACE`, ao contrário de
     /// `first_pty_output_reported`.
     pty_output_seen: bool,
-    /// A carga da imagem do arranque, esperando o prompt
-    /// (`release_deferred_background_load`).
-    deferred_background_load: Option<background_image::BackgroundImageKey>,
+    /// As cargas das imagens do arranque (as chaves dos dois slots, sem
+    /// repetir), esperando o prompt (`release_deferred_background_load`).
+    deferred_background_loads: Vec<background_image::BackgroundImageKey>,
 }
 
 /// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
@@ -5483,7 +5487,7 @@ impl App {
             git_poll_interval_warned: false,
             background_image: background_image::BackgroundImageStore::default(),
             pty_output_seen: false,
-            deferred_background_load: None,
+            deferred_background_loads: Vec::new(),
         };
         // RF-17.17: o arranque não espera pela imagem -- só um `metadata` aqui,
         // e a decodificação numa thread.
@@ -5497,15 +5501,38 @@ impl App {
     /// chave nova, uma thread de carga; `path` vazio, sem imagem. Mudar só
     /// `mode` ou `opacity` não muda a chave, então não relê nada.
     fn sync_background_image(&mut self) {
-        let wanted = porecatu_config::resolve_background_image_path(
-            self.config_path.as_deref(),
-            &self.config.terminal.background_image.path,
-        )
-        .map(|path| background_image::BackgroundImageKey::probe(&path));
-        match self
-            .background_image
-            .sync(background_image::BackgroundImageSlot::Terminal, wanted)
-        {
+        use background_image::BackgroundImageSlot;
+        // ADR-0062 §6: dois slots, cada um com a sua tabela de config. A
+        // mesma função resolve os dois caminhos, contra o mesmo arquivo.
+        let slots = [
+            (
+                BackgroundImageSlot::Terminal,
+                self.config.terminal.background_image.path.clone(),
+            ),
+            (
+                BackgroundImageSlot::Window,
+                self.config.appearance.window.background_image.path.clone(),
+            ),
+        ];
+        for (slot, raw_path) in slots {
+            let wanted = porecatu_config::resolve_background_image_path(
+                self.config_path.as_deref(),
+                &raw_path,
+            )
+            .map(|path| background_image::BackgroundImageKey::probe(&path));
+            self.sync_background_image_slot(slot, wanted);
+        }
+    }
+
+    fn sync_background_image_slot(
+        &mut self,
+        slot: background_image::BackgroundImageSlot,
+        wanted: Option<(
+            background_image::BackgroundImageKey,
+            Option<background_image::BackgroundImageError>,
+        )>,
+    ) {
+        match self.background_image.sync(slot, wanted) {
             background_image::SyncOutcome::Unchanged => {}
             background_image::SyncOutcome::Cleared => {
                 self.release_background_textures();
@@ -5517,16 +5544,16 @@ impl App {
                 // atrasava o primeiro prompt em ~25% (medido: 632 -> 809 ms com
                 // um JPEG de 8000x6000). Antes do primeiro byte do PTY ela só
                 // espera, e começa quando o prompt chega; depois disso (uma
-                // recarga a quente) começa na hora.
+                // recarga a quente) começa na hora. Vale para os dois slots.
                 if self.pty_output_seen {
                     self.start_background_load(key);
-                } else {
-                    self.deferred_background_load = Some(key);
+                } else if !self.deferred_background_loads.contains(&key) {
+                    self.deferred_background_loads.push(key);
                 }
             }
             background_image::SyncOutcome::Failed(failure) => {
                 self.release_background_textures();
-                self.warn_background_image(failure);
+                self.warn_background_image(slot, failure);
                 self.for_each_surface(|surface| surface.request_redraw());
             }
         }
@@ -5547,21 +5574,23 @@ impl App {
     }
 
     /// Chamado no primeiro byte de PTY do processo (o prompt chegou): solta a
-    /// carga da imagem que o arranque segurou. Só vale se a chave ainda é a
-    /// atual -- uma recarga entre o arranque e o prompt pode ter trocado ou
-    /// apagado o caminho.
+    /// cargas das imagens que o arranque segurou, as dos dois slots. Só vale
+    /// para a chave que algum slot ainda deseja -- uma recarga entre o arranque
+    /// e o prompt pode ter trocado ou apagado o caminho. Uma chave, uma
+    /// thread, mesmo pedida pelos dois slots (`sync` só devolve `Load` uma vez
+    /// por chave, e o adiamento não repete).
     fn release_deferred_background_load(&mut self) {
         if self.pty_output_seen {
             return;
         }
         self.pty_output_seen = true;
-        if let Some(key) = self.deferred_background_load.take()
-            && self
-                .background_image
-                .key(background_image::BackgroundImageSlot::Terminal)
-                == Some(&key)
-        {
-            self.start_background_load(key);
+        for key in std::mem::take(&mut self.deferred_background_loads) {
+            let wanted = background_image::BackgroundImageSlot::ALL
+                .into_iter()
+                .any(|slot| self.background_image.key(slot) == Some(&key));
+            if wanted {
+                self.start_background_load(key);
+            }
         }
     }
 
@@ -5575,7 +5604,7 @@ impl App {
             background_image::ApplyOutcome::Failed(failures) => {
                 self.release_background_textures();
                 for failure in failures {
-                    self.warn_background_image(failure.failure);
+                    self.warn_background_image(failure.slot, failure.failure);
                 }
                 self.for_each_surface(|surface| surface.request_redraw());
             }
@@ -5614,7 +5643,7 @@ impl App {
             }
             background_image::UploadOutcome::Failed(failures) => {
                 for failure in failures {
-                    self.warn_background_image(failure.failure);
+                    self.warn_background_image(failure.slot, failure.failure);
                 }
                 self.for_each_surface(|surface| surface.request_redraw());
             }
@@ -5630,19 +5659,25 @@ impl App {
         }
     }
 
-    /// RF-17.14: a falha da imagem de fundo é **um** aviso, não um por janela
-    /// -- vai para a primeira janela, como os avisos de sessão do arranque; sem
-    /// janela ainda, espera `resumed` em `pending_startup_warnings`. Quem
-    /// chama garante que é uma transição para `Failed` de uma chave nova
-    /// (`BackgroundImageStore`), então o aviso sai uma vez por arquivo e por
-    /// problema, não a cada recarga.
-    fn warn_background_image(&mut self, failure: background_image::BackgroundImageFailure) {
+    /// RF-17.14, RF-18.17: a falha da imagem de fundo é **um** aviso por slot,
+    /// não um por janela -- vai para a primeira janela, como os avisos de
+    /// sessão do arranque; sem janela ainda, espera `resumed` em
+    /// `pending_startup_warnings`. Quem chama garante que é uma transição para
+    /// `Failed` de uma chave nova para aquele slot (`BackgroundImageStore`),
+    /// então o aviso sai uma vez por arquivo e por problema, não a cada
+    /// recarga. O slot escolhe as frases: "da janela" ou "do terminal"
+    /// (ADR-0062 §7).
+    fn warn_background_image(
+        &mut self,
+        slot: background_image::BackgroundImageSlot,
+        failure: background_image::BackgroundImageFailure,
+    ) {
         let Some(state) = self.windows.values_mut().next() else {
             self.pending_startup_warnings
-                .push(StartupNotice::BackgroundImage(failure));
+                .push(StartupNotice::BackgroundImage(slot, failure));
             return;
         };
-        let (title, body) = failure.notice_text(&self.catalog);
+        let (title, body) = failure.notice_text(slot, &self.catalog);
         state
             .warnings
             .push(Severity::Warning, title, body, Instant::now());

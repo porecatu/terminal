@@ -555,6 +555,15 @@ unsupported = "Format non accepté (PNG et JPEG seulement) : \"{path}\""
 malformed = "Corrompu ou image non valide : \"{path}\""
 too_large = "Trop volumineux pour être chargé : \"{path}\""
 
+# Mêmes phrases, pour l'image de la fenêtre (ADR-0062 §7, RF-18.17).
+[notice.window_background_image]
+title = "Image d'arrière-plan de la fenêtre non chargée"
+not_found = "Introuvable : \"{path}\""
+unreadable = "Lecture impossible : \"{path}\""
+unsupported = "Format non accepté (PNG et JPEG seulement) : \"{path}\""
+malformed = "Corrompu ou image non valide : \"{path}\""
+too_large = "Trop volumineux pour être chargé : \"{path}\""
+
 [notice.language_not_found]
 title = "Langue introuvable"
 body = "Aucun fichier pour \"{language}\" (recherché : {searched})."

@@ -555,6 +555,15 @@ unsupported = "Nicht unterstütztes Format (nur PNG und JPEG): \"{path}\""
 malformed = "Beschädigt oder kein gültiges Bild: \"{path}\""
 too_large = "Zu groß zum Laden: \"{path}\""
 
+# Gleiche Sätze, für das Fensterbild (ADR-0062 §7, RF-18.17).
+[notice.window_background_image]
+title = "Hintergrundbild des Fensters nicht geladen"
+not_found = "Nicht gefunden: \"{path}\""
+unreadable = "Konnte nicht gelesen werden: \"{path}\""
+unsupported = "Nicht unterstütztes Format (nur PNG und JPEG): \"{path}\""
+malformed = "Beschädigt oder kein gültiges Bild: \"{path}\""
+too_large = "Zu groß zum Laden: \"{path}\""
+
 [notice.language_not_found]
 title = "Sprache nicht gefunden"
 body = "Keine Datei für \"{language}\" (gesucht in: {searched})."
