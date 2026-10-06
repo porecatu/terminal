@@ -127,6 +127,12 @@ pub(crate) struct QuadShared {
     pipeline: wgpu::RenderPipeline,
     /// Mesmo shader, `BlendState::REPLACE` (`Primitive::Backdrop`).
     backdrop_pipeline: wgpu::RenderPipeline,
+    /// `Backdrop` arredondado, primeira metade: `dst * (1 - cobertura)`
+    /// (`fs_erase`). A segunda é `add_pipeline`.
+    erase_pipeline: wgpu::RenderPipeline,
+    /// `Backdrop` arredondado, segunda metade: soma a cor premultiplicada pela
+    /// cobertura (`dst + src`), o que fecha `lerp(dst, cor, cobertura)`.
+    add_pipeline: wgpu::RenderPipeline,
     /// Grupo 0 (uniforme de resolução da janela): o pipeline de imagem usa o
     /// mesmo layout, e portanto o mesmo bind group de cada janela.
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
@@ -185,57 +191,100 @@ impl QuadShared {
             ],
         };
 
-        let make_pipeline = |label: &'static str, blend: wgpu::BlendState| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(vertex_layout.clone()), Some(instance_layout.clone())],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        // O fragment shader devolve cor premultiplicada
-                        // (`color.rgb * alpha, alpha`, quad.wgsl) -- o blend
-                        // tem que ser o par certo, não `ALPHA_BLENDING`
-                        // (straight). Com o par errado o alpha era aplicado em
-                        // dobro na faixa de antialiasing do SDF, escurecendo um
-                        // anel exatamente no contorno de todo canto arredondado
-                        // -- mascarado enquanto havia borda ali, visível assim
-                        // que a pílula do grupo (cor cheia, sem borda) passou a
-                        // ficar sobre a cápsula da mesma cor.
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let make_pipeline =
+            |label: &'static str, fragment_entry: &'static str, blend: wgpu::BlendState| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[Some(vertex_layout.clone()), Some(instance_layout.clone())],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(fragment_entry),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            // O fragment shader devolve cor premultiplicada
+                            // (`color.rgb * alpha, alpha`, quad.wgsl) -- o blend
+                            // tem que ser o par certo, não `ALPHA_BLENDING`
+                            // (straight). Com o par errado o alpha era aplicado em
+                            // dobro na faixa de antialiasing do SDF, escurecendo um
+                            // anel exatamente no contorno de todo canto arredondado
+                            // -- mascarado enquanto havia borda ali, visível assim
+                            // que a pílula do grupo (cor cheia, sem borda) passou a
+                            // ficar sobre a cápsula da mesma cor.
+                            blend: Some(blend),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
         let pipeline = make_pipeline(
             "porecatu-render/quad-pipeline",
+            "fs_main",
             wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
         );
         let backdrop_pipeline = make_pipeline(
             "porecatu-render/backdrop-pipeline",
+            "fs_main",
             wgpu::BlendState::REPLACE,
+        );
+        // `Backdrop` de raio > 0 não usa `REPLACE`: ele escreveria o retângulo
+        // inteiro, inclusive a cobertura zero dos cantos de fora do raio e a
+        // faixa antialiasada, e ali o que estava embaixo (a imagem da janela, o
+        // que está atrás dela) sumiria. São duas passadas, que juntas dão
+        // `dst * (1 - c) + cor * c` -- igual ao `REPLACE` no miolo (`c = 1`),
+        // intacto fora do raio (`c = 0`) e proporcional na borda.
+        let erase_pipeline = make_pipeline(
+            "porecatu-render/backdrop-erase-pipeline",
+            "fs_erase",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+        );
+        let add_pipeline = make_pipeline(
+            "porecatu-render/backdrop-add-pipeline",
+            "fs_main",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
         );
 
         Self {
             pipeline,
             backdrop_pipeline,
+            erase_pipeline,
+            add_pipeline,
             bind_group_layout,
             vertex_buffer,
         }
@@ -300,15 +349,38 @@ struct QuadLayerBuffer {
     draws: Vec<Draw>,
 }
 
+/// Como uma execução de quads compõe com o destino.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuadMode {
+    /// Blend premultiplicado normal.
+    Blend,
+    /// `Backdrop` de raio zero (fundo de célula): `REPLACE`. A forma é um
+    /// retângulo alinhado ao pixel, sem cobertura parcial nem canto.
+    Replace,
+    /// `Backdrop` arredondado: apagar com cobertura e somar a cor, uma
+    /// instância por vez para a ordem do stream valer (`erase`, depois `add`,
+    /// de cada uma).
+    RoundedBackdrop,
+}
+
+impl QuadMode {
+    fn of(g: &GeometryPrimitive) -> Self {
+        match g {
+            GeometryPrimitive::Backdrop(q) if q.radius > 0.0 => Self::RoundedBackdrop,
+            GeometryPrimitive::Backdrop(_) => Self::Replace,
+            _ => Self::Blend,
+        }
+    }
+}
+
 /// Um `draw` da camada.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Draw {
-    /// Execução contígua de quads de um batch, num pipeline só. `backdrop`
-    /// desenha com o que substitui.
+    /// Execução contígua de quads de um batch, no mesmo modo de blend.
     Quads {
         scissor: ScissorRect,
         range: Range<u32>,
-        backdrop: bool,
+        mode: QuadMode,
     },
     /// Uma imagem: `index` é a posição dela em `image_buffer`.
     Image {
@@ -454,20 +526,20 @@ impl QuadWindowState {
             // Uma execução por tipo de blend: `Backdrop` troca de pipeline, e
             // a ordem do stream continua valendo.
             let mut run_start = start;
-            let mut run_backdrop = matches!(batch.geometry[0], GeometryPrimitive::Backdrop(_));
+            let mut run_mode = QuadMode::of(&batch.geometry[0]);
             for g in &batch.geometry {
-                let backdrop = matches!(g, GeometryPrimitive::Backdrop(_));
-                if backdrop != run_backdrop {
+                let mode = QuadMode::of(g);
+                if mode != run_mode {
                     let at = instances.len() as u32;
                     if !scissor.is_empty() {
                         state.draws.push(Draw::Quads {
                             scissor,
                             range: run_start..at,
-                            backdrop: run_backdrop,
+                            mode: run_mode,
                         });
                     }
                     run_start = at;
-                    run_backdrop = backdrop;
+                    run_mode = mode;
                 }
                 instances.push(match g {
                     GeometryPrimitive::Quad(q) => Instance::from_quad(q, scale),
@@ -486,7 +558,7 @@ impl QuadWindowState {
                 state.draws.push(Draw::Quads {
                     scissor,
                     range: run_start..end,
-                    backdrop: run_backdrop,
+                    mode: run_mode,
                 });
             }
         }
@@ -546,19 +618,33 @@ impl QuadWindowState {
                 Draw::Quads {
                     scissor,
                     range,
-                    backdrop,
+                    mode,
                 } => {
                     if slot_holds_images {
                         pass.set_vertex_buffer(1, state.instance_buffer.slice(..));
                         slot_holds_images = false;
                     }
-                    pass.set_pipeline(if *backdrop {
-                        &shared.backdrop_pipeline
-                    } else {
-                        &shared.pipeline
-                    });
                     pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
-                    pass.draw(0..4, range.clone());
+                    match mode {
+                        QuadMode::Blend => {
+                            pass.set_pipeline(&shared.pipeline);
+                            pass.draw(0..4, range.clone());
+                        }
+                        QuadMode::Replace => {
+                            pass.set_pipeline(&shared.backdrop_pipeline);
+                            pass.draw(0..4, range.clone());
+                        }
+                        QuadMode::RoundedBackdrop => {
+                            // Uma instância por vez: o erase e o add de cada
+                            // uma, em ordem, antes da seguinte.
+                            for index in range.clone() {
+                                pass.set_pipeline(&shared.erase_pipeline);
+                                pass.draw(0..4, index..index + 1);
+                                pass.set_pipeline(&shared.add_pipeline);
+                                pass.draw(0..4, index..index + 1);
+                            }
+                        }
+                    }
                 }
                 Draw::Image {
                     scissor,

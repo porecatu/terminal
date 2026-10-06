@@ -750,6 +750,114 @@ mod gpu_tests {
         })
     }
 
+    fn backdrop(radius: f32, color: Color) -> Primitive {
+        Primitive::Backdrop(crate::primitives::RoundedQuad {
+            rect: full(),
+            radius,
+            color,
+            border_color: Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+            border_width: 0.0,
+        })
+    }
+
+    /// `Backdrop` substitui o destino **dentro** da forma, e só dentro: os
+    /// pixels de cobertura zero nos cantos de fora do raio ficam como estavam.
+    /// Com `REPLACE` puro o fragmento de cobertura zero também era escrito, e
+    /// o canto virava transparente (o desktop aparecia ali em janela
+    /// transparente, onde devia aparecer o que está embaixo).
+    #[test]
+    fn a_backdrop_leaves_the_pixels_outside_its_radius_alone() {
+        let Some(gpu) = Harness::new() else {
+            return;
+        };
+        let clear = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        };
+        let pixels = gpu.render(&[blue_backdrop(), backdrop(4.0, clear)]);
+        // O canto (0,0) está fora do raio 4: continua o azul de embaixo.
+        assert_near(at(&pixels, 0, 0), BLUE);
+        assert_near(at(&pixels, 7, 0), BLUE);
+        assert_near(at(&pixels, 0, 7), BLUE);
+        assert_near(at(&pixels, 7, 7), BLUE);
+        // O miolo é substituído: o furo transparente de sempre.
+        assert_near(at(&pixels, 4, 4), [0, 0, 0, 0]);
+        // Uma aresta reta, longe dos cantos: a borda antialiasada da forma
+        // (o pixel está a meio pixel de dentro), quase toda apagada.
+        assert!(at(&pixels, 4, 0)[3] < 64, "{:?}", at(&pixels, 4, 0));
+    }
+
+    /// A faixa antialiasada do raio apaga só em parte: nem o transparente
+    /// inteiro de `REPLACE` (que deixava a faixa mostrar o que está atrás da
+    /// janela) nem o destino intacto. Em algum pixel da borda o alfa fica
+    /// entre os dois.
+    #[test]
+    fn a_backdrop_rim_erases_only_in_proportion_to_its_coverage() {
+        let Some(gpu) = Harness::new() else {
+            return;
+        };
+        let clear = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        };
+        let pixels = gpu.render(&[blue_backdrop(), backdrop(4.0, clear)]);
+        assert!(
+            pixels.iter().any(|p| p[3] > 8 && p[3] < 247),
+            "nenhum pixel de borda com apagamento parcial: {pixels:?}"
+        );
+        // Premultiplicado: onde o alfa é parcial, o azul que sobra é o mesmo.
+        for p in &pixels {
+            assert_eq!(p[0], 0);
+            assert_eq!(p[1], 0);
+            assert!(p[2] <= p[3].saturating_add(2), "{p:?}");
+        }
+    }
+
+    /// Com cor (alfa 0.5 de verde): o miolo vira a cor premultiplicada, como
+    /// com `REPLACE`, e o canto de fora do raio continua o que era.
+    #[test]
+    fn a_backdrop_with_a_color_replaces_the_inside_and_keeps_the_corner() {
+        let Some(gpu) = Harness::new() else {
+            return;
+        };
+        let half_green = Color {
+            r: 0.0,
+            g: 1.0,
+            b: 0.0,
+            a: 0.5,
+        };
+        let pixels = gpu.render(&[blue_backdrop(), backdrop(4.0, half_green)]);
+        // Miolo: verde a 0.5 premultiplicado, o azul de baixo substituído.
+        assert_near(at(&pixels, 4, 4), [0, 128, 0, 128]);
+        assert_near(at(&pixels, 0, 0), BLUE);
+        assert_near(at(&pixels, 7, 7), BLUE);
+    }
+
+    #[test]
+    fn a_backdrop_with_radius_zero_still_replaces_every_pixel() {
+        let Some(gpu) = Harness::new() else {
+            return;
+        };
+        let clear = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        };
+        let pixels = gpu.render(&[blue_backdrop(), backdrop(0.0, clear)]);
+        assert_near(at(&pixels, 0, 0), [0, 0, 0, 0]);
+        assert_near(at(&pixels, 7, 7), [0, 0, 0, 0]);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn image_prim(
         id: ImageId,

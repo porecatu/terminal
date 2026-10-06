@@ -94,3 +94,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let alpha = color.a * fill_alpha;
     return vec4<f32>(color.rgb * alpha, alpha);
 }
+
+// Primeira metade de um `Primitive::Backdrop` arredondado (ver `QuadMode` em
+// `quad.rs`): só a cobertura da forma, no alfa, com cor zero. O pipeline que a
+// usa tem `dst * (1 - alfa)` como blend: apaga o destino na proporção em que a
+// forma o cobre -- tudo no miolo, nada fora do raio, e a faixa antialiasada
+// só em parte. `BlendState::REPLACE` apagava os pixels de cobertura zero dos
+// cantos de fora do raio e a faixa inteira, e o que estava atrás da janela
+// aparecia ali.
+@fragment
+fn fs_erase(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, shape_coverage(in.local_pos, in.half_size, in.radius));
+}
