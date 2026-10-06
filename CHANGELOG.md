@@ -14,6 +14,19 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [Não lançado]
+
+### Corrigido
+
+- **Em janela transparente, o desktop não aparece mais pelos cantos
+  arredondados do quadro do terminal**, com ou sem imagem de fundo da janela.
+  O fundo do quadro (`Backdrop` com `REPLACE`) escrevia o retângulo inteiro e
+  deixava transparentes os pixels de fora do raio e a faixa antialiasada do
+  arco. Um `Backdrop` arredondado passou a ser desenhado em duas passadas
+  (apagar com cobertura e somar a cor): igual ao de antes no miolo, intacto
+  fora do raio e proporcional na borda. O contorno externo do quadro faz agora
+  antialiasing com o que está embaixo
+
 ## [0.9.2] - 2026-10-06
 
 O app ganha **imagem de fundo da janela**: uma PNG ou JPEG atrás da janela
