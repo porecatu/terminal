@@ -220,6 +220,94 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    /// O mesmo para a imagem da janela (RF-18.23): só a tabela
+    /// `[appearance.window.background_image]` e as três chaves são novas.
+    #[test]
+    fn saving_the_three_window_image_options_adds_only_their_own_lines() {
+        use crate::settings::catalog::option;
+        use crate::settings::draft::Draft;
+
+        let original = "# meu arquivo\n\n[appearance.window]\nopacity = 0.9   # RF-4.1\n\n[terminal.font]\nsize = 14.0   # RF-5.3\n";
+        let path = file_with("window-image-three.toml", original);
+        let (config, _) = porecatu_config::parse(original).unwrap();
+
+        let mut draft = Draft::new(&config);
+        for (id, value) in [
+            (
+                "window_background_image",
+                EditValue::String("imagens/montanha.jpg".to_owned()),
+            ),
+            (
+                "window_background_image_mode",
+                EditValue::String("center".to_owned()),
+            ),
+            ("window_background_image_opacity", EditValue::Float(0.35)),
+        ] {
+            draft.set(option(id).unwrap(), value).unwrap();
+        }
+        let edits = draft.edits();
+        assert_eq!(edits.len(), 3, "uma edição por opção, nenhuma outra");
+
+        let saved = save(&path, Some(original), EXAMPLE, &edits).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+
+        let before: Vec<&str> = original.lines().collect();
+        let after: Vec<&str> = written.lines().collect();
+        let mut cursor = 0;
+        for line in &before {
+            let found = after[cursor..]
+                .iter()
+                .position(|candidate| candidate == line)
+                .unwrap_or_else(|| panic!("linha perdida ou fora de ordem: {line:?}"));
+            cursor += found + 1;
+        }
+        let added: Vec<&str> = after
+            .iter()
+            .copied()
+            .filter(|line| !before.contains(line))
+            .collect();
+        assert_eq!(
+            added,
+            [
+                "[appearance.window.background_image]",
+                "path = \"imagens/montanha.jpg\"",
+                "mode = \"center\"",
+                "opacity = 0.35",
+            ]
+        );
+        let image = &saved.config.appearance.window.background_image;
+        assert_eq!(image.path, "imagens/montanha.jpg");
+        assert_eq!(image.mode, porecatu_config::BackgroundImageMode::Center);
+        assert_eq!(image.opacity, 0.35);
+        // A imagem do terminal não foi tocada.
+        assert_eq!(saved.config.terminal.background_image.path, "");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn restoring_a_window_image_option_removes_only_its_key() {
+        use crate::settings::catalog::option;
+        use crate::settings::draft::Draft;
+
+        let original = "[appearance.window.background_image]\npath = \"a.png\"\nmode = \"tile\"\nopacity = 0.5\n";
+        let path = file_with("window-image-reset.toml", original);
+        let (config, _) = porecatu_config::parse(original).unwrap();
+        let mut draft = Draft::new(&config);
+        draft.reset(option("window_background_image_mode").unwrap());
+        let edits = draft.edits();
+        assert_eq!(edits.len(), 1);
+        let saved = save(&path, Some(original), EXAMPLE, &edits).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[appearance.window.background_image]\npath = \"a.png\"\nopacity = 0.5\n"
+        );
+        assert_eq!(
+            saved.config.appearance.window.background_image.mode,
+            porecatu_config::BackgroundImageMode::Stretch
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
     #[test]
     fn a_remove_drops_the_key_and_keeps_the_comment_above_it() {
         let original = "[terminal.font]\n# tamanho em pixels\nsize = 16.0\nfamily = \"X\"\n";
