@@ -152,4 +152,10 @@ Mais simples de escrever, e recusada pela métrica do PRD: o mesmo JPEG grande n
 
 ## Registro do aval visual
 
-> **Pendente.** Pedido na etapa de pintura do [roadmap](../roadmap.md), sobre a build. Itens a avaliar: a imagem atrás da barra de abas sem o fundo dela; a sombra do quadro na faixa de baixo da barra (§3); a imagem através do quadro translúcido; as duas imagens juntas.
+> **Pendente — pedido em 2026-10-06.** Pedido na etapa de pintura do [roadmap](../roadmap.md), sobre a build. Itens a avaliar: a imagem atrás da barra de abas sem o fundo dela; a sombra do quadro na faixa de baixo da barra (§3); a imagem através do quadro translúcido; as duas imagens juntas.
+
+### Defeito conhecido, aberto: desktop nos cantos do quadro (pré-existente)
+
+Achado na medição de pixel da etapa de composição, e confirmado pelo dono do produto a olho: em janela transparente, o canto arredondado do quadro do terminal mostra a cor de trás da janela. A causa é anterior a este ADR. O `Primitive::Backdrop` usa `BlendState::REPLACE` e escreve o retângulo inteiro do quadro, inclusive os pixels de cobertura zero fora do raio; o destino ali vira transparente. Com a imagem da janela exibida, o furo do §4 herda o mesmo defeito, mas a imagem recortada **não** vaza para fora do raio. O controle sem imagem da janela, com o mesmo `background_opacity = 0.6`, mostra o mesmo pixel (medido em (6,52) numa janela de 800 px de largura).
+
+**Dívida de verificação e de correção, decisão do dono do produto de 2026-10-06: anotar e corrigir depois.** A correção, a verificar, é descartar o fragmento de cobertura zero no pipeline `REPLACE` do `quad.wgsl`, o que mexe no app inteiro e pede aval próprio.
