@@ -26,7 +26,7 @@ use image::imageops::{self, FilterType};
 use image::{ImageError, ImageFormat, ImageReader, Limits, RgbaImage};
 use porecatu_config::BackgroundImageMode;
 use porecatu_locale::Catalog;
-use porecatu_render::{ImageId, Rect};
+use porecatu_render::{ImageId, Primitive, Rect};
 
 use crate::messages::msg;
 
@@ -132,6 +132,41 @@ pub(crate) fn placement(
             }
         }
     }
+}
+
+/// A primitiva da imagem **da janela** (ADR-0062 §2, §5): a primeira da lista
+/// de `Layer::Grid`, abaixo de todo quadro de terminal. `window` é a área de
+/// conteúdo inteira em lógico, usada como `frame` do `placement` (uma imagem
+/// só, RF-18.6) **e** como `mask`, com raio zero -- a janela não tem canto
+/// arredondado pintado por nós. `texture` é o que `displayed(Window)` deu;
+/// `None` (sem imagem, `Loading` sem anterior, `Failed`) e `opacity == 0` não
+/// desenham nada (RF-18.14: `0.0` carrega, não desenha).
+///
+/// O `alpha` é **só** a `opacity` da imagem, limitada. A multiplicação por
+/// `[appearance.window] opacity` (RF-18.15) já acontece no blit de opacidade
+/// da `WindowSurface`, que compõe a cena inteira com esse alfa: refazer a
+/// conta aqui daria `opacity × window_opacity²` (ADR-0062 §2).
+pub(crate) fn window_paint(
+    config: &porecatu_config::BackgroundImage,
+    texture: Option<BackgroundTexture>,
+    window: Rect,
+    scale: f32,
+) -> Option<Primitive> {
+    let texture = texture?;
+    let alpha = config.clamped_opacity();
+    if alpha <= 0.0 {
+        return None;
+    }
+    let placement = placement(config.mode, window, texture.size, scale);
+    Some(Primitive::Image {
+        rect: placement.rect,
+        uv: placement.uv,
+        repeat: placement.repeat,
+        mask: window,
+        mask_radius: 0.0,
+        alpha,
+        image: texture.id,
+    })
 }
 
 /// O caminho resolvido de `raw` (o texto do campo da tela de configurações,
@@ -1399,6 +1434,131 @@ mod tests {
                 assert!(!p.repeat);
             }
         }
+    }
+
+    // ---- imagem da janela (função pura, sem GPU) -----------------------
+
+    fn window_config(mode: BackgroundImageMode, opacity: f32) -> porecatu_config::BackgroundImage {
+        porecatu_config::BackgroundImage {
+            path: "praia.png".into(),
+            mode,
+            opacity,
+        }
+    }
+
+    fn texture(size: (u32, u32)) -> Option<BackgroundTexture> {
+        Some(BackgroundTexture {
+            id: ImageId::from_raw(7),
+            size,
+        })
+    }
+
+    #[test]
+    fn the_window_image_uses_the_whole_window_as_frame_and_as_mask() {
+        let window = r(0.0, 0.0, 1000.0, 700.0);
+        let config = window_config(BackgroundImageMode::Stretch, 0.6);
+        let Some(Primitive::Image {
+            rect,
+            uv,
+            repeat,
+            mask,
+            mask_radius,
+            alpha,
+            image,
+        }) = window_paint(&config, texture((200, 100)), window, 1.0)
+        else {
+            panic!("devia desenhar");
+        };
+        assert_eq!(rect, window);
+        assert_eq!(uv, r(0.0, 0.0, 1.0, 1.0));
+        assert!(!repeat);
+        assert_eq!(mask, window);
+        assert_eq!(mask_radius, 0.0);
+        assert_eq!(alpha, 0.6);
+        assert_eq!(image, ImageId::from_raw(7));
+    }
+
+    #[test]
+    fn the_window_image_alpha_is_only_the_image_opacity() {
+        // O blit da `WindowSurface` já multiplica por `[appearance.window]
+        // opacity` (ADR-0062 §2): a primitiva não conhece essa chave, e a
+        // função nem recebe a opacidade da janela para multiplicar.
+        let window = r(0.0, 0.0, 400.0, 300.0);
+        for (opacity, expected) in [(1.0, 1.0), (0.25, 0.25), (1.7, 1.0), (f32::NAN, 1.0)] {
+            let config = window_config(BackgroundImageMode::Stretch, opacity);
+            let Some(Primitive::Image { alpha, .. }) =
+                window_paint(&config, texture((10, 10)), window, 1.0)
+            else {
+                panic!("devia desenhar com opacity {opacity}");
+            };
+            assert_eq!(alpha, expected, "opacity {opacity}");
+        }
+    }
+
+    #[test]
+    fn the_window_image_draws_nothing_without_a_texture_or_at_zero_opacity() {
+        let window = r(0.0, 0.0, 400.0, 300.0);
+        let config = window_config(BackgroundImageMode::Stretch, 1.0);
+        assert!(window_paint(&config, None, window, 1.0).is_none());
+        for zero in [0.0, -0.5] {
+            let hidden = window_config(BackgroundImageMode::Stretch, zero);
+            assert!(window_paint(&hidden, texture((10, 10)), window, 1.0).is_none());
+        }
+    }
+
+    #[test]
+    fn the_window_image_follows_the_mode_with_the_window_as_reference() {
+        // RF-18.6: `tile` parte do canto da janela, `center` centraliza na
+        // janela -- não num quadro.
+        let window = r(0.0, 0.0, 400.0, 200.0);
+        let tile = window_paint(
+            &window_config(BackgroundImageMode::Tile, 1.0),
+            texture((200, 100)),
+            window,
+            1.0,
+        );
+        let Some(Primitive::Image {
+            rect,
+            uv,
+            repeat,
+            mask,
+            ..
+        }) = tile
+        else {
+            panic!("tile");
+        };
+        assert!(repeat);
+        assert_eq!((rect, mask), (window, window));
+        assert_eq!(uv, r(0.0, 0.0, 2.0, 2.0));
+
+        let center = window_paint(
+            &window_config(BackgroundImageMode::Center, 1.0),
+            texture((200, 100)),
+            window,
+            1.0,
+        );
+        let Some(Primitive::Image { rect, uv, mask, .. }) = center else {
+            panic!("center");
+        };
+        assert_eq!(rect, r(100.0, 50.0, 200.0, 100.0));
+        assert_eq!(uv, r(0.0, 0.0, 1.0, 1.0));
+        // A máscara segue sendo a janela inteira, não o retângulo da imagem.
+        assert_eq!(mask, window);
+    }
+
+    #[test]
+    fn a_resize_only_redoes_the_placement() {
+        // RF-18.7: a mesma textura, outra janela, outra posição.
+        let config = window_config(BackgroundImageMode::Stretch, 1.0);
+        let small = window_paint(&config, texture((50, 50)), r(0.0, 0.0, 300.0, 200.0), 1.0);
+        let large = window_paint(&config, texture((50, 50)), r(0.0, 0.0, 900.0, 600.0), 2.0);
+        let (Some(Primitive::Image { rect: a, .. }), Some(Primitive::Image { rect: b, .. })) =
+            (small, large)
+        else {
+            panic!("devia desenhar");
+        };
+        assert_eq!(a, r(0.0, 0.0, 300.0, 200.0));
+        assert_eq!(b, r(0.0, 0.0, 900.0, 600.0));
     }
 
     // ---- erros ---------------------------------------------------------

@@ -10567,6 +10567,23 @@ impl App {
             _ => base_layout,
         };
 
+        // PRD-018/ADR-0062 §2: a imagem da janela, ou `None`. Montada antes do
+        // chrome porque a barra de abas precisa saber se ela está exibida
+        // (§3), e empurrada depois como a **primeira** primitiva de
+        // `Layer::Grid`. A área de conteúdo inteira em lógico, borda de 1px
+        // da janela por cima (`Layer::Modal`).
+        let window_image = background_image::window_paint(
+            &self.config.appearance.window.background_image,
+            self.background_image
+                .displayed(background_image::BackgroundImageSlot::Window),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: state.logical_width,
+                height: state.logical_height,
+            },
+            state.scale,
+        );
         let chrome_primitives = chrome::paint(
             &paint_layout,
             &state.workspace,
@@ -10590,6 +10607,7 @@ impl App {
             hover_window_button,
             bar_hover,
             hover_sessions_button,
+            window_image.is_some(),
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
@@ -10659,7 +10677,10 @@ impl App {
             }
             .unwrap_or(self.term_pal.cursor);
 
-            let mut grid_primitives = Vec::new();
+            // A imagem da janela abre a lista: acima do `clear`, abaixo de
+            // sombra, fundo, imagem do terminal e grade de todo quadro.
+            let mut grid_primitives: Vec<porecatu_render::Primitive> =
+                window_image.into_iter().collect();
             let mut cursor_blinks = false;
             // Fundo translúcido só substitui o que há atrás se a surface desta
             // janela compõe com o desktop.
