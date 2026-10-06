@@ -14,6 +14,56 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [Não lançado]
+
+O app ganha **imagem de fundo da janela**: uma PNG ou JPEG atrás da janela
+inteira — barra de abas, barra de status, margem e vão entre painéis —,
+abaixo dos quadros de terminal e visível através deles quando o terminal é
+translúcido ([PRD-018](docs/prd/prd-018-imagem-de-fundo-da-janela.md),
+[ADR-0062](docs/adr/0062-imagem-de-fundo-da-janela.md)).
+
+### Adicionado
+
+- **`[appearance.window.background_image]`** (`path`, `mode`, `opacity`), com
+  o padrão `path = ""`: sem imagem, a janela é desenhada exatamente como
+  antes. Os três modos (`stretch`, `tile`, `center`) e as regras de caminho
+  são os da imagem do terminal. A imagem é uma só, na janela inteira, e a
+  janela de configurações não a recebe
+- **Atrás da barra de abas**, que deixa de pintar o fundo opaco quando a
+  imagem está exibida: ela transparece por abas, cápsulas e pílulas, e a
+  sombra do quadro do terminal passa a aparecer na faixa de baixo da barra
+- **Através do quadro translúcido:** com `background_opacity` abaixo de
+  `1.0`, a imagem da janela aparece dentro do quadro, por baixo do fundo dele e
+  da imagem do terminal. Em janela transparente, o fundo do quadro vira furo,
+  imagem recortada pelo quadro e fundo em blend normal; o pixel final é
+  `fundo·b + imagem·i·(1 − b)`. Célula com fundo próprio cobre as duas imagens
+- **O mesmo arquivo nas duas chaves** é decodificado e guardado uma vez, e a
+  carga do arranque espera o primeiro prompt, como a do terminal. Avisos de
+  erro por imagem ("da janela" ou "do terminal"), com frases nos cinco
+  arquivos de `locales/`
+- **Três opções no grupo Aparência da tela de configurações** (caminho, modo e
+  opacidade da imagem da janela), com a nota de Aviso quando o arquivo não
+  existe, que não impede o Salvar. O catálogo passa a ter 53 opções
+- Subseção "Imagem de fundo da janela" no
+  [guia do usuário](docs/guia-do-usuario.md)
+
+### Alterado
+
+- **`BackgroundImageStore` passa a ter dois slots** (terminal e janela), com
+  chave compartilhada e textura liberada só quando nenhum slot a usa. Nenhuma
+  primitiva, shader ou dependência nova em `porecatu-render`
+
+### Dívida de verificação
+
+Os treze cenários do PRD-018 foram percorridos ao vivo no Windows, com
+medição de pixel em janela opaca e transparente contra a fórmula do ADR-0062,
+sem bug da feature. **O aval visual do dono do produto está pendente.** Um
+defeito pré-existente, aberto e a corrigir depois: em janela transparente, o
+desktop aparece pelos cantos arredondados do quadro do terminal (o `Backdrop`
+com `REPLACE` zera os pixels de fora do raio). Ficam só por teste: escala de
+janela diferente de 100%, macOS e Linux. Detalhe em
+[docs/roadmap.md](docs/roadmap.md).
+
 ## [0.9.1] - 2026-10-05
 
 O terminal ganha **imagem de fundo**: uma PNG ou JPEG atrás do texto de todo

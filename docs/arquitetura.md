@@ -298,7 +298,7 @@ A grade do terminal é um caso particular: fundo de célula vira quads em batch,
 >
 > Nada disso roda na main thread além do `metadata` e do envio da textura.
 
-> **Imagem de fundo da janela ([ADR-0062](adr/0062-imagem-de-fundo-da-janela.md), documentada, não implementada).** Reutiliza tudo o que está acima, sem primitiva nova. A imagem é a primeira primitiva de `Layer::Grid`, na janela inteira, e a barra de abas deixa de pintar o fundo opaco quando ela está exibida. Em janela transparente, o fundo de cada quadro vira furo transparente, imagem da janela recortada pelo quadro e fundo em blend normal. O estado do `App` passa a ter dois slots (terminal e janela), com uma textura só quando os dois apontam para o mesmo arquivo.
+> **Imagem de fundo da janela ([ADR-0062](adr/0062-imagem-de-fundo-da-janela.md), implementada).** Reutiliza tudo o que está acima, sem primitiva nova. A imagem é a primeira primitiva de `Layer::Grid`, na janela inteira, e a barra de abas deixa de pintar o fundo opaco quando ela está exibida. Em janela transparente, o fundo de cada quadro vira furo transparente, imagem da janela recortada pelo quadro e fundo em blend normal. O estado do `App` passa a ter dois slots (terminal e janela), com uma textura só quando os dois apontam para o mesmo arquivo.
 
 **Nenhuma cor, raio ou dimensão é hardcoded no renderer.** Tudo vem de `Config` via `ui`. É isso que torna o requisito de customização (PRD-004, PRD-005) uma questão de configuração e não de recompilação.
 

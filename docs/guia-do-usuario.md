@@ -234,7 +234,7 @@ fecha a tela junto, e, se houver alterações pendentes, pergunta antes.
 | **Geral** | idioma, diretório inicial, confirmações ao fechar aba e janela |
 | **Shell** | programa, argumentos e variáveis de ambiente do shell |
 | **Terminal** | fonte, cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
-| **Aparência** | tema, animações, opacidade e decoração da janela, posição da barra de abas, o que a aba mostra, barra de status |
+| **Aparência** | tema, animações, opacidade e decoração da janela, imagem de fundo da janela, posição da barra de abas, o que a aba mostra, barra de status |
 | **Sessão** | gravar e restaurar a sessão, restauração preguiçosa, geometria das janelas, convite de integração de shell |
 | **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |
 | **Git** | consultar o remoto e o intervalo |
@@ -505,6 +505,33 @@ A imagem é lida **fora** da thread da interface: o app abre e o terminal
 funciona sem ela, e ela aparece quando termina de carregar. Imagens muito
 grandes (dezenas de megapixels) demoram um pouco mais para aparecer, e é só
 isso que custam ao arranque.
+
+### Imagem de fundo da janela
+
+Uma segunda imagem, **PNG** ou **JPEG**, atrás da **janela inteira**: da barra de abas, da barra de status, da margem em volta dos terminais e do vão entre painéis. É uma imagem só, não uma por painel, e fica **abaixo** dos quadros de terminal. Ela aparece também pela tela de configurações, no grupo **Aparência**, logo depois de `window_opacity`.
+
+```toml
+[appearance.window.background_image]
+path = "imagens/praia.jpg"   # vazio = sem imagem (o padrão)
+mode = "stretch"             # "stretch", "tile" ou "center"
+opacity = 1.0                # 0.0 a 1.0
+```
+
+`path` sozinho já desenha a imagem na janela inteira. O caminho, o formato, os três modos e o tamanho natural (um pixel da imagem por pixel da tela) são **os mesmos** da imagem do terminal, e valem para a janela como um todo: `stretch` a estica até a janela inteira sem manter a proporção, `tile` a repete a partir do canto superior esquerdo da janela, e `center` a põe no meio da janela, com o fundo da janela em volta. Maximizar ou redimensionar a janela refaz a conta sem recarregar nada do disco.
+
+**Onde aparece.** Atrás das abas, das cápsulas e das pílulas de grupo, que continuam translúcidas e deixam a imagem transparecer na medida dos alfas que já têm. Com a imagem exibida, a barra de abas **deixa de pintar o fundo** dela, e por isso a sombra do quadro do terminal passa a aparecer na faixa de baixo da barra. Sem imagem, nada disso muda. A **janela de configurações não recebe** a imagem, nem os avisos, os menus, os tooltips e os diálogos.
+
+**Através do terminal translúcido.** Com `[terminal] background_opacity` abaixo de `1.0`, a imagem da janela aparece **dentro** do quadro do terminal, por baixo do fundo dele e da imagem do terminal, fazendo o papel do que está atrás da janela. Com a imagem da janela a `1.0`, o que está atrás da janela (o desktop) **deixa de aparecer** através do quadro; com a imagem mais transparente, ele volta na medida do que falta. Com o terminal opaco, o quadro cobre a imagem e ela só se vê fora dele.
+
+**As duas imagens juntas.** Se as duas chaves estão configuradas, dentro do quadro a imagem do terminal fica **por cima** do fundo do quadro e a da janela **por baixo** dele; fora dos quadros só aparece a da janela. Se as duas apontam para **o mesmo arquivo**, ele é lido e guardado **uma vez só**.
+
+**As opacidades.** O alfa da imagem da janela é só o `opacity` dela. Quem multiplica é a opacidade da janela: com `[appearance.window] opacity = 0.8` e a imagem a `1.0`, a imagem sai a 80% e o que está atrás da janela continua aparecendo. É diferente da imagem do terminal, que multiplica por `background_opacity`.
+
+**O que cobre a imagem da janela.** Uma célula com cor de fundo própria, posta pelo programa, cobre as duas imagens, como cobre o fundo do terminal. Numa janela transparente, uma célula assim mostra o que está atrás da janela, não a imagem da janela. As células sem cor própria deixam a imagem aparecer.
+
+**Aplicação e erros.** Mudar `path`, `mode` ou `opacity` vale na hora, em todas as janelas, sem reiniciar e sem redimensionar terminal nenhum. Arquivo inexistente, ilegível, de formato não aceito, corrompido ou grande demais **não derruba nada**: a janela abre sem imagem e um aviso diz qual arquivo e por quê, **"da janela"** ou **"do terminal"**. O mesmo arquivo ausente nas duas chaves dá dois avisos, um de cada, porque são duas configurações erradas. Na tela de configurações, o campo do caminho mostra uma nota quando o arquivo não existe, e ela não impede o Salvar.
+
+**Legibilidade.** Uma imagem forte atrás das abas e da barra de status pode atrapalhar a leitura; `opacity` é o controle. Comece com `0.3` a `0.6` e suba até a imagem aparecer sem competir com o texto.
 
 ## Selecionar texto dentro de um programa que pede o mouse (`Shift`)
 
