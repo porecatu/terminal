@@ -596,6 +596,15 @@ unsupported = "Unsupported format (PNG and JPEG only): \"{path}\""
 malformed = "Corrupted or not a valid image: \"{path}\""
 too_large = "Too large to load: \"{path}\""
 
+# Same phrases, for the window image (ADR-0062 §7, RF-18.17).
+[notice.window_background_image]
+title = "Window background image not loaded"
+not_found = "Not found: \"{path}\""
+unreadable = "Could not be read: \"{path}\""
+unsupported = "Unsupported format (PNG and JPEG only): \"{path}\""
+malformed = "Corrupted or not a valid image: \"{path}\""
+too_large = "Too large to load: \"{path}\""
+
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]
 title = "Language not found"

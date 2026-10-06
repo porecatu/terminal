@@ -555,6 +555,15 @@ unsupported = "Formato no admitido (solo PNG y JPEG): \"{path}\""
 malformed = "Dañado o no es una imagen válida: \"{path}\""
 too_large = "Demasiado grande para cargar: \"{path}\""
 
+# Mismas frases, para la imagen de la ventana (ADR-0062 §7, RF-18.17).
+[notice.window_background_image]
+title = "Imagen de fondo de la ventana no cargada"
+not_found = "No encontrado: \"{path}\""
+unreadable = "No se pudo leer: \"{path}\""
+unsupported = "Formato no admitido (solo PNG y JPEG): \"{path}\""
+malformed = "Dañado o no es una imagen válida: \"{path}\""
+too_large = "Demasiado grande para cargar: \"{path}\""
+
 [notice.language_not_found]
 title = "Idioma no encontrado"
 body = "No hay archivo para \"{language}\" (buscado en: {searched})."
