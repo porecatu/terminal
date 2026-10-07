@@ -286,6 +286,20 @@ impl Workspace {
         None
     }
 
+    /// Último recurso de `close_tab`, quando [`Self::focus_ladder`] não
+    /// achou aba visível: a aba de um grupo colapsado, procurando na mesma
+    /// direção da escada (depois de `group_index`, depois antes dele). Do
+    /// grupo, a última aba visitada (ADR-0020 §6), senão a primeira.
+    fn collapsed_fallback(&self, group_index: usize) -> Option<TabId> {
+        let split = (group_index + 1).min(self.groups.len());
+        let (before, after) = self.groups.split_at(split);
+        after
+            .iter()
+            .chain(before.iter().rev())
+            .filter(|g| g.is_collapsed())
+            .find_map(|g| g.last_active().or_else(|| g.tabs().first().copied()))
+    }
+
     /// RF-1.2/RF-1.5: remove a aba. Devolve a aba ativa do workspace
     /// depois da remoção (`None` se ele ficou sem nenhuma aba alcançável).
     /// Não bloqueia em I/O nem em confirmação: quem decide se a aba pode
@@ -316,7 +330,14 @@ impl Workspace {
             } else {
                 None
             };
-            match self.focus_ladder(group_index, next_sibling, prev_sibling) {
+            // A escada pula grupo colapsado; se só sobrou aba em grupo
+            // colapsado, ela ainda existe e a janela não está vazia --
+            // ativá-la expande o grupo (RF-2.17). Sem isso, `None` aqui
+            // fazia a UI fechar a janela com abas vivas dentro dele.
+            let next = self
+                .focus_ladder(group_index, next_sibling, prev_sibling)
+                .or_else(|| self.collapsed_fallback(group_index));
+            match next {
                 Some(next) => {
                     self.activate_tab(next);
                 }
@@ -993,6 +1014,23 @@ mod tests {
         ws.collapse_group(grupo, true);
         assert_eq!(ws.next_group(), None);
         assert_eq!(ws.prev_group(), None);
+    }
+
+    /// Fechar a única aba visível com outras dentro de grupo colapsado não
+    /// deixa o workspace sem aba ativa (o que fechava a janela): a escada
+    /// cai no grupo colapsado e ativar a aba dele o expande (RF-2.17).
+    #[test]
+    fn closing_the_last_visible_tab_falls_back_to_a_collapsed_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let grupo = ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        let solta = ws.append_ungrouped_tab("zsh", None);
+        ws.collapse_group(grupo, true);
+        assert_eq!(ws.active_tab(), Some(solta));
+
+        assert_eq!(ws.close_tab(solta), Some(a));
+        assert_eq!(ws.active_tab(), Some(a));
+        assert!(!ws.group(grupo).unwrap().is_collapsed());
     }
 
     /// Com um único grupo navegável, circular volta para ele mesmo e a aba
