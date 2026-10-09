@@ -41,19 +41,11 @@ pub(crate) use window::{DialogAnswer, Env, Press, SettingsWindow};
 
 use crate::palette;
 
-/// Fundo da linha de opção: a "linha de perfil" `#1c2028` do canvas (espec. §1.2, ADR-0060 §2). Não está em `ResolvedPalette`.
-pub(crate) const ROW_BACKGROUND: Color = palette::hex(0x1c, 0x20, 0x28);
 /// Trilho da alternância ligada, `#3f8f80` (espec. §1.5, ADR-0060 §3), e o
 /// fundo do botão Salvar -- "o par ligado da alternância" (ADR-0060 §4).
 pub(crate) const TOGGLE_ON: Color = palette::hex(0x3f, 0x8f, 0x80);
 /// Trilho da alternância desligada, `#2a3038` (espec. §1.5, ADR-0060 §3).
 pub(crate) const TOGGLE_OFF: Color = palette::hex(0x2a, 0x30, 0x38);
-
-/// Fundo do chip de atalho: `#1e232b`, o chip do drawer (espec. §2.12,
-/// ADR-0060 §3). `ResolvedPalette` não o carrega.
-pub(crate) const CHIP_BACKGROUND: Color = palette::hex(0x1e, 0x23, 0x2b);
-/// Borda do chip de atalho: `#2a2f38` (espec. §2.12, ADR-0060 §3).
-pub(crate) const CHIP_BORDER: Color = palette::hex(0x2a, 0x2f, 0x38);
 
 /// Ícone do botão de restaurar padrão: `#727a86` (ADR-0060 §2, o do botão de
 /// fechar da aba, espec. §1.7 e §2.14). `ResolvedPalette` o carrega com outro
@@ -66,13 +58,6 @@ pub(crate) const RESTORE_HOVER_BACKGROUND: Color = palette::hex(0x39, 0x40, 0x4b
 pub(crate) const RESTORE_HOVER_ICON: Color = palette::hex(0xe4, 0xe8, 0xee);
 /// Raio do botão de restaurar: 4px, o do botão de fechar da aba (espec. §1.7).
 pub(crate) const RESTORE_RADIUS: f32 = 4.0;
-
-/// Fundo do painel: o token "Drawer" `#171b21` (espec. §1.2, "painel de
-/// configurações"), citado pelo ADR-0060 §1. É a única cor da janela que
-/// `ResolvedPalette` não carrega: cabeçalho e guia usam `bar_background`
-/// (`#1b1f26`), o separador `editor_divider` (`#2a2f38`) e o título
-/// `dialog_title_text` (`#e6eaef`).
-pub(crate) const PANEL_BACKGROUND: Color = palette::hex(0x17, 0x1b, 0x21);
 
 /// Tamanho do título do cabeçalho: o token "título do painel de
 /// configurações" `15px / 500` (espec. §1.1, ADR-0060 §1).

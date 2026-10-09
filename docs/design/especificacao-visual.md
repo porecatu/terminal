@@ -57,7 +57,7 @@ Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuári
 | Pílula de grupo | `#1f242c` | **fora de uso** — a pílula é pintada com a cor cheia do grupo (§2.4) |
 | Contador do grupo | `#12151a` | também o botão de busca, o fundo do indicador de overflow (§2.18) e o traço do "+", do nome e do caret que caem sobre a cápsula de cor cheia (§2.4, §2.6) |
 | Popover | `#1a1e25` | menu de perfis, editor de grupo, paleta de comandos |
-| Drawer | `#171b21` | painel de configurações |
+| Drawer | `#171b21` | painel de configurações (`[appearance.settings] panel_background`, tematizável por `[themes.settings]`, como a linha `#1c2028`, o chip `#1e232b` e o separador do rodapé `#23272f`) |
 | Campo de rename | `#0e1116` | |
 | Cartão de perfil | `#161a20` (hover `#1b2028`) | tela de nova aba |
 | Linha de perfil | `#1c2028` | configurações |

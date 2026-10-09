@@ -54,7 +54,7 @@ pub use terminal::{
 };
 pub use theme::{
     Theme, ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeGroupEditor, ThemeGroups,
-    ThemeNotices, ThemeStatusBar, ThemeTooltip, apply as apply_theme,
+    ThemeNotices, ThemeSettings, ThemeStatusBar, ThemeTooltip, apply as apply_theme,
     overridden_keys as theme_overridden_keys,
 };
 

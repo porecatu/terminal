@@ -56,7 +56,7 @@ use super::layout::{
 use super::paint;
 use super::save::Saved;
 use super::shortcuts::{Capturing, Conflict, Shortcuts};
-use super::{Group, HEADER_GAP_PX, PANEL_BACKGROUND, TITLE_SIZE_PX};
+use super::{Group, HEADER_GAP_PX, TITLE_SIZE_PX};
 use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::input::modifiers_from;
 use crate::keymap::{Capture, Chord, Platform};
@@ -2240,7 +2240,7 @@ impl SettingsWindow {
         }
 
         let mut out = vec![
-            quad(layout.panel, PANEL_BACKGROUND),
+            quad(layout.panel, pal.settings_panel_background),
             quad(layout.sidebar, pal.bar_background),
             quad(layout.sidebar_separator, pal.editor_divider),
         ];
@@ -2285,8 +2285,11 @@ impl SettingsWindow {
         let mut popover = Vec::new();
         // Borda de 1px da janela, na camada mais alta (um pouco mais escura
         // que o fundo do painel).
-        let border =
-            chrome::window_border(self.logical_width, self.logical_height, PANEL_BACKGROUND);
+        let border = chrome::window_border(
+            self.logical_width,
+            self.logical_height,
+            pal.settings_panel_background,
+        );
         if let Some((anchor, text)) = self.hover.visible() {
             popover.extend(overlay::paint_tooltip(
                 anchor,
@@ -2364,8 +2367,9 @@ impl SettingsWindow {
 
     /// Submete o quadro. O fundo de limpeza é o do painel, que é o que
     /// ocupa a maior parte da janela.
-    pub(crate) fn render(&mut self, gpu: &mut GpuContext, frame: &Frame) {
-        self.surface.render(gpu, PANEL_BACKGROUND, frame, 1.0);
+    pub(crate) fn render(&mut self, gpu: &mut GpuContext, pal: &ResolvedPalette, frame: &Frame) {
+        self.surface
+            .render(gpu, pal.settings_panel_background, frame, 1.0);
         if self.settle_frames > 0 {
             self.settle_frames -= 1;
             self.window.request_redraw();

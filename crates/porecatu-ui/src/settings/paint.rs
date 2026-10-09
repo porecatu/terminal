@@ -25,8 +25,8 @@ use super::layout::{
     RowGeometry, banner_geometry, list_geometry,
 };
 use super::{
-    CHIP_BACKGROUND, CHIP_BORDER, Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON,
-    RESTORE_ICON, RESTORE_RADIUS, ROW_BACKGROUND, TOGGLE_OFF, TOGGLE_ON,
+    Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON, RESTORE_ICON, RESTORE_RADIUS, TOGGLE_OFF,
+    TOGGLE_ON,
 };
 use crate::chrome::centered_glyph;
 use crate::messages::msg;
@@ -38,11 +38,6 @@ use crate::toggle::{TOGGLE_KNOB_COLOR, push_toggle};
 /// Espaçamento entre letras do rótulo de seção: `letter-spacing: .8px`
 /// (ADR-0060 §2).
 const SECTION_LETTER_SPACING: f32 = 0.8;
-
-/// Separador de 1px entre as opções e o rodapé: o "separador de barra"
-/// `#23272f` (ADR-0060 §1, espec. §1.3). O binário não o pinta em nenhuma barra
-/// e `ResolvedPalette` não o carrega.
-const FOOTER_SEPARATOR: Color = palette::hex(0x23, 0x27, 0x2f);
 
 /// Tudo o que a pintura do corpo lê.
 pub(crate) struct Input<'a> {
@@ -428,7 +423,13 @@ fn paint_row(
     } else {
         pal.dialog_cancel_border
     };
-    out.push(rounded(rect, m.row_radius, ROW_BACKGROUND, border, 1.0));
+    out.push(rounded(
+        rect,
+        m.row_radius,
+        pal.settings_row_background,
+        border,
+        1.0,
+    ));
 
     let name_origin = (geometry.name_origin.0 + dx, geometry.name_origin.1 + dy);
     out.push(text(
@@ -928,14 +929,14 @@ fn paint_chips(
             height: m.chip_height,
         };
         let (border, color) = match chip.tone {
-            ChipTone::Normal => (CHIP_BORDER, input.ink(pal.menu_item_text)),
-            ChipTone::Muted => (CHIP_BORDER, pal.editor_section_text),
+            ChipTone::Normal => (pal.editor_divider, input.ink(pal.menu_item_text)),
+            ChipTone::Muted => (pal.editor_divider, pal.editor_section_text),
             ChipTone::Capturing => (pal.dialog_focus_ring, pal.editor_section_text),
         };
         out.push(rounded(
             chip_rect,
             m.chip_radius,
-            CHIP_BACKGROUND,
+            pal.settings_chip_background,
             border,
             1.0,
         ));
@@ -1071,7 +1072,7 @@ fn paint_footer(input: &Input<'_>, out: &mut Vec<Primitive>) {
             height: 1.0_f32.min(footer.height),
             ..footer
         },
-        FOOTER_SEPARATOR,
+        pal.settings_footer_separator,
     ));
     for (index, (button, rect)) in input.footer.iter().enumerate() {
         let available = input.footer_available[index];
@@ -1683,7 +1684,7 @@ mod tests {
             .iter()
             .filter(|p| {
                 matches!(p, Primitive::RoundedQuad(q)
-                if q.color == ROW_BACKGROUND && q.border_color == f.pal.dialog_focus_ring)
+                if q.color == f.pal.settings_row_background && q.border_color == f.pal.dialog_focus_ring)
             })
             .count();
         assert_eq!(accent_rows, 1);
@@ -1757,10 +1758,10 @@ mod tests {
         )
     }
 
-    fn chip_boxes(out: &[Primitive]) -> Vec<(Rect, Color)> {
+    fn chip_boxes(out: &[Primitive], chip_background: Color) -> Vec<(Rect, Color)> {
         out.iter()
             .filter_map(|p| match p {
-                Primitive::RoundedQuad(q) if q.color == CHIP_BACKGROUND => {
+                Primitive::RoundedQuad(q) if q.color == chip_background => {
                     Some((q.rect, q.border_color))
                 }
                 _ => None,
@@ -1773,7 +1774,7 @@ mod tests {
         let f = fixture();
         let state = Shortcuts::new(&f.config, Platform::Windows);
         let out = paint_shortcuts(&f, &state, "", None, None, Focus::Sidebar);
-        assert!(!chip_boxes(&out).is_empty());
+        assert!(!chip_boxes(&out, f.pal.settings_chip_background).is_empty());
         // `Nova aba` leva o chip `Ctrl+Shift+T` em mono 10.5px.
         assert!(out.iter().any(|p| matches!(
             p,
@@ -1784,9 +1785,9 @@ mod tests {
         )));
         // O chip fica na borda comum; sem captura nenhuma leva o Acento.
         assert!(
-            chip_boxes(&out)
+            chip_boxes(&out, f.pal.settings_chip_background)
                 .iter()
-                .all(|(_, border)| *border == CHIP_BORDER)
+                .all(|(_, border)| *border == f.pal.editor_divider)
         );
         // "Nenhum atalho" esmaecido.
         assert!(out.iter().any(|p| matches!(
@@ -1808,7 +1809,7 @@ mod tests {
             conflict: None,
         };
         let out = paint_shortcuts(&f, &state, "", Some(&capturing), None, Focus::Sidebar);
-        let accent: Vec<_> = chip_boxes(&out)
+        let accent: Vec<_> = chip_boxes(&out, f.pal.settings_chip_background)
             .into_iter()
             .filter(|(_, border)| *border == f.pal.dialog_focus_ring)
             .collect();

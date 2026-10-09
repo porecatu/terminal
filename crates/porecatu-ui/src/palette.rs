@@ -331,6 +331,14 @@ pub struct ResolvedPalette {
 
     // [appearance.groups] -- contador de abas do popover de destino.
     pub pill_count_text: Color,
+
+    // [appearance.settings] -- corpo da janela de configurações. A borda da
+    // linha de opção e a do chip vêm de `dialog_cancel_border` e
+    // `editor_divider`, já tematizados.
+    pub settings_panel_background: Color,
+    pub settings_row_background: Color,
+    pub settings_chip_background: Color,
+    pub settings_footer_separator: Color,
 }
 
 impl ResolvedPalette {
@@ -344,6 +352,7 @@ impl ResolvedPalette {
         let tooltip = &config.appearance.tooltip;
         let status_bar = &config.appearance.status_bar;
         let editor = &config.appearance.group_editor;
+        let settings = &config.appearance.settings;
 
         let mut group_colors = [TRANSPARENT; 6];
         for (slot, entry) in group_colors.iter_mut().zip(groups.palette.iter()) {
@@ -447,6 +456,11 @@ impl ResolvedPalette {
             editor_destructive_hover_background: cvt(editor.destructive_hover_background),
 
             pill_count_text: cvt(groups.count_foreground),
+
+            settings_panel_background: cvt(settings.panel_background),
+            settings_row_background: cvt(settings.row_background),
+            settings_chip_background: cvt(settings.chip_background),
+            settings_footer_separator: cvt(settings.footer_separator),
         }
     }
 
@@ -586,6 +600,12 @@ mod tests {
 
         assert_eq!(pal.pill_count_text, hex(0x7b, 0x83, 0x8f));
 
+        // O corpo da janela de configurações: os tokens do drawer.
+        assert_eq!(pal.settings_panel_background, hex(0x17, 0x1b, 0x21));
+        assert_eq!(pal.settings_row_background, hex(0x1c, 0x20, 0x28));
+        assert_eq!(pal.settings_chip_background, hex(0x1e, 0x23, 0x2b));
+        assert_eq!(pal.settings_footer_separator, hex(0x23, 0x27, 0x2f));
+
         assert_eq!(pal.group_color(GroupColor::Red), hex(0xef, 0x8a, 0x8a));
         assert_eq!(pal.group_color(GroupColor::Yellow), hex(0xe0, 0xb0, 0x60));
         assert_eq!(pal.group_color(GroupColor::Cyan), hex(0x5e, 0xd3, 0xbc));
@@ -716,6 +736,19 @@ mod tests {
             pal_on.resolve(TermColor::Indexed(1), false, true),
             hex(0xef, 0x8a, 0x8a),
             "RF-5.5 é convenção de texto -- fundo nunca promove, mesmo com bold_is_bright"
+        );
+    }
+
+    #[test]
+    fn a_light_theme_repaints_the_settings_window_body() {
+        let base = porecatu_config::Config::default();
+        let themed = porecatu_config::apply_theme(&base, "catppuccin-latte");
+        let pal = ResolvedPalette::from_config(&themed);
+        assert_eq!(pal.settings_panel_background, hex(0xef, 0xf1, 0xf5));
+        assert_eq!(pal.settings_row_background, hex(0xdc, 0xe0, 0xe8));
+        assert_ne!(
+            pal.settings_panel_background,
+            ResolvedPalette::from_config(&base).settings_panel_background
         );
     }
 }

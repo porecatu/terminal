@@ -720,6 +720,17 @@ number_field_width = 88
 row_gap = 8
 # Dez quadrados mais `gap: 2` em 138px, menos que um campo de texto.
 theme_swatch_size = 12
+# Cores do corpo da janela. Os defaults são os tokens do drawer do canvas
+# (espec. §1.2, §2.12); cada tema de [[themes]] pode sobrescrevê-los em
+# [themes.settings], e é isso que faz a janela acompanhar um tema claro.
+# Fundo do painel de opções ("Drawer").                               [A]
+panel_background = "#171b21"
+# Fundo e borda da linha de opção (a linha de perfil do drawer).      [A]
+row_background = "#1c2028"
+# Fundo e borda do chip de atalho.                                    [A]
+chip_background = "#1e232b"
+# Linha entre o painel e o rodapé.                                    [A]
+footer_separator = "#23272f"
 
 
 # Quadro arredondado em volta da grade do terminal -- pedido do usuário,
@@ -1270,6 +1281,12 @@ divider                      = "#ccd0da"
 destructive_foreground       = "#d20f39"
 destructive_hover_background = "#f2dee1"
 
+[themes.settings]
+panel_background = "#eff1f5"
+row_background   = "#dce0e8"
+chip_background  = "#eff1f5"
+footer_separator = "#ccd0da"
+
 [themes.window_controls]
 hover_background       = "#ccd0da"
 close_hover_background = "#d20f39"
@@ -1363,6 +1380,12 @@ divider                      = "#d5c4a1"
 destructive_foreground       = "#9d0006"
 destructive_hover_background = "#f0d9d1"
 
+[themes.settings]
+panel_background = "#fbf1c7"
+row_background   = "#ebdbb2"
+chip_background  = "#fbf1c7"
+footer_separator = "#d5c4a1"
+
 [themes.window_controls]
 hover_background       = "#d5c4a1"
 close_hover_background = "#9d0006"
@@ -1455,6 +1478,12 @@ item_hover_background        = "#e0d9c4"
 divider                      = "#e0d9c4"
 destructive_foreground       = "#dc322f"
 destructive_hover_background = "#f2e0dc"
+
+[themes.settings]
+panel_background = "#fdf6e3"
+row_background   = "#eee8d5"
+chip_background  = "#fdf6e3"
+footer_separator = "#e0d9c4"
 
 [themes.window_controls]
 hover_background       = "#e0d9c4"

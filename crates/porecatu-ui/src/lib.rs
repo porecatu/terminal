@@ -8022,7 +8022,7 @@ impl App {
         // O tema da sessão entra na linha abaixo da lista de temas (RF-16.25).
         settings.set_session_theme(self.session_theme.as_deref());
         let frame = settings.paint(env, &self.pal, &self.term_pal, gpu.text_measurer());
-        settings.render(gpu, &frame);
+        settings.render(gpu, &self.pal, &frame);
     }
 
     /// O ponto único de "para cada janela" que inclui a de configurações

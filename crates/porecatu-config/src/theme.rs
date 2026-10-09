@@ -146,6 +146,17 @@ pub struct ThemeGroupEditor {
     pub destructive_hover_background: Option<Color>,
 }
 
+/// `[themes.settings]` -- override das cores de `[appearance.settings]`
+/// (corpo da janela de configurações). Só cor: dimensões não mudam por tema.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default)]
+pub struct ThemeSettings {
+    pub panel_background: Option<Color>,
+    pub row_background: Option<Color>,
+    pub chip_background: Option<Color>,
+    pub footer_separator: Option<Color>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default)]
 pub struct Theme {
@@ -185,6 +196,7 @@ pub struct Theme {
     pub group_editor: ThemeGroupEditor,
     pub window_controls: ThemeWindowControls,
     pub status_bar: ThemeStatusBar,
+    pub settings: ThemeSettings,
 }
 
 /// Nome duplicado entre dois `[[themes]]` é erro: não há como o usuário
@@ -456,6 +468,12 @@ fn catppuccin_latte() -> Theme {
             destructive_foreground: Some(Color::hex("#d20f39")),
             destructive_hover_background: Some(Color::hex("#f2dee1")),
         },
+        settings: ThemeSettings {
+            panel_background: Some(Color::hex("#eff1f5")),
+            row_background: Some(Color::hex("#dce0e8")),
+            chip_background: Some(Color::hex("#eff1f5")),
+            footer_separator: Some(Color::hex("#ccd0da")),
+        },
         window_controls: ThemeWindowControls {
             hover_background: Some(Color::hex("#ccd0da")),
             close_hover_background: Some(Color::hex("#d20f39")),
@@ -553,6 +571,12 @@ fn gruvbox_light() -> Theme {
             divider: Some(Color::hex("#d5c4a1")),
             destructive_foreground: Some(Color::hex("#9d0006")),
             destructive_hover_background: Some(Color::hex("#f0d9d1")),
+        },
+        settings: ThemeSettings {
+            panel_background: Some(Color::hex("#fbf1c7")),
+            row_background: Some(Color::hex("#ebdbb2")),
+            chip_background: Some(Color::hex("#fbf1c7")),
+            footer_separator: Some(Color::hex("#d5c4a1")),
         },
         window_controls: ThemeWindowControls {
             hover_background: Some(Color::hex("#d5c4a1")),
@@ -652,6 +676,12 @@ fn solarized_light() -> Theme {
             destructive_foreground: Some(Color::hex("#dc322f")),
             destructive_hover_background: Some(Color::hex("#f2e0dc")),
         },
+        settings: ThemeSettings {
+            panel_background: Some(Color::hex("#fdf6e3")),
+            row_background: Some(Color::hex("#eee8d5")),
+            chip_background: Some(Color::hex("#fdf6e3")),
+            footer_separator: Some(Color::hex("#e0d9c4")),
+        },
         window_controls: ThemeWindowControls {
             hover_background: Some(Color::hex("#e0d9c4")),
             close_hover_background: Some(Color::hex("#dc322f")),
@@ -697,6 +727,8 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
     let sb = &config.appearance.status_bar;
     let wcd = crate::appearance::WindowControls::default();
     let wc = &config.appearance.window_controls;
+    let std_ = crate::appearance::Settings::default();
+    let st = &config.appearance.settings;
     // `AnsiPalette::default()` sozinho devolve os valores de `normal`
     // (comentário em `terminal/colors.rs`: existe só pra satisfazer
     // `#[serde(default)]`, `Colors::default()` é quem monta os dois
@@ -1020,6 +1052,34 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
             default: sbd.shell,
             theme_value: theme.status_bar.shell,
             set: |cfg, v| cfg.appearance.status_bar.shell = v,
+        },
+        MergeField {
+            name: "appearance.settings.panel_background",
+            current: st.panel_background,
+            default: std_.panel_background,
+            theme_value: theme.settings.panel_background,
+            set: |cfg, v| cfg.appearance.settings.panel_background = v,
+        },
+        MergeField {
+            name: "appearance.settings.row_background",
+            current: st.row_background,
+            default: std_.row_background,
+            theme_value: theme.settings.row_background,
+            set: |cfg, v| cfg.appearance.settings.row_background = v,
+        },
+        MergeField {
+            name: "appearance.settings.chip_background",
+            current: st.chip_background,
+            default: std_.chip_background,
+            theme_value: theme.settings.chip_background,
+            set: |cfg, v| cfg.appearance.settings.chip_background = v,
+        },
+        MergeField {
+            name: "appearance.settings.footer_separator",
+            current: st.footer_separator,
+            default: std_.footer_separator,
+            theme_value: theme.settings.footer_separator,
+            set: |cfg, v| cfg.appearance.settings.footer_separator = v,
         },
         MergeField {
             name: "appearance.group_editor.background",
