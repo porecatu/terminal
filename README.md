@@ -4,185 +4,69 @@
 [![ci](https://github.com/porecatu/terminal/actions/workflows/ci.yml/badge.svg)](https://github.com/porecatu/terminal/actions/workflows/ci.yml)
 [![licença: GPL-3.0-or-later](https://img.shields.io/badge/licen%C3%A7a-GPL--3.0--or--later-blue)](LICENSE)
 
-Emulador de terminal cross-platform escrito em Rust, com foco em **organização de múltiplos terminais**: abas, grupos de abas nomeados e restauração de sessão.
+Um terminal para quem trabalha com **muitos terminais abertos ao mesmo tempo**.
 
-> Status: **v1 fechado, versão `0.9.2`** — a que traz a imagem de fundo da janela (`[appearance.window.background_image]`); a `0.9.1` trouxe a imagem de fundo do terminal (`[terminal.background_image]`); a `0.9.0` trouxe a tela de configurações (engrenagem na barra de abas ou `Ctrl+Shift+O`); a `0.8.0` trouxe o idioma da interface, com o default em inglês (`language = "pt_BR"` em `[general]` devolve o português). As sete fases do [roadmap](docs/roadmap.md) — F0 (esqueleto) a F6 (polimento) — estão **fechadas**, com dívida de verificação registrada por fase (ver abaixo). `cargo run` abre uma janela com abas e grupos de terminal funcionais: motor VT, PTY, render por GPU, teclado, mouse, seleção, clipboard, ciclo de vida de aba, overflow da barra, seleção múltipla, grupos nomeados e coloridos com colapso, navegação entre grupos pela última aba visitada de cada um, editor de grupo, arraste entre grupos, animação de reflui, menu de contexto, tooltip, aviso, diálogo de confirmação, busca no scrollback, hyperlinks OSC 8, árvore de acessibilidade (`accesskit`) e uma segunda janela — tudo governado por um arquivo de configuração (`porecatu.toml`) com recarga a quente. Fechar e reabrir restaura abas, grupos, geometria de janela, diretório de trabalho (via OSC 7 ou fallback fora do Windows) e tema/zoom de sessão. Instalador nativo por plataforma publicado a partir desta versão ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)); o binário cru deixa de ser publicado com a internacionalização ([ADR-0057](docs/adr/0057-idiomas-nos-artefatos.md)).
+Quem passa o dia na linha de comando conhece a cena: dez abas chamadas "bash", nenhuma pista de qual é qual, e, ao fechar a janela, todo o contexto de trabalho vai embora. O Porecatu foi feito para resolver isso: organizar, nomear, colorir e lembrar.
 
----
+Versão atual: **0.9.2**. Funciona em Windows, Linux e macOS.
 
-## Por que
+## O que ele faz
 
-Emuladores modernos (Alacritty, WezTerm, Windows Terminal, Kitty) resolvem bem *renderização* e *conformidade VT*. O que continua ruim é a **gestão de muitos terminais abertos ao mesmo tempo**: abas viram uma fileira indistinguível de "bash", grupos não existem, e fechar a janela perde todo o contexto de trabalho.
+**Abas e grupos**
+- Agrupe abas por assunto, dê um nome e uma cor a cada grupo, e recolha o grupo quando não precisar dele. Os programas continuam rodando por trás.
+- Arraste abas entre grupos, mova um grupo inteiro e selecione várias abas de uma vez.
+- Divida uma aba em vários terminais, lado a lado ou um embaixo do outro.
 
-Porecatu ataca esse problema:
+**Ele lembra do seu trabalho**
+- Ao reabrir, as abas, os grupos, as janelas e as pastas voltam como estavam.
+- Salve uma janela inteira com um nome e reabra quando quiser.
+- Um arquivo `.porecatu` na pasta de um projeto pode dizer o que rodar quando a aba voltar.
 
-- abas com **grupos nomeados e coloridos**, colapsáveis;
-- **sessão persistente**: reabrir o app restaura abas e grupos nos mesmos diretórios;
-- **aparência totalmente configurável** — tanto o *chrome* (barra de abas, grupos) quanto o conteúdo do terminal (cores, fonte, ligaduras).
+**Do seu jeito**
+- Cores, fonte, cursor, temas (claros e escuros), atalhos de teclado e imagem de fundo, tanto no terminal quanto na janela.
+- Uma tela de configurações com tudo isso, ou, se preferir, um único arquivo de texto (`porecatu.toml`). Mudou, aplicou: sem reiniciar.
+- Interface em português ou inglês.
 
-## Recursos-alvo (v1)
+**No dia a dia**
+- Barra de status com a pasta atual, o shell e a branch do Git, e um aviso quando há commits novos no repositório remoto.
+- Busca no histórico do terminal, links clicáveis, copiar e colar, mouse funcionando dentro de programas como `htop`.
+- Mais de uma janela, tela cheia e suporte a leitores de tela.
 
-| # | Recurso | PRD | Referência visual |
-|---|---------|-----|---|
-| 1 | Abas para múltiplos terminais na mesma janela | [PRD-001](docs/prd/prd-001-abas.md) | [anatomia 2.2, 2.5](docs/design/especificacao-visual.md) |
-| 2 | Agrupamento de abas com nome e cor | [PRD-002](docs/prd/prd-002-grupos-de-abas.md) | [anatomia 2.3, 2.4, 2.10](docs/design/especificacao-visual.md) |
-| 3 | Persistência e restauração de sessão | [PRD-003](docs/prd/prd-003-persistencia-de-sessao.md) | — |
-| 4 | Aparência configurável do chrome (abas/grupos) | [PRD-004](docs/prd/prd-004-aparencia-do-chrome.md) | [tokens, seção 1](docs/design/especificacao-visual.md) |
-| 5 | Cores e fontes do terminal configuráveis | [PRD-005](docs/prd/prd-005-aparencia-do-terminal.md) | [anatomia 2.7](docs/design/especificacao-visual.md) |
+Rápido por usar a placa de vídeo para desenhar, e sem gastar processador quando nada está acontecendo.
 
-Visão de produto completa: [PRD-000](docs/prd/prd-000-visao-de-produto.md).
+## Como instalar
 
-## Estado atual
+Baixe o instalador da sua plataforma na [página de releases](https://github.com/porecatu/terminal/releases). O [guia do usuário](docs/guia-do-usuario.md) explica a instalação, a configuração e os atalhos, passo a passo.
 
-| Fase | O que entrega | Status |
-|---|---|---|
-| F0 | Workspace Cargo, janela `winit` + surface `wgpu`, CI nas três plataformas | **fechada** |
-| F1 | Terminal único: PTY, motor VT, threading, render de texto, teclado, mouse, seleção, clipboard | **fechada** |
-| F2 | Abas: modelo de workspace, barra de abas, ciclo de vida, overflow, arraste, widgets de chrome, segunda janela | **fechada** |
-| F3 | Grupos: modelo explícito, seleção múltipla, pílula e cápsula de cor, colapso, editor de grupo, arraste entre grupos, animação, navegação entre grupos | **fechada** |
-| F4 | Configuração: `porecatu-config`, hot reload, `[keybindings]`, temas, zoom, hover e sombra aprovados | **fechada** (dívida na etapa 6, ver abaixo) |
-| F5 | Sessão: `porecatu-session`, restauração, `argv` (`--config`, caminho posicional), fallback de `cwd`, convite à integração de shell, tema/zoom persistidos | **fechada** (dívida de verificação, ver abaixo) |
-| F6 | Polimento: busca no scrollback, hyperlinks OSC 8, menu do terminal, acessibilidade, métricas, empacotamento e release | **fechada** (dívida de verificação e uma métrica fora do alvo, ver abaixo) |
+Para rodar a partir do código-fonte (precisa do [Rust](https://rustup.rs)):
 
-As seis fechadas (F1 a F6) fecharam com **dívida de verificação interativa** — ver o parágrafo do CI abaixo.
-
-O que já roda hoje:
-
-- PTY cross-platform (`portable-pty`, ConPTY no Windows) com spawn, leitura, escrita, resize e encerramento
-- `alacritty_terminal` encapsulado, com snapshot de grade de tipos próprios e cor não resolvida
-- Três threads por terminal (leitura, escrita, observação do processo) e render **damage-driven**: terminal ocioso não gera frame
-- Pipelines `wgpu` de quads (com cantos arredondados via SDF) e de texto (`glyphon`, atlas em cache), com a Iosevka Fixed (terminal e chrome) e a face de ícones embutidas no binário
-- Teclado com codificação xterm, `Ctrl`/`Alt`, DECCKM, bracketed paste e IME (tecla morta do ABNT2)
-- Mouse reportado ao programa (modos 1000/1002/1003, encoding SGR 1006), seleção nos quatro modos com `Shift` forçando seleção local, cópia/cola via `arboard` e OSC 52 com leitura negada por default
-- Rolagem de scrollback por teclado e por roda, com tela alternativa tratada
-- Abas com ciclo de vida completo: criar herdando o `cwd` (OSC 7), fechar com confirmação quando há programa de tela cheia, navegar por sequência e por índice, renomear inline, e estado `Exited` para aba cujo shell saiu
-- Título com precedência — customizado, depois OSC 0/2, depois nome do shell — sincronizado com o título da janela
-- Barra de abas com layout e hit-testing como funções puras, testáveis sem GPU e sem janela; reordenação por arraste e por teclado; overflow por rolagem da trilha, com indicador de abas fora da vista e uma zona fixa à direita que não rola (hoje os botões de sessões salvas e de configurações; a engrenagem abre a [tela de configurações](docs/guia-do-usuario.md#tela-de-configurações), [PRD-016](docs/prd/prd-016-tela-de-configuracoes.md)); indicadores de atividade e de campainha
-- Grupos de abas: nomeados, coloridos por uma paleta de seis, colapsáveis (as abas saem da barra e da navegação sequencial, os processos seguem vivos), com indicador agregado na pílula e a cápsula de cor cheia por trás das abas — que continua desenhada com o grupo colapsado, porque é ela que diz de que cor o grupo é. Um "+" por grupo cria aba dentro dele
-- Seleção múltipla de abas (`Ctrl`/`Cmd`+clique alterna, `Shift`+clique estende), arraste de aba entre grupos e arraste da pílula para mover o grupo inteiro
-- Navegação **entre grupos** (`Ctrl+Shift+PageDown`/`PageUp`), caindo na última aba visitada de cada um e pulando grupo colapsado; mais `Ctrl+Shift+G` para agrupar, `Ctrl+Shift+U` para desagrupar, `Ctrl+Shift+E` para renomear e `Ctrl+Shift+K` para colapsar. Todos rebindáveis via `[keybindings]`, incluindo os defaults de macOS (F4 etapa 5)
-- Animação de reflui da trilha ao formar grupo e ao colapsar/expandir, dirigida pelo event loop — sem thread de timer e sem loop de render contínuo
-- Cinco widgets de chrome próprios, desenhados por cima do terminal: aviso do app, diálogo de confirmação, menu de contexto (de aba e de grupo), tooltip e editor de grupo. Nenhum diálogo nativo do sistema
-- Múltiplas janelas: cada uma com seu conjunto de abas e sua surface, nascendo em cascata a partir da que a criou
-
-A **F4 (configuração) fechou** em seis etapas: `porecatu-config` (structs `serde`, defaults completos, resolução de caminho por `PORECATU_CONFIG` ou o padrão da plataforma — a flag `--config` já tinha a precedência implementada em `resolve_config_path`, mas até a etapa 5 da F5 nada no binário lia `argv` para chamá-la com um valor), toda a barra e o terminal lendo `Config` em vez de constante, hot reload (`notify`, três classes de chave — aplica a quente, aplica com recálculo de grade, exige reinício), `enum Action` + parser de `[keybindings]` em três níveis (comum → plataforma, com os defaults de macOS finalmente respondendo), temas nomeados, zoom de fonte por atalho, `animations = false`, e as duas mudanças visuais aprovadas ([ADR-0032](docs/adr/0032-interface-do-v1-fechada.md)): hover por brilho e sombra em camadas nos cinco widgets de chrome. Dívida registrada em [docs/roadmap.md](docs/roadmap.md): zoom por atalho é sempre do processo (não por aba), e a entrada de cor por hexadecimal do editor de grupo não foi implementada.
-
-A **F5 (sessão) fechou** em seis etapas: `porecatu-session` nasce (schema versionado, escrita atômica, tabela de recuperação); gravação debounçada na UI; o terceiro estado da aba (`NotStarted`, restauração preguiçosa); restauração no start (geometria, monitor, grupos e abas, aba ativa); `argv` no binário (`--config`, caminho posicional, `--help`, `--version`) e o fallback de `cwd` por `sysinfo` fora do Windows; e o convite à integração de shell (nota no grid, snippet por shell embutido de [docs/reference/integracao-de-shell.md](docs/reference/integracao-de-shell.md), dispensa definitiva digitada no terminal) mais tema e zoom de sessão persistidos. `porecatu-session` deixou de ser stub, e a restauração de sessão existe de ponta a ponta. Detalhe completo, incluindo a dívida de verificação de cada etapa, em [docs/roadmap.md](docs/roadmap.md).
-
-A **F6 (polimento) fechou** em seis etapas, e com ela **o v1 inteiro**: busca no scrollback (barra sobreposta, sem camada nova) e hyperlinks OSC 8 (`Ctrl`/`Cmd`+clique, `file` revelado no gerenciador de arquivos); quatro dos sete requisitos aprovados e nunca entregues achados ao auditar o código (avisos de config no arranque, aviso de fonte ausente, fallback de GPU sem `panic`, botão de configurações deixando de ser inerte — dois outros foram cortados com o alcance investigado, decisão do usuário); árvore de acessibilidade via `accesskit` sobre o chrome (barra de abas e cinco widgets, grade do terminal fora do v1); e, fechando a fase, instrumentação das cinco métricas do [PRD-000](docs/prd/prd-000-visao-de-produto.md) por `Instant` (`PORECATU_TRACE`) — quatro bateram o alvo, uma não (tempo até o primeiro prompt, dominado por inicialização de GPU/spawn do shell, não pelo código do app) —, instalador nativo por plataforma (MSI verificado de ponta a ponta nesta máquina; `.deb`, AppImage e `.app`/`.dmg` só por CI), `--locked` no `ci.yml` (última pendência da F0) e a primeira versão publicada, **`0.7.0`** — não `1.0.0` como o [ADR-0044](docs/adr/0044-empacotamento-e-release.md) tinha decidido, revisto pelo [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md) por decisão do dono do produto. [Guia do usuário](docs/guia-do-usuario.md) novo, cobrindo instalação, config, atalhos e a convenção do `Shift`. Detalhe completo em [docs/roadmap.md](docs/roadmap.md).
-
-**Depois do v1**, fora da ordem de fases: a **barra de status** ([ADR-0048](docs/adr/0048-barra-de-status.md)) com o segmento de **Git** ([ADR-0049](docs/adr/0049-branch-git-na-barra-de-status.md)) e a **sincronização com o remoto** ([PRD-013](docs/prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](docs/adr/0052-sincronizacao-com-o-remoto-do-git.md)); o arquivo de projeto **`.porecatu`** ([PRD-012](docs/prd/prd-012-comando-de-projeto-por-diretorio.md), [ADR-0051](docs/adr/0051-arquivo-de-projeto-porecatu.md)); **tela cheia** por `F11` ([ADR-0050](docs/adr/0050-tela-cheia.md)); os **painéis divididos** ([PRD-006](docs/prd/prd-006-paineis-divididos.md), [ADR-0053](docs/adr/0053-paineis-divididos.md)); e as **sessões nomeadas** ([PRD-014](docs/prd/prd-014-sessoes-nomeadas.md), [ADR-0054](docs/adr/0054-sessoes-nomeadas.md), [ADR-0055](docs/adr/0055-botao-e-popover-de-sessoes.md)) — todos implementados. O **idioma da interface** ([PRD-015](docs/prd/prd-015-idioma-da-interface.md), [ADR-0056](docs/adr/0056-catalogo-de-textos-da-interface.md), [ADR-0057](docs/adr/0057-idiomas-nos-artefatos.md)) está **implementado**: `[general] language` escolhe entre arquivos `locales/en_US.toml` e `pt_BR.toml` em disco, com `en_US` como default a partir da `0.8.0`, troca ao vivo e um arquivo do usuário que corrige uma frase ou acrescenta um idioma ([guia do usuário](docs/guia-do-usuario.md)). Uma aba pode ser dividida em vários terminais, recursivamente, com o divisor sendo só o vão entre os quadros e o foco marcado pelo cursor; a divisão, as proporções e o diretório de cada painel sobrevivem ao fechar e reabrir o app. Uma janela inteira — grupos, abas, painéis — pode ser salva com um nome e reaberta numa janela nova a qualquer momento, pelo botão de marcador na barra ou por `Ctrl+Shift+S`, independente da sessão automática. A **tela de configurações** ([PRD-016](docs/prd/prd-016-tela-de-configuracoes.md), [ADR-0058](docs/adr/0058-escrita-do-arquivo-de-configuracao.md), [ADR-0059](docs/adr/0059-janela-de-configuracoes.md), [ADR-0060](docs/adr/0060-anatomia-da-tela-de-configuracoes.md)) também está **implementada**, a partir da `0.9.0`: uma janela própria, aberta pela engrenagem ou por `settings.open`, com nove grupos de opções, Salvar e Descartar, restaurar padrão, remapeamento de atalhos por captura de tecla e escolha de tema — e que grava no `porecatu.toml` só as chaves que o usuário mexeu, preservando comentários, ordem e final de linha ([guia do usuário](docs/guia-do-usuario.md#tela-de-configurações)). As etapas de cada um estão em [docs/roadmap.md](docs/roadmap.md).
-
-O CI passa nas três plataformas (**603 testes**, `clippy -D warnings` limpo). A **verificação interativa é dívida assumida**: o critério de saída das fases exigia gesto de verdade — `vim`/`htop`/`fzf` usáveis, mouse dentro do `htop`, copiar e colar no Wayland, acentuação ABNT2, arraste de aba e de grupo, seleção múltipla, editor de grupo, duas janelas em monitores de DPI diferente, teclado de verdade nos atalhos —, e a proteção de foco do Windows bloqueia input sintético de teclado na maioria dos casos (mouse sintético funciona e foi usado para confirmar hover/sombra por captura de tela e para focar aba `NotStarted` na F5; teclado sintético funcionou pontualmente na etapa 6 da F6, para medir latência, não para nenhum gesto de produto). As fases fecharam com cobertura automatizada mais smoke test, e o que não foi confirmado está escrito por fase em [docs/roadmap.md](docs/roadmap.md). **Todas as sete fases do roadmap estão fechadas.**
-
-## Design
-
-O registro visual está em [`docs/design/`](docs/design/README.md) — e o **alvo é o binário**, não o desenho (ver abaixo).
-
-- [**Mockup estático**](docs/design/mockup-estatico.html) — o ponto de partida do desenho, abre com duplo clique e sem dependências. Referência **histórica**: onde ele e o binário divergem, o binário é o alvo ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
-- [**Especificação visual**](docs/design/especificacao-visual.md) — tokens, anatomia por componente, tabela de fases, rastreabilidade design ↔ requisito. Descreve o que o binário desenha hoje, e é atualizada quando ele muda
-- [Canvas original](https://claude.ai/design/p/b0bc7589-f967-40cb-98ab-caef4070a95a?file=Terminal+Multiplataforma.dc.html) — interativo, em claude.ai
-
-**A interface como está é o alvo.** O que o binário desenha com a configuração padrão é normativo para a aparência; a especificação registra esses valores e o [`porecatu.example.toml`](docs/config/porecatu.example.toml) os carrega como default. Nenhuma mudança de aparência é feita sem aval do dono do produto — inclusive as que a documentação já chamou de "dívida a pagar" ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md), que supersede em parte o [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md)). Isso não afrouxa a regra de procedência: valor de aparência sem origem declarada na especificação continua sendo erro.
-
-> O mockup mostra o produto **completo**, não o v1. Perfis e paleta de comandos são `[v2]`; o painel de configurações saiu dessa lista como **janela própria**, não como o drawer do canvas ([PRD-016](docs/prd/prd-016-tela-de-configuracoes.md), implementada); a barra de status **saiu dessa lista** e está no produto ([ADR-0048](docs/adr/0048-barra-de-status.md)), e os **painéis divididos** saíram dela em 2026-09-15 ([PRD-006](docs/prd/prd-006-paineis-divididos.md), [ADR-0053](docs/adr/0053-paineis-divididos.md)) e estão implementados; o **cabeçalho de painel** que o canvas desenha junto com eles foi recusado, e continua `[v2]` por decisão de não fazer. A faixa de identidade da barra de título (logo, nome do app, título da aba ativa) também segue `[v2]`; os controles de janela e o resize sem decoração nativa já são `[v1]` fora do macOS ([ADR-0027](docs/adr/0027-controles-de-janela-e-resize-proprios.md)). Consulte a tabela de fases antes de implementar. Ver [ADR-0009](docs/adr/0009-referencia-visual-e-reconciliacao.md) e [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md).
-
-## Stack
-
-| Camada | Escolha | ADR |
-|--------|---------|-----|
-| Janela + eventos | `winit` | [ADR-0001](docs/adr/0001-stack-de-gui.md) |
-| Render GPU | `wgpu` | [ADR-0001](docs/adr/0001-stack-de-gui.md) |
-| Shaping/atlas de texto | `glyphon` + `cosmic-text` | [ADR-0001](docs/adr/0001-stack-de-gui.md) |
-| Motor VT / grid | `alacritty_terminal` | [ADR-0002](docs/adr/0002-motor-vte.md) |
-| Configuração | TOML (`serde` + `toml`) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
-| Escrita da configuração (tela de configurações) | `toml_edit`, edição por chave preservando comentários e formatação, gravação atômica | [ADR-0058](docs/adr/0058-escrita-do-arquivo-de-configuracao.md) |
-| PTY | `portable-pty` (ConPTY no Windows) | [ADR-0004](docs/adr/0004-pty-cross-platform.md) |
-| Encerramento de árvore de processo (Windows) | `win32job` (Job Object) + `sysinfo` (varredura complementar) | [ADR-0033](docs/adr/0033-job-object-encerramento-de-processo.md) |
-| Persistência de sessão | JSON versionado em state dir, com DTO próprio por versão de schema | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md), [ADR-0036](docs/adr/0036-formato-do-arquivo-de-sessao.md) |
-| Diretório de trabalho da aba | OSC 7, com fallback por `sysinfo` no Linux e macOS; sem fallback no Windows | [ADR-0005](docs/adr/0005-persistencia-de-sessao.md), [ADR-0038](docs/adr/0038-fallbacks-de-cwd.md) |
-| Clipboard | `arboard` | [ADR-0013](docs/adr/0013-mouse-selecao-e-clipboard.md) |
-| Acessibilidade | `accesskit_winit` sobre o chrome (barra de abas e os cinco widgets); grade fora do v1 | [ADR-0001](docs/adr/0001-stack-de-gui.md), [ADR-0043](docs/adr/0043-arvore-de-acessibilidade.md) |
-| Abrir/revelar URI do sistema | crate wrapper (o `unsafe` fica nele; a regra do workspace segue sem exceção) | [ADR-0042](docs/adr/0042-hyperlinks-osc-8.md) |
-| Consulta ao remoto do Git | o `git` do sistema, lançado como processo pela biblioteca padrão, numa thread de vida curta — sem crate novo e sem `unsafe` | [ADR-0052](docs/adr/0052-sincronizacao-com-o-remoto-do-git.md) |
-| Fontes | Iosevka Fixed (OFL-1.1, terminal e chrome) + Lucide (ISC), embutidas | [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md) |
-| Ícone do app | `png` (decodifica em runtime) + `winres` num `build.rs` (recurso PE no Windows) | — |
-| Imagem de fundo do terminal | `image`, só com as features `png` e `jpeg`, decodificando fora da main thread | [ADR-0061](docs/adr/0061-imagem-de-fundo-do-terminal.md) |
-| Imagem de fundo da janela | o mesmo `image` e a mesma primitiva `Image` do terminal, sem dependência nova; dois slots de estado | [ADR-0062](docs/adr/0062-imagem-de-fundo-da-janela.md) |
-| Caminhos do usuário | `dirs` (home como diretório inicial de aba; caminho de config) | [ADR-0003](docs/adr/0003-formato-de-configuracao.md) |
-| Referência visual | o binário; design canvas como histórico | [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md) |
-| Textos da interface | arquivos TOML por idioma em disco (`locales/`), mesclados por frase; crate próprio `porecatu-locale`, sem crate de i18n | [ADR-0056](docs/adr/0056-catalogo-de-textos-da-interface.md) |
-| Empacotamento e release | instalador nativo por plataforma com `locales/` dentro, primeira versão `0.7.0`, sem assinatura de código; sem binário cru | [ADR-0044](docs/adr/0044-empacotamento-e-release.md), [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md), [ADR-0057](docs/adr/0057-idiomas-nos-artefatos.md) |
-| Toolchain | stable pinada, edition 2024 | [ADR-0011](docs/adr/0011-toolchain-rust.md) |
-| Licença | GPL-3.0-or-later | [ADR-0010](docs/adr/0010-licenciamento.md) |
-
-Plataformas-alvo do v1: **Windows 10+, Linux (X11/Wayland), macOS 12+**.
-
-## Arquitetura
-
-Workspace Cargo multi-crate. Detalhes em [docs/arquitetura.md](docs/arquitetura.md).
-
-```
-porecatu/
-├── src/main.rs             # binário: chama porecatu_ui::run()
-├── crates/
-│   ├── porecatu-core/      # modelo de domínio: Workspace, Group, Tab, IDs
-│   ├── porecatu-config/    # parse TOML, defaults, hot reload
-│   ├── porecatu-pty/       # abstração de PTY sobre portable-pty
-│   ├── porecatu-term/      # wrapper de alacritty_terminal, snapshot de grid
-│   ├── porecatu-render/    # wgpu: pipelines de quad, texto, arredondamento
-│   ├── porecatu-ui/        # event loop winit, layout, hit-testing, roteamento de input
-│   └── porecatu-session/   # serialização/restauração de sessão
-├── build.rs                # embute o .ico como recurso PE no Windows (winres)
-├── assets/
-│   ├── fonts/              # Iosevka + Lucide embutidas no binário
-│   └── icon/               # porecatu.png (embutido) e porecatu.ico
-└── docs/
+```bash
+git clone https://github.com/porecatu/terminal.git
+cd terminal
+cargo run
 ```
 
-Versões travadas por igualdade exata onde a API quebra a cada release: `alacritty_terminal = "=0.26.0"` e `wgpu = "=30.0.1"` ([ADR-0002](docs/adr/0002-motor-vte.md), [ADR-0001](docs/adr/0001-stack-de-gui.md)). Toolchain em `rust-toolchain.toml`, com job canário semanal contra a stable do dia ([ADR-0011](docs/adr/0011-toolchain-rust.md)).
+## Estado do projeto
 
-## Documentação
+Todas as funções planejadas para a primeira versão estão prontas, e outras vieram depois, como painéis divididos, sessões nomeadas e a tela de configurações.
 
-- [docs/guia-do-usuario.md](docs/guia-do-usuario.md) — instalação, config, atalhos, integração de shell, o `.porecatu`, commits novos no remoto do Git, painéis divididos, a convenção do `Shift`
-- [CLAUDE.md](CLAUDE.md) — guia operacional para agentes e contribuidores
-- [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
-- [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, fases, histórico de decisões (o mockup é histórico, ver [ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
-- [docs/adr/](docs/adr/) — Architecture Decision Records
-- [docs/prd/](docs/prd/) — Product Requirement Documents
-- [docs/roadmap.md](docs/roadmap.md) — fases de entrega
-- [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo fechado de ações vinculáveis a teclas
-- [docs/reference/arquivo-de-projeto.md](docs/reference/arquivo-de-projeto.md) — formato do `.porecatu`, o arquivo com que um projeto declara o que rodar ao restaurar a aba
-- [docs/reference/integracao-de-shell.md](docs/reference/integracao-de-shell.md) — snippets de OSC 7 por shell, fonte única do que o convite do RF-3.1 mostra
-- [docs/config/porecatu.example.toml](docs/config/porecatu.example.toml) — configuração de referência comentada
+O Windows é a plataforma mais testada no uso real. Linux e macOS passam pelos testes automáticos, mas têm menos horas de uso. O que ainda falta conferir em cada fase está registrado no [roadmap](docs/roadmap.md).
 
-## Nome
+## Para saber mais
+
+- [Guia do usuário](docs/guia-do-usuario.md): instalação, configuração, atalhos
+- [Configuração de exemplo](docs/config/porecatu.example.toml): todas as opções, comentadas
+- [Visão do produto](docs/prd/prd-000-visao-de-produto.md): por que o Porecatu existe
+- [Roadmap](docs/roadmap.md): o que foi feito e o que vem a seguir
+
+Para quem quer contribuir: [CONTRIBUTING.md](CONTRIBUTING.md), [arquitetura](docs/arquitetura.md) e as [decisões técnicas](docs/adr/).
+
+## O nome
 
 Porecatu é uma cidade do norte do Paraná. O nome vem do tupi e significa **"salto bonito"**.
 
 ## Licença
 
-**GPL-3.0-or-later.** Texto integral em [LICENSE](LICENSE); a decisão e suas alternativas em [ADR-0010](docs/adr/0010-licenciamento.md).
+**GPL-3.0-or-later.** Texto completo em [LICENSE](LICENSE). Copyright © 2026 Leonardo Otaviano Pedrozo.
 
-Copyright © 2026 Leonardo Otaviano Pedrozo.
-
-A escolha da versão 3 não é estética: `winit` e `alacritty_terminal` são Apache-2.0, e a FSF declara Apache-2.0 **incompatível com a GPLv2**. A v3 é compatível com toda a stack travada nos ADRs.
-
-### Fontes embutidas
-
-O binário embute duas faces de texto da **[Iosevka](https://typeof.net/Iosevka/)** (Iosevka Fixed 400/500, terminal **e** chrome — mesma família nos dois, [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md)), Copyright © 2015-2026 Renzhi Li, sob a [SIL Open Font License 1.1](assets/fonts/LICENSE-OFL-iosevka.txt). São recortadas por [`scripts/subset-fonts.py`](scripts/subset-fonts.py), o que a OFL da Iosevka permite por não ter cláusula de Reserved Font Name. Decisão e medições em [ADR-0025](docs/adr/0025-iosevka-no-lugar-da-ibm-plex.md), unificação de família no [ADR-0026](docs/adr/0026-chrome-unificado-em-iosevka-fixed.md).
-
-Embute também uma face de ícones, **[Lucide](https://lucide.dev)**, Copyright © Lucide Contributors, sob a [licença ISC](assets/fonts/LICENSE-ISC-lucide.txt) — é ela que desenha o botão de fechar, o caret do grupo e os chevrons de overflow, que nenhuma das faces de texto cobre. Decisão em [ADR-0024](docs/adr/0024-face-de-icones.md).
-
-## Contribuindo
-
-Convenções, processo de ADR e verificação local em [CONTRIBUTING.md](CONTRIBUTING.md).
-
-```bash
-git clone https://github.com/porecatu/terminal.git
-cd terminal
-
-cargo run                    # abre a janela com um terminal
-cargo test --workspace       # 404 testes
-python scripts/verify-docs.py
-```
+O programa embute duas fontes: a [Iosevka](https://typeof.net/Iosevka/) (SIL Open Font License 1.1, [texto](assets/fonts/LICENSE-OFL-iosevka.txt)) e os ícones da [Lucide](https://lucide.dev) (licença ISC, [texto](assets/fonts/LICENSE-ISC-lucide.txt)).
