@@ -14,10 +14,37 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
-## [Não lançado]
+## [0.9.3] - 2026-10-15
+
+Versão de correções: minimizar e restaurar a janela não apaga mais o
+terminal, a tela de configurações acompanha os temas claros e a imagem de
+fundo da janela deixa de furar até o desktop.
 
 ### Corrigido
 
+- **Minimizar e restaurar a janela não apaga mais o terminal.** Com a janela
+  maximizada, o Windows relata o tamanho do ícone minimizado (160×28), e o app
+  levava todo terminal a uma linha de 19 colunas; o ConPTY guardava essa tela
+  e, ao restaurar, sobrava só o fim do prompt, cortado à esquerda, com o
+  cursor no topo. O tamanho relatado com a janela minimizada passa a ser
+  ignorado, e um tamanho igual ao atual não chega mais ao PTY
+- **A janela restaurada não fica mais preta até o mouse passar por cima:** um
+  quadro extra é desenhado depois de reconfigurar a surface, e nenhum com a
+  janela minimizada
+- **A sessão não grava mais a geometria de uma janela minimizada**
+  (`(-32000, -32000)` e 160×28), que a reabriria fora da tela ou minúscula:
+  vale a última geometria vista com a janela exibida
+- **Fechar a última aba visível não fecha mais a janela quando sobram abas
+  dentro de um grupo colapsado:** a aba ativa passa a ser uma delas, e o grupo
+  se expande (RF-2.17)
+- **A tela de configurações acompanha o tema:** o fundo do painel, da linha
+  de opção, do chip de atalho e o separador do rodapé eram fixos e escuros, e
+  num tema claro só a guia mudava
+- **Com imagem de fundo da janela, o fundo translúcido do terminal não fura
+  mais até o desktop:** quadro e célula fazem blend sobre a imagem, e o
+  resultado não depende mais de a janela ter nascido transparente ou opaca
+  ([ADR-0063](docs/adr/0063-imagem-da-janela-sem-furo-ate-o-desktop.md)).
+  Pânico passa a ser registrado em `crash.log`, ao lado do `session.json`
 - **Em janela transparente, o desktop não aparece mais pelos cantos
   arredondados do quadro do terminal**, com ou sem imagem de fundo da janela.
   O fundo do quadro (`Backdrop` com `REPLACE`) escrevia o retângulo inteiro e
@@ -26,6 +53,17 @@ primeiro release.
   (apagar com cobertura e somar a cor): igual ao de antes no miolo, intacto
   fora do raio e proporcional na borda. O contorno externo do quadro faz agora
   antialiasing com o que está embaixo
+
+### Adicionado
+
+- **`[appearance.settings]`** `panel_background`, `row_background`,
+  `chip_background` e `footer_separator`, com os valores antigos como padrão,
+  sobrescritos por `[themes.settings]` nos três temas claros
+
+### Dependências
+
+- Atualizações de patch pelo Dependabot: `serde_json` 1.0.152 e
+  `accesskit_winit` 0.34.1
 
 ## [0.9.2] - 2026-10-06
 
