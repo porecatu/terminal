@@ -223,9 +223,16 @@ impl TermEngine {
         self.parser.advance(&mut self.term, styled.as_bytes());
     }
 
-    /// Redimensiona a grade.
-    pub fn resize(&mut self, rows: usize, cols: usize) {
+    /// Redimensiona a grade. Devolve `false` sem tocar nada quando o
+    /// tamanho pedido já é o atual -- quem chama usa isso para não
+    /// repassar ao PTY um resize que não muda nada (o ConPTY repinta a
+    /// tela inteira a cada resize, mesmo de tamanho igual).
+    pub fn resize(&mut self, rows: usize, cols: usize) -> bool {
+        if self.term.screen_lines() == rows && self.term.columns() == cols {
+            return false;
+        }
         self.term.resize(TermSize { rows, cols });
+        true
     }
 
     /// Rola o scrollback (PRD-010 RF-10.12 a RF-10.14). Sem efeito na tela

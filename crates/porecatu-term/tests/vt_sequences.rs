@@ -528,3 +528,18 @@ fn links_distintos_adjacentes_nao_se_fundem() {
     assert_eq!(snap.hyperlink_spans[0].end_col, 1);
     assert_eq!(snap.hyperlink_spans[1].start_col, 2);
 }
+
+#[test]
+fn resize_para_o_mesmo_tamanho_nao_e_aplicado() {
+    let (mut term, _rx) = engine(3, 10);
+    term.advance(b"abc");
+
+    assert!(!term.resize(3, 10));
+    assert!(term.resize(4, 10));
+    assert!(!term.resize(4, 10));
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+    assert_eq!(cell_char(&snap, 0, 0), 'a');
+    assert_eq!(snap.cursor.position, Some((0, 3)));
+}

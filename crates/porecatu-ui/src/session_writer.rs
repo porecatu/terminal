@@ -86,6 +86,26 @@ pub fn window_monitor(window: &Window) -> Option<MonitorIdV1> {
     })
 }
 
+/// Geometria e monitor de uma janela, como a sessão os grava.
+pub type Placement = (GeometryV1, Option<MonitorIdV1>);
+
+/// O que a sessão grava de uma janela. Minimizada, o Windows relata a
+/// janela em `(-32000, -32000)` com o tamanho do ícone (160×28) e
+/// `maximized = false`: gravar isso reabriria a janela fora da tela ou
+/// minúscula. Nesse caso vale a última geometria vista com a janela
+/// exibida (`last_shown`); sem uma (minimizada antes do primeiro
+/// `Moved`/`Resized`, não deveria acontecer), lê na hora mesmo assim.
+pub fn session_placement(
+    minimized: Option<bool>,
+    last_shown: Option<&Placement>,
+    read_now: impl FnOnce() -> Placement,
+) -> Placement {
+    match (minimized, last_shown) {
+        (Some(true), Some(last)) => last.clone(),
+        _ => read_now(),
+    }
+}
+
 /// Monta o `WindowV1` de uma janela a partir das peças já extraídas --
 /// puro, testável sem um `winit::window::Window` real (`cwd_fallback` é
 /// injetado pelo mesmo motivo: `App::build_session_file` é quem tem
@@ -728,5 +748,51 @@ mod tests {
         let (cwd, note) = resolve_tab_cwd(None, true, &home);
         assert_eq!(cwd, None);
         assert_eq!(note, None);
+    }
+
+    /// Janela maximizada e depois minimizada: o que o Windows relata
+    /// nesse estado nunca chega ao arquivo.
+    #[test]
+    fn minimized_window_saves_last_shown_placement() {
+        let shown = (
+            GeometryV1 {
+                x: -8,
+                y: -8,
+                width: 1920,
+                height: 1032,
+                maximized: true,
+            },
+            None,
+        );
+        let iconic = || {
+            (
+                GeometryV1 {
+                    x: -32000,
+                    y: -32000,
+                    width: 160,
+                    height: 28,
+                    maximized: false,
+                },
+                None,
+            )
+        };
+        assert_eq!(session_placement(Some(true), Some(&shown), iconic), shown);
+    }
+
+    #[test]
+    fn shown_window_saves_what_it_reads_now() {
+        let last = (geometry(0), None);
+        let now = (geometry(830), None);
+        assert_eq!(
+            session_placement(Some(false), Some(&last), || now.clone()),
+            now
+        );
+        assert_eq!(session_placement(None, Some(&last), || now.clone()), now);
+    }
+
+    #[test]
+    fn minimized_without_last_shown_reads_now() {
+        let now = (geometry(10), None);
+        assert_eq!(session_placement(Some(true), None, || now.clone()), now);
     }
 }

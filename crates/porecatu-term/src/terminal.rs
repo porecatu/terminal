@@ -288,12 +288,14 @@ impl Terminal {
     /// (travando o motor por um instante, igual a qualquer outro acesso);
     /// o lado do PTY (`ioctl`/`ResizePseudoConsole`, o que avisa o
     /// processo filho) é aplicado pela thread de observação, que é quem
-    /// tem o `PtyHandle` -- ver `watch_loop`. Perder um resize em trânsito
-    /// não é grave: o próximo `Resized` da janela manda o tamanho atual de
-    /// novo.
+    /// tem o `PtyHandle` -- ver `watch_loop`. Tamanho igual ao atual do
+    /// motor não chega ao PTY: o ConPTY repinta a tela a cada resize, e
+    /// restaurar uma janela minimizada manda de novo o tamanho que ela já
+    /// tinha.
     pub fn resize(&self, rows: usize, cols: usize) {
-        lock(&self.engine).resize(rows, cols);
-        let _ = self.resize.send((rows as u16, cols as u16));
+        if lock(&self.engine).resize(rows, cols) {
+            let _ = self.resize.send((rows as u16, cols as u16));
+        }
     }
 
     /// Hot reload de `[terminal.cursor]`: troca o cursor de default sem

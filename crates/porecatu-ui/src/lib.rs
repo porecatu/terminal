@@ -673,6 +673,39 @@ fn grid_size_for_rect(content: Rect, cell_metrics: CellMetrics) -> (usize, usize
     (rows, cols)
 }
 
+/// O tamanho que a janela relata serve para redimensionar a grade? Não com
+/// ela minimizada: o Windows relata o tamanho do ícone minimizado (160×28
+/// numa janela que estava maximizada, 0×0 em outros casos), e
+/// `grid_size_for_rect` levaria toda aba a uma linha de ~19 colunas. Ir a
+/// isso e voltar não é sem perda: o ConPTY guarda a tela de 1×19 e, ao
+/// voltar ao tamanho real, repinta a grade a partir dela -- o texto some,
+/// sobra o fim do prompt cortado à esquerda e o cursor vai para o topo.
+/// Minimizada, a grade fica como estava; o `Resized` da restauração (já
+/// com `is_minimized() == false`) traz o tamanho real.
+fn window_size_is_usable(width: u32, height: u32, minimized: Option<bool>) -> bool {
+    width > 0 && height > 0 && minimized != Some(true)
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::window_size_is_usable;
+
+    #[test]
+    fn minimized_or_zero_size_is_not_usable() {
+        assert!(!window_size_is_usable(0, 0, None));
+        assert!(!window_size_is_usable(0, 600, Some(false)));
+        assert!(!window_size_is_usable(800, 0, Some(false)));
+        // Tamanho do ícone de uma janela maximizada que foi minimizada.
+        assert!(!window_size_is_usable(160, 28, Some(true)));
+    }
+
+    #[test]
+    fn normal_size_is_usable() {
+        assert!(window_size_is_usable(800, 600, Some(false)));
+        assert!(window_size_is_usable(800, 600, None));
+    }
+}
+
 /// RF-6.4/RF-6.14: `pane_rect` comporta o mínimo de `[panes]`? Calculado
 /// com a mesma `grid_size_for_rect`/`pane_content_rect` que o spawn e o
 /// resize de verdade usam -- nunca uma conta paralela (é a régua explícita
@@ -1187,6 +1220,17 @@ struct WindowState {
     /// aquilo vira de fato um agendamento (RF-3.6, `enabled = false`
     /// nunca marca dirty no scheduler); esta janela só registra o fato.
     session_dirty: bool,
+    /// Última geometria (e monitor) vista com a janela exibida, para a
+    /// sessão não gravar a de janela minimizada -- ver
+    /// [`session_writer::session_placement`]. Atualizada em `Moved`/
+    /// `Resized`, só fora do estado minimizado.
+    last_shown_placement: Option<session_writer::Placement>,
+    /// Quadros extras a desenhar depois de reconfigurar a surface. No
+    /// Windows o primeiro present depois de `configure` pode não chegar à
+    /// tela (mesma causa do `settle_frames` da janela de configurações):
+    /// restaurar uma janela minimizada a deixava preta até o mouse passar
+    /// por cima. O render é damage-driven, então nada pede o segundo sozinho.
+    settle_frames: u8,
     /// Barra de busca (ADR-0041), o sexto widget de chrome -- estado
     /// efêmero de janela, amarrado à aba em que foi aberta (mesma
     /// classificação de `selection`, ADR-0041 §8). `redraw` fecha sozinha
@@ -2010,6 +2054,8 @@ impl WindowState {
             selection: Selection::default(),
             last_titlebar_click: None,
             session_dirty: false,
+            last_shown_placement: None,
+            settle_frames: 1,
             search: None,
             git: std::cell::RefCell::new(git::GitInfo::default()),
             access_adapter,
@@ -2114,6 +2160,31 @@ impl WindowState {
     /// `Resized`, `App::window_event`).
     fn mark_session_dirty(&mut self) {
         self.session_dirty = true;
+    }
+
+    /// `Moved`/`Resized`: guarda a geometria atual se a janela está
+    /// exibida. Minimizada, mantém a anterior.
+    fn remember_shown_placement(&mut self) {
+        if self.window.is_minimized() != Some(true) {
+            self.last_shown_placement = Some((
+                session_writer::window_geometry(&self.window),
+                session_writer::window_monitor(&self.window),
+            ));
+        }
+    }
+
+    /// Geometria e monitor que a sessão grava desta janela.
+    fn session_placement(&self) -> session_writer::Placement {
+        session_writer::session_placement(
+            self.window.is_minimized(),
+            self.last_shown_placement.as_ref(),
+            || {
+                (
+                    session_writer::window_geometry(&self.window),
+                    session_writer::window_monitor(&self.window),
+                )
+            },
+        )
     }
 
     /// Fecha os cinco widgets da camada popover (ADR-0023: "abrir
@@ -4748,7 +4819,11 @@ impl WindowState {
         cell_metrics: CellMetrics,
         style: &TabBarStyle,
     ) {
+        if !window_size_is_usable(width, height, self.window.is_minimized()) {
+            return;
+        }
         self.window_surface.resize(gpu, width, height, self.scale);
+        self.settle_frames = 1;
         self.logical_width = width as f32 / self.scale;
         self.logical_height = height as f32 / self.scale;
         // ADR-0053 §5/RF-6.15: cada painel de cada aba recebe o par
@@ -6067,10 +6142,11 @@ impl App {
         };
         let theme = self.session_theme.clone();
         let zoom_steps = self.session_zoom_steps();
+        let (geometry, monitor) = state.session_placement();
         let window = session_writer::window_v1(
             &state.workspace,
-            session_writer::window_geometry(&state.window),
-            session_writer::window_monitor(&state.window),
+            geometry,
+            monitor,
             theme,
             zoom_steps,
             |tab_id, pane_id| {
@@ -6722,10 +6798,11 @@ impl App {
             schema_version: porecatu_session::CURRENT_SCHEMA_VERSION,
             windows: windows
                 .map(|state| {
+                    let (geometry, monitor) = state.session_placement();
                     session_writer::window_v1(
                         &state.workspace,
-                        session_writer::window_geometry(&state.window),
-                        session_writer::window_monitor(&state.window),
+                        geometry,
+                        monitor,
                         theme.clone(),
                         zoom_steps,
                         |tab_id, pane_id| {
@@ -8435,17 +8512,20 @@ impl ApplicationHandler<Wakeup> for App {
             WindowEvent::Resized(size) => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.mark_session_dirty(); // RF-3.2: redimensionar a janela
+                    state.remember_shown_placement();
                 }
                 if let (Some(state), Some(gpu)) = (self.windows.get_mut(&window_id), &self.gpu) {
                     state.resize_to(size.width, size.height, gpu, self.cell_metrics, &self.style);
                 }
             }
             WindowEvent::Moved(_) => {
-                // RF-3.2: mover a janela. A geometria em si não é lida
-                // daqui -- `session_writer::window_geometry` consulta
-                // `winit` de novo, fresca, no momento da gravação.
+                // RF-3.2: mover a janela. A gravação lê a geometria de novo,
+                // fresca (`WindowState::session_placement`); aqui só se
+                // guarda a última vista com a janela exibida, para o caso
+                // de a gravação cair com ela minimizada.
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.mark_session_dirty();
+                    state.remember_shown_placement();
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -10484,6 +10564,12 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
+        // Minimizada não há o que mostrar, e o quadro apresentado iria para
+        // uma janela de 160×28. A restauração traz um `Resized` que pede o
+        // próximo.
+        if state.window.is_minimized() == Some(true) {
+            return;
+        }
         let mut frame = Frame::new();
 
         let style = &self.style;
@@ -11168,6 +11254,10 @@ impl App {
             &frame,
             self.config.appearance.window.opacity.clamp(0.0, 1.0) as f32,
         );
+        if state.settle_frames > 0 {
+            state.settle_frames -= 1;
+            state.window.request_redraw();
+        }
 
         // ADR-0022: enquanto há reflui em curso o próximo quadro sai daqui,
         // não só do `WaitUntil` de `schedule_next_wake`. O prazo dele é
