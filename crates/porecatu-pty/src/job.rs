@@ -333,8 +333,10 @@ mod tests {
         // Espera o `ping` subir como filho direto do `cmd.exe` antes de
         // medir a contagem -- polling com prazo generoso em vez de um
         // sleep fixo, que falseia sob CI contido/lento (a mesma técnica de
-        // `tests/cwd.rs`).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // `tests/cwd.rs`). O prazo conta desde o spawn, então inclui a
+        // subida do shell até o prompt: generoso porque sai assim que o
+        // `ping` aparece.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut count_before = group.process_count();
         while count_before < 2 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -392,8 +394,10 @@ mod tests {
 
         // Polling com prazo generoso em vez de um sleep fixo -- mesma
         // técnica do teste anterior e de `tests/cwd.rs`, evita falso
-        // negativo sob CI contido/lento.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // negativo sob CI contido/lento. O prazo conta desde o spawn e
+        // inclui a subida a frio do `pwsh` até o prompt, que num runner de
+        // CI Windows já passou de 5s (CI de `main` no merge do #84).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let root_pid = group.root_pid;
         let mut descendants_before: Vec<sysinfo::Pid> =
             descendants_of(&refreshed_system(), sysinfo::Pid::from_u32(root_pid));
