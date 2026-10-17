@@ -1033,7 +1033,7 @@ mod tests {
         let font = FontFace::Mono { bold: false };
         for scale in [1.0_f32, 1.25, 1.5] {
             let mut m = TextMeasurer::new();
-            let mut zoom_to = |m: &mut TextMeasurer, size: f32| {
+            let zoom_to = |m: &mut TextMeasurer, size: f32| {
                 let (width, _) = m.measure_mono_cell(size, size * 1.2);
                 let snapped = (width * scale).round().max(1.0) / scale;
                 m.align_mono_advance_to(snapped, size);
