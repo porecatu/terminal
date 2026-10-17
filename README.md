@@ -8,7 +8,7 @@ Um terminal para quem trabalha com **muitos terminais abertos ao mesmo tempo**.
 
 Quem passa o dia na linha de comando conhece a cena: dez abas chamadas "bash", nenhuma pista de qual é qual, e, ao fechar a janela, todo o contexto de trabalho vai embora. O Porecatu foi feito para resolver isso: organizar, nomear, colorir e lembrar.
 
-Versão atual: **0.9.3**. Funciona em Windows, Linux e macOS.
+Versão atual: **0.9.4**. Funciona em Windows, Linux e macOS.
 
 ## O que ele faz
 

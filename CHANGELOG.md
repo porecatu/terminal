@@ -14,6 +14,33 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [0.9.4] - 2026-10-17
+
+O app ganha **ícone novo**, e a tela de configurações passa a ser modal.
+Mais correções de zoom e de cursor.
+
+### Alterado
+
+- **Ícone novo:** o P verde com o prompt `>_` em roxo, sobre fundo
+  transparente, sem placa. O `.ico` traz os quadros de 16 a 256 px, inclusive
+  os de 20, 24 e 40 px que a barra de tarefas do Windows pede, e o PNG vai a
+  512 px
+- **A tela de configurações é modal e pertence à janela de onde foi aberta**
+  ([ADR-0064](docs/adr/0064-janela-de-configuracoes-modal.md)): no Windows,
+  não tem mais botão próprio na barra de tarefas, as janelas de terminal ficam
+  desabilitadas enquanto ela está aberta, e minimizá-la minimiza as de
+  terminal
+- **Renomear aba e o editor de grupo abrem com o nome todo selecionado:**
+  digitar já substitui o nome
+
+### Corrigido
+
+- **Idas e voltas de zoom não sobrepõem mais as letras:** a célula e o
+  alinhamento do avanço mono partem sempre do `letter_spacing` da config, e
+  não da correção do tamanho anterior, que se acumulava a cada volta
+- **Com o scrollback rolado, o cursor abaixo da vista não é mais desenhado
+  sobre a barra de status**
+
 ## [0.9.3] - 2026-10-15
 
 Versão de correções: minimizar e restaurar a janela não apaga mais o
