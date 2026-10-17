@@ -293,6 +293,28 @@ fn scroll_move_scroll_offset_na_tela_principal() {
 }
 
 #[test]
+fn cursor_rolado_para_fora_da_vista_nao_tem_posicao() {
+    let (mut term, _rx) = engine(3, 10);
+    for i in 0..10 {
+        term.advance(format!("linha {i}\r\n").as_bytes());
+    }
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+    assert_eq!(snap.cursor.position, Some((2, 0)));
+
+    // Uma linha acima: o cursor (última linha) desce para a linha 3, que
+    // não existe numa vista de 3 -- seria desenhado abaixo da grade.
+    term.scroll(TermScroll::Lines(1));
+    term.snapshot_into(&mut snap);
+    assert_eq!(snap.cursor.position, None);
+
+    term.scroll(TermScroll::Bottom);
+    term.snapshot_into(&mut snap);
+    assert_eq!(snap.cursor.position, Some((2, 0)));
+}
+
+#[test]
 fn tela_alternativa_nao_tem_scrollback_para_rolar() {
     let (mut term, _rx) = engine(3, 10);
     for i in 0..10 {

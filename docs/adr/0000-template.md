@@ -60,11 +60,12 @@
 | [0056](0056-catalogo-de-textos-da-interface.md) | Catálogo de textos da interface: arquivos TOML por idioma em disco, crate `porecatu-locale`, prosa só em `porecatu-ui` | Aceito |
 | [0057](0057-idiomas-nos-artefatos.md) | Idiomas nos artefatos de release: `locales/` dentro de todo instalador, e o binário cru deixa de ser publicado | Aceito |
 | [0058](0058-escrita-do-arquivo-de-configuracao.md) | Escrita do arquivo de configuração: `toml_edit`, edição por chave e gravação atômica | Aceito |
-| [0059](0059-janela-de-configuracoes.md) | Janela de configurações: a primeira janela que não é um workspace de terminal | Aceito |
+| [0059](0059-janela-de-configuracoes.md) | Janela de configurações: a primeira janela que não é um workspace de terminal | Aceito · §2 revisto por ADR-0064 (**parcial**: no Windows, modal e possuída pela janela de terminal) |
 | [0060](0060-anatomia-da-tela-de-configuracoes.md) | Anatomia da tela de configurações: guia lateral, painel de opções e os controles que faltavam | Aceito — aval visual em 2026-10-02 |
 | [0061](0061-imagem-de-fundo-do-terminal.md) | Imagem de fundo do terminal: `image` para decodificar, primitiva de imagem no render, alfa multiplicado | Aceito |
 | [0062](0062-imagem-de-fundo-da-janela.md) | Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots | Aceito · §4 Superseded by ADR-0063 (**parcial**: sem furo até o desktop com imagem da janela) |
 | [0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) | Imagem da janela sem furo até o desktop | Aceito |
+| [0064](0064-janela-de-configuracoes-modal.md) | Janela de configurações modal, possuída pela janela de terminal | Aceito |
 
 ## Convenção
 

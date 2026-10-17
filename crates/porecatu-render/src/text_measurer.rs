@@ -228,6 +228,11 @@ pub struct TextMeasurer {
     /// CLAUDE.md registra. O conjunto de caracteres distintos numa sessão
     /// é pequeno e estável, então o cache satura rápido.
     advance_cache: HashMap<(char, FontFace), f32>,
+    /// `[terminal.font] letter_spacing` como a config pediu, sem a correção
+    /// de `align_mono_advance_to` -- que vive em
+    /// `families.mono_letter_spacing_em` e é refeita a cada tamanho novo a
+    /// partir **deste** valor, nunca da correção anterior.
+    configured_letter_spacing_em: f32,
     /// RF-5.8/RF-11.25: `[terminal.font] family` configurada que não bateu
     /// com nenhuma face carregada (nem embutida, nem do sistema) -- `Some`
     /// com o nome exatamente como o usuário escreveu. O fallback já
@@ -254,6 +259,7 @@ impl TextMeasurer {
             FontSystem::new_with_locale_and_db_and_fallback("en-US".to_string(), db, fallback);
         Self {
             font_system,
+            configured_letter_spacing_em: families.mono_letter_spacing_em,
             families,
             advance_cache: HashMap::new(),
             missing_mono_family,
@@ -372,9 +378,25 @@ impl TextMeasurer {
     /// Largura de avanço de `M` na mono e altura de linha pedida -- decide
     /// a largura/altura de célula da grade (a grade é derivada da métrica
     /// de fonte, não o contrário).
+    ///
+    /// Mede com o espaçamento **configurado**, descartando a correção que
+    /// `align_mono_advance_to` tenha feito para o tamanho anterior. Medir
+    /// com ela fazia o zoom derivar: a correção de 13px (`+0.5px`) entrava
+    /// inteira na medição de 14px, a célula arredondava para 8 em vez de 7,
+    /// a correção crescia, e a cada ida e volta de zoom as letras se
+    /// afastavam (ou se sobrepunham) mais. Quem chama alinha logo depois.
     pub fn measure_mono_cell(&mut self, size_px: f32, line_height_px: f32) -> (f32, f32) {
+        self.reset_mono_alignment();
         let width = self.measure_width("M", FontFace::Mono { bold: false }, size_px);
         (width, line_height_px)
+    }
+
+    /// Volta `mono_letter_spacing_em` ao valor da config, sem correção.
+    fn reset_mono_alignment(&mut self) {
+        if self.families.mono_letter_spacing_em != self.configured_letter_spacing_em {
+            self.families.mono_letter_spacing_em = self.configured_letter_spacing_em;
+            self.advance_cache.clear();
+        }
     }
 
     /// Corrige `mono_letter_spacing_em` para que o avanço renderizado de
@@ -396,9 +418,9 @@ impl TextMeasurer {
     /// cauda do run anterior: o run anterior renderizou mais largo que as
     /// colunas que a grade contou pra ele.
     ///
-    /// Idempotente: mede o avanço **corrente** (que já inclui qualquer
-    /// correção de uma chamada anterior) contra o alvo, então uma segunda
-    /// chamada com o mesmo alvo não muda nada. Precisa ser chamado de novo
+    /// Idempotente e sem memória: parte sempre do espaçamento configurado
+    /// (nunca da correção de uma chamada anterior), então a mesma chamada
+    /// dá o mesmo resultado não importa o histórico de zoom. Precisa ser chamado de novo
     /// sempre que `size_px`/`target_width_px` mudar (fonte, zoom, hot
     /// reload) -- é por isso que existe como método, não só uma conta feita
     /// uma vez na construção.
@@ -406,6 +428,7 @@ impl TextMeasurer {
         if size_px <= 0.0 {
             return;
         }
+        self.reset_mono_alignment();
         let current_advance_px = self.advance_em('M', FontFace::Mono { bold: false }) * size_px;
         let delta_em = (target_width_px - current_advance_px) / size_px;
         if delta_em.abs() <= f32::EPSILON {
@@ -1000,6 +1023,38 @@ mod tests {
     /// linha (era exatamente o que fazia o cursor "atrasar" atrás do texto
     /// digitado e um `TextRun` de cor nova desenhar por cima da cauda do
     /// anterior).
+    /// Regressão: diminuir e restaurar o zoom várias vezes fazia a célula
+    /// crescer a cada volta, porque `measure_mono_cell` media com a
+    /// correção do tamanho anterior. A mesma sequência de `apply_zoom`
+    /// (medir, arredondar ao pixel físico, alinhar) tem de voltar à célula
+    /// e ao avanço do começo, em qualquer escala.
+    #[test]
+    fn zoom_round_trips_do_not_drift_the_cell() {
+        let font = FontFace::Mono { bold: false };
+        for scale in [1.0_f32, 1.25, 1.5] {
+            let mut m = TextMeasurer::new();
+            let mut zoom_to = |m: &mut TextMeasurer, size: f32| {
+                let (width, _) = m.measure_mono_cell(size, size * 1.2);
+                let snapped = (width * scale).round().max(1.0) / scale;
+                m.align_mono_advance_to(snapped, size);
+                (snapped, m.measure_width("MMMMMMMMMM", font, size))
+            };
+            let start = zoom_to(&mut m, 14.0);
+            for _ in 0..5 {
+                zoom_to(&mut m, 13.0);
+                zoom_to(&mut m, 12.0);
+                let back = zoom_to(&mut m, 14.0);
+                assert_eq!(back.0, start.0, "célula derivou em escala {scale}");
+                assert!(
+                    (back.1 - start.1).abs() < 0.01,
+                    "avanço derivou em escala {scale}: {} contra {}",
+                    back.1,
+                    start.1
+                );
+            }
+        }
+    }
+
     #[test]
     fn align_mono_advance_removes_drift_at_a_size_that_does_not_snap() {
         let mut m = TextMeasurer::new();

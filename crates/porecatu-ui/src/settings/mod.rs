@@ -97,6 +97,7 @@ pub(crate) fn window_attributes(
     title: &str,
     position: Option<(i32, i32)>,
     config: &Config,
+    owner: Option<&winit::window::Window>,
 ) -> WindowAttributes {
     let settings = &config.appearance.settings;
     #[allow(unused_mut)]
@@ -121,6 +122,29 @@ pub(crate) fn window_attributes(
             .with_titlebar_transparent(false)
             .with_fullsize_content_view(false);
     }
+    // ADR-0064: no Windows, a janela de origem é a **dona** desta. Janela
+    // possuída não ganha botão próprio na barra de tarefas (não parecem dois
+    // Porecatus abertos), fica sempre na frente da dona e minimiza com ela.
+    // Sem minimizar pelo menu do sistema: com as janelas de terminal
+    // desabilitadas enquanto esta está aberta (modal), minimizá-la sozinha a
+    // esconderia sem ter onde clicar para trazê-la de volta. O botão do
+    // cabeçalho minimiza as de terminal (`Press::Minimize`).
+    #[cfg(windows)]
+    if let Some(owner) = owner {
+        use winit::platform::windows::WindowAttributesExtWindows;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = owner.window_handle()
+            && let RawWindowHandle::Win32(win32) = handle.as_raw()
+        {
+            attributes = attributes
+                .with_owner_window(win32.hwnd.get())
+                .with_enabled_buttons(
+                    winit::window::WindowButtons::CLOSE | winit::window::WindowButtons::MAXIMIZE,
+                );
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = owner;
     if let Some((x, y)) = position {
         attributes = attributes.with_position(PhysicalPosition::new(x, y));
     }

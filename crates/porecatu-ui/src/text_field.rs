@@ -39,6 +39,15 @@ impl TextFieldState {
         }
     }
 
+    /// Texto inteiro selecionado, cursor no fim: o estado de quem abre um
+    /// campo para **trocar** um nome (renomear aba, editor de grupo) --
+    /// digitar substitui tudo, sem selecionar e apagar antes.
+    pub fn selected_all(initial: &str) -> Self {
+        let mut field = Self::new(initial);
+        field.select_all();
+        field
+    }
+
     pub fn text(&self) -> &str {
         &self.buffer
     }

@@ -3138,7 +3138,7 @@ impl WindowState {
         };
         self.rename = RenameState::Editing {
             tab: id,
-            field: TextFieldState::new(tab.title()),
+            field: TextFieldState::selected_all(tab.title()),
         };
     }
 
@@ -7816,8 +7816,29 @@ impl App {
             &msg::settings::window_title(&self.catalog),
             position,
             &self.config,
+            origin_window.map(|window| window.as_ref()),
         );
         self.settings = self.create_settings_window(event_loop, attributes);
+        if self.settings.is_some() {
+            self.set_terminal_windows_enabled(false);
+        }
+    }
+
+    /// ADR-0064: enquanto a janela de configurações está aberta, as de
+    /// terminal não recebem entrada -- ela é modal. No Windows é o
+    /// `EnableWindow` do SO: clicar numa janela desabilitada pisca a de
+    /// configurações em vez de agir. Nas outras plataformas não há
+    /// equivalente no `winit`, e elas continuam como antes.
+    fn set_terminal_windows_enabled(&self, enabled: bool) {
+        #[cfg(windows)]
+        {
+            use winit::platform::windows::WindowExtWindows;
+            for state in self.windows.values() {
+                state.window.set_enable(enabled);
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = enabled;
     }
 
     /// Cria a janela do SO e a surface `wgpu` da tela de configurações. O
@@ -7884,6 +7905,10 @@ impl App {
     /// guarda o grupo em que ela estava (RF-16.9). Soltar o `SettingsWindow`
     /// fecha a janela do SO.
     fn close_settings(&mut self) {
+        // Reabilitar **antes** de destruir a janela: o Windows ativa a dona
+        // quando a janela possuída some, e uma dona ainda desabilitada
+        // passaria o foco para outro programa.
+        self.set_terminal_windows_enabled(true);
         if let Some(settings) = self.settings.take() {
             self.settings_last_group = settings.selected_group();
         }
@@ -8055,6 +8080,20 @@ impl App {
             settings::Press::Answer(answer) => self.settings_dialog_answer(answer, event_loop),
             settings::Press::OpenFile => self.open_config_file_from_settings(),
             settings::Press::Save => self.save_settings(),
+            settings::Press::Minimize => self.minimize_settings(),
+        }
+    }
+
+    /// ADR-0064: no Windows, minimizar a janela de configurações sozinha a
+    /// deixaria sem botão na barra de tarefas para voltar (ela é possuída e
+    /// modal). Minimiza as de terminal; a possuída some e volta com a dona.
+    fn minimize_settings(&self) {
+        if cfg!(windows) {
+            for state in self.windows.values() {
+                state.window.set_minimized(true);
+            }
+        } else if let Some(settings) = &self.settings {
+            settings.minimize();
         }
     }
 

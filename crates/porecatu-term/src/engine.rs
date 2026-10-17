@@ -393,7 +393,12 @@ impl TermEngine {
 
         let shape = convert_cursor_shape(content.cursor.shape);
         out.cursor = Cursor {
+            // `point_to_viewport` só recusa linha acima da vista: com o
+            // scrollback rolado, o cursor da última linha vira `line >=
+            // rows` e era desenhado abaixo da grade, por cima da barra de
+            // status. Cursor fora da vista não tem posição.
             position: point_to_viewport(display_offset, content.cursor.point)
+                .filter(|p| p.line < rows)
                 .map(|p| (p.line, p.column.0)),
             shape,
             visible: shape != CursorShape::Hidden,

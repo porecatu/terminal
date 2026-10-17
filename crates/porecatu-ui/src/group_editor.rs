@@ -69,7 +69,13 @@ impl GroupEditor {
         Self {
             group,
             focus: initial_focus,
-            name_field: TextFieldState::new(current_name),
+            // Aberto no nome (grupo novo, `group.rename`, duplo clique na
+            // pílula), o nome vem todo selecionado: digitar já o substitui.
+            name_field: if initial_focus == EditorRegion::Name {
+                TextFieldState::selected_all(current_name)
+            } else {
+                TextFieldState::new(current_name)
+            },
             swatch_highlight: current_color_index.min(SWATCH_COUNT - 1),
             action_highlight: 0,
         }
@@ -217,6 +223,13 @@ mod tests {
         assert_eq!(editor.name_buffer(), "xy!");
         editor.backspace();
         assert_eq!(editor.name_buffer(), "xy");
+    }
+
+    #[test]
+    fn opening_on_the_name_selects_it_so_typing_replaces_it() {
+        let mut editor = GroupEditor::new(g(), "Novo grupo", 0, EditorRegion::Name);
+        editor.name_field_mut().unwrap().insert_char('x');
+        assert_eq!(editor.name_buffer(), "x");
     }
 
     #[test]

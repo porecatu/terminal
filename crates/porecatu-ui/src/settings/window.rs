@@ -96,6 +96,10 @@ pub(crate) enum Press {
     /// pendência e nenhuma recusada; as edições estão em
     /// [`SettingsWindow::edits`].
     Save,
+    /// O botão de minimizar do cabeçalho. Quem minimiza é `App`: no
+    /// Windows esta janela é possuída pela de terminal (ADR-0064) e some
+    /// junto com ela, que é o que tem botão na barra de tarefas para voltar.
+    Minimize,
 }
 
 /// O que o usuário respondeu ao diálogo de pendências (RF-16.4). Cancelar
@@ -269,6 +273,10 @@ impl SettingsWindow {
     /// RF-16.2: a janela já aberta vem para a frente em vez de abrir outra.
     /// Uma janela minimizada é restaurada antes -- `focus_window` sozinho não
     /// a tira da barra de tarefas.
+    pub(crate) fn minimize(&self) {
+        self.window.set_minimized(true);
+    }
+
     pub(crate) fn bring_to_front(&self) {
         if self.window.is_minimized() == Some(true) {
             self.window.set_minimized(false);
@@ -1123,10 +1131,7 @@ impl SettingsWindow {
                 point,
             ) {
                 return match hit {
-                    WindowButtonHit::Minimize => {
-                        self.window.set_minimized(true);
-                        Press::Nothing
-                    }
+                    WindowButtonHit::Minimize => Press::Minimize,
                     WindowButtonHit::MaximizeRestore => {
                         self.window.set_maximized(!self.window.is_maximized());
                         Press::Nothing
