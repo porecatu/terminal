@@ -594,9 +594,28 @@ impl SettingsWindow {
         self.window.request_redraw();
     }
 
-    /// Acompanha o tamanho físico novo da janela.
+    pub(crate) fn is_minimized(&self) -> bool {
+        self.window.is_minimized() == Some(true)
+    }
+
+    /// A janela voltou à tela (a dona foi restaurada) sem necessariamente
+    /// receber um `Resized` próprio: o primeiro present pode não chegar à
+    /// tela no Windows, então dois quadros, mesma causa do `settle_frames`.
+    pub(crate) fn refresh_after_show(&mut self) {
+        self.settle_frames = 1;
+        self.window.request_redraw();
+    }
+
+    /// Acompanha o tamanho físico novo da janela. Minimizada, o Windows
+    /// relata o tamanho do ícone, e a surface fica como estava; o `Resized`
+    /// da restauração traz o tamanho real (mesma regra da janela de
+    /// terminal, `window_size_is_usable`).
     pub(crate) fn resize(&mut self, gpu: &GpuContext, width: u32, height: u32) {
+        if !crate::window_size_is_usable(width, height, self.window.is_minimized()) {
+            return;
+        }
         self.surface.resize(gpu, width, height, self.scale);
+        self.settle_frames = 1;
         self.logical_width = width as f32 / self.scale;
         self.logical_height = height as f32 / self.scale;
         self.choice = None;

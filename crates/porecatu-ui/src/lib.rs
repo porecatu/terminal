@@ -682,7 +682,7 @@ fn grid_size_for_rect(content: Rect, cell_metrics: CellMetrics) -> (usize, usize
 /// sobra o fim do prompt cortado à esquerda e o cursor vai para o topo.
 /// Minimizada, a grade fica como estava; o `Resized` da restauração (já
 /// com `is_minimized() == false`) traz o tamanho real.
-fn window_size_is_usable(width: u32, height: u32, minimized: Option<bool>) -> bool {
+pub(crate) fn window_size_is_usable(width: u32, height: u32, minimized: Option<bool>) -> bool {
     width > 0 && height > 0 && minimized != Some(true)
 }
 
@@ -8131,6 +8131,11 @@ impl App {
         let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
             return;
         };
+        // Minimizada não há o que mostrar (mesma regra da janela de
+        // terminal); a restauração pede o próximo quadro.
+        if settings.is_minimized() {
+            return;
+        }
         let env = settings::Env {
             style: &self.style,
             config: &self.config,
@@ -8555,6 +8560,14 @@ impl ApplicationHandler<Wakeup> for App {
                 }
                 if let (Some(state), Some(gpu)) = (self.windows.get_mut(&window_id), &self.gpu) {
                     state.resize_to(size.width, size.height, gpu, self.cell_metrics, &self.style);
+                    // A janela de configurações é possuída (ADR-0064): some e
+                    // volta com a dona, sem `Resized` próprio garantido. A
+                    // restauração da dona é o sinal de que ela reapareceu.
+                    if window_size_is_usable(size.width, size.height, state.window.is_minimized())
+                        && let Some(settings) = &mut self.settings
+                    {
+                        settings.refresh_after_show();
+                    }
                 }
             }
             WindowEvent::Moved(_) => {
