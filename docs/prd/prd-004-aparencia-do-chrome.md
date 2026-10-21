@@ -67,6 +67,8 @@ Todo usuário, com defaults que funcionam sem configuração alguma. A profundid
 
 **RF-4.10** — Configuráveis: família e tamanho da fonte do título da aba, independentes da fonte do terminal ([PRD-005](prd-005-aparencia-do-terminal.md)).
 
+> *Emendado em 2026-10-21* ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)): a fonte do título da aba **não** é mais independente — família e tamanho são os de `[terminal.font]`, e as chaves `[appearance.tabs] font_family`/`font_size` saíram. O zoom de sessão continua só na grade.
+
 **RF-4.11** — Configuráveis, cada um ligável e desligável: botão de fechar, número de índice da aba, indicador de atividade, indicador de campainha, botão de nova aba na barra.
 
 **RF-4.12** — Configurável: se o botão de fechar aparece sempre ou apenas no hover.
@@ -74,6 +76,8 @@ Todo usuário, com defaults que funcionam sem configuração alguma. A profundid
 ### Grupos
 
 **RF-4.13** — Configuráveis para o rótulo do grupo: espaçamento interno horizontal, tamanho da fonte, raio dos cantos.
+
+> *Emendado em 2026-10-21* ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)): o tamanho da fonte do rótulo deixa de ser configurável à parte — é o de `[terminal.font] size`, e `[appearance.groups] label_font_size` saiu. O peso continua próprio (500).
 
 **RF-4.14** — O **indicador de grupo** é a **pílula** — nome e caret na cor cheia do grupo — mais a **cápsula** atrás das abas. Não é configurável, e é a única forma.
 

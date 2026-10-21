@@ -856,14 +856,14 @@ fn active_group_color(workspace: &Workspace, pal: &palette::ResolvedPalette) -> 
 /// Monta `FontFamilies` a partir de `Config` -- `porecatu-render` não pode
 /// depender de `porecatu-config` (regra de dependência, CLAUDE.md), então a
 /// família desce como parâmetro simples. `mono` vem de `[terminal.font]`
-/// (RF-5.1/5.2/5.6); `sans` de `[appearance.tabs]` (RF-4.10) -- por default
-/// o mesmo valor (ADR-0026), mas a config permite divergir.
+/// (RF-5.1/5.2/5.6), e `sans` também: a fonte do chrome é a do terminal
+/// (ADR-0026 na face, ADR-0065 na chave -- não há mais como divergir).
 fn font_families_from_config(config: &porecatu_config::Config) -> porecatu_render::FontFamilies {
     let font = &config.terminal.font;
     porecatu_render::FontFamilies {
         mono: font.family.clone(),
         mono_fallback: font.fallback.clone(),
-        sans: config.appearance.tabs.font_family.clone(),
+        sans: font.family.clone(),
         mono_letter_spacing_em: font.letter_spacing as f32,
     }
 }
@@ -1094,15 +1094,10 @@ enum NewTabRequest {
     /// "+" ao fim da trilha, fora de qualquer wrapper.
     Ungrouped,
     WindowEmptied,
-    /// Botão de fechar da janela (ADR-0027): precisa do diálogo de
-    /// confirmação com múltiplas abas (`App::request_close_window`), que
-    /// vive em `App` -- `WindowState` não pode resolver isto sozinho, mesmo
-    /// motivo de `WindowEmptied`.
-    CloseWindowRequested,
     /// Botão de configurações (RF-16.1, ADR-0059 §6): dispara `settings.open`,
     /// que `App` resolve -- o mesmo caminho do atalho, `ActionOutcome::
     /// OpenSettings`. `WindowState` não pode, pelo mesmo motivo de
-    /// `CloseWindowRequested`.
+    /// `WindowEmptied`.
     OpenSettings,
     /// Botão de sessões nomeadas (ADR-0054/ADR-0055): `WindowState::
     /// open_session_picker` resolve sozinho, mas o hit-test do botão só
@@ -1156,6 +1151,10 @@ struct WindowState {
     /// Botão pressionado no momento, se algum -- decide se `CursorMoved`
     /// é arraste (estende seleção / reporta modo 1002) ou movimento livre.
     mouse_button_down: Option<MouseButton>,
+    /// Botão de janela (ADR-0027) sob o press esquerdo: o press só arma, e
+    /// o release sobre o mesmo botão é que dispara
+    /// (`tab_bar::window_button_release`).
+    pressed_window_button: Option<tab_bar::WindowButtonHit>,
     click_tracker: ClickTracker,
     /// Modo de captura do ADR-0008 passo 1 -- rename inline (RF-1.8).
     rename: RenameState,
@@ -2036,6 +2035,7 @@ impl WindowState {
             modifiers: Modifiers::NONE,
             cursor_position: (0.0, 0.0),
             mouse_button_down: None,
+            pressed_window_button: None,
             click_tracker: ClickTracker::default(),
             rename: RenameState::Idle,
             scroll_offset: 0.0,
@@ -3934,6 +3934,33 @@ impl WindowState {
         }
     }
 
+    /// Release do botão esquerdo com um botão de janela armado pelo press
+    /// (ADR-0027): dispara só se o cursor ainda está sobre o mesmo botão.
+    /// Minimizar/maximizar-restaurar são síncronos, sem diálogo --
+    /// resolvidos aqui mesmo. Fechar precisa do diálogo de confirmação com
+    /// múltiplas abas, que só `App` sabe montar (`request_close_window`),
+    /// então devolve `true` para quem chama.
+    fn release_window_button(&mut self, style: &TabBarStyle) -> bool {
+        let logical_point = (
+            self.cursor_position.0 as f32 / self.scale,
+            self.cursor_position.1 as f32 / self.scale,
+        );
+        let released_over = tab_bar::point_in_window_button(
+            style,
+            is_macos(),
+            self.logical_width,
+            bar_height(style),
+            logical_point,
+        );
+        match tab_bar::window_button_release(self.pressed_window_button.take(), released_over) {
+            Some(tab_bar::WindowButtonHit::Minimize) => self.window.set_minimized(true),
+            Some(tab_bar::WindowButtonHit::MaximizeRestore) => self.maximize_or_restore(),
+            Some(tab_bar::WindowButtonHit::Close) => return true,
+            None => {}
+        }
+        false
+    }
+
     /// Resolve o que um clique na área da barra de abas atinge e dispara a
     /// ação correspondente. Indicadores de overflow (espec §2.18) primeiro
     /// -- ficam em coordenadas de tela, fora do recorte que rola com a
@@ -3981,24 +4008,14 @@ impl WindowState {
             // Botões de janela (ADR-0027): zona fixa à direita, ainda mais
             // à direita que a de configurações. Sempre `None` no macOS
             // (semáforo nativo, o clique nunca chega até aqui).
-            // Minimizar/maximizar-restaurar são síncronos, sem diálogo --
-            // resolvidos aqui mesmo. Fechar precisa do diálogo de
-            // confirmação com múltiplas abas, que só `App` sabe montar
-            // (`request_close_window`), então sobe como `NewTabRequest`.
+            // O press só arma o botão: quem dispara é o release sobre o
+            // mesmo botão (`release_window_button`). Disparar aqui deixava o
+            // release cair na janela de trás -- de outro app, inclusive.
             if let Some(hit) =
                 tab_bar::point_in_window_button(style, is_macos(), bar_width, h, logical_point)
             {
-                return match hit {
-                    tab_bar::WindowButtonHit::Minimize => {
-                        self.window.set_minimized(true);
-                        NewTabRequest::None
-                    }
-                    tab_bar::WindowButtonHit::MaximizeRestore => {
-                        self.maximize_or_restore();
-                        NewTabRequest::None
-                    }
-                    tab_bar::WindowButtonHit::Close => NewTabRequest::CloseWindowRequested,
-                };
+                self.pressed_window_button = Some(hit);
+                return NewTabRequest::None;
             }
             // Botão de sessões nomeadas (ADR-0054/ADR-0055): mesma zona
             // fixa, mesma ordem de teste que a engrenagem -- depois dos
@@ -8059,7 +8076,16 @@ impl App {
                 ..
             } => {
                 if let Some(settings) = &mut self.settings {
-                    settings.left_released();
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    press = settings.left_released(env);
+                }
+            }
+            WindowEvent::Focused(false) => {
+                if let Some(settings) = &mut self.settings {
+                    settings.focus_lost();
                 }
             }
             WindowEvent::KeyboardInput { event: key, .. } => {
@@ -8628,6 +8654,7 @@ impl ApplicationHandler<Wakeup> for App {
                     // Released correspondente -- sem isto, o estado ficava
                     // preso até o próximo evento de mouse.
                     state.mouse_button_down = None;
+                    state.pressed_window_button = None;
                     state.window.request_redraw();
                 }
             }
@@ -10006,6 +10033,16 @@ impl App {
 
         if !pressed {
             state.mouse_button_down = None;
+            if button == MouseButton::Left && state.pressed_window_button.is_some() {
+                // ADR-0027: o botão de janela dispara no release, não no
+                // press. Fechar invalida `state`, então nada depois disto.
+                if state.release_window_button(&self.style) {
+                    self.request_close_window(window_id, event_loop);
+                } else {
+                    state.window.request_redraw();
+                }
+                return;
+            }
             if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
                 if let Some(gpu) = &mut self.gpu {
                     state.finish_drag(gpu, &self.style);
@@ -10473,11 +10510,6 @@ impl App {
                 // válido depois disto, então nada de `request_redraw`.
                 NewTabRequest::WindowEmptied => {
                     self.close_window_unconditionally(window_id, event_loop);
-                }
-                // ADR-0027: botão de fechar da janela -- mesmo caminho do
-                // atalho/menu, com diálogo se houver mais de uma aba.
-                NewTabRequest::CloseWindowRequested => {
-                    self.request_close_window(window_id, event_loop);
                 }
                 NewTabRequest::OpenSettings => self.open_settings(event_loop, window_id),
                 // ADR-0055 §3: clique no botão abre em navegação. "Clicar

@@ -31,9 +31,10 @@ Fallback de UI: `system-ui, sans-serif`. Fallback mono: `monospace`.
 | 19px / 500 | título da tela de nova aba |
 | 15px / 500 | título do painel de configurações |
 | 14.5px | campo de busca da paleta de comandos |
-| 13px | **rótulo da aba** (peso 400) e **nome da pílula do grupo** (peso 500, `Medium` — lê como bold; ver seção 4.4), nome de perfil, item de resultado, campo de nome de grupo |
+| 14px | **conteúdo do terminal**, **rótulo da aba** (peso 400), **nome da pílula do grupo** (peso 500, `Medium` — lê como bold; ver seção 4.4) e **campo de rename da aba** — um valor só, `[terminal.font] size`, na família de `[terminal.font] family` ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)); o zoom de sessão muda só a grade |
+| 13px | nome de perfil, item de resultado, campo de nome de grupo |
 | 12.5px | itens de menu |
-| 12px | nome do app, campo de rename |
+| 12px | nome do app |
 | 11px | subtítulo da barra de título, título do painel, descrição de toggle |
 | 10.5px | barra de status, comando do perfil |
 | 10px | contador do grupo, rótulo de seção (uppercase, `letter-spacing: .7px`) |
@@ -341,7 +342,7 @@ translúcidas empilhadas. Hover `brightness(1.25)` (F4 etapa 6, §1.10).
 
 Da esquerda para a direita:
 
-1. **Nome** 13px/**500** (`Medium`, para ler como bold contra o 400 da aba) em
+1. **Nome** 14px/**500** (`Medium`, para ler como bold contra o 400 da aba) em
    `#12151a`, sem quebra, `max-width: 140px`, truncado com reticências (RF-2.12).
    Nome completo em tooltip (seção 2.20), pelo mesmo caminho da aba.
 2. **Caret** — ícone Lucide `chevron-right` colapsado, `chevron-down` expandido, na
@@ -452,14 +453,14 @@ existir** — junto com os estilos `left-bar` e `outline`, que nunca tiveram ana
 Conteúdo:
 
 1. **Badge de perfil** `[v2]` — mono 9px/500, raio 3, `padding: 2px 4px`, `letter-spacing: .4px`. Texto na cor do grupo, fundo na cor do grupo com alfa `.14`.
-2. **Rótulo** 13px/400 (12.5px originalmente; pedido do usuário, ver seção 4.4),
+2. **Rótulo** 14px/400, o tamanho do terminal (12.5px originalmente, 13 depois; ver seção 4.4),
    `max-width: 180px` — que é também o piso —, truncado com reticências.
 3. **Botão de fechar** 17×17 de desenho e 25×17 de alvo (§1.7), raio 4, ícone Lucide
    `x` na em de 20px, em **`#e4e8ee`** já em repouso: contra a barra `#1b1f26` o traço
    fino do Lucide desaparece num cinza médio, então o tom que a espec. reservava para
    o hover virou o tom de base. Hover: fundo `#39404b`.
 
-**Campo de rename** `[v1]` — substitui o rótulo no lugar. Largura 120, fundo `#0e1116`, borda `1px #5ed3bc`, raio 4, texto `#e4e8ee` 12px, `padding: 2px 5px`, `outline: none`, foco automático. Confirma em `Enter` e no blur; cancela em `Esc`.
+**Campo de rename** `[v1]` — substitui o rótulo no lugar. Largura 120, fundo `#0e1116`, borda `1px #5ed3bc`, raio 4, texto `#e4e8ee` 14px (o tamanho do rótulo e do terminal, [ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)), `padding: 2px 5px`, `outline: none`, foco automático. Confirma em `Enter` e no blur; cancela em `Esc`.
 
 A largura é `min(120, largura disponível do rótulo)` — a cláusula sobrevive à mudança da §2.18, que deixou o rótulo sempre no teto de 180 px, porque um título curto ainda dá uma aba mais estreita que o campo. **A aba não muda de largura ao entrar em rename**: mudar reflui a barra enquanto o usuário digita. Título mais longo que o campo rola dentro dele, com o caret sempre visível. OSC 0/2 que chegue com o campo aberto é registrado mas **não redesenha o campo**: o texto sob o cursor do usuário não muda sozinho.
 
@@ -1134,6 +1135,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Fundo do quadro do terminal só em cor sólida (`#0f1216`, com `background_opacity`) (§2.7) | **Uma imagem PNG ou JPEG entre o fundo do quadro e o fundo das células**, no quadro inteiro de cada painel, recortada pelo raio 6, em três modos (`stretch`, `tile`, `center`) e com opacidade própria que **se multiplica** pela do terminal (§2.7). Terminal transparente nunca fica opaco por causa dela, e célula com fundo próprio a cobre. **Nenhuma cor, dimensão, raio ou espaçamento novo**; com `path` vazio o binário não muda um pixel. **Aval do dono do produto pendente: dívida de verificação** — a aparência foi medida por pixel (janela opaca e transparente) e capturada, e o dono do produto a verifica depois, sobre a build | [ADR-0061](../adr/0061-imagem-de-fundo-do-terminal.md), fora de fase |
 | Janela sem imagem de fundo: o fundo da janela era a cor `#1b1f26` e a barra de abas pintava um fundo opaco da mesma cor por cima (§2.2) | **Uma imagem PNG ou JPEG atrás da janela inteira**, abaixo de todo quadro de terminal e visível através do quadro translúcido (§2.7), em três modos e com opacidade própria. Com ela exibida, a barra de abas **não pinta o fundo** e a **sombra do quadro passa a aparecer na faixa de baixo dela**; em janela transparente o fundo do quadro vira furo, imagem recortada e fundo em blend normal; célula com fundo próprio cobre as duas imagens. **Nenhuma cor, dimensão, raio ou espaçamento novo**; com `path` vazio o binário não muda um pixel. **Aval do dono do produto pendente: dívida de verificação** | [ADR-0062](../adr/0062-imagem-de-fundo-da-janela.md), fora de fase |
 | Janela sem contorno | **Borda de 1px em volta de toda janela** (terminal e configurações), por cima de tudo, na cor do fundo da janela escurecida a 70% (`chrome::window_border`). Pedido do dono do produto | pedido do usuário, fora de fase |
+| O desenho pedia o rótulo da aba a 12.5px e o campo de rename a 12px, contra 12.5px no terminal; o binário chegou a 13px na aba e na pílula e 14px no terminal, cada um com chave própria | **Um tamanho e uma família só, os de `[terminal.font]`**, para rótulo da aba, nome da pílula, campo de rename e grade: **14px**. Pedido do dono do produto — a tela de configurações só mostrava a fonte do terminal, e as chaves `[appearance.tabs] font_family`/`font_size`, `[appearance.tabs.rename] font_size` e `[appearance.groups] label_font_size` saíram. O **peso** da pílula continua 500, e o **zoom de sessão** continua só na grade (a aba tem altura fixa). Menus, avisos, tooltip e barra de status mantêm os tamanhos próprios | [ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md), fora de fase |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.
 

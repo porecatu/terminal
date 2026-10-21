@@ -254,9 +254,10 @@ icon_em_size = 20
 # aceitar `min_width < max_width` exige cache de medição primeiro.
 
 # --- fonte do título -------------------------------------------------- RF-4.10
-font_family = "Iosevka Fixed" # unificada com o terminal (ADR-0026)
-font_size = 13 # era 12.5, pedido do usuário; o nome da pílula usa o mesmo
-               # tamanho, mas peso próprio -- ver [appearance.groups]
+# Sem chave aqui: o título da aba, o nome da pílula e o campo de rename usam
+# a fonte do terminal, `[terminal.font] family` e `size` (ADR-0065). O zoom
+# de sessão (`font.increase`/`decrease`) continua só na grade. As antigas
+# `font_family`/`font_size` desta tabela viram chave desconhecida.
 
 # --- elementos visíveis ------------------------------------- RF-4.11, RF-4.12
 show_close_button = "always" # "always" | "hover" | "never"; design usa always
@@ -329,8 +330,7 @@ rename_foreground = "#e4e8ee"
 [appearance.tabs.rename]
 width = 120                  # largura máxima; min(120, largura do rótulo)
 height = 20                  # a espec. dá padding e fonte, não a altura
-font_size = 12
-padding_x = 5
+padding_x = 5                # fonte: a do terminal (ADR-0065)
 
 
 # --- indicador de abas fora da vista --------------------------- RF-1.19
@@ -351,11 +351,11 @@ scroll_step = 90             # px por notch da roda e por clique no indicador
 # --- pílula do grupo -------------------------------------------------- RF-4.13
 label_padding_left = 10       # era 8; +2px, pedido do usuário
 label_padding_right = 9
-# Mesmo TAMANHO do rótulo da aba (13): meio pixel de diferença lado a lado
-# lê como fonte trocada, não como hierarquia. O PESO diverge -- 500
-# (`Medium`), pedido do usuário para o rótulo do grupo ler como bold.
-label_font_size = 13.0
-label_font_weight = 500       # 400 | 500 -- a face Fixed só embute os dois
+# Família e TAMANHO são os do terminal, `[terminal.font]` (ADR-0065): meio
+# pixel de diferença lado a lado lê como fonte trocada, não como hierarquia.
+# O PESO diverge -- 500 (`Medium`), pedido do usuário para o rótulo do grupo
+# ler como bold.
+label_font_weight = 500      # 400 | 500 -- a face Fixed só embute os dois
 label_corner_radius = 6
 label_hover_brightness = 1.25 # ainda não desenhado; entra na F4
 # Sem `label_background`/`label_foreground`/`label_border`, sem swatch.
@@ -847,6 +847,8 @@ background_opacity = 1.0
 
 # Classe de recarga: [B] -- métrica de fonte decide a largura de célula, logo
 # colunas e linhas. É o caso que o RF-5.28 nomeia.
+# `family` e `size` valem também para a barra de abas -- título da aba, nome
+# do grupo e campo de rename (ADR-0065). O zoom de sessão é só da grade.
 [terminal.font]
 family = "Iosevka Fixed"                                              # RF-5.1
 # Cadeia de fallback, em ordem. Glyph ausente na família principal é

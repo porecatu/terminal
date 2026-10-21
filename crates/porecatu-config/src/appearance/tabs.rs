@@ -39,8 +39,6 @@ pub struct Tabs {
     pub icon_button_padding_x: i32,
     /// Tamanho de EM dos ícones do chrome, não do desenho. Ver ADR-0024.
     pub icon_em_size: i32,
-    pub font_family: String,
-    pub font_size: f64,
     pub show_close_button: CloseButtonVisibility,
     pub show_index: bool,
     pub show_activity_indicator: bool,
@@ -67,8 +65,6 @@ impl Default for Tabs {
             corner_radius: 6,
             icon_button_padding_x: 4,
             icon_em_size: 20,
-            font_family: "Iosevka Fixed".to_owned(),
-            font_size: 13.0,
             show_close_button: CloseButtonVisibility::Always,
             show_index: false,
             show_activity_indicator: true,
@@ -150,7 +146,6 @@ impl Default for TabsColors {
 pub struct TabsRename {
     pub width: i32,
     pub height: i32,
-    pub font_size: f64,
     pub padding_x: i32,
 }
 
@@ -159,7 +154,6 @@ impl Default for TabsRename {
         Self {
             width: 120,
             height: 20,
-            font_size: 12.0,
             padding_x: 5,
         }
     }
@@ -194,7 +188,6 @@ mod tests {
     fn default_matches_example_toml() {
         let tabs = Tabs::default();
         assert_eq!(tabs.height, 52);
-        assert_eq!(tabs.font_family, "Iosevka Fixed");
         assert_eq!(tabs.show_close_button, CloseButtonVisibility::Always);
         assert_eq!(tabs.colors.bar_background, Color::hex("#1b1f26"));
         assert_eq!(tabs.rename.width, 120);

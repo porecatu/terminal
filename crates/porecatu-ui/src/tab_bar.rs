@@ -131,7 +131,8 @@ pub struct TabBarStyle {
     /// `[appearance.tabs] show_close_button` -- `Never` tira o `X` do hit
     /// test; `Hover` só o desenha com o cursor na aba (`chrome::paint`).
     pub show_close_button: porecatu_config::CloseButtonVisibility,
-    /// `[appearance.tabs] font_size`
+    /// `[terminal.font] size` -- a mesma fonte do terminal (ADR-0065), sem
+    /// o zoom de sessão, que é só da grade.
     pub font_size: f32,
     /// `[appearance.groups] label_padding_left` -- pílula (espec. §2.4).
     /// 10px, 2px a mais que o `label_padding_left` da espec (8) -- pedido
@@ -143,12 +144,10 @@ pub struct TabBarStyle {
     /// que a espec também intercala saiu -- ver [`GroupPillRect`]). Sem
     /// chave própria no TOML (mesmo padrão de `internal_gap`).
     pub pill_gap: f32,
-    /// `[appearance.groups] label_font_size` -- tamanho do nome da pílula.
-    /// Igual a `font_size` (o rótulo da aba) por pedido do usuário; a
-    /// espec. §2.4 pede 12.0 contra os 13 da aba (12.5 originalmente,
-    /// depois 13 -- também pedido do usuário), e meio pixel de diferença
-    /// lado a lado só faz o nome parecer de outra fonte. O **peso**, no
-    /// entanto, diverge da aba -- ver [`PILL_NAME_FONT`].
+    /// `[terminal.font] size` -- tamanho do nome da pílula, o mesmo do
+    /// rótulo da aba e do terminal (ADR-0065): meio pixel de diferença lado
+    /// a lado só faz o nome parecer de outra fonte. O **peso**, no entanto,
+    /// diverge da aba -- ver [`PILL_NAME_FONT`].
     pub pill_font_size: f32,
     /// `[appearance.groups] label_max_width` -- teto do nome (RF-2.12): o
     /// da aba (180) menos os 41px de cromo da §2.18, valor citado direto da
@@ -225,7 +224,7 @@ pub struct TabBarStyle {
     pub rename_field_height: f32,
     /// `[appearance.tabs.rename] width`.
     pub rename_field_width: f32,
-    /// `[appearance.tabs.rename] font_size`.
+    /// `[terminal.font] size`, como o rótulo da aba (ADR-0065).
     pub rename_font_size: f32,
     /// `[appearance.tabs.rename] padding_x`.
     pub rename_padding_x: f32,
@@ -275,11 +274,11 @@ impl TabBarStyle {
         right_zone_button_size: 30.0,
         show_new_tab_button: true,
         show_close_button: porecatu_config::CloseButtonVisibility::Always,
-        font_size: 13.0, // era 12.5, pedido do usuário
+        font_size: 14.0, // = `[terminal.font] size` (ADR-0065)
         pill_padding_left: 10.0,
         pill_padding_right: 9.0,
         pill_gap: 7.0,
-        pill_font_size: 13.0, // = `font_size`
+        pill_font_size: 14.0, // = `font_size`
         pill_name_max_width: 140.0,
         // `icon::WIDEST_CARET_INK_EM * chrome::PILL_CARET_ICON_SIZE`,
         // fixado aqui porque `TabBarStyle::DEFAULT` é `const` e o
@@ -309,7 +308,7 @@ impl TabBarStyle {
         indicator_dot_size: 6.0,
         rename_field_height: 20.0,
         rename_field_width: 120.0,
-        rename_font_size: 12.0,
+        rename_font_size: 14.0, // = `font_size`
         rename_padding_x: 5.0,
         terminal_frame_margin: 6.0,
         terminal_frame_padding: 6.0,
@@ -350,11 +349,11 @@ impl TabBarStyle {
             right_zone_button_size: Self::DEFAULT.right_zone_button_size,
             show_new_tab_button: tabs.show_new_tab_button,
             show_close_button: tabs.show_close_button,
-            font_size: tabs.font_size as f32,
+            font_size: config.terminal.font.size as f32,
             pill_padding_left: groups.label_padding_left as f32,
             pill_padding_right: groups.label_padding_right as f32,
             pill_gap: Self::DEFAULT.pill_gap,
-            pill_font_size: groups.label_font_size as f32,
+            pill_font_size: config.terminal.font.size as f32,
             pill_name_max_width: groups.label_max_width as f32,
             pill_caret_size: Self::DEFAULT.pill_caret_size,
             overflow_indicator_size: tabs.overflow.indicator_size as f32,
@@ -380,7 +379,7 @@ impl TabBarStyle {
             indicator_dot_size: groups.collapsed_indicator_size as f32,
             rename_field_height: tabs.rename.height as f32,
             rename_field_width: tabs.rename.width as f32,
-            rename_font_size: tabs.rename.font_size as f32,
+            rename_font_size: config.terminal.font.size as f32,
             rename_padding_x: tabs.rename.padding_x as f32,
             terminal_frame_margin: terminal_frame.margin as f32,
             terminal_frame_padding: terminal_frame.padding as f32,
@@ -1228,6 +1227,18 @@ pub fn point_in_window_button(
     None
 }
 
+/// Decide, ao soltar o botão esquerdo, se um botão de janela dispara. O
+/// press só arma (`armed`); disparar no press deixava o release cair na
+/// janela de trás -- de outro app, inclusive -- quando esta fechava ou
+/// minimizava. Dispara só se o release cai sobre o **mesmo** botão do press,
+/// como os botões nativos de janela.
+pub fn window_button_release(
+    armed: Option<WindowButtonHit>,
+    released_over: Option<WindowButtonHit>,
+) -> Option<WindowButtonHit> {
+    armed.filter(|hit| released_over == Some(*hit))
+}
+
 /// Inset à esquerda do início da trilha (`x` inicial de [`layout`]) --
 /// espaço do semáforo nativo no macOS (`[appearance.window_controls]
 /// macos_traffic_light_inset`), zero nas outras plataformas.
@@ -1472,6 +1483,28 @@ mod tests {
     fn from_config_matches_default_style() {
         let style = TabBarStyle::from_config(&porecatu_config::Config::default());
         assert_eq!(style, TabBarStyle::DEFAULT);
+    }
+
+    /// O botão de janela dispara no release sobre o mesmo botão do press,
+    /// nunca no press nem com o cursor arrastado para fora.
+    #[test]
+    fn window_button_fires_only_on_release_over_the_pressed_button() {
+        use WindowButtonHit::{Close, Minimize};
+        assert_eq!(window_button_release(Some(Close), Some(Close)), Some(Close));
+        assert_eq!(window_button_release(Some(Close), None), None);
+        assert_eq!(window_button_release(Some(Close), Some(Minimize)), None);
+        assert_eq!(window_button_release(None, Some(Close)), None);
+    }
+
+    /// ADR-0065: abas, pílula e rename seguem `[terminal.font] size`.
+    #[test]
+    fn chrome_font_size_follows_the_terminal_font() {
+        let mut config = porecatu_config::Config::default();
+        config.terminal.font.size = 18.0;
+        let style = TabBarStyle::from_config(&config);
+        assert_eq!(style.font_size, 18.0);
+        assert_eq!(style.pill_font_size, 18.0);
+        assert_eq!(style.rename_font_size, 18.0);
     }
 
     #[test]

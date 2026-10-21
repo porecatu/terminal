@@ -24,7 +24,6 @@ pub struct Groups {
     // --- pílula do grupo -------------------------------------- RF-4.13
     pub label_padding_left: i32,
     pub label_padding_right: i32,
-    pub label_font_size: f64,
     /// 400 | 500 -- a face Fixed só embute os dois.
     pub label_font_weight: i32,
     pub label_corner_radius: i32,
@@ -72,7 +71,6 @@ impl Default for Groups {
         Self {
             label_padding_left: 10,
             label_padding_right: 9,
-            label_font_size: 13.0,
             label_font_weight: 500,
             label_corner_radius: 6,
             label_hover_brightness: 1.25,

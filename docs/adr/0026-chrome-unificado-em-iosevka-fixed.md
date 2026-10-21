@@ -20,6 +20,8 @@ Usuário relatou a letra "i" do terminal e a do rótulo de aba como visivelmente
 | Conteúdo do terminal | Iosevka Fixed 400/500 | Iosevka Fixed 400/500 (sem mudança) |
 | Chrome (aba, rótulo, menu) | Iosevka Aile 400/500/600 | **Iosevka Fixed 400/500** |
 
+> *Revisto pelo [ADR-0065](0065-fonte-unica-para-terminal-e-chrome.md)*: a unificação passou da face às chaves — a família e o tamanho do chrome da barra de abas são os de `[terminal.font]`, e `[appearance.tabs] font_family` saiu do schema. A decisão de face acima continua de pé.
+
 `FontFace::Sans` (`porecatu-render/src/primitives.rs`) continua existindo como nome do **papel** que a face desempenha no chrome (distinto de `FontFace::Mono`, que carrega o parâmetro `bold` da grade e não passa pela mesma tabela de pesos) — não implica família proporcional separada. Internamente, `SANS_FAMILY` em `text_measurer.rs` passa a apontar para a mesma constante que `MONO_FAMILY` (`"Iosevka Fixed"`).
 
 ### Peso 600 (`SansWeight::SemiBold`)

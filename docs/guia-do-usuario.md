@@ -89,6 +89,14 @@ reiniciar) — o app assiste o arquivo e recarrega sozinho. Algumas mudanças
 (fonte, por exemplo) exigem recalcular a grade e podem levar um instante a
 mais para aparecer; nenhuma exige fechar e reabrir o app.
 
+A fonte é **uma só**: `[terminal.font] family` e `size` valem para o
+terminal e também para a barra de abas — título da aba, nome do grupo e
+campo de renomear ([ADR-0065](adr/0065-fonte-unica-para-terminal-e-chrome.md)).
+As antigas `[appearance.tabs] font_family`/`font_size`,
+`[appearance.tabs.rename] font_size` e `[appearance.groups] label_font_size`
+não existem mais; se estiverem no seu arquivo, viram aviso de chave
+desconhecida e podem ser apagadas.
+
 Outras formas de apontar o app para um arquivo de config diferente
 ([ADR-0040](adr/0040-superficie-de-linha-de-comando.md)):
 
@@ -233,7 +241,7 @@ fecha a tela junto, e, se houver alterações pendentes, pergunta antes.
 |---|---|
 | **Geral** | idioma, diretório inicial, confirmações ao fechar aba e janela |
 | **Shell** | programa, argumentos e variáveis de ambiente do shell |
-| **Terminal** | fonte, cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
+| **Terminal** | fonte (do terminal **e** da barra de abas e grupos), cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
 | **Aparência** | tema, animações, opacidade e decoração da janela, imagem de fundo da janela, posição da barra de abas, o que a aba mostra, barra de status |
 | **Sessão** | gravar e restaurar a sessão, restauração preguiçosa, geometria das janelas, convite de integração de shell |
 | **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |
@@ -370,7 +378,7 @@ usados, no default de fábrica:
 | `Shift+PageUp` / `Shift+PageDown` | igual | Rolar o scrollback |
 | `Ctrl+Shift+F` | `Cmd+F` | Buscar no scrollback |
 | `F3` / `Shift+F3` | igual | Próxima/anterior ocorrência da busca |
-| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | `Cmd++` / `Cmd+-` / `Cmd+0` | Zoom da fonte (aumentar/diminuir/resetar) |
+| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | `Cmd++` / `Cmd+-` / `Cmd+0` | Zoom da fonte do terminal (aumentar/diminuir/resetar); a barra de abas não muda |
 | `Ctrl+Shift+Y` | `Cmd+Y` | Alternar tema |
 | `Ctrl+Shift+O` | `Cmd+,` | Abrir a tela de configurações (`settings.open`) |
 | `Ctrl+Shift+,` | `Cmd+Shift+,` | Recarregar config na hora |

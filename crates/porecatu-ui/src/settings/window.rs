@@ -179,6 +179,10 @@ pub(crate) struct SettingsWindow {
     /// O botão do mouse segue apertado dentro de um campo em edição: o
     /// arraste seleciona texto (ADR-0035).
     dragging_field: bool,
+    /// Botão de janela (ADR-0027) sob o press esquerdo: o press só arma, e
+    /// o release sobre o mesmo botão é que dispara
+    /// (`tab_bar::window_button_release`).
+    pressed_window_button: Option<WindowButtonHit>,
     /// A lista de um botão de escolha, aberta.
     choice: Option<ChoiceList>,
     /// Onde procurar arquivos de idioma, para a lista do idioma.
@@ -243,6 +247,7 @@ impl SettingsWindow {
             draft: Draft::new(config),
             editing: None,
             dragging_field: false,
+            pressed_window_button: None,
             choice: None,
             locale_dirs,
             session_theme: None,
@@ -1149,14 +1154,9 @@ impl SettingsWindow {
                 bar_height(style),
                 point,
             ) {
-                return match hit {
-                    WindowButtonHit::Minimize => Press::Minimize,
-                    WindowButtonHit::MaximizeRestore => {
-                        self.window.set_maximized(!self.window.is_maximized());
-                        Press::Nothing
-                    }
-                    WindowButtonHit::Close => self.request_close(),
-                };
+                // Só arma: dispara no release (`left_released`).
+                self.pressed_window_button = Some(hit);
+                return Press::Nothing;
             }
             if let Some(direction) = self.resize_direction(style, resize_border, point) {
                 let _ = self.window.drag_resize_window(direction);
@@ -1247,9 +1247,39 @@ impl SettingsWindow {
         }
     }
 
-    /// O botão esquerdo foi solto: acaba o arraste de seleção de um campo.
-    pub(crate) fn left_released(&mut self) {
+    /// O botão esquerdo foi solto: acaba o arraste de seleção de um campo e
+    /// dispara o botão de janela armado pelo press, se o cursor ainda está
+    /// sobre ele -- disparar no press deixava o release cair na janela de
+    /// trás.
+    pub(crate) fn left_released(&mut self, env: Env<'_>) -> Press {
         self.dragging_field = false;
+        let armed = self.pressed_window_button.take();
+        if armed.is_none() || is_macos() {
+            return Press::Nothing;
+        }
+        let style = env.style;
+        let released_over = tab_bar::point_in_window_button(
+            style,
+            false,
+            self.logical_width,
+            bar_height(style),
+            self.cursor_logical(),
+        );
+        match tab_bar::window_button_release(armed, released_over) {
+            Some(WindowButtonHit::Minimize) => Press::Minimize,
+            Some(WindowButtonHit::MaximizeRestore) => {
+                self.window.set_maximized(!self.window.is_maximized());
+                Press::Nothing
+            }
+            Some(WindowButtonHit::Close) => self.request_close(),
+            None => Press::Nothing,
+        }
+    }
+
+    /// A janela perdeu o foco: um press armado num botão de janela não
+    /// recebe mais o release correspondente.
+    pub(crate) fn focus_lost(&mut self) {
+        self.pressed_window_button = None;
     }
 
     /// Clique num botão do rodapé. Descartar e Salvar indisponíveis não fazem

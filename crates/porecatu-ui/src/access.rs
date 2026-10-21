@@ -2035,7 +2035,7 @@ mod settings_tree_tests {
         assert_eq!(size.numeric_value(), Some(14.0));
         assert_eq!(
             size.description(),
-            Some("Tamanho da fonte, em pixels lógicos.")
+            Some("Tamanho da fonte do terminal e da barra de abas, em pixels lógicos.")
         );
         assert_eq!(
             labelled(&nodes, "Piscar").toggled(),

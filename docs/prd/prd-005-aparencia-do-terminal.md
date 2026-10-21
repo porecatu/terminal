@@ -26,6 +26,8 @@ Todo usuário. Defaults com boa legibilidade e contraste adequado, sem exigir ne
 
 **RF-5.1** — Configurável: a família da fonte principal do terminal, independente da fonte usada nos títulos de aba ([PRD-004](prd-004-aparencia-do-chrome.md)).
 
+> *Emendado em 2026-10-21* ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)): família e tamanho de `[terminal.font]` valem também para a barra de abas — título da aba, nome do grupo e campo de rename. Não há mais fonte de título de aba independente.
+
 **RF-5.2** — Configurável: uma **cadeia ordenada de fontes de fallback**. Um glyph ausente na fonte principal é procurado nas seguintes, em ordem. Não achando em nenhuma, o app usa a fonte padrão do sistema antes de desenhar um retângulo vazio.
 
 **RF-5.3** — Configurável: o tamanho da fonte em pontos, com valores fracionários.
