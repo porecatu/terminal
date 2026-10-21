@@ -235,6 +235,19 @@ no mesmo grupo e com as alterações pendentes intactas. Ela não entra na
 sessão e não volta ao reabrir o app. Fechar a última janela de terminal
 fecha a tela junto, e, se houver alterações pendentes, pergunta antes.
 
+**Em gerenciador de janelas tiling** (i3, bspwm e afins): no **X11** a tela
+se declara janela de diálogo, então ela **flutua** sobre a janela de
+terminal em vez de dividir a tela com ela, sem regra nenhuma no config do
+gerenciador. No **Wayland** (sway e afins) não há esse sinal; para que ela
+flutue, use uma regra pelo título, que segue o idioma da interface — por
+exemplo, no sway:
+
+```
+for_window [title="^Configurações$"] floating enable
+```
+
+(`"^Settings$"` com a interface em inglês.)
+
 ### Os grupos
 
 | Grupo | O que tem |

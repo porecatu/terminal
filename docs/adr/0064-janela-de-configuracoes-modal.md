@@ -29,6 +29,8 @@ O botão de minimizar do cabeçalho da tela continua desenhado (a aparência nã
 
 O `winit` não expõe dona nem desabilitar janela nas outras plataformas de forma equivalente; nelas o comportamento do ADR-0059 continua.
 
+> *Revisto em 2026-10-21*, a pedido do dono do produto (uso em i3): no **X11**, a janela de configurações passa a ser criada com `_NET_WM_WINDOW_TYPE_DIALOG` (`WindowAttributesExtX11::with_x11_window_type`, API segura do `winit`), sempre, sem detectar o gerenciador. Gerenciador tiling flutua janela de diálogo por conta própria, então ela sobrepõe a janela de terminal em vez de dividir a tela com ela. Continua **sem** dona e **sem** modal ali — o `winit` 0.30 não define `WM_TRANSIENT_FOR`. No **Wayland** nada muda: o `winit` não expõe janela pai, e o guia do usuário traz a regra manual do sway pelo título. Verificação: só compilação e clippy no CI Linux; o teste ao vivo no i3 fica com o dono do produto.
+
 ## Consequências
 
 ### Positivas

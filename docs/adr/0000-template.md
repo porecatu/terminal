@@ -65,7 +65,7 @@
 | [0061](0061-imagem-de-fundo-do-terminal.md) | Imagem de fundo do terminal: `image` para decodificar, primitiva de imagem no render, alfa multiplicado | Aceito |
 | [0062](0062-imagem-de-fundo-da-janela.md) | Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots | Aceito · §4 Superseded by ADR-0063 (**parcial**: sem furo até o desktop com imagem da janela) |
 | [0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) | Imagem da janela sem furo até o desktop | Aceito |
-| [0064](0064-janela-de-configuracoes-modal.md) | Janela de configurações modal, possuída pela janela de terminal | Aceito |
+| [0064](0064-janela-de-configuracoes-modal.md) | Janela de configurações modal, possuída pela janela de terminal | Aceito · §4 revisto (no X11, tipo diálogo para flutuar em gerenciador tiling) |
 | [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito |
 
 ## Convenção

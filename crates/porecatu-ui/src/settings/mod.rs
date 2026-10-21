@@ -145,6 +145,22 @@ pub(crate) fn window_attributes(
     }
     #[cfg(not(windows))]
     let _ = owner;
+    // No X11, a janela de configurações se declara diálogo
+    // (`_NET_WM_WINDOW_TYPE_DIALOG`): gerenciador tiling (i3, bspwm...) a
+    // deixa flutuar sobre a de terminal em vez de dividir a tela com ela.
+    // Em Wayland o atributo é ignorado -- o winit não expõe janela pai lá.
+    // Os mesmos sistemas em que o winit tem o módulo `platform::x11`.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        use winit::platform::x11::{WindowAttributesExtX11, WindowType};
+        attributes = attributes.with_x11_window_type(vec![WindowType::Dialog]);
+    }
     if let Some((x, y)) = position {
         attributes = attributes.with_position(PhysicalPosition::new(x, y));
     }
