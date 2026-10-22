@@ -14,7 +14,10 @@ mod hyperlinks;
 mod scrollback;
 mod selection;
 
-pub use acrylic::{Acrylic, AcrylicBlock, AcrylicState, MAX_BLUR, MIN_BLUR, acrylic_state};
+pub use acrylic::{
+    Acrylic, AcrylicBlock, AcrylicState, DEFAULT_BLUR, MAX_BLUR, MIN_BLUR, acrylic_requirement,
+    acrylic_state,
+};
 pub use background_image::{BackgroundImage, BackgroundImageMode, resolve_background_image_path};
 pub use clipboard::Clipboard;
 pub use colors::{AnsiPalette, Colors};

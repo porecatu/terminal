@@ -94,20 +94,30 @@ pub fn acrylic_state(config: &Config) -> AcrylicState {
     if !config.terminal.acrylic.enabled {
         return AcrylicState::Disabled;
     }
-    if config.appearance.window.opacity != 1.0 {
-        return AcrylicState::Blocked(AcrylicBlock::WindowOpacity);
+    match acrylic_requirement(config) {
+        Some(block) => AcrylicState::Blocked(block),
+        None => AcrylicState::Active,
     }
-    if config
+}
+
+/// A condição do RF-19.10 que **falta**, ignorando `enabled`: `None` com as
+/// duas atendidas. É a metade de [`acrylic_state`] que não depende do
+/// interruptor, e é o que a tela de configurações pergunta (RF-19.19): com o
+/// efeito desligado e a opacidade da janela em 0.9, as duas linhas já ficam
+/// indisponíveis -- senão ligar o interruptor o travaria no mesmo gesto, e o
+/// motivo só apareceria depois. A precedência é a de sempre (RF-19.19).
+pub fn acrylic_requirement(config: &Config) -> Option<AcrylicBlock> {
+    if config.appearance.window.opacity != 1.0 {
+        return Some(AcrylicBlock::WindowOpacity);
+    }
+    config
         .appearance
         .window
         .background_image
         .path
         .trim()
         .is_empty()
-    {
-        return AcrylicState::Blocked(AcrylicBlock::NoWindowImage);
-    }
-    AcrylicState::Active
+        .then_some(AcrylicBlock::NoWindowImage)
 }
 
 #[cfg(test)]
@@ -278,6 +288,34 @@ mod tests {
             acrylic_state(&config(true, 0.9, "")),
             AcrylicState::Blocked(AcrylicBlock::WindowOpacity)
         );
+    }
+
+    /// A condição que falta não depende do interruptor: é o que a tela de
+    /// configurações pergunta, com o efeito ligado ou não.
+    #[test]
+    fn the_requirement_ignores_the_switch_and_keeps_the_precedence() {
+        for enabled in [false, true] {
+            let missing = |opacity, image| acrylic_requirement(&config(enabled, opacity, image));
+            assert_eq!(missing(1.0, "fundo.png"), None);
+            assert_eq!(missing(0.9, "fundo.png"), Some(AcrylicBlock::WindowOpacity));
+            assert_eq!(missing(1.0, ""), Some(AcrylicBlock::NoWindowImage));
+            assert_eq!(missing(1.0, "  "), Some(AcrylicBlock::NoWindowImage));
+            assert_eq!(missing(0.9, ""), Some(AcrylicBlock::WindowOpacity));
+        }
+    }
+
+    /// `acrylic_state` é o requisito mais o interruptor, nada além.
+    #[test]
+    fn the_state_is_the_requirement_plus_the_switch() {
+        for (opacity, image) in [(1.0, "a.png"), (0.9, "a.png"), (1.0, ""), (0.9, "")] {
+            let off = config(false, opacity, image);
+            assert_eq!(acrylic_state(&off), AcrylicState::Disabled);
+            let on = config(true, opacity, image);
+            assert_eq!(
+                acrylic_state(&on),
+                acrylic_requirement(&on).map_or(AcrylicState::Active, AcrylicState::Blocked)
+            );
+        }
     }
 
     #[test]

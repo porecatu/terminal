@@ -49,8 +49,9 @@ pub use session::Session;
 pub use shell::Shell;
 pub use terminal::{
     Acrylic, AcrylicBlock, AcrylicState, AnsiPalette, BackgroundImage, BackgroundImageMode,
-    Clipboard, Colors as TerminalColors, Cursor, CursorShape, Font, MAX_BLUR, MIN_BLUR, Scrollback,
-    Selection, Terminal, ZoomScope, acrylic_state, resolve_background_image_path,
+    Clipboard, Colors as TerminalColors, Cursor, CursorShape, DEFAULT_BLUR, Font, MAX_BLUR,
+    MIN_BLUR, Scrollback, Selection, Terminal, ZoomScope, acrylic_requirement, acrylic_state,
+    resolve_background_image_path,
 };
 pub use theme::{
     BUILT_IN_THEME_FILES, DEFAULT_LIGHT_THEME, DEFAULT_THEME, THEME_FILE_PREFIX, Theme,

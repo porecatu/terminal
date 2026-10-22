@@ -307,6 +307,11 @@ pub(crate) struct RowView {
     /// de atalho (RF-16.30) e a combinação que o terminal perde (RF-16.29).
     /// Cortada ao orçamento da linha, como a razão de um valor recusado.
     pub notice: Option<String>,
+    /// A linha está **indisponível por dependência** (ADR-0068 §10): a nota do
+    /// que falta, cortada ao orçamento da linha, em 11px no tom Terciário
+    /// abaixo da descrição. A linha se desenha como a somente leitura, sem
+    /// edição e sem Restaurar padrão. `None` na linha disponível.
+    pub unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -485,7 +490,7 @@ pub(crate) fn build(
             Block::Row(row) => BlockSpec::Row {
                 control: row.control.size(m),
                 two_lines: !row.description.is_empty(),
-                reason: row.invalid.is_some() || row.notice.is_some(),
+                reason: row.invalid.is_some() || row.notice.is_some() || row.unavailable.is_some(),
             },
         })
         .collect();
@@ -644,6 +649,19 @@ fn option_row(
             .0
     });
 
+    // ADR-0068 §10: a dependência avaliada sobre as pendências (RF-19.20). A
+    // linha indisponível não tem Restaurar padrão (a pendência, se há, fica).
+    let unavailable = draft.unavailable(option).map(|unavailable| {
+        measurer
+            .truncate(
+                &(unavailable.note)(catalog),
+                BODY_FONT,
+                m.description_size,
+                budget,
+            )
+            .0
+    });
+
     RowView {
         option: Some(option.id),
         name,
@@ -655,9 +673,10 @@ fn option_row(
         control,
         pending: draft.is_pending(option),
         invalid,
-        can_reset: draft.can_reset(option),
+        can_reset: draft.can_reset(option) && unavailable.is_none(),
         action: None,
         notice: None,
+        unavailable,
     }
 }
 
@@ -975,6 +994,7 @@ fn push_shortcut_blocks(
                 can_reset: view.state.can_reset(action),
                 action: Some(action),
                 notice,
+                unavailable: None,
             })));
         }
     }
@@ -1039,6 +1059,7 @@ fn push_theme_rows(
             can_reset: false,
             action: None,
             notice: None,
+            unavailable: None,
         })));
     }
     if let Some(session) = session_theme
@@ -2044,6 +2065,169 @@ mod tests {
             panic!("modo deveria ser segmentado: {:?}", mode.control);
         };
         assert_eq!(labels, &["Esticar", "Ladrilho", "Centralizar"]);
+    }
+
+    // ---- acrílico: linha indisponível por dependência (ADR-0068 §10) --------
+
+    fn appearance_of(draft: &Draft) -> Content {
+        draft_content(Group::Appearance, draft)
+    }
+
+    fn acrylic_file(opacity: f64, image: &str) -> Config {
+        let mut config = Config::default();
+        config.appearance.window.opacity = opacity;
+        config.appearance.window.background_image.path = image.to_owned();
+        config
+    }
+
+    #[test]
+    fn the_acrylic_rows_come_after_the_three_window_image_rows() {
+        let c = appearance_of(&Draft::new(&Config::default()));
+        let ids: Vec<_> = rows(&c).iter().filter_map(|row| row.option).collect();
+        let at = ids
+            .iter()
+            .position(|id| *id == "window_background_image_opacity")
+            .unwrap();
+        assert_eq!(
+            &ids[at..at + 3],
+            [
+                "window_background_image_opacity",
+                "acrylic_enabled",
+                "acrylic_blur"
+            ]
+        );
+        let toggle = row_of(&c, "acrylic_enabled");
+        assert_eq!(toggle.name, "Efeito acrílico");
+        assert!(matches!(toggle.control, ControlView::Toggle { on: false }));
+        let blur = row_of(&c, "acrylic_blur");
+        let ControlView::Field {
+            text,
+            right_aligned,
+            ..
+        } = &blur.control
+        else {
+            panic!("o desfoque é um campo numérico: {:?}", blur.control);
+        };
+        assert_eq!(text, "24");
+        assert!(right_aligned);
+    }
+
+    /// RF-19.19: as duas linhas, com a nota do motivo; a opacidade vence.
+    #[test]
+    fn without_the_conditions_both_acrylic_rows_carry_the_reason_note() {
+        for (opacity, image, note) in [
+            (0.9, "fundo.png", "Exige a opacidade da janela em 100%"),
+            (1.0, "", "Exige uma imagem de fundo da janela"),
+            (0.9, "", "Exige a opacidade da janela em 100%"),
+        ] {
+            let c = appearance_of(&Draft::new(&acrylic_file(opacity, image)));
+            for id in ["acrylic_enabled", "acrylic_blur"] {
+                let row = row_of(&c, id);
+                assert_eq!(row.unavailable.as_deref(), Some(note), "{id}");
+                assert!(!row.can_reset, "{id} sem Restaurar padrão");
+            }
+        }
+    }
+
+    #[test]
+    fn with_both_conditions_the_acrylic_rows_are_available() {
+        let c = appearance_of(&Draft::new(&acrylic_file(1.0, "fundo.png")));
+        for id in ["acrylic_enabled", "acrylic_blur"] {
+            assert!(row_of(&c, id).unavailable.is_none(), "{id}");
+        }
+        // E nenhuma outra linha do grupo ganha nota.
+        assert!(
+            rows(&c)
+                .iter()
+                .filter(|row| !matches!(row.option, Some("acrylic_enabled" | "acrylic_blur")))
+                .all(|row| row.unavailable.is_none())
+        );
+    }
+
+    /// RF-19.20: a nota segue a opacidade **pendente**, sem salvar.
+    #[test]
+    fn the_note_follows_the_pending_window_opacity() {
+        let opacity = super::super::catalog::option("window_opacity").unwrap();
+        let mut draft = Draft::new(&acrylic_file(1.0, "fundo.png"));
+        assert!(
+            row_of(&appearance_of(&draft), "acrylic_blur")
+                .unavailable
+                .is_none()
+        );
+        draft.set(opacity, EditValue::Float(0.9)).unwrap();
+        let c = appearance_of(&draft);
+        assert!(row_of(&c, "acrylic_enabled").unavailable.is_some());
+        assert!(row_of(&c, "acrylic_blur").unavailable.is_some());
+        draft.set(opacity, EditValue::Float(1.0)).unwrap();
+        let c = appearance_of(&draft);
+        assert!(row_of(&c, "acrylic_enabled").unavailable.is_none());
+        assert!(row_of(&c, "acrylic_blur").unavailable.is_none());
+    }
+
+    /// A nota abre uma linha de razão na geometria: a linha fica mais alta que
+    /// a mesma linha disponível, sem que o resto do painel se sobreponha.
+    #[test]
+    fn the_note_takes_the_reason_line_of_the_row_geometry() {
+        let height_of = |config: &Config| {
+            let c = appearance_of(&Draft::new(config));
+            let index = c
+                .blocks
+                .iter()
+                .position(
+                    |block| matches!(block, Block::Row(row) if row.option == Some("acrylic_blur")),
+                )
+                .unwrap();
+            let super::layout::BlockGeometry::Row(geometry) = &c.geometry.blocks[index] else {
+                panic!("sem geometria de linha");
+            };
+            geometry.rect.height
+        };
+        assert!(
+            height_of(&acrylic_file(0.9, "fundo.png")) > height_of(&acrylic_file(1.0, "fundo.png"))
+        );
+    }
+
+    /// RF-19.21: uma pendência já feita sobrevive a a linha esmaecer -- a linha
+    /// segue com o ponto de pendente e o valor editado, só sem Restaurar.
+    #[test]
+    fn a_pending_edit_stays_visible_on_a_row_that_became_unavailable() {
+        let catalog = super::super::catalog::option;
+        let mut draft = Draft::new(&acrylic_file(1.0, "fundo.png"));
+        draft
+            .set(catalog("acrylic_blur").unwrap(), EditValue::Integer(8))
+            .unwrap();
+        draft
+            .set(catalog("window_opacity").unwrap(), EditValue::Float(0.9))
+            .unwrap();
+        let c = appearance_of(&draft);
+        let blur = row_of(&c, "acrylic_blur");
+        assert!(blur.unavailable.is_some());
+        assert!(blur.pending, "o ponto de pendente continua");
+        assert!(!blur.can_reset);
+        let ControlView::Field { text, .. } = &blur.control else {
+            panic!()
+        };
+        assert_eq!(text, "8");
+    }
+
+    #[test]
+    fn the_note_is_cut_to_the_row_budget_like_the_description() {
+        let mut narrow = metrics();
+        narrow.panel_padding = 8.0;
+        let c = build(
+            ContentKey {
+                group: Group::Appearance,
+                panel_width_bits: 360.0_f32.to_bits(),
+                generation: 0,
+            },
+            &Draft::new(&acrylic_file(0.9, "fundo.png")),
+            &ViewExtras::default(),
+            &test_support::pt_br(),
+            &narrow,
+            &mut TextMeasurer::new(),
+        );
+        let note = row_of(&c, "acrylic_blur").unavailable.clone().unwrap();
+        assert!(!note.is_empty());
     }
 
     #[test]

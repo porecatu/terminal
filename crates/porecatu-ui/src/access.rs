@@ -1062,9 +1062,20 @@ fn settings_row_node(
         Some(notice) => format!("{description} {notice}"),
         None => description,
     };
+    // A nota de uma linha indisponível por dependência (ADR-0068 §10) também é
+    // lida junto da descrição: o leitor de tela diz o que falta, e o nó vai
+    // desabilitado.
+    let description = match &row.unavailable {
+        Some(note) if description.is_empty() => note.clone(),
+        Some(note) => format!("{description} {note}"),
+        None => description,
+    };
     let describe = |node: &mut Node| {
         if !description.is_empty() {
             node.set_description(description.clone());
+        }
+        if row.unavailable.is_some() {
+            node.set_disabled();
         }
         // Valor recusado (RF-16.18): o leitor de tela o anuncia como inválido.
         if row.invalid.is_some() {
@@ -2242,6 +2253,53 @@ mod settings_tree_tests {
             "pt-BR",
         );
         assert!(rows_only(&update).iter().all(|read_only| !read_only));
+    }
+
+    /// ADR-0068 §10: a linha indisponível por dependência é um nó **desabilitado**
+    /// que lê a nota do motivo junto da descrição; as outras linhas do grupo
+    /// seguem habilitadas. (Com a config padrão não há imagem da janela, então as
+    /// duas do acrílico nascem indisponíveis.)
+    #[test]
+    fn an_unavailable_row_is_a_disabled_node_that_reads_its_note() {
+        let rows = rows_for_test(Group::Appearance);
+        assert!(
+            rows.iter()
+                .any(|row| row.option == Some("acrylic_blur") && row.unavailable.is_some())
+        );
+        let layout = layout_for_test(true);
+        let refs: Vec<&RowView> = rows.iter().collect();
+        let update = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::Appearance,
+            false,
+            &refs,
+            None,
+            None,
+            None,
+            &test_support::pt_br(),
+            "pt-BR",
+        );
+        let nodes = row_nodes(&update);
+        let named = |label: &str| {
+            nodes
+                .iter()
+                .find(|node| node.label() == Some(label))
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        for label in ["Efeito acrílico", "Desfoque do acrílico"] {
+            let node = named(label);
+            assert!(node.is_disabled(), "{label}");
+            assert!(
+                node.description()
+                    .is_some_and(|text| text.ends_with("Exige uma imagem de fundo da janela")),
+                "{label}: {:?}",
+                node.description()
+            );
+        }
+        // Só elas: a tela não ficou desabilitada.
+        let animations = named("Animações");
+        assert!(!animations.is_disabled());
     }
 
     #[test]
