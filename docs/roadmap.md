@@ -1035,6 +1035,44 @@ Pedido do dono do produto, fora da ordem de fases ([ADR-0067](adr/0067-temas-em-
 
 ---
 
+## Depois do v1 — efeito acrílico no fundo do terminal — documentada
+
+Fora da ordem de fases, pelo caminho das duas imagens de fundo: **requisito novo**, pedido do dono do produto. O [PRD-019](prd/prd-019-efeito-acrilico-no-fundo-do-terminal.md) pede que a imagem de fundo da janela apareça **desfocada** através do quadro do terminal, com raio configurável (`[terminal.acrylic] enabled` e `blur`), nítida fora dele, com a imagem do terminal nítida por cima. O efeito só vale com `[appearance.window] opacity = 1.0` e com imagem de fundo da janela: com a janela translúcida, o desktop apareceria nítido atrás do que o app desfoca. Revoga, por emenda, o "desfoque" do fora de escopo do PRD-017 e do PRD-018. O [ADR-0068](adr/0068-efeito-acrilico-no-fundo-do-terminal.md) decide:
+
+- um passe de desfoque em `porecatu-render`, revogando o "sem passo de filtro, definitivo" **só para isto**;
+- a fonte do desfoque como lista de primitivas dada pela `ui`, sem domínio no render;
+- gaussiana separável sobre cópia reduzida, `Rgba8Unorm`, guardada na `WindowSurface` e refeita só quando a chave muda;
+- `Primitive::BlurredBackdrop`, amostrada por coordenada de tela, entre a sombra e o fundo do quadro;
+- `acrylic_state` em `porecatu-config`, uma regra para pintura, aviso e tela;
+- o estado de linha "indisponível por dependência" na tela de configurações;
+- classe A da recarga.
+
+O ponto de partida: a imagem da janela é a primeira primitiva de `Layer::Grid`, o quadro não fura até o desktop com ela configurada (ADR-0063), a `WindowSurface` já tem um `Offscreen` para o blit de opacidade e não há passe de filtro nenhum.
+
+**Cinco etapas:**
+
+1. **Documentação e decisão — feita.** Os documentos novos são o PRD-019 e o ADR-0068. Ganharam blockquote de revisão: o PRD-017 e o PRD-018 (fora de escopo), o ADR-0030 (classe A) e o ADR-0060 §2 (linha indisponível por dependência). Também foram atualizados o índice de ADRs, a tabela de fases da especificação (só a classificação) e o CLAUDE.md. **A especificação não é reescrita aqui**, e **`[terminal.acrylic]` não entra no arquivo de exemplo aqui** (`tests/example_toml.rs` reprova chave antes do campo).
+2. **Config, regra e avisos.** `[terminal.acrylic]` (`enabled`, `blur` limitado a `1..=64` com aviso) em `porecatu-config`, com o bloco comentado no exemplo na mesma leva; `acrylic_state(&Config)` com `Active`, `Disabled` e `Blocked(WindowOpacity | NoWindowImage)` e testes de cada caso e da precedência; os avisos `notice.acrylic.*` em todo `locales/`, emitidos na carga e na recarga que **cria** o bloqueio, uma vez por processo. **Sem pixel novo.**
+3. **Passe de desfoque no render.** A fonte de desfoque da `WindowSurface` (cor, primitivas, raio lógico, chave), a cópia reduzida, os dois passes gaussianos, o cache por chave e `Primitive::BlurredBackdrop` com a SDF compartilhada. Testes de GPU: cor lisa sobrevive ao passe sem mudar (nada de dupla conversão sRGB), a amostra em coordenada de tela é contínua entre dois retângulos vizinhos, o raio físico acompanha a escala. **Sem uso pela `ui` ainda.**
+4. **Pintura, recarga e tela de configurações.** A `ui` monta a fonte a partir da imagem da janela e emite o `BlurredBackdrop` por quadro entre a sombra e o fundo, conforme `acrylic_state`; recarga classe A; as duas opções no grupo Aparência depois das três da imagem da janela, com o estado indisponível avaliado sobre as pendências e a nota do motivo; frases em todo `locales/`. **Aval visual pedido aqui.**
+5. **Verificação ao vivo e fechamento.** Os cenários do PRD-019 numa instância isolada por cenário; medição de pixel da continuidade entre painéis e do tingimento; frames ociosos, `PORECATU_TRACE` com e sem acrílico e o custo do desfoque no redimensionamento em 1080p e 4K. As §1.2, §2.7 e §4.4 da especificação, a arquitetura §5, o guia do usuário, o CHANGELOG e a nota da F2 no CLAUDE.md passam a descrever o binário.
+
+**Escopo:** RF-19.1 a RF-19.22.
+
+**Aparência:** a imagem da janela desfocada dentro do quadro do terminal e duas linhas na tela de configurações. **Nenhuma cor, dimensão, raio ou espaçamento novo**; com `enabled = false`, que é o padrão, o binário não muda um pixel. Sujeita ao aval visual da etapa 4.
+
+**Dependências:** nenhuma nova.
+
+**Critério de saída:**
+- o acrílico desenhado com a janela opaca e imagem de janela, nos três modos da imagem, contínuo entre painéis, com a imagem do terminal nítida por cima;
+- o acrílico recusado, com o aviso do motivo, com a janela translúcida e sem imagem da janela;
+- a tela de configurações esmaecendo e devolvendo as duas opções conforme as pendências;
+- troca de `enabled` e `blur` pela recarga sem redimensionar PTY;
+- tempo até o primeiro prompt e frames ociosos iguais com e sem acrílico;
+- `verify-docs.py`, `cargo test --workspace`, `clippy -D warnings` e `cargo fmt --check` verdes.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

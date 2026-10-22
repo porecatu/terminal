@@ -28,6 +28,8 @@ O layout da barra é função pura de `(Workspace, Config, largura)` desde a F2 
 
 > **Acrescentado pelo [ADR-0062](0062-imagem-de-fundo-da-janela.md) §9.** `[appearance.window.background_image] path`, `mode` e `opacity` são classe A, com o mesmo comportamento das três chaves de `[terminal.background_image]`. A imagem da janela não decide a transparência da surface: `[appearance.window] opacity` continua classe C.
 
+> **Acrescentado pelo [ADR-0068](0068-efeito-acrilico-no-fundo-do-terminal.md) §9.** `[terminal.acrylic] enabled` e `blur` são classe A, e também a passagem do acrílico entre ativo e bloqueado quando `[appearance.window] opacity` ou a imagem da janela mudam por recarga. O desfoque é refeito no frame seguinte, sem PTY, sem grade e sem janela recriada. A transparência da surface continua classe C, e o acrílico não entra nela.
+
 ### Classe B — aplica a quente, com recálculo de grade e resize de PTY
 
 `terminal.font.*` (família, tamanho, `line_height`, `letter_spacing`), `[appearance.tabs] height`/`tab_height`/`trilha_padding` (mudam a altura da barra, logo a área do terminal) e `[appearance.terminal_frame]` (mudam a área útil dentro do quadro). Depois da troca do `Arc`, recalcula a métrica de célula, deriva colunas e linhas e **redimensiona todos os PTYs da janela** — o mesmo caminho de um resize de janela, que já existe.

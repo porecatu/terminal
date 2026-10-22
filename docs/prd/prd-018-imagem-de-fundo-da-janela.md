@@ -202,6 +202,9 @@ Cenário: pela tela de configurações
 - **Imagem na janela de configurações**, nos avisos, menus, tooltip, popovers, editor de grupo e diálogos.
 - **Imagem por baixo da decoração nativa do macOS** além do que já é nosso pixel: a barra transparente com o conteúdo por baixo ([ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md)) já deixa a área inteira para o app; a moldura do sistema não é desenhada por nós.
 - **Um quarto modo** (`fill`/`fit`), desfoque, escurecimento ou tingimento, GIF/WebP/BMP/SVG, imagem animada, imagem em tema, troca periódica, URL e vigiar o arquivo — pelas mesmas razões do [PRD-017](prd-017-imagem-de-fundo-do-terminal.md).
+
+  > **Emenda ([PRD-019](prd-019-efeito-acrilico-no-fundo-do-terminal.md), [ADR-0068](../adr/0068-efeito-acrilico-no-fundo-do-terminal.md)):** o **desfoque** sai desta lista, só para a imagem da janela vista **através do quadro do terminal** (o efeito acrílico), e só com `[appearance.window] opacity = 1.0`. Fora do quadro a imagem continua nítida, e o resto da lista continua fora de escopo.
+
 - **Dar uso ao token `[appearance.window] background`** (`#15181d`), que existe no arquivo e nunca foi lido. Ele não vira o fundo atrás da imagem; o fundo continua sendo o `bar_background`.
 - **Uma imagem que respeite a sombra do quadro do terminal** de outro jeito que não pela ordem de pintura: a sombra é pintada por cima da imagem, como é pintada por cima do fundo.
 

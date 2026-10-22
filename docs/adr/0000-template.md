@@ -69,6 +69,7 @@
 | [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito |
 | [0066](0066-estado-pressionado-dos-botoes-de-janela.md) | Estado pressionado dos botões de janela | Aceito · cores revistas por ADR-0067 (fundos translúcidos) |
 | [0067](0067-temas-em-arquivos-proprios.md) | Temas em arquivos próprios (`thm_*.toml`), cor só no tema, botões de janela translúcidos | Aceito |
+| [0068](0068-efeito-acrilico-no-fundo-do-terminal.md) | Efeito acrílico no fundo do terminal: desfoque da camada da janela em passe próprio, amostrado por quadro | Aceito — aval visual pendente |
 
 ## Convenção
 

@@ -57,6 +57,9 @@ A regra que não cai, desde o [ADR-0028](0028-o-binario-como-referencia-visual.m
 - **Inválida** (RF-16.18): borda do controle em **Erro** `#ef8a8a` e, abaixo da descrição, a razão em 11px `#ef8a8a`.
 - **Somente leitura** (RF-16.22): controles e textos da linha em `#5c646f`, a regra "indisponível fica esmaecido, nunca ausente" da §2.16.
 
+> **Acrescentado pelo [ADR-0068](0068-efeito-acrilico-no-fundo-do-terminal.md) §10.** Um quarto estado de linha, **indisponível por dependência**: a anatomia da linha somente leitura (controles e textos em `#5c646f`, sem edição, sem Restaurar padrão), mais uma nota abaixo da descrição em 11px **Terciário** `#828a96`, que diz qual opção falta. É recalculado a cada edição pendente, não só ao abrir a tela, e não remove o valor do arquivo. Primeiro uso: as duas opções do acrílico ([PRD-019](../prd/prd-019-efeito-acrilico-no-fundo-do-terminal.md)), que dependem da opacidade da janela e da imagem de fundo da janela. Nenhum valor novo.
+
+
 **Faixa** de arquivo alterado fora ou inválido (RF-16.22, RF-16.23): o **aviso do app** (§2.14) embutido no topo do painel, largura cheia em vez de 320 e sem sombra (não flutua, como a barra de busca — [ADR-0041](0041-busca-no-scrollback.md)): fundo `#1a1e25`, borda `1px #2e343e`, raio 8, `padding: 11px 12px`, barra de severidade de 2px (aviso `#e0b060`, erro `#ef8a8a`), título 12.5px/500 `#dfe4ea`, corpo 11px `#a8b0bb`, e os botões da faixa (Recarregar, Manter minhas alterações, Abrir arquivo no editor) à direita com a anatomia do botão do diálogo (§3).
 
 ### 3. Os controles

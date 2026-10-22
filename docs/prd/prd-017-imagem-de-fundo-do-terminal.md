@@ -190,6 +190,9 @@ Cenário: pela tela de configurações
 - **Um quarto modo que preenche mantendo a proporção** (`fill`/*cover*) ou que cabe mantendo a proporção (`fit`/*contain*). São três modos, decisão do dono do produto; acrescentar um é aditivo.
 - **GIF, WebP, BMP, SVG e imagem animada.**
 - **Desfoque, escurecimento ou tingimento da imagem** além da opacidade. Não há primitiva de filtro em `porecatu-render`, e é definitivo ([CLAUDE.md](../../CLAUDE.md), "Descobertas na F2").
+
+  > **Emenda ([PRD-019](prd-019-efeito-acrilico-no-fundo-do-terminal.md), [ADR-0068](../adr/0068-efeito-acrilico-no-fundo-do-terminal.md)):** o desfoque passa a existir para a **imagem da janela** vista através do quadro do terminal (o efeito acrílico), com um passe de desfoque em `porecatu-render` só para isso. A imagem **do terminal** continua sem desfoque, escurecimento ou tingimento: no acrílico ela fica nítida, por cima.
+
 - **Seletor de arquivo do sistema.** Nenhum diálogo nativo ([ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md)); caminho é texto (RF-16.12).
 - **Vigiar o arquivo de imagem** e recarregá-lo sozinho quando ele muda.
 - **Imagem no chrome**: barra de abas, barra de status, widgets, janela de configurações.
