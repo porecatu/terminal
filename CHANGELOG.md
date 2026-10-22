@@ -16,6 +16,11 @@ primeiro release.
 
 ## [Não publicado]
 
+## [0.9.5] - 2026-10-22
+
+O app ganha o **efeito acrílico** no fundo do terminal e **temas em arquivos
+próprios**. Mais quatro correções de janela e de botões.
+
 ### Adicionado
 
 - **Efeito acrílico no fundo do terminal**
@@ -58,6 +63,13 @@ primeiro release.
 - Cor no `porecatu.toml` (`[terminal.colors]`, as cores de `[appearance.*]`
   e `[[themes]]`): vira chave ignorada, com um aviso só que diz quantas eram
 - O passo "sem tema" de `theme.cycle`: sem tema é o `default`
+
+### Corrigido
+
+- **Botões de janela disparam ao soltar**, não ao apertar, e ganham estado
+  pressionado; o terminal e o chrome usam a mesma fonte (`[terminal.font]`)
+- **A tela de configurações não fica mais preta ao restaurar o app**
+- **A tela de configurações flutua em gerenciador de janelas tiling no X11**
 
 ## [0.9.4] - 2026-10-17
 
