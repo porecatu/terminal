@@ -154,6 +154,12 @@ window_background_image_mode_label = "Modus des Fensterbilds"
 window_background_image_mode_description = "Wie das Bild das ganze Fenster füllt."
 window_background_image_opacity_label = "Deckkraft des Fensterbilds"
 window_background_image_opacity_description = "Deckkraft des Fensterbilds, von 0.0 bis 1.0; die Fensterdeckkraft gilt zusätzlich."
+acrylic_enabled_label = "Acryleffekt"
+acrylic_enabled_description = "Zeigt das Fensterhintergrundbild unscharf durch das Terminal. Er zeigt sich im Maß der Deckkraft des Terminalhintergrunds: bei 1.0 verdeckt der Hintergrund den Effekt."
+acrylic_blur_label = "Acryl-Unschärfe"
+acrylic_blur_description = "Wie stark das Bild verwischt wird, von 1 bis 64 Pixel."
+acrylic_requires_window_opacity = "Erfordert die Fensterdeckkraft bei 100 %"
+acrylic_requires_window_image = "Erfordert ein Fensterhintergrundbild"
 decorations_label = "Systemdekoration"
 decorations_description = "Verwendet die Titelleiste des Systems statt der eigenen der App."
 show_close_button_label = "Schließen-Schaltfläche am Tab"
@@ -579,6 +585,15 @@ unreadable = "Konnte nicht gelesen werden: \"{path}\""
 unsupported = "Nicht unterstütztes Format (nur PNG und JPEG): \"{path}\""
 malformed = "Beschädigt oder kein gültiges Bild: \"{path}\""
 too_large = "Zu groß zum Laden: \"{path}\""
+
+[notice.acrylic]
+title = "Acryleffekt nicht angewendet"
+window_opacity = "Fensterdeckkraft nicht bei 100 %: Acryl braucht 1.0."
+no_window_image = "Kein Hintergrundbild für das Fenster: Acryl braucht eines."
+
+[notice.acrylic_blur_adjusted]
+title = "Acryl-Unschärfe angepasst"
+body = "Außerhalb des Bereichs {min} bis {max}: \"{key}\" verwendet {used}."
 
 [notice.language_not_found]
 title = "Sprache nicht gefunden"

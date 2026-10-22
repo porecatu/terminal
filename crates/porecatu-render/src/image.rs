@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use crate::frame::ImagePrimitive;
-use crate::primitives::ImageId;
+use crate::primitives::{ImageId, Rect};
 use crate::quad::{QuadShared, snap_rect_to_physical_pixels};
 
 const SHADER: &str = concat!(include_str!("sdf.wgsl"), include_str!("image.wgsl"));
@@ -184,11 +184,35 @@ impl ImageInstance {
             _pad: [0.0, 0.0],
         }
     }
+
+    /// A instância de um `BlurredBackdrop` (ADR-0068 §5): só a máscara, em
+    /// pixels físicos com as bordas arredondadas como as das outras primitivas.
+    /// O retângulo desenhado é a máscara com **um pixel de folga** de cada lado,
+    /// para a faixa de antialiasing de um canto arredondado não ser cortada pelo
+    /// próprio quad; fora da máscara a cobertura é zero. `uv` não é lido por
+    /// `fs_screen`.
+    pub(crate) fn screen_space(mask: Rect, mask_radius: f32, scale: f32) -> Self {
+        let (mask_pos, mask_size) = snap_rect_to_physical_pixels(mask, scale);
+        Self {
+            rect_pos: [mask_pos[0] - 1.0, mask_pos[1] - 1.0],
+            rect_size: [mask_size[0] + 2.0, mask_size[1] + 2.0],
+            uv_origin: [0.0, 0.0],
+            uv_size: [1.0, 1.0],
+            mask_pos,
+            mask_size,
+            mask_radius: mask_radius * scale,
+            alpha: 1.0,
+            _pad: [0.0, 0.0],
+        }
+    }
 }
 
 /// Pipeline, samplers e layouts do processo (ADR-0018).
 pub(crate) struct ImageShared {
     pub(crate) pipeline: wgpu::RenderPipeline,
+    /// O mesmo layout e o mesmo vértice, com o fragmento `fs_screen`
+    /// (`Primitive::BlurredBackdrop`).
+    pub(crate) screen_pipeline: wgpu::RenderPipeline,
     texture_layout: wgpu::BindGroupLayout,
     clamp_sampler: wgpu::Sampler,
     repeat_sampler: wgpu::Sampler,
@@ -253,38 +277,43 @@ impl ImageShared {
                 8 => Float32,   // alpha
             ],
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("porecatu-render/image-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(vertex_layout), Some(instance_layout)],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // O shader devolve `rgb * a, a` (image.wgsl): o par certo é
-                    // o premultiplicado, o mesmo do quad -- `ALPHA_BLENDING`
-                    // aplicaria o alfa em dobro (CLAUDE.md, "Blend mode do
-                    // pipeline de quad").
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let make_pipeline = |label: &'static str, fragment_entry: &'static str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(vertex_layout.clone()), Some(instance_layout.clone())],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment_entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        // Os dois fragmentos devolvem premultiplicado (`rgb * a,
+                        // a`, image.wgsl): o par certo é o blend premultiplicado,
+                        // o mesmo do quad -- `ALPHA_BLENDING` aplicaria o alfa em
+                        // dobro (CLAUDE.md, "Blend mode do pipeline de quad").
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline("porecatu-render/image-pipeline", "fs_main");
+        let screen_pipeline =
+            make_pipeline("porecatu-render/blurred-backdrop-pipeline", "fs_screen");
 
         let sampler = |label: &'static str, address_mode: wgpu::AddressMode| {
             device.create_sampler(&wgpu::SamplerDescriptor {
@@ -300,6 +329,7 @@ impl ImageShared {
         };
         Self {
             pipeline,
+            screen_pipeline,
             texture_layout,
             clamp_sampler: sampler(
                 "porecatu-render/image-clamp",
@@ -307,6 +337,18 @@ impl ImageShared {
             ),
             repeat_sampler: sampler("porecatu-render/image-repeat", wgpu::AddressMode::Repeat),
         }
+    }
+
+    /// O layout de textura + sampler do grupo 1: o `BlurredBackdrop` o usa para
+    /// a textura desfocada (`blur.rs`), uma textura de um nível só.
+    pub(crate) fn texture_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.texture_layout
+    }
+
+    /// O sampler linear de `ClampToEdge` das imagens, que amplia a textura
+    /// reduzida do desfoque e estende a borda dela.
+    pub(crate) fn clamp_sampler(&self) -> &wgpu::Sampler {
+        &self.clamp_sampler
     }
 
     /// Cria a textura (um nível por entrada de `levels`) e o bind group.
@@ -642,6 +684,7 @@ mod gpu_tests {
                 &self.queue,
                 &resolved.batches,
                 &self.registry,
+                false,
                 1.0,
                 SIZE,
                 SIZE,
@@ -671,6 +714,7 @@ mod gpu_tests {
                     &self.quad_shared,
                     &self.image_shared,
                     &self.registry,
+                    None,
                     &mut pass,
                 );
             }

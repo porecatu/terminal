@@ -315,6 +315,21 @@ impl SettingsWindow {
             && !self.draft.has_invalid()
     }
 
+    /// A linha `index` não aceita gesto: a tela está em somente leitura
+    /// (RF-16.22), ou a linha está indisponível por dependência
+    /// (ADR-0068 §10, RF-19.19) -- clique, `Enter`, `Espaço`, setas e Restaurar
+    /// padrão não agem. O `Draft` recusa a mudança também
+    /// (`Draft::set`/`reset`); esta guarda poupa abrir um campo ou uma lista
+    /// que não poderia ser confirmado.
+    fn row_blocked(&self, index: usize) -> bool {
+        !self.file.allows_edit()
+            || self
+                .content
+                .as_ref()
+                .and_then(|content| content.row(index))
+                .is_some_and(|row| row.unavailable.is_some())
+    }
+
     /// As edições do rascunho, na ordem do catálogo: o que o Salvar grava.
     pub(crate) fn edits(&self) -> Vec<Edit> {
         let mut edits = self.draft.edits();
@@ -1205,8 +1220,9 @@ impl SettingsWindow {
                 self.commit_edit();
                 self.press_banner(button)
             }
-            // Somente leitura (RF-16.22): o clique só leva o foco à linha.
-            Some(Hit::Restore(index) | Hit::Control(index, _)) if !self.file.allows_edit() => {
+            // Somente leitura (RF-16.22) ou linha indisponível por dependência
+            // (ADR-0068 §10): o clique só leva o foco à linha.
+            Some(Hit::Restore(index) | Hit::Control(index, _)) if self.row_blocked(index) => {
                 self.commit_edit();
                 self.focus = Focus::Row(index);
                 self.window.request_redraw();
@@ -1598,7 +1614,7 @@ impl SettingsWindow {
 
     /// `Up`/`Down` numa linha numérica com o foco, fora de edição.
     fn step_row(&mut self, index: usize, direction: i32) {
-        if !self.file.allows_edit() {
+        if self.row_blocked(index) {
             return;
         }
         let Some(option) = self.option_at(index) else {
@@ -1846,8 +1862,9 @@ impl SettingsWindow {
             self.window.request_redraw();
             return;
         }
-        // Somente leitura (RF-16.22): nada abre nem alterna.
-        if !self.file.allows_edit() {
+        // Somente leitura (RF-16.22) ou linha indisponível por dependência:
+        // nada abre nem alterna.
+        if self.row_blocked(index) {
             return;
         }
         // Uma linha de atalho: `Enter` entra em captura do primeiro atalho --
@@ -1900,12 +1917,12 @@ impl SettingsWindow {
 
     /// Setas esquerda e direita sobre um segmentado com o foco.
     fn step_segmented(&mut self, delta: i32) {
-        if !self.file.allows_edit() {
-            return;
-        }
         let Focus::Row(index) = self.focus else {
             return;
         };
+        if self.row_blocked(index) {
+            return;
+        }
         let Some(ControlView::Segmented {
             selected, labels, ..
         }) = self.content().row(index).map(|row| row.control.clone())

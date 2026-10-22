@@ -156,7 +156,9 @@ impl QuadShared {
             label: Some("porecatu-render/quad-bind-group-layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                // O fragmento do `BlurredBackdrop` (`fs_screen`, image.wgsl) lê
+                // a resolução para amostrar pela coordenada de tela.
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -391,6 +393,10 @@ enum Draw {
         /// `ClampToEdge`).
         repeat: bool,
     },
+    /// Um `BlurredBackdrop`: `index` é a posição da instância em
+    /// `image_buffer` (o mesmo layout de instância da imagem); a textura vem
+    /// da fonte de desfoque da janela, não do registro.
+    Blurred { scissor: ScissorRect, index: u32 },
 }
 
 impl QuadLayerBuffer {
@@ -475,6 +481,9 @@ impl QuadWindowState {
     /// stream, e sobe pra GPU num upload só. `scale` converte de pixels
     /// lógicos (contrato de [`Rect`]) para físicos -- o único ponto de
     /// conversão fica em `WindowSurface`, que é quem chama isto.
+    ///
+    /// `blur_available` diz se a janela tem fonte de desfoque: sem ela um
+    /// `BlurredBackdrop` não vira `draw` nenhum (ADR-0068 §5).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_layer(
         &mut self,
@@ -483,6 +492,7 @@ impl QuadWindowState {
         queue: &wgpu::Queue,
         batches: &[GeometryBatch],
         images: &ImageRegistry<GpuImage>,
+        blur_available: bool,
         scale: f32,
         surface_width: u32,
         surface_height: u32,
@@ -517,6 +527,22 @@ impl QuadWindowState {
                 }
                 continue;
             }
+            // O desfoque também fica sozinho no batch, com a instância no mesmo
+            // buffer das imagens.
+            if let [GeometryPrimitive::Blurred(blurred)] = batch.geometry.as_slice() {
+                if !scissor.is_empty() && blur_available {
+                    state.draws.push(Draw::Blurred {
+                        scissor,
+                        index: image_instances.len() as u32,
+                    });
+                    image_instances.push(ImageInstance::screen_space(
+                        blurred.mask,
+                        blurred.mask_radius,
+                        scale,
+                    ));
+                }
+                continue;
+            }
             let start = instances.len() as u32;
             // Na ordem de chegada -- não por tipo. Separar quad e
             // arredondado em dois `extend` desenhava todo arredondado por
@@ -548,8 +574,8 @@ impl QuadWindowState {
                     }
                     // Nunca num batch com quads (ver acima); se algum dia
                     // chegar, desenhar como quad seria errado, e calar também.
-                    GeometryPrimitive::Image(_) => {
-                        unreachable!("imagem sempre sozinha no batch (resolve_layer)")
+                    GeometryPrimitive::Image(_) | GeometryPrimitive::Blurred(_) => {
+                        unreachable!("imagem e desfoque sempre sozinhos no batch (resolve_layer)")
                     }
                 });
             }
@@ -594,13 +620,16 @@ impl QuadWindowState {
 
     /// Desenha o que `prepare_layer` montou para `layer`: um `draw` por
     /// batch, com seu próprio `set_scissor_rect` -- é isso que faz o
-    /// recorte valer (ADR-0018).
+    /// recorte valer (ADR-0018). `blur` é o bind group da textura desfocada da
+    /// janela (`BlurState::bind_group`); sem ele os `BlurredBackdrop` não
+    /// desenham.
     pub(crate) fn render_layer<'pass>(
         &'pass self,
         layer: Layer,
         shared: &'pass QuadShared,
         image_shared: &'pass ImageShared,
         images: &'pass ImageRegistry<GpuImage>,
+        blur: Option<&'pass wgpu::BindGroup>,
         pass: &mut wgpu::RenderPass<'pass>,
     ) {
         let state = &self.layers[layer.index()];
@@ -659,6 +688,18 @@ impl QuadWindowState {
                     pass.set_pipeline(&image_shared.pipeline);
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_bind_group(1, gpu_image.bind_group(*repeat), &[]);
+                    pass.set_vertex_buffer(1, state.image_buffer.slice(..));
+                    slot_holds_images = true;
+                    pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+                    pass.draw(0..4, *index..*index + 1);
+                }
+                Draw::Blurred { scissor, index } => {
+                    let Some(blur_group) = blur else {
+                        continue;
+                    };
+                    pass.set_pipeline(&image_shared.screen_pipeline);
+                    pass.set_bind_group(0, &self.bind_group, &[]);
+                    pass.set_bind_group(1, blur_group, &[]);
                     pass.set_vertex_buffer(1, state.image_buffer.slice(..));
                     slot_holds_images = true;
                     pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);

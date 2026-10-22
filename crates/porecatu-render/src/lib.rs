@@ -13,6 +13,7 @@
 //! GPU (seção 7 da arquitetura).
 
 mod blit;
+mod blur;
 mod frame;
 mod gpu;
 pub mod icon;
@@ -23,6 +24,7 @@ mod text;
 mod text_measurer;
 mod window_surface;
 
+pub use blur::BlurSource;
 pub use frame::{Frame, Layer};
 pub use gpu::{GpuContext, SurfaceError};
 pub use primitives::{

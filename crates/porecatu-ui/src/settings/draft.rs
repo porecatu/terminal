@@ -30,7 +30,10 @@ use std::collections::{BTreeMap, HashSet};
 
 use porecatu_config::{Config, Edit, EditValue};
 
-use super::catalog::{Control, GIT_POLL_MAX, GIT_POLL_MIN, Group, OPTIONS, OptionDef, number_of};
+use super::catalog::{
+    APPLIED_VALUES, Control, GIT_POLL_MAX, GIT_POLL_MIN, Group, OPTIONS, OptionDef, Unavailable,
+    apply_value, number_of,
+};
 
 /// Por que um valor foi recusado.
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +144,29 @@ impl Draft {
         self.value(option) != option.default_value()
     }
 
+    /// O `Config` **com as pendências aplicadas** (RF-19.20): o do arquivo, com
+    /// o valor em vista de cada opção que uma regra de disponibilidade lê
+    /// (`catalog::APPLIED_VALUES`). É o que a tela passa às regras, para que
+    /// baixar a opacidade da janela para 0.9, sem salvar, já esmaeça as linhas
+    /// que dependem dela. Pendência recusada não conta, como em [`Self::value`].
+    pub(crate) fn effective_config(&self) -> Config {
+        let mut config = self.file.clone();
+        for option in OPTIONS.iter().filter(|o| APPLIED_VALUES.contains(&o.id)) {
+            apply_value(&mut config, option, &self.value(option));
+        }
+        config
+    }
+
+    /// Por que `option` está indisponível por dependência **agora**, avaliada
+    /// sobre as pendências (RF-19.20), ou `None`. Opção sem dependência nunca
+    /// está.
+    pub(crate) fn unavailable(&self, option: &OptionDef) -> Option<Unavailable> {
+        if !option.has_availability() {
+            return None;
+        }
+        option.unavailable(&self.effective_config())
+    }
+
     // ---- consultas do rascunho
 
     /// Há alguma pendência (válida ou recusada)?
@@ -200,7 +226,15 @@ impl Draft {
     /// inteiro num campo decimal vira decimal); recusado, fica no rascunho
     /// como pendência recusada e o erro volta. Igual ao do arquivo, apaga a
     /// pendência.
+    ///
+    /// Linha indisponível por dependência não muda (RF-19.19): o gesto é um
+    /// "nada" aqui, o ponto único por onde clique, teclado, passo e
+    /// Restaurar padrão passam. A pendência que ela já tinha **fica**
+    /// (RF-19.21).
     pub(crate) fn set(&mut self, option: &OptionDef, value: EditValue) -> Result<(), ValueError> {
+        if self.unavailable(option).is_some() {
+            return Ok(());
+        }
         match validate(option, &value) {
             Ok(value) => {
                 self.record(option, value);
@@ -222,6 +256,9 @@ impl Draft {
     /// Como [`Self::set`], para o texto de um campo (numérico ou de texto):
     /// lê o texto pelo controle da opção. Recusado, o texto fica guardado.
     pub(crate) fn set_raw(&mut self, option: &OptionDef, raw: &str) -> Result<(), ValueError> {
+        if self.unavailable(option).is_some() {
+            return Ok(());
+        }
         match parse_raw(option, raw).and_then(|value| validate(option, &value)) {
             Ok(value) => {
                 self.record(option, value);
@@ -281,6 +318,9 @@ impl Draft {
         option: &OptionDef,
         rows: &[(String, String)],
     ) -> Result<(), ValueError> {
+        if self.unavailable(option).is_some() {
+            return Ok(());
+        }
         match self.rows.iter_mut().find(|(id, _)| *id == option.id) {
             Some((_, slot)) => *slot = rows.to_vec(),
             None => self.rows.push((option.id, rows.to_vec())),
@@ -320,7 +360,7 @@ impl Draft {
     /// padrão. Se o arquivo já diz o padrão, restaurar é só desfazer a
     /// pendência -- não há o que remover.
     pub(crate) fn reset(&mut self, option: &OptionDef) {
-        if !self.can_reset(option) {
+        if !self.can_reset(option) || self.unavailable(option).is_some() {
             return;
         }
         if self.file_value(option) == option.default_value() {
@@ -508,6 +548,204 @@ mod tests {
 
     fn draft_from(text: &str) -> Draft {
         Draft::new(&porecatu_config::parse(text).unwrap().0)
+    }
+
+    // ---- indisponível por dependência (RF-19.19 a RF-19.21) -------------
+
+    const WITH_IMAGE: &str = "[appearance.window.background_image]\npath = \"fundo.png\"\n";
+
+    fn blocked(draft: &Draft, id: &str) -> bool {
+        draft.unavailable(opt(id)).is_some()
+    }
+
+    fn both_blocked(draft: &Draft) -> bool {
+        blocked(draft, "acrylic_enabled") && blocked(draft, "acrylic_blur")
+    }
+
+    fn both_available(draft: &Draft) -> bool {
+        !blocked(draft, "acrylic_enabled") && !blocked(draft, "acrylic_blur")
+    }
+
+    /// Sem imagem da janela, as duas linhas já nascem indisponíveis, com o
+    /// efeito desligado -- o interruptor não entra na conta.
+    #[test]
+    fn without_a_window_image_the_acrylic_rows_start_unavailable() {
+        assert!(both_blocked(&draft()));
+        assert!(both_available(&draft_from(WITH_IMAGE)));
+    }
+
+    /// RF-19.20: baixar a opacidade da janela, **sem salvar**, esmaece as duas
+    /// linhas na hora, e voltá-la a 1.0 as devolve.
+    #[test]
+    fn a_pending_window_opacity_blocks_and_unblocks_the_rows() {
+        let mut draft = draft_from(WITH_IMAGE);
+        assert!(both_available(&draft));
+        draft
+            .set(opt("window_opacity"), EditValue::Float(0.9))
+            .unwrap();
+        assert!(both_blocked(&draft));
+        draft
+            .set(opt("window_opacity"), EditValue::Float(1.0))
+            .unwrap();
+        assert!(both_available(&draft));
+        assert!(!draft.is_dirty());
+    }
+
+    /// A opacidade do **arquivo** a 0.9 já bloqueia, e uma pendência de volta a
+    /// 1.0 desbloqueia antes de salvar.
+    #[test]
+    fn a_pending_opacity_overrides_the_file_one_in_both_directions() {
+        let mut draft = draft_from(&format!("[appearance.window]\nopacity = 0.9\n{WITH_IMAGE}"));
+        assert!(both_blocked(&draft));
+        draft
+            .set(opt("window_opacity"), EditValue::Float(1.0))
+            .unwrap();
+        assert!(both_available(&draft));
+    }
+
+    #[test]
+    fn a_pending_window_image_path_blocks_and_unblocks_the_rows() {
+        let mut draft = draft();
+        assert!(both_blocked(&draft));
+        draft
+            .set(
+                opt("window_background_image"),
+                EditValue::String("fundo.png".into()),
+            )
+            .unwrap();
+        assert!(both_available(&draft));
+        draft
+            .set(
+                opt("window_background_image"),
+                EditValue::String("  ".into()),
+            )
+            .unwrap();
+        assert!(both_blocked(&draft));
+    }
+
+    /// Restaurar padrão da opacidade volta a 1.0: desbloqueia.
+    #[test]
+    fn resetting_the_window_opacity_unblocks_the_rows() {
+        let mut draft = draft_from(&format!("[appearance.window]\nopacity = 0.5\n{WITH_IMAGE}"));
+        assert!(both_blocked(&draft));
+        draft.reset(opt("window_opacity"));
+        assert!(both_available(&draft));
+    }
+
+    /// Opção sem dependência nunca está indisponível, qualquer que seja a
+    /// pendência.
+    #[test]
+    fn an_option_without_a_dependency_is_never_unavailable() {
+        let mut draft = draft();
+        draft
+            .set(opt("window_opacity"), EditValue::Float(0.3))
+            .unwrap();
+        for option in OPTIONS.iter().filter(|o| !o.has_availability()) {
+            assert!(draft.unavailable(option).is_none(), "{}", option.id);
+        }
+    }
+
+    /// Nada altera o rascunho numa linha indisponível: alternar, número, texto,
+    /// passo e Restaurar padrão.
+    #[test]
+    fn nothing_changes_an_unavailable_row() {
+        let mut draft = draft(); // sem imagem: as duas indisponíveis
+        let toggle = opt("acrylic_enabled");
+        let blur = opt("acrylic_blur");
+        assert!(draft.set(toggle, EditValue::Bool(true)).is_ok());
+        assert!(draft.set(blur, EditValue::Integer(8)).is_ok());
+        assert!(draft.set_raw(blur, "8").is_ok());
+        assert!(
+            draft.set_raw(blur, "abc").is_ok(),
+            "nem a recusa é registrada"
+        );
+        draft.reset(toggle);
+        draft.reset(blur);
+        assert!(!draft.is_dirty());
+        assert!(!draft.has_invalid());
+        assert_eq!(draft.value(toggle), EditValue::Bool(false));
+        assert_eq!(draft.value(blur), EditValue::Integer(24));
+    }
+
+    /// Pelas funções de gesto da tela também: alternar, escolher, confirmar
+    /// texto e somar o passe não tocam na linha.
+    #[test]
+    fn the_gestures_leave_an_unavailable_row_alone() {
+        use super::super::interact;
+        let mut draft = draft();
+        interact::toggle(&mut draft, opt("acrylic_enabled"));
+        interact::commit_text(&mut draft, opt("acrylic_blur"), "40");
+        interact::step_text(&mut draft, opt("acrylic_blur"), "24", 1);
+        assert!(!draft.is_dirty());
+    }
+
+    /// RF-19.21: esmaecer não apaga nada. A pendência que a linha já tinha
+    /// continua, é gravada pelo Salvar junto com as outras, e o valor do
+    /// arquivo não é tocado.
+    #[test]
+    fn a_pending_acrylic_edit_survives_the_row_becoming_unavailable_and_is_saved() {
+        let mut draft = draft_from(WITH_IMAGE);
+        draft
+            .set(opt("acrylic_enabled"), EditValue::Bool(true))
+            .unwrap();
+        draft
+            .set(opt("acrylic_blur"), EditValue::Integer(8))
+            .unwrap();
+        draft
+            .set(opt("window_opacity"), EditValue::Float(0.9))
+            .unwrap();
+        assert!(both_blocked(&draft));
+        assert!(draft.is_pending(opt("acrylic_enabled")));
+        assert!(draft.is_pending(opt("acrylic_blur")));
+        assert_eq!(draft.value(opt("acrylic_blur")), EditValue::Integer(8));
+        assert_eq!(
+            draft.edits(),
+            vec![
+                Edit::Set(opt("window_opacity").key_path(), EditValue::Float(0.9)),
+                Edit::Set(opt("acrylic_enabled").key_path(), EditValue::Bool(true)),
+                Edit::Set(opt("acrylic_blur").key_path(), EditValue::Integer(8)),
+            ]
+        );
+    }
+
+    /// E o inverso: sem ter editado o acrílico, o Salvar não toca nas chaves
+    /// dele, bloqueado ou não.
+    #[test]
+    fn saving_other_edits_does_not_touch_the_acrylic_keys() {
+        let mut draft = draft(); // as duas indisponíveis
+        draft.set(opt("font_size"), EditValue::Float(16.0)).unwrap();
+        let edits = draft.edits();
+        assert_eq!(edits.len(), 1);
+        assert!(!edits.iter().any(|edit| matches!(
+            edit,
+            Edit::Set(path, _) | Edit::Remove(path)
+                if *path == opt("acrylic_enabled").key_path()
+                    || *path == opt("acrylic_blur").key_path()
+        )));
+    }
+
+    /// A configuração efetiva só muda onde há pendência -- e pendência
+    /// recusada não conta.
+    #[test]
+    fn the_effective_config_applies_only_valid_pendings() {
+        let mut draft = draft_from(WITH_IMAGE);
+        assert_eq!(&draft.effective_config(), draft.file_config());
+        draft
+            .set(opt("window_opacity"), EditValue::Float(0.9))
+            .unwrap();
+        draft.set(opt("font_size"), EditValue::Float(16.0)).unwrap();
+        let effective = draft.effective_config();
+        assert_eq!(effective.appearance.window.opacity, 0.9);
+        // Só o que uma regra lê é aplicado; o resto continua o do arquivo.
+        assert_eq!(
+            effective.terminal.font.size,
+            draft.file_config().terminal.font.size
+        );
+        // Um valor recusado vira o do arquivo.
+        let mut refused = draft_from(WITH_IMAGE);
+        let _ = refused.set_raw(opt("window_opacity"), "muito");
+        assert!(refused.invalid(opt("window_opacity")).is_some());
+        assert_eq!(refused.effective_config().appearance.window.opacity, 1.0);
     }
 
     #[test]
@@ -908,8 +1146,13 @@ B = \"2\"
         // arquivo que o `parse` aceita, sem chave desconhecida (RF-16.19).
         let example = include_str!("../../../../docs/config/porecatu.example.toml");
         let document = porecatu_config::ConfigDocument::parse(example).unwrap();
-        let mut draft = draft();
-        for option in OPTIONS {
+        // As opções com dependência primeiro, sobre um arquivo com imagem da
+        // janela: a opacidade da janela sondada (0.0) as bloquearia depois, e
+        // linha indisponível não aceita valor (RF-19.19).
+        let mut draft = draft_from(WITH_IMAGE);
+        let (dependent, independent): (Vec<_>, Vec<_>) =
+            OPTIONS.iter().partition(|option| option.has_availability());
+        for option in dependent.into_iter().chain(independent) {
             draft
                 .set(option, super::super::catalog::probe_value(option))
                 .unwrap();

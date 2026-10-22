@@ -107,6 +107,16 @@ pub(crate) enum GeometryPrimitive {
     /// [`Primitive::Image`]: outro pipeline e outro bind group, então
     /// `resolve_layer` o põe **sozinho** num batch.
     Image(ImagePrimitive),
+    /// [`Primitive::BlurredBackdrop`]: o mesmo pipeline de imagem com outro
+    /// fragmento e outro bind group, então também fica **sozinho** num batch.
+    Blurred(BlurredPrimitive),
+}
+
+/// Os campos de [`Primitive::BlurredBackdrop`], como valor próprio.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct BlurredPrimitive {
+    pub mask: Rect,
+    pub mask_radius: f32,
 }
 
 /// Os campos de [`Primitive::Image`], como valor próprio para viajar na
@@ -217,6 +227,17 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
                     })],
                 });
             }
+            Primitive::BlurredBackdrop { mask, mask_radius } => {
+                // Como a imagem: troca de bind group, então batch próprio, na
+                // ordem do stream.
+                resolved.batches.push(GeometryBatch {
+                    clip: clip_stack.last().copied(),
+                    geometry: vec![GeometryPrimitive::Blurred(BlurredPrimitive {
+                        mask: *mask,
+                        mask_radius: *mask_radius,
+                    })],
+                });
+            }
             Primitive::Text(run) => resolved.text.push(ResolvedText {
                 run: run.clone(),
                 clip: clip_stack.last().copied(),
@@ -229,7 +250,11 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
 
 fn batch_for(batches: &mut Vec<GeometryBatch>, clip: Option<Rect>) -> &mut GeometryBatch {
     let needs_new = batches.last().is_none_or(|b| {
-        b.clip != clip || matches!(b.geometry.first(), Some(GeometryPrimitive::Image(_)))
+        b.clip != clip
+            || matches!(
+                b.geometry.first(),
+                Some(GeometryPrimitive::Image(_) | GeometryPrimitive::Blurred(_))
+            )
     });
     if needs_new {
         batches.push(GeometryBatch {
@@ -417,6 +442,69 @@ mod tests {
                 None
             ]
         );
+    }
+
+    fn blurred(x: f32) -> Primitive {
+        Primitive::BlurredBackdrop {
+            mask: Rect {
+                x,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            mask_radius: 6.0,
+        }
+    }
+
+    fn is_blurred(batch: &GeometryBatch) -> bool {
+        matches!(batch.geometry.as_slice(), [GeometryPrimitive::Blurred(_)])
+    }
+
+    /// Um quad, o desfoque e um quad: três batches, na ordem do stream -- o
+    /// desfoque troca de bind group, como a imagem.
+    #[test]
+    fn a_blurred_backdrop_between_two_quads_makes_three_batches_in_order() {
+        let resolved = resolve_layer(&[quad(0.0), blurred(5.0), quad(1.0)]);
+        assert_eq!(resolved.batches.len(), 3);
+        assert!(is_blurred(&resolved.batches[1]));
+        assert!(matches!(
+            resolved.batches[0].geometry.as_slice(),
+            [GeometryPrimitive::Quad(_)]
+        ));
+        assert!(matches!(
+            resolved.batches[2].geometry.as_slice(),
+            [GeometryPrimitive::Quad(_)]
+        ));
+        let GeometryPrimitive::Blurred(drawn) = resolved.batches[1].geometry[0] else {
+            unreachable!();
+        };
+        assert_eq!(drawn.mask.x, 5.0);
+        assert_eq!(drawn.mask_radius, 6.0);
+    }
+
+    #[test]
+    fn blurred_backdrops_and_images_never_share_a_batch() {
+        let resolved = resolve_layer(&[blurred(0.0), blurred(1.0), image(0.0), blurred(2.0)]);
+        assert_eq!(resolved.batches.len(), 4);
+        assert!(resolved.batches.iter().all(|b| b.geometry.len() == 1));
+    }
+
+    #[test]
+    fn a_blurred_backdrop_respects_the_clip_stack() {
+        let clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 5.0,
+            height: 5.0,
+        };
+        let resolved = resolve_layer(&[
+            Primitive::PushClip(clip),
+            blurred(0.0),
+            Primitive::PopClip,
+            blurred(1.0),
+        ]);
+        let clips: Vec<_> = resolved.batches.iter().map(|b| b.clip).collect();
+        assert_eq!(clips, vec![Some(clip), None]);
     }
 
     #[test]

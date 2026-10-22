@@ -10,6 +10,7 @@ use std::sync::Arc;
 use wgpu::rwh::{HasDisplayHandle, HasWindowHandle};
 
 use crate::blit::BlitShared;
+use crate::blur::BlurShared;
 use crate::image::{GpuImage, ImageRegistry, ImageShared, check_levels};
 use crate::primitives::ImageId;
 use crate::quad::QuadShared;
@@ -53,6 +54,8 @@ pub struct GpuContext {
     pub(crate) image_shared: ImageShared,
     pub(crate) images: ImageRegistry<GpuImage>,
     pub(crate) blit_shared: BlitShared,
+    /// Pipeline do passe de desfoque (ADR-0068): do processo, um por formato.
+    pub(crate) blur_shared: BlurShared,
     pub(crate) text_cache: glyphon::Cache,
     pub(crate) text_atlas: glyphon::TextAtlas,
     pub(crate) swash_cache: glyphon::SwashCache,
@@ -217,6 +220,7 @@ impl GpuContext {
         let quad_shared = QuadShared::new(&device, format);
         let image_shared = ImageShared::new(&device, format, &quad_shared);
         let blit_shared = BlitShared::new(&device, format);
+        let blur_shared = BlurShared::new(&device, format);
         let text_cache = glyphon::Cache::new(&device);
         // `ColorMode::Accurate` (o default de `TextAtlas::new`) faz o
         // glyphon decodificar a cor de todo glyph de sRGB pra linear antes
@@ -261,6 +265,7 @@ impl GpuContext {
             image_shared,
             images: ImageRegistry::new(),
             blit_shared,
+            blur_shared,
             text_cache,
             text_atlas,
             swash_cache,

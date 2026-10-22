@@ -154,6 +154,12 @@ window_background_image_mode_label = "Mode de l'image de la fenêtre"
 window_background_image_mode_description = "Comment l'image remplit toute la fenêtre."
 window_background_image_opacity_label = "Opacité de l'image de la fenêtre"
 window_background_image_opacity_description = "Opacité de l'image de la fenêtre, de 0.0 à 1.0 ; l'opacité de la fenêtre s'applique par-dessus."
+acrylic_enabled_label = "Effet acrylique"
+acrylic_enabled_description = "Affiche l'image d'arrière-plan de la fenêtre floutée à travers le terminal. Il se voit à la mesure de l'opacité du fond du terminal : à 1.0, le fond couvre l'effet."
+acrylic_blur_label = "Flou de l'acrylique"
+acrylic_blur_description = "Le degré de flou de l'image, de 1 à 64 pixels."
+acrylic_requires_window_opacity = "Exige l'opacité de la fenêtre à 100 %"
+acrylic_requires_window_image = "Exige une image d'arrière-plan de la fenêtre"
 decorations_label = "Décorations du système"
 decorations_description = "Utilise la barre de titre du système au lieu de celle de l'application."
 show_close_button_label = "Bouton de fermeture d'onglet"
@@ -579,6 +585,15 @@ unreadable = "Lecture impossible : \"{path}\""
 unsupported = "Format non accepté (PNG et JPEG seulement) : \"{path}\""
 malformed = "Corrompu ou image non valide : \"{path}\""
 too_large = "Trop volumineux pour être chargé : \"{path}\""
+
+[notice.acrylic]
+title = "Effet acrylique non appliqué"
+window_opacity = "L'opacité de la fenêtre n'est pas à 100 % : l'acrylique la veut à 1.0."
+no_window_image = "Pas d'image d'arrière-plan de la fenêtre : l'acrylique en a besoin."
+
+[notice.acrylic_blur_adjusted]
+title = "Flou acrylique ajusté"
+body = "Hors de la plage de {min} à {max} : \"{key}\" utilise {used}."
 
 [notice.language_not_found]
 title = "Langue introuvable"

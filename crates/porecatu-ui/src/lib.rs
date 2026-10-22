@@ -31,6 +31,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId};
 
 mod access;
+mod acrylic;
 mod animation;
 mod app_icon;
 mod background_image;
@@ -5228,6 +5229,9 @@ enum StartupNotice {
         background_image::BackgroundImageSlot,
         background_image::BackgroundImageFailure,
     ),
+    /// RF-19.8, RF-19.12: o acrílico ligado sem uma das condições, ou com
+    /// `blur` fora da faixa, já na config do arranque.
+    Acrylic(acrylic::AcrylicNotice),
 }
 
 impl StartupNotice {
@@ -5260,6 +5264,7 @@ impl StartupNotice {
                 let (title, body) = failure.notice_text(*slot, catalog);
                 (Severity::Warning, title, body)
             }
+            StartupNotice::Acrylic(notice) => notice.compose(catalog),
         }
     }
 }
@@ -5627,6 +5632,12 @@ impl App {
             pending_startup_warnings
                 .push(StartupNotice::UnknownTheme(config.terminal.theme.clone()));
         }
+        // RF-19.12: o acrílico ligado sem uma das condições avisa já no
+        // arranque. O estado anterior é o de `Config::default()` (desligado),
+        // então o arranque conta como "recarga que cria o bloqueio".
+        for notice in acrylic::notices(&porecatu_config::Config::default(), &config) {
+            pending_startup_warnings.push(StartupNotice::Acrylic(notice));
+        }
         let style = TabBarStyle::from_config(&config);
         let themed = porecatu_config::apply_theme(&config, &config.terminal.theme);
         let pal = palette::ResolvedPalette::from_config(&themed);
@@ -5897,6 +5908,22 @@ impl App {
         state
             .warnings
             .push(Severity::Warning, title, body, Instant::now());
+    }
+
+    /// Entrega os avisos do acrílico (RF-19.8, RF-19.12): **um** por processo,
+    /// na primeira janela, não um por janela -- o mesmo caminho da imagem de
+    /// fundo (`warn_background_image`). Sem janela ainda, espera `resumed` em
+    /// `pending_startup_warnings`.
+    fn warn_acrylic(&mut self, notices: Vec<acrylic::AcrylicNotice>) {
+        for notice in notices {
+            let Some(state) = self.windows.values_mut().next() else {
+                self.pending_startup_warnings
+                    .push(StartupNotice::Acrylic(notice));
+                continue;
+            };
+            let (severity, title, body) = notice.compose(&self.catalog);
+            state.warnings.push(severity, title, body, Instant::now());
+        }
     }
 
     /// ADR-0015: cria uma janela nova com uma aba, herdando o `cwd` da aba
@@ -7660,7 +7687,11 @@ impl App {
         let (unknown_keys, ignored_colors) = split_color_keys(&unknown_keys);
 
         let effects = reload::diff(&self.config, &new_config);
+        // RF-19.12: o aviso sai na recarga que **cria** o bloqueio (ou troca o
+        // motivo), então a decisão compara a config que vale com a que chega.
+        let acrylic_notices = acrylic::notices(&self.config, &new_config);
         self.config = Arc::new(*new_config);
+        self.warn_acrylic(acrylic_notices);
         self.style = TabBarStyle::from_config(&self.config);
         // PRD-017, classe A (ADR-0061 §9): a chave é reavaliada a cada recarga
         // aplicada; só `path` novo, ou arquivo trocado no disco, abre carga.
@@ -10890,6 +10921,15 @@ impl App {
             window_rect,
             state.scale,
         );
+        // PRD-019/ADR-0068 §2 e §7: a fonte do desfoque desta janela, de novo a
+        // cada frame que já ia ser desenhado -- `None` (acrílico desligado ou
+        // bloqueado) a limpa. A `WindowSurface` só refaz o desfoque quando a
+        // chave, o tamanho físico ou a escala mudam, então repetir não custa
+        // um frame a mais nem um desfoque a mais: saída de PTY não entra.
+        let blur_source =
+            acrylic::blur_source(&self.config, pal.bar_background, window_image, window_rect);
+        let acrylic_active = blur_source.is_some();
+        state.window_surface.set_blur_source(blur_source);
         let chrome_primitives = chrome::paint(
             &paint_layout,
             &state.workspace,
@@ -10998,6 +11038,7 @@ impl App {
                 state.window_surface.is_transparent(),
                 window_image_configured(&self.config),
             );
+            window_term_pal.acrylic = acrylic_active;
             // PRD-017: a textura do processo, a mesma em toda janela e todo
             // painel (RF-17.18). `displayed` é a da chave atual se `Ready`, ou
             // a anterior enquanto a nova carrega; `Loading` sem anterior e

@@ -7,6 +7,7 @@
 //! que `porecatu-ui` monta, fica em lógico.
 
 use crate::blit::Offscreen;
+use crate::blur::{BlurCache, BlurDeps, BlurSource, BlurStamp, BlurState};
 use crate::frame::{Frame, Layer, resolve_layer};
 use crate::gpu::GpuContext;
 use crate::primitives::Color;
@@ -25,6 +26,12 @@ pub struct WindowSurface {
     /// Textura onde o frame é desenhado quando a janela tem opacidade < 1
     /// (`blit.rs`); criada sob demanda e refeita no resize.
     offscreen: Option<Offscreen>,
+    /// A fonte do desfoque que `porecatu-ui` definiu, se houver
+    /// ([`Self::set_blur_source`]).
+    blur_source: Option<BlurSource>,
+    /// O resultado guardado, com a etiqueta do que o produziu: refeito só
+    /// quando ela muda (ADR-0068 §4).
+    blur_cache: BlurCache<BlurState>,
 }
 
 impl WindowSurface {
@@ -57,7 +64,25 @@ impl WindowSurface {
             text_state,
             scale: 1.0,
             offscreen: None,
+            blur_source: None,
+            blur_cache: BlurCache::new(),
         }
+    }
+
+    /// Define, troca ou retira a fonte do desfoque (ADR-0068 §2). Com uma fonte,
+    /// os `Primitive::BlurredBackdrop` do frame desenham a textura desfocada;
+    /// com `None` -- e antes da primeira chamada --, não desenham nada, e as
+    /// texturas do desfoque são descartadas.
+    ///
+    /// Não desenha nada agora e não agenda frame: o desfoque é feito dentro do
+    /// próximo [`Self::render`], e só se a chave, o tamanho físico ou a escala
+    /// mudaram desde o último (ADR-0068 §4). Repetir a mesma fonte a cada frame
+    /// é correto e não refaz nada -- só custa a cópia da lista.
+    pub fn set_blur_source(&mut self, source: Option<BlurSource>) {
+        if source.is_none() {
+            self.blur_cache.clear();
+        }
+        self.blur_source = source;
     }
 
     /// `true` se a surface compõe com o que está atrás da janela
@@ -120,6 +145,7 @@ impl WindowSurface {
                 &gpu.queue,
                 &resolved.batches,
                 &gpu.images,
+                self.blur_source.is_some(),
                 self.scale,
                 self.config.width,
                 self.config.height,
@@ -176,6 +202,28 @@ impl WindowSurface {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        // ADR-0068 §4: o desfoque é refeito aqui, dentro do frame que já ia ser
+        // desenhado, e só quando a etiqueta do que o produz mudou.
+        if let Some(source) = &self.blur_source {
+            let stamp = BlurStamp::new(source, self.config.width, self.config.height, self.scale);
+            let deps = BlurDeps {
+                device: &gpu.device,
+                queue: &gpu.queue,
+                blur_shared: &gpu.blur_shared,
+                quad_shared: &gpu.quad_shared,
+                image_shared: &gpu.image_shared,
+                images: &gpu.images,
+            };
+            let (width, height, scale, format) = (
+                self.config.width,
+                self.config.height,
+                self.scale,
+                self.config.format,
+            );
+            self.blur_cache.ensure(stamp, || {
+                BlurState::build(&deps, &mut encoder, source, width, height, scale, format)
+            });
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("porecatu-render/frame"),
@@ -199,6 +247,7 @@ impl WindowSurface {
                     &gpu.quad_shared,
                     &gpu.image_shared,
                     &gpu.images,
+                    self.blur_cache.get().map(BlurState::bind_group),
                     &mut pass,
                 );
                 // `QuadWindowState::render_layer` deixa o `scissor_rect` do

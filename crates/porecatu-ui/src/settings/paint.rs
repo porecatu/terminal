@@ -413,6 +413,18 @@ fn paint_row(
     measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
+    // ADR-0068 §10: a linha indisponível por dependência se desenha como a
+    // somente leitura -- nome, controles e textos em `#5c646f`, o trilho
+    // escurecido --, só que **ela**, não a tela inteira.
+    let dimmed = Input {
+        read_only: true,
+        ..*input
+    };
+    let input = if row.unavailable.is_some() {
+        &dimmed
+    } else {
+        input
+    };
     let m = input.metrics;
     let pal = input.pal;
     let rect = shift(geometry.rect, dx, dy);
@@ -471,6 +483,22 @@ fn paint_row(
             BODY_FONT,
             m.description_size,
             pal.warning_severity_error,
+        ));
+    }
+
+    // A nota de uma linha indisponível por dependência, abaixo da descrição,
+    // em 11px no Terciário `#828a96` -- o tom do escopo de classe C, pela mesma
+    // razão: precisa ser lida (ADR-0068 §10). Um valor recusado ocupa o mesmo
+    // lugar e vence: ele bloqueia o Salvar.
+    if row.invalid.is_none()
+        && let Some(note) = &row.unavailable
+    {
+        out.push(text(
+            (geometry.reason_origin.0 + dx, geometry.reason_origin.1 + dy),
+            note,
+            BODY_FONT,
+            m.description_size,
+            pal.status_bar_stale_cwd,
         ));
     }
 
@@ -2071,6 +2099,214 @@ mod tests {
             p,
             Primitive::Text(run) if run.text == "Tamanho" && run.color == f.pal.menu_item_text
         )));
+    }
+
+    // ---- linha indisponível por dependência (ADR-0068 §10) --------------
+
+    /// Pinta o grupo Aparência sobre `draft`, com o foco e o cursor na linha
+    /// `target` se pedidos.
+    fn paint_appearance(
+        f: &Fixture,
+        draft: &Draft,
+        target: &str,
+        focus: bool,
+        hover: bool,
+    ) -> Vec<Primitive> {
+        let m = Metrics::from_config(&f.config, 52.0);
+        let layout = layout::layout(900.0, 2400.0, 52.0, 200.0, m.footer_height());
+        let key = ContentKey {
+            group: Group::Appearance,
+            panel_width_bits: layout.panel.width.to_bits(),
+            generation: 0,
+        };
+        let mut measurer = TextMeasurer::new();
+        let content = content::build(
+            key,
+            draft,
+            &ViewExtras::default(),
+            &f.catalog,
+            &m,
+            &mut measurer,
+        );
+        let index = content
+            .blocks
+            .iter()
+            .position(
+                |block| matches!(block, Block::Row(row) if row.option == Some(target_id(target))),
+            )
+            .expect("linha do grupo Aparência");
+        let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
+        let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        paint_body(
+            &Input {
+                layout: &layout,
+                metrics: &m,
+                content: &content,
+                items: &items,
+                footer: &footer,
+                selected: Group::Appearance,
+                focus: if focus {
+                    Focus::Row(index)
+                } else {
+                    Focus::Sidebar
+                },
+                hovered: hover.then_some(Hit::Row(index)),
+                scroll: 0.0,
+                pending_groups: &[],
+                editing: None,
+                selection_color: palette::hex(1, 2, 3),
+                footer_available: [true, false, false],
+                read_only: false,
+                style: &f.style,
+                pal: &f.pal,
+                config: &f.config,
+                catalog: &f.catalog,
+            },
+            &mut measurer,
+        )
+    }
+
+    /// O `&'static str` do id de uma opção do catálogo.
+    fn target_id(id: &str) -> &'static str {
+        option(id).expect("opção do catálogo").id
+    }
+
+    fn file_with(opacity: f64, image: &str) -> Config {
+        let mut config = Config::default();
+        config.appearance.window.opacity = opacity;
+        config.appearance.window.background_image.path = image.to_owned();
+        config
+    }
+
+    fn text_colors(out: &[Primitive], wanted: &str) -> Vec<(Color, f32)> {
+        out.iter()
+            .filter_map(|p| match p {
+                Primitive::Text(run) if run.text == wanted => Some((run.color, run.size_px)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// RF-19.19: nome, texto do campo e rótulo em `#5c646f` -- a somente
+    /// leitura --, e a nota abaixo da descrição em 11px no Terciário.
+    #[test]
+    fn an_unavailable_acrylic_row_is_dimmed_with_the_tertiary_note_under_it() {
+        let f = fixture();
+        let dim = f.pal.editor_section_text;
+        let draft = Draft::new(&file_with(0.9, "fundo.png"));
+        let out = paint_appearance(&f, &draft, "acrylic_blur", false, false);
+        assert_eq!(text_colors(&out, "Desfoque do acrílico"), [(dim, 12.5)]);
+        assert_eq!(text_colors(&out, "Efeito acrílico"), [(dim, 12.5)]);
+        // O número do campo, esmaecido.
+        assert!(
+            text_colors(&out, "24")
+                .iter()
+                .any(|(color, _)| *color == dim),
+            "{:?}",
+            text_colors(&out, "24")
+        );
+        // A nota: Terciário `#828a96`, 11px, uma por linha indisponível.
+        let note = text_colors(&out, "Exige a opacidade da janela em 100%");
+        assert_eq!(note, vec![(f.pal.status_bar_stale_cwd, 11.0); 2]);
+        assert_eq!(
+            f.pal.status_bar_stale_cwd,
+            palette::hex(0x82, 0x8a, 0x96),
+            "o Terciário da especificação, sem valor novo"
+        );
+    }
+
+    #[test]
+    fn the_note_names_the_missing_image_when_only_the_image_is_missing() {
+        let f = fixture();
+        let out = paint_appearance(
+            &f,
+            &Draft::new(&file_with(1.0, "")),
+            "acrylic_blur",
+            false,
+            false,
+        );
+        assert_eq!(
+            text_colors(&out, "Exige uma imagem de fundo da janela").len(),
+            2
+        );
+        assert!(text_colors(&out, "Exige a opacidade da janela em 100%").is_empty());
+    }
+
+    /// Com as duas condições nada muda: cores normais e nenhuma nota.
+    #[test]
+    fn an_available_acrylic_row_paints_as_any_other_row() {
+        let f = fixture();
+        let out = paint_appearance(
+            &f,
+            &Draft::new(&file_with(1.0, "fundo.png")),
+            "acrylic_blur",
+            false,
+            false,
+        );
+        assert_eq!(
+            text_colors(&out, "Desfoque do acrílico"),
+            [(f.pal.menu_item_text, 12.5)]
+        );
+        let field_size = Metrics::from_config(&f.config, 52.0).field_font_size;
+        assert_eq!(
+            text_colors(&out, "24"),
+            [(f.pal.editor_input_text, field_size)]
+        );
+        for note in [
+            "Exige a opacidade da janela em 100%",
+            "Exige uma imagem de fundo da janela",
+        ] {
+            assert!(text_colors(&out, note).is_empty(), "{note}");
+        }
+    }
+
+    /// A dependência é **da linha**, não da tela: as outras linhas do grupo
+    /// seguem na cor normal.
+    #[test]
+    fn only_the_acrylic_rows_are_dimmed_not_the_whole_screen() {
+        let f = fixture();
+        let out = paint_appearance(
+            &f,
+            &Draft::new(&file_with(0.9, "fundo.png")),
+            "acrylic_blur",
+            false,
+            false,
+        );
+        let label = (option("window_opacity").unwrap().label)(&f.catalog);
+        assert_eq!(text_colors(&out, &label), [(f.pal.menu_item_text, 12.5)]);
+    }
+
+    /// O ponto de pendente continua numa linha indisponível (RF-19.21), mas o
+    /// Restaurar padrão não aparece, nem com foco e cursor.
+    #[test]
+    fn an_unavailable_row_keeps_its_dot_and_never_shows_restore() {
+        let f = fixture();
+        let mut config = file_with(1.0, "fundo.png");
+        config.terminal.acrylic.blur = 10.0; // difere do padrão: haveria Restaurar
+        let mut draft = Draft::new(&config);
+        // Disponível: com cursor, o Restaurar aparece.
+        let out = paint_appearance(&f, &draft, "acrylic_blur", true, true);
+        assert!(has_restore_icon(&out));
+        // Pendência de blur e a opacidade baixada: indisponível, pendente.
+        draft
+            .set(
+                option("acrylic_blur").unwrap(),
+                porecatu_config::EditValue::Integer(8),
+            )
+            .unwrap();
+        draft
+            .set(
+                option("window_opacity").unwrap(),
+                porecatu_config::EditValue::Float(0.9),
+            )
+            .unwrap();
+        let out = paint_appearance(&f, &draft, "acrylic_blur", true, true);
+        assert!(!has_restore_icon(&out));
+        assert!(
+            dots(&out, &f) >= 2,
+            "o ponto de pendente: {}",
+            dots(&out, &f)
+        );
     }
 
     #[test]

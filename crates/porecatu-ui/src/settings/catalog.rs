@@ -184,6 +184,19 @@ pub(crate) enum ReloadScope {
     Restart,
 }
 
+/// Por que uma linha está **indisponível por dependência** (ADR-0068 §10):
+/// a opção existe, mas depende de outra coisa da config que hoje não vale. A
+/// nota é a frase do catálogo que diz o que falta, e aparece abaixo da
+/// descrição.
+pub(crate) struct Unavailable {
+    pub note: fn(&Catalog) -> String,
+}
+
+/// A função de disponibilidade de uma opção: recebe o `Config` **com as
+/// pendências aplicadas** (RF-19.20) e devolve `None` se a opção pode ser
+/// editada, ou por que não pode.
+pub(crate) type Availability = fn(&Config) -> Option<Unavailable>;
+
 /// Uma opção do catálogo.
 pub(crate) struct OptionDef {
     /// Identificador curto e estável (`font_size`): o que as frases do
@@ -198,9 +211,24 @@ pub(crate) struct OptionDef {
     pub description: fn(&Catalog) -> String,
     /// O valor desta opção num `Config`.
     read: fn(&Config) -> EditValue,
+    /// `Some` quando a opção só vale sob uma condição de outra parte da config
+    /// (o acrílico, ADR-0068 §10). Genérico: a tela não sabe o que é acrílico.
+    availability: Option<Availability>,
 }
 
 impl OptionDef {
+    /// Por que a opção está indisponível em `config` (que a tela passa **com as
+    /// pendências aplicadas**), ou `None` se está disponível -- sempre o caso
+    /// das opções sem dependência.
+    pub(crate) fn unavailable(&self, config: &Config) -> Option<Unavailable> {
+        self.availability.and_then(|rule| rule(config))
+    }
+
+    /// A opção declara uma dependência (mesmo que hoje esteja satisfeita).
+    pub(crate) fn has_availability(&self) -> bool {
+        self.availability.is_some()
+    }
+
     pub(crate) fn key_path(&self) -> KeyPath {
         KeyPath::parse(self.path).expect("o catálogo só tem caminhos válidos")
     }
@@ -343,6 +371,15 @@ const fn integer(min: f64, max: f64, step: f64) -> Control {
 /// `labels::font_size::{label, description}`.
 macro_rules! option {
     ($id:ident, $group:ident, $section:ident, $path:literal, $control:expr, $read:expr) => {
+        option!($id, $group, $section, $path, $control, $read, None)
+    };
+    // Com dependência: `requires = função` (`Availability`).
+    ($id:ident, $group:ident, $section:ident, $path:literal, $control:expr, $read:expr,
+     requires = $rule:expr) => {
+        option!($id, $group, $section, $path, $control, $read, Some($rule))
+    };
+    ($id:ident, $group:ident, $section:ident, $path:literal, $control:expr, $read:expr,
+     $availability:expr) => {
         OptionDef {
             id: stringify!($id),
             group: Group::$group,
@@ -352,6 +389,7 @@ macro_rules! option {
             label: labels::$id::label,
             description: labels::$id::description,
             read: $read,
+            availability: $availability,
         }
     };
 }
@@ -420,6 +458,8 @@ label_modules! {
     window_background_image => (window_background_image_label, window_background_image_description),
     window_background_image_mode => (window_background_image_mode_label, window_background_image_mode_description),
     window_background_image_opacity => (window_background_image_opacity_label, window_background_image_opacity_description),
+    acrylic_enabled => (acrylic_enabled_label, acrylic_enabled_description),
+    acrylic_blur => (acrylic_blur_label, acrylic_blur_description),
     decorations => (decorations_label, decorations_description),
     show_close_button => (show_close_button_label, show_close_button_description),
     show_index => (show_index_label, show_index_description),
@@ -476,6 +516,68 @@ fn window_image_opacity(config: &Config) -> EditValue {
     image_opacity_value(config.appearance.window.background_image.opacity)
 }
 
+/// `blur` é `f32` no arquivo e inteiro na tela (passo 1, RF-19.18): lido
+/// arredondado, com NaN valendo o padrão. Um valor fora da faixa **aparece
+/// como está** (marcado, nunca corrigido, RF-16.18) -- não é o limitado.
+fn acrylic_blur_value(config: &Config) -> EditValue {
+    let blur = config.terminal.acrylic.blur;
+    let blur = if blur.is_nan() {
+        porecatu_config::DEFAULT_BLUR
+    } else {
+        blur
+    };
+    EditValue::Integer(blur.round() as i64)
+}
+
+/// A regra das duas opções do acrílico (ADR-0068 §10): `acrylic_requirement` --
+/// as duas condições do RF-19.10, **sem** o interruptor --, com a nota do que
+/// falta. A precedência é a da regra (`WindowOpacity` vence, RF-19.19).
+fn acrylic_availability(config: &Config) -> Option<Unavailable> {
+    use porecatu_config::AcrylicBlock;
+    match porecatu_config::acrylic_requirement(config)? {
+        AcrylicBlock::WindowOpacity => Some(Unavailable {
+            note: |catalog| msg::settings::option::acrylic_requires_window_opacity(catalog),
+        }),
+        AcrylicBlock::NoWindowImage => Some(Unavailable {
+            note: |catalog| msg::settings::option::acrylic_requires_window_image(catalog),
+        }),
+    }
+}
+
+/// Põe `value` em `option` dentro de `config`, para as opções de que **outras
+/// dependem**: é com isto que o rascunho monta o `Config` "com as pendências
+/// aplicadas" (RF-19.20) sem regravar o arquivo. Só as quatro que uma regra de
+/// disponibilidade lê -- uma opção nova que passe a ser lida por uma regra
+/// ganha o braço dela aqui, e `the_pending_values_the_rules_read_are_applied`
+/// reprova se faltar. Devolve se `option` é uma delas.
+pub(crate) fn apply_value(config: &mut Config, option: &OptionDef, value: &EditValue) -> bool {
+    match (option.id, value) {
+        ("window_opacity", EditValue::Float(opacity)) => {
+            config.appearance.window.opacity = *opacity;
+        }
+        ("window_background_image", EditValue::String(path)) => {
+            config
+                .appearance
+                .window
+                .background_image
+                .path
+                .clone_from(path);
+        }
+        ("acrylic_enabled", EditValue::Bool(on)) => config.terminal.acrylic.enabled = *on,
+        ("acrylic_blur", EditValue::Integer(blur)) => config.terminal.acrylic.blur = *blur as f32,
+        _ => return false,
+    }
+    true
+}
+
+/// As opções que `apply_value` sabe aplicar.
+pub(crate) const APPLIED_VALUES: [&str; 4] = [
+    "window_opacity",
+    "window_background_image",
+    "acrylic_enabled",
+    "acrylic_blur",
+];
+
 fn cursor_shape(config: &Config) -> EditValue {
     string(match config.terminal.cursor.shape {
         porecatu_config::CursorShape::Block => "block",
@@ -492,8 +594,8 @@ fn close_button(config: &Config) -> EditValue {
     })
 }
 
-/// As 53 opções do RF-16.11 (47, as três da imagem de fundo do terminal, RF-17.20,
-/// e as três da imagem da janela, RF-18.23).
+/// As 55 opções do RF-16.11 (47, as três da imagem de fundo do terminal, RF-17.20,
+/// as três da imagem da janela, RF-18.23, e as duas do acrílico, RF-19.18).
 pub(crate) static OPTIONS: &[OptionDef] = &[
     // ---- Geral
     option!(
@@ -800,6 +902,26 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         float(0.0, 1.0, 0.05),
         window_image_opacity
     ),
+    // PRD-019 RF-19.18: o acrílico, logo depois das três da imagem da janela. As
+    // duas ficam indisponíveis sem as condições do RF-19.10 (ADR-0068 §10).
+    option!(
+        acrylic_enabled,
+        Appearance,
+        Window,
+        "terminal.acrylic.enabled",
+        TOGGLE,
+        |c| EditValue::Bool(c.terminal.acrylic.enabled),
+        requires = acrylic_availability
+    ),
+    option!(
+        acrylic_blur,
+        Appearance,
+        Window,
+        "terminal.acrylic.blur",
+        integer(1.0, 64.0, 1.0),
+        acrylic_blur_value,
+        requires = acrylic_availability
+    ),
     option!(
         decorations,
         Appearance,
@@ -954,12 +1076,187 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        assert_eq!(OPTIONS.len(), 53);
+        assert_eq!(OPTIONS.len(), 55);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 24, 13, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 24, 15, 4, 2, 1, 2, 0]);
+    }
+
+    /// RF-19.18: as duas opções do acrílico ficam no grupo Aparência, logo
+    /// depois das três da imagem da janela e nesta ordem, com recarga na hora
+    /// (classe A, ADR-0068 §9).
+    #[test]
+    fn the_acrylic_options_follow_the_window_image_options_in_the_appearance_group() {
+        let ids: Vec<&str> = options_in(Group::Appearance).map(|o| o.id).collect();
+        let at = ids
+            .iter()
+            .position(|id| *id == "window_background_image_opacity")
+            .unwrap();
+        assert_eq!(
+            &ids[at..at + 3],
+            [
+                "window_background_image_opacity",
+                "acrylic_enabled",
+                "acrylic_blur"
+            ]
+        );
+        for (id, path, control) in [
+            ("acrylic_enabled", "terminal.acrylic.enabled", TOGGLE),
+            (
+                "acrylic_blur",
+                "terminal.acrylic.blur",
+                integer(1.0, 64.0, 1.0),
+            ),
+        ] {
+            let option = option(id).unwrap();
+            assert_eq!(option.group, Group::Appearance, "{id}");
+            assert_eq!(option.path, path, "{id}");
+            assert_eq!(option.control, control, "{id}");
+            assert_eq!(option.reload_scope(), ReloadScope::Live, "{id}");
+            assert!(option.has_availability(), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_acrylic_defaults_are_the_config_defaults() {
+        assert_eq!(
+            option("acrylic_enabled").unwrap().default_value(),
+            EditValue::Bool(false)
+        );
+        assert_eq!(
+            option("acrylic_blur").unwrap().default_value(),
+            EditValue::Integer(24)
+        );
+    }
+
+    /// `blur` é `f32` no arquivo e inteiro na tela: 24 sai 24, uma fração
+    /// arredonda, NaN vale o padrão, e um valor fora da faixa aparece como está.
+    #[test]
+    fn the_blur_reads_as_an_integer() {
+        let option = option("acrylic_blur").unwrap();
+        let read = |blur: f32| {
+            let mut config = Config::default();
+            config.terminal.acrylic.blur = blur;
+            option.read(&config)
+        };
+        assert_eq!(read(24.0), EditValue::Integer(24));
+        assert_eq!(read(2.6), EditValue::Integer(3));
+        assert_eq!(read(f32::NAN), EditValue::Integer(24));
+        assert_eq!(read(100.0), EditValue::Integer(100));
+        for written in [1, 8, 24, 64] {
+            let config = config_with(option, &EditValue::Integer(written)).expect("na faixa");
+            assert_eq!(option.read(&config), EditValue::Integer(written));
+        }
+    }
+
+    /// Só as opções do acrílico declaram dependência.
+    #[test]
+    fn only_the_acrylic_options_declare_a_dependency() {
+        let with: Vec<&str> = OPTIONS
+            .iter()
+            .filter(|option| option.has_availability())
+            .map(|option| option.id)
+            .collect();
+        assert_eq!(with, ["acrylic_enabled", "acrylic_blur"]);
+    }
+
+    fn config_with_window(opacity: f64, image: &str) -> Config {
+        let mut config = Config::default();
+        config.appearance.window.opacity = opacity;
+        config.appearance.window.background_image.path = image.to_owned();
+        config
+    }
+
+    fn note_of(config: &Config, id: &str) -> Option<String> {
+        let catalog = crate::messages::test_support::pt_br();
+        option(id)
+            .unwrap()
+            .unavailable(config)
+            .map(|unavailable| (unavailable.note)(&catalog))
+    }
+
+    /// As quatro combinações (opacidade 1.0/0.9 × imagem sim/não), com a
+    /// precedência do RF-19.19, e as **duas** linhas sempre juntas.
+    #[test]
+    fn availability_follows_the_two_conditions_and_the_precedence() {
+        let opacity = Some("Exige a opacidade da janela em 100%".to_owned());
+        let image = Some("Exige uma imagem de fundo da janela".to_owned());
+        for (window_opacity, path, expected) in [
+            (1.0, "fundo.png", None),
+            (0.9, "fundo.png", opacity.clone()),
+            (1.0, "", image.clone()),
+            (0.9, "", opacity.clone()),
+        ] {
+            let config = config_with_window(window_opacity, path);
+            for id in ["acrylic_enabled", "acrylic_blur"] {
+                assert_eq!(
+                    note_of(&config, id),
+                    expected,
+                    "{id}: opacidade {window_opacity}, imagem {path:?}"
+                );
+            }
+        }
+    }
+
+    /// RF-19.19/19.20: o interruptor não entra na conta -- com o efeito
+    /// desligado as linhas já estão indisponíveis quando falta uma condição.
+    #[test]
+    fn availability_does_not_depend_on_the_switch() {
+        for enabled in [false, true] {
+            let mut config = config_with_window(0.9, "fundo.png");
+            config.terminal.acrylic.enabled = enabled;
+            assert!(note_of(&config, "acrylic_enabled").is_some(), "{enabled}");
+            let mut config = config_with_window(1.0, "fundo.png");
+            config.terminal.acrylic.enabled = enabled;
+            assert!(note_of(&config, "acrylic_enabled").is_none(), "{enabled}");
+        }
+    }
+
+    #[test]
+    fn an_option_without_a_dependency_is_always_available() {
+        let config = config_with_window(0.1, "");
+        for option in OPTIONS.iter().filter(|o| !o.has_availability()) {
+            assert!(option.unavailable(&config).is_none(), "{}", option.id);
+        }
+    }
+
+    /// `apply_value` cobre as opções que as regras leem, e só elas.
+    #[test]
+    fn the_pending_values_the_rules_read_are_applied() {
+        let mut config = Config::default();
+        let apply = |config: &mut Config, id: &str, value: EditValue| {
+            apply_value(config, option(id).unwrap(), &value)
+        };
+        assert!(apply(&mut config, "window_opacity", EditValue::Float(0.9)));
+        assert!(apply(
+            &mut config,
+            "window_background_image",
+            EditValue::String("a.png".into())
+        ));
+        assert!(apply(&mut config, "acrylic_enabled", EditValue::Bool(true)));
+        assert!(apply(&mut config, "acrylic_blur", EditValue::Integer(8)));
+        assert_eq!(config.appearance.window.opacity, 0.9);
+        assert_eq!(config.appearance.window.background_image.path, "a.png");
+        assert!(config.terminal.acrylic.enabled);
+        assert_eq!(config.terminal.acrylic.blur, 8.0);
+        // Uma opção que nenhuma regra lê não é aplicada.
+        assert!(!apply(&mut config, "font_size", EditValue::Float(20.0)));
+        assert_eq!(
+            config.terminal.font.size,
+            Config::default().terminal.font.size
+        );
+        // E a lista declarada bate com o que o `match` cobre.
+        for id in APPLIED_VALUES {
+            let option = option(id).unwrap();
+            let mut scratch = Config::default();
+            assert!(
+                apply_value(&mut scratch, option, &probe_value(option)),
+                "{id} está em APPLIED_VALUES e não é aplicada"
+            );
+            assert_ne!(scratch, Config::default(), "{id} não mudou nada");
+        }
     }
 
     /// RF-17.20: as três opções da imagem de fundo ficam no grupo Terminal,

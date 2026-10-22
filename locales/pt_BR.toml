@@ -172,6 +172,12 @@ window_background_image_mode_label = "Modo da imagem da janela"
 window_background_image_mode_description = "Como a imagem ocupa a janela inteira."
 window_background_image_opacity_label = "Opacidade da imagem da janela"
 window_background_image_opacity_description = "Opacidade da imagem da janela, de 0.0 a 1.0; a opacidade da janela se aplica por cima."
+acrylic_enabled_label = "Efeito acrílico"
+acrylic_enabled_description = "Mostra a imagem de fundo da janela desfocada através do terminal. Aparece na medida da opacidade do fundo do terminal: com 1.0 o fundo cobre o efeito."
+acrylic_blur_label = "Desfoque do acrílico"
+acrylic_blur_description = "Quanto a imagem é desfocada, de 1 a 64 pixels."
+acrylic_requires_window_opacity = "Exige a opacidade da janela em 100%"
+acrylic_requires_window_image = "Exige uma imagem de fundo da janela"
 decorations_label = "Decorações do sistema"
 decorations_description = "Usa a barra de título do sistema em vez da própria do app."
 show_close_button_label = "Botão de fechar a aba"
@@ -622,6 +628,17 @@ unreadable = "Não pôde ser lido: \"{path}\""
 unsupported = "Formato não aceito (só PNG e JPEG): \"{path}\""
 malformed = "Corrompido ou não é uma imagem válida: \"{path}\""
 too_large = "Grande demais para carregar: \"{path}\""
+
+# Efeito acrílico (PRD-019, RF-19.12, ADR-0068 §11): o aviso diz qual
+# condição falta; o terminal é desenhado sem o efeito.
+[notice.acrylic]
+title = "Efeito acrílico não aplicado"
+window_opacity = "Opacidade da janela diferente de 100%: o acrílico exige 1.0."
+no_window_image = "Sem imagem de fundo da janela: o acrílico precisa dela."
+
+[notice.acrylic_blur_adjusted]
+title = "Desfoque do acrílico ajustado"
+body = "Fora da faixa de {min} a {max}: \"{key}\" usa {used}."
 
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]

@@ -116,6 +116,11 @@ pub struct ResolvedTermPalette {
     /// desktop. `false`, ele só se mistura à cor da barra. Decidido por
     /// janela, a cada frame, por quem pinta -- não vem da config.
     pub backdrop_punch: bool,
+    /// `true` quando o acrílico está ativo nesta janela (`acrylic_state ==
+    /// Active`, ADR-0068 §7): cada quadro desenha o `BlurredBackdrop` entre a
+    /// sombra e o fundo. Como `backdrop_punch`, é decidido por janela, a cada
+    /// frame, por quem pinta -- não vem da config diretamente.
+    pub acrylic: bool,
 }
 
 impl ResolvedTermPalette {
@@ -136,6 +141,7 @@ impl ResolvedTermPalette {
             background_image_opacity: config.terminal.background_image.clamped_opacity(),
             background_image_mode: config.terminal.background_image.mode,
             backdrop_punch: false,
+            acrylic: false,
         }
     }
 

@@ -473,6 +473,12 @@ registry! {
             window_background_image_mode_description(),
             window_background_image_opacity_label(),
             window_background_image_opacity_description(),
+            acrylic_enabled_label(),
+            acrylic_enabled_description(),
+            acrylic_blur_label(),
+            acrylic_blur_description(),
+            acrylic_requires_window_opacity(),
+            acrylic_requires_window_image(),
             decorations_label(),
             decorations_description(),
             show_close_button_label(),
@@ -899,6 +905,15 @@ registry! {
             unsupported(path),
             malformed(path),
             too_large(path),
+        },
+        acrylic {
+            title(),
+            window_opacity(),
+            no_window_image(),
+        },
+        acrylic_blur_adjusted {
+            title(),
+            body(key, min, max, used),
         },
         language_not_found {
             title(),
