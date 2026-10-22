@@ -726,6 +726,20 @@ mod tests {
         assert_eq!(diff(&base(), &new), ReloadEffects::default());
     }
 
+    /// PRD-019, RF-19.15, ADR-0068 §9: `enabled` e `blur` são classe A -- nem
+    /// resize de PTY (B) nem adiamento (C).
+    #[test]
+    fn acrylic_change_is_class_a() {
+        let mut new = base();
+        new.terminal.acrylic.enabled = true;
+        new.terminal.acrylic.blur = 8.0;
+        assert_eq!(diff(&base(), &new), ReloadEffects::default());
+
+        // Também fora da faixa: quem limita é o consumidor, não a recarga.
+        new.terminal.acrylic.blur = 500.0;
+        assert_eq!(diff(&base(), &new), ReloadEffects::default());
+    }
+
     #[test]
     fn decorations_change_is_deferred() {
         let mut new = base();

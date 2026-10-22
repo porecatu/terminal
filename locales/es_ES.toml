@@ -580,6 +580,15 @@ unsupported = "Formato no admitido (solo PNG y JPEG): \"{path}\""
 malformed = "Dañado o no es una imagen válida: \"{path}\""
 too_large = "Demasiado grande para cargar: \"{path}\""
 
+[notice.acrylic]
+title = "Efecto acrílico no aplicado"
+window_opacity = "La opacidad de la ventana no es 100 %: el acrílico la necesita en 1.0."
+no_window_image = "Sin imagen de fondo de la ventana: el acrílico la necesita."
+
+[notice.acrylic_blur_adjusted]
+title = "Desenfoque acrílico ajustado"
+body = "Fuera del rango de {min} a {max}: \"{key}\" usa {used}."
+
 [notice.language_not_found]
 title = "Idioma no encontrado"
 body = "No hay archivo para \"{language}\" (buscado en: {searched})."

@@ -63,6 +63,19 @@ background_opacity = 1.0
 # Transparência da imagem, de 0.0 a 1.0.
 # opacity = 1.0
 
+# Efeito acrílico: a imagem de fundo da janela aparece desfocada através do
+# terminal, tingida pela cor de fundo dele. Tire o "#" das linhas para usar.
+# Só funciona com duas coisas ao mesmo tempo: a opacidade da janela em 1.0
+# ([appearance.window] opacity) e uma imagem de fundo da janela
+# ([appearance.window.background_image] path). Faltando uma delas, o app
+# desenha sem o efeito e avisa qual falta. Com "background_opacity = 1.0" o
+# fundo do terminal cobre o efeito: baixe esse valor para vê-lo.
+# [terminal.acrylic]
+# true liga o efeito.
+# enabled = false
+# Quanto desfocar, de 1 a 64 (em pixels). Valor fora disso é ajustado.
+# blur = 24
+
 [terminal.font]
 # Fonte do terminal e das abas.
 family = "Iosevka Fixed"

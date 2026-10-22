@@ -621,6 +621,17 @@ unsupported = "Unsupported format (PNG and JPEG only): \"{path}\""
 malformed = "Corrupted or not a valid image: \"{path}\""
 too_large = "Too large to load: \"{path}\""
 
+# Acrylic effect (PRD-019, RF-19.12, ADR-0068 §11): the notice says which
+# condition is missing; the terminal is drawn without the effect.
+[notice.acrylic]
+title = "Acrylic effect not applied"
+window_opacity = "Window opacity is not 100%: acrylic needs it at 1.0."
+no_window_image = "No window background image: acrylic needs one."
+
+[notice.acrylic_blur_adjusted]
+title = "Acrylic blur adjusted"
+body = "Out of range {min} to {max}: \"{key}\" uses {used}."
+
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]
 title = "Language not found"

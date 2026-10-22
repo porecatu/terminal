@@ -623,6 +623,17 @@ unsupported = "Formato não aceito (só PNG e JPEG): \"{path}\""
 malformed = "Corrompido ou não é uma imagem válida: \"{path}\""
 too_large = "Grande demais para carregar: \"{path}\""
 
+# Efeito acrílico (PRD-019, RF-19.12, ADR-0068 §11): o aviso diz qual
+# condição falta; o terminal é desenhado sem o efeito.
+[notice.acrylic]
+title = "Efeito acrílico não aplicado"
+window_opacity = "Opacidade da janela diferente de 100%: o acrílico exige 1.0."
+no_window_image = "Sem imagem de fundo da janela: o acrílico precisa dela."
+
+[notice.acrylic_blur_adjusted]
+title = "Desfoque do acrílico ajustado"
+body = "Fora da faixa de {min} a {max}: \"{key}\" usa {used}."
+
 # Avisos sobre o próprio idioma (ADR-0056 §8).
 [notice.language_not_found]
 title = "Idioma não encontrado"

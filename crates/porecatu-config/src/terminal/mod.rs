@@ -4,6 +4,7 @@
 //! PRD-010/ADR-0013 que vivem sob `[terminal.selection]` e
 //! `[terminal.clipboard]`.
 
+mod acrylic;
 mod background_image;
 mod clipboard;
 mod colors;
@@ -13,6 +14,7 @@ mod hyperlinks;
 mod scrollback;
 mod selection;
 
+pub use acrylic::{Acrylic, AcrylicBlock, AcrylicState, MAX_BLUR, MIN_BLUR, acrylic_state};
 pub use background_image::{BackgroundImage, BackgroundImageMode, resolve_background_image_path};
 pub use clipboard::Clipboard;
 pub use colors::{AnsiPalette, Colors};
@@ -36,6 +38,8 @@ pub struct Terminal {
     pub background_opacity: f64,
     /// `[terminal.background_image]` -- PRD-017, ADR-0061.
     pub background_image: BackgroundImage,
+    /// `[terminal.acrylic]` -- PRD-019, ADR-0068. Sem cor: não entra em tema.
+    pub acrylic: Acrylic,
     pub font: Font,
     pub cursor: Cursor,
     pub scrollback: Scrollback,
@@ -54,6 +58,7 @@ impl Default for Terminal {
             theme: crate::theme::DEFAULT_THEME.to_owned(),
             background_opacity: 1.0,
             background_image: BackgroundImage::default(),
+            acrylic: Acrylic::default(),
             font: Font::default(),
             cursor: Cursor::default(),
             scrollback: Scrollback::default(),

@@ -900,6 +900,15 @@ registry! {
             malformed(path),
             too_large(path),
         },
+        acrylic {
+            title(),
+            window_opacity(),
+            no_window_image(),
+        },
+        acrylic_blur_adjusted {
+            title(),
+            body(key, min, max, used),
+        },
         language_not_found {
             title(),
             body(language, searched),
