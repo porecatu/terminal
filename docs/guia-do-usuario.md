@@ -1,7 +1,7 @@
 # Guia do usuário
 
 RF-11.22, escrito no fechamento da F6. Cobre instalação, arquivo de
-configuração, tela de configurações, idioma da interface, atalhos, painéis divididos, imagem de fundo, integração de shell e a
+configuração, tela de configurações, idioma da interface, atalhos, painéis divididos, imagem de fundo, efeito acrílico, integração de shell e a
 convenção do `Shift` para selecionar texto dentro de um programa que pede o mouse. Para decisões de
 arquitetura e o "porquê" de cada coisa, veja os ADRs linkados; este guia é
 só o "como usar".
@@ -603,6 +603,33 @@ opacity = 1.0                # 0.0 a 1.0
 **Aplicação e erros.** Mudar `path`, `mode` ou `opacity` vale na hora, em todas as janelas, sem reiniciar e sem redimensionar terminal nenhum. Arquivo inexistente, ilegível, de formato não aceito, corrompido ou grande demais **não derruba nada**: a janela abre sem imagem e um aviso diz qual arquivo e por quê, **"da janela"** ou **"do terminal"**. O mesmo arquivo ausente nas duas chaves dá dois avisos, um de cada, porque são duas configurações erradas. Na tela de configurações, o campo do caminho mostra uma nota quando o arquivo não existe, e ela não impede o Salvar.
 
 **Legibilidade.** Uma imagem forte atrás das abas e da barra de status pode atrapalhar a leitura; `opacity` é o controle. Comece com `0.3` a `0.6` e suba até a imagem aparecer sem competir com o texto.
+
+## Efeito acrílico
+
+O efeito acrílico mostra a **imagem de fundo da janela desfocada** através do quadro do terminal, tingida pela cor de fundo dele. Fora do quadro — na barra de abas, na barra de status, na margem e no vão entre painéis — a imagem continua **nítida**, e a imagem de fundo do terminal, se houver, fica nítida **por cima** do desfoque. O texto sai nítido como sempre. É o que deixa uma foto de bordas fortes ou de muito contraste servir de fundo sem competir com o que está na tela.
+
+```toml
+[terminal.acrylic]
+enabled = true   # false = desligado (o padrão)
+blur = 24        # raio do desfoque, de 1 a 64 pixels (o padrão é 24)
+```
+
+**Duas condições.** O efeito só vale com as duas juntas:
+
+1. `[appearance.window] opacity = 1.0` — a janela **opaca**. Com a janela translúcida, o que aparece atrás dela é o desktop, que o app não tem como desfocar; o efeito sairia metade desfocado, metade nítido.
+2. `[appearance.window.background_image] path` **preenchido** — sem imagem só há uma cor lisa, e desfocar uma cor lisa não muda nada.
+
+Faltando uma delas, o app **desenha sem o efeito** e mostra um aviso que diz qual condição falta ("opacidade da janela diferente de 100%" ou "sem imagem de fundo da janela"); se faltam as duas, o aviso fala da opacidade. O aviso sai uma vez por vez que a configuração cria o problema, não a cada quadro. A imagem ainda carregando, ou que falhou, não conta como falta: o efeito já vale e passa a mostrar a imagem desfocada quando ela chega (o aviso da falha da imagem é o da própria imagem).
+
+**Quanto aparece depende de `[terminal] background_opacity`.** O fundo do quadro faz o papel de tingimento: com `background_opacity = 0.7` o efeito aparece bem; com `1.0`, o fundo é opaco e **cobre** o efeito, como cobre a imagem nítida. A opção não fica bloqueada por isso — baixe `background_opacity` para ver o desfoque.
+
+**O raio.** `blur` é em pixels **lógicos**, então o mesmo valor desfoca o mesmo tanto em 100% e em 150% de escala. Fora de `1` a `64` o valor é limitado ao extremo mais próximo e a recarga avisa. O desfoque acompanha a imagem da janela: o mesmo `mode` e a mesma `opacity` dela valem, e maximizar ou redimensionar a janela o refaz sem recarregar a imagem do disco.
+
+**É só desfoque e tingimento.** Não há ruído, camada de luminosidade nem aumento de saturação, como no acrílico do Windows. O acrílico do sistema operacional também não é usado: o efeito é desenhado pelo app, sobre a imagem da janela, e não desfoca o desktop.
+
+**Tela de configurações.** As duas opções estão no grupo **Aparência**, logo depois das três da imagem de fundo da janela: **Efeito acrílico** (alternância) e **Desfoque do acrílico** (número de 1 a 64). Sem as duas condições, as **duas linhas ficam esmaecidas e sem edição**, com uma nota abaixo da descrição — "Exige a opacidade da janela em 100%" ou "Exige uma imagem de fundo da janela". A conta usa os valores ainda **não salvos** da própria tela: baixar a opacidade da janela para `0.9` esmaece as linhas na hora, e voltá-la a `1.0` as devolve, antes de Salvar. Esmaecer não apaga nada: o valor que está no arquivo continua lá, e o Salvar grava as outras mudanças sem tocar nas chaves do acrílico.
+
+**Aplicação.** Mudar `enabled` ou `blur` vale **na hora**, em todas as janelas, sem reiniciar e sem redimensionar terminal nenhum, e o mesmo vale quando uma das condições passa a valer ou deixa de valer por recarga. Com o acrílico ligado e nada mudando, nenhum quadro é desenhado: o terminal ocioso continua custando zero. A janela de configurações, os avisos, os menus, o tooltip e os diálogos **não têm** o efeito.
 
 ## Selecionar texto dentro de um programa que pede o mouse (`Shift`)
 

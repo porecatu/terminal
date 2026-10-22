@@ -16,6 +16,26 @@ primeiro release.
 
 ## [Não publicado]
 
+### Adicionado
+
+- **Efeito acrílico no fundo do terminal**
+  ([PRD-019](docs/prd/prd-019-efeito-acrilico-no-fundo-do-terminal.md),
+  [ADR-0068](docs/adr/0068-efeito-acrilico-no-fundo-do-terminal.md)):
+  `[terminal.acrylic]` (`enabled`, padrão `false`, e `blur` de 1 a 64 pixels
+  lógicos, padrão 24) mostra a imagem de fundo da janela **desfocada** através
+  do quadro do terminal, tingida pelo fundo dele em `background_opacity`; fora
+  do quadro ela segue nítida, e a imagem do terminal fica nítida por cima. Só
+  vale com `[appearance.window] opacity = 1.0` e com imagem de fundo da
+  janela; faltando uma condição o app desenha sem o efeito e avisa qual falta.
+  Um passe de desfoque novo em `porecatu-render` (gaussiana separável sobre
+  cópia reduzida, refeito só quando a imagem, o raio, o tamanho ou a escala
+  mudam), `Primitive::BlurredBackdrop` e a regra `acrylic_state` em
+  `porecatu-config`. Classe A: vale na hora, sem reiniciar
+- **Duas opções na tela de configurações**, no grupo Aparência: efeito acrílico
+  e desfoque do acrílico. Sem as duas condições as linhas ficam esmaecidas, com
+  uma nota do motivo avaliada sobre os valores ainda não salvos
+- Avisos `notice.acrylic.*` e as frases das duas opções nos cinco idiomas
+
 ### Alterado
 
 - **Temas em arquivos próprios**
