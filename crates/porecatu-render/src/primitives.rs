@@ -116,6 +116,16 @@ pub enum Primitive {
         alpha: f32,
         image: ImageId,
     },
+    /// A textura desfocada da própria janela (`WindowSurface::set_blur_source`,
+    /// ADR-0068 §5), desenhada dentro da máscara e amostrada pela **coordenada
+    /// de tela** do fragmento: dois quadros vizinhos mostram pedaços contínuos
+    /// da mesma imagem. A máscara é a mesma SDF de [`RoundedQuad`]. Geometria, na
+    /// ordem da lista, composta em premultiplicado sobre o que já está no
+    /// destino. Sem fonte de desfoque definida na surface, não desenha nada.
+    BlurredBackdrop {
+        mask: Rect,
+        mask_radius: f32,
+    },
     Quad(Quad),
     RoundedQuad(RoundedQuad),
     /// Fundo translúcido que **substitui** o que já estava no destino em vez

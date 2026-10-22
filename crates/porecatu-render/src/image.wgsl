@@ -79,3 +79,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let a = texel.a * in.alpha * coverage;
     return vec4<f32>(texel.rgb * a, a);
 }
+
+// `Primitive::BlurredBackdrop` (ADR-0068 §5): a mesma máscara e a mesma
+// cobertura, mas a textura é a da janela desfocada, amostrada pela **coordenada
+// de tela** do fragmento -- não por `uv` de instância. É isso que faz dois
+// quadros vizinhos mostrarem pedaços contínuos da mesma imagem, sem conta de
+// `uv` por quadro. `clip_position.xy` chega em pixels físicos (centro do pixel),
+// `resolution` é o tamanho da surface.
+//
+// A textura já é premultiplicada (`blur.wgsl`): só a cobertura multiplica, sem
+// premultiplicar de novo. O mesmo bind group (textura + sampler) e o mesmo
+// sampler do pipeline de imagem, `ClampToEdge`.
+@fragment
+fn fs_screen(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.clip_position.xy / uniforms.resolution;
+    let texel = textureSample(image_texture, image_sampler, uv);
+    let coverage = shape_coverage(in.mask_local, in.mask_half, in.mask_radius);
+    return texel * (in.alpha * coverage);
+}
