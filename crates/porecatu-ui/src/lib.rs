@@ -10921,6 +10921,15 @@ impl App {
             window_rect,
             state.scale,
         );
+        // PRD-019/ADR-0068 §2 e §7: a fonte do desfoque desta janela, de novo a
+        // cada frame que já ia ser desenhado -- `None` (acrílico desligado ou
+        // bloqueado) a limpa. A `WindowSurface` só refaz o desfoque quando a
+        // chave, o tamanho físico ou a escala mudam, então repetir não custa
+        // um frame a mais nem um desfoque a mais: saída de PTY não entra.
+        let blur_source =
+            acrylic::blur_source(&self.config, pal.bar_background, window_image, window_rect);
+        let acrylic_active = blur_source.is_some();
+        state.window_surface.set_blur_source(blur_source);
         let chrome_primitives = chrome::paint(
             &paint_layout,
             &state.workspace,
@@ -11029,6 +11038,7 @@ impl App {
                 state.window_surface.is_transparent(),
                 window_image_configured(&self.config),
             );
+            window_term_pal.acrylic = acrylic_active;
             // PRD-017: a textura do processo, a mesma em toda janela e todo
             // painel (RF-17.18). `displayed` é a da chave atual se `Ready`, ou
             // a anterior enquanto a nova carrega; `Loading` sem anterior e

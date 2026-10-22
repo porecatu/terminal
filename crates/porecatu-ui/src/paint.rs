@@ -252,6 +252,18 @@ pub fn build_primitives_with_image(
             style.terminal_frame_corner_radius,
         );
     }
+    // PRD-019/ADR-0068 §6: com o acrílico ativo, a imagem da janela desfocada
+    // entra entre a sombra e o fundo do quadro, recortada pelo quadro e pelo
+    // raio dele. O fundo, com `background_opacity`, faz o papel de tingimento.
+    // A amostra é por coordenada de tela (`porecatu-render`), então a máscara
+    // é só a deste quadro -- dois painéis vizinhos mostram pedaços contínuos
+    // da mesma imagem desfocada.
+    if term_pal.acrylic {
+        primitives.push(Primitive::BlurredBackdrop {
+            mask: box_rect,
+            mask_radius: style.terminal_frame_corner_radius,
+        });
+    }
     let frame_fill = RoundedQuad {
         rect: box_rect,
         radius: style.terminal_frame_corner_radius,
@@ -1135,6 +1147,186 @@ mod tests {
             &[],
         );
         assert_eq!(format!("{without:?}"), format!("{plain:?}"));
+    }
+
+    // ---- acrílico (PRD-019, ADR-0068 §6) --------------------------------
+
+    fn acrylic_pal(acrylic: bool, opacity: f64) -> ResolvedTermPalette {
+        let mut pal = punch_pal(opacity, false);
+        pal.acrylic = acrylic;
+        pal
+    }
+
+    fn acrylic_primitives(
+        m: &mut porecatu_render::TextMeasurer,
+        pal: &ResolvedTermPalette,
+        box_rect: Rect,
+        image: Option<BackgroundImagePaint>,
+    ) -> Vec<Primitive> {
+        let metrics = cell(m);
+        let mut snap = snapshot("ab");
+        snap.cells[0].bg = porecatu_term::TermColor::Rgb {
+            r: 200,
+            g: 60,
+            b: 60,
+        };
+        build_primitives_with_image(
+            &snap,
+            metrics,
+            SIZE,
+            box_rect,
+            &TabBarStyle::DEFAULT,
+            pal,
+            test_cursor(),
+            m,
+            &[],
+            image,
+        )
+    }
+
+    fn blurred_masks(out: &[Primitive]) -> Vec<(Rect, f32)> {
+        out.iter()
+            .filter_map(|p| match p {
+                Primitive::BlurredBackdrop { mask, mask_radius } => Some((*mask, *mask_radius)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Sem o acrílico ativo -- desligado ou bloqueado, nos dois o campo da
+    /// paleta é `false` -- a lista é a de hoje, pixel por pixel, com e sem
+    /// imagem do terminal, opaca e translúcida.
+    #[test]
+    fn without_the_acrylic_the_list_is_the_one_from_before() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        for opacity in [1.0, 0.6] {
+            for image in [None, Some(image_paint())] {
+                let off = acrylic_primitives(
+                    &mut m,
+                    &acrylic_pal(false, opacity),
+                    test_box_rect(),
+                    image,
+                );
+                let reference = {
+                    // O mesmo `punch_pal` que não conhece o campo novo.
+                    let pal = punch_pal(opacity, false);
+                    assert!(!pal.acrylic);
+                    acrylic_primitives(&mut m, &pal, test_box_rect(), image)
+                };
+                assert_eq!(format!("{off:?}"), format!("{reference:?}"));
+                assert!(blurred_masks(&off).is_empty());
+            }
+        }
+    }
+
+    /// Com o acrílico, a única diferença da lista é **uma** primitiva a mais,
+    /// o `BlurredBackdrop`; o resto, na mesma ordem.
+    #[test]
+    fn the_acrylic_adds_exactly_one_blurred_backdrop_and_changes_nothing_else() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let off = acrylic_primitives(
+            &mut m,
+            &acrylic_pal(false, 0.6),
+            test_box_rect(),
+            Some(image_paint()),
+        );
+        let on = acrylic_primitives(
+            &mut m,
+            &acrylic_pal(true, 0.6),
+            test_box_rect(),
+            Some(image_paint()),
+        );
+        assert_eq!(on.len(), off.len() + 1);
+        let without_blur: Vec<_> = on
+            .iter()
+            .filter(|p| !matches!(p, Primitive::BlurredBackdrop { .. }))
+            .collect();
+        assert_eq!(
+            format!("{without_blur:?}"),
+            format!("{:?}", off.iter().collect::<Vec<_>>())
+        );
+    }
+
+    /// Sombra, depois o desfoque, depois o fundo do quadro, a imagem do
+    /// terminal, o fundo de célula e o texto (ADR-0068 §6).
+    #[test]
+    fn the_blurred_backdrop_sits_between_the_shadow_and_the_frame_fill() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let out = acrylic_primitives(
+            &mut m,
+            &acrylic_pal(true, 0.6),
+            test_box_rect(),
+            Some(image_paint()),
+        );
+        let blurred = position(&out, |p| matches!(p, Primitive::BlurredBackdrop { .. })).unwrap();
+        // A sombra são `RoundedQuad`s pretos empilhados; o fundo do quadro é o
+        // `RoundedQuad` com a cor do terminal.
+        let first_shadow = position(&out, |p| matches!(p, Primitive::RoundedQuad(_))).unwrap();
+        let frame = position(
+            &out,
+            |p| matches!(p, Primitive::RoundedQuad(q) if q.color.r > 0.0 || q.color.g > 0.0 || q.color.b > 0.0),
+        )
+        .unwrap();
+        let image = position(&out, |p| matches!(p, Primitive::Image { .. })).unwrap();
+        // Translúcido, o fundo da célula também é `RoundedQuad` (o vermelho).
+        let cell_bg = position(
+            &out,
+            |p| matches!(p, Primitive::RoundedQuad(q) if q.rect != test_box_rect() && q.color.r > 0.7),
+        )
+        .unwrap();
+        let text = position(&out, |p| matches!(p, Primitive::Text(_))).unwrap();
+        assert!(first_shadow < blurred, "sombra abaixo do desfoque");
+        assert!(blurred < frame, "fundo do quadro acima do desfoque");
+        assert!(frame < image, "imagem do terminal acima do fundo");
+        assert!(image < cell_bg && cell_bg < text);
+        // A imagem do terminal não é desfocada: continua uma `Image` nítida.
+        assert_eq!(blurred_masks(&out).len(), 1);
+    }
+
+    #[test]
+    fn the_blurred_backdrop_is_the_frame_rect_with_the_frame_radius() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let style = TabBarStyle::DEFAULT;
+        let box_rect = Rect {
+            x: 6.0,
+            y: 52.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        let out = acrylic_primitives(&mut m, &acrylic_pal(true, 0.6), box_rect, None);
+        assert_eq!(
+            blurred_masks(&out),
+            vec![(box_rect, style.terminal_frame_corner_radius)]
+        );
+    }
+
+    /// Dois painéis vizinhos: cada um desenha o desfoque com a máscara do
+    /// próprio quadro, e as duas máscaras não se tocam -- o vão fica de fora
+    /// (a continuidade vem da amostragem por coordenada de tela).
+    #[test]
+    fn two_neighbouring_panes_mask_only_their_own_frames() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let left = Rect {
+            x: 6.0,
+            y: 52.0,
+            width: 200.0,
+            height: 300.0,
+        };
+        let right = Rect {
+            x: 212.0,
+            y: 52.0,
+            width: 200.0,
+            height: 300.0,
+        };
+        let pal = acrylic_pal(true, 0.6);
+        let mut all = acrylic_primitives(&mut m, &pal, left, None);
+        all.extend(acrylic_primitives(&mut m, &pal, right, None));
+        let masks: Vec<Rect> = blurred_masks(&all)
+            .into_iter()
+            .map(|(rect, _)| rect)
+            .collect();
+        assert_eq!(masks, vec![left, right]);
+        assert!(left.x + left.width < right.x, "há um vão entre os quadros");
     }
 
     // ---- imagem da janela sob o quadro (revisão do ADR-0062 §4) -------

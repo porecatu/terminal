@@ -8,11 +8,15 @@
 //! disponibilidade em si (`acrylic_state`) é de `porecatu-config`, a mesma que
 //! a pintura e a tela de configurações vão chamar.
 
+use std::hash::{Hash, Hasher};
+
 use porecatu_config::{
     Acrylic, AcrylicBlock, AcrylicState, Config, MAX_BLUR, MIN_BLUR, acrylic_state,
 };
 use porecatu_locale::Catalog;
+use porecatu_render::{BlurSource, Color, Rect};
 
+use crate::background_image::WindowImage;
 use crate::messages::msg;
 use crate::warning::Severity;
 
@@ -59,6 +63,75 @@ impl AcrylicNotice {
             }
         }
     }
+}
+
+/// A fonte do desfoque desta janela, ou `None` quando o acrílico não vale
+/// (ADR-0068 §2 e §7): é a camada **da janela** -- a cor da barra e, se há,
+/// a imagem da janela já posta pelo `placement`, a mesma primitiva que abre
+/// `Layer::Grid` (mesmo retângulo, mesmo `uv`, mesmo alfa). Nem abas, nem
+/// barra de status, nem sombras, nem outros quadros entram nela: é o que a
+/// torna estável quando uma aba muda de título.
+///
+/// Só `acrylic_state == Active` produz fonte -- a regra única de
+/// `porecatu-config`, a mesma do aviso e da tela de configurações. A imagem
+/// ainda carregando, ou que falhou, chega como `None` em `window_image`: a
+/// fonte vai só com `background`, sem efeito visível (RF-19.11), e quando a
+/// imagem fica pronta a `key` muda e o desfoque é refeito no frame da chegada.
+pub(crate) fn blur_source(
+    config: &Config,
+    background: Color,
+    window_image: Option<WindowImage>,
+    window_rect: Rect,
+) -> Option<BlurSource> {
+    if acrylic_state(config) != AcrylicState::Active {
+        return None;
+    }
+    let radius_logical = config.terminal.acrylic.clamped_blur();
+    Some(BlurSource {
+        background,
+        primitives: window_image
+            .map(|image| image.primitive(window_rect, 0.0))
+            .into_iter()
+            .collect(),
+        radius_logical,
+        key: blur_key(background, window_image, radius_logical),
+    })
+}
+
+/// A chave de identidade da fonte (ADR-0068 §4): muda quando muda o que entra
+/// no desfoque -- a imagem (qual, onde cai, com que alfa; o `mode` e a
+/// `opacity` da config já estão nisso), o `blur` e a cor de fundo --, e **só**
+/// então. Tamanho físico e escala a `WindowSurface` já guarda; saída do
+/// terminal, cursor, hover e abas não passam por aqui. Estável dentro do
+/// processo, que é o que a chave precisa.
+pub(crate) fn blur_key(background: Color, window_image: Option<WindowImage>, radius: f32) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    radius.to_bits().hash(&mut hasher);
+    for channel in [background.r, background.g, background.b, background.a] {
+        channel.to_bits().hash(&mut hasher);
+    }
+    match window_image {
+        None => 0_u8.hash(&mut hasher),
+        Some(image) => {
+            1_u8.hash(&mut hasher);
+            image.image.hash(&mut hasher);
+            for value in [
+                image.rect.x,
+                image.rect.y,
+                image.rect.width,
+                image.rect.height,
+                image.uv.x,
+                image.uv.y,
+                image.uv.width,
+                image.uv.height,
+                image.alpha,
+            ] {
+                value.to_bits().hash(&mut hasher);
+            }
+            image.repeat.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 /// Há aviso de bloqueio a emitir? Só a recarga que **cria** o bloqueio ou
@@ -108,6 +181,140 @@ mod tests {
 
     const OPACITY: AcrylicState = AcrylicState::Blocked(AcrylicBlock::WindowOpacity);
     const NO_IMAGE: AcrylicState = AcrylicState::Blocked(AcrylicBlock::NoWindowImage);
+
+    // ---- a fonte do desfoque -------------------------------------------
+
+    const BAR: Color = Color {
+        r: 0.1,
+        g: 0.12,
+        b: 0.15,
+        a: 1.0,
+    };
+
+    fn window() -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        }
+    }
+
+    fn image(id: u32, alpha: f32) -> WindowImage {
+        WindowImage {
+            rect: window(),
+            uv: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            repeat: false,
+            alpha,
+            image: porecatu_render::ImageId::from_raw(id),
+        }
+    }
+
+    fn active() -> Config {
+        config(true, 1.0, "fundo.png")
+    }
+
+    #[test]
+    fn only_an_active_acrylic_has_a_source() {
+        assert!(blur_source(&active(), BAR, Some(image(1, 1.0)), window()).is_some());
+        for blocked_or_off in [
+            Config::default(),
+            config(false, 1.0, "fundo.png"),
+            config(true, 0.9, "fundo.png"),
+            config(true, 1.0, ""),
+        ] {
+            assert!(
+                blur_source(&blocked_or_off, BAR, Some(image(1, 1.0)), window()).is_none(),
+                "{:?}",
+                acrylic_state(&blocked_or_off)
+            );
+        }
+    }
+
+    #[test]
+    fn the_source_is_the_bar_color_under_the_same_primitive_the_window_head_has() {
+        let image = image(3, 0.7);
+        let source = blur_source(&active(), BAR, Some(image), window()).unwrap();
+        assert_eq!(source.background, BAR);
+        assert_eq!(source.primitives.len(), 1);
+        assert_eq!(
+            format!("{:?}", source.primitives[0]),
+            format!("{:?}", image.primitive(window(), 0.0))
+        );
+    }
+
+    /// Imagem carregando ou falha: só a cor, sem efeito visível (RF-19.11).
+    #[test]
+    fn a_missing_window_image_leaves_just_the_background() {
+        let source = blur_source(&active(), BAR, None, window()).unwrap();
+        assert!(source.primitives.is_empty());
+        assert_eq!(source.background, BAR);
+    }
+
+    #[test]
+    fn the_radius_is_the_clamped_blur() {
+        let mut config = active();
+        for (configured, used) in [(24.0, 24.0), (500.0, 64.0), (0.0, 1.0), (f32::NAN, 24.0)] {
+            config.terminal.acrylic.blur = configured;
+            let source = blur_source(&config, BAR, None, window()).unwrap();
+            assert_eq!(source.radius_logical, used, "{configured}");
+        }
+    }
+
+    fn key(image: Option<WindowImage>, radius: f32, background: Color) -> u64 {
+        blur_key(background, image, radius)
+    }
+
+    #[test]
+    fn the_same_inputs_give_the_same_key() {
+        assert_eq!(
+            key(Some(image(1, 1.0)), 24.0, BAR),
+            key(Some(image(1, 1.0)), 24.0, BAR)
+        );
+        assert_eq!(key(None, 24.0, BAR), key(None, 24.0, BAR));
+    }
+
+    #[test]
+    fn each_input_the_blur_depends_on_changes_the_key() {
+        let base = key(Some(image(1, 1.0)), 24.0, BAR);
+        let other_bar = Color { r: 0.2, ..BAR };
+        let mut moved = image(1, 1.0);
+        moved.rect.width = 1000.0; // outro `mode`/tamanho: a imagem cai noutro lugar
+        let mut tiled = image(1, 1.0);
+        tiled.repeat = true;
+        let mut cropped = image(1, 1.0);
+        cropped.uv.width = 0.5;
+        for (what, changed) in [
+            ("a imagem trocada", key(Some(image(2, 1.0)), 24.0, BAR)),
+            ("a opacity da imagem", key(Some(image(1, 0.5)), 24.0, BAR)),
+            ("o blur", key(Some(image(1, 1.0)), 8.0, BAR)),
+            ("a cor da barra", key(Some(image(1, 1.0)), 24.0, other_bar)),
+            ("a posição", key(Some(moved), 24.0, BAR)),
+            ("o repeat", key(Some(tiled), 24.0, BAR)),
+            ("o uv", key(Some(cropped), 24.0, BAR)),
+            ("a imagem pronta depois de carregar", key(None, 24.0, BAR)),
+        ] {
+            assert_ne!(changed, base, "{what} deveria mudar a chave");
+        }
+    }
+
+    /// A chave **não** depende da config do acrílico além do raio: ligar o
+    /// efeito, o que está no terminal ou o tamanho da janela (que a surface
+    /// leva em conta) não a mexem.
+    #[test]
+    fn the_key_is_the_same_whatever_the_terminal_is_doing() {
+        let first = blur_source(&active(), BAR, Some(image(1, 1.0)), window()).unwrap();
+        let mut other = active();
+        other.terminal.background_opacity = 0.3; // tingimento: não é da fonte
+        other.terminal.font.size = 20.0;
+        let second = blur_source(&other, BAR, Some(image(1, 1.0)), window()).unwrap();
+        assert_eq!(first.key, second.key);
+    }
 
     #[test]
     fn creating_the_block_emits_its_reason() {
