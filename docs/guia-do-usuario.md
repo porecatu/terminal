@@ -97,6 +97,10 @@ As antigas `[appearance.tabs] font_family`/`font_size`,
 não existem mais; se estiverem no seu arquivo, viram aviso de chave
 desconhecida e podem ser apagadas.
 
+**Cores não ficam no `porecatu.toml`**: ficam nos temas (ver
+[Temas](#temas) abaixo). Uma cor escrita no `porecatu.toml` — de um arquivo
+antigo, por exemplo — é ignorada, e o app avisa uma vez quantas encontrou.
+
 Outras formas de apontar o app para um arquivo de config diferente
 ([ADR-0040](adr/0040-superficie-de-linha-de-comando.md)):
 
@@ -116,6 +120,49 @@ porecatu --config <arquivo>  usa esse arquivo de config
 porecatu --help / -h         imprime as formas acima e sai
 porecatu --version / -V      imprime nome, versão e licença, e sai
 ```
+
+## Temas
+
+As cores do app — terminal, barra de abas, menus, avisos, barra de status,
+janela de configurações — vêm de um **tema**. Cada tema é um arquivo
+`thm_<nome>.toml` na mesma pasta do `porecatu.toml`, e o nome do tema é o do
+arquivo, sem `thm_` e sem `.toml`.
+
+O Porecatu traz dois:
+
+| Tema | Arquivo |
+|---|---|
+| `default` (escuro, o padrão) | `thm_default.toml` |
+| `default_light` (claro) | `thm_default_light.toml` |
+
+Os dois funcionam mesmo sem os arquivos, porque vêm dentro do app. Quando o
+`porecatu.toml` é criado (pelo botão **Open file in editor** ou pelo primeiro
+Salvar da tela de configurações), o app grava também os dois arquivos de
+tema, se ainda não existirem — nunca por cima de um que você já tenha.
+
+Para **escolher** o tema: na tela de configurações, grupo **Aparência**, ou no
+arquivo:
+
+```toml
+[terminal]
+theme = "default_light"
+```
+
+`Ctrl+Shift+Y` (`Cmd+Shift+Y` no macOS) passa para o próximo tema só nesta
+sessão, sem gravar nada: `default`, `default_light` e depois os seus, em
+ordem alfabética.
+
+Para **criar** um tema: copie `thm_default.toml` com outro nome, por exemplo
+`thm_meu.toml`, e troque as cores. Cor que o seu tema não tiver usa a do
+`default`, então um tema pode ter só as cores que mudam. Cores aceitam
+`"#rrggbb"`, `"#rrggbbaa"` (os dois últimos dígitos são a transparência) ou
+`"transparent"`. Salvou, aplicou: o app relê os temas sozinho. Um arquivo de
+tema com erro vira aviso, e o tema dele fica fora da lista até ser
+corrigido.
+
+Editar `thm_default.toml` muda o tema padrão. Para voltar ao original, apague
+o arquivo: o app volta ao embutido e o grava de novo na próxima vez que criar
+os arquivos.
 
 ## Idioma da interface
 
@@ -268,7 +315,8 @@ Quando a mudança não vale na hora, a linha diz o escopo antes de você mexer �
 "applies to new tabs" (vale em aba nova), "applies to the next window"
 (vale na próxima janela) ou a necessidade de reiniciar.
 
-Na **Aparência**, o tema é uma lista com uma amostra das cores de cada um. Um
+Na **Aparência**, o tema é uma lista com uma amostra das cores de cada um —
+`default`, `default_light` e os seus arquivos `thm_*.toml`. Um
 tema escolhido na sessão por `theme.cycle` não é pendência nem é gravado: a
 lista mostra o tema do arquivo, e uma linha abaixo diz qual a sessão está
 usando, se for outro.
@@ -290,7 +338,7 @@ usando, se for outro.
 
 Salvar mexe **só nas chaves que você alterou**. Comentários, linhas em
 branco, a ordem das chaves e das tabelas, chaves desconhecidas, tabelas que a
-tela não mostra (`[[themes]]`, os tokens de `[appearance.*]`, os atalhos de
+tela não mostra (os tokens de `[appearance.*]`, os atalhos de
 outras plataformas) e o final de linha do arquivo (CRLF ou LF) ficam como
 estavam: num arquivo versionado, o `git diff` mostra apenas as linhas que você
 mexeu. Chave que ainda não estava no arquivo entra na tabela dela, que é
@@ -342,9 +390,9 @@ existente o substitui.
 ### O que fica só no arquivo
 
 A tela mostra um catálogo curado, não o arquivo inteiro. Ficam só no arquivo:
-as cores, dimensões, raios e espaçamentos de `[appearance.*]` (tokens de
-design), criar, editar ou apagar temas (`[[themes]]` — a tela só **escolhe**
-qual vale), os atalhos comuns de `[keybindings]` e os de outras plataformas, e
+as dimensões, raios e espaçamentos de `[appearance.*]` (tokens de
+design), criar, editar ou apagar temas (os arquivos `thm_*.toml` — a tela só
+**escolhe** qual vale), os atalhos comuns de `[keybindings]` e os de outras plataformas, e
 qualquer chave que o catálogo não cobre. O botão **Open file in editor**, no
 rodapé, abre o arquivo no editor do sistema (e o cria a partir do exemplo, se
 ele não existir). Também não existem pré-visualização antes de salvar nem
@@ -801,9 +849,10 @@ enabled = false
 ```
 
 Desligada, a barra devolve a altura ao terminal — o número de linhas da
-grade cresce de volta, na hora, sem reiniciar. Cores, altura e tamanho da
+grade cresce de volta, na hora, sem reiniciar. Altura e tamanho da
 fonte também são configuráveis; ver `[appearance.status_bar]` no
-[arquivo de exemplo](config/porecatu.example.toml).
+[arquivo de exemplo](config/porecatu.example.toml). As cores são do tema
+(`[status_bar]` em `thm_*.toml`).
 
 A única coisa clicável na barra é o número de commits atrás do remoto
 (acima). Em todo o resto dela, a borda inferior da janela continua sendo

@@ -142,7 +142,7 @@ background_image_mode_description = "Cómo la imagen ocupa el marco del terminal
 background_image_opacity_label = "Opacidad de la imagen"
 background_image_opacity_description = "Opacidad de la imagen, de 0.0 a 1.0; multiplica la opacidad del fondo."
 theme_label = "Tema"
-theme_description = "Conjunto de colores del terminal. Sin tema usa los colores del archivo."
+theme_description = "Conjunto de colores de la app, de un archivo thm_<nombre>.toml junto a la configuración."
 animations_label = "Animaciones"
 animations_description = "Movimiento al contraer grupos y reorganizar pestañas."
 window_opacity_label = "Opacidad de la ventana"
@@ -237,7 +237,6 @@ empty_name = "El nombre no puede estar vacío."
 duplicate_name = "El nombre {name} ya existe."
 
 [settings.theme]
-none = "Sin tema"
 session_using = "Esta sesión está usando el tema {name}."
 
 [settings.shortcut]
@@ -426,17 +425,27 @@ title = "Configuración no válida"
 body_at = "línea {line}, columna {column}: {detail}"
 body = "{detail}"
 unreadable = "no se pudo leer \"{path}\": {cause}"
-duplicate_theme = "nombre de tema duplicado: \"{name}\""
 
 [notice.unknown_config_key]
 title = "Clave desconocida en la configuración"
 
 [notice.unknown_theme]
 title = "Tema desconocido"
-body = "\"{name}\" no está en [[themes]]; se usan los valores por defecto."
+body = "\"{name}\" no tiene archivo de tema; se usa el tema default."
 
-[notice.color_overridden]
-title = "Color que sustituye al tema"
+[notice.colors_ignored]
+title = "Colores ignorados en porecatu.toml"
+body = "{count} clave(s) de color ignorada(s): los colores ahora están en los archivos de tema thm_*.toml."
+
+[notice.theme_file_invalid]
+title = "Archivo de tema no válido"
+body_at = "{file}, línea {line}, columna {column}: {detail}"
+body = "{file}: {detail}"
+unreadable = "no se pudo leer \"{file}\": {cause}"
+
+[notice.theme_file_unknown_key]
+title = "Clave desconocida en el tema"
+body = "{file}: {keys}"
 
 [notice.theme_vanished]
 title = "El tema de la sesión ya no existe"

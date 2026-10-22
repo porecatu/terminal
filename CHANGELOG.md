@@ -14,6 +14,31 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [Não publicado]
+
+### Alterado
+
+- **Temas em arquivos próprios**
+  ([ADR-0067](docs/adr/0067-temas-em-arquivos-proprios.md)): cada tema é um
+  arquivo `thm_<nome>.toml` ao lado do `porecatu.toml`, e é o único lugar de
+  cor. O app traz dois, `default` (escuro) e `default_light` (claro, novo),
+  embutidos e gravados ao lado da config quando ela é criada. `[terminal]
+  theme` passa a valer `"default"`. Toda cor do app passou a ser temável
+- **`porecatu.toml` reescrito para quem não conhece a arquitetura:** de 1848
+  para menos de 500 linhas, comentários curtos em português simples, e as
+  dimensões finas numa seção "Avançado" no fim
+- **Botões minimizar, maximizar e fechar com fundo translúcido** no hover e
+  no pressionado, no tema escuro e no claro: o que está atrás da barra
+  continua aparecendo
+
+### Removido
+
+- Os temas `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`,
+  `gruvbox-light`, `dracula`, `nord` e `solarized-light`
+- Cor no `porecatu.toml` (`[terminal.colors]`, as cores de `[appearance.*]`
+  e `[[themes]]`): vira chave ignorada, com um aviso só que diz quantas eram
+- O passo "sem tema" de `theme.cycle`: sem tema é o `default`
+
 ## [0.9.4] - 2026-10-17
 
 O app ganha **ícone novo**, e a tela de configurações passa a ser modal.

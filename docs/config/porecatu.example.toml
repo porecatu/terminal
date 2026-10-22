@@ -1,1566 +1,216 @@
-##############################################################################
-# Porecatu — configuração de referência
+# Configuração do Porecatu
 #
-# Todos os valores mostrados aqui são os DEFAULTS. Nenhuma chave é obrigatória:
-# apagar este arquivo inteiro produz exatamente o mesmo comportamento.
-#
-# Local do arquivo:
-#   Linux    $XDG_CONFIG_HOME/porecatu/porecatu.toml  (~/.config/porecatu/)
-#   macOS    ~/.config/porecatu/porecatu.toml
+# Onde fica este arquivo:
 #   Windows  %APPDATA%\porecatu\porecatu.toml
+#   Linux    ~/.config/porecatu/porecatu.toml
+#   macOS    ~/.config/porecatu/porecatu.toml
 #
-# Override: --config <caminho>  ou  variável PORECATU_CONFIG
+# Tudo aqui é opcional: apague uma linha e o Porecatu usa o valor padrão
+# (o que está escrito neste arquivo). A maior parte das opções também pode
+# ser mudada em Configurações (Ctrl+Shift+O), sem abrir este arquivo.
 #
-# Recarga a quente: salvar o arquivo aplica as mudanças em menos de 500 ms.
-# Config inválida NÃO derruba o app — mantém a anterior e mostra o erro.
+# Salvou, aplicou: o app relê o arquivo sozinho. Algumas opções só valem
+# numa aba ou janela nova, ou depois de reiniciar -- o comentário avisa.
+# Se algo estiver errado, o app mostra um aviso e continua funcionando.
 #
-# CLASSE DE RECARGA (ADR-0030). Cada seção abaixo declara a sua; onde uma
-# chave foge da classe da seção, ela vem marcada na própria linha.
-#   [A] aplica a quente: troca o Config, recalcula o layout, redesenha.
-#   [B] aplica a quente COM recálculo de grade e resize de todos os PTYs --
-#       um resize por recarga, coalescido pelo debounce.
-#   [C] não aplica à sessão em curso, e AVISA o escopo real ("vale na
-#       próxima janela", "vale em aba nova", "reinicie o app"). Ignorar em
-#       silêncio produz "mudei e não aconteceu nada", indistinguível de bug.
-# Uma chave de classe C alterada não invalida o resto da gravação.
-#
-# Governança de cada seção:
-#   [general] [shell]        PRD-000, PRD-001; TERM em ADR-0012
-#   [appearance.*]           PRD-004  (aparência do chrome)
-#   [appearance.notices]     PRD-010, ADR-0014  (aviso, diálogo, menu)
-#   [appearance.dialog]      PRD-010, ADR-0014
-#   [appearance.context_menu] PRD-010, ADR-0014
-#   [terminal.*] [[themes]]  PRD-005  (aparência do terminal)
-#   [terminal.selection]     PRD-010, ADR-0013  (mouse, seleção)
-#   [terminal.clipboard]     PRD-010, ADR-0013  (OSC 52)
-#   [keybindings]            ADR-0008; catálogo em docs/reference/acoes.md
-#   [session]                PRD-003
-#   [project_file]           PRD-012, ADR-0051  (arquivo .porecatu do projeto)
-#   [git]                    PRD-013, ADR-0052  (sincronização com o remoto do Git)
-#   [panes]                  PRD-006, ADR-0053  (painéis divididos)
-#
-# ORIGEM DOS VALORES DE APARÊNCIA
-# Cores, dimensões, raios e espaçamentos estão registrados em
-# docs/design/especificacao-visual.md (seção 1, Tokens), e não são
-# arbitrários. A direção da conferência mudou com o ADR-0028: o BINÁRIO é a
-# referência visual, e estes defaults têm de reproduzir o que ele desenha.
-# O mockup (docs/design/mockup-estatico.html) é histórico -- divergência
-# entre ele e a build não é bug. Nenhuma mudança de aparência sem aval do
-# dono do produto, inclusive nas chaves abaixo.
-#
-# O QUE NÃO É CONFIGURÁVEL, E POR QUÊ
-# Vira chave o que se VÊ. Fica fixo no binário o que se SENTE -- mecânica de
-# interação, não aparência: limiar de duplo/triplo clique (500 ms), limiar
-# de arraste (4 px), zona de auto-scroll na borda da trilha (30 px) e passo
-# dela (12 px), cascata da janela nova (30 px, ADR-0015) e intervalo de
-# frame do relógio de animação. Não são tokens de design: são convenções de
-# SO ou consequências do modelo de threading (ADR-0007, ADR-0022).
-#
-# Chaves marcadas [v2] descrevem elementos desenhados no canvas mas fora do
-# escopo do v1. Estão aqui para reserva de nome; não implementar ainda.
-#
-# Cores aceitam "#rrggbb", "#rrggbbaa" ou "transparent".
-##############################################################################
+# Cores não ficam aqui: ficam nos temas, arquivos thm_<nome>.toml nesta
+# mesma pasta. O Porecatu traz dois, thm_default.toml (escuro) e
+# thm_default_light.toml (claro). Para criar o seu, copie um deles com
+# outro nome e troque as cores.
 
 
-# Classe de recarga: [A] -- as três valem no próximo gesto que as consulta.
+# --- Geral ------------------------------------------------------------------
 [general]
-# Pede confirmação ao fechar aba com processo ativo — dois sinais em OU:
-# tela alternativa/reporte de mouse ligado (vim, htop, less, fzf, tmux), ou,
-# no Windows, mais de um processo vivo na árvore do shell (ADR-0033), ex. um
-# `node server.js` em primeiro plano. Nenhum dos dois é a varredura contínua
-# que o ADR-0005 e o ADR-0008 descartaram para decidir "processo em primeiro
-# plano" — a contagem aqui é disparada só pelo clique de fechar, sobre uma
-# raiz já conhecida (o shell desta aba), não uma heurística contínua.
-#                                           RF-1.6, ADR-0017, ADR-0033, ADR-0034
+# Pergunta antes de fechar uma aba com um programa rodando (vim, servidor...).
 confirm_close_with_process = true
-# Pede confirmação ao fechar uma janela com mais de uma aba.      RF-10.23
+# Pergunta antes de fechar uma janela com mais de uma aba.
 confirm_close_window = true
-# Diretório da primeira aba de uma sessão nova. "home" ou um caminho absoluto.
-# Abas criadas depois herdam o diretório da aba ativa.  RF-1.1
+# Pasta onde a primeira aba abre: "home" (sua pasta pessoal) ou um caminho.
 startup_directory = "home"
-# Idioma da interface: nome do arquivo em locales/ (en_US, pt_BR). Sem o
-# arquivo, cai em en_US.                     [A]  RF-15.1, ADR-0056
+# Idioma da interface: en_US, pt_BR, es_ES, fr_FR ou de_DE.
 language = "en_US"
 
 
-# Classe de recarga: [C] -- "vale em aba nova". Aba já aberta tem processo
-# já lançado; trocar o shell não relança nada, e o aviso diz isso.
+# --- Shell ------------------------------------------------------------------
+# Vale nas abas abertas depois da mudança.
 [shell]
-# Vazio = detecta automaticamente:
-#   Linux    $SHELL -> /bin/sh
-#   macOS    $SHELL -> /bin/zsh
-#   Windows  pwsh.exe -> powershell.exe -> cmd.exe
+# Programa que roda em cada aba. Vazio = escolhe sozinho
+# (Windows: pwsh, depois powershell, depois cmd; Linux e macOS: o seu shell).
 program = ""
+# Argumentos passados a esse programa, por exemplo ["-l"].
 args = []
 
-# Variáveis injetadas no ambiente de cada shell.
-#
-# O app já define, antes desta seção (ADR-0012):
-#   TERM=xterm-256color        capacidades, via terminfo
-#   COLORTERM=truecolor        24 bits, que o terminfo do xterm não descreve
-#   TERM_PROGRAM=porecatu      identificação do app
-#   TERM_PROGRAM_VERSION=...   versão do binário
-#
-# Chaves declaradas aqui têm precedência sobre essas — a config do usuário é
-# soberana. Sobrescrever TERM é escape para caso específico, não rotina:
-# valor inválido faz o ncurses recusar-se a abrir.
-#
-# TERM_PROGRAM é o gancho para emitir OSC 7 condicionalmente no seu shell,
-# que é o que faz a restauração de diretório funcionar. Ver PRD-003 RF-3.1.
-# Classe de recarga: [C], como [shell] -- vale em aba nova.
+# Variáveis de ambiente extras para cada aba.
 [shell.env]
 # EDITOR = "vim"
 
 
-##############################################################################
-# APARÊNCIA DO CHROME — PRD-004
-##############################################################################
-
-# Classe de recarga: [A], com quatro exceções marcadas nas próprias linhas.
-[appearance.window]
-padding_x = 0              # [B] muda a área útil, logo colunas e linhas  RF-4.1
-padding_y = 0              # [B] idem
-# [C] "vale na próxima janela": atributo de superfície decidido na criação.
-# Abaixo de 1.0 a janela nasce transparente e é composta inteira com este
-# alfa (chrome e terminal). Sem suporte da plataforma, fica opaca.
-opacity = 1.0              # 0.0 a 1.0; opacidade da janela inteira      RF-4.1
-background = "#15181d"     # corpo da janela, atrás das barras
-border = "#2a2f38"
-corner_radius = 8
-# Decorações do sistema. Fora do macOS o default é `false` (ADR-0027): a
-# barra de abas assume drag region, botões de janela e resize por borda,
-# para que nem a borda da janela escape da paleta do design. No macOS o
-# default é `true` -- a decoração nativa continua, com o semáforo, e a
-# trilha reserva espaço à esquerda dele.
-#
-# A faixa de identidade do mockup (logo, nome do app, título da aba ativa)
-# segue [v2]: os controles saíram dela para a barra de abas existente, sem
-# empilhar uma segunda barra. Ver ADR-0027 e a seção 2.2.1 da espec.
-# [C] "reinicie o app": winit não recria o frame do SO sem recriar a janela.
-decorations = false        # macOS: true                                 RF-4.1
-
-# Animação de interface. O v1 tem duas, e as duas são explicativas, não
-# decorativas: a reordenação das abas ao formar grupo (RF-2.5) e o colapso
-# da pílula. `false` aplica o estado final no primeiro frame -- as abas
-# ficam contíguas do mesmo jeito, só não se vê o caminho.
-#
-# Existe por acessibilidade (movimento na tela é gatilho), por máquina
-# remota (RDP/VNC gastam banda com isso) e porque nada de aparência fica
-# fora do alcance desta config. Ver ADR-0022.
-animations = true
-# Duração do `reflow` da seção 1.10 da especificação visual. Interpolação
-# linear, sem curva de easing. São DUAS durações, uma por consumidor do
-# relógio (ADR-0022): formar/arrastar grupo e colapsar/expandir. O binário
-# usa 180 e 150 -- valores calibrados em tela, não um só arredondado.
-animation_reflow_ms = 180          # formar grupo e arrastar grupo (RF-2.5)
-animation_collapse_ms = 150        # colapso e expansão de grupo (RF-2.13)
-
-# Imagem de fundo da janela: UMA imagem PNG ou JPEG atrás da janela inteira --
-# barra de abas, barra de status, margem em volta do quadro e vão entre painéis.
-# Fica abaixo dos quadros de terminal e aparece através deles quando
-# `[terminal] background_opacity < 1`. Não aparece na janela de configurações.
-# Com ela configurada, o terminal translúcido mostra a imagem (sobre o fundo da
-# janela), nunca o desktop: o desktop só aparece por
-# `[appearance.window] opacity < 1`.                                  ADR-0063
-# É independente de `[terminal.background_image]`: cada uma tem as próprias três
-# chaves, e podem apontar para o mesmo arquivo (aí ele é carregado uma vez só).
-# Bloco comentado: o padrão é não ter imagem, e com `path` vazio a janela é
-# desenhada exatamente como sem este bloco.
-# Classe de recarga: [A] -- as três chaves valem na hora, em todas as janelas,
-# sem reiniciar nem redimensionar terminal. O app não vigia o arquivo de imagem.
-#
-# [appearance.window.background_image]
-# Caminho da imagem. Vazio = sem imagem.                    [A] RF-18.1, RF-18.2
-# Mesmas regras de `[terminal.background_image] path`: formato reconhecido pelo
-# conteúdo; só PNG e JPEG; relativo vale a partir do diretório DESTE arquivo;
-# `~/` ou `~\` é a pasta pessoal; absoluto vale como está. Arquivo com problema
-# vira aviso, sem imagem.                                              RF-18.3
-# path = ""
-# Como a imagem ocupa a janela (a referência é a janela inteira, não um quadro).
-#                                                           [A] RF-18.6, RF-18.7
-#   "stretch" -- estica até as quatro bordas da janela, SEM manter a proporção.
-#   "tile"    -- repete no tamanho natural, a partir do canto superior esquerdo
-#                da janela.
-#   "center"  -- tamanho natural, centralizada na janela; sobra o fundo da
-#                janela em volta.
-# Tamanho natural = um pixel da imagem por pixel físico da tela.
-# mode = "stretch"
-# Opacidade da imagem, de 0.0 a 1.0.                       [A] RF-18.14, RF-18.15
-# A opacidade EFETIVA é `opacity × [appearance.window] opacity` (acima): com a
-# janela a 0.8 e a imagem a 0.5, a imagem sai a 0.4. `[terminal]
-# background_opacity` não entra nessa conta fora dos quadros. `0.0` não desenha
-# a imagem, mas a carrega.
-# opacity = 1.0
-
-
-# Controles de janela e resize, quando `decorations = false` (ADR-0027,
-# seção 2.2.1 da espec. visual). Nenhum destes tem RF próprio em PRD-004: o
-# ADR-0027 veio depois do PRD, e a emenda está registrada na seção 4.4.
-# Classe de recarga: [A] -- mudam a largura da zona fixa, não a grade.
-[appearance.window_controls]
-button_width = 46             # largura de cada botão; altura = a da barra
-gap = 6                       # respiro entre a zona de configurações e esta
-hover_background = "#252a33"  # tom da seção 2.1, reaproveitado
-close_hover_background = "#c4413f"
-close_hover_foreground = "#ffffff"
-# Pressionado (ADR-0066): só com o cursor sobre o botão armado pelo press;
-# arrastado para fora, volta ao repouso. O ícone do fechar segue
-# close_hover_foreground.
-pressed_background = "#39404b"        # tom do hover do ✕ da aba, reaproveitado
-close_pressed_background = "#a33533"
-# Espessura da zona de resize em cada borda da janela. Desliga sozinha com
-# a janela maximizada.
-resize_border = 6
-# Espaço reservado à ESQUERDA da trilha para o semáforo nativo do macOS.
-# Fora do macOS, zero. Valor de partida, não medido contra NSWindow real.
-macos_traffic_light_inset = 78
-
-
-# Classe de recarga: [A], exceto as três alturas marcadas abaixo: elas mudam
-# `bar_height`, logo a área do terminal.
-[appearance.tabs]
-# --- dimensões ------------------------------------------------------- RF-4.3
-# A altura da barra NÃO é livre: é derivada (`chrome::bar_height`) de
-#   tab_height + wrapper_padding * 2 + trilha_padding * 2 = 34 + 6 + 12 = 52
-# A chave `height` fica como o valor esperado dessa conta -- serve de
-# verificação, não de entrada. O 42 do design pressupunha aba de 30 e
-# trilha colada nas bordas; as duas coisas mudaram, a pedido do usuário.
-height = 52                # [B] altura da barra, em px lógicos (derivada)
-tab_height = 34            # [B] altura da aba DENTRO de um grupo
-                           # aba solta: tab_height + wrapper_padding * 2 = 40
-trilha_padding = 6         # [B] respiro entre a trilha e as bordas da barra,
-                           # nos quatro lados; entra na conta de `height`
-max_width = 260            # teto: a aba tem largura fixa (padding + 180px de
-                           # rótulo + gap + botão de fechar = 229), saturada aqui
-min_width = 229            # piso = a largura fixa: nada encolhe (ver abaixo)
-padding_left = 10          # design usa padding assimétrico: 0 6px 0 10px
-padding_right = 6          # menor à direita por causa do botão de fechar
-gap = 4                    # espaço entre abas do mesmo grupo
-corner_radius = 6          # 0 = abas retangulares                       RF-4.4
-# Respiro horizontal DENTRO de cada botão de ícone (fechar da aba, os dois
-# "+", caret da pílula, botão da zona fixa): eles ficam mais largos que
-# altos, com o desenho ainda centrado no quadrado original. A altura não
-# muda -- senão o botão de fechar deixaria de caber na aba.
-icon_button_padding_x = 4
-# Tamanho de EM dos ícones do chrome, não do desenho: a face Lucide avança
-# 1 em e preenche ~0.6 dela, então um ✕ "de 10px" pedido como em de 10px sai
-# com 5.9px de desenho e traço de 0.83px, que o antialiasing dilui até
-# desaparecer. Ver ADR-0024 e a seção 1.1 da espec.
-icon_em_size = 20
-# LARGURA DA ABA É FIXA (RF-4.3, RF-4.5 emendados). `min_width` e
-# `max_width` existem, mas hoje descrevem a mesma largura: o teto de 180px
-# do rótulo virou também o piso. Largura por conteúdo refluía a trilha
-# inteira a cada título novo -- trocar de aba, renomear ou abrir um
-# programa que muda o título mexia na posição de todas as outras. Em
-# overflow, nada cede: a trilha rola (seção 2.18 da espec.). Encolhimento
-# por busca binária foi implementado na F2/F3 e descartado por custo (até
-# 24 relayouts por frame, cada um remedindo texto sem cache); voltar a
-# aceitar `min_width < max_width` exige cache de medição primeiro.
-
-# --- fonte do título -------------------------------------------------- RF-4.10
-# Sem chave aqui: o título da aba, o nome da pílula e o campo de rename usam
-# a fonte do terminal, `[terminal.font] family` e `size` (ADR-0065). O zoom
-# de sessão (`font.increase`/`decrease`) continua só na grade. As antigas
-# `font_family`/`font_size` desta tabela viram chave desconhecida.
-
-# --- elementos visíveis ------------------------------------- RF-4.11, RF-4.12
-show_close_button = "always" # "always" | "hover" | "never"; design usa always
-show_index = false           # número da aba antes do título
-show_activity_indicator = true   # RF-1.20 — ponto 6x6, espec. visual §2.17
-show_bell_indicator = true       # RF-1.21 — ponto 6x6, espec. visual §2.17
-show_new_tab_button = true
-show_profile_badge = true    # [v2] badge de perfil na aba   RF-4.23, PRD-007
-
-
-# Classe de recarga: [A].
-[appearance.tabs.colors]
-# --- barra ------------------------------------------------------------ RF-4.7
-bar_background = "#1b1f26"
-# Separador na base da barra. NÃO é pintado: o traço de 1px virava uma linha
-# contra o quadro do terminal, que o usuário pediu para eliminar. Ver seção
-# 4.4 da espec.
-bar_border = "#23272f"
-# Alfa do fundo da aba, sobre a cápsula do grupo: 15% da cor do grupo passa
-# por baixo de cada aba. Sobre a barra, fora de um grupo, o resultado é
-# indistinguível do opaco.
-background_alpha = 0.85
-
-# --- estados da aba --------------------------------------------------- RF-4.6
-# O design não define hover por cor: aplica filtro de brilho sobre o
-# estado atual. Com 6 cores de grupo, cor de hover exigiria 12 tokens.
-active_background = "#282e37"
-active_foreground = "#eaeef3"
-inactive_background = "#191d23"
-inactive_foreground = "#98a0ab"
-hover_brightness = 1.18       # multiplicador aplicado no hover da aba
-close_button_foreground = "#e4e8ee"  # era #727a86; ver espec. seção 4.4
-close_button_hover_background = "#39404b"
-close_button_hover_foreground = "#e4e8ee"
-# Rótulo da aba `Exited` (ADR-0017): o binário já desenhava este tom antes
-# desta chave existir -- é o `#727a86` que `close_button_foreground` citava
-# como o valor anterior à promoção acima, reaproveitado aqui como o "tom de
-# inerte" que a espec. §2.5 continua descrevendo para este estado. Chave
-# nova nesta etapa (F4 etapa 2): faltava procedência declarada para um
-# valor que o binário já pintava (ADR-0028).
-exited_foreground = "#727a86"
-
-# --- bordas ----------------------------------------------------------- RF-4.7
-# A aba ativa é distinguível por fundo, borda E cor de texto — nunca só
-# por matiz.                                                            RF-4.21
-active_border = "#39404b"
-inactive_border = "#22262e"
-# 1px em TODO estado (eram 2px; pedido do dono do produto: a borda de 2px
-# ficava grossa demais). A espessura é a mesma de `selected_border_width`,
-# abaixo -- não é número novo. A aba selecionada continua se distinguindo
-# só pela cor do token.
-active_border_width = 1
-inactive_border_width = 1
-selected_border = "#5ed3bc"   # aba em seleção múltipla; sem desenho     RF-2.2
-selected_border_width = 1
-
-# --- indicadores ------------------------------------------------------ RF-4.8
-# Sem desenho aprovado no canvas; ver especificacao-visual.md seção 4.2.
-activity_indicator = "#86c56a"
-bell_indicator = "#ef8a8a"
-
-# --- campo de rename inline ------------------------------------------- RF-1.8
-rename_background = "#0e1116"
-rename_border = "#5ed3bc"
-rename_foreground = "#e4e8ee"
-
-
-# Geometria do campo de rename (espec. 2.5). Cores acima, em .colors.
-# Classe de recarga: [A].
-[appearance.tabs.rename]
-width = 120                  # largura máxima; min(120, largura do rótulo)
-height = 20                  # a espec. dá padding e fonte, não a altura
-padding_x = 5                # fonte: a do terminal (ADR-0065)
-
-
-# --- indicador de abas fora da vista --------------------------- RF-1.19
-# Círculo com o chevron, ancorado por dentro de cada ponta da trilha, fora
-# do recorte de rolagem. Era uma cápsula de 34x18 com chevron + contagem;
-# virou círculo só com o chevron, a pedido do usuário (seção 4.4).
-# Classe de recarga: [A].
-[appearance.tabs.overflow]
-indicator_size = 18          # largura = altura; o raio é a metade
-indicator_background = "#12151a"
-edge_inset = 4               # recuo por dentro de cada ponta da trilha
-scroll_step = 90             # px por notch da roda e por clique no indicador
-
-
-# Classe de recarga: [A] -- inclusive `wrapper_padding`, que muda a altura da
-# aba solta mas não a da barra (`bar_height` sai da aba agrupada).
-[appearance.groups]
-# --- pílula do grupo -------------------------------------------------- RF-4.13
-label_padding_left = 10       # era 8; +2px, pedido do usuário
-label_padding_right = 9
-# Família e TAMANHO são os do terminal, `[terminal.font]` (ADR-0065): meio
-# pixel de diferença lado a lado lê como fonte trocada, não como hierarquia.
-# O PESO diverge -- 500 (`Medium`), pedido do usuário para o rótulo do grupo
-# ler como bold.
-label_font_weight = 500      # 400 | 500 -- a face Fixed só embute os dois
-label_corner_radius = 6
-label_hover_brightness = 1.25 # ainda não desenhado; entra na F4
-# Sem `label_background`/`label_foreground`/`label_border`, sem swatch.
-# Pedido do usuário: a pílula inteira é pintada com a cor do grupo (a
-# mesma cápsula do wrapper), sem borda e sem um quadrado de cor à parte --
-# e nome/caret usam `count_background` (abaixo) pelo mesmo motivo do "+"
-# do grupo: sobre a cor cheia, o claro perde contraste.
-# Teto do nome do grupo (RF-2.12). O teto de 140 é o da aba (180) menos os
-# 41px de cromo da seção 2.18: uma pílula não deve ficar mais larga que a
-# aba que ela rotula. Nome além do teto trunca com reticências e aparece
-# inteiro no tooltip. Sem piso: o nome nunca encolhe abaixo do teto -- a
-# trilha inteira rola quando não cabe, em vez de ceder rótulo/nome antes
-# disso (mudança de performance pós-F3, ver a nota de `tab_bar::fit_width`
-# no código; a métrica de dez grupos do PRD-002 segue valendo, só que via
-# rolagem em vez de encolhimento).
-label_max_width = 140
-# `count_background`: contador de abas no popover de destino e no
-# indicador de overflow (a pílula da barra não tem mais contador nem
-# swatch); também a cor de nome/caret da pílula e do "+" do grupo, sobre a
-# cápsula cheia -- pedido do usuário, ver nota acima.
-count_background = "#12151a"
-count_foreground = "#7b838f"
-count_corner_radius = 9
-# Sem `caret_foreground`: o caret da pílula usa `count_background` (acima),
-# não um tom próprio -- mesma nota.
-
-# --- indicador -------------------------------------------- RF-4.14, RF-4.15
-# NÃO HÁ CHAVE DE ESTILO. O indicador de grupo é a pílula (nome e caret na
-# cor cheia do grupo) mais a cápsula atrás das abas, e é a única forma --
-# ADR-0032, que supersede o ADR-0009 §5. O `indicator_style` que vivia aqui
-# oferecia quatro estilos: "pill" (o que ficou), "underline" (desenhado na
-# F3 e removido -- virou ruído depois que a cápsula passou a ser cor cheia)
-# e "left-bar"/"outline", que nunca tiveram anatomia e saíram de escopo.
-#
-# `indicator_thickness` também saiu: o valor 2 que ela carregava governa a
-# borda da aba, que tem chave própria em [appearance.tabs.colors]
-# (`active_border_width`/`inactive_border_width`). Nada mudou de valor.
-#
-# A cápsula continua governada por `tint_strength` e pelos alfas de vidro,
-# abaixo; a geometria da pílula, pelas chaves `label_*` acima.
-
-# Espaço entre grupos, maior que o espaço entre abas do mesmo grupo.
-# É o que torna a fronteira do grupo perceptível sem depender de cor.    RF-4.16
-gap = 6
-# Respiro entre a cápsula e o conteúdo. Só se aplica onde HÁ cápsula: num
-# run implícito (abas soltas) ele não entra, senão abriria entre grupo e
-# aba solta um vão maior -- e sem cor -- do que entre dois grupos. É também
-# por causa dele que a aba solta é mais alta que a agrupada: solta, ela
-# ocupa a caixa inteira do wrapper.
-wrapper_padding = 3
-wrapper_corner_radius = 8
-
-# Quanto a cor do grupo tinge o fundo da cápsula: 0.0 a 1.0.             RF-4.19
-# Default 1.0 -- COR CHEIA, não o tingimento de 0.07 que o design pedia:
-# atrás do fundo das abas, 7% da cor não se via, e o indicador de grupo
-# mais visível da barra não podia ser o menos legível dela. Pedido direto
-# do usuário. A cápsula é desenhada também com o grupo COLAPSADO, abraçando
-# a pílula sozinha -- é ela que diz de que cor o grupo é.
-tint_strength = 1.0
-# Efeito de vidro (pedido do usuário: "aparência chapada demais"). Sem
-# primitiva de blur em porecatu-render, não há como turvar o que passa por
-# trás -- só deixar passar menos dele. Alfa da cápsula e da pílula, mais um
-# rim translúcido de 1px nas duas.
-capsule_alpha = 0.85
-label_alpha = 0.92
-glass_border = "#ffffff"
-glass_border_alpha = 0.16
-glass_border_width = 1
-# Sombra da cápsula e da aba solta (a aba dentro de um grupo fica só com a
-# borda -- a cápsula carrega a sombra por ela). Três RoundedQuad pretos
-# empilhados, já que não há primitiva de sombra: os spreads, alfas e
-# offsets estão na seção 1.7 da espec. Liga e desliga; não são seis chaves.
-shadow = true
-border = "#262b34"            # borda de 1px da cápsula e da aba solta
-
-# Grupo colapsado exibe a contagem de abas no rótulo.                    RF-4.17
-# HOJE A PÍLULA NÃO TEM CONTADOR: ele saiu por pedido do usuário, expandido
-# e colapsado (seção 2.4 da espec., registro na 4.4). A chave fica com
-# default `true` porque é o comportamento que o requisito nomeia e o que
-# volta a valer se o contador voltar; os tokens `count_*` continuam em uso
-# noutros lugares -- ver a nota deles acima.
-show_tab_count_when_collapsed = true
-
-# Indicador agregado de atividade em grupo colapsado.                   RF-2.16
-# Ponto de 6px antes do nome (o swatch que ficava à esquerda dele saiu),
-# com as mesmas duas cores dos
-# indicadores da aba ([appearance.tabs.colors]) e a mesma regra: um ponto
-# só, campainha vence. Só aparece colapsado -- expandido, cada aba mostra
-# o seu, e um agregado seria redundante. Não pisca, pela regra do ADR-0007.
-# Ver seção 2.4 da especificação visual.
-collapsed_indicator = true
-collapsed_indicator_size = 6
-
-# Paleta oferecida na troca manual de cor e usada para atribuir cor
-# automaticamente a grupos novos, sem repetir na mesma janela.  RF-4.18, RF-2.4
-# Seis cores, na ordem do design.
-palette = [
-  { name = "vermelho", color = "#ef8a8a" },
-  { name = "amarelo",  color = "#e0b060" },
-  { name = "ciano",    color = "#5ed3bc" },
-  { name = "azul",     color = "#6fa8f5" },
-  { name = "roxo",     color = "#a68cf0" },
-  { name = "verde",    color = "#86c56a" },
-]
-# Cor usada por abas fora de qualquer grupo (grupo implícito, ADR-0006).
-ungrouped_color = "#7b838f"
-
-# Badge de perfil na aba: herda a cor do GRUPO, não a do perfil, para
-# manter a barra legível pelo eixo principal de organização.   [v2] PRD-007
-badge_tint_strength = 0.14
-
-
-##############################################################################
-# AVISO, DIÁLOGO E MENU DE CONTEXTO — PRD-010, ADR-0014
-#
-# Widgets próprios: nenhum diálogo nativo do sistema. Diálogo do SO bloqueia
-# o event loop, não é tematizável por esta config e é diferente nas três
-# plataformas. Os valores abaixo saem dos tokens de popover da especificação
-# visual, seções 1.2, 1.3 e 1.5 — não há cor nova aqui.
-##############################################################################
-
-# Avisos do APP, empilhados no canto superior direito: erro de config com
-# linha e chave (RF-4.21), chave desconhecida (RF-4.22), fonte ausente
-# (RF-5.8), sessão corrompida (RF-3.14), schema mais novo (RF-3.16), convite
-# de integração de shell (RF-3.1), fallback de GPU (ADR-0001).
-#
-# Fato de uma ABA só não vem para cá: vai como primeira linha no grid daquela
-# aba — diretório inexistente (RF-3.10), código de saída (RF-1.3). Os dois
-# canais estão definidos em RF-10.15.
-# Classe de recarga: [A].
-[appearance.notices]
-background = "#1a1e25"
-border = "#2e343e"
-corner_radius = 8
-foreground = "#dfe4ea"        # título
-body_foreground = "#a8b0bb"   # corpo
-font_size = 12.5              # título
-body_font_size = 11.0
-# Geometria da pilha e do cartão.
-width = 320
-padding_x = 12
-padding_y = 11
-gap = 8                       # entre avisos empilhados
-stack_margin_top = 8          # da borda da área de conteúdo
-stack_margin_right = 10
-# Sem métrica natural de linha (mesma simplificação do line-height do
-# terminal): valor de trabalho para separar título e corpo.
-line_height = 16
-close_button_size = 17        # o mesmo botão de fechar da aba
-severity_bar_width = 2
-# O CORPO É DE UMA LINHA, truncado com reticências. A espec. pedia três; o
-# TextRun é sempre uma linha, e quebrar por palavra mudaria a altura do
-# widget. Decidido não fazer (ADR-0028); registro na seção 4.4 da espec.
-# Barra de severidade de 2px à esquerda.
-error = "#ef8a8a"
-warning = "#e0b060"
-info = "#5ed3bc"
-# Quantos convivem na tela; o quarto substitui o mais antigo.
-max_visible = 3                # RF-10.16
-# Erro e aviso persistem até dispensa. Só informação sai sozinha.
-info_timeout_ms = 6000         # RF-10.16
-
-# Diálogo modal de confirmação: fechar aba com processo (RF-1.6), fechar
-# grupo com contagem (RF-2.23), fechar janela com mais de uma aba (ADR-0015).
-#
-# O foco inicial é sempre o CANCELAR, e isso não é configurável: diálogo
-# destrutivo que confirma no Enter transforma distração em perda de
-# trabalho.                                                          RF-10.18
-# Classe de recarga: [A].
-[appearance.dialog]
-overlay = "#06070973"         # rgba(6,7,9,.45) da especificação visual
-background = "#1a1e25"
-border = "#2e343e"
-corner_radius = 10
-width = 380
-padding = 16
-gap = 14                      # entre título, corpo e a fila de botões
-title_foreground = "#e6eaef"
-title_font_size = 13.0
-foreground = "#d7dce3"
-font_size = 12.5              # corpo, de uma linha como no aviso
-button_height = 30
-button_gap = 8
-button_padding_x = 12
-button_corner_radius = 5
-button_border = "#262b34"
-destructive_foreground = "#e08585"
-destructive_hover_background = "#2e2224"
-
-# Menu de contexto de aba (RF-1.1, RF-1.2, RF-2.20) e de grupo (RF-2.22).
-# Comportamento em RF-10.19 a RF-10.21.
-# O menu do grupo e o editor de grupo leem a MESMA lista de ações — ver
-# docs/reference/acoes.md.
-# Classe de recarga: [A].
-[appearance.context_menu]
-background = "#1a1e25"
-border = "#2e343e"
-corner_radius = 8
-width = 200                   # largura mínima
-padding = 6
-item_height = 28              # sem métrica natural de linha; ver notices
-item_padding_x = 8
-item_corner_radius = 5
-item_hover_background = "#242a33"
-separator = "#2a2f38"
-foreground = "#d7dce3"
-# Item indisponível fica esmaecido, nunca ausente: menu que muda de tamanho
-# obriga a reaprender a posição dos itens a cada abertura.
-disabled_foreground = "#5c646f"   # RF-10.20
-destructive_foreground = "#e08585"
-font_size = 12.5
-
-
-# Tooltip do texto truncado. Origem: ADR-0019 — o ADR-0014 decidiu três
-# widgets de chrome quando o v1 precisa de quatro (RF-1.10 título de aba,
-# RF-2.12 nome de grupo, RF-9.3 caminho na barra de status [v2]).
-# Anatomia na seção 2.20 da especificação visual.
-# Classe de recarga: [A] -- `delay_ms` vale para o próximo hover.
-[appearance.tooltip]
-background = "#1a1e25"
-border = "#2e343e"
-# 6 e não 8: num retângulo de uma linha o raio de popover pesa.
-corner_radius = 6
-foreground = "#d7dce3"
-font_size = 11.0
-# Largura máxima; texto além disso trunca com reticências.
-max_width = 320
-padding_x = 8
-padding_y = 7
-# Folga entre o alvo e o tooltip, no eixo em que ele ancora.
-gap = 6
-# Atraso de hover parado antes de aparecer. Comportamento, não token de
-# design — a seção 1.10 não define atraso.
-delay_ms = 600
-# Aparece SÓ quando o texto do alvo foi efetivamente truncado. Desligar aqui
-# remove o tooltip por completo.
-enabled = true
-
-
-# Editor de grupo: o quinto widget de chrome (ADR-0023). Popover ancorado
-# no grupo que está sendo editado, 8px abaixo da barra de abas -- não o
-# `top: 76px` do canvas, que pressupõe a barra de título [v2]. Vira nos dois
-# eixos para caber na janela, fecha em clique fora / Esc / perda de foco, e
-# nunca coexiste com o menu de contexto.
-#
-# É a única superfície de escolha de cor do v1: a entrada por hexadecimal
-# do RF-2.10 fica diferida, e quem quer outra cor a coloca na `palette`
-# acima. Anatomia na seção 2.10 da especificação visual.
-# Classe de recarga: [A].
-[appearance.group_editor]
-background = "#1a1e25"
-border = "#2e343e"
-corner_radius = 8
-padding = 14
-gap = 13
-width = 286
-# Folga entre a borda da barra de abas e o topo do popover -- o mesmo
-# respiro da pilha de avisos.
-offset_y = 8
-# Rótulo de seção ("GRUPO", "COR"): 10px maiúsculas.
-section_foreground = "#5c646f"
-section_font_size = 10.0
-# Campo de nome. Também usado inline sobre a pílula, no nascimento do grupo
-# (RF-2.4): é o mesmo componente, renderizado em outro lugar.
-input_background = "#0f1216"
-input_border = "#333a45"
-input_border_focus = "#5ed3bc"
-input_corner_radius = 5
-input_foreground = "#e4e8ee"
-input_font_size = 13.0
-input_height = 30             # a espec. dá padding e fonte, não a altura
-input_padding_x = 9
-# Espaço entre a legenda de seção ("GRUPO"/"COR") e o conteúdo abaixo.
-section_caption_gap = 6
-# Faixa de cores: seis quadrados, um por cor da `palette`.
-swatch_size = 28
-swatch_corner_radius = 6
-swatch_gap = 8
-swatch_border_width = 2
-swatch_ring_selected = "#eef2f4"
-# Halo do realce de foco por teclado / hover do swatch -- a espec. diz que
-# os dois são o mesmo realce, mas não dá o tamanho dele.
-swatch_highlight_pad = 3
-# Lista de ações, com os mesmos tokens do menu de contexto.
-item_foreground = "#d7dce3"
-item_hover_background = "#242a33"
-item_height = 28
-divider = "#2a2f38"
-divider_height = 1
-# "Fechar grupo (N abas)" -- a ação destrutiva.
-destructive_foreground = "#e08585"
-destructive_hover_background = "#2e2224"
-
-
-# Popover de grupo de destino do `tab.move_to_group` (RF-2.20, ADR-0023).
-# Única lista ROLÁVEL do chrome: o tamanho dela é o número de grupos do
-# usuário, ao contrário das listas de ação, cujo tamanho é conhecido em
-# tempo de escrita. Cores e tipografia vêm de [appearance.context_menu] --
-# é o mesmo popover, com linhas em vez de itens de ação.
-# Classe de recarga: [A].
-[appearance.move_to_group]
-width = 200                   # = context_menu.width
-row_height = 28               # = context_menu.item_height
-row_padding_x = 8
-# Teto de linhas visíveis de uma vez; acima disso a lista rola. Rola por
-# realce de teclado e por clique -- não por roda do mouse (pendência
-# registrada no roadmap).
-max_visible_rows = 6
-# Swatch da linha, menor que o da faixa de cores do editor.
-swatch_size = 8
-swatch_gap = 8
-
-
-# Popover de sessões nomeadas (PRD-014, ADR-0054, ADR-0055 §2), sétimo
-# widget de chrome -- botão à esquerda da engrenagem. Só geometria: cores
-# e tipografia vêm de [appearance.context_menu] (mesmo popover, linhas em
-# vez de itens de ação), e o campo "Salvar esta janela..." em modo de
-# edição reaproveita [appearance.group_editor] (o mesmo campo de nome).
-# Classe de recarga: [A].
-[appearance.session_picker]
-# Largura fixa -- o teto do menu de contexto e do aviso, não a largura
-# mínima de context_menu.width: nome de sessão é o conteúdo, e a largura
-# mínima de 200 truncaria quase todo nome.
-width = 320
-row_height = 28               # = context_menu.item_height
-row_padding_x = 8
-# Teto de linhas visíveis de uma vez; acima disso a lista rola.
-max_visible_rows = 6
-
-
-# Janela de configurações (PRD-016, ADR-0059, ADR-0060 §5). Só dimensões:
-# as cores são os tokens que o canvas já dava ao painel de configurações
-# (espec. §1.2, §1.5), e a tipografia vem de [appearance.context_menu],
-# [appearance.group_editor] e [appearance.dialog] (os widgets que a tela
-# reaproveita).
-# Classe de recarga: [A] para as de dentro da tela -- valem no próximo
-# quadro da janela aberta --; [C] para as quatro de tamanho da janela
-# (window_width, window_height, min_width, min_height): valem na próxima
-# abertura da tela.
-[appearance.settings]
-# Guia de 200 + painel com linha de 640 + os dois padding: 18 do painel +
-# folga para o botão de restaurar.                                    [C]
-window_width = 900
-# Cabeçalho de 52 + rodapé de 54 + ~8 linhas de opção visíveis sem rolar.
-# O grupo Terminal inteiro cabe em duas telas.                        [C]
-window_height = 640
-# Abaixo disso a linha não comporta nome, descrição e o campo de texto
-# lado a lado.                                                        [C]
-min_width = 640
-# Cabeçalho, rodapé e pelo menos três linhas.                         [C]
-min_height = 420
-# = context_menu.width, a largura mínima do menu de contexto: a guia é uma
-# lista de itens de menu.
-sidebar_width = 200
-# Cabe um caminho de projeto comum e `Iosevka Fixed` em 13px sem truncar.
-text_field_width = 240
-# Cabe `102400` (o maior default do catálogo, osc52_max_bytes) com folga
-# para um sétimo dígito, mais o padding do campo.
-number_field_width = 88
-# = o `gap: 8` dos botões do diálogo e dos avisos empilhados. Ganha chave
-# porque é o espaçamento que define a densidade da tela inteira.
-row_gap = 8
-# Dez quadrados mais `gap: 2` em 138px, menos que um campo de texto.
-theme_swatch_size = 12
-# Cores do corpo da janela. Os defaults são os tokens do drawer do canvas
-# (espec. §1.2, §2.12); cada tema de [[themes]] pode sobrescrevê-los em
-# [themes.settings], e é isso que faz a janela acompanhar um tema claro.
-# Fundo do painel de opções ("Drawer").                               [A]
-panel_background = "#171b21"
-# Fundo e borda da linha de opção (a linha de perfil do drawer).      [A]
-row_background = "#1c2028"
-# Fundo e borda do chip de atalho.                                    [A]
-chip_background = "#1e232b"
-# Linha entre o painel e o rodapé.                                    [A]
-footer_separator = "#23272f"
-
-
-# Quadro arredondado em volta da grade do terminal -- pedido do usuário,
-# sem origem no design (a seção 2.7 da espec. descrevia um retângulo pleno).
-# A margem é o `trilha_padding` da barra e o padding é o `wrapper_padding`
-# dobrado: nenhum número novo. Registro na seção 4.4 da espec.
-# Classe de recarga: [B] -- as três primeiras mudam a área útil dentro do
-# quadro, logo colunas e linhas.
-[appearance.terminal_frame]
-# Margem entre a borda da janela e o quadro, nos três lados que NÃO
-# encostam na barra de abas. Em cima o quadro encosta na barra sem gap: um
-# vão ali desenha uma linha entre a trilha e o terminal.
-margin = 6
-# Padding entre a borda do quadro e a grade, nos quatro lados.
-padding = 6
-corner_radius = 6
-shadow = true                 # mesma sombra em camadas da cápsula
-
-
-# Barra de status: faixa fixa no rodapé da janela. Origem: PRD-009 (RF-9.1
-# a RF-9.8) e ADR-0048, anatomia na seção 2.8 da espec. Ela ENCOLHE a
-# grade -- o quadro do terminal acima termina `terminal_frame.margin`
-# antes dela, e o PTY recebe menos linhas.
-# Classe de recarga: [B] para `enabled`, `height` e `font_size` (mudam a
-# área útil, logo colunas e linhas); [A] para o resto.
-[appearance.status_bar]
-# Desligada, a barra não desenha NEM ocupa altura: a grade volta ao
-# tamanho que teria sem ela. Ligada por padrão porque, desligada, ela
-# anula o RF-9.4 -- quem não sabe que o OSC 7 pode faltar nunca vai
-# ligá-la para descobrir (ADR-0048 §6).                                RF-9.1
-enabled = true
-height = 26
-padding_x = 12
-gap = 16                      # folga entre segmentos, dentro de cada zona
-font_size = 10.5
-# Sem chave de fundo: a faixa NÃO pinta fundo próprio. O fundo da janela
-# ali já é a cor das barras, e um quad opaco cobriria a sombra do quadro
-# do terminal, que desce sobre o topo dela.
-# Token "Secundário" (§1.4). NÃO é o "Tênue" #6b737e que o desenho pedia:
-# a 10.5px ele dava 3.45:1 contra o fundo, abaixo do mínimo WCAG AA, e
-# ficava quase indistinguível. Mesma correção que o corpo do aviso já
-# tinha recebido (§2.14), pelo mesmo motivo. #a8b0bb sobe pra 7.55:1.
-foreground = "#a8b0bb"
-# Nome do shell -- o único segmento colorido (acento).                  RF-9.2
-shell = "#5ed3bc"
-# RF-9.4: cor do diretório quando ele NÃO veio de um OSC 7, ou seja,
-# quando é o de spawn e pode estar obsoleto -- o requisito que dá razão de
-# existir à barra. Token "Terciário", um degrau abaixo de `foreground` na
-# escada da §1.4, e ainda 4.74:1 (passa AA): o caminho é para ser lido e
-# marcado, não apagado.
-stale_cwd = "#828a96"
-# Indicador de commits atrás/à frente do remoto (PRD-013, ADR-0052 §8) -- o
-# segundo item colorido da barra, e o primeiro alvo clicável dela. Mesmo
-# token Acento que `shell` já usa: zero cor nova, mas o PRD-004 exige a
-# chave mesmo assim.                                                   RF-13.7
-ahead_behind = "#5ed3bc"
-
-
-##############################################################################
-# APARÊNCIA DO TERMINAL — PRD-005
-##############################################################################
-
-# Classe de recarga: [A].
+# --- Terminal ---------------------------------------------------------------
 [terminal]
-# Nome de um tema definido em [[themes]]. Vazio = usa as cores de
-# [terminal.colors] diretamente.                                RF-5.18, RF-5.19
-theme = ""
-# Opacidade do fundo do terminal, independente da opacidade da janela.   RF-5.15
-# Só o fundo (quadro e células); texto e cursor ficam opacos. Para mostrar o
-# que há atrás da janela, ela precisa ter nascido transparente (abaixo de 1.0
-# aqui ou em `appearance.window.opacity`); ao sair de 1.0 com o app aberto,
-# vale na próxima janela. Numa janela opaca, o fundo só se mistura à barra.
-# Com `[appearance.window.background_image]` configurada, este valor não faz
-# a janela nascer transparente: o fundo se mistura à imagem da janela.
+# Tema de cores: o nome do arquivo thm_<nome>.toml, sem "thm_" e sem ".toml".
+theme = "default"
+# Transparência do fundo do terminal, de 0.0 (invisível) a 1.0 (opaco).
+# Para ver o que está atrás da janela, reinicie o app depois de mudar.
 background_opacity = 1.0
 
-# Imagem de fundo do terminal: PNG ou JPEG atrás de TODO quadro de terminal
-# (aba solta, aba de grupo e cada painel de uma aba dividida, cada um com a
-# imagem inteira). Fica acima do fundo do quadro e abaixo de células, texto,
-# seleção e cursor. Bloco comentado: o padrão é não ter imagem, e com `path`
-# vazio o terminal é desenhado exatamente como sem este bloco.
-# Classe de recarga: [A] -- as três chaves valem na hora, em todas as janelas,
-# sem reiniciar nem redimensionar terminal. Trocar o conteúdo do arquivo de
-# imagem, mantendo o caminho, vale na próxima recarga da config: o app não
-# vigia o arquivo.
-#
+# Imagem de fundo atrás de cada terminal (PNG ou JPEG). Tire o "#" das
+# linhas para usar.
 # [terminal.background_image]
-# Caminho da imagem. Vazio = sem imagem.                    [A] RF-17.1, RF-17.2
-# Formato reconhecido pelo conteúdo, não pela extensão; só PNG e JPEG. Relativo
-# vale a partir do diretório DESTE arquivo (o do --config, de PORECATU_CONFIG
-# ou o padrão da plataforma), não de onde o app foi lançado. Essa regra é
-# diferente da de `startup_directory` e `trusted_paths`, que não mudam.
-# `~/` ou `~\` no início é a pasta pessoal; absoluto vale como está. Arquivo
-# ausente, ilegível, de outro formato ou corrompido vira aviso, sem imagem.
-#                                                                       RF-17.3
-# path = ""
-# Como a imagem ocupa o quadro.                             [A] RF-17.5, RF-17.6
-#   "stretch" -- estica até o quadro inteiro, nos dois eixos, SEM manter a
-#                proporção (um quadro largo achata a imagem).
-#   "tile"    -- repete lado a lado no tamanho natural, a partir do canto
-#                superior esquerdo; o que passa da borda é cortado.
-#   "center"  -- tamanho natural, centralizada; menor que o quadro, sobra o
-#                fundo do terminal em volta; maior, corta nas bordas.
-# Tamanho natural = um pixel da imagem por pixel físico da tela.
+# Caminho da imagem. Relativo a esta pasta, "~/" é a sua pasta pessoal.
+# path = "fundo.png"
+# "stretch" estica para caber, "tile" repete, "center" centraliza.
 # mode = "stretch"
-# Opacidade da imagem, de 0.0 a 1.0.                       [A] RF-17.11, RF-17.12
-# A opacidade EFETIVA é `opacity × background_opacity` (acima): com o terminal
-# a 0.8 e a imagem a 0.5, a imagem sai a 0.4. Assim terminal transparente nunca
-# fica opaco por causa da imagem. Imagem forte atrás do texto atrapalha a
-# leitura; esta é a chave que a devolve. `0.0` não desenha a imagem, mas a
-# carrega.
+# Transparência da imagem, de 0.0 a 1.0.
 # opacity = 1.0
 
-
-# Classe de recarga: [B] -- métrica de fonte decide a largura de célula, logo
-# colunas e linhas. É o caso que o RF-5.28 nomeia.
-# `family` e `size` valem também para a barra de abas -- título da aba, nome
-# do grupo e campo de rename (ADR-0065). O zoom de sessão é só da grade.
 [terminal.font]
-family = "Iosevka Fixed"                                              # RF-5.1
-# Cadeia de fallback, em ordem. Glyph ausente na família principal é
-# procurado aqui antes de virar retângulo vazio.                        RF-5.2
+# Fonte do terminal e das abas.
+family = "Iosevka Fixed"
+# Fontes usadas para símbolos que a principal não tem.
 fallback = ["Symbols Nerd Font Mono", "Noto Color Emoji", "Noto Sans CJK"]
-# Par de propósito: a Iosevka Fixed avança 0.5 em em todo glyph, então
-# `size / 2 * scale` precisa cair em pixel inteiro para a célula não ser
-# arredondada.                                                          RF-5.3
 size = 14.0
-
-# Variantes. Vazio = deriva da família principal.                       RF-5.4
+# Fontes específicas para negrito e itálico. Vazio = a mesma de cima.
 bold_family = ""
 italic_family = ""
 bold_italic_family = ""
-# Sintetiza negrito/itálico quando a variante não existe na fonte.
+# Imita negrito e itálico quando a fonte não tem essas versões.
 synthesize_bold = true
 synthesize_italic = true
-
-# Texto em negrito usa a versão brilhante da cor ANSI.                  RF-5.5
+# Texto em negrito usa a versão clara da cor.
 bold_is_bright = false
-
-# Multiplicadores das métricas naturais da fonte.                       RF-5.6
 line_height = 1.2
 letter_spacing = 0.0
+ligatures = false
+# Ctrl+= e Ctrl+- mudam o tamanho da fonte: "all" em todas as abas,
+# "active" só na aba atual.
+zoom_scope = "all"
 
-ligatures = false                                                     # RF-5.7
-
-# Zoom por atalho vale para a aba ativa ou para todas.       RF-5.9, RF-5.10
-zoom_scope = "all"         # "all" | "active"
-
-
-# Classe de recarga: [A].
 [terminal.cursor]
-shape = "block"            # "block" | "beam" | "underline"             RF-5.22
-width = 7                  # px lógicos quando shape = "beam" ou "block"
-# No design, cursor e prompt assumem a cor do grupo da aba — é o que
-# amarra o terminal ao grupo sem pintar o fundo.
+# "block" (bloco), "beam" (barra) ou "underline" (sublinhado).
+shape = "block"
+# Largura do cursor "beam", em pixels.
+width = 7
+# Cursor com a cor do grupo da aba.
 follows_group_color = true
-blink = false                                                        # RF-5.23
+blink = false
 blink_interval_ms = 500
-unfocused_hollow = true    # cursor vazado quando a janela perde foco   RF-5.24
-# DECSCUSR emitido pelo programa tem precedência sobre `shape`.         RF-5.25
+# Cursor vazado quando a janela não está em foco.
+unfocused_hollow = true
 
-
-# Classe de recarga: [C] -- "vale em aba nova". Mudar a capacidade do
-# histórico de um motor em execução descartaria linhas já roladas; a chave
-# vale para as abas que nascerem depois da gravação.
 [terminal.scrollback]
-lines = 10000                                                        # RF-5.26
-scroll_multiplier = 3      # linhas por passo da roda do mouse         RF-5.27
-# Saída em segundo plano não arranca o usuário de onde ele estava lendo.
-scroll_on_output = false                                            # RF-10.13
-# Digitar volta ao final, que é onde o prompt está.
-scroll_on_input = true                                              # RF-10.13
-# Na tela alternativa (vim, htop, less) não existe scrollback. Com isto
-# ligado, a roda do mouse vira setas — é o que faz `less` e `man` rolarem.
-alternate_scroll = true                                             # RF-10.14
+lines = 10000          # linhas antigas guardadas para rolar para cima
+# Linhas por passo da roda do mouse.
+scroll_multiplier = 3
+# Volta para o fim quando sai texto novo.
+scroll_on_output = false
+# Volta para o fim quando você digita.
+scroll_on_input = true
+# A roda do mouse rola dentro de programas de tela cheia (less, vim).
+alternate_scroll = true
 
-
-# ---------------------------------------------------------------------------
-# SELEÇÃO COM MOUSE — PRD-010, ADR-0013
-#
-# Os gestos são fixos, não configuráveis: arraste seleciona caractere, duplo
-# clique seleciona palavra, triplo clique seleciona a linha lógica, Alt+arraste
-# seleciona retângulo.
-#
-# Quando o programa em execução pede o mouse (htop, fzf, vim), o evento vai
-# para ele. SHIFT força a seleção local, sempre — é a válvula de escape, e por
-# isso não é configurável. Convenção do xterm.
-# ---------------------------------------------------------------------------
-# Classe de recarga: [A] -- vale para a próxima seleção.
 [terminal.selection]
-# Selecionar já copia para o clipboard. Desligado por default: quem seleciona
-# só para ler não espera perder o que tinha copiado.
-copy_on_select = false                                               # RF-10.8
-# Caracteres que delimitam "palavra" no duplo clique.                 RF-10.5
+# Selecionar já copia para a área de transferência.
+copy_on_select = false
+# Caracteres que separam palavras no clique duplo.
 word_separators = " \t\n\"'`()[]{}<>,;:!?=&|"
-# Seleção PRIMARY do X11/Wayland (colar com botão do meio) NÃO é implementada
-# no v1 — limitação conhecida, não bug. Nome reservado.
-# primary_selection = false                                          RF-10.9
 
-
-# ---------------------------------------------------------------------------
-# CLIPBOARD — PRD-010, ADR-0013
-# ---------------------------------------------------------------------------
-# Classe de recarga: [A].
 [terminal.clipboard]
-# OSC 52: o programa em execução mexendo no clipboard do sistema.
-#
-# ESCRITA permitida: é o que faz copiar de dentro de um tmux ou nvim rodando
-# por SSH funcionar, onde o programa não alcança o clipboard local.
-osc52_write = true                                                 # RF-10.10
-# LEITURA negada. Ligar isto permite que qualquer processo — inclusive num
-# host remoto comprometido — leia o que você copiou, senha de gerenciador de
-# senhas inclusa. Você não teria como saber que foi lido. Ligue com essa
-# consciência, ou não ligue.
-osc52_read = false                                                 # RF-10.11
-# Teto do payload de escrita, em bytes. Sem limite, saída não confiável
-# despeja megabytes no seu clipboard.
-osc52_max_bytes = 102400                                           # RF-10.10
+# Programas no terminal podem escrever na área de transferência.
+osc52_write = true
+# Programas no terminal podem ler a área de transferência (cuidado).
+osc52_read = false
+# Tamanho máximo, em bytes, do que um programa pode copiar.
+osc52_max_bytes = 102400
 
-
-# Hyperlinks OSC 8: o programa marca um trecho da saída com um URI.
-# Ligado, o trecho sob o cursor ganha sublinhado enquanto o modificador de
-# abertura está pressionado (Ctrl; Cmd no macOS, onde Ctrl+clique é o clique
-# secundário), e o clique com ele segue o link.        RF-11.10, RF-11.11
-#
-# O URI vem da SAÍDA DE UM PROGRAMA, então a lista de esquemas aceitos é
-# fechada e NÃO é configurável: http, https e mailto abrem no handler padrão
-# do sistema; `file` é revelado no gerenciador de arquivos, nunca entregue ao
-# handler por extensão -- no Windows isso executaria um .exe ou .bat. Esquema
-# fora da lista não abre: o URI é copiado e o app informa.
-#                                                      RF-11.12, RF-11.13
-# Uma chave configurável de esquemas seria escalada de privilégio embalada
-# como conveniência. Ver ADR-0042. O que se pode desligar é o recurso todo.
-#
-# Classe de recarga: [A].
 [terminal.hyperlinks]
+# Links que os programas mostram abrem com Ctrl+clique.
 enabled = true
 
 
-# Classe de recarga: [A].
-[terminal.colors]
-# Chaves declaradas aqui têm precedência sobre as do tema selecionado,
-# permitindo adotar um tema e ajustar uma cor sem copiar a paleta.      RF-5.19
-foreground = "#c7ccd6"                                               # RF-5.12
-background = "#0f1216"
-cursor = "#5ed3bc"                                                   # RF-5.13
-cursor_text = "#0f1216"
-selection_background = "#2e6b62"                                     # RF-5.14
-selection_foreground = "#eef2f4"
-# Segunda metade do prompt (caminho), quando o shell emite OSC 7.
-prompt_secondary = "#6b737e"
+# --- Janela -----------------------------------------------------------------
+[appearance.window]
+# Transparência da janela inteira, de 0.0 a 1.0. Reinicie o app depois de
+# mudar.
+opacity = 1.0
+# Animações ao agrupar, arrastar e recolher abas.
+animations = true
+animation_reflow_ms = 180
+animation_collapse_ms = 150
+# Moldura e botões do sistema operacional. Reinicie o app depois de mudar.
+# No macOS o padrão é true.
+decorations = false
+# Ajuste fino; não precisa mexer.
+padding_x = 0
+padding_y = 0
+corner_radius = 8
 
-# As 16 cores ANSI derivam das seis cores semânticas que o design usa
-# na saída de terminal (ok/warn/error/accent/dim/padrão), estendidas
-# para cobrir a paleta completa. Derivação declarada em
-# docs/design/especificacao-visual.md, seção 1.9.
-[terminal.colors.normal]                                             # RF-5.11
-black   = "#3b434f"
-red     = "#ef8a8a"
-green   = "#86c56a"
-yellow  = "#e0b060"
-blue    = "#6fa8f5"
-magenta = "#a68cf0"
-cyan    = "#5ed3bc"
-white   = "#c7ccd6"
+# Imagem de fundo da janela inteira (PNG ou JPEG), atrás das abas e dos
+# terminais. Tire o "#" das linhas para usar.
+# [appearance.window.background_image]
+# path = "fundo.png"
+# mode = "stretch"
+# opacity = 1.0
 
-[terminal.colors.bright]                                             # RF-5.11
-black   = "#6f7783"
-red     = "#f5a3a3"
-green   = "#9bd482"
-yellow  = "#ecc37c"
-blue    = "#8dbcf8"
-magenta = "#bda6f5"
-cyan    = "#7fdfcc"
-white   = "#eaeef3"
-
-# Cores de 256 e true color emitidas pelos programas funcionam sempre e
-# não são afetadas por esta paleta.                                    RF-5.17
+[appearance.status_bar]
+# Barra no rodapé com shell, pasta, grupo e branch do Git.
+enabled = true
+# Ajuste fino; não precisa mexer.
+height = 26
+padding_x = 12
+gap = 16
+font_size = 10.5
 
 
-##############################################################################
-# TEMAS NOMEADOS — PRD-005 RF-5.18 a RF-5.21, ADR-0031
-# Selecione com `theme = "<nome>"` em [terminal]. Cicle por atalho (RF-5.21).
-#
-# ESCOPO: UM TEMA DECLARA COR, E SÓ COR
-#   Cor de terminal E cor de chrome -- um tema claro com a barra de abas
-#   escura é um produto quebrado. Nunca fonte, dimensão, raio, espaçamento
-#   ou tempo: com a fronteira em cor, `theme.cycle` é sempre recarga de
-#   classe [A]. Um tema que mudasse `tab_height` refluiria a barra e
-#   redimensionaria todos os PTYs a cada atalho -- classe [B] por atalho, o
-#   que ninguém quer de uma troca de tema. Quem quer trocar fonte junto com
-#   cor edita o arquivo; é mudança que se faz uma vez.
-#   Chave fora desse escopo dentro de um tema é aviso de chave desconhecida.
-#
-# MERGE POR FOLHA, TRÊS NÍVEIS DE PRECEDÊNCIA                       RF-5.19
-#   chave declarada FORA do tema  >  chave do tema ativo  >  default
-#   Merge parcial e por folha: um tema que declara só `background` muda só
-#   o fundo do terminal, e o resto cai no default. Não há tema "completo",
-#   e um tema de uma chave é válido.
-#   EXCEÇÃO: `palette` (cores de grupo) é SUBSTITUÍDA INTEIRA, nunca
-#   mesclada por índice -- a posição na lista tem significado (é a ordem de
-#   atribuição automática, ADR-0020 §5), e mesclar produziria uma paleta que
-#   ninguém escolheu.
-#   Consequência a lembrar: cor declarada fora do tema RESISTE à troca de
-#   tema. É o que o RF-5.19 promete; o app avisa quando isso acontece.
-#
-# CICLO (`theme.cycle`, RF-5.21)
-#   Anda na ORDEM DE DECLARAÇÃO deste arquivo -- não alfabética: a ordem do
-#   arquivo é a que o usuário controla sem renomear nada. O estado SEM TEMA
-#   (`theme = ""`, tudo nos defaults, que são os valores do design) é o
-#   primeiro do ciclo e participa dele: sem isso, adotar um tema seria via
-#   de mão única. Sem nenhum [[themes]] declarado, ciclar não faz nada.
-#   Ciclar NÃO ESCREVE no arquivo (mesma regra do zoom, RF-5.9): vale para a
-#   sessão. Uma recarga preserva o tema ciclado enquanto ele existir; se ele
-#   desaparecer do arquivo, a sessão volta ao `theme` declarado e avisa.
-#   Persistir o tema de sessão é F5.
-#   O ciclo é do PROCESSO, não da janela: duas janelas compartilham o mesmo
-#   Config, então ciclar numa muda as duas.
-#
-# Nome desconhecido em `theme` é AVISO (cai nos defaults, lista os nomes
-# disponíveis). Nome DUPLICADO entre dois [[themes]] é ERRO: não há como o
-# usuário saber qual dos dois vale.
-#
-# Classe de recarga: [A].
-##############################################################################
-
-[[themes]]
-name = "catppuccin-mocha"
-# Cores de CHROME, para demonstrar o escopo do ADR-0031: um tema pode
-# retematizar a barra de abas junto com o terminal. Os nomes são os mesmos
-# das seções de aparência -- aqui, [appearance.tabs.colors].
-bar_background = "#181825"
-tab_active_background = "#313244"
-tab_inactive_background = "#1e1e2e"
-tab_active_foreground = "#cdd6f4"
-tab_inactive_foreground = "#a6adc8"
-# Cores de TERMINAL.
-foreground = "#cdd6f4"
-background = "#1e1e2e"
-cursor = "#f5e0dc"
-cursor_text = "#1e1e2e"
-selection_background = "#585b70"
-selection_foreground = "#cdd6f4"
-
-[themes.normal]
-black   = "#45475a"
-red     = "#f38ba8"
-green   = "#a6e3a1"
-yellow  = "#f9e2af"
-blue    = "#89b4fa"
-magenta = "#f5c2e7"
-cyan    = "#94e2d5"
-white   = "#bac2de"
-
-[themes.bright]
-black   = "#585b70"
-red     = "#f37799"
-green   = "#89d88b"
-yellow  = "#ebd391"
-blue    = "#74a8fc"
-magenta = "#f2aede"
-cyan    = "#6bd7ca"
-white   = "#a6adc8"
+# --- Sessão -----------------------------------------------------------------
+# Reinicie o app depois de mudar.
+[session]
+# Reabre as abas e janelas da última vez. false = sempre começa do zero.
+enabled = true
+# Espera, em milissegundos, antes de gravar a sessão.
+save_debounce_ms = 2000
+# true = só a aba visível abre o shell na hora; as outras quando você
+# clicar nelas.
+lazy_restore = false
+# Reabre a janela no mesmo tamanho e lugar.
+restore_window_geometry = true
+# Sugere uma vez como fazer o shell informar a pasta atual, para que ela
+# volte junto com a sessão.
+suggest_shell_integration = true
 
 
-[[themes]]
-name = "gruvbox-dark"
-foreground = "#ebdbb2"
-background = "#282828"
-cursor = "#ebdbb2"
-cursor_text = "#282828"
-selection_background = "#504945"
-selection_foreground = "#ebdbb2"
-
-[themes.normal]
-black   = "#282828"
-red     = "#cc241d"
-green   = "#98971a"
-yellow  = "#d79921"
-blue    = "#458588"
-magenta = "#b16286"
-cyan    = "#689d6a"
-white   = "#a89984"
-
-[themes.bright]
-black   = "#928374"
-red     = "#fb4934"
-green   = "#b8bb26"
-yellow  = "#fabd2f"
-blue    = "#83a598"
-magenta = "#d3869b"
-cyan    = "#8ec07c"
-white   = "#ebdbb2"
+# --- Arquivo de projeto (.porecatu) -------------------------------------------
+# Um arquivo .porecatu na pasta de um projeto diz que comando rodar quando
+# uma aba daquela pasta é reaberta pela sessão. Detalhes no guia do usuário.
+# Reinicie o app depois de mudar.
+[project_file]
+enabled = true
+# Pastas onde um .porecatu pode rodar (inclui as subpastas). Vazio por
+# segurança: um projeto baixado da internet poderia rodar qualquer coisa.
+# Liste só pastas com projetos seus. Exemplo: ["C:/Projetos", "~/work"]
+trusted_paths = []
 
 
-[[themes]]
-name = "dracula"
-bar_background = "#1e1f29"
-tab_active_background = "#44475a"
-tab_inactive_background = "#282a36"
-tab_active_foreground = "#f8f8f2"
-tab_inactive_foreground = "#6272a4"
-foreground = "#f8f8f2"
-background = "#282a36"
-cursor = "#f8f8f2"
-cursor_text = "#282a36"
-selection_background = "#44475a"
-selection_foreground = "#f8f8f2"
-
-[themes.normal]
-black   = "#21222c"
-red     = "#ff5555"
-green   = "#50fa7b"
-yellow  = "#f1fa8c"
-blue    = "#bd93f9"
-magenta = "#ff79c6"
-cyan    = "#8be9fd"
-white   = "#f8f8f2"
-
-[themes.bright]
-black   = "#6272a4"
-red     = "#ff6e6e"
-green   = "#69ff94"
-yellow  = "#ffffa5"
-blue    = "#d6acff"
-magenta = "#ff92df"
-cyan    = "#a4ffff"
-white   = "#ffffff"
+# --- Git --------------------------------------------------------------------
+[git]
+# De quantos em quantos segundos o app confere se há commits novos no
+# servidor, para mostrar na barra de status. 0 desliga. Mínimo 30.
+remote_poll_interval_secs = 300
 
 
-[[themes]]
-name = "nord"
-bar_background = "#242933"
-tab_active_background = "#3b4252"
-tab_inactive_background = "#2e3440"
-tab_active_foreground = "#eceff4"
-tab_inactive_foreground = "#7b88a1"
-foreground = "#d8dee9"
-background = "#2e3440"
-cursor = "#d8dee9"
-cursor_text = "#2e3440"
-selection_background = "#434c5e"
-selection_foreground = "#eceff4"
-
-[themes.normal]
-black   = "#3b4252"
-red     = "#bf616a"
-green   = "#a3be8c"
-yellow  = "#ebcb8b"
-blue    = "#81a1c1"
-magenta = "#b48ead"
-cyan    = "#88c0d0"
-white   = "#e5e9f0"
-
-[themes.bright]
-black   = "#4c566a"
-red     = "#d08770"
-green   = "#8fbcbb"
-yellow  = "#ebcb8b"
-blue    = "#88c0d0"
-magenta = "#b48ead"
-cyan    = "#8fbcbb"
-white   = "#eceff4"
+# --- Painéis divididos ------------------------------------------------------
+[panes]
+# Tamanho mínimo de um painel, em colunas e linhas de texto.
+min_columns = 20
+min_rows = 5
 
 
-[[themes]]
-name = "catppuccin-latte"
-bar_background = "#e6e9ef"
-tab_active_background = "#ccd0da"
-tab_inactive_background = "#eff1f5"
-tab_active_foreground = "#4c4f69"
-tab_inactive_foreground = "#8c8fa1"
-close_button_foreground = "#5c5f77"  # mesmo tom de notices.body_foreground
-foreground = "#4c4f69"
-background = "#eff1f5"
-cursor = "#dc8a78"
-cursor_text = "#eff1f5"
-selection_background = "#acb0be"
-selection_foreground = "#4c4f69"
-
-[themes.normal]
-black   = "#5c5f77"
-red     = "#d20f39"
-green   = "#40a02b"
-yellow  = "#df8e1d"
-blue    = "#1e66f5"
-magenta = "#ea76cb"
-cyan    = "#179299"
-white   = "#acb0be"
-
-[themes.bright]
-black   = "#6c6f85"
-red     = "#d20f39"
-green   = "#40a02b"
-yellow  = "#df8e1d"
-blue    = "#1e66f5"
-magenta = "#ea76cb"
-cyan    = "#179299"
-white   = "#bcc0cc"
-
-[themes.notices]
-background      = "#dce0e8"
-border          = "#bcc0cc"
-foreground      = "#4c4f69"
-body_foreground = "#5c5f77"
-error           = "#d20f39"
-warning         = "#df8e1d"
-info            = "#179299"
-
-[themes.dialog]
-background                    = "#dce0e8"
-border                        = "#bcc0cc"
-title_foreground              = "#4c4f69"
-foreground                    = "#5c5f77"
-button_border                 = "#bcc0cc"
-destructive_foreground        = "#d20f39"
-destructive_hover_background  = "#f2dee1"
-
-[themes.context_menu]
-background            = "#dce0e8"
-border                = "#bcc0cc"
-item_hover_background = "#ccd0da"
-separator             = "#ccd0da"
-foreground            = "#5c5f77"
-disabled_foreground   = "#8c8fa1"
-destructive_foreground = "#d20f39"
-
-[themes.tooltip]
-background = "#dce0e8"
-border     = "#bcc0cc"
-foreground = "#5c5f77"
-
-[themes.status_bar]
-foreground = "#4c4f69"
-shell      = "#179299"
-stale_cwd  = "#5c5f77"
-
-[themes.group_editor]
-background                   = "#dce0e8"
-border                       = "#bcc0cc"
-section_foreground           = "#8c8fa1"
-input_background             = "#eff1f5"
-input_border                 = "#bcc0cc"
-input_border_focus           = "#179299"
-input_foreground             = "#4c4f69"
-swatch_ring_selected         = "#4c4f69"
-item_foreground              = "#5c5f77"
-item_hover_background        = "#ccd0da"
-divider                      = "#ccd0da"
-destructive_foreground       = "#d20f39"
-destructive_hover_background = "#f2dee1"
-
-[themes.settings]
-panel_background = "#eff1f5"
-row_background   = "#dce0e8"
-chip_background  = "#eff1f5"
-footer_separator = "#ccd0da"
-
-[themes.window_controls]
-hover_background       = "#ccd0da"
-close_hover_background = "#d20f39"
-close_hover_foreground = "#ffffff"
-pressed_background       = "#bcc0cc"
-close_pressed_background = "#a50c2d"
-
-
-[[themes]]
-name = "gruvbox-light"
-bar_background = "#ebdbb2"
-tab_active_background = "#fbf1c7"
-tab_inactive_background = "#dfd3b6"
-tab_active_foreground = "#3c3836"
-tab_inactive_foreground = "#7c6f64"
-close_button_foreground = "#7c6f64"  # mesmo tom de tab_inactive_foreground
-foreground = "#3c3836"
-background = "#fbf1c7"
-cursor = "#3c3836"
-cursor_text = "#fbf1c7"
-selection_background = "#d5c4a1"
-selection_foreground = "#3c3836"
-
-[themes.normal]
-black   = "#fbf1c7"
-red     = "#cc241d"
-green   = "#98971a"
-yellow  = "#d79921"
-blue    = "#458588"
-magenta = "#b16286"
-cyan    = "#689d6a"
-white   = "#7c6f64"
-
-[themes.bright]
-black   = "#928374"
-red     = "#9d0006"
-green   = "#79740e"
-yellow  = "#b57614"
-blue    = "#076678"
-magenta = "#8f3f71"
-cyan    = "#427b58"
-white   = "#3c3836"
-
-[themes.notices]
-background      = "#ebdbb2"
-border          = "#bdae93"
-foreground      = "#3c3836"
-body_foreground = "#7c6f64"
-error           = "#cc241d"
-warning         = "#d79921"
-info            = "#689d6a"
-
-[themes.dialog]
-background                    = "#ebdbb2"
-border                        = "#bdae93"
-title_foreground              = "#3c3836"
-foreground                    = "#7c6f64"
-button_border                 = "#bdae93"
-destructive_foreground        = "#9d0006"
-destructive_hover_background  = "#f0d9d1"
-
-[themes.context_menu]
-background            = "#ebdbb2"
-border                = "#bdae93"
-item_hover_background = "#d5c4a1"
-separator             = "#d5c4a1"
-foreground            = "#7c6f64"
-disabled_foreground   = "#928374"
-destructive_foreground = "#9d0006"
-
-[themes.tooltip]
-background = "#ebdbb2"
-border     = "#bdae93"
-foreground = "#7c6f64"
-
-[themes.status_bar]
-foreground = "#3c3836"
-shell      = "#689d6a"
-stale_cwd  = "#665c54"
-
-[themes.group_editor]
-background                   = "#ebdbb2"
-border                       = "#bdae93"
-section_foreground           = "#928374"
-input_background             = "#fbf1c7"
-input_border                 = "#bdae93"
-input_border_focus           = "#689d6a"
-input_foreground             = "#3c3836"
-swatch_ring_selected         = "#3c3836"
-item_foreground              = "#7c6f64"
-item_hover_background        = "#d5c4a1"
-divider                      = "#d5c4a1"
-destructive_foreground       = "#9d0006"
-destructive_hover_background = "#f0d9d1"
-
-[themes.settings]
-panel_background = "#fbf1c7"
-row_background   = "#ebdbb2"
-chip_background  = "#fbf1c7"
-footer_separator = "#d5c4a1"
-
-[themes.window_controls]
-hover_background       = "#d5c4a1"
-close_hover_background = "#9d0006"
-close_hover_foreground = "#ffffff"
-pressed_background       = "#bdae93"
-close_pressed_background = "#7c0005"
-
-
-[[themes]]
-name = "solarized-light"
-bar_background = "#eee8d5"
-tab_active_background = "#fdf6e3"
-tab_inactive_background = "#e0d9c4"
-tab_active_foreground = "#586e75"
-tab_inactive_foreground = "#93a1a1"
-close_button_foreground = "#657b83"  # mesmo tom de foreground
-foreground = "#657b83"
-background = "#fdf6e3"
-cursor = "#586e75"
-cursor_text = "#fdf6e3"
-selection_background = "#eee8d5"
-selection_foreground = "#586e75"
-
-[themes.normal]
-black   = "#073642"
-red     = "#dc322f"
-green   = "#859900"
-yellow  = "#b58900"
-blue    = "#268bd2"
-magenta = "#d33682"
-cyan    = "#2aa198"
-white   = "#eee8d5"
-
-[themes.bright]
-black   = "#002b36"
-red     = "#cb4b16"
-green   = "#586e75"
-yellow  = "#657b83"
-blue    = "#83a598"
-magenta = "#6c71c4"
-cyan    = "#93a1a1"
-white   = "#fdf6e3"
-
-[themes.notices]
-background      = "#eee8d5"
-border          = "#93a1a1"
-foreground      = "#586e75"
-body_foreground = "#657b83"
-error           = "#dc322f"
-warning         = "#b58900"
-info            = "#2aa198"
-
-[themes.dialog]
-background                    = "#eee8d5"
-border                        = "#93a1a1"
-title_foreground              = "#586e75"
-foreground                    = "#657b83"
-button_border                 = "#93a1a1"
-destructive_foreground        = "#dc322f"
-destructive_hover_background  = "#f2e0dc"
-
-[themes.context_menu]
-background            = "#eee8d5"
-border                = "#93a1a1"
-item_hover_background = "#e0d9c4"
-separator             = "#e0d9c4"
-foreground            = "#657b83"
-disabled_foreground   = "#93a1a1"
-destructive_foreground = "#dc322f"
-
-[themes.tooltip]
-background = "#eee8d5"
-border     = "#93a1a1"
-foreground = "#657b83"
-
-[themes.status_bar]
-foreground = "#073642"
-shell      = "#2aa198"
-stale_cwd  = "#586e75"
-
-[themes.group_editor]
-background                   = "#eee8d5"
-border                       = "#93a1a1"
-section_foreground           = "#93a1a1"
-input_background             = "#fdf6e3"
-input_border                 = "#93a1a1"
-input_border_focus           = "#2aa198"
-input_foreground             = "#586e75"
-swatch_ring_selected         = "#586e75"
-item_foreground              = "#657b83"
-item_hover_background        = "#e0d9c4"
-divider                      = "#e0d9c4"
-destructive_foreground       = "#dc322f"
-destructive_hover_background = "#f2e0dc"
-
-[themes.settings]
-panel_background = "#fdf6e3"
-row_background   = "#eee8d5"
-chip_background  = "#fdf6e3"
-footer_separator = "#e0d9c4"
-
-[themes.window_controls]
-hover_background       = "#e0d9c4"
-close_hover_background = "#dc322f"
-close_hover_foreground = "#ffffff"
-pressed_background       = "#d3cbb7"
-close_pressed_background = "#b02826"
-
-
-##############################################################################
-# KEYBINDINGS — ADR-0008 (semântica) e ADR-0029 (gramática)
-#
-# Precedência: modo de captura -> keybind de app -> terminal.
-# Um binding que casa NUNCA cai para o terminal.
-# Ação "none" remove o binding e devolve a tecla ao terminal.
-# Nenhum default usa Ctrl+<letra> sozinho: esse espaço é do terminal.
-#
-# O conjunto de ações é FECHADO: ação desconhecida é erro de config, com
-# sugestão do nome mais próximo. A lista completa, com a origem de cada uma,
-# está em docs/reference/acoes.md.
-#
-# GRAMÁTICA DA CHAVE (ADR-0029)
-#   <modificador>* <tecla>, separados por "+", tudo em MINÚSCULAS.
-#   Modificadores: ctrl, shift, alt, cmd.
-#     `cmd` é o modificador de macOS -- não `super`, não `meta`: é o nome
-#     escrito na tecla física. Fora do macOS ele casa a tecla Super; nenhum
-#     default o usa lá.
-#   A ORDEM É LIVRE: "shift+ctrl+t" e "ctrl+shift+t" são o MESMO binding, e
-#   declarar os dois é erro de binding duplicado, citando as duas linhas.
-#   A tecla é a LÓGICA, com o layout do usuário já aplicado -- é o que faz
-#   "ctrl+shift+comma" funcionar num ABNT2 sem descobrir onde a vírgula
-#   mora fisicamente. IME e teclas mortas passam direto, sem consultar
-#   este mapa.
-#
-#   Teclas nomeadas por palavra (símbolo seria ambíguo em TOML ou dependeria
-#   de layout):
-#     equals  minus  comma  period  slash  backslash  semicolon  quote
-#     bracketleft  bracketright  backtick  space  tab  enter  escape
-#     backspace  delete  insert  home  end  pageup  pagedown
-#     up  down  left  right  f1 .. f24
-#   Letras e dígitos são o próprio caractere: "t", "1".
-#
-# ERRO NÃO DEIXA O APP SEM TECLA (ADR-0029 §4)
-#   Chave malformada, tecla desconhecida ou ação desconhecida invalidam
-#   AQUELA LINHA: ela é descartada, o default embutido permanece, e o aviso
-#   cita linha, chave e a sugestão. É mais fino que a regra geral do
-#   ADR-0003 (que descartaria a config inteira) de propósito: um erro de
-#   digitação numa tecla não deve reverter uma mudança de cor feita na
-#   mesma gravação, e um mapa vazio deixaria o usuário sem Ctrl+Shift+C.
-#   Trocar bindings durante um modo de captura (rename inline, editor de
-#   grupo, diálogo) não afeta a captura em curso: ela termina com o mapa
-#   que tinha ao abrir.
-#
-# DEFAULTS POR PLATAFORMA, NUM ARQUIVO SÓ
-#   [keybindings] é a tabela comum; [keybindings.windows],
-#   [keybindings.linux] e [keybindings.macos] sobrescrevem por plataforma.
-#   Resolução: defaults embutidos da plataforma atual -> [keybindings] ->
-#   tabela da plataforma atual. Um binding definido na tabela comum e na da
-#   plataforma NÃO é duplicado: é override, que é o ponto -- um dotfile
-#   sincronizado entre máquinas fica com a seção comum e o desvio de cada
-#   SO explícito.
-#
-# Classe de recarga: [A] -- o mapa novo vale imediatamente, com a ressalva
-# do modo de captura acima.
-##############################################################################
-
+# --- Atalhos de teclado -----------------------------------------------------
+# Formato: "teclas" = "ação". Teclas em minúsculas, unidas por "+":
+# ctrl, shift, alt, cmd e a tecla. Nomes de teclas especiais: equals, minus,
+# comma, period, slash, space, tab, enter, escape, up, down, left, right,
+# pageup, pagedown, home, end, f1 a f24...
+# Para devolver uma tecla ao terminal, use a ação "none".
+# Lista de ações: docs/reference/acoes.md no site do projeto.
 [keybindings]
 "ctrl+shift+t"        = "tab.new"
 "ctrl+shift+w"        = "tab.close"
@@ -1579,27 +229,13 @@ close_pressed_background = "#b02826"
 "ctrl+shift+pagedown" = "group.next"
 "ctrl+shift+pageup"   = "group.prev"
 
-# group.new_tab e group.close_all são vinculáveis e ficam SEM default, de
-# propósito: atalho para a ação mais destrutiva da interface (RF-2.23) é
-# risco desproporcional, e `tab.new` já cria aba no grupo da aba ativa.
-# Quem quiser, vincula:
-# "ctrl+shift+insert" = "group.new_tab"
-
-# Janelas. Cada janela tem seu próprio conjunto de abas e grupos.  RF-10.22
 "ctrl+shift+n"        = "window.new"
-"ctrl+shift+q"        = "window.close"   # não é ctrl+shift+w: essa é tab.close
-# app.quit não tem default em Windows e Linux — fechar a última janela já
-# encerra o app (RF-1.4). No macOS o default é Cmd+Q, por convenção.
-
-# Tela cheia, ADR-0050. F11 vale nas três plataformas, como f3/shift+f3
-# abaixo -- sem entrada própria em [keybindings.macos], a comum já cobre.
+"ctrl+shift+q"        = "window.close"
 "f11"                 = "window.toggle_fullscreen"
 
 "ctrl+shift+c"        = "clipboard.copy"
 "ctrl+shift+v"        = "clipboard.paste"
 
-# Rolagem do scrollback. Shift de novo como o modificador que fala com o
-# emulador em vez do programa. Nada age na tela alternativa.       RF-10.12
 "shift+pageup"        = "scrollback.page_up"
 "shift+pagedown"      = "scrollback.page_down"
 "shift+home"          = "scrollback.to_top"
@@ -1608,61 +244,31 @@ close_pressed_background = "#b02826"
 "ctrl+equals"         = "font.increase"
 "ctrl+minus"          = "font.decrease"
 "ctrl+0"              = "font.reset"
-"ctrl+shift+y"        = "theme.cycle"      # RF-5.21; movido de ctrl+shift+p
-                                           # para liberar a paleta. ADR-0009.
+"ctrl+shift+y"        = "theme.cycle"
 
 "ctrl+shift+comma"    = "config.reload"
+"ctrl+shift+o"        = "settings.open"
 
-# Janela de configurações, RF-16.1, ADR-0059 §6. `Ctrl+,` sozinho ficaria
-# fora da regra do ADR-0008 (Ctrl+<tecla> sem Shift é do terminal), e
-# `ctrl+shift+comma` já é config.reload. A engrenagem da barra de abas
-# dispara esta mesma ação.
-"ctrl+shift+o"        = "settings.open"                      # RF-16.1
+"ctrl+shift+f"        = "search.open"
+"f3"                  = "search.next"
+"shift+f3"            = "search.prev"
+"ctrl+shift+a"        = "selection.select_all"
 
-# [v2] O design abre a paleta de comandos com Ctrl+Shift+P. PRD-008. Ação
-# fora do catálogo fechado da F4 (docs/reference/acoes.md) -- nome
-# reservado, sem default embutido, comentada como as duas de F6 abaixo.
-# "ctrl+shift+p"      = "command.palette"
+"ctrl+shift+h"        = "pane.split_horizontal"
+"ctrl+shift+d"        = "pane.split_vertical"
+"alt+left"            = "pane.focus_left"
+"alt+right"           = "pane.focus_right"
+"alt+up"              = "pane.focus_up"
+"alt+down"            = "pane.focus_down"
 
-# Busca no scrollback e "selecionar tudo", da F6.        PRD-011, ADR-0041
-# `f3`/`shift+f3` para próxima e anterior valem nas TRÊS plataformas: no
-# macOS a convenção seria `cmd+g`/`cmd+shift+g`, mas as duas já são
-# `group.create` e `group.dissolve` pela tabela do ADR-0008, e mover um
-# default estabelecido para acomodar um recurso novo é pior negócio.
-# Dentro da busca, `Enter` e `Shift+Enter` fazem o mesmo sem binding: são
-# teclas que a captura parcial reivindica (ADR-0041 §3).
-"ctrl+shift+f"        = "search.open"                        # RF-11.1
-"f3"                  = "search.next"                        # RF-11.5
-"shift+f3"            = "search.prev"                        # RF-11.5
-"ctrl+shift+a"        = "selection.select_all"               # RF-11.16
+"ctrl+shift+s"        = "session.save_named"
 
-# Painéis divididos (PRD-006, ADR-0053). A tabela do RF-6.1 desambigua
-# "horizontal": divisor deitado (painel novo abaixo) para Ctrl+Shift+H,
-# divisor em pé (painel novo à direita) para Ctrl+Shift+D. As quatro de
-# foco valem nas três plataformas -- mesmo padrão de f11/f3 acima.
-"ctrl+shift+h"        = "pane.split_horizontal"               # RF-6.1
-"ctrl+shift+d"        = "pane.split_vertical"                 # RF-6.1
-"alt+left"            = "pane.focus_left"                     # RF-6.8
-"alt+right"           = "pane.focus_right"                    # RF-6.8
-"alt+up"              = "pane.focus_up"                       # RF-6.8
-"alt+down"            = "pane.focus_down"                     # RF-6.8
-# pane.close é vinculável e fica SEM default, de propósito -- mesmo
-# precedente de group.new_tab/group.close_all acima: exit no shell já
-# fecha o painel (RF-6.11), e Ctrl+Shift+W continua fechando a aba inteira.
-# Quem quiser, vincula:
+# Ações sem atalho padrão, que você pode ligar a uma tecla:
+# "ctrl+shift+insert" = "group.new_tab"
 # "ctrl+shift+x"      = "pane.close"
-
-# Sessões nomeadas (PRD-014, ADR-0054), fora da ordem de fases.
-# session.open_list é vinculável e fica SEM default, de propósito -- mesmo
-# precedente de group.new_tab/pane.close acima. Quem quiser, vincula:
 # "ctrl+shift+l"      = "session.open_list"
-"ctrl+shift+s"        = "session.save_named"                  # RF-14.1
 
-# --- defaults de macOS ---------------------------------- ADR-0008, ADR-0029
-# A tabela do ADR-0008 define Cmd para todas as ações de app; nada disso
-# responde no Mac até o parser existir. Estão aqui no formato que ele lê.
-# `cmd+shift+g` para desagrupar (e não `cmd+u`) segue a tabela do ADR-0008;
-# `ctrl+tab` é a única exceção ao padrão, e é igual nas três plataformas.
+# Atalhos do macOS.
 [keybindings.macos]
 "cmd+t"               = "tab.new"
 "cmd+w"               = "tab.close"
@@ -1691,158 +297,188 @@ close_pressed_background = "#b02826"
 "cmd+minus"           = "font.decrease"
 "cmd+0"               = "font.reset"
 "cmd+shift+y"         = "theme.cycle"
-# `cmd+comma` é a convenção do sistema para "Ajustes…": era config.reload e
-# passou a settings.open; o reload foi para `cmd+shift+comma`. RF-16.1,
-# ADR-0059 §6.
-"cmd+comma"           = "settings.open"                      # RF-16.1
+"cmd+comma"           = "settings.open"
 "cmd+shift+comma"     = "config.reload"
-"cmd+q"               = "app.quit"     # convenção de plataforma; RF-1.4
-# Busca e "selecionar tudo" no macOS -- mesma razão do bloco comum acima.
-"cmd+f"               = "search.open"                        # RF-11.1
-"f3"                  = "search.next"                        # RF-11.5
-"shift+f3"            = "search.prev"                        # RF-11.5
-"cmd+a"               = "selection.select_all"               # RF-11.16
-# "cmd+shift+p"       = "command.palette"   # [v2], fora do catálogo -- ver nota acima
+"cmd+q"               = "app.quit"
+"cmd+f"               = "search.open"
+"f3"                  = "search.next"
+"shift+f3"            = "search.prev"
+"cmd+a"               = "selection.select_all"
+"cmd+shift+h"         = "pane.split_horizontal"
+"cmd+shift+d"         = "pane.split_vertical"
+"cmd+shift+s"         = "session.save_named"
 
-# Painéis divididos. Só os dois de split levam entrada própria aqui -- as
-# quatro de foco já valem nas três plataformas pela tabela comum acima.
-"cmd+shift+h"         = "pane.split_horizontal"               # RF-6.1
-"cmd+shift+d"         = "pane.split_vertical"                 # RF-6.1
-
-# Sessões nomeadas -- mesma razão do bloco comum acima.
-"cmd+shift+s"         = "session.save_named"                  # RF-14.1
-
-# As duas tabelas abaixo existem pela mesma razão e ficam vazias por
-# default -- os defaults de Windows e Linux são os da tabela comum acima.
-# Elas são o lugar de um desvio por SO num dotfile compartilhado.
+# Atalhos só do Windows ou só do Linux, se precisar:
 # [keybindings.windows]
 # [keybindings.linux]
 
-# Ações que aceitam argumento (group.set_color, tab.move_to_group) não são
-# vinculáveis a tecla: são invocadas por menu, onde o alvo é implícito. As
-# duas abrem uma superfície de escolha -- o editor de grupo e o popover de
-# grupo de destino -- em vez de executar direto. Ver ADR-0023.
+
+##############################################################################
+# AVANÇADO -- ajuste fino da aparência. Não precisa mexer.
 #
-# Por tecla, as ações de grupo operam sobre o grupo da ABA ATIVA; por menu
-# ou pelo editor, sobre o grupo clicado. Ver docs/reference/acoes.md.
-
-# Libera uma tecla para o terminal:
-# "ctrl+shift+k" = "none"
-
-
-##############################################################################
-# SESSÃO — PRD-003
+# Tamanhos em pixels, tempos em milissegundos. Valores fora do padrão podem
+# deixar a interface desalinhada.
 ##############################################################################
 
-# Classe de recarga: [C] -- "reinicie o app". Não há chave de caminho: trocar o
-# destino com sessão em memória pediria migração de arquivo. Para testes existe
-# a variável PORECATU_SESSION (ADR-0036), que não é contrato público.
-# Tema e zoom de sessão são persistidos junto (ADR-0031, ADR-0036) e não têm
-# chave própria -- `enabled = false` desliga a gravação/leitura automática
-# de uma vez. NÃO afeta as sessões nomeadas (PRD-014, ADR-0054 §8): salvar
-# e restaurar por nome (botão/Ctrl+Shift+S) continuam funcionando com
-# enabled = false -- são gravadas à parte, em sessions/, por gesto do
-# usuário, nunca pelo app sozinho.
-[session]
-enabled = true                    # false = sempre abre com uma aba limpa  RF-3.6
-# Atraso do agrupamento de gravações. Fechar 10 abas gera 1 escrita.       RF-3.3
-save_debounce_ms = 2000
-# true: só a aba ativa de cada janela inicia o shell no start, as demais
-# no primeiro foco. Default false (eager): todas sobem juntas.            RF-3.8
-lazy_restore = false
-restore_window_geometry = true                                          # RF-3.11
-# Oferece uma vez o trecho de integração de shell quando OSC 7 não é
-# detectado. No Windows, sem OSC 7 o diretório NÃO é restaurado.          RF-3.1
-suggest_shell_integration = true
+[appearance.tabs]
+# "always" (sempre), "hover" (ao passar o mouse) ou "never" (nunca).
+show_close_button = "always"
+show_index = false
+show_activity_indicator = true
+show_bell_indicator = true
+show_new_tab_button = true
+show_profile_badge = true
+height = 52
+tab_height = 34
+trilha_padding = 6
+max_width = 260
+min_width = 229
+padding_left = 10
+padding_right = 6
+gap = 4
+corner_radius = 6
+icon_button_padding_x = 4
+icon_em_size = 20
 
+[appearance.tabs.colors]
+background_alpha = 0.85
+hover_brightness = 1.18
+active_border_width = 1
+inactive_border_width = 1
+selected_border_width = 1
 
-##############################################################################
-# ARQUIVO DE PROJETO — PRD-012
-##############################################################################
+[appearance.tabs.rename]
+width = 120
+height = 20
+padding_x = 5
 
-# O arquivo `.porecatu` na raiz de um projeto declara o que rodar quando uma
-# aba daquele diretório é RESTAURADA de uma sessão gravada -- uma seção por
-# tipo de terminal, com o script literal dentro. Origem: PRD-012 (RF-12.1 a
-# RF-12.15) e ADR-0051. Formato completo em docs/reference/arquivo-de-projeto.md.
-#
-# Só na restauração: aba nova no mesmo diretório NÃO dispara, e `cd` para ele
-# também não (ADR-0051 §1). O script é escrito no terminal como se digitado --
-# aparece na tela, entra no histórico do shell e o Ctrl+C o interrompe.
-# Classe de recarga: [C] -- "reinicie o app".
-[project_file]
-# Desligado, nada é lido do disco -- nem o arquivo, nem o aviso abaixo. RF-12.7
+[appearance.tabs.overflow]
+indicator_size = 18
+edge_inset = 4
+scroll_step = 90
+
+[appearance.window_controls]
+button_width = 46
+gap = 6
+resize_border = 6
+macos_traffic_light_inset = 78
+
+[appearance.groups]
+show_tab_count_when_collapsed = true
+collapsed_indicator = true
+collapsed_indicator_size = 6
+label_padding_left = 10
+label_padding_right = 9
+label_font_weight = 500
+label_corner_radius = 6
+label_hover_brightness = 1.25
+label_max_width = 140
+count_corner_radius = 9
+gap = 6
+wrapper_padding = 3
+wrapper_corner_radius = 8
+tint_strength = 1.0
+capsule_alpha = 0.85
+label_alpha = 0.92
+glass_border_alpha = 0.16
+glass_border_width = 1
+shadow = true
+badge_tint_strength = 0.14
+
+[appearance.terminal_frame]
+margin = 6
+padding = 6
+corner_radius = 6
+shadow = true
+
+[appearance.notices]
+max_visible = 3
+info_timeout_ms = 6000
+corner_radius = 8
+font_size = 12.5
+body_font_size = 11.0
+width = 320
+padding_x = 12
+padding_y = 11
+gap = 8
+stack_margin_top = 8
+stack_margin_right = 10
+line_height = 16
+close_button_size = 17
+severity_bar_width = 2
+
+[appearance.dialog]
+corner_radius = 10
+width = 380
+padding = 16
+gap = 14
+title_font_size = 13.0
+font_size = 12.5
+button_height = 30
+button_gap = 8
+button_padding_x = 12
+button_corner_radius = 5
+
+[appearance.context_menu]
+corner_radius = 8
+width = 200
+padding = 6
+item_height = 28
+item_padding_x = 8
+item_corner_radius = 5
+font_size = 12.5
+
+[appearance.tooltip]
 enabled = true
-# Diretórios em que um `.porecatu` tem permissão para rodar. Um caminho aqui
-# cobre a ÁRVORE INTEIRA sob ele. Aceita `~`.                            RF-12.5
-#
-# VAZIA POR PADRÃO, E ISSO É DELIBERADO. O `.porecatu` chega junto com o
-# projeto, e projeto clonado é arquivo escrito por OUTRA PESSOA: sem esta
-# lista, um `git clone` qualquer mais uma aba restaurada bastaria para
-# executar o que estivesse dentro dele.
-#
-# Pelo mesmo motivo, PENSE ANTES DE LISTAR UM CAMINHO LARGO. Apontar para o
-# diretório onde você clona repositórios -- ou para o seu home -- faz todo
-# repositório novo ali dentro rodar o `.porecatu` dele sozinho, meses depois
-# de você ter escrito a linha e sem nenhum lembrete. Liste onde ficam os
-# projetos que são SEUS.
-#
-# Caminho que não existe é ignorado em silêncio, não é erro: dotfiles viajam
-# entre máquinas, e um `~/work` que só existe no escritório não pode derrubar
-# a config em casa.
-#
-# Exemplo: trusted_paths = ["C:/Projetos", "~/work"]
-trusted_paths = []
-# Um `.porecatu` encontrado FORA dessa lista não roda e não passa em silêncio:
-# o app escreve uma nota na aba com o caminho e a linha que o autorizaria, uma
-# vez por execução do app (não uma por aba). Não há chave para desligar só a
-# nota -- quem não a quer autoriza o diretório, apaga o arquivo, ou usa
-# `enabled = false` acima.                                               RF-12.6
+delay_ms = 600
+corner_radius = 6
+font_size = 11.0
+max_width = 320
+padding_x = 8
+padding_y = 7
+gap = 6
 
+[appearance.group_editor]
+corner_radius = 8
+padding = 14
+gap = 13
+width = 286
+offset_y = 8
+section_font_size = 10.0
+input_corner_radius = 5
+input_font_size = 13.0
+input_height = 30
+input_padding_x = 9
+section_caption_gap = 6
+swatch_size = 28
+swatch_corner_radius = 6
+swatch_gap = 8
+swatch_border_width = 2
+swatch_highlight_pad = 3
+item_height = 28
+divider_height = 1
 
-##############################################################################
-# SINCRONIZAÇÃO COM O REMOTO DO GIT — PRD-013
-##############################################################################
+[appearance.move_to_group]
+width = 200
+row_height = 28
+row_padding_x = 8
+max_visible_rows = 6
+swatch_size = 8
+swatch_gap = 8
 
-# Consulta periódica de quantos commits a branch da aba ativa está atrás do
-# remoto que ela segue, mostrado como segmento clicável na barra de status ao
-# lado da branch (ADR-0049). O clique integra por `pull --ff-only`, só quando
-# não há commits locais à frente -- nunca sozinho. Origem: PRD-013 (RF-13.1 a
-# RF-13.19) e ADR-0052.
-#
-# Não altera a árvore de trabalho, o índice nem o HEAD por si só -- só o
-# clique toca algo, e só por fast-forward. Estado da árvore (sujo/limpo,
-# stage) continua fora: percorre a árvore, o que isto não faz.
-# Classe de recarga: [A].
-[git]
-# Intervalo entre consultas, em SEGUNDOS (as outras chaves de tempo da config
-# são em milissegundos; um intervalo de rede em ms seria um número de seis
-# dígitos que ninguém lê). `0` desliga o recurso INTEIRO: nenhuma consulta,
-# nenhum indicador, nenhum processo lançado, nenhum prazo agendado -- o app
-# se comporta exatamente como antes deste recurso existir.              RF-13.2
-#
-# Valor entre 1 e 29 é elevado a 30 e o app informa uma vez que elevou --
-# saturar em silêncio esconderia que o número não vale, e recusar a config
-# derrubaria mais do que o erro merece.                                 RF-13.3
-remote_poll_interval_secs = 300
+[appearance.session_picker]
+width = 320
+row_height = 28
+row_padding_x = 8
+max_visible_rows = 6
 
-
-##############################################################################
-# PAINÉIS DIVIDIDOS — PRD-006
-##############################################################################
-
-# Mínimo útil de painel -- comportamento, não aparência: não descreve
-# dimensão desenhada nenhuma, por isso não entra na tabela VALORES de
-# scripts/verify-docs.py. Governa dois gestos (ADR-0053 §9):
-#   - pane.split_horizontal/pane.split_vertical são RECUSADOS quando
-#     qualquer um dos dois painéis resultantes ficaria abaixo do mínimo,
-#     com aviso explicando por quê (RF-6.4).
-#   - Arrastar o divisor entre dois painéis PARA no mínimo -- o painel que
-#     encolhe nunca passa dele (RF-6.14).
-# Dois números, não um: colunas e linhas não são a mesma quantidade de
-# terminal, e um valor único obrigaria a escolher qual eixo fica errado.
-# Classe de recarga: [A] -- vale no próximo split e no próximo arraste, sem
-# tocar em painel que já existe.
-[panes]
-min_columns = 20
-min_rows = 5
-
+[appearance.settings]
+window_width = 900
+window_height = 640
+min_width = 640
+min_height = 420
+sidebar_width = 200
+text_field_width = 240
+number_field_width = 88
+row_gap = 8
+theme_swatch_size = 12

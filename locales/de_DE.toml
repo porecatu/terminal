@@ -142,7 +142,7 @@ background_image_mode_description = "Wie das Bild den Terminalrahmen füllt."
 background_image_opacity_label = "Bilddeckkraft"
 background_image_opacity_description = "Deckkraft des Bildes, von 0.0 bis 1.0; sie wird mit der Hintergrunddeckkraft multipliziert."
 theme_label = "Thema"
-theme_description = "Farbsatz des Terminals. Ohne Thema gelten die Farben aus der Datei."
+theme_description = "Farbsatz der App, aus einer Datei thm_<name>.toml neben der Konfiguration."
 animations_label = "Animationen"
 animations_description = "Bewegung beim Einklappen von Gruppen und Umordnen von Tabs."
 window_opacity_label = "Fensterdeckkraft"
@@ -237,7 +237,6 @@ empty_name = "Der Name darf nicht leer sein."
 duplicate_name = "Der Name {name} existiert bereits."
 
 [settings.theme]
-none = "Kein Thema"
 session_using = "Diese Sitzung verwendet das Thema {name}."
 
 [settings.shortcut]
@@ -426,17 +425,27 @@ title = "Ungültige Konfiguration"
 body_at = "Zeile {line}, Spalte {column}: {detail}"
 body = "{detail}"
 unreadable = "\"{path}\" konnte nicht gelesen werden: {cause}"
-duplicate_theme = "doppelter Themenname: \"{name}\""
 
 [notice.unknown_config_key]
 title = "Unbekannter Schlüssel in der Konfiguration"
 
 [notice.unknown_theme]
 title = "Unbekanntes Thema"
-body = "\"{name}\" steht nicht in [[themes]]; Standardwerte werden verwendet."
+body = "\"{name}\" hat keine Themendatei; das Thema default wird verwendet."
 
-[notice.color_overridden]
-title = "Farbe überschreibt das Thema"
+[notice.colors_ignored]
+title = "Farben in porecatu.toml ignoriert"
+body = "{count} Farbschlüssel ignoriert: Farben stehen jetzt in den Themendateien thm_*.toml."
+
+[notice.theme_file_invalid]
+title = "Ungültige Themendatei"
+body_at = "{file}, Zeile {line}, Spalte {column}: {detail}"
+body = "{file}: {detail}"
+unreadable = "\"{file}\" konnte nicht gelesen werden: {cause}"
+
+[notice.theme_file_unknown_key]
+title = "Unbekannter Schlüssel im Thema"
+body = "{file}: {keys}"
 
 [notice.theme_vanished]
 title = "Thema der Sitzung nicht mehr vorhanden"

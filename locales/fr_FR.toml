@@ -142,7 +142,7 @@ background_image_mode_description = "Comment l'image remplit le cadre du termina
 background_image_opacity_label = "Opacité de l'image"
 background_image_opacity_description = "Opacité de l'image, de 0.0 à 1.0 ; elle multiplie l'opacité du fond."
 theme_label = "Thème"
-theme_description = "Jeu de couleurs du terminal. Sans thème : les couleurs du fichier."
+theme_description = "Jeu de couleurs de l'app, d'un fichier thm_<nom>.toml à côté de la configuration."
 animations_label = "Animations"
 animations_description = "Mouvement lors du repli des groupes et du réarrangement des onglets."
 window_opacity_label = "Opacité de la fenêtre"
@@ -237,7 +237,6 @@ empty_name = "Le nom ne peut pas être vide."
 duplicate_name = "Le nom {name} existe déjà."
 
 [settings.theme]
-none = "Sans thème"
 session_using = "Cette session utilise le thème {name}."
 
 [settings.shortcut]
@@ -426,17 +425,27 @@ title = "Configuration invalide"
 body_at = "ligne {line}, colonne {column} : {detail}"
 body = "{detail}"
 unreadable = "impossible de lire \"{path}\" : {cause}"
-duplicate_theme = "nom de thème en double : \"{name}\""
 
 [notice.unknown_config_key]
 title = "Clé inconnue dans la configuration"
 
 [notice.unknown_theme]
 title = "Thème inconnu"
-body = "\"{name}\" n'est pas dans [[themes]] ; valeurs par défaut utilisées."
+body = "\"{name}\" n'a pas de fichier de thème ; thème default utilisé."
 
-[notice.color_overridden]
-title = "Couleur qui remplace le thème"
+[notice.colors_ignored]
+title = "Couleurs ignorées dans porecatu.toml"
+body = "{count} clé(s) de couleur ignorée(s) : les couleurs sont désormais dans les fichiers de thème thm_*.toml."
+
+[notice.theme_file_invalid]
+title = "Fichier de thème invalide"
+body_at = "{file}, ligne {line}, colonne {column} : {detail}"
+body = "{file} : {detail}"
+unreadable = "impossible de lire \"{file}\" : {cause}"
+
+[notice.theme_file_unknown_key]
+title = "Clé inconnue dans le thème"
+body = "{file} : {keys}"
 
 [notice.theme_vanished]
 title = "Le thème de la session a disparu"

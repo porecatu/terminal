@@ -26,7 +26,7 @@ use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
 use notify::{Event, RecursiveMode, Watcher};
-use porecatu_config::{Config, ConfigError, ConfigErrorKind};
+use porecatu_config::{Config, ConfigError, ConfigErrorKind, ThemeFileProblem};
 use porecatu_locale::{Catalog, CatalogOutcome, Diagnostic, LocaleName};
 
 use crate::language;
@@ -50,6 +50,9 @@ pub enum ConfigReload {
         config: Box<Config>,
         /// ADR-0003 regra 4 / RF-4.22.
         unknown_keys: Vec<String>,
+        /// ADR-0067: os `thm_*.toml` ao lado da config que não entraram,
+        /// ou entraram com chave desconhecida.
+        theme_problems: Vec<ThemeFileProblem>,
     },
     /// ADR-0003 regra 2: a main thread mantém a config anterior e só
     /// mostra o erro.
@@ -218,7 +221,11 @@ struct Touched {
 fn classify(paths: &[PathBuf], config_path: &Path, locales_dir: &Path) -> Touched {
     let mut touched = Touched::default();
     for path in paths {
-        if path == config_path {
+        // Um `thm_*.toml` ao lado da config (ADR-0067) recarrega como a
+        // própria config: os temas entram no mesmo `Config`.
+        let is_theme_file = path.parent() == config_path.parent()
+            && porecatu_config::theme_name_from_file(path).is_some();
+        if path == config_path || is_theme_file {
             touched.config = true;
         } else if path == locales_dir {
             touched.locales_dir = true;
@@ -343,12 +350,29 @@ pub(crate) fn read_and_parse(path: &Path) -> Option<ConfigReload> {
         }
     };
     Some(match porecatu_config::parse(&text) {
-        Ok((config, unknown_keys)) => ConfigReload::Loaded {
-            config: Box::new(config),
-            unknown_keys,
-        },
+        Ok((mut config, unknown_keys)) => {
+            let theme_problems = load_disk_themes(&mut config, Some(path));
+            ConfigReload::Loaded {
+                config: Box::new(config),
+                unknown_keys,
+                theme_problems,
+            }
+        }
         Err(error) => ConfigReload::Invalid { error },
     })
+}
+
+/// Junta aos temas embutidos de `config` os `thm_*.toml` da pasta de
+/// `config_path` (ADR-0067). Mesma função no arranque e na recarga, então
+/// os dois veem os mesmos temas. Sem caminho resolvido, só os embutidos.
+pub(crate) fn load_disk_themes(
+    config: &mut Config,
+    config_path: Option<&Path>,
+) -> Vec<ThemeFileProblem> {
+    match config_path.and_then(Path::parent) {
+        Some(dir) => porecatu_config::load_theme_files(config, dir),
+        None => Vec::new(),
+    }
 }
 
 /// Inicia o watcher numa thread própria e detached -- como as threads de
@@ -754,6 +778,7 @@ mod tests {
         ConfigReload::Loaded {
             config: Box::new(config),
             unknown_keys: Vec::new(),
+            theme_problems: Vec::new(),
         }
     }
 
@@ -935,11 +960,23 @@ mod tests {
                 ..Touched::default()
             }
         );
-        // Outro arquivo da pasta da config, e arquivo em subpasta de
-        // `locales/` (o watch é não recursivo), não contam.
+        // Um tema ao lado da config recarrega como a config (ADR-0067).
+        assert_eq!(
+            classify(&paths(&["/c/thm_meu.toml"]), config, locales),
+            Touched {
+                config: true,
+                ..Touched::default()
+            }
+        );
+        // Outro arquivo da pasta da config, tema fora dela e arquivo em
+        // subpasta de `locales/` (o watch é não recursivo), não contam.
         assert_eq!(
             classify(
-                &paths(&["/c/other.toml", "/c/locales/x/y.toml"]),
+                &paths(&[
+                    "/c/other.toml",
+                    "/c/locales/x/y.toml",
+                    "/c/sub/thm_meu.toml"
+                ]),
                 config,
                 locales
             ),

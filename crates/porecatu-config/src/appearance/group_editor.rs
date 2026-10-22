@@ -10,7 +10,9 @@ use crate::color::Color;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct GroupEditor {
+    #[serde(skip_deserializing)]
     pub background: Color,
+    #[serde(skip_deserializing)]
     pub border: Color,
     pub corner_radius: i32,
     pub padding: i32,
@@ -18,12 +20,17 @@ pub struct GroupEditor {
     pub width: i32,
     /// Folga entre a borda da barra de abas e o topo do popover.
     pub offset_y: i32,
+    #[serde(skip_deserializing)]
     pub section_foreground: Color,
     pub section_font_size: f64,
+    #[serde(skip_deserializing)]
     pub input_background: Color,
+    #[serde(skip_deserializing)]
     pub input_border: Color,
+    #[serde(skip_deserializing)]
     pub input_border_focus: Color,
     pub input_corner_radius: i32,
+    #[serde(skip_deserializing)]
     pub input_foreground: Color,
     pub input_font_size: f64,
     pub input_height: i32,
@@ -34,15 +41,21 @@ pub struct GroupEditor {
     pub swatch_corner_radius: i32,
     pub swatch_gap: i32,
     pub swatch_border_width: i32,
+    #[serde(skip_deserializing)]
     pub swatch_ring_selected: Color,
     pub swatch_highlight_pad: i32,
+    #[serde(skip_deserializing)]
     pub item_foreground: Color,
+    #[serde(skip_deserializing)]
     pub item_hover_background: Color,
     pub item_height: i32,
+    #[serde(skip_deserializing)]
     pub divider: Color,
     pub divider_height: i32,
     /// "Fechar grupo (N abas)" -- a ação destrutiva.
+    #[serde(skip_deserializing)]
     pub destructive_foreground: Color,
+    #[serde(skip_deserializing)]
     pub destructive_hover_background: Color,
 }
 

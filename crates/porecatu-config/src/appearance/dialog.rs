@@ -11,24 +11,32 @@ use crate::color::Color;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Dialog {
+    #[serde(skip_deserializing)]
     pub overlay: Color,
+    #[serde(skip_deserializing)]
     pub background: Color,
+    #[serde(skip_deserializing)]
     pub border: Color,
     pub corner_radius: i32,
     pub width: i32,
     pub padding: i32,
     /// Entre título, corpo e a fila de botões.
     pub gap: i32,
+    #[serde(skip_deserializing)]
     pub title_foreground: Color,
     pub title_font_size: f64,
+    #[serde(skip_deserializing)]
     pub foreground: Color,
     pub font_size: f64,
     pub button_height: i32,
     pub button_gap: i32,
     pub button_padding_x: i32,
     pub button_corner_radius: i32,
+    #[serde(skip_deserializing)]
     pub button_border: Color,
+    #[serde(skip_deserializing)]
     pub destructive_foreground: Color,
+    #[serde(skip_deserializing)]
     pub destructive_hover_background: Color,
 }
 

@@ -89,7 +89,6 @@ pub(crate) fn all(catalog: &Catalog) -> Vec<(&'static str, String)> {
             "settings.option.trusted_paths_warning",
             s::option::trusted_paths_warning(catalog),
         ),
-        ("settings.theme.none", s::theme::none(catalog)),
         (
             "settings.theme.session_using",
             s::theme::session_using(catalog, "Solar"),

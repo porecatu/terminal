@@ -28,8 +28,8 @@ use serde::Deserialize;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Terminal {
-    /// Nome de um tema definido em `[[themes]]`. Vazio = usa as cores de
-    /// `[terminal.colors]` diretamente.
+    /// Nome do tema ativo: o arquivo `thm_<nome>.toml` ao lado do
+    /// `porecatu.toml` (ADR-0067). Vazio ou desconhecido cai em `default`.
     pub theme: String,
     /// Opacidade do fundo do terminal, independente da opacidade da
     /// janela. RF-5.15.
@@ -41,6 +41,9 @@ pub struct Terminal {
     pub scrollback: Scrollback,
     pub selection: Selection,
     pub clipboard: Clipboard,
+    /// Vem só do tema (ADR-0067): `[terminal.colors]` no `porecatu.toml`
+    /// é ignorado e avisado.
+    #[serde(skip_deserializing)]
     pub colors: Colors,
     pub hyperlinks: Hyperlinks,
 }
@@ -48,7 +51,7 @@ pub struct Terminal {
 impl Default for Terminal {
     fn default() -> Self {
         Self {
-            theme: String::new(),
+            theme: crate::theme::DEFAULT_THEME.to_owned(),
             background_opacity: 1.0,
             background_image: BackgroundImage::default(),
             font: Font::default(),
@@ -69,7 +72,7 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         let terminal = Terminal::default();
-        assert_eq!(terminal.theme, "");
+        assert_eq!(terminal.theme, "default");
         assert_eq!(terminal.background_opacity, 1.0);
     }
 }

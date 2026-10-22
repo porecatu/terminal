@@ -9,10 +9,9 @@
 //! etapa 2 da F4; aqui a superfície é carregar, validar e comparar por
 //! igualdade -- é o que a torna testável sem GPU e sem janela.
 //!
-//! Hot reload (etapa 4), o enum `Action` e o parser de `[keybindings]`
-//! (etapa 5) e o merge de temas (etapa 6) não vivem aqui: `[keybindings]`
-//! é só um mapa de string para string preservado, e cada `[[themes]]` é
-//! uma árvore independente de overrides, nunca aplicada.
+//! Cor não mora aqui: os campos de cor de `Config` não são lidos do
+//! `porecatu.toml` e valem o default embutido até um tema `thm_*.toml` ser
+//! aplicado (ADR-0067, ver `theme.rs`).
 
 mod appearance;
 mod color;
@@ -53,9 +52,11 @@ pub use terminal::{
     CursorShape, Font, Scrollback, Selection, Terminal, ZoomScope, resolve_background_image_path,
 };
 pub use theme::{
-    Theme, ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeGroupEditor, ThemeGroups,
-    ThemeNotices, ThemeSettings, ThemeStatusBar, ThemeTooltip, apply as apply_theme,
-    overridden_keys as theme_overridden_keys,
+    BUILT_IN_THEME_FILES, DEFAULT_LIGHT_THEME, DEFAULT_THEME, THEME_FILE_PREFIX, Theme,
+    ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeFileProblem, ThemeGroupEditor,
+    ThemeGroups, ThemeNotices, ThemeSettings, ThemeStatusBar, ThemeTabs, ThemeTerminal,
+    ThemeTooltip, ThemeWindow, ThemeWindowControls, apply as apply_theme, is_color_key,
+    load_theme_files, parse_theme, theme_name_from_file,
 };
 
 use std::path::Path;
@@ -69,6 +70,10 @@ pub struct Config {
     pub shell: Shell,
     pub appearance: Appearance,
     pub terminal: Terminal,
+    /// Os temas conhecidos: os embutidos, mais os `thm_*.toml` do disco
+    /// depois de `load_theme_files`. Nunca lido do `porecatu.toml` --
+    /// `[[themes]]` lá é chave ignorada (ADR-0067).
+    #[serde(skip_deserializing)]
     pub themes: Vec<Theme>,
     pub keybindings: Keybindings,
     pub session: Session,
@@ -190,8 +195,8 @@ fn raw_language(text: &str) -> Option<String> {
 /// hot reload (etapa 4, que já tem o texto em mãos após o evento do
 /// `notify`). Devolve a config carregada mais as chaves desconhecidas
 /// (ADR-0003 regra 4), ou o primeiro erro localizado (regra 3): TOML
-/// sintaticamente inválido, tipo errado num campo (inclusive cor
-/// inválida, RF-4.9) ou nome de tema duplicado.
+/// sintaticamente inválido ou tipo errado num campo. Os temas são só os
+/// embutidos: os do disco entram por `load_theme_files`.
 pub fn parse(text: &str) -> Result<(Config, Vec<String>), ConfigError> {
     let deserializer =
         toml::de::Deserializer::parse(text).map_err(|err| ConfigError::from_toml(text, err))?;
@@ -199,13 +204,6 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), ConfigError> {
     let config: Config =
         serde_ignored::deserialize(deserializer, |path| unknown_keys.push(path.to_string()))
             .map_err(|err| ConfigError::from_toml(text, err))?;
-
-    if let Some(name) = theme::find_duplicate_name(&config.themes) {
-        return Err(ConfigError::new(ConfigErrorKind::DuplicateThemeName {
-            name: name.to_owned(),
-        }));
-    }
-
     Ok((config, unknown_keys))
 }
 
@@ -237,32 +235,21 @@ mod tests {
     }
 
     #[test]
-    fn invalid_color_is_localized_error() {
-        let err = parse("[appearance.window]\nbackground = \"not-a-color\"\n").unwrap_err();
-        assert!(err.line.is_some());
-        let ConfigErrorKind::Toml { detail } = &err.kind else {
-            panic!("expected a Toml error, got {:?}", err.kind);
-        };
-        assert!(detail.contains("invalid color \"not-a-color\""));
-        assert!(detail.contains("expected \"#rrggbb\", \"#rrggbbaa\" or \"transparent\""));
-    }
-
-    #[test]
-    fn duplicate_theme_name_is_error() {
-        let text = r#"
-            [[themes]]
-            name = "x"
-            [[themes]]
-            name = "x"
-        "#;
-        let err = parse(text).unwrap_err();
+    fn color_in_config_is_an_ignored_color_key() {
+        let (config, unknown_keys) = parse(
+            "[appearance.window]\nbackground = \"#123456\"\n[terminal.colors]\nforeground = \"#654321\"\n[[themes]]\nname = \"x\"\n",
+        )
+        .expect("cor no porecatu.toml é aviso");
         assert_eq!(
-            err.kind,
-            ConfigErrorKind::DuplicateThemeName {
-                name: "x".to_owned()
-            }
+            config.appearance.window.background,
+            Config::default().appearance.window.background
         );
-        assert_eq!((err.line, err.column), (None, None));
+        assert_eq!(config.themes, Config::default().themes);
+        assert!(!unknown_keys.is_empty());
+        assert!(
+            unknown_keys.iter().all(|key| is_color_key(key)),
+            "{unknown_keys:?}"
+        );
     }
 
     #[test]
@@ -299,12 +286,12 @@ mod tests {
 
     #[test]
     fn invalid_config_with_valid_syntax_keeps_the_language() {
-        // Deserialization fails on the color; the TOML itself is fine.
+        // Deserialization fails on the opacity; the TOML itself is fine.
         let result = load_text(
             "[general]
 language = \"pt_BR\"
 [appearance.window]
-background = \"nope\"
+opacity = \"nope\"
 ",
         );
         let LoadResult::Invalid { config, .. } = result else {

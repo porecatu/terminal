@@ -18,7 +18,9 @@ pub struct Window {
     /// [C] "vale na próxima janela": atributo de superfície decidido na
     /// criação. 0.0 a 1.0.
     pub opacity: f64,
+    #[serde(skip_deserializing)]
     pub background: Color,
+    #[serde(skip_deserializing)]
     pub border: Color,
     pub corner_radius: i32,
     /// [C] "reinicie o app": `winit` não recria o frame do SO sem recriar a

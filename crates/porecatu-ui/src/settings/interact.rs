@@ -523,7 +523,7 @@ copy_on_select = false
         assert!(choose_value(&mut d, theme, "nord"));
         assert!(d.is_pending(theme));
         assert_eq!(d.value(theme), EditValue::String("nord".to_owned()));
-        assert!(choose_value(&mut d, theme, ""));
+        assert!(choose_value(&mut d, theme, "default"));
         assert!(!d.is_pending(theme));
     }
 }

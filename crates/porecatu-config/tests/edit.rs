@@ -237,15 +237,12 @@ fn example_one_float_edit_changes_exactly_its_line() {
 fn example_set_keeps_the_end_of_line_comment_and_its_spacing() {
     let out = apply(
         EXAMPLE,
-        &[set(
-            "terminal.selection.copy_on_select",
-            EditValue::Bool(true),
-        )],
+        &[set("terminal.scrollback.lines", EditValue::Integer(5000))],
     );
     let (removed, added) = diff(EXAMPLE, &out);
     assert_eq!(removed.len(), 1);
-    assert_eq!(added, vec![removed[0].replace("false", "true")]);
-    assert!(added[0].ends_with("# RF-10.8"));
+    assert_eq!(added, vec![removed[0].replace("10000", "5000")]);
+    assert!(added[0].ends_with("# linhas antigas guardadas para rolar para cima"));
 }
 
 #[test]
@@ -275,14 +272,14 @@ fn example_remove_drops_only_the_key_line() {
     assert!(removed[0].starts_with("copy_on_select = false"));
     assert!(added.is_empty());
     // The documentation comment that sat above the key is still there.
-    assert!(out.contains("# Selecionar já copia para o clipboard."));
+    assert!(out.contains("# Selecionar já copia para a área de transferência."));
 }
 
 #[test]
 fn example_remove_of_the_last_key_of_the_file_keeps_its_comments() {
-    let out = apply(EXAMPLE, &[remove("panes.min_rows")]);
+    let out = apply(EXAMPLE, &[remove("appearance.settings.theme_swatch_size")]);
     let (removed, added) = diff(EXAMPLE, &out);
-    assert_eq!(removed, vec!["min_rows = 5".to_owned()]);
+    assert_eq!(removed, vec!["theme_swatch_size = 12".to_owned()]);
     assert!(added.is_empty());
 }
 

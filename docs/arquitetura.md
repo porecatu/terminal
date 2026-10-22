@@ -207,7 +207,7 @@ Quatro decisões que a forma acima carrega:
 
 **As cores não são resolvidas aqui.** `Cell.fg` e `Cell.bg` são um `TermColor`
 — `Default`, `Indexed(u8)` ou `Rgb`. Quem traduz para RGBA é `porecatu-ui`, que tem
-`Config` e portanto a paleta, o tema e os overrides. É o que permite ao `term` ignorar
+`Config` e portanto a paleta e o tema (arquivos `thm_*.toml`, [ADR-0067](adr/0067-temas-em-arquivos-proprios.md)). É o que permite ao `term` ignorar
 a existência de config e ao renderer receber só cor concreta (seção 5).
 
 **O buffer é reusado entre frames.** Nem `cells` nem `clusters` alocam no caminho
@@ -338,7 +338,7 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 >
 > A classe fica escrita ao lado da chave no arquivo de exemplo. O evento de `notify` chega por `EventLoopProxy`, como o `Wakeup` de PTY: uma recarga é um evento e um frame, e o loop volta a dormir ([ADR-0007](adr/0007-modelo-de-threading.md)). O `Arc<Config>` é **do processo**, não da janela — uma recarga redesenha todas as janelas, e o recálculo da classe B roda por janela, porque a métrica é a mesma e as dimensões não.
 >
-> Duas decisões vizinhas: o enum `Action` que o parser de `[keybindings]` produz nasce em `porecatu-core`, porque `config` não pode depender de `ui` ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)); e um tema nomeado só declara **cor**, nunca fonte ou dimensão, o que mantém `theme.cycle` na classe A ([ADR-0031](adr/0031-temas-nomeados.md)).
+> Duas decisões vizinhas: o enum `Action` que o parser de `[keybindings]` produz nasce em `porecatu-core`, porque `config` não pode depender de `ui` ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)); e um tema nomeado só declara **cor**, nunca fonte ou dimensão, o que mantém `theme.cycle` na classe A ([ADR-0031](adr/0031-temas-nomeados.md)). Desde o [ADR-0067](adr/0067-temas-em-arquivos-proprios.md) o tema é um arquivo `thm_<nome>.toml` ao lado do `porecatu.toml` e é o único lugar de cor; o watcher, que já assistia a pasta, recarrega os temas como a própria config.
 
 > **Acrescentado pelo [ADR-0056](adr/0056-catalogo-de-textos-da-interface.md) §9.** O mesmo desenho recarrega o **catálogo de idioma**: `[general] language` é classe A, e editar um arquivo em `locales/`, ao lado do `porecatu.toml`, também dispara recarga, por um segundo watch não recursivo. O catálogo é montado na thread do watcher e chega por `EventLoopProxy`; se falhar, o anterior continua.
 

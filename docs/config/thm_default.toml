@@ -1,0 +1,164 @@
+# Tema "default" -- o tema escuro padrão do Porecatu.
+#
+# Um tema é um arquivo thm_<nome>.toml na mesma pasta do porecatu.toml.
+# Para criar o seu, copie este arquivo com outro nome (por exemplo,
+# thm_meu.toml) e troque as cores. Depois escolha-o em
+# Configurações > Aparência, ou escreva no porecatu.toml:
+#
+#   [terminal]
+#   theme = "meu"
+#
+# Cores em "#rrggbb", "#rrggbbaa" (os dois últimos dígitos são a
+# transparência: 00 invisível, ff opaco) ou "transparent". Chave que o
+# seu tema não tiver usa a cor deste tema. Salvou, aplicou: não precisa
+# reiniciar o app.
+
+# Texto e fundo do terminal.
+[terminal]
+foreground = "#c7ccd6"
+background = "#0f1216"
+cursor = "#5ed3bc"
+cursor_text = "#0f1216"            # letra embaixo do cursor
+selection_background = "#2e6b62"
+selection_foreground = "#eef2f4"
+prompt_secondary = "#6b737e"       # avisos do app escritos no terminal
+
+# As 16 cores que os programas usam no terminal.
+[terminal.normal]
+black = "#3b434f"
+red = "#ef8a8a"
+green = "#86c56a"
+yellow = "#e0b060"
+blue = "#6fa8f5"
+magenta = "#a68cf0"
+cyan = "#5ed3bc"
+white = "#c7ccd6"
+
+[terminal.bright]
+black = "#6f7783"
+red = "#f5a3a3"
+green = "#9bd482"
+yellow = "#ecc37c"
+blue = "#8dbcf8"
+magenta = "#bda6f5"
+cyan = "#7fdfcc"
+white = "#eaeef3"
+
+# Fundo da janela, em volta dos terminais.
+[window]
+background = "#15181d"
+border = "#2a2f38"
+
+# Barra de abas.
+[tabs]
+bar_background = "#1b1f26"
+bar_border = "#23272f"
+active_background = "#282e37"
+active_foreground = "#eaeef3"
+inactive_background = "#191d23"
+inactive_foreground = "#98a0ab"
+close_button_foreground = "#e4e8ee"   # ícones da barra: fechar, +, engrenagem
+close_button_hover_background = "#39404b"
+close_button_hover_foreground = "#e4e8ee"
+exited_foreground = "#727a86"         # aba cujo programa terminou
+active_border = "#39404b"
+inactive_border = "#22262e"
+selected_border = "#5ed3bc"           # abas selecionadas com Ctrl+clique
+activity_indicator = "#86c56a"        # ponto de "saiu texto novo"
+bell_indicator = "#ef8a8a"            # ponto de "campainha"
+rename_background = "#0e1116"         # campo de renomear aba
+rename_border = "#5ed3bc"
+rename_foreground = "#e4e8ee"
+overflow_indicator_background = "#12151a"  # setas quando as abas não cabem
+
+# Botões minimizar, maximizar e fechar.
+[window_controls]
+hover_background = "#ffffff1a"
+pressed_background = "#ffffff29"
+close_hover_background = "#c4413fd9"
+close_pressed_background = "#a33533e6"
+close_hover_foreground = "#ffffff"
+
+# Grupos de abas.
+[groups]
+count_background = "#12151a"
+count_foreground = "#7b838f"
+glass_border = "#ffffff"
+border = "#262b34"
+ungrouped_color = "#7b838f"
+# Cores que um grupo novo pode receber, nesta ordem.
+palette = [
+  { name = "vermelho", color = "#ef8a8a" },
+  { name = "amarelo", color = "#e0b060" },
+  { name = "ciano", color = "#5ed3bc" },
+  { name = "azul", color = "#6fa8f5" },
+  { name = "roxo", color = "#a68cf0" },
+  { name = "verde", color = "#86c56a" },
+]
+
+# Avisos no canto da janela.
+[notices]
+background = "#1a1e25"
+border = "#2e343e"
+foreground = "#dfe4ea"
+body_foreground = "#a8b0bb"
+error = "#ef8a8a"
+warning = "#e0b060"
+info = "#5ed3bc"
+
+# Caixas de confirmação.
+[dialog]
+overlay = "#06070973"
+background = "#1a1e25"
+border = "#2e343e"
+title_foreground = "#e6eaef"
+foreground = "#d7dce3"
+button_border = "#262b34"
+destructive_foreground = "#e08585"
+destructive_hover_background = "#2e2224"
+
+# Menus do botão direito.
+[context_menu]
+background = "#1a1e25"
+border = "#2e343e"
+item_hover_background = "#242a33"
+separator = "#2a2f38"
+foreground = "#d7dce3"
+disabled_foreground = "#5c646f"
+destructive_foreground = "#e08585"
+
+# Dicas que aparecem ao parar o mouse.
+[tooltip]
+background = "#1a1e25"
+border = "#2e343e"
+foreground = "#d7dce3"
+
+# Editor de grupo (nome e cor).
+[group_editor]
+background = "#1a1e25"
+border = "#2e343e"
+section_foreground = "#5c646f"
+input_background = "#0f1216"
+input_border = "#333a45"
+input_border_focus = "#5ed3bc"
+input_foreground = "#e4e8ee"
+swatch_ring_selected = "#eef2f4"
+item_foreground = "#d7dce3"
+item_hover_background = "#242a33"
+divider = "#2a2f38"
+destructive_foreground = "#e08585"
+destructive_hover_background = "#2e2224"
+
+# Barra de status, no rodapé.
+[status_bar]
+foreground = "#a8b0bb"
+shell = "#5ed3bc"
+stale_cwd = "#828a96"        # diretório que pode estar desatualizado
+ahead_behind = "#5ed3bc"     # commits a trazer do Git
+
+# Janela de configurações.
+[settings]
+panel_background = "#171b21"
+row_background = "#1c2028"
+chip_background = "#1e232b"
+footer_separator = "#23272f"

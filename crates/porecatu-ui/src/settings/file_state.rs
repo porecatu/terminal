@@ -37,14 +37,18 @@ pub(crate) enum Disk {
 }
 
 impl Disk {
-    /// Lê `path` e passa o texto pelo mesmo `parse` da carga.
+    /// Lê `path` e passa o texto pelo mesmo `parse` da carga, com os temas
+    /// `thm_*.toml` da mesma pasta (ADR-0067): é a lista que a tela oferece.
     pub(crate) fn observe(path: &Path) -> Self {
         match fs::read_to_string(path) {
             Ok(text) => match porecatu_config::parse(&text) {
-                Ok((config, _)) => Disk::Valid {
-                    text,
-                    config: Box::new(config),
-                },
+                Ok((mut config, _)) => {
+                    crate::reload::load_disk_themes(&mut config, Some(path));
+                    Disk::Valid {
+                        text,
+                        config: Box::new(config),
+                    }
+                }
                 Err(error) => Disk::Invalid {
                     text: Some(text),
                     error,

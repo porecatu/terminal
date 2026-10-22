@@ -25,20 +25,24 @@ pub struct StatusBar {
     /// janela já é a cor das barras, e um quad opaco aqui cobriria a
     /// sombra do quadro do terminal, que desce sobre o topo dela
     /// (ADR-0048 §10).
+    #[serde(skip_deserializing)]
     pub foreground: Color,
     /// Nome do shell -- o único segmento colorido, é o que distingue a
     /// aba de relance.
+    #[serde(skip_deserializing)]
     pub shell: Color,
     /// RF-9.4: cor do diretório quando ele não veio de um OSC 7, ou seja,
     /// quando é o de spawn e pode estar obsoleto. Um degrau abaixo de
     /// `foreground` na escada de texto da §1.4 -- e não um alfa sobre
     /// ela, que a esta altura de fonte apagaria o caminho em vez de
     /// marcá-lo (ADR-0048 §4).
+    #[serde(skip_deserializing)]
     pub stale_cwd: Color,
     /// PRD-013, ADR-0052 §8: cor do indicador de commits atrás/à frente do
     /// remoto -- o segundo item colorido da barra e o primeiro alvo
     /// clicável dela. Mesmo valor do token Acento que `shell` já usa; o
     /// PRD-004 exige a chave mesmo sem cor nova.
+    #[serde(skip_deserializing)]
     pub ahead_behind: Color,
 }
 

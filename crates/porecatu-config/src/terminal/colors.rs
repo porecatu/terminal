@@ -9,7 +9,7 @@ use crate::color::Color;
 
 /// As 16 cores ANSI, em dois grupos de oito (RF-5.11). Usado tanto pela
 /// paleta base do terminal (aqui, sempre completa) quanto, de forma
-/// parcial, por um override de `[[themes]]` -- ver `crate::theme`.
+/// parcial, por um tema `thm_*.toml` -- ver `crate::theme`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct AnsiPalette {

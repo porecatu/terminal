@@ -34,7 +34,7 @@
 | [0028](0028-o-binario-como-referencia-visual.md) | O binário como referência visual | Aceito |
 | [0029](0029-enum-de-acao-e-gramatica-de-tecla.md) | Enum de ação e gramática de tecla | Aceito |
 | [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito |
-| [0031](0031-temas-nomeados.md) | Temas nomeados: escopo, merge e ciclo | Aceito |
+| [0031](0031-temas-nomeados.md) | Temas nomeados: escopo, merge e ciclo | Superseded by ADR-0067 (**parcial**: onde o tema mora, precedência, ordem do ciclo; "tema é só cor" e ciclar sem escrever continuam) |
 | [0032](0032-interface-do-v1-fechada.md) | A interface do v1 está fechada | Aceito |
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito |
@@ -67,7 +67,8 @@
 | [0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) | Imagem da janela sem furo até o desktop | Aceito |
 | [0064](0064-janela-de-configuracoes-modal.md) | Janela de configurações modal, possuída pela janela de terminal | Aceito · §4 revisto (no X11, tipo diálogo para flutuar em gerenciador tiling) |
 | [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito |
-| [0066](0066-estado-pressionado-dos-botoes-de-janela.md) | Estado pressionado dos botões de janela | Aceito |
+| [0066](0066-estado-pressionado-dos-botoes-de-janela.md) | Estado pressionado dos botões de janela | Aceito · cores revistas por ADR-0067 (fundos translúcidos) |
+| [0067](0067-temas-em-arquivos-proprios.md) | Temas em arquivos próprios (`thm_*.toml`), cor só no tema, botões de janela translúcidos | Aceito |
 
 ## Convenção
 

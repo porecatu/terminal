@@ -158,7 +158,7 @@ background_image_mode_description = "How the image fills the terminal frame."
 background_image_opacity_label = "Image opacity"
 background_image_opacity_description = "Opacity of the image, from 0.0 to 1.0; it multiplies the background opacity."
 theme_label = "Theme"
-theme_description = "Terminal color set. No theme uses the colors from the file."
+theme_description = "The app's color set, from a thm_<name>.toml file next to the config."
 animations_label = "Animations"
 animations_description = "Motion when collapsing groups and rearranging tabs."
 window_opacity_label = "Window opacity"
@@ -253,7 +253,6 @@ empty_name = "The name cannot be empty."
 duplicate_name = "The name {name} already exists."
 
 [settings.theme]
-none = "No theme"
 session_using = "This session is using the theme {name}."
 
 [settings.shortcut]
@@ -460,17 +459,27 @@ title = "Invalid config"
 body_at = "line {line}, column {column}: {detail}"
 body = "{detail}"
 unreadable = "could not read \"{path}\": {cause}"
-duplicate_theme = "duplicate theme name: \"{name}\""
 
 [notice.unknown_config_key]
 title = "Unknown key in config"
 
 [notice.unknown_theme]
 title = "Unknown theme"
-body = "\"{name}\" is not in [[themes]]; using defaults."
+body = "\"{name}\" has no theme file; using the default theme."
 
-[notice.color_overridden]
-title = "Color overriding the theme"
+[notice.colors_ignored]
+title = "Colors ignored in porecatu.toml"
+body = "{count} color key(s) ignored: colors now live in the theme files thm_*.toml."
+
+[notice.theme_file_invalid]
+title = "Invalid theme file"
+body_at = "{file}, line {line}, column {column}: {detail}"
+body = "{file}: {detail}"
+unreadable = "could not read \"{file}\": {cause}"
+
+[notice.theme_file_unknown_key]
+title = "Unknown key in theme"
+body = "{file}: {keys}"
 
 [notice.theme_vanished]
 title = "Session theme is gone"

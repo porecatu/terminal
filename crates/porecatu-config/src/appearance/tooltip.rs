@@ -10,9 +10,12 @@ use crate::color::Color;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Tooltip {
+    #[serde(skip_deserializing)]
     pub background: Color,
+    #[serde(skip_deserializing)]
     pub border: Color,
     pub corner_radius: i32,
+    #[serde(skip_deserializing)]
     pub foreground: Color,
     pub font_size: f64,
     /// Largura máxima; texto além disso trunca com reticências.

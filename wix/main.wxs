@@ -96,7 +96,9 @@
                       OFL-1.1 (Iosevka) e a ISC (Lucide) seriam descumpridas
                       na distribuição, exatamente o risco que o ADR
                       registra. porecatu.example.toml também acompanha,
-                      como documentação de configuração real (ADR-0044 par. 4).
+                      como documentação de configuração real (ADR-0044 par. 4),
+                      e os dois temas embutidos, thm_default.toml e
+                      thm_default_light.toml, como modelo de tema (ADR-0067).
                     -->
                     <Component Id='License' Guid='*'>
                         <File Id='LicenseFile' Name='LICENSE' DiskId='1' Source='LICENSE' KeyPath='yes'/>
@@ -112,6 +114,14 @@
                     <Component Id='ExampleConfig' Guid='*'>
                         <File Id='ExampleConfigFile' Name='porecatu.example.toml' DiskId='1'
                             Source='docs\config\porecatu.example.toml' KeyPath='yes'/>
+                    </Component>
+                    <Component Id='ThemeDefault' Guid='*'>
+                        <File Id='ThemeDefaultFile' Name='thm_default.toml' DiskId='1'
+                            Source='docs\config\thm_default.toml' KeyPath='yes'/>
+                    </Component>
+                    <Component Id='ThemeDefaultLight' Guid='*'>
+                        <File Id='ThemeDefaultLightFile' Name='thm_default_light.toml' DiskId='1'
+                            Source='docs\config\thm_default_light.toml' KeyPath='yes'/>
                     </Component>
 
                     <Directory Id='Bin' Name='bin'>
@@ -173,7 +183,7 @@
         <Feature
             Id='Binaries'
             Title='Application'
-            Description='Installs the binary, language files, LICENSE, font attributions and porecatu.example.toml.'
+            Description='Installs the binary, language files, LICENSE, font attributions, porecatu.example.toml and the two built-in themes.'
             Level='1'
             ConfigurableDirectory='APPLICATIONFOLDER'
             AllowAdvertise='no'
@@ -185,6 +195,8 @@
             <ComponentRef Id='FontAttributionOfl'/>
             <ComponentRef Id='FontAttributionIsc'/>
             <ComponentRef Id='ExampleConfig'/>
+            <ComponentRef Id='ThemeDefault'/>
+            <ComponentRef Id='ThemeDefaultLight'/>
 
             <ComponentRef Id='binary0'/>
 

@@ -1022,6 +1022,19 @@ A mesma config desenhava de dois jeitos, conforme a janela tivesse nascido com s
 
 ---
 
+## Depois do v1 — temas em arquivos próprios — implementada
+
+Pedido do dono do produto, fora da ordem de fases ([ADR-0067](adr/0067-temas-em-arquivos-proprios.md), que revê parcialmente o [ADR-0031](adr/0031-temas-nomeados.md) e emenda RF-5.18, RF-5.19 e RF-5.21 do [PRD-005](prd/prd-005-aparencia-do-terminal.md)):
+
+- cada tema é um `thm_<nome>.toml` ao lado do `porecatu.toml`, e é o único lugar de cor; `default` e `default_light` embutidos, gravados quando a config é criada, nunca por cima de um arquivo existente;
+- os sete temas antigos saem; cor no `porecatu.toml` vira um aviso único;
+- o exemplo cai de 1848 para menos de 500 linhas, para leigo, com as dimensões numa seção "Avançado";
+- fundos de hover e pressionado dos botões de janela translúcidos.
+
+**Dívida de verificação:** cobertura automatizada (carga, ordem, completude dos dois temas embutidos, `thm_default.toml` igual a `Config::default()`, recarga por evento de `thm_*.toml`, aviso agregado de cor) e smoke test no Windows. O **aval visual do `default_light`** fica com o dono do produto: as cores que o `catppuccin-latte` não tinha (bordas e indicadores de aba, campo de renomear, fundo da janela, overflow) foram escolhidas na mesma paleta, não aprovadas em tela.
+
+---
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

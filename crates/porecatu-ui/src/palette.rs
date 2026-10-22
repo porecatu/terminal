@@ -11,8 +11,8 @@
 //! resolve` e `ResolvedPalette::group_color` são chamados no caminho quente
 //! (`resolve` por célula da grade, `group_color` por grupo por frame) --
 //! por isso recebem paleta já resolvida, nunca um `&Config` a consultar
-//! ali. `[terminal.theme]`/`[[themes]]` ficam de fora (F4 etapa 6): vazio é
-//! o único valor tratado, e vazio já cai direto em `[terminal.colors]`.
+//! ali. O tema não é resolvido aqui: `from_config` recebe o `Config` que
+//! `porecatu_config::apply_theme` já devolveu com as cores do tema.
 
 use porecatu_core::GroupColor;
 use porecatu_render::Color;
@@ -547,11 +547,24 @@ mod tests {
         assert_eq!(pal.glass_border, hex_alpha(0xff, 0xff, 0xff, 0.16));
         assert_eq!(pal.new_tab_border, hex(0x26, 0x2b, 0x34));
 
-        assert_eq!(pal.window_button_hover_bg, hex(0x25, 0x2a, 0x33));
-        assert_eq!(pal.window_close_hover_bg, hex(0xc4, 0x41, 0x3f));
+        // Fundos translúcidos (ADR-0067): o que está atrás da barra aparece.
+        assert_eq!(
+            pal.window_button_hover_bg,
+            hex_alpha(0xff, 0xff, 0xff, 0x1a as f64 / 255.0)
+        );
+        assert_eq!(
+            pal.window_close_hover_bg,
+            hex_alpha(0xc4, 0x41, 0x3f, 0xd9 as f64 / 255.0)
+        );
         assert_eq!(pal.window_close_hover_icon, hex(0xff, 0xff, 0xff));
-        assert_eq!(pal.window_button_pressed_bg, hex(0x39, 0x40, 0x4b));
-        assert_eq!(pal.window_close_pressed_bg, hex(0xa3, 0x35, 0x33));
+        assert_eq!(
+            pal.window_button_pressed_bg,
+            hex_alpha(0xff, 0xff, 0xff, 0x29 as f64 / 255.0)
+        );
+        assert_eq!(
+            pal.window_close_pressed_bg,
+            hex_alpha(0xa3, 0x35, 0x33, 0xe6 as f64 / 255.0)
+        );
 
         assert_eq!(pal.popover_background, hex(0x1a, 0x1e, 0x25));
         assert_eq!(pal.popover_border, hex(0x2e, 0x34, 0x3e));
@@ -748,7 +761,7 @@ mod tests {
     #[test]
     fn a_light_theme_repaints_the_settings_window_body() {
         let base = porecatu_config::Config::default();
-        let themed = porecatu_config::apply_theme(&base, "catppuccin-latte");
+        let themed = porecatu_config::apply_theme(&base, porecatu_config::DEFAULT_LIGHT_THEME);
         let pal = ResolvedPalette::from_config(&themed);
         assert_eq!(pal.settings_panel_background, hex(0xef, 0xf1, 0xf5));
         assert_eq!(pal.settings_row_background, hex(0xdc, 0xe0, 0xe8));

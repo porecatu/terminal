@@ -875,12 +875,6 @@ fn font_families_from_config(config: &porecatu_config::Config) -> porecatu_rende
 /// `docs/`, sem duplicar o conteúdo).
 const EXAMPLE_CONFIG_TOML: &str = include_str!("../../../docs/config/porecatu.example.toml");
 
-/// Garante que `path` existe, criando-o a partir do exemplo embutido se
-/// ainda não existir (RF-11.27: "decida e registre" -- criar a partir do
-/// exemplo é a opção óbvia, o usuário vê os defaults comentados em vez de
-/// um arquivo vazio ou um erro). Separada de `open_config_file` para ser
-/// testável sem `opener` -- testar a chamada real abriria um programa de
-/// verdade na máquina que roda `cargo test`.
 /// Por que uma sessão nomeada não foi gravada: a janela sumiu antes, ou a
 /// gravação falhou (`SaveError`). A frase é de `messages` (ADR-0056 §2).
 #[derive(Debug)]
@@ -889,14 +883,36 @@ pub(crate) enum SaveNamedFailure {
     Save(porecatu_session::named::SaveError),
 }
 
+/// Garante que `path` existe, criando-o a partir do exemplo embutido se
+/// ainda não existir (RF-11.27: "decida e registre" -- criar a partir do
+/// exemplo é a opção óbvia, o usuário vê os defaults comentados em vez de
+/// um arquivo vazio ou um erro), e que os dois temas embutidos estão ao
+/// lado dele (ADR-0067). Separada de `open_config_file` para ser
+/// testável sem `opener` -- testar a chamada real abriria um programa de
+/// verdade na máquina que roda `cargo test`.
 fn ensure_config_file_exists(path: &Path) -> std::io::Result<()> {
-    if path.exists() {
-        return Ok(());
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, EXAMPLE_CONFIG_TOML)?;
     }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    match path.parent() {
+        Some(dir) => write_missing_theme_files(dir),
+        None => Ok(()),
     }
-    std::fs::write(path, EXAMPLE_CONFIG_TOML)
+}
+
+/// Grava em `dir` os arquivos dos temas embutidos que ainda não existem
+/// (ADR-0067) -- nunca sobrescreve: um `thm_default.toml` ali é do usuário.
+fn write_missing_theme_files(dir: &Path) -> std::io::Result<()> {
+    for (file_name, text) in porecatu_config::BUILT_IN_THEME_FILES {
+        let path = dir.join(file_name);
+        if !path.exists() {
+            std::fs::write(path, text)?;
+        }
+    }
+    Ok(())
 }
 
 /// RF-11.27: abre o arquivo de config no editor padrão do sistema --
@@ -979,6 +995,31 @@ mod ensure_config_file_exists_tests {
         ensure_config_file_exists(&path).unwrap();
         assert!(path.exists());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn built_in_theme_files_are_written_beside_the_config() {
+        let dir = scratch_path("themes");
+        let path = dir.join("porecatu.toml");
+        ensure_config_file_exists(&path).unwrap();
+        for (file_name, text) in porecatu_config::BUILT_IN_THEME_FILES {
+            assert_eq!(std::fs::read_to_string(dir.join(file_name)).unwrap(), text);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn existing_theme_file_is_left_untouched() {
+        let dir = scratch_path("theme-kept");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("thm_default.toml"), "meu tema").unwrap();
+        ensure_config_file_exists(&dir.join("porecatu.toml")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("thm_default.toml")).unwrap(),
+            "meu tema"
+        );
+        assert!(dir.join("thm_default_light.toml").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 
@@ -5168,8 +5209,13 @@ enum StartupNotice {
     ConfigInvalid(porecatu_config::ConfigError),
     /// RF-4.22: caminho com pontos (`appearance.tabs.foo`).
     UnknownConfigKey(String),
-    /// RF-5.18/ADR-0031 §5: nome de `[terminal] theme` fora de `[[themes]]`.
+    /// RF-5.18/ADR-0031 §5: nome de `[terminal] theme` sem arquivo de tema.
     UnknownTheme(String),
+    /// ADR-0067: quantas cores o `porecatu.toml` ainda declara (ignoradas).
+    ColorsIgnored(usize),
+    /// ADR-0067: um `thm_*.toml` que não entrou, ou entrou com chave
+    /// desconhecida.
+    ThemeFile(porecatu_config::ThemeFileProblem),
     /// ADR-0029 §4: tecla malformada, ação desconhecida ou binding duplicado
     /// no arranque -- só aquela linha é descartada.
     KeybindingInvalid(keymap::KeymapIssue),
@@ -5202,6 +5248,8 @@ impl StartupNotice {
                 msg::notice::unknown_theme::title(catalog),
                 msg::notice::unknown_theme::body(catalog, name),
             ),
+            StartupNotice::ColorsIgnored(count) => messages::colors_ignored(catalog, *count),
+            StartupNotice::ThemeFile(problem) => messages::theme_file_problem(catalog, problem),
             StartupNotice::KeybindingInvalid(issue) => (
                 Severity::Warning,
                 msg::notice::keybinding_invalid::title(catalog),
@@ -5404,17 +5452,27 @@ struct App {
     deferred_background_loads: Vec<background_image::BackgroundImageKey>,
 }
 
-/// Ordem de `theme.cycle` (RF-5.21, ADR-0031 §3): "" (sem tema) primeiro,
-/// depois `declared` na ordem de declaração do arquivo -- nunca
-/// alfabética, é a única ordem que o usuário controla sem renomear nada.
-/// Função pura, testável sem `App`/GPU. `current` fora da lista (não
-/// deveria acontecer: `active_theme_name` só devolve `""` ou um nome de
-/// `config.themes`) cai no primeiro item, não trava.
+/// Separa das chaves desconhecidas do `porecatu.toml` as de cor (ADR-0067):
+/// devolve as demais, que seguem avisadas uma a uma, e quantas eram de
+/// cor, que viram um aviso só.
+fn split_color_keys(keys: &[String]) -> (Vec<String>, usize) {
+    let other: Vec<String> = keys
+        .iter()
+        .filter(|key| !porecatu_config::is_color_key(key))
+        .cloned()
+        .collect();
+    let colors = keys.len() - other.len();
+    (other, colors)
+}
+
+/// Ordem de `theme.cycle` (RF-5.21, ADR-0067): a de `config.themes` --
+/// `default`, `default_light`, depois os do usuário em ordem alfabética
+/// do nome do arquivo. Não há passo "sem tema": sem tema é o `default`.
+/// Função pura, testável sem `App`/GPU. `current` fora da lista (vazio ou
+/// um tema que sumiu) vale como o primeiro item, não trava.
 fn next_theme_name<'a>(declared: &[&'a str], current: &str) -> &'a str {
-    let mut names: Vec<&str> = vec![""];
-    names.extend_from_slice(declared);
-    let pos = names.iter().position(|&n| n == current).unwrap_or(0);
-    names[(pos + 1) % names.len()]
+    let pos = declared.iter().position(|&n| n == current).unwrap_or(0);
+    declared[(pos + 1) % declared.len()]
 }
 
 #[cfg(test)]
@@ -5422,27 +5480,23 @@ mod theme_cycle_tests {
     use super::next_theme_name;
 
     #[test]
-    fn no_theme_starts_the_cycle() {
-        let declared = ["a", "b"];
-        assert_eq!(next_theme_name(&declared, ""), "a");
+    fn cycle_advances_in_list_order() {
+        let declared = ["default", "default_light", "meu"];
+        assert_eq!(next_theme_name(&declared, "default"), "default_light");
+        assert_eq!(next_theme_name(&declared, "default_light"), "meu");
     }
 
     #[test]
-    fn cycle_advances_in_declaration_order() {
-        let declared = ["a", "b"];
-        assert_eq!(next_theme_name(&declared, "a"), "b");
+    fn cycle_wraps_back_to_the_first() {
+        let declared = ["default", "default_light"];
+        assert_eq!(next_theme_name(&declared, "default_light"), "default");
     }
 
     #[test]
-    fn cycle_wraps_back_to_no_theme() {
-        let declared = ["a", "b"];
-        assert_eq!(next_theme_name(&declared, "b"), "");
-    }
-
-    #[test]
-    fn unknown_current_restarts_the_cycle() {
-        let declared = ["a", "b"];
-        assert_eq!(next_theme_name(&declared, "sumiu"), "a");
+    fn unknown_or_empty_current_counts_as_the_first() {
+        let declared = ["default", "default_light"];
+        assert_eq!(next_theme_name(&declared, "sumiu"), "default_light");
+        assert_eq!(next_theme_name(&declared, ""), "default_light");
     }
 }
 
@@ -5471,7 +5525,8 @@ impl App {
     }
 
     /// Nome do tema efetivo (ADR-0031 §4): o da sessão, se `theme.cycle`
-    /// já mexeu nele, senão o declarado no arquivo. `""` é "sem tema".
+    /// já mexeu nele, senão o declarado no arquivo. Nome vazio ou sem
+    /// arquivo de tema desenha com o `default` (ADR-0067).
     fn active_theme_name(&self) -> &str {
         self.session_theme
             .as_deref()
@@ -5479,40 +5534,26 @@ impl App {
     }
 
     /// Recalcula as duas paletas resolvidas a partir do tema efetivo
-    /// (`active_theme_name`) e devolve as chaves que "venceram" o tema
-    /// (ADR-0031 §1) -- chamado por `cycle_theme` e por
+    /// (`active_theme_name`) -- chamado por `cycle_theme` e por
     /// `apply_config_reload`, que também precisam repetir isto.
-    fn recompute_palettes(&mut self) -> Vec<&'static str> {
+    fn recompute_palettes(&mut self) {
         let name = self.active_theme_name().to_owned();
         let themed = porecatu_config::apply_theme(&self.config, &name);
         self.pal = palette::ResolvedPalette::from_config(&themed);
         self.term_pal = palette::ResolvedTermPalette::from_config(&themed);
-        porecatu_config::theme_overridden_keys(&self.config, &name)
     }
 
-    /// `theme.cycle` (RF-5.21): anda na ordem de declaração dos
-    /// `[[themes]]`, com "sem tema" participando como primeiro item
-    /// (ADR-0031 §3). Não escreve no arquivo (§4) e é classe A -- troca
-    /// só as paletas resolvidas, sem tocar grade nem PTY.
-    fn cycle_theme(&mut self, now: Instant) {
+    /// `theme.cycle` (RF-5.21): anda na ordem de `config.themes`
+    /// (ADR-0067). Não escreve no arquivo (ADR-0031 §4) e é classe A --
+    /// troca só as paletas resolvidas, sem tocar grade nem PTY.
+    fn cycle_theme(&mut self) {
         if self.config.themes.is_empty() {
-            return; // "sem nenhum [[themes]] declarado, ciclar não faz nada"
+            return;
         }
         let declared: Vec<&str> = self.config.themes.iter().map(|t| t.name.as_str()).collect();
         let next = next_theme_name(&declared, self.active_theme_name());
         self.session_theme = Some(next.to_owned());
-
-        let overridden = self.recompute_palettes();
-        for state in self.windows.values_mut() {
-            if !overridden.is_empty() {
-                state.warnings.push(
-                    Severity::Info,
-                    msg::notice::color_overridden::title(&self.catalog),
-                    overridden.join(", "),
-                    now,
-                );
-            }
-        }
+        self.recompute_palettes();
         self.for_each_surface(|surface| surface.request_redraw());
     }
 
@@ -5541,17 +5582,28 @@ impl App {
             porecatu_config::LoadResult::Loaded { unknown_keys, .. } => {
                 // RF-4.22: chave desconhecida é aviso, não erro -- mesma
                 // severidade/título do hot reload (`apply_config_reload`).
-                for key in unknown_keys {
-                    pending_startup_warnings.push(StartupNotice::UnknownConfigKey(key.clone()));
+                // As de cor viram um aviso só (ADR-0067).
+                let (keys, colors) = split_color_keys(unknown_keys);
+                for key in keys {
+                    pending_startup_warnings.push(StartupNotice::UnknownConfigKey(key));
+                }
+                if colors > 0 {
+                    pending_startup_warnings.push(StartupNotice::ColorsIgnored(colors));
                 }
             }
             porecatu_config::LoadResult::Missing { .. } => {}
         }
-        let config = Arc::new(load_result.config().clone());
         // ADR-0056 §7: config -> catálogo -> só então frase nenhuma. O
         // caminho da config é o **resolvido**, o mesmo que `load` leu e que
         // o watcher assiste (o `locales/` do usuário mora ao lado dele).
         let config_path = porecatu_config::resolve_config_path(cli_config.as_deref());
+        // ADR-0067: os `thm_*.toml` ao lado da config, por cima dos
+        // embutidos -- mesma função da recarga.
+        let mut config = load_result.config().clone();
+        for problem in reload::load_disk_themes(&mut config, config_path.as_deref()) {
+            pending_startup_warnings.push(StartupNotice::ThemeFile(problem));
+        }
+        let config = Arc::new(config);
         let language_outcome =
             language::load_catalog(&config.general.language, config_path.as_deref());
         let language_tag = language::language_tag(language_outcome.locale.as_ref());
@@ -5564,8 +5616,8 @@ impl App {
             }
             pending_startup_warnings.push(StartupNotice::Language(diagnostic));
         }
-        // RF-5.18/ADR-0031 §5: nome desconhecido em `[terminal] theme` é
-        // aviso.
+        // RF-5.18/ADR-0031 §5: nome sem arquivo de tema em `[terminal]
+        // theme` é aviso (e desenha com o `default`).
         if !config.terminal.theme.is_empty()
             && !config
                 .themes
@@ -7583,7 +7635,7 @@ impl App {
     /// regra 2) -- sucesso troca o `Arc` inteiro (dono é o processo, não
     /// a janela) e aplica as classes A/B/C em todas as janelas.
     fn apply_config_reload(&mut self, outcome: ConfigReload, now: Instant) {
-        let (new_config, unknown_keys) = match outcome {
+        let (new_config, unknown_keys, theme_problems) = match outcome {
             ConfigReload::Invalid { error } => {
                 // A tela de configurações também vê o arquivo (ADR-0059 §4):
                 // inválido, ela passa a somente leitura.
@@ -7602,8 +7654,10 @@ impl App {
             ConfigReload::Loaded {
                 config,
                 unknown_keys,
-            } => (config, unknown_keys),
+                theme_problems,
+            } => (config, unknown_keys, theme_problems),
         };
+        let (unknown_keys, ignored_colors) = split_color_keys(&unknown_keys);
 
         let effects = reload::diff(&self.config, &new_config);
         self.config = Arc::new(*new_config);
@@ -7613,9 +7667,9 @@ impl App {
         self.sync_background_image();
 
         // ADR-0031 §4: tema de sessão sobrevive à recarga enquanto
-        // existir; se sumiu do arquivo, volta ao `theme` declarado (ou a
-        // nenhum) e avisa qual sumiu -- mesmo raciocínio de "o arquivo é
-        // do usuário" que o zoom de sessão já segue.
+        // existir; se o arquivo dele sumiu, volta ao `theme` declarado e
+        // avisa qual sumiu -- mesmo raciocínio de "o arquivo é do usuário"
+        // que o zoom de sessão já segue.
         let mut vanished_theme = None;
         if let Some(name) = &self.session_theme
             && !name.is_empty()
@@ -7632,7 +7686,7 @@ impl App {
                 .iter()
                 .any(|t| t.name == self.config.terminal.theme))
         .then(|| self.config.terminal.theme.clone());
-        let overridden = self.recompute_palettes();
+        self.recompute_palettes();
 
         self.term_params = term_params_from_config(&self.config);
         // `[terminal.cursor]` é classe A: o default novo chega também aos
@@ -7731,7 +7785,8 @@ impl App {
                     now,
                 );
             }
-            // RF-4.22: chave desconhecida é aviso, não erro.
+            // RF-4.22: chave desconhecida é aviso, não erro. As de cor
+            // viram um aviso só, e os temas com problema um cada (ADR-0067).
             for key in &unknown_keys {
                 state.warnings.push(
                     Severity::Warning,
@@ -7739,6 +7794,15 @@ impl App {
                     key.clone(),
                     now,
                 );
+            }
+            if ignored_colors > 0 {
+                let (severity, title, body) =
+                    messages::colors_ignored(&self.catalog, ignored_colors);
+                state.warnings.push(severity, title, body, now);
+            }
+            for problem in &theme_problems {
+                let (severity, title, body) = messages::theme_file_problem(&self.catalog, problem);
+                state.warnings.push(severity, title, body, now);
             }
             // ADR-0029 §4: tecla malformada, ação desconhecida ou
             // binding duplicado descartam só aquela linha de
@@ -7752,9 +7816,8 @@ impl App {
                     now,
                 );
             }
-            // ADR-0031 §4/§5: tema de sessão que sumiu, tema declarado
-            // desconhecido, e a cor fora do tema que "venceu" o tema
-            // efetivo depois da recarga.
+            // ADR-0031 §4/§5: tema de sessão que sumiu e tema declarado
+            // desconhecido.
             if let Some(name) = &vanished_theme {
                 state.warnings.push(
                     Severity::Info,
@@ -7768,14 +7831,6 @@ impl App {
                     Severity::Warning,
                     msg::notice::unknown_theme::title(&self.catalog),
                     msg::notice::unknown_theme::body(&self.catalog, name),
-                    now,
-                );
-            }
-            if !overridden.is_empty() {
-                state.warnings.push(
-                    Severity::Info,
-                    msg::notice::color_overridden::title(&self.catalog),
-                    overridden.join(", "),
                     now,
                 );
             }
@@ -7983,7 +8038,15 @@ impl App {
             EXAMPLE_CONFIG_TOML,
             &plan.edits,
         ) {
-            Ok(saved) => settings.save_succeeded(&saved),
+            Ok(saved) => {
+                // ADR-0067: os temas embutidos ao lado do arquivo que
+                // acabou de nascer (ou de um antigo que não os tinha). Falhar
+                // aqui não desfaz o Salvar: os temas continuam embutidos.
+                if let Some(dir) = path.parent() {
+                    let _ = write_missing_theme_files(dir);
+                }
+                settings.save_succeeded(&saved);
+            }
             // O arquivo mudou por fora desde o que a tela viu: nada foi
             // gravado, e a faixa de conflito sobe (RF-16.23).
             Err(error) if error.is_conflict() => {
@@ -9038,7 +9101,7 @@ impl App {
             }
             ActionOutcome::OpenSettings => self.open_settings(event_loop, window_id),
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
-            ActionOutcome::CycleTheme => self.cycle_theme(Instant::now()),
+            ActionOutcome::CycleTheme => self.cycle_theme(),
             // ADR-0055 §3: `session.save_named` abre em edição (campo em
             // foco), `session.open_list` em navegação.
             ActionOutcome::OpenSessionPicker { edit_name } => {

@@ -144,7 +144,7 @@ fn missing_file_with_a_template_is_created_from_it() {
     let saved = fs::read_to_string(&path).unwrap();
     let (config, _) = porecatu_config::parse(&saved).unwrap();
     assert!(config.terminal.selection.copy_on_select);
-    assert!(saved.contains("# Selecionar já copia para o clipboard."));
+    assert!(saved.contains("# Selecionar já copia para a área de transferência."));
     // Saved once: it is a plain document now.
     document.save(&path, &[size(15.0)]).unwrap();
 }

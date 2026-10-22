@@ -10,7 +10,9 @@ use crate::color::Color;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct ContextMenu {
+    #[serde(skip_deserializing)]
     pub background: Color,
+    #[serde(skip_deserializing)]
     pub border: Color,
     pub corner_radius: i32,
     /// Largura mínima.
@@ -19,11 +21,16 @@ pub struct ContextMenu {
     pub item_height: i32,
     pub item_padding_x: i32,
     pub item_corner_radius: i32,
+    #[serde(skip_deserializing)]
     pub item_hover_background: Color,
+    #[serde(skip_deserializing)]
     pub separator: Color,
+    #[serde(skip_deserializing)]
     pub foreground: Color,
     /// Item indisponível fica esmaecido, nunca ausente. RF-10.20.
+    #[serde(skip_deserializing)]
     pub disabled_foreground: Color,
+    #[serde(skip_deserializing)]
     pub destructive_foreground: Color,
     pub font_size: f64,
 }

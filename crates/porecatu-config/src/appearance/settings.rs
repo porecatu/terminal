@@ -4,9 +4,8 @@
 //! configurações e de dois controles dela, mais as seis cores do corpo da
 //! janela (painel, linha de opção, chip de atalho, separador do rodapé), que
 //! têm por default os tokens que o canvas já dava ao painel (ADR-0060 §2 e
-//! §3) e, desde a correção do tema, podem ser sobrescritas por `[[themes]]`
-//! (ADR-0031 §1) -- sem isso um tema claro deixava o painel escuro ao lado
-//! de uma guia clara. Classe de recarga A para as de dentro da tela,
+//! §3) e vêm do tema (`[settings]` de um `thm_*.toml`, ADR-0067) -- sem
+//! isso um tema claro deixava o painel escuro ao lado de uma guia clara. Classe de recarga A para as de dentro da tela,
 //! aplicadas no próximo quadro da janela aberta; as quatro de tamanho da
 //! janela valem na próxima abertura da tela (classe C).
 
@@ -34,13 +33,17 @@ pub struct Settings {
     /// Lado de cada quadrado da amostra de um tema.
     pub theme_swatch_size: i32,
     /// Fundo do painel de opções: o token "Drawer" (espec. §1.2).
+    #[serde(skip_deserializing)]
     pub panel_background: Color,
     /// Fundo da linha de opção: a linha de perfil do drawer. A borda é
     /// `dialog.button_border`, já tematizada.
+    #[serde(skip_deserializing)]
     pub row_background: Color,
     /// Fundo do chip de atalho (espec. §2.12). A borda é `group_editor.divider`.
+    #[serde(skip_deserializing)]
     pub chip_background: Color,
     /// Linha entre o painel e o rodapé.
+    #[serde(skip_deserializing)]
     pub footer_separator: Color,
 }
 

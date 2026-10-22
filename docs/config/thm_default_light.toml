@@ -1,0 +1,142 @@
+# Tema "default_light" -- o tema claro padrão do Porecatu.
+#
+# Um tema é um arquivo thm_<nome>.toml na mesma pasta do porecatu.toml.
+# Para criar o seu, copie este arquivo com outro nome (por exemplo,
+# thm_meu.toml) e troque as cores. Chave que o seu tema não tiver usa a
+# cor do tema "default". Veja as explicações em thm_default.toml.
+
+[terminal]
+foreground = "#4c4f69"
+background = "#eff1f5"
+cursor = "#dc8a78"
+cursor_text = "#eff1f5"
+selection_background = "#acb0be"
+selection_foreground = "#4c4f69"
+prompt_secondary = "#8c8fa1"
+
+[terminal.normal]
+black = "#5c5f77"
+red = "#d20f39"
+green = "#40a02b"
+yellow = "#df8e1d"
+blue = "#1e66f5"
+magenta = "#ea76cb"
+cyan = "#179299"
+white = "#acb0be"
+
+[terminal.bright]
+black = "#6c6f85"
+red = "#d20f39"
+green = "#40a02b"
+yellow = "#df8e1d"
+blue = "#1e66f5"
+magenta = "#ea76cb"
+cyan = "#179299"
+white = "#bcc0cc"
+
+[window]
+background = "#e6e9ef"
+border = "#ccd0da"
+
+[tabs]
+bar_background = "#e6e9ef"
+bar_border = "#dce0e8"
+active_background = "#ccd0da"
+active_foreground = "#4c4f69"
+inactive_background = "#eff1f5"
+inactive_foreground = "#8c8fa1"
+close_button_foreground = "#5c5f77"
+close_button_hover_background = "#bcc0cc"
+close_button_hover_foreground = "#4c4f69"
+exited_foreground = "#9ca0b0"
+active_border = "#bcc0cc"
+inactive_border = "#dce0e8"
+selected_border = "#179299"
+activity_indicator = "#40a02b"
+bell_indicator = "#d20f39"
+rename_background = "#eff1f5"
+rename_border = "#179299"
+rename_foreground = "#4c4f69"
+overflow_indicator_background = "#dce0e8"
+
+[window_controls]
+hover_background = "#0000001a"
+pressed_background = "#00000029"
+close_hover_background = "#d20f39d9"
+close_pressed_background = "#a50c2de6"
+close_hover_foreground = "#ffffff"
+
+[groups]
+count_background = "#dce0e8"
+count_foreground = "#6c6f85"
+glass_border = "#ffffff"
+border = "#ccd0da"
+ungrouped_color = "#8c8fa1"
+palette = [
+  { name = "vermelho", color = "#ef8a8a" },
+  { name = "amarelo", color = "#e0b060" },
+  { name = "ciano", color = "#5ed3bc" },
+  { name = "azul", color = "#6fa8f5" },
+  { name = "roxo", color = "#a68cf0" },
+  { name = "verde", color = "#86c56a" },
+]
+
+[notices]
+background = "#dce0e8"
+border = "#bcc0cc"
+foreground = "#4c4f69"
+body_foreground = "#5c5f77"
+error = "#d20f39"
+warning = "#df8e1d"
+info = "#179299"
+
+[dialog]
+overlay = "#4c4f6966"
+background = "#dce0e8"
+border = "#bcc0cc"
+title_foreground = "#4c4f69"
+foreground = "#5c5f77"
+button_border = "#bcc0cc"
+destructive_foreground = "#d20f39"
+destructive_hover_background = "#f2dee1"
+
+[context_menu]
+background = "#dce0e8"
+border = "#bcc0cc"
+item_hover_background = "#ccd0da"
+separator = "#ccd0da"
+foreground = "#5c5f77"
+disabled_foreground = "#8c8fa1"
+destructive_foreground = "#d20f39"
+
+[tooltip]
+background = "#dce0e8"
+border = "#bcc0cc"
+foreground = "#5c5f77"
+
+[group_editor]
+background = "#dce0e8"
+border = "#bcc0cc"
+section_foreground = "#8c8fa1"
+input_background = "#eff1f5"
+input_border = "#bcc0cc"
+input_border_focus = "#179299"
+input_foreground = "#4c4f69"
+swatch_ring_selected = "#4c4f69"
+item_foreground = "#5c5f77"
+item_hover_background = "#ccd0da"
+divider = "#ccd0da"
+destructive_foreground = "#d20f39"
+destructive_hover_background = "#f2dee1"
+
+[status_bar]
+foreground = "#4c4f69"
+shell = "#179299"
+stale_cwd = "#5c5f77"
+ahead_behind = "#179299"
+
+[settings]
+panel_background = "#eff1f5"
+row_background = "#dce0e8"
+chip_background = "#eff1f5"
+footer_separator = "#ccd0da"

@@ -67,6 +67,8 @@ assets = [
     ["assets/fonts/LICENSE-OFL-iosevka.txt", "usr/share/doc/porecatu/LICENSE-OFL-iosevka.txt", "644"],
     ["assets/fonts/LICENSE-ISC-lucide.txt", "usr/share/doc/porecatu/LICENSE-ISC-lucide.txt", "644"],
     ["docs/config/porecatu.example.toml", "usr/share/doc/porecatu/porecatu.example.toml", "644"],
+    ["docs/config/thm_default.toml", "usr/share/doc/porecatu/thm_default.toml", "644"],
+    ["docs/config/thm_default_light.toml", "usr/share/doc/porecatu/thm_default_light.toml", "644"],
     ["assets/icon/porecatu.png", "usr/share/icons/hicolor/512x512/apps/porecatu.png", "644"],
     ["packaging/linux/porecatu.desktop", "usr/share/applications/porecatu.desktop", "644"],
     # ADR-0057 §1: arquivos de idioma onde o resolvedor os procura a partir de

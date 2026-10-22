@@ -254,7 +254,8 @@ jobs:
           cp assets/icon/porecatu.png "$appdir/usr/share/icons/hicolor/512x512/apps/porecatu.png"
           cp assets/icon/porecatu.png "$appdir/porecatu.png"
           cp LICENSE assets/fonts/LICENSE-OFL-iosevka.txt assets/fonts/LICENSE-ISC-lucide.txt \
-            docs/config/porecatu.example.toml "$appdir/usr/share/doc/porecatu/"
+            docs/config/porecatu.example.toml docs/config/thm_default.toml \
+            docs/config/thm_default_light.toml "$appdir/usr/share/doc/porecatu/"
           # ADR-0057 §1: `<exe>/../share/porecatu/locales`, o mesmo caminho do
           # .deb (o executável fica em usr/bin, como em /usr/bin).
           cp locales/*.toml "$appdir/usr/share/porecatu/locales/"
@@ -265,7 +266,8 @@ jobs:
           APPRUN
           chmod +x "$appdir/AppRun"
 
-          for f in LICENSE LICENSE-OFL-iosevka.txt LICENSE-ISC-lucide.txt porecatu.example.toml; do
+          for f in LICENSE LICENSE-OFL-iosevka.txt LICENSE-ISC-lucide.txt porecatu.example.toml \
+            thm_default.toml thm_default_light.toml; do
             test -f "$appdir/usr/share/doc/porecatu/$f" || { echo "faltando $f no AppDir"; exit 1; }
           done
 
@@ -342,10 +344,12 @@ jobs:
           mkdir -p "$staging"
           mv "$app" "$staging/"
           cp LICENSE assets/fonts/LICENSE-OFL-iosevka.txt assets/fonts/LICENSE-ISC-lucide.txt \
-            docs/config/porecatu.example.toml "$staging/"
+            docs/config/porecatu.example.toml docs/config/thm_default.toml \
+            docs/config/thm_default_light.toml "$staging/"
           ln -s /Applications "$staging/Applications"
 
-          for f in LICENSE LICENSE-OFL-iosevka.txt LICENSE-ISC-lucide.txt porecatu.example.toml; do
+          for f in LICENSE LICENSE-OFL-iosevka.txt LICENSE-ISC-lucide.txt porecatu.example.toml \
+            thm_default.toml thm_default_light.toml; do
             test -f "$staging/$f" || { echo "faltando $f no dmg"; exit 1; }
           done
 

@@ -980,8 +980,9 @@ fn push_shortcut_blocks(
     }
 }
 
-/// RF-16.24: uma linha por tema -- "sem tema", depois os de `[[themes]]` na
-/// ordem do ciclo -- com a amostra de dez quadrados. O escolhido é o do
+/// RF-16.24: uma linha por tema, na ordem do ciclo (`default`,
+/// `default_light`, depois os `thm_*.toml` do usuário, ADR-0067) -- com a
+/// amostra de dez quadrados. O escolhido é o do
 /// rascunho (o do arquivo, até o usuário mexer). O tema de sessão
 /// (`theme.cycle`) **não** é escolha nem pendência (RF-16.25): se difere do
 /// arquivo, uma linha abaixo da lista diz qual está em uso.
@@ -997,19 +998,15 @@ fn push_theme_rows(
     measurer: &mut TextMeasurer,
 ) {
     let config = draft.file_config();
+    // Nome vazio ou sem arquivo desenha com o `default`: é ele que aparece
+    // escolhido.
     let chosen = match draft.value(option) {
-        EditValue::String(name) => name,
-        _ => String::new(),
+        EditValue::String(name) if config.themes.iter().any(|t| t.name == name) => name,
+        _ => porecatu_config::DEFAULT_THEME.to_owned(),
     };
     let pending = draft.is_pending(option);
-    let mut names: Vec<(String, &str)> = vec![(msg::settings::theme::none(catalog), "")];
-    names.extend(
-        config
-            .themes
-            .iter()
-            .map(|theme| (theme.name.clone(), theme.name.as_str())),
-    );
-    for (label, name) in names {
+    for theme in &config.themes {
+        let (label, name) = (theme.name.clone(), theme.name.as_str());
         let themed = porecatu_config::apply_theme(config, name);
         let palette = ResolvedTermPalette::from_config(&themed);
         let mut colors = [palette.background; SWATCH_COUNT];
@@ -1047,11 +1044,7 @@ fn push_theme_rows(
     if let Some(session) = session_theme
         && session != config.terminal.theme
     {
-        let shown = if session.is_empty() {
-            msg::settings::theme::none(catalog)
-        } else {
-            session.to_owned()
-        };
+        let shown = session.to_owned();
         let width = (panel_width - m.panel_padding * 2.0).max(0.0);
         blocks.push(Block::Note {
             lines: wrap(
@@ -1129,7 +1122,7 @@ mod tests {
             let c = content(group, &Config::default());
             let expected = if group == Group::Appearance {
                 // o tema vira uma linha por tema (ver o teste próprio).
-                options_in(group).count() - 1 + 1 + Config::default().themes.len()
+                options_in(group).count() - 1 + Config::default().themes.len()
             } else {
                 options_in(group).count()
             };
@@ -1271,9 +1264,10 @@ mod tests {
             .into_iter()
             .filter(|row| matches!(row.control, ControlView::Themes { .. }))
             .collect();
-        assert_eq!(themes.len(), 1 + config.themes.len());
-        assert_eq!(themes[0].name, "Sem tema");
-        // nenhum tema escolhido: "sem tema" é o escolhido.
+        assert_eq!(themes.len(), config.themes.len());
+        assert_eq!(themes[0].name, "default");
+        assert_eq!(themes[1].name, "default_light");
+        // o padrão do arquivo é o `default`.
         let ControlView::Themes { selected, .. } = themes[0].control else {
             panic!()
         };
@@ -1785,34 +1779,14 @@ mod tests {
         };
         assert!(theme_notes(None).is_empty());
         // Igual ao do arquivo: nada a dizer.
-        assert!(theme_notes(Some("")).is_empty());
-        let notes = theme_notes(Some("nord"));
+        assert!(theme_notes(Some("default")).is_empty());
+        let notes = theme_notes(Some("default_light"));
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].1, NoteTone::Muted);
-        assert_eq!(notes[0].0.join(" "), "Esta sessão está usando o tema nord.");
-        // "Sem tema" na sessão, com um tema no arquivo, também é dito.
-        let mut named = Config::default();
-        named.terminal.theme = named.themes[0].name.clone();
-        let c = build(
-            key(Group::Appearance),
-            &Draft::new(&named),
-            &ViewExtras {
-                session_theme: Some(""),
-                ..ViewExtras::default()
-            },
-            &test_support::pt_br(),
-            &metrics(),
-            &mut TextMeasurer::new(),
+        assert_eq!(
+            notes[0].0.join(" "),
+            "Esta sessão está usando o tema default_light."
         );
-        let text: String = c
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                Block::Note { lines, .. } => Some(lines.join(" ")),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(text, "Esta sessão está usando o tema Sem tema.");
     }
 
     #[test]

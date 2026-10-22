@@ -1,6 +1,6 @@
 # ADR-0031 — Temas nomeados: escopo, merge e ciclo
 
-**Status:** Aceito
+**Status:** Superseded by [ADR-0067](0067-temas-em-arquivos-proprios.md) (parcial — §1 onde o tema mora, §2 precedência, §3 ordem do ciclo e o passo "sem tema", §5 nome duplicado; o escopo "tema é só cor" e o §4, ciclar não escreve no arquivo, continuam)
 **Data:** 2026-09-02
 **Relacionados:** ADR-0003, ADR-0009, ADR-0028, ADR-0030, PRD-004, PRD-005, [catálogo de ações](../reference/acoes.md)
 

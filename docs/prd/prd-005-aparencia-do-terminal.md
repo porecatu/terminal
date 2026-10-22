@@ -68,11 +68,17 @@ Todo usuário. Defaults com boa legibilidade e contraste adequado, sem exigir ne
 
 **RF-5.18** — O usuário define **temas nomeados** no arquivo de config, cada um com paleta completa, e seleciona o tema ativo por nome.
 
+> **Emendado pelo [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md) (2026-10-22).** Cada tema é um arquivo próprio, `thm_<nome>.toml`, ao lado do `porecatu.toml`, e o nome do tema é o do arquivo. Vêm dois, `default` e `default_light`, embutidos e gravados ao lado da config quando ela é criada. A seleção continua por nome, em `[terminal] theme`, com default `"default"`.
+
 **RF-5.19** — Chaves de cor declaradas fora do tema têm precedência sobre as do tema selecionado. *(Permite adotar um tema e ajustar uma cor específica sem copiar a paleta inteira.)*
+
+> **Revogado pelo [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md) (2026-10-22).** Cor não mora mais no `porecatu.toml`: lá ela é chave ignorada, com um aviso único. Chave ausente num tema cai no tema `default`, então um tema de poucas chaves continua sendo o jeito de ajustar uma cor sem copiar a paleta.
 
 **RF-5.20** — Trocar o tema no arquivo aplica a mudança a quente em todas as abas abertas.
 
 **RF-5.21** — O usuário troca de tema por atalho, ciclando entre os temas definidos, sem editar o arquivo. Atalho padrão `Ctrl+Shift+Y` — movido de `Ctrl+Shift+P`, que passou a abrir a paleta de comandos ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md)).
+
+> **Emendado pelo [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md) (2026-10-22).** A ordem do ciclo é `default`, `default_light` e depois os temas do usuário em ordem alfabética; o passo "sem tema" saiu, porque sem tema é o `default`.
 
 ### Cursor
 

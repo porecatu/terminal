@@ -58,12 +58,13 @@ Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuári
 | Pílula de grupo | `#1f242c` | **fora de uso** — a pílula é pintada com a cor cheia do grupo (§2.4) |
 | Contador do grupo | `#12151a` | também o botão de busca, o fundo do indicador de overflow (§2.18) e o traço do "+", do nome e do caret que caem sobre a cápsula de cor cheia (§2.4, §2.6) |
 | Popover | `#1a1e25` | menu de perfis, editor de grupo, paleta de comandos |
-| Drawer | `#171b21` | painel de configurações (`[appearance.settings] panel_background`, tematizável por `[themes.settings]`, como a linha `#1c2028`, o chip `#1e232b` e o separador do rodapé `#23272f`) |
+| Drawer | `#171b21` | painel de configurações (`[appearance.settings] panel_background`, tematizável por `[settings]` de um `thm_*.toml`, como a linha `#1c2028`, o chip `#1e232b` e o separador do rodapé `#23272f`) |
 | Campo de rename | `#0e1116` | |
 | Cartão de perfil | `#161a20` (hover `#1b2028`) | tela de nova aba |
 | Linha de perfil | `#1c2028` | configurações |
 | Hover de menu | `#242a33` | |
-| Hover de aba/botão | `#262b34` · `#252a33` · `#39404b` · `#1e232b` · `#262c35` | por componente, ver anatomia; `#39404b` é também o botão de janela pressionado (§2.2.1) |
+| Hover de aba/botão | `#262b34` · `#252a33` · `#39404b` · `#1e232b` · `#262c35` | por componente, ver anatomia |
+| Botão de janela | `#ffffff` a `.10` (hover) · `#ffffff` a `.16` (pressionado) | minimizar e maximizar/restaurar (§2.2.1). Translúcido: o que está atrás da barra continua aparecendo. No tema claro, `#000000` com os mesmos alfas ([ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)) |
 | Hover destrutivo | `#2e2224` | "Fechar grupo" |
 | Chips de tecla | `#1d222a` · `#1e232b` · `#232830` | por componente |
 | Vidro (rim) | `#ffffff` a `.16` | borda translúcida de 1px da cápsula e da pílula do grupo (§2.3, §2.4) |
@@ -107,8 +108,8 @@ Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuári
 | Sucesso | `#86c56a` | saída OK do terminal |
 | Aviso | `#e0b060` | saída WARN |
 | Erro | `#ef8a8a` | saída ERROR; também a primeira cor de grupo |
-| Destrutivo forte | `#c4413f` | hover do botão de fechar a janela, com o ícone em `#ffffff` (§2.2.1) |
-| Destrutivo pressionado | `#a33533` | botão de fechar a janela pressionado, ícone em `#ffffff` (§2.2.1, [ADR-0066](../adr/0066-estado-pressionado-dos-botoes-de-janela.md)) |
+| Destrutivo forte | `#c4413f` a `.85` | hover do botão de fechar a janela, com o ícone em `#ffffff` (§2.2.1, [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)) |
+| Destrutivo pressionado | `#a33533` a `.90` | botão de fechar a janela pressionado, ícone em `#ffffff` (§2.2.1, [ADR-0066](../adr/0066-estado-pressionado-dos-botoes-de-janela.md), [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)) |
 | Destrutivo brando | `#e08585` | item "Fechar grupo" |
 | Toggle ligado | `#3f8f80` (trilho), `#f0f3f6` (botão) | desligado: `#2a3038` |
 | Seleção de texto | `#2e6b62` (fundo), `#eef2f4` (texto) | RF-5.14. Nasceu do `::selection` do canvas e é o valor que o binário desenha — logo, o valor deliberado (ADR-0028) |
@@ -190,7 +191,7 @@ Sombras. O binário desenha sombra **em camadas** (§1.2): três `RoundedQuad` p
 
 Os valores CSS do mockup — janela `0 32px 80px rgba(0,0,0,.6)`, popover `0 18px 44px rgba(0,0,0,.55)`, modal `0 28px 70px rgba(0,0,0,.6)` — descrevem manchas grandes, que aliaseariam nessa técnica; a sombra em camadas é a aproximação deliberada.
 
-Overlays: diálogo de confirmação `rgba(6,7,9,.45)`; paleta de comandos `[v2]` `rgba(6,7,9,.55)`.
+Overlays: diálogo de confirmação `rgba(6,7,9,.45)` (`#060709` a `.45`, a chave `[dialog] overlay` do tema); paleta de comandos `[v2]` `rgba(6,7,9,.55)`.
 
 ### 1.8 Tingimentos
 
@@ -268,7 +269,7 @@ Altura 36, fundo `#1b1f26`, borda inferior `#23272f`, `padding-left: 12px`.
 
 **Direita**: três botões de 44px de largura, altura cheia, `#8b929e`. Minimizar 11px, maximizar 10px, fechar 11px. Hover `#252a33`; o de fechar vira `#c4413f` com texto `#ffffff`.
 
-**Ainda `[v2]` só nesta faixa própria** (logo, nome do app, travessão, título da aba ativa) — é identidade de app, não controle de janela. O [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) tirou os três botões e o resize dela e os deu à barra de abas existente, sem empilhar uma segunda barra: ver §2.2.1, que já é `[v1]` fora do macOS. As cores de hover acima (`#252a33`, `#c4413f`, `#ffffff`) são as que §2.2.1 reaproveita.
+**Ainda `[v2]` só nesta faixa própria** (logo, nome do app, travessão, título da aba ativa) — é identidade de app, não controle de janela. O [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) tirou os três botões e o resize dela e os deu à barra de abas existente, sem empilhar uma segunda barra: ver §2.2.1, que já é `[v1]` fora do macOS. As cores de hover acima (`#252a33`, `#c4413f`, `#ffffff`) foram as que §2.2.1 reaproveitou, até o [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md) tornar os fundos translúcidos.
 
 ### 2.2 Barra de abas `[v1]`
 
@@ -298,7 +299,7 @@ Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
 **Drag region** — a área vazia da barra (fora de aba, pílula, "+", botão de sessões, botão de configurações e botões de janela) arrasta a janela. Duplo clique nela maximiza/restaura.
 
-**Botões de janela** — três, **46px** de largura cada, altura cheia da barra (52px), colados na borda direita: minimizar, maximizar/restaurar, fechar. Ícones Lucide 14px (`ICON_EM_SIZE * 0.7`): `minus`, `square`, `copy` (sem ícone dedicado de "restore" no Lucide; dois quadrados sobrepostos, aproximação comum de outras suítes) para minimizar/maximizar/restaurar, `x` para fechar — mesmo ícone da aba. Cor de repouso `#8b929e`, hover `#252a33`; fechar em hover vira `#c4413f` com ícone `#ffffff` — os três tons são os que §2.1 já descrevia para a faixa `[v2]`, sem cor nova. **Pressionado** ([ADR-0066](../adr/0066-estado-pressionado-dos-botoes-de-janela.md)): fundo `#39404b` (o hover do ✕ da aba), fechar `#a33533` com ícone `#ffffff`, só enquanto o cursor está sobre o botão armado pelo press; arrastado para fora, volta ao repouso.
+**Botões de janela** — três, **46px** de largura cada, altura cheia da barra (52px), colados na borda direita: minimizar, maximizar/restaurar, fechar. Ícones Lucide 14px (`ICON_EM_SIZE * 0.7`): `minus`, `square`, `copy` (sem ícone dedicado de "restore" no Lucide; dois quadrados sobrepostos, aproximação comum de outras suítes) para minimizar/maximizar/restaurar, `x` para fechar — mesmo ícone da aba. Cor de repouso `#8b929e`, hover `#ffffff` a `.10`; fechar em hover vira `#c4413f` a `.85` com ícone `#ffffff`. **Pressionado** ([ADR-0066](../adr/0066-estado-pressionado-dos-botoes-de-janela.md)): fundo `#ffffff` a `.16` (o alfa do rim de vidro), fechar `#a33533` a `.90` com ícone `#ffffff`, só enquanto o cursor está sobre o botão armado pelo press; arrastado para fora, volta ao repouso. Os quatro fundos são **translúcidos** desde o [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md): com imagem de fundo na janela ou janela transparente, o que está atrás da barra continua aparecendo sob o botão. No tema claro, o branco vira `#000000` com os mesmos alfas e o vermelho é o do tema.
 
 **Resize por borda** — 6px em toda borda da janela (não só a barra), desligado com a janela maximizada. Sem token de design.
 
@@ -715,7 +716,7 @@ Valor **recusado** (fora da faixa, número malformado, nome de variável vazio o
 | Escolha com mais valores (idioma) | botão com a anatomia do campo e o caret `chevron-down`; abre a lista no menu de contexto (§2.16) sob ele |
 | Lista editável (`shell.args`, diretórios autorizados) | um campo por item, o `X` do botão de fechar da aba à direita e, abaixo, o item "Adicionar" com o ícone `plus`, `gap: 6`; `Alt+Up`/`Alt+Down` reordenam o item em edição. Os diretórios autorizados levam acima o aviso do RF-16.27 em 11px `#e0b060` |
 | Lista de nome e valor (`shell.env`) | a lista editável com dois campos por item: o nome em `text_field_width / 2` e o valor no resto |
-| Lista de temas | uma linha por tema (sem tema, os embutidos e os de `[[themes]]`, na ordem do ciclo) com a **amostra** de dez quadrados `theme_swatch_size`, raio 3, `gap: 2` — fundo, texto e as oito ANSI normais; o escolhido leva a borda `1px #5ed3bc`; o tema de `theme.cycle`, se difere do arquivo, ganha uma linha 11px `#828a96` abaixo da lista e **nunca** vira pendência |
+| Lista de temas | uma linha por tema (`default`, `default_light` e os `thm_*.toml` do usuário, na ordem do ciclo) com a **amostra** de dez quadrados `theme_swatch_size`, raio 3, `gap: 2` — fundo, texto e as oito ANSI normais; o escolhido leva a borda `1px #5ed3bc`; o tema de `theme.cycle`, se difere do arquivo, ganha uma linha 11px `#828a96` abaixo da lista e **nunca** vira pendência |
 | Atalho | o **chip** mono 10.5px sobre `#1e232b`, borda `1px #2a2f38`, raio 4, `padding: 3px 7px`, texto `Chord::label` em `#d7dce3`, lado a lado com `gap: 6`; "Nenhum atalho" em `#5c646f`. Em **captura**: borda `#5ed3bc` e a frase "Pressione a combinação…" em `#5c646f`. **Conflito**: abaixo do nome, 11px `#e0b060` com a ação em conflito, e os botões Substituir/Cancelar no lugar dos chips |
 | Filtro (Atalhos) | o campo de texto em largura cheia no topo do grupo, com a frase esmaecida `#5c646f` enquanto vazio; filtra a cada tecla por nome ou por tecla |
 
@@ -1076,6 +1077,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 
 | O que o desenho pedia | O que vale, e por quê | Onde |
 |---|---|---|
+| O mockup desenha hover dos botões de janela em `#252a33` e o fechar em `#c4413f`, opacos, e o ADR-0066 somou o pressionado opaco (`#39404b`, `#a33533`) | **Os quatro fundos são translúcidos**: branco a `.10` no hover e `.16` no pressionado (o alfa do rim de vidro, §1.2), e o vermelho do fechar a `.85`/`.90`. No tema claro, preto com os mesmos alfas. Pedido do dono do produto: com imagem de fundo na janela ou janela transparente, o fundo opaco do botão tapava o que estava atrás da barra. Ícones continuam opacos | [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md), fora de fase |
 | O mockup desenha os botões de janela com repouso e hover, e o ADR-0027 só trouxe esses dois estados | **Terceiro estado, pressionado**: `#39404b` em minimizar e maximizar/restaurar, `#a33533` no fechar (ícone continua `#ffffff`), só com o cursor sobre o botão armado pelo press — arrastado para fora, volta ao repouso, a mesma condição em que o release dispara. Pedido do dono do produto: segurando o clique, nada dizia que o botão tinha registrado o press. `#39404b` reaproveita o hover do ✕ da aba; `#a33533` é a cor nova, o vermelho do hover escurecido, e entrou com chave própria em `[appearance.window_controls]` e nos três temas claros (recusado derivar do hover por fator, que seria um número sem chave). Vale para a janela de terminal e a de configurações, que pintam os botões pela mesma função | [ADR-0066](../adr/0066-estado-pressionado-dos-botoes-de-janela.md), fora de fase |
 | O canvas desenha painéis divididos com `gap: 1px` sobre `#23272f` como divisor, `border-top: 2px` na cor do grupo marcando o painel focado, e um **cabeçalho por painel** com ponto de status, título mono truncado e botões de dividir e fechar | **As três saíram, e o que entrou foi a ausência delas.** O divisor é o **vão de 6px** que já separa o quadro da janela (§2.7.1) — pedido literal do dono do produto, *"somente um espaço entre os dois terminais, como são as próprias margens entre a janela e o terminal"* —, porque entre dois quadros que já têm sombra e fundo próprio uma linha é a terceira separação no mesmo lugar, o mesmo argumento que tirou a borda do topo da barra de status. O foco é **o cursor vazado** no painel sem foco, escolhido entre três opções levadas ao dono do produto; as recusadas foram a borda na cor do grupo (reintroduziria no quadro do terminal a distinção de cor que a trilha já faz, e o pedido era que um painel fosse indistinguível de um terminal inteiro) e esmaecer os painéis sem foco (o caso de uso do recurso é **ler os dois ao mesmo tempo**). O **cabeçalho** foi recusado: ~26px por painel saindo da grade, em todo painel, para repetir o que a barra de status já diz do focado. **Zero valor novo, zero cor nova, zero primitiva nova** — o quadro por painel é o da §2.7 repetido, e o cursor vazado é um `RoundedQuad` de raio 0 com borda de 1px, que corta reto desde a correção de `sdf_box` no `quad.wgsl`. Mudança de seções 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), passando pelo ADR que ele exige — e a segunda que **remove** um `[v2]` da tabela de fases, depois da barra de status | [ADR-0053](../adr/0053-paineis-divididos.md), fora de fase |
 | A barra de status está desenhada no canvas desde o começo (§2.8), com seis segmentos, e era `[v2]` — a tabela de tokens já a nomeava em quatro lugares, sem consumidor | **Entrou no produto, fora da ordem de fases**, por decisão do dono do produto. Cinco segmentos, não seis: a contagem de painéis sai enquanto o [PRD-006](../prd/prd-006-paineis-divididos.md) for `[v2]`, porque "1 painel" para sempre é ruído com aparência de informação. **Encolhe a grade em vez de sobrepor** — o inverso do [ADR-0041](../adr/0041-busca-no-scrollback.md), e pela razão que aquele ADR escreveu: o rodapé é onde o prompt ativo está, e uma faixa permanente sobreposta o taparia para sempre. A marca do RF-9.4 (diretório que não veio de OSC 7) é o **alfa `.45`** do [ADR-0037](../adr/0037-aba-nao-iniciada.md), recusadas a cor de aviso `#e0b060` (colide com saída WARN do terminal, e a barra encosta nele) e um ícone de alerta (pediria codepoint novo na face Lucide recortada). **Zero valor novo e zero ícone novo.** Terceira mudança de seções 1/2 depois do [ADR-0032](../adr/0032-interface-do-v1-fechada.md), e a primeira que **remove** um `[v2]` da tabela de fases em vez de acrescentar anatomia | [ADR-0048](../adr/0048-barra-de-status.md), fora de fase |

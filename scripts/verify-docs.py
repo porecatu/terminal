@@ -42,6 +42,10 @@ for fluxo in (sys.stdout, sys.stderr):
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = "docs/design/especificacao-visual.md"
 CONFIG = "docs/config/porecatu.example.toml"
+# Desde o ADR-0067 a cor mora nos temas: o `default` é o que vem do design e
+# é rastreado; os outros temas (o claro) não.
+THEME_DEFAULT = "docs/config/thm_default.toml"
+THEMES_UNTRACKED = ["docs/config/thm_default_light.toml"]
 UI = "crates/porecatu-ui/src"
 # F4 etapa 2 moveu ~30 constantes de `porecatu-ui` para defaults de
 # `porecatu-config`; os arquivos de origem passaram a viver aqui também.
@@ -133,6 +137,27 @@ def folhas(d: dict, prefixo: str = ""):
             yield caminho, valor
 
 
+def cores_de(dados: dict) -> list[tuple[str, str]]:
+    """Folhas `#rrggbb`/`#rrggbbaa` de um TOML já carregado."""
+    return [
+        (c, v)
+        for c, v in folhas(dados)
+        if isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?", v)
+    ]
+
+
+def carregar_toml(caminho: str) -> dict | None:
+    if not os.path.exists(caminho):
+        erro(f"{caminho} não encontrado")
+        return None
+    try:
+        with open(caminho, "rb") as f:
+            return tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        erro(f"{caminho} não parseia: {e}")
+        return None
+
+
 def verificar_tokens(config: dict | None) -> None:
     secao("Tokens: origem na especificação visual")
     if config is None:
@@ -144,24 +169,32 @@ def verificar_tokens(config: dict | None) -> None:
 
     spec_hex = {h.lower() for h in re.findall(r"#[0-9a-fA-F]{6}", ler(SPEC))}
 
-    cores = [
-        (c, v)
-        for c, v in folhas(config)
-        if isinstance(v, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", v)
-    ]
-    # Temas alternativos (catppuccin, gruvbox) são paletas de terceiros:
-    # não vêm do design e não devem ser rastreadas contra ele.
-    tema = [c for c, _ in cores if c.startswith("themes")]
-    principal = [(c, v) for c, v in cores if not c.startswith("themes")]
-    orfas = [(c, v) for c, v in principal if v.lower() not in spec_hex]
+    # Cor no porecatu.toml é chave ignorada desde o ADR-0067: o exemplo não
+    # pode ter nenhuma.
+    no_exemplo = cores_de(config)
+    for caminho, valor in no_exemplo:
+        erro(f"cor no exemplo, fora de tema: {caminho} = {valor}")
+
+    tema = carregar_toml(THEME_DEFAULT)
+    if tema is None:
+        return
+    # A cor com alfa (`#rrggbbaa`) rastreia pelo RGB: o alfa é registrado
+    # na especificação junto do valor.
+    principal = cores_de(tema)
+    orfas = [(c, v) for c, v in principal if v[:7].lower() not in spec_hex]
+    nao_rastreadas = 0
+    for caminho in THEMES_UNTRACKED:
+        outro = carregar_toml(caminho)
+        if outro is not None:
+            nao_rastreadas += len(cores_de(outro))
 
     if orfas:
         for caminho, valor in orfas:
-            erro(f"cor sem origem em {SPEC}: {caminho} = {valor}")
-    else:
+            erro(f"cor sem origem em {SPEC}: {THEME_DEFAULT} {caminho} = {valor}")
+    elif not no_exemplo:
         ok(
-            f"{len(principal)} cores rastreiam à especificação "
-            f"({len(tema)} em temas alternativos, não rastreadas)"
+            f"{len(principal)} cores do tema default rastreiam à especificação "
+            f"({nao_rastreadas} no tema claro, não rastreadas)"
         )
 
 

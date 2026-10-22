@@ -60,7 +60,11 @@ pub(crate) fn save(
     // O texto gravado já passou pelo `parse` da carga dentro de `save`.
     let text = document.base().to_owned();
     porecatu_config::parse(&text)
-        .map(|(config, _)| Saved { text, config })
+        .map(|(mut config, _)| {
+            // Os temas da pasta (ADR-0067), como em `Disk::observe`.
+            crate::reload::load_disk_themes(&mut config, Some(path));
+            Saved { text, config }
+        })
         .map_err(|err| SaveError::Edit(EditError::Invalid(err)))
 }
 
@@ -367,7 +371,10 @@ mod tests {
             .apply(&[set("terminal.font.size", EditValue::Float(16.0))])
             .unwrap();
         assert_eq!(written, expected);
-        assert!(written.contains("RF-5.3"), "a documentação do exemplo veio");
+        assert!(
+            written.contains("# Fonte do terminal e das abas."),
+            "a documentação do exemplo veio"
+        );
         assert!(written.contains("size = 16.0"));
         assert_eq!(saved.text, written);
         fs::remove_file(&path).unwrap();

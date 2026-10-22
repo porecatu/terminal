@@ -30,7 +30,9 @@ pub struct Groups {
     pub label_hover_brightness: f64,
     /// Teto do nome do grupo (RF-2.12); sem piso.
     pub label_max_width: i32,
+    #[serde(skip_deserializing)]
     pub count_background: Color,
+    #[serde(skip_deserializing)]
     pub count_foreground: Color,
     pub count_corner_radius: i32,
 
@@ -43,10 +45,12 @@ pub struct Groups {
     pub tint_strength: f64,
     pub capsule_alpha: f64,
     pub label_alpha: f64,
+    #[serde(skip_deserializing)]
     pub glass_border: Color,
     pub glass_border_alpha: f64,
     pub glass_border_width: i32,
     pub shadow: bool,
+    #[serde(skip_deserializing)]
     pub border: Color,
 
     /// RF-4.17.
@@ -57,9 +61,11 @@ pub struct Groups {
     pub collapsed_indicator_size: i32,
 
     /// Seis cores, na ordem do design (RF-4.18, RF-2.4).
+    #[serde(skip_deserializing)]
     pub palette: Vec<GroupPaletteEntry>,
     /// Cor usada por abas fora de qualquer grupo (grupo implícito,
     /// ADR-0006).
+    #[serde(skip_deserializing)]
     pub ungrouped_color: Color,
 
     /// `[v2]` PRD-007.

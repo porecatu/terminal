@@ -17,15 +17,12 @@ pub enum ConfigErrorKind {
     /// O arquivo existe mas não pôde ser lido. `cause` é o texto do
     /// `io::Error`, do sistema operacional.
     Unreadable { path: PathBuf, cause: String },
-    /// Dois `[[themes]]` com o mesmo `name`.
-    DuplicateThemeName { name: String },
 }
 
 /// Erro de parse ou de validação semântica de uma config.
 ///
 /// `line`/`column` são `None` para erros que não vêm de uma posição no texto
-/// fonte -- por exemplo nome de tema duplicado, que é uma checagem entre
-/// duas tabelas `[[themes]]` já deserializadas, não uma posição única.
+/// fonte -- por exemplo o arquivo ilegível.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
     pub line: Option<usize>,
@@ -84,9 +81,6 @@ impl fmt::Display for ConfigErrorKind {
             Self::Unreadable { path, cause } => {
                 write!(f, "não foi possível ler \"{}\": {cause}", path.display())
             }
-            Self::DuplicateThemeName { name } => {
-                write!(f, "nome de tema duplicado: \"{name}\"")
-            }
         }
     }
 }
@@ -133,9 +127,10 @@ mod tests {
 
     #[test]
     fn display_without_position() {
-        let err = ConfigError::new(ConfigErrorKind::DuplicateThemeName {
-            name: "x".to_owned(),
+        let err = ConfigError::new(ConfigErrorKind::Unreadable {
+            path: PathBuf::from("x"),
+            cause: "c".to_owned(),
         });
-        assert_eq!(err.to_string(), "nome de tema duplicado: \"x\"");
+        assert_eq!(err.to_string(), "não foi possível ler \"x\": c");
     }
 }

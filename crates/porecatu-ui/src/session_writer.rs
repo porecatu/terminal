@@ -223,8 +223,9 @@ pub fn steps_to_zoom_px(
 /// checado contra os temas **hoje** declarados na config -- um tema que
 /// existia quando a sessão foi gravada e sumiu do arquivo desde então
 /// recebe o mesmo tratamento que o hot reload já dá a um tema que some
-/// (zera e avisa), nunca aplicado calado. Nome vazio é "sem tema", nunca
-/// "vanished" (é o estado inicial do ciclo, ADR-0031 §3).
+/// (zera e avisa), nunca aplicado calado. Nome vazio é o "sem tema" que o
+/// ciclo tinha antes do ADR-0067: vale como nenhum tema de sessão, e o
+/// arquivo decide.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestoredTheme {
     Applied(Option<String>),
@@ -233,11 +234,9 @@ pub enum RestoredTheme {
 
 pub fn restore_theme(saved: Option<&str>, declared: &[&str]) -> RestoredTheme {
     match saved {
-        Some(name) if !name.is_empty() && !declared.contains(&name) => {
-            RestoredTheme::Vanished(name.to_string())
-        }
+        None | Some("") => RestoredTheme::Applied(None),
+        Some(name) if !declared.contains(&name) => RestoredTheme::Vanished(name.to_string()),
         Some(name) => RestoredTheme::Applied(Some(name.to_string())),
-        None => RestoredTheme::Applied(None),
     }
 }
 
@@ -568,14 +567,13 @@ mod tests {
         );
     }
 
-    /// ADR-0031 §3: `""` é o estado "sem tema" do ciclo, distinto de
-    /// `None` ("nunca ciclou, usa o do arquivo") -- nunca cai no ramo de
-    /// "sumiu", porque não há nome nenhum para procurar na lista.
+    /// ADR-0067: o `""` ("sem tema") de uma sessão gravada antes vale como
+    /// nenhum tema de sessão -- o arquivo decide, e nada "sumiu".
     #[test]
-    fn restore_theme_keeps_the_explicit_no_theme_state_distinct_from_none() {
+    fn restore_theme_treats_the_old_no_theme_state_as_none() {
         assert_eq!(
             restore_theme(Some(""), &["dracula"]),
-            RestoredTheme::Applied(Some(String::new()))
+            RestoredTheme::Applied(None)
         );
     }
 

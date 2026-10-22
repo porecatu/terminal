@@ -81,32 +81,50 @@ impl Default for Tabs {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct TabsColors {
+    #[serde(skip_deserializing)]
     pub bar_background: Color,
     /// Não pintado -- ver comentário do arquivo de exemplo e a seção 4.4
     /// da espec.
+    #[serde(skip_deserializing)]
     pub bar_border: Color,
     pub background_alpha: f64,
+    #[serde(skip_deserializing)]
     pub active_background: Color,
+    #[serde(skip_deserializing)]
     pub active_foreground: Color,
+    #[serde(skip_deserializing)]
     pub inactive_background: Color,
+    #[serde(skip_deserializing)]
     pub inactive_foreground: Color,
     pub hover_brightness: f64,
+    #[serde(skip_deserializing)]
     pub close_button_foreground: Color,
+    #[serde(skip_deserializing)]
     pub close_button_hover_background: Color,
+    #[serde(skip_deserializing)]
     pub close_button_hover_foreground: Color,
     /// Rótulo da aba `Exited` (ADR-0017, espec. §2.5) -- o binário já
     /// desenhava este tom antes de esta chave existir.
+    #[serde(skip_deserializing)]
     pub exited_foreground: Color,
+    #[serde(skip_deserializing)]
     pub active_border: Color,
+    #[serde(skip_deserializing)]
     pub inactive_border: Color,
     pub active_border_width: i32,
     pub inactive_border_width: i32,
+    #[serde(skip_deserializing)]
     pub selected_border: Color,
     pub selected_border_width: i32,
+    #[serde(skip_deserializing)]
     pub activity_indicator: Color,
+    #[serde(skip_deserializing)]
     pub bell_indicator: Color,
+    #[serde(skip_deserializing)]
     pub rename_background: Color,
+    #[serde(skip_deserializing)]
     pub rename_border: Color,
+    #[serde(skip_deserializing)]
     pub rename_foreground: Color,
 }
 
@@ -164,6 +182,7 @@ impl Default for TabsRename {
 #[serde(default)]
 pub struct TabsOverflow {
     pub indicator_size: i32,
+    #[serde(skip_deserializing)]
     pub indicator_background: Color,
     pub edge_inset: i32,
     pub scroll_step: i32,

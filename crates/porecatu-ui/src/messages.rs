@@ -23,7 +23,7 @@
 use std::fmt::Display;
 use std::path::Path;
 
-use porecatu_config::{ConfigError, ConfigErrorKind};
+use porecatu_config::{ConfigError, ConfigErrorKind, ThemeFileProblem};
 use porecatu_core::ActionParseError;
 use porecatu_locale::{Catalog, MessageSpec, Schema};
 use porecatu_session::CURRENT_SCHEMA_VERSION;
@@ -32,6 +32,7 @@ use porecatu_term::TerminalSpawnError;
 
 use crate::SaveNamedFailure;
 use crate::keymap::{ChordParseError, KeymapIssue};
+use crate::warning::Severity;
 
 /// Texto de uma falha que veio do sistema operacional ou de uma biblioteca
 /// externa (`io::Error`, `opener`), como chegou. É o `{cause}` do ADR-0056:
@@ -41,8 +42,7 @@ pub(crate) fn os_cause(err: &dyn Display) -> String {
 }
 
 /// Corpo do aviso de config inválida. Posição só existe para erro de sintaxe
-/// do TOML (`ConfigError::at`); leitura e nome de tema duplicado não têm
-/// linha nem coluna.
+/// do TOML (`ConfigError::at`); a leitura não tem linha nem coluna.
 pub(crate) fn config_error(catalog: &Catalog, error: &ConfigError) -> String {
     match (&error.kind, error.line, error.column) {
         (ConfigErrorKind::Toml { detail }, Some(line), Some(column)) => {
@@ -54,10 +54,66 @@ pub(crate) fn config_error(catalog: &Catalog, error: &ConfigError) -> String {
         (ConfigErrorKind::Unreadable { path, cause }, _, _) => {
             msg::notice::config_invalid::unreadable(catalog, path.display(), cause)
         }
-        (ConfigErrorKind::DuplicateThemeName { name }, _, _) => {
-            msg::notice::config_invalid::duplicate_theme(catalog, name)
-        }
     }
+}
+
+/// Título e corpo do aviso de um arquivo de tema com problema (ADR-0067):
+/// cita o nome do arquivo, não o caminho inteiro, que o aviso cortaria.
+pub(crate) fn theme_file_problem(
+    catalog: &Catalog,
+    problem: &ThemeFileProblem,
+) -> (Severity, String, String) {
+    let file_name = |path: &Path| {
+        path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    };
+    match problem {
+        ThemeFileProblem::Unreadable { path, cause } => (
+            Severity::Warning,
+            msg::notice::theme_file_invalid::title(catalog),
+            msg::notice::theme_file_invalid::unreadable(catalog, file_name(path), cause),
+        ),
+        ThemeFileProblem::Invalid { path, error } => {
+            let body = match (&error.kind, error.line, error.column) {
+                (ConfigErrorKind::Toml { detail }, Some(line), Some(column)) => {
+                    msg::notice::theme_file_invalid::body_at(
+                        catalog,
+                        file_name(path),
+                        line,
+                        column,
+                        detail,
+                    )
+                }
+                _ => msg::notice::theme_file_invalid::body(
+                    catalog,
+                    file_name(path),
+                    config_error(catalog, error),
+                ),
+            };
+            (
+                Severity::Warning,
+                msg::notice::theme_file_invalid::title(catalog),
+                body,
+            )
+        }
+        ThemeFileProblem::UnknownKeys { path, keys } => (
+            Severity::Warning,
+            msg::notice::theme_file_unknown_key::title(catalog),
+            msg::notice::theme_file_unknown_key::body(catalog, file_name(path), keys.join(", ")),
+        ),
+    }
+}
+
+/// O aviso único das cores que um `porecatu.toml` antigo ainda declara
+/// (ADR-0067): um só, com a contagem, em vez de um por chave.
+pub(crate) fn colors_ignored(catalog: &Catalog, count: usize) -> (Severity, String, String) {
+    (
+        Severity::Info,
+        msg::notice::colors_ignored::title(catalog),
+        msg::notice::colors_ignored::body(catalog, count),
+    )
 }
 
 /// Corpo do aviso de Salvar que não gravou (RF-16.19): o texto que o
@@ -500,7 +556,6 @@ registry! {
             duplicate_name(name),
         },
         theme {
-            none(),
             session_using(name),
         },
         shortcut {
@@ -691,7 +746,6 @@ registry! {
             body_at(line, column, detail),
             body(detail),
             unreadable(path, cause),
-            duplicate_theme(name),
         },
         unknown_config_key {
             title(),
@@ -700,8 +754,19 @@ registry! {
             title(),
             body(name),
         },
-        color_overridden {
+        colors_ignored {
             title(),
+            body(count),
+        },
+        theme_file_invalid {
+            title(),
+            body_at(file, line, column, detail),
+            body(file, detail),
+            unreadable(file, cause),
+        },
+        theme_file_unknown_key {
+            title(),
+            body(file, keys),
         },
         theme_vanished {
             title(),
@@ -1028,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn config_unreadable_and_duplicate_have_no_position() {
+    fn config_unreadable_has_no_position() {
         let pt = test_support::pt_br();
         let unreadable = config_error_of(
             ConfigErrorKind::Unreadable {
@@ -1041,19 +1106,37 @@ mod tests {
             config_error(&pt, &unreadable),
             "não foi possível ler \"p.toml\": acesso negado"
         );
-        let duplicate = config_error_of(
-            ConfigErrorKind::DuplicateThemeName {
-                name: "x".to_owned(),
+    }
+
+    #[test]
+    fn theme_file_problems_cite_the_file_name() {
+        let pt = test_support::pt_br();
+        let (_, title, body) = theme_file_problem(
+            &pt,
+            &ThemeFileProblem::UnknownKeys {
+                path: PathBuf::from("/c/thm_meu.toml"),
+                keys: vec!["terminal.foo".to_owned(), "bar".to_owned()],
             },
-            None,
         );
-        assert_eq!(
-            config_error(&pt, &duplicate),
-            "nome de tema duplicado: \"x\""
+        assert_eq!(title, "Chave desconhecida no tema");
+        assert_eq!(body, "thm_meu.toml: terminal.foo, bar");
+        let (_, _, body) = theme_file_problem(
+            &pt,
+            &ThemeFileProblem::Invalid {
+                path: PathBuf::from("/c/thm_meu.toml"),
+                error: config_error_of(
+                    ConfigErrorKind::Toml {
+                        detail: "d".to_owned(),
+                    },
+                    Some((3, 4)),
+                ),
+            },
         );
+        assert_eq!(body, "thm_meu.toml, linha 3, coluna 4: d");
+        let (_, _, body) = colors_ignored(&pt, 7);
         assert_eq!(
-            config_error(&test_support::en_us(), &duplicate),
-            "duplicate theme name: \"x\""
+            body,
+            "7 chave(s) de cor ignorada(s): as cores agora ficam nos arquivos de tema thm_*.toml."
         );
     }
 
@@ -1072,12 +1155,6 @@ mod tests {
                 ConfigErrorKind::Unreadable {
                     path: PathBuf::from("p.toml"),
                     cause: "c".to_owned(),
-                },
-                None,
-            ),
-            config_error_of(
-                ConfigErrorKind::DuplicateThemeName {
-                    name: "n".to_owned(),
                 },
                 None,
             ),

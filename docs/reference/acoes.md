@@ -248,7 +248,7 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 | `font.increase` | Aumenta a fonte na sessão, sem tocar no arquivo | [PRD-005](../prd/prd-005-aparencia-do-terminal.md) RF-5.9 | F4 | |
 | `font.decrease` | Diminui a fonte na sessão | RF-5.9 | F4 | |
 | `font.reset` | Volta ao tamanho da config | RF-5.9 | F4 | |
-| `theme.cycle` | Cicla entre os temas nomeados definidos na config | RF-5.21 | F4 | |
+| `theme.cycle` | Cicla entre os temas (`default`, `default_light`, depois os `thm_*.toml` do usuário em ordem alfabética), sem gravar | RF-5.21, [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md) | F4 | |
 | `config.reload` | Relê o arquivo de config imediatamente | [ADR-0003](../adr/0003-formato-de-configuracao.md) | F4 | |
 | `settings.open` | Abre a janela de configurações, ou a traz para a frente se já aberta | [PRD-016](../prd/prd-016-tela-de-configuracoes.md) RF-16.1, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §6 | fora de fase | |
 | `search.open` | Abre a busca no scrollback | [PRD-011](../prd/prd-011-polimento.md) RF-11.1, [ADR-0041](../adr/0041-busca-no-scrollback.md) | F6 | |

@@ -160,7 +160,7 @@ background_image_mode_description = "Como a imagem ocupa o quadro do terminal."
 background_image_opacity_label = "Opacidade da imagem"
 background_image_opacity_description = "Opacidade da imagem, de 0.0 a 1.0; multiplica a opacidade do fundo."
 theme_label = "Tema"
-theme_description = "Conjunto de cores do terminal. Sem tema usa as cores do arquivo."
+theme_description = "Conjunto de cores do app, de um arquivo thm_<nome>.toml ao lado da config."
 animations_label = "Animações"
 animations_description = "Movimento ao colapsar grupos e reorganizar abas."
 window_opacity_label = "Opacidade da janela"
@@ -255,7 +255,6 @@ empty_name = "O nome não pode ficar vazio."
 duplicate_name = "O nome {name} já existe."
 
 [settings.theme]
-none = "Sem tema"
 session_using = "Esta sessão está usando o tema {name}."
 
 [settings.shortcut]
@@ -462,17 +461,27 @@ title = "Config inválida"
 body_at = "linha {line}, coluna {column}: {detail}"
 body = "{detail}"
 unreadable = "não foi possível ler \"{path}\": {cause}"
-duplicate_theme = "nome de tema duplicado: \"{name}\""
 
 [notice.unknown_config_key]
 title = "Chave desconhecida na config"
 
 [notice.unknown_theme]
 title = "Tema desconhecido"
-body = "\"{name}\" não está em [[themes]]; usando defaults."
+body = "\"{name}\" não tem arquivo de tema; usando o tema default."
 
-[notice.color_overridden]
-title = "Cor fora do tema vencendo"
+[notice.colors_ignored]
+title = "Cores ignoradas no porecatu.toml"
+body = "{count} chave(s) de cor ignorada(s): as cores agora ficam nos arquivos de tema thm_*.toml."
+
+[notice.theme_file_invalid]
+title = "Arquivo de tema inválido"
+body_at = "{file}, linha {line}, coluna {column}: {detail}"
+body = "{file}: {detail}"
+unreadable = "não foi possível ler \"{file}\": {cause}"
+
+[notice.theme_file_unknown_key]
+title = "Chave desconhecida no tema"
+body = "{file}: {keys}"
 
 [notice.theme_vanished]
 title = "Tema da sessão sumiu"

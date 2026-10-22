@@ -10,12 +10,16 @@ use crate::color::Color;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Notices {
+    #[serde(skip_deserializing)]
     pub background: Color,
+    #[serde(skip_deserializing)]
     pub border: Color,
     pub corner_radius: i32,
     /// Título.
+    #[serde(skip_deserializing)]
     pub foreground: Color,
     /// Corpo.
+    #[serde(skip_deserializing)]
     pub body_foreground: Color,
     pub font_size: f64,
     pub body_font_size: f64,
@@ -28,8 +32,11 @@ pub struct Notices {
     pub line_height: i32,
     pub close_button_size: i32,
     pub severity_bar_width: i32,
+    #[serde(skip_deserializing)]
     pub error: Color,
+    #[serde(skip_deserializing)]
     pub warning: Color,
+    #[serde(skip_deserializing)]
     pub info: Color,
     /// Quantos convivem na tela; o quarto substitui o mais antigo.
     pub max_visible: i32,

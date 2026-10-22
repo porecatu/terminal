@@ -13,12 +13,17 @@ use crate::color::Color;
 pub struct WindowControls {
     pub button_width: i32,
     pub gap: i32,
+    #[serde(skip_deserializing)]
     pub hover_background: Color,
+    #[serde(skip_deserializing)]
     pub close_hover_background: Color,
+    #[serde(skip_deserializing)]
     pub close_hover_foreground: Color,
     /// Fundo do botão pressionado (ADR-0066): só com o cursor sobre o
     /// botão armado pelo press.
+    #[serde(skip_deserializing)]
     pub pressed_background: Color,
+    #[serde(skip_deserializing)]
     pub close_pressed_background: Color,
     /// Espessura da zona de resize em cada borda da janela.
     pub resize_border: i32,
@@ -33,11 +38,11 @@ impl Default for WindowControls {
         Self {
             button_width: 46,
             gap: 6,
-            hover_background: Color::hex("#252a33"),
-            close_hover_background: Color::hex("#c4413f"),
+            hover_background: Color::hex("#ffffff1a"),
+            close_hover_background: Color::hex("#c4413fd9"),
             close_hover_foreground: Color::hex("#ffffff"),
-            pressed_background: Color::hex("#39404b"),
-            close_pressed_background: Color::hex("#a33533"),
+            pressed_background: Color::hex("#ffffff29"),
+            close_pressed_background: Color::hex("#a33533e6"),
             resize_border: 6,
             macos_traffic_light_inset: 78,
         }
@@ -55,11 +60,11 @@ mod tests {
             WindowControls {
                 button_width: 46,
                 gap: 6,
-                hover_background: Color::hex("#252a33"),
-                close_hover_background: Color::hex("#c4413f"),
+                hover_background: Color::hex("#ffffff1a"),
+                close_hover_background: Color::hex("#c4413fd9"),
                 close_hover_foreground: Color::hex("#ffffff"),
-                pressed_background: Color::hex("#39404b"),
-                close_pressed_background: Color::hex("#a33533"),
+                pressed_background: Color::hex("#ffffff29"),
+                close_pressed_background: Color::hex("#a33533e6"),
                 resize_border: 6,
                 macos_traffic_light_inset: 78,
             }
