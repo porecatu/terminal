@@ -30,7 +30,7 @@
 | [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
 | [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Superseded by [ADR-0026](0026-chrome-unificado-em-iosevka-fixed.md) (**parcial**: só a família do chrome; Fixed no terminal e o recorte continuam valendo) |
 | [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito |
-| [0027](0027-controles-de-janela-e-resize-proprios.md) | Controles de janela e resize próprios (Windows/Linux) | Aceito |
+| [0027](0027-controles-de-janela-e-resize-proprios.md) | Controles de janela e resize próprios (Windows/Linux) | Aceito · botões revistos por ADR-0066 (estado pressionado) |
 | [0028](0028-o-binario-como-referencia-visual.md) | O binário como referência visual | Aceito |
 | [0029](0029-enum-de-acao-e-gramatica-de-tecla.md) | Enum de ação e gramática de tecla | Aceito |
 | [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito |
@@ -67,6 +67,7 @@
 | [0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) | Imagem da janela sem furo até o desktop | Aceito |
 | [0064](0064-janela-de-configuracoes-modal.md) | Janela de configurações modal, possuída pela janela de terminal | Aceito · §4 revisto (no X11, tipo diálogo para flutuar em gerenciador tiling) |
 | [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito |
+| [0066](0066-estado-pressionado-dos-botoes-de-janela.md) | Estado pressionado dos botões de janela | Aceito |
 
 ## Convenção
 

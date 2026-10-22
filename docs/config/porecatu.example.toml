@@ -204,6 +204,11 @@ gap = 6                       # respiro entre a zona de configurações e esta
 hover_background = "#252a33"  # tom da seção 2.1, reaproveitado
 close_hover_background = "#c4413f"
 close_hover_foreground = "#ffffff"
+# Pressionado (ADR-0066): só com o cursor sobre o botão armado pelo press;
+# arrastado para fora, volta ao repouso. O ícone do fechar segue
+# close_hover_foreground.
+pressed_background = "#39404b"        # tom do hover do ✕ da aba, reaproveitado
+close_pressed_background = "#a33533"
 # Espessura da zona de resize em cada borda da janela. Desliga sozinha com
 # a janela maximizada.
 resize_border = 6
@@ -1293,6 +1298,8 @@ footer_separator = "#ccd0da"
 hover_background       = "#ccd0da"
 close_hover_background = "#d20f39"
 close_hover_foreground = "#ffffff"
+pressed_background       = "#bcc0cc"
+close_pressed_background = "#a50c2d"
 
 
 [[themes]]
@@ -1392,6 +1399,8 @@ footer_separator = "#d5c4a1"
 hover_background       = "#d5c4a1"
 close_hover_background = "#9d0006"
 close_hover_foreground = "#ffffff"
+pressed_background       = "#bdae93"
+close_pressed_background = "#7c0005"
 
 
 [[themes]]
@@ -1491,6 +1500,8 @@ footer_separator = "#e0d9c4"
 hover_background       = "#e0d9c4"
 close_hover_background = "#dc322f"
 close_hover_foreground = "#ffffff"
+pressed_background       = "#d3cbb7"
+close_pressed_background = "#b02826"
 
 
 ##############################################################################

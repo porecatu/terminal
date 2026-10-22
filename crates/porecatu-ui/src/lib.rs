@@ -10848,6 +10848,7 @@ impl App {
             is_mac,
             state.occupies_the_whole_screen(),
             hover_window_button,
+            state.pressed_window_button,
             bar_hover,
             hover_sessions_button,
             window_image.is_some(),

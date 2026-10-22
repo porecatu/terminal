@@ -263,6 +263,8 @@ pub struct ResolvedPalette {
     pub window_button_hover_bg: Color,
     pub window_close_hover_bg: Color,
     pub window_close_hover_icon: Color,
+    pub window_button_pressed_bg: Color,
+    pub window_close_pressed_bg: Color,
 
     // [appearance.notices] -- fundo/borda do próprio widget de aviso.
     pub popover_background: Color,
@@ -397,6 +399,8 @@ impl ResolvedPalette {
             window_button_hover_bg: cvt(window_controls.hover_background),
             window_close_hover_bg: cvt(window_controls.close_hover_background),
             window_close_hover_icon: cvt(window_controls.close_hover_foreground),
+            window_button_pressed_bg: cvt(window_controls.pressed_background),
+            window_close_pressed_bg: cvt(window_controls.close_pressed_background),
 
             popover_background: cvt(notices.background),
             popover_border: cvt(notices.border),
@@ -546,6 +550,8 @@ mod tests {
         assert_eq!(pal.window_button_hover_bg, hex(0x25, 0x2a, 0x33));
         assert_eq!(pal.window_close_hover_bg, hex(0xc4, 0x41, 0x3f));
         assert_eq!(pal.window_close_hover_icon, hex(0xff, 0xff, 0xff));
+        assert_eq!(pal.window_button_pressed_bg, hex(0x39, 0x40, 0x4b));
+        assert_eq!(pal.window_close_pressed_bg, hex(0xa3, 0x35, 0x33));
 
         assert_eq!(pal.popover_background, hex(0x1a, 0x1e, 0x25));
         assert_eq!(pal.popover_border, hex(0x2e, 0x34, 0x3e));

@@ -16,6 +16,10 @@ pub struct WindowControls {
     pub hover_background: Color,
     pub close_hover_background: Color,
     pub close_hover_foreground: Color,
+    /// Fundo do botão pressionado (ADR-0066): só com o cursor sobre o
+    /// botão armado pelo press.
+    pub pressed_background: Color,
+    pub close_pressed_background: Color,
     /// Espessura da zona de resize em cada borda da janela.
     pub resize_border: i32,
     /// Espaço reservado à esquerda da trilha para o semáforo nativo do
@@ -32,6 +36,8 @@ impl Default for WindowControls {
             hover_background: Color::hex("#252a33"),
             close_hover_background: Color::hex("#c4413f"),
             close_hover_foreground: Color::hex("#ffffff"),
+            pressed_background: Color::hex("#39404b"),
+            close_pressed_background: Color::hex("#a33533"),
             resize_border: 6,
             macos_traffic_light_inset: 78,
         }
@@ -52,6 +58,8 @@ mod tests {
                 hover_background: Color::hex("#252a33"),
                 close_hover_background: Color::hex("#c4413f"),
                 close_hover_foreground: Color::hex("#ffffff"),
+                pressed_background: Color::hex("#39404b"),
+                close_pressed_background: Color::hex("#a33533"),
                 resize_border: 6,
                 macos_traffic_light_inset: 78,
             }

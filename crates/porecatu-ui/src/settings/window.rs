@@ -1154,8 +1154,10 @@ impl SettingsWindow {
                 bar_height(style),
                 point,
             ) {
-                // Só arma: dispara no release (`left_released`).
+                // Só arma: dispara no release (`left_released`). O
+                // redraw mostra o estado pressionado (ADR-0066).
                 self.pressed_window_button = Some(hit);
+                self.window.request_redraw();
                 return Press::Nothing;
             }
             if let Some(direction) = self.resize_direction(style, resize_border, point) {
@@ -1257,6 +1259,8 @@ impl SettingsWindow {
         if armed.is_none() || is_macos() {
             return Press::Nothing;
         }
+        // Apaga o estado pressionado (ADR-0066) mesmo sem disparar.
+        self.window.request_redraw();
         let style = env.style;
         let released_over = tab_bar::point_in_window_button(
             style,
@@ -1279,7 +1283,9 @@ impl SettingsWindow {
     /// A janela perdeu o foco: um press armado num botão de janela não
     /// recebe mais o release correspondente.
     pub(crate) fn focus_lost(&mut self) {
-        self.pressed_window_button = None;
+        if self.pressed_window_button.take().is_some() {
+            self.window.request_redraw();
+        }
     }
 
     /// Clique num botão do rodapé. Descartar e Salvar indisponíveis não fazem
@@ -2331,6 +2337,7 @@ impl SettingsWindow {
                 header.height,
                 self.window.is_maximized(),
                 self.hovered_button,
+                self.pressed_window_button,
                 &mut out,
             );
         }

@@ -203,6 +203,8 @@ pub fn paint(
     // enganoso: o botão nunca "maximiza-por-cima-do-fullscreen").
     show_restore_icon: bool,
     hover_window_button: Option<tab_bar::WindowButtonHit>,
+    // ADR-0066: botão de janela armado pelo press, ainda sem release.
+    pressed_window_button: Option<tab_bar::WindowButtonHit>,
     // Hover por brilho (F4 etapa 6, ADR-0032 §2, espec §1.10) -- `None`
     // durante arraste/rename/qualquer modo de captura, mesma regra do
     // resto do hover da barra: calculado fresco por frame a partir do
@@ -656,6 +658,7 @@ pub fn paint(
             bar_height,
             show_restore_icon,
             hover_window_button,
+            pressed_window_button,
             &mut out,
         );
     }
@@ -1217,6 +1220,12 @@ pub(crate) fn centered_glyph(
 /// (`tab_bar::window_button_rect`), o mesmo hover e o mesmo desenho, então
 /// os dois nunca divergem. Fora do macOS -- lá o semáforo é nativo e quem
 /// chama não chega aqui.
+///
+/// `pressed_window_button` é o botão armado pelo press (ADR-0066): ele só
+/// pinta o fundo de pressionado com o cursor ainda sobre ele, a mesma
+/// condição em que o release dispara (`tab_bar::window_button_release`).
+/// Arrastado para fora, volta ao repouso.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_window_buttons(
     style: &TabBarStyle,
     pal: &ResolvedPalette,
@@ -1224,6 +1233,7 @@ pub(crate) fn paint_window_buttons(
     bar_height: f32,
     show_restore_icon: bool,
     hover_window_button: Option<tab_bar::WindowButtonHit>,
+    pressed_window_button: Option<tab_bar::WindowButtonHit>,
     out: &mut Vec<Primitive>,
 ) {
     // Menor que o "+"/configurações -- convenção Windows: glyphs finos de
@@ -1246,10 +1256,13 @@ pub(crate) fn paint_window_buttons(
     for (index, hit, glyph, is_close) in buttons {
         let rect = tab_bar::window_button_rect(style, index, bar_width, bar_height);
         let hovered = hover_window_button == Some(hit);
-        let bg = match (is_close, hovered) {
-            (true, true) => pal.window_close_hover_bg,
-            (false, true) => pal.window_button_hover_bg,
-            (_, false) => palette::TRANSPARENT,
+        let pressed = hovered && pressed_window_button == Some(hit);
+        let bg = match (is_close, hovered, pressed) {
+            (true, _, true) => pal.window_close_pressed_bg,
+            (false, _, true) => pal.window_button_pressed_bg,
+            (true, true, false) => pal.window_close_hover_bg,
+            (false, true, false) => pal.window_button_hover_bg,
+            (_, false, _) => palette::TRANSPARENT,
         };
         out.push(Primitive::Quad(Quad { rect, color: bg }));
         let icon_color = if is_close && hovered {
@@ -1306,6 +1319,54 @@ mod tests {
         palette::ResolvedTermPalette::from_config(&porecatu_config::Config::default())
     }
 
+    /// Fundo pintado de cada um dos três botões de janela, na ordem
+    /// minimizar, maximizar/restaurar, fechar.
+    fn window_button_backgrounds(
+        hover: Option<tab_bar::WindowButtonHit>,
+        pressed: Option<tab_bar::WindowButtonHit>,
+    ) -> Vec<Color> {
+        let mut out = Vec::new();
+        paint_window_buttons(
+            &TabBarStyle::DEFAULT,
+            &default_palette(),
+            800.0,
+            52.0,
+            false,
+            hover,
+            pressed,
+            &mut out,
+        );
+        out.iter()
+            .filter_map(|p| match p {
+                Primitive::Quad(q) => Some(q.color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// ADR-0066: pressionado só com o cursor sobre o botão armado.
+    #[test]
+    fn pressed_window_button_paints_only_while_hovered() {
+        use tab_bar::WindowButtonHit::{Close, Minimize};
+        let pal = default_palette();
+
+        let bgs = window_button_backgrounds(Some(Minimize), Some(Minimize));
+        assert_eq!(bgs[0], pal.window_button_pressed_bg);
+        assert_eq!(bgs[2], palette::TRANSPARENT);
+
+        let bgs = window_button_backgrounds(Some(Close), Some(Close));
+        assert_eq!(bgs[2], pal.window_close_pressed_bg);
+
+        // Armado e arrastado para fora: volta ao repouso.
+        let bgs = window_button_backgrounds(None, Some(Close));
+        assert_eq!(bgs[2], palette::TRANSPARENT);
+
+        // Armado num, cursor noutro: o outro só tem hover.
+        let bgs = window_button_backgrounds(Some(Minimize), Some(Close));
+        assert_eq!(bgs[0], pal.window_button_hover_bg);
+        assert_eq!(bgs[2], palette::TRANSPARENT);
+    }
+
     /// Pedido do usuário, contra o "colapsado fica transparente" do
     /// RF-4.19: a cápsula é o que diz de que cor o grupo é, e sumir com
     /// ela no colapso tirava a única marca de cor justo quando o nome do
@@ -1344,6 +1405,7 @@ mod tests {
                 m,
                 false,
                 false,
+                None,
                 None,
                 None,
                 false,
@@ -1412,6 +1474,7 @@ mod tests {
                 &mut m,
                 false,
                 false,
+                None,
                 None,
                 None,
                 false,
@@ -1488,6 +1551,7 @@ mod tests {
             &mut m,
             false,
             false,
+            None,
             None,
             None,
             false,

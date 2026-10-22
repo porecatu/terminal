@@ -118,13 +118,15 @@ pub struct ThemeStatusBar {
 }
 
 /// `[themes.window_controls]` -- override de `[appearance.window_controls]`.
-/// Só as três cores; largura/gap/borda de resize não mudam por tema.
+/// Só as cores; largura/gap/borda de resize não mudam por tema.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default)]
 pub struct ThemeWindowControls {
     pub hover_background: Option<Color>,
     pub close_hover_background: Option<Color>,
     pub close_hover_foreground: Option<Color>,
+    pub pressed_background: Option<Color>,
+    pub close_pressed_background: Option<Color>,
 }
 
 /// `[themes.group_editor]` -- override de `[appearance.group_editor]`.
@@ -477,6 +479,8 @@ fn catppuccin_latte() -> Theme {
         window_controls: ThemeWindowControls {
             hover_background: Some(Color::hex("#ccd0da")),
             close_hover_background: Some(Color::hex("#d20f39")),
+            pressed_background: Some(Color::hex("#bcc0cc")),
+            close_pressed_background: Some(Color::hex("#a50c2d")),
             close_hover_foreground: Some(Color::hex("#ffffff")),
         },
         ..Theme::default()
@@ -581,6 +585,8 @@ fn gruvbox_light() -> Theme {
         window_controls: ThemeWindowControls {
             hover_background: Some(Color::hex("#d5c4a1")),
             close_hover_background: Some(Color::hex("#9d0006")),
+            pressed_background: Some(Color::hex("#bdae93")),
+            close_pressed_background: Some(Color::hex("#7c0005")),
             close_hover_foreground: Some(Color::hex("#ffffff")),
         },
         ..Theme::default()
@@ -685,6 +691,8 @@ fn solarized_light() -> Theme {
         window_controls: ThemeWindowControls {
             hover_background: Some(Color::hex("#e0d9c4")),
             close_hover_background: Some(Color::hex("#dc322f")),
+            pressed_background: Some(Color::hex("#d3cbb7")),
+            close_pressed_background: Some(Color::hex("#b02826")),
             close_hover_foreground: Some(Color::hex("#ffffff")),
         },
         ..Theme::default()
@@ -1192,6 +1200,20 @@ fn mergeable_fields(config: &Config, theme: &Theme) -> Vec<MergeField> {
             default: wcd.close_hover_foreground,
             theme_value: theme.window_controls.close_hover_foreground,
             set: |cfg, v| cfg.appearance.window_controls.close_hover_foreground = v,
+        },
+        MergeField {
+            name: "appearance.window_controls.pressed_background",
+            current: wc.pressed_background,
+            default: wcd.pressed_background,
+            theme_value: theme.window_controls.pressed_background,
+            set: |cfg, v| cfg.appearance.window_controls.pressed_background = v,
+        },
+        MergeField {
+            name: "appearance.window_controls.close_pressed_background",
+            current: wc.close_pressed_background,
+            default: wcd.close_pressed_background,
+            theme_value: theme.window_controls.close_pressed_background,
+            set: |cfg, v| cfg.appearance.window_controls.close_pressed_background = v,
         },
     ];
 
