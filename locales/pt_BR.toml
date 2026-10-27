@@ -396,6 +396,7 @@ confirm = "Sobrescrever"
 [note]
 process_exited = "processo encerrado (código {code})"
 cwd_missing = "diretório \"{path}\" não existe mais, aba aberta no home"
+profile_missing = "o perfil \"{id}\" não existe mais, aba aberta com o perfil padrão"
 # {name} é o nome do arquivo de projeto; {toml_value} é o diretório já escrito
 # como valor de TOML (barras normais).
 project_file_untrusted = "{name} encontrado em {dir}, mas este diretório não está autorizado.\nPara autorizá-lo, acrescente em porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"

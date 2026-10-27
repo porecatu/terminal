@@ -373,6 +373,7 @@ confirm = "Sobrescribir"
 [note]
 process_exited = "proceso terminado (código {code})"
 cwd_missing = "el directorio \"{path}\" ya no existe, pestaña abierta en el directorio personal"
+profile_missing = "el perfil \"{id}\" ya no existe, pestaña abierta con el perfil predeterminado"
 project_file_untrusted = "{name} encontrado en {dir}, pero este directorio no es de confianza.\nPara confiar en él, añade a porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
 project_file_unreadable = "no se pudo leer \"{path}\": {reason}"
 

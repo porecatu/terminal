@@ -373,6 +373,7 @@ confirm = "Écraser"
 [note]
 process_exited = "processus terminé (code {code})"
 cwd_missing = "le répertoire \"{path}\" n'existe plus, onglet ouvert dans le répertoire personnel"
+profile_missing = "le profil \"{id}\" n'existe plus, onglet ouvert avec le profil par défaut"
 project_file_untrusted = "{name} trouvé dans {dir}, mais ce répertoire n'est pas approuvé.\nPour l'approuver, ajoutez à porecatu.toml :\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
 project_file_unreadable = "impossible de lire \"{path}\" : {reason}"
 

@@ -373,6 +373,7 @@ confirm = "Überschreiben"
 [note]
 process_exited = "Prozess beendet (Code {code})"
 cwd_missing = "Verzeichnis \"{path}\" existiert nicht mehr, Tab im Home-Verzeichnis geöffnet"
+profile_missing = "Profil \"{id}\" existiert nicht mehr, Tab mit dem Standardprofil geöffnet"
 project_file_untrusted = "{name} in {dir} gefunden, aber dieses Verzeichnis ist nicht vertrauenswürdig.\nUm ihm zu vertrauen, füge in porecatu.toml hinzu:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"
 project_file_unreadable = "\"{path}\" konnte nicht gelesen werden: {reason}"
 

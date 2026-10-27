@@ -693,6 +693,7 @@ registry! {
     note {
         process_exited(code),
         cwd_missing(path),
+        profile_missing(id),
         project_file_untrusted(name, dir, toml_value),
         project_file_unreadable(path, reason),
         shell_invite {

@@ -394,6 +394,7 @@ confirm = "Overwrite"
 [note]
 process_exited = "process exited (code {code})"
 cwd_missing = "directory \"{path}\" no longer exists, tab opened in home"
+profile_missing = "profile \"{id}\" no longer exists, tab opened with the default profile"
 # {name} é o nome do arquivo de projeto; {toml_value} é o diretório já escrito
 # como valor de TOML (barras normais).
 project_file_untrusted = "{name} found in {dir}, but this directory is not trusted.\nTo trust it, add to porecatu.toml:\n    [project_file]\n    trusted_paths = [\"{toml_value}\"]"

@@ -127,6 +127,12 @@ impl Pane {
         self.profile = profile;
     }
 
+    /// Nome do shell que **foi lançado** (ADR-0070 §4): numa restauração o
+    /// valor gravado pode já não ser o que sobe (perfil editado ou ausente).
+    pub fn set_shell_name(&mut self, shell_name: impl Into<String>) {
+        self.shell_name = shell_name.into();
+    }
+
     /// Captura de OSC 7.
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         self.cwd = Some(cwd);

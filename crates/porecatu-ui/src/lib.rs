@@ -15,12 +15,12 @@ use porecatu_core::{
 use porecatu_locale::Catalog;
 
 use messages::msg;
+use porecatu_config::ResolvedProfile;
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_session::named::{EntryStatus, NamedSessionEntry};
 use porecatu_term::{
     DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
-    SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell,
-    search_path,
+    SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -55,6 +55,7 @@ mod overlay;
 mod paint;
 mod palette;
 mod panes;
+mod profile_spawn;
 mod reload;
 mod rename;
 mod search_bar;
@@ -2319,24 +2320,6 @@ impl WindowState {
         grid_size_for_rect(content, cell_metrics)
     }
 
-    /// Nome de exibição do shell (fallback de última instância da
-    /// precedência de título, RF-1.7/ADR-0017) -- `[shell] program`
-    /// presente vence (mesma precedência de `SpawnConfig.program`); vazio
-    /// cai na mesma resolução que `porecatu_pty::spawn` usa. Reduzido ao
-    /// nome-base (sem caminho nem extensão) nos dois casos.
-    fn shell_display_name(shell: &porecatu_config::Shell) -> String {
-        let resolved = if shell.program.is_empty() {
-            resolve_default_shell(std::env::var("SHELL").ok().as_deref(), search_path)
-        } else {
-            shell.program.clone()
-        };
-        std::path::Path::new(&resolved)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(resolved)
-    }
-
     /// RF-1.18: rola a trilha o mínimo necessário para que a aba ativa
     /// fique visível -- alinha à borda esquerda se ela está à esquerda da
     /// janela visível, à direita se está à direita, nunca centraliza
@@ -2411,6 +2394,20 @@ impl WindowState {
         self.pane_runtime(id)
     }
 
+    /// Grava no painel o perfil com que ele está sendo lançado (ADR-0070
+    /// §4) -- `None` para o `[shell]`, e é o que a sessão grava -- e o nome
+    /// do shell que sobe, que numa restauração pode divergir do gravado.
+    fn set_pane_profile(&mut self, tab_id: TabId, pane_id: PaneId, profile: &ResolvedProfile) {
+        if let Some(pane) = self
+            .workspace
+            .tab_mut(tab_id)
+            .and_then(|t| t.panes_mut().pane_mut(pane_id))
+        {
+            pane.set_profile(profile_spawn::pane_profile_id(profile));
+            pane.set_shell_name(profile_spawn::display_name(profile));
+        }
+    }
+
     /// Cria uma aba, herdando `cwd` (RF-1.1, ADR-0017), e spawna a
     /// `Terminal` dela via [`Self::spawn_tab_runtime`]. Aba nova nasce
     /// sempre `Running` (ADR-0037 §1) -- `spawn_tab_runtime` não muda
@@ -2425,11 +2422,13 @@ impl WindowState {
         target: NewTabTarget,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
     ) {
-        let shell_name = Self::shell_display_name(shell);
+        // ADR-0070 §2: a new tab launches the default profile.
+        let spawn_profile = profile_spawn::default_profile(config);
+        let shell_name = profile_spawn::display_name(&spawn_profile.resolved);
         let tab_id = match target {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
                 Some(g) => {
@@ -2455,7 +2454,7 @@ impl WindowState {
             now,
             style,
             term_params,
-            shell,
+            &spawn_profile,
             SpawnOrigin::New,
             project_file,
             startup_directory,
@@ -2488,7 +2487,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        spawn_profile: &profile_spawn::SpawnProfile,
         origin: SpawnOrigin,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
@@ -2497,6 +2496,17 @@ impl WindowState {
         // gesto de split, é sempre o único painel dela.
         let Some(pane_id) = self.workspace.tab(tab_id).map(|t| t.panes().focused_id()) else {
             return;
+        };
+        let profile = &spawn_profile.resolved;
+        // The pane records the profile it is launched with (ADR-0070 §4), so
+        // a restored pane whose profile is gone is saved as the default.
+        self.set_pane_profile(tab_id, pane_id, profile);
+        // A new tab starts in the profile's `cwd` when it has one (it
+        // overrides the one inherited from the active tab); a restored tab
+        // keeps the directory it was saved in.
+        let cwd = match origin {
+            SpawnOrigin::New => profile.cwd.clone().or(cwd),
+            SpawnOrigin::Restored => cwd.or_else(|| profile.cwd.clone()),
         };
         let (rows, cols) = self.grid_size(cell_metrics, style);
         let window_id = self.window.id();
@@ -2508,35 +2518,31 @@ impl WindowState {
         // `resolve_tab_cwd` substituir `cwd` -- veja `project_file_
         // candidate_dir` para a regra em si.
         let project_dir = project_file_candidate_dir(origin, cwd_exists, cwd.as_deref());
-        // Cuidado: o shell a considerar é o que **vai ser lançado agora**
-        // (`shell`, de onde `pty_config.program` abaixo sai), nunca
+        // Cuidado: o shell a considerar é o do perfil que **vai ser lançado
+        // agora** (`profile`, de onde `pty_config.program` abaixo sai), nunca
         // `Tab::shell_name()` -- numa aba restaurada aquele valor veio do
-        // arquivo de sessão, e a restauração ignora esse campo ao spawnar
-        // (sempre usa `config.shell`); os dois podem divergir se o usuário
-        // trocou de shell entre uma execução e outra.
+        // arquivo de sessão, e os dois podem divergir se o usuário trocou
+        // de shell ou editou o perfil entre uma execução e outra.
         let project_outcome = project_dir.as_deref().map(|dir| {
             porecatu_config::resolve_project_file(
                 dir,
-                &Self::shell_display_name(shell),
+                &profile_spawn::display_name(profile),
                 project_file,
             )
         });
         let (cwd, missing_cwd_note) =
             session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
-            // Vazio = detecta automaticamente (`porecatu_pty::spawn` cai em
-            // `resolve_default_shell`) -- `[shell] program` presente tem
+            // `None` = detecta automaticamente (`porecatu_pty::spawn` cai em
+            // `resolve_default_shell`) -- `program` presente tem
             // precedência total (doc de `SpawnConfig`).
-            program: (!shell.program.is_empty()).then(|| shell.program.clone()),
-            args: shell.args.clone(),
-            // `[shell.env]` é aplicado **depois** do ambiente base
-            // (TERM/COLORTERM/...) por `porecatu_pty::spawn` -- a config do
-            // usuário pode sobrescrevê-lo (ADR-0012).
-            env: shell
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            program: profile.program.clone(),
+            args: profile.args.clone(),
+            // `[shell.env]` (com o `env` do perfil por cima) é aplicado
+            // **depois** do ambiente base (TERM/COLORTERM/...) por
+            // `porecatu_pty::spawn` -- a config do usuário pode
+            // sobrescrevê-lo (ADR-0012).
+            env: profile.env.clone(),
             cwd: cwd.clone(),
             size: PtySize {
                 rows: rows as u16,
@@ -2557,6 +2563,12 @@ impl WindowState {
                 if let Some(missing) = &missing_cwd_note {
                     terminal.inject_note(
                         &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(id) = &spawn_profile.missing {
+                    terminal.inject_note(
+                        &msg::note::profile_missing(&self.catalog, id),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2645,10 +2657,15 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        spawn_profile: &profile_spawn::SpawnProfile,
         now: Instant,
         startup_directory: &Option<PathBuf>,
     ) {
+        let profile = &spawn_profile.resolved;
+        self.set_pane_profile(tab_id, pane_id, profile);
+        // The directory inherited from the origin pane (or saved) wins; the
+        // profile's `cwd` only fills in when there is none.
+        let cwd = cwd.or_else(|| profile.cwd.clone());
         let content = paint::pane_content_rect(pane_rect, style);
         let (rows, cols) = grid_size_for_rect(content, cell_metrics);
         let window_id = self.window.id();
@@ -2657,13 +2674,9 @@ impl WindowState {
         let (cwd, missing_cwd_note) =
             session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
-            program: (!shell.program.is_empty()).then(|| shell.program.clone()),
-            args: shell.args.clone(),
-            env: shell
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            program: profile.program.clone(),
+            args: profile.args.clone(),
+            env: profile.env.clone(),
             cwd: cwd.clone(),
             size: PtySize {
                 rows: rows as u16,
@@ -2683,6 +2696,12 @@ impl WindowState {
                 if let Some(missing) = &missing_cwd_note {
                     terminal.inject_note(
                         &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(id) = &spawn_profile.missing {
+                    terminal.inject_note(
+                        &msg::note::profile_missing(&self.catalog, id),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2733,7 +2752,7 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         now: Instant,
         startup_directory: &Option<PathBuf>,
     ) {
@@ -2742,13 +2761,20 @@ impl WindowState {
         };
         let focused = tab.panes().focused_id();
         let box_rect = self.active_tab_box_rect(style);
-        let siblings: Vec<(PaneId, Option<PathBuf>, Rect)> =
+        // ADR-0070 §4: each sibling launches the profile it was saved with,
+        // resolved now, when the process starts.
+        let siblings: Vec<(PaneId, Option<PathBuf>, Rect, profile_spawn::SpawnProfile)> =
             panes::layout(tab.panes(), box_rect, style)
                 .into_iter()
                 .filter(|(id, _)| *id != focused)
-                .filter_map(|(id, rect)| tab.panes().pane(id).map(|p| (id, p.cwd().cloned(), rect)))
+                .filter_map(|(id, rect)| {
+                    tab.panes().pane(id).map(|p| {
+                        let profile = profile_spawn::restored_profile(config, p.profile());
+                        (id, p.cwd().cloned(), rect, profile)
+                    })
+                })
                 .collect();
-        for (pane_id, cwd, pane_rect) in siblings {
+        for (pane_id, cwd, pane_rect, spawn_profile) in siblings {
             if self.panes.contains_key(&(tab_id, pane_id)) {
                 continue;
             }
@@ -2761,7 +2787,7 @@ impl WindowState {
                 proxy,
                 style,
                 term_params,
-                shell,
+                &spawn_profile,
                 now,
                 startup_directory,
             );
@@ -2783,7 +2809,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         panes_config: &porecatu_config::Panes,
         startup_directory: &Option<PathBuf>,
     ) {
@@ -2794,7 +2820,10 @@ impl WindowState {
             return;
         };
         let focused = tab.panes().focused_id();
-        let shell_name = Self::shell_display_name(shell);
+        // RF-7.15/ADR-0070 §2: dividir lança o perfil do painel de origem,
+        // `None` (o `[shell]`) inclusive -- nunca consulta o padrão.
+        let spawn_profile = profile_spawn::split_profile(config, tab.panes().focused().profile());
+        let shell_name = profile_spawn::display_name(&spawn_profile.resolved);
         // RF-6.3: o painel novo herda o `cwd` do painel de origem -- o
         // mesmo valor que a barra de status/o título já mostram para ele.
         let cwd = tab.cwd().cloned();
@@ -2841,7 +2870,7 @@ impl WindowState {
             proxy,
             style,
             term_params,
-            shell,
+            &spawn_profile,
             now,
             startup_directory,
         );
@@ -2895,7 +2924,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
     ) {
@@ -2909,6 +2938,10 @@ impl WindowState {
             return;
         }
         let cwd = tab.cwd().cloned();
+        // ADR-0070 §4: o perfil é resolvido agora, no primeiro foco -- ele
+        // pode ter sido editado entre a restauração e este momento.
+        let spawn_profile =
+            profile_spawn::restored_profile(config, tab.panes().focused().profile());
         // ADR-0037 §1/ADR-0051 §1: `NotStarted` só é criada pela
         // restauração de sessão -- este caminho é sempre `Restored`.
         self.spawn_tab_runtime(
@@ -2919,7 +2952,7 @@ impl WindowState {
             now,
             style,
             term_params,
-            shell,
+            &spawn_profile,
             SpawnOrigin::Restored,
             project_file,
             startup_directory,
@@ -2941,7 +2974,7 @@ impl WindowState {
             proxy,
             style,
             term_params,
-            shell,
+            config,
             now,
             startup_directory,
         );
@@ -3055,7 +3088,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
@@ -3070,7 +3103,7 @@ impl WindowState {
             NewTabTarget::ActiveGroup,
             style,
             term_params,
-            shell,
+            config,
             project_file,
             startup_directory,
         );
@@ -3693,7 +3726,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         panes_config: &porecatu_config::Panes,
         keymap: &HashMap<Chord, Action>,
@@ -3734,7 +3767,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     project_file,
                     catalog,
                 );
@@ -3751,7 +3784,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     project_file,
                 );
                 ActionOutcome::Handled
@@ -3897,7 +3930,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     panes_config,
                     startup_directory,
                 );
@@ -3911,7 +3944,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     panes_config,
                     startup_directory,
                 );
@@ -4541,7 +4574,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         catalog: &Catalog,
     ) {
@@ -4558,7 +4591,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     project_file,
                 );
             }
@@ -4595,7 +4628,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
@@ -4610,7 +4643,7 @@ impl WindowState {
             NewTabTarget::Ungrouped,
             style,
             term_params,
-            shell,
+            config,
             project_file,
             startup_directory,
         );
@@ -4626,7 +4659,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
@@ -4641,7 +4674,7 @@ impl WindowState {
             NewTabTarget::Group(group),
             style,
             term_params,
-            shell,
+            config,
             project_file,
             startup_directory,
         );
@@ -6004,7 +6037,7 @@ impl App {
             NewTabTarget::ActiveGroup,
             &self.style,
             &self.term_params,
-            &self.config.shell,
+            &self.config,
             &self.config.project_file,
             &self.startup_directory,
         );
@@ -6123,6 +6156,12 @@ impl App {
         let now = Instant::now();
         for tab_id in to_start {
             let cwd = state.workspace.tab(tab_id).and_then(|t| t.cwd().cloned());
+            let saved_profile = state
+                .workspace
+                .tab(tab_id)
+                .and_then(|t| t.panes().focused().profile().map(str::to_owned));
+            let spawn_profile =
+                profile_spawn::restored_profile(&self.config, saved_profile.as_deref());
             state.spawn_tab_runtime(
                 tab_id,
                 cwd,
@@ -6131,7 +6170,7 @@ impl App {
                 now,
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &spawn_profile,
                 SpawnOrigin::Restored,
                 &self.config.project_file,
                 &self.startup_directory,
@@ -6149,7 +6188,7 @@ impl App {
                 &self.proxy,
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &self.config,
                 now,
                 &self.startup_directory,
             );
@@ -6169,7 +6208,7 @@ impl App {
                 NewTabTarget::ActiveGroup,
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &self.config,
                 &self.config.project_file,
                 &self.startup_directory,
             );
@@ -6717,7 +6756,7 @@ impl App {
                         Instant::now(),
                         &self.style,
                         &self.term_params,
-                        &self.config.shell,
+                        &self.config,
                         &self.config.project_file,
                     );
                     state.window.request_redraw();
@@ -8817,7 +8856,7 @@ impl ApplicationHandler<Wakeup> for App {
                 Instant::now(),
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &self.config,
                 &self.config.project_file,
                 &self.startup_directory,
             );
@@ -8981,7 +9020,7 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -9019,7 +9058,7 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -9115,7 +9154,7 @@ impl App {
             Instant::now(),
             &self.style,
             &self.term_params,
-            &self.config.shell,
+            &self.config,
             &self.config.project_file,
             &self.config.panes,
             &self.keymap,
@@ -9358,7 +9397,7 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -10305,7 +10344,7 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -10608,7 +10647,7 @@ impl App {
                         Instant::now(),
                         &self.style,
                         &self.term_params,
-                        &self.config.shell,
+                        &self.config,
                         &self.config.project_file,
                     );
                     state.window.request_redraw();
@@ -10622,7 +10661,7 @@ impl App {
                         Instant::now(),
                         &self.style,
                         &self.term_params,
-                        &self.config.shell,
+                        &self.config,
                         &self.config.project_file,
                     );
                     state.window.request_redraw();
