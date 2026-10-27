@@ -450,6 +450,111 @@ no grupo Atalhos, ou na seção `[keybindings]` do arquivo (e
 desvio por plataforma) — [`porecatu.example.toml`](config/porecatu.example.toml)
 tem a tabela inteira, comentada.
 
+## Perfis de aba
+
+Um **perfil** é uma forma de abrir uma aba: um programa, seus argumentos e o
+que mais ele precisar. Quem usa um shell só não precisa de nada disso — sem
+perfil declarado, o `+`, os atalhos e a barra se comportam como sempre, e
+nenhum badge aparece. O `[shell]` do arquivo de configuração continua
+sendo o perfil padrão.
+
+### Declarar perfis
+
+Cada perfil é um `[[profiles.list]]`; `[profiles] default` diz qual abre
+quando você clica no `+` ou usa `Ctrl+Shift+T`:
+
+```toml
+[profiles]
+default = "pwsh"     # o "id" de um perfil; vazio é o [shell]
+detect  = true       # procura shells na máquina (veja abaixo)
+
+[[profiles.list]]
+id      = "pwsh"
+name    = "PowerShell 7"
+badge   = "PS"       # até 4 caracteres, aparece na aba
+program = "pwsh.exe"
+
+[[profiles.list]]
+id      = "ubuntu"
+name    = "Ubuntu"
+badge   = "WSL"
+program = "wsl.exe"
+args    = ["-d", "Ubuntu"]
+cwd     = "~/projetos"            # opcional: diretório inicial
+env     = { EDITOR = "nvim" }     # opcional: soma-se a [shell.env]
+```
+
+`id` é letras minúsculas, números, `-` e `_`, e não se repete. Um perfil com
+erro (id repetido, `program` vazio, `type` desconhecido) é descartado e os
+outros continuam valendo; o aviso diz a linha e a coluna.
+`type = "ssh"` ainda não existe e é recusado.
+
+> **`env` não é lugar de segredo.** O `porecatu.toml` é texto puro, costuma
+> ir para repositório de dotfiles, e o ambiente de um processo é legível
+> por quem roda na mesma conta. Senhas e tokens ficam no cofre do sistema
+> ou no próprio programa.
+
+Mudar `[profiles]` com o app aberto vale para **abas novas**; as abertas
+seguem como estão.
+
+### Escolher o perfil
+
+- **Clique direito no `+`** (de um grupo, ou o de abas soltas) abre o menu
+  de perfis: o padrão primeiro, os declarados, o `[shell]` quando não é o
+  padrão, os detectados e, no fim, "Novo grupo de abas". Escolher uma linha
+  abre a aba **naquele grupo**. O **clique esquerdo** no `+` não mudou: abre
+  o padrão, sem menu.
+- **`profile.open_menu`** abre o mesmo menu no `+` do grupo da aba ativa.
+- **`profile.new_tab_1` … `profile.new_tab_9`** abrem o N-ésimo perfil
+  **declarado** (na ordem do arquivo) no grupo da aba ativa; sem N-ésimo,
+  não fazem nada. O índice nunca conta os detectados, então um atalho não
+  muda de alvo porque a máquina ganhou um shell.
+
+Nenhuma dessas ações tem tecla de fábrica. Para ligar uma, no
+`porecatu.toml`:
+
+```toml
+[keybindings]
+"ctrl+shift+m" = "profile.open_menu"
+"ctrl+f1"      = "profile.new_tab_1"
+```
+
+O menu mostra, à direita de cada linha, a tecla que você ligou.
+
+### O badge na aba
+
+A aba mostra o **badge** do perfil, na cor do grupo, **só quando o perfil
+dela não é o padrão** — e nunca para o `[shell]`. Ele consome espaço do
+título, e a aba não muda de largura. Numa aba com atividade, a ordem é
+badge, ponto, título. `show_profile_badge = false` em `[appearance.tabs]`
+esconde o badge em todas as abas.
+
+### Shells detectados
+
+Na **primeira vez que o menu abre** num processo, e com `detect = true`, o
+app procura os shells da máquina — `pwsh`, `powershell` e `cmd` no Windows,
+mais as distribuições do WSL; o que estiver em `/etc/shells` no Linux e no
+macOS — e os acrescenta ao menu quando a busca termina, sem fechá-lo nem
+mover a linha realçada. Passados 3 segundos a busca desiste em silêncio. O
+que repete uma linha acima (mesmo programa e argumentos) não aparece de
+novo. Os detectados não têm atalho nem entram na conta de
+`profile.new_tab_N`. **`detect = false` desliga a busca por inteiro**: nada
+é lançado, nem o `wsl.exe`.
+
+### O que a sessão grava
+
+O **painel** guarda o identificador do perfil com que nasceu, não o
+comando. Ao reabrir, a aba volta com o mesmo perfil, mesmo que o padrão
+tenha mudado; dividir um painel abre outro **do mesmo perfil**. Um
+`profile` que não existe mais na configuração abre o perfil padrão, com uma
+nota na primeira linha do painel. Para os detectados o identificador é
+`auto:shell:pwsh.exe`, `auto:shell:/bin/zsh` ou `auto:wsl:Ubuntu`, e é
+**revalidado** ao restaurar: o Windows só aceita `pwsh.exe`,
+`powershell.exe` e `cmd.exe`; Linux e macOS, um caminho que esteja em
+`/etc/shells`; para o WSL, um nome de distribuição de letras, números,
+`.`, `_` e `-`. Um arquivo de sessão copiado ou editado à mão não consegue
+pedir outro executável.
+
 ## Dividir a aba em painéis
 
 Uma aba pode ser dividida em vários terminais, cada um com o próprio

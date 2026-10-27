@@ -1229,6 +1229,9 @@ struct WindowState {
     group_context_menu: Option<GroupContextMenu>,
     /// Profile menu (ADR-0070 §6): the context menu anchored on a `+`.
     profile_menu: Option<ProfileMenu>,
+    /// The panes' tab badges need recomputing (ADR-0070 §7): after a spawn, a
+    /// restore (starts `true`) or a config reload.
+    profile_badges_dirty: bool,
     /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
     /// mesma exclusão mútua de `close_all_popovers`.
     terminal_context_menu: Option<TerminalContextMenu>,
@@ -2097,6 +2100,7 @@ impl WindowState {
             context_menu: None,
             group_context_menu: None,
             profile_menu: None,
+            profile_badges_dirty: true,
             terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
@@ -2423,6 +2427,28 @@ impl WindowState {
         {
             pane.set_profile(profile_spawn::pane_profile_id(profile));
             pane.set_shell_name(profile_spawn::display_name(profile));
+        }
+        self.profile_badges_dirty = true;
+    }
+
+    /// Recomputes the badge of every pane from its profile and the config
+    /// (ADR-0070 §7). Runs before a frame, only when something changed: a
+    /// spawn, a restore or a reload; resolving a profile is too much work to
+    /// repeat per frame.
+    fn refresh_profile_badges(&mut self, config: &porecatu_config::Config) {
+        if !self.profile_badges_dirty {
+            return;
+        }
+        self.profile_badges_dirty = false;
+        let tabs: Vec<TabId> = self.workspace.visual_order().collect();
+        for id in tabs {
+            let Some(tab) = self.workspace.tab_mut(id) else {
+                continue;
+            };
+            for pane in tab.panes_mut().panes_mut() {
+                let badge = profile_spawn::badge_to_show(config, pane.profile());
+                pane.set_profile_badge(badge);
+            }
         }
     }
 
@@ -8035,6 +8061,11 @@ impl App {
         self.config = Arc::new(*new_config);
         self.warn_acrylic(acrylic_notices);
         self.style = TabBarStyle::from_config(&self.config);
+        // ADR-0070 §7: a new default or a new `[[profiles.list]]` changes
+        // which tabs show a badge.
+        for state in self.windows.values_mut() {
+            state.profile_badges_dirty = true;
+        }
         // PRD-017, classe A (ADR-0061 §9): a chave é reavaliada a cada recarga
         // aplicada; só `path` novo, ou arquivo trocado no disco, abre carga.
         self.sync_background_image();
@@ -11198,6 +11229,7 @@ impl App {
         let style = &self.style;
         let pal = &self.pal;
         let config = &self.config;
+        state.refresh_profile_badges(config);
         let bar_width = state.logical_width;
         let is_mac = is_macos();
         let trilha_width = tab_bar::trilha_width(style, bar_width, is_mac);

@@ -39,6 +39,15 @@ pub enum PaneState {
     Exited { exit_code: i32 },
 }
 
+/// What the tab shows of a non-default profile: the badge text and the
+/// profile's name (the accessibility description). Both are data from the
+/// config or the detection, not interface phrases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileBadge {
+    pub badge: String,
+    pub name: String,
+}
+
 /// Um painel: um terminal completo, com PTY, grade, scrollback, diretório e
 /// ciclo de vida próprios (RF-6.5). Não carrega PTY nem motor VT -- isso é
 /// `porecatu-term`, do outro lado da fronteira da seção 4 da arquitetura.
@@ -56,6 +65,11 @@ pub struct Pane {
     /// é o `[shell]`. Vale também no painel `NotStarted`, que o resolve só
     /// no primeiro foco.
     profile: Option<String>,
+    /// Badge the tab shows for this pane's profile (ADR-0070 §7): resolved by
+    /// the UI from the config, `None` for the default profile and the
+    /// `[shell]`. Derived display state, never persisted.
+    #[serde(skip)]
+    profile_badge: Option<ProfileBadge>,
     /// Diretório de trabalho conhecido, capturado por OSC 7. `None` até o
     /// primeiro OSC 7 chegar; quem decide o fallback (`startup_directory`)
     /// é o chamador, não este tipo.
@@ -76,6 +90,7 @@ impl Pane {
             process_title: None,
             shell_name: shell_name.into(),
             profile: None,
+            profile_badge: None,
             cwd: None,
             state: PaneState::Running,
             activity: false,
@@ -125,6 +140,15 @@ impl Pane {
 
     pub fn set_profile(&mut self, profile: Option<String>) {
         self.profile = profile;
+    }
+
+    /// Badge to show on the tab, or `None` (ADR-0070 §7, RF-7.13).
+    pub const fn profile_badge(&self) -> Option<&ProfileBadge> {
+        self.profile_badge.as_ref()
+    }
+
+    pub fn set_profile_badge(&mut self, badge: Option<ProfileBadge>) {
+        self.profile_badge = badge;
     }
 
     /// Nome do shell que **foi lançado** (ADR-0070 §4): numa restauração o

@@ -459,11 +459,16 @@ pub fn paint(
                 border_width,
             }));
 
-            let dot_reserve = if tab.indicator.is_some() {
-                style.indicator_dot_size + style.internal_gap
-            } else {
-                0.0
-            };
+            // Order: badge, indicator dot, label (ADR-0070 §7).
+            push_tab_badge(
+                &mut out,
+                tab,
+                tab_rect,
+                style,
+                group_color,
+                fade_in,
+                measurer,
+            );
             if let Some(indicator) = tab.indicator {
                 let color = match indicator {
                     Indicator::Activity => pal.activity_indicator,
@@ -471,7 +476,7 @@ pub fn paint(
                 };
                 out.push(Primitive::RoundedQuad(RoundedQuad {
                     rect: Rect {
-                        x: tab_rect.x + style.padding_left,
+                        x: tab_rect.x + tab.dot_offset(style),
                         y: tab_rect.y + (tab_rect.height - style.indicator_dot_size) / 2.0,
                         width: style.indicator_dot_size,
                         height: style.indicator_dot_size,
@@ -490,7 +495,7 @@ pub fn paint(
             } else {
                 let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
                 out.push(Primitive::Text(TextRun {
-                    origin: (tab_rect.x + style.padding_left + dot_reserve, label_y),
+                    origin: (tab_rect.x + tab.label_offset(style), label_y),
                     text: tab.label.clone(),
                     font: LABEL_FONT,
                     size_px: style.font_size,
@@ -579,14 +584,19 @@ pub fn paint(
             border_color: scale_alpha(border, fade_out),
             border_width: 1.0,
         }));
-        let dot_reserve = if old_tab.indicator.is_some() {
-            style.indicator_dot_size + style.internal_gap
-        } else {
-            0.0
-        };
+        let group_color = tab_group_color(workspace, pal, old_tab.id);
+        push_tab_badge(
+            &mut out,
+            old_tab,
+            tab_rect,
+            style,
+            group_color,
+            fade_out,
+            measurer,
+        );
         let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
         out.push(Primitive::Text(TextRun {
-            origin: (tab_rect.x + style.padding_left + dot_reserve, label_y),
+            origin: (tab_rect.x + old_tab.label_offset(style), label_y),
             text: old_tab.label.clone(),
             font: LABEL_FONT,
             size_px: style.font_size,
@@ -728,14 +738,11 @@ pub fn paint(
             border_color: border,
             border_width,
         }));
-        let dot_reserve = if tab.indicator.is_some() {
-            style.indicator_dot_size + style.internal_gap
-        } else {
-            0.0
-        };
+        let group_color = tab_group_color(workspace, pal, tab.id);
+        push_tab_badge(&mut out, tab, ghost_rect, style, group_color, 1.0, measurer);
         let label_y = ghost_rect.y + (ghost_rect.height - style.font_size) / 2.0;
         out.push(Primitive::Text(TextRun {
-            origin: (ghost_rect.x + style.padding_left + dot_reserve, label_y),
+            origin: (ghost_rect.x + tab.label_offset(style), label_y),
             text: tab.label.clone(),
             font: LABEL_FONT,
             size_px: style.font_size,
@@ -1037,6 +1044,48 @@ pub(crate) fn push_badge(
         x += advance + BADGE_LETTER_SPACING;
     }
     rect
+}
+
+/// Color of the group a tab belongs to (the ungrouped color for an implicit
+/// run), the one its badge takes.
+fn tab_group_color(workspace: &Workspace, pal: &ResolvedPalette, tab: TabId) -> Color {
+    workspace
+        .group_of_tab(tab)
+        .and_then(|id| workspace.group(id))
+        .and_then(|g| g.color())
+        .map(|c| pal.group_color(c))
+        .unwrap_or_else(|| pal.ungrouped_group_color())
+}
+
+/// Paints the tab's profile badge, vertically centered at the left padding.
+/// Nothing when the tab has none. `fade` is the tab's own opacity (the
+/// reflow and the close animation).
+fn push_tab_badge(
+    out: &mut Vec<Primitive>,
+    tab: &tab_bar::TabRect,
+    tab_rect: Rect,
+    style: &TabBarStyle,
+    group_color: Color,
+    fade: f32,
+    measurer: &mut porecatu_render::TextMeasurer,
+) {
+    let Some(badge) = &tab.badge else {
+        return;
+    };
+    let (_, height) = badge_size(&badge.text, measurer);
+    push_badge(
+        out,
+        (
+            tab_rect.x + style.padding_left,
+            tab_rect.y + (tab_rect.height - height) / 2.0,
+        ),
+        &badge.text,
+        scale_alpha(group_color, fade),
+        // `[appearance.groups] badge_tint_strength`, the value the drag
+        // highlight already carries.
+        style.drag_highlight_tint_strength * f64::from(fade),
+        measurer,
+    );
 }
 
 #[cfg(test)]

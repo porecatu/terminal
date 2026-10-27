@@ -16,6 +16,22 @@ primeiro release.
 
 ## [Não publicado]
 
+### Adicionado
+
+- **Perfis de aba** ([PRD-007](docs/prd/prd-007-perfis-de-aba.md),
+  [ADR-0070](docs/adr/0070-perfis-de-aba.md)): `[profiles]` e
+  `[[profiles.list]]` declaram formas de abrir uma aba (programa, argumentos,
+  `env`, `cwd`, badge); o `[shell]` segue como o perfil padrão implícito. O
+  clique direito num `+` abre o **menu de perfis** (o clique esquerdo não
+  mudou), e as ações `profile.open_menu` e `profile.new_tab_1` … `_9`,
+  sem tecla de fábrica, o espelham no teclado. O painel grava o perfil na
+  sessão, e a restauração, a divisão e a aba nova seguem as regras do ADR.
+- **Shells detectados** no menu de perfis (`pwsh`, `powershell`, `cmd`, WSL,
+  `/etc/shells`), sob demanda e em thread, desligáveis com
+  `[profiles] detect = false`.
+- **Badge de perfil na aba**, na cor do grupo, só em aba cujo perfil não é o
+  padrão; `show_profile_badge` o esconde.
+
 ## [0.9.5] - 2026-10-22
 
 O app ganha o **efeito acrílico** no fundo do terminal e **temas em arquivos

@@ -203,7 +203,7 @@ Derivados da cor do grupo, por composição alfa. Cápsula e pílula são pintad
 | **Pílula do grupo** | `.92` da cor cheia | fica por cima da cápsula, do mesmo tom: duas camadas translúcidas empilhadas, "vidro sobre vidro" |
 | **Fundo da aba** | `.85` do próprio tom (ativa `#282e37`, inativa `#191d23`) | deixa passar 15% da cápsula atrás dela como indício da cor do grupo |
 | Realce de fronteira do arraste | `.14` da cor do grupo, borda na cor a `.45` | §2.19. O `.16` que a prosa daquela seção citava arredondava o `badge_tint_strength` do arquivo de exemplo, que vale `.14` — o TOML é a fonte numérica |
-| Fundo do badge de perfil `[v2]` | `.14` | texto do badge usa a cor cheia |
+| Fundo do badge de perfil | `.14` | texto do badge usa a cor cheia |
 | Fundo do chip de tipo na paleta `[v2]` | `.14` | |
 
 O tingimento de `.07` que esta seção pedia para o wrapper não se via atrás do fundo das abas; a cápsula de cor cheia o substituiu, por pedido do usuário. `tint_strength` continua no arquivo de exemplo e governa o valor a partir da F4 — com default `1.0`, que é o que o binário desenha.
@@ -454,7 +454,7 @@ existir** — junto com os estilos `left-bar` e `outline`, que nunca tiveram ana
 
 Conteúdo:
 
-1. **Badge de perfil** `[v2]` — mono 9px/500, raio 3, `padding: 2px 4px`, `letter-spacing: .4px`. Texto na cor do grupo, fundo na cor do grupo com alfa `.14`.
+1. **Badge de perfil** — mono 9px/500, raio 3, `padding: 2px 4px`, `letter-spacing: .4px`. Texto na cor do grupo, fundo na cor do grupo com alfa `.14` (`[appearance.groups] badge_tint_strength`). **Só aparece quando o painel focado da aba não roda o perfil padrão**, e nunca para o `[shell]`: uma barra só de abas do padrão é a de sempre. Ordem na aba: **badge, ponto de indicador (§2.17), rótulo**, com o `gap: 8` da aba entre os três. Consome largura do rótulo — a aba segue com a largura fixa e o título trunca antes. `[appearance.tabs] show_profile_badge = false` o esconde em todas as abas. O desenho de texto não tem espaçamento entre letras, então cada caractere é uma corrida própria; a fonte monoespaçada permite isso sem erro de avanço.
 2. **Rótulo** 14px/400, o tamanho do terminal (12.5px originalmente, 13 depois; ver seção 4.4),
    `max-width: 180px` — que é também o piso —, truncado com reticências.
 3. **Botão de fechar** 17×17 de desenho e 25×17 de alvo (§1.7), raio 4, ícone Lucide
@@ -645,11 +645,13 @@ Até oito segmentos, seis à esquerda e dois à direita:
 
 O mockup desenha um segmento a mais: a **versão do app** ao lado do sistema, tirada por não mudar entre execuções (§4.4). A **contagem de painéis**, que também estava só no desenho, entrou com o [PRD-006](../prd/prd-006-paineis-divididos.md) em 2026-09-15.
 
-### 2.9 Menu de perfis `[v2]`
+### 2.9 Menu de perfis `[v1]`
 
-Popover `top: 76px`, largura 268, fundo `#1a1e25`, borda `#2e343e`, raio 8, `padding: 6`, sombra `0 18px 44px rgba(0,0,0,.55)`, animação `pop .13s`.
+Descreve o binário ([ADR-0028](../adr/0028-o-binario-como-referencia-visual.md)). É o menu de contexto (§2.16) **ancorado no botão `+`**: pelo clique direito em qualquer `+` de grupo ou no de abas soltas, ou por `profile.open_menu`. Abre abaixo do botão, com o `offset_y` do editor de grupo (§2.10) entre os dois, e vira nos dois eixos como o menu de contexto — sem espaço à direita alinha à borda direita do botão, sem espaço embaixo abre acima. Mesmos tokens da §2.16: fundo, borda, raio 8, `padding: 6`, sombra em camadas, itens `padding: 7px 8px` com raio 5, texto 12.5px `#d7dce3`, hover `#242a33`, divisor `1px #2a2f38` com `margin: 5px 4px`. **Largura:** a do conteúdo, entre o mínimo do menu de contexto (200) e o máximo de 320 (a do aviso); o rótulo que não cabe trunca com reticências.
 
-Rótulo "Perfis" 10px uppercase `#5c646f`, `letter-spacing: .7px`. Itens: `padding: 7px 8px`, raio 5, `gap: 10`, hover `#242a33` — badge, nome 12.5px `#d7dce3`, tecla mono 9.5px `#5c646f`. Divisor `1px #2a2f38`, `margin: 5px 4px`. Ao final, "Novo grupo de abas".
+Cada linha tem uma **coluna de badge** à esquerda — a largura do badge mais largo, para os nomes alinharem; a linha do `[shell]` e "Novo grupo de abas" deixam a coluna vazia —, o nome e, à direita, a tecla vinculada em mono 9.5px `#5c646f` (`profile.new_tab_N` nos declarados, `group.create` em "Novo grupo de abas"). O badge tem a anatomia da §2.5 item 1, **na cor do grupo de destino** (o do `+` clicado, ou o da aba ativa pela ação), não numa cor por perfil. Ordem das linhas, divisores e o que não se repete: [PRD-007](../prd/prd-007-perfis-de-aba.md) RF-7.9. Os detectados chegam depois da primeira abertura do menu no processo e entram sem fechá-lo nem mover o realce.
+
+**O que o canvas desenhava e não entrou:** o cabeçalho "Perfis" em caixa alta, a animação `pop .13s` e uma cor própria por perfil. Registro na §4.4.
 
 ### 2.10 Editor de grupo `[v1]`
 
@@ -799,13 +801,13 @@ Largura máxima **320**, a do aviso; rótulo mais longo trunca com reticências.
 
 Camada **popover** do [ADR-0018](../adr/0018-composicao-de-frame.md), compartilhada com o tooltip da seção 2.20.
 
-Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal ([PRD-011](../prd/prd-011-polimento.md) RF-11.14, F6: copiar, colar, selecionar tudo, buscar, mais os itens de link quando o clique cai sobre um hyperlink). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md).
+Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal ([PRD-011](../prd/prd-011-polimento.md) RF-11.14, F6: copiar, colar, selecionar tudo, buscar, mais os itens de link quando o clique cai sobre um hyperlink). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md). Um quarto, o menu de perfis (§2.9), é este mesmo menu **ancorado num botão**: nasce do `+` em vez do cursor, abre abaixo dele e vira nos dois eixos, com a coluna de badge como única diferença de anatomia.
 
 ### 2.17 Indicadores da aba `[v1]`
 
 Sem representação no canvas — estava na seção 4.2. Os valores abaixo saem dos tokens da seção 1; as duas cores já existem no arquivo de exemplo (`activity_indicator`, `bell_indicator`) e vêm da semântica da seção 1.5.
 
-Ponto circular **6×6, raio 50%** — o token do ponto de status do painel —, à esquerda do rótulo, com o `gap: 8` da aba. Fica na posição que o badge de perfil `[v2]` ocupará; quando o badge existir, os dois convivem com o mesmo `gap`.
+Ponto circular **6×6, raio 50%** — o token do ponto de status do painel —, à esquerda do rótulo, com o `gap: 8` da aba. Quando a aba tem badge de perfil (§2.5 item 1), a ordem é **badge, ponto, rótulo**, com o mesmo `gap: 8` entre os três: o badge é o dado estável e fica na ponta; o ponto vai e vem e fica colado no rótulo que qualifica.
 
 | Estado | Cor |
 |---|---|
@@ -1022,8 +1024,8 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Efeito acrílico: a imagem da janela desfocada através do quadro do terminal, só com a janela opaca (§2.7) | `[v1]` | [PRD-019](../prd/prd-019-efeito-acrilico-no-fundo-do-terminal.md), [ADR-0068](../adr/0068-efeito-acrilico-no-fundo-do-terminal.md) — fora da ordem de fases; sem representação no canvas |
 | Contagem de painéis na barra de status (§2.8), só com dois ou mais | `[v1]` | PRD-006 RF-6.20, ADR-0053 — fora da ordem de fases; cumpre a promessa do [ADR-0048](../adr/0048-barra-de-status.md) §5 |
 | **Cabeçalho e botões do painel** | `[v2]` | recusado pelo [ADR-0053](../adr/0053-paineis-divididos.md) — desenho do canvas sem requisito, ver §4.3 |
-| **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md), [ADR-0070](../adr/0070-perfis-de-aba.md) — aprovado fora da ordem de fases, **a implementar**; o menu será o menu de contexto (§2.16) aberto pelo clique direito no `+`, sem o cabeçalho "Perfis" nem a cor de perfil da §2.9. Passa a `[v1]` no PR que o implementa |
-| **Badge de perfil na aba** | `[v2]` | PRD-007 RF-7.13, PRD-004 RF-4.23, ADR-0070 §7 — aprovado, **a implementar**; só em painel de perfil não padrão |
+| **Perfis de aba e menu de perfis** | `[v1]` | [PRD-007](../prd/prd-007-perfis-de-aba.md), [ADR-0070](../adr/0070-perfis-de-aba.md) — fora da ordem de fases; o menu é o menu de contexto (§2.16) aberto pelo clique direito no `+` ou por `profile.open_menu`, sem o cabeçalho "Perfis" nem a cor de perfil da §2.9. **Aval visual do dono pendente** |
+| **Badge de perfil na aba** | `[v1]` | PRD-007 RF-7.13 e RF-7.14, PRD-004 RF-4.23, ADR-0070 §7 — fora da ordem de fases; só em painel de perfil não padrão (§2.5 item 1). **Aval visual do dono pendente** |
 | Diálogo de segredo SSH: campo mascarado e caixa "Lembrar no cofre do sistema" (variante da §2.15) | `[v2]` | [PRD-020](../prd/prd-020-conexoes-ssh.md) RF-20.12, [ADR-0075](../adr/0075-superficies-de-ui-do-ssh.md) §1–§2 — aprovado fora da ordem de fases, **a implementar**, aval visual pendente; sem representação no canvas |
 | Diálogo de host desconhecido: tipo e impressão digital da chave em linhas de dado mono (variante da §2.15) | `[v2]` | PRD-020 RF-20.16, ADR-0075 §3 — idem |
 | Grupo "Perfis" da tela de configurações: lista de perfis, formulário e importação do `~/.ssh/config` (§2.12) | `[v2]` | PRD-020 RF-20.3 a RF-20.7, ADR-0075 §6–§7 — idem |
@@ -1080,7 +1082,7 @@ O comportamento da seleção de texto — gesto, semântica de palavra, recorte 
 
 ### 4.3 Elementos do design **sem** requisito no v1
 
-Todos `[v2]`, todos endereçados na tabela de fases: perfis e badge, tela de nova aba, paleta de comandos, faixa de identidade da barra de título. O painel de configurações saiu desta lista: tem requisito desde o [PRD-016](../prd/prd-016-tela-de-configuracoes.md).
+Todos `[v2]`, todos endereçados na tabela de fases: tela de nova aba, paleta de comandos, faixa de identidade da barra de título. Perfis e o badge saíram desta lista ao entrar no produto (§2.9, §2.5 item 1). O painel de configurações saiu dela também: tem requisito desde o [PRD-016](../prd/prd-016-tela-de-configuracoes.md).
 
 A **barra de status** saiu desta lista em 2026-09-09, pelo [ADR-0048](../adr/0048-barra-de-status.md) — a primeira redução dela desde que foi escrita. O [PRD-009](../prd/prd-009-barra-de-status.md) foi promovido a Aprovado no mesmo movimento.
 
@@ -1158,6 +1160,9 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Janela sem contorno | **Borda de 1px em volta de toda janela** (terminal e configurações), por cima de tudo, na cor do fundo da janela escurecida a 70% (`chrome::window_border`). Pedido do dono do produto | pedido do usuário, fora de fase |
 | O quadro do terminal translúcido deixava a imagem da janela passar **nítida**, e `porecatu-render` não tinha passo de desfoque ("sem passo de filtro, definitivo") (§1.2, §2.7) | **Efeito acrílico**: com `[terminal.acrylic] enabled` e as duas condições (janela opaca e imagem da janela), a imagem da janela aparece **desfocada** dentro do quadro de cada painel — uma só por janela, contínua entre painéis —, tingida pelo fundo do quadro em `background_opacity`, com a imagem do terminal nítida por cima; fora do quadro ela segue nítida. Um passe de desfoque entra em `porecatu-render` **só para isto** (a sombra continua em camadas e o hover em CPU). Faltando uma condição, o app desenha sem o efeito e avisa o motivo; na tela de configurações as duas linhas esmaecem com a nota do motivo, avaliada sobre os valores não salvos. **Nenhuma cor, dimensão, raio ou espaçamento novo**; com `enabled = false`, que é o padrão, o binário não muda um pixel. **Aval do dono do produto pendente: dívida de verificação** | [ADR-0068](../adr/0068-efeito-acrilico-no-fundo-do-terminal.md), fora de fase |
 | O desenho pedia o rótulo da aba a 12.5px e o campo de rename a 12px, contra 12.5px no terminal; o binário chegou a 13px na aba e na pílula e 14px no terminal, cada um com chave própria | **Um tamanho e uma família só, os de `[terminal.font]`**, para rótulo da aba, nome da pílula, campo de rename e grade: **14px**. Pedido do dono do produto — a tela de configurações só mostrava a fonte do terminal, e as chaves `[appearance.tabs] font_family`/`font_size`, `[appearance.tabs.rename] font_size` e `[appearance.groups] label_font_size` saíram. O **peso** da pílula continua 500, e o **zoom de sessão** continua só na grade (a aba tem altura fixa). Menus, avisos, tooltip e barra de status mantêm os tamanhos próprios | [ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md), fora de fase |
+| O canvas abre o menu de perfis pelo clique no `+` (§2.9), e o `+` não faz outra coisa | **O clique esquerdo no `+` continua criando a aba do perfil padrão; o menu é o clique direito**, ou `profile.open_menu`. Quem usa um perfil só não ganha um gesto a mais em toda aba nova, e o gesto que já existia não muda de significado. Recusado pelo dono do produto | ADR-0070 §6 |
+| O menu de perfis do canvas leva o cabeçalho "Perfis" em caixa alta (10px, `letter-spacing: .7px`) e a animação `pop .13s` (§2.9) | **Sem cabeçalho e sem animação.** O menu de contexto não tem cabeçalho, e um menu aberto num `+` não precisa dizer o que é; a única animação do v1 é o `reflow` (§2.10) | ADR-0070 §6, ADR-0032 |
+| O canvas dá a cada perfil uma cor própria no menu de perfis (§2.9) | **Sem cor por perfil**: o badge usa a cor do grupo, na aba e no menu. Uma cor por item de uma lista do usuário não tem onde morar no tema ([ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)), e `[[profiles.list]]` não tem chave `color` | ADR-0070 (alternativas) |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.
 

@@ -403,6 +403,11 @@ fn build_tab_list(
                 None => {}
             }
             node.set_label(label);
+            // ADR-0070 §7: the profile's name is the **description**; the
+            // name stays the title.
+            if let Some(profile) = tab.profile_badge() {
+                node.set_description(profile.name.clone());
+            }
             node.add_action(accesskit::Action::Focus);
             let close_id = tab_close_button_id(tab_rect.id);
             let mut children = vec![close_id];
@@ -1324,6 +1329,27 @@ mod tests {
         assert_eq!(b_node.role(), Role::Tab);
         assert!(b_node.label().unwrap().contains("bash"));
         assert!(b_node.is_selected().unwrap_or(false));
+    }
+
+    /// ADR-0070 §7: the profile's name is the node's **description**; the
+    /// name stays the title. A tab without a badge has no description.
+    #[test]
+    fn the_profile_name_is_the_tab_description_not_its_name() {
+        let mut ws = Workspace::new();
+        let plain = ws.append_tab("zsh", None);
+        let wsl = ws.append_tab("bash", None);
+        for pane in ws.tab_mut(wsl).unwrap().panes_mut().panes_mut() {
+            pane.set_profile_badge(Some(porecatu_core::ProfileBadge {
+                badge: "WSL".to_owned(),
+                name: "Ubuntu-24.04".to_owned(),
+            }));
+        }
+        let update = build(&ws);
+        let badged = node(&update, tab_node_id(wsl));
+        assert_eq!(badged.description(), Some("Ubuntu-24.04"));
+        assert!(!badged.label().unwrap().contains("Ubuntu"));
+        assert!(!badged.label().unwrap().contains("WSL"));
+        assert_eq!(node(&update, tab_node_id(plain)).description(), None);
     }
 
     #[test]

@@ -80,6 +80,36 @@ fn resolve_saved(config: &Config, saved: Option<&str>) -> Result<ResolvedProfile
     resolve_profile(config, ProfileRef::Id(saved.unwrap_or("")))
 }
 
+/// The badge a tab shows for a pane running `pane_profile` (ADR-0070 §7,
+/// RF-7.13): only when it is **not** the default profile, never for the
+/// `[shell]`, and none when the profile cannot be resolved (nothing to draw).
+pub(crate) fn badge_to_show(
+    config: &Config,
+    pane_profile: Option<&str>,
+) -> Option<porecatu_core::ProfileBadge> {
+    let resolved = resolve_profile(config, ProfileRef::Id(pane_profile?)).ok()?;
+    if resolved.id.is_empty() || resolved.id == default_profile(config).resolved.id {
+        return None;
+    }
+    let name = match config
+        .profiles
+        .list
+        .iter()
+        .find(|def| def.id == resolved.id)
+    {
+        Some(def) => def.name.clone(),
+        None => match resolved.args.as_slice() {
+            // `auto:wsl:<distro>` launches `wsl.exe -d <distro>`.
+            [flag, distro] if flag == "-d" => distro.clone(),
+            _ => display_name(&resolved),
+        },
+    };
+    Some(porecatu_core::ProfileBadge {
+        badge: resolved.badge?,
+        name,
+    })
+}
+
 /// The id the pane records: `None` for the `[shell]`, never `""`.
 pub(crate) fn pane_profile_id(resolved: &ResolvedProfile) -> Option<String> {
     (!resolved.id.is_empty()).then(|| resolved.id.clone())
@@ -189,6 +219,35 @@ mod tests {
         let split = split_profile(&config, Some("gone"));
         assert_eq!(split.resolved.id, "wsl");
         assert_eq!(split.missing, None, "a live split raises no note");
+    }
+
+    #[test]
+    fn badge_shows_only_for_a_profile_that_is_not_the_default() {
+        let config = config(&format!(
+            "[profiles]\ndefault = \"a\"\n{}{}",
+            "[[profiles.list]]\nid = \"a\"\nname = \"A\"\nbadge = \"AA\"\nprogram = \"a\"\n",
+            "[[profiles.list]]\nid = \"b\"\nname = \"B\"\nbadge = \"BB\"\nprogram = \"b\"\n"
+        ));
+        assert_eq!(badge_to_show(&config, Some("b")).unwrap().badge, "BB");
+        assert_eq!(badge_to_show(&config, Some("a")), None, "the default");
+        assert_eq!(badge_to_show(&config, None), None, "the [shell]");
+        assert_eq!(badge_to_show(&config, Some("gone")), None);
+    }
+
+    #[test]
+    fn no_profile_declared_means_no_badge_anywhere() {
+        let config = config("");
+        assert_eq!(badge_to_show(&config, None), None);
+        assert_eq!(badge_to_show(&config, Some("")), None);
+    }
+
+    /// With the `[shell]` as the default, a declared profile is not the
+    /// default and shows its badge; the `[shell]` pane still shows none.
+    #[test]
+    fn declared_profile_shows_a_badge_when_the_shell_is_the_default() {
+        let config = config(WSL);
+        assert_eq!(badge_to_show(&config, Some("wsl")).unwrap().badge, "WSL");
+        assert_eq!(badge_to_show(&config, None), None);
     }
 
     #[test]

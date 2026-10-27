@@ -128,6 +128,9 @@ pub struct TabBarStyle {
     /// grupo, que desde a remoção do botão global é o único botão de nova
     /// aba da barra.
     pub show_new_tab_button: bool,
+    /// `[appearance.tabs] show_profile_badge` -- `false` esconde o badge de
+    /// perfil em todas as abas (RF-7.14).
+    pub show_profile_badge: bool,
     /// `[appearance.tabs] show_close_button` -- `Never` tira o `X` do hit
     /// test; `Hover` só o desenha com o cursor na aba (`chrome::paint`).
     pub show_close_button: porecatu_config::CloseButtonVisibility,
@@ -273,6 +276,7 @@ impl TabBarStyle {
         trilha_padding: 6.0,
         right_zone_button_size: 30.0,
         show_new_tab_button: true,
+        show_profile_badge: true,
         show_close_button: porecatu_config::CloseButtonVisibility::Always,
         font_size: 14.0, // = `[terminal.font] size` (ADR-0065)
         pill_padding_left: 10.0,
@@ -348,6 +352,7 @@ impl TabBarStyle {
             trilha_padding: tabs.trilha_padding as f32,
             right_zone_button_size: Self::DEFAULT.right_zone_button_size,
             show_new_tab_button: tabs.show_new_tab_button,
+            show_profile_badge: tabs.show_profile_badge,
             show_close_button: tabs.show_close_button,
             font_size: config.terminal.font.size as f32,
             pill_padding_left: groups.label_padding_left as f32,
@@ -442,6 +447,42 @@ impl Default for TabBarStyle {
     }
 }
 
+/// O badge de perfil de uma aba: texto e largura (com o padding do badge).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabBadge {
+    pub text: String,
+    pub width: f32,
+}
+
+impl TabRect {
+    /// Largura que o badge tira do rótulo: ele mais o `gap: 8` da aba.
+    pub fn badge_reserve(&self, style: &TabBarStyle) -> f32 {
+        self.badge
+            .as_ref()
+            .map_or(0.0, |badge| badge.width + style.internal_gap)
+    }
+
+    /// Largura que o ponto de indicador tira do rótulo (espec. §2.17).
+    pub fn dot_reserve(&self, style: &TabBarStyle) -> f32 {
+        if self.indicator.is_some() {
+            style.indicator_dot_size + style.internal_gap
+        } else {
+            0.0
+        }
+    }
+
+    /// Distância da borda esquerda da aba até o rótulo, na ordem **badge,
+    /// ponto, rótulo** (ADR-0070 §7), com o `gap` da aba entre os três.
+    pub fn label_offset(&self, style: &TabBarStyle) -> f32 {
+        style.padding_left + self.badge_reserve(style) + self.dot_reserve(style)
+    }
+
+    /// Distância da borda esquerda da aba até o ponto de indicador.
+    pub fn dot_offset(&self, style: &TabBarStyle) -> f32 {
+        style.padding_left + self.badge_reserve(style)
+    }
+}
+
 /// Geometria de uma aba dentro da trilha, em coordenadas relativas ao
 /// topo-esquerda da trilha (a posição da barra na janela, e o padding `6px
 /// 10px` dela, são responsabilidade de quem pinta -- não deste layout).
@@ -462,6 +503,10 @@ pub struct TabRect {
     /// partir do estado da aba -- `None` para aba `Exited` ou sem nenhum
     /// dos dois fatos pendentes.
     pub indicator: Option<Indicator>,
+    /// Badge de perfil (ADR-0070 §7), com a largura já medida: só numa aba
+    /// cujo painel focado não roda o perfil padrão, e nunca com
+    /// `show_profile_badge = false`.
+    pub badge: Option<TabBadge>,
     /// Área de hit-test do corpo da aba: o retângulo visual estendido até
     /// a metade do `gap` para a aba vizinha do mesmo grupo (espec. §2.2:
     /// "a fronteira entre abas vizinhas parte o gap ao meio"). Não se
@@ -755,7 +800,17 @@ fn layout_inset(
             } else {
                 0.0
             };
-            let label_cap = style.label_cap(dot_reserve);
+            // O badge também consome largura do rótulo (ADR-0070 §7): a
+            // aba segue com a largura fixa, e o título trunca antes.
+            let badge = tab
+                .profile_badge()
+                .filter(|_| style.show_profile_badge)
+                .map(|profile| TabBadge {
+                    text: profile.badge.clone(),
+                    width: crate::chrome::badge_size(&profile.badge, measurer).0,
+                });
+            let badge_reserve = badge.as_ref().map_or(0.0, |b| b.width + style.internal_gap);
+            let label_cap = style.label_cap(dot_reserve + badge_reserve);
 
             let (label, label_truncated) =
                 measurer.truncate(tab.title(), LABEL_FONT, style.font_size, label_cap);
@@ -814,6 +869,7 @@ fn layout_inset(
                 label,
                 label_truncated,
                 indicator,
+                badge,
                 hit_rect,
                 close_hit_rect,
             });
@@ -1941,6 +1997,78 @@ mod tests {
             style.label_cap(style.indicator_dot_size + style.internal_gap),
             style.label_max_width - style.indicator_dot_size - style.internal_gap
         );
+    }
+
+    fn badged_tab(ws: &mut Workspace, title: &str, badge: Option<&str>) -> TabId {
+        let id = ws.append_tab(title, None);
+        let tab = ws.tab_mut(id).unwrap();
+        for pane in tab.panes_mut().panes_mut() {
+            pane.set_profile_badge(badge.map(|b| porecatu_core::ProfileBadge {
+                badge: b.to_owned(),
+                name: "Profile".to_owned(),
+            }));
+        }
+        id
+    }
+
+    /// ADR-0070 §7: the badge takes width from the label, and the tab keeps its
+    /// fixed width (RF-7.14).
+    #[test]
+    fn badge_shrinks_the_label_and_keeps_the_tab_width() {
+        let long = "a title long enough to be truncated in any case at all";
+        let mut ws = Workspace::new();
+        badged_tab(&mut ws, long, None);
+        badged_tab(&mut ws, long, Some("WSL"));
+        let mut m = measurer();
+        let style = TabBarStyle::DEFAULT;
+        let layout = layout(&ws, &style, &mut m);
+        let tabs = &layout.groups[0].tabs;
+        assert_eq!(tabs[0].rect.width, tabs[1].rect.width);
+        assert!(tabs[0].badge.is_none());
+        let badge = tabs[1].badge.as_ref().expect("badge present");
+        assert_eq!(badge.text, "WSL");
+        let plain = m.measure_width(&tabs[0].label, LABEL_FONT, style.font_size);
+        let with_badge = m.measure_width(&tabs[1].label, LABEL_FONT, style.font_size);
+        assert!(with_badge < plain, "{with_badge} < {plain}");
+        assert!(with_badge <= style.label_cap(badge.width + style.internal_gap) + 0.5);
+    }
+
+    /// Order **badge, dot, label**, with the tab's `gap` between the three.
+    #[test]
+    fn badge_comes_before_the_dot_and_the_label() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        let id = badged_tab(&mut ws, "zsh", Some("PS"));
+        ws.tab_mut(id).unwrap().mark_activity();
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        let tab = &layout.groups[0].tabs[0];
+        let badge = tab.badge.as_ref().unwrap();
+        assert_eq!(
+            tab.dot_offset(&style),
+            style.padding_left + badge.width + style.internal_gap
+        );
+        assert_eq!(
+            tab.label_offset(&style),
+            tab.dot_offset(&style) + style.indicator_dot_size + style.internal_gap
+        );
+    }
+
+    /// `show_profile_badge = false` hides it everywhere and gives the width
+    /// back to the label.
+    #[test]
+    fn show_profile_badge_false_hides_the_badge() {
+        let mut ws = Workspace::new();
+        badged_tab(&mut ws, "zsh", Some("PS"));
+        let mut m = measurer();
+        let style = TabBarStyle {
+            show_profile_badge: false,
+            ..TabBarStyle::DEFAULT
+        };
+        let layout = layout(&ws, &style, &mut m);
+        let tab = &layout.groups[0].tabs[0];
+        assert!(tab.badge.is_none());
+        assert_eq!(tab.label_offset(&style), style.padding_left);
     }
 
     #[test]
