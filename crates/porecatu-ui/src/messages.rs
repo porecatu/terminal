@@ -163,6 +163,9 @@ pub(crate) fn terminal_spawn_error(catalog: &Catalog, error: &TerminalSpawnError
         TerminalSpawnError::Pty(err) => {
             msg::notice::spawn_failed::body(catalog, err.kind().as_str(), err.cause())
         }
+        TerminalSpawnError::Stream(err) => {
+            msg::notice::spawn_failed::body(catalog, "stream", err.to_string())
+        }
     }
 }
 
@@ -995,7 +998,7 @@ pub(crate) mod test_support {
 mod tests {
     use std::path::PathBuf;
 
-    use porecatu_term::{PtySize, SpawnConfig, TermParams, Terminal};
+    use porecatu_term::{BackendSpec, PtySize, SpawnConfig, TermParams, Terminal};
 
     use super::*;
 
@@ -1297,7 +1300,7 @@ mod tests {
         // `PtyError::new` is crate-private to `porecatu-pty`; a real failed
         // spawn is the way to get one.
         let result = Terminal::spawn(
-            SpawnConfig {
+            BackendSpec::Local(SpawnConfig {
                 program: Some("porecatu-no-such-program-xyz".to_owned()),
                 args: Vec::new(),
                 env: Vec::new(),
@@ -1308,7 +1311,7 @@ mod tests {
                     pixel_width: 0,
                     pixel_height: 0,
                 },
-            },
+            }),
             TermParams::default(),
             || {},
         );

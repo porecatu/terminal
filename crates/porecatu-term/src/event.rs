@@ -8,6 +8,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::backend::EndReason;
+
 /// Evento traduzido de `alacritty_terminal::event::Event` -- nenhum tipo do
 /// motor atravessa esta fronteira (mesma disciplina do snapshot, ADR-0002).
 #[derive(Debug, Clone)]
@@ -27,10 +29,10 @@ pub enum TermEvent {
     ClipboardRead(ClipboardResponder),
     /// OSC 4 / 10 / 11, consulta de cor (frente, fundo, paleta indexada).
     ColorQuery(ColorQueryResponder),
-    /// Fim do processo (RF-1.3). Não vem do motor VT -- vem de
-    /// `porecatu-pty::PtyHandle::try_wait`, detectado por `Terminal`
-    /// (Etapa 3) e injetado neste mesmo canal.
-    Exit { success: bool, code: u32 },
+    /// Fim da sessão (RF-1.3), com a razão (ADR-0071 §3). Não vem do motor
+    /// VT -- vem de `Backend::try_wait`, detectado por `Terminal` e injetado
+    /// neste mesmo canal.
+    Exit(EndReason),
     /// OSC 7 (ADR-0017 item 1). Captura própria de `porecatu-term`, fora do
     /// motor -- ver `crate::osc7`. Herdado por `tab.new`/`window.new`;
     /// `None` continua sendo o fallback de `startup_directory` até o

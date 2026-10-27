@@ -12,7 +12,9 @@
 use std::time::{Duration, Instant};
 
 use porecatu_pty::{PtySize, SpawnConfig};
-use porecatu_term::{CellText, GridSnapshot, TermEvent, TermParams, Terminal};
+use porecatu_term::{
+    BackendSpec, CellText, EndReason, GridSnapshot, TermEvent, TermParams, Terminal,
+};
 
 fn trivial_command() -> (Option<String>, Vec<String>) {
     if cfg!(target_os = "windows") {
@@ -54,13 +56,13 @@ fn snapshot_text(snap: &GridSnapshot) -> String {
 fn terminal_spawna_escreve_saida_no_snapshot_e_responde_dsr_sozinho() {
     let (program, args) = trivial_command();
     let terminal = Terminal::spawn(
-        SpawnConfig {
+        BackendSpec::Local(SpawnConfig {
             program,
             args,
             env: Vec::new(),
             cwd: None,
             size: default_size(),
-        },
+        }),
         TermParams::default(),
         || {},
     )
@@ -82,7 +84,8 @@ fn terminal_spawna_escreve_saida_no_snapshot_e_responde_dsr_sozinho() {
     let start = Instant::now();
     let mut exited = None;
     while start.elapsed() < Duration::from_secs(5) {
-        if let Some(TermEvent::Exit { success, .. }) = terminal.try_recv_event() {
+        if let Some(TermEvent::Exit(EndReason::Exited { success, .. })) = terminal.try_recv_event()
+        {
             exited = Some(success);
             break;
         }
@@ -117,13 +120,13 @@ fn long_running_command() -> (String, Vec<String>) {
 fn spawn_long_running() -> Terminal {
     let (program, args) = long_running_command();
     Terminal::spawn(
-        SpawnConfig {
+        BackendSpec::Local(SpawnConfig {
             program: Some(program),
             args,
             env: Vec::new(),
             cwd: None,
             size: default_size(),
-        },
+        }),
         TermParams::default(),
         || {},
     )
@@ -193,13 +196,13 @@ fn terminal_close_devolve_na_hora_sem_esperar_confirmacao() {
 fn inject_note_escreve_no_grid_como_saida_do_programa() {
     let (program, args) = trivial_command();
     let terminal = Terminal::spawn(
-        SpawnConfig {
+        BackendSpec::Local(SpawnConfig {
             program,
             args,
             env: Vec::new(),
             cwd: None,
             size: default_size(),
-        },
+        }),
         TermParams::default(),
         || {},
     )

@@ -19,8 +19,9 @@ use porecatu_config::ResolvedProfile;
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_session::named::{EntryStatus, NamedSessionEntry};
 use porecatu_term::{
-    DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
-    SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal,
+    BackendSpec, DEFAULT_SEARCH_LINES_PER_STEP, EndReason, GridSnapshot, HyperlinkSpan, Liveness,
+    Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermModes, TermParams, TermScroll,
+    Terminal,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -593,7 +594,7 @@ mod pane_runtime_map_key_tests {
             )
         };
         Terminal::spawn(
-            SpawnConfig {
+            BackendSpec::Local(SpawnConfig {
                 program,
                 args,
                 env: Vec::new(),
@@ -604,7 +605,7 @@ mod pane_runtime_map_key_tests {
                     pixel_width: 0,
                     pixel_height: 0,
                 },
-            },
+            }),
             TermParams::default(),
             || {},
         )
@@ -1318,6 +1319,20 @@ struct WindowState {
     /// Uma troca de idioma atualiza toda janela junto com o `App`
     /// (`App::apply_language_reload`).
     catalog: Arc<Catalog>,
+}
+
+/// Reduz o fim de uma sessão ao que o tratamento de hoje entende: se fecha
+/// o painel (`true`) ou o deixa aberto com nota, e o código dessa nota.
+/// Só `Exited` é produzido por enquanto; as outras razões (SSH, ADR-0071
+/// §3) recebem o tratamento de saída com código ≠ 0 -- painel aberto, com
+/// nota -- até quem as produz definir o seu.
+fn exit_outcome(reason: &EndReason) -> (bool, u32) {
+    match reason {
+        EndReason::Exited { success, code } => (*success, *code),
+        EndReason::RemoteEnded { .. } | EndReason::Lost { .. } | EndReason::Failed { .. } => {
+            (false, 1)
+        }
+    }
 }
 
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
@@ -2063,6 +2078,40 @@ mod should_confirm_tab_close_tests {
         };
         assert!(!should_confirm_tab_close(false, modes, true));
     }
+
+    #[test]
+    fn exited_keeps_its_own_success_and_code() {
+        let ok = EndReason::Exited {
+            success: true,
+            code: 0,
+        };
+        let bad = EndReason::Exited {
+            success: false,
+            code: 3,
+        };
+        assert_eq!(exit_outcome(&ok), (true, 0));
+        assert_eq!(exit_outcome(&bad), (false, 3));
+    }
+
+    #[test]
+    fn reasons_not_yet_produced_leave_the_pane_open_with_a_note() {
+        use porecatu_term::{FailCause, LostCause};
+        let reasons = [
+            EndReason::RemoteEnded {
+                code: Some(0),
+                signal: None,
+            },
+            EndReason::Lost {
+                cause: LostCause::Transport,
+            },
+            EndReason::Failed {
+                cause: FailCause::Refused,
+            },
+        ];
+        for reason in &reasons {
+            assert_eq!(exit_outcome(reason), (false, 1), "{reason:?}");
+        }
+    }
 }
 
 impl WindowState {
@@ -2601,13 +2650,17 @@ impl WindowState {
             },
         };
 
-        match Terminal::spawn(pty_config, term_params.clone(), move || {
-            let _ = proxy.send_event(Wakeup::TabDirty {
-                window: window_id,
-                tab,
-                pane,
-            });
-        }) {
+        match Terminal::spawn(
+            BackendSpec::Local(pty_config),
+            term_params.clone(),
+            move || {
+                let _ = proxy.send_event(Wakeup::TabDirty {
+                    window: window_id,
+                    tab,
+                    pane,
+                });
+            },
+        ) {
             Ok(terminal) => {
                 if let Some(missing) = &missing_cwd_note {
                     terminal.inject_note(
@@ -2734,13 +2787,17 @@ impl WindowState {
                 pixel_height: 0,
             },
         };
-        match Terminal::spawn(pty_config, term_params.clone(), move || {
-            let _ = proxy.send_event(Wakeup::TabDirty {
-                window: window_id,
-                tab: tab_id,
-                pane: pane_id,
-            });
-        }) {
+        match Terminal::spawn(
+            BackendSpec::Local(pty_config),
+            term_params.clone(),
+            move || {
+                let _ = proxy.send_event(Wakeup::TabDirty {
+                    window: window_id,
+                    tab: tab_id,
+                    pane: pane_id,
+                });
+            },
+        ) {
             Ok(terminal) => {
                 if let Some(missing) = &missing_cwd_note {
                     terminal.inject_note(
@@ -3193,7 +3250,7 @@ impl WindowState {
                     should_confirm_tab_close(
                         confirm_close_with_process,
                         runtime.terminal.modes(),
-                        runtime.terminal.has_extra_processes(),
+                        runtime.terminal.liveness() != Liveness::Idle,
                     )
                 })
             });
@@ -3234,7 +3291,7 @@ impl WindowState {
         if should_confirm_tab_close(
             confirm_close_with_process,
             runtime.terminal.modes(),
-            runtime.terminal.has_extra_processes(),
+            runtime.terminal.liveness() != Liveness::Idle,
         ) {
             let title = tab.title().to_string();
             return Some(TabCloseOutcome::Dialog(ConfirmDialog::close_pane(
@@ -4675,7 +4732,7 @@ impl WindowState {
                     should_confirm_tab_close(
                         confirm_close_with_process,
                         runtime.terminal.modes(),
-                        runtime.terminal.has_extra_processes(),
+                        runtime.terminal.liveness() != Liveness::Idle,
                     )
                 })
             });
@@ -6941,7 +6998,7 @@ impl App {
             should_confirm_tab_close(
                 confirm_close_with_process,
                 runtime.terminal.modes(),
-                runtime.terminal.has_extra_processes(),
+                runtime.terminal.liveness() != Liveness::Idle,
             )
         });
         if window_close_needs_confirmation(significant_tab_count, any_tab_busy) {
@@ -8954,7 +9011,8 @@ impl ApplicationHandler<Wakeup> for App {
                         state.mark_session_dirty();
                     }
                 }
-                TermEvent::Exit { success, code } => {
+                TermEvent::Exit(reason) => {
+                    let (success, code) = exit_outcome(&reason);
                     if success {
                         // RF-1.3/RF-6.10: código zero não deixa rastro -- o
                         // painel que gerou o evento fecha; se era o último

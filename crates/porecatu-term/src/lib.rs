@@ -9,6 +9,7 @@
 //!   struct de parâmetros próprio, montado por `porecatu-ui`.
 //! - Cor de célula não é resolvida aqui -- ver [`TermColor`].
 
+mod backend;
 mod color;
 mod dismiss;
 mod engine;
@@ -23,6 +24,7 @@ mod selection;
 mod snapshot;
 mod terminal;
 
+pub use backend::{BackendSpec, EndReason, FailCause, Liveness, LostCause};
 pub use color::TermColor;
 pub use dismiss::DISMISS_MARKER as SHELL_INTEGRATION_DISMISS_MARKER;
 pub use engine::{TermEngine, TermSize};
