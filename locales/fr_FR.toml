@@ -664,6 +664,7 @@ skipped_lines = { one = "{count} ligne de known_hosts illisible.", other = "{cou
 confirm = "Faire confiance et se connecter"
 
 [note.ssh]
+dormant = "Entrée pour se connecter à {name}"
 connecting = "connexion à {host}…"
 refused = "impossible de se connecter à {host} : connexion refusée ou hôte injoignable"
 timeout = "impossible de se connecter à {host} : pas de réponse"

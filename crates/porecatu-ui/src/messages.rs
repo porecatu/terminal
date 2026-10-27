@@ -163,6 +163,12 @@ pub(crate) fn secret_profile_key(catalog: &Catalog, key: &str) -> (Severity, Str
     )
 }
 
+/// A nota de um painel SSH restaurado, que só conecta no primeiro gesto
+/// (RF-20.33, ADR-0075 §5): "`Enter` para conectar a `nome`".
+pub(crate) fn ssh_dormant_note(catalog: &Catalog, name: &str) -> String {
+    msg::note::ssh::dormant(catalog, name)
+}
+
 /// A nota "conectando a `host`…" de uma aba SSH recém-aberta (ADR-0075 §5).
 pub(crate) fn ssh_connecting_note(catalog: &Catalog, host: &str) -> String {
     msg::note::ssh::connecting(catalog, host)
@@ -841,6 +847,7 @@ registry! {
         project_file_untrusted(name, dir, toml_value),
         project_file_unreadable(path, reason),
         ssh {
+            dormant(name),
             connecting(host),
             refused(host),
             timeout(host),
@@ -1450,6 +1457,18 @@ mod tests {
         assert!(note(KnownHostsCause::Other).contains("erro de leitura"));
         assert!(note(KnownHostsCause::NotText).contains("/x/known_hosts"));
         assert!(note(KnownHostsCause::NotText).contains("não foi tentada"));
+    }
+
+    #[test]
+    fn the_dormant_note_names_the_profile_and_the_key() {
+        assert_eq!(
+            ssh_dormant_note(&test_support::pt_br(), "prod-web-01"),
+            "Enter para conectar a prod-web-01"
+        );
+        assert_eq!(
+            ssh_dormant_note(&test_support::en_us(), "prod-web-01"),
+            "Enter to connect to prod-web-01"
+        );
     }
 
     #[test]

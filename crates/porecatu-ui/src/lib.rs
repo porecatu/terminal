@@ -576,6 +576,18 @@ struct PaneRuntime {
     /// `Some(host)` num painel SSH (ADR-0072 §6): é o que as notas e o diálogo
     /// de host desconhecido citam. `None` num painel local.
     ssh_host: Option<String>,
+    /// `usuário@host` de um painel SSH: o que a barra de status mostra no lugar
+    /// do nome do shell (RF-20.21).
+    ssh_target: Option<String>,
+    /// O diretório **do servidor** que o OSC 7 informou, só com o host do
+    /// perfil (RF-20.21). Vive aqui e **nunca** em `Pane::cwd`: é daí que saem
+    /// o `cwd` herdado por `tab.new`, o fallback de `cwd` e o que a sessão
+    /// grava, e nenhum deles pode ver um caminho remoto (RF-20.22, RF-20.32).
+    remote_cwd: Option<PathBuf>,
+    /// Painel SSH restaurado que ainda espera o primeiro gesto do usuário
+    /// (RF-20.33): o motor existe e mostra a nota, nenhum backend roda. Só
+    /// `WindowState::connect_dormant_pane` desliga isto.
+    dormant: bool,
 }
 
 #[cfg(test)]
@@ -627,6 +639,9 @@ mod pane_runtime_map_key_tests {
             pending_project_command: None,
             pending_project_notice: None,
             ssh_host: None,
+            ssh_target: None,
+            remote_cwd: None,
+            dormant: false,
         }
     }
 
@@ -1353,6 +1368,40 @@ fn exit_outcome(reason: &EndReason) -> (bool, u32) {
     }
 }
 
+/// O `cwd` local de um painel: o dele, a menos que seja SSH -- o diretório de
+/// um servidor nunca é um diretório desta máquina (RF-20.22).
+fn local_cwd(remote: bool, tab_cwd: Option<&PathBuf>) -> Option<PathBuf> {
+    if remote { None } else { tab_cwd.cloned() }
+}
+
+/// O `cwd` herdado por `tab.new`/`window.new` (ADR-0017 item 1): o local da aba
+/// ativa e, sem ele, o `startup_directory` -- que é também o que uma aba SSH
+/// dá, por não ter diretório local (RF-20.22).
+fn inherited_cwd(local: Option<PathBuf>, startup_directory: &Option<PathBuf>) -> Option<PathBuf> {
+    local.or_else(|| startup_directory.clone())
+}
+
+/// A nota que abre um painel SSH: a de conectando, ou -- num painel restaurado
+/// que espera o gesto (RF-20.33) -- a que diz como conectar.
+fn ssh_start_note(catalog: &Catalog, dormant: bool, host: &str, name: &str) -> String {
+    if dormant {
+        messages::ssh_dormant_note(catalog, name)
+    } else {
+        messages::ssh_connecting_note(catalog, host)
+    }
+}
+
+/// RF-20.25, ADR-0034, ADR-0071 §6: o que o `Terminal` diz estar vivo conta
+/// como "tem algo a perder" para a confirmação de fechamento -- processo extra
+/// no PTY **e** conexão SSH aberta, **do canal deste painel**. `Idle` é o
+/// painel local só com o shell, o SSH já encerrado e o dormente.
+fn liveness_needs_confirmation(liveness: Liveness) -> bool {
+    match liveness {
+        Liveness::Idle => false,
+        Liveness::ExtraProcesses | Liveness::OpenConnection => true,
+    }
+}
+
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
 /// devem confirmar antes de fechar -- dois sinais em OU, ambos atrás da
 /// config `confirm_close_with_process`. Função livre e pura (sem
@@ -1367,6 +1416,23 @@ fn should_confirm_tab_close(
         && (modes.alt_screen
             || modes.mouse_reporting != MouseReporting::None
             || has_extra_processes)
+}
+
+/// ADR-0053 §10: fechar a aba pergunta se **qualquer** painel dela tem algo a
+/// perder. Cada painel entra com o que o `Terminal` dele diz -- e `Liveness`
+/// é **por canal** (ADR-0071 §6): dois painéis na mesma conexão, um com o
+/// shell remoto já encerrado, e só o outro pesa.
+fn any_pane_needs_confirmation(
+    confirm_close_with_process: bool,
+    panes: impl IntoIterator<Item = (TermModes, Liveness)>,
+) -> bool {
+    panes.into_iter().any(|(modes, liveness)| {
+        should_confirm_tab_close(
+            confirm_close_with_process,
+            modes,
+            liveness_needs_confirmation(liveness),
+        )
+    })
 }
 
 /// ADR-0034 §6, ADR-0037 §3: decide se `window.close`/`app.quit` devem
@@ -2097,6 +2163,73 @@ mod should_confirm_tab_close_tests {
         assert!(!should_confirm_tab_close(false, modes, true));
     }
 
+    /// RF-20.22: `tab.new` a partir de uma aba SSH abre o padrão no
+    /// `startup_directory`; a partir de uma aba local, herda o diretório dela.
+    #[test]
+    fn a_new_tab_from_an_ssh_tab_starts_in_the_startup_directory() {
+        let startup = Some(PathBuf::from("/home/me"));
+        let tab_cwd = PathBuf::from("/work/project");
+
+        let from_local = inherited_cwd(local_cwd(false, Some(&tab_cwd)), &startup);
+        let from_ssh = inherited_cwd(local_cwd(true, Some(&tab_cwd)), &startup);
+        assert_eq!(from_local, Some(tab_cwd.clone()));
+        assert_eq!(from_ssh, startup);
+        // No startup directory either: the OS decides, never the remote path.
+        assert_eq!(inherited_cwd(local_cwd(true, Some(&tab_cwd)), &None), None);
+    }
+
+    /// RF-20.25: a conexão aberta confirma como o processo extra, atrás da
+    /// mesma chave -- e o painel SSH já encerrado, o dormente e o local só com
+    /// o shell, não.
+    #[test]
+    fn every_liveness_has_its_confirmation_decision() {
+        let table = [
+            (Liveness::Idle, false),
+            (Liveness::ExtraProcesses, true),
+            (Liveness::OpenConnection, true),
+        ];
+        for (liveness, confirms) in table {
+            assert_eq!(liveness_needs_confirmation(liveness), confirms);
+            assert_eq!(
+                should_confirm_tab_close(
+                    true,
+                    quiet_modes(),
+                    liveness_needs_confirmation(liveness)
+                ),
+                confirms,
+                "{liveness:?}"
+            );
+            // `confirm_close_with_process = false` silences all of them.
+            assert!(!should_confirm_tab_close(
+                false,
+                quiet_modes(),
+                liveness_needs_confirmation(liveness)
+            ));
+        }
+    }
+
+    /// ADR-0071 §6: o painel cujo shell remoto saiu fecha sem perguntar mesmo
+    /// com a conexão viva por causa do outro. O estado do canal é simulado:
+    /// a conexão compartilhada ainda não existe (prompt 14).
+    #[test]
+    fn with_two_panes_on_one_connection_only_the_open_channel_weighs() {
+        let ended = (quiet_modes(), Liveness::Idle);
+        let open = (quiet_modes(), Liveness::OpenConnection);
+        // The pane that closes alone: its own channel decides.
+        assert!(!any_pane_needs_confirmation(true, [ended]));
+        assert!(any_pane_needs_confirmation(true, [open]));
+        // The tab with both: the open channel is enough, whatever the order.
+        assert!(any_pane_needs_confirmation(true, [ended, open]));
+        assert!(any_pane_needs_confirmation(true, [open, ended]));
+        // Both ended (or never started): nothing to lose.
+        assert!(!any_pane_needs_confirmation(true, [ended, ended]));
+        // A busy local pane next to an ended SSH one still asks.
+        let busy_local = (quiet_modes(), Liveness::ExtraProcesses);
+        assert!(any_pane_needs_confirmation(true, [ended, busy_local]));
+        assert!(!any_pane_needs_confirmation(false, [open, busy_local]));
+        assert!(!any_pane_needs_confirmation(true, []));
+    }
+
     #[test]
     fn exited_keeps_its_own_success_and_code() {
         let ok = EndReason::Exited {
@@ -2158,6 +2291,62 @@ mod should_confirm_tab_close_tests {
         };
         assert_eq!(exit_outcome(&lost), (false, 1));
         assert_eq!(exit_outcome(&failed), (false, 1));
+    }
+
+    /// RF-20.26, ADR-0071 §3: a tabela inteira, do fim da sessão ao destino da
+    /// aba -- só o `exit` limpo (local ou do servidor) fecha. `Lost` e todo
+    /// `Failed` ficam abertos com nota, e nenhum deles reconecta aqui.
+    #[test]
+    fn the_whole_table_of_end_reasons_decides_closed_or_kept() {
+        use porecatu_term::{FailCause, LostCause};
+        let remote = |code, signal: Option<&str>| EndReason::RemoteEnded {
+            code,
+            signal: signal.map(str::to_owned),
+        };
+        let mut table = vec![
+            (
+                EndReason::Exited {
+                    success: true,
+                    code: 0,
+                },
+                true,
+            ),
+            (
+                EndReason::Exited {
+                    success: false,
+                    code: 1,
+                },
+                false,
+            ),
+            (remote(Some(0), None), true),
+            (remote(Some(3), None), false),
+            (remote(None, Some("HUP")), false),
+            (remote(Some(0), Some("HUP")), false),
+            (remote(None, None), false),
+        ];
+        for cause in [
+            LostCause::KeepaliveTimeout,
+            LostCause::Transport,
+            LostCause::ServerDisconnect,
+        ] {
+            table.push((EndReason::Lost { cause }, false));
+        }
+        for cause in [
+            FailCause::Refused,
+            FailCause::Timeout,
+            FailCause::AuthRejected,
+            FailCause::AuthCancelled,
+            FailCause::AuthUnsupported,
+            FailCause::KeyUnreadable,
+            FailCause::HostKeyRejectedByUser,
+            FailCause::ChannelRefused,
+            FailCause::Runtime,
+        ] {
+            table.push((EndReason::Failed { cause }, false));
+        }
+        for (reason, closes) in table {
+            assert_eq!(exit_outcome(&reason).0, closes, "{reason:?}");
+        }
     }
 }
 
@@ -2398,11 +2587,25 @@ impl WindowState {
     /// aba ativa -> diretório de início do app -> nenhum (o SO decide,
     /// tipicamente home).
     fn resolve_new_tab_cwd(&self, startup_directory: &Option<PathBuf>) -> Option<PathBuf> {
-        self.workspace
-            .active_tab()
-            .and_then(|id| self.workspace.tab(id))
-            .and_then(|tab| tab.cwd().cloned())
-            .or_else(|| startup_directory.clone())
+        inherited_cwd(
+            self.workspace
+                .active_tab()
+                .and_then(|id| self.local_cwd_of(id)),
+            startup_directory,
+        )
+    }
+
+    /// O `cwd` **local** da aba (do painel focado), ou `None` quando esse painel
+    /// é SSH -- o diretório de um servidor nunca é herdado como local
+    /// (RF-20.22). O remoto nem passa por `Tab::cwd` (ver `remote_cwd`); isto
+    /// é a segunda trava, para um `cwd` herdado antes de o perfil ser SSH.
+    fn local_cwd_of(&self, id: TabId) -> Option<PathBuf> {
+        let tab = self.workspace.tab(id)?;
+        let remote = self
+            .panes
+            .get(&(id, tab.panes().focused_id()))
+            .is_some_and(|rt| rt.ssh_host.is_some());
+        local_cwd(remote, tab.cwd())
     }
 
     /// `cwd` herdado por `group.new_tab` (RF-2.8): a última aba **do grupo
@@ -2419,8 +2622,7 @@ impl WindowState {
         self.workspace
             .group(group)
             .and_then(|g| g.tabs().last())
-            .and_then(|&id| self.workspace.tab(id))
-            .and_then(|tab| tab.cwd().cloned())
+            .and_then(|&id| self.local_cwd_of(id))
             .or_else(|| self.resolve_new_tab_cwd(startup_directory))
     }
 
@@ -2575,6 +2777,8 @@ impl WindowState {
             None => profile_spawn::default_profile(config),
         };
         let shell_name = profile_spawn::display_name(&spawn_profile.resolved);
+        // A connection has no local directory to start in (RF-20.22).
+        let cwd = local_cwd(spawn_profile.resolved.ssh.is_some(), cwd.as_ref());
         let tab_id = match target {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
                 Some(g) => {
@@ -2703,7 +2907,15 @@ impl WindowState {
         };
 
         let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+        let ssh_name = profile.ssh.as_ref().map(|ssh| ssh.name.clone());
+        let ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
+        // RF-20.33: a restored SSH pane never connects by itself.
+        let dormant = origin == SpawnOrigin::Restored && profile.ssh.is_some();
         let spec = match &profile.ssh {
+            Some(_) if dormant => BackendSpec::Dormant {
+                rows: rows as u16,
+                cols: cols as u16,
+            },
             Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16)),
             None => BackendSpec::Local(pty_config),
         };
@@ -2725,9 +2937,9 @@ impl WindowState {
                     );
                 }
                 // ADR-0075 §5: o estado da conexão é nota no grid.
-                if let Some(host) = &ssh_host {
+                if let (Some(host), Some(name)) = (&ssh_host, &ssh_name) {
                     terminal.inject_note(
-                        &messages::ssh_connecting_note(&self.catalog, host),
+                        &ssh_start_note(&self.catalog, dormant, host, name),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2771,12 +2983,18 @@ impl WindowState {
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
-                        received_osc7: false,
+                        // An SSH pane has no local shell to invite to emit
+                        // OSC 7, and the session never asks it for a local
+                        // directory: it counts as "already has it".
+                        received_osc7: ssh_host.is_some(),
                         #[cfg(windows)]
                         first_output_at: None,
                         pending_project_command,
                         pending_project_notice,
                         ssh_host,
+                        ssh_target,
+                        remote_cwd: None,
+                        dormant,
                     },
                 );
             }
@@ -2826,6 +3044,7 @@ impl WindowState {
         spawn_profile: &profile_spawn::SpawnProfile,
         now: Instant,
         startup_directory: &Option<PathBuf>,
+        dormant: bool,
     ) {
         let profile = &spawn_profile.resolved;
         self.set_pane_profile(tab_id, pane_id, profile);
@@ -2852,7 +3071,13 @@ impl WindowState {
             },
         };
         let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+        let ssh_name = profile.ssh.as_ref().map(|ssh| ssh.name.clone());
+        let ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
         let spec = match &profile.ssh {
+            Some(_) if dormant => BackendSpec::Dormant {
+                rows: rows as u16,
+                cols: cols as u16,
+            },
             Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16)),
             None => BackendSpec::Local(pty_config),
         };
@@ -2872,9 +3097,9 @@ impl WindowState {
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
-                if let Some(host) = &ssh_host {
+                if let (Some(host), Some(name)) = (&ssh_host, &ssh_name) {
                     terminal.inject_note(
-                        &messages::ssh_connecting_note(&self.catalog, host),
+                        &ssh_start_note(&self.catalog, dormant, host, name),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2890,12 +3115,15 @@ impl WindowState {
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
-                        received_osc7: false,
+                        received_osc7: ssh_host.is_some(),
                         #[cfg(windows)]
                         first_output_at: None,
                         pending_project_command: None,
                         pending_project_notice: None,
                         ssh_host,
+                        ssh_target,
+                        remote_cwd: None,
+                        dormant,
                     },
                 );
             }
@@ -2970,6 +3198,8 @@ impl WindowState {
                 &spawn_profile,
                 now,
                 startup_directory,
+                // RF-20.33: an SSH sibling waits for its own gesture.
+                spawn_profile.resolved.ssh.is_some(),
             );
         }
     }
@@ -3053,6 +3283,8 @@ impl WindowState {
             &spawn_profile,
             now,
             startup_directory,
+            // A split is the user asking for "one more of these": it connects.
+            false,
         );
         // O painel de origem encolheu na árvore, mas o `Terminal` dele já
         // existia antes do split e não sabe disso sozinho -- sem isto, um
@@ -3117,6 +3349,11 @@ impl WindowState {
         if !tab.is_not_started() {
             return;
         }
+        // RF-20.33: a focused SSH pane stays `NotStarted` in the model after
+        // its dormant runtime exists -- the tab has been dealt with already.
+        if self.panes.contains_key(&(id, tab.panes().focused_id())) {
+            return;
+        }
         let cwd = tab.cwd().cloned();
         // ADR-0070 §4: o perfil é resolvido agora, no primeiro foco -- ele
         // pode ter sido editado entre a restauração e este momento.
@@ -3143,11 +3380,6 @@ impl WindowState {
         // continua sendo o foco da aba, mas ele sobe **todos** os painéis
         // dela de uma vez -- `Tab::start()` só formaliza o focado, então
         // cada painel da árvore recebe o próprio `Pane::start()` aqui.
-        if let Some(tab) = self.workspace.tab_mut(id) {
-            for pane in tab.panes_mut().panes_mut() {
-                pane.start();
-            }
-        }
         self.spawn_restored_sibling_panes(
             id,
             cell_metrics,
@@ -3158,6 +3390,145 @@ impl WindowState {
             now,
             startup_directory,
         );
+        self.start_live_panes(id);
+        // RF-20.33: this is where a dormant SSH pane becomes the active one
+        // (`Ctrl+Tab`, `tab.goto_N`, the tab the restore picked). Gaining
+        // focus is not a gesture on the pane, and the one decision says so.
+        if profile_spawn::gesture_connects(profile_spawn::PaneGesture::Focus)
+            && let Some((tab, pane)) = self.dormant_focused_pane()
+        {
+            self.connect_dormant_pane(tab, pane, config, startup_directory, now);
+        }
+    }
+
+    /// Formaliza `NotStarted -> Running` em todo painel da aba que ganhou um
+    /// processo -- ou seja, em todos menos os SSH dormentes (RF-20.33), que
+    /// só `Self::connect_dormant_pane` inicia. Roda **depois** de os painéis
+    /// irmãos subirem, para já ver quais ficaram dormentes.
+    fn start_live_panes(&mut self, tab_id: TabId) {
+        let Some(tab) = self.workspace.tab_mut(tab_id) else {
+            return;
+        };
+        for pane in tab.panes_mut().panes_mut() {
+            if !self
+                .panes
+                .get(&(tab_id, pane.id()))
+                .is_some_and(|rt| rt.dormant)
+            {
+                pane.start();
+            }
+        }
+    }
+
+    fn is_dormant(&self, tab: TabId, pane: PaneId) -> bool {
+        self.panes.get(&(tab, pane)).is_some_and(|rt| rt.dormant)
+    }
+
+    /// O painel focado da aba ativa, se for um SSH dormente.
+    fn dormant_focused_pane(&self) -> Option<(TabId, PaneId)> {
+        let tab = self.workspace.active_tab()?;
+        let pane = self.focused_pane_of(tab)?;
+        self.is_dormant(tab, pane).then_some((tab, pane))
+    }
+
+    /// Aba que não tem nenhum processo ainda -- `NotStarted` **e** sem
+    /// runtime. Uma aba cujo painel focado é um SSH dormente também é
+    /// `NotStarted` no modelo, mas tem runtime (o motor com a nota) e outros
+    /// painéis podem ter processo: ela passa pela agregação normal.
+    fn tab_has_nothing_running(&self, id: TabId) -> bool {
+        self.workspace.tab(id).is_some_and(|t| {
+            t.is_not_started() && !self.panes.contains_key(&(id, t.panes().focused_id()))
+        })
+    }
+
+    /// RF-20.33: o primeiro gesto do usuário sobre um painel SSH restaurado
+    /// -- clique nele ou `Enter` com ele focado -- liga o backend ao motor que
+    /// já está lá. O perfil é resolvido agora, como em todo spawn
+    /// (ADR-0070 §4): se ele deixou de ser SSH desde a restauração, sobe o
+    /// que ele é hoje.
+    fn connect_dormant_pane(
+        &mut self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        config: &porecatu_config::Config,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+    ) {
+        if !self.is_dormant(tab_id, pane_id) {
+            return;
+        }
+        let saved = self
+            .workspace
+            .tab(tab_id)
+            .and_then(|t| t.panes().pane(pane_id))
+            .and_then(|p| p.profile().map(str::to_owned));
+        let spawn_profile = profile_spawn::restored_profile(config, saved.as_deref());
+        let profile = &spawn_profile.resolved;
+        self.set_pane_profile(tab_id, pane_id, profile);
+        let Some(runtime) = self.panes.get_mut(&(tab_id, pane_id)) else {
+            return;
+        };
+        let (rows, cols) = match (runtime.snapshot.rows, runtime.snapshot.cols) {
+            (0, _) | (_, 0) => (24, 80),
+            (rows, cols) => (rows as u16, cols as u16),
+        };
+        let spec = match &profile.ssh {
+            Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows, cols)),
+            None => BackendSpec::Local(SpawnConfig {
+                program: profile.program.clone(),
+                args: profile.args.clone(),
+                env: profile.env.clone(),
+                cwd: profile
+                    .cwd
+                    .clone()
+                    .or_else(|| startup_directory.clone())
+                    .filter(|dir| dir.is_dir()),
+                size: PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+            }),
+        };
+        match runtime.terminal.reattach(spec) {
+            Ok(()) => {
+                runtime.dormant = false;
+                runtime.ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+                runtime.ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
+                runtime.received_osc7 = runtime.ssh_host.is_some();
+                runtime.remote_cwd = None;
+                if let Some(ssh) = &profile.ssh {
+                    runtime.terminal.inject_note(
+                        &messages::ssh_connecting_note(&self.catalog, &ssh.host),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(id) = &spawn_profile.missing {
+                    runtime.terminal.inject_note(
+                        &msg::note::profile_missing(&self.catalog, id),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(pane) = self
+                    .workspace
+                    .tab_mut(tab_id)
+                    .and_then(|t| t.panes_mut().pane_mut(pane_id))
+                {
+                    pane.start();
+                }
+                self.mark_session_dirty();
+            }
+            Err(err) => {
+                self.warnings.push(
+                    Severity::Error,
+                    msg::notice::spawn_failed::title(&self.catalog),
+                    messages::terminal_spawn_error(&self.catalog, &err),
+                    now,
+                );
+            }
+        }
+        self.sync_window_title();
     }
 
     /// Fecha uma aba sem perguntar: sinaliza o processo sem bloquear
@@ -3305,7 +3676,7 @@ impl WindowState {
         let id = self.workspace.active_tab()?;
         // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
         // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup`.
-        if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
+        if self.tab_has_nothing_running(id) {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
@@ -3313,21 +3684,16 @@ impl WindowState {
         // tem processo ativo -- não só o focado. Diferente de
         // `action_close_pane`, que fecha um painel só e por isso olha
         // apenas o runtime dele.
-        let any_pane_needs_confirmation = self
-            .workspace
-            .tab(id)?
-            .panes()
-            .leaves_in_order()
-            .iter()
-            .any(|pane| {
-                self.panes.get(&(id, *pane)).is_some_and(|runtime| {
-                    should_confirm_tab_close(
-                        confirm_close_with_process,
-                        runtime.terminal.modes(),
-                        runtime.terminal.liveness() != Liveness::Idle,
-                    )
-                })
-            });
+        let any_pane_needs_confirmation = any_pane_needs_confirmation(
+            confirm_close_with_process,
+            self.workspace
+                .tab(id)?
+                .panes()
+                .leaves_in_order()
+                .iter()
+                .filter_map(|pane| self.panes.get(&(id, *pane)))
+                .map(|runtime| (runtime.terminal.modes(), runtime.terminal.liveness())),
+        );
         if any_pane_needs_confirmation {
             let title = self
                 .workspace
@@ -3365,7 +3731,7 @@ impl WindowState {
         if should_confirm_tab_close(
             confirm_close_with_process,
             runtime.terminal.modes(),
-            runtime.terminal.liveness() != Liveness::Idle,
+            liveness_needs_confirmation(runtime.terminal.liveness()),
         ) {
             let title = tab.title().to_string();
             return Some(TabCloseOutcome::Dialog(ConfirmDialog::close_pane(
@@ -4862,26 +5228,21 @@ impl WindowState {
     ) -> Option<TabCloseOutcome> {
         // ADR-0037 §3 -- mesma checagem de `action_close_tab`, antes da
         // detecção do ADR-0034.
-        if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
+        if self.tab_has_nothing_running(id) {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
         // ADR-0053 §10 -- mesma agregação de `action_close_tab`.
-        let any_pane_needs_confirmation = self
-            .workspace
-            .tab(id)?
-            .panes()
-            .leaves_in_order()
-            .iter()
-            .any(|pane| {
-                self.panes.get(&(id, *pane)).is_some_and(|runtime| {
-                    should_confirm_tab_close(
-                        confirm_close_with_process,
-                        runtime.terminal.modes(),
-                        runtime.terminal.liveness() != Liveness::Idle,
-                    )
-                })
-            });
+        let any_pane_needs_confirmation = any_pane_needs_confirmation(
+            confirm_close_with_process,
+            self.workspace
+                .tab(id)?
+                .panes()
+                .leaves_in_order()
+                .iter()
+                .filter_map(|pane| self.panes.get(&(id, *pane)))
+                .map(|runtime| (runtime.terminal.modes(), runtime.terminal.liveness())),
+        );
         if any_pane_needs_confirmation {
             let title = self
                 .workspace
@@ -5252,6 +5613,25 @@ impl WindowState {
         // sinal de verdade: `Tab::cwd` sozinho não serve, porque uma aba
         // nova **herda** o `cwd` do grupo sem nunca ter recebido OSC 7.
         let runtime = self.pane_runtime(tab_id);
+        // RF-20.21: numa aba SSH a barra mostra `usuário@host` e, se o OSC 7
+        // veio com o host do perfil, o diretório do servidor -- e nada de
+        // Git, porque o repositório que o app enxerga é local.
+        if let Some(target) = runtime.and_then(|rt| rt.ssh_target.clone()) {
+            return status_bar::StatusBarContent {
+                group: self
+                    .workspace
+                    .group_of_tab(tab_id)
+                    .and_then(|g| self.workspace.group(g))
+                    .and_then(|g| g.name())
+                    .map(str::to_owned),
+                pane_count_label: status_bar::pane_count_label(
+                    &self.catalog,
+                    tab.map_or(0, |t| t.panes().leaves_in_order().len()),
+                ),
+                system: std::env::consts::OS.to_owned(),
+                ..status_bar::ssh_content(target, runtime.and_then(|rt| rt.remote_cwd.as_deref()))
+            };
+        }
         let received_osc7 = runtime.is_some_and(|rt| rt.received_osc7);
         let cwd_path = tab
             .and_then(|t| t.cwd())
@@ -6675,6 +7055,8 @@ impl App {
             &window_v1.tabs,
             window_v1.active_tab,
             lazy_restore,
+            // RF-20.33: an SSH pane is born `NotStarted` whatever else is set.
+            &|id| profile_spawn::restores_as_ssh(&self.config, id),
         );
 
         // RF-3.8: só a aba ativa sobe agora; com `lazy_restore = false`,
@@ -6709,11 +7091,8 @@ impl App {
             );
             // RF-6.23: sobe todos os painéis da árvore de uma vez, não só
             // o focado -- mesma razão de `Self::ensure_active_tab_started`.
-            if let Some(tab) = state.workspace.tab_mut(tab_id) {
-                for pane in tab.panes_mut().panes_mut() {
-                    pane.start();
-                }
-            }
+            // Os irmãos primeiro: `start_live_panes` pula os SSH dormentes
+            // (RF-20.33), e só os conhece depois de subirem.
             state.spawn_restored_sibling_panes(
                 tab_id,
                 self.cell_metrics,
@@ -7191,13 +7570,14 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let significant_tab_count = state.panes.len();
+        // RF-20.33: a dormant SSH pane is a grid with a note, nothing to lose.
+        let significant_tab_count = state.panes.values().filter(|rt| !rt.dormant).count();
         let confirm_close_with_process = self.config.general.confirm_close_with_process;
         let any_tab_busy = state.panes.values().any(|runtime| {
             should_confirm_tab_close(
                 confirm_close_with_process,
                 runtime.terminal.modes(),
-                runtime.terminal.liveness() != Liveness::Idle,
+                liveness_needs_confirmation(runtime.terminal.liveness()),
             )
         });
         if window_close_needs_confirmation(significant_tab_count, any_tab_busy) {
@@ -9210,20 +9590,36 @@ impl ApplicationHandler<Wakeup> for App {
                 }
                 // Depende de tema resolvido -- F4.
                 TermEvent::ColorQuery(_) => {}
-                TermEvent::Cwd(cwd) => {
-                    // RF-3.1 (ADR-0039 §2): sinal de verdade de que esta
-                    // instância tem OSC 7 -- diferente de `Tab::cwd()`,
-                    // que uma aba nova já pode ter por herança (ver o
-                    // comentário do campo em `PaneRuntime`).
-                    if let Some(rt) = state.panes.get_mut(&(tab_id, pane_id)) {
-                        rt.received_osc7 = true;
-                    }
+                TermEvent::Cwd { path: cwd, host } => {
+                    // RF-20.22: num painel SSH o caminho é do servidor. Fica
+                    // no runtime, só com o host do perfil, e **nunca** chega
+                    // a `Pane::cwd` -- de lá saem o `cwd` herdado, o fallback
+                    // e a sessão.
+                    let is_remote = match state.panes.get_mut(&(tab_id, pane_id)) {
+                        Some(rt) => match rt.ssh_host.clone() {
+                            Some(profile_host) => {
+                                rt.remote_cwd =
+                                    profile_spawn::remote_cwd(&profile_host, host.as_deref(), &cwd);
+                                true
+                            }
+                            // RF-3.1 (ADR-0039 §2): sinal de verdade de que
+                            // esta instância tem OSC 7 -- diferente de
+                            // `Tab::cwd()`, que uma aba nova já pode ter por
+                            // herança (ver o comentário do campo em
+                            // `PaneRuntime`).
+                            None => {
+                                rt.received_osc7 = true;
+                                false
+                            }
+                        },
+                        None => false,
+                    };
                     // No painel `pane_id`, não no focado da aba (ADR-0053
                     // §2) -- `tab.set_cwd` gravaria no painel focado *no
                     // instante em que este evento é processado*, que pode
                     // já não ser mais `pane_id` se o foco mudou entre o
                     // evento ser gerado e ser lido aqui.
-                    if let Some(tab) = state.workspace.tab_mut(tab_id) {
+                    if !is_remote && let Some(tab) = state.workspace.tab_mut(tab_id) {
                         tab.set_pane_cwd(pane_id, cwd);
                         state.mark_session_dirty();
                     }
@@ -9858,6 +10254,31 @@ impl App {
             ActionOutcome::OpenSessionPicker { edit_name } => {
                 state.open_session_picker(edit_name);
                 state.window.request_redraw();
+            }
+            ActionOutcome::Unhandled if state.dormant_focused_pane().is_some() => {
+                // RF-20.33: o painel SSH restaurado só entende `Enter`. Nenhuma
+                // outra tecla chega a ele -- não há processo para recebê-la.
+                if let Some((tab, pane)) = state.dormant_focused_pane() {
+                    let enter = key.state == ElementState::Pressed
+                        && key.logical_key == Key::Named(NamedKey::Enter)
+                        && !state.modifiers.ctrl
+                        && !state.modifiers.alt;
+                    let gesture = if enter {
+                        profile_spawn::PaneGesture::Enter
+                    } else {
+                        profile_spawn::PaneGesture::Key
+                    };
+                    if profile_spawn::gesture_connects(gesture) {
+                        state.connect_dormant_pane(
+                            tab,
+                            pane,
+                            &self.config,
+                            &self.startup_directory,
+                            Instant::now(),
+                        );
+                    }
+                    state.window.request_redraw();
+                }
             }
             ActionOutcome::Unhandled => {
                 if let Some(runtime) = state.active_runtime() {
@@ -11509,6 +11930,26 @@ impl App {
                 {
                     state.search = None;
                 }
+            }
+            // RF-20.33: o clique num painel SSH restaurado é o gesto que o
+            // conecta -- e é consumido por inteiro, não há programa a quem
+            // entregá-lo.
+            if button == MouseButton::Left
+                && pressed
+                && let Some(id) = active_id
+                && state.is_dormant(id, pane)
+            {
+                if profile_spawn::gesture_connects(profile_spawn::PaneGesture::Click) {
+                    state.connect_dormant_pane(
+                        id,
+                        pane,
+                        &self.config,
+                        &self.startup_directory,
+                        Instant::now(),
+                    );
+                }
+                state.window.request_redraw();
+                return;
             }
             if let Some(runtime) = active_id.and_then(|tab| state.panes.get(&(tab, pane))) {
                 input::handle_mouse_button(

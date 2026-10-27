@@ -525,6 +525,14 @@ Se a pergunta chega com a aba em segundo plano, o diálogo **não rouba o foco**
 
 O estado da conexão (conectando, falhou, caiu) aparece como nota no próprio terminal, abaixo do conteúdo. Dividir um painel SSH abre uma conexão nova.
 
+**O rótulo e a barra de status.** Sem título seu e enquanto o servidor não manda um, a aba se chama como o perfil (`prod-web-01`). A barra de status mostra `usuário@host` no lugar do nome do shell. A pasta aparece só se o shell do servidor informá-la (OSC 7, como no [convite de integração de shell](reference/integracao-de-shell.md)) **com o mesmo nome de host do perfil**: um perfil escrito com o IP e um shell que diz o nome da máquina não mostram pasta. Os segmentos de Git não aparecem — o repositório que o Porecatu enxerga é o local.
+
+**Fechar.** Fechar uma aba, um painel ou a janela com uma conexão SSH **aberta** (conectando, autenticando ou conectada) pede confirmação, atrás de `general.confirm_close_with_process`, como um programa em primeiro plano. Cada painel conta por si: o painel cujo shell remoto já saiu fecha sem perguntar. Aba já encerrada, ou que nunca conectou, também. Quando o servidor encerra a sessão, vale o de um shell local: `exit` (código 0) fecha a aba; qualquer outro código, ou um sinal, deixa a aba aberta com a nota; uma conexão que falhou ou caiu fica aberta com a causa.
+
+**Reabrir o app.** Todo painel SSH restaurado — ao abrir o app ou ao abrir uma sessão nomeada — volta **esmaecido, sem conectar**, com a nota "Enter para conectar a `nome`", **mesmo com `lazy_restore = false` e mesmo sendo o painel ativo**. Ele conecta no primeiro **clique** dentro dele ou no primeiro **Enter** com ele focado; trocar de aba, `Ctrl+Tab` e `tab.goto_N` só o mostram. Abrir o app nunca pede senha nem abre o diálogo de chave de host sozinho. Painéis locais voltam como sempre.
+
+**Pastas.** `tab.new` numa aba SSH abre o perfil padrão na pasta de início (`startup_directory`), nunca numa pasta do servidor; o `.porecatu` nunca roda numa aba SSH; a sessão grava o perfil do painel e **nada da conexão** — nem pasta, nem segredo.
+
 ### Escolher o perfil
 
 - **Clique direito no `+`** (de um grupo, ou o de abas soltas) abre o menu

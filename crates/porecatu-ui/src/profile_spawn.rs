@@ -133,6 +133,56 @@ pub(crate) fn ssh_spawn(ssh: &ResolvedSsh, rows: u16, cols: u16) -> SshSpawn {
     spawn
 }
 
+/// Whether a saved profile id launches an SSH connection **when restored**
+/// (RF-20.33): the answer of `restored_profile`, so an id that vanished from
+/// the config and fell back to an SSH default counts too -- the restore must
+/// never connect on its own either way.
+pub(crate) fn restores_as_ssh(config: &Config, saved: &str) -> bool {
+    restored_profile(config, Some(saved)).resolved.ssh.is_some()
+}
+
+/// What the user did to a pane, as far as a dormant SSH pane cares
+/// (RF-20.33, ADR-0075 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneGesture {
+    /// A left click inside the pane.
+    Click,
+    /// `Enter`, with the pane focused.
+    Enter,
+    /// The pane only gained focus: `Ctrl+Tab`, `tab.goto_N`, the tab the
+    /// restore picked as active, a pane-focus action.
+    Focus,
+    /// Any other key.
+    Key,
+}
+
+/// Does this gesture connect a restored SSH pane? Only the two that say "I
+/// mean this pane": a click in it and `Enter` on it. Gaining focus never does
+/// -- opening the app, or walking through tabs, must not reach a server.
+pub(crate) fn gesture_connects(gesture: PaneGesture) -> bool {
+    matches!(gesture, PaneGesture::Click | PaneGesture::Enter)
+}
+
+/// `user@host`, what the status bar shows in place of a shell name
+/// (RF-20.21).
+pub(crate) fn ssh_target(ssh: &ResolvedSsh) -> String {
+    format!("{}@{}", ssh.user, ssh.host)
+}
+
+/// The directory an SSH pane's OSC 7 reports, **only when** the host in it is
+/// the profile's (RF-20.21): the path is the server's, and a shell that names
+/// another machine -- or none -- is not vouching for it. Host names compare
+/// ignoring case. The result is never a local directory (RF-20.22).
+pub(crate) fn remote_cwd(
+    profile_host: &str,
+    osc7_host: Option<&str>,
+    path: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    osc7_host
+        .filter(|host| host.eq_ignore_ascii_case(profile_host))
+        .map(|_| path.to_path_buf())
+}
+
 /// The id the pane records: `None` for the `[shell]`, never `""`.
 pub(crate) fn pane_profile_id(resolved: &ResolvedProfile) -> Option<String> {
     (!resolved.id.is_empty()).then(|| resolved.id.clone())
@@ -142,10 +192,10 @@ pub(crate) fn pane_profile_id(resolved: &ResolvedProfile) -> Option<String> {
 /// RF-1.7/ADR-0017): its `program`, or the detected shell when empty, cut to
 /// the base name without path or extension.
 pub(crate) fn display_name(resolved: &ResolvedProfile) -> String {
-    // An SSH profile launches no local program: the title falls back to the
-    // server it connects to.
+    // An SSH profile launches no local program: with no custom title and no
+    // OSC 0/2, the tab is labeled by the profile's name (RF-20.20).
     if let Some(ssh) = &resolved.ssh {
-        return ssh.host.clone();
+        return ssh.name.clone();
     }
     let program = match &resolved.program {
         Some(program) => program.clone(),
@@ -316,15 +366,62 @@ mod tests {
     }
 
     #[test]
-    fn an_ssh_pane_is_titled_by_its_host_and_never_by_the_local_shell() {
+    fn an_ssh_pane_is_titled_by_the_profile_name_and_never_by_the_local_shell() {
         let config = config(SSH);
         let resolved = resolve_profile(&config, ProfileRef::Id("prod")).unwrap();
 
-        assert_eq!(display_name(&resolved), "10.4.1.20");
+        assert_eq!(display_name(&resolved), "prod-web-01");
         // A split of an SSH pane launches the same profile (a new connection).
         let split = split_profile(&config, Some("prod"));
         assert!(split.resolved.ssh.is_some());
         assert_eq!(split.missing, None);
+    }
+
+    #[test]
+    fn only_a_click_and_enter_connect_a_restored_pane_never_focus() {
+        assert!(gesture_connects(PaneGesture::Click));
+        assert!(gesture_connects(PaneGesture::Enter));
+        assert!(!gesture_connects(PaneGesture::Focus));
+        assert!(!gesture_connects(PaneGesture::Key));
+    }
+
+    #[test]
+    fn an_ssh_profile_restores_dormant_a_local_one_and_the_shell_do_not() {
+        let config = config(
+            &(SSH.to_owned()
+                + "\n[[profiles.list]]\nid = \"loc\"\nname = \"loc\"\nprogram = \"zsh\"\n"),
+        );
+        assert!(restores_as_ssh(&config, "prod"));
+        assert!(!restores_as_ssh(&config, "loc"));
+        assert!(!restores_as_ssh(&config, ""));
+    }
+
+    #[test]
+    fn a_vanished_id_that_falls_back_to_an_ssh_default_still_restores_dormant() {
+        let config = config(&(SSH.to_owned() + "\n[profiles]\ndefault = \"prod\"\n"));
+        assert!(restores_as_ssh(&config, "gone"));
+    }
+
+    #[test]
+    fn the_status_target_is_user_at_host_and_the_directory_needs_the_same_host() {
+        let config = config(SSH);
+        let resolved = resolve_profile(&config, ProfileRef::Id("prod")).unwrap();
+        let ssh = resolved.ssh.as_ref().unwrap();
+        assert_eq!(ssh_target(ssh), "deploy@10.4.1.20");
+
+        let path = std::path::Path::new("/srv/app");
+        assert_eq!(
+            remote_cwd("10.4.1.20", Some("10.4.1.20"), path),
+            Some(path.to_path_buf())
+        );
+        // Case does not matter in a host name.
+        assert_eq!(
+            remote_cwd("Prod.Example.COM", Some("prod.example.com"), path),
+            Some(path.to_path_buf())
+        );
+        // Another machine, or none at all: not vouched for.
+        assert_eq!(remote_cwd("10.4.1.20", Some("other"), path), None);
+        assert_eq!(remote_cwd("10.4.1.20", None, path), None);
     }
 
     #[test]

@@ -504,6 +504,9 @@ pub struct ResolvedProfile {
 /// A `type = "ssh"` profile ready for `SshSpawn` (ADR-0072 §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSsh {
+    /// The profile's `name`: what labels the tab when nothing else does
+    /// (RF-20.20).
+    pub name: String,
     pub host: String,
     pub port: u16,
     pub user: String,
@@ -574,6 +577,7 @@ pub fn resolve_profile(
             env: Vec::new(),
             cwd: None,
             ssh: Some(ResolvedSsh {
+                name: def.name.clone(),
                 host: ssh.host.clone(),
                 port: ssh.port,
                 user: ssh.user.clone(),
@@ -1132,6 +1136,7 @@ program = "sh"
         assert_eq!(
             resolved.ssh,
             Some(ResolvedSsh {
+                name: "X".to_owned(),
                 host: "10.4.1.20".to_owned(),
                 port: 2200,
                 user: "deploy".to_owned(),

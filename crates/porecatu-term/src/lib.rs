@@ -36,7 +36,7 @@ pub use engine::{TermEngine, TermSize};
 pub use event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 pub use keys::{Modifiers, TermKey, encode_ctrl_char, encode_key, encode_text, wrap_paste};
 pub use mouse::{MouseAction, MouseButton, encode_mouse_report};
-pub use osc7::parse_file_uri;
+pub use osc7::{Osc7Cwd, parse_file_uri, parse_file_uri_with_host};
 pub use params::TermParams;
 pub use prompt::{Answer, Prompt, PromptId, PromptKind, PromptSink, Secret, SecretLabel};
 pub use scroll::TermScroll;

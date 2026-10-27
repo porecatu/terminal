@@ -25,6 +25,10 @@ pub enum BackendSpec {
     /// Abre um canal SSH com pseudo-terminal (ADR-0072). `Terminal::spawn`
     /// devolve na hora: conectar e autenticar acontecem fora da main thread.
     Ssh(SshSpawn),
+    /// Só o motor VT, nenhum backend: a grade existe e aceita notas, nada
+    /// roda. É o painel SSH restaurado que espera o primeiro gesto do
+    /// usuário (RF-20.33); `Terminal::reattach` liga o backend de verdade.
+    Dormant { rows: u16, cols: u16 },
 }
 
 impl BackendSpec {
@@ -33,6 +37,7 @@ impl BackendSpec {
         match self {
             BackendSpec::Local(config) => (config.size.rows as usize, config.size.cols as usize),
             BackendSpec::Ssh(spawn) => (spawn.rows as usize, spawn.cols as usize),
+            BackendSpec::Dormant { rows, cols } => (*rows as usize, *cols as usize),
         }
     }
 }
@@ -235,6 +240,48 @@ impl Inspect for PtyInspect {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn cwd_fallback(&self) -> Option<PathBuf> {
         None
+    }
+}
+
+/// O backend que não faz nada ([`BackendSpec::Dormant`]): leitor vazio,
+/// escritor que descarta, nunca termina, nada a perder ao fechar.
+pub(crate) struct DormantBackend;
+
+struct DormantInspect;
+
+impl Inspect for DormantInspect {
+    fn liveness(&self) -> Liveness {
+        Liveness::Idle
+    }
+
+    fn cwd_fallback(&self) -> Option<PathBuf> {
+        None
+    }
+}
+
+impl Backend for DormantBackend {
+    fn reader(&mut self) -> io::Result<Box<dyn Read + Send>> {
+        Ok(Box::new(io::empty()))
+    }
+
+    fn writer(&mut self) -> io::Result<Box<dyn Write + Send>> {
+        Ok(Box::new(io::sink()))
+    }
+
+    fn resize(&mut self, _rows: u16, _cols: u16) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn try_wait(&mut self) -> Option<EndReason> {
+        None
+    }
+
+    fn kill(&mut self) {}
+
+    fn finish(self: Box<Self>, _how: Finish) {}
+
+    fn inspector(&self) -> Arc<dyn Inspect> {
+        Arc::new(DormantInspect)
     }
 }
 

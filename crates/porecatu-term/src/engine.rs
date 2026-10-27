@@ -257,7 +257,10 @@ impl TermEngine {
     pub fn advance(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
         if let Some(cwd) = self.osc7.advance(bytes) {
-            let _ = self.events.send(TermEvent::Cwd(cwd));
+            let _ = self.events.send(TermEvent::Cwd {
+                path: cwd.path,
+                host: cwd.host,
+            });
         }
         if self.dismiss.advance(bytes) {
             let _ = self.events.send(TermEvent::ShellIntegrationDismiss);

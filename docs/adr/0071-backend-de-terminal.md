@@ -81,6 +81,8 @@ impl Terminal {
 
 A re-exportação é o caminho que o CLAUDE.md já prescreve para `SpawnConfig`/`PtySize`/`PtyError`: `porecatu-ui` não depende de `porecatu-pty` nem de `porecatu-ssh`. `SshSpawn` é um struct **do projeto**, sem tipo da biblioteca SSH dentro.
 
+> **Acrescentado na implementação do [PRD-020](../prd/prd-020-conexoes-ssh.md) RF-20.33 (prompt 12).** `BackendSpec` ganhou uma terceira variante, `Dormant { rows, cols }`: **só o motor**, nenhum backend (leitor vazio, escritor que descarta, nunca termina, `Liveness::Idle`). É o que o painel SSH restaurado usa para existir, mostrar a nota "`Enter` para conectar a `nome`" e esperar o primeiro gesto do usuário; o gesto chama `Terminal::reattach` com o `Ssh(..)` de verdade, e a nota que estava na grade fica (§4). Sem a variante, o painel não teria grade onde escrever a nota, e a decisão "nada conecta por acaso" ficaria sem lugar para viver.
+
 `Terminal::spawn` de um `Ssh` **não espera a conexão**: devolve na hora, com o motor criado e o backend em estado "conectando". Conectar, autenticar e abrir o canal acontecem fora da main thread (ADR-0072); os bytes só começam a chegar depois. Enquanto isso o leitor do backend simplesmente não tem o que ler.
 
 ### 3. Fim: razão em vez de código

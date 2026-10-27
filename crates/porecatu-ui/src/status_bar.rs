@@ -113,6 +113,24 @@ pub struct StatusBarContent {
     pub system: String,
 }
 
+/// O que a barra mostra de uma aba SSH (RF-20.21): `usuário@host` no lugar do
+/// nome do shell e, se houver, o diretório **do servidor** -- sem `~`, que é o
+/// home de outra máquina, e nunca "desatualizado". Sem segmento de Git: o
+/// repositório que o app enxerga é local. O resto (grupo, painéis, sistema) é
+/// de quem chama.
+pub fn ssh_content(target: String, remote_cwd: Option<&std::path::Path>) -> StatusBarContent {
+    StatusBarContent {
+        shell: target,
+        cwd: remote_cwd
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        cwd_is_stale: false,
+        git_branch: None,
+        ahead_behind: None,
+        ..StatusBarContent::default()
+    }
+}
+
 /// Conteúdo do segmento de commits atrás/à frente (PRD-013, ADR-0052
 /// §8), já resolvido pelo layout puro do mapa de sincronização -- este
 /// módulo não conhece o mapa nem o repositório, só o rótulo pronto e se
@@ -634,6 +652,48 @@ mod tests {
             pane_count_label: None,
             system: "windows".to_owned(),
         }
+    }
+
+    /// RF-20.21: an SSH tab shows `user@host` where the shell name goes.
+    #[test]
+    fn an_ssh_tab_shows_user_at_host_in_the_shell_segment() {
+        let ssh = ssh_content("deploy@10.4.1.20".to_owned(), None);
+        assert_eq!(ssh.shell, "deploy@10.4.1.20");
+    }
+
+    /// With an OSC 7 that names the profile's host the directory shows, raw
+    /// (the server's `~` is not ours to abbreviate); with one that names
+    /// another host, or none, the segment is simply absent.
+    #[test]
+    fn the_directory_shows_only_for_an_osc7_of_the_profiles_host() {
+        let path = std::path::Path::new("/srv/app");
+        let same = crate::profile_spawn::remote_cwd("10.4.1.20", Some("10.4.1.20"), path);
+        let other = crate::profile_spawn::remote_cwd("10.4.1.20", Some("laptop"), path);
+        let none = crate::profile_spawn::remote_cwd("10.4.1.20", None, path);
+
+        let shown = ssh_content("deploy@10.4.1.20".to_owned(), same.as_deref());
+        assert_eq!(shown.cwd, "/srv/app");
+        assert!(!shown.cwd_is_stale, "a remote directory is never 'stale'");
+        assert_eq!(
+            ssh_content("deploy@10.4.1.20".to_owned(), other.as_deref()).cwd,
+            ""
+        );
+        assert_eq!(
+            ssh_content("deploy@10.4.1.20".to_owned(), none.as_deref()).cwd,
+            ""
+        );
+    }
+
+    /// RF-20.21: the Git segments never appear on an SSH tab, whatever the
+    /// directory says.
+    #[test]
+    fn an_ssh_tab_has_no_git_segments() {
+        let ssh = ssh_content(
+            "deploy@10.4.1.20".to_owned(),
+            Some(std::path::Path::new("/srv/app")),
+        );
+        assert_eq!(ssh.git_branch, None);
+        assert_eq!(ssh.ahead_behind, None);
     }
 
     fn pal() -> ResolvedPalette {

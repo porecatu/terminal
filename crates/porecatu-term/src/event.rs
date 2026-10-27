@@ -41,7 +41,11 @@ pub enum TermEvent {
     /// motor -- ver `crate::osc7`. Herdado por `tab.new`/`window.new`;
     /// `None` continua sendo o fallback de `startup_directory` até o
     /// primeiro OSC 7 chegar.
-    Cwd(PathBuf),
+    ///
+    /// `host` é o que o shell pôs na URI. Num painel local não importa; num
+    /// painel SSH o caminho é do servidor e só vale com o host do perfil
+    /// (RF-20.21).
+    Cwd { path: PathBuf, host: Option<String> },
     /// Marcador de dispensa do convite de integração de shell digitado
     /// pelo usuário (ADR-0039 §4). Captura própria, fora do motor -- ver
     /// `crate::dismiss`.

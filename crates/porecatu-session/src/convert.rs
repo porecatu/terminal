@@ -84,15 +84,24 @@ pub fn window_from_workspace(ws: &Workspace) -> (Vec<GroupV1>, Vec<TabV1>, Optio
 /// aba que não é a `active_tab` da janela nasce `NotStarted` -- só a ativa
 /// nasce `Running`. Com `false`, todas nascem `Running`, e a chamada é
 /// idêntica ao comportamento de antes desta etapa. A decisão é por aba
-/// individual, não por lote: nenhuma verificação de disco (`cwd` inexistente,
+/// individual, não por lote -- salvo painel SSH, que ignora tudo isso (abaixo):
+/// nenhuma verificação de disco (`cwd` inexistente,
 /// RF-3.10) acontece aqui -- essa checagem é de quem sobe o shell de
 /// verdade (`WindowState::spawn_tab_runtime`), no momento em que a aba sobe,
 /// não na reconstrução do modelo.
+///
+/// `is_ssh_profile` (RF-20.33, ADR-0075 §5): todo painel cujo perfil gravado
+/// ela reconhece como SSH nasce `NotStarted`, **mesmo com `lazy_restore =
+/// false` e mesmo na aba ativa** -- uma conexão só abre por gesto do usuário.
+/// A decisão é por painel, não por aba; os locais seguem a regra acima sem
+/// mudança. O crate não conhece perfis (só o identificador gravado), então
+/// quem restaura diz quais identificadores são SSH.
 pub fn workspace_from_window(
     groups: &[GroupV1],
     tabs: &[TabV1],
     active_tab: Option<u32>,
     lazy_restore: bool,
+    is_ssh_profile: &dyn Fn(&str) -> bool,
 ) -> Workspace {
     let by_id: HashMap<u32, &TabV1> = tabs.iter().map(|t| (t.id, t)).collect();
     let mut ws = Workspace::new();
@@ -107,17 +116,20 @@ pub fn workspace_from_window(
             let is_active = active_tab == Some(file_tab_id);
             let not_started = lazy_restore && !is_active;
             let new_id = if let Some(tree) = &tab.panes {
-                let core_tree = pane_tree_from_v1(tree, not_started);
+                let core_tree = pane_tree_from_v1(tree, not_started, is_ssh_profile);
                 ws.insert_tab_with_panes(group_id, core_tree, pos)
             } else {
                 // Arquivo gravado por uma versão anterior ao ADR-0053 §11:
                 // sem árvore, a aba volta como um painel só (ADR-0036 §3,
                 // "perda de layout, não corrupção").
                 let shell = tab.spawn_program.clone().unwrap_or_default();
+                let ssh = is_ssh_saved(tab.profile.as_deref(), is_ssh_profile);
+                let not_started = not_started || ssh;
+                let cwd = tab.cwd.clone().filter(|_| !ssh);
                 let id = if not_started {
-                    ws.new_tab_not_started(group_id, shell, tab.cwd.clone(), pos)
+                    ws.new_tab_not_started(group_id, shell, cwd, pos)
                 } else {
-                    ws.new_tab(group_id, shell, tab.cwd.clone(), pos)
+                    ws.new_tab(group_id, shell, cwd, pos)
                 };
                 ws.tab_mut(id)
                     .expect("acabou de ser criada")
@@ -262,22 +274,36 @@ fn external_from_v1(node: &PaneNodeV1) -> ExternalNode<PaneV1> {
     }
 }
 
+fn is_ssh_saved(profile: Option<&str>, is_ssh_profile: &dyn Fn(&str) -> bool) -> bool {
+    profile_from_v1(profile).is_some_and(|id| is_ssh_profile(&id))
+}
+
 /// ADR-0053 §11: `PaneTreeV1` (disco) -> `PaneTree` (domínio) --
 /// `not_started` vem de fora porque o gatilho de restauração preguiçosa é
 /// por **aba** (RF-6.23): todo painel da árvore nasce no mesmo estado, nunca
 /// decidido folha a folha.
-fn pane_tree_from_v1(tree: &PaneTreeV1, not_started: bool) -> PaneTree {
+fn pane_tree_from_v1(
+    tree: &PaneTreeV1,
+    not_started: bool,
+    is_ssh_profile: &dyn Fn(&str) -> bool,
+) -> PaneTree {
     let shape = external_from_v1(&tree.root);
     PaneTree::from_external(
         shape,
         |id, leaf: &PaneV1| {
             let shell = leaf.spawn_program.clone().unwrap_or_default();
+            // RF-20.33: the exception to the tab-wide rule above -- an SSH pane
+            // waits for a gesture whatever the tab does.
+            let ssh = is_ssh_saved(leaf.profile.as_deref(), is_ssh_profile);
+            let not_started = not_started || ssh;
             let mut pane = if not_started {
                 Pane::new_not_started(id, shell)
             } else {
                 Pane::new(id, shell)
             };
-            if let Some(cwd) = leaf.cwd.clone() {
+            // A directory saved for an SSH pane (by a version that did not know
+            // better) is not a place on this machine: RF-20.22.
+            if let Some(cwd) = leaf.cwd.clone().filter(|_| !ssh) {
                 pane.set_cwd(cwd);
             }
             pane.set_profile(profile_from_v1(leaf.profile.as_deref()));
@@ -316,7 +342,7 @@ mod tests {
         let (groups2, tabs2, active_tab2): (Vec<GroupV1>, Vec<TabV1>, Option<u32>) =
             serde_json::from_str(&json).unwrap();
 
-        let rebuilt = workspace_from_window(&groups2, &tabs2, active_tab2, false);
+        let rebuilt = workspace_from_window(&groups2, &tabs2, active_tab2, false, &|_| false);
 
         // Ordem visual: uma aba solta seguida do grupo colapsado (que
         // continua gravado -- colapso não tira aba do arquivo).
@@ -394,7 +420,7 @@ mod tests {
         let json = serde_json::to_string(&(&groups, &tabs, active_tab)).unwrap();
         let (groups2, tabs2, active_tab2): (Vec<GroupV1>, Vec<TabV1>, Option<u32>) =
             serde_json::from_str(&json).unwrap();
-        let rebuilt = workspace_from_window(&groups2, &tabs2, active_tab2, false);
+        let rebuilt = workspace_from_window(&groups2, &tabs2, active_tab2, false, &|_| false);
 
         let rebuilt_id = rebuilt.visual_order().next().unwrap();
         let tree = rebuilt.tab(rebuilt_id).unwrap().panes();
@@ -460,7 +486,7 @@ mod tests {
         let tabs: Vec<TabV1> = serde_json::from_str(tabs_json).unwrap();
         assert!(tabs[0].panes.is_none(), "chave ausente vira None");
 
-        let ws = workspace_from_window(&groups, &tabs, Some(0), false);
+        let ws = workspace_from_window(&groups, &tabs, Some(0), false, &|_| false);
         let id = ws.visual_order().next().unwrap();
         let tab = ws.tab(id).unwrap();
         assert_eq!(tab.panes().leaves_in_order().len(), 1);
@@ -509,7 +535,7 @@ mod tests {
         }];
         let tabs = vec![tab_v1(0, "zsh"), tab_v1(1, "bash")];
 
-        let ws = workspace_from_window(&groups, &tabs, Some(1), true);
+        let ws = workspace_from_window(&groups, &tabs, Some(1), true, &|_| false);
 
         let ids: Vec<TabId> = ws.visual_order().collect();
         assert_eq!(
@@ -536,7 +562,7 @@ mod tests {
         }];
         let tabs = vec![tab_v1(0, "zsh"), tab_v1(1, "bash")];
 
-        let ws = workspace_from_window(&groups, &tabs, Some(1), false);
+        let ws = workspace_from_window(&groups, &tabs, Some(1), false, &|_| false);
 
         assert!(
             ws.visual_order()
@@ -560,7 +586,7 @@ mod tests {
         }];
         let tabs = vec![tab_v1(0, "zsh"), tab_v1(1, "bash")];
 
-        let ws = workspace_from_window(&groups, &tabs, Some(1), true);
+        let ws = workspace_from_window(&groups, &tabs, Some(1), true, &|_| false);
 
         let active = ws.active_tab().expect("aba ativa restaurada");
         let group = ws.group_of_tab(active).expect("aba pertence ao grupo");
@@ -676,7 +702,7 @@ mod tests {
         let json = serde_json::to_string(&(&groups, &tabs, active)).unwrap();
         let (groups2, tabs2, active2): (Vec<GroupV1>, Vec<TabV1>, Option<u32>) =
             serde_json::from_str(&json).unwrap();
-        let rebuilt = workspace_from_window(&groups2, &tabs2, active2, false);
+        let rebuilt = workspace_from_window(&groups2, &tabs2, active2, false, &|_| false);
 
         let profiles_of = |ws: &Workspace| -> Vec<Vec<Option<String>>> {
             ws.visual_order()
@@ -746,7 +772,7 @@ mod tests {
             collapsed: false,
             tabs: vec![0, 1],
         }];
-        let ws = workspace_from_window(&groups, &tabs, Some(0), false);
+        let ws = workspace_from_window(&groups, &tabs, Some(0), false, &|_| false);
         let mut count = 0;
         for id in ws.visual_order() {
             let tree = ws.tab(id).unwrap().panes();
@@ -756,6 +782,92 @@ mod tests {
             }
         }
         assert_eq!(count, 3);
+    }
+
+    /// RF-20.33: painel SSH nasce `NotStarted` com `lazy_restore = false` e na
+    /// aba ativa; o painel local da mesma aba segue a regra de sempre.
+    #[test]
+    fn an_ssh_pane_is_never_started_by_the_restore_not_even_the_active_one() {
+        let leaf = |id, profile: Option<&str>| {
+            PaneNodeV1::Leaf(PaneV1 {
+                id,
+                cwd: Some(PathBuf::from("/srv")),
+                spawn_program: Some("zsh".to_string()),
+                profile: profile.map(str::to_string),
+            })
+        };
+        let mixed = TabV1 {
+            id: 0,
+            panes: Some(PaneTreeV1 {
+                root: PaneNodeV1::Split {
+                    axis: SplitAxisV1::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(leaf(0, None)),
+                    second: Box::new(leaf(1, Some("prod"))),
+                },
+                focused: 1,
+            }),
+            ..tab_v1(0, "zsh")
+        };
+        let mut legacy = tab_v1(1, "zsh");
+        legacy.profile = Some("prod".to_string());
+        legacy.cwd = Some(PathBuf::from("/srv"));
+        let mut local_legacy = tab_v1(2, "zsh");
+        local_legacy.profile = Some("wsl".to_string());
+        let group = GroupV1 {
+            id: 0,
+            name: None,
+            color: None,
+            collapsed: false,
+            tabs: vec![0, 1, 2],
+        };
+        let is_ssh = |id: &str| id == "prod";
+
+        for lazy in [false, true] {
+            let ws = workspace_from_window(
+                &[group.clone()],
+                &[mixed.clone(), legacy.clone(), local_legacy.clone()],
+                Some(0),
+                lazy,
+                &is_ssh,
+            );
+            let order: Vec<TabId> = ws.visual_order().collect();
+            let states = |id: TabId| -> Vec<PaneState> {
+                let tree = ws.tab(id).unwrap().panes();
+                tree.leaves_in_order()
+                    .into_iter()
+                    .map(|p| tree.pane(p).unwrap().state())
+                    .collect()
+            };
+            // The active tab: the local pane runs, the SSH one waits -- focused
+            // or not.
+            assert_eq!(
+                states(order[0]),
+                [PaneState::Running, PaneState::NotStarted],
+                "lazy_restore = {lazy}"
+            );
+            assert!(ws.tab(order[0]).unwrap().is_not_started(), "SSH is focused");
+            // A saved tab without the pane tree, SSH profile: waits as well.
+            assert_eq!(states(order[1]), [PaneState::NotStarted]);
+            // The same shape with a local profile follows `lazy_restore`.
+            let expected = if lazy {
+                PaneState::NotStarted
+            } else {
+                PaneState::Running
+            };
+            assert_eq!(states(order[2]), [expected]);
+
+            // RF-20.22/RF-20.32: a directory saved for an SSH pane is dropped,
+            // the local pane keeps its own.
+            let tree = ws.tab(order[0]).unwrap().panes();
+            let leaves = tree.leaves_in_order();
+            assert_eq!(
+                tree.pane(leaves[0]).unwrap().cwd(),
+                Some(&PathBuf::from("/srv"))
+            );
+            assert_eq!(tree.pane(leaves[1]).unwrap().cwd(), None);
+            assert_eq!(ws.tab(order[1]).unwrap().cwd(), None);
+        }
     }
 
     /// Caminho sem `panes`: `TabV1::profile` vale para o painel único.
@@ -770,7 +882,7 @@ mod tests {
             collapsed: false,
             tabs: vec![0],
         };
-        let ws = workspace_from_window(&[group], &[tab], None, false);
+        let ws = workspace_from_window(&[group], &[tab], None, false, &|_| false);
         let id = ws.visual_order().next().unwrap();
         assert_eq!(ws.tab(id).unwrap().panes().focused().profile(), Some("wsl"));
     }
@@ -810,7 +922,13 @@ mod tests {
             tabs: vec![0, 1, 2],
         };
         let active = tab_v1(0, "zsh");
-        let ws = workspace_from_window(&[group], &[active, split_tab, legacy_tab], Some(0), true);
+        let ws = workspace_from_window(
+            &[group],
+            &[active, split_tab, legacy_tab],
+            Some(0),
+            true,
+            &|_| false,
+        );
 
         let order: Vec<TabId> = ws.visual_order().collect();
         let profiles_of = |id: TabId| -> Vec<Option<String>> {

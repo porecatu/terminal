@@ -140,6 +140,7 @@ A licença do `ssh2-config` é conferida com a árvore dele no PR que o adiciona
 ### 8. Barra de status e menu da aba
 
 - O segmento de shell mostra `usuário@host` numa aba SSH; o de diretório, o caminho remoto do OSC 7 quando o host do OSC 7 bate com o do perfil, e nada caso contrário; os de Git não aparecem (RF-20.21). Nenhum segmento novo, nenhum token novo.
+> **Como ficou (prompt 12).** O OSC 7 chega com o host (`TermEvent::Cwd { path, host }`; até aqui o host era descartado). Num painel SSH o caminho **não** entra em `Pane::cwd`: fica em `PaneRuntime::remote_cwd`, e só se o host da URI for **igual, sem distinguir caixa,** ao `host` do perfil — o que impede, por construção, que o `cwd` herdado por `tab.new`, o fallback de `cwd` e a sessão vejam um caminho do servidor (RF-20.22, RF-20.32). A comparação é estrita: um shell que diz `file:///dir` (sem host) ou o nome da máquina quando o perfil usa o IP **não** mostra diretório — a barra fica só com `usuário@host`. O rótulo da aba sem título é o **nome do perfil** (RF-20.20), não o host.
 - O menu de contexto da aba ganha **"Reconectar"** (`ssh.reconnect`, [ADR-0076](0076-reconexao-automatica.md)) numa aba SSH; em aba que não é SSH o item **não aparece** — exceção deliberada à regra do item esmaecido do ADR-0014, porque o item não está indisponível nessa aba, ele não tem sentido nela.
 
 ## Alternativas consideradas

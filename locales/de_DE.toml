@@ -664,6 +664,7 @@ skipped_lines = { one = "{count} known_hosts-Zeile nicht lesbar.", other = "{cou
 confirm = "Vertrauen und verbinden"
 
 [note.ssh]
+dormant = "Eingabetaste zum Verbinden mit {name}"
 connecting = "verbinde mit {host} …"
 refused = "Verbindung zu {host} nicht möglich: Verbindung abgelehnt oder Host nicht erreichbar"
 timeout = "Verbindung zu {host} nicht möglich: keine Antwort"

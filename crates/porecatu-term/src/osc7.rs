@@ -12,9 +12,18 @@ use std::path::PathBuf;
 
 use alacritty_terminal::vte::{Parser, Perform};
 
+/// What an OSC 7 carried: the path and the host the shell named for it
+/// (`None` for `file:///path`). The host matters on an SSH pane, where the
+/// path is the server's (RF-20.21).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Osc7Cwd {
+    pub path: PathBuf,
+    pub host: Option<String>,
+}
+
 #[derive(Default)]
 struct Sink {
-    cwd: Option<PathBuf>,
+    cwd: Option<Osc7Cwd>,
 }
 
 impl Perform for Sink {
@@ -23,7 +32,7 @@ impl Perform for Sink {
             return;
         }
         if let Some(uri) = params.get(1) {
-            self.cwd = parse_file_uri(uri);
+            self.cwd = parse_file_uri_with_host(uri);
         }
     }
 }
@@ -44,7 +53,7 @@ impl Osc7Watcher {
     }
 
     /// Processa `bytes` e devolve o `cwd` capturado neste lote, se houver.
-    pub fn advance(&mut self, bytes: &[u8]) -> Option<PathBuf> {
+    pub fn advance(&mut self, bytes: &[u8]) -> Option<Osc7Cwd> {
         self.parser.advance(&mut self.sink, bytes);
         self.sink.cwd.take()
     }
@@ -64,19 +73,30 @@ impl Default for Osc7Watcher {
 /// mesma conversão para revelar um `file://` -- inclusive a correção da
 /// letra de unidade do Windows abaixo, que só existe aqui uma vez.
 pub fn parse_file_uri(bytes: &[u8]) -> Option<PathBuf> {
+    parse_file_uri_with_host(bytes).map(|cwd| cwd.path)
+}
+
+/// Como [`parse_file_uri`], mas sem descartar o host: `file://srv/a` ->
+/// (`srv`, `/a`). Sem host (`file:///a`, `file://C:/a`) é `None`.
+pub fn parse_file_uri_with_host(bytes: &[u8]) -> Option<Osc7Cwd> {
     let s = std::str::from_utf8(bytes).ok()?;
     let rest = s.strip_prefix("file://")?;
-    let path = if is_windows_drive_without_host(rest) {
-        rest
+    let (host, path) = if is_windows_drive_without_host(rest) {
+        (None, rest)
     } else {
-        rest.find('/').map(|idx| &rest[idx..])?
+        let idx = rest.find('/')?;
+        let host = percent_decode(&rest[..idx]);
+        ((!host.is_empty()).then_some(host), &rest[idx..])
     };
     let path = strip_windows_drive_leading_slash(path);
     let decoded = percent_decode(path);
     if decoded.is_empty() {
         None
     } else {
-        Some(PathBuf::from(decoded))
+        Some(Osc7Cwd {
+            path: PathBuf::from(decoded),
+            host,
+        })
     }
 }
 
@@ -142,25 +162,52 @@ mod tests {
         bytes
     }
 
+    /// The path of what the watcher captured, the way the older tests read it.
+    fn path(cwd: Option<Osc7Cwd>) -> Option<PathBuf> {
+        cwd.map(|c| c.path)
+    }
+
     #[test]
     fn captures_path_without_host() {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file:///home/user/projeto"));
-        assert_eq!(cwd, Some(PathBuf::from("/home/user/projeto")));
+        assert_eq!(
+            cwd,
+            Some(Osc7Cwd {
+                path: PathBuf::from("/home/user/projeto"),
+                host: None,
+            })
+        );
     }
 
     #[test]
-    fn captures_path_with_host_and_discards_it() {
+    fn captures_path_with_host_and_keeps_it() {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file://myhost/home/user/projeto"));
-        assert_eq!(cwd, Some(PathBuf::from("/home/user/projeto")));
+        assert_eq!(
+            cwd,
+            Some(Osc7Cwd {
+                path: PathBuf::from("/home/user/projeto"),
+                host: Some("myhost".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse_file_uri(b"file://myhost/home/user/projeto"),
+            Some(PathBuf::from("/home/user/projeto"))
+        );
+    }
+
+    #[test]
+    fn a_drive_letter_is_not_a_host() {
+        let cwd = parse_file_uri_with_host(b"file://C:/Users/ana").unwrap();
+        assert_eq!(cwd.host, None);
     }
 
     #[test]
     fn percent_decodes_path() {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file:///home/user/um%20diret%C3%B3rio"));
-        assert_eq!(cwd, Some(PathBuf::from("/home/user/um diretório")));
+        assert_eq!(path(cwd), Some(PathBuf::from("/home/user/um diretório")));
     }
 
     #[test]
@@ -191,7 +238,7 @@ mod tests {
     fn windows_drive_letter_uri_drops_the_extra_leading_slash() {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file:///C:/Users/ana"));
-        assert_eq!(cwd, Some(PathBuf::from("C:/Users/ana")));
+        assert_eq!(path(cwd), Some(PathBuf::from("C:/Users/ana")));
     }
 
     /// Letra de unidade minúscula (`cmd.exe`/PowerShell podem emitir
@@ -200,7 +247,7 @@ mod tests {
     fn windows_drive_letter_uri_matches_lowercase_letter_too() {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file:///d:/projetos/porecatu"));
-        assert_eq!(cwd, Some(PathBuf::from("d:/projetos/porecatu")));
+        assert_eq!(path(cwd), Some(PathBuf::from("d:/projetos/porecatu")));
     }
 
     /// Forma de duas barras (sem a barra extra de host vazio) não deve
@@ -209,7 +256,7 @@ mod tests {
     fn windows_drive_letter_two_slash_form_is_not_mistaken_for_host() {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file://C:/Users/ana"));
-        assert_eq!(cwd, Some(PathBuf::from("C:/Users/ana")));
+        assert_eq!(path(cwd), Some(PathBuf::from("C:/Users/ana")));
     }
 
     /// Um hostname de verdade (sem letra de unidade seguida de `:/`)
@@ -218,6 +265,6 @@ mod tests {
     fn real_hostname_is_still_discarded() {
         let mut w = Osc7Watcher::new();
         let cwd = w.advance(&osc7("file://myhost/C:/Users/ana"));
-        assert_eq!(cwd, Some(PathBuf::from("C:/Users/ana")));
+        assert_eq!(path(cwd), Some(PathBuf::from("C:/Users/ana")));
     }
 }

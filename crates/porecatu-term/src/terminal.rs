@@ -23,7 +23,7 @@ use std::{fmt, io};
 
 use porecatu_pty::PtyError;
 
-use crate::backend::{Backend, BackendSpec, Finish, Inspect, Liveness, PtyBackend};
+use crate::backend::{Backend, BackendSpec, DormantBackend, Finish, Inspect, Liveness, PtyBackend};
 use crate::engine::{TermEngine, TermSize};
 use crate::event::TermEvent;
 use crate::params::TermParams;
@@ -113,6 +113,7 @@ impl Prepared {
     fn from_spec(spec: BackendSpec, prompts: PromptSink) -> Result<Self, TerminalSpawnError> {
         let backend: Box<dyn Backend> = match spec {
             BackendSpec::Local(config) => Box::new(PtyBackend::spawn(config)?),
+            BackendSpec::Dormant { .. } => Box::new(DormantBackend),
             BackendSpec::Ssh(spawn) => {
                 Box::new(SshBackend::open(spawn, prompts.clone()).map_err(|err| {
                     TerminalSpawnError::Stream(io::Error::new(
