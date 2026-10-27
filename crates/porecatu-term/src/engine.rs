@@ -268,8 +268,13 @@ impl TermEngine {
     /// -- passa pelo mesmo parser, nunca escreve na grade por fora dele
     /// (ADR-0017 item 5). `rgb` é resolvido por quem chama: este motor não
     /// conhece paleta nem tema.
+    ///
+    /// Cada quebra de linha do `text` vira `\r\n`: um `\n` sozinho só desce o
+    /// cursor, e uma nota de várias linhas (a de chave alterada, a do convite
+    /// de shell) viraria uma escada para a direita.
     pub fn inject_note(&mut self, text: &str, rgb: (u8, u8, u8)) {
         let (r, g, b) = rgb;
+        let text = text.replace("\r\n", "\n").replace('\n', "\r\n");
         let styled = format!("\r\n\x1b[38;2;{r};{g};{b}m{text}\x1b[0m\r\n");
         self.parser.advance(&mut self.term, styled.as_bytes());
     }
