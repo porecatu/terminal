@@ -1111,6 +1111,12 @@ Etapa 5, fechada em 2026-10-22, no Windows 11 (build 26300), GPU Intel Iris Xe p
 
 ---
 
+## Depois do v1 — hover e pressionado dos botões da zona fixa — implementada
+
+Fora da ordem de fases, pedido do dono do produto: os botões de sessões (`bookmark`) e de configurações (`settings`) ganham hover e clique como os botões de janela, em quadrado arredondado sem borda, revelado só no hover e no clique. O [ADR-0069](adr/0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md) decide: fundo `hover_background`/`pressed_background` de `[appearance.window_controls]` (sem chave nova), ícone sem mudança de cor, disparo no **release** sobre o mesmo botão armado (`pressed_zone_button`), as funções dos botões intactas. Testes: o quadrado (raio, sem borda, lado igual à altura, não ocupa a barra) em `chrome.rs`; `point_in_zone_button` e `zone_button_release` em `tab_bar.rs`.
+
+**Verificação:** o dono verificou o visual pessoalmente em 2026-10-27 e aprovou ("era isso, ficou bom"). Não houve captura automatizada.
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.

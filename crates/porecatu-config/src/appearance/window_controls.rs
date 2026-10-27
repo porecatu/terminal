@@ -20,7 +20,8 @@ pub struct WindowControls {
     #[serde(skip_deserializing)]
     pub close_hover_foreground: Color,
     /// Fundo do botão pressionado (ADR-0066): só com o cursor sobre o
-    /// botão armado pelo press.
+    /// botão armado pelo press. Também é o fundo dos botões de sessões e
+    /// configurações (ADR-0069), como `hover_background`.
     #[serde(skip_deserializing)]
     pub pressed_background: Color,
     #[serde(skip_deserializing)]

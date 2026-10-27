@@ -70,6 +70,7 @@
 | [0066](0066-estado-pressionado-dos-botoes-de-janela.md) | Estado pressionado dos botões de janela | Aceito · cores revistas por ADR-0067 (fundos translúcidos) |
 | [0067](0067-temas-em-arquivos-proprios.md) | Temas em arquivos próprios (`thm_*.toml`), cor só no tema, botões de janela translúcidos | Aceito |
 | [0068](0068-efeito-acrilico-no-fundo-do-terminal.md) | Efeito acrílico no fundo do terminal: desfoque da camada da janela em passe próprio, amostrado por quadro | Aceito — aval visual pendente |
+| [0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md) | Hover e pressionado dos botões da zona fixa (sessões e configurações): quadrado arredondado revelado, disparo no release | Aceito |
 
 ## Convenção
 

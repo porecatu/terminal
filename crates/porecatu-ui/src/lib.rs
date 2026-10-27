@@ -1136,16 +1136,6 @@ enum NewTabRequest {
     /// "+" ao fim da trilha, fora de qualquer wrapper.
     Ungrouped,
     WindowEmptied,
-    /// Botão de configurações (RF-16.1, ADR-0059 §6): dispara `settings.open`,
-    /// que `App` resolve -- o mesmo caminho do atalho, `ActionOutcome::
-    /// OpenSettings`. `WindowState` não pode, pelo mesmo motivo de
-    /// `WindowEmptied`.
-    OpenSettings,
-    /// Botão de sessões nomeadas (ADR-0054/ADR-0055): `WindowState::
-    /// open_session_picker` resolve sozinho, mas o hit-test do botão só
-    /// devolve `NewTabRequest` -- vive na mesma enumeração dos outros
-    /// hits da zona fixa por uniformidade, não por precisar de `App`.
-    OpenSessionPicker,
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -1197,6 +1187,8 @@ struct WindowState {
     /// o release sobre o mesmo botão é que dispara
     /// (`tab_bar::window_button_release`).
     pressed_window_button: Option<tab_bar::WindowButtonHit>,
+    /// Botão de sessões/configurações armado pelo press; dispara no release.
+    pressed_zone_button: Option<tab_bar::ZoneButtonHit>,
     click_tracker: ClickTracker,
     /// Modo de captura do ADR-0008 passo 1 -- rename inline (RF-1.8).
     rename: RenameState,
@@ -2078,6 +2070,7 @@ impl WindowState {
             cursor_position: (0.0, 0.0),
             mouse_button_down: None,
             pressed_window_button: None,
+            pressed_zone_button: None,
             click_tracker: ClickTracker::default(),
             rename: RenameState::Idle,
             scroll_offset: 0.0,
@@ -4003,6 +3996,23 @@ impl WindowState {
         false
     }
 
+    /// Solta o botão armado da zona fixa (sessões/configurações) e devolve
+    /// qual deve disparar: só o que recebe o release sobre si mesmo.
+    fn release_zone_button(&mut self, style: &TabBarStyle) -> Option<tab_bar::ZoneButtonHit> {
+        let logical_point = (
+            self.cursor_position.0 as f32 / self.scale,
+            self.cursor_position.1 as f32 / self.scale,
+        );
+        let released_over = tab_bar::point_in_zone_button(
+            style,
+            self.logical_width,
+            bar_height(style),
+            is_macos(),
+            logical_point,
+        );
+        tab_bar::zone_button_release(self.pressed_zone_button.take(), released_over)
+    }
+
     /// Resolve o que um clique na área da barra de abas atinge e dispara a
     /// ação correspondente. Indicadores de overflow (espec §2.18) primeiro
     /// -- ficam em coordenadas de tela, fora do recorte que rola com a
@@ -4059,20 +4069,18 @@ impl WindowState {
                 self.pressed_window_button = Some(hit);
                 return NewTabRequest::None;
             }
-            // Botão de sessões nomeadas (ADR-0054/ADR-0055): mesma zona
-            // fixa, mesma ordem de teste que a engrenagem -- depois dos
-            // botões de janela, antes da trilha. Testado antes da
-            // engrenagem (fica à esquerda dela na tela).
-            if tab_bar::point_in_sessions_button(style, bar_width, h, is_macos(), logical_point) {
-                return NewTabRequest::OpenSessionPicker;
-            }
-            // Botão de configurações (RF-11.27): zona fixa à direita, fora
-            // da trilha que rola -- resolvido em coordenadas de tela, como
-            // as pílulas de overflow logo abaixo, não pelo hit-test de
-            // conteúdo. Dispara `settings.open` (ADR-0059 §6), que é decisão
-            // de `App`, então só sobe o pedido.
-            if tab_bar::point_in_settings_button(style, bar_width, h, is_macos(), logical_point) {
-                return NewTabRequest::OpenSettings;
+            // Botões de sessões nomeadas (ADR-0054/ADR-0055) e de
+            // configurações (RF-11.27): zona fixa à direita, fora da trilha
+            // que rola -- resolvidos em coordenadas de tela, como as
+            // pílulas de overflow logo abaixo, não pelo hit-test de
+            // conteúdo. Como os botões de janela, o press só arma; quem
+            // dispara (`settings.open`, ADR-0059 §6, ou o popover de
+            // sessões) é o release (`release_zone_button`).
+            if let Some(hit) =
+                tab_bar::point_in_zone_button(style, bar_width, h, is_macos(), logical_point)
+            {
+                self.pressed_zone_button = Some(hit);
+                return NewTabRequest::None;
             }
             if overflow.hidden_left > 0
                 && tab_bar::point_in_overflow_pill(
@@ -8749,6 +8757,7 @@ impl ApplicationHandler<Wakeup> for App {
                     // preso até o próximo evento de mouse.
                     state.mouse_button_down = None;
                     state.pressed_window_button = None;
+                    state.pressed_zone_button = None;
                     state.window.request_redraw();
                 }
             }
@@ -10137,6 +10146,25 @@ impl App {
                 }
                 return;
             }
+            if button == MouseButton::Left && state.pressed_zone_button.is_some() {
+                // Bookmark e engrenagem disparam no release, como os botões
+                // de janela. `open_settings` precisa de `self`, então
+                // `state` não é usado depois dele. Sessões (ADR-0055 §3):
+                // "clicar de novo com o popover aberto fecha" segue de
+                // graça -- `dispatch_session_picker_click` intercepta o
+                // press antes de qualquer botão ser armado.
+                match state.release_zone_button(&self.style) {
+                    Some(tab_bar::ZoneButtonHit::Settings) => {
+                        self.open_settings(event_loop, window_id);
+                    }
+                    Some(tab_bar::ZoneButtonHit::Sessions) => {
+                        state.open_session_picker(false);
+                        state.window.request_redraw();
+                    }
+                    None => state.window.request_redraw(),
+                }
+                return;
+            }
             if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
                 if let Some(gpu) = &mut self.gpu {
                     state.finish_drag(gpu, &self.style);
@@ -10605,19 +10633,6 @@ impl App {
                 NewTabRequest::WindowEmptied => {
                     self.close_window_unconditionally(window_id, event_loop);
                 }
-                NewTabRequest::OpenSettings => self.open_settings(event_loop, window_id),
-                // ADR-0055 §3: clique no botão abre em navegação. "Clicar
-                // de novo com ele aberto fecha" já sai de graça: com o
-                // popover aberto, `dispatch_session_picker_click`
-                // intercepta todo clique antes daqui (`return` mais
-                // acima), e um clique sobre o botão -- fora dos
-                // retângulos do popover -- cai no braço `None` dele, que
-                // fecha. Este braço só é alcançado com o popover já
-                // fechado.
-                NewTabRequest::OpenSessionPicker => {
-                    state.open_session_picker(false);
-                    state.window.request_redraw();
-                }
                 NewTabRequest::None => {
                     state.window.request_redraw();
                 }
@@ -10790,18 +10805,20 @@ impl App {
         // fora da `TabBarLayout` (zona fixa), calculado à parte de
         // `bar_hover` (que só cobre o que `hit_test` testa: trilha,
         // pílulas, abas).
-        let hover_sessions_button = state.in_bar(state.cursor_position.1, style) && {
+        let hover_zone_button = if state.in_bar(state.cursor_position.1, style) {
             let cursor_logical = (
                 state.cursor_position.0 as f32 / state.scale,
                 state.cursor_position.1 as f32 / state.scale,
             );
-            tab_bar::point_in_sessions_button(
+            tab_bar::point_in_zone_button(
                 style,
                 bar_width,
                 bar_height(style),
                 is_mac,
                 cursor_logical,
             )
+        } else {
+            None
         };
 
         // Hover por brilho (F4 etapa 6, espec §1.10): mesmo padrão do
@@ -10953,7 +10970,8 @@ impl App {
             hover_window_button,
             state.pressed_window_button,
             bar_hover,
-            hover_sessions_button,
+            hover_zone_button,
+            state.pressed_zone_button,
             window_image.is_some(),
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);

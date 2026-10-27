@@ -1163,6 +1163,41 @@ pub fn point_in_sessions_button(
     )
 }
 
+/// Qual botão da zona fixa (sessões ou configurações) um ponto atinge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneButtonHit {
+    Sessions,
+    Settings,
+}
+
+/// Testa um ponto contra os dois botões da zona fixa. Mesma geometria de
+/// `sessions_button_rect`/`settings_button_rect`, nunca recalculada.
+pub fn point_in_zone_button(
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+    point: (f32, f32),
+) -> Option<ZoneButtonHit> {
+    if point_in_sessions_button(style, bar_width, bar_height, is_macos, point) {
+        Some(ZoneButtonHit::Sessions)
+    } else if point_in_settings_button(style, bar_width, bar_height, is_macos, point) {
+        Some(ZoneButtonHit::Settings)
+    } else {
+        None
+    }
+}
+
+/// Decide, ao soltar o botão esquerdo, se um botão da zona fixa dispara:
+/// só se o release cai sobre o **mesmo** botão armado pelo press, como em
+/// [`window_button_release`].
+pub fn zone_button_release(
+    armed: Option<ZoneButtonHit>,
+    released_over: Option<ZoneButtonHit>,
+) -> Option<ZoneButtonHit> {
+    armed.filter(|hit| released_over == Some(*hit))
+}
+
 /// Qual botão de janela um clique atingiu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowButtonHit {

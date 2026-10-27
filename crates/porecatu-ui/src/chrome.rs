@@ -210,11 +210,13 @@ pub fn paint(
     // resto do hover da barra: calculado fresco por frame a partir do
     // cursor, nunca por dentro de um modo que já consome o clique.
     hover: Option<tab_bar::TabBarHit>,
-    // ADR-0055 §1: hover do botão de sessões, mesmo padrão de
-    // `hover_window_button` acima -- fora da `TabBarLayout` (zona fixa,
-    // não rola com a trilha), por isso um parâmetro à parte, não uma
+    // ADR-0055 §1: hover dos botões da zona fixa (sessões, configurações),
+    // mesmo padrão de `hover_window_button` acima -- fora da `TabBarLayout`
+    // (não rola com a trilha), por isso parâmetros à parte, não uma
     // variante de `TabBarHit`.
-    hover_sessions_button: bool,
+    hover_zone_button: Option<tab_bar::ZoneButtonHit>,
+    // Botão da zona fixa armado pelo press, ainda sem release.
+    pressed_zone_button: Option<tab_bar::ZoneButtonHit>,
     // ADR-0062 §3: a imagem de fundo da janela está **exibida** (pronta e com
     // opacidade > 0). A barra deixa de pintar o `Quad` opaco de
     // `bar_background` sobre ela; sem imagem, o `Quad` continua e o binário é
@@ -622,30 +624,34 @@ pub fn paint(
     // ADR-0054/ADR-0055: botão de sessões nomeadas, imediatamente à
     // esquerda da engrenagem -- mesma anatomia, pintado pelo mesmo
     // helper para os dois nunca divergirem (`paint_zone_icon_button`).
-    // Hover por brilho só aqui: a engrenagem nunca teve estado de hover
-    // (dívida pré-existente, fora do escopo deste ADR -- `hovered: false`
-    // preserva o pixel de hoje).
-    let sessions = tab_bar::sessions_button_rect(style, bar_width, bar_height, is_macos);
-    paint_zone_icon_button(
-        sessions,
-        icon::BOOKMARK,
-        settings_icon_size,
-        hover_sessions_button,
-        style,
-        pal,
-        &mut out,
-    );
-
-    let settings = tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos);
-    paint_zone_icon_button(
-        settings,
-        icon::SETTINGS,
-        settings_icon_size,
-        false,
-        style,
-        pal,
-        &mut out,
-    );
+    // Hover e pressed como os botões de janela, só que num quadrado
+    // arredondado que não ocupa a altura da barra. Pressed só com o cursor
+    // ainda sobre o botão armado -- a condição em que o release dispara.
+    for (hit, glyph) in [
+        (tab_bar::ZoneButtonHit::Sessions, icon::BOOKMARK),
+        (tab_bar::ZoneButtonHit::Settings, icon::SETTINGS),
+    ] {
+        let rect = match hit {
+            tab_bar::ZoneButtonHit::Sessions => {
+                tab_bar::sessions_button_rect(style, bar_width, bar_height, is_macos)
+            }
+            tab_bar::ZoneButtonHit::Settings => {
+                tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos)
+            }
+        };
+        let hovered = hover_zone_button == Some(hit);
+        let pressed = hovered && pressed_zone_button == Some(hit);
+        paint_zone_icon_button(
+            rect,
+            glyph,
+            settings_icon_size,
+            hovered,
+            pressed,
+            style,
+            pal,
+            &mut out,
+        );
+    }
 
     // Botões de janela (ADR-0027): minimizar/maximizar-restaurar/fechar,
     // colados na borda direita. Não existem no macOS -- lá é o semáforo
@@ -854,31 +860,45 @@ fn with_alpha(color: Color, alpha: f64) -> Color {
     Color { a: alpha, ..color }
 }
 
-/// Botão de ícone da zona fixa (engrenagem, sessões -- ADR-0055 §1:
-/// "idêntica à do botão de configurações"): quadro arredondado com
-/// borda, sem preenchimento, e o ícone centrado nele. `hovered` clareia
-/// borda e ícone pelo mesmo `tab_hover_brightness` que
-/// `search_bar::push_icon_button` já usa nos três botões de ícone da
-/// busca (ADR-0041 §6: "mesmo brilho 1.18 dos demais botões da barra") --
-/// extraído aqui para os dois botões da zona fixa nunca divergirem entre
-/// si.
+/// Botão de ícone da zona fixa (engrenagem, sessões -- ADR-0055 §1): o
+/// ícone centrado num quadrado de cantos arredondados, sem borda. Em
+/// repouso só o ícone aparece; hover e pressed "revelam" o botão com o
+/// fundo dos botões de janela (`window_controls.hover_background` /
+/// `pressed_background`), e o ícone nunca muda de cor. Extraído aqui para
+/// os dois botões nunca divergirem entre si.
 #[allow(clippy::too_many_arguments)]
 fn paint_zone_icon_button(
     rect: Rect,
     icon: icon::Icon,
     icon_size: f32,
     hovered: bool,
+    pressed: bool,
     style: &TabBarStyle,
     pal: &ResolvedPalette,
     out: &mut Vec<Primitive>,
 ) {
-    // Sem borda (pedido do dono do produto): só o ícone, que clareia no hover.
-    let icon_color = if hovered {
-        brighten(pal.chrome_icon, style.tab_hover_brightness)
-    } else {
-        pal.chrome_icon
+    let bg = match (hovered, pressed) {
+        (_, true) => pal.window_button_pressed_bg,
+        (true, false) => pal.window_button_hover_bg,
+        (false, false) => palette::TRANSPARENT,
     };
-    out.push(centered_glyph(icon, rect, icon_size, icon_color));
+    // O retângulo do botão é mais largo que alto (respiro lateral,
+    // `icon_button_padding_x`); o fundo revelado é o quadrado de lado
+    // `height` centrado nele.
+    let square = Rect {
+        x: rect.x + (rect.width - rect.height) / 2.0,
+        y: rect.y,
+        width: rect.height,
+        height: rect.height,
+    };
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: square,
+        radius: style.tab_corner_radius,
+        color: bg,
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+    out.push(centered_glyph(icon, rect, icon_size, pal.chrome_icon));
 }
 
 /// `filter: brightness(mult)` (espec §1.10), resolvido em CPU: multiplica
@@ -1367,6 +1387,72 @@ mod tests {
         assert_eq!(bgs[2], palette::TRANSPARENT);
     }
 
+    /// O quadrado arredondado de bookmark/engrenagem: o retângulo e o
+    /// fundo pintados para um (hover, pressed).
+    fn zone_button_quad(hovered: bool, pressed: bool) -> RoundedQuad {
+        let style = TabBarStyle::DEFAULT;
+        let rect = tab_bar::settings_button_rect(&style, 800.0, 52.0, false);
+        let mut out = Vec::new();
+        paint_zone_icon_button(
+            rect,
+            icon::SETTINGS,
+            style.icon_em_size,
+            hovered,
+            pressed,
+            &style,
+            &default_palette(),
+            &mut out,
+        );
+        out.into_iter()
+            .find_map(|p| match p {
+                Primitive::RoundedQuad(q) => Some(q),
+                _ => None,
+            })
+            .expect("o botão pinta um quad arredondado")
+    }
+
+    #[test]
+    fn zone_button_is_a_borderless_rounded_square_revealed_by_hover_and_pressed() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+
+        let rest = zone_button_quad(false, false);
+        assert_eq!(rest.color, palette::TRANSPARENT, "em repouso some");
+        let hover = zone_button_quad(true, false);
+        assert_eq!(hover.color, pal.window_button_hover_bg);
+        let pressed = zone_button_quad(true, true);
+        assert_eq!(pressed.color, pal.window_button_pressed_bg);
+
+        for quad in [rest, hover, pressed] {
+            assert_eq!(quad.radius, style.tab_corner_radius);
+            assert_eq!(quad.border_width, 0.0, "sem borda");
+            assert_eq!(quad.rect.width, quad.rect.height, "quadrado");
+            assert!(quad.rect.height < 52.0, "não ocupa a altura da barra");
+        }
+    }
+
+    /// Pressed só vale com o cursor sobre o botão armado, como nos botões
+    /// de janela (ADR-0066): o chamador passa `pressed = hovered && armado`.
+    #[test]
+    fn zone_buttons_paint_hover_only_on_the_hovered_one() {
+        let style = TabBarStyle::DEFAULT;
+        let rect_of = |hit| match hit {
+            tab_bar::ZoneButtonHit::Sessions => {
+                tab_bar::sessions_button_rect(&style, 800.0, 52.0, false)
+            }
+            tab_bar::ZoneButtonHit::Settings => {
+                tab_bar::settings_button_rect(&style, 800.0, 52.0, false)
+            }
+        };
+        let sessions = rect_of(tab_bar::ZoneButtonHit::Sessions);
+        let settings = rect_of(tab_bar::ZoneButtonHit::Settings);
+        assert_eq!(sessions.width, settings.width);
+        assert!(
+            sessions.x + sessions.width <= settings.x,
+            "lado a lado, sem sobrepor"
+        );
+    }
+
     /// Pedido do usuário, contra o "colapsado fica transparente" do
     /// RF-4.19: a cápsula é o que diz de que cor o grupo é, e sumir com
     /// ela no colapso tirava a única marca de cor justo quando o nome do
@@ -1408,7 +1494,8 @@ mod tests {
                 None,
                 None,
                 None,
-                false,
+                None,
+                None,
                 false,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
@@ -1477,7 +1564,8 @@ mod tests {
                 None,
                 None,
                 None,
-                false,
+                None,
+                None,
                 window_image_shown,
             )
         };
@@ -1554,7 +1642,8 @@ mod tests {
             None,
             None,
             None,
-            false,
+            None,
+            None,
             false,
         );
 
