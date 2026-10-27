@@ -193,6 +193,18 @@ As nove entradas de `profile.new_tab_N` são explícitas, como as de `tab.goto_N
 
 ---
 
+## `ssh.*` — conexões SSH
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `ssh.reconnect` | No painel focado, se ele é SSH e está encerrado, desistiu de reconectar ou espera a próxima tentativa: reconecta agora, recomeçando a contagem. Em qualquer outro painel, não faz nada. Também é o item "Reconectar" do menu da aba SSH. **Sem default** | [PRD-020](../prd/prd-020-conexoes-ssh.md) RF-20.31, [ADR-0076](../adr/0076-reconexao-automatica.md) §5 | fora de fase | |
+
+> **Estado.** Aprovada, **a implementar**, depois das ações `profile.*`.
+
+Responder aos diálogos de senha e de chave do host não é ação: é a linha "confirmar ou cancelar diálogo" da tabela de superfícies abaixo. Cadastrar, editar, excluir e importar perfis acontece na janela de configurações, que é modo de captura (mesma tabela).
+
+---
+
 ## `pane.*` — painéis
 
 | Ação | O que faz | Origem | Fase | Arg |
@@ -307,7 +319,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Vinte e um comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os oito últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Vinte e dois comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os nove últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -329,6 +341,7 @@ Vinte e um comportamentos têm requisito aprovado e **não recebem nome de açã
 | Clicar no indicador de commits atrás do remoto, na barra de status | [RF-13.12](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §9 | integra commits no repositório da aba ativa, e uma tecla faria isso no repositório que a aba ativa **por acaso** tem — a mesma classe de decisão que o [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md) §4 registrou para `trusted_paths`: tomada uma vez, esquecida depois. O clique mira o que descreve, e só existe quando há o que integrar |
 | Restaurar uma sessão nomeada, por clique ou `Enter` na linha do popover | [RF-14.10](../prd/prd-014-sessoes-nomeadas.md), [ADR-0054](../adr/0054-sessoes-nomeadas.md) §7 | o alvo é a sessão da linha; uma ação precisaria de argumento (qual sessão?), e ação com argumento não é vinculável a tecla. `session.open_list` leva até a lista |
 | Excluir uma sessão nomeada, pelo `X` ou `Delete` na linha do popover | [RF-14.16](../prd/prd-014-sessoes-nomeadas.md), ADR-0054 §7 | idem, e sempre com o diálogo de confirmação por cima |
+| Conectar um painel SSH restaurado, por clique dentro dele ou `Enter` com ele focado | [RF-20.33](../prd/prd-020-conexoes-ssh.md), [ADR-0075](../adr/0075-superficies-de-ui-do-ssh.md) §5 | o alvo é o painel não iniciado sob o gesto; uma tecla global conectaria o painel que **por acaso** está focado, e o recurso existe justamente para a conexão nunca acontecer por acaso. `ssh.reconnect` cobre o painel SSH já encerrado |
 | Abrir o menu de perfis por clique direito num botão `+` | [RF-7.8](../prd/prd-007-perfis-de-aba.md), [ADR-0070](../adr/0070-perfis-de-aba.md) §6 | o alvo é o grupo do `+` clicado; `profile.open_menu` é o equivalente de teclado, sobre o grupo da aba ativa |
 | Escolher um perfil numa linha do menu de perfis | RF-7.9, RF-7.10, ADR-0070 §6 | o alvo é o perfil da linha, e os detectados não têm posição estável; `profile.new_tab_N` cobre os declarados |
 | Navegar, salvar, descartar e capturar atalho dentro da janela de configurações | [RF-16.10](../prd/prd-016-tela-de-configuracoes.md), RF-16.29, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §3 | a janela é um modo de captura, como o diálogo: `Tab`, setas, `Espaço`, `Enter`, `Esc` e `Ctrl+S`/`Cmd+S` são consumidos por ela e o mapa de `[keybindings]` não é consultado ali |

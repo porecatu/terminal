@@ -74,7 +74,7 @@ As quatro questões abertas do rascunho, respondidas em 2026-10-27:
 
 **RF-7.3** — Nenhum campo de perfil é desenhado para segredo. Senha, passphrase e chave privada de um perfil SSH vivem onde o PRD de conexões SSH decidir — nunca no `porecatu.toml`, no `session.json` ou num arquivo de sessão nomeada. O ambiente de um perfil é texto do `porecatu.toml`, como o `[shell.env]` de hoje, e não é lugar de segredo; a sessão não o grava.
 
-**RF-7.4** — Um perfil tem um **tipo**: `local` (o default — um programa lançado num pseudo-terminal, como toda aba de hoje) ou `ssh` (uma conexão do cliente embutido, definida no PRD de conexões SSH). Este documento descreve o comportamento comum aos dois; onde o tipo `ssh` diverge, quem decide é aquele PRD.
+**RF-7.4** — Um perfil tem um **tipo**: `local` (o default — um programa lançado num pseudo-terminal, como toda aba de hoje) ou `ssh` (uma conexão do cliente embutido, definida no [PRD-020](prd-020-conexoes-ssh.md)). Este documento descreve o comportamento comum aos dois; onde o tipo `ssh` diverge, quem decide é aquele PRD.
 
 **RF-7.5** — Perfil inválido — identificador repetido, identificador vazio, programa vazio num perfil `local`, badge vazio — é **erro de config** com a linha, pelo caminho de erro que a config já tem; os perfis válidos continuam valendo. A regra do RF-4.22 vale igual: chave desconhecida dentro de um perfil é aviso, não erro.
 

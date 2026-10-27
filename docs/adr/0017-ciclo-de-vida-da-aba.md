@@ -75,6 +75,8 @@ O que isso **cobre**: `vim`, `nvim`, `htop`, `less`, `man`, `fzf`, `tmux`, e `ss
 
 O que isso **não cobre**, e é registrado aqui para não ser lido como bug: comando não interativo de longa duração (`cargo build`, `rsync`) e `ssh` parado num prompt remoto. Nos dois casos a aba fecha sem perguntar. O RF-1.3 é a rede de segurança parcial — processo que morre com código ≠ 0 mantém a aba aberta —, e o `confirm_close_window` do [ADR-0015](0015-multiplas-janelas.md) protege o caso agregado.
 
+> **Revisto pelo [ADR-0071](0071-backend-de-terminal.md) §6.** Uma aba do **cliente SSH embutido** ([PRD-020](../prd/prd-020-conexoes-ssh.md)) parada no prompt remoto confirma ao fechar: a conexão aberta é sinal próprio. O `ssh` do sistema lançado dentro de um shell local continua sob o critério do [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md), que já o cobre no Windows pela contagem de processos.
+
 ### 4. Encerramento sem EOF, com confirmação e sem bloqueio
 
 A regra do RF-1.2 — não perder a última saída — vale; o mecanismo muda, porque o ConPTY não oferece o que o requisito nomeia.

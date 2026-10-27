@@ -50,6 +50,8 @@ A escolha que organiza o resto: **um fato que vale para o app não aparece no me
 
 > **Acrescentado pelo [ADR-0056](0056-catalogo-de-textos-da-interface.md) §8.** O **canal 1** ganha os avisos do idioma da interface: idioma não encontrado, arquivo de idioma com erro, frases sem tradução (informação agregada, que expira) e chaves desconhecidas — com a severidade de cada um tabelada lá. Mesmo critério desta seção: são sobre o app, não sobre um terminal. Nos dois canais, **o texto** passa a vir do arquivo de idioma ([PRD-015](../prd/prd-015-idioma-da-interface.md)); a anatomia e a regra de qual canal recebe o quê não mudam.
 
+> **Acrescentado pelo [ADR-0075](0075-superficies-de-ui-do-ssh.md) §5.** O **canal 2** recebe o estado das conexões SSH — conectando, autenticação cancelada, chave de host bloqueada, queda e cada tentativa de reconexão —, porque é história daquele terminal. O **canal 1** ganha um consumidor: a falha ao gravar um segredo no cofre do sistema, que acontece com a conexão já aberta e se perderia no meio da saída do shell.
+
 O RF-3.10 já pede exatamente isso — *"a aba abre no diretório home e informa isso na primeira linha"* — e o RF-1.3 cabe no mesmo mecanismo sem inventar nada. O critério é simples: informação que pertence ao histórico de um terminal fica dentro dele, e sobrevive à rolagem; informação sobre o app fica no overlay, e é dispensável.
 
 ### Anatomia — aviso do app
@@ -74,6 +76,8 @@ Atende RF-1.6, RF-2.23 e a chave `confirm_close_window`.
 - **Foco inicial no cancelar.** `Enter` confirma o botão focado, `Esc` cancela. Um diálogo destrutivo que confirma com `Enter` por default transforma um `Enter` distraído em perda de trabalho.
 - RF-2.23 exibe a contagem de abas e não é desligável, como o requisito determina.
 
+> **Revisto pelo [ADR-0075](0075-superficies-de-ui-do-ssh.md) §1 a §4.** O diálogo ganha três acréscimos para as perguntas do SSH: **campo** (mascarável, para senha e passphrase), **caixa de marcar** ("Lembrar no cofre do sistema") e **linhas de dado** em mono (tipo e impressão digital da chave do host). O corpo continua de uma linha. O diálogo de segredo, que não é destrutivo, abre com o foco **no campo**; o de host desconhecido mantém o foco no cancelar. E os dois só abrem com a aba que pergunta em foco — senão a pergunta espera, com o indicador de campainha aceso.
+
 ### Anatomia — menu de contexto
 
 Reaproveita integralmente os tokens do menu de perfis (seção 2.9 da especificação), que já estão definidos: fundo `#1a1e25`, borda `#2e343e`, raio 8, `padding: 6`, sombra de popover, animação `pop .13s`; item `padding: 7px 8px`, raio 5, `gap: 10`, texto 12.5px `#d7dce3`, hover `#242a33`; divisor `1px #2a2f38` com `margin: 5px 4px`; item destrutivo `#e08585` com hover `#2e2224`; chip de tecla mono 9.5px `#5c646f`.
@@ -81,6 +85,8 @@ Reaproveita integralmente os tokens do menu de perfis (seção 2.9 da especifica
 Comportamento: ancorado no cursor, virado horizontal e verticalmente para caber na tela, navegável por setas com `Enter` e `Esc`, fechado por clique fora ou perda de foco da janela. Item indisponível fica esmaecido em `#5c646f`, nunca ausente — menu cuja lista muda de tamanho a cada abertura obriga a reaprender a posição dos itens.
 
 > **Revisto pelo [ADR-0070](0070-perfis-de-aba.md) §6.** Um quarto menu, o **de perfis**, usa este widget **ancorado num botão** — o `+` clicado, ou o do grupo da aba ativa pela ação —, não no cursor; o flip nos dois eixos vale igual. Cada linha ganha a coluna do badge do perfil. As linhas dele são dados (a lista de perfis da máquina), não ações dependentes de contexto, e a lista tem o tamanho dos dados: a regra do item esmaecido acima continua valendo para os três menus de ações.
+>
+> **Revisto pelo [ADR-0075](0075-superficies-de-ui-do-ssh.md) §8.** O menu da aba ganha "Reconectar" só em aba SSH, e o item **não aparece** nas demais: ali ele não está indisponível, ele não tem sentido.
 
 Três menus:
 

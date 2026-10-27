@@ -1024,6 +1024,9 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | **Cabeçalho e botões do painel** | `[v2]` | recusado pelo [ADR-0053](../adr/0053-paineis-divididos.md) — desenho do canvas sem requisito, ver §4.3 |
 | **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md), [ADR-0070](../adr/0070-perfis-de-aba.md) — aprovado fora da ordem de fases, **a implementar**; o menu será o menu de contexto (§2.16) aberto pelo clique direito no `+`, sem o cabeçalho "Perfis" nem a cor de perfil da §2.9. Passa a `[v1]` no PR que o implementa |
 | **Badge de perfil na aba** | `[v2]` | PRD-007 RF-7.13, PRD-004 RF-4.23, ADR-0070 §7 — aprovado, **a implementar**; só em painel de perfil não padrão |
+| Diálogo de segredo SSH: campo mascarado e caixa "Lembrar no cofre do sistema" (variante da §2.15) | `[v2]` | [PRD-020](../prd/prd-020-conexoes-ssh.md) RF-20.12, [ADR-0075](../adr/0075-superficies-de-ui-do-ssh.md) §1–§2 — aprovado fora da ordem de fases, **a implementar**, aval visual pendente; sem representação no canvas |
+| Diálogo de host desconhecido: tipo e impressão digital da chave em linhas de dado mono (variante da §2.15) | `[v2]` | PRD-020 RF-20.16, ADR-0075 §3 — idem |
+| Grupo "Perfis" da tela de configurações: lista de perfis, formulário e importação do `~/.ssh/config` (§2.12) | `[v2]` | PRD-020 RF-20.3 a RF-20.7, ADR-0075 §6–§7 — idem |
 | **Tela de nova aba** | `[v2]` | recusada pelo PRD-007 RF-7.20 — só existiria numa janela sem abas, e fechar a última aba fecha a janela |
 | **Paleta de comandos e botão de busca** | `[v2]` | [PRD-008](../prd/prd-008-paleta-de-comandos.md) *(rascunho)* |
 | **Barra de status** | `[v1]` | [PRD-009](../prd/prd-009-barra-de-status.md), [ADR-0048](../adr/0048-barra-de-status.md) — fora da ordem de fases |

@@ -23,7 +23,7 @@ Recursos entregues **fora da ordem de fases**, todos implementados (detalhe e d�
 
 Em andamento, **só documentação** até agora:
 
-- **Perfis de aba e conexões SSH** — [PRD-007](docs/prd/prd-007-perfis-de-aba.md) aprovado, [ADR-0070](docs/adr/0070-perfis-de-aba.md) aceito (aval visual pendente); PRD de conexões SSH a escrever. `[shell]` é o perfil padrão implícito; o perfil é **do painel** e a sessão grava o identificador; clique esquerdo no `+` não muda, o menu é o clique direito; sem cor por perfil. SSH é tipo de perfil, com cliente embutido — o valor `type = "ssh"` é recusado até lá.
+- **Perfis de aba e conexões SSH** — [PRD-007](docs/prd/prd-007-perfis-de-aba.md) aprovado, [ADR-0070](docs/adr/0070-perfis-de-aba.md) aceito (aval visual pendente); [PRD-020](docs/prd/prd-020-conexoes-ssh.md) aprovado, [ADR-0071](docs/adr/0071-backend-de-terminal.md) a [ADR-0076](docs/adr/0076-reconexao-automatica.md). `[shell]` é o perfil padrão implícito; o perfil é **do painel** e a sessão grava o identificador (`auto:` validado na restauração); clique esquerdo no `+` não muda, o menu é o clique direito; sem cor por perfil. SSH é tipo de perfil: cliente embutido (`russh`) em `porecatu-ssh`, **único crate com `tokio`**, criado na primeira conexão; segredo só no cofre do SO, gravado só depois de aceito; `~/.ssh/known_hosts` do OpenSSH, só acréscimo; motor sobrevive à reconexão (`Terminal::reattach`). `type = "ssh"` é recusado até a implementação.
 
 Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da área — o código segue o que está escrito lá, incluindo os desvios anotados. Grupos, seleção, animação e popover: ADR-0020 a 0023. Sessão: ADR-0036 a 0040.
 
@@ -38,7 +38,7 @@ Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da ár
 
 ## Stack travada
 
-`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `arboard` (clipboard) · TOML+`serde` (config).
+`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `arboard` (clipboard) · TOML+`serde` (config). Decididos, a implementar: `russh` com `ring` (cliente SSH, [ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) · `keyring` (cofre do SO, [ADR-0073](docs/adr/0073-credenciais-no-cofre-do-sistema.md)).
 
 Toolchain: stable **pinada** em `rust-toolchain.toml`, edition 2024, lints em `[workspace.lints]` ([ADR-0011](docs/adr/0011-toolchain-rust.md)).
 
@@ -51,6 +51,7 @@ porecatu (bin)
    ├── porecatu-ui ──── porecatu-render
    │        │
    │        ├── porecatu-term ──── porecatu-pty
+   │        │        └──────────── porecatu-ssh   (decidido, a implementar — ADR-0072)
    │        ├── porecatu-config
    │        ├── porecatu-locale
    │        └── porecatu-session ── porecatu-core
@@ -64,7 +65,8 @@ Dependências apontam **só para baixo**. Em particular:
 | `porecatu-core` | nada do projeto | tudo o mais |
 | `porecatu-config` | `core` | GUI, PTY |
 | `porecatu-pty` | — | GUI, `core` |
-| `porecatu-term` | `pty` | GUI, `config` |
+| `porecatu-term` | `pty`, `ssh` | GUI, `config` |
+| `porecatu-ssh` *(a implementar)* | — | todo crate do projeto; único com `tokio` ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) |
 | `porecatu-render` | — | `core`, `config`, `term` |
 | `porecatu-ui` | `core`, `config`, `term`, `render` | — |
 | `porecatu-session` | `core` | GUI, PTY |
@@ -162,7 +164,7 @@ Versão curta. Texto completo, com sintoma e custo, no [Apêndice A de docs/desc
 
 **Dependências**
 
-- **`alacritty_terminal`, `wgpu`, `toml_edit`**: pinar versão exata; subir é tarefa própria. `alacritty_terminal` isolado em `porecatu-term`; `toml_edit` isolado em `porecatu-config`.
+- **`alacritty_terminal`, `wgpu`, `toml_edit`**: pinar versão exata; subir é tarefa própria. `alacritty_terminal` isolado em `porecatu-term`; `toml_edit` isolado em `porecatu-config`. Quando entrarem: `russh` e `keyring` também exatos, isolados em `porecatu-ssh`; `russh` com piso de segurança 0.62.4 e RUSTSEC conferido a cada subida; `tokio` **fora** de `[workspace.dependencies]` ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)).
 - **`accesskit_winit`** é acoplado a uma versão de `winit`: subir os dois juntos e conferir `cargo tree -p porecatu-ui -i winit` (uma ocorrência só).
 - **Clipboard no Wayland** é o ponto frágil do `arboard`; encapsulado em `porecatu-ui/clipboard.rs`, `copypasta` é o plano B, verificação pendente.
 
@@ -203,7 +205,7 @@ Descobertas por fase (F1 a F6, pós-F6 e cada recurso fora de fase) vivem em [do
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, tabela de fases, histórico. Descreve o binário ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
 - [docs/adr/](docs/adr/) — decisões arquiteturais
-- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–019 aprovados; 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
+- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–020 aprovados; 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
 - [docs/roadmap.md](docs/roadmap.md) — fases e etapas, com a dívida de verificação de cada uma
 - [docs/descobertas.md](docs/descobertas.md) — descobertas e armadilhas, texto completo
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo **fechado** de ações; ação fora dele é erro de config

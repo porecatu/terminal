@@ -36,6 +36,8 @@ terminal (ADR-0017, mantido) e, no Windows, mais de um processo vivo na
 `general.confirm_close_with_process`, que existia desde o ADR-0017 mas
 nunca teve consumidor.**
 
+> **Revisto pelo [ADR-0071](0071-backend-de-terminal.md) §6.** `has_extra_processes` vira `Terminal::liveness`, com um terceiro valor para o backend SSH: **conexão aberta** — conectada, autenticando ou reconectando — também confirma, atrás da mesma chave ([PRD-020](../prd/prd-020-conexoes-ssh.md) RF-20.25). Para o PTY local, o resultado é idêntico ao decidido aqui.
+
 ### 1. Por que isto supersede o ADR-0017 e não é ADR novo avulso
 
 O ADR-0017 é a decisão aceita especificamente sobre o critério do RF-1.6.

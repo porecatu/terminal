@@ -13,7 +13,7 @@ O [PRD-007](../prd/prd-007-perfis-de-aba.md) pede que o usuário escolha **o que
 
 O que existe hoje e condiciona a decisão:
 
-- **O shell é montado em dois lugares e escolhido em muitos.** `spawn_tab_runtime` e `spawn_split_pane_runtime` (`crates/porecatu-ui/src/lib.rs`) recebem um `&Shell` e montam o `SpawnConfig` com ele — `program` vazio cai em `porecatu_pty::resolve_default_shell`, que procura `pwsh.exe`, depois `powershell.exe`, depois `cmd.exe` no Windows, e usa `$SHELL` no Unix. Quem escolhe **qual** `Shell` passar são os chamadores, e todos passam `&self.config.shell` — cerca de treze pontos em `lib.rs`.
+- **O shell é montado em dois lugares e escolhido em muitos.** `spawn_tab_runtime` e `spawn_split_pane_runtime` (`crates/porecatu-ui/src/lib.rs`) recebem um `&Shell` e montam o `SpawnConfig` com ele — `program` vazio cai em `porecatu_pty::resolve_default_shell`, que procura `pwsh.exe`, depois `powershell.exe`, depois `cmd.exe` no Windows, e usa `$SHELL` no Unix. Quem escolhe **qual** `Shell` passar são os chamadores: cinco chamadas diretas das duas funções, alimentadas por catorze leituras de `config.shell` em `lib.rs` (contagem de 2026-10-27).
 - **O shell já é do painel.** Desde o [ADR-0053](0053-paineis-divididos.md), `shell_name` é propriedade do `Pane`, e a aba a deriva do focado.
 - **A sessão grava o nome do shell e o ignora.** `TabV1.spawn_program` e o campo de mesmo nome em `PaneV1` (a folha da árvore, `PaneNodeV1::Leaf`) guardam `Pane::shell_name()`, mas a restauração sempre lança o `[shell]` corrente — um comentário em `spawn_tab_runtime` registra que a restauração ignora o campo e que os dois podem divergir. O nome, sozinho, nem bastaria para relançar: não há argumentos nem ambiente gravados.
 - **`show_profile_badge` já existe** em `[appearance.tabs]` como reserva de nome (`crates/porecatu-config/src/appearance/tabs.rs`), e `badge_tint_strength = 0.14` já existe em `[appearance.groups]`, com consumidor no realce de arraste.
@@ -61,6 +61,8 @@ args = ["-d", "Ubuntu"]
 - **`env`** é mesclado **sobre** `[shell.env]`, que continua valendo para todo perfil `local`: é o lugar onde o usuário já põe `EDITOR` e afins. **Não é lugar de segredo**, pela mesma razão que `[shell.env]` não é: o `porecatu.toml` é um arquivo de texto que o usuário versiona. O app não grava `env` em lugar nenhum além do próprio arquivo — nem na sessão (§4) —, e o comentário da chave no arquivo de exemplo diz isso.
 - **Sem `color` e sem `icon`**, pelas razões do PRD-007 ("O que este documento faz com o desenho").
 
+> **Revisto pelo [ADR-0072](0072-cliente-ssh-embutido.md) §6.** `type = "ssh"` deixa de ser recusado quando o cliente embutido estiver implementado, com os campos `host`, `port`, `user`, `auth` e `identity_file`, e sem `program`, `args`, `env` e `cwd`. O badge default de um perfil `ssh` é `SSH`. Até a implementação, a recusa decidida acima continua.
+
 Validação (RF-7.5) em `porecatu-config`: identificador inválido, repetido ou com `auto:`, `name` vazio, `program` vazio, `badge` vazio ou longo demais, `type` desconhecido ou `"ssh"` — erro de config **naquele item**, que é descartado; os demais valem. `default` apontando para identificador inexistente é erro e volta a `""`.
 
 ### 2. `[shell]` é o perfil padrão implícito
@@ -90,7 +92,7 @@ pub struct ResolvedProfile {
 pub fn resolve_profile(config: &Config, r: ProfileRef) -> Result<ResolvedProfile, MissingProfile>;
 ```
 
-`spawn_tab_runtime` e `spawn_split_pane_runtime` passam a receber um `ResolvedProfile` em vez de um `&Shell`; o `SpawnConfig` sai dele. Os cerca de treze chamadores que hoje passam `&self.config.shell` passam a resolver o perfil certo para o caso deles — o padrão, o do painel de origem, o gravado na sessão, o escolhido no menu —, e nenhum deles continua lendo `config.shell` para spawnar. A mudança é mais larga que as duas funções, e a regra que a mantém honesta é essa última: quem quer saber o que lançar pergunta a `resolve_profile`.
+`spawn_tab_runtime` e `spawn_split_pane_runtime` passam a receber um `ResolvedProfile` em vez de um `&Shell`; o `SpawnConfig` sai dele. Os caminhos que hoje leem `config.shell` para chegar a elas passam a resolver o perfil certo para o caso deles — o padrão, o do painel de origem, o gravado na sessão, o escolhido no menu —, e nenhum deles continua lendo `config.shell` para spawnar. A mudança é mais larga que as duas funções, e a regra que a mantém honesta é essa última: quem quer saber o que lançar pergunta a `resolve_profile`.
 
 Identificadores `auto:` (§5) são resolvidos pela mesma função, sem rodar a detecção completa, e **só se passarem a validação do §5** — o identificador vem de um arquivo de sessão, e arquivo de sessão não é fonte de confiança para escolher executável.
 
@@ -256,7 +258,7 @@ Um perfil com `host`, `user`, `port`. Recusada: o que um perfil SSH guarda depen
 
 | Risco | Probabilidade | Impacto | Mitigação |
 |---|---|---|---|
-| Um dos ~13 chamadores continuar passando `config.shell` e ignorar o perfil | Média | **Alto** | §3: as duas funções de spawn recebem `ResolvedProfile` e deixam de aceitar `&Shell`, então o compilador acha cada chamador; teste por caminho (aba nova, divisão, restauração, `NotStarted`) conferindo o `SpawnConfig` |
+| Um dos caminhos de spawn continuar lendo `config.shell` e ignorar o perfil | Média | **Alto** | §3: as duas funções de spawn recebem `ResolvedProfile` e deixam de aceitar `&Shell`, então o compilador acha cada chamador; teste por caminho (aba nova, divisão, restauração, `NotStarted`) conferindo o `SpawnConfig` |
 | `wsl.exe` travar a thread de detecção | Média | Baixo | Teto de 3 s e processo morto; a detecção é de um processo só e nunca bloqueia o menu |
 | Arquivo de sessão copiado ou editado lançar um executável arbitrário por `auto:` | Baixa | **Alto** | §5: `auto:` validado na restauração contra os três nomes fixos do Windows, o `/etc/shells` corrente e um padrão de nome de distribuição; recusado cai no padrão com nota; teste com `auto:shell:C:\x\evil.exe` e `auto:wsl:a b;c` |
 | Saída do `wsl.exe` lida como UTF-8 e virar lixo | **Alta** se esquecido | Médio | §5, e teste com a saída UTF-16LE real capturada como fixture |
