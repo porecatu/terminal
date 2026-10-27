@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::backend::EndReason;
+use crate::prompt::Prompt;
 
 /// Evento traduzido de `alacritty_terminal::event::Event` -- nenhum tipo do
 /// motor atravessa esta fronteira (mesma disciplina do snapshot, ADR-0002).
@@ -33,6 +34,9 @@ pub enum TermEvent {
     /// VT -- vem de `Backend::try_wait`, detectado por `Terminal` e injetado
     /// neste mesmo canal.
     Exit(EndReason),
+    /// O backend pergunta algo à UI e espera (ADR-0071 §5). A resposta volta
+    /// por `Terminal::answer`, com o `id` da pergunta.
+    Prompt(Prompt),
     /// OSC 7 (ADR-0017 item 1). Captura própria de `porecatu-term`, fora do
     /// motor -- ver `crate::osc7`. Herdado por `tab.new`/`window.new`;
     /// `None` continua sendo o fallback de `startup_directory` até o

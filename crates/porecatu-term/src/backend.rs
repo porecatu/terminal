@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 use porecatu_pty::{ProcessGroup, PtyError, PtyHandle, SpawnConfig};
 
+use crate::prompt::PromptSink;
+
 /// Qual backend alimenta o terminal (ADR-0071 §2). Só o PTY local existe
 /// por enquanto; o SSH entra como segunda variante.
 #[derive(Debug, Clone)]
@@ -112,6 +114,9 @@ pub(crate) trait Inspect: Send + Sync {
 
 /// O que alimenta o motor com bytes e recebe os que ele escreve (ADR-0071 §1).
 pub(crate) trait Backend: Send {
+    /// Chamado uma vez, antes de `reader`: o canal por onde o backend pergunta
+    /// à UI (ADR-0071 §5). O PTY nunca pergunta nada.
+    fn set_prompts(&mut self, _prompts: PromptSink) {}
     fn reader(&mut self) -> io::Result<Box<dyn Read + Send>>;
     fn writer(&mut self) -> io::Result<Box<dyn Write + Send>>;
     fn resize(&mut self, rows: u16, cols: u16) -> io::Result<()>;

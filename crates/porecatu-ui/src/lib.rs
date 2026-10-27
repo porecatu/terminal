@@ -19,9 +19,9 @@ use porecatu_config::ResolvedProfile;
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_session::named::{EntryStatus, NamedSessionEntry};
 use porecatu_term::{
-    BackendSpec, DEFAULT_SEARCH_LINES_PER_STEP, EndReason, GridSnapshot, HyperlinkSpan, Liveness,
-    Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermModes, TermParams, TermScroll,
-    Terminal,
+    Answer, BackendSpec, DEFAULT_SEARCH_LINES_PER_STEP, EndReason, GridSnapshot, HyperlinkSpan,
+    Liveness, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermModes, TermParams,
+    TermScroll, Terminal,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -9005,6 +9005,17 @@ impl ApplicationHandler<Wakeup> for App {
                 // `App`; um shell que por acaso emita a mesma string
                 // (extremamente improvável) não dispensa nada sem o
                 // convite ter chegado a existir.
+                // ADR-0071 §5: a pergunta é do painel `pane_id`, e é ele que
+                // a responde. Nenhum backend pergunta ainda (só o PTY
+                // existe); o diálogo vem com o SSH.
+                // TODO(porecatu-ssh-11): abrir o diálogo de segredo / de chave
+                // de host e responder com a escolha do usuário. Até lá, toda
+                // pergunta é cancelada, para o backend nunca ficar esperando.
+                TermEvent::Prompt(prompt) => {
+                    if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
+                        runtime.terminal.answer(prompt.id, Answer::Cancel);
+                    }
+                }
                 TermEvent::ShellIntegrationDismiss => {
                     if self.shell_integration_invite_claimed {
                         self.shell_integration_dismissed = true;

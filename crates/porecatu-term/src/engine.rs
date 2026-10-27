@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
@@ -61,14 +61,21 @@ struct EventProxy {
     /// esquecer um `PtyWrite` pendente é o programa ficar parado esperando
     /// resposta que nunca chega (era exatamente o problema do teste de
     /// integração da Etapa 1, antes deste motor existir).
-    pty_writer: mpsc::Sender<Vec<u8>>,
+    ///
+    /// Compartilhado com `TermEngine`, que o troca em `set_pty_writer`
+    /// quando o backend é trocado (`Terminal::reattach`).
+    pty_writer: Arc<Mutex<mpsc::Sender<Vec<u8>>>>,
     clipboard_write_max_bytes: usize,
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         if let Event::PtyWrite(text) = event {
-            let _ = self.pty_writer.send(text.into_bytes());
+            let writer = self
+                .pty_writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = writer.send(text.into_bytes());
             return;
         }
 
@@ -139,10 +146,28 @@ pub struct TermEngine {
     /// não é despachado a nenhum método de `Handler`, ver `crate::osc7`),
     /// então `advance` manda direto por aqui, fora de `EventProxy`.
     events: mpsc::Sender<TermEvent>,
+    /// Mesmo canal que `EventProxy::pty_writer` usa, para trocá-lo.
+    pty_writer: Arc<Mutex<mpsc::Sender<Vec<u8>>>>,
     /// Config atual do motor, guardada para `set_default_cursor_style`:
     /// `Term::set_options` troca a config inteira, não um campo.
     config: AlacConfig,
 }
+
+/// O que `TermEngine::soft_reset` manda ao parser: desliga o que uma sessão
+/// pode ter deixado ligado, sem apagar a grade nem o scrollback. Equivale ao
+/// efeito visível de um `DECSTR` (que o motor não implementa) nos modos que
+/// importam para quem entra depois.
+const SOFT_RESET: &str = concat!(
+    "\x1b[?1049l",                       // tela alternativa
+    "\x1b[?1000l\x1b[?1002l\x1b[?1003l", // reporte de mouse
+    "\x1b[?1005l\x1b[?1006l\x1b[?1015l", // encodings de mouse
+    "\x1b[?2004l",                       // bracketed paste
+    "\x1b[?1004l",                       // eventos de foco
+    "\x1b[?1l\x1b>",                     // setas e teclado numérico de aplicação (DECCKM, DECKPNM)
+    "\x1b[?25h",                         // cursor visível
+    "\x1b[0 q",                          // forma de cursor do usuário (DECSCUSR)
+    "\x1b[0m",                           // atributos
+);
 
 impl TermEngine {
     /// Cria o motor. `events` é o canal para onde o motor manda os eventos
@@ -170,9 +195,10 @@ impl TermEngine {
             osc52: osc52_mode(params.osc52_read, params.osc52_write),
             ..Default::default()
         };
+        let pty_writer = Arc::new(Mutex::new(pty_writer));
         let proxy = EventProxy {
             sender: events.clone(),
-            pty_writer,
+            pty_writer: Arc::clone(&pty_writer),
             clipboard_write_max_bytes: params.clipboard_write_max_bytes,
         };
 
@@ -183,8 +209,33 @@ impl TermEngine {
             osc7: Osc7Watcher::new(),
             dismiss: DismissWatcher::new(),
             events,
+            pty_writer,
             config,
         }
+    }
+
+    /// Linhas e colunas da grade de agora.
+    pub fn size(&self) -> (usize, usize) {
+        (self.term.screen_lines(), self.term.columns())
+    }
+
+    /// Aponta as respostas automáticas (DSR/DA/CPR) para outro canal de
+    /// escrita -- o do backend novo, em `Terminal::reattach`. Resposta que
+    /// já estava no canal antigo morre com ele.
+    pub fn set_pty_writer(&mut self, writer: mpsc::Sender<Vec<u8>>) {
+        *self
+            .pty_writer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = writer;
+    }
+
+    /// Desliga os modos que a sessão anterior deixou ligados (tela
+    /// alternativa, mouse, bracketed paste...) pelo caminho do próprio motor,
+    /// mantendo grade e scrollback. Usado por `Terminal::reattach`: sem isto,
+    /// um `vim` aberto na hora de uma queda prenderia a aba nova na tela
+    /// alternativa (ADR-0071 §4).
+    pub fn soft_reset(&mut self) {
+        self.parser.advance(&mut self.term, SOFT_RESET.as_bytes());
     }
 
     /// Troca o cursor de **default** do motor (hot reload de
