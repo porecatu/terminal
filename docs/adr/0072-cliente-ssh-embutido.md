@@ -215,7 +215,7 @@ Separaria cadastro de host de perfil. Recusada pelo dono: o SSH é um tipo de pe
 | Risco | Probabilidade | Impacto | Mitigação |
 |---|---|---|---|
 | Vulnerabilidade nova no `russh` ou na pilha cripto | Média | **Alto** | Versão exata; subir é tarefa própria, conferindo RUSTSEC; piso 0.62.4 registrado aqui |
-| `rsa` em pré-lançamento com canal lateral de tempo (*Marvin*) | Média | Médio | Conferir o estado do RUSTSEC-2023-0071 na série 0.10 no PR da dependência; se aberto, registrar no guia que chave Ed25519 é a recomendada, e avaliar `rsa` desligado |
+| `rsa` em pré-lançamento com canal lateral de tempo (*Marvin*) | Média | Médio | Conferir o estado do RUSTSEC-2023-0071 na série 0.10 no PR da dependência; se aberto, registrar no guia que chave Ed25519 é a recomendada, e avaliar `rsa` desligado. **Conferido em 2026-10-27 (prompt 09): aberto.** O RUSTSEC-2023-0071 não tem versão corrigida e afeta o `rsa` 0.9.10 e o `0.10.0-rc.18`, que é o que a árvore do `russh` 0.65.0 trouxe. Segue ligado, como decidido; o guia do usuário (prompt 17) deve recomendar Ed25519, e "avaliar `rsa` desligado" fica para quando houver versão corrigida ou o uso real de chave RSA justificar |
 | Licença incompatível entrando por dependência transitiva | Baixa | **Alto** | §2: `cargo tree` completo conferido no PR, com a lista no texto do PR |
 | Código de outro crate passar a usar `tokio` | Média | Médio | `tokio` só no `Cargo.toml` de `porecatu-ssh`; revisão de PR confere `cargo tree -i tokio` com um único caminho |
 | Bloquear a thread de trabalho do runtime esperando o usuário | Média | **Alto** | §4: perguntas por `oneshot`, nunca por `recv` síncrono dentro de tarefa |

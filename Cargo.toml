@@ -3,6 +3,7 @@ members = [
     "crates/porecatu-core",
     "crates/porecatu-config",
     "crates/porecatu-pty",
+    "crates/porecatu-ssh",
     "crates/porecatu-term",
     "crates/porecatu-render",
     "crates/porecatu-ui",

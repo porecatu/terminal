@@ -13,3 +13,4 @@ workspace = true
 alacritty_terminal = "=0.26.0"
 bitflags = "2"
 porecatu-pty = { path = "../porecatu-pty" }
+porecatu-ssh = { path = "../porecatu-ssh" }

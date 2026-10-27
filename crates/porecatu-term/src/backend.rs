@@ -13,15 +13,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use porecatu_pty::{ProcessGroup, PtyError, PtyHandle, SpawnConfig};
+use porecatu_ssh::SshSpawn;
 
 use crate::prompt::PromptSink;
 
-/// Qual backend alimenta o terminal (ADR-0071 §2). Só o PTY local existe
-/// por enquanto; o SSH entra como segunda variante.
+/// Qual backend alimenta o terminal (ADR-0071 §2).
 #[derive(Debug, Clone)]
 pub enum BackendSpec {
     /// Lança um programa local num pseudo-terminal.
     Local(SpawnConfig),
+    /// Abre um canal SSH com pseudo-terminal (ADR-0072). `Terminal::spawn`
+    /// devolve na hora: conectar e autenticar acontecem fora da main thread.
+    Ssh(SshSpawn),
 }
 
 impl BackendSpec {
@@ -29,13 +32,13 @@ impl BackendSpec {
     pub(crate) fn grid_size(&self) -> (usize, usize) {
         match self {
             BackendSpec::Local(config) => (config.size.rows as usize, config.size.cols as usize),
+            BackendSpec::Ssh(spawn) => (spawn.rows as usize, spawn.cols as usize),
         }
     }
 }
 
-/// Por que o terminal parou de ser alimentado (ADR-0071 §3). Só `Exited` é
-/// produzido hoje; as outras três esperam o backend SSH, e `porecatu-ui` já
-/// as trata.
+/// Por que o terminal parou de ser alimentado (ADR-0071 §3). `Exited` vem do
+/// PTY; as outras três, do backend SSH.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EndReason {
     /// Processo local saiu (PTY).
@@ -54,7 +57,6 @@ pub enum EndReason {
 /// Causa de uma conexão perdida. Lista fechada pelo ADR-0071 §3; variante
 /// nova pede revisão daquela seção.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code, reason = "produced by the SSH backend, not yet implemented")]
 pub enum LostCause {
     KeepaliveTimeout,
     Transport,
@@ -65,7 +67,6 @@ pub enum LostCause {
 /// ADR-0071 §3. As três de chave de host ainda não carregam os dados que a
 /// nota vai mostrar (ADR-0074 §6): entram junto com quem os produz.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code, reason = "produced by the SSH backend, not yet implemented")]
 pub enum FailCause {
     Refused,
     Timeout,
@@ -79,6 +80,10 @@ pub enum FailCause {
     KnownHostsUnreadable {},
     ChannelRefused,
     Runtime,
+    /// **Provisória (prompt 09).** A chave do host ainda não é verificada, e
+    /// por isso toda conexão SSH de produção falha aqui. O prompt 10
+    /// (`known_hosts`) a remove; ela não pode chegar a `main`.
+    HostKeyUnverified,
 }
 
 /// Sinal de consulta da UI para a confirmação de fechamento (ADR-0034,
@@ -89,8 +94,8 @@ pub enum Liveness {
     Idle,
     /// PTY: mais de um processo na árvore (ADR-0034).
     ExtraProcesses,
-    /// SSH: o canal deste painel está aberto, abrindo ou em reconexão.
-    #[allow(dead_code, reason = "produced by the SSH backend, not yet implemented")]
+    /// SSH: o canal deste painel está aberto ou abrindo. (O ciclo de
+    /// reconexão, ADR-0076, é do prompt 14.)
     OpenConnection,
 }
 

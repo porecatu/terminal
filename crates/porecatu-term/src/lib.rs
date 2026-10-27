@@ -23,6 +23,7 @@ mod scroll;
 mod search;
 mod selection;
 mod snapshot;
+mod ssh_backend;
 mod terminal;
 
 pub use backend::{BackendSpec, EndReason, FailCause, Liveness, LostCause};
@@ -59,3 +60,6 @@ pub use terminal::{ShutdownWait, Terminal, TerminalSpawnError};
 pub use porecatu_pty::{
     ProcessGroup, PtyError, PtyErrorKind, PtySize, SpawnConfig, resolve_default_shell, search_path,
 };
+// Mesma regra para o SSH (ADR-0071 §2): `porecatu-ui` não depende de
+// `porecatu-ssh`, e nenhum tipo do `russh` atravessa a fronteira.
+pub use porecatu_ssh::{AuthMethod, Connection, ConnectionId, SshSpawn};

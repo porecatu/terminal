@@ -1,0 +1,20 @@
+[package]
+name = "porecatu-ssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# ADR-0072 §2. Versão exata: o `russh` fixa `ssh-key` e `rsa` em pré-lançamento
+# com `=`, e subir um sem o outro quebra em silêncio. Subir é tarefa própria,
+# conferindo RUSTSEC (piso 0.62.4). Sem `dsa`; `ring` em vez de `aws-lc-rs`
+# (sem NASM no Windows).
+russh = { version = "=0.65.0", default-features = false, features = ["ring", "rsa", "flate2"] }
+# ADR-0072 §2: `tokio` é declarado só aqui, nunca em `[workspace.dependencies]`,
+# para nenhum outro crate importá-lo por conveniência.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time", "io-util"] }

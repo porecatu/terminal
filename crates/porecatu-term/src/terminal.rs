@@ -32,6 +32,7 @@ use crate::scroll::TermScroll;
 use crate::search::{InvalidPattern, SearchJob, SearchMode, SearchStep};
 use crate::selection::{SelectionKind, SelectionSide};
 use crate::snapshot::{CursorShape, GridSnapshot, TermModes};
+use crate::ssh_backend::SshBackend;
 
 /// Intervalo de checagem de `try_wait` na thread de observação do processo.
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -112,6 +113,12 @@ impl Prepared {
     fn from_spec(spec: BackendSpec, prompts: PromptSink) -> Result<Self, TerminalSpawnError> {
         let backend: Box<dyn Backend> = match spec {
             BackendSpec::Local(config) => Box::new(PtyBackend::spawn(config)?),
+            BackendSpec::Ssh(spawn) => Box::new(SshBackend::open(spawn).map_err(|err| {
+                TerminalSpawnError::Stream(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    err.to_string(),
+                ))
+            })?),
         };
         Ok(Self::new(backend, prompts)?)
     }

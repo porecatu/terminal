@@ -38,7 +38,7 @@ Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da ár
 
 ## Stack travada
 
-`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `arboard` (clipboard) · TOML+`serde` (config). Decididos, a implementar: `russh` com `ring` (cliente SSH, [ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) · `keyring` (cofre do SO, [ADR-0073](docs/adr/0073-credenciais-no-cofre-do-sistema.md)).
+`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `russh` com `ring` (cliente SSH, em `porecatu-ssh`, [ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) · `arboard` (clipboard) · TOML+`serde` (config). Decidido, a implementar: `keyring` (cofre do SO, [ADR-0073](docs/adr/0073-credenciais-no-cofre-do-sistema.md)).
 
 Toolchain: stable **pinada** em `rust-toolchain.toml`, edition 2024, lints em `[workspace.lints]` ([ADR-0011](docs/adr/0011-toolchain-rust.md)).
 
@@ -51,7 +51,7 @@ porecatu (bin)
    ├── porecatu-ui ──── porecatu-render
    │        │
    │        ├── porecatu-term ──── porecatu-pty
-   │        │        └──────────── porecatu-ssh   (decidido, a implementar — ADR-0072)
+   │        │        └──────────── porecatu-ssh   (ADR-0072)
    │        ├── porecatu-config
    │        ├── porecatu-locale
    │        └── porecatu-session ── porecatu-core
@@ -66,7 +66,7 @@ Dependências apontam **só para baixo**. Em particular:
 | `porecatu-config` | `core` | GUI, PTY |
 | `porecatu-pty` | — | GUI, `core` |
 | `porecatu-term` | `pty`, `ssh` | GUI, `config` |
-| `porecatu-ssh` *(a implementar)* | — | todo crate do projeto; único com `tokio` ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) |
+| `porecatu-ssh` | — | todo crate do projeto; único com `tokio` e `russh` ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) |
 | `porecatu-render` | — | `core`, `config`, `term` |
 | `porecatu-ui` | `core`, `config`, `term`, `render` | — |
 | `porecatu-session` | `core` | GUI, PTY |
@@ -164,7 +164,7 @@ Versão curta. Texto completo, com sintoma e custo, no [Apêndice A de docs/desc
 
 **Dependências**
 
-- **`alacritty_terminal`, `wgpu`, `toml_edit`**: pinar versão exata; subir é tarefa própria. `alacritty_terminal` isolado em `porecatu-term`; `toml_edit` isolado em `porecatu-config`. Quando entrarem: `russh` e `keyring` também exatos, isolados em `porecatu-ssh`; `russh` com piso de segurança 0.62.4 e RUSTSEC conferido a cada subida; `tokio` **fora** de `[workspace.dependencies]` ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)).
+- **`alacritty_terminal`, `wgpu`, `toml_edit`, `russh`**: pinar versão exata; subir é tarefa própria. `alacritty_terminal` isolado em `porecatu-term`; `toml_edit` isolado em `porecatu-config`; `russh` (`=0.65.0`, feature `ring`, sem `dsa`) isolado em `porecatu-ssh`, com piso de segurança 0.62.4 e RUSTSEC conferido a cada subida — o `rsa` que ele traz em pré-lançamento tem o RUSTSEC-2023-0071 aberto, sem versão corrigida ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md), "Riscos"). `tokio` **fora** de `[workspace.dependencies]`, declarado só em `porecatu-ssh`; `cargo tree -i tokio` tem de mostrar um único caminho. Quando entrar, `keyring` também exato e isolado em `porecatu-ssh`.
 - **`accesskit_winit`** é acoplado a uma versão de `winit`: subir os dois juntos e conferir `cargo tree -p porecatu-ui -i winit` (uma ocorrência só).
 - **Clipboard no Wayland** é o ponto frágil do `arboard`; encapsulado em `porecatu-ui/clipboard.rs`, `copypasta` é o plano B, verificação pendente.
 
