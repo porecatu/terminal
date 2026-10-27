@@ -584,6 +584,46 @@ fn banner_view(
     }
 }
 
+/// O que o seletor de perfil padrão mostra para o `id` `id`: o `[shell]` para o
+/// vazio, o nome do perfil quando ele existe, e o próprio `id` quando o arquivo
+/// aponta para um que não existe mais.
+pub(crate) fn profile_choice_label(
+    catalog: &Catalog,
+    list: &[porecatu_config::ProfileDef],
+    id: &str,
+) -> String {
+    if id.is_empty() {
+        return msg::settings::group::shell(catalog);
+    }
+    list.iter()
+        .find(|profile| profile.id == id)
+        .map_or_else(|| id.to_owned(), |profile| profile.name.clone())
+}
+
+#[cfg(test)]
+mod profile_choice_tests {
+    use super::*;
+    use crate::messages::test_support;
+
+    fn list() -> Vec<porecatu_config::ProfileDef> {
+        let text = "[[profiles.list]]\nid = \"wsl\"\nname = \"WSL Ubuntu\"\nbadge = \"WSL\"\nprogram = \"wsl.exe\"\n";
+        porecatu_config::parse(text).unwrap().0.profiles.list
+    }
+
+    #[test]
+    fn the_choice_shows_the_name_of_the_profile_and_the_shell_for_empty() {
+        let pt = test_support::pt_br();
+        assert_eq!(profile_choice_label(&pt, &list(), "wsl"), "WSL Ubuntu");
+        assert_eq!(profile_choice_label(&pt, &list(), ""), "Shell");
+    }
+
+    #[test]
+    fn a_default_that_points_nowhere_shows_its_own_id() {
+        let pt = test_support::pt_br();
+        assert_eq!(profile_choice_label(&pt, &list(), "gone"), "gone");
+    }
+}
+
 fn option_row(
     option: &OptionDef,
     draft: &Draft,
@@ -597,9 +637,17 @@ fn option_row(
         Control::StringList | Control::StringMap => draft.rows(option),
         _ => Vec::new(),
     };
+    // O perfil padrão mostra o **nome** do perfil, não o `id` que o arquivo guarda.
+    let shown =
+        match (option.control, &value) {
+            (Control::ProfileChoice, EditValue::String(id)) => EditValue::String(
+                profile_choice_label(catalog, &draft.file_config().profiles.list, id),
+            ),
+            _ => value.clone(),
+        };
     let control = control_view(
         option,
-        &value,
+        &shown,
         draft.raw(option),
         &rows,
         catalog,
@@ -719,8 +767,8 @@ fn control_view(
 ) -> ControlView {
     match (option.control, value) {
         (Control::Toggle, EditValue::Bool(on)) => ControlView::Toggle { on: *on },
-        (Control::Text | Control::Language, EditValue::String(text)) => {
-            if option.control == Control::Language {
+        (Control::Text | Control::Language | Control::ProfileChoice, EditValue::String(text)) => {
+            if matches!(option.control, Control::Language | Control::ProfileChoice) {
                 ControlView::Choice { text: text.clone() }
             } else {
                 field(

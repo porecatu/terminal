@@ -2138,7 +2138,7 @@ mod settings_tree_tests {
     }
 
     #[test]
-    fn the_sidebar_is_a_list_with_the_nine_groups_and_one_selected() {
+    fn the_sidebar_is_a_list_with_the_ten_groups_and_one_selected() {
         let update = tree(Group::Terminal, false, true, "pt-BR");
         let list = node(&update, SETTINGS_GROUP_LIST_ID);
         assert_eq!(list.role(), Role::ListBox);
@@ -2153,6 +2153,7 @@ mod settings_tree_tests {
             [
                 "Geral",
                 "Shell",
+                "Perfis",
                 "Terminal",
                 "Aparência",
                 "Sessão",

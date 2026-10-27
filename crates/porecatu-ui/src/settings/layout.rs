@@ -1235,7 +1235,8 @@ mod tests {
         );
         let hit = |point| hit_test(&l, &items, &footer, &geometry, 0.0, point);
 
-        let terminal = items[2].1;
+        // Geral, Shell, Perfis, Terminal: o quarto.
+        let terminal = items[3].1;
         assert_eq!(
             hit((terminal.x + 5.0, terminal.y + 5.0)),
             Some(Hit::Group(Group::Terminal))

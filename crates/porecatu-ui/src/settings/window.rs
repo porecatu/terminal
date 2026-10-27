@@ -1673,8 +1673,26 @@ impl SettingsWindow {
                 found
             }
             Control::Choice(choices) => choices.iter().map(|c| (*c).to_owned()).collect(),
+            // O `[shell]` (vazio) e os perfis declarados, na ordem do arquivo;
+            // o valor em vista entra mesmo que o perfil dele tenha sumido.
+            Control::ProfileChoice => {
+                let mut found = vec![String::new()];
+                found.extend(
+                    self.draft
+                        .file_config()
+                        .profiles
+                        .list
+                        .iter()
+                        .map(|profile| profile.id.clone()),
+                );
+                if !found.contains(&current) {
+                    found.push(current.clone());
+                }
+                found
+            }
             _ => return,
         };
+        let profiles = self.draft.file_config().profiles.list.clone();
         let Some(anchor) = self.control_rect(env, index) else {
             return;
         };
@@ -1683,6 +1701,9 @@ impl SettingsWindow {
             .map(|value| {
                 let label = match option.control {
                     Control::Language => value.clone(),
+                    Control::ProfileChoice => {
+                        content::profile_choice_label(&self.catalog, &profiles, &value)
+                    }
                     _ => choice_label(&self.catalog, &value),
                 };
                 ChoiceItem {

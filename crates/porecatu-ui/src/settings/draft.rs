@@ -448,7 +448,9 @@ impl Draft {
 /// Lê o texto de um campo conforme o controle da opção.
 fn parse_raw(option: &OptionDef, raw: &str) -> Result<EditValue, ValueError> {
     match option.control {
-        Control::Text | Control::Language | Control::Theme => Ok(EditValue::String(raw.to_owned())),
+        Control::Text | Control::Language | Control::Theme | Control::ProfileChoice => {
+            Ok(EditValue::String(raw.to_owned()))
+        }
         Control::Number { float: true, .. } => raw
             .trim()
             .parse::<f64>()
@@ -479,9 +481,10 @@ fn parse_integer(raw: &str) -> Result<EditValue, ValueError> {
 pub(crate) fn validate(option: &OptionDef, value: &EditValue) -> Result<EditValue, ValueError> {
     match (option.control, value) {
         (Control::Toggle, EditValue::Bool(_)) => Ok(value.clone()),
-        (Control::Text | Control::Language | Control::Theme, EditValue::String(_)) => {
-            Ok(value.clone())
-        }
+        (
+            Control::Text | Control::Language | Control::Theme | Control::ProfileChoice,
+            EditValue::String(_),
+        ) => Ok(value.clone()),
         (
             Control::Number {
                 min, max, float, ..
@@ -1159,7 +1162,11 @@ B = \"2\"
                 .unwrap();
         }
         assert_eq!(draft.edits().len(), OPTIONS.len());
-        let (text, unknown) = document.apply_checked(&draft.edits()).unwrap();
+        // O perfil padrão só vale com o perfil que ele nomeia: o arquivo de prova
+        // o declara antes das edições.
+        let mut edits = vec![super::super::catalog::probe_default_edits()[0].clone()];
+        edits.extend(draft.edits());
+        let (text, unknown) = document.apply_checked(&edits).unwrap();
         assert!(unknown.is_empty(), "{unknown:?}");
         let (config, _) = porecatu_config::parse(&text).unwrap();
         for option in OPTIONS {

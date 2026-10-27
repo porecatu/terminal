@@ -33,11 +33,15 @@ use porecatu_locale::Catalog;
 use crate::messages::msg;
 use crate::reload::{self, DeferredScope};
 
-/// Os nove grupos da guia lateral, na ordem do RF-16.7.
+/// Os dez grupos da guia lateral, na ordem do RF-16.7 mais o "Perfis" do
+/// ADR-0075 §6, logo depois de "Shell".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Group {
     General,
     Shell,
+    /// ADR-0075 §6: `[profiles] default` e `detect` como opções comuns; a lista
+    /// e o formulário têm estado próprio (`ProfilesDraft`).
+    Profiles,
     Terminal,
     Appearance,
     Session,
@@ -50,9 +54,10 @@ pub(crate) enum Group {
 }
 
 impl Group {
-    pub(crate) const ALL: [Group; 9] = [
+    pub(crate) const ALL: [Group; 10] = [
         Group::General,
         Group::Shell,
+        Group::Profiles,
         Group::Terminal,
         Group::Appearance,
         Group::Session,
@@ -66,6 +71,7 @@ impl Group {
         match self {
             Group::General => msg::settings::group::general(catalog),
             Group::Shell => msg::settings::group::shell(catalog),
+            Group::Profiles => msg::settings::group::profiles(catalog),
             Group::Terminal => msg::settings::group::terminal(catalog),
             Group::Appearance => msg::settings::group::appearance(catalog),
             Group::Session => msg::settings::group::session(catalog),
@@ -86,6 +92,8 @@ pub(crate) enum Section {
     Confirmations,
     Program,
     Environment,
+    /// O topo do grupo "Perfis": o perfil padrão e a detecção.
+    ProfileDefaults,
     Font,
     Cursor,
     Scrollback,
@@ -110,6 +118,7 @@ impl Section {
             Section::Startup => msg::settings::section::startup(catalog),
             Section::Confirmations => msg::settings::section::confirmations(catalog),
             Section::Program => msg::settings::section::program(catalog),
+            Section::ProfileDefaults => msg::settings::section::profile_defaults(catalog),
             Section::Environment => msg::settings::section::environment(catalog),
             Section::Font => msg::settings::section::font(catalog),
             Section::Cursor => msg::settings::section::cursor(catalog),
@@ -151,6 +160,9 @@ pub(crate) enum Control {
     /// Escolha entre os arquivos de idioma encontrados -- a lista vem do
     /// disco, não da tabela.
     Language,
+    /// `[profiles] default`: o `[shell]` (valor vazio) ou o `id` de um perfil
+    /// declarado. A lista vem dos perfis que a tela tem, não da tabela.
+    ProfileChoice,
     /// Lista editável de textos (`shell.args`, `project_file.trusted_paths`).
     StringList,
     /// Lista de nome e valor (`shell.env`).
@@ -262,6 +274,13 @@ fn probe_scope(option: &OptionDef) -> ReloadScope {
     let default = Config::default();
     let changed = config_with(option, &probe_value(option))
         .expect("o valor de sondagem é válido para a própria opção");
+    let changed = if option.control == Control::ProfileChoice {
+        // `[profiles] default` só vale com o perfil que ele nomeia: a sondagem
+        // declara um (ADR-0070 §1) e o aponta.
+        probe_default_profile()
+    } else {
+        changed
+    };
     match reload::diff(&default, &changed).deferred.first() {
         Some(deferred) => match deferred.scope {
             DeferredScope::NewTab => ReloadScope::NewTab,
@@ -270,6 +289,39 @@ fn probe_scope(option: &OptionDef) -> ReloadScope {
         },
         None => ReloadScope::Live,
     }
+}
+
+/// As edições que declaram o perfil `x` e o põem como padrão: o único jeito
+/// válido de mudar `[profiles] default` (a primeira é o perfil, a segunda a
+/// chave).
+pub(crate) fn probe_default_edits() -> [Edit; 2] {
+    [
+        Edit::AppendTable {
+            array: KeyPath::parse("profiles.list").expect("caminho válido"),
+            entries: vec![
+                ("id".to_owned(), EditValue::String("x".to_owned())),
+                ("name".to_owned(), EditValue::String("x".to_owned())),
+                ("badge".to_owned(), EditValue::String("X".to_owned())),
+                ("program".to_owned(), EditValue::String("x".to_owned())),
+            ],
+        },
+        Edit::Set(
+            KeyPath::parse("profiles.default").expect("caminho válido"),
+            EditValue::String("x".to_owned()),
+        ),
+    ]
+}
+
+/// Um `Config` igual ao padrão, salvo por declarar o perfil `x` e tê-lo como
+/// padrão: o único jeito válido de mudar `[profiles] default`.
+fn probe_default_profile() -> Config {
+    let document = ConfigDocument::parse("").expect("texto vazio");
+    let (text, _) = document
+        .apply_checked(&probe_default_edits())
+        .expect("o perfil de sondagem é válido");
+    porecatu_config::parse(&text)
+        .expect("o perfil de sondagem carrega")
+        .0
 }
 
 /// Um `Config` igual ao padrão, salvo por `option` valer `value`: um `Set`
@@ -313,9 +365,10 @@ pub(crate) fn probe_value(option: &OptionDef) -> EditValue {
                 .expect("uma escolha tem ao menos dois valores")
                 .to_string(),
         ),
-        (Control::Text | Control::Language | Control::Theme, EditValue::String(current)) => {
-            EditValue::String(format!("{current}x"))
-        }
+        (
+            Control::Text | Control::Language | Control::Theme | Control::ProfileChoice,
+            EditValue::String(current),
+        ) => EditValue::String(format!("{current}x")),
         (Control::StringList, _) => EditValue::StringList(vec!["x".to_owned()]),
         (Control::StringMap, _) => {
             EditValue::StringMap([("X".to_owned(), "1".to_owned())].into_iter().collect())
@@ -428,6 +481,8 @@ label_modules! {
     shell_program => (shell_program_label, shell_program_description),
     shell_args => (shell_args_label, shell_args_description),
     shell_env => (shell_env_label, shell_env_description),
+    profiles_default => (profiles_default_label, profiles_default_description),
+    profiles_detect => (profiles_detect_label, profiles_detect_description),
     font_family => (font_family_label, font_family_description),
     font_size => (font_size_label, font_size_description),
     line_height => (line_height_label, line_height_description),
@@ -654,6 +709,23 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         "shell.env",
         Control::StringMap,
         |c| EditValue::StringMap(c.shell.env.clone())
+    ),
+    // ---- Perfis (o topo; a lista e o formulário são do `ProfilesDraft`)
+    option!(
+        profiles_default,
+        Profiles,
+        ProfileDefaults,
+        "profiles.default",
+        Control::ProfileChoice,
+        |c| string(&c.profiles.default)
+    ),
+    option!(
+        profiles_detect,
+        Profiles,
+        ProfileDefaults,
+        "profiles.detect",
+        Control::Toggle,
+        |c| EditValue::Bool(c.profiles.detect)
     ),
     // ---- Terminal
     option!(
@@ -1076,12 +1148,13 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        assert_eq!(OPTIONS.len(), 55);
+        // As 55 do RF-16.11 e as duas do topo do grupo "Perfis" (ADR-0075 §6).
+        assert_eq!(OPTIONS.len(), 57);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 24, 15, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 2, 24, 15, 4, 2, 1, 2, 0]);
     }
 
     /// RF-19.18: as duas opções do acrílico ficam no grupo Aparência, logo
@@ -1447,8 +1520,14 @@ mod tests {
                 "{}: a sondagem não difere do padrão",
                 option.id
             );
+            // O perfil padrão só vale com o perfil que ele nomeia.
+            let edits = if option.control == Control::ProfileChoice {
+                probe_default_edits().to_vec()
+            } else {
+                vec![Edit::Set(option.key_path(), probe.clone())]
+            };
             let (text, unknown) = document
-                .apply_checked(&[Edit::Set(option.key_path(), probe.clone())])
+                .apply_checked(&edits)
                 .unwrap_or_else(|err| panic!("{}: {err:?}", option.id));
             assert!(
                 unknown.is_empty(),
@@ -1526,6 +1605,60 @@ mod tests {
             option("shell_program").unwrap().reload_scope(),
             ReloadScope::NewTab
         );
+    }
+
+    #[test]
+    fn the_profiles_group_comes_right_after_shell_with_the_default_and_the_detection() {
+        let at = |group: Group| Group::ALL.iter().position(|g| *g == group).unwrap();
+        assert_eq!(at(Group::Profiles), at(Group::Shell) + 1);
+        let ids: Vec<&str> = options_in(Group::Profiles).map(|o| o.id).collect();
+        assert_eq!(ids, ["profiles_default", "profiles_detect"]);
+        assert_eq!(
+            option("profiles_default").unwrap().control,
+            Control::ProfileChoice
+        );
+        assert_eq!(option("profiles_detect").unwrap().control, Control::Toggle);
+        assert_eq!(option("profiles_default").unwrap().path, "profiles.default");
+    }
+
+    #[test]
+    fn the_default_profile_and_the_detection_read_the_config_and_default_to_the_shell_and_on() {
+        let default = Config::default();
+        assert_eq!(
+            option("profiles_default").unwrap().read(&default),
+            EditValue::String(String::new())
+        );
+        assert_eq!(
+            option("profiles_detect").unwrap().read(&default),
+            EditValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn reload_scope_of_the_profile_options_is_new_tab() {
+        // Classe C, "vale em aba nova" (ADR-0070 §9): o mesmo que o `[shell]`.
+        for id in ["profiles_default", "profiles_detect"] {
+            assert_eq!(
+                option(id).unwrap().reload_scope(),
+                ReloadScope::NewTab,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_group_and_its_section_are_translated_in_every_language() {
+        for catalog in crate::messages::test_support::all_catalogs() {
+            assert!(!Group::Profiles.label(&catalog).is_empty());
+            assert!(!Section::ProfileDefaults.label(&catalog).is_empty());
+            for id in ["profiles_default", "profiles_detect"] {
+                let option = option(id).unwrap();
+                assert!(!(option.label)(&catalog).is_empty());
+                assert!(!(option.description)(&catalog).is_empty());
+            }
+        }
+        let pt = crate::messages::test_support::pt_br();
+        assert_eq!(Group::Profiles.label(&pt), "Perfis");
     }
 
     #[test]
