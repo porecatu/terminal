@@ -189,7 +189,7 @@ Restaurar uma sessão específica e excluí-la **não são ações**: exigiriam 
 
 As nove entradas de `profile.new_tab_N` são explícitas, como as de `tab.goto_N`: `profile.new_tab_10` é erro de config. O índice nunca conta os perfis **detectados** — um atalho não muda de alvo porque a máquina ganhou um shell.
 
-> **Estado.** Aprovadas, **a implementar**. Até o código existir, nenhuma delas entra no arquivo de exemplo: `crates/porecatu-config/tests/example_toml.rs` reprova binding de ação que o parser não conhece.
+> **Estado.** Implementadas. Sem default de tecla; o arquivo de exemplo as lista comentadas, entre as ações sem atalho. O menu de perfis é o menu de contexto ancorado no `+` (ao lado da aba ativa quando `show_new_tab_button = false`), e a largura cresce com o conteúdo, entre a do menu de contexto e a do aviso.
 
 ---
 

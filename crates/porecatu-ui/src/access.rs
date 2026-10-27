@@ -36,6 +36,7 @@ use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
 use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
+use crate::profile_menu::ProfileMenu;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
 use crate::settings::{
@@ -195,6 +196,7 @@ pub(crate) fn build_tree(
     dialog: &Option<ConfirmDialog>,
     context_menu: &Option<ContextMenu>,
     group_context_menu: &Option<GroupContextMenu>,
+    profile_menu: &Option<ProfileMenu>,
     terminal_context_menu: &Option<TerminalContextMenu>,
     group_editor: &Option<GroupEditor>,
     move_to_group: &Option<MoveToGroupPopover>,
@@ -310,6 +312,8 @@ pub(crate) fn build_tree(
         focus = build_tab_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(m) = group_context_menu {
         focus = build_group_menu(m, workspace, catalog, &mut nodes, &mut root_children);
+    } else if let Some(m) = profile_menu {
+        focus = build_profile_menu(m, &mut nodes, &mut root_children);
     } else if let Some(m) = terminal_context_menu {
         focus = build_terminal_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(e) = group_editor {
@@ -646,6 +650,28 @@ fn build_group_menu(
     for (index, item) in items.iter().enumerate() {
         let id = menu_item_id(index);
         nodes.push((id, leaf(Role::MenuItem, item.label.clone())));
+        children.push(id);
+        if index == menu.highlighted() {
+            focus = id;
+        }
+    }
+    nodes.push((MENU_ID, container(Role::Menu, children)));
+    root_children.push(MENU_ID);
+    focus
+}
+
+/// The profile menu enters the tree like the other context menus; each item's
+/// name is the profile name (ADR-0070 §6), not the badge.
+fn build_profile_menu(
+    menu: &ProfileMenu,
+    nodes: &mut Vec<(NodeId, Node)>,
+    root_children: &mut Vec<NodeId>,
+) -> NodeId {
+    let mut children = Vec::new();
+    let mut focus = MENU_ID;
+    for (index, row) in menu.rows().iter().enumerate() {
+        let id = menu_item_id(index);
+        nodes.push((id, leaf(Role::MenuItem, row.label.clone())));
         children.push(id);
         if index == menu.highlighted() {
             focus = id;
@@ -1235,6 +1261,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -1348,6 +1375,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             Some(&order),
             &TabBarStyle::DEFAULT,
@@ -1390,6 +1418,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1451,6 +1480,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -1494,6 +1524,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1570,6 +1601,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             Some(&layout),
             None,
             &TabBarStyle::DEFAULT,
@@ -1611,6 +1643,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1661,6 +1694,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -1687,6 +1721,7 @@ mod tests {
             &WarningStack::default(),
             &None,
             &menu,
+            &None,
             &None,
             &None,
             &None,
@@ -1747,6 +1782,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             &picker,
             &None,
             None,
@@ -1777,6 +1813,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,

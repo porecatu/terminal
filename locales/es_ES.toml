@@ -301,6 +301,11 @@ pane_focus_up = "Enfocar el panel de arriba"
 pane_focus_down = "Enfocar el panel de abajo"
 session_save_named = "Guardar sesión con nombre"
 session_open_list = "Abrir lista de sesiones"
+profile_open_menu = "Abrir menú de perfiles"
+profile_new_tab = "Nueva pestaña con el perfil {n}"
+
+[profile_menu]
+new_group = "Nuevo grupo de pestañas"
 
 [action_domain]
 tab = "Pestañas"
@@ -308,6 +313,7 @@ group = "Grupos"
 window = "Ventanas"
 session = "Sesiones"
 pane = "Paneles"
+profile = "Perfiles"
 scrollback = "Desplazamiento"
 clipboard = "Portapapeles"
 selection = "Selección"

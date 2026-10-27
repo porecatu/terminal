@@ -111,9 +111,17 @@ pub enum Action {
     /// ADR-0059 §6. Abre a janela de configurações (RF-16.1), ou a traz
     /// para a frente se já estiver aberta.
     SettingsOpen,
+
+    /// ADR-0070 §8. Abre o menu de perfis ancorado no `+` do grupo da aba
+    /// ativa. Vinculável e **sem default** em nenhuma plataforma.
+    ProfileOpenMenu,
+    /// `profile.new_tab_1`..`profile.new_tab_9`: o N-ésimo perfil
+    /// **declarado**. Mesmo desenho de `TabGoto`: `FromStr` valida `1..=9`
+    /// e rejeita `_0`/`_10`. **Sem default**.
+    ProfileNewTab(u8),
 }
 
-/// As 56 linhas do catálogo fechado, na grafia exata que `FromStr`/
+/// As 66 linhas do catálogo fechado, na grafia exata que `FromStr`/
 /// `Display` usam. Único array-fonte: o teste bidirecional
 /// (`tests::every_catalog_name_round_trips`) e a sugestão de erro
 /// (`closest_name`) partem dele, então as duas checagens não podem
@@ -181,6 +189,16 @@ pub const CATALOG: &[&str] = &[
     "session.save_named",
     "session.open_list",
     "settings.open",
+    "profile.open_menu",
+    "profile.new_tab_1",
+    "profile.new_tab_2",
+    "profile.new_tab_3",
+    "profile.new_tab_4",
+    "profile.new_tab_5",
+    "profile.new_tab_6",
+    "profile.new_tab_7",
+    "profile.new_tab_8",
+    "profile.new_tab_9",
 ];
 
 /// Erro de parse de uma ação (ADR-0029 §4). Dois casos distintos, cada um com
@@ -229,6 +247,13 @@ impl FromStr for Action {
         {
             return Ok(Action::TabGoto(digit));
         }
+        if let Some(n) = s.strip_prefix("profile.new_tab_")
+            && let Ok(digit) = n.parse::<u8>()
+            && (1..=9).contains(&digit)
+            && n.len() == 1
+        {
+            return Ok(Action::ProfileNewTab(digit));
+        }
         let action = match s {
             "tab.new" => Action::TabNew,
             "tab.close" => Action::TabClose,
@@ -276,6 +301,7 @@ impl FromStr for Action {
             "session.save_named" => Action::SessionSaveNamed,
             "session.open_list" => Action::SessionOpenList,
             "settings.open" => Action::SettingsOpen,
+            "profile.open_menu" => Action::ProfileOpenMenu,
             _ => {
                 return Err(ActionParseError::Unknown {
                     input: s.to_owned(),
@@ -339,6 +365,8 @@ impl fmt::Display for Action {
             Action::SessionSaveNamed => "session.save_named",
             Action::SessionOpenList => "session.open_list",
             Action::SettingsOpen => "settings.open",
+            Action::ProfileOpenMenu => "profile.open_menu",
+            Action::ProfileNewTab(n) => return write!(f, "profile.new_tab_{n}"),
         };
         f.write_str(name)
     }
@@ -452,6 +480,9 @@ mod tests {
             Action::SessionSaveNamed,
             Action::SessionOpenList,
             Action::SettingsOpen,
+            Action::ProfileOpenMenu,
+            Action::ProfileNewTab(1),
+            Action::ProfileNewTab(9),
         ];
         for action in variants {
             let name = action.to_string();
@@ -467,6 +498,32 @@ mod tests {
         assert!("tab.goto_0".parse::<Action>().is_err());
         assert!("tab.goto_10".parse::<Action>().is_err());
         assert!("tab.goto_99".parse::<Action>().is_err());
+    }
+
+    #[test]
+    fn profile_actions_parse_and_display() {
+        assert_eq!(
+            "profile.open_menu".parse::<Action>(),
+            Ok(Action::ProfileOpenMenu)
+        );
+        assert_eq!(Action::ProfileOpenMenu.to_string(), "profile.open_menu");
+        for n in 1..=9u8 {
+            let name = format!("profile.new_tab_{n}");
+            assert_eq!(name.parse::<Action>(), Ok(Action::ProfileNewTab(n)));
+            assert_eq!(Action::ProfileNewTab(n).to_string(), name);
+        }
+    }
+
+    #[test]
+    fn profile_new_tab_out_of_range_is_unknown() {
+        for name in [
+            "profile.new_tab_0",
+            "profile.new_tab_10",
+            "profile.new_tab_01",
+            "profile.new_tab_",
+        ] {
+            assert!(name.parse::<Action>().is_err(), "{name}");
+        }
     }
 
     #[test]

@@ -43,6 +43,16 @@ pub(crate) fn default_profile(config: &Config) -> SpawnProfile {
     )
 }
 
+/// A profile the user picked from the menu or by `profile.new_tab_N`
+/// (`""` is the `[shell]`). One that vanished from the config since the menu
+/// opened falls back to the default.
+pub(crate) fn chosen_profile(config: &Config, id: &str) -> SpawnProfile {
+    match resolve_profile(config, ProfileRef::Id(id)) {
+        Ok(resolved) => SpawnProfile::found(resolved),
+        Err(_) => default_profile(config),
+    }
+}
+
 /// A split launches "one more of these" (RF-7.15): the origin pane's
 /// profile, `None` being the `[shell]` whatever `default` says. A profile
 /// that left the config since the pane opened falls back to the default.

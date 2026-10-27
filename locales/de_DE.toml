@@ -301,6 +301,11 @@ pane_focus_up = "Oberen Bereich fokussieren"
 pane_focus_down = "Unteren Bereich fokussieren"
 session_save_named = "Sitzung unter Namen speichern"
 session_open_list = "Sitzungsliste öffnen"
+profile_open_menu = "Profilmenü öffnen"
+profile_new_tab = "Neuer Tab mit Profil {n}"
+
+[profile_menu]
+new_group = "Neue Tab-Gruppe"
 
 [action_domain]
 tab = "Tabs"
@@ -308,6 +313,7 @@ group = "Gruppen"
 window = "Fenster"
 session = "Sitzungen"
 pane = "Bereiche"
+profile = "Profile"
 scrollback = "Scrollen"
 clipboard = "Zwischenablage"
 selection = "Auswahl"

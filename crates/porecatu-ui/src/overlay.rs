@@ -50,7 +50,7 @@ use porecatu_render::{
 };
 use porecatu_session::named::EntryStatus;
 
-use crate::chrome::{centered_glyph, push_shadow};
+use crate::chrome::{badge_size, centered_glyph, push_badge, push_shadow};
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
 use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::group_editor::{EditorRegion, GroupEditor};
@@ -58,6 +58,7 @@ use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContext
 use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
 use crate::palette::{self, ResolvedPalette};
+use crate::profile_menu::ProfileMenu;
 use crate::session_picker::{Highlight, Mode, SessionPicker};
 use crate::tab_bar::{self, TabBarStyle, rect_contains};
 use crate::terminal_menu::{TerminalContextMenu, TerminalMenuItem};
@@ -815,6 +816,253 @@ pub fn paint_group_menu(
 }
 
 pub fn group_menu_hit(layout: &GroupMenuLayout, point: (f32, f32)) -> Option<usize> {
+    layout
+        .item_rects
+        .iter()
+        .position(|&rect| rect_contains(rect, point))
+}
+
+// ---- menu de perfis (espec §2.9/§2.16, ADR-0070 §6) ----
+
+/// The context-menu anatomy again, anchored on a button instead of the cursor,
+/// with a divider before the last row ("new tab group") and a badge column.
+/// Same `[appearance.context_menu]` keys.
+pub(crate) struct ProfileMenuLayout {
+    pub(crate) menu_rect: Rect,
+    pub(crate) item_rects: Vec<Rect>,
+}
+
+/// Top-left corner of a `size` popover hanging from `anchor`: below it, with
+/// `offset` between them, left edges aligned. "Flips on both axes": when it
+/// does not fit to the right it aligns to the anchor's right edge, and when it
+/// does not fit below it opens above. Last resort is a clamp into the window.
+pub(crate) fn anchored_origin(
+    anchor: Rect,
+    size: (f32, f32),
+    window: (f32, f32),
+    offset: f32,
+) -> (f32, f32) {
+    let (width, height) = size;
+    let mut x = anchor.x;
+    if x + width > window.0 {
+        x = anchor.x + anchor.width - width;
+    }
+    let max_x = (window.0 - width).max(0.0);
+    x = x.clamp(0.0, max_x);
+    let mut y = anchor.y + anchor.height + offset;
+    if y + height > window.1 {
+        y = anchor.y - offset - height;
+    }
+    let max_y = (window.1 - height).max(0.0);
+    y = y.clamp(0.0, max_y);
+    (x, y)
+}
+
+/// Width of the profile menu: the content's, between the context menu's width
+/// (the minimum, §2.16) and the notice's `width` (the 320 maximum, §2.16).
+/// Measured once, when the menu opens; a label that still does not fit is cut
+/// with an ellipsis like in every other menu.
+pub(crate) fn profile_menu_width(
+    rows: &[crate::profile_menu::ProfileRow],
+    config: &porecatu_config::Config,
+    measurer: &mut TextMeasurer,
+) -> f32 {
+    let cfg = &config.appearance.context_menu;
+    let minimum = cfg.width as f32;
+    let maximum = (config.appearance.notices.width as f32).max(minimum);
+    let item_padding_x = cfg.item_padding_x as f32;
+    let font_size = cfg.font_size as f32;
+    let column = rows
+        .iter()
+        .filter_map(|row| row.badge.as_deref())
+        .map(|badge| badge_size(badge, measurer).0)
+        .fold(0.0_f32, f32::max);
+    let label_offset = if column > 0.0 {
+        column + SAVE_ITEM_ICON_GAP
+    } else {
+        0.0
+    };
+    let widest_row = rows
+        .iter()
+        .map(|row| {
+            let label = measurer.measure_width(&row.label, BODY_FONT, font_size);
+            let chip = row.chip.as_deref().map_or(0.0, |chip| {
+                SAVE_ITEM_ICON_GAP + measurer.measure_width(chip, CHIP_FONT, CHIP_FONT_SIZE)
+            });
+            label_offset + label + chip
+        })
+        .fold(0.0_f32, f32::max);
+    let content = cfg.padding as f32 * 2.0 + item_padding_x * 2.0 + widest_row;
+    content.clamp(minimum, maximum)
+}
+
+pub(crate) fn layout_profile_menu(
+    menu: &ProfileMenu,
+    config: &porecatu_config::Config,
+    window_width: f32,
+    window_height: f32,
+) -> ProfileMenuLayout {
+    let cfg = &config.appearance.context_menu;
+    let width = menu.width;
+    let padding = cfg.padding as f32;
+    let item_height = cfg.item_height as f32;
+    // The distance the other anchored popovers keep from the bar (the group
+    // editor's `offset_y`); no value of its own.
+    let offset = config.appearance.group_editor.offset_y as f32;
+
+    let count = menu.rows().len();
+    let divider_block = if count > 1 {
+        SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT
+    } else {
+        0.0
+    };
+    let height = padding * 2.0 + item_height * count as f32 + divider_block;
+    let (x, y) = anchored_origin(
+        menu.anchor,
+        (width, height),
+        (window_width, window_height),
+        offset,
+    );
+    let menu_rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let item_rects = (0..count)
+        .map(|i| {
+            // The divider sits before the last row.
+            let after_divider = if count > 1 && i == count - 1 {
+                divider_block
+            } else {
+                0.0
+            };
+            Rect {
+                x: menu_rect.x + padding,
+                y: menu_rect.y + padding + item_height * i as f32 + after_divider,
+                width: menu_rect.width - padding * 2.0,
+                height: item_height,
+            }
+        })
+        .collect();
+    ProfileMenuLayout {
+        menu_rect,
+        item_rects,
+    }
+}
+
+pub(crate) fn paint_profile_menu(
+    layout: &ProfileMenuLayout,
+    menu: &ProfileMenu,
+    badge_color: Color,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
+    let cfg = &config.appearance.context_menu;
+    let corner_radius = cfg.corner_radius as f32;
+    let item_radius = cfg.item_corner_radius as f32;
+    let item_padding_x = cfg.item_padding_x as f32;
+    let font_size = cfg.font_size as f32;
+    let tint = config.appearance.groups.badge_tint_strength;
+
+    let mut out = Vec::new();
+    push_shadow(&mut out, layout.menu_rect, corner_radius);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: layout.menu_rect,
+        radius: corner_radius,
+        color: pal.context_menu_background,
+        border_color: pal.context_menu_border,
+        border_width: 1.0,
+    }));
+
+    // The badge column is as wide as the widest badge, so the labels line up
+    // whether or not their row has one (the `[shell]` row has none).
+    let column = menu
+        .rows()
+        .iter()
+        .filter_map(|row| row.badge.as_deref())
+        .map(|badge| badge_size(badge, measurer).0)
+        .fold(0.0_f32, f32::max);
+    let label_offset = if column > 0.0 {
+        column + SAVE_ITEM_ICON_GAP
+    } else {
+        0.0
+    };
+
+    for (index, row) in menu.rows().iter().enumerate() {
+        let rect = layout.item_rects[index];
+        if index == menu.highlighted() {
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect,
+                radius: item_radius,
+                color: pal.menu_item_hover,
+                border_color: palette::TRANSPARENT,
+                border_width: 0.0,
+            }));
+        }
+        let left = rect.x + item_padding_x;
+        if let Some(badge) = &row.badge {
+            let (_, badge_height) = badge_size(badge, measurer);
+            push_badge(
+                &mut out,
+                (left, rect.y + (rect.height - badge_height) / 2.0),
+                badge,
+                badge_color,
+                tint,
+                measurer,
+            );
+        }
+        let chip_width = row.chip.as_deref().map_or(0.0, |chip| {
+            measurer.measure_width(chip, CHIP_FONT, CHIP_FONT_SIZE)
+        });
+        let chip_gap = if chip_width > 0.0 {
+            SAVE_ITEM_ICON_GAP
+        } else {
+            0.0
+        };
+        let label_x = left + label_offset;
+        let budget =
+            (rect.x + rect.width - item_padding_x - chip_width - chip_gap - label_x).max(0.0);
+        out.push(Primitive::Text(TextRun {
+            origin: (label_x, rect.y + (rect.height - font_size) / 2.0),
+            text: fit_label(row.label.clone(), budget, font_size, measurer),
+            font: BODY_FONT,
+            size_px: font_size,
+            color: pal.menu_item_text,
+        }));
+        if let Some(chip) = &row.chip {
+            out.push(Primitive::Text(TextRun {
+                origin: (
+                    rect.x + rect.width - item_padding_x - chip_width,
+                    rect.y + (rect.height - CHIP_FONT_SIZE) / 2.0,
+                ),
+                text: chip.clone(),
+                font: CHIP_FONT,
+                size_px: CHIP_FONT_SIZE,
+                color: pal.menu_item_disabled_text,
+            }));
+        }
+    }
+
+    if menu.rows().len() > 1 {
+        let padding = cfg.padding as f32;
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: layout.menu_rect.x + padding + SAVE_DIVIDER_MARGIN_X,
+                y: layout.item_rects[menu.rows().len() - 1].y
+                    - SAVE_DIVIDER_MARGIN_Y
+                    - SAVE_DIVIDER_HEIGHT,
+                width: layout.menu_rect.width - padding * 2.0 - SAVE_DIVIDER_MARGIN_X * 2.0,
+                height: SAVE_DIVIDER_HEIGHT,
+            },
+            color: pal.editor_divider,
+        }));
+    }
+    out
+}
+
+pub(crate) fn profile_menu_hit(layout: &ProfileMenuLayout, point: (f32, f32)) -> Option<usize> {
     layout
         .item_rects
         .iter()
@@ -2035,6 +2283,99 @@ mod tests {
 
     fn width_of(text: &str, size: f32, measurer: &mut TextMeasurer) -> f32 {
         measurer.measure_width(text, BODY_FONT, size)
+    }
+
+    const ANCHOR: Rect = Rect {
+        x: 100.0,
+        y: 4.0,
+        width: 25.0,
+        height: 30.0,
+    };
+
+    /// The profile menu hangs below its button with the left edges aligned.
+    #[test]
+    fn an_anchored_popover_opens_below_and_left_aligned() {
+        let (x, y) = anchored_origin(ANCHOR, (200.0, 100.0), (800.0, 600.0), 8.0);
+        assert_eq!((x, y), (100.0, 42.0));
+    }
+
+    /// Flip on both axes: no room to the right aligns the right edges, no
+    /// room below opens above the button.
+    #[test]
+    fn an_anchored_popover_flips_on_both_axes() {
+        let near_corner = Rect {
+            x: 700.0,
+            y: 560.0,
+            ..ANCHOR
+        };
+        let (x, y) = anchored_origin(near_corner, (200.0, 100.0), (800.0, 600.0), 8.0);
+        assert_eq!(x, near_corner.x + near_corner.width - 200.0);
+        assert_eq!(y, near_corner.y - 8.0 - 100.0);
+    }
+
+    /// Without room on either side the popover is clamped into the window.
+    #[test]
+    fn an_anchored_popover_that_fits_nowhere_is_clamped() {
+        let (x, y) = anchored_origin(ANCHOR, (200.0, 100.0), (150.0, 90.0), 8.0);
+        assert_eq!((x, y), (0.0, 0.0));
+    }
+
+    /// Between the context menu's width and the notice's: short rows keep the
+    /// minimum, long ones grow to fit and stop at the maximum.
+    #[test]
+    fn the_profile_menu_width_grows_with_its_content_within_the_limits() {
+        use crate::profile_menu::{ProfileRow, ProfileRowKind};
+
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let row = |label: &str, chip: Option<&str>| ProfileRow {
+            kind: ProfileRowKind::NewGroup,
+            label: label.to_owned(),
+            badge: Some("CMD".to_owned()),
+            chip: chip.map(str::to_owned),
+        };
+        let minimum = config.appearance.context_menu.width as f32;
+        let maximum = config.appearance.notices.width as f32;
+
+        let short = profile_menu_width(&[row("sh", None)], &config, &mut measurer);
+        assert_eq!(short, minimum);
+
+        let medium = profile_menu_width(
+            &[row("Command Prompt", Some("Ctrl+Alt+2"))],
+            &config,
+            &mut measurer,
+        );
+        assert!(medium > minimum && medium < maximum, "{medium}");
+
+        let long = "a very long profile name that no menu could ever hold in one line";
+        let capped = profile_menu_width(&[row(long, Some("Ctrl+Alt+2"))], &config, &mut measurer);
+        assert_eq!(capped, maximum);
+    }
+
+    /// The divider sits before the last row and adds its block to the height.
+    #[test]
+    fn the_profile_menu_layout_separates_the_last_row() {
+        use crate::profile_menu::{ProfileMenuTarget, profile_menu_rows};
+
+        let config = porecatu_config::Config::default();
+        let rows = profile_menu_rows(&config, &test_support::pt_br(), &Default::default());
+        let count = rows.len();
+        let menu = ProfileMenu::new(ProfileMenuTarget::Ungrouped, ANCHOR, 200.0, rows);
+        let layout = layout_profile_menu(&menu, &config, 800.0, 600.0);
+        let cfg = &config.appearance.context_menu;
+        let item = cfg.item_height as f32;
+        let gap = layout.item_rects[count - 1].y - layout.item_rects[count - 2].y;
+        assert_eq!(
+            gap,
+            item + SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT
+        );
+        assert_eq!(
+            layout.menu_rect.height,
+            cfg.padding as f32 * 2.0
+                + item * count as f32
+                + SAVE_DIVIDER_MARGIN_Y * 2.0
+                + SAVE_DIVIDER_HEIGHT
+        );
     }
 
     /// Um rótulo mais largo que o orçamento é cortado com reticências, e o

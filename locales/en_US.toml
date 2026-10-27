@@ -317,6 +317,11 @@ pane_focus_up = "Focus pane above"
 pane_focus_down = "Focus pane below"
 session_save_named = "Save session with a name"
 session_open_list = "Open session list"
+profile_open_menu = "Open profile menu"
+profile_new_tab = "New tab with profile {n}"
+
+[profile_menu]
+new_group = "New tab group"
 
 [action_domain]
 tab = "Tabs"
@@ -324,6 +329,7 @@ group = "Groups"
 window = "Windows"
 session = "Sessions"
 pane = "Panes"
+profile = "Profiles"
 scrollback = "Scrolling"
 clipboard = "Clipboard"
 selection = "Selection"

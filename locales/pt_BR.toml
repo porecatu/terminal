@@ -319,6 +319,11 @@ pane_focus_up = "Focar painel acima"
 pane_focus_down = "Focar painel abaixo"
 session_save_named = "Salvar sessão com nome"
 session_open_list = "Abrir lista de sessões"
+profile_open_menu = "Abrir menu de perfis"
+profile_new_tab = "Nova aba com o perfil {n}"
+
+[profile_menu]
+new_group = "Novo grupo de abas"
 
 [action_domain]
 tab = "Abas"
@@ -326,6 +331,7 @@ group = "Grupos"
 window = "Janelas"
 session = "Sessões"
 pane = "Painéis"
+profile = "Perfis"
 scrollback = "Rolagem"
 clipboard = "Área de transferência"
 selection = "Seleção"

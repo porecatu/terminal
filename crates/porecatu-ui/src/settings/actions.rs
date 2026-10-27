@@ -80,6 +80,8 @@ pub(crate) fn label(catalog: &Catalog, action: Action) -> Option<String> {
         Action::SessionSaveNamed => a::session_save_named(catalog),
         Action::SessionOpenList => a::session_open_list(catalog),
         Action::SettingsOpen => a::settings_open(catalog),
+        Action::ProfileOpenMenu => a::profile_open_menu(catalog),
+        Action::ProfileNewTab(n) => a::profile_new_tab(catalog, n),
     })
 }
 
@@ -92,6 +94,7 @@ pub(crate) enum Domain {
     Window,
     Session,
     Pane,
+    Profile,
     Scrollback,
     Clipboard,
     Selection,
@@ -104,12 +107,13 @@ pub(crate) enum Domain {
 }
 
 impl Domain {
-    pub(crate) const ALL: [Domain; 14] = [
+    pub(crate) const ALL: [Domain; 15] = [
         Domain::Tab,
         Domain::Group,
         Domain::Window,
         Domain::Session,
         Domain::Pane,
+        Domain::Profile,
         Domain::Scrollback,
         Domain::Clipboard,
         Domain::Selection,
@@ -132,6 +136,7 @@ impl Domain {
             "window" => Domain::Window,
             "session" => Domain::Session,
             "pane" => Domain::Pane,
+            "profile" => Domain::Profile,
             "scrollback" => Domain::Scrollback,
             "clipboard" => Domain::Clipboard,
             "selection" => Domain::Selection,
@@ -153,6 +158,7 @@ impl Domain {
             Domain::Window => d::window(catalog),
             Domain::Session => d::session(catalog),
             Domain::Pane => d::pane(catalog),
+            Domain::Profile => d::profile(catalog),
             Domain::Scrollback => d::scrollback(catalog),
             Domain::Clipboard => d::clipboard(catalog),
             Domain::Selection => d::selection(catalog),

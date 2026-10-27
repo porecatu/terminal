@@ -978,6 +978,112 @@ fn label_color(text_color: Color, not_started: bool) -> Color {
     }
 }
 
+// Profile badge (spec §2.5 item 1): mono 9px/500, radius 3, `padding: 2px 4px`,
+// `letter-spacing: .4px`. Text in the group color, background the same color at
+// `[appearance.groups] badge_tint_strength`. Spec values with no TOML key.
+const BADGE_FONT: FontFace = FontFace::Mono { bold: true };
+const BADGE_FONT_SIZE: f32 = 9.0;
+const BADGE_RADIUS: f32 = 3.0;
+const BADGE_PADDING_X: f32 = 4.0;
+const BADGE_PADDING_Y: f32 = 2.0;
+const BADGE_LETTER_SPACING: f32 = 0.4;
+
+/// Width and height of the badge for `text`. `TextRun` has no letter spacing,
+/// so [`push_badge`] places one run per character; the mono advance is the
+/// same for every character, so the width is `n * (advance + spacing)`.
+pub(crate) fn badge_size(text: &str, measurer: &mut porecatu_render::TextMeasurer) -> (f32, f32) {
+    let advance = measurer.measure_width("M", BADGE_FONT, BADGE_FONT_SIZE);
+    let chars = text.chars().count() as f32;
+    (
+        chars * (advance + BADGE_LETTER_SPACING) + BADGE_PADDING_X * 2.0,
+        BADGE_FONT_SIZE * 1.2 + BADGE_PADDING_Y * 2.0,
+    )
+}
+
+/// Paints the badge with its top-left corner at `origin` and returns its
+/// rectangle. Reused by the profile menu now and by the tab (prompt 06).
+pub(crate) fn push_badge(
+    out: &mut Vec<Primitive>,
+    origin: (f32, f32),
+    text: &str,
+    color: Color,
+    tint_strength: f64,
+    measurer: &mut porecatu_render::TextMeasurer,
+) -> Rect {
+    let (width, height) = badge_size(text, measurer);
+    let rect = Rect {
+        x: origin.0,
+        y: origin.1,
+        width,
+        height,
+    };
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: BADGE_RADIUS,
+        color: with_alpha(color, tint_strength),
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+    let advance = measurer.measure_width("M", BADGE_FONT, BADGE_FONT_SIZE);
+    let mut x = rect.x + BADGE_PADDING_X;
+    for ch in text.chars() {
+        out.push(Primitive::Text(TextRun {
+            origin: (x, rect.y + BADGE_PADDING_Y),
+            text: ch.to_string(),
+            font: BADGE_FONT,
+            size_px: BADGE_FONT_SIZE,
+            color,
+        }));
+        x += advance + BADGE_LETTER_SPACING;
+    }
+    rect
+}
+
+#[cfg(test)]
+mod badge_tests {
+    use super::*;
+    use porecatu_render::TextMeasurer;
+
+    #[test]
+    fn badge_grows_by_one_advance_plus_spacing_per_character() {
+        let mut m = TextMeasurer::new();
+        let (one, h1) = badge_size("P", &mut m);
+        let (three, h3) = badge_size("WSL", &mut m);
+        let advance = m.measure_width("M", BADGE_FONT, BADGE_FONT_SIZE);
+        assert!((three - one - 2.0 * (advance + BADGE_LETTER_SPACING)).abs() < 1e-3);
+        assert_eq!(h1, h3);
+    }
+
+    #[test]
+    fn badge_paints_a_tinted_box_and_one_run_per_character() {
+        let mut m = TextMeasurer::new();
+        let color = Color {
+            r: 0.4,
+            g: 0.6,
+            b: 0.9,
+            a: 1.0,
+        };
+        let mut out = Vec::new();
+        let rect = push_badge(&mut out, (10.0, 20.0), "WSL", color, 0.14, &mut m);
+        assert_eq!((rect.x, rect.y), (10.0, 20.0));
+        let Primitive::RoundedQuad(quad) = &out[0] else {
+            panic!("the box comes first");
+        };
+        assert_eq!(quad.color.a, 0.14);
+        assert_eq!(quad.radius, 3.0);
+        let runs: Vec<_> = out
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(runs.len(), 3);
+        assert!(runs.iter().all(|t| t.color == color));
+        assert!(runs[1].origin.0 > runs[0].origin.0);
+    }
+}
+
 #[cfg(test)]
 mod label_color_tests {
     use super::*;

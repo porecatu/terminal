@@ -301,6 +301,11 @@ pane_focus_up = "Activer le panneau du dessus"
 pane_focus_down = "Activer le panneau du dessous"
 session_save_named = "Enregistrer la session sous un nom"
 session_open_list = "Ouvrir la liste des sessions"
+profile_open_menu = "Ouvrir le menu des profils"
+profile_new_tab = "Nouvel onglet avec le profil {n}"
+
+[profile_menu]
+new_group = "Nouveau groupe d'onglets"
 
 [action_domain]
 tab = "Onglets"
@@ -308,6 +313,7 @@ group = "Groupes"
 window = "Fenêtres"
 session = "Sessions"
 pane = "Panneaux"
+profile = "Profils"
 scrollback = "Défilement"
 clipboard = "Presse-papiers"
 selection = "Sélection"

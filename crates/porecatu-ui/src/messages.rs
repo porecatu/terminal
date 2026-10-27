@@ -621,6 +621,11 @@ registry! {
         pane_focus_down(),
         session_save_named(),
         session_open_list(),
+        profile_open_menu(),
+        profile_new_tab(n),
+    }
+    profile_menu {
+        new_group(),
     }
     action_domain {
         tab(),
@@ -628,6 +633,7 @@ registry! {
         window(),
         session(),
         pane(),
+        profile(),
         scrollback(),
         clipboard(),
         selection(),

@@ -55,6 +55,7 @@ mod overlay;
 mod paint;
 mod palette;
 mod panes;
+mod profile_menu;
 mod profile_spawn;
 mod reload;
 mod rename;
@@ -85,6 +86,7 @@ use keymap::Chord;
 use move_to_group::{MoveTarget, MoveToGroupPopover};
 use paint::CellMetrics;
 use porecatu_core::GroupColor;
+use profile_menu::{ProfileMenu, ProfileMenuTarget, ProfileRowKind};
 use reload::{ConfigReload, LanguageReload, Reload};
 use rename::RenameState;
 use search_bar::{SearchBarHit, SearchBarState};
@@ -1137,6 +1139,12 @@ enum NewTabRequest {
     /// "+" ao fim da trilha, fora de qualquer wrapper.
     Ungrouped,
     WindowEmptied,
+    /// Secondary click on a `+`: the profile menu hangs from `anchor` (window
+    /// coordinates). `App` builds the rows, which need the config and keymap.
+    OpenProfileMenu {
+        target: ProfileMenuTarget,
+        anchor: Rect,
+    },
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -1215,6 +1223,8 @@ struct WindowState {
     /// exclusivo com `context_menu`/`group_editor`/`move_to_group`
     /// (`close_all_popovers`).
     group_context_menu: Option<GroupContextMenu>,
+    /// Profile menu (ADR-0070 §6): the context menu anchored on a `+`.
+    profile_menu: Option<ProfileMenu>,
     /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
     /// mesma exclusão mútua de `close_all_popovers`.
     terminal_context_menu: Option<TerminalContextMenu>,
@@ -2082,6 +2092,7 @@ impl WindowState {
             dialog: None,
             context_menu: None,
             group_context_menu: None,
+            profile_menu: None,
             terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
@@ -2146,6 +2157,7 @@ impl WindowState {
         let dialog = &self.dialog;
         let context_menu = &self.context_menu;
         let group_context_menu = &self.group_context_menu;
+        let profile_menu = &self.profile_menu;
         let terminal_context_menu = &self.terminal_context_menu;
         let group_editor = &self.group_editor;
         let move_to_group = &self.move_to_group;
@@ -2160,6 +2172,7 @@ impl WindowState {
                 dialog,
                 context_menu,
                 group_context_menu,
+                profile_menu,
                 terminal_context_menu,
                 group_editor,
                 move_to_group,
@@ -2230,6 +2243,7 @@ impl WindowState {
     fn close_all_popovers(&mut self) {
         self.context_menu = None;
         self.group_context_menu = None;
+        self.profile_menu = None;
         self.terminal_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
@@ -2425,9 +2439,14 @@ impl WindowState {
         config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
+        profile: Option<&str>,
     ) {
-        // ADR-0070 §2: a new tab launches the default profile.
-        let spawn_profile = profile_spawn::default_profile(config);
+        // ADR-0070 §2: a new tab launches the default profile, unless the
+        // user chose one (profile menu, `profile.new_tab_N`).
+        let spawn_profile = match profile {
+            Some(id) => profile_spawn::chosen_profile(config, id),
+            None => profile_spawn::default_profile(config),
+        };
         let shell_name = profile_spawn::display_name(&spawn_profile.resolved);
         let tab_id = match target {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
@@ -3106,6 +3125,7 @@ impl WindowState {
             config,
             project_file,
             startup_directory,
+            None,
         );
     }
 
@@ -3497,6 +3517,186 @@ impl WindowState {
             }
             _ => None,
         }
+    }
+
+    /// Opens the profile menu hanging from `anchor`, closing every other
+    /// popover first (ADR-0023).
+    fn open_profile_menu(
+        &mut self,
+        target: ProfileMenuTarget,
+        anchor: Rect,
+        rows: Vec<profile_menu::ProfileRow>,
+        config: &porecatu_config::Config,
+        measurer: &mut TextMeasurer,
+    ) {
+        self.close_all_popovers();
+        self.hover.dismiss();
+        let width = overlay::profile_menu_width(&rows, config, measurer);
+        self.profile_menu = Some(ProfileMenu::new(target, anchor, width, rows));
+    }
+
+    /// `profile.open_menu` (RF-7.12): the menu of the group the active tab is
+    /// in, hanging from that group's `+`, or from the active tab when the
+    /// button is hidden. Nothing happens without an active tab.
+    fn action_open_profile_menu(
+        &mut self,
+        gpu: &mut GpuContext,
+        style: &TabBarStyle,
+        rows: Vec<profile_menu::ProfileRow>,
+        config: &porecatu_config::Config,
+    ) {
+        let Some(active) = self.workspace.active_tab() else {
+            return;
+        };
+        let Some(group) = self.workspace.group_of_tab(active) else {
+            return;
+        };
+        let layout = tab_bar::fit_width(
+            &self.workspace,
+            style,
+            self.logical_width,
+            gpu.text_measurer(),
+            is_macos(),
+        );
+        let Some(rect) = profile_menu::open_menu_anchor(&layout, group, active) else {
+            return;
+        };
+        // A `+` scrolled out of the track still anchors at the track's edge,
+        // never over the fixed buttons on the right.
+        let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
+        let anchor = Rect {
+            x: (rect.x - self.scroll_offset).clamp(0.0, (trilha_width - rect.width).max(0.0)),
+            ..rect
+        };
+        // The first row is highlighted, which `ProfileMenu::new` already does.
+        self.open_profile_menu(
+            ProfileMenuTarget::Group(group),
+            anchor,
+            rows,
+            config,
+            gpu.text_measurer(),
+        );
+    }
+
+    /// Arrows move the highlight, `Enter` chooses, `Esc` closes. Devolve a
+    /// linha escolhida, com o alvo do menu.
+    fn handle_profile_menu_key(
+        &mut self,
+        event: &KeyEvent,
+    ) -> Option<(ProfileMenuTarget, ProfileRowKind)> {
+        if event.state != ElementState::Pressed {
+            return None;
+        }
+        let menu = self.profile_menu.as_mut()?;
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.profile_menu = None;
+                None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                menu.move_highlight(-1);
+                None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                menu.move_highlight(1);
+                None
+            }
+            Key::Named(NamedKey::Enter) => {
+                let chosen = menu.selected().map(|row| (menu.target, row.kind.clone()));
+                self.profile_menu = None;
+                chosen
+            }
+            _ => None,
+        }
+    }
+
+    /// Runs the chosen row: a tab with that profile in the menu's group, which
+    /// inherits the `cwd` like `tab.new` (the profile's own `cwd` wins), or
+    /// `group.create`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_profile_menu_row(
+        &mut self,
+        target: ProfileMenuTarget,
+        kind: ProfileRowKind,
+        gpu: &mut GpuContext,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        config: &porecatu_config::Config,
+        project_file: &porecatu_config::ProjectFile,
+        catalog: &Catalog,
+    ) {
+        match kind {
+            ProfileRowKind::Profile { id } => {
+                if self.rename.editing_tab().is_some() {
+                    self.commit_rename();
+                }
+                let (new_tab_target, cwd) = match target {
+                    ProfileMenuTarget::Group(group) => (
+                        NewTabTarget::Group(group),
+                        self.resolve_group_new_tab_cwd(group, startup_directory),
+                    ),
+                    ProfileMenuTarget::Ungrouped => (
+                        NewTabTarget::Ungrouped,
+                        self.resolve_new_tab_cwd(startup_directory),
+                    ),
+                };
+                self.open_tab(
+                    cell_metrics,
+                    proxy,
+                    cwd,
+                    now,
+                    new_tab_target,
+                    style,
+                    term_params,
+                    config,
+                    project_file,
+                    startup_directory,
+                    Some(&id),
+                );
+            }
+            ProfileRowKind::NewGroup => self.action_group_create(gpu, style, catalog),
+        }
+    }
+
+    /// `profile.new_tab_N` (RF-7.11): the N-th declared profile, in the group of
+    /// the active tab. No N-th profile: nothing happens.
+    #[allow(clippy::too_many_arguments)]
+    fn action_profile_new_tab(
+        &mut self,
+        n: u8,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        config: &porecatu_config::Config,
+        project_file: &porecatu_config::ProjectFile,
+    ) {
+        let Some(id) = profile_menu::nth_declared_id(config, n) else {
+            return;
+        };
+        if self.rename.editing_tab().is_some() {
+            self.commit_rename();
+        }
+        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        self.open_tab(
+            cell_metrics,
+            proxy,
+            cwd,
+            now,
+            NewTabTarget::ActiveGroup,
+            style,
+            term_params,
+            config,
+            project_file,
+            startup_directory,
+            Some(id),
+        );
     }
 
     /// Espelha `handle_group_menu_key`, sobre `terminal_context_menu`.
@@ -3989,6 +4189,27 @@ impl WindowState {
             // ADR-0054 §7/ADR-0055 §3: abre o popover de sessões.
             Action::SessionSaveNamed => ActionOutcome::OpenSessionPicker { edit_name: true },
             Action::SessionOpenList => ActionOutcome::OpenSessionPicker { edit_name: false },
+            // ADR-0070 §8: no default key; the menu hangs from the `+` of the
+            // active tab's group.
+            Action::ProfileOpenMenu => {
+                let rows = profile_menu::profile_menu_rows(config, catalog, keymap);
+                self.action_open_profile_menu(gpu, style, rows, config);
+                ActionOutcome::Handled
+            }
+            Action::ProfileNewTab(n) => {
+                self.action_profile_new_tab(
+                    n,
+                    cell_metrics,
+                    proxy,
+                    startup_directory,
+                    now,
+                    style,
+                    term_params,
+                    config,
+                    project_file,
+                );
+                ActionOutcome::Handled
+            }
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
             // resolvido -- inalcançável na prática, mas o `match` precisa
             // ser exaustivo.
@@ -4167,7 +4388,20 @@ impl WindowState {
                     self.group_context_menu = Some(GroupContextMenu::new(id, logical_point));
                     self.hover.dismiss();
                 }
-                TabBarHit::GroupNewTab(_) | TabBarHit::UngroupedNewTab => {}
+                TabBarHit::GroupNewTab(_) | TabBarHit::UngroupedNewTab => {
+                    // RF-7.8: the menu belongs to the group of the `+` hit.
+                    if let Some(target) = profile_menu::target_for_hit(hit)
+                        && let Some(button) = profile_menu::plus_rect(&layout, target)
+                    {
+                        return NewTabRequest::OpenProfileMenu {
+                            target,
+                            anchor: Rect {
+                                x: button.x - self.scroll_offset,
+                                ..button
+                            },
+                        };
+                    }
+                }
             }
             return NewTabRequest::None;
         }
@@ -4646,6 +4880,7 @@ impl WindowState {
             config,
             project_file,
             startup_directory,
+            None,
         );
     }
 
@@ -4677,6 +4912,7 @@ impl WindowState {
             config,
             project_file,
             startup_directory,
+            None,
         );
     }
 
@@ -6040,6 +6276,7 @@ impl App {
             &self.config,
             &self.config.project_file,
             &self.startup_directory,
+            None,
         );
         self.windows.insert(window_id, state);
     }
@@ -6211,6 +6448,7 @@ impl App {
                 &self.config,
                 &self.config.project_file,
                 &self.startup_directory,
+                None,
             );
         }
         state.sync_window_title();
@@ -9030,6 +9268,30 @@ impl App {
             }
             return;
         }
+        if state.profile_menu.is_some() {
+            if let Some((target, kind)) = state.handle_profile_menu_key(&key)
+                && let Some(gpu) = &mut self.gpu
+            {
+                state.run_profile_menu_row(
+                    target,
+                    kind,
+                    gpu,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
+                    &self.style,
+                    &self.term_params,
+                    &self.config,
+                    &self.config.project_file,
+                    &self.catalog,
+                );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
         if state.terminal_context_menu.is_some() {
             let menu = state.terminal_context_menu;
             if let Some(action) =
@@ -9415,6 +9677,7 @@ impl App {
         if state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
         {
@@ -9539,6 +9802,24 @@ impl App {
                 state.logical_height,
             );
             if let Some(index) = overlay::group_menu_hit(&layout, logical_point) {
+                menu.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+        // Menu de perfis: mesmo tratamento.
+        if let Some(menu) = &mut state.profile_menu {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let layout = overlay::layout_profile_menu(
+                menu,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            if let Some(index) = overlay::profile_menu_hit(&layout, logical_point) {
                 menu.set_highlight(index);
             }
             state.window.request_redraw();
@@ -9990,6 +10271,7 @@ impl App {
         let overlay_open = state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
@@ -10355,6 +10637,44 @@ impl App {
             return;
         }
 
+        // Menu de perfis: clique esquerdo numa linha a escolhe, qualquer outro
+        // clique fecha.
+        if let Some(menu) = state.profile_menu.take() {
+            let layout = overlay::layout_profile_menu(
+                &menu,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            let chosen = (button == MouseButton::Left)
+                .then(|| overlay::profile_menu_hit(&layout, logical_point))
+                .flatten()
+                .and_then(|index| menu.rows().get(index))
+                .map(|row| row.kind.clone());
+            if let Some(kind) = chosen
+                && let Some(gpu) = &mut self.gpu
+            {
+                state.run_profile_menu_row(
+                    menu.target,
+                    kind,
+                    gpu,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
+                    &self.style,
+                    &self.term_params,
+                    &self.config,
+                    &self.config.project_file,
+                    &self.catalog,
+                );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
         // Menu de contexto do terminal: mesmo padrão dos dois acima.
         if let Some(menu) = state.terminal_context_menu {
             let items = match state.pane_and_rect_at(&self.style, menu.anchor) {
@@ -10612,15 +10932,19 @@ impl App {
             && state.in_bar(state.cursor_position.1, &self.style)
         {
             state.hover.dismiss();
-            if let Some(gpu) = &mut self.gpu {
-                state.handle_bar_click(
+            if let Some(gpu) = &mut self.gpu
+                && let NewTabRequest::OpenProfileMenu { target, anchor } = state.handle_bar_click(
                     logical_point,
                     gpu,
                     true,
                     &self.style,
                     self.config.general.confirm_close_with_process,
                     &self.catalog,
-                );
+                )
+            {
+                let rows =
+                    profile_menu::profile_menu_rows(&self.config, &self.catalog, &self.keymap);
+                state.open_profile_menu(target, anchor, rows, &self.config, gpu.text_measurer());
             }
             state.window.request_redraw();
             return;
@@ -10672,7 +10996,8 @@ impl App {
                 NewTabRequest::WindowEmptied => {
                     self.close_window_unconditionally(window_id, event_loop);
                 }
-                NewTabRequest::None => {
+                // Only the secondary click asks for the profile menu.
+                NewTabRequest::None | NewTabRequest::OpenProfileMenu { .. } => {
                     state.window.request_redraw();
                 }
             }
@@ -11043,6 +11368,7 @@ impl App {
         let hyperlink_overlay_blocks_hover = state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
@@ -11319,6 +11645,32 @@ impl App {
                 &layout,
                 &items,
                 menu.highlighted(),
+                config,
+                pal,
+                gpu.text_measurer(),
+            ));
+        }
+        if let Some(menu) = &state.profile_menu {
+            let layout = overlay::layout_profile_menu(
+                menu,
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            // The badges take the color of the group the new tab joins.
+            let badge_color = match menu.target {
+                ProfileMenuTarget::Group(id) => state
+                    .workspace
+                    .group(id)
+                    .and_then(|g| g.color())
+                    .map(|c| pal.group_color(c))
+                    .unwrap_or_else(|| pal.ungrouped_group_color()),
+                ProfileMenuTarget::Ungrouped => pal.ungrouped_group_color(),
+            };
+            popover.extend(overlay::paint_profile_menu(
+                &layout,
+                menu,
+                badge_color,
                 config,
                 pal,
                 gpu.text_measurer(),
