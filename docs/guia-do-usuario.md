@@ -566,7 +566,20 @@ ordem ficam como estão.
   pendente: o arquivo e o cofre só mudam no **Salvar**, e **Descartar** desfaz.
 - **Senha salva — Esquecer** e **Passphrase salva — Esquecer**, no formulário SSH
   (só quando o cofre do sistema responde), apagam o segredo na hora.
-- **Importar do ~/.ssh/config** ainda não importa: abre só o estado vazio.
+- **Importar do ~/.ssh/config** abre, no lugar do formulário, uma lista com um
+  interruptor por bloco `Host` de destino concreto (sem `*`, `?` nem `!`),
+  mostrando `usuário@host:porta` já resolvidos (`HostName`, `User`, `Port`;
+  sem `User`, entra o seu usuário local). Marque os que quiser e use
+  **Importar marcados**: cada um vira um perfil SSH nas alterações pendentes,
+  gravado só no **Salvar**. É uma **cópia**: mudar o `~/.ssh/config` depois não
+  muda os perfis. Aparecem desabilitados, com o motivo, os blocos que o cliente
+  embutido não suporta (`ProxyJump`, `ProxyCommand`, `LocalForward`,
+  `RemoteForward`, `DynamicForward`, `CertificateFile`), os que o perfil
+  recusaria (host ou usuário com caractere proibido) e os que já são um perfil
+  (mesmo host, porta e usuário). `Include` é resolvido. Um arquivo com **`Match`**
+  é recusado inteiro: o Porecatu não lê `Match`, e a lista diz isso, com a
+  linha, em vez de importar dados trocados. O mesmo vale para uma diretiva que o
+  leitor não conhece.
 
 ### Escolher o perfil
 
