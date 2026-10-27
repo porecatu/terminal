@@ -199,7 +199,7 @@ As nove entradas de `profile.new_tab_N` são explícitas, como as de `tab.goto_N
 |---|---|---|---|---|
 | `ssh.reconnect` | No painel focado, se ele é SSH e está encerrado, desistiu de reconectar ou espera a próxima tentativa: reconecta agora, recomeçando a contagem. Em qualquer outro painel, não faz nada. Também é o item "Reconectar" do menu da aba SSH. **Sem default** | [PRD-020](../prd/prd-020-conexoes-ssh.md) RF-20.31, [ADR-0076](../adr/0076-reconexao-automatica.md) §5 | fora de fase | |
 
-> **Estado.** Aprovada, **a implementar**, depois das ações `profile.*`.
+> **Estado.** **Implementada** (prompt 14). Sem default de tecla; o arquivo de exemplo a lista comentada, entre as ações sem atalho. Age no painel SSH focado: em `Waiting` antecipa a tentativa (mantendo o número dela), em `Exited` ou depois de desistir recomeça a contagem em 1 de 5, em `Connecting` não faz nada, e em qualquer painel que não é SSH (ou que ainda está dormente) não faz nada. O mesmo caminho serve ao item "Reconectar" do menu de contexto da aba, que só existe em aba SSH.
 
 Responder aos diálogos de senha e de chave do host não é ação: é a linha "confirmar ou cancelar diálogo" da tabela de superfícies abaixo. Cadastrar, editar, excluir e importar perfis acontece na janela de configurações, que é modo de captura (mesma tabela).
 

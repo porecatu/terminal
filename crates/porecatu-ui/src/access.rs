@@ -29,7 +29,7 @@ use porecatu_core::{GroupColor, GroupId, PaneId, TabId, Workspace};
 use porecatu_locale::Catalog;
 use porecatu_render::TextMeasurer;
 
-use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
+use crate::context_menu::ContextMenu;
 use crate::dialog::{ConfirmDialog, DialogButton, SecretFocus};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
@@ -665,7 +665,7 @@ fn build_tab_menu(
 ) -> NodeId {
     let mut children = Vec::new();
     let mut focus = MENU_ID;
-    for (index, item) in TAB_MENU_ITEMS.iter().enumerate() {
+    for (index, item) in menu.items().iter().enumerate() {
         let id = menu_item_id(index);
         let mut node = Node::new(Role::MenuItem);
         node.set_label(item.action.label(catalog));
@@ -1279,7 +1279,7 @@ mod tests {
     use porecatu_core::{GroupColor, Workspace};
 
     use super::*;
-    use crate::context_menu::{ContextMenu, MenuAction};
+    use crate::context_menu::{ContextMenu, MenuAction, TAB_MENU_ITEMS};
     use crate::dialog::DialogAction;
 
     fn measurer() -> TextMeasurer {

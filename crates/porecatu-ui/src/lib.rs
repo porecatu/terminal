@@ -35,6 +35,7 @@ mod access;
 mod acrylic;
 mod animation;
 mod app_icon;
+mod app_reconnect;
 mod background_image;
 mod box_glyphs;
 mod chrome;
@@ -61,6 +62,7 @@ mod profile_detect;
 mod profile_menu;
 mod profile_spawn;
 mod prompt_queue;
+mod reconnect;
 mod reload;
 mod rename;
 mod search_bar;
@@ -590,6 +592,25 @@ struct PaneRuntime {
     /// (RF-20.33): o motor existe e mostra a nota, nenhum backend roda. Só
     /// `WindowState::connect_dormant_pane` desliga isto.
     dormant: bool,
+    /// O que abre a conexão deste painel SSH, para a reconexão refazê-la
+    /// (ADR-0076 §3): destino, métodos, chave. A conexão e o tamanho são
+    /// preenchidos a cada tentativa. `None` num painel local.
+    ssh_spawn: Option<porecatu_term::SshSpawn>,
+    /// O painel está num ciclo de reconexão (ADR-0076 §4): a conexão conta como
+    /// **aberta** para o RF-20.25, mesmo com o backend que caiu já encerrado.
+    reconnecting: bool,
+}
+
+impl PaneRuntime {
+    /// A atividade do painel para a confirmação de fechar. Num ciclo de
+    /// reconexão a conexão conta como aberta (ADR-0076 §4).
+    fn liveness(&self) -> Liveness {
+        if self.reconnecting {
+            Liveness::OpenConnection
+        } else {
+            self.terminal.liveness()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -644,6 +665,8 @@ mod pane_runtime_map_key_tests {
             ssh_target: None,
             remote_cwd: None,
             dormant: false,
+            ssh_spawn: None,
+            reconnecting: false,
         }
     }
 
@@ -1124,6 +1147,9 @@ enum ActionOutcome {
     OpenSessionPicker {
         edit_name: bool,
     },
+    /// `ssh.reconnect` (ADR-0076 §5): o ciclo de reconexão é do processo, não
+    /// da janela.
+    SshReconnect,
     Unhandled,
 }
 
@@ -1369,7 +1395,9 @@ fn exit_outcome(reason: &EndReason) -> (bool, u32) {
         // painel marca ≠ 0 para nunca parecer um `exit` bem-sucedido.
         EndReason::RemoteEnded { code, .. } => (false, code.filter(|code| *code != 0).unwrap_or(1)),
         // `Lost` e `Failed` não são saída de processo nenhuma: a aba fica
-        // aberta com a nota da causa. (A reconexão é de uma etapa à frente.)
+        // aberta com a nota da causa. Uma conexão que caiu sozinha nunca chega
+        // aqui: é do ciclo de reconexão (`app_reconnect.rs`, ADR-0076), que só
+        // devolve o painel a este caminho ao desistir.
         EndReason::Lost { .. } | EndReason::Failed { .. } => (false, 1),
     }
 }
@@ -2916,14 +2944,19 @@ impl WindowState {
         let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
         let ssh_name = profile.ssh.as_ref().map(|ssh| ssh.name.clone());
         let ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
+        let ssh_spawn = profile
+            .ssh
+            .as_ref()
+            .map(|ssh| profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16));
         // RF-20.33: a restored SSH pane never connects by itself.
         let dormant = origin == SpawnOrigin::Restored && profile.ssh.is_some();
-        let spec = match &profile.ssh {
+        let spec = match &ssh_spawn {
             Some(_) if dormant => BackendSpec::Dormant {
                 rows: rows as u16,
                 cols: cols as u16,
             },
-            Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16)),
+            // Aba nova de um perfil SSH: conexão nova, sempre (ADR-0072 §5).
+            Some(spawn) => BackendSpec::Ssh(spawn.clone()),
             None => BackendSpec::Local(pty_config),
         };
         match Terminal::spawn(spec, term_params.clone(), move || {
@@ -3002,6 +3035,8 @@ impl WindowState {
                         ssh_target,
                         remote_cwd: None,
                         dormant,
+                        ssh_spawn,
+                        reconnecting: false,
                     },
                 );
             }
@@ -3052,6 +3087,7 @@ impl WindowState {
         now: Instant,
         startup_directory: &Option<PathBuf>,
         dormant: bool,
+        share_connection: Option<porecatu_term::ConnectionId>,
     ) {
         let profile = &spawn_profile.resolved;
         self.set_pane_profile(tab_id, pane_id, profile);
@@ -3080,12 +3116,27 @@ impl WindowState {
         let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
         let ssh_name = profile.ssh.as_ref().map(|ssh| ssh.name.clone());
         let ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
-        let spec = match &profile.ssh {
+        let ssh_spawn = profile
+            .ssh
+            .as_ref()
+            .map(|ssh| profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16));
+        let spec = match &ssh_spawn {
             Some(_) if dormant => BackendSpec::Dormant {
                 rows: rows as u16,
                 cols: cols as u16,
             },
-            Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16)),
+            // RF-20.23: dividir um painel SSH abre um canal na **mesma
+            // conexão**, sem autenticar de novo. Sem conexão viva para
+            // dividir, abre uma própria, como uma aba nova.
+            Some(spawn) => {
+                let mut spawn = spawn.clone();
+                if let Some(id) = share_connection
+                    && porecatu_term::connection_is_alive(id)
+                {
+                    spawn.connection = porecatu_term::Connection::Share(id);
+                }
+                BackendSpec::Ssh(spawn)
+            }
             None => BackendSpec::Local(pty_config),
         };
         match Terminal::spawn(spec, term_params.clone(), move || {
@@ -3131,6 +3182,8 @@ impl WindowState {
                         ssh_target,
                         remote_cwd: None,
                         dormant,
+                        ssh_spawn,
+                        reconnecting: false,
                     },
                 );
             }
@@ -3207,6 +3260,7 @@ impl WindowState {
                 startup_directory,
                 // RF-20.33: an SSH sibling waits for its own gesture.
                 spawn_profile.resolved.ssh.is_some(),
+                None,
             );
         }
     }
@@ -3278,6 +3332,13 @@ impl WindowState {
             return;
         };
         let new_pane_rect = self.pane_box_rect(style, new_pane_id);
+        // RF-20.23: the new pane joins the connection of the one it came from,
+        // when that one is a live SSH pane (not dormant, not reconnecting).
+        let share_connection = self
+            .panes
+            .get(&(tab_id, focused))
+            .filter(|rt| rt.ssh_spawn.is_some() && !rt.dormant && !rt.reconnecting)
+            .and_then(|rt| rt.terminal.connection_id());
         self.spawn_split_pane_runtime(
             tab_id,
             new_pane_id,
@@ -3292,6 +3353,7 @@ impl WindowState {
             startup_directory,
             // A split is the user asking for "one more of these": it connects.
             false,
+            share_connection,
         );
         // O painel de origem encolheu na árvore, mas o `Terminal` dele já
         // existia antes do split e não sabe disso sozinho -- sem isto, um
@@ -3699,7 +3761,7 @@ impl WindowState {
                 .leaves_in_order()
                 .iter()
                 .filter_map(|pane| self.panes.get(&(id, *pane)))
-                .map(|runtime| (runtime.terminal.modes(), runtime.terminal.liveness())),
+                .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
         );
         if any_pane_needs_confirmation {
             let title = self
@@ -3738,7 +3800,7 @@ impl WindowState {
         if should_confirm_tab_close(
             confirm_close_with_process,
             runtime.terminal.modes(),
-            liveness_needs_confirmation(runtime.terminal.liveness()),
+            liveness_needs_confirmation(runtime.liveness()),
         ) {
             let title = tab.title().to_string();
             return Some(TabCloseOutcome::Dialog(ConfirmDialog::close_pane(
@@ -4849,6 +4911,7 @@ impl WindowState {
             // ADR-0054 §7/ADR-0055 §3: abre o popover de sessões.
             Action::SessionSaveNamed => ActionOutcome::OpenSessionPicker { edit_name: true },
             Action::SessionOpenList => ActionOutcome::OpenSessionPicker { edit_name: false },
+            Action::SshReconnect => ActionOutcome::SshReconnect,
             // ADR-0070 §8: no default key; the menu hangs from the `+` of the
             // active tab's group.
             Action::ProfileOpenMenu => {
@@ -5040,7 +5103,17 @@ impl WindowState {
             match hit {
                 TabBarHit::Tab(id) | TabBarHit::CloseButton(id) => {
                     self.close_all_popovers();
-                    self.context_menu = Some(ContextMenu::new(id, logical_point));
+                    // ADR-0075 §8: "Reconectar" só no menu de uma aba SSH.
+                    let ssh = self
+                        .workspace
+                        .tab(id)
+                        .map(|tab| tab.panes().focused_id())
+                        .is_some_and(|pane| {
+                            self.panes
+                                .get(&(id, pane))
+                                .is_some_and(|runtime| runtime.ssh_spawn.is_some())
+                        });
+                    self.context_menu = Some(ContextMenu::for_tab(id, logical_point, ssh));
                     self.hover.dismiss();
                 }
                 TabBarHit::Pill(id) => {
@@ -5301,7 +5374,7 @@ impl WindowState {
                 .leaves_in_order()
                 .iter()
                 .filter_map(|pane| self.panes.get(&(id, *pane)))
-                .map(|runtime| (runtime.terminal.modes(), runtime.terminal.liveness())),
+                .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
         );
         if any_pane_needs_confirmation {
             let title = self
@@ -6288,6 +6361,9 @@ struct App {
     /// árvore de comparação.
     keymap: HashMap<Chord, Action>,
     windows: HashMap<WindowId, WindowState>,
+    /// Os ciclos de reconexão, **por conexão** (a que caiu): estado do
+    /// processo chaveado pelo que descreve, nunca pela janela (ADR-0076 §3).
+    reconnects: app_reconnect::Cycles,
     /// A janela de configurações (ADR-0059 §1): no máximo uma, **fora** de
     /// `windows` -- sessão, wakeup de PTY e contagem de abas nunca a veem. O
     /// estado dela morre com a janela.
@@ -6701,6 +6777,7 @@ impl App {
             term_params,
             keymap,
             windows: HashMap::new(),
+            reconnects: HashMap::new(),
             settings: None,
             settings_last_group: settings::Group::General,
             deferred_quit: None,
@@ -7637,7 +7714,7 @@ impl App {
             should_confirm_tab_close(
                 confirm_close_with_process,
                 runtime.terminal.modes(),
-                liveness_needs_confirmation(runtime.terminal.liveness()),
+                liveness_needs_confirmation(runtime.liveness()),
             )
         });
         if window_close_needs_confirmation(significant_tab_count, any_tab_busy) {
@@ -7807,6 +7884,17 @@ impl App {
                     state.close_all_popovers();
                     state.move_to_group = Some(MoveToGroupPopover::new(tab, menu.anchor, targets));
                     state.window.request_redraw();
+                }
+            }
+            // ADR-0075 §8: o painel focado da aba do menu.
+            MenuAction::Reconnect => {
+                let pane = self
+                    .windows
+                    .get(&window_id)
+                    .and_then(|state| state.workspace.tab(tab))
+                    .map(|t| t.panes().focused_id());
+                if let Some(pane) = pane {
+                    self.ssh_reconnect_pane((window_id, tab, pane), Instant::now());
                 }
             }
         }
@@ -8047,6 +8135,9 @@ impl App {
         self.check_git_remote_queries(now);
         self.check_profile_detection();
         self.open_ready_prompts();
+        // ADR-0076 §2: as tentativas de reconexão cujo prazo venceu começam
+        // aqui, e o próximo prazo entra no `WaitUntil` logo abaixo.
+        self.poll_reconnects(now);
         let next = self
             .windows
             .values()
@@ -8056,6 +8147,7 @@ impl App {
             .chain(self.shell_integration_invite_deadline())
             .chain(self.project_command_deadline())
             .chain(self.git_next_deadline(now))
+            .chain(self.reconnect_deadline())
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
@@ -9643,8 +9735,26 @@ impl ApplicationHandler<Wakeup> for App {
         }
 
         let mut window_should_close = false;
+        // O que um painel SSH diz sobre a conexão vai para `App`, depois do
+        // laço: o ciclo de reconexão mexe em mais de um painel (ADR-0076 §3).
+        let key: app_reconnect::PaneKey = (window, tab_id, pane_id);
+        let mut ssh_events: Vec<app_reconnect::SshEvent> = Vec::new();
         for term_event in pending {
             match term_event {
+                TermEvent::Connected => ssh_events.push(app_reconnect::SshEvent::Connected),
+                // Uma conexão que caiu sozinha, ou o resultado de uma
+                // tentativa, é do ciclo (ADR-0076 §1); o resto segue o
+                // caminho de sempre.
+                TermEvent::Exit(reason)
+                    if app_reconnect::end_belongs_to_a_cycle(
+                        state.panes.get(&(tab_id, pane_id)),
+                        &self.reconnects,
+                        key,
+                        &reason,
+                    ) =>
+                {
+                    ssh_events.push(app_reconnect::SshEvent::Ended(reason));
+                }
                 // Do painel `pane_id`, não necessariamente o focado da aba
                 // (ADR-0053 §2) -- `Tab::title` já lê o focado sob demanda
                 // (RF-6.17), então só a escrita precisa saber de onde veio.
@@ -9793,6 +9903,10 @@ impl ApplicationHandler<Wakeup> for App {
                     }
                 }
             }
+        }
+
+        if !ssh_events.is_empty() {
+            self.handle_ssh_events(key, ssh_events, Instant::now());
         }
 
         if window_should_close {
@@ -10334,6 +10448,18 @@ impl App {
             ActionOutcome::OpenSessionPicker { edit_name } => {
                 state.open_session_picker(edit_name);
                 state.window.request_redraw();
+            }
+            // ADR-0076 §5: o painel focado da aba ativa.
+            ActionOutcome::SshReconnect => {
+                let target = state.workspace.active_tab().and_then(|tab| {
+                    state
+                        .workspace
+                        .tab(tab)
+                        .map(|t| (tab, t.panes().focused_id()))
+                });
+                if let Some((tab, pane)) = target {
+                    self.ssh_reconnect_pane((window_id, tab, pane), Instant::now());
+                }
             }
             ActionOutcome::Unhandled if state.dormant_focused_pane().is_some() => {
                 // RF-20.33: o painel SSH restaurado só entende `Enter`. Nenhuma
@@ -11529,14 +11655,9 @@ impl App {
             state.context_menu = None;
             if button == MouseButton::Left
                 && let Some(index) = hit
-                && context_menu::TAB_MENU_ITEMS[index].enabled
+                && menu.items()[index].enabled
             {
-                self.run_menu_action(
-                    window_id,
-                    menu,
-                    context_menu::TAB_MENU_ITEMS[index].action,
-                    event_loop,
-                );
+                self.run_menu_action(window_id, menu, menu.items()[index].action, event_loop);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();

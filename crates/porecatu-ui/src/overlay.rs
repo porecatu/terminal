@@ -51,7 +51,7 @@ use porecatu_render::{
 use porecatu_session::named::EntryStatus;
 
 use crate::chrome::{badge_size, centered_glyph, push_badge, push_shadow};
-use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
+use crate::context_menu::ContextMenu;
 use crate::dialog::{ConfirmDialog, DialogButton, LineTone, SecretFocus};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
@@ -969,7 +969,7 @@ pub fn layout_context_menu(
     let padding = cfg.padding as f32;
     let item_height = cfg.item_height as f32;
 
-    let height = padding * 2.0 + item_height * TAB_MENU_ITEMS.len() as f32;
+    let height = padding * 2.0 + item_height * menu.items().len() as f32;
     let mut x = menu.anchor.0;
     let mut y = menu.anchor.1;
     // "Vira nos dois eixos para caber na tela" (espec §2.16) -- contra a
@@ -988,7 +988,7 @@ pub fn layout_context_menu(
         width,
         height,
     };
-    let item_rects = (0..TAB_MENU_ITEMS.len())
+    let item_rects = (0..menu.items().len())
         .map(|i| Rect {
             x: menu_rect.x + padding,
             y: menu_rect.y + padding + item_height * i as f32,
@@ -1025,7 +1025,7 @@ pub fn paint_context_menu(
         border_color: pal.context_menu_border,
         border_width: 1.0,
     }));
-    for (index, item) in TAB_MENU_ITEMS.iter().enumerate() {
+    for (index, item) in menu.items().iter().enumerate() {
         let rect = layout.item_rects[index];
         if index == menu.highlighted() {
             out.push(Primitive::RoundedQuad(RoundedQuad {

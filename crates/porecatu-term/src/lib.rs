@@ -44,7 +44,8 @@ pub use prompt::{
 // ADR-0073 §4: o cofre só é alcançável por aqui; a UI pergunta se existe e pede
 // para esquecer, e nunca lê um segredo.
 pub use porecatu_ssh::{
-    Destination, VaultError, forget_passphrase, forget_password, vault_available,
+    Destination, VaultError, connection_is_alive, forget_passphrase, forget_password,
+    vault_available,
 };
 pub use scroll::TermScroll;
 pub use search::{

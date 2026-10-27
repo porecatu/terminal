@@ -195,6 +195,15 @@ impl Pane {
         self.bell = false;
     }
 
+    /// `ssh.reconnect` (RF-20.31): um painel SSH `Exited` volta a `Running`
+    /// porque ganhou um backend novo no mesmo motor. É a **única** volta de
+    /// `Exited`, e só um painel SSH a usa; `NotStarted` e `Running` não mudam.
+    pub fn resume(&mut self) {
+        if matches!(self.state, PaneState::Exited { .. }) {
+            self.state = PaneState::Running;
+        }
+    }
+
     pub const fn activity(&self) -> bool {
         self.activity
     }
@@ -827,6 +836,22 @@ mod tests {
 
     fn leaf_count(tree: &PaneTree) -> usize {
         tree.leaves_in_order().len()
+    }
+
+    #[test]
+    fn resume_brings_an_exited_pane_back_and_touches_no_other_state() {
+        let mut tree = PaneTree::new("zsh");
+        let id = tree.focused_id();
+        let pane = tree.pane_mut(id).unwrap();
+
+        pane.resume();
+        assert!(!pane.is_exited(), "a running pane stays running");
+
+        pane.mark_exited(3);
+        assert!(pane.is_exited());
+        pane.resume();
+        assert!(!pane.is_exited());
+        assert!(pane.accepts_input());
     }
 
     // -----------------------------------------------------------------

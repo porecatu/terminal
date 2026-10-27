@@ -118,6 +118,10 @@ impl Inspect for SshInspect {
     fn cwd_fallback(&self) -> Option<PathBuf> {
         None
     }
+
+    fn connection(&self) -> Option<porecatu_ssh::ConnectionId> {
+        Some(self.probe.connection())
+    }
 }
 
 impl Backend for SshBackend {
@@ -136,6 +140,10 @@ impl Backend for SshBackend {
 
     fn try_wait(&mut self) -> Option<EndReason> {
         self.channel.try_end().map(translate)
+    }
+
+    fn is_established(&self) -> Option<bool> {
+        Some(self.channel.is_established())
     }
 
     /// Sem processo local para matar: `finish` fecha o canal logo em seguida.

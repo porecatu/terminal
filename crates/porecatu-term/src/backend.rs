@@ -153,6 +153,11 @@ pub(crate) trait Inspect: Send + Sync {
     /// RF-3.10/ADR-0038, segundo degrau da precedência de `cwd` na gravação
     /// de sessão.
     fn cwd_fallback(&self) -> Option<PathBuf>;
+    /// A conexão SSH do backend (ADR-0072 §5), para a UI agrupar os painéis que
+    /// dividem uma (ADR-0076 §3). `None` fora do SSH.
+    fn connection(&self) -> Option<porecatu_ssh::ConnectionId> {
+        None
+    }
 }
 
 /// O que alimenta o motor com bytes e recebe os que ele escreve (ADR-0071 §1).
@@ -165,6 +170,12 @@ pub(crate) trait Backend: Send {
     fn resize(&mut self, rows: u16, cols: u16) -> io::Result<()>;
     /// Não bloqueia. `None` = ainda vivo.
     fn try_wait(&mut self) -> Option<EndReason>;
+    /// O backend remoto terminou de conectar (o shell abriu)? `None` fora do
+    /// SSH, onde a pergunta não faz sentido. A thread de observação avisa a UI
+    /// uma vez, com `TermEvent::Connected` (ADR-0076 §3).
+    fn is_established(&self) -> Option<bool> {
+        None
+    }
     /// Encerramento pedido pelo usuário.
     fn kill(&mut self);
     /// Último ato da thread de observação.

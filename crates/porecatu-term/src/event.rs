@@ -40,6 +40,10 @@ pub enum TermEvent {
     /// O backend tem algo a dizer ao usuário que não pede resposta (canal 1
     /// do ADR-0014): hoje, o segredo que não coube no cofre.
     Notice(TermNotice),
+    /// O backend remoto abriu o shell (ADR-0076 §3): é o sinal de que uma
+    /// tentativa de reconexão deu certo. Uma vez por sessão de backend; nunca
+    /// vem de um backend local.
+    Connected,
     /// OSC 7 (ADR-0017 item 1). Captura própria de `porecatu-term`, fora do
     /// motor -- ver `crate::osc7`. Herdado por `tab.new`/`window.new`;
     /// `None` continua sendo o fallback de `startup_directory` até o

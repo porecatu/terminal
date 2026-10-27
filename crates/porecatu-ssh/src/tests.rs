@@ -106,6 +106,10 @@ struct ServerLog {
     key_offers: AtomicUsize,
     /// Quantas vezes o cliente tentou `password`.
     password_tries: AtomicUsize,
+    /// Quantas autenticações o servidor aceitou: uma por **conexão**.
+    auths: AtomicUsize,
+    /// Quantos shells o servidor abriu: um por **canal**.
+    shells: AtomicUsize,
 }
 
 struct ShellServer {
@@ -130,6 +134,11 @@ impl server::Server for ShellServer {
 
 impl server::Handler for ShellServer {
     type Error = russh::Error;
+
+    async fn auth_succeeded(&mut self, _session: &mut Session) -> Result<(), Self::Error> {
+        self.log.auths.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
 
     async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
         self.log.password_tries.fetch_add(1, Ordering::SeqCst);
@@ -242,6 +251,7 @@ impl server::Handler for ShellServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
+        self.log.shells.fetch_add(1, Ordering::SeqCst);
         match self.script {
             Script::Echo => {}
             Script::ExitStatus(code) => {
@@ -439,9 +449,79 @@ struct Fixture {
     known_hosts: PathBuf,
     server_key: PublicKey,
     server: JoinHandle<()>,
+    /// O que `restart` precisa para subir o mesmo servidor de novo.
+    host_key: PrivateKey,
+    authorized: PublicKey,
+    auth: ServerAuth,
+    script: Script,
+}
+
+/// Sobe o servidor de mentira em `listener`; vive até a tarefa ser abortada ou o
+/// runtime cair.
+fn spawn_server(
+    rt: &Runtime,
+    listener: TcpListener,
+    host_key: PrivateKey,
+    authorized: PublicKey,
+    auth: ServerAuth,
+    script: Script,
+    log: Arc<ServerLog>,
+) -> JoinHandle<()> {
+    let config = Arc::new(server::Config {
+        keys: vec![host_key],
+        auth_rejection_time: Duration::from_millis(1),
+        auth_rejection_time_initial: Some(Duration::ZERO),
+        methods: auth.methods(),
+        ..server::Config::default()
+    });
+    let mut srv = ShellServer {
+        script,
+        authorized,
+        auth,
+        log,
+    };
+    rt.spawn(async move {
+        // `run_on_socket` aceita conexões até a tarefa ser abortada.
+        let _ = srv.run_on_socket(config, &listener).await;
+    })
 }
 
 impl Fixture {
+    /// Derruba o servidor **e todas as conexões dele**, como uma queda de rede
+    /// ou um servidor que reinicia, e o sobe de novo **na mesma porta**.
+    /// `new_host_key` troca a chave do host entre a queda e a volta.
+    fn restart(&mut self, new_host_key: bool) {
+        self.server.abort();
+        // Derrubar o runtime encerra as sessões e fecha os sockets.
+        drop(std::mem::replace(&mut self.rt, Runtime::new().unwrap()));
+        if new_host_key {
+            self.host_key = new_key();
+            self.server_key = self.host_key.public_key().clone();
+        }
+        let mut listener = None;
+        for _ in 0..100 {
+            match self
+                .rt
+                .block_on(TcpListener::bind(("127.0.0.1", self.port)))
+            {
+                Ok(bound) => {
+                    listener = Some(bound);
+                    break;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+        self.server = spawn_server(
+            &self.rt,
+            listener.expect("the port came back"),
+            self.host_key.clone(),
+            self.authorized.clone(),
+            self.auth,
+            self.script,
+            Arc::clone(&self.log),
+        );
+    }
+
     /// Um servidor que autoriza a chave do cliente gerada aqui, **e cuja chave
     /// de host já está no `known_hosts`**.
     fn start(script: Script) -> Self {
@@ -471,25 +551,17 @@ impl Fixture {
         let host_key = new_key();
         let server_key = host_key.public_key().clone();
         let log = Arc::new(ServerLog::default());
-        let config = Arc::new(server::Config {
-            keys: vec![host_key],
-            auth_rejection_time: Duration::from_millis(1),
-            auth_rejection_time_initial: Some(Duration::ZERO),
-            methods: auth.methods(),
-            ..server::Config::default()
-        });
         let listener = rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
         let port = listener.local_addr().unwrap().port();
-        let mut srv = ShellServer {
-            script,
-            authorized,
+        let server = spawn_server(
+            &rt,
+            listener,
+            host_key.clone(),
+            authorized.clone(),
             auth,
-            log: Arc::clone(&log),
-        };
-        let server = rt.spawn(async move {
-            // `run_on_socket` aceita conexões até a tarefa ser abortada.
-            let _ = srv.run_on_socket(config, &listener).await;
-        });
+            script,
+            Arc::clone(&log),
+        );
 
         let dir =
             std::env::temp_dir().join(format!("porecatu-ssh-test-{}-{port}", std::process::id()));
@@ -508,6 +580,10 @@ impl Fixture {
             key_file,
             server_key,
             server,
+            host_key,
+            authorized,
+            auth,
+            script,
         }
     }
 
@@ -843,7 +919,7 @@ fn a_method_outside_the_auth_list_is_never_tried() {
 }
 
 #[test]
-fn sharing_a_connection_is_not_implemented_yet() {
+fn sharing_a_connection_that_does_not_exist_is_an_error() {
     let mut spawn = SshSpawn::new("127.0.0.1", 22, "tester");
     spawn.connection = Connection::Share(ConnectionId::next());
 
@@ -857,7 +933,217 @@ fn sharing_a_connection_is_not_implemented_yet() {
         Arc::new(MemoryVault::default()),
     );
 
-    assert_eq!(result.err(), Some(OpenError::ShareUnsupported));
+    assert_eq!(result.err(), Some(OpenError::ConnectionGone));
+}
+
+// ---------------------------------------------------------------------------
+// Divisão e reconexão (prompt 14, ADR-0072 §5, ADR-0076)
+// ---------------------------------------------------------------------------
+
+/// Espera o canal abrir o shell (o servidor o viu) e ecoar.
+fn wait_established(channel: &SshChannel) {
+    wait_until("the shell to open", || channel.is_established());
+}
+
+#[test]
+fn a_second_channel_on_the_same_connection_does_not_authenticate_again() {
+    let fixture = Fixture::start(Script::Echo);
+    let first = fixture.open(fixture.spawn());
+    connected_and_echoing(&first);
+    assert_eq!(fixture.log.auths.load(Ordering::SeqCst), 1);
+
+    let mut spawn = fixture.spawn();
+    spawn.connection = Connection::Share(first.connection().unwrap());
+    // `NeverAsked`: no question, no password, no host key.
+    let second = fixture.open(spawn);
+    connected_and_echoing(&second);
+
+    assert_eq!(
+        fixture.log.auths.load(Ordering::SeqCst),
+        1,
+        "one authentication for two channels"
+    );
+    assert_eq!(fixture.log.shells.load(Ordering::SeqCst), 2);
+    assert_eq!(second.connection(), first.connection());
+}
+
+#[test]
+fn a_shared_channel_asks_nothing_even_when_the_first_one_needed_a_password() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let first = fixture.open_asking(
+        fixture.password_spawn(),
+        SecretUser::typing(&[(PROOF, false)]),
+    );
+    connected_and_echoing(&first);
+
+    let mut spawn = fixture.password_spawn();
+    spawn.connection = Connection::Share(first.connection().unwrap());
+    let second = fixture.open(spawn);
+
+    connected_and_echoing(&second);
+    assert_eq!(fixture.log.password_tries.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_new_tab_never_shares_a_connection() {
+    let fixture = Fixture::start(Script::Echo);
+    let first = fixture.open(fixture.spawn());
+    connected_and_echoing(&first);
+
+    let second = fixture.open(fixture.spawn());
+    connected_and_echoing(&second);
+
+    assert_ne!(first.connection(), second.connection());
+    assert_eq!(fixture.log.auths.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn the_connection_closes_with_the_last_channel_and_not_before() {
+    let fixture = Fixture::start(Script::Echo);
+    let first = fixture.open(fixture.spawn());
+    connected_and_echoing(&first);
+    let id = first.connection().unwrap();
+    let mut spawn = fixture.spawn();
+    spawn.connection = Connection::Share(id);
+    let second = fixture.open(spawn);
+    connected_and_echoing(&second);
+
+    first.close();
+    std::thread::sleep(Duration::from_millis(300));
+    // The second channel keeps the connection up: it did not end, and a third
+    // channel can still join.
+    assert_eq!(second.try_end(), None);
+    let mut spawn = fixture.spawn();
+    spawn.connection = Connection::Share(id);
+    let third = fixture.open(spawn);
+    connected_and_echoing(&third);
+    third.close();
+
+    second.close();
+    wait_until("the connection to leave the registry", || {
+        crate::task::lookup(id).is_none()
+    });
+    let mut spawn = fixture.spawn();
+    spawn.connection = Connection::Share(id);
+    let late = SshChannel::open_with(
+        spawn,
+        Arc::new(NeverAsked),
+        fixture.files(),
+        Arc::new(MemoryVault::default()),
+    );
+    assert_eq!(late.err(), Some(OpenError::ConnectionGone));
+}
+
+#[test]
+fn a_dead_connection_refuses_a_shared_channel() {
+    let mut fixture = Fixture::start(Script::Echo);
+    let first = fixture.open(fixture.spawn());
+    connected_and_echoing(&first);
+    let id = first.connection().unwrap();
+
+    fixture.restart(false);
+    assert!(matches!(wait_end(&first), End::Lost(_)));
+
+    let mut spawn = fixture.spawn();
+    spawn.connection = Connection::Share(id);
+    let result = SshChannel::open_with(
+        spawn,
+        Arc::new(NeverAsked),
+        fixture.files(),
+        Arc::new(MemoryVault::default()),
+    );
+    assert_eq!(result.err(), Some(OpenError::ConnectionGone));
+}
+
+#[test]
+fn every_channel_of_a_connection_that_falls_is_lost() {
+    let mut fixture = Fixture::start(Script::Echo);
+    let first = fixture.open(fixture.spawn());
+    connected_and_echoing(&first);
+    let mut spawn = fixture.spawn();
+    spawn.connection = Connection::Share(first.connection().unwrap());
+    let second = fixture.open(spawn);
+    connected_and_echoing(&second);
+
+    fixture.restart(false);
+
+    assert!(matches!(wait_end(&first), End::Lost(_)));
+    assert!(matches!(wait_end(&second), End::Lost(_)));
+}
+
+#[test]
+fn after_the_server_comes_back_a_new_connection_works_on_the_same_port() {
+    let mut fixture = Fixture::start(Script::Echo);
+    let before = fixture.open(fixture.spawn());
+    connected_and_echoing(&before);
+
+    fixture.restart(false);
+    assert!(matches!(wait_end(&before), End::Lost(_)));
+
+    // The known host key is the same: no question.
+    let after = fixture.open(fixture.spawn());
+    connected_and_echoing(&after);
+    assert_ne!(after.connection(), before.connection());
+}
+
+#[test]
+fn a_host_key_that_changed_between_the_drop_and_the_return_stops_at_once() {
+    let mut fixture = Fixture::start(Script::Echo);
+    let before = fixture.open(fixture.spawn());
+    connected_and_echoing(&before);
+
+    fixture.restart(true);
+    assert!(matches!(wait_end(&before), End::Lost(_)));
+
+    let after = fixture.open(fixture.spawn());
+    assert!(
+        matches!(
+            wait_end(&after),
+            End::Failed(FailKind::HostKeyChanged { .. })
+        ),
+        "the new key is not the registered one"
+    );
+}
+
+#[test]
+fn a_clean_exit_is_not_a_lost_connection() {
+    let fixture = Fixture::start(Script::ExitStatus(0));
+    let channel = fixture.open(fixture.spawn());
+
+    assert!(matches!(
+        wait_end(&channel),
+        End::RemoteEnded { code: Some(0), .. }
+    ));
+}
+
+#[test]
+fn what_is_typed_before_a_reconnect_attempt_opens_is_discarded() {
+    let fixture = Fixture::start(Script::Echo);
+    let mut spawn = fixture.spawn();
+    spawn.discard_input_until_open = true;
+    let channel = fixture.open(spawn);
+    // Typed while the connection is still being made.
+    channel.writer().write_all(b"typed-too-early\n").unwrap();
+    wait_established(&channel);
+    std::thread::sleep(Duration::from_millis(200));
+
+    channel.writer().write_all(b"typed-in-time\n").unwrap();
+    let seen = read_until(&channel, "typed-in-time");
+
+    assert!(seen.contains("typed-in-time"));
+    assert!(
+        !seen.contains("typed-too-early"),
+        "the old shell's input never reaches the new one: {seen:?}"
+    );
+}
+
+#[test]
+fn without_the_flag_input_typed_while_connecting_is_still_delivered() {
+    let fixture = Fixture::start(Script::Echo);
+    let channel = fixture.open(fixture.spawn());
+    channel.writer().write_all(b"early\n").unwrap();
+
+    assert!(read_until(&channel, "early").contains("early"));
 }
 
 #[test]
@@ -1490,7 +1776,7 @@ fn no_error_variant_can_carry_a_secret() {
     ] {
         assert!(!format!("{error:?} {error}").contains(PROOF));
     }
-    assert!(!format!("{:?}", OpenError::ShareUnsupported).contains(PROOF));
+    assert!(!format!("{:?}", OpenError::ConnectionGone).contains(PROOF));
 }
 
 #[test]

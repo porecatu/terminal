@@ -4,6 +4,7 @@
 //! runtime (`crate::task`) fala com o servidor; daqui só se vê `std`.
 
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -46,12 +47,26 @@ impl EndSlot {
 
 /// Consulta, de qualquer thread, se o canal ainda está aberto ou abrindo.
 #[derive(Clone)]
-pub struct EndProbe(EndSlot);
+pub struct EndProbe {
+    end: EndSlot,
+    connection: ConnectionId,
+    established: Arc<AtomicBool>,
+}
 
 impl EndProbe {
     /// `true` até o canal terminar (ou falhar ao abrir).
     pub fn is_open(&self) -> bool {
-        self.0.lock().is_none()
+        self.end.lock().is_none()
+    }
+
+    /// A conexão do canal (ADR-0072 §5).
+    pub fn connection(&self) -> ConnectionId {
+        self.connection
+    }
+
+    /// O shell já abriu.
+    pub fn is_established(&self) -> bool {
+        self.established.load(Ordering::SeqCst)
     }
 }
 
@@ -60,6 +75,8 @@ pub struct SshChannel {
     reader: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     cmd: UnboundedSender<Cmd>,
     end: EndSlot,
+    /// O shell já abriu: conectou, autenticou e o servidor aceitou o canal.
+    established: Arc<AtomicBool>,
     connection: ConnectionId,
 }
 
@@ -92,19 +109,29 @@ impl SshChannel {
         files: KnownHostsFiles,
         vault: Arc<dyn Vault>,
     ) -> Result<Self, OpenError> {
-        if matches!(spawn.connection, Connection::Share(_)) {
-            return Err(OpenError::ShareUnsupported);
-        }
+        // Dividir pede um canal na conexão viva; sem ela, quem pediu abre outra.
+        let (connection, source) = match spawn.connection {
+            Connection::New => {
+                let id = ConnectionId::next();
+                (id, task::Source::New(id))
+            }
+            Connection::Share(id) => {
+                let conn = task::lookup(id).ok_or(OpenError::ConnectionGone)?;
+                (id, task::Source::Shared(conn))
+            }
+        };
         let (data_tx, data_rx) = mpsc::channel();
         let (cmd_tx, cmd_rx) = unbounded_channel();
         let end = EndSlot::default();
-        let connection = ConnectionId::next();
+        let established = Arc::new(AtomicBool::new(false));
 
         let started = runtime::spawn(task::run(
             spawn,
             files,
             asker,
             vault,
+            source,
+            Arc::clone(&established),
             data_tx,
             cmd_tx.clone(),
             cmd_rx,
@@ -117,6 +144,7 @@ impl SshChannel {
             reader: Mutex::new(Some(data_rx)),
             cmd: cmd_tx,
             end,
+            established,
             connection,
         })
     }
@@ -154,7 +182,19 @@ impl SshChannel {
 
     /// Cópia de consulta de "ainda aberto", para quem não tem o canal.
     pub fn probe(&self) -> EndProbe {
-        EndProbe(self.end.clone())
+        EndProbe {
+            end: self.end.clone(),
+            connection: self.connection,
+            established: Arc::clone(&self.established),
+        }
+    }
+
+    /// O shell já abriu (RF-20.28: é quando a reconexão deu certo). Fica
+    /// verdadeiro depois do fim também: quem pergunta olha o fim por [`try_end`].
+    ///
+    /// [`try_end`]: SshChannel::try_end
+    pub fn is_established(&self) -> bool {
+        self.established.load(Ordering::SeqCst)
     }
 
     /// A conexão deste canal (ADR-0072 §5).

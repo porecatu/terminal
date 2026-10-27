@@ -185,6 +185,37 @@ pub(crate) fn ssh_connecting_note(catalog: &Catalog, host: &str) -> String {
     msg::note::ssh::connecting(catalog, host)
 }
 
+/// Antes de uma tentativa de reconexão (RF-20.28, ADR-0076 §4): a contagem
+/// regressiva é **uma frase**, não se reescreve a cada segundo.
+pub(crate) fn ssh_reconnect_waiting_note(
+    catalog: &Catalog,
+    attempt: u8,
+    total: u8,
+    seconds: u64,
+) -> String {
+    msg::note::ssh::reconnect_waiting(catalog, attempt, total, seconds)
+}
+
+/// A tentativa de reconexão começou.
+pub(crate) fn ssh_reconnect_connecting_note(
+    catalog: &Catalog,
+    attempt: u8,
+    total: u8,
+    host: &str,
+) -> String {
+    msg::note::ssh::reconnect_connecting(catalog, attempt, total, host)
+}
+
+/// RF-20.29: o processo remoto da sessão perdida não foi retomado.
+pub(crate) fn ssh_reconnect_not_resumed_note(catalog: &Catalog) -> String {
+    msg::note::ssh::reconnect_not_resumed(catalog)
+}
+
+/// Esgotaram as tentativas (RF-20.31).
+pub(crate) fn ssh_reconnect_gave_up_note(catalog: &Catalog, total: u8) -> String {
+    msg::note::ssh::reconnect_gave_up(catalog, total)
+}
+
 fn ssh_entry(catalog: &Catalog, entry: &HostKeyEntry) -> String {
     msg::note::ssh::entry(
         catalog,
@@ -476,6 +507,7 @@ registry! {
         new(),
         close(),
         move_to_group(),
+        reconnect(),
     }
     terminal_menu {
         copy(),
@@ -769,6 +801,7 @@ registry! {
         session_open_list(),
         profile_open_menu(),
         profile_new_tab(n),
+        ssh_reconnect(),
     }
     profile_menu {
         new_group(),
@@ -780,6 +813,7 @@ registry! {
         session(),
         pane(),
         profile(),
+        ssh(),
         scrollback(),
         clipboard(),
         selection(),
@@ -890,6 +924,10 @@ registry! {
             lost_disconnect(host),
             remote_signal(signal),
             remote_closed(),
+            reconnect_waiting(attempt, total, seconds),
+            reconnect_connecting(attempt, total, host),
+            reconnect_not_resumed(),
+            reconnect_gave_up(total),
         },
         shell_invite {
             text(consequence, body, marker),

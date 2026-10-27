@@ -119,9 +119,14 @@ pub enum Action {
     /// **declarado**. Mesmo desenho de `TabGoto`: `FromStr` valida `1..=9`
     /// e rejeita `_0`/`_10`. **Sem default**.
     ProfileNewTab(u8),
+    /// ADR-0076 §5, RF-20.31. No painel focado, se ele é SSH e está encerrado,
+    /// desistiu de reconectar ou espera a próxima tentativa: reconecta agora,
+    /// recomeçando a contagem. Em qualquer outro painel, não faz nada.
+    /// Vinculável e **sem default**.
+    SshReconnect,
 }
 
-/// As 66 linhas do catálogo fechado, na grafia exata que `FromStr`/
+/// As 67 linhas do catálogo fechado, na grafia exata que `FromStr`/
 /// `Display` usam. Único array-fonte: o teste bidirecional
 /// (`tests::every_catalog_name_round_trips`) e a sugestão de erro
 /// (`closest_name`) partem dele, então as duas checagens não podem
@@ -199,6 +204,7 @@ pub const CATALOG: &[&str] = &[
     "profile.new_tab_7",
     "profile.new_tab_8",
     "profile.new_tab_9",
+    "ssh.reconnect",
 ];
 
 /// Erro de parse de uma ação (ADR-0029 §4). Dois casos distintos, cada um com
@@ -302,6 +308,7 @@ impl FromStr for Action {
             "session.open_list" => Action::SessionOpenList,
             "settings.open" => Action::SettingsOpen,
             "profile.open_menu" => Action::ProfileOpenMenu,
+            "ssh.reconnect" => Action::SshReconnect,
             _ => {
                 return Err(ActionParseError::Unknown {
                     input: s.to_owned(),
@@ -366,6 +373,7 @@ impl fmt::Display for Action {
             Action::SessionOpenList => "session.open_list",
             Action::SettingsOpen => "settings.open",
             Action::ProfileOpenMenu => "profile.open_menu",
+            Action::SshReconnect => "ssh.reconnect",
             Action::ProfileNewTab(n) => return write!(f, "profile.new_tab_{n}"),
         };
         f.write_str(name)
@@ -481,6 +489,7 @@ mod tests {
             Action::SessionOpenList,
             Action::SettingsOpen,
             Action::ProfileOpenMenu,
+            Action::SshReconnect,
             Action::ProfileNewTab(1),
             Action::ProfileNewTab(9),
         ];

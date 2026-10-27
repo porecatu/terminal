@@ -5,9 +5,11 @@
 //! ADR-0076 §1). Roda no runtime de `crate::runtime`, nunca na main thread.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use russh::Preferred;
@@ -20,7 +22,7 @@ use crate::auth::{self, Secrets};
 use crate::channel::{Cmd, EndSlot};
 use crate::end::{End, FailKind, LostKind};
 use crate::known_hosts::{self, KnownHostsFiles};
-use crate::spawn::SshSpawn;
+use crate::spawn::{ConnectionId, SshSpawn};
 use crate::vault::Vault;
 use crate::verify::{HostKeyVerifier, Waiting};
 
@@ -36,7 +38,7 @@ const DISCONNECT_REASON_POLL: Duration = Duration::from_millis(25);
 
 /// O que o `Handler` do `russh` anota para a tarefa ler depois.
 #[derive(Default)]
-struct Shared {
+pub(crate) struct Shared {
     disconnect: Mutex<Option<LostKind>>,
     /// Por que a chave do host foi recusada, se foi.
     host_key: Mutex<Option<FailKind>>,
@@ -185,23 +187,61 @@ pub(crate) async fn run(
     files: KnownHostsFiles,
     asker: Arc<dyn crate::ask::Asker>,
     vault: Arc<dyn Vault>,
+    source: Source,
+    established: Arc<AtomicBool>,
     data_tx: mpsc::Sender<Vec<u8>>,
     cmd_tx: UnboundedSender<Cmd>,
     mut cmd_rx: UnboundedReceiver<Cmd>,
     end: EndSlot,
 ) {
-    let shared = Arc::new(Shared::default());
-    let opened = match open(&spawn, files, asker, vault, &shared, &data_tx).await {
-        Ok(opened) => opened,
+    // A conexão: uma nova (conecta e autentica) ou a de um canal que já
+    // existe (RF-20.23, ADR-0072 §5), que não autentica de novo.
+    let conn = match source {
+        Source::Shared(conn) => conn,
+        Source::New(id) => match connect(&spawn, files, asker, vault).await {
+            Ok(conn) => {
+                register(id, &conn);
+                conn
+            }
+            Err(kind) => {
+                end.set(End::Failed(kind));
+                return;
+            }
+        },
+    };
+    conn.channels.fetch_add(1, Ordering::SeqCst);
+
+    let channel = match open_session(&conn.handle, &spawn, &data_tx).await {
+        Ok(channel) => channel,
         Err(kind) => {
             end.set(End::Failed(kind));
+            release(&conn).await;
             return;
         }
     };
-    let Opened { handle, channel } = opened;
+    established.store(true, Ordering::SeqCst);
+    // Tentativa de reconexão: o que foi digitado antes de o shell novo existir
+    // era para o shell velho, e não chega a este (ADR-0076 §4).
+    if spawn.discard_input_until_open {
+        let mut kept = Vec::new();
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            if !matches!(cmd, Cmd::Data(_)) {
+                kept.push(cmd);
+            }
+        }
+        for cmd in kept {
+            let _ = cmd_tx.send(cmd);
+        }
+    }
     let (read_half, write_half) = channel.split();
 
-    tokio::spawn(read_loop(read_half, data_tx, shared, end, cmd_tx));
+    tokio::spawn(read_loop(
+        read_half,
+        data_tx,
+        Arc::clone(&conn.shared),
+        end,
+        cmd_tx,
+    ));
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
@@ -219,24 +259,81 @@ pub(crate) async fn run(
         }
     }
     let _ = write_half.close().await;
-    let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
+    release(&conn).await;
 }
 
-struct Opened {
+/// De onde vem a conexão de um canal.
+pub(crate) enum Source {
+    /// Conexão nova, com este identificador.
+    New(ConnectionId),
+    /// Canal numa conexão viva.
+    Shared(Arc<Conn>),
+}
+
+/// Uma conexão SSH autenticada, com os canais que a usam (ADR-0072 §5). Fecha
+/// com o último canal.
+pub(crate) struct Conn {
     handle: Handle<Client>,
-    channel: Channel<Msg>,
+    shared: Arc<Shared>,
+    channels: AtomicUsize,
 }
 
-/// Conecta (com o teto de 15 s até a troca de chaves), autentica e deixa o
-/// shell pronto.
-async fn open(
+impl Conn {
+    /// A conexão ainda serve para abrir um canal novo.
+    fn is_alive(&self) -> bool {
+        !self.handle.is_closed() && self.shared.disconnect().is_none()
+    }
+}
+
+/// As conexões vivas, por identificador. Guarda só uma referência fraca: quem
+/// mantém a conexão de pé são os canais.
+static REGISTRY: LazyLock<Mutex<HashMap<ConnectionId, Weak<Conn>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn registry() -> std::sync::MutexGuard<'static, HashMap<ConnectionId, Weak<Conn>>> {
+    REGISTRY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn register(id: ConnectionId, conn: &Arc<Conn>) {
+    let mut registry = registry();
+    // Quem já fechou sai do registro, para ele não crescer sem teto.
+    registry.retain(|_, weak| weak.strong_count() > 0);
+    registry.insert(id, Arc::downgrade(conn));
+}
+
+/// A conexão viva `id`, se há.
+pub(crate) fn lookup(id: ConnectionId) -> Option<Arc<Conn>> {
+    let conn = registry().get(&id)?.upgrade()?;
+    conn.is_alive().then_some(conn)
+}
+
+/// A conexão `id` existe e serve para abrir um canal novo: quem divide um
+/// painel decide por aqui entre dividir e abrir uma conexão própria (RF-20.23).
+pub fn connection_is_alive(id: ConnectionId) -> bool {
+    lookup(id).is_some()
+}
+
+/// Um canal a menos; o último fecha a conexão.
+async fn release(conn: &Arc<Conn>) {
+    if conn.channels.fetch_sub(1, Ordering::SeqCst) == 1 {
+        let _ = conn
+            .handle
+            .disconnect(Disconnect::ByApplication, "", "en")
+            .await;
+    }
+}
+
+/// Conecta (com o teto de 15 s até a troca de chaves) e autentica.
+async fn connect(
     spawn: &SshSpawn,
     files: KnownHostsFiles,
     asker: Arc<dyn crate::ask::Asker>,
     vault: Arc<dyn Vault>,
-    shared: &Arc<Shared>,
-    data_tx: &mpsc::Sender<Vec<u8>>,
-) -> Result<Opened, FailKind> {
+) -> Result<Arc<Conn>, FailKind> {
+    let shared = Arc::new(Shared::default());
+    let shared = &shared;
     // Antes de conectar: um `known_hosts` ilegível encerra sem nem tocar a
     // rede (ADR-0074 §1), e os tipos já registrados decidem a preferência de
     // algoritmo (§3). A verificação lê o arquivo de novo, na hora de decidir.
@@ -281,6 +378,19 @@ async fn open(
 
     auth::authenticate(&mut handle, spawn, &secrets).await?;
 
+    Ok(Arc::new(Conn {
+        handle,
+        shared: Arc::clone(shared),
+        channels: AtomicUsize::new(0),
+    }))
+}
+
+/// Abre o pseudo-terminal e o shell num canal novo da conexão.
+async fn open_session(
+    handle: &Handle<Client>,
+    spawn: &SshSpawn,
+    data_tx: &mpsc::Sender<Vec<u8>>,
+) -> Result<Channel<Msg>, FailKind> {
     let mut channel = handle
         .channel_open_session()
         .await
@@ -306,7 +416,7 @@ async fn open(
         .map_err(|_| FailKind::ChannelRefused)?;
     await_reply(&mut channel, data_tx).await?;
 
-    Ok(Opened { handle, channel })
+    Ok(channel)
 }
 
 /// Espera o `success` ou o `failure` de um pedido de canal. Dados que cheguem

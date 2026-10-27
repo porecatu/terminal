@@ -119,6 +119,14 @@ Ação sem argumento, vinculável ([ADR-0029](0029-enum-de-acao-e-gramatica-de-t
 
 Nada específico. Ao acordar, o keepalive ou o transporte acusa a queda em segundos, e o ciclo começa. Um ciclo que já estava em andamento ao suspender depende do `Instant`, que **pode ou não** contar o tempo suspenso conforme a plataforma (documentação do `std`). Os dois resultados são aceitáveis e nenhum é tratado: ou a espera continua de onde parou, ou a tentativa pendente vence logo ao acordar. Como cada `due` é de **uma** tentativa, nunca há uma rajada de tentativas acumuladas.
 
+> **Como ficou (prompt 14).** Três precisões da implementação:
+>
+> - **A conexão compartilhada mora em `porecatu-ssh`**: um registro de conexões por `ConnectionId` (referência fraca; quem a mantém de pé são os canais, e o último a sair a fecha). `Connection::Share(id)` num `SshSpawn` abre um canal **sem autenticar**; conexão morta (fechada, ou com a queda já anotada) devolve `OpenError::ConnectionGone`, e `porecatu_term::connection_is_alive(id)` deixa quem divide escolher entre dividir e abrir uma própria.
+> - **O sinal de que a tentativa deu certo** é `TermEvent::Connected`, mandado **uma vez** pela thread de observação do `Terminal` quando o backend remoto abre o shell (`Backend::is_established`). Sem ele a UI só saberia pelo primeiro byte da saída, que um shell silencioso pode nunca mandar. `Terminal::connection_id()` diz a conexão do painel e muda a cada `reattach`.
+> - **Teclas durante o ciclo.** Com o backend velho já encerrado, escrever nele falha e não enfileira; para a tentativa em andamento, o `SshSpawn` ganhou `discard_input_until_open`, que joga fora o que foi digitado **antes** de o shell novo abrir. O estado do painel em ciclo é `PaneRuntime::reconnecting`, que faz `liveness()` valer `OpenConnection`. `Pane::resume()` é a única volta de `Exited` (só `ssh.reconnect` a usa).
+>
+> A máquina pura ganhou `Connected` (fora do ciclo), `reconnect_now` e o `Cycle<K>` por conexão (o mais antigo tenta, os demais seguem, e quem sai passa a vez); a tabela do §2 é um `match` **exaustivo** sobre `FailCause`. Um painel que fecha durante o ciclo sai dele na volta seguinte do laço de eventos (`prune_reconnects`), e a tentativa em andamento é refeita já pelo próximo.
+
 ## Alternativas consideradas
 
 ### Política dentro de `porecatu-ssh`

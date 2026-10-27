@@ -334,6 +334,7 @@ min_rows = 5
 # "ctrl+shift+x"      = "pane.close"
 # "ctrl+shift+l"      = "session.open_list"
 # "ctrl+shift+m"      = "profile.open_menu"
+# "ctrl+shift+j"      = "ssh.reconnect"       # reconecta o painel SSH focado, se ele caiu ou espera
 # "ctrl+alt+1"        = "profile.new_tab_1"   # até profile.new_tab_9: o N-ésimo perfil declarado
 
 # Atalhos do macOS.

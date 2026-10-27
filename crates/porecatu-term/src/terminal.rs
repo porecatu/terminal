@@ -402,6 +402,12 @@ impl Terminal {
         self.session.inspect.liveness()
     }
 
+    /// A conexão SSH desta sessão, ou `None` num backend local (ADR-0072 §5).
+    /// Muda a cada `reattach`.
+    pub fn connection_id(&self) -> Option<porecatu_ssh::ConnectionId> {
+        self.session.inspect.connection()
+    }
+
     /// RF-3.10/ADR-0038, segundo degrau da precedência de `cwd` na
     /// gravação de sessão (o primeiro, `Tab::cwd` por OSC 7, é decisão de
     /// `porecatu-ui`, que não conhece o backend). Ver
@@ -609,6 +615,7 @@ fn watch_loop(
     on_wakeup: Arc<dyn Fn() + Send + Sync>,
     generation: Generation,
 ) {
+    let mut connected_sent = false;
     loop {
         match shutdown.recv_timeout(WATCH_POLL_INTERVAL) {
             // `Ok(())` nunca é enviado de propósito hoje -- só o `Sender`
@@ -631,6 +638,16 @@ fn watch_loop(
                 }
                 if let Some((rows, cols)) = latest_resize {
                     let _ = backend.resize(rows, cols);
+                }
+
+                // O shell remoto abriu: avisa uma vez, e só se esta ainda é a
+                // sessão atual (a de antes do `reattach` já não interessa).
+                if !connected_sent && backend.is_established() == Some(true) {
+                    connected_sent = true;
+                    if generation.is_current() {
+                        let _ = events.send(TermEvent::Connected);
+                        on_wakeup();
+                    }
                 }
 
                 if let Some(reason) = backend.try_wait() {
@@ -1103,6 +1120,86 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), ["resize 30x40", "finish Ended"]);
         // Natural end is not a requested shutdown: nothing to confirm.
         assert!(killed_rx.try_recv().is_err());
+    }
+
+    /// Um backend remoto que já abriu o shell e termina na terceira consulta.
+    struct Established(FakeBackend);
+
+    impl Backend for Established {
+        fn reader(&mut self) -> io::Result<Box<dyn Read + Send>> {
+            self.0.reader()
+        }
+        fn writer(&mut self) -> io::Result<Box<dyn Write + Send>> {
+            self.0.writer()
+        }
+        fn resize(&mut self, rows: u16, cols: u16) -> io::Result<()> {
+            self.0.resize(rows, cols)
+        }
+        fn try_wait(&mut self) -> Option<EndReason> {
+            self.0.try_wait()
+        }
+        fn is_established(&self) -> Option<bool> {
+            Some(true)
+        }
+        fn kill(&mut self) {
+            self.0.kill();
+        }
+        fn finish(self: Box<Self>, how: Finish) {
+            Box::new(self.0).finish(how);
+        }
+        fn inspector(&self) -> Arc<dyn Inspect> {
+            self.0.inspector()
+        }
+    }
+
+    #[test]
+    fn watch_loop_tells_the_ui_once_when_the_remote_shell_opens_and_before_the_end() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (events_tx, events_rx) = mpsc::channel();
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+        let (killed_tx, _killed_rx) = mpsc::channel();
+        let (_resize_tx, resize_rx) = mpsc::channel();
+        let backend = Established(FakeBackend {
+            log: Arc::clone(&log),
+            exit_after: Some(3),
+            polls: 0,
+        });
+
+        watch_loop(
+            Box::new(backend),
+            events_tx,
+            shutdown_rx,
+            killed_tx,
+            resize_rx,
+            Arc::new(|| {}),
+            first_generation(),
+        );
+
+        assert!(matches!(events_rx.try_recv(), Ok(TermEvent::Connected)));
+        assert!(matches!(events_rx.try_recv(), Ok(TermEvent::Exit(_))));
+        assert!(events_rx.try_recv().is_err(), "Connected is sent once");
+    }
+
+    #[test]
+    fn a_local_backend_never_says_it_connected() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (events_tx, events_rx) = mpsc::channel();
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+        let (killed_tx, _killed_rx) = mpsc::channel();
+        let (_resize_tx, resize_rx) = mpsc::channel();
+
+        watch_loop(
+            FakeBackend::boxed(&log, Some(2)),
+            events_tx,
+            shutdown_rx,
+            killed_tx,
+            resize_rx,
+            Arc::new(|| {}),
+            first_generation(),
+        );
+
+        assert!(matches!(events_rx.try_recv(), Ok(TermEvent::Exit(_))));
+        assert!(events_rx.try_recv().is_err());
     }
 
     #[test]

@@ -35,7 +35,9 @@ impl ConnectionId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Connection {
     New,
-    /// Dividir um painel SSH (RF-20.23). Ainda não implementado.
+    /// Dividir um painel SSH (RF-20.23), ou os painéis que seguem o que
+    /// reconectou (ADR-0076 §3): um canal novo na conexão viva, **sem
+    /// autenticar**. Conexão que não está viva devolve `OpenError`.
     Share(ConnectionId),
 }
 
@@ -56,6 +58,10 @@ pub struct SshSpawn {
     pub connection: Connection,
     /// Teto até a troca de chaves; injetável para os testes não esperarem 15 s.
     pub connect_timeout: Duration,
+    /// Tentativa de reconexão: o que foi digitado **antes** de o shell novo
+    /// existir era para o shell que caiu e é descartado, nunca entregue ao novo
+    /// (ADR-0076 §4).
+    pub discard_input_until_open: bool,
 }
 
 impl SshSpawn {
@@ -73,6 +79,7 @@ impl SshSpawn {
             term: "xterm-256color".to_owned(),
             connection: Connection::New,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            discard_input_until_open: false,
         }
     }
 }
@@ -83,14 +90,15 @@ impl SshSpawn {
 /// [`End`]: crate::End
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenError {
-    /// `Connection::Share` entra com a divisão de painel.
-    ShareUnsupported,
+    /// `Connection::Share` de uma conexão que não existe mais, ou que caiu: quem
+    /// pediu abre uma conexão nova (RF-20.23).
+    ConnectionGone,
 }
 
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenError::ShareUnsupported => f.write_str("ssh: shared connection not implemented"),
+            OpenError::ConnectionGone => f.write_str("ssh: the shared connection is gone"),
         }
     }
 }

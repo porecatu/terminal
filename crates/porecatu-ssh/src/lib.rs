@@ -36,4 +36,5 @@ pub use secret::Secret;
 pub use spawn::{
     AuthMethod, Connection, ConnectionId, DEFAULT_CONNECT_TIMEOUT, OpenError, SshSpawn,
 };
+pub use task::connection_is_alive;
 pub use vault::{Destination, VaultError, forget_passphrase, forget_password, vault_available};

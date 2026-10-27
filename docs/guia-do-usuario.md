@@ -527,7 +527,20 @@ Se a pergunta chega com a aba em segundo plano, o diálogo **não rouba o foco**
 
 A caixa **"Lembrar no cofre do sistema"** (Gerenciador de Credenciais do Windows, Keychain do macOS, Secret Service no Linux) vem desmarcada. Marcada, o segredo só é gravado **depois** de o servidor aceitá-lo: senha errada nunca fica salva. Na próxima conexão ele é tentado sem perguntar; se o servidor **recusar a senha** (e continuar oferecendo o método), a entrada é apagada e o diálogo volta com "O servidor recusou a senha." Uma conexão derrubada no meio da autenticação (`fail2ban`, `MaxAuthTries`) ou um método retirado **não** apagam nada. Sem cofre (Linux sem Secret Service), a caixa fica desabilitada, com a nota dizendo por quê, e o segredo é pedido a cada conexão: não há outro lugar onde guardá-lo. Se o cofre recusar a gravação, a conexão segue e um aviso diz que o segredo não foi salvo. As entradas aparecem no cofre do sistema com o nome de serviço `porecatu-ssh`, uma por `usuário@host:porta` (senha) e uma por arquivo de chave (passphrase), e é lá que você as apaga à mão.
 
-O estado da conexão (conectando, falhou, caiu) aparece como nota no próprio terminal, abaixo do conteúdo. Dividir um painel SSH abre uma conexão nova.
+O estado da conexão (conectando, falhou, caiu) aparece como nota no próprio terminal, abaixo do conteúdo.
+
+**Dividir.** Dividir um painel SSH abre um **segundo shell na mesma conexão**: não autentica de novo, não pede senha e não abre outra conexão TCP. Uma **aba nova** do mesmo perfil nunca compartilha conexão, para que uma queda ou um `exit` não leve as duas. Se a conexão do painel de origem não está viva, o painel novo abre uma própria.
+
+**Reconexão automática.** Quando a conexão **cai sozinha** (rede, servidor reiniciado, a máquina suspendeu), o Porecatu tenta de novo: até **5 tentativas**, com 1, 2, 4, 8 e 16 s de espera antes de cada uma. O scrollback fica inteiro e o shell novo começa embaixo dele; cada tentativa escreve uma nota ("reconectando (tentativa 2 de 5) em 2 s"), e a contagem é uma frase, não se reescreve. A primeira volta escreve também que **o processo remoto não foi retomado**: é outro shell, num login novo (`tmux` ou `screen` no servidor continuam sendo o caminho para manter o programa). Detalhes:
+
+- Um servidor que **encerrou** a sessão (`exit`, o shell saiu) não dispara reconexão. Uma aba que **nunca conectou** (host recusado, senha errada) também não.
+- Várias divisões da mesma conexão reconectam **juntas**: o painel mais antigo tenta, e os outros entram na conexão nova quando ela abre. Uma senha não salva é pedida **uma vez**, no diálogo do painel que tenta, que espera você chegar a ele.
+- Cancelar o diálogo de senha, uma chave de host que mudou, uma chave ilegível e uma autenticação recusada **interrompem** as tentativas na hora; uma recusa de conexão ou um tempo esgotado seguem até a quinta.
+- O que você digita durante a queda é **descartado**, não enfileirado: nunca chega ao shell novo.
+- Durante o ciclo a conexão conta como aberta: fechar a aba ou o painel pede confirmação.
+- Esgotadas as tentativas, o painel fica encerrado com a nota da última falha.
+
+**Reconectar à mão.** A ação `ssh.reconnect` (sem tecla padrão) e o item **Reconectar** do menu de contexto da aba, que só existe em aba SSH, agem no painel SSH focado: se ele espera a próxima tentativa, ela vem agora; se desistiu ou está encerrado, a contagem recomeça do 1. Em qualquer outro painel, não fazem nada.
 
 **O rótulo e a barra de status.** Sem título seu e enquanto o servidor não manda um, a aba se chama como o perfil (`prod-web-01`). A barra de status mostra `usuário@host` no lugar do nome do shell. A pasta aparece só se o shell do servidor informá-la (OSC 7, como no [convite de integração de shell](reference/integracao-de-shell.md)) **com o mesmo nome de host do perfil**: um perfil escrito com o IP e um shell que diz o nome da máquina não mostram pasta. Os segmentos de Git não aparecem — o repositório que o Porecatu enxerga é o local.
 

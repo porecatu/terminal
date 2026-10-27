@@ -20,6 +20,9 @@ pub enum MenuAction {
     /// mesmo sem nenhum grupo explícito existir ainda. Aciona abre o
     /// popover de destino (`move_to_group.rs`), não move direto.
     MoveToGroup,
+    /// ADR-0075 §8, RF-20.31: reconecta o painel SSH focado da aba. Só existe
+    /// no menu de uma aba SSH ([`SSH_TAB_MENU_ITEMS`]).
+    Reconnect,
 }
 
 impl MenuAction {
@@ -30,6 +33,7 @@ impl MenuAction {
             MenuAction::NewTab => msg::tab_menu::new(catalog),
             MenuAction::CloseTab => msg::tab_menu::close(catalog),
             MenuAction::MoveToGroup => msg::tab_menu::move_to_group(catalog),
+            MenuAction::Reconnect => msg::tab_menu::reconnect(catalog),
         }
     }
 }
@@ -57,6 +61,18 @@ pub const TAB_MENU_ITEMS: [MenuItem; 3] = [
     },
 ];
 
+/// Os itens do menu de uma aba SSH: os de sempre e "Reconectar" por último
+/// (ADR-0075 §8).
+pub const SSH_TAB_MENU_ITEMS: [MenuItem; 4] = [
+    TAB_MENU_ITEMS[0],
+    TAB_MENU_ITEMS[1],
+    TAB_MENU_ITEMS[2],
+    MenuItem {
+        action: MenuAction::Reconnect,
+        enabled: true,
+    },
+];
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContextMenu {
     pub tab: TabId,
@@ -64,14 +80,32 @@ pub struct ContextMenu {
     /// (RF-10.19: "ancorados no cursor").
     pub anchor: (f32, f32),
     highlighted: usize,
+    /// A aba é SSH: o menu ganha "Reconectar".
+    ssh: bool,
 }
 
 impl ContextMenu {
+    #[cfg(test)]
     pub fn new(tab: TabId, anchor: (f32, f32)) -> Self {
+        Self::for_tab(tab, anchor, false)
+    }
+
+    /// O menu de uma aba; `ssh` acrescenta "Reconectar" (ADR-0075 §8).
+    pub fn for_tab(tab: TabId, anchor: (f32, f32), ssh: bool) -> Self {
         Self {
             tab,
             anchor,
-            highlighted: first_enabled_index(),
+            highlighted: 0,
+            ssh,
+        }
+    }
+
+    /// Os itens deste menu, na ordem em que aparecem.
+    pub fn items(&self) -> &'static [MenuItem] {
+        if self.ssh {
+            &SSH_TAB_MENU_ITEMS
+        } else {
+            &TAB_MENU_ITEMS
         }
     }
 
@@ -84,11 +118,12 @@ impl ContextMenu {
     /// visual", então o item realçado é sempre um que `Enter` pode
     /// acionar de verdade.
     pub fn move_highlight(&mut self, delta: isize) {
-        let len = TAB_MENU_ITEMS.len() as isize;
+        let items = self.items();
+        let len = items.len() as isize;
         let mut idx = self.highlighted as isize;
         for _ in 0..len {
             idx = (idx + delta).rem_euclid(len);
-            if TAB_MENU_ITEMS[idx as usize].enabled {
+            if items[idx as usize].enabled {
                 self.highlighted = idx as usize;
                 return;
             }
@@ -96,21 +131,14 @@ impl ContextMenu {
     }
 
     pub fn set_highlight(&mut self, index: usize) {
-        if TAB_MENU_ITEMS.get(index).is_some_and(|item| item.enabled) {
+        if self.items().get(index).is_some_and(|item| item.enabled) {
             self.highlighted = index;
         }
     }
 
     pub fn selected(&self) -> MenuAction {
-        TAB_MENU_ITEMS[self.highlighted].action
+        self.items()[self.highlighted].action
     }
-}
-
-fn first_enabled_index() -> usize {
-    TAB_MENU_ITEMS
-        .iter()
-        .position(|item| item.enabled)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -149,6 +177,51 @@ mod tests {
         assert_eq!(menu.selected(), MenuAction::MoveToGroup);
         menu.set_highlight(1);
         assert_eq!(menu.selected(), MenuAction::CloseTab);
+    }
+
+    #[test]
+    fn a_plain_tab_menu_has_no_reconnect_and_an_ssh_one_ends_with_it() {
+        let plain = ContextMenu::for_tab(TabId::new(0), (0.0, 0.0), false);
+        let ssh = ContextMenu::for_tab(TabId::new(0), (0.0, 0.0), true);
+
+        assert!(
+            plain
+                .items()
+                .iter()
+                .all(|item| item.action != MenuAction::Reconnect)
+        );
+        assert_eq!(ssh.items().len(), plain.items().len() + 1);
+        assert_eq!(ssh.items().last().unwrap().action, MenuAction::Reconnect);
+        // The usual items keep their order.
+        assert_eq!(&ssh.items()[..3], plain.items());
+    }
+
+    #[test]
+    fn the_ssh_menu_can_highlight_and_select_reconnect() {
+        let mut menu = ContextMenu::for_tab(TabId::new(0), (0.0, 0.0), true);
+        menu.move_highlight(-1);
+        assert_eq!(menu.selected(), MenuAction::Reconnect);
+        menu.move_highlight(1);
+        assert_eq!(menu.selected(), MenuAction::NewTab);
+        menu.set_highlight(3);
+        assert_eq!(menu.selected(), MenuAction::Reconnect);
+
+        // A plain menu has nothing at index 3.
+        let mut plain = ContextMenu::for_tab(TabId::new(0), (0.0, 0.0), false);
+        plain.set_highlight(3);
+        assert_eq!(plain.selected(), MenuAction::NewTab);
+    }
+
+    #[test]
+    fn reconnect_is_translated() {
+        use crate::messages::test_support;
+        assert_eq!(
+            MenuAction::Reconnect.label(&test_support::pt_br()),
+            "Reconectar"
+        );
+        for catalog in test_support::all_catalogs() {
+            assert!(!MenuAction::Reconnect.label(&catalog).is_empty());
+        }
     }
 
     #[test]
