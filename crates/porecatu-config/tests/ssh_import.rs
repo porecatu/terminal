@@ -48,8 +48,7 @@ fn a_concrete_host_comes_with_every_field_resolved() {
         (c.alias.as_str(), c.host.as_str(), c.user.as_str(), c.port),
         ("web", "10.0.0.5", "deploy", 2222)
     );
-    assert!(c.identity_file.ends_with("id_web"), "{}", c.identity_file);
-    assert!(Path::new(&c.identity_file).starts_with(home.path()));
+    assert_eq!(c.identity_file, "~/.ssh/id_web");
     assert_eq!(c.status, SshImportStatus::Importable);
 }
 

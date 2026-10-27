@@ -2133,7 +2133,7 @@ fn push_import_blocks(
 ) {
     use msg::settings::profiles as p;
     let width = (panel_width - m.panel_padding * 2.0).max(0.0);
-    blocks.push(Block::Section(p::import(catalog)));
+    blocks.push(Block::Section(p::import_section(catalog)));
     if let Some(text) = import_note(catalog, import) {
         blocks.push(Block::Note {
             lines: wrap(&text, m.description_size, width, measurer),

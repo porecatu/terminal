@@ -223,8 +223,6 @@ pub(crate) struct SettingsWindow {
     /// "Importar do ~/.ssh/config" está aberto: o que o leitor achou e o que
     /// está marcado (ADR-0075 §7). Ocupa o lugar do formulário.
     import: Option<ImportList>,
-    /// O cofre do sistema responde (sondado uma vez, na criação da janela).
-    vault: bool,
     /// O texto do filtro do grupo Atalhos (RF-16.28); vale a cada tecla e
     /// vive enquanto a janela vive.
     filter: String,
@@ -285,7 +283,6 @@ impl SettingsWindow {
             shortcuts: Shortcuts::new(config, Platform::current()),
             profiles: ProfilesDraft::new(&config.profiles.list),
             import: None,
-            vault: porecatu_term::vault_available(),
             filter: String::new(),
             capturing: None,
             file: FileState::new(disk),
@@ -813,7 +810,9 @@ impl SettingsWindow {
                 config_path: self.config_path.as_deref(),
                 profiles: Some(&self.profiles),
                 import: self.import.as_ref(),
-                vault: self.vault,
+                // Não bloqueia: a primeira chamada só inicia a sondagem e
+                // responde `false`; a montagem seguinte já vê a resposta.
+                vault: porecatu_term::vault_available(),
             };
             self.content = Some(content::build(
                 key,

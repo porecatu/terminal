@@ -28,6 +28,9 @@ use porecatu_config::{
 };
 use porecatu_term::Destination;
 
+/// O badge que o parser dá a um perfil SSH sem `badge` (ADR-0072 §6).
+const DEFAULT_SSH_BADGE: &str = "SSH";
+
 /// Onde o array de perfis mora no arquivo.
 pub(crate) const LIST: &str = "profiles.list";
 
@@ -125,6 +128,12 @@ impl Form {
             identity_file: String::new(),
         };
         if let Some(ssh) = &def.ssh {
+            // O parser dá `SSH` ao perfil sem badge; o formulário o mostra
+            // vazio, como na criação, senão o que acabou de ser gravado nunca
+            // igualaria o que a tela tem.
+            if form.badge == DEFAULT_SSH_BADGE {
+                form.badge.clear();
+            }
             form.host = ssh.host.clone();
             form.port = ssh.port.to_string();
             form.user = ssh.user.clone();
@@ -1445,6 +1454,35 @@ user = "deploy"
         // The last one imported is the chosen one, and the profiles are valid.
         assert_eq!(draft.selected(), Some(before + 1));
         assert!(draft.is_valid(before) && draft.is_valid(before + 1));
+    }
+
+    #[test]
+    fn a_saved_ssh_profile_without_badge_is_not_pending_after_the_reload_gives_it_the_default() {
+        let mut draft = ProfilesDraft::new(&[]);
+        let index = draft.add_ssh("x");
+        draft.set_text(index, Field::Host, "h.example");
+        draft.set_text(index, Field::User, "u");
+        assert!(draft.is_dirty());
+        let saved = ProfileDef {
+            id: "x".to_owned(),
+            name: "x".to_owned(),
+            badge: "SSH".to_owned(),
+            kind: ProfileKind::Ssh,
+            program: String::new(),
+            args: Vec::new(),
+            env: Default::default(),
+            cwd: String::new(),
+            ssh: Some(SshProfile {
+                host: "h.example".to_owned(),
+                port: 22,
+                user: "u".to_owned(),
+                auth: AUTH_PRESETS[0].to_vec(),
+                identity_file: String::new(),
+            }),
+        };
+        draft.commit(&[saved], |_| {});
+        assert!(!draft.is_dirty());
+        assert!(!draft.is_pending(index));
     }
 
     #[test]

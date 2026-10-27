@@ -726,6 +726,7 @@ registry! {
             empty(),
             new_local_name(),
             new_ssh_name(),
+            import_section(),
             import_missing(),
             import_none(),
             import_confirm(),

@@ -143,7 +143,7 @@ pub fn read_ssh_config(
     }
     let candidates = aliases
         .into_iter()
-        .map(|alias| candidate(alias, &config.query(alias), local_user, existing))
+        .map(|alias| candidate(alias, &config.query(alias), home, local_user, existing))
         .collect();
     Ok(SshConfigImport {
         file_found: true,
@@ -158,6 +158,7 @@ fn is_concrete(alias: &str) -> bool {
 fn candidate(
     alias: &str,
     params: &HostParams,
+    home: &Path,
     local_user: &str,
     existing: &[SshProfile],
 ) -> SshImportCandidate {
@@ -168,7 +169,7 @@ fn candidate(
         .identity_file
         .as_ref()
         .and_then(|files| files.first())
-        .map(|file| file.to_string_lossy().into_owned())
+        .map(|file| tilde_form(file, home))
         .unwrap_or_default();
     let status = if let Some(reason) = unsupported(params) {
         SshImportStatus::Unsupported(reason)
@@ -191,6 +192,18 @@ fn candidate(
         port,
         identity_file,
         status,
+    }
+}
+
+/// The reader expands `~`; the profile keeps it as `~/…`, so it does not carry
+/// this machine's home folder (and Windows separators) into the file.
+fn tilde_form(file: &Path, home: &Path) -> String {
+    match file.strip_prefix(home) {
+        Ok(rest) => {
+            let rest: Vec<_> = rest.iter().map(|part| part.to_string_lossy()).collect();
+            format!("~/{}", rest.join("/"))
+        }
+        Err(_) => file.to_string_lossy().into_owned(),
     }
 }
 
