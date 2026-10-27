@@ -446,6 +446,7 @@ mod tests {
                 args: args.iter().map(|a| (*a).to_owned()).collect(),
                 env: Vec::new(),
                 cwd: None,
+                ssh: None,
             },
         }
     }

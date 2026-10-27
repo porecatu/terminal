@@ -52,7 +52,7 @@ use porecatu_session::named::EntryStatus;
 
 use crate::chrome::{badge_size, centered_glyph, push_badge, push_shadow};
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
-use crate::dialog::{ConfirmDialog, DialogButton};
+use crate::dialog::{ConfirmDialog, DialogButton, LineTone};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
 use crate::messages::msg;
@@ -337,9 +337,22 @@ pub fn layout_dialog(
         + confirm_width
         + button_gap
         + discard_width.map_or(0.0, |discard| discard + button_gap);
-    let width = width.max(buttons_width + padding * 2.0);
+    // As linhas de dado nunca são truncadas (ADR-0075 §3): se alguma não
+    // coube nos 380px configurados -- outra fonte, outra escala --, o diálogo
+    // cresce o que for preciso, como já faz para os botões.
+    let widest_data = dialog
+        .lines
+        .iter()
+        .filter(|line| line.tone == LineTone::Data)
+        .map(|line| measurer.measure_width(&line.text, BODY_FONT, body_size))
+        .fold(0.0_f32, f32::max);
+    let width = width
+        .max(buttons_width + padding * 2.0)
+        .max(widest_data + padding * 2.0);
 
-    let content_height = title_size + gap + body_size + gap + button_height;
+    // Cada linha extra custa o `gap` e a própria altura, como o corpo.
+    let lines_height = dialog.lines.len() as f32 * (gap + body_size);
+    let content_height = title_size + gap + body_size + lines_height + gap + button_height;
     let modal_height = padding * 2.0 + content_height;
     let modal_rect = Rect {
         x: (window_width - width) / 2.0,
@@ -432,6 +445,27 @@ pub fn paint_dialog(
         size_px: body_size,
         color: pal.dialog_body_text,
     }));
+    // Linhas de dado e de aviso (ADR-0075 §3): dado em "Secundário" sem
+    // truncar, aviso na cor de aviso da §2.14 e cortado ao conteúdo.
+    for line in &dialog.lines {
+        y += body_size + gap;
+        let (text, color) = match line.tone {
+            LineTone::Data => (line.text.clone(), pal.warning_body_text),
+            LineTone::Warning => (
+                measurer
+                    .truncate(&line.text, BODY_FONT, body_size, body_max_width)
+                    .0,
+                pal.warning_severity_warning,
+            ),
+        };
+        out.push(Primitive::Text(TextRun {
+            origin: (text_x, y),
+            text,
+            font: BODY_FONT,
+            size_px: body_size,
+            color,
+        }));
+    }
 
     if let (Some(discard_rect), Some(discard_label)) =
         (layout.discard_rect, dialog.discard_label.as_ref())
@@ -2465,6 +2499,149 @@ mod tests {
 
     fn center(rect: Rect) -> (f32, f32) {
         (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
+    }
+
+    // ---- diálogo de host desconhecido (RF-20.16, ADR-0075 §3)
+
+    /// Uma impressão digital no formato real: `SHA256:` e 43 caracteres de
+    /// base64 sem preenchimento (50 no total).
+    const REAL_FINGERPRINT: &str = "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE";
+
+    fn host_key_dialog(
+        catalog: &porecatu_locale::Catalog,
+        known_types: &[&str],
+        skipped_lines: usize,
+    ) -> ConfirmDialog {
+        use crate::dialog::HostKeyFacts;
+        use porecatu_core::{PaneId, TabId};
+        use porecatu_term::PromptId;
+        ConfirmDialog::host_key(
+            catalog,
+            &HostKeyFacts {
+                host: "10.4.1.20".to_owned(),
+                algorithm: "ecdsa-sha2-nistp256".to_owned(),
+                fingerprint: REAL_FINGERPRINT.to_owned(),
+                known_types: known_types.iter().map(|t| (*t).to_owned()).collect(),
+                skipped_lines,
+            },
+            DialogAction::HostKey(TabId::new(0), PaneId::new(0), PromptId::new(0)),
+        )
+    }
+
+    #[test]
+    fn the_host_key_data_lines_fit_the_380px_dialog_in_every_language() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let mut measurer = TextMeasurer::new();
+        for locale in ["en_US", "pt_BR", "es_ES", "fr_FR", "de_DE"] {
+            let catalog = test_support::catalog(locale);
+            // Every line there can be: another type on file, and skipped lines.
+            let dialog = host_key_dialog(&catalog, &["ssh-ed25519"], 12);
+            let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+
+            // The dialog did not have to grow past the configured width...
+            assert_eq!(layout.modal_rect.width, cfg.width as f32, "{locale}");
+            // ...and no data line is wider than the content box (so none is cut).
+            let budget = layout.modal_rect.width - cfg.padding as f32 * 2.0;
+            for line in &dialog.lines {
+                let width = measurer.measure_width(&line.text, BODY_FONT, cfg.font_size as f32);
+                assert!(
+                    width <= budget,
+                    "{locale}: {:?} is {width}px, budget {budget}px",
+                    line.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_extra_line_makes_the_dialog_one_line_taller() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let catalog = test_support::pt_br();
+        let mut measurer = TextMeasurer::new();
+        let height = |dialog: &ConfirmDialog, measurer: &mut TextMeasurer| {
+            layout_dialog(1000.0, 700.0, dialog, &config, measurer)
+                .modal_rect
+                .height
+        };
+
+        let plain = height(&two_button_dialog(), &mut measurer);
+        let basic = host_key_dialog(&catalog, &[], 0);
+        let with_type = host_key_dialog(&catalog, &["ssh-ed25519"], 0);
+        let with_both = host_key_dialog(&catalog, &["ssh-ed25519"], 3);
+
+        let line = cfg.gap as f32 + cfg.font_size as f32;
+        // Type, fingerprint label and fingerprint: three data lines.
+        assert_eq!(basic.lines.len(), 3);
+        assert_eq!(height(&basic, &mut measurer), plain + 3.0 * line);
+        assert_eq!(height(&with_type, &mut measurer), plain + 4.0 * line);
+        assert_eq!(height(&with_both, &mut measurer), plain + 5.0 * line);
+    }
+
+    #[test]
+    fn the_dialog_stays_centered_and_inside_the_window() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let dialog = host_key_dialog(&test_support::pt_br(), &["ssh-ed25519"], 2);
+
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+
+        let modal = layout.modal_rect;
+        assert!(modal.x >= 0.0 && modal.x + modal.width <= 1000.0);
+        assert!(modal.y >= 0.0 && modal.y + modal.height <= 700.0);
+        assert_eq!(modal.x, (1000.0 - modal.width) / 2.0);
+        assert_eq!(modal.y, (700.0 - modal.height) / 2.0);
+        // The buttons are still inside the modal, below the last line.
+        assert!(layout.confirm_rect.y + layout.confirm_rect.height <= modal.y + modal.height);
+    }
+
+    #[test]
+    fn the_host_key_dialog_paints_data_in_secondary_and_warnings_in_the_warning_color() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let catalog = test_support::pt_br();
+        let dialog = host_key_dialog(&catalog, &["ssh-ed25519"], 2);
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+
+        let primitives = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            &mut measurer,
+        );
+        let texts = text_colors(&primitives);
+        let color_of = |label: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("no text {label:?} in {texts:?}"))
+                .1
+        };
+
+        // "Secundário" #a8b0bb, verbatim: the fingerprint is never truncated.
+        let secondary = palette::hex(0xa8, 0xb0, 0xbb);
+        assert_eq!(color_of(REAL_FINGERPRINT), secondary);
+        assert_eq!(color_of("Tipo: ecdsa-sha2-nistp256"), secondary);
+        assert_eq!(color_of("Impressão digital:"), secondary);
+        // The warning color of §2.14 (#e0b060).
+        let warning = palette::hex(0xe0, 0xb0, 0x60);
+        for line in dialog.lines.iter().skip(3) {
+            assert_eq!(color_of(&line.text), warning, "{}", line.text);
+        }
+        // Title and the one-line body keep their own colors.
+        assert_eq!(
+            color_of("Host desconhecido: 10.4.1.20"),
+            palette::hex(0xe6, 0xea, 0xef)
+        );
+        assert_eq!(
+            color_of("A autenticidade deste host não pode ser confirmada."),
+            palette::hex(0xd7, 0xdc, 0xe3)
+        );
     }
 
     #[test]

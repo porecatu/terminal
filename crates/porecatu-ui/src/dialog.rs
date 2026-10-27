@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use porecatu_core::{GroupId, PaneId, TabId};
 use porecatu_locale::Catalog;
+use porecatu_term::PromptId;
 
 use crate::messages::msg;
 
@@ -56,6 +57,40 @@ pub enum DialogAction {
     /// alterações pendentes. Quem responde é a própria janela de
     /// configurações, que guarda o rascunho; `App` só vê a resposta.
     SettingsPending,
+    /// RF-20.16 (ADR-0075 §3): confiar numa chave de host desconhecida.
+    /// Confirmar responde `Confirm` à pergunta `prompt` do painel; qualquer
+    /// outra saída (cancelar, `Esc`) responde `Cancel`.
+    HostKey(TabId, PaneId, PromptId),
+}
+
+/// O tom de uma linha abaixo do corpo (ADR-0075 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineTone {
+    /// Dado, em mono: cor "Secundário" (`#a8b0bb`, §1.4). Nunca truncado.
+    Data,
+    /// Aviso, na cor de aviso da §2.14.
+    Warning,
+}
+
+/// Uma linha de dado ou de aviso entre o corpo e os botões. O texto de uma
+/// linha de dado não passa pelo catálogo (é a impressão digital, como no
+/// `ssh`); os rótulos passam.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogLine {
+    pub text: String,
+    pub tone: LineTone,
+}
+
+/// O que o diálogo de host desconhecido mostra: dado, não frase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostKeyFacts {
+    pub host: String,
+    pub algorithm: String,
+    pub fingerprint: String,
+    /// Tipos de chave que o host já tem registrados (ADR-0074 §3).
+    pub known_types: Vec<String>,
+    /// Linhas do `known_hosts` que o leitor não entendeu (ADR-0074 §2).
+    pub skipped_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +105,8 @@ pub struct ConfirmDialog {
     /// outros, que continuam com dois botões.
     pub discard_label: Option<String>,
     pub action: DialogAction,
+    /// Linhas entre o corpo e os botões; vazio nos diálogos de sempre.
+    pub lines: Vec<DialogLine>,
     focused: DialogButton,
     /// O botão sob o cursor, só no diálogo de três saídas: os de dois botões
     /// não têm realce de hover.
@@ -91,6 +128,7 @@ impl ConfirmDialog {
             cancel_label: cancel_label.into(),
             discard_label: None,
             action,
+            lines: Vec::new(),
             focused: DialogButton::Cancel,
             hovered: None,
         }
@@ -188,6 +226,43 @@ impl ConfirmDialog {
             DialogAction::SettingsPending,
         );
         dialog.discard_label = Some(msg::settings::dialog::discard_and_close(catalog));
+        dialog
+    }
+
+    /// RF-20.16 (ADR-0075 §3): host desconhecido. O corpo tem uma linha; abaixo
+    /// vêm o tipo da chave e a impressão digital (dado, sem truncar) e, quando
+    /// há, os avisos de outro tipo registrado e de linhas puladas. O foco
+    /// inicial é o cancelar, como em todo diálogo: um `Enter` distraído não
+    /// confia num host.
+    pub fn host_key(catalog: &Catalog, facts: &HostKeyFacts, action: DialogAction) -> Self {
+        let mut dialog = Self::new(
+            msg::dialog::host_key::title(catalog, &facts.host),
+            msg::dialog::host_key::body(catalog),
+            msg::dialog::host_key::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            action,
+        );
+        let data = |text: String| DialogLine {
+            text,
+            tone: LineTone::Data,
+        };
+        dialog.lines = vec![
+            data(msg::dialog::host_key::type_line(catalog, &facts.algorithm)),
+            data(msg::dialog::host_key::fingerprint_label(catalog)),
+            data(facts.fingerprint.clone()),
+        ];
+        if !facts.known_types.is_empty() {
+            dialog.lines.push(DialogLine {
+                text: msg::dialog::host_key::other_type(catalog, facts.known_types.join(", ")),
+                tone: LineTone::Warning,
+            });
+        }
+        if facts.skipped_lines > 0 {
+            dialog.lines.push(DialogLine {
+                text: msg::dialog::host_key::skipped_lines(catalog, facts.skipped_lines),
+                tone: LineTone::Warning,
+            });
+        }
         dialog
     }
 
@@ -361,6 +436,131 @@ mod tests {
         assert_eq!(dialog.focused(), DialogButton::Cancel);
         dialog.step_focus(-1);
         assert_eq!(dialog.focused(), DialogButton::Confirm);
+    }
+
+    fn facts(known_types: &[&str], skipped_lines: usize) -> HostKeyFacts {
+        HostKeyFacts {
+            host: "10.4.1.20".to_owned(),
+            algorithm: "ssh-ed25519".to_owned(),
+            fingerprint: "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE".to_owned(),
+            known_types: known_types.iter().map(|t| (*t).to_owned()).collect(),
+            skipped_lines,
+        }
+    }
+
+    fn host_key_action() -> DialogAction {
+        DialogAction::HostKey(TabId::new(2), PaneId::new(1), PromptId::new(7))
+    }
+
+    /// ADR-0014 / ADR-0075 §3: o foco inicial é o cancelar -- um `Enter`
+    /// distraído não confia num host.
+    #[test]
+    fn the_host_key_dialog_starts_on_cancel_and_enter_does_not_trust() {
+        let dialog =
+            ConfirmDialog::host_key(&test_support::pt_br(), &facts(&[], 0), host_key_action());
+
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        assert_eq!(
+            dialog.buttons(),
+            [DialogButton::Cancel, DialogButton::Confirm]
+        );
+        assert_eq!(dialog.action, host_key_action());
+    }
+
+    #[test]
+    fn the_host_key_dialog_reads_as_title_body_data_and_two_buttons() {
+        let pt = test_support::pt_br();
+        let dialog = ConfirmDialog::host_key(&pt, &facts(&[], 0), host_key_action());
+
+        assert_eq!(dialog.title, "Host desconhecido: 10.4.1.20");
+        assert_eq!(
+            dialog.body,
+            "A autenticidade deste host não pode ser confirmada."
+        );
+        assert_eq!(dialog.cancel_label, "Cancelar");
+        assert_eq!(dialog.confirm_label, "Confiar e conectar");
+        assert_eq!(dialog.discard_label, None);
+        let texts: Vec<&str> = dialog.lines.iter().map(|l| l.text.as_str()).collect();
+        // The labels come from the catalog; the type and the fingerprint do not.
+        assert_eq!(
+            texts,
+            [
+                "Tipo: ssh-ed25519",
+                "Impressão digital:",
+                "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE",
+            ]
+        );
+        assert!(dialog.lines.iter().all(|l| l.tone == LineTone::Data));
+    }
+
+    #[test]
+    fn the_host_key_dialog_adds_a_warning_for_another_registered_type_and_for_skipped_lines() {
+        let pt = test_support::pt_br();
+
+        let other_type = ConfirmDialog::host_key(
+            &pt,
+            &facts(&["ecdsa-sha2-nistp256", "ssh-rsa"], 0),
+            host_key_action(),
+        );
+        let warnings: Vec<&str> = other_type
+            .lines
+            .iter()
+            .filter(|l| l.tone == LineTone::Warning)
+            .map(|l| l.text.as_str())
+            .collect();
+        assert_eq!(
+            warnings,
+            ["Outro tipo já registrado: ecdsa-sha2-nistp256, ssh-rsa"]
+        );
+
+        let skipped = ConfirmDialog::host_key(&pt, &facts(&[], 1), host_key_action());
+        assert_eq!(
+            skipped.lines.last().map(|l| l.text.as_str()),
+            Some("1 linha do known_hosts não pôde ser lida.")
+        );
+        let many = ConfirmDialog::host_key(&pt, &facts(&[], 3), host_key_action());
+        assert_eq!(
+            many.lines.last().map(|l| l.text.as_str()),
+            Some("3 linhas do known_hosts não puderam ser lidas.")
+        );
+
+        // Neither: just the three data lines.
+        assert_eq!(
+            ConfirmDialog::host_key(&pt, &facts(&[], 0), host_key_action())
+                .lines
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn the_host_key_dialog_is_translated_but_its_data_is_not() {
+        for locale in ["en_US", "es_ES", "fr_FR", "de_DE"] {
+            let catalog = test_support::catalog(locale);
+            let dialog =
+                ConfirmDialog::host_key(&catalog, &facts(&["ssh-rsa"], 2), host_key_action());
+            assert!(dialog.title.contains("10.4.1.20"), "{locale}");
+            // Fingerprint and algorithm travel verbatim.
+            assert!(
+                dialog.lines.iter().any(|l| l.text.contains("ssh-ed25519")),
+                "{locale}"
+            );
+            assert!(
+                dialog
+                    .lines
+                    .iter()
+                    .any(|l| l.text == "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE"),
+                "{locale}"
+            );
+            assert_ne!(dialog.confirm_label, "Confiar e conectar", "{locale}");
+        }
+    }
+
+    #[test]
+    fn the_ordinary_dialogs_have_no_extra_lines() {
+        let pt = test_support::pt_br();
+        assert!(ConfirmDialog::close_window(&pt, 2).lines.is_empty());
+        assert!(ConfirmDialog::settings_pending(&pt, 1).lines.is_empty());
     }
 
     #[test]

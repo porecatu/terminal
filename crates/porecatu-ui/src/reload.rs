@@ -50,6 +50,9 @@ pub enum ConfigReload {
         config: Box<Config>,
         /// ADR-0003 regra 4 / RF-4.22.
         unknown_keys: Vec<String>,
+        /// ADR-0070 §1 / RF-7.5: perfis recusados (a config já só tem os
+        /// válidos).
+        profile_problems: Vec<porecatu_config::ProfileProblem>,
         /// ADR-0067: os `thm_*.toml` ao lado da config que não entraram,
         /// ou entraram com chave desconhecida.
         theme_problems: Vec<ThemeFileProblem>,
@@ -349,12 +352,14 @@ pub(crate) fn read_and_parse(path: &Path) -> Option<ConfigReload> {
             });
         }
     };
-    Some(match porecatu_config::parse(&text) {
-        Ok((mut config, unknown_keys)) => {
+    Some(match porecatu_config::parse_checked(&text) {
+        Ok(parsed) => {
+            let mut config = parsed.config;
             let theme_problems = load_disk_themes(&mut config, Some(path));
             ConfigReload::Loaded {
                 config: Box::new(config),
-                unknown_keys,
+                unknown_keys: parsed.unknown_keys,
+                profile_problems: parsed.profile_problems,
                 theme_problems,
             }
         }
@@ -813,6 +818,7 @@ mod tests {
         ConfigReload::Loaded {
             config: Box::new(config),
             unknown_keys: Vec::new(),
+            profile_problems: Vec::new(),
             theme_problems: Vec::new(),
         }
     }

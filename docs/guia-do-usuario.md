@@ -487,7 +487,7 @@ env     = { EDITOR = "nvim" }     # opcional: soma-se a [shell.env]
 `id` é letras minúsculas, números, `-` e `_`, e não se repete. Um perfil com
 erro (id repetido, `program` vazio, `type` desconhecido) é descartado e os
 outros continuam valendo; o aviso diz a linha e a coluna.
-`type = "ssh"` ainda não existe e é recusado.
+Um servidor SSH é um perfil com `type = "ssh"`, descrito na seção "Perfis SSH" abaixo.
 
 > **`env` não é lugar de segredo.** O `porecatu.toml` é texto puro, costuma
 > ir para repositório de dotfiles, e o ambiente de um processo é legível
@@ -496,6 +496,34 @@ outros continuam valendo; o aviso diz a linha e a coluna.
 
 Mudar `[profiles]` com o app aberto vale para **abas novas**; as abertas
 seguem como estão.
+
+### Perfis SSH
+
+Um perfil `type = "ssh"` abre uma aba que fala com um servidor, pelo cliente SSH embutido — sem o programa `ssh` do sistema:
+
+```toml
+[[profiles.list]]
+id            = "prod"
+name          = "prod-web-01"
+type          = "ssh"
+host          = "10.4.1.20"
+port          = 22                       # opcional
+user          = "deploy"                 # obrigatório
+auth          = ["agent", "key"]         # opcional: a ordem tentada
+identity_file = "~/.ssh/id_ed25519"      # opcional; "~" é a sua pasta pessoal
+```
+
+- `host` e `user` são obrigatórios e não aceitam espaço nem os caracteres `, | [ ] @ # * ? !` (e `user` também não aceita `@` nem `:`): eles viram uma linha do `known_hosts`. Um endereço IPv6 se escreve sem colchetes.
+- `program`, `args`, `env` e `cwd` **não valem** num perfil SSH e são erro: o perfil é ignorado, com um aviso que diz a linha.
+- `auth` é a ordem em que os métodos são tentados (`agent`, `key`, `password`), parando no primeiro aceito; um método fora da lista não é tentado. Sem `auth`, a ordem é agente, depois a chave **se** houver `identity_file`, depois senha. `auth = ["key"]` sem `identity_file` é erro. **Nesta versão** a autenticação funciona por agente e por chave **sem** passphrase; a senha e a passphrase ainda não estão disponíveis.
+- O `badge` é `SSH` se você não escrever outro.
+- **Senha e passphrase não vão no `porecatu.toml`.** Uma chave de perfil com `password`, `passphrase` ou `secret` no nome é ignorada, com um aviso: o valor nem é lido.
+
+**Primeira conexão.** O Porecatu confere a chave do servidor no `~/.ssh/known_hosts`, o mesmo arquivo do OpenSSH: o que você já confia lá vale aqui, e o contrário. Com um host que o arquivo não conhece, abre um diálogo com o tipo da chave e a impressão digital `SHA256:…`; **Cancelar** é o foco inicial. **Confiar e conectar** acrescenta uma linha ao fim do arquivo (em hash, se o seu arquivo já usa hash) e conecta. Se a chave do host **mudou**, ou foi marcada `@revoked`, a conexão é bloqueada com uma nota que diz a impressão digital apresentada e o arquivo e a linha da entrada — o Porecatu nunca oferece "substituir": quem resolve é o seu editor, ou o `ssh-keygen -R`. Se o `known_hosts` existe e não pode ser lido (por exemplo, regravado em UTF-16 pelo PowerShell 5), a conexão nem é tentada.
+
+Se a pergunta chega com a aba em segundo plano, o diálogo **não rouba o foco**: a campainha da aba acende, e o diálogo abre quando você chega ao painel.
+
+O estado da conexão (conectando, falhou, caiu) aparece como nota no próprio terminal, abaixo do conteúdo. Dividir um painel SSH abre uma conexão nova.
 
 ### Escolher o perfil
 

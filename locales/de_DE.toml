@@ -626,3 +626,63 @@ body = { one = "{count} Text ohne Übersetzung in {locale}", other = "{count} Te
 [notice.language_unknown_keys]
 title = "Unbekannte Schlüssel in der Sprachdatei"
 body = { one = "{count} unbekannter Schlüssel in {path}", other = "{count} unbekannte Schlüssel in {path}" }
+
+# Perfis de aba e SSH (ADR-0070, ADR-0072 §6, ADR-0075 §3 e §5). Host,
+# impressão digital, arquivo e linha são dado, não frase.
+[notice.profile_problem]
+title = "Problem mit einem Profil"
+body = "Zeile {line}, Spalte {column}: {reason}"
+
+[notice.profile_reason]
+id_invalid = "Profil übersprungen: „id“ fehlt oder ist ungültig (Kleinbuchstaben, Ziffern, „-“ und „_“, höchstens 32 Zeichen)"
+id_reserved = "Profil übersprungen: „id“ darf nicht mit „auto:“ beginnen"
+id_duplicate = "Profil übersprungen: die „id“ „{id}“ wird schon von einem anderen Profil verwendet"
+name_empty = "Profil übersprungen: „name“ ist leer"
+badge_empty = "Profil übersprungen: „badge“ ist leer"
+badge_too_long = "Profil übersprungen: „badge“ hat mehr als 4 Zeichen"
+type_unknown = "Profil übersprungen: „type“ muss „local“ oder „ssh“ sein"
+program_empty = "Profil übersprungen: „program“ fehlt oder ist leer"
+default_unknown = "„default“ nennt „{id}“, das kein gültiges Profil ist; Standard ist die [shell]"
+ssh_field = "Profil übersprungen: „{field}“ gilt nicht für den Typ „ssh“"
+host_invalid = "Profil übersprungen: „host“ fehlt oder enthält ein nicht erlaubtes Zeichen (Leerzeichen, Steuerzeichen oder eines von , | [ ] @ # * ? !)"
+user_invalid = "Profil übersprungen: „user“ fehlt oder enthält ein nicht erlaubtes Zeichen (Leerzeichen, Steuerzeichen, „@“ oder „:“)"
+port_invalid = "Profil übersprungen: „port“ muss zwischen 1 und 65535 liegen"
+auth_invalid = "Profil übersprungen: „auth“ erlaubt nur „agent“, „key“ und „password“, jeweils höchstens einmal"
+key_without_identity_file = "Profil übersprungen: „auth“ ist nur „key“, aber es gibt keine „identity_file“"
+
+[notice.secret_profile_key]
+title = "Schlüssel ignoriert"
+body = "„{key}“ wurde ignoriert, der Wert wurde nicht gelesen. Passwörter und Passphrasen gehören nicht in diese Datei: der Schlüsselbund des Systems bewahrt sie auf."
+
+[dialog.host_key]
+title = "Unbekannter Host: {host}"
+body = "Die Echtheit dieses Hosts kann nicht bestätigt werden."
+type_line = "Typ: {algorithm}"
+fingerprint_label = "Fingerabdruck:"
+other_type = "Anderer Typ bereits gespeichert: {types}"
+skipped_lines = { one = "{count} known_hosts-Zeile nicht lesbar.", other = "{count} known_hosts-Zeilen nicht lesbar." }
+confirm = "Vertrauen und verbinden"
+
+[note.ssh]
+connecting = "verbinde mit {host} …"
+refused = "Verbindung zu {host} nicht möglich: Verbindung abgelehnt oder Host nicht erreichbar"
+timeout = "Verbindung zu {host} nicht möglich: keine Antwort"
+auth_rejected = "{host} hat alle Anmeldeverfahren abgelehnt"
+auth_cancelled = "Anmeldung abgebrochen"
+auth_unsupported = "{host} verlangt ein Anmeldeverfahren, das die App nicht unterstützt"
+key_unreadable = "Die Schlüsseldatei konnte nicht gelesen werden"
+host_key_rejected = "Host-Schlüssel nicht vertraut: Verbindung abgebrochen"
+host_key_changed = "Der Host-Schlüssel von {host} ist nicht der gespeicherte: Verbindung blockiert.\n  vorgelegt: {presented}\n{entries}"
+host_key_revoked = "Der Host-Schlüssel von {host} ist als widerrufen markiert: Verbindung blockiert.\n  vorgelegt: {presented}\n{entry}"
+entry = "  gespeichert: {fingerprint} ({file}:{line})"
+known_hosts_unreadable = "„{file}“ konnte nicht gelesen werden ({reason}): Verbindung nicht versucht"
+known_hosts_permission = "Zugriff verweigert"
+known_hosts_not_text = "keine UTF-8-Textdatei"
+known_hosts_other = "Lesefehler"
+channel_refused = "{host} hat das Öffnen einer Terminalsitzung abgelehnt"
+runtime = "Die Verbindung konnte nicht gestartet werden"
+lost_keepalive = "Verbindung zu {host} verloren: der Server antwortet nicht mehr"
+lost_transport = "Verbindung zu {host} verloren"
+lost_disconnect = "Verbindung zu {host} vom Server beendet"
+remote_signal = "Sitzung durch Signal {signal} beendet"
+remote_closed = "Sitzung vom Server geschlossen"

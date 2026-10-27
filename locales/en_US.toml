@@ -670,3 +670,63 @@ body = { one = "{count} text without translation in {locale}", other = "{count} 
 [notice.language_unknown_keys]
 title = "Unknown keys in language file"
 body = { one = "{count} unknown key in {path}", other = "{count} unknown keys in {path}" }
+
+# Perfis de aba e SSH (ADR-0070, ADR-0072 §6, ADR-0075 §3 e §5). Host,
+# impressão digital, arquivo e linha são dado, não frase.
+[notice.profile_problem]
+title = "Profile problem"
+body = "line {line}, column {column}: {reason}"
+
+[notice.profile_reason]
+id_invalid = "profile skipped: \"id\" is missing or invalid (lowercase letters, digits, \"-\" and \"_\", up to 32 characters)"
+id_reserved = "profile skipped: \"id\" cannot start with \"auto:\""
+id_duplicate = "profile skipped: the \"id\" \"{id}\" is already used by another profile"
+name_empty = "profile skipped: \"name\" is empty"
+badge_empty = "profile skipped: \"badge\" is empty"
+badge_too_long = "profile skipped: \"badge\" has more than 4 characters"
+type_unknown = "profile skipped: \"type\" must be \"local\" or \"ssh\""
+program_empty = "profile skipped: \"program\" is missing or empty"
+default_unknown = "\"default\" names \"{id}\", which is not a valid profile; the [shell] is the default"
+ssh_field = "profile skipped: \"{field}\" does not apply to type \"ssh\""
+host_invalid = "profile skipped: \"host\" is missing or has a character that is not allowed (space, control, or any of , | [ ] @ # * ? !)"
+user_invalid = "profile skipped: \"user\" is missing or has a character that is not allowed (space, control, \"@\" or \":\")"
+port_invalid = "profile skipped: \"port\" must be between 1 and 65535"
+auth_invalid = "profile skipped: \"auth\" accepts only \"agent\", \"key\" and \"password\", at most once each"
+key_without_identity_file = "profile skipped: \"auth\" is only \"key\", but there is no \"identity_file\""
+
+[notice.secret_profile_key]
+title = "Key ignored"
+body = "\"{key}\" was ignored and its value was not read. Passwords and passphrases do not go in this file: the system keychain keeps them."
+
+[dialog.host_key]
+title = "Unknown host: {host}"
+body = "The authenticity of this host cannot be confirmed."
+type_line = "Type: {algorithm}"
+fingerprint_label = "Fingerprint:"
+other_type = "Another type on file: {types}"
+skipped_lines = { one = "{count} known_hosts line could not be read.", other = "{count} known_hosts lines could not be read." }
+confirm = "Trust and connect"
+
+[note.ssh]
+connecting = "connecting to {host}…"
+refused = "could not connect to {host}: connection refused or host unreachable"
+timeout = "could not connect to {host}: no response"
+auth_rejected = "{host} rejected every authentication method"
+auth_cancelled = "authentication cancelled"
+auth_unsupported = "{host} asked for an authentication method this app does not support"
+key_unreadable = "could not read the identity file"
+host_key_rejected = "host key not trusted: connection cancelled"
+host_key_changed = "the host key of {host} is not the one on file: connection blocked.\n  presented: {presented}\n{entries}"
+host_key_revoked = "the host key of {host} is marked as revoked: connection blocked.\n  presented: {presented}\n{entry}"
+entry = "  on file: {fingerprint} ({file}:{line})"
+known_hosts_unreadable = "could not read \"{file}\" ({reason}): connection not attempted"
+known_hosts_permission = "permission denied"
+known_hosts_not_text = "not a UTF-8 text file"
+known_hosts_other = "read error"
+channel_refused = "{host} refused to open a terminal session"
+runtime = "could not start the connection"
+lost_keepalive = "connection to {host} lost: the server stopped answering"
+lost_transport = "connection to {host} lost"
+lost_disconnect = "connection to {host} closed by the server"
+remote_signal = "session ended by signal {signal}"
+remote_closed = "session closed by the server"

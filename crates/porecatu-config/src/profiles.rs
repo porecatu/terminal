@@ -29,9 +29,28 @@ const WINDOWS_AUTO_SHELLS: [&str; 3] = ["pwsh.exe", "powershell.exe", "cmd.exe"]
 pub enum ProfileKind {
     #[default]
     Local,
-    /// Reserved: `type = "ssh"` is refused until the SSH client exists
-    /// (ADR-0070 §1). A validated list never holds one.
+    /// `type = "ssh"` (ADR-0072 §6): the profile carries an [`SshProfile`].
     Ssh,
+}
+
+/// An SSH authentication method (ADR-0072 §6). The order of
+/// [`SshProfile::auth`] is the order tried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshAuth {
+    Agent,
+    Key,
+    Password,
+}
+
+/// The destination of a `type = "ssh"` profile, already validated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshProfile {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: Vec<SshAuth>,
+    /// Empty = none. A leading `~` is expanded on resolve.
+    pub identity_file: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +64,9 @@ pub struct ProfileDef {
     pub env: BTreeMap<String, String>,
     /// Empty = inherit, like `tab.new`. A leading `~` is expanded on resolve.
     pub cwd: String,
+    /// `Some` exactly when `kind` is [`ProfileKind::Ssh`]; `program`, `args`,
+    /// `env` and `cwd` are then empty.
+    pub ssh: Option<SshProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,9 +107,26 @@ pub enum ProfileProblemKind {
     BadgeTooLong,
     /// `type` is neither `"local"` nor `"ssh"`.
     TypeUnknown,
-    /// `type = "ssh"`, refused until the SSH client is implemented.
-    TypeSsh,
     ProgramEmpty,
+    /// `program`, `args`, `env` or `cwd` in a `type = "ssh"` profile: known
+    /// keys with no meaning for the type, so an error and not an unknown-key
+    /// warning (ADR-0072 §6).
+    SshFieldNotAllowed {
+        field: &'static str,
+    },
+    /// `host` missing, empty, or with a character that would corrupt a
+    /// `known_hosts` line (ADR-0072 §6).
+    HostInvalid,
+    /// `user` missing, empty, or with whitespace, a control character, `@`
+    /// or `:`.
+    UserInvalid,
+    /// `port` outside 1..=65535.
+    PortInvalid,
+    /// `auth` empty, with a value other than `agent`/`key`/`password`, or
+    /// with a repeated one.
+    AuthInvalid,
+    /// `auth = ["key"]` without `identity_file`: nothing could ever succeed.
+    KeyWithoutIdentityFile,
     /// `[profiles] default` names no valid item; it falls back to `""`.
     DefaultUnknown {
         id: String,
@@ -136,9 +175,14 @@ struct RawProfile {
     #[serde(rename = "type")]
     kind: Option<Spanned<String>>,
     program: Option<Spanned<String>>,
-    args: Vec<String>,
-    env: BTreeMap<String, String>,
-    cwd: String,
+    args: Option<Spanned<Vec<String>>>,
+    env: Option<Spanned<BTreeMap<String, String>>>,
+    cwd: Option<Spanned<String>>,
+    host: Option<Spanned<String>>,
+    port: Option<Spanned<i64>>,
+    user: Option<Spanned<String>>,
+    auth: Option<Spanned<Vec<String>>>,
+    identity_file: Option<Spanned<String>>,
 }
 
 impl<'de> Deserialize<'de> for ProfilesConfig {
@@ -218,7 +262,22 @@ fn validate_item(
         );
     }
 
-    let badge = raw.badge.as_ref().map_or("", |f| f.get_ref().as_str());
+    let kind = match raw.kind.as_ref().map(|f| f.get_ref().as_str()) {
+        None | Some("local") => ProfileKind::Local,
+        Some("ssh") => ProfileKind::Ssh,
+        Some(_) => {
+            return fail(
+                offset_of(&raw.kind, item_start),
+                ProfileProblemKind::TypeUnknown,
+            );
+        }
+    };
+
+    // A local profile must name its badge; an SSH one defaults to `SSH`.
+    let badge = match (&raw.badge, kind) {
+        (None, ProfileKind::Ssh) => SSH_DEFAULT_BADGE,
+        (_, _) => raw.badge.as_ref().map_or("", |f| f.get_ref().as_str()),
+    };
     if badge.trim().is_empty() {
         return fail(
             offset_of(&raw.badge, item_start),
@@ -232,21 +291,20 @@ fn validate_item(
         );
     }
 
-    let kind = match raw.kind.as_ref().map(|f| f.get_ref().as_str()) {
-        None | Some("local") => ProfileKind::Local,
-        Some("ssh") => {
-            return fail(
-                offset_of(&raw.kind, item_start),
-                ProfileProblemKind::TypeSsh,
-            );
-        }
-        Some(_) => {
-            return fail(
-                offset_of(&raw.kind, item_start),
-                ProfileProblemKind::TypeUnknown,
-            );
-        }
-    };
+    if kind == ProfileKind::Ssh {
+        let ssh = validate_ssh(&raw, item_start)?;
+        return Ok(ProfileDef {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            badge: badge.to_owned(),
+            kind,
+            program: String::new(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            cwd: String::new(),
+            ssh: Some(ssh),
+        });
+    }
 
     let program = raw.program.as_ref().map_or("", |f| f.get_ref().as_str());
     if program.trim().is_empty() {
@@ -262,10 +320,142 @@ fn validate_item(
         badge: badge.to_owned(),
         kind,
         program: program.to_owned(),
-        args: raw.args,
-        env: raw.env,
-        cwd: raw.cwd,
+        args: raw.args.map(Spanned::into_inner).unwrap_or_default(),
+        env: raw.env.map(Spanned::into_inner).unwrap_or_default(),
+        cwd: raw.cwd.map(Spanned::into_inner).unwrap_or_default(),
+        ssh: None,
     })
+}
+
+/// The badge of an SSH profile that does not name one (ADR-0072 §6).
+const SSH_DEFAULT_BADGE: &str = "SSH";
+
+/// Default SSH port.
+const SSH_DEFAULT_PORT: u16 = 22;
+
+/// Validation of a `type = "ssh"` item (ADR-0072 §6). `host` and `user` become
+/// a `known_hosts` line and a vault account, so the characters that would
+/// change the meaning of either are refused.
+fn validate_ssh(raw: &RawProfile, item_start: usize) -> Result<SshProfile, RawProblem> {
+    let fail = |offset: usize, kind: ProfileProblemKind| Err(RawProblem { offset, kind });
+
+    // `program`, `args`, `env` and `cwd` mean nothing here.
+    let forbidden: [(&'static str, Option<usize>); 4] = [
+        ("program", raw.program.as_ref().map(|f| f.span().start)),
+        ("args", raw.args.as_ref().map(|f| f.span().start)),
+        ("env", raw.env.as_ref().map(|f| f.span().start)),
+        ("cwd", raw.cwd.as_ref().map(|f| f.span().start)),
+    ];
+    for (field, offset) in forbidden {
+        if let Some(offset) = offset {
+            return fail(offset, ProfileProblemKind::SshFieldNotAllowed { field });
+        }
+    }
+
+    let host = raw.host.as_ref().map_or("", |f| f.get_ref().as_str());
+    if !is_valid_ssh_host(host) {
+        return fail(
+            offset_of(&raw.host, item_start),
+            ProfileProblemKind::HostInvalid,
+        );
+    }
+    let user = raw.user.as_ref().map_or("", |f| f.get_ref().as_str());
+    if !is_valid_ssh_user(user) {
+        return fail(
+            offset_of(&raw.user, item_start),
+            ProfileProblemKind::UserInvalid,
+        );
+    }
+
+    let port = match &raw.port {
+        None => SSH_DEFAULT_PORT,
+        Some(port) => match u16::try_from(*port.get_ref()) {
+            Ok(value) if value != 0 => value,
+            _ => return fail(port.span().start, ProfileProblemKind::PortInvalid),
+        },
+    };
+
+    let identity_file = raw
+        .identity_file
+        .as_ref()
+        .map_or("", |f| f.get_ref().as_str())
+        .to_owned();
+
+    let auth = match &raw.auth {
+        // The default order (RF-20.9) tries the key only when there is a file.
+        None => {
+            let mut auth = vec![SshAuth::Agent];
+            if !identity_file.is_empty() {
+                auth.push(SshAuth::Key);
+            }
+            auth.push(SshAuth::Password);
+            auth
+        }
+        Some(list) => {
+            let mut auth = Vec::new();
+            for value in list.get_ref() {
+                let method = match value.as_str() {
+                    "agent" => SshAuth::Agent,
+                    "key" => SshAuth::Key,
+                    "password" => SshAuth::Password,
+                    _ => return fail(list.span().start, ProfileProblemKind::AuthInvalid),
+                };
+                if auth.contains(&method) {
+                    return fail(list.span().start, ProfileProblemKind::AuthInvalid);
+                }
+                auth.push(method);
+            }
+            if auth.is_empty() {
+                return fail(list.span().start, ProfileProblemKind::AuthInvalid);
+            }
+            if auth == [SshAuth::Key] && identity_file.is_empty() {
+                return fail(
+                    list.span().start,
+                    ProfileProblemKind::KeyWithoutIdentityFile,
+                );
+            }
+            auth
+        }
+    };
+
+    Ok(SshProfile {
+        host: host.to_owned(),
+        port,
+        user: user.to_owned(),
+        auth,
+        identity_file,
+    })
+}
+
+/// No whitespace, control character, or any of `,|[]@#*?!` (ADR-0072 §6). An
+/// IPv6 literal is written without brackets (`::1`).
+fn is_valid_ssh_host(host: &str) -> bool {
+    !host.is_empty()
+        && !host
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || ",|[]@#*?!".contains(c))
+}
+
+/// No whitespace, control character, `@` or `:` (ADR-0072 §6).
+fn is_valid_ssh_user(user: &str) -> bool {
+    !user.is_empty()
+        && !user
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '@' || c == ':')
+}
+
+/// Key names that smell like a secret inside a profile (ADR-0072 §6): they are
+/// ignored like any unknown key, but the warning says secrets belong in the
+/// system vault. `path` is the `serde_ignored` path, e.g.
+/// `profiles.list.1.password`.
+pub fn is_secret_profile_key(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("profiles.list.") else {
+        return false;
+    };
+    let name = rest.rsplit('.').next().unwrap_or(rest).to_lowercase();
+    ["password", "passphrase", "secret"]
+        .iter()
+        .any(|word| name.contains(word))
 }
 
 /// `^[a-z0-9][a-z0-9_-]{0,31}$`.
@@ -305,6 +495,21 @@ pub struct ResolvedProfile {
     /// `[shell.env]` with the profile's `env` merged over it.
     pub env: Vec<(String, String)>,
     pub cwd: Option<PathBuf>,
+    /// `Some` for a `type = "ssh"` profile: then `program` is `None` **and
+    /// does not mean the default shell** -- the caller must open a
+    /// connection instead.
+    pub ssh: Option<ResolvedSsh>,
+}
+
+/// A `type = "ssh"` profile ready for `SshSpawn` (ADR-0072 §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSsh {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: Vec<SshAuth>,
+    /// `~` already expanded.
+    pub identity_file: Option<PathBuf>,
 }
 
 /// The identifier names no profile, or an `auto:` one that failed
@@ -360,6 +565,24 @@ pub fn resolve_profile(
         .iter()
         .find(|def| def.id == id)
         .ok_or_else(|| MissingProfile { id: id.to_owned() })?;
+    if let Some(ssh) = &def.ssh {
+        return Ok(ResolvedProfile {
+            id: def.id.clone(),
+            badge: Some(def.badge.clone()),
+            program: None,
+            args: Vec::new(),
+            env: Vec::new(),
+            cwd: None,
+            ssh: Some(ResolvedSsh {
+                host: ssh.host.clone(),
+                port: ssh.port,
+                user: ssh.user.clone(),
+                auth: ssh.auth.clone(),
+                identity_file: (!ssh.identity_file.is_empty())
+                    .then(|| expand_tilde(&ssh.identity_file)),
+            }),
+        });
+    }
     Ok(ResolvedProfile {
         id: def.id.clone(),
         badge: Some(def.badge.clone()),
@@ -367,6 +590,7 @@ pub fn resolve_profile(
         args: def.args.clone(),
         env: merged_env(&config.shell.env, &def.env),
         cwd: (!def.cwd.is_empty()).then(|| expand_tilde(&def.cwd)),
+        ssh: None,
     })
 }
 
@@ -379,6 +603,7 @@ fn shell_profile(config: &Config) -> ResolvedProfile {
         args: shell.args.clone(),
         env: merged_env(&shell.env, &BTreeMap::new()),
         cwd: None,
+        ssh: None,
     }
 }
 
@@ -427,6 +652,7 @@ pub fn resolve_auto_profile(
         args,
         env: Vec::new(),
         cwd: None,
+        ssh: None,
     })
 }
 
@@ -653,14 +879,289 @@ program = "sh"
         );
     }
 
+    // ---- type = "ssh" (ADR-0072 §6) ----
+
+    /// An SSH item between two valid local ones, `extra` lines after the
+    /// mandatory `host` and `user`. The item starts at line 7.
+    fn ssh_item(extra: &str) -> String {
+        format!(
+            "[[profiles.list]]\nid = \"x\"\nname = \"X\"\ntype = \"ssh\"\nhost = \"10.4.1.20\"\nuser = \"deploy\"\n{extra}"
+        )
+    }
+
+    fn ssh_def(extra: &str) -> ProfileDef {
+        let (config, problems) = checked(&ssh_item(extra));
+        assert!(problems.is_empty(), "{problems:?}");
+        config.profiles.list.into_iter().next().expect("one item")
+    }
+
     #[test]
-    fn ssh_type_is_refused() {
-        assert_item_refused(
-            "[[profiles.list]]\nid = \"x\"\nname = \"X\"\nbadge = \"X\"\ntype = \"ssh\"\nprogram = \"x\"",
-            ProfileProblemKind::TypeSsh,
+    fn a_minimal_ssh_profile_gets_the_defaults() {
+        let def = ssh_def("");
+
+        assert_eq!(def.kind, ProfileKind::Ssh);
+        assert_eq!(def.badge, "SSH");
+        assert!(def.program.is_empty() && def.args.is_empty() && def.cwd.is_empty());
+        let ssh = def.ssh.expect("ssh part");
+        assert_eq!(ssh.host, "10.4.1.20");
+        assert_eq!(ssh.port, 22);
+        assert_eq!(ssh.user, "deploy");
+        assert_eq!(ssh.identity_file, "");
+        // No `identity_file`: the key is left out of the default order.
+        assert_eq!(ssh.auth, [SshAuth::Agent, SshAuth::Password]);
+    }
+
+    #[test]
+    fn the_default_auth_order_tries_the_key_when_there_is_a_file() {
+        let def = ssh_def("identity_file = \"~/.ssh/id_ed25519\"\n");
+
+        assert_eq!(
+            def.ssh.unwrap().auth,
+            [SshAuth::Agent, SshAuth::Key, SshAuth::Password]
+        );
+    }
+
+    #[test]
+    fn explicit_ssh_values_are_kept_in_the_order_given() {
+        let def = ssh_def(
+            "badge = \"PRD\"\nport = 2222\nauth = [\"password\", \"agent\"]\nidentity_file = \"/k\"\n",
+        );
+
+        assert_eq!(def.badge, "PRD");
+        let ssh = def.ssh.unwrap();
+        assert_eq!(ssh.port, 2222);
+        assert_eq!(ssh.auth, [SshAuth::Password, SshAuth::Agent]);
+        assert_eq!(ssh.identity_file, "/k");
+    }
+
+    #[test]
+    fn key_alone_with_a_file_and_key_among_other_methods_are_both_valid() {
+        assert_eq!(
+            ssh_def("auth = [\"key\"]\nidentity_file = \"/k\"\n")
+                .ssh
+                .unwrap()
+                .auth,
+            [SshAuth::Key]
+        );
+        // `key` among other methods needs no file: it is simply not usable.
+        assert_eq!(
+            ssh_def("auth = [\"agent\", \"key\"]\n").ssh.unwrap().auth,
+            [SshAuth::Agent, SshAuth::Key]
+        );
+    }
+
+    fn assert_ssh_refused(extra: &str, kind: ProfileProblemKind, line: usize, column: usize) {
+        assert_item_refused(&ssh_item(extra), kind, line, column);
+    }
+
+    #[test]
+    fn program_args_env_and_cwd_are_errors_in_an_ssh_profile() {
+        // Lines: item at 7, id 8, name 9, type 10, host 11, user 12, extra 13.
+        assert_ssh_refused(
+            "program = \"ssh\"\n",
+            ProfileProblemKind::SshFieldNotAllowed { field: "program" },
+            13,
             11,
+        );
+        assert_ssh_refused(
+            "args = [\"-v\"]\n",
+            ProfileProblemKind::SshFieldNotAllowed { field: "args" },
+            13,
             8,
         );
+        assert_ssh_refused(
+            "env = { A = \"b\" }\n",
+            ProfileProblemKind::SshFieldNotAllowed { field: "env" },
+            13,
+            7,
+        );
+        assert_ssh_refused(
+            "cwd = \"/tmp\"\n",
+            ProfileProblemKind::SshFieldNotAllowed { field: "cwd" },
+            13,
+            7,
+        );
+    }
+
+    #[test]
+    fn host_with_a_character_that_would_corrupt_known_hosts_is_refused() {
+        for bad in [
+            "a b",
+            "a,b",
+            "a|b",
+            "[::1]",
+            "a@b",
+            "a#b",
+            "*.example.org",
+            "a?b",
+            "!a",
+            "a\\tb",
+            "",
+        ] {
+            let text = format!(
+                "[[profiles.list]]\nid = \"x\"\nname = \"X\"\ntype = \"ssh\"\nhost = \"{bad}\"\nuser = \"u\"\n"
+            );
+            let (config, problems) = checked(&text);
+            assert!(config.profiles.list.is_empty(), "{bad:?}");
+            assert_eq!(problems.len(), 1, "{bad:?}");
+            assert_eq!(problems[0].kind, ProfileProblemKind::HostInvalid, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_missing_host_is_refused_pointing_at_the_item() {
+        let (config, problems) =
+            checked("[[profiles.list]]\nid = \"x\"\nname = \"X\"\ntype = \"ssh\"\nuser = \"u\"\n");
+
+        assert!(config.profiles.list.is_empty());
+        assert_eq!(
+            problems,
+            vec![ProfileProblem {
+                line: 1,
+                column: 1,
+                kind: ProfileProblemKind::HostInvalid
+            }]
+        );
+    }
+
+    #[test]
+    fn an_ipv6_literal_without_brackets_is_a_valid_host() {
+        let def = ssh_def("");
+        assert_eq!(def.ssh.unwrap().host, "10.4.1.20");
+        let (config, problems) = checked(
+            "[[profiles.list]]\nid = \"x\"\nname = \"X\"\ntype = \"ssh\"\nhost = \"::1\"\nuser = \"u\"\n",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(config.profiles.list[0].ssh.as_ref().unwrap().host, "::1");
+    }
+
+    #[test]
+    fn user_is_required_and_cannot_hold_at_colon_or_whitespace() {
+        for bad in ["a@b", "a:b", "a b", ""] {
+            let text = format!(
+                "[[profiles.list]]\nid = \"x\"\nname = \"X\"\ntype = \"ssh\"\nhost = \"h\"\nuser = \"{bad}\"\n"
+            );
+            let (config, problems) = checked(&text);
+            assert!(config.profiles.list.is_empty(), "{bad:?}");
+            assert_eq!(problems[0].kind, ProfileProblemKind::UserInvalid, "{bad:?}");
+        }
+        let (config, problems) =
+            checked("[[profiles.list]]\nid = \"x\"\nname = \"X\"\ntype = \"ssh\"\nhost = \"h\"\n");
+        assert!(config.profiles.list.is_empty());
+        assert_eq!(problems[0].kind, ProfileProblemKind::UserInvalid);
+    }
+
+    #[test]
+    fn a_port_outside_the_range_is_refused() {
+        for bad in ["0", "65536", "-1"] {
+            assert_ssh_refused(
+                &format!("port = {bad}\n"),
+                ProfileProblemKind::PortInvalid,
+                13,
+                8,
+            );
+        }
+    }
+
+    #[test]
+    fn auth_accepts_only_the_three_methods_once_each_and_not_empty() {
+        for bad in [
+            "auth = [\"agent\", \"telnet\"]\n",
+            "auth = [\"agent\", \"agent\"]\n",
+            "auth = []\n",
+        ] {
+            assert_ssh_refused(bad, ProfileProblemKind::AuthInvalid, 13, 8);
+        }
+    }
+
+    #[test]
+    fn key_as_the_only_method_without_identity_file_is_refused() {
+        assert_ssh_refused(
+            "auth = [\"key\"]\n",
+            ProfileProblemKind::KeyWithoutIdentityFile,
+            13,
+            8,
+        );
+    }
+
+    #[test]
+    fn a_secret_looking_key_is_an_unknown_key_and_its_value_is_never_kept() {
+        let parsed = parse_checked(&ssh_item(
+            "password = \"hunter2\"\nssh_passphrase = \"x\"\nApiSecret = \"y\"\n",
+        ))
+        .unwrap();
+
+        let mut keys = parsed.unknown_keys.clone();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "profiles.list.0.ApiSecret".to_owned(),
+                "profiles.list.0.password".to_owned(),
+                "profiles.list.0.ssh_passphrase".to_owned(),
+            ]
+        );
+        assert!(parsed.unknown_keys.iter().all(|k| is_secret_profile_key(k)));
+        // The profile is still valid, and nothing of the secret is in it.
+        assert!(parsed.profile_problems.is_empty());
+        let rendered = format!("{:?}", parsed.config.profiles);
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+    }
+
+    #[test]
+    fn only_secret_names_inside_a_profile_are_secret_keys() {
+        assert!(is_secret_profile_key("profiles.list.3.password"));
+        assert!(is_secret_profile_key("profiles.list.0.my_Passphrase_file"));
+        assert!(!is_secret_profile_key("profiles.list.0.foo"));
+        assert!(!is_secret_profile_key("general.password"));
+        assert!(!is_secret_profile_key("shell.env.SECRET"));
+    }
+
+    #[test]
+    fn an_ssh_profile_resolves_to_a_connection_not_a_program() {
+        let (config, _) = checked(&ssh_item(
+            "port = 2200\nauth = [\"key\"]\nidentity_file = \"/keys/id\"\n",
+        ));
+
+        let resolved = resolve_profile(&config, ProfileRef::Id("x")).unwrap();
+
+        assert_eq!(resolved.id, "x");
+        assert_eq!(resolved.badge.as_deref(), Some("SSH"));
+        assert_eq!(resolved.program, None);
+        assert!(resolved.args.is_empty() && resolved.env.is_empty());
+        assert_eq!(
+            resolved.ssh,
+            Some(ResolvedSsh {
+                host: "10.4.1.20".to_owned(),
+                port: 2200,
+                user: "deploy".to_owned(),
+                auth: vec![SshAuth::Key],
+                identity_file: Some(PathBuf::from("/keys/id")),
+            })
+        );
+    }
+
+    #[test]
+    fn the_identity_file_expands_a_leading_tilde_on_resolve() {
+        let (config, _) = checked(&ssh_item("identity_file = \"~/.ssh/id_ed25519\"\n"));
+
+        let resolved = resolve_profile(&config, ProfileRef::Id("x")).unwrap();
+
+        let file = resolved.ssh.unwrap().identity_file.unwrap();
+        assert!(file.ends_with(".ssh/id_ed25519") || file.ends_with(".ssh\\id_ed25519"));
+        assert!(!file.to_string_lossy().starts_with('~'), "{file:?}");
+    }
+
+    #[test]
+    fn local_profiles_resolve_without_an_ssh_part() {
+        let (config, _) = checked(
+            "[[profiles.list]]\nid = \"a\"\nname = \"A\"\nbadge = \"A\"\nprogram = \"x\"\n",
+        );
+
+        let resolved = resolve_profile(&config, ProfileRef::Id("a")).unwrap();
+
+        assert_eq!(resolved.ssh, None);
+        assert_eq!(resolved.program.as_deref(), Some("x"));
     }
 
     #[test]
@@ -728,6 +1229,7 @@ program = "sh"
                 args: vec!["-l".to_owned()],
                 env: vec![("EDITOR".to_owned(), "vim".to_owned())],
                 cwd: None,
+                ssh: None,
             }
         );
         assert_eq!(resolve_profile(&config, ProfileRef::Id("")), Ok(resolved));

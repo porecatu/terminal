@@ -626,3 +626,63 @@ body = { one = "{count} texte sans traduction en {locale}", other = "{count} tex
 [notice.language_unknown_keys]
 title = "Clés inconnues dans le fichier de langue"
 body = { one = "{count} clé inconnue dans {path}", other = "{count} clés inconnues dans {path}" }
+
+# Perfis de aba e SSH (ADR-0070, ADR-0072 §6, ADR-0075 §3 e §5). Host,
+# impressão digital, arquivo e linha são dado, não frase.
+[notice.profile_problem]
+title = "Problème dans un profil"
+body = "ligne {line}, colonne {column} : {reason}"
+
+[notice.profile_reason]
+id_invalid = "profil ignoré : « id » absent ou invalide (lettres minuscules, chiffres, « - » et « _ », 32 caractères au plus)"
+id_reserved = "profil ignoré : « id » ne peut pas commencer par « auto: »"
+id_duplicate = "profil ignoré : l'« id » « {id} » est déjà utilisé par un autre profil"
+name_empty = "profil ignoré : « name » est vide"
+badge_empty = "profil ignoré : « badge » est vide"
+badge_too_long = "profil ignoré : « badge » dépasse 4 caractères"
+type_unknown = "profil ignoré : « type » doit valoir « local » ou « ssh »"
+program_empty = "profil ignoré : « program » absent ou vide"
+default_unknown = "« default » désigne « {id} », qui n'est pas un profil valide ; le profil par défaut est le [shell]"
+ssh_field = "profil ignoré : « {field} » ne s'applique pas au type « ssh »"
+host_invalid = "profil ignoré : « host » absent ou contenant un caractère interdit (espace, contrôle, ou l'un de , | [ ] @ # * ? !)"
+user_invalid = "profil ignoré : « user » absent ou contenant un caractère interdit (espace, contrôle, « @ » ou « : »)"
+port_invalid = "profil ignoré : « port » doit être compris entre 1 et 65535"
+auth_invalid = "profil ignoré : « auth » n'accepte que « agent », « key » et « password », une fois chacun au plus"
+key_without_identity_file = "profil ignoré : « auth » vaut seulement « key », mais il n'y a pas d'« identity_file »"
+
+[notice.secret_profile_key]
+title = "Clé ignorée"
+body = "« {key} » a été ignorée et sa valeur n'a pas été lue. Les mots de passe et phrases secrètes ne vont pas dans ce fichier : le trousseau du système les garde."
+
+[dialog.host_key]
+title = "Hôte inconnu : {host}"
+body = "L'authenticité de cet hôte ne peut pas être confirmée."
+type_line = "Type : {algorithm}"
+fingerprint_label = "Empreinte :"
+other_type = "Autre type déjà enregistré : {types}"
+skipped_lines = { one = "{count} ligne de known_hosts illisible.", other = "{count} lignes de known_hosts illisibles." }
+confirm = "Faire confiance et se connecter"
+
+[note.ssh]
+connecting = "connexion à {host}…"
+refused = "impossible de se connecter à {host} : connexion refusée ou hôte injoignable"
+timeout = "impossible de se connecter à {host} : pas de réponse"
+auth_rejected = "{host} a refusé toutes les méthodes d'authentification"
+auth_cancelled = "authentification annulée"
+auth_unsupported = "{host} a demandé une méthode d'authentification que l'application ne gère pas"
+key_unreadable = "impossible de lire le fichier de clé"
+host_key_rejected = "clé de l'hôte non approuvée : connexion annulée"
+host_key_changed = "la clé de l'hôte {host} n'est pas celle qui est enregistrée : connexion bloquée.\n  présentée : {presented}\n{entries}"
+host_key_revoked = "la clé de l'hôte {host} est marquée comme révoquée : connexion bloquée.\n  présentée : {presented}\n{entry}"
+entry = "  enregistrée : {fingerprint} ({file}:{line})"
+known_hosts_unreadable = "impossible de lire « {file} » ({reason}) : la connexion n'a pas été tentée"
+known_hosts_permission = "permission refusée"
+known_hosts_not_text = "ce n'est pas un fichier texte UTF-8"
+known_hosts_other = "erreur de lecture"
+channel_refused = "{host} a refusé d'ouvrir une session de terminal"
+runtime = "impossible de démarrer la connexion"
+lost_keepalive = "connexion à {host} perdue : le serveur ne répond plus"
+lost_transport = "connexion à {host} perdue"
+lost_disconnect = "connexion à {host} fermée par le serveur"
+remote_signal = "session terminée par le signal {signal}"
+remote_closed = "session fermée par le serveur"

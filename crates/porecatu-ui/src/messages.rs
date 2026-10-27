@@ -23,12 +23,17 @@
 use std::fmt::Display;
 use std::path::Path;
 
-use porecatu_config::{ConfigError, ConfigErrorKind, ThemeFileProblem};
+use porecatu_config::{
+    ConfigError, ConfigErrorKind, ProfileProblem, ProfileProblemKind, ThemeFileProblem,
+};
 use porecatu_core::ActionParseError;
 use porecatu_locale::{Catalog, MessageSpec, Schema};
 use porecatu_session::CURRENT_SCHEMA_VERSION;
 use porecatu_session::named::SaveError;
-use porecatu_term::TerminalSpawnError;
+use porecatu_term::{
+    EndReason, FailCause, HostKeyEntry, HostKeyPresented, KnownHostsCause, LostCause,
+    TerminalSpawnError,
+};
 
 use crate::SaveNamedFailure;
 use crate::keymap::{ChordParseError, KeymapIssue};
@@ -114,6 +119,127 @@ pub(crate) fn colors_ignored(catalog: &Catalog, count: usize) -> (Severity, Stri
         msg::notice::colors_ignored::title(catalog),
         msg::notice::colors_ignored::body(catalog, count),
     )
+}
+
+/// Aviso de um item de `[[profiles.list]]` recusado, ou de um `default`
+/// inexistente (RF-7.5). Cita linha e coluna, como o aviso de config inválida.
+pub(crate) fn profile_problem(
+    catalog: &Catalog,
+    problem: &ProfileProblem,
+) -> (Severity, String, String) {
+    use msg::notice::profile_reason as reason;
+    let reason = match &problem.kind {
+        ProfileProblemKind::IdInvalid => reason::id_invalid(catalog),
+        ProfileProblemKind::IdReserved => reason::id_reserved(catalog),
+        ProfileProblemKind::IdDuplicate { id } => reason::id_duplicate(catalog, id),
+        ProfileProblemKind::NameEmpty => reason::name_empty(catalog),
+        ProfileProblemKind::BadgeEmpty => reason::badge_empty(catalog),
+        ProfileProblemKind::BadgeTooLong => reason::badge_too_long(catalog),
+        ProfileProblemKind::TypeUnknown => reason::type_unknown(catalog),
+        ProfileProblemKind::ProgramEmpty => reason::program_empty(catalog),
+        ProfileProblemKind::DefaultUnknown { id } => reason::default_unknown(catalog, id),
+        ProfileProblemKind::SshFieldNotAllowed { field } => reason::ssh_field(catalog, field),
+        ProfileProblemKind::HostInvalid => reason::host_invalid(catalog),
+        ProfileProblemKind::UserInvalid => reason::user_invalid(catalog),
+        ProfileProblemKind::PortInvalid => reason::port_invalid(catalog),
+        ProfileProblemKind::AuthInvalid => reason::auth_invalid(catalog),
+        ProfileProblemKind::KeyWithoutIdentityFile => reason::key_without_identity_file(catalog),
+    };
+    (
+        Severity::Warning,
+        msg::notice::profile_problem::title(catalog),
+        msg::notice::profile_problem::body(catalog, problem.line, problem.column, reason),
+    )
+}
+
+/// Aviso de uma chave de perfil com `password`, `passphrase` ou `secret` no
+/// nome (ADR-0072 §6): ignorada como toda chave desconhecida, mas a frase diz
+/// que segredo vai no cofre do sistema. O valor nunca foi lido.
+pub(crate) fn secret_profile_key(catalog: &Catalog, key: &str) -> (Severity, String, String) {
+    (
+        Severity::Warning,
+        msg::notice::secret_profile_key::title(catalog),
+        msg::notice::secret_profile_key::body(catalog, key),
+    )
+}
+
+/// A nota "conectando a `host`…" de uma aba SSH recém-aberta (ADR-0075 §5).
+pub(crate) fn ssh_connecting_note(catalog: &Catalog, host: &str) -> String {
+    msg::note::ssh::connecting(catalog, host)
+}
+
+fn ssh_entry(catalog: &Catalog, entry: &HostKeyEntry) -> String {
+    msg::note::ssh::entry(
+        catalog,
+        &entry.fingerprint,
+        entry.file.display(),
+        entry.line,
+    )
+}
+
+fn ssh_presented(presented: &HostKeyPresented) -> String {
+    format!("{} {}", presented.algorithm, presented.fingerprint)
+}
+
+/// A nota de uma sessão que acabou por um motivo que não é um processo local
+/// (ADR-0071 §3), escrita abaixo do conteúdo (ADR-0075 §5). `None` para
+/// `Exited`, que tem a frase de sempre (`note.process_exited`) -- e para o
+/// fim limpo (`RemoteEnded` com código 0), que fecha o painel sem nota.
+///
+/// **Informativa:** nenhuma nota pede ação que mude confiança. A de chave
+/// alterada diz as impressões digitais e o arquivo:linha, e para aí
+/// (ADR-0075 §5): quem diz como resolver é o OpenSSH, não o Porecatu.
+pub(crate) fn ssh_end_note(catalog: &Catalog, host: &str, reason: &EndReason) -> Option<String> {
+    use msg::note::ssh;
+    Some(match reason {
+        EndReason::Exited { .. } => return None,
+        EndReason::RemoteEnded { code, signal } => match (code, signal) {
+            (Some(0), None) => return None,
+            (Some(code), None) => msg::note::process_exited(catalog, code),
+            (_, Some(signal)) => ssh::remote_signal(catalog, signal),
+            (None, None) => ssh::remote_closed(catalog),
+        },
+        EndReason::Lost { cause } => match cause {
+            LostCause::KeepaliveTimeout => ssh::lost_keepalive(catalog, host),
+            LostCause::Transport => ssh::lost_transport(catalog, host),
+            LostCause::ServerDisconnect => ssh::lost_disconnect(catalog, host),
+        },
+        EndReason::Failed { cause } => match cause {
+            FailCause::Refused => ssh::refused(catalog, host),
+            FailCause::Timeout => ssh::timeout(catalog, host),
+            FailCause::AuthRejected => ssh::auth_rejected(catalog, host),
+            FailCause::AuthCancelled => ssh::auth_cancelled(catalog),
+            FailCause::AuthUnsupported => ssh::auth_unsupported(catalog, host),
+            FailCause::KeyUnreadable => ssh::key_unreadable(catalog),
+            FailCause::HostKeyRejectedByUser => ssh::host_key_rejected(catalog),
+            FailCause::HostKeyChanged {
+                presented,
+                expected,
+            } => {
+                let entries: Vec<String> = expected
+                    .iter()
+                    .map(|entry| ssh_entry(catalog, entry))
+                    .collect();
+                ssh::host_key_changed(catalog, host, ssh_presented(presented), entries.join("\n"))
+            }
+            FailCause::HostKeyRevoked { presented, entry } => ssh::host_key_revoked(
+                catalog,
+                host,
+                ssh_presented(presented),
+                ssh_entry(catalog, entry),
+            ),
+            FailCause::KnownHostsUnreadable { file, cause } => {
+                let why = match cause {
+                    KnownHostsCause::PermissionDenied => ssh::known_hosts_permission(catalog),
+                    KnownHostsCause::NotText => ssh::known_hosts_not_text(catalog),
+                    KnownHostsCause::Other => ssh::known_hosts_other(catalog),
+                };
+                ssh::known_hosts_unreadable(catalog, file.display(), why)
+            }
+            FailCause::ChannelRefused => ssh::channel_refused(catalog, host),
+            FailCause::Runtime => ssh::runtime(catalog),
+        },
+    })
 }
 
 /// Corpo do aviso de Salvar que não gravou (RF-16.19): o texto que o
@@ -688,6 +814,15 @@ registry! {
             body(plural),
             confirm(plural),
         },
+        host_key {
+            title(host),
+            body(),
+            type_line(algorithm),
+            fingerprint_label(),
+            other_type(types),
+            skipped_lines(plural),
+            confirm(),
+        },
         delete_session {
             title(),
             body(name),
@@ -705,6 +840,30 @@ registry! {
         profile_missing(id),
         project_file_untrusted(name, dir, toml_value),
         project_file_unreadable(path, reason),
+        ssh {
+            connecting(host),
+            refused(host),
+            timeout(host),
+            auth_rejected(host),
+            auth_cancelled(),
+            auth_unsupported(host),
+            key_unreadable(),
+            host_key_rejected(),
+            host_key_changed(host, presented, entries),
+            host_key_revoked(host, presented, entry),
+            entry(fingerprint, file, line),
+            known_hosts_unreadable(file, reason),
+            known_hosts_permission(),
+            known_hosts_not_text(),
+            known_hosts_other(),
+            channel_refused(host),
+            runtime(),
+            lost_keepalive(host),
+            lost_transport(host),
+            lost_disconnect(host),
+            remote_signal(signal),
+            remote_closed(),
+        },
         shell_invite {
             text(consequence, body, marker),
             consequence_windows(),
@@ -773,6 +932,31 @@ registry! {
         colors_ignored {
             title(),
             body(count),
+        },
+        profile_problem {
+            title(),
+            body(line, column, reason),
+        },
+        profile_reason {
+            id_invalid(),
+            id_reserved(),
+            id_duplicate(id),
+            name_empty(),
+            badge_empty(),
+            badge_too_long(),
+            type_unknown(),
+            program_empty(),
+            default_unknown(id),
+            ssh_field(field),
+            host_invalid(),
+            user_invalid(),
+            port_invalid(),
+            auth_invalid(),
+            key_without_identity_file(),
+        },
+        secret_profile_key {
+            title(),
+            body(key),
         },
         theme_file_invalid {
             title(),
@@ -1007,6 +1191,348 @@ mod tests {
             Some((line, column)) => ConfigError::at(line, column, kind),
             None => ConfigError::new(kind),
         }
+    }
+
+    // ---- SSH: notas no grid (ADR-0075 §5) e avisos de perfil (ADR-0072 §6)
+
+    fn presented() -> HostKeyPresented {
+        HostKeyPresented {
+            algorithm: "ssh-ed25519".to_owned(),
+            fingerprint: "SHA256:NEWNEWNEW".to_owned(),
+        }
+    }
+
+    fn entry(line: usize) -> HostKeyEntry {
+        HostKeyEntry {
+            file: PathBuf::from("/home/u/.ssh/known_hosts"),
+            line,
+            fingerprint: "SHA256:OLDOLDOLD".to_owned(),
+        }
+    }
+
+    /// Cada variante de `FailCause`, `LostCause` e `EndReason` que acaba uma
+    /// sessão SSH (ADR-0071 §3). Se uma variante nascer, `ssh_end_note` (um
+    /// `match` sem curinga) deixa de compilar -- e esta lista a acompanha.
+    fn every_end() -> Vec<EndReason> {
+        let failed = |cause| EndReason::Failed { cause };
+        vec![
+            EndReason::RemoteEnded {
+                code: Some(2),
+                signal: None,
+            },
+            EndReason::RemoteEnded {
+                code: None,
+                signal: Some("TERM".to_owned()),
+            },
+            EndReason::RemoteEnded {
+                code: None,
+                signal: None,
+            },
+            EndReason::Lost {
+                cause: LostCause::KeepaliveTimeout,
+            },
+            EndReason::Lost {
+                cause: LostCause::Transport,
+            },
+            EndReason::Lost {
+                cause: LostCause::ServerDisconnect,
+            },
+            failed(FailCause::Refused),
+            failed(FailCause::Timeout),
+            failed(FailCause::AuthRejected),
+            failed(FailCause::AuthCancelled),
+            failed(FailCause::AuthUnsupported),
+            failed(FailCause::KeyUnreadable),
+            failed(FailCause::HostKeyRejectedByUser),
+            failed(FailCause::HostKeyChanged {
+                presented: presented(),
+                expected: vec![entry(4), entry(9)],
+            }),
+            failed(FailCause::HostKeyRevoked {
+                presented: presented(),
+                entry: entry(7),
+            }),
+            failed(FailCause::KnownHostsUnreadable {
+                file: PathBuf::from("/home/u/.ssh/known_hosts"),
+                cause: KnownHostsCause::PermissionDenied,
+            }),
+            failed(FailCause::KnownHostsUnreadable {
+                file: PathBuf::from("/home/u/.ssh/known_hosts"),
+                cause: KnownHostsCause::NotText,
+            }),
+            failed(FailCause::KnownHostsUnreadable {
+                file: PathBuf::from("/home/u/.ssh/known_hosts"),
+                cause: KnownHostsCause::Other,
+            }),
+            failed(FailCause::ChannelRefused),
+            failed(FailCause::Runtime),
+        ]
+    }
+
+    #[test]
+    fn every_way_a_session_can_end_has_a_note_in_every_language() {
+        for locale in ["en_US", "pt_BR", "es_ES", "fr_FR", "de_DE"] {
+            let catalog = test_support::catalog(locale);
+            for reason in every_end() {
+                let note = ssh_end_note(&catalog, "prod-web-01", &reason)
+                    .unwrap_or_else(|| panic!("{locale}: no note for {reason:?}"));
+                assert!(!note.trim().is_empty(), "{locale}: {reason:?}");
+                // No placeholder was left unfilled.
+                assert!(
+                    !note.contains('{') && !note.contains('}'),
+                    "{locale}: {note}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_local_exit_and_a_clean_remote_exit_have_no_ssh_note() {
+        let pt = test_support::pt_br();
+        let exited = EndReason::Exited {
+            success: false,
+            code: 3,
+        };
+        let clean = EndReason::RemoteEnded {
+            code: Some(0),
+            signal: None,
+        };
+        assert_eq!(ssh_end_note(&pt, "h", &exited), None);
+        assert_eq!(ssh_end_note(&pt, "h", &clean), None);
+    }
+
+    #[test]
+    fn a_remote_exit_code_reuses_the_process_exited_phrase() {
+        let pt = test_support::pt_br();
+        let with_code = EndReason::RemoteEnded {
+            code: Some(2),
+            signal: None,
+        };
+        assert_eq!(
+            ssh_end_note(&pt, "h", &with_code).as_deref(),
+            Some("processo encerrado (código 2)")
+        );
+    }
+
+    #[test]
+    fn the_changed_key_note_says_both_fingerprints_and_where_but_asks_for_nothing() {
+        let pt = test_support::pt_br();
+        let reason = EndReason::Failed {
+            cause: FailCause::HostKeyChanged {
+                presented: presented(),
+                expected: vec![entry(4), entry(9)],
+            },
+        };
+
+        let note = ssh_end_note(&pt, "10.4.1.20", &reason).unwrap();
+
+        assert!(note.contains("10.4.1.20"));
+        assert!(note.contains("ssh-ed25519 SHA256:NEWNEWNEW"), "{note}");
+        // Every divergent entry: fingerprint, file and line.
+        assert!(
+            note.contains("SHA256:OLDOLDOLD (/home/u/.ssh/known_hosts:4)"),
+            "{note}"
+        );
+        assert!(
+            note.contains("SHA256:OLDOLDOLD (/home/u/.ssh/known_hosts:9)"),
+            "{note}"
+        );
+        assert!(note.contains("conexão bloqueada"));
+        // ADR-0075 §5: informative. Not a word about replacing, accepting,
+        // trusting, removing or fixing -- OpenSSH says how to resolve it.
+        let lower = note.to_lowercase();
+        for asking in [
+            "substitua",
+            "aceite",
+            "confie",
+            "remova",
+            "apague",
+            "ssh-keygen",
+            "-r ",
+        ] {
+            assert!(!lower.contains(asking), "{asking:?} in {note}");
+        }
+    }
+
+    #[test]
+    fn no_ssh_note_asks_the_user_to_change_trust_in_any_language() {
+        // The same rule for every language: a note never tells anyone to trust,
+        // accept, replace or delete a key (ADR-0075 §5). The notes are not
+        // authenticated, a hostile server can imitate one.
+        // Imperative forms and the OpenSSH command: a statement such as "host
+        // key not trusted" is information, not a request.
+        let forbidden: [(&str, &[&str]); 5] = [
+            (
+                "en_US",
+                &[
+                    "ssh-keygen",
+                    "replace ",
+                    "delete ",
+                    "remove ",
+                    "accept the",
+                    "trust it",
+                    "to trust",
+                    "run ",
+                ],
+            ),
+            (
+                "pt_BR",
+                &[
+                    "ssh-keygen",
+                    "substitua",
+                    "apague",
+                    "remova",
+                    "aceite",
+                    "confie",
+                ],
+            ),
+            (
+                "es_ES",
+                &[
+                    "ssh-keygen",
+                    "sustituya",
+                    "borre",
+                    "elimine",
+                    "acepte",
+                    "confíe",
+                ],
+            ),
+            (
+                "fr_FR",
+                &[
+                    "ssh-keygen",
+                    "remplacez",
+                    "supprimez",
+                    "acceptez",
+                    "faites confiance",
+                ],
+            ),
+            (
+                "de_DE",
+                &[
+                    "ssh-keygen",
+                    "ersetzen sie",
+                    "löschen sie",
+                    "akzeptieren sie",
+                    "vertrauen sie",
+                ],
+            ),
+        ];
+        for (locale, words) in forbidden {
+            let catalog = test_support::catalog(locale);
+            for reason in every_end() {
+                let note = ssh_end_note(&catalog, "h", &reason).unwrap().to_lowercase();
+                for word in words {
+                    assert!(!note.contains(word), "{locale}: {word:?} in {note}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_unreadable_known_hosts_note_names_the_file_and_the_reason() {
+        let pt = test_support::pt_br();
+        let note = |cause| {
+            ssh_end_note(
+                &pt,
+                "h",
+                &EndReason::Failed {
+                    cause: FailCause::KnownHostsUnreadable {
+                        file: PathBuf::from("/x/known_hosts"),
+                        cause,
+                    },
+                },
+            )
+            .unwrap()
+        };
+        assert!(note(KnownHostsCause::PermissionDenied).contains("permissão negada"));
+        assert!(note(KnownHostsCause::NotText).contains("UTF-8"));
+        assert!(note(KnownHostsCause::Other).contains("erro de leitura"));
+        assert!(note(KnownHostsCause::NotText).contains("/x/known_hosts"));
+        assert!(note(KnownHostsCause::NotText).contains("não foi tentada"));
+    }
+
+    #[test]
+    fn the_connecting_note_names_the_host() {
+        assert_eq!(
+            ssh_connecting_note(&test_support::pt_br(), "10.4.1.20"),
+            "conectando a 10.4.1.20…"
+        );
+        assert_eq!(
+            ssh_connecting_note(&test_support::en_us(), "10.4.1.20"),
+            "connecting to 10.4.1.20…"
+        );
+    }
+
+    #[test]
+    fn every_profile_problem_has_a_sentence_with_its_position() {
+        use ProfileProblemKind as Kind;
+        let kinds = [
+            Kind::IdInvalid,
+            Kind::IdReserved,
+            Kind::IdDuplicate { id: "dup".into() },
+            Kind::NameEmpty,
+            Kind::BadgeEmpty,
+            Kind::BadgeTooLong,
+            Kind::TypeUnknown,
+            Kind::ProgramEmpty,
+            Kind::DefaultUnknown { id: "nope".into() },
+            Kind::SshFieldNotAllowed { field: "program" },
+            Kind::HostInvalid,
+            Kind::UserInvalid,
+            Kind::PortInvalid,
+            Kind::AuthInvalid,
+            Kind::KeyWithoutIdentityFile,
+        ];
+        for locale in ["en_US", "pt_BR", "es_ES", "fr_FR", "de_DE"] {
+            let catalog = test_support::catalog(locale);
+            for kind in &kinds {
+                let problem = ProfileProblem {
+                    line: 12,
+                    column: 7,
+                    kind: kind.clone(),
+                };
+                let (severity, title, body) = profile_problem(&catalog, &problem);
+                assert_eq!(severity, Severity::Warning);
+                assert!(!title.is_empty(), "{locale}");
+                assert!(
+                    body.contains("12") && body.contains('7'),
+                    "{locale}: {body}"
+                );
+                assert!(!body.contains('{'), "{locale}: {body}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_profile_problem_sentence_names_what_is_wrong() {
+        let pt = test_support::pt_br();
+        let (_, title, body) = profile_problem(
+            &pt,
+            &ProfileProblem {
+                line: 3,
+                column: 8,
+                kind: ProfileProblemKind::SshFieldNotAllowed { field: "cwd" },
+            },
+        );
+        assert_eq!(title, "Problema em perfil");
+        assert_eq!(
+            body,
+            "linha 3, coluna 8: perfil ignorado: \"cwd\" não vale para o tipo \"ssh\""
+        );
+    }
+
+    #[test]
+    fn the_secret_key_warning_says_the_value_was_ignored_and_where_secrets_go() {
+        let pt = test_support::pt_br();
+        let (severity, title, body) = secret_profile_key(&pt, "profiles.list.0.password");
+        assert_eq!(severity, Severity::Warning);
+        assert_eq!(title, "Chave ignorada");
+        assert!(body.contains("profiles.list.0.password"));
+        assert!(body.contains("o valor não foi lido"));
+        assert!(body.contains("cofre do sistema"));
+        // It is not the generic unknown-key sentence: that one is the key alone.
+        assert_ne!(body, "profiles.list.0.password");
     }
 
     #[test]

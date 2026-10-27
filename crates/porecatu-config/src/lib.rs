@@ -44,7 +44,8 @@ pub use panes::Panes;
 pub use path::resolve_config_path;
 pub use profiles::{
     AutoPlatform, MissingProfile, ProfileDef, ProfileKind, ProfileProblem, ProfileProblemKind,
-    ProfileRef, ProfilesConfig, ResolvedProfile, resolve_auto_profile, resolve_profile,
+    ProfileRef, ProfilesConfig, ResolvedProfile, ResolvedSsh, SshAuth, SshProfile,
+    is_secret_profile_key, resolve_auto_profile, resolve_profile,
 };
 pub use project_file::{
     PROJECT_FILE_NAME, ProjectFile, ProjectFileOutcome, ProjectScript, is_trusted,
@@ -129,6 +130,9 @@ pub enum LoadResult {
     Loaded {
         config: Config,
         unknown_keys: Vec<String>,
+        /// `[[profiles.list]]` itens recusados e `[profiles] default`
+        /// inexistente (ADR-0070 §1, RF-7.5): a config já só tem os válidos.
+        profile_problems: Vec<ProfileProblem>,
     },
     /// Arquivo presente mas inválido -- sintaticamente ou semanticamente
     /// (ADR-0003 regra 2: config inválida no start devolve o erro **e**
@@ -173,10 +177,11 @@ pub fn load(cli_config: Option<&Path>) -> LoadResult {
             };
         }
     };
-    match parse(&text) {
-        Ok((config, unknown_keys)) => LoadResult::Loaded {
-            config,
-            unknown_keys,
+    match parse_checked(&text) {
+        Ok(parsed) => LoadResult::Loaded {
+            config: parsed.config,
+            unknown_keys: parsed.unknown_keys,
+            profile_problems: parsed.profile_problems,
         },
         Err(error) => {
             let mut config = Config::default();

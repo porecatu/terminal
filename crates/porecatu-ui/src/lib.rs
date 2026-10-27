@@ -20,8 +20,8 @@ use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, Windo
 use porecatu_session::named::{EntryStatus, NamedSessionEntry};
 use porecatu_term::{
     Answer, BackendSpec, DEFAULT_SEARCH_LINES_PER_STEP, EndReason, GridSnapshot, HyperlinkSpan,
-    Liveness, Modifiers, MouseReporting, PtySize, SpawnConfig, TermEvent, TermModes, TermParams,
-    TermScroll, Terminal,
+    Liveness, Modifiers, MouseReporting, PromptKind, PtySize, SpawnConfig, TermEvent, TermModes,
+    TermParams, TermScroll, Terminal,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -59,6 +59,7 @@ mod panes;
 mod profile_detect;
 mod profile_menu;
 mod profile_spawn;
+mod prompt_queue;
 mod reload;
 mod rename;
 mod search_bar;
@@ -80,7 +81,7 @@ mod warning;
 use animation::AnimationClock;
 use chrome::{DragGhost, GroupDragGhost};
 use context_menu::{ContextMenu, MenuAction};
-use dialog::{ConfirmDialog, DialogAction, DialogButton};
+use dialog::{ConfirmDialog, DialogAction, DialogButton, HostKeyFacts};
 use group_editor::{EditorRegion, GroupEditor};
 use group_menu::{GroupAction, GroupContextMenu};
 use input::ClickTracker;
@@ -572,6 +573,9 @@ struct PaneRuntime {
     /// autorizado, à espera da nota. Drenado por `App`, que é quem sabe se a
     /// nota desta execução já foi escrita.
     pending_project_notice: Option<PathBuf>,
+    /// `Some(host)` num painel SSH (ADR-0072 §6): é o que as notas e o diálogo
+    /// de host desconhecido citam. `None` num painel local.
+    ssh_host: Option<String>,
 }
 
 #[cfg(test)]
@@ -622,6 +626,7 @@ mod pane_runtime_map_key_tests {
             first_output_at: None,
             pending_project_command: None,
             pending_project_notice: None,
+            ssh_host: None,
         }
     }
 
@@ -1233,6 +1238,9 @@ struct WindowState {
     /// The panes' tab badges need recomputing (ADR-0070 §7): after a spawn, a
     /// restore (starts `true`) or a config reload.
     profile_badges_dirty: bool,
+    /// Perguntas de um backend que esperam o usuário chegar ao painel
+    /// (ADR-0075 §4).
+    pending_prompts: prompt_queue::PendingPrompts,
     /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
     /// mesma exclusão mútua de `close_all_popovers`.
     terminal_context_menu: Option<TerminalContextMenu>,
@@ -1329,9 +1337,19 @@ struct WindowState {
 fn exit_outcome(reason: &EndReason) -> (bool, u32) {
     match reason {
         EndReason::Exited { success, code } => (*success, *code),
-        EndReason::RemoteEnded { .. } | EndReason::Lost { .. } | EndReason::Failed { .. } => {
-            (false, 1)
-        }
+        // ADR-0071 §3: o servidor encerrou com código 0 e sem sinal -- é o
+        // `exit` de sempre, e o painel fecha. Com código ≠ 0, com sinal, ou
+        // sem nenhum dos dois, fica aberto com a nota.
+        EndReason::RemoteEnded {
+            code: Some(0),
+            signal: None,
+        } => (true, 0),
+        // Um sinal com código 0 (ou nenhum código) não é saída limpa: o
+        // painel marca ≠ 0 para nunca parecer um `exit` bem-sucedido.
+        EndReason::RemoteEnded { code, .. } => (false, code.filter(|code| *code != 0).unwrap_or(1)),
+        // `Lost` e `Failed` não são saída de processo nenhuma: a aba fica
+        // aberta com a nota da causa. (A reconexão é de uma etapa à frente.)
+        EndReason::Lost { .. } | EndReason::Failed { .. } => (false, 1),
     }
 }
 
@@ -2093,24 +2111,53 @@ mod should_confirm_tab_close_tests {
         assert_eq!(exit_outcome(&bad), (false, 3));
     }
 
+    /// ADR-0071 §3: o servidor encerrou com código 0 e sem sinal, o `exit` de
+    /// sempre -- o painel fecha como o de um shell local.
     #[test]
-    fn reasons_not_yet_produced_leave_the_pane_open_with_a_note() {
+    fn a_clean_remote_exit_closes_the_pane_like_a_local_one() {
+        let clean = EndReason::RemoteEnded {
+            code: Some(0),
+            signal: None,
+        };
+        assert_eq!(exit_outcome(&clean), (true, 0));
+    }
+
+    #[test]
+    fn a_remote_exit_with_a_code_a_signal_or_nothing_keeps_the_pane_open() {
+        let with_code = EndReason::RemoteEnded {
+            code: Some(3),
+            signal: None,
+        };
+        let by_signal = EndReason::RemoteEnded {
+            code: None,
+            signal: Some("TERM".into()),
+        };
+        // A signal next to a "0" is still not a clean exit.
+        let signal_and_zero = EndReason::RemoteEnded {
+            code: Some(0),
+            signal: Some("KILL".into()),
+        };
+        let closed_by_the_server = EndReason::RemoteEnded {
+            code: None,
+            signal: None,
+        };
+        assert_eq!(exit_outcome(&with_code), (false, 3));
+        assert_eq!(exit_outcome(&by_signal), (false, 1));
+        assert_eq!(exit_outcome(&signal_and_zero), (false, 1));
+        assert_eq!(exit_outcome(&closed_by_the_server), (false, 1));
+    }
+
+    #[test]
+    fn a_lost_or_failed_connection_keeps_the_pane_open_with_the_cause_as_a_note() {
         use porecatu_term::{FailCause, LostCause};
-        let reasons = [
-            EndReason::RemoteEnded {
-                code: Some(0),
-                signal: None,
-            },
-            EndReason::Lost {
-                cause: LostCause::Transport,
-            },
-            EndReason::Failed {
-                cause: FailCause::Refused,
-            },
-        ];
-        for reason in &reasons {
-            assert_eq!(exit_outcome(reason), (false, 1), "{reason:?}");
-        }
+        let lost = EndReason::Lost {
+            cause: LostCause::Transport,
+        };
+        let failed = EndReason::Failed {
+            cause: FailCause::Refused,
+        };
+        assert_eq!(exit_outcome(&lost), (false, 1));
+        assert_eq!(exit_outcome(&failed), (false, 1));
     }
 }
 
@@ -2150,6 +2197,7 @@ impl WindowState {
             group_context_menu: None,
             profile_menu: None,
             profile_badges_dirty: true,
+            pending_prompts: prompt_queue::PendingPrompts::default(),
             terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
@@ -2621,13 +2669,17 @@ impl WindowState {
         // `Tab::shell_name()` -- numa aba restaurada aquele valor veio do
         // arquivo de sessão, e os dois podem divergir se o usuário trocou
         // de shell ou editou o perfil entre uma execução e outra.
-        let project_outcome = project_dir.as_deref().map(|dir| {
-            porecatu_config::resolve_project_file(
-                dir,
-                &profile_spawn::display_name(profile),
-                project_file,
-            )
-        });
+        // Um painel SSH não lê `.porecatu`: o diretório é do servidor.
+        let project_outcome = project_dir
+            .as_deref()
+            .filter(|_| profile.ssh.is_none())
+            .map(|dir| {
+                porecatu_config::resolve_project_file(
+                    dir,
+                    &profile_spawn::display_name(profile),
+                    project_file,
+                )
+            });
         let (cwd, missing_cwd_note) =
             session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
@@ -2650,21 +2702,32 @@ impl WindowState {
             },
         };
 
-        match Terminal::spawn(
-            BackendSpec::Local(pty_config),
-            term_params.clone(),
-            move || {
-                let _ = proxy.send_event(Wakeup::TabDirty {
-                    window: window_id,
-                    tab,
-                    pane,
-                });
-            },
-        ) {
+        let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+        let spec = match &profile.ssh {
+            Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16)),
+            None => BackendSpec::Local(pty_config),
+        };
+        match Terminal::spawn(spec, term_params.clone(), move || {
+            let _ = proxy.send_event(Wakeup::TabDirty {
+                window: window_id,
+                tab,
+                pane,
+            });
+        }) {
             Ok(terminal) => {
-                if let Some(missing) = &missing_cwd_note {
+                // O `cwd` local não vale para um servidor remoto.
+                if ssh_host.is_none()
+                    && let Some(missing) = &missing_cwd_note
+                {
                     terminal.inject_note(
                         &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                // ADR-0075 §5: o estado da conexão é nota no grid.
+                if let Some(host) = &ssh_host {
+                    terminal.inject_note(
+                        &messages::ssh_connecting_note(&self.catalog, host),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2713,6 +2776,7 @@ impl WindowState {
                         first_output_at: None,
                         pending_project_command,
                         pending_project_notice,
+                        ssh_host,
                     },
                 );
             }
@@ -2787,21 +2851,30 @@ impl WindowState {
                 pixel_height: 0,
             },
         };
-        match Terminal::spawn(
-            BackendSpec::Local(pty_config),
-            term_params.clone(),
-            move || {
-                let _ = proxy.send_event(Wakeup::TabDirty {
-                    window: window_id,
-                    tab: tab_id,
-                    pane: pane_id,
-                });
-            },
-        ) {
+        let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+        let spec = match &profile.ssh {
+            Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16)),
+            None => BackendSpec::Local(pty_config),
+        };
+        match Terminal::spawn(spec, term_params.clone(), move || {
+            let _ = proxy.send_event(Wakeup::TabDirty {
+                window: window_id,
+                tab: tab_id,
+                pane: pane_id,
+            });
+        }) {
             Ok(terminal) => {
-                if let Some(missing) = &missing_cwd_note {
+                if ssh_host.is_none()
+                    && let Some(missing) = &missing_cwd_note
+                {
                     terminal.inject_note(
                         &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(host) = &ssh_host {
+                    terminal.inject_note(
+                        &messages::ssh_connecting_note(&self.catalog, host),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2822,6 +2895,7 @@ impl WindowState {
                         first_output_at: None,
                         pending_project_command: None,
                         pending_project_notice: None,
+                        ssh_host,
                     },
                 );
             }
@@ -3510,6 +3584,78 @@ impl WindowState {
         });
     }
 
+    /// Fecha o diálogo sem confirmar -- `Esc`, o botão Cancelar, um clique
+    /// fora. Num diálogo de host desconhecido isso **responde `Cancel`** à
+    /// pergunta que o abriu (ADR-0075 §3): o backend nunca fica esperando, e
+    /// quem não confirmou não confiou.
+    fn dismiss_dialog(&mut self) {
+        let Some(dialog) = self.dialog.take() else {
+            return;
+        };
+        if let DialogAction::HostKey(tab_id, pane_id, prompt_id) = dialog.action
+            && let Some(runtime) = self.panes.get(&(tab_id, pane_id))
+        {
+            runtime.terminal.answer(prompt_id, Answer::Cancel);
+        }
+    }
+
+    /// Abre o diálogo da primeira pergunta pendente cujo painel a janela
+    /// mostra agora (ADR-0075 §4): aba ativa, painel focado, janela em foco e
+    /// nenhum outro diálogo aberto. Chamado a cada volta do laço de eventos,
+    /// então "o usuário chegou ao painel" não depende de saber por qual gesto
+    /// -- clique, `Ctrl+Tab`, foco de painel, foco da janela.
+    fn open_ready_prompt(&mut self, catalog: &Catalog) {
+        if self.pending_prompts.is_empty() {
+            return;
+        }
+        let active_tab = self.workspace.active_tab();
+        let focused_pane = active_tab
+            .and_then(|id| self.workspace.tab(id))
+            .map(|tab| tab.panes().focused_id());
+        let view = prompt_queue::FocusView {
+            window_focused: self.focused,
+            active_tab,
+            focused_pane,
+            dialog_open: self.dialog.is_some(),
+        };
+        let panes = &self.panes;
+        let Some(ready) = self
+            .pending_prompts
+            .take_ready(&view, |tab, pane| panes.contains_key(&(tab, pane)))
+        else {
+            return;
+        };
+        let PromptKind::HostKey {
+            algorithm,
+            fingerprint,
+            known_types,
+            skipped_lines,
+        } = ready.prompt.kind
+        else {
+            return;
+        };
+        let host = self
+            .panes
+            .get(&(ready.tab, ready.pane))
+            .and_then(|runtime| runtime.ssh_host.clone())
+            .unwrap_or_default();
+        let facts = HostKeyFacts {
+            host,
+            algorithm,
+            fingerprint,
+            known_types,
+            skipped_lines,
+        };
+        self.dialog = Some(ConfirmDialog::host_key(
+            catalog,
+            &facts,
+            DialogAction::HostKey(ready.tab, ready.pane, ready.prompt.id),
+        ));
+        // Visitar o painel apaga a campainha que a pergunta acendeu.
+        self.workspace.activate_tab(ready.tab);
+        self.window.request_redraw();
+    }
+
     /// `Enter` aciona o botão focado, `Esc` cancela (RF-10.18); `Left`/
     /// `Right`/`Tab` trocam o foco entre os dois botões. Devolve a ação
     /// resolvida se o usuário confirmou -- `lib.rs` executa de verdade,
@@ -3523,7 +3669,7 @@ impl WindowState {
         };
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
-                self.dialog = None;
+                self.dismiss_dialog();
                 None
             }
             Key::Named(NamedKey::Enter) => {
@@ -3533,7 +3679,7 @@ impl WindowState {
                     self.dialog = None;
                     Some(action)
                 } else {
-                    self.dialog = None;
+                    self.dismiss_dialog();
                     None
                 }
             }
@@ -5597,6 +5743,10 @@ enum StartupNotice {
     /// RF-19.8, RF-19.12: o acrílico ligado sem uma das condições, ou com
     /// `blur` fora da faixa, já na config do arranque.
     Acrylic(acrylic::AcrylicNotice),
+    /// RF-7.5: um `[[profiles.list]]` recusado (ou `default` inexistente).
+    ProfileProblem(porecatu_config::ProfileProblem),
+    /// ADR-0072 §6: chave de perfil com cara de segredo, ignorada.
+    SecretProfileKey(String),
 }
 
 impl StartupNotice {
@@ -5630,6 +5780,8 @@ impl StartupNotice {
                 (Severity::Warning, title, body)
             }
             StartupNotice::Acrylic(notice) => notice.compose(catalog),
+            StartupNotice::ProfileProblem(problem) => messages::profile_problem(catalog, problem),
+            StartupNotice::SecretProfileKey(key) => messages::secret_profile_key(catalog, key),
         }
     }
 }
@@ -5831,6 +5983,41 @@ struct App {
 /// Separa das chaves desconhecidas do `porecatu.toml` as de cor (ADR-0067):
 /// devolve as demais, que seguem avisadas uma a uma, e quantas eram de
 /// cor, que viram um aviso só.
+/// Separa as chaves de perfil com cara de segredo (ADR-0072 §6) das demais
+/// chaves desconhecidas: elas têm frase própria.
+fn split_secret_keys(keys: Vec<String>) -> (Vec<String>, Vec<String>) {
+    keys.into_iter()
+        .partition(|key| !porecatu_config::is_secret_profile_key(key))
+}
+
+#[cfg(test)]
+mod split_secret_keys_tests {
+    use super::split_secret_keys;
+
+    #[test]
+    fn secret_looking_profile_keys_get_their_own_list_and_the_rest_stay_unknown_keys() {
+        let keys = vec![
+            "general.foo".to_owned(),
+            "profiles.list.0.password".to_owned(),
+            "profiles.list.1.bar".to_owned(),
+            "profiles.list.1.ssh_passphrase".to_owned(),
+            // Outside a profile, `password` is just an unknown key.
+            "shell.password".to_owned(),
+        ];
+
+        let (unknown, secret) = split_secret_keys(keys);
+
+        assert_eq!(
+            unknown,
+            ["general.foo", "profiles.list.1.bar", "shell.password"]
+        );
+        assert_eq!(
+            secret,
+            ["profiles.list.0.password", "profiles.list.1.ssh_passphrase"]
+        );
+    }
+}
+
 fn split_color_keys(keys: &[String]) -> (Vec<String>, usize) {
     let other: Vec<String> = keys
         .iter()
@@ -5955,13 +6142,25 @@ impl App {
             porecatu_config::LoadResult::Invalid { error, .. } => {
                 pending_startup_warnings.push(StartupNotice::ConfigInvalid(error.clone()));
             }
-            porecatu_config::LoadResult::Loaded { unknown_keys, .. } => {
+            porecatu_config::LoadResult::Loaded {
+                unknown_keys,
+                profile_problems,
+                ..
+            } => {
                 // RF-4.22: chave desconhecida é aviso, não erro -- mesma
                 // severidade/título do hot reload (`apply_config_reload`).
                 // As de cor viram um aviso só (ADR-0067).
                 let (keys, colors) = split_color_keys(unknown_keys);
+                // A chave de perfil com cara de segredo tem frase própria.
+                let (keys, secrets) = split_secret_keys(keys);
                 for key in keys {
                     pending_startup_warnings.push(StartupNotice::UnknownConfigKey(key));
+                }
+                for key in secrets {
+                    pending_startup_warnings.push(StartupNotice::SecretProfileKey(key));
+                }
+                for problem in profile_problems {
+                    pending_startup_warnings.push(StartupNotice::ProfileProblem(problem.clone()));
                 }
                 if colors > 0 {
                     pending_startup_warnings.push(StartupNotice::ColorsIgnored(colors));
@@ -7065,6 +7264,17 @@ impl App {
             // Vive na janela de configurações, que a resolve sozinha: um
             // diálogo de `WindowState` nunca o carrega.
             DialogAction::SettingsPending => {}
+            // RF-20.16: "Confiar e conectar". O backend grava a linha no
+            // `known_hosts` e segue; é a única saída que confia (as outras,
+            // `dismiss_dialog`, respondem `Cancel`).
+            DialogAction::HostKey(tab_id, pane_id, prompt_id) => {
+                if let Some(state) = self.windows.get(&window_id) {
+                    if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
+                        runtime.terminal.answer(prompt_id, Answer::Confirm);
+                    }
+                    state.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -7372,6 +7582,7 @@ impl App {
         // que `tick_all` rode a tempo de descobrir o primeiro repositório.
         self.check_git_remote_queries(now);
         self.check_profile_detection();
+        self.open_ready_prompts();
         let next = self
             .windows
             .values()
@@ -7493,6 +7704,14 @@ impl App {
     /// `detect = true`, starts the detection thread. Checked from
     /// `about_to_wait`, so every way of opening the menu (click, key) is
     /// covered by one place; never again afterwards, whatever the outcome.
+    /// ADR-0075 §4: abre, em cada janela, o diálogo da pergunta pendente cujo
+    /// painel acabou de ficar à vista. Barato quando nada está pendente.
+    fn open_ready_prompts(&mut self) {
+        for state in self.windows.values_mut() {
+            state.open_ready_prompt(&self.catalog);
+        }
+    }
+
     fn check_profile_detection(&mut self) {
         let menu_open = self.windows.values().any(|w| w.profile_menu.is_some());
         if !profile_detect::detection_due(
@@ -8087,7 +8306,7 @@ impl App {
     /// regra 2) -- sucesso troca o `Arc` inteiro (dono é o processo, não
     /// a janela) e aplica as classes A/B/C em todas as janelas.
     fn apply_config_reload(&mut self, outcome: ConfigReload, now: Instant) {
-        let (new_config, unknown_keys, theme_problems) = match outcome {
+        let (new_config, unknown_keys, profile_problems, theme_problems) = match outcome {
             ConfigReload::Invalid { error } => {
                 // A tela de configurações também vê o arquivo (ADR-0059 §4):
                 // inválido, ela passa a somente leitura.
@@ -8106,10 +8325,12 @@ impl App {
             ConfigReload::Loaded {
                 config,
                 unknown_keys,
+                profile_problems,
                 theme_problems,
-            } => (config, unknown_keys, theme_problems),
+            } => (config, unknown_keys, profile_problems, theme_problems),
         };
         let (unknown_keys, ignored_colors) = split_color_keys(&unknown_keys);
+        let (unknown_keys, secret_keys) = split_secret_keys(unknown_keys);
 
         let effects = reload::diff(&self.config, &new_config);
         // RF-19.12: o aviso sai na recarga que **cria** o bloqueio (ou troca o
@@ -8255,6 +8476,14 @@ impl App {
                     key.clone(),
                     now,
                 );
+            }
+            for key in &secret_keys {
+                let (severity, title, body) = messages::secret_profile_key(&self.catalog, key);
+                state.warnings.push(severity, title, body, now);
+            }
+            for problem in &profile_problems {
+                let (severity, title, body) = messages::profile_problem(&self.catalog, problem);
+                state.warnings.push(severity, title, body, now);
             }
             if ignored_colors > 0 {
                 let (severity, title, body) =
@@ -9005,17 +9234,27 @@ impl ApplicationHandler<Wakeup> for App {
                 // `App`; um shell que por acaso emita a mesma string
                 // (extremamente improvável) não dispensa nada sem o
                 // convite ter chegado a existir.
-                // ADR-0071 §5: a pergunta é do painel `pane_id`, e é ele que
-                // a responde. Nenhum backend pergunta ainda (só o PTY
-                // existe); o diálogo vem com o SSH.
-                // TODO(porecatu-ssh-11): abrir o diálogo de segredo / de chave
-                // de host e responder com a escolha do usuário. Até lá, toda
-                // pergunta é cancelada, para o backend nunca ficar esperando.
-                TermEvent::Prompt(prompt) => {
-                    if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
-                        runtime.terminal.answer(prompt.id, Answer::Cancel);
+                // ADR-0071 §5, ADR-0075 §4: a pergunta é do painel `pane_id`
+                // e **espera o foco nele** -- nunca a do painel focado. O
+                // diálogo não rouba o foco: fica pendente, acende a campainha
+                // do painel e abre quando o usuário chega a ele
+                // (`WindowState::open_ready_prompt`).
+                TermEvent::Prompt(prompt) => match prompt.kind {
+                    PromptKind::HostKey { .. } => {
+                        state.pending_prompts.push(tab_id, pane_id, prompt);
+                        if let Some(tab) = state.workspace.tab_mut(tab_id) {
+                            tab.mark_pane_bell(pane_id);
+                        }
                     }
-                }
+                    // TODO(porecatu-ssh-13): o diálogo de segredo (senha,
+                    // passphrase). Até lá, responde `Cancel`, para o backend
+                    // nunca ficar esperando.
+                    PromptKind::Secret { .. } => {
+                        if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
+                            runtime.terminal.answer(prompt.id, Answer::Cancel);
+                        }
+                    }
+                },
                 TermEvent::ShellIntegrationDismiss => {
                     if self.shell_integration_invite_claimed {
                         self.shell_integration_dismissed = true;
@@ -9048,10 +9287,19 @@ impl ApplicationHandler<Wakeup> for App {
                         }
                     } else {
                         if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
-                            runtime.terminal.inject_note(
-                                &msg::note::process_exited(&self.catalog, code),
-                                palette::NOTE_ACCENT_RGB,
-                            );
+                            // Um painel SSH diz por que acabou (ADR-0075 §5); o
+                            // local e o `exit` de sempre seguem com a frase do
+                            // código de saída.
+                            let note = runtime
+                                .ssh_host
+                                .as_deref()
+                                .and_then(|host| {
+                                    messages::ssh_end_note(&self.catalog, host, &reason)
+                                })
+                                .unwrap_or_else(|| msg::note::process_exited(&self.catalog, code));
+                            runtime
+                                .terminal
+                                .inject_note(&note, palette::NOTE_ACCENT_RGB);
                         }
                         // O painel que saiu é `pane_id`, não necessariamente
                         // o focado da aba -- endereça pelo id de verdade.
@@ -10713,10 +10961,10 @@ impl App {
                             self.run_dialog_action(window_id, action, event_loop);
                         }
                     } else {
-                        state.dialog = None;
+                        state.dismiss_dialog();
                     }
                 } else {
-                    state.dialog = None;
+                    state.dismiss_dialog();
                 }
             }
             if let Some(state) = self.windows.get(&window_id) {

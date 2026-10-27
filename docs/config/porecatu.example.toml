@@ -72,6 +72,31 @@ detect = true
 # [profiles.list.env]
 # EDITOR = "vim"
 
+# Um servidor SSH é um perfil com type = "ssh". Não leva "program", "args",
+# "env" nem "cwd" (são erro). O Porecatu confere a chave do servidor no
+# ~/.ssh/known_hosts, o mesmo arquivo do OpenSSH.
+# [[profiles.list]]
+# id = "prod"
+# name = "prod-web-01"
+# type = "ssh"
+# Texto curto na aba. Sem esta linha, o badge é "SSH".
+# badge = "SSH"
+# Endereço do servidor. IPv6 se escreve sem colchetes ("::1").
+# host = "10.4.1.20"
+# Porta. Padrão 22.
+# port = 22
+# Usuário no servidor. Obrigatório.
+# user = "deploy"
+# Métodos de autenticação, na ordem em que são tentados. Padrão: "agent",
+# depois "key" (só se houver identity_file) e "password".
+# auth = ["agent", "key", "password"]
+# Arquivo da chave privada. "~/" é a sua pasta pessoal. Obrigatório se "key"
+# for o único método.
+# identity_file = "~/.ssh/id_ed25519"
+# Não escreva senha nem passphrase neste arquivo: ele é texto puro e costuma ir
+# para repositório. Uma chave com "password", "passphrase" ou "secret" no nome
+# é ignorada, com um aviso.
+
 
 # --- Terminal ---------------------------------------------------------------
 [terminal]

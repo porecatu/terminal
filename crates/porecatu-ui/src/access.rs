@@ -127,6 +127,9 @@ fn pane_node_id(tab: TabId, pane: PaneId) -> NodeId {
 }
 
 const WARNING_ITEM_BASE: u64 = 300_000;
+/// As linhas de dado e de aviso do diálogo de host desconhecido (ADR-0075 §3).
+/// Fora das faixas dos painéis (até 1_600_000) e das configurações (2_000_000).
+const DIALOG_LINE_BASE: u64 = 1_700_000;
 const MENU_ITEM_BASE: u64 = 400_000;
 const SWATCH_BASE: u64 = 500_000;
 const EDITOR_ACTION_BASE: u64 = 500_100;
@@ -602,11 +605,21 @@ fn build_dialog(
     ));
     buttons.push(DIALOG_CONFIRM_ID);
 
+    // As linhas de dado e de aviso entram como texto, antes dos botões: o
+    // leitor de tela lê a impressão digital que o usuário vai confiar.
+    let mut children = Vec::new();
+    for (index, line) in dialog.lines.iter().enumerate() {
+        let id = NodeId(DIALOG_LINE_BASE + index as u64);
+        nodes.push((id, leaf(Role::Label, line.text.clone())));
+        children.push(id);
+    }
+    children.extend(buttons);
+
     let mut node = Node::new(Role::Dialog);
     node.set_modal();
     node.set_label(dialog.title.clone());
     node.set_description(dialog.body.clone());
-    node.set_children(buttons);
+    node.set_children(children);
     nodes.push((DIALOG_ID, node));
     root_children.push(DIALOG_ID);
     focused_id
@@ -1734,6 +1747,83 @@ mod tests {
         assert_eq!(dialog_node.role(), Role::Dialog);
         assert!(dialog_node.is_modal());
         // Foco inicial é o cancelar (ADR-0014).
+        assert_eq!(update.focus, DIALOG_CANCEL_ID);
+    }
+
+    /// ADR-0075 §3, acessibilidade: as linhas de dado e de aviso entram como
+    /// texto dentro do diálogo, antes dos botões -- o leitor de tela lê a
+    /// impressão digital que o usuário vai confiar --, e o foco inicial é o
+    /// cancelar.
+    #[test]
+    fn the_host_key_dialog_exposes_its_data_lines_as_text_before_the_buttons() {
+        use crate::dialog::HostKeyFacts;
+        use porecatu_core::{PaneId, TabId};
+        use porecatu_term::PromptId;
+
+        let pt = crate::messages::test_support::pt_br();
+        let dialog = Some(ConfirmDialog::host_key(
+            &pt,
+            &HostKeyFacts {
+                host: "10.4.1.20".to_owned(),
+                algorithm: "ssh-ed25519".to_owned(),
+                fingerprint: "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE".to_owned(),
+                known_types: vec!["ssh-rsa".to_owned()],
+                skipped_lines: 2,
+            },
+            DialogAction::HostKey(TabId::new(0), PaneId::new(0), PromptId::new(1)),
+        ));
+        let ws = Workspace::new();
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &dialog,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &pt,
+            "pt-BR",
+            &mut measurer(),
+        );
+
+        let dialog_node = node(&update, DIALOG_ID);
+        assert_eq!(dialog_node.role(), Role::Dialog);
+        assert!(dialog_node.is_modal());
+        assert_eq!(dialog_node.label(), Some("Host desconhecido: 10.4.1.20"));
+        // Five lines (type, label, fingerprint, other type, skipped), then the
+        // two buttons.
+        let children = dialog_node.children();
+        assert_eq!(children.len(), 7);
+        let labels: Vec<String> = children
+            .iter()
+            .take(5)
+            .map(|id| node(&update, *id).label().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(labels[0], "Tipo: ssh-ed25519");
+        assert_eq!(labels[1], "Impressão digital:");
+        assert_eq!(
+            labels[2],
+            "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE"
+        );
+        assert_eq!(labels[3], "Outro tipo já registrado: ssh-rsa");
+        assert_eq!(labels[4], "2 linhas do known_hosts não puderam ser lidas.");
+        assert!(
+            children[..5]
+                .iter()
+                .all(|id| node(&update, *id).role() == Role::Label)
+        );
+        assert_eq!(children[5], DIALOG_CANCEL_ID);
+        assert_eq!(children[6], DIALOG_CONFIRM_ID);
+        // The initial focus is on Cancel, as in every dialog (ADR-0014).
         assert_eq!(update.focus, DIALOG_CANCEL_ID);
     }
 

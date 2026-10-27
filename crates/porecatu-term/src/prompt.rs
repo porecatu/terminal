@@ -18,6 +18,15 @@ use crate::event::TermEvent;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PromptId(u64);
 
+impl PromptId {
+    /// Para quem monta uma [`Prompt`] à mão (testes de `porecatu-ui`): os
+    /// identificadores de verdade vêm do `PromptSink`. Responder a um
+    /// identificador que nenhuma pergunta aberta tem é ignorado.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
 /// Texto secreto digitado pelo usuário (senha, passphrase).
 ///
 /// **Provisório:** o prompt 13 move este tipo para `porecatu-ssh` com

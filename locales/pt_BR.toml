@@ -672,3 +672,63 @@ body = { one = "{count} texto sem tradução em {locale}", other = "{count} text
 [notice.language_unknown_keys]
 title = "Chaves desconhecidas no idioma"
 body = { one = "{count} chave desconhecida em {path}", other = "{count} chaves desconhecidas em {path}" }
+
+# Perfis de aba e SSH (ADR-0070, ADR-0072 §6, ADR-0075 §3 e §5). Host,
+# impressão digital, arquivo e linha são dado, não frase.
+[notice.profile_problem]
+title = "Problema em perfil"
+body = "linha {line}, coluna {column}: {reason}"
+
+[notice.profile_reason]
+id_invalid = "perfil ignorado: \"id\" ausente ou inválido (letras minúsculas, números, \"-\" e \"_\", até 32 caracteres)"
+id_reserved = "perfil ignorado: \"id\" não pode começar com \"auto:\""
+id_duplicate = "perfil ignorado: o \"id\" \"{id}\" já é usado por outro perfil"
+name_empty = "perfil ignorado: \"name\" está vazio"
+badge_empty = "perfil ignorado: \"badge\" está vazio"
+badge_too_long = "perfil ignorado: \"badge\" tem mais de 4 caracteres"
+type_unknown = "perfil ignorado: \"type\" deve ser \"local\" ou \"ssh\""
+program_empty = "perfil ignorado: \"program\" ausente ou vazio"
+default_unknown = "\"default\" aponta para \"{id}\", que não é um perfil válido; o padrão é o [shell]"
+ssh_field = "perfil ignorado: \"{field}\" não vale para o tipo \"ssh\""
+host_invalid = "perfil ignorado: \"host\" ausente ou com caractere que não é permitido (espaço, controle, ou qualquer um de , | [ ] @ # * ? !)"
+user_invalid = "perfil ignorado: \"user\" ausente ou com caractere que não é permitido (espaço, controle, \"@\" ou \":\")"
+port_invalid = "perfil ignorado: \"port\" deve estar entre 1 e 65535"
+auth_invalid = "perfil ignorado: \"auth\" só aceita \"agent\", \"key\" e \"password\", no máximo uma vez cada"
+key_without_identity_file = "perfil ignorado: \"auth\" é só \"key\", mas não há \"identity_file\""
+
+[notice.secret_profile_key]
+title = "Chave ignorada"
+body = "\"{key}\" foi ignorada e o valor não foi lido. Senha e passphrase não vão neste arquivo: o cofre do sistema as guarda."
+
+[dialog.host_key]
+title = "Host desconhecido: {host}"
+body = "A autenticidade deste host não pode ser confirmada."
+type_line = "Tipo: {algorithm}"
+fingerprint_label = "Impressão digital:"
+other_type = "Outro tipo já registrado: {types}"
+skipped_lines = { one = "{count} linha do known_hosts não pôde ser lida.", other = "{count} linhas do known_hosts não puderam ser lidas." }
+confirm = "Confiar e conectar"
+
+[note.ssh]
+connecting = "conectando a {host}…"
+refused = "não foi possível conectar a {host}: conexão recusada ou host inalcançável"
+timeout = "não foi possível conectar a {host}: sem resposta"
+auth_rejected = "{host} recusou todos os métodos de autenticação"
+auth_cancelled = "autenticação cancelada"
+auth_unsupported = "{host} pediu um método de autenticação que o app não suporta"
+key_unreadable = "não foi possível ler o arquivo da chave"
+host_key_rejected = "chave do host não confiada: conexão cancelada"
+host_key_changed = "a chave do host {host} não é a que está registrada: conexão bloqueada.\n  apresentada: {presented}\n{entries}"
+host_key_revoked = "a chave do host {host} está marcada como revogada: conexão bloqueada.\n  apresentada: {presented}\n{entry}"
+entry = "  registrada: {fingerprint} ({file}:{line})"
+known_hosts_unreadable = "não foi possível ler \"{file}\" ({reason}): a conexão não foi tentada"
+known_hosts_permission = "permissão negada"
+known_hosts_not_text = "não é um arquivo de texto UTF-8"
+known_hosts_other = "erro de leitura"
+channel_refused = "{host} recusou abrir uma sessão de terminal"
+runtime = "não foi possível iniciar a conexão"
+lost_keepalive = "conexão com {host} perdida: o servidor parou de responder"
+lost_transport = "conexão com {host} perdida"
+lost_disconnect = "conexão com {host} encerrada pelo servidor"
+remote_signal = "sessão encerrada pelo sinal {signal}"
+remote_closed = "sessão encerrada pelo servidor"

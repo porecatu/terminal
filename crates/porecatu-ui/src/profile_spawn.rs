@@ -9,8 +9,10 @@
 //! - restore (also first focus of a `NotStarted` tab and sibling panes): the
 //!   saved profile, resolved when the process starts.
 
-use porecatu_config::{Config, MissingProfile, ProfileRef, ResolvedProfile, resolve_profile};
-use porecatu_term::{resolve_default_shell, search_path};
+use porecatu_config::{
+    Config, MissingProfile, ProfileRef, ResolvedProfile, ResolvedSsh, SshAuth, resolve_profile,
+};
+use porecatu_term::{AuthMethod, SshSpawn, resolve_default_shell, search_path};
 
 /// What to spawn, and the saved id that could not be honored (so the pane
 /// gets `note.profile_missing`).
@@ -110,6 +112,27 @@ pub(crate) fn badge_to_show(
     })
 }
 
+/// What `porecatu-term` needs to open the channel of an SSH profile
+/// (ADR-0072 §4, §6): the destination, the methods in the order to try, the
+/// key file, and the size of the grid the pty is born with. A split still
+/// opens a **new connection** (sharing is a later step).
+pub(crate) fn ssh_spawn(ssh: &ResolvedSsh, rows: u16, cols: u16) -> SshSpawn {
+    let mut spawn = SshSpawn::new(ssh.host.clone(), ssh.port, ssh.user.clone());
+    spawn.auth = ssh
+        .auth
+        .iter()
+        .map(|method| match method {
+            SshAuth::Agent => AuthMethod::Agent,
+            SshAuth::Key => AuthMethod::Key,
+            SshAuth::Password => AuthMethod::Password,
+        })
+        .collect();
+    spawn.identity_file = ssh.identity_file.clone();
+    spawn.rows = rows;
+    spawn.cols = cols;
+    spawn
+}
+
 /// The id the pane records: `None` for the `[shell]`, never `""`.
 pub(crate) fn pane_profile_id(resolved: &ResolvedProfile) -> Option<String> {
     (!resolved.id.is_empty()).then(|| resolved.id.clone())
@@ -119,6 +142,11 @@ pub(crate) fn pane_profile_id(resolved: &ResolvedProfile) -> Option<String> {
 /// RF-1.7/ADR-0017): its `program`, or the detected shell when empty, cut to
 /// the base name without path or extension.
 pub(crate) fn display_name(resolved: &ResolvedProfile) -> String {
+    // An SSH profile launches no local program: the title falls back to the
+    // server it connects to.
+    if let Some(ssh) = &resolved.ssh {
+        return ssh.host.clone();
+    }
     let program = match &resolved.program {
         Some(program) => program.clone(),
         None => resolve_default_shell(std::env::var("SHELL").ok().as_deref(), search_path),
@@ -248,6 +276,63 @@ mod tests {
         let config = config(WSL);
         assert_eq!(badge_to_show(&config, Some("wsl")).unwrap().badge, "WSL");
         assert_eq!(badge_to_show(&config, None), None);
+    }
+
+    const SSH: &str = "[[profiles.list]]\nid = \"prod\"\nname = \"prod-web-01\"\ntype = \"ssh\"\nhost = \"10.4.1.20\"\nport = 2222\nuser = \"deploy\"\nauth = [\"key\", \"agent\"]\nidentity_file = \"/keys/id\"\n";
+
+    #[test]
+    fn an_ssh_profile_becomes_an_ssh_spawn_with_the_grid_size() {
+        let config = config(SSH);
+        let resolved = resolve_profile(&config, ProfileRef::Id("prod")).unwrap();
+
+        let spawn = ssh_spawn(resolved.ssh.as_ref().unwrap(), 31, 117);
+
+        assert_eq!(spawn.host, "10.4.1.20");
+        assert_eq!(spawn.port, 2222);
+        assert_eq!(spawn.user, "deploy");
+        // The order the profile gives is the order tried.
+        assert_eq!(spawn.auth, [AuthMethod::Key, AuthMethod::Agent]);
+        assert_eq!(
+            spawn.identity_file.as_deref(),
+            Some(std::path::Path::new("/keys/id"))
+        );
+        assert_eq!((spawn.rows, spawn.cols), (31, 117));
+        assert_eq!(spawn.term, "xterm-256color");
+        assert_eq!(spawn.connection, porecatu_term::Connection::New);
+    }
+
+    #[test]
+    fn an_ssh_profile_without_a_key_file_or_auth_gets_the_default_order() {
+        let config = config(
+            "[[profiles.list]]\nid = \"p\"\nname = \"P\"\ntype = \"ssh\"\nhost = \"h\"\nuser = \"u\"\n",
+        );
+        let resolved = resolve_profile(&config, ProfileRef::Id("p")).unwrap();
+
+        let spawn = ssh_spawn(resolved.ssh.as_ref().unwrap(), 24, 80);
+
+        assert_eq!(spawn.port, 22);
+        assert_eq!(spawn.auth, [AuthMethod::Agent, AuthMethod::Password]);
+        assert_eq!(spawn.identity_file, None);
+    }
+
+    #[test]
+    fn an_ssh_pane_is_titled_by_its_host_and_never_by_the_local_shell() {
+        let config = config(SSH);
+        let resolved = resolve_profile(&config, ProfileRef::Id("prod")).unwrap();
+
+        assert_eq!(display_name(&resolved), "10.4.1.20");
+        // A split of an SSH pane launches the same profile (a new connection).
+        let split = split_profile(&config, Some("prod"));
+        assert!(split.resolved.ssh.is_some());
+        assert_eq!(split.missing, None);
+    }
+
+    #[test]
+    fn an_ssh_profile_shows_its_badge_and_the_default_ssh_one_when_none_is_named() {
+        let config = config(SSH);
+        let badge = badge_to_show(&config, Some("prod")).unwrap();
+        assert_eq!(badge.badge, "SSH");
+        assert_eq!(badge.name, "prod-web-01");
     }
 
     #[test]
