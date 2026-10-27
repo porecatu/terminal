@@ -3287,7 +3287,12 @@ dependencies = [
 name = "porecatu-ssh"
 version = "0.9.5"
 dependencies = [
+ "dirs",
+ "hmac",
+ "ring",
  "russh",
+ "sha1",
+ "subtle",
  "tokio",
 ]
 

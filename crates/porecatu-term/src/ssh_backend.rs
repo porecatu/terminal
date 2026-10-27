@@ -8,9 +8,16 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use porecatu_ssh::{End, EndProbe, FailKind, LostKind, OpenError, SshChannel, SshSpawn};
+use porecatu_ssh::{
+    Asker, End, EndProbe, FailKind, HostKeyQuestion, KnownEntry, LostKind, OpenError, Question,
+    ReadCause, Reply, SshChannel, SshSpawn,
+};
 
-use crate::backend::{Backend, EndReason, FailCause, Finish, Inspect, Liveness, LostCause};
+use crate::backend::{
+    Backend, EndReason, FailCause, Finish, HostKeyEntry, HostKeyPresented, Inspect,
+    KnownHostsCause, Liveness, LostCause,
+};
+use crate::prompt::{Answer, PromptKind, PromptSink};
 
 pub(crate) struct SshBackend {
     channel: SshChannel,
@@ -18,11 +25,45 @@ pub(crate) struct SshBackend {
 
 impl SshBackend {
     /// Devolve na hora: o canal conecta e autentica em segundo plano, e o
-    /// resultado chega por `try_wait`.
-    pub(crate) fn open(spawn: SshSpawn) -> Result<Self, OpenError> {
+    /// resultado chega por `try_wait`. As perguntas (chave de host) saem pelo
+    /// `prompts` do terminal.
+    pub(crate) fn open(spawn: SshSpawn, prompts: PromptSink) -> Result<Self, OpenError> {
         Ok(Self {
-            channel: SshChannel::open(spawn)?,
+            channel: SshChannel::open(spawn, Arc::new(PromptAsker(prompts)))?,
         })
+    }
+}
+
+/// Faz a pergunta de `porecatu-ssh` chegar à UI como `TermEvent::Prompt`
+/// (ADR-0071 §5). O tipo da pergunta mora em `porecatu-ssh` porque
+/// `porecatu-term` depende dele, e não o contrário.
+struct PromptAsker(PromptSink);
+
+impl Asker for PromptAsker {
+    fn ask(&self, question: Question, on_reply: Box<dyn FnOnce(Reply) + Send>) {
+        let Question::HostKey(HostKeyQuestion {
+            algorithm,
+            fingerprint,
+            other_types,
+            skipped_lines,
+            ..
+        }) = question;
+        self.0.ask_with(
+            PromptKind::HostKey {
+                algorithm,
+                fingerprint,
+                known_types: other_types,
+                skipped_lines,
+            },
+            // Só `Confirm` confirma: `Cancel` e qualquer outra resposta (um
+            // segredo, que aqui não faz sentido) recusam.
+            move |answer| {
+                on_reply(match answer {
+                    Answer::Confirm => Reply::Confirm,
+                    Answer::Secret { .. } | Answer::Cancel => Reply::Cancel,
+                });
+            },
+        );
     }
 }
 
@@ -103,14 +144,47 @@ fn translate(end: End) -> EndReason {
                 FailKind::AuthUnsupported => FailCause::AuthUnsupported,
                 FailKind::KeyUnreadable => FailCause::KeyUnreadable,
                 FailKind::HostKeyRejectedByUser => FailCause::HostKeyRejectedByUser,
-                FailKind::HostKeyChanged => FailCause::HostKeyChanged {},
-                FailKind::HostKeyRevoked => FailCause::HostKeyRevoked {},
-                FailKind::KnownHostsUnreadable => FailCause::KnownHostsUnreadable {},
+                FailKind::HostKeyChanged {
+                    presented,
+                    expected,
+                } => FailCause::HostKeyChanged {
+                    presented: presented_key(presented),
+                    expected: expected.into_iter().map(entry).collect(),
+                },
+                FailKind::HostKeyRevoked {
+                    presented,
+                    entry: revoked,
+                } => FailCause::HostKeyRevoked {
+                    presented: presented_key(presented),
+                    entry: entry(revoked),
+                },
+                FailKind::KnownHostsUnreadable { file, cause } => FailCause::KnownHostsUnreadable {
+                    file,
+                    cause: match cause {
+                        ReadCause::PermissionDenied => KnownHostsCause::PermissionDenied,
+                        ReadCause::NotText => KnownHostsCause::NotText,
+                        ReadCause::Other => KnownHostsCause::Other,
+                    },
+                },
                 FailKind::ChannelRefused => FailCause::ChannelRefused,
                 FailKind::Runtime => FailCause::Runtime,
-                FailKind::HostKeyUnverified => FailCause::HostKeyUnverified,
             },
         },
+    }
+}
+
+fn presented_key(presented: porecatu_ssh::HostKeyPresented) -> HostKeyPresented {
+    HostKeyPresented {
+        algorithm: presented.algorithm,
+        fingerprint: presented.fingerprint,
+    }
+}
+
+fn entry(entry: KnownEntry) -> HostKeyEntry {
+    HostKeyEntry {
+        file: entry.file,
+        line: entry.line,
+        fingerprint: entry.fingerprint,
     }
 }
 
@@ -173,11 +247,153 @@ mod tests {
             (FailKind::KeyUnreadable, FailCause::KeyUnreadable),
             (FailKind::ChannelRefused, FailCause::ChannelRefused),
             (FailKind::Runtime, FailCause::Runtime),
-            (FailKind::HostKeyUnverified, FailCause::HostKeyUnverified),
         ];
         for (kind, cause) in pairs {
             assert_eq!(translate(End::Failed(kind)), EndReason::Failed { cause });
         }
+    }
+
+    #[test]
+    fn host_key_failures_keep_what_the_note_needs() {
+        use porecatu_ssh::HostKeyPresented as SshPresented;
+        let presented = || SshPresented {
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+        };
+        let known = || KnownEntry {
+            file: PathBuf::from("known_hosts"),
+            line: 4,
+            fingerprint: "SHA256:old".into(),
+        };
+        let entry = || HostKeyEntry {
+            file: PathBuf::from("known_hosts"),
+            line: 4,
+            fingerprint: "SHA256:old".into(),
+        };
+        let expected_presented = || HostKeyPresented {
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+        };
+
+        assert_eq!(
+            translate(End::Failed(FailKind::HostKeyChanged {
+                presented: presented(),
+                expected: vec![known()],
+            })),
+            EndReason::Failed {
+                cause: FailCause::HostKeyChanged {
+                    presented: expected_presented(),
+                    expected: vec![entry()],
+                }
+            }
+        );
+        assert_eq!(
+            translate(End::Failed(FailKind::HostKeyRevoked {
+                presented: presented(),
+                entry: known(),
+            })),
+            EndReason::Failed {
+                cause: FailCause::HostKeyRevoked {
+                    presented: expected_presented(),
+                    entry: entry(),
+                }
+            }
+        );
+        assert_eq!(
+            translate(End::Failed(FailKind::KnownHostsUnreadable {
+                file: PathBuf::from("known_hosts"),
+                cause: ReadCause::NotText,
+            })),
+            EndReason::Failed {
+                cause: FailCause::KnownHostsUnreadable {
+                    file: PathBuf::from("known_hosts"),
+                    cause: KnownHostsCause::NotText,
+                }
+            }
+        );
+        assert_eq!(
+            translate(End::Failed(FailKind::HostKeyRejectedByUser)),
+            EndReason::Failed {
+                cause: FailCause::HostKeyRejectedByUser
+            }
+        );
+    }
+
+    fn host_key_question() -> Question {
+        Question::HostKey(HostKeyQuestion {
+            host: "example.org".into(),
+            port: 22,
+            algorithm: "ssh-ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+            other_types: vec!["ecdsa-sha2-nistp256".into()],
+            skipped_lines: 2,
+        })
+    }
+
+    /// A pergunta de `porecatu-ssh` chega à UI como `TermEvent::Prompt` com os
+    /// dados do diálogo, e a resposta volta ao `on_reply`.
+    #[test]
+    fn a_host_key_question_becomes_a_prompt_and_only_confirm_confirms() {
+        use crate::event::TermEvent;
+        use crate::prompt::PromptGuard;
+
+        let answer_with = |answer: Answer| {
+            let (events, unread) = std::sync::mpsc::channel();
+            let guard = PromptGuard::new();
+            let asker = PromptAsker(guard.sink(events, Arc::new(|| {})));
+            let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+            asker.ask(
+                host_key_question(),
+                Box::new(move |reply| {
+                    let _ = reply_tx.send(reply);
+                }),
+            );
+            let TermEvent::Prompt(prompt) = unread.try_recv().unwrap() else {
+                panic!("expected a prompt event");
+            };
+            assert_eq!(
+                prompt.kind,
+                PromptKind::HostKey {
+                    algorithm: "ssh-ed25519".into(),
+                    fingerprint: "SHA256:abc".into(),
+                    known_types: vec!["ecdsa-sha2-nistp256".into()],
+                    skipped_lines: 2,
+                }
+            );
+            guard.answer(prompt.id, answer);
+            reply_rx.recv().unwrap()
+        };
+
+        assert_eq!(answer_with(Answer::Confirm), Reply::Confirm);
+        assert_eq!(answer_with(Answer::Cancel), Reply::Cancel);
+        // A secret is not a confirmation, whatever it says.
+        assert_eq!(
+            answer_with(Answer::Secret {
+                value: crate::prompt::Secret::new("yes".into()),
+                remember: false
+            }),
+            Reply::Cancel
+        );
+    }
+
+    #[test]
+    fn dropping_the_terminal_cancels_an_open_host_key_question() {
+        use crate::prompt::PromptGuard;
+
+        let (events, _unread) = std::sync::mpsc::channel();
+        let guard = PromptGuard::new();
+        let asker = PromptAsker(guard.sink(events, Arc::new(|| {})));
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        asker.ask(
+            host_key_question(),
+            Box::new(move |reply| {
+                let _ = reply_tx.send(reply);
+            }),
+        );
+
+        drop(guard);
+
+        assert_eq!(reply_rx.recv().unwrap(), Reply::Cancel);
     }
 
     /// Fim a fim, sem servidor: um destino que recusa a conexão aparece como
@@ -186,7 +402,10 @@ mod tests {
     #[test]
     fn a_refused_connection_ends_the_backend_and_closes_the_liveness() {
         // Porta 1 no loopback: nada escuta ali.
-        let mut backend = SshBackend::open(SshSpawn::new("127.0.0.1", 1, "tester")).unwrap();
+        let (events, _unread) = std::sync::mpsc::channel();
+        let prompts = crate::prompt::PromptGuard::new().sink(events, Arc::new(|| {}));
+        let mut backend =
+            SshBackend::open(SshSpawn::new("127.0.0.1", 1, "tester"), prompts).unwrap();
         let inspector = backend.inspector();
 
         let start = std::time::Instant::now();

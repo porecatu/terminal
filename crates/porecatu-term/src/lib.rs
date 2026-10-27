@@ -26,7 +26,10 @@ mod snapshot;
 mod ssh_backend;
 mod terminal;
 
-pub use backend::{BackendSpec, EndReason, FailCause, Liveness, LostCause};
+pub use backend::{
+    BackendSpec, EndReason, FailCause, HostKeyEntry, HostKeyPresented, KnownHostsCause, Liveness,
+    LostCause,
+};
 pub use color::TermColor;
 pub use dismiss::DISMISS_MARKER as SHELL_INTEGRATION_DISMISS_MARKER;
 pub use engine::{TermEngine, TermSize};

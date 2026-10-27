@@ -1,0 +1,13 @@
+example.org|2:-
+[example.org]:2222|3:-
+rot.example.org|7:-,8:-
+ec.example.org|9:-
+bad.example.org|10:REVOKED
+ca.example.org|11:CA
+x.lan.test|4:-
+10.0.0.5|5:-
+a.neg.test|12:-
+secret.neg.test|-
+mixed.case.example.org|14:-
+unknown.example.org|-
+[example.org]:2223|-

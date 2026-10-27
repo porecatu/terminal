@@ -11,9 +11,11 @@
 //! **Nenhum erro deste crate carrega segredo ou texto livre vindo do usuário**
 //! (ADR-0073 §5): as causas de fim são enums sem campo de texto.
 
+mod ask;
 mod auth;
 mod channel;
 mod end;
+mod known_hosts;
 mod runtime;
 mod spawn;
 mod task;
@@ -22,8 +24,10 @@ mod verify;
 #[cfg(test)]
 mod tests;
 
+pub use ask::{Asker, HostKeyQuestion, Question, Reply};
 pub use channel::{ChannelReader, ChannelWriter, EndProbe, SshChannel};
-pub use end::{End, FailKind, LostKind};
+pub use end::{End, FailKind, HostKeyPresented, LostKind};
+pub use known_hosts::{KnownEntry, ReadCause};
 pub use spawn::{
     AuthMethod, Connection, ConnectionId, DEFAULT_CONNECT_TIMEOUT, OpenError, SshSpawn,
 };

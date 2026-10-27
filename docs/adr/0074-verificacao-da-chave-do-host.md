@@ -94,6 +94,8 @@ Aceitar um host desconhecido (RF-20.16) acrescenta **uma linha** ao fim de `~/.s
 
 A verificação roda **dentro do callback de chave do servidor** do `russh`, na tarefa SSH, antes de qualquer autenticação — e a leitura do arquivo em `spawn_blocking`. `Unknown` vira uma pergunta pelo canal do [ADR-0071](0071-backend-de-terminal.md) §5 e espera a resposta; `Changed` e `Revoked` encerram com `Failed { cause: HostKeyChanged | HostKeyRevoked }` e os dados da nota; arquivo ilegível encerra com `Failed { cause: KnownHostsUnreadable }` (§1). A reconexão automática ([ADR-0076](0076-reconexao-automatica.md)) passa pelo mesmo caminho a cada tentativa, e por isso uma chave que muda entre a queda e a volta bloqueia (RF-20.30).
 
+> **Na implementação (prompt 10).** O casamento do nome ignora a caixa **dos dois lados**, padrão e nome procurado — é o que o `ssh-keygen -F` faz, conferido contra as respostas dele (OpenSSH 9.7p1) gravadas como fixtures —, e não só o nome procurado. O arquivo é lido **duas vezes** por conexão: antes de conectar (um arquivo ilegível encerra sem tocar a rede, e os tipos já registrados decidem a preferência de algoritmo do §3) e na hora de decidir. Se **gravar** a linha falha depois de o usuário confirmar, a conexão segue sem lembrar — o `ssh` também segue —; a nota de que não ficou gravado é da UI (prompt 11). Certificado de host não é verificado: a conexão falha como `Refused`, sem pergunta.
+
 ## Alternativas consideradas
 
 ### Usar `russh::keys::known_hosts` como está

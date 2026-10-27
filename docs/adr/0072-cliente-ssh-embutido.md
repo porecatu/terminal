@@ -110,6 +110,8 @@ impl SshChannel {
 - **Escrita**: `UnboundedSender::send` é síncrono e não bloqueia; a tarefa async drena e escreve no canal. As respostas DSR/DA/CPR do motor seguem pelo mesmo caminho, como no PTY.
 - **Perguntas** (senha, passphrase, chave de host): a tarefa manda a pergunta pelo `PromptSink` — um `Sender` de `porecatu-term` — e espera a resposta num `tokio::sync::oneshot`, **sem ocupar a thread de trabalho** enquanto o usuário digita. `Terminal::answer` completa o `oneshot` do lado síncrono.
 
+> **Na implementação (prompt 10).** `open` não recebe um `PromptSink`: recebe um `Arc<dyn Asker>`, definido em `porecatu-ssh` (ver a revisão na seção 5 do [ADR-0071](0071-backend-de-terminal.md)). `Asker::ask(question, on_reply)` volta na hora e chama `on_reply` uma vez, de qualquer thread; a tarefa espera num `tokio::sync::oneshot`. O teto de 15 s do §8 **não conta** o tempo em que uma pergunta espera o usuário: decidir uma chave de host acontece dentro da troca de chaves.
+
 ### 5. Conexões e canais
 
 `porecatu-ssh` guarda um registro de conexões vivas, por `ConnectionId`. `SshSpawn` diz se o canal pede **conexão nova** ou **canal numa conexão existente**:

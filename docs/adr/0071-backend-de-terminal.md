@@ -121,6 +121,8 @@ pub enum FailCause {
 }
 ```
 
+> **Na implementação (prompt 10).** As três de chave de host e a de `known_hosts` ilegível carregam os dados da nota, e o `{ .. }` do bloco acima é: `HostKeyChanged { presented, expected }` (a chave apresentada e as entradas divergentes, com arquivo e linha), `HostKeyRevoked { presented, entry }` e `KnownHostsUnreadable { file, cause }` (`cause` é um enum: permissão, não é texto, outra). `presented` é o algoritmo e a impressão digital; nada é frase.
+
 Quais delas reabrem uma tentativa de reconexão é decidido por variante no [ADR-0076](0076-reconexao-automatica.md) §2. O que decide o ciclo de vida da aba ([ADR-0017](0017-ciclo-de-vida-da-aba.md)):
 
 | Razão | Aba |
@@ -158,6 +160,8 @@ impl Terminal {
 ```
 
 `Prompt` e `Answer` são tipos **de `porecatu-term`**, genéricos o bastante para o que o PRD-020 pede — segredo (com rótulo tipado: senha de `usuário@host`, passphrase de arquivo) e confirmação de chave de host (tipo e impressão digital) — e nada mais. **Quem espera a resposta é o próprio backend, no contexto de execução dele** — no `SshBackend`, a tarefa async, por um `oneshot` que não ocupa thread de trabalho ([ADR-0072](0072-cliente-ssh-embutido.md) §4) —, nunca a thread de leitura do motor e nunca a main thread. A UI recebe o evento no wakeup, abre o diálogo e chama `answer`. Fechar a aba com pergunta aberta responde `Answer::Cancel` implicitamente pelo `Drop`.
+
+> **Na implementação (prompt 10).** `porecatu-ssh` não pode nomear `PromptSink`, que é de `porecatu-term` — e `porecatu-term` depende de `porecatu-ssh`. O tipo da pergunta que o backend SSH faz mora, portanto, **em `porecatu-ssh`** (`Asker`, `Question`, `Reply`), e `porecatu-term` o adapta ao `PromptSink` (`PromptAsker`). A resposta chega por *callback* (`PromptSink::ask_with`), e não por um `Receiver`, para a tarefa async esperá-la num `oneshot` sem ocupar uma thread. `PromptKind::HostKey` leva `skipped_lines` no lugar de `known_hosts_read`: um arquivo ilegível nunca chega a virar pergunta.
 
 **Roteamento por painel.** Há um `Terminal` por painel, e `porecatu-ui` drena os eventos de cada um a partir do `Wakeup { window, tab, pane }` que o acordou. `TermEvent::Exit` e `TermEvent::Prompt` chegam, portanto, **com o painel de origem conhecido**, e a UI os aplica com as variantes `set_pane_*`/`mark_pane_*` daquele painel — nunca com as que miram o focado, a regra do CLAUDE.md para painel em segundo plano. É isso que permite à pergunta de um painel de fundo esperar nele, com a campainha acesa ([ADR-0075](0075-superficies-de-ui-do-ssh.md) §4).
 

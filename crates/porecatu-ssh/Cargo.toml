@@ -18,3 +18,11 @@ russh = { version = "=0.65.0", default-features = false, features = ["ring", "rs
 # ADR-0072 §2: `tokio` é declarado só aqui, nunca em `[workspace.dependencies]`,
 # para nenhum outro crate importá-lo por conveniência.
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time", "io-util"] }
+# ADR-0074 §2: o hash do `known_hosts` e a comparação em tempo constante vêm da
+# pilha RustCrypto que o `russh` já traz, nas versões da árvore. `ring` é o
+# backend que o `russh` usa, e aqui só sorteia o sal de uma entrada em hash.
+hmac = "0.13"
+sha1 = "0.11"
+subtle = "2.6"
+ring = "0.17"
+dirs = "7"

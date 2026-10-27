@@ -113,12 +113,14 @@ impl Prepared {
     fn from_spec(spec: BackendSpec, prompts: PromptSink) -> Result<Self, TerminalSpawnError> {
         let backend: Box<dyn Backend> = match spec {
             BackendSpec::Local(config) => Box::new(PtyBackend::spawn(config)?),
-            BackendSpec::Ssh(spawn) => Box::new(SshBackend::open(spawn).map_err(|err| {
-                TerminalSpawnError::Stream(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    err.to_string(),
-                ))
-            })?),
+            BackendSpec::Ssh(spawn) => {
+                Box::new(SshBackend::open(spawn, prompts.clone()).map_err(|err| {
+                    TerminalSpawnError::Stream(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        err.to_string(),
+                    ))
+                })?)
+            }
         };
         Ok(Self::new(backend, prompts)?)
     }

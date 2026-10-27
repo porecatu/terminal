@@ -64,8 +64,7 @@ pub enum LostCause {
 }
 
 /// Causa de uma conexão que nem chegou a abrir. Lista fechada pelo
-/// ADR-0071 §3. As três de chave de host ainda não carregam os dados que a
-/// nota vai mostrar (ADR-0074 §6): entram junto com quem os produz.
+/// ADR-0071 §3. As de chave de host carregam os dados da nota (ADR-0074 §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailCause {
     Refused,
@@ -75,15 +74,49 @@ pub enum FailCause {
     AuthUnsupported,
     KeyUnreadable,
     HostKeyRejectedByUser,
-    HostKeyChanged {},
-    HostKeyRevoked {},
-    KnownHostsUnreadable {},
+    /// Há chave do mesmo tipo registrada e nenhuma casa (RF-20.17).
+    HostKeyChanged {
+        presented: HostKeyPresented,
+        expected: Vec<HostKeyEntry>,
+    },
+    /// `@revoked` casa com a chave apresentada (RF-20.18).
+    HostKeyRevoked {
+        presented: HostKeyPresented,
+        entry: HostKeyEntry,
+    },
+    /// Um `known_hosts` que existe e não pôde ser lido (ADR-0074 §1).
+    KnownHostsUnreadable {
+        file: PathBuf,
+        cause: KnownHostsCause,
+    },
     ChannelRefused,
     Runtime,
-    /// **Provisória (prompt 09).** A chave do host ainda não é verificada, e
-    /// por isso toda conexão SSH de produção falha aqui. O prompt 10
-    /// (`known_hosts`) a remove; ela não pode chegar a `main`.
-    HostKeyUnverified,
+}
+
+/// A chave que o servidor apresentou, para a nota de bloqueio.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostKeyPresented {
+    pub algorithm: String,
+    /// `SHA256:` e o hash em base64 sem preenchimento.
+    pub fingerprint: String,
+}
+
+/// Uma entrada do `known_hosts`: onde está e qual chave guarda.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostKeyEntry {
+    pub file: PathBuf,
+    /// A partir de 1.
+    pub line: usize,
+    pub fingerprint: String,
+}
+
+/// Por que um `known_hosts` não pôde ser lido.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnownHostsCause {
+    PermissionDenied,
+    /// Não é texto UTF-8 (um arquivo regravado em UTF-16, por exemplo).
+    NotText,
+    Other,
 }
 
 /// Sinal de consulta da UI para a confirmação de fechamento (ADR-0034,

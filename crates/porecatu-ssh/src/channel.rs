@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
+use crate::ask::Asker;
 use crate::end::{End, FailKind};
+use crate::known_hosts::KnownHostsFiles;
 use crate::runtime;
 use crate::spawn::{Connection, ConnectionId, OpenError, SshSpawn};
 use crate::task;
-use crate::verify::{HostKeyVerifier, Unverified};
 
 /// O que a tarefa recebe do lado síncrono. Escrita e controle viajam no mesmo
 /// canal, para a tarefa esperar por uma coisa só.
@@ -66,17 +67,22 @@ impl SshChannel {
     /// canal acontecem no runtime. O resultado aparece em [`try_end`] e, para
     /// o que chegar do servidor, em [`reader`].
     ///
-    /// Toda chave de host é recusada até o `known_hosts` existir (prompt 10).
+    /// A chave do host é conferida contra o `known_hosts` do OpenSSH
+    /// (ADR-0074): host conhecido segue; desconhecido vira uma pergunta ao
+    /// `asker`, e só `Confirm` conecta (e grava); alterada ou revogada encerra.
     ///
     /// [`try_end`]: SshChannel::try_end
     /// [`reader`]: SshChannel::reader
-    pub fn open(spawn: SshSpawn) -> Result<Self, OpenError> {
-        Self::open_with(spawn, Arc::new(Unverified))
+    pub fn open(spawn: SshSpawn, asker: Arc<dyn Asker>) -> Result<Self, OpenError> {
+        Self::open_with(spawn, asker, KnownHostsFiles::standard())
     }
 
+    /// Como [`open`](SshChannel::open), com os arquivos de `known_hosts` à
+    /// escolha -- o que os testes usam para não tocar o `~/.ssh` de quem roda.
     pub(crate) fn open_with(
         spawn: SshSpawn,
-        verifier: Arc<dyn HostKeyVerifier>,
+        asker: Arc<dyn Asker>,
+        files: KnownHostsFiles,
     ) -> Result<Self, OpenError> {
         if matches!(spawn.connection, Connection::Share(_)) {
             return Err(OpenError::ShareUnsupported);
@@ -88,7 +94,8 @@ impl SshChannel {
 
         let started = runtime::spawn(task::run(
             spawn,
-            verifier,
+            files,
+            asker,
             data_tx,
             cmd_tx.clone(),
             cmd_rx,
