@@ -18,6 +18,7 @@ use porecatu_render::Rect;
 
 use crate::keymap::{Chord, chord_for_action};
 use crate::messages::msg;
+use crate::profile_detect::{DetectedProfile, launch_key};
 use crate::profile_spawn::{default_profile, display_name};
 use crate::tab_bar::{self, TabBarHit, TabBarLayout};
 
@@ -48,6 +49,9 @@ pub(crate) struct ProfileRow {
     pub(crate) badge: Option<String>,
     /// The bound key, already rendered (`Ctrl+Shift+2`), when there is one.
     pub(crate) chip: Option<String>,
+    /// A divider is painted above this row: the first detected one and
+    /// "new tab group".
+    pub(crate) separated: bool,
 }
 
 /// The rows, in the order of ADR-0070 §6:
@@ -56,8 +60,9 @@ pub(crate) struct ProfileRow {
 /// 2. the declared ones, without repeating the default;
 /// 3. the `[shell]`, when it is not the default, named after the shell it
 ///    resolves to and without a badge;
-/// 4. (prompt 05 adds the detected section here, see [`detected_rows`]);
-/// 5. "new tab group", always last. A divider is painted before it.
+/// 4. after a divider, the detected ones that do not repeat a line above (same
+///    program and arguments, RF-7.9);
+/// 5. after a divider, "new tab group", always last.
 ///
 /// The key of a declared row is `profile.new_tab_N`, `N` being its position in
 /// `[[profiles.list]]` whether or not it is also the default row; detected
@@ -66,6 +71,7 @@ pub(crate) fn profile_menu_rows(
     config: &Config,
     catalog: &Catalog,
     bindings: &HashMap<Chord, Action>,
+    detected: &[DetectedProfile],
 ) -> Vec<ProfileRow> {
     let chip_of = |action: Action| chord_for_action(bindings, action).map(|chord| chord.label());
     let declared_index = |id: &str| {
@@ -90,38 +96,76 @@ pub(crate) fn profile_menu_rows(
             label: declared.map_or_else(|| display_name(resolved), |def| def.name.clone()),
             badge: resolved.badge.clone(),
             chip: declared_index(&resolved.id).and_then(|n| chip_of(Action::ProfileNewTab(n))),
+            separated: false,
         }
     };
 
+    let mut seen: Vec<(String, Vec<String>)> = Vec::new();
+    let mut remember = |resolved: &ResolvedProfile| {
+        let program = resolved
+            .program
+            .clone()
+            .unwrap_or_else(|| display_name(resolved));
+        seen.push(launch_key(&program, &resolved.args));
+    };
+
     let default = default_profile(config).resolved;
+    remember(&default);
     let mut rows = vec![row_for(&default)];
     for def in &config.profiles.list {
         if def.id == default.id {
             continue;
         }
         if let Ok(resolved) = resolve_profile(config, ProfileRef::Id(&def.id)) {
+            remember(&resolved);
             rows.push(row_for(&resolved));
         }
     }
     if !default.id.is_empty()
         && let Ok(shell) = resolve_profile(config, ProfileRef::Id(""))
     {
+        remember(&shell);
         rows.push(row_for(&shell));
     }
-    rows.extend(detected_rows(config));
+    let first_detected = rows.len();
+    for found in detected {
+        let program = found.resolved.program.as_deref().unwrap_or_default();
+        let key = launch_key(program, &found.resolved.args);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        rows.push(ProfileRow {
+            kind: ProfileRowKind::Profile {
+                id: found.id.clone(),
+            },
+            label: found.name.clone(),
+            badge: found.resolved.badge.clone(),
+            chip: None,
+            separated: false,
+        });
+    }
+    if let Some(first) = rows.get_mut(first_detected) {
+        first.separated = true;
+    }
     rows.push(ProfileRow {
         kind: ProfileRowKind::NewGroup,
         label: msg::profile_menu::new_group(catalog),
         badge: None,
         chip: chip_of(Action::GroupCreate),
+        separated: true,
     });
     rows
 }
 
-/// Insertion point of the detected-profiles section (ADR-0070 §5, prompt 05):
-/// between the `[shell]` row and the divider before "new tab group".
-fn detected_rows(_config: &Config) -> Vec<ProfileRow> {
-    Vec::new()
+/// Where the highlight goes when the rows change under an open menu (the
+/// detected section arriving): on the **same profile** if it is still there,
+/// not on the same position, so what the user is about to choose does not
+/// move. Without it, the nearest valid index.
+pub(crate) fn preserved_highlight(old: &[ProfileRow], index: usize, new: &[ProfileRow]) -> usize {
+    old.get(index)
+        .and_then(|row| new.iter().position(|candidate| candidate.kind == row.kind))
+        .unwrap_or_else(|| index.min(new.len().saturating_sub(1)))
 }
 
 /// The id `profile.new_tab_N` opens: the N-th **declared** profile, 1-based.
@@ -202,6 +246,14 @@ impl ProfileMenu {
         &self.rows
     }
 
+    /// Swaps the rows for a fresh set (the detected section arrived) without
+    /// moving the highlight off the profile it was on.
+    pub(crate) fn replace_rows(&mut self, rows: Vec<ProfileRow>, width: f32) {
+        self.highlighted = preserved_highlight(&self.rows, self.highlighted, &rows);
+        self.rows = rows;
+        self.width = width;
+    }
+
     pub(crate) const fn highlighted(&self) -> usize {
         self.highlighted
     }
@@ -242,7 +294,7 @@ mod tests {
     }
 
     fn rows(text: &str) -> Vec<ProfileRow> {
-        profile_menu_rows(&config(text), &test_support::pt_br(), &HashMap::new())
+        profile_menu_rows(&config(text), &test_support::pt_br(), &HashMap::new(), &[])
     }
 
     fn ids(rows: &[ProfileRow]) -> Vec<Option<&str>> {
@@ -328,7 +380,12 @@ mod tests {
             .keybindings,
             keymap::Platform::Linux,
         );
-        let rows = profile_menu_rows(&config(&text), &test_support::pt_br(), &resolved.bindings);
+        let rows = profile_menu_rows(
+            &config(&text),
+            &test_support::pt_br(),
+            &resolved.bindings,
+            &[],
+        );
         // `b` is the default row but is still the second declared profile.
         assert_eq!(rows[0].chip.as_deref(), Some("Ctrl+Shift+2"));
         assert_eq!(rows[1].chip, None, "profile.new_tab_1 is not bound");
@@ -370,6 +427,128 @@ mod tests {
         assert_eq!(menu.highlighted(), 0);
         menu.set_highlight(99);
         assert_eq!(menu.highlighted(), 0);
+    }
+
+    fn detected(
+        id: &str,
+        name: &str,
+        program: &str,
+        args: &[&str],
+        badge: &str,
+    ) -> DetectedProfile {
+        DetectedProfile {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            resolved: ResolvedProfile {
+                id: id.to_owned(),
+                badge: Some(badge.to_owned()),
+                program: Some(program.to_owned()),
+                args: args.iter().map(|a| (*a).to_owned()).collect(),
+                env: Vec::new(),
+                cwd: None,
+            },
+        }
+    }
+
+    fn rows_with(text: &str, found: &[DetectedProfile]) -> Vec<ProfileRow> {
+        profile_menu_rows(
+            &config(text),
+            &test_support::pt_br(),
+            &HashMap::new(),
+            found,
+        )
+    }
+
+    /// RF-7.9: a detected shell with the same program and arguments as a line
+    /// above (declared, default or `[shell]`) does not appear again; the
+    /// rest does, after a divider and before "new group".
+    #[test]
+    fn detected_shells_skip_what_a_line_above_already_launches() {
+        let text = format!(
+            "[profiles]\ndefault = \"a\"\n{}",
+            profile("pwsh", "PowerShell", "PS")
+                .replace("id = \"pwsh\"", "id = \"a\"")
+                .replace("pwsh.exe", "C:\\\\Tools\\\\PWSH.exe")
+        );
+        let found = [
+            detected("auto:shell:pwsh.exe", "pwsh", "pwsh.exe", &[], "PS"),
+            detected("auto:shell:cmd.exe", "cmd", "cmd.exe", &[], "CMD"),
+            detected(
+                "auto:wsl:Ubuntu",
+                "Ubuntu",
+                "wsl.exe",
+                &["-d", "Ubuntu"],
+                "WSL",
+            ),
+        ];
+        let rows = rows_with(&text, &found);
+        assert_eq!(
+            ids(&rows),
+            [
+                Some("a"),
+                Some(""),
+                Some("auto:shell:cmd.exe"),
+                Some("auto:wsl:Ubuntu"),
+                None
+            ]
+        );
+        // `pwsh.exe` is the declared one in another directory: not repeated.
+        let detected_row = &rows[2];
+        assert_eq!(detected_row.label, "cmd");
+        assert_eq!(detected_row.badge.as_deref(), Some("CMD"));
+        assert_eq!(detected_row.chip, None, "detected profiles have no key");
+        let separated: Vec<bool> = rows.iter().map(|r| r.separated).collect();
+        assert_eq!(separated, [false, false, true, false, true]);
+    }
+
+    #[test]
+    fn nothing_detected_leaves_only_the_divider_before_new_group() {
+        let rows = rows_with("", &[]);
+        let separated: Vec<bool> = rows.iter().map(|r| r.separated).collect();
+        assert_eq!(separated, [false, true]);
+    }
+
+    /// The section arriving under an open menu moves rows, not the choice.
+    #[test]
+    fn the_highlight_follows_the_profile_when_the_section_arrives() {
+        let text = profile("a", "A", "A");
+        let found = [detected("auto:shell:cmd.exe", "cmd", "cmd.exe", &[], "CMD")];
+        let before = rows_with(&text, &[]);
+        let after = rows_with(&text, &found);
+        // `before`: a, shell, new group. `after`: a, shell, cmd, new group.
+        let mut menu = ProfileMenu::new(
+            ProfileMenuTarget::Ungrouped,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            200.0,
+            before,
+        );
+        menu.set_highlight(2);
+        assert_eq!(menu.selected().unwrap().kind, ProfileRowKind::NewGroup);
+        menu.replace_rows(after, 220.0);
+        assert_eq!(menu.highlighted(), 3, "still on \"new group\", now row 3");
+        assert_eq!(menu.selected().unwrap().kind, ProfileRowKind::NewGroup);
+        assert_eq!(menu.width, 220.0);
+    }
+
+    #[test]
+    fn a_highlighted_profile_that_left_falls_back_to_the_nearest_index() {
+        let gone = ProfileRow {
+            kind: ProfileRowKind::Profile { id: "gone".into() },
+            label: String::new(),
+            badge: None,
+            chip: None,
+            separated: false,
+        };
+        let new = rows("");
+        assert_eq!(preserved_highlight(&[gone.clone(), gone], 1, &new), 1);
+        let one_row = &new[..1];
+        let old = [new[0].clone(), new[1].clone(), new[1].clone()];
+        assert_eq!(preserved_highlight(&old[..0], 5, one_row), 0);
     }
 
     fn measurer() -> porecatu_render::TextMeasurer {

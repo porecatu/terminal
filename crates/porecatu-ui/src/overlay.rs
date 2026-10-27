@@ -911,12 +911,19 @@ pub(crate) fn layout_profile_menu(
     let offset = config.appearance.group_editor.offset_y as f32;
 
     let count = menu.rows().len();
-    let divider_block = if count > 1 {
-        SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT
-    } else {
-        0.0
+    let divider_block = SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT;
+    // A divider above every `separated` row but the first.
+    let dividers_above = |i: usize| {
+        menu.rows()
+            .iter()
+            .take(i + 1)
+            .enumerate()
+            .filter(|(index, row)| *index > 0 && row.separated)
+            .count() as f32
     };
-    let height = padding * 2.0 + item_height * count as f32 + divider_block;
+    let height = padding * 2.0
+        + item_height * count as f32
+        + divider_block * dividers_above(count.saturating_sub(1));
     let (x, y) = anchored_origin(
         menu.anchor,
         (width, height),
@@ -930,19 +937,11 @@ pub(crate) fn layout_profile_menu(
         height,
     };
     let item_rects = (0..count)
-        .map(|i| {
-            // The divider sits before the last row.
-            let after_divider = if count > 1 && i == count - 1 {
-                divider_block
-            } else {
-                0.0
-            };
-            Rect {
-                x: menu_rect.x + padding,
-                y: menu_rect.y + padding + item_height * i as f32 + after_divider,
-                width: menu_rect.width - padding * 2.0,
-                height: item_height,
-            }
+        .map(|i| Rect {
+            x: menu_rect.x + padding,
+            y: menu_rect.y + padding + item_height * i as f32 + divider_block * dividers_above(i),
+            width: menu_rect.width - padding * 2.0,
+            height: item_height,
         })
         .collect();
     ProfileMenuLayout {
@@ -1045,14 +1044,15 @@ pub(crate) fn paint_profile_menu(
         }
     }
 
-    if menu.rows().len() > 1 {
-        let padding = cfg.padding as f32;
+    let padding = cfg.padding as f32;
+    for (index, row) in menu.rows().iter().enumerate() {
+        if index == 0 || !row.separated {
+            continue;
+        }
         out.push(Primitive::Quad(Quad {
             rect: Rect {
                 x: layout.menu_rect.x + padding + SAVE_DIVIDER_MARGIN_X,
-                y: layout.item_rects[menu.rows().len() - 1].y
-                    - SAVE_DIVIDER_MARGIN_Y
-                    - SAVE_DIVIDER_HEIGHT,
+                y: layout.item_rects[index].y - SAVE_DIVIDER_MARGIN_Y - SAVE_DIVIDER_HEIGHT,
                 width: layout.menu_rect.width - padding * 2.0 - SAVE_DIVIDER_MARGIN_X * 2.0,
                 height: SAVE_DIVIDER_HEIGHT,
             },
@@ -2333,6 +2333,7 @@ mod tests {
             label: label.to_owned(),
             badge: Some("CMD".to_owned()),
             chip: chip.map(str::to_owned),
+            separated: false,
         };
         let minimum = config.appearance.context_menu.width as f32;
         let maximum = config.appearance.notices.width as f32;
@@ -2358,7 +2359,7 @@ mod tests {
         use crate::profile_menu::{ProfileMenuTarget, profile_menu_rows};
 
         let config = porecatu_config::Config::default();
-        let rows = profile_menu_rows(&config, &test_support::pt_br(), &Default::default());
+        let rows = profile_menu_rows(&config, &test_support::pt_br(), &Default::default(), &[]);
         let count = rows.len();
         let menu = ProfileMenu::new(ProfileMenuTarget::Ungrouped, ANCHOR, 200.0, rows);
         let layout = layout_profile_menu(&menu, &config, 800.0, 600.0);

@@ -55,6 +55,7 @@ mod overlay;
 mod paint;
 mod palette;
 mod panes;
+mod profile_detect;
 mod profile_menu;
 mod profile_spawn;
 mod reload;
@@ -483,6 +484,9 @@ enum Wakeup {
     /// `RemoteIntegrationResult` não passa dos 56 bytes (`PathBuf` mais um
     /// enum com `String`), bem dentro dos 80 que `AccessKit` já reserva.
     GitIntegrationResult(git::RemoteIntegrationResult),
+    /// The shell detection finished (ADR-0070 §5): data, never a command.
+    /// `App::apply_detected_profiles` keeps it and refreshes an open menu.
+    ProfilesDetected(Vec<profile_detect::DetectedProfile>),
     /// A thread de carga da imagem de fundo terminou (PRD-017, ADR-0061 §7):
     /// dado chaveado por caminho, `mtime` e tamanho -- `App::
     /// apply_background_image_result` o descarta se a chave já não é a
@@ -3930,6 +3934,7 @@ impl WindowState {
         project_file: &porecatu_config::ProjectFile,
         panes_config: &porecatu_config::Panes,
         keymap: &HashMap<Chord, Action>,
+        detected: &[profile_detect::DetectedProfile],
         confirm_close_with_process: bool,
         catalog: &Catalog,
     ) -> ActionOutcome {
@@ -4192,7 +4197,7 @@ impl WindowState {
             // ADR-0070 §8: no default key; the menu hangs from the `+` of the
             // active tab's group.
             Action::ProfileOpenMenu => {
-                let rows = profile_menu::profile_menu_rows(config, catalog, keymap);
+                let rows = profile_menu::profile_menu_rows(config, catalog, keymap, detected);
                 self.action_open_profile_menu(gpu, style, rows, config);
                 ActionOutcome::Handled
             }
@@ -5718,6 +5723,12 @@ struct App {
     /// RF-13.3: `true` depois do primeiro aviso de intervalo elevado ao
     /// piso -- uma vez por execução, mesmo padrão do campo acima.
     git_poll_interval_warned: bool,
+    /// ADR-0070 §5: shells found by the detection thread, kept for the whole
+    /// process. Empty until the result arrives (and forever when it fails or
+    /// `[profiles] detect = false`).
+    detected_profiles: Vec<profile_detect::DetectedProfile>,
+    /// `true` once the thread was started: detection runs once per process.
+    profile_detection_started: bool,
     /// PRD-017/ADR-0061 §7: a imagem de fundo do terminal, do **processo**,
     /// nunca da janela -- uma decodificação por processo (RF-17.18). Escrito
     /// só em `sync_background_image` (a cada aplicação de config) e
@@ -5989,6 +6000,8 @@ impl App {
             git_remotes: HashMap::new(),
             git_disabled: false,
             git_poll_interval_warned: false,
+            detected_profiles: Vec::new(),
+            profile_detection_started: false,
             background_image: background_image::BackgroundImageStore::default(),
             pty_output_seen: false,
             deferred_background_loads: Vec::new(),
@@ -7275,6 +7288,7 @@ impl App {
         // ainda vazio no início da execução, nenhum outro prazo garante
         // que `tick_all` rode a tempo de descobrir o primeiro repositório.
         self.check_git_remote_queries(now);
+        self.check_profile_detection();
         let next = self
             .windows
             .values()
@@ -7389,6 +7403,49 @@ impl App {
             git::spawn_query(repo, branch, move |result| {
                 let _ = proxy.send_event(Wakeup::GitQueryResult(result));
             });
+        }
+    }
+
+    /// ADR-0070 §5: the first time a profile menu is open in the process, with
+    /// `detect = true`, starts the detection thread. Checked from
+    /// `about_to_wait`, so every way of opening the menu (click, key) is
+    /// covered by one place; never again afterwards, whatever the outcome.
+    fn check_profile_detection(&mut self) {
+        let menu_open = self.windows.values().any(|w| w.profile_menu.is_some());
+        if !profile_detect::detection_due(
+            self.profile_detection_started,
+            self.config.profiles.detect,
+            menu_open,
+        ) {
+            return;
+        }
+        self.profile_detection_started = true;
+        let proxy = self.proxy.clone();
+        profile_detect::spawn(move |found| {
+            let _ = proxy.send_event(Wakeup::ProfilesDetected(found));
+        });
+    }
+
+    /// Keeps the detection result for the process and rebuilds the rows of any
+    /// open menu, which keeps its highlight on the same profile.
+    fn apply_detected_profiles(&mut self, found: Vec<profile_detect::DetectedProfile>) {
+        self.detected_profiles = found;
+        for state in self.windows.values_mut() {
+            let Some(menu) = state.profile_menu.as_mut() else {
+                continue;
+            };
+            let rows = profile_menu::profile_menu_rows(
+                &self.config,
+                &self.catalog,
+                &self.keymap,
+                &self.detected_profiles,
+            );
+            let width = match &mut self.gpu {
+                Some(gpu) => overlay::profile_menu_width(&rows, &self.config, gpu.text_measurer()),
+                None => menu.width,
+            };
+            menu.replace_rows(rows, width);
+            state.window.request_redraw();
         }
     }
 
@@ -8745,6 +8802,10 @@ impl ApplicationHandler<Wakeup> for App {
                 self.apply_git_integration_result(result);
                 return;
             }
+            Wakeup::ProfilesDetected(found) => {
+                self.apply_detected_profiles(found);
+                return;
+            }
             Wakeup::BackgroundImageLoaded(result) => {
                 self.apply_background_image_result(*result);
                 return;
@@ -9420,6 +9481,7 @@ impl App {
             &self.config.project_file,
             &self.config.panes,
             &self.keymap,
+            &self.detected_profiles,
             self.config.general.confirm_close_with_process,
             &self.catalog,
         );
@@ -10942,8 +11004,12 @@ impl App {
                     &self.catalog,
                 )
             {
-                let rows =
-                    profile_menu::profile_menu_rows(&self.config, &self.catalog, &self.keymap);
+                let rows = profile_menu::profile_menu_rows(
+                    &self.config,
+                    &self.catalog,
+                    &self.keymap,
+                    &self.detected_profiles,
+                );
                 state.open_profile_menu(target, anchor, rows, &self.config, gpu.text_measurer());
             }
             state.window.request_redraw();
