@@ -378,6 +378,7 @@ mod tests {
                 custom_title: None,
                 cwd: None,
                 spawn_program: Some("zsh".to_string()),
+                profile: None,
                 panes: None,
             }],
             active_tab: Some(0),

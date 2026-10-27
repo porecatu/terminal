@@ -70,6 +70,11 @@ pub struct TabV1 {
     pub custom_title: Option<String>,
     pub cwd: Option<PathBuf>,
     pub spawn_program: Option<String>,
+    /// ADR-0070 §4: perfil do painel focado, só para o caminho sem `panes`.
+    /// Com `panes` presente cada `PaneV1` leva o seu, e este não é gravado.
+    /// Ausente = o `[shell]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// ADR-0053 §11: a árvore de painéis da aba -- estrutura, `ratio` de
     /// cada divisor, `cwd` e programa de cada painel, e qual estava
     /// focado. **Opcional, sem subir `schema_version`**: ausência (arquivo
@@ -91,6 +96,10 @@ pub struct PaneV1 {
     pub id: u32,
     pub cwd: Option<PathBuf>,
     pub spawn_program: Option<String>,
+    /// ADR-0070 §4: identificador do perfil, nunca o comando. Ausente = o
+    /// `[shell]` (o campo nunca vale `""`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 /// Eixo do divisor, espelhando `porecatu_core::SplitAxis` -- tipo próprio

@@ -52,6 +52,10 @@ pub struct Pane {
     /// Nome do shell spawnado -- fallback de última instância, sempre
     /// presente.
     shell_name: String,
+    /// Identificador do perfil com que o painel nasceu (ADR-0070 §4); `None`
+    /// é o `[shell]`. Vale também no painel `NotStarted`, que o resolve só
+    /// no primeiro foco.
+    profile: Option<String>,
     /// Diretório de trabalho conhecido, capturado por OSC 7. `None` até o
     /// primeiro OSC 7 chegar; quem decide o fallback (`startup_directory`)
     /// é o chamador, não este tipo.
@@ -71,6 +75,7 @@ impl Pane {
             id,
             process_title: None,
             shell_name: shell_name.into(),
+            profile: None,
             cwd: None,
             state: PaneState::Running,
             activity: false,
@@ -111,6 +116,15 @@ impl Pane {
 
     pub fn shell_name(&self) -> &str {
         &self.shell_name
+    }
+
+    /// Perfil do painel (ADR-0070 §4); `None` é o `[shell]`.
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
+    }
+
+    pub fn set_profile(&mut self, profile: Option<String>) {
+        self.profile = profile;
     }
 
     /// Captura de OSC 7.
