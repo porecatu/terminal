@@ -376,6 +376,15 @@ title = "Sitzung «{name}» überschreiben?"
 body = "Die unter diesem Namen gespeicherte Sitzung wird ersetzt."
 confirm = "Überschreiben"
 
+[dialog.secret]
+title_password = "Passwort für {target}"
+title_passphrase = "Passphrase des Schlüssels"
+remember = "Im Schlüsselbund des Systems merken"
+remember_unavailable = "Der Schlüsselbund des Systems ist nicht verfügbar."
+confirm = "Verbinden"
+refused_password = "Der Server hat das Passwort abgelehnt."
+refused_passphrase = "Die Passphrase öffnet den Schlüssel nicht."
+
 [note]
 process_exited = "Prozess beendet (Code {code})"
 cwd_missing = "Verzeichnis \"{path}\" existiert nicht mehr, Tab im Home-Verzeichnis geöffnet"
@@ -653,6 +662,10 @@ key_without_identity_file = "Profil übersprungen: „auth“ ist nur „key“,
 [notice.secret_profile_key]
 title = "Schlüssel ignoriert"
 body = "„{key}“ wurde ignoriert, der Wert wurde nicht gelesen. Passwörter und Passphrasen gehören nicht in diese Datei: der Schlüsselbund des Systems bewahrt sie auf."
+
+[notice.secret_not_saved]
+title = "Geheimnis nicht gespeichert"
+body = "Die Verbindung wurde hergestellt, aber der Schlüsselbund des Systems hat das Passwort oder die Passphrase nicht gespeichert."
 
 [dialog.host_key]
 title = "Unbekannter Host: {host}"

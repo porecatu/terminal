@@ -21,7 +21,7 @@ use porecatu_session::named::{EntryStatus, NamedSessionEntry};
 use porecatu_term::{
     Answer, BackendSpec, DEFAULT_SEARCH_LINES_PER_STEP, EndReason, GridSnapshot, HyperlinkSpan,
     Liveness, Modifiers, MouseReporting, PromptKind, PtySize, SpawnConfig, TermEvent, TermModes,
-    TermParams, TermScroll, Terminal,
+    TermNotice, TermParams, TermScroll, Terminal,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -50,6 +50,7 @@ mod hyperlink;
 mod input;
 mod keymap;
 mod language;
+mod masked_field;
 mod messages;
 mod move_to_group;
 mod overlay;
@@ -63,6 +64,7 @@ mod prompt_queue;
 mod reload;
 mod rename;
 mod search_bar;
+mod secret_dialog;
 mod selection;
 mod session_picker;
 mod session_writer;
@@ -1242,6 +1244,10 @@ struct WindowState {
     /// Diálogo de confirmação em andamento (ADR-0014, RF-10.18), no máximo
     /// um por janela -- "modal é por janela, não por app".
     dialog: Option<ConfirmDialog>,
+    /// O campo mascarado do diálogo de segredo (ADR-0075 §2): o único pedaço
+    /// dele que não é dado puro (`ConfirmDialog` é `Clone`). Existe **só**
+    /// enquanto `dialog` é um `DialogAction::Secret`; cai (e é zerado) com ele.
+    secret_field: Option<masked_field::MaskedFieldState>,
     /// Menu de contexto de aba em andamento (ADR-0014 §2.16, RF-10.19).
     context_menu: Option<ContextMenu>,
     /// Menu de contexto de grupo (RF-2.22, ADR-0023) -- mutuamente
@@ -2382,6 +2388,7 @@ impl WindowState {
             hover: Hover::default(),
             warnings: WarningStack::default(),
             dialog: None,
+            secret_field: None,
             context_menu: None,
             group_context_menu: None,
             profile_menu: None,
@@ -3958,7 +3965,10 @@ impl WindowState {
         let Some(dialog) = self.dialog.take() else {
             return;
         };
-        if let DialogAction::HostKey(tab_id, pane_id, prompt_id) = dialog.action
+        // O que foi digitado morre aqui, zerado, sem ir a lugar nenhum.
+        self.secret_field = None;
+        if let DialogAction::HostKey(tab_id, pane_id, prompt_id)
+        | DialogAction::Secret(tab_id, pane_id, prompt_id) = dialog.action
             && let Some(runtime) = self.panes.get(&(tab_id, pane_id))
         {
             runtime.terminal.answer(prompt_id, Answer::Cancel);
@@ -3971,6 +3981,10 @@ impl WindowState {
     /// então "o usuário chegou ao painel" não depende de saber por qual gesto
     /// -- clique, `Ctrl+Tab`, foco de painel, foco da janela.
     fn open_ready_prompt(&mut self, catalog: &Catalog) {
+        // Sem diálogo, nenhum texto digitado sobrevive: cai e é zerado.
+        if self.dialog.is_none() {
+            self.secret_field = None;
+        }
         if self.pending_prompts.is_empty() {
             return;
         }
@@ -3991,32 +4005,47 @@ impl WindowState {
         else {
             return;
         };
-        let PromptKind::HostKey {
-            algorithm,
-            fingerprint,
-            known_types,
-            skipped_lines,
-        } = ready.prompt.kind
-        else {
-            return;
-        };
-        let host = self
-            .panes
-            .get(&(ready.tab, ready.pane))
-            .and_then(|runtime| runtime.ssh_host.clone())
-            .unwrap_or_default();
-        let facts = HostKeyFacts {
-            host,
-            algorithm,
-            fingerprint,
-            known_types,
-            skipped_lines,
-        };
-        self.dialog = Some(ConfirmDialog::host_key(
-            catalog,
-            &facts,
-            DialogAction::HostKey(ready.tab, ready.pane, ready.prompt.id),
-        ));
+        match ready.prompt.kind {
+            PromptKind::HostKey {
+                algorithm,
+                fingerprint,
+                known_types,
+                skipped_lines,
+            } => {
+                let host = self
+                    .panes
+                    .get(&(ready.tab, ready.pane))
+                    .and_then(|runtime| runtime.ssh_host.clone())
+                    .unwrap_or_default();
+                let facts = HostKeyFacts {
+                    host,
+                    algorithm,
+                    fingerprint,
+                    known_types,
+                    skipped_lines,
+                };
+                self.dialog = Some(ConfirmDialog::host_key(
+                    catalog,
+                    &facts,
+                    DialogAction::HostKey(ready.tab, ready.pane, ready.prompt.id),
+                ));
+            }
+            // ADR-0075 §2: o campo nasce com o foco, a caixa desmarcada.
+            PromptKind::Secret {
+                label,
+                vault_available,
+                retry,
+            } => {
+                self.dialog = Some(ConfirmDialog::secret(
+                    catalog,
+                    &label,
+                    vault_available,
+                    retry,
+                    DialogAction::Secret(ready.tab, ready.pane, ready.prompt.id),
+                ));
+                self.secret_field = Some(masked_field::MaskedFieldState::new());
+            }
+        }
         // Visitar o painel apaga a campainha que a pergunta acendeu.
         self.workspace.activate_tab(ready.tab);
         self.window.request_redraw();
@@ -4033,6 +4062,37 @@ impl WindowState {
         let Some(dialog) = &mut self.dialog else {
             return None;
         };
+        // Diálogo de segredo: o foco anda por campo, caixa e botões, e as
+        // teclas de texto vão ao campo mascarado (ADR-0075 §2).
+        if let Some(field) = self.secret_field.as_mut() {
+            let outcome = secret_dialog::apply_secret_key(
+                field,
+                dialog,
+                &event.logical_key,
+                event.text.as_deref(),
+                self.modifiers,
+            );
+            return match outcome {
+                secret_dialog::SecretKey::None => None,
+                secret_dialog::SecretKey::Cancel => {
+                    self.dismiss_dialog();
+                    None
+                }
+                secret_dialog::SecretKey::Submit => {
+                    // O diálogo e o campo seguem de pé: `run_dialog_action` lê a
+                    // caixa "Lembrar", tira o campo e o entrega, movido.
+                    Some(dialog.action.clone())
+                }
+                secret_dialog::SecretKey::Paste => {
+                    // O texto da área de transferência não é nosso: é zerado
+                    // assim que entra no campo.
+                    if let Some(pasted) = clipboard::paste().map(zeroize::Zeroizing::new) {
+                        field.paste(&pasted);
+                    }
+                    None
+                }
+            };
+        }
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
                 self.dismiss_dialog();
@@ -7655,6 +7715,30 @@ impl App {
                     state.window.request_redraw();
                 }
             }
+            // RF-20.12: "Conectar". O texto do campo sai por movimento para o
+            // `Secret`, que atravessa `porecatu-term` até a tarefa SSH sem ser
+            // guardado; o campo fica vazio e cai com o diálogo.
+            DialogAction::Secret(tab_id, pane_id, prompt_id) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    let field = state.secret_field.take();
+                    let remember = state
+                        .dialog
+                        .take()
+                        .and_then(|dialog| dialog.secret)
+                        .is_some_and(|facts| facts.remember && facts.vault_available);
+                    if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
+                        let answer = match field {
+                            Some(mut field) => Answer::Secret {
+                                value: field.take(),
+                                remember,
+                            },
+                            None => Answer::Cancel,
+                        };
+                        runtime.terminal.answer(prompt_id, answer);
+                    }
+                    state.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -9635,22 +9719,18 @@ impl ApplicationHandler<Wakeup> for App {
                 // diálogo não rouba o foco: fica pendente, acende a campainha
                 // do painel e abre quando o usuário chega a ele
                 // (`WindowState::open_ready_prompt`).
-                TermEvent::Prompt(prompt) => match prompt.kind {
-                    PromptKind::HostKey { .. } => {
-                        state.pending_prompts.push(tab_id, pane_id, prompt);
-                        if let Some(tab) = state.workspace.tab_mut(tab_id) {
-                            tab.mark_pane_bell(pane_id);
-                        }
+                // A chave de host e o segredo esperam o foco do mesmo jeito.
+                TermEvent::Prompt(prompt) => {
+                    state.pending_prompts.push(tab_id, pane_id, prompt);
+                    if let Some(tab) = state.workspace.tab_mut(tab_id) {
+                        tab.mark_pane_bell(pane_id);
                     }
-                    // TODO(porecatu-ssh-13): o diálogo de segredo (senha,
-                    // passphrase). Até lá, responde `Cancel`, para o backend
-                    // nunca ficar esperando.
-                    PromptKind::Secret { .. } => {
-                        if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
-                            runtime.terminal.answer(prompt.id, Answer::Cancel);
-                        }
-                    }
-                },
+                }
+                // ADR-0073 §3, ADR-0075 §5: o único consumidor novo do canal 1.
+                TermEvent::Notice(TermNotice::SecretNotSaved) => {
+                    let (severity, title, body) = messages::secret_not_saved(&self.catalog);
+                    state.warnings.push(severity, title, body, Instant::now());
+                }
                 TermEvent::ShellIntegrationDismiss => {
                     if self.shell_integration_invite_claimed {
                         self.shell_integration_dismissed = true;
@@ -11374,17 +11454,60 @@ impl App {
             ))
         }) {
             if button == MouseButton::Left {
-                if let Some(clicked) = overlay::dialog_hit(&layout, logical_point) {
-                    if clicked == DialogButton::Confirm {
+                // Dentro do campo mascarado ou da caixa "Lembrar" (diálogo de
+                // segredo): o clique é do diálogo, nunca o cancela.
+                let secret_hit = state
+                    .secret_field
+                    .as_ref()
+                    .and_then(|_| overlay::secret_hit(&layout, logical_point));
+                // Conectar sem nada digitado não faz nada, como o `Enter`.
+                let nothing_typed = state
+                    .secret_field
+                    .as_ref()
+                    .is_some_and(|field| field.is_empty());
+                let clicked_button = overlay::dialog_hit(&layout, logical_point);
+                if let Some(hit) = secret_hit {
+                    let dots = state.secret_field.as_ref().map_or(0, |field| field.len());
+                    let scalar = match (hit, self.gpu.as_mut()) {
+                        (overlay::SecretHit::Field, Some(gpu)) => overlay::secret_field_scalar_at(
+                            &layout,
+                            logical_point.0,
+                            &self.config,
+                            dots,
+                            gpu.text_measurer(),
+                        ),
+                        _ => dots,
+                    };
+                    match hit {
+                        overlay::SecretHit::Field => {
+                            if let Some(dialog) = state.dialog.as_mut() {
+                                dialog.focus_secret(dialog::SecretFocus::Field);
+                            }
+                            if let Some(field) = state.secret_field.as_mut() {
+                                field.click_at_scalar(scalar);
+                            }
+                        }
+                        overlay::SecretHit::Remember => {
+                            if let Some(dialog) = state.dialog.as_mut() {
+                                dialog.focus_secret(dialog::SecretFocus::Remember);
+                                dialog.toggle_remember();
+                            }
+                        }
+                    }
+                } else if clicked_button == Some(DialogButton::Confirm) {
+                    if !nothing_typed {
                         let action = state.dialog.as_ref().map(|d| d.action.clone());
-                        state.dialog = None;
+                        // O diálogo de segredo segue de pé até a ação: ela lê a
+                        // caixa "Lembrar" e leva o campo, movido.
+                        if !matches!(action, Some(DialogAction::Secret(..))) {
+                            state.dialog = None;
+                        }
                         if let Some(action) = action {
                             self.run_dialog_action(window_id, action, event_loop);
                         }
-                    } else {
-                        state.dismiss_dialog();
                     }
                 } else {
+                    // Cancelar, ou um clique fora de tudo.
                     state.dismiss_dialog();
                 }
             }
@@ -12676,6 +12799,13 @@ impl App {
                 config,
                 gpu.text_measurer(),
             );
+            let secret_view = state
+                .secret_field
+                .as_ref()
+                .map(|field| overlay::SecretView {
+                    field,
+                    selection_color: self.term_pal.selection_background,
+                });
             let primitives = overlay::paint_dialog(
                 &layout,
                 dialog,
@@ -12683,6 +12813,7 @@ impl App {
                 pal,
                 state.logical_width,
                 state.logical_height,
+                secret_view.as_ref(),
                 gpu.text_measurer(),
             );
             frame.set_layer(Layer::Modal, primitives);

@@ -78,7 +78,8 @@ impl HostKeyVerifier {
                         self.remember(key).await;
                         Ok(())
                     }
-                    Reply::Cancel => Err(FailKind::HostKeyRejectedByUser),
+                    // Só `Confirm` confia: um segredo aqui não faz sentido.
+                    Reply::Cancel | Reply::Secret { .. } => Err(FailKind::HostKeyRejectedByUser),
                 }
             }
         }

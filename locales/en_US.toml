@@ -395,6 +395,15 @@ title = "Overwrite session «{name}»?"
 body = "The session saved under this name will be replaced."
 confirm = "Overwrite"
 
+[dialog.secret]
+title_password = "Password for {target}"
+title_passphrase = "Key passphrase"
+remember = "Remember in the system keychain"
+remember_unavailable = "The system keychain is not available."
+confirm = "Connect"
+refused_password = "The server refused the password."
+refused_passphrase = "The passphrase does not unlock the key."
+
 # Notas escritas no grid do terminal (canal 2 do ADR-0014). Os avisos da pilha
 # estão em [notice.*].
 [note]
@@ -697,6 +706,10 @@ key_without_identity_file = "profile skipped: \"auth\" is only \"key\", but ther
 [notice.secret_profile_key]
 title = "Key ignored"
 body = "\"{key}\" was ignored and its value was not read. Passwords and passphrases do not go in this file: the system keychain keeps them."
+
+[notice.secret_not_saved]
+title = "Secret not saved"
+body = "The connection was made, but the system keychain did not store the password or passphrase."
 
 [dialog.host_key]
 title = "Unknown host: {host}"

@@ -376,6 +376,15 @@ title = "¿Sobrescribir la sesión «{name}»?"
 body = "La sesión guardada con este nombre será reemplazada."
 confirm = "Sobrescribir"
 
+[dialog.secret]
+title_password = "Contraseña para {target}"
+title_passphrase = "Frase de paso de la clave"
+remember = "Recordar en el llavero del sistema"
+remember_unavailable = "El llavero del sistema no está disponible."
+confirm = "Conectar"
+refused_password = "El servidor rechazó la contraseña."
+refused_passphrase = "La frase de paso no abre la clave."
+
 [note]
 process_exited = "proceso terminado (código {code})"
 cwd_missing = "el directorio \"{path}\" ya no existe, pestaña abierta en el directorio personal"
@@ -653,6 +662,10 @@ key_without_identity_file = "perfil omitido: \"auth\" es solo \"key\", pero no h
 [notice.secret_profile_key]
 title = "Clave ignorada"
 body = "\"{key}\" se ignoró y su valor no se leyó. Las contraseñas y frases de paso no van en este archivo: las guarda el llavero del sistema."
+
+[notice.secret_not_saved]
+title = "Secreto no guardado"
+body = "Se hizo la conexión, pero el llavero del sistema no guardó la contraseña ni la frase de paso."
 
 [dialog.host_key]
 title = "Host desconocido: {host}"

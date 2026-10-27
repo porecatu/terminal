@@ -923,6 +923,7 @@ mod tests {
                 host: "example.org".into(),
             },
             vault_available: true,
+            retry: false,
         }
     }
 

@@ -23,10 +23,13 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
-use crate::ask::{Asker, HostKeyQuestion, Question, Reply};
+use crate::ask::{Asker, HostKeyQuestion, Notice, Question, Reply, SecretQuestion, SecretTarget};
 use crate::end::{End, FailKind, LostKind};
 use crate::known_hosts::{KnownHostsFiles, ReadCause};
+use crate::secret::Secret;
 use crate::spawn::{AuthMethod, Connection, ConnectionId, OpenError, SshSpawn};
+use crate::vault::fake::MemoryVault;
+use crate::vault::{Destination, Vault, passphrase_account};
 use crate::{SshChannel, runtime};
 
 /// O que o shell de mentira faz quando o canal abre.
@@ -42,17 +45,73 @@ enum Script {
     CloseOnly,
 }
 
+/// O keyboard-interactive que o servidor de mentira oferece.
+#[derive(Clone, Copy)]
+enum Kbd {
+    /// Um campo oculto ("Password: "); aceita esta senha.
+    OneHidden(&'static str),
+    /// Dois campos ocultos.
+    TwoFields,
+    /// Um campo que ecoa.
+    OneVisible,
+    /// A senha certa abre um segundo campo (um código): segundo fator.
+    PasswordThenCode(&'static str),
+}
+
+/// Como o servidor de mentira trata senha e keyboard-interactive. O default só
+/// oferece chave pública.
+#[derive(Clone, Copy, Default)]
+struct ServerAuth {
+    /// A senha que `password` aceita. `None`: o método nem é oferecido.
+    password: Option<&'static str>,
+    kbd: Option<Kbd>,
+    /// Tentar `password` derruba a conexão (`fail2ban`, `MaxAuthTries`).
+    drop_on_password: bool,
+    /// Recusar uma senha errada **retirando** `password` da lista.
+    withdraw_password_on_failure: bool,
+}
+
+impl ServerAuth {
+    fn password(secret: &'static str) -> Self {
+        Self {
+            password: Some(secret),
+            ..Self::default()
+        }
+    }
+
+    fn kbd(kbd: Kbd) -> Self {
+        Self {
+            kbd: Some(kbd),
+            ..Self::default()
+        }
+    }
+
+    fn methods(&self) -> russh::MethodSet {
+        let mut methods = vec![russh::MethodKind::PublicKey];
+        if self.password.is_some() || self.drop_on_password {
+            methods.push(russh::MethodKind::Password);
+        }
+        if self.kbd.is_some() {
+            methods.push(russh::MethodKind::KeyboardInteractive);
+        }
+        russh::MethodSet::from(&methods[..])
+    }
+}
+
 #[derive(Default)]
 struct ServerLog {
     /// `(colunas, linhas)` de cada `pty-req` e `window-change`, em ordem.
     sizes: Mutex<Vec<(u32, u32)>>,
     /// Quantas chaves públicas o cliente ofereceu.
     key_offers: AtomicUsize,
+    /// Quantas vezes o cliente tentou `password`.
+    password_tries: AtomicUsize,
 }
 
 struct ShellServer {
     script: Script,
     authorized: PublicKey,
+    auth: ServerAuth,
     log: Arc<ServerLog>,
 }
 
@@ -63,6 +122,7 @@ impl server::Server for ShellServer {
         Self {
             script: self.script,
             authorized: self.authorized.clone(),
+            auth: self.auth,
             log: Arc::clone(&self.log),
         }
     }
@@ -70,6 +130,65 @@ impl server::Server for ShellServer {
 
 impl server::Handler for ShellServer {
     type Error = russh::Error;
+
+    async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
+        self.log.password_tries.fetch_add(1, Ordering::SeqCst);
+        if self.auth.drop_on_password {
+            // A conexão cai no meio da autenticação, sem resposta.
+            return Err(russh::Error::Disconnect);
+        }
+        if self.auth.password == Some(password) {
+            return Ok(Auth::Accept);
+        }
+        // O `russh` tira `password` da lista quando se recusa com `reject()`;
+        // o OpenSSH não: o método segue oferecido, e foi a senha que falhou.
+        // O teste diz a lista de propósito.
+        let proceed = if self.auth.withdraw_password_on_failure {
+            russh::MethodSet::from(&[russh::MethodKind::PublicKey][..])
+        } else {
+            self.auth.methods()
+        };
+        Ok(Auth::Reject {
+            proceed_with_methods: Some(proceed),
+            partial_success: false,
+        })
+    }
+
+    async fn auth_keyboard_interactive<'a>(
+        &'a mut self,
+        _user: &str,
+        _submethods: &str,
+        response: Option<server::Response<'a>>,
+    ) -> Result<Auth, Self::Error> {
+        use std::borrow::Cow;
+        let ask = |prompts: Vec<(&'static str, bool)>| Auth::Partial {
+            name: Cow::Borrowed(""),
+            instructions: Cow::Borrowed(""),
+            prompts: prompts
+                .into_iter()
+                .map(|(text, echo)| (Cow::Borrowed(text), echo))
+                .collect::<Vec<_>>()
+                .into(),
+        };
+        let Some(kbd) = self.auth.kbd else {
+            return Ok(Auth::reject());
+        };
+        let Some(mut response) = response else {
+            return Ok(match kbd {
+                Kbd::OneHidden(_) | Kbd::PasswordThenCode(_) => ask(vec![("Password: ", false)]),
+                Kbd::TwoFields => ask(vec![("Password: ", false), ("Again: ", false)]),
+                Kbd::OneVisible => ask(vec![("Login: ", true)]),
+            });
+        };
+        let answer = response.next();
+        Ok(match (kbd, answer) {
+            (Kbd::OneHidden(good), Some(text)) if &text[..] == good.as_bytes() => Auth::Accept,
+            (Kbd::PasswordThenCode(good), Some(text)) if &text[..] == good.as_bytes() => {
+                ask(vec![("Verification code: ", false)])
+            }
+            _ => Auth::reject(),
+        })
+    }
 
     async fn auth_publickey_offered(
         &mut self,
@@ -218,14 +337,15 @@ fn new_key() -> PrivateKey {
 /// O usuário de mentira: responde às perguntas com o que o teste pede e
 /// guarda o que foi perguntado.
 struct ScriptedUser {
-    reply: Reply,
+    /// `Confirm` confirma; qualquer outra coisa cancela.
+    confirm: bool,
     asked: Mutex<Vec<HostKeyQuestion>>,
 }
 
 impl ScriptedUser {
     fn new(reply: Reply) -> Arc<Self> {
         Arc::new(Self {
-            reply,
+            confirm: matches!(reply, Reply::Confirm),
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -237,9 +357,15 @@ impl ScriptedUser {
 
 impl Asker for ScriptedUser {
     fn ask(&self, question: Question, on_reply: Box<dyn FnOnce(Reply) + Send>) {
-        let Question::HostKey(question) = question;
+        let Question::HostKey(question) = question else {
+            panic!("this user only answers the host key question");
+        };
         self.asked.lock().unwrap().push(question);
-        on_reply(self.reply);
+        on_reply(if self.confirm {
+            Reply::Confirm
+        } else {
+            Reply::Cancel
+        });
     }
 }
 
@@ -252,12 +378,63 @@ impl Asker for NeverAsked {
     }
 }
 
+/// O usuário que digita segredos: responde na ordem e guarda o que viu. A
+/// chave do host, quando perguntada, ele confirma.
+#[derive(Default)]
+struct SecretUser {
+    replies: Mutex<std::collections::VecDeque<(&'static str, bool)>>,
+    asked: Mutex<Vec<SecretQuestion>>,
+    notices: Mutex<Vec<Notice>>,
+}
+
+impl SecretUser {
+    /// Cada resposta é `(texto, lembrar)`; acabando, o usuário cancela.
+    fn typing(replies: &[(&'static str, bool)]) -> Arc<Self> {
+        Arc::new(Self {
+            replies: Mutex::new(replies.iter().copied().collect()),
+            ..Self::default()
+        })
+    }
+
+    fn asked(&self) -> Vec<SecretQuestion> {
+        self.asked.lock().unwrap().clone()
+    }
+
+    fn notices(&self) -> Vec<Notice> {
+        self.notices.lock().unwrap().clone()
+    }
+}
+
+impl Asker for SecretUser {
+    fn ask(&self, question: Question, on_reply: Box<dyn FnOnce(Reply) + Send>) {
+        match question {
+            Question::HostKey(_) => on_reply(Reply::Confirm),
+            Question::Secret(question) => {
+                self.asked.lock().unwrap().push(question);
+                let next = self.replies.lock().unwrap().pop_front();
+                on_reply(match next {
+                    Some((text, remember)) => Reply::Secret {
+                        value: Secret::new(text.to_owned()),
+                        remember,
+                    },
+                    None => Reply::Cancel,
+                });
+            }
+        }
+    }
+
+    fn notice(&self, notice: Notice) {
+        self.notices.lock().unwrap().push(notice);
+    }
+}
+
 struct Fixture {
     /// Dono do servidor (e do proxy): precisa viver até o fim do teste.
     rt: Runtime,
     port: u16,
     log: Arc<ServerLog>,
     dir: PathBuf,
+    client_key: PrivateKey,
     key_file: PathBuf,
     known_hosts: PathBuf,
     server_key: PublicKey,
@@ -268,13 +445,22 @@ impl Fixture {
     /// Um servidor que autoriza a chave do cliente gerada aqui, **e cuja chave
     /// de host já está no `known_hosts`**.
     fn start(script: Script) -> Self {
-        let fixture = Self::start_unregistered(script, true);
+        Self::start_auth(script, ServerAuth::default())
+    }
+
+    /// Como `start`, com senha e/ou keyboard-interactive.
+    fn start_auth(script: Script, auth: ServerAuth) -> Self {
+        let fixture = Self::start_with(script, true, auth);
         fixture.register_server_key(&fixture.server_key.clone());
         fixture
     }
 
     /// Como `start`, mas o `known_hosts` não existe.
     fn start_unregistered(script: Script, authorize_client_key: bool) -> Self {
+        Self::start_with(script, authorize_client_key, ServerAuth::default())
+    }
+
+    fn start_with(script: Script, authorize_client_key: bool, auth: ServerAuth) -> Self {
         let rt = Runtime::new().unwrap();
         let client_key = new_key();
         let authorized = if authorize_client_key {
@@ -289,6 +475,7 @@ impl Fixture {
             keys: vec![host_key],
             auth_rejection_time: Duration::from_millis(1),
             auth_rejection_time_initial: Some(Duration::ZERO),
+            methods: auth.methods(),
             ..server::Config::default()
         });
         let listener = rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
@@ -296,6 +483,7 @@ impl Fixture {
         let mut srv = ShellServer {
             script,
             authorized,
+            auth,
             log: Arc::clone(&log),
         };
         let server = rt.spawn(async move {
@@ -316,6 +504,7 @@ impl Fixture {
             log,
             known_hosts: dir.join("dot_ssh").join("known_hosts"),
             dir,
+            client_key,
             key_file,
             server_key,
             server,
@@ -359,7 +548,38 @@ impl Fixture {
     }
 
     fn open_asking(&self, spawn: SshSpawn, asker: Arc<dyn Asker>) -> SshChannel {
-        SshChannel::open_with(spawn, asker, self.files()).unwrap()
+        self.open_in(spawn, asker, Arc::new(MemoryVault::default()))
+    }
+
+    /// Como `open_asking`, com o cofre (em memória) que o teste escolheu.
+    fn open_in(&self, spawn: SshSpawn, asker: Arc<dyn Asker>, vault: Arc<dyn Vault>) -> SshChannel {
+        SshChannel::open_with(spawn, asker, self.files(), vault).unwrap()
+    }
+
+    /// Reescreve o arquivo da chave do cliente cifrado com `passphrase`.
+    fn encrypt_key_file(&self, passphrase: &str) {
+        let encrypted = self
+            .client_key
+            .encrypt(&mut TestRng::new(), passphrase)
+            .unwrap();
+        std::fs::write(
+            &self.key_file,
+            encrypted.to_openssh(LineEnding::LF).unwrap().as_bytes(),
+        )
+        .unwrap();
+    }
+
+    /// A conta do cofre da senha de `tester` neste servidor.
+    fn password_account(&self) -> String {
+        Destination::new("tester", "127.0.0.1", self.port).password_account()
+    }
+
+    /// Spawn que usa só a senha.
+    fn password_spawn(&self) -> SshSpawn {
+        let mut spawn = self.spawn();
+        spawn.auth = vec![AuthMethod::Password];
+        spawn.identity_file = None;
+        spawn
     }
 
     /// Um proxy TCP na frente do servidor: abortá-lo derruba a conexão como
@@ -398,7 +618,13 @@ fn open_without_files(spawn: SshSpawn) -> SshChannel {
         user: None,
         read_only: Vec::new(),
     };
-    SshChannel::open_with(spawn, Arc::new(NeverAsked), files).unwrap()
+    SshChannel::open_with(
+        spawn,
+        Arc::new(NeverAsked),
+        files,
+        Arc::new(MemoryVault::default()),
+    )
+    .unwrap()
 }
 
 fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
@@ -628,6 +854,7 @@ fn sharing_a_connection_is_not_implemented_yet() {
             user: None,
             read_only: Vec::new(),
         },
+        Arc::new(MemoryVault::default()),
     );
 
     assert_eq!(result.err(), Some(OpenError::ShareUnsupported));
@@ -853,4 +1080,447 @@ fn time_spent_on_the_host_key_question_does_not_count_against_the_connect_timeou
 
     assert!(read_until(&channel, "patient").contains("patient"));
     assert_eq!(channel.try_end(), None);
+}
+
+// ---------------------------------------------------------------------------
+// Senha, passphrase e keyboard-interactive (prompt 13, ADR-0073, ADR-0075 §2)
+// ---------------------------------------------------------------------------
+
+/// O segredo de prova: nenhuma nota, erro ou pergunta pode contê-lo.
+const PROOF: &str = "tr0ub4dor-proof-9f31";
+
+fn connected_and_echoing(channel: &SshChannel) {
+    channel.writer().write_all(b"hello\n").unwrap();
+    assert!(read_until(channel, "hello").contains("hello"));
+}
+
+#[test]
+fn a_password_typed_in_the_dialog_connects() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let user = SecretUser::typing(&[(PROOF, false)]);
+
+    let channel = fixture.open_asking(fixture.password_spawn(), user.clone());
+
+    connected_and_echoing(&channel);
+    let asked = user.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(
+        asked[0].target,
+        SecretTarget::Password {
+            user: "tester".to_owned(),
+            host: "127.0.0.1".to_owned(),
+        }
+    );
+    assert!(!asked[0].retry);
+    assert!(asked[0].vault_available);
+}
+
+#[test]
+fn a_wrong_password_reopens_the_dialog_with_the_error_line() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let user = SecretUser::typing(&[("not-it", false), (PROOF, false)]);
+
+    let channel = fixture.open_asking(fixture.password_spawn(), user.clone());
+
+    connected_and_echoing(&channel);
+    let retries: Vec<bool> = user.asked().iter().map(|q| q.retry).collect();
+    assert_eq!(retries, [false, true]);
+    assert_eq!(fixture.log.password_tries.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn cancelling_the_secret_dialog_ends_with_authentication_cancelled() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let user = SecretUser::typing(&[]);
+
+    let channel = fixture.open_asking(fixture.password_spawn(), user.clone());
+
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::AuthCancelled));
+    assert_eq!(fixture.log.password_tries.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_server_that_only_offers_one_hidden_field_is_served_as_a_password() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::kbd(Kbd::OneHidden(PROOF)));
+    let user = SecretUser::typing(&[(PROOF, false)]);
+
+    let channel = fixture.open_asking(fixture.password_spawn(), user.clone());
+
+    connected_and_echoing(&channel);
+    // The dialog is the app's: the same question as for a plain password. The
+    // server's "Password: " text has nowhere to travel.
+    let asked = user.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(
+        asked[0].target,
+        SecretTarget::Password {
+            user: "tester".to_owned(),
+            host: "127.0.0.1".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn a_wrong_keyboard_interactive_password_asks_again() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::kbd(Kbd::OneHidden(PROOF)));
+    let user = SecretUser::typing(&[("not-it", false), (PROOF, false)]);
+
+    let channel = fixture.open_asking(fixture.password_spawn(), user.clone());
+
+    connected_and_echoing(&channel);
+    let retries: Vec<bool> = user.asked().iter().map(|q| q.retry).collect();
+    assert_eq!(retries, [false, true]);
+}
+
+#[test]
+fn keyboard_interactive_with_two_fields_fails_without_asking_anything() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::kbd(Kbd::TwoFields));
+
+    // `NeverAsked`: the user is not asked for a password the server will not
+    // take on its own.
+    let channel = fixture.open(fixture.password_spawn());
+
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::AuthUnsupported));
+}
+
+#[test]
+fn keyboard_interactive_with_a_visible_field_fails_without_asking_anything() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::kbd(Kbd::OneVisible));
+
+    let channel = fixture.open(fixture.password_spawn());
+
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::AuthUnsupported));
+}
+
+#[test]
+fn a_second_factor_after_the_password_fails_and_keeps_the_saved_password() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::kbd(Kbd::PasswordThenCode(PROOF)));
+    let vault = Arc::new(MemoryVault::with(&fixture.password_account(), PROOF));
+
+    let channel = fixture.open_in(
+        fixture.password_spawn(),
+        Arc::new(NeverAsked),
+        vault.clone(),
+    );
+
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::AuthUnsupported));
+    // The password was right: nothing is deleted for a server that wants more.
+    assert!(vault.deleted.lock().unwrap().is_empty());
+    assert_eq!(
+        vault.stored(&fixture.password_account()).as_deref(),
+        Some(PROOF)
+    );
+}
+
+#[test]
+fn an_encrypted_key_asks_for_its_passphrase_and_connects() {
+    let fixture = Fixture::start(Script::Echo);
+    fixture.encrypt_key_file(PROOF);
+    let user = SecretUser::typing(&[(PROOF, false)]);
+
+    let channel = fixture.open_asking(fixture.spawn(), user.clone());
+
+    connected_and_echoing(&channel);
+    let asked = user.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(
+        asked[0].target,
+        SecretTarget::KeyPassphrase {
+            path: fixture.key_file.clone(),
+        }
+    );
+}
+
+#[test]
+fn a_wrong_passphrase_asks_again_with_the_error_line() {
+    let fixture = Fixture::start(Script::Echo);
+    fixture.encrypt_key_file(PROOF);
+    let user = SecretUser::typing(&[("not-it", false), (PROOF, false)]);
+
+    let channel = fixture.open_asking(fixture.spawn(), user.clone());
+
+    connected_and_echoing(&channel);
+    let retries: Vec<bool> = user.asked().iter().map(|q| q.retry).collect();
+    assert_eq!(retries, [false, true]);
+}
+
+#[test]
+fn a_remembered_passphrase_is_kept_only_after_the_server_accepts_the_key() {
+    let fixture = Fixture::start(Script::Echo);
+    fixture.encrypt_key_file(PROOF);
+    let vault = Arc::new(MemoryVault::default());
+    let user = SecretUser::typing(&[("not-it", true), (PROOF, true)]);
+
+    let channel = fixture.open_in(fixture.spawn(), user.clone(), vault.clone());
+
+    connected_and_echoing(&channel);
+    let account = passphrase_account(&fixture.key_file);
+    // The wrong one was never written: a single write, of the right one.
+    assert_eq!(*vault.written.lock().unwrap(), [account.clone()]);
+    assert_eq!(vault.stored(&account).as_deref(), Some(PROOF));
+}
+
+#[test]
+fn a_saved_passphrase_is_used_without_asking() {
+    let fixture = Fixture::start(Script::Echo);
+    fixture.encrypt_key_file(PROOF);
+    let vault = Arc::new(MemoryVault::with(
+        &passphrase_account(&fixture.key_file),
+        PROOF,
+    ));
+
+    let channel = fixture.open_in(fixture.spawn(), Arc::new(NeverAsked), vault);
+
+    connected_and_echoing(&channel);
+}
+
+#[test]
+fn a_stale_saved_passphrase_is_deleted_and_the_dialog_opens() {
+    let fixture = Fixture::start(Script::Echo);
+    fixture.encrypt_key_file(PROOF);
+    let account = passphrase_account(&fixture.key_file);
+    let vault = Arc::new(MemoryVault::with(&account, "old-passphrase"));
+    let user = SecretUser::typing(&[(PROOF, false)]);
+
+    let channel = fixture.open_in(fixture.spawn(), user.clone(), vault.clone());
+
+    connected_and_echoing(&channel);
+    assert_eq!(*vault.deleted.lock().unwrap(), [account]);
+    assert!(user.asked()[0].retry);
+}
+
+#[test]
+fn a_right_passphrase_for_a_key_the_server_does_not_know_is_not_saved() {
+    // The server authorizes another key: the passphrase decrypts, nobody accepts.
+    let fixture = Fixture::start_with(Script::Echo, false, ServerAuth::default());
+    fixture.register_server_key(&fixture.server_key.clone());
+    fixture.encrypt_key_file(PROOF);
+    let vault = Arc::new(MemoryVault::default());
+    let user = SecretUser::typing(&[(PROOF, true)]);
+
+    let channel = fixture.open_in(fixture.spawn(), user, vault.clone());
+
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::AuthRejected));
+    assert!(vault.is_empty());
+}
+
+#[test]
+fn a_remembered_password_is_written_only_after_the_server_accepts() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let vault = Arc::new(MemoryVault::default());
+    let user = SecretUser::typing(&[("not-it", true), (PROOF, true)]);
+
+    let channel = fixture.open_in(fixture.password_spawn(), user.clone(), vault.clone());
+
+    connected_and_echoing(&channel);
+    let account = fixture.password_account();
+    assert_eq!(*vault.written.lock().unwrap(), [account.clone()]);
+    assert_eq!(vault.stored(&account).as_deref(), Some(PROOF));
+    assert!(user.notices().is_empty());
+}
+
+#[test]
+fn a_wrong_password_with_remember_writes_nothing() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let vault = Arc::new(MemoryVault::default());
+    let user = SecretUser::typing(&[("not-it", true)]);
+
+    let channel = fixture.open_in(fixture.password_spawn(), user, vault.clone());
+
+    // The user gave up after the refusal.
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::AuthCancelled));
+    assert!(vault.is_empty());
+    assert!(vault.written.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_next_connection_uses_the_remembered_password_without_asking() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let vault = Arc::new(MemoryVault::default());
+    let first = fixture.open_in(
+        fixture.password_spawn(),
+        SecretUser::typing(&[(PROOF, true)]),
+        vault.clone(),
+    );
+    connected_and_echoing(&first);
+    first.close();
+
+    let second = fixture.open_in(fixture.password_spawn(), Arc::new(NeverAsked), vault);
+
+    connected_and_echoing(&second);
+}
+
+#[test]
+fn a_saved_password_the_server_refuses_is_deleted_and_asked_again() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let account = fixture.password_account();
+    let vault = Arc::new(MemoryVault::with(&account, "changed-on-the-server"));
+    let user = SecretUser::typing(&[(PROOF, false)]);
+
+    let channel = fixture.open_in(fixture.password_spawn(), user.clone(), vault.clone());
+
+    connected_and_echoing(&channel);
+    assert_eq!(*vault.deleted.lock().unwrap(), [account]);
+    assert!(vault.is_empty());
+    assert!(user.asked()[0].retry);
+}
+
+#[test]
+fn a_connection_dropped_mid_authentication_keeps_the_saved_password() {
+    let fixture = Fixture::start_auth(
+        Script::Echo,
+        ServerAuth {
+            drop_on_password: true,
+            ..ServerAuth::default()
+        },
+    );
+    let account = fixture.password_account();
+    let vault = Arc::new(MemoryVault::with(&account, PROOF));
+
+    let channel = fixture.open_in(
+        fixture.password_spawn(),
+        Arc::new(NeverAsked),
+        vault.clone(),
+    );
+
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::Refused));
+    assert!(vault.deleted.lock().unwrap().is_empty());
+    assert_eq!(vault.stored(&account).as_deref(), Some(PROOF));
+}
+
+#[test]
+fn a_method_the_server_withdraws_keeps_the_saved_password() {
+    let fixture = Fixture::start_auth(
+        Script::Echo,
+        ServerAuth {
+            password: Some("something-else"),
+            withdraw_password_on_failure: true,
+            ..ServerAuth::default()
+        },
+    );
+    let account = fixture.password_account();
+    let vault = Arc::new(MemoryVault::with(&account, PROOF));
+
+    let channel = fixture.open_in(
+        fixture.password_spawn(),
+        Arc::new(NeverAsked),
+        vault.clone(),
+    );
+
+    // `password` left the list: the secret was not what failed.
+    assert_eq!(wait_end(&channel), End::Failed(FailKind::AuthRejected));
+    assert!(vault.deleted.lock().unwrap().is_empty());
+    assert_eq!(vault.stored(&account).as_deref(), Some(PROOF));
+}
+
+#[test]
+fn without_a_vault_the_dialog_says_so_and_nothing_is_written() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let vault = Arc::new(MemoryVault::unavailable());
+    // Even a ticked box writes nothing when there is no vault.
+    let user = SecretUser::typing(&[(PROOF, true)]);
+
+    let channel = fixture.open_in(fixture.password_spawn(), user.clone(), vault.clone());
+
+    connected_and_echoing(&channel);
+    assert!(!user.asked()[0].vault_available);
+    assert!(vault.written.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_vault_that_refuses_the_write_only_raises_a_notice() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let vault = Arc::new(MemoryVault::default());
+    *vault.write_error.lock().unwrap() = Some(crate::vault::VaultError::Denied);
+    let user = SecretUser::typing(&[(PROOF, true)]);
+
+    let channel = fixture.open_in(fixture.password_spawn(), user.clone(), vault);
+
+    // The connection was accepted and stays up.
+    connected_and_echoing(&channel);
+    assert_eq!(user.notices(), [Notice::SecretNotSaved]);
+}
+
+#[test]
+fn the_default_order_still_tries_the_key_before_the_password() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password(PROOF));
+    let mut spawn = fixture.spawn();
+    spawn.auth = vec![AuthMethod::Key, AuthMethod::Password];
+
+    // The key works: the password dialog never opens.
+    let channel = fixture.open(spawn);
+
+    connected_and_echoing(&channel);
+    assert_eq!(fixture.log.password_tries.load(Ordering::SeqCst), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Varredura de vazamento (RF-20.34, ADR-0073 §5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_error_variant_can_carry_a_secret() {
+    // Every `FailKind` and `End` the crate can produce, formatted: the proof
+    // secret is nowhere, because none of them has a field that could hold it.
+    let kinds = [
+        FailKind::Refused,
+        FailKind::Timeout,
+        FailKind::AuthRejected,
+        FailKind::AuthCancelled,
+        FailKind::AuthUnsupported,
+        FailKind::KeyUnreadable,
+        FailKind::HostKeyRejectedByUser,
+        FailKind::ChannelRefused,
+        FailKind::Runtime,
+        FailKind::KnownHostsUnreadable {
+            file: PathBuf::from("known_hosts"),
+            cause: ReadCause::NotText,
+        },
+    ];
+    for kind in kinds {
+        let end = End::Failed(kind.clone());
+        for text in [format!("{kind:?}"), format!("{end:?}"), format!("{end:#?}")] {
+            assert!(!text.contains(PROOF), "{text}");
+        }
+    }
+    for error in [
+        crate::vault::VaultError::Unavailable,
+        crate::vault::VaultError::Denied,
+        crate::vault::VaultError::Failed,
+    ] {
+        assert!(!format!("{error:?} {error}").contains(PROOF));
+    }
+    assert!(!format!("{:?}", OpenError::ShareUnsupported).contains(PROOF));
+}
+
+#[test]
+fn a_secret_that_crosses_the_crate_never_shows_in_a_reply_or_question() {
+    let reply = Reply::Secret {
+        value: Secret::new(PROOF.to_owned()),
+        remember: true,
+    };
+    assert!(!format!("{reply:?}").contains(PROOF));
+    let question = SecretQuestion {
+        target: SecretTarget::Password {
+            user: "tester".to_owned(),
+            host: "127.0.0.1".to_owned(),
+        },
+        vault_available: true,
+        retry: true,
+    };
+    assert!(!format!("{question:?}").contains(PROOF));
+}
+
+#[test]
+fn a_full_failed_connection_leaves_no_secret_in_what_the_channel_reports() {
+    let fixture = Fixture::start_auth(Script::Echo, ServerAuth::password("another"));
+    let user = SecretUser::typing(&[(PROOF, true)]);
+
+    let channel = fixture.open_asking(fixture.password_spawn(), user.clone());
+
+    let end = wait_end(&channel);
+    assert!(!format!("{end:?}").contains(PROOF));
+    for question in user.asked() {
+        assert!(!format!("{question:?}").contains(PROOF));
+    }
 }

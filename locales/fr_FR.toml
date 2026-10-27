@@ -376,6 +376,15 @@ title = "Écraser la session «{name}» ?"
 body = "La session enregistrée sous ce nom sera remplacée."
 confirm = "Écraser"
 
+[dialog.secret]
+title_password = "Mot de passe pour {target}"
+title_passphrase = "Phrase secrète de la clé"
+remember = "Mémoriser dans le trousseau du système"
+remember_unavailable = "Le trousseau du système n'est pas disponible."
+confirm = "Se connecter"
+refused_password = "Le serveur a refusé le mot de passe."
+refused_passphrase = "La phrase secrète n'ouvre pas la clé."
+
 [note]
 process_exited = "processus terminé (code {code})"
 cwd_missing = "le répertoire \"{path}\" n'existe plus, onglet ouvert dans le répertoire personnel"
@@ -653,6 +662,10 @@ key_without_identity_file = "profil ignoré : « auth » vaut seulement « key �
 [notice.secret_profile_key]
 title = "Clé ignorée"
 body = "« {key} » a été ignorée et sa valeur n'a pas été lue. Les mots de passe et phrases secrètes ne vont pas dans ce fichier : le trousseau du système les garde."
+
+[notice.secret_not_saved]
+title = "Secret non enregistré"
+body = "La connexion a été établie, mais le trousseau du système n'a pas enregistré le mot de passe ni la phrase secrète."
 
 [dialog.host_key]
 title = "Hôte inconnu : {host}"

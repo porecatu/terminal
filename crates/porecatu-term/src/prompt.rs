@@ -6,7 +6,6 @@
 //! execução dele: nunca a thread de leitura do motor e nunca a main thread.
 
 use std::collections::HashMap;
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -27,30 +26,10 @@ impl PromptId {
     }
 }
 
-/// Texto secreto digitado pelo usuário (senha, passphrase).
-///
-/// **Provisório:** o prompt 13 move este tipo para `porecatu-ssh` com
-/// `zeroize::Zeroizing<String>` (ADR-0073 §5). Já nasce com a forma final: sem
-/// `Clone`, sem `Display`, `Debug` opaco -- e atravessa `porecatu-term` por
-/// movimento, sem ser guardado.
-pub struct Secret(String);
-
-impl Secret {
-    pub fn new(value: String) -> Self {
-        Self(value)
-    }
-
-    /// O texto, para quem vai usá-lo (a autenticação). Não copiar.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Secret(..)")
-    }
-}
+/// Texto secreto digitado pelo usuário (senha, passphrase): o tipo de
+/// `porecatu-ssh` (ADR-0073 §5), zerado ao cair, sem `Clone` e sem `Display`.
+/// Atravessa `porecatu-term` **por movimento**, sem ser guardado.
+pub use porecatu_ssh::Secret;
 
 /// De quem é o segredo pedido. Tipado, sem prosa: a frase é de `porecatu-ui`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +47,9 @@ pub enum PromptKind {
     Secret {
         label: SecretLabel,
         vault_available: bool,
+        /// O segredo anterior foi recusado: o diálogo mostra a linha de erro
+        /// (ADR-0075 §2).
+        retry: bool,
     },
     /// Chave de host desconhecida (RF-20.16).
     HostKey {
@@ -166,6 +148,21 @@ impl PromptSink {
         let _ = self.events.send(TermEvent::Prompt(Prompt { id, kind }));
         (self.on_wakeup)();
     }
+
+    /// Avisa a UI de algo que não pede resposta (canal 1 do ADR-0014).
+    pub fn notice(&self, notice: TermNotice) {
+        let _ = self.events.send(TermEvent::Notice(notice));
+        (self.on_wakeup)();
+    }
+}
+
+/// O que o backend quer que o app diga ao usuário, fora de qualquer pergunta.
+/// Tipado, sem prosa: a frase é de `porecatu-ui`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermNotice {
+    /// A conexão foi aceita, mas o segredo não pôde ser gravado no cofre do
+    /// sistema (ADR-0073 §3).
+    SecretNotSaved,
 }
 
 /// Dono das perguntas de uma sessão de backend: quando cai (o `Terminal`

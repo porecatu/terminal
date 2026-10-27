@@ -61,6 +61,14 @@ Falha ao **gravar** (cofre trancado, usuário negou a permissão do sistema) nã
 
 O acesso ao cofre é bloqueante (chamada de SO, D-Bus) e roda em `tokio::task::spawn_blocking`, nunca numa thread de trabalho do runtime e nunca na main thread.
 
+> **Como ficou (prompt 13).** O ciclo mora em `cycle.rs`, sem `russh`: quem fala com o servidor é um `Attempter` (senha, keyboard-interactive de um campo, passphrase), o que o deixa testável com um cofre em memória (`vault::Vault`, trait interno). Três precisões que a implementação trouxe:
+>
+> - **Quatro resultados, não dois.** Além de aceito e recusado, há **`Declined`** (o segredo está certo e o método não levou à autenticação: a chave decifrou e o servidor não a quer; o método saiu da lista) e **`Failed`** (a troca não terminou). Nenhum dos dois apaga a entrada, grava ou reabre o diálogo; `Declined` deixa o próximo método da lista seguir.
+> - **Queda no meio da autenticação.** O `russh` não devolve erro quando a conexão cai durante uma tentativa: devolve uma falha com a **lista de métodos vazia**. É essa a assinatura que a implementação lê como queda (`Failed`, causa `Refused`, entrada **mantida**); uma lista com outros métodos, mas sem o de senha, é método retirado (`Declined`). Um servidor de verdade não fecha a lista vazia.
+> - **Passphrase só é gravada depois do aceite da chave.** "Recusada" é local (a chave não decifra), mas gravar espera o servidor aceitar a chave decifrada, como na senha: uma passphrase certa para uma chave que o servidor não conhece não é guardada.
+>
+> **`vault_available()`** é guardado por processo e **nunca bloqueia quem chama**: na primeira chamada devolve `false` e dispara o cálculo numa thread de fundo; a conexão calcula o seu dentro da tarefa SSH, onde pode esperar. A tela de configurações (prompt 15) lê o valor guardado, como o §Riscos já previa. **Servidor com campo oculto único** (keyboard-interactive, RF-20.10) é examinado **antes** de perguntar a senha: a troca começa, e um segundo fator ou um campo visível falha com `AuthUnsupported` sem diálogo. Um segundo campo depois da senha também falha assim, **sem** apagar a entrada. **Cópia fora do alcance do `Secret`:** o `russh` pede um `String` para `authenticate_password` e o clipboard devolve um `String` ao colar; o primeiro é do `russh`, o segundo é zerado ao entrar no campo.
+
 ### 4. A UI só pergunta e esquece
 
 `porecatu-ssh` expõe, re-exportado por `porecatu-term` como os demais tipos ([ADR-0071](0071-backend-de-terminal.md) §2):

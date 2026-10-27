@@ -30,7 +30,7 @@ use porecatu_locale::Catalog;
 use porecatu_render::TextMeasurer;
 
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
-use crate::dialog::{ConfirmDialog, DialogButton};
+use crate::dialog::{ConfirmDialog, DialogButton, SecretFocus};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
@@ -91,6 +91,9 @@ const SESSION_PICKER_SAVE_ITEM_ID: NodeId = NodeId(103);
 /// O botão do meio do diálogo de três saídas (RF-16.4): fora da faixa dos
 /// dois fixos, que ficam juntos em 14 e 15.
 const DIALOG_DISCARD_ID: NodeId = NodeId(104);
+/// O campo de senha e a caixa "Lembrar" do diálogo de segredo (RF-20.35).
+const DIALOG_SECRET_FIELD_ID: NodeId = NodeId(105);
+const DIALOG_SECRET_REMEMBER_ID: NodeId = NodeId(106);
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -612,6 +615,35 @@ fn build_dialog(
         let id = NodeId(DIALOG_LINE_BASE + index as u64);
         nodes.push((id, leaf(Role::Label, line.text.clone())));
         children.push(id);
+    }
+    // Diálogo de segredo (RF-20.35): o campo é um campo de **senha**, sem valor
+    // exposto -- nem o texto, nem os pontos --, e a caixa "Lembrar" uma
+    // alternância. O foco inicial é o campo.
+    let mut focused_id = focused_id;
+    if let Some(facts) = &dialog.secret {
+        let mut field = Node::new(Role::PasswordInput);
+        field.set_label(dialog.title.clone());
+        nodes.push((DIALOG_SECRET_FIELD_ID, field));
+        children.push(DIALOG_SECRET_FIELD_ID);
+
+        let mut remember = leaf(Role::Switch, facts.remember_label.clone());
+        remember.set_toggled(if facts.remember {
+            accesskit::Toggled::True
+        } else {
+            accesskit::Toggled::False
+        });
+        if !facts.vault_available {
+            remember.set_disabled();
+            remember.set_description(facts.unavailable_note.clone());
+        }
+        nodes.push((DIALOG_SECRET_REMEMBER_ID, remember));
+        children.push(DIALOG_SECRET_REMEMBER_ID);
+
+        focused_id = match facts.focus {
+            SecretFocus::Field => DIALOG_SECRET_FIELD_ID,
+            SecretFocus::Remember => DIALOG_SECRET_REMEMBER_ID,
+            SecretFocus::Buttons => focused_id,
+        };
     }
     children.extend(buttons);
 
@@ -1825,6 +1857,101 @@ mod tests {
         assert_eq!(children[6], DIALOG_CONFIRM_ID);
         // The initial focus is on Cancel, as in every dialog (ADR-0014).
         assert_eq!(update.focus, DIALOG_CANCEL_ID);
+    }
+
+    fn secret_tree(vault_available: bool, remember: bool) -> TreeUpdate {
+        use porecatu_core::{PaneId, TabId};
+        use porecatu_term::{PromptId, SecretLabel};
+
+        let pt = crate::messages::test_support::pt_br();
+        let mut dialog = ConfirmDialog::secret(
+            &pt,
+            &SecretLabel::Password {
+                user: "deploy".to_owned(),
+                host: "10.4.1.20".to_owned(),
+            },
+            vault_available,
+            false,
+            DialogAction::Secret(TabId::new(0), PaneId::new(0), PromptId::new(1)),
+        );
+        if remember {
+            dialog.toggle_remember();
+        }
+        build_tree(
+            &Workspace::new(),
+            &WarningStack::default(),
+            &Some(dialog),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &pt,
+            "pt-BR",
+            &mut measurer(),
+        )
+    }
+
+    #[test]
+    fn the_secret_field_is_a_password_input_with_no_value_and_it_starts_focused() {
+        let update = secret_tree(true, false);
+
+        let field = node(&update, DIALOG_SECRET_FIELD_ID);
+        assert_eq!(field.role(), Role::PasswordInput);
+        assert_eq!(field.label(), Some("Senha para deploy@10.4.1.20"));
+        // RF-20.35: nothing of what is typed -- not the text, not the dots --
+        // is exposed.
+        assert_eq!(field.value(), None);
+        assert_eq!(field.description(), None);
+        assert_eq!(update.focus, DIALOG_SECRET_FIELD_ID);
+        // Field, box, then the buttons.
+        let children = node(&update, DIALOG_ID).children().to_vec();
+        assert_eq!(
+            children,
+            [
+                DIALOG_SECRET_FIELD_ID,
+                DIALOG_SECRET_REMEMBER_ID,
+                DIALOG_CANCEL_ID,
+                DIALOG_CONFIRM_ID
+            ]
+        );
+    }
+
+    #[test]
+    fn the_remember_box_is_a_switch_that_follows_its_state_and_the_vault() {
+        let on = secret_tree(true, true);
+        let remember = node(&on, DIALOG_SECRET_REMEMBER_ID);
+        assert_eq!(remember.role(), Role::Switch);
+        assert_eq!(remember.label(), Some("Lembrar no cofre do sistema"));
+        assert_eq!(remember.toggled(), Some(accesskit::Toggled::True));
+        assert!(!remember.is_disabled());
+
+        let off = secret_tree(true, false);
+        assert_eq!(
+            node(&off, DIALOG_SECRET_REMEMBER_ID).toggled(),
+            Some(accesskit::Toggled::False)
+        );
+
+        let no_vault = secret_tree(false, true);
+        let disabled = node(&no_vault, DIALOG_SECRET_REMEMBER_ID);
+        assert!(disabled.is_disabled());
+        assert_eq!(
+            disabled.toggled(),
+            Some(accesskit::Toggled::False),
+            "without a vault the box cannot be ticked"
+        );
+        assert_eq!(
+            disabled.description(),
+            Some("O cofre do sistema não está disponível.")
+        );
     }
 
     #[test]

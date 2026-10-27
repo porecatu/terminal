@@ -38,7 +38,14 @@ pub use keys::{Modifiers, TermKey, encode_ctrl_char, encode_key, encode_text, wr
 pub use mouse::{MouseAction, MouseButton, encode_mouse_report};
 pub use osc7::{Osc7Cwd, parse_file_uri, parse_file_uri_with_host};
 pub use params::TermParams;
-pub use prompt::{Answer, Prompt, PromptId, PromptKind, PromptSink, Secret, SecretLabel};
+pub use prompt::{
+    Answer, Prompt, PromptId, PromptKind, PromptSink, Secret, SecretLabel, TermNotice,
+};
+// ADR-0073 §4: o cofre só é alcançável por aqui; a UI pergunta se existe e pede
+// para esquecer, e nunca lê um segredo.
+pub use porecatu_ssh::{
+    Destination, VaultError, forget_passphrase, forget_password, vault_available,
+};
 pub use scroll::TermScroll;
 pub use search::{
     DEFAULT_SEARCH_LINES_PER_STEP, GridPos, InvalidPattern, Occurrence, SearchJob, SearchMode,

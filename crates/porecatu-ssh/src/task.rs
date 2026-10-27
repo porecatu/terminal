@@ -16,11 +16,12 @@ use russh::keys::{Algorithm, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg, ChannelReadHalf, Disconnect, Sig};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::auth;
+use crate::auth::{self, Secrets};
 use crate::channel::{Cmd, EndSlot};
 use crate::end::{End, FailKind, LostKind};
 use crate::known_hosts::{self, KnownHostsFiles};
 use crate::spawn::SshSpawn;
+use crate::vault::Vault;
 use crate::verify::{HostKeyVerifier, Waiting};
 
 /// ADR-0076 §1: um `keepalive@openssh.com` a cada 15 s sem tráfego, e a
@@ -175,17 +176,22 @@ async fn within_budget<F: Future>(
 
 /// Entrada da tarefa. Quando devolve, `data_tx` cai e a leitura do outro lado
 /// vê o fim de arquivo.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one entry point that the channel feeds with everything the task owns"
+)]
 pub(crate) async fn run(
     spawn: SshSpawn,
     files: KnownHostsFiles,
     asker: Arc<dyn crate::ask::Asker>,
+    vault: Arc<dyn Vault>,
     data_tx: mpsc::Sender<Vec<u8>>,
     cmd_tx: UnboundedSender<Cmd>,
     mut cmd_rx: UnboundedReceiver<Cmd>,
     end: EndSlot,
 ) {
     let shared = Arc::new(Shared::default());
-    let opened = match open(&spawn, files, asker, &shared, &data_tx).await {
+    let opened = match open(&spawn, files, asker, vault, &shared, &data_tx).await {
         Ok(opened) => opened,
         Err(kind) => {
             end.set(End::Failed(kind));
@@ -227,6 +233,7 @@ async fn open(
     spawn: &SshSpawn,
     files: KnownHostsFiles,
     asker: Arc<dyn crate::ask::Asker>,
+    vault: Arc<dyn Vault>,
     shared: &Arc<Shared>,
     data_tx: &mpsc::Sender<Vec<u8>>,
 ) -> Result<Opened, FailKind> {
@@ -244,6 +251,10 @@ async fn open(
     let registered = known_hosts::registered_algorithms(&texts, &spawn.host, spawn.port);
 
     let waiting = Arc::new(Waiting::default());
+    let secrets = Secrets {
+        vault,
+        asker: Arc::clone(&asker),
+    };
     let verifier = Arc::new(HostKeyVerifier {
         files,
         asker,
@@ -268,7 +279,7 @@ async fn open(
         Some(Ok(handle)) => handle,
     };
 
-    auth::authenticate(&mut handle, spawn).await?;
+    auth::authenticate(&mut handle, spawn, &secrets).await?;
 
     let mut channel = handle
         .channel_open_session()

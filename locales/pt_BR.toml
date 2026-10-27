@@ -397,6 +397,15 @@ title = "Sobrescrever a sessão «{name}»?"
 body = "A sessão salva com esse nome será substituída."
 confirm = "Sobrescrever"
 
+[dialog.secret]
+title_password = "Senha para {target}"
+title_passphrase = "Passphrase da chave"
+remember = "Lembrar no cofre do sistema"
+remember_unavailable = "O cofre do sistema não está disponível."
+confirm = "Conectar"
+refused_password = "O servidor recusou a senha."
+refused_passphrase = "A passphrase não abre a chave."
+
 # Notas escritas no grid do terminal (canal 2 do ADR-0014). Os avisos da pilha
 # estão em [notice.*].
 [note]
@@ -699,6 +708,10 @@ key_without_identity_file = "perfil ignorado: \"auth\" é só \"key\", mas não 
 [notice.secret_profile_key]
 title = "Chave ignorada"
 body = "\"{key}\" foi ignorada e o valor não foi lido. Senha e passphrase não vão neste arquivo: o cofre do sistema as guarda."
+
+[notice.secret_not_saved]
+title = "Segredo não salvo"
+body = "A conexão foi feita, mas o cofre do sistema não guardou a senha ou a passphrase."
 
 [dialog.host_key]
 title = "Host desconhecido: {host}"

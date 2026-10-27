@@ -52,7 +52,7 @@ use porecatu_session::named::EntryStatus;
 
 use crate::chrome::{badge_size, centered_glyph, push_badge, push_shadow};
 use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
-use crate::dialog::{ConfirmDialog, DialogButton, LineTone};
+use crate::dialog::{ConfirmDialog, DialogButton, LineTone, SecretFocus};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
 use crate::messages::msg;
@@ -62,6 +62,7 @@ use crate::profile_menu::ProfileMenu;
 use crate::session_picker::{Highlight, Mode, SessionPicker};
 use crate::tab_bar::{self, TabBarStyle, rect_contains};
 use crate::terminal_menu::{TerminalContextMenu, TerminalMenuItem};
+use crate::toggle::{TOGGLE_TRACK_HEIGHT, TOGGLE_TRACK_WIDTH};
 use crate::warning::{Severity, WarningStack};
 
 pub(crate) const TITLE_FONT: FontFace = FontFace::Sans {
@@ -302,6 +303,62 @@ pub struct DialogLayout {
     /// O botão do meio do diálogo de três saídas (RF-16.4).
     pub discard_rect: Option<Rect>,
     pub confirm_rect: Rect,
+    /// O campo mascarado, só no diálogo de segredo (ADR-0075 §2).
+    pub field_rect: Option<Rect>,
+    /// A linha da caixa "Lembrar" inteira (a área do clique) e o trilho da
+    /// alternância dentro dela.
+    pub remember_rect: Option<Rect>,
+    pub toggle_rect: Option<Rect>,
+    /// A nota esmaecida abaixo da caixa, sem cofre (RF-20.14).
+    pub note_rect: Option<Rect>,
+}
+
+/// O que `paint_dialog` precisa do diálogo de segredo além do que o
+/// `ConfirmDialog` carrega (foco e caixa já estão em `dialog.secret`).
+pub struct SecretView<'a> {
+    /// O campo mascarado: o único pedaço do diálogo que não é dado puro.
+    pub field: &'a crate::masked_field::MaskedFieldState,
+    /// A cor da seleção do campo é a do terminal (a mesma da tela de
+    /// configurações).
+    pub selection_color: Color,
+}
+
+/// Fonte do campo mascarado: os pontos são texto da Iosevka Fixed, com o mesmo
+/// avanço de célula (ADR-0075 §1).
+const MASK_FONT: FontFace = FontFace::Mono { bold: false };
+
+/// Corta `text` no **meio** com reticências até caber em `max_width`: o começo e
+/// o fim de um caminho são o que o identifica (ADR-0075 §2).
+fn truncate_middle(
+    text: &str,
+    font: FontFace,
+    size: f32,
+    max_width: f32,
+    measurer: &mut TextMeasurer,
+) -> String {
+    if measurer.measure_width(text, font, size) <= max_width {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let build = |keep: usize| {
+        let head = keep.div_ceil(2);
+        let tail = keep / 2;
+        let mut out: String = chars[..head].iter().collect();
+        out.push('…');
+        out.extend(&chars[chars.len() - tail..]);
+        out
+    };
+    // O maior número de caracteres mantidos que ainda cabe.
+    let (mut low, mut high) = (0, chars.len().saturating_sub(1));
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if measurer.measure_width(&build(mid), font, size) <= max_width {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    build(low)
 }
 
 pub fn layout_dialog(
@@ -346,13 +403,32 @@ pub fn layout_dialog(
         .filter(|line| line.tone == LineTone::Data)
         .map(|line| measurer.measure_width(&line.text, BODY_FONT, body_size))
         .fold(0.0_f32, f32::max);
+    // A linha da caixa "Lembrar" (trilho, vão, rótulo) também não é cortada.
+    let remember_width = dialog.secret.as_ref().map_or(0.0, |facts| {
+        TOGGLE_TRACK_WIDTH
+            + button_gap
+            + measurer.measure_width(&facts.remember_label, BODY_FONT, body_size)
+    });
     let width = width
         .max(buttons_width + padding * 2.0)
-        .max(widest_data + padding * 2.0);
+        .max(widest_data + padding * 2.0)
+        .max(remember_width + padding * 2.0);
 
     // Cada linha extra custa o `gap` e a própria altura, como o corpo.
     let lines_height = dialog.lines.len() as f32 * (gap + body_size);
-    let content_height = title_size + gap + body_size + lines_height + gap + button_height;
+    // O diálogo de segredo ganha o campo (a altura do campo do editor), a
+    // linha da caixa e, sem cofre, a nota.
+    let field_height = config.appearance.group_editor.input_height as f32;
+    let secret_height = dialog.secret.as_ref().map_or(0.0, |facts| {
+        let note = if facts.vault_available {
+            0.0
+        } else {
+            gap + body_size
+        };
+        gap + field_height + gap + TOGGLE_TRACK_HEIGHT + note
+    });
+    let content_height =
+        title_size + gap + body_size + lines_height + secret_height + gap + button_height;
     let modal_height = padding * 2.0 + content_height;
     let modal_rect = Rect {
         x: (window_width - width) / 2.0,
@@ -382,14 +458,189 @@ pub fn layout_dialog(
         height: button_height,
     };
 
+    // Campo, caixa e nota, empilhados abaixo do corpo e das linhas.
+    let mut field_rect = None;
+    let mut remember_rect = None;
+    let mut toggle_rect = None;
+    let mut note_rect = None;
+    if let Some(facts) = &dialog.secret {
+        let content_x = modal_rect.x + padding;
+        let content_width = modal_rect.width - padding * 2.0;
+        let below_body = modal_rect.y + padding + title_size + gap + body_size + lines_height;
+        let field = Rect {
+            x: content_x,
+            y: below_body + gap,
+            width: content_width,
+            height: field_height,
+        };
+        let row = Rect {
+            x: content_x,
+            y: field.y + field.height + gap,
+            width: content_width,
+            height: TOGGLE_TRACK_HEIGHT,
+        };
+        field_rect = Some(field);
+        remember_rect = Some(row);
+        toggle_rect = Some(Rect {
+            x: row.x,
+            y: row.y,
+            width: TOGGLE_TRACK_WIDTH,
+            height: TOGGLE_TRACK_HEIGHT,
+        });
+        if !facts.vault_available {
+            note_rect = Some(Rect {
+                x: content_x,
+                y: row.y + row.height + gap,
+                width: content_width,
+                height: body_size,
+            });
+        }
+    }
+
     DialogLayout {
         modal_rect,
         cancel_rect,
         discard_rect,
         confirm_rect,
+        field_rect,
+        remember_rect,
+        toggle_rect,
+        note_rect,
     }
 }
 
+/// O campo mascarado: a anatomia do campo de texto da tela de configurações
+/// (§2.12), com pontos no lugar do texto. Foco no anel de Acento.
+fn paint_secret_field(
+    rect: Rect,
+    view: &SecretView<'_>,
+    focus: SecretFocus,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    measurer: &mut TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    let editor = &config.appearance.group_editor;
+    let padding_x = editor.input_padding_x as f32;
+    let size = editor.input_font_size as f32;
+    let focused = focus == SecretFocus::Field;
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: editor.input_corner_radius as f32,
+        color: pal.editor_input_background,
+        border_color: if focused {
+            pal.dialog_focus_ring
+        } else {
+            pal.editor_input_border
+        },
+        border_width: 1.0,
+    }));
+    let dots = view.field.display();
+    let text = dots.text();
+    let text_width = measurer.measure_width(text, MASK_FONT, size);
+    let text_x = secret_text_x(rect, padding_x, text_width);
+    let inner = Rect {
+        x: rect.x + padding_x,
+        y: rect.y,
+        width: (rect.width - padding_x * 2.0).max(0.0),
+        height: rect.height,
+    };
+    let bar_y = rect.y + 3.0;
+    let bar_height = (rect.height - 6.0).max(0.0);
+    out.push(Primitive::PushClip(inner));
+    if let Some((start, end)) = dots.selection_range() {
+        let x0 = text_x + measurer.measure_width(&text[..start], MASK_FONT, size);
+        let x1 = text_x + measurer.measure_width(&text[..end], MASK_FONT, size);
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: x0,
+                y: bar_y,
+                width: x1 - x0,
+                height: bar_height,
+            },
+            color: view.selection_color,
+        }));
+    }
+    out.push(Primitive::Text(TextRun {
+        origin: (text_x, rect.y + (rect.height - size) / 2.0),
+        text: text.to_owned(),
+        font: MASK_FONT,
+        size_px: size,
+        color: pal.editor_input_text,
+    }));
+    if focused && dots.selection_range().is_none() {
+        let before = measurer.measure_width(&text[..dots.cursor()], MASK_FONT, size);
+        out.push(Primitive::Quad(Quad {
+            rect: Rect {
+                x: (text_x + before).min(inner.x + inner.width - 1.0),
+                y: bar_y,
+                width: 1.0,
+                height: bar_height,
+            },
+            color: pal.editor_input_text,
+        }));
+    }
+    out.push(Primitive::PopClip);
+}
+
+/// Onde os pontos começam em x: o campo rola para manter o cursor à vista, como
+/// o de rename e os da tela de configurações.
+fn secret_text_x(field: Rect, padding_x: f32, text_width: f32) -> f32 {
+    tab_bar::scrolled_text_x(
+        field.x,
+        padding_x,
+        text_width,
+        (field.width - padding_x * 2.0).max(0.0),
+    )
+}
+
+/// Qual ponto está sob o clique em `x`: o cursor vai para antes dele.
+pub fn secret_field_scalar_at(
+    layout: &DialogLayout,
+    x: f32,
+    config: &porecatu_config::Config,
+    dot_count: usize,
+    measurer: &mut TextMeasurer,
+) -> usize {
+    let Some(field) = layout.field_rect else {
+        return 0;
+    };
+    let editor = &config.appearance.group_editor;
+    let size = editor.input_font_size as f32;
+    let dot_width = measurer.measure_width("•", MASK_FONT, size);
+    if dot_width <= 0.0 {
+        return dot_count;
+    }
+    let total = dot_width * dot_count as f32;
+    let text_x = secret_text_x(field, editor.input_padding_x as f32, total);
+    (((x - text_x) / dot_width).round().max(0.0) as usize).min(dot_count)
+}
+
+/// Os cliques de um diálogo de segredo: dentro do campo, na caixa, ou nos
+/// botões (`dialog_hit`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretHit {
+    Field,
+    Remember,
+}
+
+pub fn secret_hit(layout: &DialogLayout, point: (f32, f32)) -> Option<SecretHit> {
+    if layout
+        .field_rect
+        .is_some_and(|field| rect_contains(field, point))
+    {
+        Some(SecretHit::Field)
+    } else if layout
+        .remember_rect
+        .is_some_and(|row| rect_contains(row, point))
+    {
+        Some(SecretHit::Remember)
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn paint_dialog(
     layout: &DialogLayout,
     dialog: &ConfirmDialog,
@@ -397,6 +648,7 @@ pub fn paint_dialog(
     pal: &ResolvedPalette,
     window_width: f32,
     window_height: f32,
+    secret: Option<&SecretView<'_>>,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let cfg = &config.appearance.dialog;
@@ -406,6 +658,13 @@ pub fn paint_dialog(
     let gap = cfg.gap as f32;
     let corner_radius = cfg.corner_radius as f32;
     let button_corner_radius = cfg.button_corner_radius as f32;
+    // No diálogo de segredo o foco anda também pelo campo e pela caixa: o anel
+    // dos botões só aparece com o foco neles.
+    let buttons_have_focus = dialog
+        .secret
+        .as_ref()
+        .is_none_or(|facts| facts.focus == SecretFocus::Buttons);
+    let focused_button = |button: DialogButton| buttons_have_focus && dialog.focused() == button;
 
     let mut out = Vec::new();
     out.push(Primitive::Quad(Quad {
@@ -437,13 +696,29 @@ pub fn paint_dialog(
     }));
     y += title_size + gap;
     let body_max_width = layout.modal_rect.width - padding * 2.0;
-    let (body, _) = measurer.truncate(&dialog.body, BODY_FONT, body_size, body_max_width);
+    // O caminho de uma chave se corta no meio; o resto, no fim.
+    let body = if dialog
+        .secret
+        .as_ref()
+        .is_some_and(|facts| facts.body_is_path)
+    {
+        truncate_middle(&dialog.body, BODY_FONT, body_size, body_max_width, measurer)
+    } else {
+        measurer
+            .truncate(&dialog.body, BODY_FONT, body_size, body_max_width)
+            .0
+    };
     out.push(Primitive::Text(TextRun {
         origin: (text_x, y),
         text: body,
         font: BODY_FONT,
         size_px: body_size,
-        color: pal.dialog_body_text,
+        // A linha de erro de um segredo recusado fica na cor de erro (§2.14).
+        color: if dialog.body_is_error {
+            pal.warning_severity_error
+        } else {
+            pal.dialog_body_text
+        },
     }));
     // Linhas de dado e de aviso (ADR-0075 §3): dado em "Secundário" sem
     // truncar, aviso na cor de aviso da §2.14 e cortado ao conteúdo.
@@ -465,6 +740,58 @@ pub fn paint_dialog(
             size_px: body_size,
             color,
         }));
+    }
+
+    // Campo mascarado e caixa "Lembrar" (ADR-0075 §2).
+    if let (Some(view), Some(facts)) = (secret, dialog.secret.as_ref()) {
+        if let Some(field) = layout.field_rect {
+            paint_secret_field(field, view, facts.focus, config, pal, measurer, &mut out);
+        }
+        if let Some(toggle) = layout.toggle_rect {
+            // Sem cofre a alternância fica desligada e o rótulo esmaecido.
+            let on = facts.remember && facts.vault_available;
+            crate::toggle::push_toggle(
+                toggle,
+                on,
+                crate::settings::TOGGLE_ON,
+                crate::settings::TOGGLE_OFF,
+                &mut out,
+            );
+            if facts.focus == SecretFocus::Remember {
+                out.push(Primitive::RoundedQuad(RoundedQuad {
+                    rect: toggle,
+                    radius: TOGGLE_TRACK_HEIGHT / 2.0,
+                    color: palette::TRANSPARENT,
+                    border_color: pal.dialog_focus_ring,
+                    border_width: 1.0,
+                }));
+            }
+            out.push(Primitive::Text(TextRun {
+                origin: (
+                    toggle.x + toggle.width + cfg.button_gap as f32,
+                    toggle.y + (toggle.height - body_size) / 2.0,
+                ),
+                text: facts.remember_label.clone(),
+                font: BODY_FONT,
+                size_px: body_size,
+                color: if facts.vault_available {
+                    pal.dialog_body_text
+                } else {
+                    pal.menu_item_disabled_text
+                },
+            }));
+        }
+        if let Some(note) = layout.note_rect {
+            out.push(Primitive::Text(TextRun {
+                origin: (note.x, note.y),
+                text: measurer
+                    .truncate(&facts.unavailable_note, BODY_FONT, body_size, note.width)
+                    .0,
+                font: BODY_FONT,
+                size_px: body_size,
+                color: pal.menu_item_disabled_text,
+            }));
+        }
     }
 
     if let (Some(discard_rect), Some(discard_label)) =
@@ -537,7 +864,7 @@ pub fn paint_dialog(
         &dialog.cancel_label,
         palette::TRANSPARENT,
         pal.dialog_cancel_text,
-        if dialog.focused() == DialogButton::Cancel {
+        if focused_button(DialogButton::Cancel) {
             pal.dialog_focus_ring
         } else {
             pal.dialog_cancel_border
@@ -550,9 +877,19 @@ pub fn paint_dialog(
     paint_dialog_button(
         layout.confirm_rect,
         &dialog.confirm_label,
-        pal.dialog_confirm_background,
-        pal.dialog_confirm_text,
-        if dialog.focused() == DialogButton::Confirm {
+        // Conectar é o primário do rodapé da tela de configurações, não o
+        // destrutivo (ADR-0075 §2).
+        if dialog.secret.is_some() {
+            crate::settings::TOGGLE_ON
+        } else {
+            pal.dialog_confirm_background
+        },
+        if dialog.secret.is_some() {
+            crate::toggle::TOGGLE_KNOB_COLOR
+        } else {
+            pal.dialog_confirm_text
+        },
+        if focused_button(DialogButton::Confirm) {
             pal.dialog_focus_ring
         } else {
             palette::TRANSPARENT
@@ -2612,6 +2949,7 @@ mod tests {
             &pal,
             1000.0,
             700.0,
+            None,
             &mut measurer,
         );
         let texts = text_colors(&primitives);
@@ -2736,6 +3074,421 @@ mod tests {
             .collect()
     }
 
+    fn secret_dialog(vault_available: bool, retry: bool) -> ConfirmDialog {
+        use porecatu_core::{PaneId, TabId};
+        use porecatu_term::{PromptId, SecretLabel};
+        ConfirmDialog::secret(
+            &test_support::pt_br(),
+            &SecretLabel::Password {
+                user: "deploy".to_owned(),
+                host: "10.4.1.20".to_owned(),
+            },
+            vault_available,
+            retry,
+            DialogAction::Secret(TabId::new(0), PaneId::new(0), PromptId::new(0)),
+        )
+    }
+
+    #[test]
+    fn the_secret_dialog_stacks_field_box_and_buttons_inside_the_380px_modal() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_dialog(
+            1000.0,
+            700.0,
+            &secret_dialog(true, false),
+            &config,
+            &mut measurer,
+        );
+
+        let modal = layout.modal_rect;
+        let field = layout.field_rect.expect("field");
+        let row = layout.remember_rect.expect("box row");
+        let toggle = layout.toggle_rect.expect("toggle");
+        assert_eq!(modal.width, 380.0);
+        assert_eq!(
+            field.height,
+            config.appearance.group_editor.input_height as f32
+        );
+        assert!(field.y + field.height <= row.y, "field above the box");
+        assert!(
+            row.y + row.height <= layout.confirm_rect.y,
+            "box above buttons"
+        );
+        assert!(field.x >= modal.x && field.x + field.width <= modal.x + modal.width);
+        assert_eq!(toggle.width, TOGGLE_TRACK_WIDTH);
+        assert_eq!(toggle.height, TOGGLE_TRACK_HEIGHT);
+        assert!(layout.note_rect.is_none(), "no note when there is a vault");
+    }
+
+    #[test]
+    fn without_a_vault_the_secret_dialog_grows_by_one_note_line() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let mut measurer = TextMeasurer::new();
+        let with = layout_dialog(
+            1000.0,
+            700.0,
+            &secret_dialog(true, false),
+            &config,
+            &mut measurer,
+        );
+        let without = layout_dialog(
+            1000.0,
+            700.0,
+            &secret_dialog(false, false),
+            &config,
+            &mut measurer,
+        );
+
+        assert_eq!(
+            without.modal_rect.height,
+            with.modal_rect.height + cfg.gap as f32 + cfg.font_size as f32
+        );
+        let note = without.note_rect.expect("note");
+        let row = without.remember_rect.unwrap();
+        assert!(note.y >= row.y + row.height);
+        assert!(note.y + note.height <= without.confirm_rect.y);
+    }
+
+    #[test]
+    fn a_secret_dialog_is_taller_than_the_plain_one_by_the_field_and_the_box() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let mut measurer = TextMeasurer::new();
+        let plain = layout_dialog(1000.0, 700.0, &two_button_dialog(), &config, &mut measurer);
+        let secret = layout_dialog(
+            1000.0,
+            700.0,
+            &secret_dialog(true, false),
+            &config,
+            &mut measurer,
+        );
+
+        let gap = cfg.gap as f32;
+        assert_eq!(
+            secret.modal_rect.height,
+            plain.modal_rect.height
+                + gap
+                + config.appearance.group_editor.input_height as f32
+                + gap
+                + TOGGLE_TRACK_HEIGHT
+        );
+    }
+
+    #[test]
+    fn the_masked_field_paints_dots_and_never_the_typed_text() {
+        use crate::masked_field::MaskedFieldState;
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let dialog = secret_dialog(true, false);
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+        let mut field = MaskedFieldState::new();
+        field.paste("tr0ub4dor-proof");
+        let view = SecretView {
+            field: &field,
+            selection_color: palette::hex(1, 2, 3),
+        };
+
+        let primitives = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            Some(&view),
+            &mut measurer,
+        );
+
+        let texts: Vec<String> = text_colors(&primitives)
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert!(texts.iter().any(|t| *t == "•".repeat(15)), "{texts:?}");
+        assert!(
+            texts.iter().all(|t| !t.contains("tr0ub4dor")),
+            "the typed text is never drawn: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn a_refused_secret_paints_the_error_line_in_the_error_color() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let field = crate::masked_field::MaskedFieldState::new();
+        let view = SecretView {
+            field: &field,
+            selection_color: palette::hex(1, 2, 3),
+        };
+        let paint = |retry: bool, measurer: &mut TextMeasurer| {
+            let dialog = secret_dialog(true, retry);
+            let layout = layout_dialog(1000.0, 700.0, &dialog, &config, measurer);
+            text_colors(&paint_dialog(
+                &layout,
+                &dialog,
+                &config,
+                &pal,
+                1000.0,
+                700.0,
+                Some(&view),
+                measurer,
+            ))
+        };
+
+        let refused = paint(true, &mut measurer);
+        let fresh = paint(false, &mut measurer);
+
+        let error = refused
+            .iter()
+            .find(|(t, _)| t == "O servidor recusou a senha.")
+            .expect("the error line");
+        assert_eq!(error.1, pal.warning_severity_error);
+        let body = fresh.iter().find(|(t, _)| t == "deploy@10.4.1.20").unwrap();
+        assert_eq!(body.1, pal.dialog_body_text);
+    }
+
+    #[test]
+    fn connect_is_the_primary_button_and_not_the_destructive_one() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let field = crate::masked_field::MaskedFieldState::new();
+        let view = SecretView {
+            field: &field,
+            selection_color: palette::hex(1, 2, 3),
+        };
+        let dialog = secret_dialog(true, false);
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+
+        let primitives = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            Some(&view),
+            &mut measurer,
+        );
+
+        let confirm = colors_of(&primitives)
+            .into_iter()
+            .find(|(rect, _)| *rect == layout.confirm_rect)
+            .map(|(_, color)| color)
+            .expect("the connect button");
+        assert_eq!(confirm, crate::settings::TOGGLE_ON);
+        assert_ne!(confirm, pal.dialog_confirm_background);
+        let label = text_colors(&primitives)
+            .into_iter()
+            .find(|(text, _)| text == "Conectar")
+            .expect("label");
+        assert_eq!(label.1, crate::toggle::TOGGLE_KNOB_COLOR);
+    }
+
+    #[test]
+    fn the_button_focus_ring_only_shows_when_the_buttons_have_the_focus() {
+        use crate::dialog::SecretFocus;
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let field = crate::masked_field::MaskedFieldState::new();
+        let view = SecretView {
+            field: &field,
+            selection_color: palette::hex(1, 2, 3),
+        };
+        let rings = |dialog: &ConfirmDialog, measurer: &mut TextMeasurer| {
+            let layout = layout_dialog(1000.0, 700.0, dialog, &config, measurer);
+            paint_dialog(
+                &layout,
+                dialog,
+                &config,
+                &pal,
+                1000.0,
+                700.0,
+                Some(&view),
+                measurer,
+            )
+            .iter()
+            .filter(|p| {
+                matches!(p, Primitive::RoundedQuad(q)
+                    if q.border_color == pal.dialog_focus_ring && q.border_width == 1.0)
+            })
+            .count()
+        };
+
+        let mut dialog = secret_dialog(true, false);
+        // The field has the focus at the start: one ring, on the field.
+        assert_eq!(rings(&dialog, &mut measurer), 1);
+        dialog.focus_secret(SecretFocus::Remember);
+        assert_eq!(
+            rings(&dialog, &mut measurer),
+            1,
+            "the ring moves to the box"
+        );
+        dialog.focus_secret(SecretFocus::Buttons);
+        assert_eq!(rings(&dialog, &mut measurer), 1, "and then to the button");
+    }
+
+    #[test]
+    fn the_box_is_off_and_dim_without_a_vault_even_if_it_was_ticked() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let field = crate::masked_field::MaskedFieldState::new();
+        let view = SecretView {
+            field: &field,
+            selection_color: palette::hex(1, 2, 3),
+        };
+        let mut dialog = secret_dialog(false, false);
+        if let Some(facts) = dialog.secret.as_mut() {
+            facts.remember = true;
+        }
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+
+        let primitives = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            Some(&view),
+            &mut measurer,
+        );
+
+        let track = layout.toggle_rect.unwrap();
+        let track_color = colors_of(&primitives)
+            .into_iter()
+            .find(|(rect, _)| *rect == track)
+            .map(|(_, color)| color)
+            .expect("track");
+        assert_eq!(track_color, crate::settings::TOGGLE_OFF);
+        let texts = text_colors(&primitives);
+        let label = texts
+            .iter()
+            .find(|(t, _)| t == "Lembrar no cofre do sistema")
+            .unwrap();
+        assert_eq!(label.1, pal.menu_item_disabled_text);
+        let note = texts
+            .iter()
+            .find(|(t, _)| t == "O cofre do sistema não está disponível.")
+            .expect("the dim note");
+        assert_eq!(note.1, pal.menu_item_disabled_text);
+    }
+
+    #[test]
+    fn clicks_land_on_the_field_the_box_or_nothing() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_dialog(
+            1000.0,
+            700.0,
+            &secret_dialog(true, false),
+            &config,
+            &mut measurer,
+        );
+
+        assert_eq!(
+            secret_hit(&layout, center(layout.field_rect.unwrap())),
+            Some(SecretHit::Field)
+        );
+        assert_eq!(
+            secret_hit(&layout, center(layout.remember_rect.unwrap())),
+            Some(SecretHit::Remember)
+        );
+        assert_eq!(secret_hit(&layout, center(layout.confirm_rect)), None);
+        // A dialog with no secret has neither.
+        let plain = layout_dialog(1000.0, 700.0, &two_button_dialog(), &config, &mut measurer);
+        assert_eq!(secret_hit(&plain, center(plain.modal_rect)), None);
+    }
+
+    #[test]
+    fn a_click_in_the_field_picks_the_dot_under_it() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_dialog(
+            1000.0,
+            700.0,
+            &secret_dialog(true, false),
+            &config,
+            &mut measurer,
+        );
+        let field = layout.field_rect.unwrap();
+        let editor = &config.appearance.group_editor;
+        let dot = measurer.measure_width("•", MASK_FONT, editor.input_font_size as f32);
+        let start = field.x + editor.input_padding_x as f32;
+
+        let at = |x: f32, measurer: &mut TextMeasurer| {
+            secret_field_scalar_at(&layout, x, &config, 5, measurer)
+        };
+
+        assert_eq!(at(start - 20.0, &mut measurer), 0, "left of the text");
+        assert_eq!(at(start + dot * 2.1, &mut measurer), 2);
+        assert_eq!(
+            at(start + dot * 99.0, &mut measurer),
+            5,
+            "clamped to the end"
+        );
+    }
+
+    #[test]
+    fn a_long_key_path_is_cut_in_the_middle_and_keeps_both_ends() {
+        let mut measurer = TextMeasurer::new();
+        let path = "/home/someone/.ssh/work/projects/very/long/folder/names/id_ed25519";
+        let full = measurer.measure_width(path, BODY_FONT, 12.5);
+
+        let cut = truncate_middle(path, BODY_FONT, 12.5, full / 2.0, &mut measurer);
+
+        assert!(cut.contains('…'));
+        assert!(cut.starts_with("/home"), "{cut}");
+        assert!(
+            cut.ends_with("id_ed25519") || cut.ends_with("ed25519"),
+            "{cut}"
+        );
+        assert!(measurer.measure_width(&cut, BODY_FONT, 12.5) <= full / 2.0);
+        // What fits is left alone.
+        assert_eq!(
+            truncate_middle("short", BODY_FONT, 12.5, 1000.0, &mut measurer),
+            "short"
+        );
+    }
+
+    #[test]
+    fn the_secret_dialog_fits_in_every_language() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        for catalog in test_support::all_catalogs() {
+            let dialog = ConfirmDialog::secret(
+                &catalog,
+                &porecatu_term::SecretLabel::Password {
+                    user: "deploy".to_owned(),
+                    host: "10.4.1.20".to_owned(),
+                },
+                false,
+                true,
+                DialogAction::CloseWindow,
+            );
+            let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+            let facts = dialog.secret.as_ref().unwrap();
+            let row = layout.remember_rect.unwrap();
+            let label = measurer.measure_width(
+                &facts.remember_label,
+                BODY_FONT,
+                config.appearance.dialog.font_size as f32,
+            );
+            assert!(
+                TOGGLE_TRACK_WIDTH + config.appearance.dialog.button_gap as f32 + label
+                    <= row.width,
+                "the box label fits its row: {}",
+                facts.remember_label
+            );
+            assert!(layout.confirm_rect.x >= layout.modal_rect.x);
+        }
+    }
+
     #[test]
     fn the_three_button_dialog_paints_save_primary_and_discard_destructive() {
         let config = porecatu_config::Config::default();
@@ -2744,7 +3497,9 @@ mod tests {
         let mut dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 2);
         let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
         let paint = |dialog: &ConfirmDialog, measurer: &mut TextMeasurer| {
-            paint_dialog(&layout, dialog, &config, &pal, 1000.0, 700.0, measurer)
+            paint_dialog(
+                &layout, dialog, &config, &pal, 1000.0, 700.0, None, measurer,
+            )
         };
         let primitives = paint(&dialog, &mut measurer);
         let fills = colors_of(&primitives);
@@ -2802,6 +3557,7 @@ mod tests {
             &pal,
             1000.0,
             700.0,
+            None,
             &mut measurer,
         );
         dialog.set_hovered(Some(DialogButton::Confirm));
@@ -2812,6 +3568,7 @@ mod tests {
             &pal,
             1000.0,
             700.0,
+            None,
             &mut measurer,
         );
         assert_eq!(plain.len(), hovered.len());

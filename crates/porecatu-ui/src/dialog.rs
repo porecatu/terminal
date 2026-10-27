@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use porecatu_core::{GroupId, PaneId, TabId};
 use porecatu_locale::Catalog;
-use porecatu_term::PromptId;
+use porecatu_term::{PromptId, SecretLabel};
 
 use crate::messages::msg;
 
@@ -61,6 +61,39 @@ pub enum DialogAction {
     /// Confirmar responde `Confirm` à pergunta `prompt` do painel; qualquer
     /// outra saída (cancelar, `Esc`) responde `Cancel`.
     HostKey(TabId, PaneId, PromptId),
+    /// RF-20.12 (ADR-0075 §2): senha ou passphrase. Confirmar responde à
+    /// pergunta `prompt` do painel com o texto do campo, **movido**; qualquer
+    /// outra saída responde `Cancel`. O campo mascarado não mora aqui (este
+    /// enum é `Clone`): vive em `WindowState::secret_input`.
+    Secret(TabId, PaneId, PromptId),
+}
+
+/// Onde as teclas vão no diálogo de segredo. Aqui o foco inicial é o **campo**,
+/// não o cancelar: o diálogo não é destrutivo, e o que o usuário veio fazer é
+/// digitar (ADR-0075 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretFocus {
+    Field,
+    Remember,
+    /// Um dos botões; qual, está em [`ConfirmDialog::focused`].
+    Buttons,
+}
+
+/// O que o diálogo de segredo tem além de um diálogo de confirmação: só dado.
+/// O **texto digitado** é a única coisa que não mora aqui (este tipo é `Clone`
+/// e `Debug`): vive num `MaskedFieldState` em `WindowState::secret_field`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretFacts {
+    pub remember_label: String,
+    /// Sem cofre, a caixa fica desabilitada e leva a nota esmaecida
+    /// (RF-20.14).
+    pub vault_available: bool,
+    pub unavailable_note: String,
+    /// O corpo é o caminho de uma chave: trunca no **meio** (ADR-0075 §2).
+    pub body_is_path: bool,
+    /// A caixa "Lembrar no cofre do sistema", desmarcada ao abrir.
+    pub remember: bool,
+    pub focus: SecretFocus,
 }
 
 /// O tom de uma linha abaixo do corpo (ADR-0075 §3).
@@ -107,6 +140,13 @@ pub struct ConfirmDialog {
     pub action: DialogAction,
     /// Linhas entre o corpo e os botões; vazio nos diálogos de sempre.
     pub lines: Vec<DialogLine>,
+    /// Só no diálogo de segredo: o campo e a caixa "Lembrar" entram entre o
+    /// corpo e os botões.
+    /// Em caixa: o diálogo viaja em enums pequenos (`TabCloseOutcome`), e só um
+    /// em cada centena é de segredo.
+    pub secret: Option<Box<SecretFacts>>,
+    /// O corpo é a linha de erro (segredo recusado): pintado na cor de erro.
+    pub body_is_error: bool,
     focused: DialogButton,
     /// O botão sob o cursor, só no diálogo de três saídas: os de dois botões
     /// não têm realce de hover.
@@ -129,6 +169,8 @@ impl ConfirmDialog {
             discard_label: None,
             action,
             lines: Vec::new(),
+            secret: None,
+            body_is_error: false,
             focused: DialogButton::Cancel,
             hovered: None,
         }
@@ -264,6 +306,95 @@ impl ConfirmDialog {
             });
         }
         dialog
+    }
+
+    /// RF-20.12 (ADR-0075 §2): senha ou passphrase. Todo texto é do app: o que
+    /// o servidor escreveu num keyboard-interactive não chega aqui. Segredo
+    /// recusado (`retry`) põe a linha de erro no lugar do corpo.
+    pub fn secret(
+        catalog: &Catalog,
+        label: &SecretLabel,
+        vault_available: bool,
+        retry: bool,
+        action: DialogAction,
+    ) -> Self {
+        let (title, plain_body, body_is_path, refused) = match label {
+            SecretLabel::Password { user, host } => {
+                let target = format!("{user}@{host}");
+                (
+                    msg::dialog::secret::title_password(catalog, &target),
+                    target,
+                    false,
+                    msg::dialog::secret::refused_password(catalog),
+                )
+            }
+            SecretLabel::KeyPassphrase { path } => (
+                msg::dialog::secret::title_passphrase(catalog),
+                path.display().to_string(),
+                true,
+                msg::dialog::secret::refused_passphrase(catalog),
+            ),
+        };
+        let mut dialog = Self::new(
+            title,
+            if retry { refused } else { plain_body },
+            msg::dialog::secret::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            action,
+        );
+        dialog.body_is_error = retry;
+        dialog.secret = Some(Box::new(SecretFacts {
+            remember_label: msg::dialog::secret::remember(catalog),
+            vault_available,
+            unavailable_note: msg::dialog::secret::remember_unavailable(catalog),
+            body_is_path: body_is_path && !retry,
+            remember: false,
+            focus: SecretFocus::Field,
+        }));
+        dialog
+    }
+
+    /// A caixa só vale com cofre (RF-20.14).
+    pub fn toggle_remember(&mut self) {
+        if let Some(facts) = self.secret.as_mut()
+            && facts.vault_available
+        {
+            facts.remember = !facts.remember;
+        }
+    }
+
+    /// Foco no campo ou na caixa, por clique.
+    pub fn focus_secret(&mut self, focus: SecretFocus) {
+        if let Some(facts) = self.secret.as_mut() {
+            facts.focus = focus;
+        }
+    }
+
+    /// Anda `delta` posições, em círculo, na ordem de leitura e de `Tab`:
+    /// campo, caixa (se há cofre), Cancelar, Conectar.
+    pub fn step_secret_focus(&mut self, delta: i32) {
+        let Some(facts) = self.secret.as_ref() else {
+            return;
+        };
+        let mut order = vec![(SecretFocus::Field, DialogButton::Cancel)];
+        if facts.vault_available {
+            order.push((SecretFocus::Remember, DialogButton::Cancel));
+        }
+        order.push((SecretFocus::Buttons, DialogButton::Cancel));
+        order.push((SecretFocus::Buttons, DialogButton::Confirm));
+        let at = order
+            .iter()
+            .position(|(focus, button)| {
+                *focus == facts.focus && (*focus != SecretFocus::Buttons || *button == self.focused)
+            })
+            .unwrap_or(0) as i32;
+        let (focus, button) = order[(at + delta).rem_euclid(order.len() as i32) as usize];
+        if focus == SecretFocus::Buttons {
+            self.focused = button;
+        }
+        if let Some(facts) = self.secret.as_mut() {
+            facts.focus = focus;
+        }
     }
 
     /// O botão sob o cursor, realçado só no diálogo de três saídas.

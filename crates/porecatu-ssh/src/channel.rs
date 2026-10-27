@@ -15,6 +15,7 @@ use crate::known_hosts::KnownHostsFiles;
 use crate::runtime;
 use crate::spawn::{Connection, ConnectionId, OpenError, SshSpawn};
 use crate::task;
+use crate::vault::{SystemVault, Vault};
 
 /// O que a tarefa recebe do lado síncrono. Escrita e controle viajam no mesmo
 /// canal, para a tarefa esperar por uma coisa só.
@@ -74,15 +75,22 @@ impl SshChannel {
     /// [`try_end`]: SshChannel::try_end
     /// [`reader`]: SshChannel::reader
     pub fn open(spawn: SshSpawn, asker: Arc<dyn Asker>) -> Result<Self, OpenError> {
-        Self::open_with(spawn, asker, KnownHostsFiles::standard())
+        Self::open_with(
+            spawn,
+            asker,
+            KnownHostsFiles::standard(),
+            Arc::new(SystemVault),
+        )
     }
 
-    /// Como [`open`](SshChannel::open), com os arquivos de `known_hosts` à
-    /// escolha -- o que os testes usam para não tocar o `~/.ssh` de quem roda.
+    /// Como [`open`](SshChannel::open), com os arquivos de `known_hosts` e o
+    /// cofre à escolha -- o que os testes usam para não tocar o `~/.ssh` nem o
+    /// cofre de quem roda.
     pub(crate) fn open_with(
         spawn: SshSpawn,
         asker: Arc<dyn Asker>,
         files: KnownHostsFiles,
+        vault: Arc<dyn Vault>,
     ) -> Result<Self, OpenError> {
         if matches!(spawn.connection, Connection::Share(_)) {
             return Err(OpenError::ShareUnsupported);
@@ -96,6 +104,7 @@ impl SshChannel {
             spawn,
             files,
             asker,
+            vault,
             data_tx,
             cmd_tx.clone(),
             cmd_rx,

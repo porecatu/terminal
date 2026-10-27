@@ -2396,6 +2396,7 @@ impl SettingsWindow {
                     pal,
                     self.logical_width,
                     self.logical_height,
+                    None,
                     measurer,
                 ),
             );

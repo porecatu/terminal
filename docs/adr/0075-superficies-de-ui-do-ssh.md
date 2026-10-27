@@ -60,6 +60,8 @@ Sobre a anatomia da §2.15 — overlay, largura 380, título, botões —, na or
 
 Segredo recusado reabre o mesmo diálogo com uma linha de erro no lugar do corpo, na cor de erro da barra de severidade do aviso (§2.14) — a tentativa anterior não é mencionada além disso, e o campo volta vazio.
 
+> **Como ficou (prompt 13).** O diálogo de segredo é um `ConfirmDialog` com `secret: Option<Box<SecretFacts>>`, dado puro: rótulo e nota da caixa, se há cofre, a caixa ligada ou não e **onde está o foco** (campo, caixa ou botões). O **texto digitado** é o único pedaço que não cabe ali (`ConfirmDialog` é `Clone`) e mora num `MaskedFieldState` em `WindowState::secret_field`, que cai e é zerado com o diálogo. O foco anda campo → caixa (só com cofre) → Cancelar → Conectar; `Enter` no campo ou na caixa conecta, e **nunca com o campo vazio**; Espaço na caixa alterna, e no campo é parte da senha; o anel de foco dos botões só aparece com o foco neles. O corpo é o destino (`usuário@host`) ou o caminho da chave, cortado **no meio**; recusado, vira a linha de erro na cor da §2.14. A pergunta de segredo e a de host usam a mesma fila de pendentes (campainha, abre ao chegar ao painel). O campo é desenhado em Iosevka Fixed (pontos com o mesmo avanço de célula), e o clique nele põe o cursor antes do ponto sob o mouse; arrastar para selecionar não foi feito (`Shift+setas` e `Ctrl+A` valem).
+
 ### 3. Diálogo de host desconhecido
 
 | Elemento | Origem |

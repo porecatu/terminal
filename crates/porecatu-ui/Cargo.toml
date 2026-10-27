@@ -35,6 +35,9 @@ notify = "8.2.0"
 # ADR proíbe.
 opener = { version = "0.9", features = ["reveal"] }
 png = "0.18"
+# Buffer do campo mascarado (ADR-0075 §1): a mesma versão que `porecatu-ssh`
+# declara e que a pilha RustCrypto do `russh` já traz. MIT OR Apache-2.0.
+zeroize = "1.9"
 porecatu-config = { path = "../porecatu-config" }
 porecatu-core = { path = "../porecatu-core" }
 porecatu-locale = { path = "../porecatu-locale" }

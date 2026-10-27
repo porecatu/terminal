@@ -155,6 +155,17 @@ pub(crate) fn profile_problem(
 /// Aviso de uma chave de perfil com `password`, `passphrase` ou `secret` no
 /// nome (ADR-0072 §6): ignorada como toda chave desconhecida, mas a frase diz
 /// que segredo vai no cofre do sistema. O valor nunca foi lido.
+/// ADR-0073 §3: a conexão foi aceita, mas o cofre do sistema não guardou o
+/// segredo. Aviso do app (canal 1): a nota no grid se perderia na saída do
+/// shell.
+pub(crate) fn secret_not_saved(catalog: &Catalog) -> (Severity, String, String) {
+    (
+        Severity::Warning,
+        msg::notice::secret_not_saved::title(catalog),
+        msg::notice::secret_not_saved::body(catalog),
+    )
+}
+
 pub(crate) fn secret_profile_key(catalog: &Catalog, key: &str) -> (Severity, String, String) {
     (
         Severity::Warning,
@@ -839,6 +850,15 @@ registry! {
             body(),
             confirm(),
         },
+        secret {
+            title_password(target),
+            title_passphrase(),
+            remember(),
+            remember_unavailable(),
+            confirm(),
+            refused_password(),
+            refused_passphrase(),
+        },
     }
     note {
         process_exited(code),
@@ -964,6 +984,10 @@ registry! {
         secret_profile_key {
             title(),
             body(key),
+        },
+        secret_not_saved {
+            title(),
+            body(),
         },
         theme_file_invalid {
             title(),
@@ -1182,6 +1206,14 @@ pub(crate) mod test_support {
 
     pub(crate) fn en_us() -> Catalog {
         catalog("en_US")
+    }
+
+    /// Os cinco idiomas que o projeto entrega.
+    pub(crate) fn all_catalogs() -> Vec<Catalog> {
+        ["en_US", "pt_BR", "es_ES", "fr_FR", "de_DE"]
+            .into_iter()
+            .map(catalog)
+            .collect()
     }
 }
 
@@ -1539,6 +1571,52 @@ mod tests {
             body,
             "linha 3, coluna 8: perfil ignorado: \"cwd\" não vale para o tipo \"ssh\""
         );
+    }
+
+    #[test]
+    fn the_secret_dialog_is_translated_and_its_title_names_the_destination() {
+        let titles: Vec<String> = test_support::all_catalogs()
+            .iter()
+            .map(|catalog| msg::dialog::secret::title_password(catalog, "deploy@10.4.1.20"))
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .all(|title| title.contains("deploy@10.4.1.20"))
+        );
+        // Five languages, five different words for "password".
+        let mut unique = titles.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 5, "{titles:?}");
+        for catalog in test_support::all_catalogs() {
+            for text in [
+                msg::dialog::secret::title_passphrase(&catalog),
+                msg::dialog::secret::remember(&catalog),
+                msg::dialog::secret::remember_unavailable(&catalog),
+                msg::dialog::secret::confirm(&catalog),
+                msg::dialog::secret::refused_password(&catalog),
+                msg::dialog::secret::refused_passphrase(&catalog),
+            ] {
+                assert!(!text.is_empty() && !text.contains('{'), "{text}");
+            }
+        }
+        assert_eq!(
+            msg::dialog::secret::remember(&test_support::pt_br()),
+            "Lembrar no cofre do sistema"
+        );
+    }
+
+    #[test]
+    fn the_unsaved_secret_warning_is_a_warning_in_every_language_and_leaks_nothing() {
+        for catalog in test_support::all_catalogs() {
+            let (severity, title, body) = secret_not_saved(&catalog);
+            assert_eq!(severity, Severity::Warning);
+            assert!(!title.is_empty() && !body.is_empty());
+        }
+        let (_, title, body) = secret_not_saved(&test_support::pt_br());
+        assert_eq!(title, "Segredo não salvo");
+        assert!(!body.to_lowercase().contains("guia"));
     }
 
     #[test]

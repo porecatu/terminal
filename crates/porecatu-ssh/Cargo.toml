@@ -26,3 +26,8 @@ sha1 = "0.11"
 subtle = "2.6"
 ring = "0.17"
 dirs = "7"
+# ADR-0073 §5: o segredo vive num `Zeroizing<String>`. A versão é a que a pilha
+# RustCrypto do `russh` já traz.
+zeroize = "1.9"
+# ADR-0073 §1. Pinar exato; subir é tarefa própria. Só o módulo `vault` o usa.
+keyring = { version = "=4.2.0", default-features = false, features = ["v1"] }

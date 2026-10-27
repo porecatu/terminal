@@ -9,15 +9,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use porecatu_ssh::{
-    Asker, End, EndProbe, FailKind, HostKeyQuestion, KnownEntry, LostKind, OpenError, Question,
-    ReadCause, Reply, SshChannel, SshSpawn,
+    Asker, End, EndProbe, FailKind, HostKeyQuestion, KnownEntry, LostKind, Notice, OpenError,
+    Question, ReadCause, Reply, SecretQuestion, SecretTarget, SshChannel, SshSpawn,
 };
 
 use crate::backend::{
     Backend, EndReason, FailCause, Finish, HostKeyEntry, HostKeyPresented, Inspect,
     KnownHostsCause, Liveness, LostCause,
 };
-use crate::prompt::{Answer, PromptKind, PromptSink};
+use crate::prompt::{Answer, PromptKind, PromptSink, SecretLabel, TermNotice};
 
 pub(crate) struct SshBackend {
     channel: SshChannel,
@@ -41,29 +41,60 @@ struct PromptAsker(PromptSink);
 
 impl Asker for PromptAsker {
     fn ask(&self, question: Question, on_reply: Box<dyn FnOnce(Reply) + Send>) {
-        let Question::HostKey(HostKeyQuestion {
-            algorithm,
-            fingerprint,
-            other_types,
-            skipped_lines,
-            ..
-        }) = question;
-        self.0.ask_with(
-            PromptKind::HostKey {
+        match question {
+            Question::HostKey(HostKeyQuestion {
                 algorithm,
                 fingerprint,
-                known_types: other_types,
+                other_types,
                 skipped_lines,
-            },
-            // Só `Confirm` confirma: `Cancel` e qualquer outra resposta (um
-            // segredo, que aqui não faz sentido) recusam.
-            move |answer| {
-                on_reply(match answer {
-                    Answer::Confirm => Reply::Confirm,
-                    Answer::Secret { .. } | Answer::Cancel => Reply::Cancel,
-                });
-            },
-        );
+                ..
+            }) => self.0.ask_with(
+                PromptKind::HostKey {
+                    algorithm,
+                    fingerprint,
+                    known_types: other_types,
+                    skipped_lines,
+                },
+                // Só `Confirm` confirma: `Cancel` e qualquer outra resposta (um
+                // segredo, que aqui não faz sentido) recusam.
+                move |answer| {
+                    on_reply(match answer {
+                        Answer::Confirm => Reply::Confirm,
+                        Answer::Secret { .. } | Answer::Cancel => Reply::Cancel,
+                    });
+                },
+            ),
+            Question::Secret(SecretQuestion {
+                target,
+                vault_available,
+                retry,
+            }) => self.0.ask_with(
+                PromptKind::Secret {
+                    label: match target {
+                        SecretTarget::Password { user, host } => {
+                            SecretLabel::Password { user, host }
+                        }
+                        SecretTarget::KeyPassphrase { path } => SecretLabel::KeyPassphrase { path },
+                    },
+                    vault_available,
+                    retry,
+                },
+                // O segredo atravessa por movimento. Confirmar um segredo
+                // sem texto não faz sentido: cancela.
+                move |answer| {
+                    on_reply(match answer {
+                        Answer::Secret { value, remember } => Reply::Secret { value, remember },
+                        Answer::Confirm | Answer::Cancel => Reply::Cancel,
+                    });
+                },
+            ),
+        }
+    }
+
+    fn notice(&self, notice: Notice) {
+        self.0.notice(match notice {
+            Notice::SecretNotSaved => TermNotice::SecretNotSaved,
+        });
     }
 }
 
@@ -364,16 +395,123 @@ mod tests {
             reply_rx.recv().unwrap()
         };
 
-        assert_eq!(answer_with(Answer::Confirm), Reply::Confirm);
-        assert_eq!(answer_with(Answer::Cancel), Reply::Cancel);
+        assert!(matches!(answer_with(Answer::Confirm), Reply::Confirm));
+        assert!(matches!(answer_with(Answer::Cancel), Reply::Cancel));
         // A secret is not a confirmation, whatever it says.
-        assert_eq!(
+        assert!(matches!(
             answer_with(Answer::Secret {
                 value: crate::prompt::Secret::new("yes".into()),
                 remember: false
             }),
             Reply::Cancel
+        ));
+    }
+
+    fn secret_question(retry: bool) -> Question {
+        Question::Secret(SecretQuestion {
+            target: SecretTarget::Password {
+                user: "deploy".into(),
+                host: "example.org".into(),
+            },
+            vault_available: true,
+            retry,
+        })
+    }
+
+    /// A pergunta de segredo chega à UI com o destino, o cofre e a linha de
+    /// erro; a resposta volta com o texto **movido**, sem cópia no caminho.
+    #[test]
+    fn a_secret_question_becomes_a_prompt_and_the_typed_secret_moves_back() {
+        use crate::event::TermEvent;
+        use crate::prompt::PromptGuard;
+
+        let (events, unread) = std::sync::mpsc::channel();
+        let guard = PromptGuard::new();
+        let asker = PromptAsker(guard.sink(events, Arc::new(|| {})));
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        asker.ask(
+            secret_question(true),
+            Box::new(move |reply| {
+                let _ = reply_tx.send(reply);
+            }),
         );
+        let TermEvent::Prompt(prompt) = unread.try_recv().unwrap() else {
+            panic!("expected a prompt event");
+        };
+        assert_eq!(
+            prompt.kind,
+            PromptKind::Secret {
+                label: SecretLabel::Password {
+                    user: "deploy".into(),
+                    host: "example.org".into(),
+                },
+                vault_available: true,
+                retry: true,
+            }
+        );
+
+        let value = crate::prompt::Secret::new("proof-secret".into());
+        let address = value.expose().as_ptr();
+        guard.answer(
+            prompt.id,
+            Answer::Secret {
+                value,
+                remember: true,
+            },
+        );
+
+        match reply_rx.recv().unwrap() {
+            Reply::Secret { value, remember } => {
+                assert!(remember);
+                assert_eq!(value.expose(), "proof-secret");
+                assert_eq!(value.expose().as_ptr(), address, "moved, not copied");
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_secret_question_is_only_answered_by_a_secret() {
+        use crate::prompt::PromptGuard;
+
+        let reply_to = |answer: Answer| {
+            let (events, unread) = std::sync::mpsc::channel();
+            let guard = PromptGuard::new();
+            let asker = PromptAsker(guard.sink(events, Arc::new(|| {})));
+            let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+            asker.ask(
+                secret_question(false),
+                Box::new(move |reply| {
+                    let _ = reply_tx.send(reply);
+                }),
+            );
+            let crate::event::TermEvent::Prompt(prompt) = unread.try_recv().unwrap() else {
+                panic!("expected a prompt event");
+            };
+            guard.answer(prompt.id, answer);
+            reply_rx.recv().unwrap()
+        };
+
+        assert!(matches!(reply_to(Answer::Cancel), Reply::Cancel));
+        // Trusting a host is not typing a password.
+        assert!(matches!(reply_to(Answer::Confirm), Reply::Cancel));
+    }
+
+    #[test]
+    fn a_vault_write_failure_reaches_the_ui_as_a_notice_event() {
+        use crate::event::TermEvent;
+        use crate::prompt::PromptGuard;
+
+        let (events, unread) = std::sync::mpsc::channel();
+        let guard = PromptGuard::new();
+        let asker = PromptAsker(guard.sink(events, Arc::new(|| {})));
+
+        asker.notice(Notice::SecretNotSaved);
+
+        assert!(matches!(
+            unread.try_recv().unwrap(),
+            TermEvent::Notice(TermNotice::SecretNotSaved)
+        ));
     }
 
     #[test]
@@ -393,7 +531,7 @@ mod tests {
 
         drop(guard);
 
-        assert_eq!(reply_rx.recv().unwrap(), Reply::Cancel);
+        assert!(matches!(reply_rx.recv().unwrap(), Reply::Cancel));
     }
 
     /// Fim a fim, sem servidor: um destino que recusa a conexão aparece como
