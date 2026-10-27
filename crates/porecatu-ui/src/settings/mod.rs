@@ -22,6 +22,10 @@ mod interact;
 mod layout;
 mod paint;
 mod phrases;
+// Sem consumidor até as camadas da tela (grupo, lista, formulário): o modelo é
+// dado puro e é testado por inteiro aqui.
+#[allow(dead_code)]
+mod profiles_draft;
 pub(crate) mod save;
 mod shortcuts;
 mod window;
