@@ -26,6 +26,7 @@ mod profiles;
 mod project_file;
 mod session;
 mod shell;
+mod ssh_import;
 mod terminal;
 mod theme;
 
@@ -53,6 +54,11 @@ pub use project_file::{
 };
 pub use session::Session;
 pub use shell::Shell;
+pub use ssh_import::{
+    SshConfigImport, SshConfigImportError, SshConfigImportErrorKind, SshImportCandidate,
+    SshImportInvalid, SshImportStatus, SshImportUnsupported, default_ssh_config_path,
+    local_user_name, read_ssh_config,
+};
 pub use terminal::{
     Acrylic, AcrylicBlock, AcrylicState, AnsiPalette, BackgroundImage, BackgroundImageMode,
     Clipboard, Colors as TerminalColors, Cursor, CursorShape, DEFAULT_BLUR, Font, MAX_BLUR,

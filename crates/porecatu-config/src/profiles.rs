@@ -429,7 +429,7 @@ fn validate_ssh(raw: &RawProfile, item_start: usize) -> Result<SshProfile, RawPr
 
 /// No whitespace, control character, or any of `,|[]@#*?!` (ADR-0072 §6). An
 /// IPv6 literal is written without brackets (`::1`).
-fn is_valid_ssh_host(host: &str) -> bool {
+pub(crate) fn is_valid_ssh_host(host: &str) -> bool {
     !host.is_empty()
         && !host
             .chars()
@@ -437,7 +437,7 @@ fn is_valid_ssh_host(host: &str) -> bool {
 }
 
 /// No whitespace, control character, `@` or `:` (ADR-0072 §6).
-fn is_valid_ssh_user(user: &str) -> bool {
+pub(crate) fn is_valid_ssh_user(user: &str) -> bool {
     !user.is_empty()
         && !user
             .chars()
