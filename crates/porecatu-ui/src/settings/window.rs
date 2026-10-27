@@ -54,7 +54,7 @@ use super::layout::{
     banner_geometry, focus_order_with_banner, footer_buttons, group_items, hit_test, next_focus,
 };
 use super::paint;
-use super::profiles_draft::{self, Forget, ListKind, ProfilesDraft};
+use super::profiles_draft::{self, Forget, ListKind, ProfilesDraft, SecretKind};
 use super::save::Saved;
 use super::shortcuts::{Capturing, Conflict, Shortcuts};
 use super::{Group, HEADER_GAP_PX, TITLE_SIZE_PX};
@@ -76,7 +76,7 @@ fn forget_in_vault(target: &Forget) {
         }
     }
 }
-use crate::dialog::{ConfirmDialog, DialogButton};
+use crate::dialog::{ConfirmDialog, DialogAction, DialogButton};
 use crate::input::modifiers_from;
 use crate::keymap::{Capture, Chord, Platform};
 use crate::messages::msg;
@@ -219,6 +219,8 @@ pub(crate) struct SettingsWindow {
     /// "Importar do ~/.ssh/config" está aberto (o estado vazio; a importação é
     /// do prompt 16).
     import_open: bool,
+    /// O cofre do sistema responde (sondado uma vez, na criação da janela).
+    vault: bool,
     /// O texto do filtro do grupo Atalhos (RF-16.28); vale a cada tecla e
     /// vive enquanto a janela vive.
     filter: String,
@@ -279,6 +281,7 @@ impl SettingsWindow {
             shortcuts: Shortcuts::new(config, Platform::current()),
             profiles: ProfilesDraft::new(&config.profiles.list),
             import_open: false,
+            vault: porecatu_term::vault_available(),
             filter: String::new(),
             capturing: None,
             file: FileState::new(disk),
@@ -587,7 +590,18 @@ impl SettingsWindow {
         let Some(layout) = self.dialog_layout(env, measurer) else {
             return Press::Nothing;
         };
+        // A caixa de marcar do diálogo de excluir alterna sem fechá-lo.
+        if overlay::checkbox_hit(&layout, point) {
+            if let Some(dialog) = &mut self.dialog {
+                dialog.toggle_checkbox();
+            }
+            self.window.request_redraw();
+            return Press::Nothing;
+        }
         match overlay::dialog_hit(&layout, point) {
+            Some(button) if self.is_delete_dialog() => {
+                self.answer_delete(button == DialogButton::Confirm)
+            }
             Some(button) => self.answer(Self::button_answer(button)),
             None => Press::Nothing,
         }
@@ -597,15 +611,23 @@ impl SettingsWindow {
     /// botão focado -- o Cancelar, de início --, e `Tab`/setas andam entre os
     /// três.
     fn dialog_key(&mut self, key: &Key) -> Press {
+        let delete = self.is_delete_dialog();
         let Some(dialog) = &mut self.dialog else {
             return Press::Nothing;
         };
         match key {
+            Key::Named(NamedKey::Escape) if delete => return self.answer_delete(false),
             Key::Named(NamedKey::Escape) => return self.answer(DialogAnswer::Cancel),
+            Key::Named(NamedKey::Enter) if delete => {
+                let confirm = dialog.focused() == DialogButton::Confirm;
+                return self.answer_delete(confirm);
+            }
             Key::Named(NamedKey::Enter) => {
                 let answer = Self::button_answer(dialog.focused());
                 return self.answer(answer);
             }
+            // A caixa de marcar do diálogo de excluir: `Espaço` alterna.
+            Key::Named(NamedKey::Space) if delete => dialog.toggle_checkbox(),
             Key::Named(NamedKey::Tab) => {
                 dialog.step_focus(if self.modifiers.shift { -1 } else { 1 });
             }
@@ -787,6 +809,7 @@ impl SettingsWindow {
                 config_path: self.config_path.as_deref(),
                 profiles: Some(&self.profiles),
                 import_open: self.import_open,
+                vault: self.vault,
             };
             self.content = Some(content::build(
                 key,
@@ -1533,7 +1556,20 @@ impl SettingsWindow {
             content::ProfileClick::Select => {
                 self.choose_profile(index);
             }
+            content::ProfileClick::Forget(kind) => self.click_profile_forget(kind),
             content::ProfileClick::Nothing => {}
+        }
+    }
+
+    /// "Esquecer" é imediato (o segredo não é do arquivo); esquecer o que não
+    /// existe não é erro.
+    fn click_profile_forget(&mut self, kind: SecretKind) {
+        if let Some(target) = self
+            .profiles
+            .selected()
+            .and_then(|selected| self.profiles.forget_target(selected, kind))
+        {
+            forget_in_vault(&target);
         }
     }
 
@@ -1589,11 +1625,45 @@ impl SettingsWindow {
         self.invalidate();
     }
 
-    /// Tira o perfil `item` da lista. A exclusão é uma alteração pendente: o
-    /// arquivo só muda no Salvar, e Descartar a desfaz.
+    /// O `X` de um perfil: abre o diálogo de excluir (RF-20.4). Num perfil SSH
+    /// que nenhum outro compartilha, o diálogo leva a caixa "Apagar também a
+    /// senha e a passphrase salvas", marcada.
     fn delete_profile(&mut self, item: usize) {
-        self.profiles.delete(item, false);
-        self.invalidate();
+        let Some(info) = self.profiles.delete_info(item) else {
+            return;
+        };
+        self.choice = None;
+        self.editing = None;
+        self.dialog = Some(ConfirmDialog::delete_profile(
+            &self.catalog,
+            &info.name,
+            item,
+            info.offers_forget,
+        ));
+        self.hover.dismiss();
+        self.window.request_redraw();
+    }
+
+    /// Resposta do diálogo de excluir. Excluir tira o perfil da lista -- uma
+    /// alteração pendente: o arquivo só muda no Salvar, e o cofre só esquece o
+    /// que a caixa pediu **nesse** Salvar --; Cancelar não faz nada.
+    fn answer_delete(&mut self, confirm: bool) -> Press {
+        let Some(dialog) = self.dialog.take() else {
+            return Press::Nothing;
+        };
+        if confirm && let DialogAction::DeleteProfile(item) = dialog.action {
+            self.profiles.delete(item, dialog.checkbox_checked());
+            self.invalidate();
+        }
+        self.window.request_redraw();
+        Press::Nothing
+    }
+
+    /// O diálogo aberto é o de excluir perfil (e não o de pendências)?
+    fn is_delete_dialog(&self) -> bool {
+        self.dialog
+            .as_ref()
+            .is_some_and(|dialog| matches!(dialog.action, DialogAction::DeleteProfile(_)))
     }
 
     /// Escolhe o tema da linha `index`, se a linha é de tema (RF-16.24): a
@@ -2148,6 +2218,9 @@ impl SettingsWindow {
                     } else {
                         self.start_edit(index, EditPart::ListFirst(0));
                     }
+                }
+                ProfileTarget::Forget(kind) => {
+                    self.click_profile_forget(kind);
                 }
                 ProfileTarget::Actions => {}
             }

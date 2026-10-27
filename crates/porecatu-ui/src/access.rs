@@ -620,6 +620,17 @@ fn build_dialog(
     // exposto -- nem o texto, nem os pontos --, e a caixa "Lembrar" uma
     // alternância. O foco inicial é o campo.
     let mut focused_id = focused_id;
+    // A caixa de marcar do diálogo de excluir perfil: uma alternância.
+    if let Some(checkbox) = &dialog.checkbox {
+        let mut node = leaf(Role::Switch, checkbox.label.clone());
+        node.set_toggled(if checkbox.checked {
+            accesskit::Toggled::True
+        } else {
+            accesskit::Toggled::False
+        });
+        nodes.push((DIALOG_SECRET_REMEMBER_ID, node));
+        children.push(DIALOG_SECRET_REMEMBER_ID);
+    }
     if let Some(facts) = &dialog.secret {
         let mut field = Node::new(Role::PasswordInput);
         field.set_label(dialog.title.clone());

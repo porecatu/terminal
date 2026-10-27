@@ -255,6 +255,9 @@ auth_key = "Key only"
 auth_password = "Password only"
 auth_key_password = "Key, password"
 auth_custom = "Custom order"
+saved_password = "Saved password"
+saved_passphrase = "Saved passphrase"
+forget = "Forget"
 
 [settings.scope]
 new_tab = "applies to new tabs"
@@ -287,6 +290,10 @@ close_body = { one = "There is {count} unsaved change.", other = "There are {cou
 save_and_close = "Save and close"
 discard_and_close = "Discard and close"
 cancel = "Cancel"
+delete_profile_title = "Delete the profile «{name}»?"
+delete_profile_body = "The profile leaves the list; the file only changes when you save."
+delete_profile_confirm = "Delete"
+delete_profile_forget = "Also erase the saved password and passphrase"
 
 [settings.validation]
 out_of_range = "Value out of range: {min} to {max}."

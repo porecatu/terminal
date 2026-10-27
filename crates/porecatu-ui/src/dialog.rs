@@ -57,6 +57,10 @@ pub enum DialogAction {
     /// alterações pendentes. Quem responde é a própria janela de
     /// configurações, que guarda o rascunho; `App` só vê a resposta.
     SettingsPending,
+    /// RF-20.4 (ADR-0075 §6): excluir o perfil `n` da lista da tela de
+    /// configurações. Quem responde é a própria janela de configurações, que
+    /// tem o rascunho dos perfis; um diálogo de `WindowState` nunca o carrega.
+    DeleteProfile(usize),
     /// RF-20.16 (ADR-0075 §3): confiar numa chave de host desconhecida.
     /// Confirmar responde `Confirm` à pergunta `prompt` do painel; qualquer
     /// outra saída (cancelar, `Esc`) responde `Cancel`.
@@ -77,6 +81,15 @@ pub enum SecretFocus {
     Remember,
     /// Um dos botões; qual, está em [`ConfirmDialog::focused`].
     Buttons,
+}
+
+/// Uma caixa de marcar no corpo de um diálogo de confirmação, com a anatomia da
+/// alternância da tela de configurações: "Apagar também a senha e a passphrase
+/// salvas" ao excluir um perfil SSH (RF-20.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckboxFacts {
+    pub label: String,
+    pub checked: bool,
 }
 
 /// O que o diálogo de segredo tem além de um diálogo de confirmação: só dado.
@@ -145,6 +158,9 @@ pub struct ConfirmDialog {
     /// Em caixa: o diálogo viaja em enums pequenos (`TabCloseOutcome`), e só um
     /// em cada centena é de segredo.
     pub secret: Option<Box<SecretFacts>>,
+    /// Uma caixa de marcar entre o corpo e os botões, sem campo (o diálogo de
+    /// excluir perfil). Exclusiva do `secret`, que tem a própria.
+    pub checkbox: Option<Box<CheckboxFacts>>,
     /// O corpo é a linha de erro (segredo recusado): pintado na cor de erro.
     pub body_is_error: bool,
     focused: DialogButton,
@@ -170,6 +186,7 @@ impl ConfirmDialog {
             action,
             lines: Vec::new(),
             secret: None,
+            checkbox: None,
             body_is_error: false,
             focused: DialogButton::Cancel,
             hovered: None,
@@ -269,6 +286,45 @@ impl ConfirmDialog {
         );
         dialog.discard_label = Some(msg::settings::dialog::discard_and_close(catalog));
         dialog
+    }
+
+    /// RF-20.4 (ADR-0075 §6): excluir o perfil `index` da lista. Com
+    /// `offers_forget` (perfil SSH que nenhum outro compartilha), a caixa
+    /// "Apagar também a senha e a passphrase salvas" vem **marcada**. Excluir é
+    /// o confirmar destrutivo de sempre, e o foco inicial é o cancelar.
+    pub fn delete_profile(
+        catalog: &Catalog,
+        name: &str,
+        index: usize,
+        offers_forget: bool,
+    ) -> Self {
+        let mut dialog = Self::new(
+            msg::settings::dialog::delete_profile_title(catalog, name),
+            msg::settings::dialog::delete_profile_body(catalog),
+            msg::settings::dialog::delete_profile_confirm(catalog),
+            msg::dialog::cancel(catalog),
+            DialogAction::DeleteProfile(index),
+        );
+        if offers_forget {
+            dialog.checkbox = Some(Box::new(CheckboxFacts {
+                label: msg::settings::dialog::delete_profile_forget(catalog),
+                checked: true,
+            }));
+        }
+        dialog
+    }
+
+    /// A caixa de marcar está marcada (e existe).
+    pub fn checkbox_checked(&self) -> bool {
+        self.checkbox
+            .as_ref()
+            .is_some_and(|checkbox| checkbox.checked)
+    }
+
+    pub fn toggle_checkbox(&mut self) {
+        if let Some(checkbox) = self.checkbox.as_mut() {
+            checkbox.checked = !checkbox.checked;
+        }
     }
 
     /// RF-20.16 (ADR-0075 §3): host desconhecido. O corpo tem uma linha; abaixo
@@ -535,6 +591,23 @@ mod tests {
         assert_eq!(dialog.focused(), DialogButton::Confirm);
         dialog.toggle_focus();
         assert_eq!(dialog.focused(), DialogButton::Cancel);
+    }
+
+    #[test]
+    fn the_delete_profile_dialog_checks_the_forget_box_only_when_offered() {
+        let pt = test_support::pt_br();
+        let mut dialog = ConfirmDialog::delete_profile(&pt, "prod", 1, true);
+        assert_eq!(dialog.action, DialogAction::DeleteProfile(1));
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        assert!(dialog.checkbox_checked());
+        dialog.toggle_checkbox();
+        assert!(!dialog.checkbox_checked());
+        dialog.toggle_checkbox();
+        assert!(dialog.checkbox_checked());
+
+        let plain = ConfirmDialog::delete_profile(&pt, "prod", 1, false);
+        assert!(plain.checkbox.is_none());
+        assert!(!plain.checkbox_checked());
     }
 
     #[test]

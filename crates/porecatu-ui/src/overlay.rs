@@ -409,6 +409,12 @@ pub fn layout_dialog(
             + button_gap
             + measurer.measure_width(&facts.remember_label, BODY_FONT, body_size)
     });
+    // A caixa de marcar do diálogo de excluir perfil, na mesma anatomia.
+    let remember_width = remember_width.max(dialog.checkbox.as_ref().map_or(0.0, |checkbox| {
+        TOGGLE_TRACK_WIDTH
+            + button_gap
+            + measurer.measure_width(&checkbox.label, BODY_FONT, body_size)
+    }));
     let width = width
         .max(buttons_width + padding * 2.0)
         .max(widest_data + padding * 2.0)
@@ -427,8 +433,20 @@ pub fn layout_dialog(
         };
         gap + field_height + gap + TOGGLE_TRACK_HEIGHT + note
     });
-    let content_height =
-        title_size + gap + body_size + lines_height + secret_height + gap + button_height;
+    // A caixa sozinha (sem campo) custa o `gap` e a altura da alternância.
+    let checkbox_height = if dialog.checkbox.is_some() {
+        gap + TOGGLE_TRACK_HEIGHT
+    } else {
+        0.0
+    };
+    let content_height = title_size
+        + gap
+        + body_size
+        + lines_height
+        + secret_height
+        + checkbox_height
+        + gap
+        + button_height;
     let modal_height = padding * 2.0 + content_height;
     let modal_rect = Rect {
         x: (window_width - width) / 2.0,
@@ -495,6 +513,22 @@ pub fn layout_dialog(
                 height: body_size,
             });
         }
+    }
+    if dialog.checkbox.is_some() {
+        let below_body = modal_rect.y + padding + title_size + gap + body_size + lines_height;
+        let row = Rect {
+            x: modal_rect.x + padding,
+            y: below_body + gap,
+            width: modal_rect.width - padding * 2.0,
+            height: TOGGLE_TRACK_HEIGHT,
+        };
+        remember_rect = Some(row);
+        toggle_rect = Some(Rect {
+            x: row.x,
+            y: row.y,
+            width: TOGGLE_TRACK_WIDTH,
+            height: TOGGLE_TRACK_HEIGHT,
+        });
     }
 
     DialogLayout {
@@ -793,6 +827,27 @@ pub fn paint_dialog(
             }));
         }
     }
+    // A caixa de marcar do diálogo de excluir perfil: a alternância da tela de
+    // configurações, ligada quando marcada.
+    if let (Some(checkbox), Some(toggle)) = (dialog.checkbox.as_ref(), layout.toggle_rect) {
+        crate::toggle::push_toggle(
+            toggle,
+            checkbox.checked,
+            crate::settings::TOGGLE_ON,
+            crate::settings::TOGGLE_OFF,
+            &mut out,
+        );
+        out.push(Primitive::Text(TextRun {
+            origin: (
+                toggle.x + toggle.width + cfg.button_gap as f32,
+                toggle.y + (toggle.height - body_size) / 2.0,
+            ),
+            text: checkbox.label.clone(),
+            font: BODY_FONT,
+            size_px: body_size,
+            color: pal.dialog_body_text,
+        }));
+    }
 
     if let (Some(discard_rect), Some(discard_label)) =
         (layout.discard_rect, dialog.discard_label.as_ref())
@@ -901,6 +956,14 @@ pub fn paint_dialog(
     );
 
     out
+}
+
+/// O clique caiu na linha da caixa de marcar de um diálogo sem campo.
+pub fn checkbox_hit(layout: &DialogLayout, point: (f32, f32)) -> bool {
+    layout.field_rect.is_none()
+        && layout
+            .remember_rect
+            .is_some_and(|row| rect_contains(row, point))
 }
 
 #[allow(clippy::too_many_arguments)]

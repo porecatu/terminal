@@ -239,6 +239,9 @@ auth_key = "Nur Schlüssel"
 auth_password = "Nur Passwort"
 auth_key_password = "Schlüssel, Passwort"
 auth_custom = "Eigene Reihenfolge"
+saved_password = "Gespeichertes Passwort"
+saved_passphrase = "Gespeicherte Passphrase"
+forget = "Vergessen"
 
 [settings.scope]
 new_tab = "gilt für neue Tabs"
@@ -271,6 +274,10 @@ close_body = { one = "Es gibt {count} nicht gespeicherte Änderung.", other = "E
 save_and_close = "Speichern und schließen"
 discard_and_close = "Verwerfen und schließen"
 cancel = "Abbrechen"
+delete_profile_title = "Profil «{name}» löschen?"
+delete_profile_body = "Das Profil verlässt die Liste; die Datei ändert sich erst beim Speichern."
+delete_profile_confirm = "Löschen"
+delete_profile_forget = "Auch das gespeicherte Passwort und die Passphrase löschen"
 
 [settings.validation]
 out_of_range = "Wert außerhalb des Bereichs: {min} bis {max}."

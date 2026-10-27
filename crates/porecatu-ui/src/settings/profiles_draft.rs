@@ -378,6 +378,13 @@ struct Item {
     id_follows_name: bool,
 }
 
+/// Qual segredo salvo um botão "Esquecer" fala.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SecretKind {
+    Password,
+    Passphrase,
+}
+
 /// O que apagar no cofre quando o Salvar levar a exclusão (RF-20.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Forget {
@@ -694,6 +701,17 @@ impl ProfilesDraft {
                 form.identity_file.clone(),
             )
         })
+    }
+
+    /// O que o botão "Esquecer" de `index` apaga do cofre: a senha do destino,
+    /// ou a passphrase do arquivo de chave (nenhuma, sem arquivo informado).
+    pub(crate) fn forget_target(&self, index: usize, kind: SecretKind) -> Option<Forget> {
+        let (destination, key) = Self::ssh_targets(&self.items.get(index)?.form)?;
+        match kind {
+            SecretKind::Password => Some(Forget::Password(destination)),
+            SecretKind::Passphrase => (!key.trim().is_empty())
+                .then(|| Forget::Passphrase(porecatu_config::expand_tilde(&key))),
+        }
     }
 
     /// O diálogo de excluir `index` (RF-20.4).
@@ -1328,6 +1346,24 @@ user = "deploy"
         draft.delete(index, true);
         assert!(draft.edits().is_empty());
         assert!(draft.is_dirty());
+    }
+
+    #[test]
+    fn the_forget_button_targets_the_password_and_the_key_passphrase() {
+        let draft = draft();
+        assert!(matches!(
+            draft.forget_target(1, SecretKind::Password),
+            Some(Forget::Password(_))
+        ));
+        assert!(matches!(
+            draft.forget_target(1, SecretKind::Passphrase),
+            Some(Forget::Passphrase(path)) if path.ends_with("id_ed25519")
+        ));
+        // No key file: nothing to forget, and not an error. Local: no vault.
+        assert_eq!(draft.forget_target(2, SecretKind::Passphrase), None);
+        assert_eq!(draft.forget_target(0, SecretKind::Password), None);
+        // Forgetting is immediate: nothing becomes pending.
+        assert!(draft.edits().is_empty());
     }
 
     #[test]

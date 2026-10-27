@@ -257,6 +257,9 @@ auth_key = "Só a chave"
 auth_password = "Só a senha"
 auth_key_password = "Chave, senha"
 auth_custom = "Ordem personalizada"
+saved_password = "Senha salva"
+saved_passphrase = "Passphrase salva"
+forget = "Esquecer"
 
 [settings.scope]
 new_tab = "vale em aba nova"
@@ -289,6 +292,10 @@ close_body = { one = "Há {count} alteração não salva.", other = "Há {count}
 save_and_close = "Salvar e fechar"
 discard_and_close = "Descartar e fechar"
 cancel = "Cancelar"
+delete_profile_title = "Excluir o perfil «{name}»?"
+delete_profile_body = "O perfil sai da lista; o arquivo só muda quando você salvar."
+delete_profile_confirm = "Excluir"
+delete_profile_forget = "Apagar também a senha e a passphrase salvas"
 
 [settings.validation]
 out_of_range = "Valor fora da faixa: de {min} a {max}."

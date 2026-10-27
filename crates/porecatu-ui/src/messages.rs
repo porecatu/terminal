@@ -746,6 +746,9 @@ registry! {
             auth_password(),
             auth_key_password(),
             auth_custom(),
+            saved_password(),
+            saved_passphrase(),
+            forget(),
         },
         scope {
             new_tab(),
@@ -778,6 +781,10 @@ registry! {
             save_and_close(),
             discard_and_close(),
             cancel(),
+            delete_profile_title(name),
+            delete_profile_body(),
+            delete_profile_confirm(),
+            delete_profile_forget(),
         },
         validation {
             out_of_range(min, max),

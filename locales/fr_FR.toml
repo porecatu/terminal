@@ -239,6 +239,9 @@ auth_key = "Clé seulement"
 auth_password = "Mot de passe seulement"
 auth_key_password = "Clé, mot de passe"
 auth_custom = "Ordre personnalisé"
+saved_password = "Mot de passe enregistré"
+saved_passphrase = "Phrase secrète enregistrée"
+forget = "Oublier"
 
 [settings.scope]
 new_tab = "s'applique aux nouveaux onglets"
@@ -271,6 +274,10 @@ close_body = { one = "Il y a {count} modification non enregistrée.", other = "I
 save_and_close = "Enregistrer et fermer"
 discard_and_close = "Abandonner et fermer"
 cancel = "Annuler"
+delete_profile_title = "Supprimer le profil «{name}» ?"
+delete_profile_body = "Le profil quitte la liste ; le fichier ne change qu'à l'enregistrement."
+delete_profile_confirm = "Supprimer"
+delete_profile_forget = "Effacer aussi le mot de passe et la phrase secrète enregistrés"
 
 [settings.validation]
 out_of_range = "Valeur hors plage : de {min} à {max}."

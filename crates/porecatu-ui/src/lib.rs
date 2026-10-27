@@ -7780,7 +7780,7 @@ impl App {
             }
             // Vive na janela de configurações, que a resolve sozinha: um
             // diálogo de `WindowState` nunca o carrega.
-            DialogAction::SettingsPending => {}
+            DialogAction::SettingsPending | DialogAction::DeleteProfile(_) => {}
             // RF-20.16: "Confiar e conectar". O backend grava a linha no
             // `known_hosts` e segue; é a única saída que confia (as outras,
             // `dismiss_dialog`, respondem `Cancel`).

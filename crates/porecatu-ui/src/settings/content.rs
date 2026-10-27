@@ -78,6 +78,9 @@ pub(crate) struct ViewExtras<'a> {
     /// "Importar do ~/.ssh/config" foi aberto: o estado vazio ocupa o lugar do
     /// formulário (ADR-0075 §7; a importação é do prompt 16).
     pub import_open: bool,
+    /// O cofre do sistema responde: só então o formulário SSH mostra os
+    /// botões "Esquecer".
+    pub vault: bool,
 }
 
 /// Um botão da faixa, com a largura já medida.
@@ -194,6 +197,8 @@ pub(crate) enum ProfileTarget {
     Auth,
     /// A lista de argumentos ou de ambiente do formulário (perfil local).
     List(super::profiles_draft::ListKind),
+    /// "Senha salva" / "Passphrase salva" com o botão "Esquecer".
+    Forget(super::profiles_draft::SecretKind),
 }
 
 impl ControlView {
@@ -527,6 +532,7 @@ pub(crate) fn build(
             &mut blocks,
             profiles,
             extras.import_open,
+            extras.vault,
             catalog,
             m,
             panel_width,
@@ -731,7 +737,10 @@ user = "deploy"
                     if matches!(
                         row.profile,
                         Some(
-                            ProfileTarget::Field(_) | ProfileTarget::Auth | ProfileTarget::List(_)
+                            ProfileTarget::Field(_)
+                                | ProfileTarget::Auth
+                                | ProfileTarget::List(_)
+                                | ProfileTarget::Forget(_)
                         )
                     ) =>
                 {
@@ -1598,6 +1607,8 @@ pub(crate) enum ProfileClick {
     Edit(super::field_edit::EditPart),
     /// Abre a lista de escolha da autenticação.
     OpenAuth,
+    /// "Esquecer" do segredo salvo.
+    Forget(super::profiles_draft::SecretKind),
     /// O `X` do item `n` da lista de argumentos ou de ambiente.
     ListRemove(super::profiles_draft::ListKind, usize),
     /// "Adicionar" da lista.
@@ -1620,6 +1631,8 @@ pub(crate) fn profile_click(target: ProfileTarget, part: ControlPart) -> Profile
         (ProfileTarget::Field(_), _) => ProfileClick::Nothing,
         (ProfileTarget::Auth, ControlPart::Whole) => ProfileClick::OpenAuth,
         (ProfileTarget::Auth, _) => ProfileClick::Nothing,
+        (ProfileTarget::Forget(kind), ControlPart::Segment(0)) => ProfileClick::Forget(kind),
+        (ProfileTarget::Forget(_), _) => ProfileClick::Nothing,
         (ProfileTarget::List(_), ControlPart::ListField { item, second }) => {
             ProfileClick::Edit(if second {
                 EditPart::ListSecond(item)
@@ -1713,12 +1726,13 @@ fn form_row(
 fn push_profile_form(
     blocks: &mut Vec<Block>,
     profiles: &ProfilesDraft,
+    vault: bool,
     catalog: &Catalog,
     m: &Metrics,
     panel_width: f32,
     measurer: &mut TextMeasurer,
 ) {
-    use super::profiles_draft::{Field, ListKind};
+    use super::profiles_draft::{Field, ListKind, SecretKind};
     let Some(selected) = profiles.selected() else {
         return;
     };
@@ -1771,6 +1785,38 @@ fn push_profile_form(
             panel_width,
             measurer,
         ));
+    }
+
+    if vault && form.kind == porecatu_config::ProfileKind::Ssh {
+        let button = msg::settings::profiles::forget(catalog);
+        let width = measurer.measure_width(&button, BODY_FONT, m.button_font_size)
+            + m.button_padding_x * 2.0;
+        for (kind, label) in [
+            (
+                SecretKind::Password,
+                msg::settings::profiles::saved_password(catalog),
+            ),
+            (
+                SecretKind::Passphrase,
+                msg::settings::profiles::saved_passphrase(catalog),
+            ),
+        ] {
+            blocks.push(form_row(
+                label.clone(),
+                ControlView::Segmented {
+                    labels: vec![button.clone()],
+                    widths: vec![width],
+                    selected: usize::MAX,
+                },
+                label,
+                None,
+                ProfileTarget::Forget(kind),
+                catalog,
+                m,
+                panel_width,
+                measurer,
+            ));
+        }
     }
 
     if form.kind == porecatu_config::ProfileKind::Local {
@@ -1840,10 +1886,12 @@ fn profile_summary(form: &super::profiles_draft::Form) -> String {
 /// ADR-0075 §6: a lista de perfis e a linha dos botões, abaixo das duas opções
 /// do topo -- blocos empilhados na mesma coluna, com os controles que a tela já
 /// tem. O formulário do perfil escolhido vem depois da lista.
+#[allow(clippy::too_many_arguments)]
 fn push_profile_blocks(
     blocks: &mut Vec<Block>,
     profiles: &ProfilesDraft,
     import_open: bool,
+    vault: bool,
     catalog: &Catalog,
     m: &Metrics,
     panel_width: f32,
@@ -1910,7 +1958,7 @@ fn push_profile_blocks(
         });
     }
     push_profile_items(blocks, profiles, catalog, m, panel_width, measurer);
-    push_profile_form(blocks, profiles, catalog, m, panel_width, measurer);
+    push_profile_form(blocks, profiles, vault, catalog, m, panel_width, measurer);
 }
 
 /// Uma linha por perfil, na ordem do arquivo.
