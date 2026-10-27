@@ -550,6 +550,24 @@ O estado da conexão (conectando, falhou, caiu) aparece como nota no próprio te
 
 **Pastas.** `tab.new` numa aba SSH abre o perfil padrão na pasta de início (`startup_directory`), nunca numa pasta do servidor; o `.porecatu` nunca roda numa aba SSH; a sessão grava o perfil do painel e **nada da conexão** — nem pasta, nem segredo.
 
+### Editar os perfis pela tela
+
+O grupo **Perfis** da tela de configurações (logo depois de Shell) tem o perfil
+padrão e a detecção de shells no topo, os botões **+ Perfil local** e
+**+ Perfil SSH**, a lista dos perfis e o formulário do escolhido. O tipo do
+perfil é fixo na criação. O `id` nasce do nome e pode ser editado; um campo
+inválido mostra o motivo na própria linha e **não impede salvar os outros
+perfis**. O Salvar mexe só nas linhas tocadas do `porecatu.toml`: comentários e
+ordem ficam como estão.
+
+- **Excluir** (o `X` da linha) pede confirmação. Num perfil SSH que nenhum outro
+  usa (mesmo destino ou mesmo arquivo de chave), a caixa **Apagar também a
+  senha e a passphrase salvas** vem marcada. A exclusão é uma alteração
+  pendente: o arquivo e o cofre só mudam no **Salvar**, e **Descartar** desfaz.
+- **Senha salva — Esquecer** e **Passphrase salva — Esquecer**, no formulário SSH
+  (só quando o cofre do sistema responde), apagam o segredo na hora.
+- **Importar do ~/.ssh/config** ainda não importa: abre só o estado vazio.
+
 ### Escolher o perfil
 
 - **Clique direito no `+`** (de um grupo, ou o de abas soltas) abre o menu
