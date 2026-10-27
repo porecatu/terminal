@@ -209,6 +209,18 @@ restore_default = "Standard wiederherstellen"
 add_item = "Hinzufügen"
 remove_item = "Entfernen"
 
+[settings.profiles]
+section_list = "PROFILE"
+actions_label = "Hinzufügen"
+actions_description = "Erstellt ein lokales oder SSH-Profil oder importiert Server aus ~/.ssh/config."
+add_local = "+ Lokales Profil"
+add_ssh = "+ SSH-Profil"
+import = "Aus ~/.ssh/config importieren"
+empty = "Noch kein Profil deklariert."
+new_local_name = "Neues lokales Profil"
+new_ssh_name = "Neuer SSH-Server"
+import_empty = "Noch nichts zu importieren."
+
 [settings.scope]
 new_tab = "gilt für neue Tabs"
 next_window = "gilt für das nächste Fenster"

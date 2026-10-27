@@ -225,6 +225,18 @@ restore_default = "Restore default"
 add_item = "Add"
 remove_item = "Remove"
 
+[settings.profiles]
+section_list = "PROFILES"
+actions_label = "Add"
+actions_description = "Creates a local or SSH profile, or imports servers from ~/.ssh/config."
+add_local = "+ Local profile"
+add_ssh = "+ SSH profile"
+import = "Import from ~/.ssh/config"
+empty = "No profile declared yet."
+new_local_name = "New local profile"
+new_ssh_name = "New SSH server"
+import_empty = "Nothing to import yet."
+
 [settings.scope]
 new_tab = "applies to new tabs"
 next_window = "applies to the next window"

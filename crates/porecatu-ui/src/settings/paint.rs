@@ -428,8 +428,13 @@ fn paint_row(
     let m = input.metrics;
     let pal = input.pal;
     let rect = shift(geometry.rect, dx, dy);
-    let chosen_theme = matches!(row.control, ControlView::Themes { selected: true, .. });
-    // O tema escolhido ganha a borda de Acento (ADR-0060 §3).
+    let chosen_theme = matches!(
+        row.control,
+        ControlView::Themes { selected: true, .. }
+            | ControlView::ProfileItem { selected: true, .. }
+    );
+    // O tema escolhido ganha a borda de Acento (ADR-0060 §3); o perfil escolhido
+    // da lista, também.
     let border = if chosen_theme {
         pal.dialog_focus_ring
     } else {
@@ -657,6 +662,9 @@ fn paint_control(
                     0.0,
                 ));
             }
+        }
+        ControlView::ProfileItem { badge, .. } => {
+            paint_profile_item(input, index, badge, rect, measurer, out);
         }
         ControlView::Chips { chips } => paint_chips(input, chips, rect, measurer, out),
         ControlView::GitPoll {
@@ -939,6 +947,63 @@ fn paint_filter(
 /// borda `#2a2f38`, raio 4 -- lado a lado com o `gap: 6`; "Nenhum atalho"
 /// esmaecido; e o chip em captura com a borda Acento e a frase esmaecida
 /// (ADR-0060 §3).
+/// Um perfil da lista (ADR-0075 §6): o badge (a anatomia do ADR-0070 §7, na cor
+/// neutra do grupo implícito, porque aqui não há grupo) e, à direita, o `X` de
+/// excluir -- a anatomia do botão de fechar da aba, a mesma do `X` das listas
+/// editáveis.
+fn paint_profile_item(
+    input: &Input<'_>,
+    index: usize,
+    badge: &str,
+    rect: Rect,
+    measurer: &mut TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    let m = input.metrics;
+    if !badge.is_empty() {
+        let (_, badge_height) = crate::chrome::badge_size(badge, measurer);
+        crate::chrome::push_badge(
+            out,
+            (rect.x, rect.y + (rect.height - badge_height) / 2.0),
+            badge,
+            input.pal.ungrouped_group_color(),
+            // O tingimento do badge é `[appearance.groups] badge_tint_strength`,
+            // que o estilo da barra carrega.
+            input.style.drag_highlight_tint_strength,
+            measurer,
+        );
+    }
+    let remove = Rect {
+        x: rect.x + rect.width - m.restore_width,
+        y: rect.y + (rect.height - m.restore_height) / 2.0,
+        width: m.restore_width,
+        height: m.restore_height,
+    };
+    let hovered = matches!(
+        input.hovered,
+        Some(Hit::Control(hit_index, ControlPart::ListRemove(_))) if hit_index == index
+    );
+    if hovered {
+        out.push(rounded(
+            remove,
+            RESTORE_RADIUS,
+            RESTORE_HOVER_BACKGROUND,
+            palette::TRANSPARENT,
+            0.0,
+        ));
+    }
+    out.push(centered_glyph(
+        icon::X,
+        remove,
+        input.style.icon_em_size,
+        if hovered {
+            RESTORE_HOVER_ICON
+        } else {
+            RESTORE_ICON
+        },
+    ));
+}
+
 fn paint_chips(
     input: &Input<'_>,
     chips: &[ChipView],

@@ -209,6 +209,18 @@ restore_default = "Rétablir la valeur par défaut"
 add_item = "Ajouter"
 remove_item = "Supprimer"
 
+[settings.profiles]
+section_list = "PROFILS"
+actions_label = "Ajouter"
+actions_description = "Crée un profil local ou SSH, ou importe des serveurs depuis ~/.ssh/config."
+add_local = "+ Profil local"
+add_ssh = "+ Profil SSH"
+import = "Importer depuis ~/.ssh/config"
+empty = "Aucun profil déclaré pour l'instant."
+new_local_name = "Nouveau profil local"
+new_ssh_name = "Nouveau serveur SSH"
+import_empty = "Rien à importer pour l'instant."
+
 [settings.scope]
 new_tab = "s'applique aux nouveaux onglets"
 next_window = "s'applique à la prochaine fenêtre"

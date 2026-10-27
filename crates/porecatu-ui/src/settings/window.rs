@@ -42,8 +42,8 @@ use winit::window::{CursorIcon, Window, WindowId};
 use super::catalog::{self, Control, OptionDef};
 use super::choice_list::{self, ChoiceItem, ChoiceLayout, ChoiceList};
 use super::content::{
-    self, Block, ChipTone, Content, ContentKey, ControlView, RowView, ShortcutsView, ViewExtras,
-    choice_label,
+    self, Block, ChipTone, Content, ContentKey, ControlView, ProfileTarget, RowView, ShortcutsView,
+    ViewExtras, choice_label,
 };
 use super::draft::Draft;
 use super::field_edit::{EditPart, Editing};
@@ -54,9 +54,28 @@ use super::layout::{
     banner_geometry, focus_order_with_banner, footer_buttons, group_items, hit_test, next_focus,
 };
 use super::paint;
+use super::profiles_draft::{Forget, ProfilesDraft};
 use super::save::Saved;
 use super::shortcuts::{Capturing, Conflict, Shortcuts};
 use super::{Group, HEADER_GAP_PX, TITLE_SIZE_PX};
+
+/// O badge de um perfil local novo: um dado (o mesmo `SH` que o menu de perfis
+/// usa para um shell sem badge), não uma frase.
+const NEW_LOCAL_BADGE: &str = "SH";
+
+/// O cofre esquece o que a exclusão de um perfil pediu (ADR-0073 §4). Esquecer o
+/// que não existe não é erro, e uma falha do cofre não desfaz a gravação do
+/// arquivo, que já aconteceu.
+fn forget_in_vault(target: &Forget) {
+    match target {
+        Forget::Password(destination) => {
+            let _ = porecatu_term::forget_password(destination);
+        }
+        Forget::Passphrase(path) => {
+            let _ = porecatu_term::forget_passphrase(path);
+        }
+    }
+}
 use crate::dialog::{ConfirmDialog, DialogButton};
 use crate::input::modifiers_from;
 use crate::keymap::{Capture, Chord, Platform};
@@ -195,6 +214,11 @@ pub(crate) struct SettingsWindow {
     dialog: Option<ConfirmDialog>,
     /// O grupo Atalhos: a tabela da plataforma em edição (RF-16.31).
     shortcuts: Shortcuts,
+    /// O grupo Perfis: a lista e o formulário em edição (ADR-0075 §6).
+    profiles: ProfilesDraft,
+    /// "Importar do ~/.ssh/config" está aberto (o estado vazio; a importação é
+    /// do prompt 16).
+    import_open: bool,
     /// O texto do filtro do grupo Atalhos (RF-16.28); vale a cada tecla e
     /// vive enquanto a janela vive.
     filter: String,
@@ -253,6 +277,8 @@ impl SettingsWindow {
             session_theme: None,
             dialog: None,
             shortcuts: Shortcuts::new(config, Platform::current()),
+            profiles: ProfilesDraft::new(&config.profiles.list),
+            import_open: false,
             filter: String::new(),
             capturing: None,
             file: FileState::new(disk),
@@ -295,6 +321,7 @@ impl SettingsWindow {
     pub(crate) fn has_pending_changes(&self) -> bool {
         self.draft.is_dirty()
             || self.shortcuts.is_dirty()
+            || self.profiles.is_dirty()
             || self
                 .editing
                 .as_ref()
@@ -304,14 +331,14 @@ impl SettingsWindow {
     /// Há alteração no rascunho ou nos atalhos, com nenhum campo em edição por
     /// confirmar: o que o diálogo de pendências conta.
     fn has_unsaved(&self) -> bool {
-        self.draft.is_dirty() || self.shortcuts.is_dirty()
+        self.draft.is_dirty() || self.shortcuts.is_dirty() || self.profiles.is_dirty()
     }
 
     /// O Salvar tem o que gravar e nada que o bloqueie: há pendência, e
     /// nenhuma foi recusada (RF-16.18).
     pub(crate) fn can_save(&self) -> bool {
         self.file.allows_edit()
-            && (self.draft.is_dirty() || self.shortcuts.is_dirty())
+            && (self.draft.is_dirty() || self.shortcuts.is_dirty() || self.profiles.is_dirty())
             && !self.draft.has_invalid()
     }
 
@@ -334,6 +361,9 @@ impl SettingsWindow {
     pub(crate) fn edits(&self) -> Vec<Edit> {
         let mut edits = self.draft.edits();
         edits.extend(self.shortcuts.edits());
+        // Os perfis por último: `[profiles] default` (do rascunho) pode apontar
+        // para um perfil que este mesmo Salvar acrescenta.
+        edits.extend(self.profiles.edits());
         edits
     }
 
@@ -349,6 +379,10 @@ impl SettingsWindow {
         self.file.saved(saved.text.clone());
         self.draft.commit(&saved.config);
         self.shortcuts.commit(&saved.config);
+        // É aqui, e só aqui, que o cofre esquece o que uma exclusão pediu
+        // (ADR-0075 §6, RF-20.4). Esquecer o que não existe não é erro.
+        self.profiles
+            .commit(&saved.config.profiles.list, forget_in_vault);
         self.invalidate();
     }
 
@@ -384,6 +418,7 @@ impl SettingsWindow {
                 // A linha em captura não muda com a recarga (ADR-0059 §3): ela
                 // guarda os atalhos que tinha ao começar.
                 self.shortcuts.rebase(&config);
+                self.profiles.rebase(&config.profiles.list);
             }
             Effect::Conflict => {}
             Effect::ReadOnly => {
@@ -402,6 +437,7 @@ impl SettingsWindow {
         if let Some(config) = self.file.accept_disk() {
             self.draft.rebase(&config);
             self.shortcuts.rebase(&config);
+            self.profiles.rebase(&config.profiles.list);
             self.invalidate();
         }
     }
@@ -415,8 +451,10 @@ impl SettingsWindow {
             self.capturing = None;
             self.draft.discard();
             self.shortcuts.discard();
+            self.profiles.discard();
             self.draft.rebase(&config);
             self.shortcuts.rebase(&config);
+            self.profiles.rebase(&config.profiles.list);
             self.invalidate();
         }
     }
@@ -470,7 +508,9 @@ impl SettingsWindow {
         self.editing = None;
         self.dialog = Some(ConfirmDialog::settings_pending(
             &self.catalog,
-            self.draft.pending_count() + self.shortcuts.pending_actions().len(),
+            self.draft.pending_count()
+                + self.shortcuts.pending_actions().len()
+                + self.profiles.pending_count(),
         ));
         self.hover.dismiss();
         self.window.request_redraw();
@@ -745,6 +785,8 @@ impl SettingsWindow {
                 shortcuts: Some(&view),
                 banner: banner.as_ref(),
                 config_path: self.config_path.as_deref(),
+                profiles: Some(&self.profiles),
+                import_open: self.import_open,
             };
             self.content = Some(content::build(
                 key,
@@ -1047,7 +1089,7 @@ impl SettingsWindow {
             Some(Hit::Row(index)) => {
                 if matches!(
                     self.content().row(index).map(|row| &row.control),
-                    Some(ControlView::Themes { .. })
+                    Some(ControlView::Themes { .. } | ControlView::ProfileItem { .. })
                 ) {
                     CursorIcon::Pointer
                 } else {
@@ -1253,7 +1295,10 @@ impl SettingsWindow {
                 }
                 self.commit_edit();
                 self.focus = Focus::Row(index);
-                if !(self.file.allows_edit() && self.choose_theme(index)) {
+                // A linha de um tema escolhe o tema; a de um perfil, o perfil.
+                if !(self.file.allows_edit()
+                    && (self.choose_theme(index) || self.choose_profile(index)))
+                {
                     self.window.request_redraw();
                 }
                 Press::Nothing
@@ -1341,6 +1386,8 @@ impl SettingsWindow {
         self.capturing = None;
         self.draft.discard();
         self.shortcuts.discard();
+        self.profiles.discard();
+        self.import_open = false;
         self.invalidate();
     }
 
@@ -1363,6 +1410,13 @@ impl SettingsWindow {
                 ControlPart::Segment(button) => self.answer_conflict(button == 0),
                 _ => {}
             }
+            self.window.request_redraw();
+            return;
+        }
+        // Uma linha do grupo Perfis: os três botões, ou o `X` de um perfil.
+        if let Some(target) = self.content().row(index).and_then(|row| row.profile) {
+            self.commit_edit();
+            self.click_profile(index, target, part);
             self.window.request_redraw();
             return;
         }
@@ -1429,6 +1483,60 @@ impl SettingsWindow {
                 String::new(),
             ));
         }
+    }
+
+    /// Escolhe o perfil da linha `index`, se a linha é de perfil: a linha inteira
+    /// é o alvo do clique, como a de um tema.
+    fn choose_profile(&mut self, index: usize) -> bool {
+        let Some(ProfileTarget::Item(item)) = self.content().row(index).and_then(|row| row.profile)
+        else {
+            return false;
+        };
+        self.profiles.select(item);
+        self.invalidate();
+        true
+    }
+
+    /// O clique numa parte de uma linha do grupo Perfis.
+    fn click_profile(&mut self, index: usize, target: ProfileTarget, part: ControlPart) {
+        match content::profile_click(target, part) {
+            content::ProfileClick::AddLocal => self.add_profile(false),
+            content::ProfileClick::AddSsh => self.add_profile(true),
+            // A importação é do prompt 16: aqui só se abre o estado vazio.
+            content::ProfileClick::OpenImport => {
+                self.import_open = true;
+                self.invalidate();
+            }
+            content::ProfileClick::Delete(item) => {
+                self.profiles.select(item);
+                self.delete_profile(item);
+            }
+            content::ProfileClick::Select => {
+                self.choose_profile(index);
+            }
+            content::ProfileClick::Nothing => {}
+        }
+    }
+
+    /// Acrescenta um perfil local ou SSH e o escolhe; o formulário dele abre
+    /// logo abaixo da lista.
+    fn add_profile(&mut self, ssh: bool) {
+        use msg::settings::profiles as p;
+        if ssh {
+            self.profiles.add_ssh(&p::new_ssh_name(&self.catalog));
+        } else {
+            self.profiles
+                .add_local(&p::new_local_name(&self.catalog), NEW_LOCAL_BADGE);
+        }
+        self.import_open = false;
+        self.invalidate();
+    }
+
+    /// Tira o perfil `item` da lista. A exclusão é uma alteração pendente: o
+    /// arquivo só muda no Salvar, e Descartar a desfaz.
+    fn delete_profile(&mut self, item: usize) {
+        self.profiles.delete(item, false);
+        self.invalidate();
     }
 
     /// Escolhe o tema da linha `index`, se a linha é de tema (RF-16.24): a
@@ -1895,6 +2003,13 @@ impl SettingsWindow {
             self.start_capture(action, first);
             return;
         }
+        // Uma linha de perfil: `Enter` escolhe o perfil.
+        if let Some(ProfileTarget::Item(_)) = self.content().row(index).and_then(|row| row.profile)
+        {
+            self.choose_profile(index);
+            self.window.request_redraw();
+            return;
+        }
         let Some(option) = self.option_at(index) else {
             return;
         };
@@ -1923,6 +2038,9 @@ impl SettingsWindow {
             }
             ControlView::Themes { .. } => {
                 self.choose_theme(index);
+            }
+            ControlView::ProfileItem { .. } => {
+                self.choose_profile(index);
             }
             ControlView::Segmented { .. } | ControlView::Chips { .. } => {}
         }
@@ -2335,6 +2453,11 @@ impl SettingsWindow {
         let mut pending_groups = self.draft.pending_groups();
         if self.shortcuts.is_dirty() {
             pending_groups.push(Group::Shortcuts);
+        }
+        // A lista de perfis também marca o grupo (ADR-0060 §2), sem repetir o
+        // ponto que as duas opções do topo já acenderam.
+        if self.profiles.is_dirty() && !pending_groups.contains(&Group::Profiles) {
+            pending_groups.push(Group::Profiles);
         }
 
         let mut out = vec![

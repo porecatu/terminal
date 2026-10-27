@@ -710,6 +710,18 @@ registry! {
             add_item(),
             remove_item(),
         },
+        profiles {
+            section_list(),
+            actions_label(),
+            actions_description(),
+            add_local(),
+            add_ssh(),
+            import(),
+            empty(),
+            new_local_name(),
+            new_ssh_name(),
+            import_empty(),
+        },
         scope {
             new_tab(),
             next_window(),

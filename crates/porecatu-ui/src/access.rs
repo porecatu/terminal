@@ -1247,6 +1247,14 @@ fn settings_row_node(
             node.set_selected(*selected);
             nodes.push((id, node));
         }
+        // Um perfil da lista (ADR-0075 §6): uma opção de lista, escolhida ou
+        // não; a descrição diz o programa ou o destino.
+        ControlView::ProfileItem { selected, .. } => {
+            let mut node = leaf(Role::ListBoxOption, row.name.clone());
+            node.set_selected(*selected);
+            describe(&mut node);
+            nodes.push((id, node));
+        }
         ControlView::GitPoll { on, seconds, .. } => {
             let switch_id = NodeId(id.0 + 1);
             let mut switch = leaf(Role::Switch, row.name.clone());
