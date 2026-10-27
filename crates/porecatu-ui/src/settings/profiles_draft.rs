@@ -75,6 +75,13 @@ pub(crate) const SSH_FIELDS: [Field; 7] = [
     Field::IdentityFile,
 ];
 
+/// As duas listas do formulário de um perfil local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListKind {
+    Args,
+    Env,
+}
+
 /// O perfil como o formulário o tem: texto cru, que pode estar inválido.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Form {
@@ -180,6 +187,11 @@ impl Form {
 
     /// Qual dos [`AUTH_PRESETS`] é a lista, ou `None` se é personalizada.
     pub(crate) fn auth_preset(&self) -> Option<usize> {
+        // Sem `auth` e sem arquivo de chave, a ordem de sempre pula a chave
+        // (RF-20.9): é o default, o primeiro conjunto, e não uma ordem do usuário.
+        if self.auth == [SshAuth::Agent, SshAuth::Password] && self.identity_file.is_empty() {
+            return Some(0);
+        }
         AUTH_PRESETS.iter().position(|preset| *preset == self.auth)
     }
 
@@ -210,12 +222,26 @@ impl Form {
             "badge" if local => text(&self.badge),
             "badge" => optional(&self.badge),
             "program" => local.then(|| EditValue::String(self.program.clone())),
+            // Um item vazio é o espaço de quem acabou de apertar "Adicionar":
+            // não é escrito, e não conta como alteração.
             "args" => {
-                (local && !self.args.is_empty()).then(|| EditValue::StringList(self.args.clone()))
+                let args: Vec<String> = self
+                    .args
+                    .iter()
+                    .filter(|a| !a.is_empty())
+                    .cloned()
+                    .collect();
+                (local && !args.is_empty()).then_some(EditValue::StringList(args))
             }
-            "env" => (local && !self.env.is_empty()).then(|| {
-                EditValue::StringMap(self.env.iter().cloned().collect::<BTreeMap<_, _>>())
-            }),
+            "env" => {
+                let env: BTreeMap<String, String> = self
+                    .env
+                    .iter()
+                    .filter(|(name, value)| !(name.is_empty() && value.is_empty()))
+                    .cloned()
+                    .collect();
+                (local && !env.is_empty()).then_some(EditValue::StringMap(env))
+            }
             "cwd" => local.then(|| optional(&self.cwd)).flatten(),
             "host" => (!local).then(|| EditValue::String(self.host.clone())),
             // Não numérico vira 0, que o parser recusa como `PortInvalid`.
@@ -548,7 +574,100 @@ impl ProfilesDraft {
     }
 
     pub(crate) fn is_valid(&self, index: usize) -> bool {
-        self.problems(index).is_empty()
+        self.problems(index).is_empty() && self.env_problem(index).is_none()
+    }
+
+    /// A lista de argumentos ou de ambiente do perfil `index`, como a tela a
+    /// mostra: um argumento por linha (o segundo texto vazio), ou nome e valor.
+    pub(crate) fn list_rows(&self, index: usize, kind: ListKind) -> Vec<(String, String)> {
+        let Some(item) = self.items.get(index) else {
+            return Vec::new();
+        };
+        match kind {
+            ListKind::Args => item
+                .form
+                .args
+                .iter()
+                .map(|arg| (arg.clone(), String::new()))
+                .collect(),
+            ListKind::Env => item.form.env.clone(),
+        }
+    }
+
+    fn set_list_rows(&mut self, index: usize, kind: ListKind, rows: Vec<(String, String)>) {
+        let Some(item) = self.items.get_mut(index) else {
+            return;
+        };
+        if item.form.kind != ProfileKind::Local {
+            return;
+        }
+        match kind {
+            ListKind::Args => item.form.args = rows.into_iter().map(|(arg, _)| arg).collect(),
+            ListKind::Env => item.form.env = rows,
+        }
+    }
+
+    /// Muda um texto de um item de lista; `false` se não mudou nada.
+    pub(crate) fn set_list_text(
+        &mut self,
+        index: usize,
+        kind: ListKind,
+        item: usize,
+        second: bool,
+        text: &str,
+    ) -> bool {
+        let mut rows = self.list_rows(index, kind);
+        let Some(row) = rows.get_mut(item) else {
+            return false;
+        };
+        let field = if second { &mut row.1 } else { &mut row.0 };
+        if field == text {
+            return false;
+        }
+        *field = text.to_owned();
+        self.set_list_rows(index, kind, rows);
+        true
+    }
+
+    /// Acrescenta um item vazio e devolve o índice dele.
+    pub(crate) fn list_add(&mut self, index: usize, kind: ListKind) -> Option<usize> {
+        if self.items.get(index)?.form.kind != ProfileKind::Local {
+            return None;
+        }
+        let mut rows = self.list_rows(index, kind);
+        rows.push((String::new(), String::new()));
+        let at = rows.len() - 1;
+        self.set_list_rows(index, kind, rows);
+        Some(at)
+    }
+
+    pub(crate) fn list_remove(&mut self, index: usize, kind: ListKind, item: usize) -> bool {
+        let mut rows = self.list_rows(index, kind);
+        if item >= rows.len() {
+            return false;
+        }
+        rows.remove(item);
+        self.set_list_rows(index, kind, rows);
+        true
+    }
+
+    /// O item `item` da lista de ambiente tem nome vazio (com valor) ou repetido:
+    /// a borda do campo fica em Erro, e o perfil não é gravado até corrigir.
+    pub(crate) fn env_item_invalid(&self, index: usize, item: usize) -> bool {
+        let rows = self.list_rows(index, ListKind::Env);
+        let Some((name, value)) = rows.get(item) else {
+            return false;
+        };
+        if name.is_empty() {
+            return !value.is_empty();
+        }
+        rows.iter().filter(|(other, _)| other == name).count() > 1
+    }
+
+    /// Algum item do ambiente é inválido.
+    pub(crate) fn env_problem(&self, index: usize) -> Option<usize> {
+        let count = self.list_rows(index, ListKind::Env).len();
+        (0..count).find(|item| self.env_item_invalid(index, *item))
     }
 
     /// Algum perfil tem problema. Não bloqueia o Salvar (ADR-0075 §6): só aquele
@@ -634,7 +753,14 @@ impl ProfilesDraft {
     fn changed(&self, item: &Item) -> bool {
         match &item.origin {
             None => true,
-            Some(origin) => self.base_form(origin) != Some(&item.form),
+            // Pelo que seria escrito, não pelo texto cru: o item vazio de uma
+            // lista não é alteração.
+            Some(origin) => self.base_form(origin).is_none_or(|base| {
+                item.form
+                    .keys()
+                    .iter()
+                    .any(|key| base.value_of(key) != item.form.value_of(key))
+            }),
         }
     }
 
@@ -1341,6 +1467,81 @@ user = "deploy"
             draft.edits().first(),
             Some(Edit::AppendTable { .. })
         ));
+    }
+
+    #[test]
+    fn the_arguments_list_adds_edits_and_removes_items_and_writes_them_in_order() {
+        let mut draft = draft();
+        let item = draft.list_add(0, ListKind::Args).unwrap();
+        assert_eq!(item, 2, "after the two the file has");
+        assert!(draft.set_list_text(0, ListKind::Args, item, false, "--login"));
+        assert!(
+            !draft.set_list_text(0, ListKind::Args, item, false, "--login"),
+            "same text"
+        );
+        assert!(draft.list_remove(0, ListKind::Args, 0));
+
+        let (_, profiles) = saved(&draft);
+        assert_eq!(profiles[0].args, ["Ubuntu", "--login"]);
+        assert!(!draft.list_remove(0, ListKind::Args, 9));
+    }
+
+    #[test]
+    fn an_empty_list_item_is_a_placeholder_and_not_a_change() {
+        let mut draft = draft();
+        draft.list_add(0, ListKind::Args);
+        draft.list_add(0, ListKind::Env);
+
+        assert!(draft.edits().is_empty(), "nothing to write yet");
+        assert!(!draft.is_dirty());
+        assert!(draft.is_valid(0));
+    }
+
+    #[test]
+    fn the_environment_needs_a_name_and_no_repeats_before_the_profile_is_written() {
+        let mut draft = draft();
+        let first = draft.list_add(0, ListKind::Env).unwrap();
+        draft.set_list_text(0, ListKind::Env, first, true, "value-without-name");
+        assert!(draft.env_item_invalid(0, first), "a value with no name");
+        assert!(!draft.is_valid(0));
+        assert!(draft.edits().is_empty());
+
+        draft.set_list_text(0, ListKind::Env, first, false, "EDITOR");
+        assert!(draft.is_valid(0));
+        let second = draft.list_add(0, ListKind::Env).unwrap();
+        draft.set_list_text(0, ListKind::Env, second, false, "EDITOR");
+        assert!(draft.env_item_invalid(0, first) && draft.env_item_invalid(0, second));
+        assert_eq!(draft.env_problem(0), Some(first));
+        assert!(!draft.is_valid(0));
+
+        draft.list_remove(0, ListKind::Env, second);
+        let (_, profiles) = saved(&draft);
+        assert_eq!(
+            profiles[0].env.get("EDITOR").map(String::as_str),
+            Some("value-without-name")
+        );
+    }
+
+    #[test]
+    fn the_lists_only_exist_in_a_local_profile() {
+        let mut draft = draft();
+        assert_eq!(draft.list_add(1, ListKind::Args), None);
+        assert_eq!(draft.list_add(1, ListKind::Env), None);
+        assert!(draft.list_rows(1, ListKind::Args).is_empty());
+    }
+
+    #[test]
+    fn an_ssh_profile_with_no_auth_and_no_key_reads_as_the_default_preset() {
+        let draft = draft();
+        // "stage" has neither `auth` nor `identity_file`: agent, then password.
+        assert_eq!(
+            draft.form(2).unwrap().auth,
+            [SshAuth::Agent, SshAuth::Password]
+        );
+        assert_eq!(draft.form(2).unwrap().auth_preset(), Some(0));
+        // "prod" has a key file: the effective order includes the key.
+        assert_eq!(draft.form(1).unwrap().auth_preset(), Some(0));
+        assert!(draft.edits().is_empty(), "reading it changes nothing");
     }
 
     #[test]

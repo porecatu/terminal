@@ -54,7 +54,7 @@ use super::layout::{
     banner_geometry, focus_order_with_banner, footer_buttons, group_items, hit_test, next_focus,
 };
 use super::paint;
-use super::profiles_draft::{Forget, ProfilesDraft};
+use super::profiles_draft::{self, Forget, ListKind, ProfilesDraft};
 use super::save::Saved;
 use super::shortcuts::{Capturing, Conflict, Shortcuts};
 use super::{Group, HEADER_GAP_PX, TITLE_SIZE_PX};
@@ -1416,7 +1416,7 @@ impl SettingsWindow {
         // Uma linha do grupo Perfis: os três botões, ou o `X` de um perfil.
         if let Some(target) = self.content().row(index).and_then(|row| row.profile) {
             self.commit_edit();
-            self.click_profile(index, target, part);
+            self.click_profile(env, measurer, index, target, part, point);
             self.window.request_redraw();
             return;
         }
@@ -1498,8 +1498,27 @@ impl SettingsWindow {
     }
 
     /// O clique numa parte de uma linha do grupo Perfis.
-    fn click_profile(&mut self, index: usize, target: ProfileTarget, part: ControlPart) {
+    fn click_profile(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        index: usize,
+        target: ProfileTarget,
+        part: ControlPart,
+        point: (f32, f32),
+    ) {
         match content::profile_click(target, part) {
+            content::ProfileClick::Edit(edit) => {
+                self.begin_or_continue_edit(env, measurer, index, edit, point);
+            }
+            content::ProfileClick::OpenAuth => self.open_choice(env, measurer, index),
+            content::ProfileClick::ListRemove(kind, item) => {
+                if let Some(selected) = self.profiles.selected() {
+                    self.profiles.list_remove(selected, kind, item);
+                    self.invalidate();
+                }
+            }
+            content::ProfileClick::ListAdd(kind) => self.add_profile_list_item(index, kind),
             content::ProfileClick::AddLocal => self.add_profile(false),
             content::ProfileClick::AddSsh => self.add_profile(true),
             // A importação é do prompt 16: aqui só se abre o estado vazio.
@@ -1515,6 +1534,44 @@ impl SettingsWindow {
                 self.choose_profile(index);
             }
             content::ProfileClick::Nothing => {}
+        }
+    }
+
+    /// Acrescenta um item vazio à lista do formulário na linha `index` e põe o
+    /// primeiro campo dele em edição (o conteúdo medido ainda é o antigo: a
+    /// edição nasce direto).
+    fn add_profile_list_item(&mut self, index: usize, kind: ListKind) {
+        let Some(selected) = self.profiles.selected() else {
+            return;
+        };
+        if let Some(item) = self.profiles.list_add(selected, kind) {
+            self.invalidate();
+            self.editing = Some(Editing::new(
+                index,
+                EditPart::ListFirst(item),
+                String::new(),
+            ));
+        }
+    }
+
+    /// Confirma o texto de um campo do formulário no perfil escolhido.
+    fn commit_profile_edit(&mut self, target: ProfileTarget, part: EditPart, text: &str) {
+        let Some(selected) = self.profiles.selected() else {
+            return;
+        };
+        match (target, part) {
+            (ProfileTarget::Field(field), EditPart::Field) => {
+                self.profiles.set_text(selected, field, text);
+            }
+            (ProfileTarget::List(kind), EditPart::ListFirst(item)) => {
+                self.profiles
+                    .set_list_text(selected, kind, item, false, text);
+            }
+            (ProfileTarget::List(kind), EditPart::ListSecond(item)) => {
+                self.profiles
+                    .set_list_text(selected, kind, item, true, text);
+            }
+            _ => {}
         }
     }
 
@@ -1666,6 +1723,21 @@ impl SettingsWindow {
             self.window.request_redraw();
             return;
         }
+        // Um campo do formulário de perfil: o rascunho de perfis, não o de opções.
+        if let Some(target) = self
+            .content
+            .as_ref()
+            .and_then(|content| content.row(editing.block))
+            .and_then(|row| row.profile)
+        {
+            if editing.changed() {
+                self.commit_profile_edit(target, editing.part, editing.state.text());
+                self.invalidate();
+            } else {
+                self.window.request_redraw();
+            }
+            return;
+        }
         if editing.changed()
             && let Some(option) = self.option_at(editing.block)
         {
@@ -1765,6 +1837,12 @@ impl SettingsWindow {
     /// `locales/` (com o do valor em vista, mesmo que o arquivo dele tenha
     /// sumido), ou os valores nomeados da opção.
     fn open_choice(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, index: usize) {
+        // A autenticação do formulário: os conjuntos de métodos, e "ordem
+        // personalizada" se a lista do arquivo é uma que nenhum deles é.
+        if self.content().row(index).and_then(|row| row.profile) == Some(ProfileTarget::Auth) {
+            self.open_auth_choice(env, measurer, index);
+            return;
+        }
         let Some(option) = self.option_at(index) else {
             return;
         };
@@ -1824,6 +1902,42 @@ impl SettingsWindow {
         self.window.request_redraw();
     }
 
+    /// Abre a lista da autenticação do formulário do perfil escolhido. O valor
+    /// de cada item é o índice do conjunto; "custom" é a ordem do arquivo.
+    fn open_auth_choice(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, index: usize) {
+        let Some(selected) = self.profiles.selected() else {
+            return;
+        };
+        let Some(form) = self.profiles.form(selected) else {
+            return;
+        };
+        let preset = form.auth_preset();
+        let current = preset.map_or_else(|| "custom".to_owned(), |p| p.to_string());
+        let mut values: Vec<(String, Option<usize>)> = (0..profiles_draft::AUTH_PRESETS.len())
+            .map(|p| (p.to_string(), Some(p)))
+            .collect();
+        if preset.is_none() {
+            values.push(("custom".to_owned(), None));
+        }
+        let Some(anchor) = self.control_rect(env, index) else {
+            return;
+        };
+        let items = values
+            .into_iter()
+            .map(|(value, preset)| ChoiceItem {
+                label: choice_list::fit_label(
+                    &content::auth_label(&self.catalog, preset),
+                    env.config,
+                    anchor.width,
+                    measurer,
+                ),
+                value,
+            })
+            .collect();
+        self.choice = Some(ChoiceList::open(index, items, &current));
+        self.window.request_redraw();
+    }
+
     /// Onde a lista aberta fica, ancorada ao controle da linha dela.
     fn choice_layout(&self, env: Env<'_>) -> Option<ChoiceLayout> {
         let list = self.choice.as_ref()?;
@@ -1842,6 +1956,18 @@ impl SettingsWindow {
         let Some(list) = self.choice.take() else {
             return;
         };
+        // A autenticação de um perfil: o valor é o índice do conjunto.
+        if self.content().row(list.block).and_then(|row| row.profile) == Some(ProfileTarget::Auth) {
+            if let (Some(selected), Some(Ok(preset))) = (
+                self.profiles.selected(),
+                list.highlighted_value().map(str::parse::<usize>),
+            ) {
+                self.profiles.set_auth_preset(selected, preset);
+                self.invalidate();
+            }
+            self.window.request_redraw();
+            return;
+        }
         if let (Some(option), Some(value)) = (self.option_at(list.block), list.highlighted_value())
         {
             interact::choose_value(&mut self.draft, option, value);
@@ -2003,10 +2129,28 @@ impl SettingsWindow {
             self.start_capture(action, first);
             return;
         }
-        // Uma linha de perfil: `Enter` escolhe o perfil.
-        if let Some(ProfileTarget::Item(_)) = self.content().row(index).and_then(|row| row.profile)
-        {
-            self.choose_profile(index);
+        // Uma linha do grupo Perfis: `Enter` escolhe o perfil, edita o campo,
+        // abre a autenticação, ou entra na lista.
+        if let Some(target) = self.content().row(index).and_then(|row| row.profile) {
+            match target {
+                ProfileTarget::Item(_) => {
+                    self.choose_profile(index);
+                }
+                ProfileTarget::Field(_) => self.start_edit(index, EditPart::Field),
+                ProfileTarget::Auth => self.open_choice(env, measurer, index),
+                ProfileTarget::List(kind) => {
+                    let empty = self
+                        .profiles
+                        .selected()
+                        .is_none_or(|selected| self.profiles.list_rows(selected, kind).is_empty());
+                    if empty {
+                        self.add_profile_list_item(index, kind);
+                    } else {
+                        self.start_edit(index, EditPart::ListFirst(0));
+                    }
+                }
+                ProfileTarget::Actions => {}
+            }
             self.window.request_redraw();
             return;
         }

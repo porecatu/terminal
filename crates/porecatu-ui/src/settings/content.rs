@@ -188,6 +188,12 @@ pub(crate) enum ProfileTarget {
     Actions,
     /// O perfil `n` da lista.
     Item(usize),
+    /// Um campo de texto do formulário do perfil escolhido.
+    Field(super::profiles_draft::Field),
+    /// A escolha de autenticação do formulário (perfil SSH).
+    Auth,
+    /// A lista de argumentos ou de ambiente do formulário (perfil local).
+    List(super::profiles_draft::ListKind),
 }
 
 impl ControlView {
@@ -696,15 +702,229 @@ user = "deploy"
         )
     }
 
+    /// Os botões e a lista: as linhas que não são do formulário.
     fn profile_rows(content: &Content) -> Vec<&RowView> {
         content
             .blocks
             .iter()
             .filter_map(|block| match block {
-                Block::Row(row) if row.profile.is_some() => Some(&**row),
+                Block::Row(row)
+                    if matches!(
+                        row.profile,
+                        Some(ProfileTarget::Actions | ProfileTarget::Item(_))
+                    ) =>
+                {
+                    Some(&**row)
+                }
                 _ => None,
             })
             .collect()
+    }
+
+    /// As linhas do formulário do perfil escolhido, na ordem.
+    fn form_rows(content: &Content) -> Vec<&RowView> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Row(row)
+                    if matches!(
+                        row.profile,
+                        Some(
+                            ProfileTarget::Field(_) | ProfileTarget::Auth | ProfileTarget::List(_)
+                        )
+                    ) =>
+                {
+                    Some(&**row)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_form_of_a_local_profile_has_its_fields_then_the_two_lists_and_no_host() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(0);
+        let content = build_profiles(&draft, false);
+        let rows = form_rows(&content);
+
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Nome",
+                "Identificador",
+                "Badge",
+                "Programa",
+                "Diretório",
+                "Argumentos",
+                "Ambiente"
+            ]
+        );
+        let ControlView::Field { text, .. } = &rows[0].control else {
+            panic!("a text field");
+        };
+        assert_eq!(text, "WSL Ubuntu");
+        assert!(matches!(
+            rows[5].control,
+            ControlView::List {
+                two_fields: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rows[6].control,
+            ControlView::List {
+                two_fields: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_form_of_an_ssh_profile_puts_the_authentication_between_user_and_key_file() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(1);
+        let content = build_profiles(&draft, false);
+        let rows = form_rows(&content);
+
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Nome",
+                "Identificador",
+                "Badge",
+                "Host",
+                "Porta",
+                "Usuário",
+                "Autenticação",
+                "Arquivo da chave"
+            ]
+        );
+        // The port is a right-aligned number box; the authentication a choice.
+        assert!(matches!(
+            rows[4].control,
+            ControlView::Field {
+                right_aligned: true,
+                ..
+            }
+        ));
+        let ControlView::Choice { text } = &rows[6].control else {
+            panic!("a choice");
+        };
+        assert_eq!(text, "Agente, chave, senha");
+        assert_eq!(rows[6].profile, Some(ProfileTarget::Auth));
+    }
+
+    #[test]
+    fn an_authentication_that_is_no_preset_reads_as_a_custom_order() {
+        let text = "[[profiles.list]]\nid=\"c\"\nname=\"c\"\ntype=\"ssh\"\nhost=\"h\"\nuser=\"u\"\nauth=[\"password\",\"agent\"]\n";
+        let list = porecatu_config::parse(text).unwrap().0.profiles.list;
+        let draft = ProfilesDraft::new(&list);
+        let content = build_profiles(&draft, false);
+        let rows = form_rows(&content);
+        let ControlView::Choice { text } = &rows[6].control else {
+            panic!("a choice");
+        };
+        assert_eq!(text, "Ordem personalizada");
+    }
+
+    #[test]
+    fn a_refused_field_carries_the_reason_of_the_parser_on_its_own_row() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(1);
+        draft.set_text(1, Field::Host, "a b");
+        let content = build_profiles(&draft, false);
+        let rows = form_rows(&content);
+
+        let host = rows.iter().find(|row| row.name == "Host").unwrap();
+        assert!(
+            host.invalid
+                .as_deref()
+                .is_some_and(|reason| reason.contains("host"))
+        );
+        let name = rows.iter().find(|row| row.name == "Nome").unwrap();
+        assert!(name.invalid.is_none(), "only the host is wrong");
+    }
+
+    #[test]
+    fn a_new_profile_opens_its_form_and_the_form_follows_the_selection() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.add_local("Meu shell", "SH");
+        let content = build_profiles(&draft, false);
+        let rows = form_rows(&content);
+        assert_eq!(rows[0].value_text, "Meu shell");
+
+        draft.select(0);
+        let rows_after = build_profiles(&draft, false);
+        assert_eq!(form_rows(&rows_after)[0].value_text, "WSL Ubuntu");
+    }
+
+    #[test]
+    fn the_lists_show_the_arguments_and_the_environment_with_the_bad_name_marked() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(0);
+        draft.set_args(0, vec!["-d".into(), "Debian".into()]);
+        draft.set_env(0, vec![("A".into(), "1".into()), ("A".into(), "2".into())]);
+        let content = build_profiles(&draft, false);
+        let rows = form_rows(&content);
+
+        let ControlView::List { items, .. } = &rows[5].control else {
+            panic!("args");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].first, "Debian");
+        let ControlView::List { items, .. } = &rows[6].control else {
+            panic!("env");
+        };
+        assert!(items.iter().all(|item| item.invalid), "both names repeat");
+    }
+
+    #[test]
+    fn a_form_click_edits_a_field_opens_the_choice_or_works_a_list() {
+        use crate::settings::field_edit::EditPart;
+        use crate::settings::profiles_draft::ListKind;
+        use ProfileClick as C;
+        let field = ProfileTarget::Field(Field::Name);
+        assert_eq!(
+            profile_click(field, ControlPart::Whole),
+            C::Edit(EditPart::Field)
+        );
+        assert_eq!(
+            profile_click(ProfileTarget::Auth, ControlPart::Whole),
+            C::OpenAuth
+        );
+        let list = ProfileTarget::List(ListKind::Env);
+        assert_eq!(
+            profile_click(
+                list,
+                ControlPart::ListField {
+                    item: 2,
+                    second: true
+                }
+            ),
+            C::Edit(EditPart::ListSecond(2))
+        );
+        assert_eq!(
+            profile_click(list, ControlPart::ListRemove(1)),
+            C::ListRemove(ListKind::Env, 1)
+        );
+        assert_eq!(
+            profile_click(list, ControlPart::ListAdd),
+            C::ListAdd(ListKind::Env)
+        );
+    }
+
+    #[test]
+    fn the_authentication_labels_are_translated() {
+        for catalog in test_support::all_catalogs() {
+            for preset in [Some(0), Some(1), Some(2), Some(3), Some(4), None] {
+                assert!(!auth_label(&catalog, preset).is_empty());
+            }
+        }
+        assert_eq!(auth_label(&test_support::pt_br(), Some(3)), "Só a senha");
     }
 
     #[test]
@@ -1374,12 +1594,21 @@ pub(crate) enum ProfileClick {
     Delete(usize),
     /// O resto da linha de um perfil: escolhe-o.
     Select,
+    /// Começa a editar este campo (de texto, ou de um item de lista).
+    Edit(super::field_edit::EditPart),
+    /// Abre a lista de escolha da autenticação.
+    OpenAuth,
+    /// O `X` do item `n` da lista de argumentos ou de ambiente.
+    ListRemove(super::profiles_draft::ListKind, usize),
+    /// "Adicionar" da lista.
+    ListAdd(super::profiles_draft::ListKind),
     Nothing,
 }
 
 /// Decide o clique numa parte de uma linha do grupo Perfis. Pura: a janela só
 /// executa o que ela diz.
 pub(crate) fn profile_click(target: ProfileTarget, part: ControlPart) -> ProfileClick {
+    use super::field_edit::EditPart;
     match (target, part) {
         (ProfileTarget::Actions, ControlPart::Segment(0)) => ProfileClick::AddLocal,
         (ProfileTarget::Actions, ControlPart::Segment(1)) => ProfileClick::AddSsh,
@@ -1387,6 +1616,202 @@ pub(crate) fn profile_click(target: ProfileTarget, part: ControlPart) -> Profile
         (ProfileTarget::Actions, _) => ProfileClick::Nothing,
         (ProfileTarget::Item(item), ControlPart::ListRemove(_)) => ProfileClick::Delete(item),
         (ProfileTarget::Item(_), _) => ProfileClick::Select,
+        (ProfileTarget::Field(_), ControlPart::Whole) => ProfileClick::Edit(EditPart::Field),
+        (ProfileTarget::Field(_), _) => ProfileClick::Nothing,
+        (ProfileTarget::Auth, ControlPart::Whole) => ProfileClick::OpenAuth,
+        (ProfileTarget::Auth, _) => ProfileClick::Nothing,
+        (ProfileTarget::List(_), ControlPart::ListField { item, second }) => {
+            ProfileClick::Edit(if second {
+                EditPart::ListSecond(item)
+            } else {
+                EditPart::ListFirst(item)
+            })
+        }
+        (ProfileTarget::List(kind), ControlPart::ListRemove(item)) => {
+            ProfileClick::ListRemove(kind, item)
+        }
+        (ProfileTarget::List(kind), ControlPart::ListAdd) => ProfileClick::ListAdd(kind),
+        (ProfileTarget::List(_), _) => ProfileClick::Nothing,
+    }
+}
+
+fn field_label(catalog: &Catalog, field: super::profiles_draft::Field) -> String {
+    use super::profiles_draft::Field;
+    use msg::settings::profiles as p;
+    match field {
+        Field::Name => p::field_name(catalog),
+        Field::Id => p::field_id(catalog),
+        Field::Badge => p::field_badge(catalog),
+        Field::Program => p::field_program(catalog),
+        Field::Cwd => p::field_cwd(catalog),
+        Field::Host => p::field_host(catalog),
+        Field::Port => p::field_port(catalog),
+        Field::User => p::field_user(catalog),
+        Field::IdentityFile => p::field_identity_file(catalog),
+        Field::Auth => p::field_auth(catalog),
+    }
+}
+
+/// O texto da escolha de autenticação: o conjunto de métodos, ou "ordem
+/// personalizada" para uma lista do arquivo que nenhum dos conjuntos é.
+pub(crate) fn auth_label(catalog: &Catalog, preset: Option<usize>) -> String {
+    use msg::settings::profiles as p;
+    match preset {
+        Some(0) => p::auth_all(catalog),
+        Some(1) => p::auth_agent(catalog),
+        Some(2) => p::auth_key(catalog),
+        Some(3) => p::auth_password(catalog),
+        Some(4) => p::auth_key_password(catalog),
+        _ => p::auth_custom(catalog),
+    }
+}
+
+/// Uma linha do formulário: o nome, o controle, e a razão se o campo está
+/// recusado. Sem descrição (o nome do campo basta) e sem restaurar padrão.
+#[allow(clippy::too_many_arguments)]
+fn form_row(
+    name: String,
+    control: ControlView,
+    value_text: String,
+    invalid: Option<String>,
+    target: ProfileTarget,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) -> Block {
+    let _ = catalog;
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    let (name, _) = measurer.truncate(&name, BODY_FONT, m.name_size, budget);
+    let invalid = invalid.map(|reason| {
+        measurer
+            .truncate(&reason, BODY_FONT, m.description_size, budget)
+            .0
+    });
+    Block::Row(Box::new(RowView {
+        option: None,
+        name,
+        description: String::new(),
+        description_full: String::new(),
+        description_truncated: false,
+        scope: None,
+        control,
+        value_text,
+        pending: false,
+        invalid,
+        can_reset: false,
+        action: None,
+        profile: Some(target),
+        notice: None,
+        unavailable: None,
+    }))
+}
+
+/// ADR-0075 §6: o formulário do perfil escolhido, abaixo da lista, com os
+/// controles que a tela já tem -- campo de texto, escolha, lista de textos e
+/// lista de nome e valor. O tipo decide os campos.
+fn push_profile_form(
+    blocks: &mut Vec<Block>,
+    profiles: &ProfilesDraft,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    use super::profiles_draft::{Field, ListKind};
+    let Some(selected) = profiles.selected() else {
+        return;
+    };
+    let Some(form) = profiles.form(selected) else {
+        return;
+    };
+    let problems = profiles.problems(selected);
+    blocks.push(Block::Section(msg::settings::profiles::section_form(
+        catalog,
+    )));
+
+    for field in form.fields().iter().copied() {
+        // Autenticação entre o usuário e o arquivo da chave (o desenho do ADR).
+        if field == Field::IdentityFile {
+            let preset = form.auth_preset();
+            let label = auth_label(catalog, preset);
+            blocks.push(form_row(
+                field_label(catalog, Field::Auth),
+                ControlView::Choice {
+                    text: label.clone(),
+                },
+                label,
+                problems
+                    .get(&Field::Auth)
+                    .map(|kind| crate::messages::profile_problem_reason(catalog, kind)),
+                ProfileTarget::Auth,
+                catalog,
+                m,
+                panel_width,
+                measurer,
+            ));
+        }
+        let text = form.text(field).to_owned();
+        let right_aligned = field == Field::Port;
+        let width = if right_aligned {
+            m.number_field_width
+        } else {
+            m.text_field_width
+        };
+        blocks.push(form_row(
+            field_label(catalog, field),
+            self::field(text.clone(), width, right_aligned, m, measurer),
+            text,
+            problems
+                .get(&field)
+                .map(|kind| crate::messages::profile_problem_reason(catalog, kind)),
+            ProfileTarget::Field(field),
+            catalog,
+            m,
+            panel_width,
+            measurer,
+        ));
+    }
+
+    if form.kind == porecatu_config::ProfileKind::Local {
+        for (kind, label, two_fields) in [
+            (
+                ListKind::Args,
+                msg::settings::profiles::field_args(catalog),
+                false,
+            ),
+            (
+                ListKind::Env,
+                msg::settings::profiles::field_env(catalog),
+                true,
+            ),
+        ] {
+            let items = profiles
+                .list_rows(selected, kind)
+                .into_iter()
+                .enumerate()
+                .map(|(item, (first, second))| ListItemView {
+                    first,
+                    second,
+                    invalid: kind == ListKind::Env && profiles.env_item_invalid(selected, item),
+                })
+                .collect();
+            blocks.push(form_row(
+                label,
+                ControlView::List {
+                    items,
+                    two_fields,
+                    add_label: msg::settings::button::add_item(catalog),
+                },
+                String::new(),
+                None,
+                ProfileTarget::List(kind),
+                catalog,
+                m,
+                panel_width,
+                measurer,
+            ));
+        }
     }
 }
 
@@ -1484,6 +1909,19 @@ fn push_profile_blocks(
             tone: NoteTone::Muted,
         });
     }
+    push_profile_items(blocks, profiles, catalog, m, panel_width, measurer);
+    push_profile_form(blocks, profiles, catalog, m, panel_width, measurer);
+}
+
+/// Uma linha por perfil, na ordem do arquivo.
+fn push_profile_items(
+    blocks: &mut Vec<Block>,
+    profiles: &ProfilesDraft,
+    _catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
     for index in 0..profiles.len() {
         let Some(form) = profiles.form(index) else {
             continue;

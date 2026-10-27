@@ -127,8 +127,19 @@ pub(crate) fn profile_problem(
     catalog: &Catalog,
     problem: &ProfileProblem,
 ) -> (Severity, String, String) {
+    let reason = profile_problem_reason(catalog, &problem.kind);
+    (
+        Severity::Warning,
+        msg::notice::profile_problem::title(catalog),
+        msg::notice::profile_problem::body(catalog, problem.line, problem.column, reason),
+    )
+}
+
+/// A razão de um problema de perfil, na frase que o aviso de carga e o campo do
+/// formulário dividem (ADR-0070 §1, ADR-0072 §6).
+pub(crate) fn profile_problem_reason(catalog: &Catalog, kind: &ProfileProblemKind) -> String {
     use msg::notice::profile_reason as reason;
-    let reason = match &problem.kind {
+    match kind {
         ProfileProblemKind::IdInvalid => reason::id_invalid(catalog),
         ProfileProblemKind::IdReserved => reason::id_reserved(catalog),
         ProfileProblemKind::IdDuplicate { id } => reason::id_duplicate(catalog, id),
@@ -144,12 +155,7 @@ pub(crate) fn profile_problem(
         ProfileProblemKind::PortInvalid => reason::port_invalid(catalog),
         ProfileProblemKind::AuthInvalid => reason::auth_invalid(catalog),
         ProfileProblemKind::KeyWithoutIdentityFile => reason::key_without_identity_file(catalog),
-    };
-    (
-        Severity::Warning,
-        msg::notice::profile_problem::title(catalog),
-        msg::notice::profile_problem::body(catalog, problem.line, problem.column, reason),
-    )
+    }
 }
 
 /// Aviso de uma chave de perfil com `password`, `passphrase` ou `secret` no
@@ -721,6 +727,25 @@ registry! {
             new_local_name(),
             new_ssh_name(),
             import_empty(),
+            section_form(),
+            field_name(),
+            field_id(),
+            field_badge(),
+            field_program(),
+            field_cwd(),
+            field_host(),
+            field_port(),
+            field_user(),
+            field_identity_file(),
+            field_auth(),
+            field_args(),
+            field_env(),
+            auth_all(),
+            auth_agent(),
+            auth_key(),
+            auth_password(),
+            auth_key_password(),
+            auth_custom(),
         },
         scope {
             new_tab(),
