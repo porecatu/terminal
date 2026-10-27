@@ -813,6 +813,7 @@ mod tests {
             .iter()
             .map(|edit| match edit {
                 Edit::Set(path, _) | Edit::Remove(path) => path.to_string(),
+                other => panic!("the option draft only sets and removes keys: {other:?}"),
             })
             .collect();
         assert_eq!(

@@ -684,6 +684,7 @@ mod tests {
             for edit in s.edits() {
                 let path = match &edit {
                     Edit::Set(path, _) | Edit::Remove(path) => path,
+                    other => panic!("shortcuts only set and remove keys: {other:?}"),
                 };
                 assert_eq!(path.segments().len(), 3);
                 assert_eq!(path.segments()[0], "keybindings");

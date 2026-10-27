@@ -317,6 +317,11 @@ pub(crate) fn settings_save_error(
             EditError::NotATable { path } | EditError::NotAValue { path } => {
                 msg::notice::settings_save_failed::structure(catalog, path)
             }
+            // Um perfil que sumiu do arquivo entre a leitura e a edição: o
+            // arquivo mudou por fora, e a mensagem de estrutura diz onde.
+            EditError::NoSuchElement { array, .. } => {
+                msg::notice::settings_save_failed::structure(catalog, array)
+            }
             // Erros de quem monta a edição, nunca do usuário.
             EditError::EmptyKeyPath | EditError::InvalidKeyPath { .. } => {
                 msg::notice::settings_save_failed::structure(catalog, edit)
