@@ -1022,9 +1022,9 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Efeito acrílico: a imagem da janela desfocada através do quadro do terminal, só com a janela opaca (§2.7) | `[v1]` | [PRD-019](../prd/prd-019-efeito-acrilico-no-fundo-do-terminal.md), [ADR-0068](../adr/0068-efeito-acrilico-no-fundo-do-terminal.md) — fora da ordem de fases; sem representação no canvas |
 | Contagem de painéis na barra de status (§2.8), só com dois ou mais | `[v1]` | PRD-006 RF-6.20, ADR-0053 — fora da ordem de fases; cumpre a promessa do [ADR-0048](../adr/0048-barra-de-status.md) §5 |
 | **Cabeçalho e botões do painel** | `[v2]` | recusado pelo [ADR-0053](../adr/0053-paineis-divididos.md) — desenho do canvas sem requisito, ver §4.3 |
-| **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md) *(rascunho)* |
-| **Badge de perfil na aba** | `[v2]` | PRD-007 *(rascunho)*, PRD-004 RF-4.23 |
-| **Tela de nova aba** | `[v2]` | PRD-007 *(rascunho)* |
+| **Perfis de aba e menu de perfis** | `[v2]` | [PRD-007](../prd/prd-007-perfis-de-aba.md), [ADR-0070](../adr/0070-perfis-de-aba.md) — aprovado fora da ordem de fases, **a implementar**; o menu será o menu de contexto (§2.16) aberto pelo clique direito no `+`, sem o cabeçalho "Perfis" nem a cor de perfil da §2.9. Passa a `[v1]` no PR que o implementa |
+| **Badge de perfil na aba** | `[v2]` | PRD-007 RF-7.13, PRD-004 RF-4.23, ADR-0070 §7 — aprovado, **a implementar**; só em painel de perfil não padrão |
+| **Tela de nova aba** | `[v2]` | recusada pelo PRD-007 RF-7.20 — só existiria numa janela sem abas, e fechar a última aba fecha a janela |
 | **Paleta de comandos e botão de busca** | `[v2]` | [PRD-008](../prd/prd-008-paleta-de-comandos.md) *(rascunho)* |
 | **Barra de status** | `[v1]` | [PRD-009](../prd/prd-009-barra-de-status.md), [ADR-0048](../adr/0048-barra-de-status.md) — fora da ordem de fases |
 | Indicador de commits atrás do remoto (§2.8), com sublinhado sob o cursor | `[v1]` | [PRD-013](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) — fora da ordem de fases; o primeiro alvo clicável da barra |

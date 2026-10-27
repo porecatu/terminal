@@ -21,6 +21,10 @@ Recursos entregues **fora da ordem de fases**, todos implementados (detalhe e d�
 - **Temas em arquivos próprios** — [ADR-0067](docs/adr/0067-temas-em-arquivos-proprios.md). `thm_<nome>.toml` ao lado do `porecatu.toml` é o único lugar de cor.
 - **Efeito acrílico** — [PRD-019](docs/prd/prd-019-efeito-acrilico-no-fundo-do-terminal.md), [ADR-0068](docs/adr/0068-efeito-acrilico-no-fundo-do-terminal.md). Único passe de filtro do render; aval visual **pendente**.
 
+Em andamento, **só documentação** até agora:
+
+- **Perfis de aba e conexões SSH** — [PRD-007](docs/prd/prd-007-perfis-de-aba.md) aprovado, [ADR-0070](docs/adr/0070-perfis-de-aba.md) aceito (aval visual pendente); PRD de conexões SSH a escrever. `[shell]` é o perfil padrão implícito; o perfil é **do painel** e a sessão grava o identificador; clique esquerdo no `+` não muda, o menu é o clique direito; sem cor por perfil. SSH é tipo de perfil, com cliente embutido — o valor `type = "ssh"` é recusado até lá.
+
 Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da área — o código segue o que está escrito lá, incluindo os desvios anotados. Grupos, seleção, animação e popover: ADR-0020 a 0023. Sessão: ADR-0036 a 0040.
 
 ### Regras que vieram dos recursos e continuam valendo
@@ -140,7 +144,7 @@ Decisão aceita **não se edita**. Para mudar:
 
 1. Escreva um ADR novo com o próximo número, referenciando o antigo em `Supersedes: ADR-NNNN`.
 2. Marque o antigo como `Status: Superseded by ADR-MMMM`.
-3. Atualize a tabela em [docs/adr/0000-template.md](docs/adr/0000-template.md) e a tabela de stack do README.
+3. Atualize a tabela em [docs/adr/0000-template.md](docs/adr/0000-template.md) e, se a decisão for de stack, a lista "Stack travada" acima.
 
 Correção de erro factual ou clareza no texto de um ADR aceito é permitida. Mudança de *decisão*, não. Revisão parcial de seção aceita entra como **blockquote de revisão** na própria seção, apontando o ADR novo.
 
@@ -199,7 +203,7 @@ Descobertas por fase (F1 a F6, pós-F6 e cada recurso fora de fase) vivem em [do
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, tabela de fases, histórico. Descreve o binário ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
 - [docs/adr/](docs/adr/) — decisões arquiteturais
-- [docs/prd/](docs/prd/) — requisitos de produto: 000–006 e 009–019 aprovados; 007 e 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
+- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–019 aprovados; 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
 - [docs/roadmap.md](docs/roadmap.md) — fases e etapas, com a dívida de verificação de cada uma
 - [docs/descobertas.md](docs/descobertas.md) — descobertas e armadilhas, texto completo
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo **fechado** de ações; ação fora dele é erro de config

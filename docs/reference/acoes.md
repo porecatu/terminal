@@ -180,6 +180,19 @@ Restaurar uma sessão específica e excluí-la **não são ações**: exigiriam 
 
 ---
 
+## `profile.*` — perfis de aba
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `profile.open_menu` | Abre o menu de perfis ancorado no `+` do grupo da aba ativa (abaixo da aba ativa com `show_new_tab_button = false`), com a primeira linha realçada. **Sem default** — precedente de `session.open_list` e `pane.close` | [PRD-007](../prd/prd-007-perfis-de-aba.md) RF-7.12, [ADR-0070](../adr/0070-perfis-de-aba.md) §8 | fora de fase | |
+| `profile.new_tab_1` … `profile.new_tab_9` | Cria aba com o N-ésimo perfil **declarado** em `[[profiles.list]]`, no grupo da aba ativa; índice sem perfil não faz nada. **Sem default** | RF-7.11, ADR-0070 §8 | fora de fase | |
+
+As nove entradas de `profile.new_tab_N` são explícitas, como as de `tab.goto_N`: `profile.new_tab_10` é erro de config. O índice nunca conta os perfis **detectados** — um atalho não muda de alvo porque a máquina ganhou um shell.
+
+> **Estado.** Aprovadas, **a implementar**. Até o código existir, nenhuma delas entra no arquivo de exemplo: `crates/porecatu-config/tests/example_toml.rs` reprova binding de ação que o parser não conhece.
+
+---
+
 ## `pane.*` — painéis
 
 | Ação | O que faz | Origem | Fase | Arg |
@@ -284,7 +297,7 @@ Ausências deliberadas, registradas para que ninguém as adicione achando que fo
 | `tab.duplicate` | Fora de escopo do PRD-001 (*"duplicar aba com o estado do processo"*) |
 | `tab.pin` | Fora de escopo do PRD-001 (*"fixar aba"*) |
 | `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000) |
-| `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho) |
+| `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho). *Revisto pelo [ADR-0070](../adr/0070-perfis-de-aba.md) §8:* o PRD-007 foi aprovado e a seção `profile.*` acima existe; continuam **não existindo** uma ação que troque o perfil de uma aba aberta e uma que abra um perfil por identificador (exigiria argumento) |
 | `terminal.clear` | Nenhum RF pede; o shell já tem `clear` |
 | `terminal.reset` | Idem; `reset` existe no shell |
 | `session.save` / `session.restore` | A gravação da sessão automática é automática por decisão do [ADR-0005](../adr/0005-persistencia-de-sessao.md); ação manual sugeriria que não é. *Revisto pelo [ADR-0054](../adr/0054-sessoes-nomeadas.md) §1 e §7:* continua valendo para o `session.json`; as **sessões nomeadas** são outro objeto, com ações de nome próprio (`session.save_named`, `session.open_list`) na seção `session.*` acima |
@@ -294,7 +307,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Dezenove comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os seis últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Vinte e um comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os oito últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -316,6 +329,8 @@ Dezenove comportamentos têm requisito aprovado e **não recebem nome de ação*
 | Clicar no indicador de commits atrás do remoto, na barra de status | [RF-13.12](../prd/prd-013-sincronizacao-com-o-remoto-do-git.md), [ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md) §9 | integra commits no repositório da aba ativa, e uma tecla faria isso no repositório que a aba ativa **por acaso** tem — a mesma classe de decisão que o [ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md) §4 registrou para `trusted_paths`: tomada uma vez, esquecida depois. O clique mira o que descreve, e só existe quando há o que integrar |
 | Restaurar uma sessão nomeada, por clique ou `Enter` na linha do popover | [RF-14.10](../prd/prd-014-sessoes-nomeadas.md), [ADR-0054](../adr/0054-sessoes-nomeadas.md) §7 | o alvo é a sessão da linha; uma ação precisaria de argumento (qual sessão?), e ação com argumento não é vinculável a tecla. `session.open_list` leva até a lista |
 | Excluir uma sessão nomeada, pelo `X` ou `Delete` na linha do popover | [RF-14.16](../prd/prd-014-sessoes-nomeadas.md), ADR-0054 §7 | idem, e sempre com o diálogo de confirmação por cima |
+| Abrir o menu de perfis por clique direito num botão `+` | [RF-7.8](../prd/prd-007-perfis-de-aba.md), [ADR-0070](../adr/0070-perfis-de-aba.md) §6 | o alvo é o grupo do `+` clicado; `profile.open_menu` é o equivalente de teclado, sobre o grupo da aba ativa |
+| Escolher um perfil numa linha do menu de perfis | RF-7.9, RF-7.10, ADR-0070 §6 | o alvo é o perfil da linha, e os detectados não têm posição estável; `profile.new_tab_N` cobre os declarados |
 | Navegar, salvar, descartar e capturar atalho dentro da janela de configurações | [RF-16.10](../prd/prd-016-tela-de-configuracoes.md), RF-16.29, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §3 | a janela é um modo de captura, como o diálogo: `Tab`, setas, `Espaço`, `Enter`, `Esc` e `Ctrl+S`/`Cmd+S` são consumidos por ela e o mapa de `[keybindings]` não é consultado ali |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

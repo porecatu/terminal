@@ -1117,6 +1117,29 @@ Fora da ordem de fases, pedido do dono do produto: os botões de sessões (`book
 
 **Verificação:** o dono verificou o visual pessoalmente em 2026-10-27 e aprovou ("era isso, ficou bom"). Não houve captura automatizada.
 
+---
+
+## Depois do v1 — perfis de aba e conexões SSH — em andamento
+
+Fora da ordem de fases, pedido do dono do produto: **abrir sessões SSH pelo app**. O dono decidiu que o SSH entra como **um tipo de perfil de aba**, com **cliente SSH embutido** (não o `ssh` do sistema), cadastro de hosts no app, senha no cofre do sistema operacional, `~/.ssh/known_hosts` compartilhado com o OpenSSH, importação do `~/.ssh/config` e reconexão automática. Por isso o recurso vem em duas levas, com um rascunho promovido no caminho: o [PRD-007](prd/prd-007-perfis-de-aba.md) (perfis, rascunho `[v2]` desde a reconciliação do ADR-0009) é aprovado e decidido no [ADR-0070](adr/0070-perfis-de-aba.md); o PRD de **conexões SSH** e os ADRs dele (backend de terminal abstrato, cliente embutido e runtime isolado, cofre de credenciais, chave de host, superfícies de UI e reconexão) vêm na segunda leva de documentação.
+
+**Etapas:**
+
+1. **Documentação de perfis — em revisão.** PRD-007 aprovado, com as quatro questões abertas do rascunho respondidas pelo dono; ADR-0070 **aceito com o aval visual pendente** (badge e menu), como o ADR-0068; emendas no PRD-000 (não-objetivo), PRD-001 ("Fora de escopo"), PRD-003 (o programa de spawn passa a ser restaurado), PRD-004 (RF-4.23), PRD-006 e PRD-016; blockquotes de revisão no ADR-0036 §3 e no ADR-0014 (menu de contexto ancorado num botão); seção `profile.*`, a linha revista de "ações que não existem" e duas superfícies de mouse em [docs/reference/acoes.md](reference/acoes.md); a tabela de fases da especificação visual (linhas de perfis apontando o ADR-0070, a tela de nova aba recusada). **Nem `[profiles]` nem os bindings entram no arquivo de exemplo aqui** — `crates/porecatu-config/tests/example_toml.rs` reprova chave e ação antes de o código existir, como na `[git]` e na `[panes]`.
+2. **Documentação de conexões SSH.** PRD próprio e ADRs; blockquotes de revisão nos ADRs que assumem processo local (ADR-0004, ADR-0007, ADR-0014, ADR-0033/0034).
+3. **Perfis em `porecatu-config` e `porecatu-session`.** `[profiles]`, validação, `resolve_profile`; `profile` em `TabV1` e no nó-folha. Sem comportamento observável.
+4. **Spawn por perfil e restauração.** `spawn_tab_runtime`/`spawn_split_pane_runtime` por `ResolvedProfile`; perfil do painel no core; nota de perfil ausente; ações `profile.*` e o arquivo de exemplo na mesma leva.
+5. **Menu, badge e detecção.** Menu de contexto ancorado no `+`; badge na aba; detecção em thread; especificação visual (§2.5, §2.9, tabela de fases, §4.4) no mesmo PR, e o aval visual que muda o ADR-0070 para `Aceito`.
+6. **Backend de terminal abstrato** — o PTY migrado para trás de um trait, sem mudança de comportamento.
+7. **Cliente SSH**, cofre, chave de host, importação do `ssh_config`, reconexão — etapas a detalhar com o PRD de conexões SSH.
+8. **Verificação ao vivo e guia do usuário.**
+
+**Escopo:** RF-7.1 a RF-7.20, e os RF do PRD de conexões SSH.
+
+**Aparência:** perfis trazem **um elemento novo** já desenhado — o badge na aba, sem valor novo (anatomia da §2.5 item 1, alfa de `badge_tint_strength`) — e reaproveitam o menu de contexto para o menu de perfis. Aval do dono **pendente**.
+
+**Dependências:** nenhuma para perfis. O cliente SSH traz dependências novas (biblioteca SSH, cofre do sistema), com licença conferida contra a GPLv3 no ADR que as adotar.
+
 ## Fora do v1
 
 Registrado para não ser reinventado como ideia nova. Cada item está justificado nos PRDs correspondentes.
@@ -1125,7 +1148,7 @@ A coluna **Desenhado** marca o que já tem alvo visual aprovado no canvas. Estar
 
 | Item | Onde está justificado | Desenhado |
 |---|---|---|
-| Perfis de aba (WSL, SSH, container) | [PRD-000](prd/prd-000-visao-de-produto.md), [PRD-007](prd/prd-007-perfis-de-aba.md) *(rascunho)* | sim, `[v2]` |
+| Perfis de container | [PRD-007](prd/prd-007-perfis-de-aba.md), "Fora de escopo" — perfis de aba em si saíram desta tabela, ver "perfis de aba e conexões SSH" acima | não |
 | Paleta de comandos | [PRD-008](prd/prd-008-paleta-de-comandos.md) *(rascunho)* | sim, `[v2]` |
 | Configuração por GUI | [ADR-0003](adr/0003-formato-de-configuracao.md), [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) | sim, `[v2]` |
 | Faixa de identidade da barra de título (logo, nome do app, título da aba ativa) | [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) (parcial, ver [ADR-0027](adr/0027-controles-de-janela-e-resize-proprios.md)), [PRD-004](prd/prd-004-aparencia-do-chrome.md) | sim, `[v2]` |

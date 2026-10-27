@@ -117,6 +117,8 @@ Três coisas que existem em código sem requisito de origem — o ADR-0027 e os 
 
 **RF-4.23** — Configurável: exibir ou não o **badge de perfil** na aba — o marcador curto que identifica o tipo de terminal (`SSH`, `WSL`, `PS`). Requer [PRD-007](prd-007-perfis-de-aba.md), em rascunho.
 
+> **Emenda (2026-10-27).** O PRD-007 foi aprovado. O badge aparece só em painel cujo perfil não é o padrão (RF-7.13), e `show_profile_badge` deixa de ser reserva de nome ([ADR-0070](../adr/0070-perfis-de-aba.md) §7).
+
 **RF-4.24** — O badge herda a cor **do grupo**, não a do perfil, com o fundo tingido dessa mesma cor. Mantém a barra legível pelo eixo principal de organização; a cor do perfil aparece apenas no menu de perfis e nas configurações.
 
 ### Recarga e erro

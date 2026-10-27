@@ -80,6 +80,8 @@ Reaproveita integralmente os tokens do menu de perfis (seção 2.9 da especifica
 
 Comportamento: ancorado no cursor, virado horizontal e verticalmente para caber na tela, navegável por setas com `Enter` e `Esc`, fechado por clique fora ou perda de foco da janela. Item indisponível fica esmaecido em `#5c646f`, nunca ausente — menu cuja lista muda de tamanho a cada abertura obriga a reaprender a posição dos itens.
 
+> **Revisto pelo [ADR-0070](0070-perfis-de-aba.md) §6.** Um quarto menu, o **de perfis**, usa este widget **ancorado num botão** — o `+` clicado, ou o do grupo da aba ativa pela ação —, não no cursor; o flip nos dois eixos vale igual. Cada linha ganha a coluna do badge do perfil. As linhas dele são dados (a lista de perfis da máquina), não ações dependentes de contexto, e a lista tem o tamanho dos dados: a regra do item esmaecido acima continua valendo para os três menus de ações.
+
 Três menus:
 
 | Menu | Origem | Fase |

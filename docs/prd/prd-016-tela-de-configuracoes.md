@@ -251,7 +251,7 @@ Cada item é decisão, não esquecimento.
 - **Aplicar ao vivo, antes de salvar** (pré-visualização). A recarga aplica depois de gravar; uma pré-visualização exigiria aplicar `Config` que não está no arquivo, que é a segunda fonte de verdade que o [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) §6 proíbe.
 - **Desfazer depois de salvar.** O arquivo é do usuário e pode estar versionado; Descartar cobre o antes de salvar.
 - **Busca entre as opções.** O catálogo é curado e cabe em nove grupos; o filtro existe só em Atalhos, que é a única lista longa.
-- **Perfis de aba** ([PRD-007](prd-007-perfis-de-aba.md)) e **paleta de comandos** ([PRD-008](prd-008-paleta-de-comandos.md)) — a seção "Perfis instalados" do drawer do canvas continua `[v2]` junto com eles.
+- **Perfis de aba** ([PRD-007](prd-007-perfis-de-aba.md)) e **paleta de comandos** ([PRD-008](prd-008-paleta-de-comandos.md)) — a seção "Perfis instalados" do drawer do canvas continua `[v2]` junto com eles. *(Emenda, 2026-10-27: o PRD-007 foi aprovado, mas editar perfis nesta tela continua fora — uma lista de tabelas pede um controle novo, decidido junto com o cadastro de hosts SSH.)*
 - **Tela de configurações dentro da janela de terminal** (sobreposição ou drawer, como o canvas desenha) e **como aba**. A janela própria foi escolha do dono do produto; ver as alternativas do [ADR-0059](../adr/0059-janela-de-configuracoes.md).
 - **Configuração por janela.** O `Config` é do processo ([ADR-0030](../adr/0030-escopo-do-hot-reload.md)); a tela edita o arquivo, que vale para todas.
 - **Editar `[keybindings]` comum ou de outra plataforma.** A tela mostra e grava só a da plataforma em uso (RF-16.31).

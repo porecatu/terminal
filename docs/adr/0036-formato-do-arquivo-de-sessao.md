@@ -113,6 +113,13 @@ Tema e zoom são **por janela**, não por processo. Restaurar duas janelas com t
 > de layout, não corrupção — que é o comportamento que o `#[serde(default)]` promete
 > e o preço de não subir a versão.
 
+> **Revisto pelo [ADR-0070](0070-perfis-de-aba.md) §4.** Cada painel — `TabV1` de um
+> painel só e o nó-folha da árvore — ganha `profile`, o identificador do perfil de
+> aba, opcional e **sem subir `schema_version`**. O "programa de spawn" da lista acima
+> continua gravado como nome de exibição; quem decide o que é lançado na restauração
+> passa a ser o `profile`, e a ausência dele significa o `[shell]` corrente, que é o
+> comportamento de antes.
+
 ### 4. Identidade de monitor
 
 `MonitorIdV1` grava o nome do monitor quando a plataforma o dá, mais a posição da origem dele no espaço virtual. Na restauração, casa por nome; sem nome, ou sem casamento, casa por posição; sem nenhum dos dois, cai no monitor primário com o tamanho preservado dentro dos limites da tela (RF-3.11). Nome é estável e legível quando existe; a posição é o desempate que funciona quando o mesmo modelo aparece duas vezes.

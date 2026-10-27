@@ -32,6 +32,8 @@ Todo usuário que criou mais de duas abas. O valor cresce com o tamanho da sess�
 | **Conteúdo do scrollback** | **Não** — fora do escopo do v1 |
 | Histórico de comandos | Não — é do shell, não nosso |
 
+> **Precisado pelo [PRD-007](prd-007-perfis-de-aba.md) (RF-7.16) e pelo [ADR-0070](../adr/0070-perfis-de-aba.md) §4.** A linha "Programa de spawn diferente do shell padrão" estava gravada desde a F5 e **nunca foi restaurada**: o arquivo guardava só o nome do shell, que não basta para relançá-lo, e a restauração sempre lançava o `[shell]` corrente. Com perfis, cada painel grava o **identificador do perfil**, e a restauração lança o perfil gravado. Painel sem perfil gravado — toda sessão anterior a esta mudança — continua subindo com o `[shell]` corrente. Lançar o perfil não é reexecutar um processo: é o mesmo programa interativo que a aba abriu, sem nenhum comando dentro dele.
+
 Processos não são restaurados por decisão explícita, não por limitação: reexecutar automaticamente o comando que estava rodando não é seguro. Restaurar um `rm -rf` ou um `terraform apply` interrompido seria pior que não restaurar nada.
 
 > **Precisado pelo [PRD-012](prd-012-comando-de-projeto-por-diretorio.md).** O parágrafo acima continua valendo inteiro, e não foi reaberto: o app segue sem gravar o que estava rodando e sem reexecutar nada que tenha observado. O que o PRD-012 acrescenta tem outra origem — um comando que o **usuário declarou** num arquivo `.porecatu` versionado com o projeto, autorizado por diretório na config, e escrito no terminal à vista dele. Um é replay do que o app viu; o outro é declaração do que o projeto pede. A proibição aqui é do primeiro.

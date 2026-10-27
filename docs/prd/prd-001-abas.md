@@ -152,6 +152,8 @@ Cenário: confirmação ao fechar com processo ativo
 - Miniatura de preview no hover
 - Perfis de aba (aba que abre WSL, SSH, container)
 
+> **Emenda (2026-10-27).** Perfis de aba saíram desta lista: o [PRD-007](prd-007-perfis-de-aba.md) foi aprovado fora da ordem de fases. O clique esquerdo no `+` e `tab.new` continuam como descritos aqui, com o perfil padrão — que, sem nada declarado, é o `[shell]` de sempre. Perfis de container continuam fora.
+
 ## Métricas de sucesso
 
 | Métrica | Alvo |

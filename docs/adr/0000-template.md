@@ -17,7 +17,7 @@
 | [0011](0011-toolchain-rust.md) | Toolchain Rust pinada e política de versão | Aceito |
 | [0012](0012-identificacao-do-terminal.md) | Identificação do terminal: `TERM` e capacidades anunciadas | Aceito |
 | [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
-| [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito |
+| [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito · menu de contexto revisto por ADR-0070 (**parcial**: o menu de perfis, ancorado num botão) |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito · "Escopo" Superseded by ADR-0059 (**parcial**: uma janela sem abas, a de configurações) |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 |
 | [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034, ADR-0037 e ADR-0053 (os três **parcialmente**) |
@@ -39,7 +39,7 @@
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito |
 | [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
-| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) · §1 e §6 Superseded by ADR-0054 (**parcial**: dois campos opcionais e o diretório `sessions/`) |
+| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) · §1 e §6 Superseded by ADR-0054 (**parcial**: dois campos opcionais e o diretório `sessions/`) · §3 revisto por ADR-0070 (**parcial**: `profile` por painel, sem subir a versão) |
 | [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito · Superseded by ADR-0053 (**parcial**: só a granularidade) |
 | [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
 | [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito · Superseded by ADR-0053 (**parcial**: só o endereço da nota) |
@@ -71,6 +71,7 @@
 | [0067](0067-temas-em-arquivos-proprios.md) | Temas em arquivos próprios (`thm_*.toml`), cor só no tema, botões de janela translúcidos | Aceito |
 | [0068](0068-efeito-acrilico-no-fundo-do-terminal.md) | Efeito acrílico no fundo do terminal: desfoque da camada da janela em passe próprio, amostrado por quadro | Aceito — aval visual pendente |
 | [0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md) | Hover e pressionado dos botões da zona fixa (sessões e configurações): quadrado arredondado revelado, disparo no release | Aceito |
+| [0070](0070-perfis-de-aba.md) | Perfis de aba: lista em `[profiles]`, `[shell]` como perfil padrão implícito, identificador no painel, menu no clique direito do `+` | Aceito — aval visual pendente |
 
 ## Convenção
 
@@ -79,7 +80,7 @@
 - Nome do arquivo: `NNNN-titulo-em-kebab-case.md`.
 - Status possíveis: `Proposto`, `Aceito`, `Rejeitado`, `Superseded by ADR-NNNN`.
 - Decisão aceita não se edita. Para mudar, escreva um ADR novo com `Supersedes: ADR-NNNN` e marque o antigo. Correção de erro factual ou de clareza no texto é permitida; mudança de decisão, não.
-- Ao adicionar um ADR, atualize a tabela acima e, se a decisão aparecer lá, a tabela de stack do [README](../../README.md).
+- Ao adicionar um ADR, atualize a tabela acima e, se a decisão aparecer lá, a lista "Stack travada" do [CLAUDE.md](../../CLAUDE.md). *(Correção de fato: esta linha apontava para uma tabela de stack no README, que não existe.)*
 
 ---
 
