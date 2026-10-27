@@ -46,6 +46,8 @@ Não há botão de "mostrar senha": seria um ícone novo e um terceiro estado do
 
 Sobre a anatomia da §2.15 — overlay, largura 380, título, botões —, na ordem:
 
+> **Revisto pelo dono do produto (prompt 16, verificação ao vivo).** A largura de **todo** diálogo passou de 380 para **760** (`appearance.dialog.width`): o corpo do diálogo de excluir perfil saía cortado com reticências. Onde este ADR diz 380, leia 760; o resto da anatomia não muda.
+
 | Elemento | Origem |
 |---|---|
 | Título: "Senha para `deploy@10.4.1.20`" / "Passphrase da chave" | título da §2.15 |

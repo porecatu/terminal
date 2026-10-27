@@ -47,7 +47,7 @@ impl Default for Dialog {
             background: Color::hex("#1a1e25"),
             border: Color::hex("#2e343e"),
             corner_radius: 10,
-            width: 380,
+            width: 760,
             padding: 16,
             gap: 14,
             title_foreground: Color::hex("#e6eaef"),
@@ -72,6 +72,6 @@ mod tests {
     #[test]
     fn default_matches_example_toml() {
         assert_eq!(Dialog::default().overlay, Color::hex("#06070973"));
-        assert_eq!(Dialog::default().width, 380);
+        assert_eq!(Dialog::default().width, 760);
     }
 }

@@ -369,7 +369,8 @@ pub fn layout_dialog(
     measurer: &mut TextMeasurer,
 ) -> DialogLayout {
     let cfg = &config.appearance.dialog;
-    let width = cfg.width as f32;
+    // Nunca mais larga que a janela (a largura configurada é 760).
+    let width = (cfg.width as f32).min(window_width - cfg.padding as f32 * 2.0);
     let padding = cfg.padding as f32;
     let title_size = cfg.title_font_size as f32;
     let body_size = cfg.font_size as f32;
@@ -395,7 +396,7 @@ pub fn layout_dialog(
         + button_gap
         + discard_width.map_or(0.0, |discard| discard + button_gap);
     // As linhas de dado nunca são truncadas (ADR-0075 §3): se alguma não
-    // coube nos 380px configurados -- outra fonte, outra escala --, o diálogo
+    // coube na largura configurada -- outra fonte, outra escala --, o diálogo
     // cresce o que for preciso, como já faz para os botões.
     let widest_data = dialog
         .lines
@@ -2929,7 +2930,7 @@ mod tests {
     }
 
     #[test]
-    fn the_host_key_data_lines_fit_the_380px_dialog_in_every_language() {
+    fn the_host_key_data_lines_fit_the_configured_dialog_in_every_language() {
         let config = porecatu_config::Config::default();
         let cfg = &config.appearance.dialog;
         let mut measurer = TextMeasurer::new();
@@ -3090,7 +3091,7 @@ mod tests {
             layout.modal_rect.x + layout.modal_rect.width - cfg.padding as f32,
             layout.confirm_rect.x + layout.confirm_rect.width
         );
-        // E os três cabem dentro do diálogo, com a largura de 380 do ADR.
+        // E os três cabem dentro do diálogo, com a largura configurada.
         assert!(layout.cancel_rect.x >= layout.modal_rect.x + cfg.padding as f32);
         for (rect, button) in [
             (layout.cancel_rect, DialogButton::Cancel),
@@ -3108,7 +3109,7 @@ mod tests {
         let cfg = &config.appearance.dialog;
         let mut measurer = TextMeasurer::new();
         let mut dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 1);
-        dialog.discard_label = Some("Descartar tudo e fechar a janela de configurações".to_owned());
+        dialog.discard_label = Some("Descartar tudo e fechar a janela de configurações ".repeat(3));
         let layout = layout_dialog(1400.0, 700.0, &dialog, &config, &mut measurer);
         assert!(layout.modal_rect.width > cfg.width as f32);
         assert!(layout.cancel_rect.x >= layout.modal_rect.x + cfg.padding as f32);
@@ -3153,7 +3154,25 @@ mod tests {
     }
 
     #[test]
-    fn the_secret_dialog_stacks_field_box_and_buttons_inside_the_380px_modal() {
+    fn every_dialog_has_the_configured_width_and_never_more_than_the_window() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let delete =
+            ConfirmDialog::delete_profile(&crate::messages::test_support::pt_br(), "prod", 0, true);
+        for dialog in [delete, two_button_dialog()] {
+            let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+            assert_eq!(layout.modal_rect.width, 760.0);
+            let narrow = layout_dialog(500.0, 700.0, &dialog, &config, &mut measurer);
+            assert!(
+                narrow.modal_rect.width <= 500.0,
+                "{}",
+                narrow.modal_rect.width
+            );
+        }
+    }
+
+    #[test]
+    fn the_secret_dialog_stacks_field_box_and_buttons_inside_the_configured_modal() {
         let config = porecatu_config::Config::default();
         let mut measurer = TextMeasurer::new();
         let layout = layout_dialog(
@@ -3168,7 +3187,7 @@ mod tests {
         let field = layout.field_rect.expect("field");
         let row = layout.remember_rect.expect("box row");
         let toggle = layout.toggle_rect.expect("toggle");
-        assert_eq!(modal.width, 380.0);
+        assert_eq!(modal.width, 760.0);
         assert_eq!(
             field.height,
             config.appearance.group_editor.input_height as f32
