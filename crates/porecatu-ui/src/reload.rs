@@ -540,6 +540,12 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
             scope: DeferredScope::NewTab,
         });
     }
+    if old.profiles != new.profiles {
+        deferred.push(Deferred {
+            key: "[profiles]",
+            scope: DeferredScope::NewTab,
+        });
+    }
     if old.terminal.scrollback != new.terminal.scrollback {
         deferred.push(Deferred {
             key: "[terminal.scrollback]",
@@ -692,6 +698,21 @@ mod tests {
             effects.deferred,
             vec![Deferred {
                 key: "[shell]",
+                scope: DeferredScope::NewTab
+            }]
+        );
+    }
+
+    #[test]
+    fn profiles_change_is_deferred_to_new_tabs() {
+        let mut new = base();
+        new.profiles.default = "wsl".to_owned();
+        let effects = diff(&base(), &new);
+        assert!(!effects.grid_changed);
+        assert_eq!(
+            effects.deferred,
+            vec![Deferred {
+                key: "[profiles]",
                 scope: DeferredScope::NewTab
             }]
         );

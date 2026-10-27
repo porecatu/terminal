@@ -45,6 +45,34 @@ args = []
 # EDITOR = "vim"
 
 
+# --- Perfis de aba ----------------------------------------------------------
+# Vale nas abas abertas depois da mudança.
+[profiles]
+# Perfil que o "+" abre. É o "id" de um perfil da lista abaixo.
+# Vazio = o próprio [shell].
+default = ""
+# Procura shells instalados na primeira vez que o menu de perfis abre.
+detect = true
+
+# Um perfil por bloco. Tire o "#" das linhas para usar.
+# [[profiles.list]]
+# Nome interno: letras minúsculas, números, "-" e "_", até 32 caracteres.
+# id = "wsl"
+# Nome que aparece no menu.
+# name = "Ubuntu 24.04"
+# Texto curto na aba, de 1 a 4 caracteres.
+# badge = "WSL"
+# Programa e argumentos que rodam na aba.
+# program = "wsl.exe"
+# args = ["-d", "Ubuntu-24.04"]
+# Pasta onde a aba abre. "~/" é a sua pasta pessoal. Vazio = como as outras abas.
+# cwd = "~/projetos"
+# Variáveis de ambiente extras, somadas às de [shell.env]. Este arquivo é
+# texto puro: não guarde senha nem chave aqui.
+# [profiles.list.env]
+# EDITOR = "vim"
+
+
 # --- Terminal ---------------------------------------------------------------
 [terminal]
 # Tema de cores: o nome do arquivo thm_<nome>.toml, sem "thm_" e sem ".toml".
