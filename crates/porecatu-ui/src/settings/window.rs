@@ -48,6 +48,7 @@ use super::content::{
 use super::draft::Draft;
 use super::field_edit::{EditPart, Editing};
 use super::file_state::{Banner, Disk, Effect, FileState};
+use super::import_list::ImportList;
 use super::interact;
 use super::layout::{
     self, BannerButton, BlockGeometry, ControlPart, Focus, FooterButton, Hit, Layout, Metrics,
@@ -62,6 +63,9 @@ use super::{Group, HEADER_GAP_PX, TITLE_SIZE_PX};
 /// O badge de um perfil local novo: um dado (o mesmo `SH` que o menu de perfis
 /// usa para um shell sem badge), não uma frase.
 const NEW_LOCAL_BADGE: &str = "SH";
+/// Aponta o "Importar" para outro arquivo no lugar do `~/.ssh/config`: é como
+/// a verificação ao vivo usa um arquivo de prova sem tocar no do usuário.
+const SSH_CONFIG_ENV: &str = "PORECATU_SSH_CONFIG";
 
 /// O cofre esquece o que a exclusão de um perfil pediu (ADR-0073 §4). Esquecer o
 /// que não existe não é erro, e uma falha do cofre não desfaz a gravação do
@@ -216,9 +220,9 @@ pub(crate) struct SettingsWindow {
     shortcuts: Shortcuts,
     /// O grupo Perfis: a lista e o formulário em edição (ADR-0075 §6).
     profiles: ProfilesDraft,
-    /// "Importar do ~/.ssh/config" está aberto (o estado vazio; a importação é
-    /// do prompt 16).
-    import_open: bool,
+    /// "Importar do ~/.ssh/config" está aberto: o que o leitor achou e o que
+    /// está marcado (ADR-0075 §7). Ocupa o lugar do formulário.
+    import: Option<ImportList>,
     /// O cofre do sistema responde (sondado uma vez, na criação da janela).
     vault: bool,
     /// O texto do filtro do grupo Atalhos (RF-16.28); vale a cada tecla e
@@ -280,7 +284,7 @@ impl SettingsWindow {
             dialog: None,
             shortcuts: Shortcuts::new(config, Platform::current()),
             profiles: ProfilesDraft::new(&config.profiles.list),
-            import_open: false,
+            import: None,
             vault: porecatu_term::vault_available(),
             filter: String::new(),
             capturing: None,
@@ -808,7 +812,7 @@ impl SettingsWindow {
                 banner: banner.as_ref(),
                 config_path: self.config_path.as_deref(),
                 profiles: Some(&self.profiles),
-                import_open: self.import_open,
+                import: self.import.as_ref(),
                 vault: self.vault,
             };
             self.content = Some(content::build(
@@ -1410,7 +1414,7 @@ impl SettingsWindow {
         self.draft.discard();
         self.shortcuts.discard();
         self.profiles.discard();
-        self.import_open = false;
+        self.import = None;
         self.invalidate();
     }
 
@@ -1516,6 +1520,7 @@ impl SettingsWindow {
             return false;
         };
         self.profiles.select(item);
+        self.import = None;
         self.invalidate();
         true
     }
@@ -1544,9 +1549,16 @@ impl SettingsWindow {
             content::ProfileClick::ListAdd(kind) => self.add_profile_list_item(index, kind),
             content::ProfileClick::AddLocal => self.add_profile(false),
             content::ProfileClick::AddSsh => self.add_profile(true),
-            // A importação é do prompt 16: aqui só se abre o estado vazio.
-            content::ProfileClick::OpenImport => {
-                self.import_open = true;
+            content::ProfileClick::OpenImport => self.open_import(),
+            content::ProfileClick::ToggleCandidate(item) => {
+                if let Some(list) = &mut self.import {
+                    list.toggle(item);
+                    self.invalidate();
+                }
+            }
+            content::ProfileClick::ImportChecked => self.import_checked(),
+            content::ProfileClick::CancelImport => {
+                self.import = None;
                 self.invalidate();
             }
             content::ProfileClick::Delete(item) => {
@@ -1621,7 +1633,47 @@ impl SettingsWindow {
             self.profiles
                 .add_local(&p::new_local_name(&self.catalog), NEW_LOCAL_BADGE);
         }
-        self.import_open = false;
+        self.import = None;
+        self.invalidate();
+    }
+
+    /// "Importar do ~/.ssh/config": lê o arquivo e abre a lista no lugar do
+    /// formulário. `PORECATU_SSH_CONFIG` aponta para outro arquivo (a prova de
+    /// verificação); o `~` e os `Include` seguem a pasta pessoal de verdade.
+    fn open_import(&mut self) {
+        let result = match dirs::home_dir() {
+            Some(home) => {
+                let path = std::env::var_os(SSH_CONFIG_ENV)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| porecatu_config::default_ssh_config_path(&home));
+                porecatu_config::read_ssh_config(
+                    &path,
+                    &home,
+                    &porecatu_config::local_user_name(),
+                    &self.profiles.ssh_destinations(),
+                )
+            }
+            None => Ok(porecatu_config::SshConfigImport {
+                file_found: false,
+                candidates: Vec::new(),
+            }),
+        };
+        self.import = Some(ImportList::from_result(result));
+        self.invalidate();
+    }
+
+    /// "Importar marcados": um perfil SSH por linha marcada, nas alterações
+    /// pendentes. Sem nada marcado, a lista fica como está.
+    fn import_checked(&mut self) {
+        let Some(list) = self.import.take() else {
+            return;
+        };
+        let chosen = list.chosen();
+        if chosen.is_empty() {
+            self.import = Some(list);
+            return;
+        }
+        self.profiles.add_imported(&chosen);
         self.invalidate();
     }
 
@@ -2222,7 +2274,13 @@ impl SettingsWindow {
                 ProfileTarget::Forget(kind) => {
                     self.click_profile_forget(kind);
                 }
-                ProfileTarget::Actions => {}
+                ProfileTarget::Candidate(item) => {
+                    if let Some(list) = &mut self.import {
+                        list.toggle(item);
+                        self.invalidate();
+                    }
+                }
+                ProfileTarget::Actions | ProfileTarget::ImportActions => {}
             }
             self.window.request_redraw();
             return;

@@ -23,6 +23,7 @@ use super::catalog::{Control, Group, OptionDef, ReloadScope, Section, options_in
 use super::draft::{Draft, ValueError};
 use super::field_edit::{display_text, number_text};
 use super::file_state::Banner;
+use super::import_list::ImportList;
 use super::layout::{self, BannerButton, BlockSpec, ControlPart, Metrics, PanelGeometry};
 use super::profiles_draft::ProfilesDraft;
 use super::shortcuts::{Capturing, Shortcuts};
@@ -75,9 +76,9 @@ pub(crate) struct ViewExtras<'a> {
     /// O rascunho do grupo "Perfis" (a lista e o formulário), no molde de
     /// `shortcuts`: estado próprio, fora do catálogo de opções.
     pub profiles: Option<&'a ProfilesDraft>,
-    /// "Importar do ~/.ssh/config" foi aberto: o estado vazio ocupa o lugar do
-    /// formulário (ADR-0075 §7; a importação é do prompt 16).
-    pub import_open: bool,
+    /// "Importar do ~/.ssh/config" está aberto: a lista de marcar ocupa o
+    /// lugar do formulário (ADR-0075 §7).
+    pub import: Option<&'a ImportList>,
     /// O cofre do sistema responde: só então o formulário SSH mostra os
     /// botões "Esquecer".
     pub vault: bool,
@@ -199,6 +200,10 @@ pub(crate) enum ProfileTarget {
     List(super::profiles_draft::ListKind),
     /// "Senha salva" / "Passphrase salva" com o botão "Esquecer".
     Forget(super::profiles_draft::SecretKind),
+    /// O candidato `n` da lista de importar do `~/.ssh/config`.
+    Candidate(usize),
+    /// Os botões "Importar marcados" e "Cancelar" da lista.
+    ImportActions,
 }
 
 impl ControlView {
@@ -531,7 +536,7 @@ pub(crate) fn build(
         push_profile_blocks(
             &mut blocks,
             profiles,
-            extras.import_open,
+            extras.import,
             extras.vault,
             catalog,
             m,
@@ -689,7 +694,7 @@ user = "deploy"
         porecatu_config::parse(FILE).unwrap().0
     }
 
-    fn build_profiles(profiles: &ProfilesDraft, import_open: bool) -> Content {
+    fn build_profiles(profiles: &ProfilesDraft, import: Option<&ImportList>) -> Content {
         build(
             ContentKey {
                 group: Group::Profiles,
@@ -699,7 +704,7 @@ user = "deploy"
             &Draft::new(&config()),
             &ViewExtras {
                 profiles: Some(profiles),
-                import_open,
+                import,
                 ..ViewExtras::default()
             },
             &test_support::pt_br(),
@@ -755,7 +760,7 @@ user = "deploy"
     fn the_form_of_a_local_profile_has_its_fields_then_the_two_lists_and_no_host() {
         let mut draft = ProfilesDraft::new(&config().profiles.list);
         draft.select(0);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = form_rows(&content);
 
         let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
@@ -795,7 +800,7 @@ user = "deploy"
     fn the_form_of_an_ssh_profile_puts_the_authentication_between_user_and_key_file() {
         let mut draft = ProfilesDraft::new(&config().profiles.list);
         draft.select(1);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = form_rows(&content);
 
         let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
@@ -832,7 +837,7 @@ user = "deploy"
         let text = "[[profiles.list]]\nid=\"c\"\nname=\"c\"\ntype=\"ssh\"\nhost=\"h\"\nuser=\"u\"\nauth=[\"password\",\"agent\"]\n";
         let list = porecatu_config::parse(text).unwrap().0.profiles.list;
         let draft = ProfilesDraft::new(&list);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = form_rows(&content);
         let ControlView::Choice { text } = &rows[6].control else {
             panic!("a choice");
@@ -845,7 +850,7 @@ user = "deploy"
         let mut draft = ProfilesDraft::new(&config().profiles.list);
         draft.select(1);
         draft.set_text(1, Field::Host, "a b");
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = form_rows(&content);
 
         let host = rows.iter().find(|row| row.name == "Host").unwrap();
@@ -862,12 +867,12 @@ user = "deploy"
     fn a_new_profile_opens_its_form_and_the_form_follows_the_selection() {
         let mut draft = ProfilesDraft::new(&config().profiles.list);
         draft.add_local("Meu shell", "SH");
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = form_rows(&content);
         assert_eq!(rows[0].value_text, "Meu shell");
 
         draft.select(0);
-        let rows_after = build_profiles(&draft, false);
+        let rows_after = build_profiles(&draft, None);
         assert_eq!(form_rows(&rows_after)[0].value_text, "WSL Ubuntu");
     }
 
@@ -877,7 +882,7 @@ user = "deploy"
         draft.select(0);
         draft.set_args(0, vec!["-d".into(), "Debian".into()]);
         draft.set_env(0, vec![("A".into(), "1".into()), ("A".into(), "2".into())]);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = form_rows(&content);
 
         let ControlView::List { items, .. } = &rows[5].control else {
@@ -939,7 +944,7 @@ user = "deploy"
     #[test]
     fn the_group_has_the_two_options_then_the_buttons_then_one_row_per_profile_in_file_order() {
         let draft = ProfilesDraft::new(&config().profiles.list);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
 
         let options: Vec<_> = content
             .blocks
@@ -971,7 +976,7 @@ user = "deploy"
     #[test]
     fn the_three_buttons_are_a_segmented_control_with_nothing_chosen() {
         let draft = ProfilesDraft::new(&config().profiles.list);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let actions = &profile_rows(&content)[0];
 
         let ControlView::Segmented {
@@ -995,7 +1000,7 @@ user = "deploy"
     fn the_chosen_profile_is_marked_and_the_badge_is_the_profile_s_or_ssh() {
         let mut draft = ProfilesDraft::new(&config().profiles.list);
         draft.select(1);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = profile_rows(&content);
 
         let ControlView::ProfileItem {
@@ -1021,7 +1026,7 @@ user = "deploy"
         draft.set_text(0, Field::Name, "WSL Debian");
         let new = draft.add_ssh("Homolog");
 
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let rows = profile_rows(&content);
 
         assert!(rows[1].pending, "edited");
@@ -1034,7 +1039,7 @@ user = "deploy"
     #[test]
     fn an_empty_list_says_so_and_the_import_state_takes_its_note() {
         let draft = ProfilesDraft::new(&[]);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         let notes: Vec<String> = content
             .blocks
             .iter()
@@ -1046,11 +1051,117 @@ user = "deploy"
         assert_eq!(notes, ["Nenhum perfil declarado ainda."]);
         assert_eq!(profile_rows(&content).len(), 1, "only the buttons");
 
-        let with_import = build_profiles(&draft, true);
+        let with_import = build_profiles(&draft, Some(&ImportList::Missing));
         let has_import_note = with_import.blocks.iter().any(|block| {
-            matches!(block, Block::Note { lines, .. } if lines.join(" ") == "Nada para importar ainda.")
+            matches!(block, Block::Note { lines, .. } if lines.join(" ") == "Não há ~/.ssh/config neste computador.")
         });
         assert!(has_import_note);
+    }
+
+    fn candidate(
+        alias: &str,
+        status: porecatu_config::SshImportStatus,
+    ) -> porecatu_config::SshImportCandidate {
+        porecatu_config::SshImportCandidate {
+            alias: alias.to_owned(),
+            host: format!("{alias}.example"),
+            user: "deploy".to_owned(),
+            port: 2222,
+            identity_file: String::new(),
+            status,
+        }
+    }
+
+    fn import_rows(content: &Content) -> Vec<&RowView> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Row(row)
+                    if matches!(
+                        row.profile,
+                        Some(ProfileTarget::Candidate(_) | ProfileTarget::ImportActions)
+                    ) =>
+                {
+                    Some(&**row)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_import_list_takes_the_place_of_the_form() {
+        use porecatu_config::{SshConfigImport, SshImportStatus as S, SshImportUnsupported as No};
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(0);
+        let mut list = ImportList::from_result(Ok(SshConfigImport {
+            file_found: true,
+            candidates: vec![
+                candidate("web", S::Importable),
+                candidate("old", S::AlreadyImported),
+                candidate("hop", S::Unsupported(No::ProxyJump)),
+            ],
+        }));
+        list.toggle(0);
+        let content = build_profiles(&draft, Some(&list));
+        assert!(form_rows(&content).is_empty(), "the form gives way");
+        let rows = import_rows(&content);
+        assert_eq!(rows.len(), 4, "three candidates and the buttons");
+        assert_eq!(rows[0].name, "web");
+        assert_eq!(rows[0].description, "deploy@web.example:2222");
+        assert!(matches!(rows[0].control, ControlView::Toggle { on: true }));
+        assert!(rows[0].unavailable.is_none());
+        assert_eq!(
+            rows[1].unavailable.as_deref(),
+            Some("Já existe um perfil com este destino.")
+        );
+        assert_eq!(
+            rows[2].unavailable.as_deref(),
+            Some("Usa ProxyJump, que o cliente embutido não suporta.")
+        );
+        assert!(matches!(rows[1].control, ControlView::Toggle { on: false }));
+        assert_eq!(rows[3].profile, Some(ProfileTarget::ImportActions));
+    }
+
+    #[test]
+    fn a_refused_file_shows_the_catalog_sentence_with_the_line_and_no_buttons() {
+        use porecatu_config::SshConfigImportErrorKind as Kind;
+        let draft = ProfilesDraft::new(&[]);
+        let list = ImportList::Refused {
+            line: Some(7),
+            kind: Kind::Match,
+        };
+        let content = build_profiles(&draft, Some(&list));
+        let text: String = content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Note { lines, .. } => Some(lines.join(" ")),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(text.contains("usa Match"), "{text}");
+        assert!(text.contains("Linha 7."), "{text}");
+        assert!(!text.contains("unknown field"), "{text}");
+        assert!(import_rows(&content).is_empty());
+    }
+
+    #[test]
+    fn the_import_clicks_are_decided_by_the_part() {
+        assert_eq!(
+            profile_click(ProfileTarget::Candidate(2), ControlPart::Whole),
+            ProfileClick::ToggleCandidate(2)
+        );
+        assert_eq!(
+            profile_click(ProfileTarget::ImportActions, ControlPart::Segment(0)),
+            ProfileClick::ImportChecked
+        );
+        assert_eq!(
+            profile_click(ProfileTarget::ImportActions, ControlPart::Segment(1)),
+            ProfileClick::CancelImport
+        );
     }
 
     #[test]
@@ -1134,7 +1245,7 @@ user = "deploy"
         draft.delete(0, false);
         // A deletion is pending in the count, though no row stays to carry the dot.
         assert_eq!(draft.pending_count(), 1);
-        let content = build_profiles(&draft, false);
+        let content = build_profiles(&draft, None);
         assert_eq!(
             profile_rows(&content).len(),
             2,
@@ -1609,6 +1720,12 @@ pub(crate) enum ProfileClick {
     OpenAuth,
     /// "Esquecer" do segredo salvo.
     Forget(super::profiles_draft::SecretKind),
+    /// Marca ou desmarca o candidato `n` da importação.
+    ToggleCandidate(usize),
+    /// "Importar marcados".
+    ImportChecked,
+    /// "Cancelar": fecha a lista de importar.
+    CancelImport,
     /// O `X` do item `n` da lista de argumentos ou de ambiente.
     ListRemove(super::profiles_draft::ListKind, usize),
     /// "Adicionar" da lista.
@@ -1633,6 +1750,10 @@ pub(crate) fn profile_click(target: ProfileTarget, part: ControlPart) -> Profile
         (ProfileTarget::Auth, _) => ProfileClick::Nothing,
         (ProfileTarget::Forget(kind), ControlPart::Segment(0)) => ProfileClick::Forget(kind),
         (ProfileTarget::Forget(_), _) => ProfileClick::Nothing,
+        (ProfileTarget::Candidate(item), _) => ProfileClick::ToggleCandidate(item),
+        (ProfileTarget::ImportActions, ControlPart::Segment(0)) => ProfileClick::ImportChecked,
+        (ProfileTarget::ImportActions, ControlPart::Segment(1)) => ProfileClick::CancelImport,
+        (ProfileTarget::ImportActions, _) => ProfileClick::Nothing,
         (ProfileTarget::List(_), ControlPart::ListField { item, second }) => {
             ProfileClick::Edit(if second {
                 EditPart::ListSecond(item)
@@ -1890,7 +2011,7 @@ fn profile_summary(form: &super::profiles_draft::Form) -> String {
 fn push_profile_blocks(
     blocks: &mut Vec<Block>,
     profiles: &ProfilesDraft,
-    import_open: bool,
+    import: Option<&ImportList>,
     vault: bool,
     catalog: &Catalog,
     m: &Metrics,
@@ -1940,17 +2061,6 @@ fn push_profile_blocks(
         notice: None,
         unavailable: None,
     })));
-    if import_open {
-        blocks.push(Block::Note {
-            lines: wrap(
-                &p::import_empty(catalog),
-                m.description_size,
-                width,
-                measurer,
-            ),
-            tone: NoteTone::Muted,
-        });
-    }
     if profiles.len() == 0 {
         blocks.push(Block::Note {
             lines: wrap(&p::empty(catalog), m.description_size, width, measurer),
@@ -1958,7 +2068,146 @@ fn push_profile_blocks(
         });
     }
     push_profile_items(blocks, profiles, catalog, m, panel_width, measurer);
-    push_profile_form(blocks, profiles, vault, catalog, m, panel_width, measurer);
+    // ADR-0075 §7: a lista de marcar ocupa o lugar do formulário.
+    if let Some(import) = import {
+        push_import_blocks(blocks, import, catalog, m, panel_width, measurer);
+    } else {
+        push_profile_form(blocks, profiles, vault, catalog, m, panel_width, measurer);
+    }
+}
+
+/// A frase do estado de uma lista que não tem o que marcar, ou do arquivo
+/// recusado: sai do catálogo, nunca da mensagem em inglês do leitor.
+fn import_note(catalog: &Catalog, import: &ImportList) -> Option<String> {
+    use msg::settings::profiles as p;
+    use porecatu_config::SshConfigImportErrorKind as Kind;
+    match import {
+        ImportList::Missing => Some(p::import_missing(catalog)),
+        ImportList::Empty => Some(p::import_none(catalog)),
+        ImportList::Refused { line, kind } => {
+            let sentence = match kind {
+                Kind::Unreadable => p::import_refused_unreadable(catalog),
+                Kind::Match => p::import_refused_match(catalog),
+                Kind::UnknownDirective { name } => p::import_refused_directive(catalog, name),
+                Kind::InvalidValue => p::import_refused_value(catalog),
+                Kind::Include => p::import_refused_include(catalog),
+            };
+            Some(match line {
+                Some(line) => format!("{sentence} {}", p::import_line(catalog, line)),
+                None => sentence,
+            })
+        }
+        ImportList::Candidates { .. } => None,
+    }
+}
+
+/// Por que um candidato está desabilitado, em texto do catálogo.
+fn import_reason(catalog: &Catalog, status: &porecatu_config::SshImportStatus) -> Option<String> {
+    use msg::settings::profiles as p;
+    use porecatu_config::SshImportUnsupported as No;
+    use porecatu_config::{SshImportInvalid as Bad, SshImportStatus as Status};
+    Some(match status {
+        Status::Importable => return None,
+        Status::AlreadyImported => p::import_reason_already(catalog),
+        Status::Unsupported(No::ProxyJump) => p::import_reason_proxy_jump(catalog),
+        Status::Unsupported(No::ProxyCommand) => p::import_reason_proxy_command(catalog),
+        Status::Unsupported(No::LocalForward) => p::import_reason_local_forward(catalog),
+        Status::Unsupported(No::RemoteForward) => p::import_reason_remote_forward(catalog),
+        Status::Unsupported(No::DynamicForward) => p::import_reason_dynamic_forward(catalog),
+        Status::Unsupported(No::CertificateFile) => p::import_reason_certificate_file(catalog),
+        Status::Invalid(Bad::Host) => p::import_reason_invalid_host(catalog),
+        Status::Invalid(Bad::User) => p::import_reason_invalid_user(catalog),
+    })
+}
+
+/// A lista de importar: uma linha por candidato, com o interruptor que a tela
+/// já tem (desabilitado e com o motivo, quando não dá para importar), e os
+/// botões. Sem candidato, só a frase do estado.
+fn push_import_blocks(
+    blocks: &mut Vec<Block>,
+    import: &ImportList,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    use msg::settings::profiles as p;
+    let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+    blocks.push(Block::Section(p::import(catalog)));
+    if let Some(text) = import_note(catalog, import) {
+        blocks.push(Block::Note {
+            lines: wrap(&text, m.description_size, width, measurer),
+            tone: NoteTone::Muted,
+        });
+        return;
+    }
+    let ImportList::Candidates { items, .. } = import else {
+        return;
+    };
+    for (index, item) in items.iter().enumerate() {
+        let control = ControlView::Toggle {
+            on: import.is_checked(index),
+        };
+        let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+        let (name, _) = measurer.truncate(&item.alias, BODY_FONT, m.name_size, budget);
+        let summary = format!("{}@{}:{}", item.user, item.host, item.port);
+        let (description, description_truncated) =
+            measurer.truncate(&summary, BODY_FONT, m.description_size, budget);
+        let unavailable = import_reason(catalog, &item.status).map(|reason| {
+            measurer
+                .truncate(&reason, BODY_FONT, m.description_size, budget)
+                .0
+        });
+        blocks.push(Block::Row(Box::new(RowView {
+            option: None,
+            name,
+            description,
+            description_full: summary,
+            description_truncated,
+            scope: None,
+            control,
+            value_text: item.alias.clone(),
+            pending: false,
+            invalid: None,
+            can_reset: false,
+            action: None,
+            profile: Some(ProfileTarget::Candidate(index)),
+            notice: None,
+            unavailable,
+        })));
+    }
+    let labels = vec![p::import_confirm(catalog), p::import_cancel(catalog)];
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|label| {
+            measurer.measure_width(label, BODY_FONT, m.button_font_size) + m.button_padding_x * 2.0
+        })
+        .collect();
+    let control = ControlView::Segmented {
+        labels,
+        widths,
+        selected: usize::MAX,
+    };
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    let name = p::import(catalog);
+    let (name_text, _) = measurer.truncate(&name, BODY_FONT, m.name_size, budget);
+    blocks.push(Block::Row(Box::new(RowView {
+        option: None,
+        name: name_text,
+        description: String::new(),
+        description_full: String::new(),
+        description_truncated: false,
+        scope: None,
+        control,
+        value_text: name,
+        pending: false,
+        invalid: None,
+        can_reset: false,
+        action: None,
+        profile: Some(ProfileTarget::ImportActions),
+        notice: None,
+        unavailable: None,
+    })));
 }
 
 /// Uma linha por perfil, na ordem do arquivo.

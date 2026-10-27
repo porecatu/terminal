@@ -18,6 +18,7 @@ mod content;
 mod draft;
 mod field_edit;
 mod file_state;
+mod import_list;
 mod interact;
 mod layout;
 mod paint;

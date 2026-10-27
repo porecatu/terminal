@@ -24,6 +24,7 @@ use std::path::PathBuf;
 
 use porecatu_config::{
     ConfigDocument, Edit, EditValue, KeyPath, ProfileDef, ProfileKind, ProfileProblemKind, SshAuth,
+    SshImportCandidate, SshProfile,
 };
 use porecatu_term::Destination;
 
@@ -714,6 +715,41 @@ impl ProfilesDraft {
         }
     }
 
+    /// Os destinos SSH que o rascunho tem agora, com o que o formulário diz:
+    /// o que a importação compara para marcar "já importado" (RF-20.7). Um
+    /// perfil com porta que não é número não entra.
+    pub(crate) fn ssh_destinations(&self) -> Vec<SshProfile> {
+        self.items
+            .iter()
+            .filter(|item| item.form.kind == ProfileKind::Ssh)
+            .filter_map(|item| {
+                Some(SshProfile {
+                    host: item.form.host.clone(),
+                    port: item.form.port.trim().parse().ok()?,
+                    user: item.form.user.clone(),
+                    auth: item.form.auth.clone(),
+                    identity_file: item.form.identity_file.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Acrescenta um perfil SSH por candidato, na ordem dada, e escolhe o
+    /// último. O nome é o do bloco `Host`; o `id` sai dele pela regra de sempre
+    /// (`-2` em colisão). A importação é uma cópia: nada do arquivo fica ligado
+    /// ao perfil.
+    pub(crate) fn add_imported(&mut self, candidates: &[&SshImportCandidate]) {
+        for candidate in candidates {
+            let id = id_from_name(&candidate.alias, &self.taken_ids());
+            let mut form = Form::new_ssh(id, &candidate.alias);
+            form.host = candidate.host.clone();
+            form.port = candidate.port.to_string();
+            form.user = candidate.user.clone();
+            form.identity_file = candidate.identity_file.clone();
+            self.push_new(form);
+        }
+    }
+
     /// O diálogo de excluir `index` (RF-20.4).
     pub(crate) fn delete_info(&self, index: usize) -> Option<DeleteInfo> {
         let item = self.items.get(index)?;
@@ -1364,6 +1400,70 @@ user = "deploy"
         assert_eq!(draft.forget_target(0, SecretKind::Password), None);
         // Forgetting is immediate: nothing becomes pending.
         assert!(draft.edits().is_empty());
+    }
+
+    fn imported(alias: &str, host: &str) -> SshImportCandidate {
+        SshImportCandidate {
+            alias: alias.to_owned(),
+            host: host.to_owned(),
+            user: "ops".to_owned(),
+            port: 2200,
+            identity_file: "C:/keys/id_ops".to_owned(),
+            status: porecatu_config::SshImportStatus::Importable,
+        }
+    }
+
+    #[test]
+    fn importing_adds_one_pending_ssh_profile_per_candidate_with_a_derived_id() {
+        let mut draft = draft();
+        let before = draft.len();
+        let ids_before = draft.valid_ids();
+        // `prod` already exists as an id in the fixture: they get `-2`, `-3`.
+        let a = imported("Prod", "a.example");
+        let b = imported("prod", "b.example");
+        draft.add_imported(&[&a, &b]);
+        assert_eq!(draft.len(), before + 2);
+        assert_eq!(draft.pending_count(), 2);
+        let first = draft.form(before).unwrap();
+        assert_eq!(first.kind, ProfileKind::Ssh);
+        assert_eq!(first.name, "Prod");
+        assert_eq!(
+            (
+                first.host.as_str(),
+                first.port.as_str(),
+                first.user.as_str()
+            ),
+            ("a.example", "2200", "ops")
+        );
+        assert_eq!(first.identity_file, "C:/keys/id_ops");
+        let second = draft.form(before + 1).unwrap();
+        assert_eq!(
+            (first.id.as_str(), second.id.as_str()),
+            ("prod-2", "prod-3")
+        );
+        assert!(!ids_before.contains(&first.id));
+        // The last one imported is the chosen one, and the profiles are valid.
+        assert_eq!(draft.selected(), Some(before + 1));
+        assert!(draft.is_valid(before) && draft.is_valid(before + 1));
+    }
+
+    #[test]
+    fn the_destinations_offered_for_comparison_are_the_ssh_ones_with_a_numeric_port() {
+        let mut draft = draft();
+        let expected = draft.ssh_destinations().len();
+        assert!(expected >= 1);
+        let a = imported("x", "x.example");
+        draft.add_imported(&[&a]);
+        let destinations = draft.ssh_destinations();
+        assert_eq!(destinations.len(), expected + 1);
+        assert!(
+            destinations
+                .iter()
+                .any(|d| d.host == "x.example" && d.port == 2200 && d.user == "ops")
+        );
+        let last = draft.len() - 1;
+        draft.set_text(last, Field::Port, "abc");
+        assert_eq!(draft.ssh_destinations().len(), expected);
     }
 
     #[test]
