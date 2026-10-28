@@ -52,6 +52,8 @@ A escolha que organiza o resto: **um fato que vale para o app não aparece no me
 
 > **Acrescentado pelo [ADR-0075](0075-superficies-de-ui-do-ssh.md) §5.** O **canal 2** recebe o estado das conexões SSH — conectando, autenticação cancelada, chave de host bloqueada, queda e cada tentativa de reconexão —, porque é história daquele terminal. O **canal 1** ganha um consumidor: a falha ao gravar um segredo no cofre do sistema, que acontece com a conexão já aberta e se perderia no meio da saída do shell.
 
+> **Revisado pelo [ADR-0077](0077-avisos-do-app-em-dialogo-modal.md).** O **canal 2** (nota no grid) deixa de existir para o que o app diz ao usuário: as notas viram diálogo modal. Nenhuma nota do app sobra no grid, nem o estado da conexão SSH (`conectando`, `Enter para conectar`).
+
 O RF-3.10 já pede exatamente isso — *"a aba abre no diretório home e informa isso na primeira linha"* — e o RF-1.3 cabe no mesmo mecanismo sem inventar nada. O critério é simples: informação que pertence ao histórico de um terminal fica dentro dele, e sobrevive à rolagem; informação sobre o app fica no overlay, e é dispensável.
 
 ### Anatomia — aviso do app

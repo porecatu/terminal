@@ -70,6 +70,31 @@ pub enum DialogAction {
     /// outra saída responde `Cancel`. O campo mascarado não mora aqui (este
     /// enum é `Clone`): vive em `WindowState::secret_input`.
     Secret(TabId, PaneId, PromptId),
+    /// Aviso do app (substitui a nota escrita no grid): só informa, não há o
+    /// que confirmar -- o diálogo vem sem botão de confirmar.
+    Notice,
+    /// "Reconectar agora" do aviso de reconexão SSH do painel (ADR-0076 §5).
+    ReconnectNow(TabId, PaneId),
+    /// "Copiar o trecho" do convite de integração de shell: o trecho vai à
+    /// área de transferência.
+    ShellInviteCopy(String),
+    /// "Não mostrar mais" do convite de integração de shell (RF-3.1,
+    /// ADR-0039 §4): a dispensa definitiva.
+    ShellInviteDismiss,
+    /// "Conectar" do aviso de um painel SSH restaurado que espera o gesto
+    /// (RF-20.33): o mesmo que o `Enter` ou o clique no painel.
+    ConnectDormant(TabId, PaneId),
+}
+
+/// Qual aviso um diálogo é, quando um aviso novo do mesmo tipo o **substitui**
+/// em vez de empilhar: o aviso vivo da reconexão de um painel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeSlot {
+    Reconnect(TabId, PaneId),
+    /// "Conectando a {host}…": vive até o painel conectar ou falhar.
+    Connecting(TabId, PaneId),
+    /// "Enter para conectar a {nome}": vive até o painel conectar.
+    Dormant(TabId, PaneId),
 }
 
 /// Onde as teclas vão no diálogo de segredo. Aqui o foco inicial é o **campo**,
@@ -116,6 +141,9 @@ pub enum LineTone {
     Data,
     /// Aviso, na cor de aviso da §2.14.
     Warning,
+    /// Continuação do corpo de um aviso do app: cor do corpo, cortado ao
+    /// conteúdo como o corpo.
+    Text,
 }
 
 /// Uma linha de dado ou de aviso entre o corpo e os botões. O texto de uma
@@ -151,6 +179,11 @@ pub struct ConfirmDialog {
     /// outros, que continuam com dois botões.
     pub discard_label: Option<String>,
     pub action: DialogAction,
+    /// O que o botão do meio faz, quando ele existe e não é o do diálogo de
+    /// configurações (que responde sozinho): o "Não mostrar mais" do convite.
+    pub discard_action: Option<Box<DialogAction>>,
+    /// O aviso que um igual substitui (reconexão), em vez de empilhar.
+    pub slot: Option<NoticeSlot>,
     /// Linhas entre o corpo e os botões; vazio nos diálogos de sempre.
     pub lines: Vec<DialogLine>,
     /// Só no diálogo de segredo: o campo e a caixa "Lembrar" entram entre o
@@ -184,6 +217,8 @@ impl ConfirmDialog {
             cancel_label: cancel_label.into(),
             discard_label: None,
             action,
+            discard_action: None,
+            slot: None,
             lines: Vec::new(),
             secret: None,
             checkbox: None,
@@ -312,6 +347,125 @@ impl ConfirmDialog {
             }));
         }
         dialog
+    }
+
+    /// Aviso do app (substitui a nota que ia ao grid): `text` quebra em linhas
+    /// -- a primeira é o corpo, as demais vêm abaixo. Só o botão de fechar.
+    pub fn notice(catalog: &Catalog, title: impl Into<String>, text: &str) -> Self {
+        let mut dialog = Self::new(
+            title,
+            "",
+            "",
+            msg::dialog::notice::close(catalog),
+            DialogAction::Notice,
+        );
+        dialog.set_text(text);
+        dialog
+    }
+
+    /// Aviso de erro: o corpo na cor de erro.
+    pub fn error_notice(catalog: &Catalog, title: impl Into<String>, text: &str) -> Self {
+        let mut dialog = Self::notice(catalog, title, text);
+        dialog.body_is_error = true;
+        dialog
+    }
+
+    /// Aviso vivo da reconexão SSH de um painel (ADR-0076): `text` diz o que
+    /// derrubou a conexão (quando se sabe) e o que o ciclo espera agora, em
+    /// linhas. "Reconectar agora" antecipa a próxima tentativa.
+    pub fn reconnect(catalog: &Catalog, tab: TabId, pane: PaneId, text: &str) -> Self {
+        let mut dialog = Self::new(
+            msg::dialog::notice::title_ssh(catalog),
+            "",
+            msg::dialog::notice::reconnect_now(catalog),
+            msg::dialog::notice::close(catalog),
+            DialogAction::ReconnectNow(tab, pane),
+        );
+        dialog.set_text(text);
+        dialog.slot = Some(NoticeSlot::Reconnect(tab, pane));
+        dialog
+    }
+
+    /// Aviso vivo de uma conexão SSH em andamento: só informa e fecha sozinho
+    /// quando o painel conecta ou falha (`NoticeSlot::Connecting`).
+    pub fn ssh_connecting(catalog: &Catalog, tab: TabId, pane: PaneId, text: &str) -> Self {
+        let mut dialog = Self::notice(catalog, msg::dialog::notice::title_ssh(catalog), text);
+        dialog.slot = Some(NoticeSlot::Connecting(tab, pane));
+        dialog
+    }
+
+    /// Aviso de um painel SSH restaurado que não conectou sozinho (RF-20.33):
+    /// **Conectar** com o foco inicial -- o diálogo não é destrutivo e o que o
+    /// usuário veio fazer é conectar -- e **Fechar**.
+    pub fn ssh_dormant(catalog: &Catalog, tab: TabId, pane: PaneId, text: &str) -> Self {
+        let mut dialog = Self::new(
+            msg::dialog::notice::title_ssh(catalog),
+            "",
+            msg::dialog::notice::connect(catalog),
+            msg::dialog::notice::close(catalog),
+            DialogAction::ConnectDormant(tab, pane),
+        );
+        dialog.set_text(text);
+        dialog.slot = Some(NoticeSlot::Dormant(tab, pane));
+        dialog.focused = DialogButton::Confirm;
+        dialog
+    }
+
+    /// Convite de integração de shell (RF-3.1, ADR-0039): `snippet`, quando há
+    /// um pronto para o shell, ganha o botão de copiar.
+    pub fn shell_invite(catalog: &Catalog, text: &str, snippet: Option<&str>) -> Self {
+        let mut dialog = Self::new(
+            msg::dialog::notice::title_shell_invite(catalog),
+            "",
+            if snippet.is_some() {
+                msg::dialog::notice::copy_snippet(catalog)
+            } else {
+                String::new()
+            },
+            msg::dialog::notice::close(catalog),
+            match snippet {
+                Some(snippet) => DialogAction::ShellInviteCopy(snippet.to_owned()),
+                None => DialogAction::Notice,
+            },
+        );
+        dialog.discard_label = Some(msg::dialog::notice::dont_show_again(catalog));
+        dialog.discard_action = Some(Box::new(DialogAction::ShellInviteDismiss));
+        dialog.set_text(text);
+        dialog
+    }
+
+    /// Põe o texto: primeira linha no corpo, o resto em `lines`. O fim de
+    /// linha pode vir como `\r\n` ou `\n`.
+    fn set_text(&mut self, text: &str) {
+        let normalized = text.replace("\r\n", "\n");
+        let mut rows = normalized.trim_end_matches('\n').split('\n');
+        self.body = rows.next().unwrap_or_default().to_owned();
+        self.lines = rows
+            .map(|row| DialogLine {
+                text: row.to_owned(),
+                tone: LineTone::Text,
+            })
+            .collect();
+    }
+
+    /// Há botão de confirmar (o aviso que só informa não tem).
+    pub fn has_confirm(&self) -> bool {
+        !self.confirm_label.is_empty()
+    }
+
+    /// A ação do botão do meio, se o diálogo tem uma.
+    pub fn discard_action(&self) -> Option<DialogAction> {
+        self.discard_action.as_deref().cloned()
+    }
+
+    /// Troca o conteúdo de um aviso vivo por `other`, que o substitui,
+    /// mantendo o botão focado.
+    pub fn replace_with(&mut self, other: ConfirmDialog) {
+        let focused = self.focused;
+        *self = other;
+        if self.buttons().contains(&focused) {
+            self.focused = focused;
+        }
     }
 
     /// A caixa de marcar está marcada (e existe).
@@ -469,7 +623,9 @@ impl ConfirmDialog {
         if self.discard_label.is_some() {
             buttons.push(DialogButton::Discard);
         }
-        buttons.push(DialogButton::Confirm);
+        if self.has_confirm() {
+            buttons.push(DialogButton::Confirm);
+        }
         buttons
     }
 
@@ -575,6 +731,81 @@ mod tests {
         let delete = ConfirmDialog::delete_session(&pt, "api", PathBuf::from("api.json"));
         assert_eq!(delete.body, "Isso remove «api» permanentemente.");
         assert_eq!(delete.confirm_label, "Excluir");
+    }
+
+    #[test]
+    fn a_notice_splits_into_body_and_lines_and_has_only_a_close_button() {
+        let pt = test_support::pt_br();
+        let dialog = ConfirmDialog::notice(&pt, "t", "um\r\ndois\r\ntrês\r\n");
+        assert_eq!(dialog.body, "um");
+        let rest: Vec<&str> = dialog.lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(rest, ["dois", "três"]);
+        assert!(!dialog.has_confirm());
+        assert_eq!(dialog.buttons(), vec![DialogButton::Cancel]);
+        assert_eq!(dialog.cancel_label, "Fechar");
+    }
+
+    #[test]
+    fn the_shell_invite_offers_copy_only_with_a_snippet() {
+        let pt = test_support::pt_br();
+        let with = ConfirmDialog::shell_invite(&pt, "texto", Some("echo"));
+        assert_eq!(
+            with.action,
+            DialogAction::ShellInviteCopy("echo".to_owned())
+        );
+        assert_eq!(
+            with.discard_action(),
+            Some(DialogAction::ShellInviteDismiss)
+        );
+        assert_eq!(
+            with.buttons(),
+            vec![
+                DialogButton::Cancel,
+                DialogButton::Discard,
+                DialogButton::Confirm
+            ]
+        );
+        let without = ConfirmDialog::shell_invite(&pt, "texto", None);
+        assert!(!without.has_confirm());
+        assert_eq!(
+            without.buttons(),
+            vec![DialogButton::Cancel, DialogButton::Discard]
+        );
+    }
+
+    #[test]
+    fn a_live_notice_keeps_its_focused_button_when_replaced() {
+        let pt = test_support::pt_br();
+        let (tab, pane) = (TabId::new(1), PaneId::new(1));
+        let mut open = ConfirmDialog::reconnect(&pt, tab, pane, "a");
+        open.toggle_focus();
+        assert_eq!(open.focused(), DialogButton::Confirm);
+        open.replace_with(ConfirmDialog::reconnect(&pt, tab, pane, "b"));
+        assert_eq!(open.body, "b");
+        assert_eq!(open.focused(), DialogButton::Confirm);
+        assert_eq!(open.slot, Some(NoticeSlot::Reconnect(tab, pane)));
+    }
+
+    #[test]
+    fn the_connecting_notice_only_informs_and_lives_in_its_slot() {
+        let en = test_support::en_us();
+        let (tab, pane) = (TabId::new(1), PaneId::new(2));
+        let dialog = ConfirmDialog::ssh_connecting(&en, tab, pane, "connecting to h…");
+        assert_eq!(dialog.body, "connecting to h…");
+        assert!(!dialog.has_confirm());
+        assert_eq!(dialog.slot, Some(NoticeSlot::Connecting(tab, pane)));
+    }
+
+    #[test]
+    fn the_dormant_notice_starts_focused_on_connect_so_enter_connects() {
+        let en = test_support::en_us();
+        let (tab, pane) = (TabId::new(1), PaneId::new(2));
+        let dialog = ConfirmDialog::ssh_dormant(&en, tab, pane, "Enter to connect to lab");
+        assert_eq!(dialog.focused(), DialogButton::Confirm);
+        assert_eq!(dialog.confirm_label, "Connect");
+        assert_eq!(dialog.cancel_label, "Close");
+        assert_eq!(dialog.action, DialogAction::ConnectDormant(tab, pane));
+        assert_eq!(dialog.slot, Some(NoticeSlot::Dormant(tab, pane)));
     }
 
     #[test]

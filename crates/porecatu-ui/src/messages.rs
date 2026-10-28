@@ -967,6 +967,16 @@ registry! {
             refused_password(),
             refused_passphrase(),
         },
+        notice {
+            close(),
+            title(),
+            title_ssh(),
+            title_shell_invite(),
+            reconnect_now(),
+            copy_snippet(),
+            dont_show_again(),
+            connect(),
+        },
     }
     note {
         process_exited(code),
@@ -1004,7 +1014,7 @@ registry! {
             reconnect_gave_up(total),
         },
         shell_invite {
-            text(consequence, body, marker),
+            text(consequence, body),
             consequence_windows(),
             consequence_other(),
             body_snippet(snippet),

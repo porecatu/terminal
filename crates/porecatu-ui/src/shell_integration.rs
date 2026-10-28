@@ -6,7 +6,6 @@
 //! usuário vê na nota, sem duplicar o texto aqui.
 
 use porecatu_locale::Catalog;
-use porecatu_term::SHELL_INTEGRATION_DISMISS_MARKER;
 
 use crate::messages::msg;
 
@@ -47,107 +46,103 @@ fn snippet_for(shell_name: &str) -> Snippet {
     }
 }
 
-/// Texto completo da nota (RF-3.1, ADR-0039 §1/§3/§4): consequência
-/// (proeminente no Windows -- §3), snippet ou explicação, instrução de
-/// cópia (a seleção normal do terminal já basta) e a dispensa definitiva
-/// (§4, digitada no terminal). As frases são do catálogo; o snippet vem do
-/// arquivo de referência e o marcador de dispensa é protocolo, os dois sem
-/// tradução (ADR-0056 §3).
-pub fn invite_text(catalog: &Catalog, shell_name: &str) -> String {
+/// O convite de integração de shell (RF-3.1, ADR-0039): o texto do diálogo e,
+/// quando há um trecho pronto para o shell, o trecho -- o que o botão de copiar
+/// põe na área de transferência.
+pub struct Invite {
+    pub text: String,
+    pub snippet: Option<String>,
+}
+
+/// Texto completo do convite (RF-3.1, ADR-0039 §1/§3): consequência
+/// (proeminente no Windows -- §3) e snippet ou explicação. As frases são do
+/// catálogo; o snippet vem do arquivo de referência, sem tradução (ADR-0056
+/// §3). Copiar e dispensar são botões do diálogo, não instruções no texto.
+pub fn invite(catalog: &Catalog, shell_name: &str) -> Invite {
     let consequence = if cfg!(windows) {
         msg::note::shell_invite::consequence_windows(catalog)
     } else {
         msg::note::shell_invite::consequence_other(catalog)
     };
 
-    let body = match snippet_for(shell_name) {
-        Snippet::Named(heading) => extract_snippet(heading).map_or_else(
-            || msg::note::shell_invite::body_generic(catalog),
-            |snippet| msg::note::shell_invite::body_snippet(catalog, snippet),
-        ),
-        Snippet::Cmd => msg::note::shell_invite::body_cmd(catalog),
-        Snippet::Unknown => msg::note::shell_invite::body_generic(catalog),
+    let (body, snippet) = match snippet_for(shell_name) {
+        Snippet::Named(heading) => match extract_snippet(heading) {
+            Some(snippet) => (
+                msg::note::shell_invite::body_snippet(catalog, snippet),
+                Some(snippet.to_owned()),
+            ),
+            None => (msg::note::shell_invite::body_generic(catalog), None),
+        },
+        Snippet::Cmd => (msg::note::shell_invite::body_cmd(catalog), None),
+        Snippet::Unknown => (msg::note::shell_invite::body_generic(catalog), None),
     };
 
-    let text =
-        msg::note::shell_invite::text(catalog, consequence, body, SHELL_INTEGRATION_DISMISS_MARKER);
-    // `Terminal::inject_note` não normaliza quebra de linha -- o snippet
-    // embutido do arquivo de referência traz `\n` cru (markdown comum), e
-    // a frase do catálogo usa `\n` pela mesma razão de simplicidade. Uma
-    // passada só, no fim, garante `\r\n` em toda parte (idempotente:
-    // colapsa `\r\n` já existente antes de expandir).
-    text.replace("\r\n", "\n").replace('\n', "\r\n")
+    Invite {
+        text: msg::note::shell_invite::text(catalog, consequence, body),
+        snippet,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn text(shell: &str) -> String {
+        invite(&crate::messages::test_support::pt_br(), shell).text
+    }
+
     #[test]
     fn bash_snippet_is_extracted_from_the_reference_file() {
-        let text = invite_text(&crate::messages::test_support::pt_br(), "bash");
+        let text = text("bash");
         assert!(text.contains("__porecatu_osc7"));
         assert!(text.contains("PROMPT_COMMAND"));
     }
 
     #[test]
     fn zsh_snippet_is_extracted() {
-        let text = invite_text(&crate::messages::test_support::pt_br(), "zsh");
-        assert!(text.contains("add-zsh-hook"));
+        assert!(text("zsh").contains("add-zsh-hook"));
     }
 
     #[test]
     fn fish_snippet_is_extracted() {
-        let text = invite_text(&crate::messages::test_support::pt_br(), "fish");
-        assert!(text.contains("--on-variable PWD"));
+        assert!(text("fish").contains("--on-variable PWD"));
     }
 
     #[test]
     fn powershell_snippet_is_extracted_for_pwsh_and_windows_powershell() {
-        assert!(
-            invite_text(&crate::messages::test_support::pt_br(), "pwsh")
-                .contains("function prompt")
-        );
-        assert!(
-            invite_text(&crate::messages::test_support::pt_br(), "powershell")
-                .contains("function prompt")
-        );
+        assert!(text("pwsh").contains("function prompt"));
+        assert!(text("powershell").contains("function prompt"));
     }
 
     #[test]
     fn cmd_has_no_snippet_and_points_to_powershell() {
-        let text = invite_text(&crate::messages::test_support::pt_br(), "cmd");
-        assert!(!text.contains("```"));
-        assert!(text.contains("PowerShell"));
+        let invite = invite(&crate::messages::test_support::pt_br(), "cmd");
+        assert!(invite.snippet.is_none());
+        assert!(!invite.text.contains("```"));
+        assert!(invite.text.contains("PowerShell"));
     }
 
     #[test]
-    fn unknown_shell_falls_back_to_the_generic_note() {
-        let text = invite_text(&crate::messages::test_support::pt_br(), "nu");
-        assert!(text.contains("docs/reference/integracao-de-shell.md"));
-    }
-
-    #[test]
-    fn dismiss_instruction_carries_the_real_marker() {
+    fn unknown_shell_falls_back_to_the_generic_text_without_a_snippet() {
+        let invite = invite(&crate::messages::test_support::pt_br(), "nu");
+        assert!(invite.snippet.is_none());
         assert!(
-            invite_text(&crate::messages::test_support::pt_br(), "bash")
-                .contains(porecatu_term::SHELL_INTEGRATION_DISMISS_MARKER)
+            invite
+                .text
+                .contains("docs/reference/integracao-de-shell.md")
         );
     }
 
     #[test]
-    fn no_bare_newline_ever_reaches_inject_note() {
-        // `Terminal::inject_note` não normaliza `\n` cru -- confirma que a
-        // nota inteira só usa `\r\n` como quebra de linha.
-        let text = invite_text(&crate::messages::test_support::pt_br(), "bash");
-        for (index, byte) in text.bytes().enumerate() {
-            if byte == b'\n' {
-                assert_eq!(
-                    text.as_bytes()[index - 1],
-                    b'\r',
-                    "quebra de linha crua em {index}"
-                );
-            }
-        }
+    fn a_known_shell_hands_the_snippet_to_the_copy_button() {
+        let invite = invite(&crate::messages::test_support::pt_br(), "bash");
+        let snippet = invite.snippet.expect("bash has a snippet");
+        assert!(snippet.contains("PROMPT_COMMAND"));
+        assert!(invite.text.contains(&snippet));
+    }
+
+    #[test]
+    fn the_text_no_longer_asks_to_type_the_dismissal_marker() {
+        assert!(!text("bash").contains(porecatu_term::SHELL_INTEGRATION_DISMISS_MARKER));
     }
 }

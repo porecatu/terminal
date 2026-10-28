@@ -59,44 +59,77 @@ impl App {
             .map(|(id, _)| *id)
     }
 
-    fn write_note(&self, key: PaneKey, text: &str) {
-        if let Some(runtime) = self.runtime(key) {
-            runtime.terminal.inject_note(text, palette::NOTE_ACCENT_RGB);
+    /// Mostra (ou atualiza) o aviso vivo de reconexão do painel `key`: um
+    /// diálogo modal por painel, que a cada tentativa troca de texto em vez de
+    /// empilhar. `lines` diz o que derrubou a conexão e o que o ciclo espera;
+    /// `last` marca o estado final (desistiu), que reabre o aviso mesmo se o
+    /// usuário o fechou e vem na cor de erro.
+    fn show_reconnect(&mut self, key: PaneKey, lines: &[&str], last: bool) {
+        let (window, tab, pane) = key;
+        let mut dialog = ConfirmDialog::reconnect(&self.catalog, tab, pane, &lines.join("\n"));
+        dialog.body_is_error = last;
+        if let Some(state) = self.windows.get_mut(&window) {
+            if last {
+                state.notify_final(tab, pane, dialog);
+            } else {
+                state.notify(tab, pane, dialog);
+            }
         }
     }
 
-    /// A nota do que o ciclo espera agora, para um painel.
-    fn write_state_note(&self, key: PaneKey, state: Reconnect, now: Instant) {
-        let Some(host) = self.runtime(key).and_then(|rt| rt.ssh_host.clone()) else {
-            return;
-        };
+    /// Mostra um aviso informativo (sem "Reconectar agora") no painel `key`.
+    fn show_info(&mut self, key: PaneKey, text: &str) {
+        let (window, tab, pane) = key;
+        let dialog = ConfirmDialog::notice(
+            &self.catalog,
+            msg::dialog::notice::title_ssh(&self.catalog),
+            text,
+        );
+        if let Some(state) = self.windows.get_mut(&window) {
+            state.notify(tab, pane, dialog);
+        }
+    }
+
+    /// O aviso vivo de reconexão do painel perdeu o sentido (reconectou).
+    fn close_reconnect_notice(&mut self, key: PaneKey) {
+        let (window, tab, pane) = key;
+        if let Some(state) = self.windows.get_mut(&window) {
+            state.forget_notice(dialog::NoticeSlot::Reconnect(tab, pane));
+        }
+    }
+
+    /// A frase do que o ciclo espera agora, para um painel.
+    fn state_text(&self, key: PaneKey, state: Reconnect, now: Instant) -> Option<String> {
+        let host = self.runtime(key).and_then(|rt| rt.ssh_host.clone())?;
         match state {
             Reconnect::Waiting { attempt, due } => {
                 // Uma frase, sem animação: a contagem não se reescreve.
                 let seconds = due.saturating_duration_since(now).as_secs_f64().ceil() as u64;
-                self.write_note(
-                    key,
-                    &messages::ssh_reconnect_waiting_note(
-                        &self.catalog,
-                        attempt,
-                        ATTEMPTS,
-                        seconds,
-                    ),
-                );
+                Some(messages::ssh_reconnect_waiting_note(
+                    &self.catalog,
+                    attempt,
+                    ATTEMPTS,
+                    seconds,
+                ))
             }
-            Reconnect::Connecting { attempt } => {
-                self.write_note(
-                    key,
-                    &messages::ssh_reconnect_connecting_note(
-                        &self.catalog,
-                        attempt,
-                        ATTEMPTS,
-                        &host,
-                    ),
-                );
-            }
-            Reconnect::GaveUp | Reconnect::Connected => {}
+            Reconnect::Connecting { attempt } => Some(messages::ssh_reconnect_connecting_note(
+                &self.catalog,
+                attempt,
+                ATTEMPTS,
+                &host,
+            )),
+            Reconnect::GaveUp | Reconnect::Connected => None,
         }
+    }
+
+    /// Atualiza o aviso do painel `key` com o estado do ciclo; `cause` é o que
+    /// derrubou a conexão, na primeira linha.
+    fn show_state(&mut self, key: PaneKey, cause: Option<&str>, state: Reconnect, now: Instant) {
+        let Some(text) = self.state_text(key, state, now) else {
+            return;
+        };
+        let lines: Vec<&str> = cause.into_iter().chain([text.as_str()]).collect();
+        self.show_reconnect(key, &lines, false);
     }
 
     /// Entrega os eventos SSH de um painel (ADR-0076 §1, §3).
@@ -133,9 +166,6 @@ impl App {
                 else {
                     return;
                 };
-                if let Some(note) = &end_note {
-                    self.write_note(key, note);
-                }
                 let cycle = self
                     .reconnects
                     .entry(connection)
@@ -145,29 +175,23 @@ impl App {
                 if let Some(runtime) = self.runtime_mut(key) {
                     runtime.reconnecting = true;
                 }
-                self.write_state_note(key, state, now);
+                self.show_state(key, end_note.as_deref(), state, now);
             }
             // A conexão da própria tentativa caiu logo depois de abrir, ou o
             // servidor a encerrou: conta como falha da tentativa.
             (EndReason::Lost { .. } | EndReason::RemoteEnded { .. }, Some(id))
                 if self.is_attempting(id, key) =>
             {
-                if let Some(note) = &end_note {
-                    self.write_note(key, note);
-                }
                 if let Some(cycle) = self.reconnects.get_mut(&id) {
                     cycle.state.on_attempt_lost(now);
                 }
-                self.after_attempt(id, key, &reason, now);
+                self.after_attempt(id, &reason, now);
             }
             (EndReason::Failed { cause }, Some(id)) if self.is_attempting(id, key) => {
-                if let Some(note) = &end_note {
-                    self.write_note(key, note);
-                }
                 if let Some(cycle) = self.reconnects.get_mut(&id) {
                     cycle.state.on_attempt_failed(cause, now);
                 }
-                self.after_attempt(id, key, &reason, now);
+                self.after_attempt(id, &reason, now);
             }
             // Evento atrasado de quem já não tenta.
             _ => {}
@@ -183,31 +207,36 @@ impl App {
 
     /// Depois do resultado de uma tentativa: avisa a espera da próxima, ou
     /// desiste, para **todos** os painéis da conexão.
-    fn after_attempt(
-        &mut self,
-        id: ConnectionId,
-        owner: PaneKey,
-        reason: &EndReason,
-        now: Instant,
-    ) {
+    fn after_attempt(&mut self, id: ConnectionId, reason: &EndReason, now: Instant) {
         let Some(cycle) = self.reconnects.get(&id) else {
             return;
         };
         let state = cycle.state;
+        let members = cycle.members().to_vec();
         match state {
-            Reconnect::GaveUp => self.give_up(id, owner, reason),
+            Reconnect::GaveUp => self.give_up(id, reason),
             Reconnect::Waiting { .. } => {
-                for member in cycle.members().to_vec() {
-                    self.write_state_note(member, state, now);
+                for member in members {
+                    let cause = self.cause_text(member, reason);
+                    self.show_state(member, cause.as_deref(), state, now);
                 }
             }
             Reconnect::Connecting { .. } | Reconnect::Connected => {}
         }
     }
 
+    /// Por que a conexão do painel `key` caiu ou falhou, na frase do catálogo.
+    fn cause_text(&self, key: PaneKey, reason: &EndReason) -> Option<String> {
+        let host = self
+            .runtime(key)
+            .and_then(|runtime| runtime.ssh_host.clone())
+            .unwrap_or_default();
+        messages::ssh_end_note(&self.catalog, &host, reason)
+    }
+
     /// `GaveUp` vale para todos os painéis da conexão de uma vez (ADR-0076 §3):
     /// cada um fica `Exited` com a nota da última falha.
-    fn give_up(&mut self, id: ConnectionId, owner: PaneKey, reason: &EndReason) {
+    fn give_up(&mut self, id: ConnectionId, reason: &EndReason) {
         let Some(cycle) = self.reconnects.remove(&id) else {
             return;
         };
@@ -218,21 +247,18 @@ impl App {
             EndReason::Exited { .. } => false,
         };
         for member in cycle.members().to_vec() {
-            let host = self
-                .runtime(member)
-                .and_then(|runtime| runtime.ssh_host.clone())
-                .unwrap_or_default();
-            // O que tentou já escreveu a causa; os outros a ganham agora.
-            if member != owner
-                && let Some(note) = messages::ssh_end_note(&self.catalog, &host, reason)
-            {
-                self.write_note(member, &note);
-            }
-            if exhausted {
-                self.write_note(
-                    member,
-                    &messages::ssh_reconnect_gave_up_note(&self.catalog, ATTEMPTS),
-                );
+            // O estado final de todo painel da conexão: a causa da última
+            // falha e, se esgotou as tentativas, que desistiu.
+            let cause = self.cause_text(member, reason);
+            let gave_up =
+                exhausted.then(|| messages::ssh_reconnect_gave_up_note(&self.catalog, ATTEMPTS));
+            let lines: Vec<&str> = cause
+                .as_deref()
+                .into_iter()
+                .chain(gave_up.as_deref())
+                .collect();
+            if !lines.is_empty() {
+                self.show_reconnect(member, &lines, true);
             }
             if let Some(runtime) = self.runtime_mut(member) {
                 runtime.reconnecting = false;
@@ -253,6 +279,10 @@ impl App {
     /// O shell da tentativa abriu: o ciclo acaba e os outros painéis da
     /// conexão entram nela, sem autenticar de novo (ADR-0076 §3).
     fn on_ssh_connected(&mut self, key: PaneKey, now: Instant) {
+        // Todo painel SSH que abre manda `Connected`: o "conectando" acabou.
+        if let Some(state) = self.windows.get_mut(&key.0) {
+            state.forget_notice(dialog::NoticeSlot::Connecting(key.1, key.2));
+        }
         // Todo painel SSH que abre manda `Connected`; só o que tentava importa.
         let Some(id) = self
             .reconnects
@@ -277,12 +307,15 @@ impl App {
         }
         // RF-20.29: a nota de que é outro shell, uma vez por painel, na
         // primeira volta.
+        // O aviso vivo de espera dá lugar à nota de que é outro shell.
         let resumed_note = messages::ssh_reconnect_not_resumed_note(&self.catalog);
-        self.write_note(key, &resumed_note);
+        self.close_reconnect_notice(key);
+        self.show_info(key, &resumed_note);
         let _ = cycle.take_resumed_note();
         for follower in cycle.followers().collect::<Vec<_>>() {
             self.reattach_ssh(follower, Connection::Share(connection), now);
-            self.write_note(follower, &resumed_note);
+            self.close_reconnect_notice(follower);
+            self.show_info(follower, &resumed_note);
         }
     }
 
@@ -377,7 +410,14 @@ impl App {
         if let Some(runtime) = self.runtime_mut(owner) {
             runtime.reconnecting = true;
         }
-        self.write_state_note(owner, Reconnect::Connecting { attempt }, now);
+        let members = self
+            .reconnects
+            .get(&id)
+            .map(|cycle| cycle.members().to_vec())
+            .unwrap_or_default();
+        for member in members {
+            self.show_state(member, None, Reconnect::Connecting { attempt }, now);
+        }
         if !self.reattach_ssh(owner, Connection::New, now) {
             // Não saiu do chão: é uma falha da tentativa (`Runtime` não se
             // repete).
@@ -389,7 +429,7 @@ impl App {
                     .state
                     .on_attempt_failed(&porecatu_term::FailCause::Runtime, now);
             }
-            self.after_attempt(id, owner, &reason, now);
+            self.after_attempt(id, &reason, now);
         }
     }
 

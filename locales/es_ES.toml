@@ -451,6 +451,17 @@ confirm = "Conectar"
 refused_password = "El servidor rechazó la contraseña."
 refused_passphrase = "La frase de paso no abre la clave."
 
+# Avisos do app em diálogo modal (no lugar das notas do grid).
+[dialog.notice]
+connect = "Conectar"
+close = "Cerrar"
+title = "Aviso"
+title_ssh = "Conexión SSH"
+title_shell_invite = "Integración con el shell"
+reconnect_now = "Reconectar ahora"
+copy_snippet = "Copiar fragmento"
+dont_show_again = "No mostrar más"
+
 [note]
 process_exited = "proceso terminado (código {code})"
 cwd_missing = "el directorio \"{path}\" ya no existe, pestaña abierta en el directorio personal"
@@ -459,7 +470,7 @@ project_file_untrusted = "{name} encontrado en {dir}, pero este directorio no es
 project_file_unreadable = "no se pudo leer \"{path}\": {reason}"
 
 [note.shell_invite]
-text = "Este terminal aún no tiene integración con el shell (OSC 7). {consequence}\n\n{body}\n\nSelecciona el fragmento de arriba con el ratón para copiarlo, como de costumbre.\n\nPara dejar de ver este aviso, escribe \"{marker}\" y pulsa Intro (el shell probablemente dirá que el comando no existe -- no pasa nada, es solo la señal de descarte)."
+text = "Este terminal aún no tiene integración con el shell (OSC 7). {consequence}\n\n{body}"
 consequence_windows = "Sin ella, el directorio de esta pestaña no se restaurará al volver a abrir Porecatu."
 consequence_other = "Sin ella, la restauración del directorio de esta pestaña es menos exacta (usa un método más costoso para saber dónde estás)."
 body_snippet = "Pega esto en la configuración de tu shell:\n\n{snippet}"

@@ -602,11 +602,13 @@ fn build_dialog(
         nodes.push((DIALOG_DISCARD_ID, leaf(Role::Button, label.clone())));
         buttons.push(DIALOG_DISCARD_ID);
     }
-    nodes.push((
-        DIALOG_CONFIRM_ID,
-        leaf(Role::Button, dialog.confirm_label.clone()),
-    ));
-    buttons.push(DIALOG_CONFIRM_ID);
+    if dialog.has_confirm() {
+        nodes.push((
+            DIALOG_CONFIRM_ID,
+            leaf(Role::Button, dialog.confirm_label.clone()),
+        ));
+        buttons.push(DIALOG_CONFIRM_ID);
+    }
 
     // As linhas de dado e de aviso entram como texto, antes dos botões: o
     // leitor de tela lê a impressão digital que o usuário vai confiar.

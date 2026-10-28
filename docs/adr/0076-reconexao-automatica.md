@@ -4,6 +4,8 @@
 **Data:** 2026-10-27
 **Relacionados:** [ADR-0007](0007-modelo-de-threading.md), [ADR-0017](0017-ciclo-de-vida-da-aba.md), [ADR-0022](0022-animacao-de-interface.md), [ADR-0029](0029-enum-de-acao-e-gramatica-de-tecla.md), [ADR-0071](0071-backend-de-terminal.md), [ADR-0072](0072-cliente-ssh-embutido.md), [ADR-0073](0073-credenciais-no-cofre-do-sistema.md), [ADR-0074](0074-verificacao-da-chave-do-host.md), [ADR-0075](0075-superficies-de-ui-do-ssh.md), [PRD-020](../prd/prd-020-conexoes-ssh.md)
 
+> **Revisado pelo [ADR-0077](0077-avisos-do-app-em-dialogo-modal.md).** As notas por tentativa (RF-20.28) e a de processo não retomado (RF-20.29) não vão mais ao grid: viram **um aviso modal vivo por painel**, atualizado a cada passo do ciclo, com "Reconectar agora". A máquina de estados e os intervalos não mudam.
+
 ## Contexto
 
 O [PRD-020](../prd/prd-020-conexoes-ssh.md) pede reconexão automática quando a conexão cai sem o servidor encerrar a sessão (RF-20.27), até **5 tentativas com intervalo crescente** — decisão do dono —, com o scrollback preservado e uma nota por tentativa (RF-20.28), sem retomar o processo remoto (RF-20.29), parando em cancelamento de senha e em chave de host alterada (RF-20.30), e com reconexão manual depois (RF-20.31).

@@ -16,6 +16,16 @@ primeiro release.
 
 ## [Não publicado]
 
+### Alterado
+
+- Os avisos do app (convite de integração de shell, falha, queda e reconexão
+  SSH, código de saída, diretório ou perfil que sumiu, `.porecatu`) deixam de
+  ser impressos no terminal e viram um diálogo modal centralizado na janela
+  ([ADR-0077](docs/adr/0077-avisos-do-app-em-dialogo-modal.md)). A reconexão SSH
+  é um aviso vivo com "Reconectar agora"; o convite de OSC 7 ganha "Copiar
+  trecho" e "Não mostrar mais"; "Conectando a…" e "Enter para conectar a…"
+  também são modais (este com o botão "Conectar").
+
 ## [0.9.6] - 2026-10-27
 
 O app ganha **perfis de aba** e **conexões SSH**: um servidor vira um perfil,

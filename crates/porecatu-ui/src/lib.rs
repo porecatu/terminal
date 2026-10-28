@@ -54,6 +54,7 @@ mod language;
 mod masked_field;
 mod messages;
 mod move_to_group;
+mod notice_queue;
 mod overlay;
 mod paint;
 mod palette;
@@ -1166,6 +1167,7 @@ enum Zoom {
 /// diálogo antes). `Closed { window_empty }` usa o mesmo contrato de
 /// `WindowState::close_tab_unconditionally`: `true` quando não sobrou
 /// grupo nenhum nem aba solta nenhuma, e quem chama fecha a janela.
+#[allow(clippy::large_enum_variant)] // the outcome is built and consumed at once, never stored
 enum TabCloseOutcome {
     Dialog(ConfirmDialog),
     Closed { window_empty: bool },
@@ -1288,6 +1290,12 @@ struct WindowState {
     /// Perguntas de um backend que esperam o usuário chegar ao painel
     /// (ADR-0075 §4).
     pending_prompts: prompt_queue::PendingPrompts,
+    /// Avisos do app que esperam o usuário chegar ao painel: o que antes era
+    /// nota no grid do terminal virou diálogo modal.
+    notices: notice_queue::PendingNotices,
+    /// Avisos vivos que o usuário fechou: não reabrem a cada atualização
+    /// (a reconexão atualiza a cada tentativa), só no estado final.
+    dismissed_notices: Vec<dialog::NoticeSlot>,
     /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
     /// mesma exclusão mútua de `close_all_popovers`.
     terminal_context_menu: Option<TerminalContextMenu>,
@@ -1758,6 +1766,11 @@ fn project_command_bytes(command: &str) -> Vec<u8> {
         bytes.push(b'\r');
     }
     bytes
+}
+
+/// Aviso informativo do app: o diálogo que substitui a nota no grid.
+fn info_dialog(catalog: &Catalog, text: &str) -> ConfirmDialog {
+    ConfirmDialog::notice(catalog, msg::dialog::notice::title(catalog), text)
 }
 
 /// ADR-0051 §5: texto da nota de `.porecatu` não autorizado -- três linhas,
@@ -2422,6 +2435,8 @@ impl WindowState {
             profile_menu: None,
             profile_badges_dirty: true,
             pending_prompts: prompt_queue::PendingPrompts::default(),
+            notices: notice_queue::PendingNotices::default(),
+            dismissed_notices: Vec::new(),
             terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
@@ -2971,23 +2986,24 @@ impl WindowState {
                 if ssh_host.is_none()
                     && let Some(missing) = &missing_cwd_note
                 {
-                    terminal.inject_note(
-                        &msg::note::cwd_missing(&self.catalog, missing.display()),
-                        palette::NOTE_ACCENT_RGB,
-                    );
+                    let text = msg::note::cwd_missing(&self.catalog, missing.display());
+                    self.notices
+                        .push(tab_id, pane_id, info_dialog(&self.catalog, &text));
                 }
                 // ADR-0075 §5: o estado da conexão é nota no grid.
                 if let (Some(host), Some(name)) = (&ssh_host, &ssh_name) {
-                    terminal.inject_note(
-                        &ssh_start_note(&self.catalog, dormant, host, name),
-                        palette::NOTE_ACCENT_RGB,
-                    );
+                    let text = ssh_start_note(&self.catalog, dormant, host, name);
+                    let dialog = if dormant {
+                        ConfirmDialog::ssh_dormant(&self.catalog, tab_id, pane_id, &text)
+                    } else {
+                        ConfirmDialog::ssh_connecting(&self.catalog, tab_id, pane_id, &text)
+                    };
+                    self.notices.push(tab_id, pane_id, dialog);
                 }
                 if let Some(id) = &spawn_profile.missing {
-                    terminal.inject_note(
-                        &msg::note::profile_missing(&self.catalog, id),
-                        palette::NOTE_ACCENT_RGB,
-                    );
+                    let text = msg::note::profile_missing(&self.catalog, id);
+                    self.notices
+                        .push(tab_id, pane_id, info_dialog(&self.catalog, &text));
                 }
                 // ADR-0051 §5/§6: `Ready` popula o pendente de escrita;
                 // `Untrusted` popula o pendente de nota (drenado por
@@ -3009,9 +3025,15 @@ impl WindowState {
                         (None, Some(path))
                     }
                     Some(porecatu_config::ProjectFileOutcome::Unreadable { path, reason }) => {
-                        terminal.inject_note(
-                            &messages::project_file_unreadable(&self.catalog, &path, &reason),
-                            palette::NOTE_ACCENT_RGB,
+                        let text = messages::project_file_unreadable(&self.catalog, &path, &reason);
+                        self.notices.push(
+                            tab_id,
+                            pane_id,
+                            ConfirmDialog::error_notice(
+                                &self.catalog,
+                                msg::dialog::notice::title(&self.catalog),
+                                &text,
+                            ),
                         );
                         (None, None)
                     }
@@ -3150,22 +3172,23 @@ impl WindowState {
                 if ssh_host.is_none()
                     && let Some(missing) = &missing_cwd_note
                 {
-                    terminal.inject_note(
-                        &msg::note::cwd_missing(&self.catalog, missing.display()),
-                        palette::NOTE_ACCENT_RGB,
-                    );
+                    let text = msg::note::cwd_missing(&self.catalog, missing.display());
+                    self.notices
+                        .push(tab_id, pane_id, info_dialog(&self.catalog, &text));
                 }
                 if let (Some(host), Some(name)) = (&ssh_host, &ssh_name) {
-                    terminal.inject_note(
-                        &ssh_start_note(&self.catalog, dormant, host, name),
-                        palette::NOTE_ACCENT_RGB,
-                    );
+                    let text = ssh_start_note(&self.catalog, dormant, host, name);
+                    let dialog = if dormant {
+                        ConfirmDialog::ssh_dormant(&self.catalog, tab_id, pane_id, &text)
+                    } else {
+                        ConfirmDialog::ssh_connecting(&self.catalog, tab_id, pane_id, &text)
+                    };
+                    self.notices.push(tab_id, pane_id, dialog);
                 }
                 if let Some(id) = &spawn_profile.missing {
-                    terminal.inject_note(
-                        &msg::note::profile_missing(&self.catalog, id),
-                        palette::NOTE_ACCENT_RGB,
-                    );
+                    let text = msg::note::profile_missing(&self.catalog, id);
+                    self.notices
+                        .push(tab_id, pane_id, info_dialog(&self.catalog, &text));
                 }
                 self.panes.insert(
                     (tab_id, pane_id),
@@ -3568,16 +3591,19 @@ impl WindowState {
                 runtime.received_osc7 = runtime.ssh_host.is_some();
                 runtime.remote_cwd = None;
                 if let Some(ssh) = &profile.ssh {
-                    runtime.terminal.inject_note(
-                        &messages::ssh_connecting_note(&self.catalog, &ssh.host),
-                        palette::NOTE_ACCENT_RGB,
+                    let text = messages::ssh_connecting_note(&self.catalog, &ssh.host);
+                    // O aviso de "Enter para conectar" cumpriu o papel.
+                    self.forget_notice(dialog::NoticeSlot::Dormant(tab_id, pane_id));
+                    self.notices.push(
+                        tab_id,
+                        pane_id,
+                        ConfirmDialog::ssh_connecting(&self.catalog, tab_id, pane_id, &text),
                     );
                 }
                 if let Some(id) = &spawn_profile.missing {
-                    runtime.terminal.inject_note(
-                        &msg::note::profile_missing(&self.catalog, id),
-                        palette::NOTE_ACCENT_RGB,
-                    );
+                    let text = msg::note::profile_missing(&self.catalog, id);
+                    self.notices
+                        .push(tab_id, pane_id, info_dialog(&self.catalog, &text));
                 }
                 if let Some(pane) = self
                     .workspace
@@ -4029,6 +4055,12 @@ impl WindowState {
         };
         // O que foi digitado morre aqui, zerado, sem ir a lugar nenhum.
         self.secret_field = None;
+        // Um aviso vivo fechado não reabre a cada atualização.
+        if let Some(slot) = dialog.slot
+            && !self.dismissed_notices.contains(&slot)
+        {
+            self.dismissed_notices.push(slot);
+        }
         if let DialogAction::HostKey(tab_id, pane_id, prompt_id)
         | DialogAction::Secret(tab_id, pane_id, prompt_id) = dialog.action
             && let Some(runtime) = self.panes.get(&(tab_id, pane_id))
@@ -4058,7 +4090,13 @@ impl WindowState {
             window_focused: self.focused,
             active_tab,
             focused_pane,
-            dialog_open: self.dialog.is_some(),
+            // O aviso de "conectando" cede à pergunta do backend (chave de
+            // host, senha): a conexão espera a resposta, e o aviso esperaria
+            // o diálogo fechar.
+            dialog_open: self
+                .dialog
+                .as_ref()
+                .is_some_and(|open| !matches!(open.slot, Some(dialog::NoticeSlot::Connecting(..)))),
         };
         let panes = &self.panes;
         let Some(ready) = self
@@ -4113,6 +4151,80 @@ impl WindowState {
         self.window.request_redraw();
     }
 
+    /// Entrega um aviso do app ao painel `(tab, pane)`. O aviso vivo (com
+    /// `slot`) que já está aberto é atualizado no lugar; um que o usuário
+    /// fechou não volta até o estado final (`notify_final`); o resto espera na
+    /// fila o usuário chegar ao painel.
+    fn notify(&mut self, tab: TabId, pane: PaneId, dialog: ConfirmDialog) {
+        if let Some(slot) = dialog.slot {
+            if self.dismissed_notices.contains(&slot) {
+                return;
+            }
+            if let Some(open) = self.dialog.as_mut()
+                && open.slot == Some(slot)
+            {
+                open.replace_with(dialog);
+                self.window.request_redraw();
+                return;
+            }
+        }
+        self.notices.push(tab, pane, dialog);
+        self.window.request_redraw();
+    }
+
+    /// Como `notify`, para o estado final de um aviso vivo: o usuário que o
+    /// fechou precisa saber como terminou.
+    fn notify_final(&mut self, tab: TabId, pane: PaneId, dialog: ConfirmDialog) {
+        if let Some(slot) = dialog.slot {
+            self.dismissed_notices
+                .retain(|dismissed| *dismissed != slot);
+        }
+        self.notify(tab, pane, dialog);
+    }
+
+    /// O aviso vivo `slot` perdeu o sentido: sai da fila e, se está aberto,
+    /// fecha.
+    fn forget_notice(&mut self, slot: dialog::NoticeSlot) {
+        self.dismissed_notices
+            .retain(|dismissed| *dismissed != slot);
+        self.notices.forget(slot);
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|open| open.slot == Some(slot))
+        {
+            self.dialog = None;
+            self.window.request_redraw();
+        }
+    }
+
+    /// Abre o primeiro aviso cujo painel a janela mostra agora -- mesma regra
+    /// das perguntas do backend: janela em foco, aba ativa, painel focado,
+    /// nenhum outro diálogo aberto.
+    fn open_ready_notice(&mut self) {
+        if self.dialog.is_some() || self.notices.is_empty() {
+            return;
+        }
+        let active_tab = self.workspace.active_tab();
+        let focused_pane = active_tab
+            .and_then(|id| self.workspace.tab(id))
+            .map(|tab| tab.panes().focused_id());
+        let view = prompt_queue::FocusView {
+            window_focused: self.focused,
+            active_tab,
+            focused_pane,
+            dialog_open: false,
+        };
+        let panes = &self.panes;
+        if let Some(ready) = self
+            .notices
+            .take_ready(&view, |tab, pane| panes.contains_key(&(tab, pane)))
+        {
+            self.dialog = Some(ready.dialog);
+            self.window.request_redraw();
+        }
+    }
+
     /// `Enter` aciona o botão focado, `Esc` cancela (RF-10.18); `Left`/
     /// `Right`/`Tab` trocam o foco entre os dois botões. Devolve a ação
     /// resolvida se o usuário confirmou -- `lib.rs` executa de verdade,
@@ -4163,9 +4275,13 @@ impl WindowState {
             Key::Named(NamedKey::Enter) => {
                 let focused = dialog.focused();
                 let action = dialog.action.clone();
+                let discard = dialog.discard_action();
                 if focused == DialogButton::Confirm {
                     self.dialog = None;
                     Some(action)
+                } else if let (DialogButton::Discard, Some(discard)) = (focused, discard) {
+                    self.dialog = None;
+                    Some(discard)
                 } else {
                     self.dismiss_dialog();
                     None
@@ -7781,6 +7897,34 @@ impl App {
             // Vive na janela de configurações, que a resolve sozinha: um
             // diálogo de `WindowState` nunca o carrega.
             DialogAction::SettingsPending | DialogAction::DeleteProfile(_) => {}
+            // Aviso que só informa: fechar é tudo.
+            DialogAction::Notice => {}
+            // "Reconectar agora" do aviso de reconexão (ADR-0076 §5).
+            DialogAction::ReconnectNow(tab_id, pane_id) => {
+                self.ssh_reconnect_pane((window_id, tab_id, pane_id), Instant::now());
+            }
+            // "Conectar" do aviso de um painel SSH restaurado (RF-20.33).
+            DialogAction::ConnectDormant(tab_id, pane_id) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.connect_dormant_pane(
+                        tab_id,
+                        pane_id,
+                        &self.config,
+                        &self.startup_directory,
+                        Instant::now(),
+                    );
+                    state.window.request_redraw();
+                }
+            }
+            // "Copiar trecho" do convite de integração de shell.
+            DialogAction::ShellInviteCopy(snippet) => clipboard::copy(&snippet),
+            // "Não mostrar mais" (RF-3.1, ADR-0039 §4): a dispensa definitiva.
+            DialogAction::ShellInviteDismiss => {
+                self.shell_integration_dismissed = true;
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.mark_session_dirty();
+                }
+            }
             // RF-20.16: "Confiar e conectar". O backend grava a linha no
             // `known_hosts` e segue; é a única saída que confia (as outras,
             // `dismiss_dialog`, respondem `Cancel`).
@@ -8265,6 +8409,7 @@ impl App {
     fn open_ready_prompts(&mut self) {
         for state in self.windows.values_mut() {
             state.open_ready_prompt(&self.catalog);
+            state.open_ready_notice();
         }
     }
 
@@ -8665,7 +8810,7 @@ impl App {
             ..
         } = self;
         for state in windows.values_mut() {
-            for runtime in state.panes.values_mut() {
+            for (&(tab_id, pane_id), runtime) in &mut state.panes {
                 let Some(path) = runtime.pending_project_notice.take() else {
                     continue;
                 };
@@ -8674,9 +8819,9 @@ impl App {
                 *project_file_notice_claimed = next_claimed;
                 if write {
                     let text = project_file_notice_text(catalog, &path);
-                    runtime
-                        .terminal
-                        .inject_note(&text, palette::NOTE_ACCENT_RGB);
+                    state
+                        .notices
+                        .push(tab_id, pane_id, info_dialog(catalog, &text));
                 }
             }
         }
@@ -8775,19 +8920,28 @@ impl App {
     /// seja depois, ao voltar dela (`try_write_pending_shell_integration_note`).
     fn write_shell_integration_note(&mut self, window_id: WindowId, tab_id: TabId) {
         self.pending_shell_integration_note = None;
-        let Some(state) = self.windows.get(&window_id) else {
+        let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let Some(rt) = state.pane_runtime(tab_id) else {
+        let Some(pane_id) = state.focused_pane_of(tab_id) else {
             return;
         };
+        if state.pane_runtime(tab_id).is_none() {
+            return;
+        }
         let shell_name = state
             .workspace
             .tab(tab_id)
             .map(porecatu_core::Tab::shell_name)
-            .unwrap_or_default();
-        let text = shell_integration::invite_text(&self.catalog, shell_name);
-        rt.terminal.inject_note(&text, palette::NOTE_ACCENT_RGB);
+            .unwrap_or_default()
+            .to_owned();
+        let invite = shell_integration::invite(&self.catalog, &shell_name);
+        state.notices.push(
+            tab_id,
+            pane_id,
+            ConfirmDialog::shell_invite(&self.catalog, &invite.text, invite.snippet.as_deref()),
+        );
+        state.window.request_redraw();
     }
 
     /// Resolve um convite adiado por tela alternativa (ADR-0039 §1) --
@@ -9872,20 +10026,27 @@ impl ApplicationHandler<Wakeup> for App {
                             );
                         }
                     } else {
+                        // A conexão que não abriu deixa de estar "conectando".
+                        state.forget_notice(dialog::NoticeSlot::Connecting(tab_id, pane_id));
                         if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
                             // Um painel SSH diz por que acabou (ADR-0075 §5); o
                             // local e o `exit` de sempre seguem com a frase do
                             // código de saída.
-                            let note = runtime
-                                .ssh_host
-                                .as_deref()
-                                .and_then(|host| {
-                                    messages::ssh_end_note(&self.catalog, host, &reason)
-                                })
-                                .unwrap_or_else(|| msg::note::process_exited(&self.catalog, code));
-                            runtime
-                                .terminal
-                                .inject_note(&note, palette::NOTE_ACCENT_RGB);
+                            let ssh_note = runtime.ssh_host.as_deref().and_then(|host| {
+                                messages::ssh_end_note(&self.catalog, host, &reason)
+                            });
+                            let dialog = match ssh_note {
+                                Some(note) => ConfirmDialog::error_notice(
+                                    &self.catalog,
+                                    msg::dialog::notice::title_ssh(&self.catalog),
+                                    &note,
+                                ),
+                                None => info_dialog(
+                                    &self.catalog,
+                                    &msg::note::process_exited(&self.catalog, code),
+                                ),
+                            };
+                            state.notices.push(tab_id, pane_id, dialog);
                         }
                         // O painel que saiu é `pane_id`, não necessariamente
                         // o focado da aba -- endereça pelo id de verdade.
@@ -11631,6 +11792,20 @@ impl App {
                         if let Some(action) = action {
                             self.run_dialog_action(window_id, action, event_loop);
                         }
+                    }
+                } else if clicked_button == Some(DialogButton::Discard)
+                    && state
+                        .dialog
+                        .as_ref()
+                        .is_some_and(|d| d.discard_action.is_some())
+                {
+                    let action = state
+                        .dialog
+                        .take()
+                        .and_then(|d| d.discard_action)
+                        .map(|action| *action);
+                    if let Some(action) = action {
+                        self.run_dialog_action(window_id, action, event_loop);
                     }
                 } else {
                     // Cancelar, ou um clique fora de tudo.

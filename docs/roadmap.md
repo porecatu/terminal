@@ -1197,3 +1197,7 @@ A coluna **Desenhado** marca o que já tem alvo visual aprovado no canvas. Estar
 | Agrupamento automático por projeto | [PRD-002](prd/prd-002-grupos-de-abas.md) | não |
 | Protocolos de imagem (sixel) | [ADR-0002](adr/0002-motor-vte.md) | não |
 | Notificação de desktop na campainha | [PRD-011](prd/prd-011-polimento.md), [ADR-0014](adr/0014-superficie-de-aviso-e-dialogo.md) — era item da F6 e saiu na abertura dela | não |
+
+## Avisos do app em diálogo modal (fora de fase)
+
+Notas que o app escrevia no grid (convite OSC 7, conectando e "Enter para conectar", reconexão SSH, código de saída, diretório e perfil ausentes, `.porecatu`) viram diálogo modal ([ADR-0077](adr/0077-avisos-do-app-em-dialogo-modal.md)). Implementado e coberto por testes automatizados (fila, diálogo, ações, locales). **Dívida:** verificação ao vivo (convite OSC 7 com copiar e dispensar, queda e reconexão SSH com o aviso vivo, `exit 3`, `.porecatu` não confiável) e o aval visual do dono, **pendentes**.

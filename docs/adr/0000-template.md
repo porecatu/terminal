@@ -78,6 +78,7 @@
 | [0074](0074-verificacao-da-chave-do-host.md) | Verificação da chave do host: `~/.ssh/known_hosts` do OpenSSH, leitura pelo `ssh-key`, casamento próprio, só acréscimo | Aceito |
 | [0075](0075-superficies-de-ui-do-ssh.md) | Superfícies de UI do SSH: diálogo com campo mascarado e linhas de dado, pergunta que espera o foco da aba, grupo "Perfis" na tela de configurações | Aceito — aval visual pendente |
 | [0076](0076-reconexao-automatica.md) | Reconexão automática: keepalive de 15 s, cinco tentativas em 1-2-4-8-16 s decididas por estado puro em `porecatu-ui`, uma reconexão por conexão | Aceito |
+| [0077](0077-avisos-do-app-em-dialogo-modal.md) | Avisos do app em diálogo modal, no lugar de nota escrita no grid | Aceito |
 
 ## Convenção
 

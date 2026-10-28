@@ -451,6 +451,17 @@ confirm = "Verbinden"
 refused_password = "Der Server hat das Passwort abgelehnt."
 refused_passphrase = "Die Passphrase öffnet den Schlüssel nicht."
 
+# Avisos do app em diálogo modal (no lugar das notas do grid).
+[dialog.notice]
+connect = "Verbinden"
+close = "Schließen"
+title = "Hinweis"
+title_ssh = "SSH-Verbindung"
+title_shell_invite = "Shell-Integration"
+reconnect_now = "Jetzt neu verbinden"
+copy_snippet = "Snippet kopieren"
+dont_show_again = "Nicht mehr anzeigen"
+
 [note]
 process_exited = "Prozess beendet (Code {code})"
 cwd_missing = "Verzeichnis \"{path}\" existiert nicht mehr, Tab im Home-Verzeichnis geöffnet"
@@ -459,7 +470,7 @@ project_file_untrusted = "{name} in {dir} gefunden, aber dieses Verzeichnis ist 
 project_file_unreadable = "\"{path}\" konnte nicht gelesen werden: {reason}"
 
 [note.shell_invite]
-text = "Dieses Terminal hat noch keine Shell-Integration (OSC 7). {consequence}\n\n{body}\n\nMarkiere das Snippet oben mit der Maus, um es wie gewohnt zu kopieren.\n\nUm diesen Hinweis nicht mehr zu sehen, tippe \"{marker}\" und drücke die Eingabetaste (die Shell meldet vermutlich, dass der Befehl nicht existiert -- das ist in Ordnung, es ist nur das Signal zum Ausblenden)."
+text = "Dieses Terminal hat noch keine Shell-Integration (OSC 7). {consequence}\n\n{body}"
 consequence_windows = "Ohne sie wird das Verzeichnis dieses Tabs beim erneuten Öffnen von Porecatu nicht wiederhergestellt."
 consequence_other = "Ohne sie ist die Wiederherstellung des Verzeichnisses dieses Tabs ungenauer (es wird ein aufwendigerer Weg genutzt, um den Aufenthaltsort zu ermitteln)."
 body_snippet = "Füge Folgendes in die Konfiguration deiner Shell ein:\n\n{snippet}"

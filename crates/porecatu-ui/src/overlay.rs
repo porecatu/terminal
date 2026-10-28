@@ -381,8 +381,13 @@ pub fn layout_dialog(
 
     let cancel_width =
         measurer.measure_width(&dialog.cancel_label, BODY_FONT, body_size) + button_padding_x * 2.0;
-    let confirm_width = measurer.measure_width(&dialog.confirm_label, BODY_FONT, body_size)
-        + button_padding_x * 2.0;
+    // O aviso que só informa não tem o botão de confirmar.
+    let has_confirm = dialog.has_confirm();
+    let confirm_width = if has_confirm {
+        measurer.measure_width(&dialog.confirm_label, BODY_FONT, body_size) + button_padding_x * 2.0
+    } else {
+        0.0
+    };
 
     let discard_width = dialog
         .discard_label
@@ -392,8 +397,11 @@ pub fn layout_dialog(
     // longas em outro idioma): o diálogo cresce o que for preciso, nunca
     // corta um botão. Com dois, a largura é sempre a configurada.
     let buttons_width = cancel_width
-        + confirm_width
-        + button_gap
+        + if has_confirm {
+            confirm_width + button_gap
+        } else {
+            0.0
+        }
         + discard_width.map_or(0.0, |discard| discard + button_gap);
     // As linhas de dado nunca são truncadas (ADR-0075 §3): se alguma não
     // coube na largura configurada -- outra fonte, outra escala --, o diálogo
@@ -463,15 +471,21 @@ pub fn layout_dialog(
         width: confirm_width,
         height: button_height,
     };
+    // Sem confirmar, o último botão encosta na margem direita.
+    let trailing_x = if has_confirm {
+        confirm_rect.x - button_gap
+    } else {
+        confirm_rect.x
+    };
     let discard_rect = discard_width.map(|discard| Rect {
-        x: confirm_rect.x - button_gap - discard,
+        x: trailing_x - discard,
         y: buttons_y,
         width: discard,
         height: button_height,
     });
-    let cancel_right = discard_rect.map_or(confirm_rect.x, |discard| discard.x);
+    let cancel_right = discard_rect.map_or(trailing_x, |discard| discard.x - button_gap);
     let cancel_rect = Rect {
-        x: cancel_right - button_gap - cancel_width,
+        x: cancel_right - cancel_width,
         y: buttons_y,
         width: cancel_width,
         height: button_height,
@@ -767,6 +781,16 @@ pub fn paint_dialog(
                     .0,
                 pal.warning_severity_warning,
             ),
+            LineTone::Text => (
+                measurer
+                    .truncate(&line.text, BODY_FONT, body_size, body_max_width)
+                    .0,
+                if dialog.body_is_error {
+                    pal.warning_severity_error
+                } else {
+                    pal.dialog_body_text
+                },
+            ),
         };
         out.push(Primitive::Text(TextRun {
             origin: (text_x, y),
@@ -895,24 +919,26 @@ pub fn paint_dialog(
             measurer,
             &mut out,
         );
-        paint_dialog_button(
-            layout.confirm_rect,
-            &dialog.confirm_label,
-            if hovered == Some(DialogButton::Confirm) {
-                crate::chrome::brighten(
-                    crate::settings::TOGGLE_ON,
-                    config.appearance.tabs.colors.hover_brightness,
-                )
-            } else {
-                crate::settings::TOGGLE_ON
-            },
-            crate::toggle::TOGGLE_KNOB_COLOR,
-            ring_or(DialogButton::Confirm, palette::TRANSPARENT),
-            body_size,
-            button_corner_radius,
-            measurer,
-            &mut out,
-        );
+        if dialog.has_confirm() {
+            paint_dialog_button(
+                layout.confirm_rect,
+                &dialog.confirm_label,
+                if hovered == Some(DialogButton::Confirm) {
+                    crate::chrome::brighten(
+                        crate::settings::TOGGLE_ON,
+                        config.appearance.tabs.colors.hover_brightness,
+                    )
+                } else {
+                    crate::settings::TOGGLE_ON
+                },
+                crate::toggle::TOGGLE_KNOB_COLOR,
+                ring_or(DialogButton::Confirm, palette::TRANSPARENT),
+                body_size,
+                button_corner_radius,
+                measurer,
+                &mut out,
+            );
+        }
         return out;
     }
     paint_dialog_button(
@@ -930,6 +956,9 @@ pub fn paint_dialog(
         measurer,
         &mut out,
     );
+    if !dialog.has_confirm() {
+        return out;
+    }
     paint_dialog_button(
         layout.confirm_rect,
         &dialog.confirm_label,
@@ -1007,7 +1036,7 @@ pub fn dialog_hit(layout: &DialogLayout, point: (f32, f32)) -> Option<DialogButt
         .is_some_and(|discard| rect_contains(discard, point))
     {
         Some(DialogButton::Discard)
-    } else if rect_contains(layout.confirm_rect, point) {
+    } else if layout.confirm_rect.width > 0.0 && rect_contains(layout.confirm_rect, point) {
         Some(DialogButton::Confirm)
     } else {
         None

@@ -470,6 +470,17 @@ confirm = "Connect"
 refused_password = "The server refused the password."
 refused_passphrase = "The passphrase does not unlock the key."
 
+# Avisos do app em diálogo modal (no lugar das notas do grid).
+[dialog.notice]
+connect = "Connect"
+close = "Close"
+title = "Notice"
+title_ssh = "SSH connection"
+title_shell_invite = "Shell integration"
+reconnect_now = "Reconnect now"
+copy_snippet = "Copy snippet"
+dont_show_again = "Don't show again"
+
 # Notas escritas no grid do terminal (canal 2 do ADR-0014). Os avisos da pilha
 # estão em [notice.*].
 [note]
@@ -485,7 +496,7 @@ project_file_unreadable = "could not read \"{path}\": {reason}"
 # docs/reference/integracao-de-shell.md e não são texto de interface; o
 # marcador de dispensa que o usuário digita também não é traduzido.
 [note.shell_invite]
-text = "This terminal does not have shell integration yet (OSC 7). {consequence}\n\n{body}\n\nSelect the snippet above with the mouse to copy it, the usual way.\n\nTo stop seeing this notice, type \"{marker}\" and press Enter (the shell will probably say the command does not exist -- that is fine, it is only the dismissal signal)."
+text = "This terminal does not have shell integration yet (OSC 7). {consequence}\n\n{body}"
 consequence_windows = "Without it, this tab's directory will not be restored when you reopen Porecatu."
 consequence_other = "Without it, restoring this tab's directory is less exact (it uses a costlier way to find out where you are)."
 body_snippet = "Paste this into your shell's config:\n\n{snippet}"

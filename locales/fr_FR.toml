@@ -451,6 +451,17 @@ confirm = "Se connecter"
 refused_password = "Le serveur a refusé le mot de passe."
 refused_passphrase = "La phrase secrète n'ouvre pas la clé."
 
+# Avisos do app em diálogo modal (no lugar das notas do grid).
+[dialog.notice]
+connect = "Se connecter"
+close = "Fermer"
+title = "Avis"
+title_ssh = "Connexion SSH"
+title_shell_invite = "Intégration du shell"
+reconnect_now = "Reconnecter maintenant"
+copy_snippet = "Copier l'extrait"
+dont_show_again = "Ne plus afficher"
+
 [note]
 process_exited = "processus terminé (code {code})"
 cwd_missing = "le répertoire \"{path}\" n'existe plus, onglet ouvert dans le répertoire personnel"
@@ -459,7 +470,7 @@ project_file_untrusted = "{name} trouvé dans {dir}, mais ce répertoire n'est p
 project_file_unreadable = "impossible de lire \"{path}\" : {reason}"
 
 [note.shell_invite]
-text = "Ce terminal n'a pas encore l'intégration du shell (OSC 7). {consequence}\n\n{body}\n\nSélectionnez l'extrait ci-dessus à la souris pour le copier, comme d'habitude.\n\nPour ne plus voir cet avis, tapez \"{marker}\" puis Entrée (le shell dira probablement que la commande n'existe pas -- c'est normal, ce n'est que le signal de rejet)."
+text = "Ce terminal n'a pas encore l'intégration du shell (OSC 7). {consequence}\n\n{body}"
 consequence_windows = "Sans elle, le répertoire de cet onglet ne sera pas restauré à la réouverture de Porecatu."
 consequence_other = "Sans elle, la restauration du répertoire de cet onglet est moins précise (elle utilise un moyen plus coûteux pour savoir où vous êtes)."
 body_snippet = "Collez ceci dans la configuration de votre shell :\n\n{snippet}"

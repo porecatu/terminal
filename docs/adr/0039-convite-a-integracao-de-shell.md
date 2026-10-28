@@ -25,6 +25,8 @@ Sem essas quatro, o recurso central do PRD-003 ficaria escondido atrás de uma c
 
 ### 1. Superfície: nota no grid
 
+> **Revisado pelo [ADR-0077](0077-avisos-do-app-em-dialogo-modal.md).** O convite deixou de ser nota no grid: é um diálogo modal com **Copiar trecho**, **Não mostrar mais** e **Fechar**. O marcador digitado (§4) não é mais pedido ao usuário; o resto da decisão (critério, proeminência, uma vez por execução, snippets) segue.
+
 Usa o canal 2 do ADR-0014 e o mecanismo que já existe: `Terminal::inject_note`, que passa os bytes pelo parser do próprio motor (o grid é do motor; escrever nele por fora furaria a fronteira da seção 4 da arquitetura). A marcação visual é a do ADR-0014 — `#5ed3bc`, nunca imitando prompt.
 
 Três consequências que decidem a escolha:

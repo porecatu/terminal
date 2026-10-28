@@ -52,12 +52,6 @@ fn cvt_alpha(c: porecatu_config::Color, alpha: f64) -> Color {
     hex_alpha(c.r(), c.g(), c.b(), alpha)
 }
 
-// Nota no grid (RF-1.3, ADR-0017 item 5): "#5ed3bc, nunca imitando prompt"
-// -- destaque fixo do ADR-0014, independente de tema e sem chave no TOML.
-// `porecatu-term` não resolve cor (seção 4 da arquitetura); passado cru
-// como RGB pro motor.
-pub const NOTE_ACCENT_RGB: (u8, u8, u8) = (0x5e, 0xd3, 0xbc);
-
 /// Transparente -- usado como preenchimento de um `RoundedQuad` que só
 /// desenha borda (botão de nova aba, espec. §2.6, sem "fundo" listado), e
 /// como `border_color` de quem não tem borda. Não é um token de design.
