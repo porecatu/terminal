@@ -6,7 +6,7 @@ Guia operacional do projeto. Leia antes de mexer em qualquer coisa. O porquê de
 
 **Porecatu** — emulador de terminal cross-platform em Rust. Diferencial: gestão de muitos terminais (abas, grupos nomeados, sessão persistente), não conformidade VT.
 
-**Estado:** F0 a F6 fechadas (o v1 inteiro); versão atual **0.9.6** (a primeira publicada foi `0.7.0`, não `1.0.0` — [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md)). Detalhe por fase e etapa em [docs/roadmap.md](docs/roadmap.md). A verificação interativa é **dívida assumida**, não critério pendente: a proteção de foco do Windows atrapalha input sintético e não há Linux/macOS no fluxo — fases e recursos fecham com teste automatizado, smoke test e verificação ao vivo só no Windows.
+**Estado:** F0 a F6 fechadas (o v1 inteiro); versão atual **0.9.7** (a primeira publicada foi `0.7.0`, não `1.0.0` — [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md)). Detalhe por fase e etapa em [docs/roadmap.md](docs/roadmap.md). A verificação interativa é **dívida assumida**, não critério pendente: a proteção de foco do Windows atrapalha input sintético e não há Linux/macOS no fluxo — fases e recursos fecham com teste automatizado, smoke test e verificação ao vivo só no Windows.
 
 Recursos entregues **fora da ordem de fases**, todos implementados (detalhe e dívida de verificação de cada um no roadmap):
 

@@ -16,6 +16,10 @@ primeiro release.
 
 ## [Não publicado]
 
+## [0.9.7] - 2026-10-28
+
+Avisos do app em diálogo modal, botão `+` quadrado e diálogos mais estreitos.
+
 ### Alterado
 
 - **Largura dos diálogos** de 760 para 360 (`appearance.dialog.width`); a
