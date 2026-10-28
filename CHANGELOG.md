@@ -16,6 +16,12 @@ primeiro release.
 
 ## [Não publicado]
 
+## [0.9.6] - 2026-10-27
+
+O app ganha **perfis de aba** e **conexões SSH**: um servidor vira um perfil,
+aberto numa aba pelo cliente SSH embutido, com cofre do sistema para os
+segredos, reconexão automática e importação do `~/.ssh/config`.
+
 ### Adicionado
 
 - **Perfis de aba** ([PRD-007](docs/prd/prd-007-perfis-de-aba.md),
