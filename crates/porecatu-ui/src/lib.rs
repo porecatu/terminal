@@ -9160,6 +9160,11 @@ impl App {
             // de bug (ADR-0030) -- por isso o aviso, severidade
             // informação, some sozinho.
             for deferred in &effects.deferred {
+                // O perfil só é lido ao abrir uma aba: criar ou editar um
+                // perfil pela tela de configurações não pede aviso.
+                if deferred.key == "[profiles]" {
+                    continue;
+                }
                 let body = match deferred.scope {
                     reload::DeferredScope::NextWindow => {
                         msg::notice::deferred::next_window(&self.catalog, deferred.key)

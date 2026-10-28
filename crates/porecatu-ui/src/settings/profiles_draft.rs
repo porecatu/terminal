@@ -230,7 +230,9 @@ impl Form {
             "type" => (!local).then(|| EditValue::String("ssh".to_owned())),
             // Local: obrigatório (o parser o cobra). SSH: vazio é o default.
             "badge" if local => text(&self.badge),
-            "badge" => optional(&self.badge),
+            // `SSH` é o que o parser dá sem `badge`: escrevê-lo é o mesmo que
+            // omitir, e o que volta do arquivo nunca o distingue.
+            "badge" => optional(&self.badge).filter(|_| self.badge != DEFAULT_SSH_BADGE),
             "program" => local.then(|| EditValue::String(self.program.clone())),
             // Um item vazio é o espaço de quem acabou de apertar "Adicionar":
             // não é escrito, e não conta como alteração.
@@ -805,6 +807,14 @@ impl ProfilesDraft {
         };
     }
 
+    /// O `Form` do arquivo que `item` já é, pelo que seria escrito (a mesma
+    /// régua de `changed`), e não pelo texto cru.
+    fn written_as(base: &Form, item: &Form) -> bool {
+        item.keys()
+            .iter()
+            .all(|key| base.value_of(key) == item.value_of(key))
+    }
+
     fn base_form(&self, origin: &str) -> Option<&Form> {
         self.base
             .iter()
@@ -818,12 +828,9 @@ impl ProfilesDraft {
             None => true,
             // Pelo que seria escrito, não pelo texto cru: o item vazio de uma
             // lista não é alteração.
-            Some(origin) => self.base_form(origin).is_none_or(|base| {
-                item.form
-                    .keys()
-                    .iter()
-                    .any(|key| base.value_of(key) != item.form.value_of(key))
-            }),
+            Some(origin) => self
+                .base_form(origin)
+                .is_none_or(|base| !Self::written_as(base, &item.form)),
         }
     }
 
@@ -965,7 +972,7 @@ impl ProfilesDraft {
             // Foi gravado: o `id` do formulário é o do arquivo agora.
             if let Some(origin) = &item.origin
                 && let Some((_, saved)) = base.iter().find(|(id, _)| id == origin)
-                && *saved == item.form
+                && Self::written_as(saved, &item.form)
             {
                 item.id_follows_name = false;
             }
@@ -975,7 +982,7 @@ impl ProfilesDraft {
             if item.origin.is_none()
                 && base
                     .iter()
-                    .any(|(id, form)| *id == item.form.id && *form == item.form)
+                    .any(|(id, form)| *id == item.form.id && Self::written_as(form, &item.form))
             {
                 item.origin = Some(item.form.id.clone());
                 item.id_follows_name = false;
@@ -988,7 +995,7 @@ impl ProfilesDraft {
                 && origin != item.form.id
                 && base
                     .iter()
-                    .any(|(id, form)| *id == item.form.id && *form == item.form)
+                    .any(|(id, form)| *id == item.form.id && Self::written_as(form, &item.form))
             {
                 item.origin = Some(item.form.id.clone());
             }
@@ -1119,6 +1126,52 @@ user = "deploy"
             (new.id.as_str(), new.program.as_str(), new.badge.as_str()),
             ("meu-shell", "zsh", "SH")
         );
+    }
+
+    #[test]
+    fn a_saved_new_ssh_profile_is_no_longer_pending() {
+        for preset in 0..AUTH_PRESETS.len() {
+            for identity in ["", "~/.ssh/id_ed25519"] {
+                let mut draft = draft();
+                let index = draft.add_ssh("Homolog");
+                draft.set_text(index, Field::Host, "10.9.9.9");
+                draft.set_text(index, Field::User, "ops");
+                draft.set_text(index, Field::IdentityFile, identity);
+                draft.set_auth_preset(index, preset);
+                if !draft.is_valid(index) {
+                    continue;
+                }
+                let (_, profiles) = saved(&draft);
+                draft.commit(&profiles, |_| {});
+                assert!(!draft.is_new(index), "preset {preset}, key {identity:?}");
+                assert!(!draft.is_dirty(), "preset {preset}, key {identity:?}");
+                assert!(
+                    draft.edits().is_empty(),
+                    "preset {preset}, key {identity:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_saved_new_ssh_profile_with_every_field_filled_is_no_longer_pending() {
+        for badge in ["", "SSH", "PRD"] {
+            for port in ["22", "2222", " 22 "] {
+                let mut draft = draft();
+                let index = draft.add_ssh("Homolog");
+                draft.set_text(index, Field::Name, "Outro nome");
+                draft.set_text(index, Field::Badge, badge);
+                draft.set_text(index, Field::Port, port);
+                draft.set_text(index, Field::Host, "10.9.9.9");
+                draft.set_text(index, Field::User, "ops");
+                if !draft.is_valid(index) {
+                    continue;
+                }
+                let (_, profiles) = saved(&draft);
+                draft.commit(&profiles, |_| {});
+                assert!(!draft.is_dirty(), "badge {badge:?}, port {port:?}");
+            }
+        }
     }
 
     #[test]
