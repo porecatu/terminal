@@ -12278,12 +12278,8 @@ impl App {
         {
             state.hover.dismiss();
             if let Some(gpu) = &mut self.gpu
-                && let NewTabRequest::OpenProfileMenu { target, anchor } = state.handle_bar_click(
-                    logical_point,
-                    gpu,
-                    true,
-                    &self.style,
-                )
+                && let NewTabRequest::OpenProfileMenu { target, anchor } =
+                    state.handle_bar_click(logical_point, gpu, true, &self.style)
             {
                 let rows = profile_menu::profile_menu_rows(
                     &self.config,
@@ -12302,12 +12298,7 @@ impl App {
             let Some(gpu) = &mut self.gpu else {
                 return;
             };
-            match state.handle_bar_click(
-                logical_point,
-                gpu,
-                false,
-                &self.style,
-            ) {
+            match state.handle_bar_click(logical_point, gpu, false, &self.style) {
                 // O press só arma o "+"; quem abre a aba é o release sobre o
                 // mesmo botão (mais abaixo, no ramo `!pressed`).
                 NewTabRequest::Ungrouped => {
