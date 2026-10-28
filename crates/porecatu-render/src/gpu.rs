@@ -196,8 +196,16 @@ impl GpuContext {
         // aceleração" pro aviso do RF-11.26.
         let software_rendering =
             used_fallback_request || adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        // `MemoryHints::Performance` (o default) faz o alocador reservar
+        // blocos de 128 MB (device) + 64 MB (host) já na primeira textura; em
+        // GPU integrada essa memória é RAM cobrada do processo (~190 MB a
+        // mais, medido no Windows com Intel). Um terminal aloca poucas
+        // texturas pequenas: blocos de 8/4 MB bastam.
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                ..Default::default()
+            })
             .await
             .expect("falha ao criar device wgpu");
 

@@ -192,6 +192,7 @@ Versão curta. Texto completo, com sintoma e custo, no [Apêndice A de docs/desc
 - **Borda de retângulo arredondado (`quad.wgsl`, `radius > 0`) nunca é pintada** — defeito aberto, corrigir depende de aval.
 - **Medir texto no caminho quente sem cache é a armadilha de performance do projeto**: `TextMeasurer` não tem cache; um shaping por string, nunca por prefixo nem por célula. Teste de grade é em **em**, contra o avanço do `'M'`; célula em teste sai de `measure_mono_cell`, nunca de número fixo.
 - **Fórmula de geometria nunca copiada** — copiada, diverge quando alguém mexe numa só.
+- **Device `wgpu` com `MemoryHints::MemoryUsage`**, nunca o default `Performance`: ele reserva blocos de 128+64 MB que GPU integrada cobra como RAM do processo (266 → 85 MB medidos).
 - **Primeiro present de surface recém-criada pode não chegar à tela** (janela preta): `settle_frames` redesenha mais um quadro.
 - **Carga pesada no arranque atrasa o primeiro prompt** mesmo em thread: imagem de fundo só começa no primeiro byte do PTY. Medir arranque sempre em A/B intercalado, trocando a ordem entre lotes.
 
