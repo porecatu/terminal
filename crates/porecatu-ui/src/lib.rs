@@ -6313,6 +6313,7 @@ impl WindowState {
             config,
             bar_height(style),
             self.logical_width,
+            gpu.text_measurer(),
         );
         let over_warnings = tab_bar::rect_contains(warning_layout.stack_rect, bar_point);
         self.warnings.set_hovered(over_warnings, now);
@@ -12007,18 +12008,21 @@ impl App {
 
         // Aviso: botão de fechar dispensa; corpo não faz nada além de
         // consumir o clique (não deixa passar pro que está atrás).
-        let warning_layout = overlay::layout_warnings(
-            &state.warnings,
-            &self.config,
-            bar_height(&self.style),
-            state.logical_width,
-        );
-        if let Some(hit) = overlay::hit_test_warnings(&warning_layout, logical_point) {
-            if let overlay::WarningHit::Close(index) = hit {
-                state.warnings.dismiss(index);
+        if let Some(gpu) = self.gpu.as_mut() {
+            let warning_layout = overlay::layout_warnings(
+                &state.warnings,
+                &self.config,
+                bar_height(&self.style),
+                state.logical_width,
+                gpu.text_measurer(),
+            );
+            if let Some(hit) = overlay::hit_test_warnings(&warning_layout, logical_point) {
+                if let overlay::WarningHit::Close(index) = hit {
+                    state.warnings.dismiss(index);
+                }
+                state.window.request_redraw();
+                return;
             }
-            state.window.request_redraw();
-            return;
         }
 
         // Barra de busca (ADR-0041 §3): captura parcial -- clique **dentro**
@@ -12858,15 +12862,15 @@ impl App {
         }
 
         if !state.warnings.is_empty() {
-            let warning_layout = overlay::layout_warnings(&state.warnings, config, h, bar_width);
-            let primitives = overlay::paint_warnings(
-                &warning_layout,
+            let warning_layout = overlay::layout_warnings(
                 &state.warnings,
                 config,
-                style,
-                pal,
+                h,
+                bar_width,
                 gpu.text_measurer(),
             );
+            let primitives =
+                overlay::paint_warnings(&warning_layout, &state.warnings, config, style, pal);
             frame.set_layer(Layer::Warning, primitives);
         }
 

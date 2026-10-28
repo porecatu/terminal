@@ -29,9 +29,10 @@
 //! config própria (nenhuma seção `[appearance.*]` destes widgets tem
 //! `shadow`, ao contrário de `[appearance.groups]`/`[appearance.
 //! terminal_frame]`): a decisão do ADR-0032 é fixa, não alternável.
-//! Corpo de aviso e diálogo também não quebra linha (`TextRun` é sempre uma linha);
-//! onde a espec pede várias linhas, o texto trunca em uma só com o
-//! `TextMeasurer`, em vez do "três linhas com reticências" literal.
+//! `TextRun` é sempre uma linha: o corpo do **aviso** quebra em várias
+//! (`wrap_body`, uma run por linha, o card cresce em altura); o do diálogo
+//! trunca em uma só com o `TextMeasurer`, em vez do "três linhas com
+//! reticências" literal.
 //!
 //! F4 etapa 2: toda geometria e cor daqui vem de `&porecatu_config::Config`
 //! (parâmetro `config`) e `&palette::ResolvedPalette` (parâmetro `pal`),
@@ -116,6 +117,76 @@ pub struct WarningEntry {
     pub index: usize,
     pub rect: Rect,
     pub close_button: Rect,
+    /// O corpo já quebrado na largura do card: a altura de `rect` depende
+    /// dele, e o paint não precisa medir de novo.
+    pub body_lines: Vec<String>,
+}
+
+/// Largura que sobra ao corpo do aviso: a do card menos a barra de
+/// severidade, o respiro dos dois lados e o botão de fechar. Um só lugar --
+/// layout e quebra de linha têm de concordar.
+fn warning_body_max_width(config: &porecatu_config::Config) -> f32 {
+    let notices = &config.appearance.notices;
+    (notices.width as f32
+        - notices.severity_bar_width as f32
+        - notices.padding_x as f32 * 2.0
+        - notices.close_button_size as f32)
+        .max(0.0)
+}
+
+/// Maior prefixo de `word` (em bytes) que cabe em `width`; no mínimo um
+/// caractere, para a quebra sempre avançar.
+fn fitting_prefix_bytes(word: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> usize {
+    let ends: Vec<usize> = word.char_indices().map(|(i, c)| i + c.len_utf8()).collect();
+    let (mut low, mut high) = (1, ends.len());
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if measurer.measure_width(&word[..ends[mid - 1]], BODY_FONT, size) <= width {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    ends[low - 1]
+}
+
+/// Quebra `text` em linhas de no máximo `width` px: entre palavras, e uma
+/// palavra mais larga que a linha (caminho, URL) é partida por caractere.
+/// `\n` do texto é respeitado. Só mede quando o texto não cabe numa linha --
+/// o caso comum (aviso curto) custa um shaping.
+fn wrap_body(text: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> Vec<String> {
+    if !text.contains('\n') && measurer.measure_width(text, BODY_FONT, size) <= width {
+        return vec![text.to_owned()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for paragraph in text.lines() {
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            let candidate = if current.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{current} {word}")
+            };
+            if measurer.measure_width(&candidate, BODY_FONT, size) <= width {
+                current = candidate;
+                continue;
+            }
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            current = word.to_owned();
+            while measurer.measure_width(&current, BODY_FONT, size) > width {
+                let cut = fitting_prefix_bytes(&current, size, width, measurer);
+                let rest = current.split_off(cut);
+                lines.push(std::mem::replace(&mut current, rest));
+            }
+        }
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 pub struct WarningLayout {
@@ -131,9 +202,12 @@ pub fn layout_warnings(
     config: &porecatu_config::Config,
     bar_height: f32,
     content_width: f32,
+    measurer: &mut TextMeasurer,
 ) -> WarningLayout {
     let notices = &config.appearance.notices;
     let width = notices.width as f32;
+    let body_size = notices.body_font_size as f32;
+    let body_max_width = warning_body_max_width(config);
     let padding_x = notices.padding_x as f32;
     let padding_y = notices.padding_y as f32;
     let gap = notices.gap as f32;
@@ -146,13 +220,13 @@ pub fn layout_warnings(
     let x = content_width - margin_right - width;
     let mut y = bar_height + margin_top;
     let mut entries = Vec::new();
-    for (index, _) in stack.items().iter().enumerate().rev() {
-        // Duas linhas -- título e corpo, mesma anatomia de
-        // `layout_dialog` (`title_size + gap + body_size + gap +
-        // button_height`) -- `paint_warnings` desenha o corpo em
-        // `title_y + line_height`, então a altura precisa reservar essa
-        // segunda linha também, não só a primeira.
-        let height = padding_y * 2.0 + title_size.max(line_height) + line_height;
+    for (index, warning) in stack.items().iter().enumerate().rev() {
+        // Título e corpo; `paint_warnings` desenha a primeira linha do
+        // corpo em `title_y + line_height`, então a altura reserva uma
+        // `line_height` por linha já quebrada (no mínimo uma).
+        let body_lines = wrap_body(&warning.body, body_size, body_max_width, measurer);
+        let height =
+            padding_y * 2.0 + title_size.max(line_height) + line_height * body_lines.len() as f32;
         let rect = Rect {
             x,
             y,
@@ -169,6 +243,7 @@ pub fn layout_warnings(
             index,
             rect,
             close_button,
+            body_lines,
         });
         y += height + gap;
     }
@@ -195,7 +270,6 @@ pub fn paint_warnings(
     config: &porecatu_config::Config,
     style: &TabBarStyle,
     pal: &ResolvedPalette,
-    measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
     let notices = &config.appearance.notices;
     let corner_radius = notices.corner_radius as f32;
@@ -203,7 +277,6 @@ pub fn paint_warnings(
     let padding_x = notices.padding_x as f32;
     let title_size = notices.font_size as f32;
     let body_size = notices.body_font_size as f32;
-    let close_size = notices.close_button_size as f32;
     let line_height = notices.line_height as f32;
     // Em, não desenho -- mesmo tamanho do botão de fechar da aba, que a
     // espec. §2.15 diz ser "o mesmo botão". Ver `porecatu_render::icon`.
@@ -252,16 +325,15 @@ pub fn paint_warnings(
             color: pal.warning_title_text,
         }));
 
-        let body_max_width =
-            (entry.rect.width - severity_bar_width - padding_x * 2.0 - close_size).max(0.0);
-        let (body, _) = measurer.truncate(&warning.body, BODY_FONT, body_size, body_max_width);
-        out.push(Primitive::Text(TextRun {
-            origin: (text_x, title_y + line_height),
-            text: body,
-            font: BODY_FONT,
-            size_px: body_size,
-            color: pal.warning_body_text,
-        }));
+        for (i, line) in entry.body_lines.iter().enumerate() {
+            out.push(Primitive::Text(TextRun {
+                origin: (text_x, title_y + line_height * (i + 1) as f32),
+                text: line.clone(),
+                font: BODY_FONT,
+                size_px: body_size,
+                color: pal.warning_body_text,
+            }));
+        }
 
         out.push(centered_glyph(
             icon::X,
@@ -2856,6 +2928,102 @@ mod tests {
         assert_ne!(fitted, long);
         assert!(fitted.ends_with('…'), "{fitted}");
         assert!(width_of(&fitted, size, &mut measurer) <= budget + 0.5);
+    }
+
+    fn warning_stack(bodies: &[&str]) -> WarningStack {
+        let mut stack = WarningStack::default();
+        let now = std::time::Instant::now();
+        for body in bodies {
+            stack.push(Severity::Error, "Erro", *body, now);
+        }
+        stack
+    }
+
+    fn line_height_of(config: &porecatu_config::Config) -> f32 {
+        config.appearance.notices.line_height as f32
+    }
+
+    /// Aviso curto: uma linha de corpo, mesma altura de antes da quebra.
+    #[test]
+    fn a_short_warning_body_stays_on_one_line() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let stack = warning_stack(&["curto"]);
+        let layout = layout_warnings(&stack, &config, 30.0, 1000.0, &mut measurer);
+        let entry = &layout.entries[0];
+        let n = &config.appearance.notices;
+        assert_eq!(entry.body_lines, vec!["curto".to_owned()]);
+        assert_eq!(
+            entry.rect.height,
+            n.padding_y as f32 * 2.0
+                + (n.font_size as f32).max(line_height_of(&config))
+                + line_height_of(&config)
+        );
+    }
+
+    /// Corpo longo com espaços quebra entre palavras: toda linha cabe e
+    /// nenhuma palavra se perde.
+    #[test]
+    fn a_long_warning_body_wraps_between_words_and_loses_nothing() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let body = "falha ao ler o arquivo de configuração porque a chave appearance.notices \
+                    tem um valor inválido e o carregamento foi interrompido";
+        let stack = warning_stack(&[body]);
+        let layout = layout_warnings(&stack, &config, 30.0, 1000.0, &mut measurer);
+        let entry = &layout.entries[0];
+        let size = config.appearance.notices.body_font_size as f32;
+        let max = warning_body_max_width(&config);
+        assert!(entry.body_lines.len() > 1);
+        for line in &entry.body_lines {
+            assert!(width_of(line, size, &mut measurer) <= max + 0.5, "{line}");
+        }
+        assert_eq!(entry.body_lines.join(" "), body);
+        let n = &config.appearance.notices;
+        assert_eq!(
+            entry.rect.height,
+            n.padding_y as f32 * 2.0
+                + (n.font_size as f32).max(line_height_of(&config))
+                + line_height_of(&config) * entry.body_lines.len() as f32
+        );
+    }
+
+    /// Palavra sem espaço mais larga que o card (caminho) é partida por
+    /// caractere: nada estoura e a concatenação devolve o original.
+    #[test]
+    fn an_unbreakable_word_is_split_by_character() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let path = "C:\\Users\\Leonardo\\AppData\\Roaming\\porecatu\\temas\\thm_um_nome_muito_comprido.toml";
+        let stack = warning_stack(&[path]);
+        let layout = layout_warnings(&stack, &config, 30.0, 1000.0, &mut measurer);
+        let lines = &layout.entries[0].body_lines;
+        let size = config.appearance.notices.body_font_size as f32;
+        let max = warning_body_max_width(&config);
+        assert!(lines.len() > 1);
+        for line in lines {
+            assert!(width_of(line, size, &mut measurer) <= max + 0.5, "{line}");
+        }
+        assert_eq!(lines.concat(), path);
+    }
+
+    /// Dois avisos: o de baixo começa onde o de cima (já mais alto) termina,
+    /// mais o `gap`; o botão de fechar fica no topo do card alto.
+    #[test]
+    fn stacked_warnings_follow_each_real_height() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let long = "palavra ".repeat(40);
+        let stack = warning_stack(&["curto", long.trim_end()]);
+        let layout = layout_warnings(&stack, &config, 30.0, 1000.0, &mut measurer);
+        // Mais recente (o longo) no topo.
+        let (top, below) = (&layout.entries[0], &layout.entries[1]);
+        assert!(top.body_lines.len() > below.body_lines.len());
+        assert_eq!(
+            below.rect.y,
+            top.rect.y + top.rect.height + config.appearance.notices.gap as f32
+        );
+        assert!(top.close_button.y < top.rect.y + line_height_of(&config) * 2.0);
     }
 
     /// Rótulo que cabe sai idêntico -- e sem ter passado por `truncate`.
