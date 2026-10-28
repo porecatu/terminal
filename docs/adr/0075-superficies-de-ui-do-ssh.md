@@ -7,6 +7,8 @@
 
 > **Aceito com o aval visual pendente**, como o [ADR-0068](0068-efeito-acrilico-no-fundo-do-terminal.md) e o [ADR-0070](0070-perfis-de-aba.md). O comportamento está decidido; a aparência dos três diálogos (§2 a §4) e do grupo de perfis (§6) passa pelo aval do dono do produto no PR que a implementa. **Nenhuma cor, dimensão ou raio novo** está previsto: cada elemento abaixo cita o token de onde sai.
 
+> **Aval parcial dado (2026-10-27, prompt 16).** O dono aprovou o **diálogo de excluir perfil** (§6), na largura **760** que passou a valer para todo diálogo. O resto — os diálogos de host desconhecido e de segredo (§2 e §3), o grupo "Perfis" e a lista de importar (§6 e §7) — continua com o aval **pendente**.
+
 ## Contexto
 
 O [PRD-020](../prd/prd-020-conexoes-ssh.md) pede quatro superfícies que o app não tem:

@@ -31,6 +31,25 @@ primeiro release.
   `[profiles] detect = false`.
 - **Badge de perfil na aba**, na cor do grupo, só em aba cujo perfil não é o
   padrão; `show_profile_badge` o esconde.
+- **Conexões SSH** ([PRD-020](docs/prd/prd-020-conexoes-ssh.md),
+  [ADR-0071](docs/adr/0071-backend-de-terminal.md) a
+  [ADR-0076](docs/adr/0076-reconexao-automatica.md)): um perfil `type = "ssh"`
+  abre uma aba num servidor pelo cliente SSH embutido (`russh`), com
+  autenticação por agente, chave (com ou sem passphrase) e senha; segredos só
+  no cofre do sistema, gravados depois de o servidor aceitar; chave do servidor
+  conferida no `~/.ssh/known_hosts` do OpenSSH (só acréscimo); dividir um
+  painel reaproveita a conexão; uma conexão que cai é refeita em até 5
+  tentativas, e a aba restaurada só conecta no clique ou `Enter`. Ações
+  `ssh.reconnect` e item **Reconectar** no menu da aba.
+- **Grupo "Perfis" na tela de configurações**: lista, formulário, exclusão com
+  confirmação (e caixa para apagar o segredo do cofre), botões **Esquecer** e
+  **Importar do ~/.ssh/config** (cópia, não vínculo; `Match` recusa o
+  arquivo).
+
+### Alterado
+
+- **Largura dos diálogos** de 380 para 760 (`appearance.dialog.width`): o texto
+  do diálogo de excluir perfil saía cortado.
 
 ## [0.9.5] - 2026-10-22
 

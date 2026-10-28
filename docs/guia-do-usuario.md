@@ -515,7 +515,7 @@ identity_file = "~/.ssh/id_ed25519"      # opcional; "~" é a sua pasta pessoal
 
 - `host` e `user` são obrigatórios e não aceitam espaço nem os caracteres `, | [ ] @ # * ? !` (e `user` também não aceita `@` nem `:`): eles viram uma linha do `known_hosts`. Um endereço IPv6 se escreve sem colchetes.
 - `program`, `args`, `env` e `cwd` **não valem** num perfil SSH e são erro: o perfil é ignorado, com um aviso que diz a linha.
-- `auth` é a ordem em que os métodos são tentados (`agent`, `key`, `password`), parando no primeiro aceito; um método fora da lista não é tentado. Sem `auth`, a ordem é agente, depois a chave **se** houver `identity_file`, depois senha. `auth = ["key"]` sem `identity_file` é erro. **Nesta versão** a autenticação funciona por agente e por chave **sem** passphrase; a senha e a passphrase ainda não estão disponíveis.
+- `auth` é a ordem em que os métodos são tentados (`agent`, `key`, `password`), parando no primeiro aceito; um método fora da lista não é tentado. Sem `auth`, a ordem é agente, depois a chave **se** houver `identity_file`, depois senha. `auth = ["key"]` sem `identity_file` é erro. A autenticação funciona por agente, por chave (com ou sem passphrase) e por senha; veja "Conexões SSH" abaixo.
 - O `badge` é `SSH` se você não escrever outro.
 - **Senha e passphrase não vão no `porecatu.toml`.** Uma chave de perfil com `password`, `passphrase` ou `secret` no nome é ignorada, com um aviso: o valor nem é lido.
 
@@ -638,6 +638,112 @@ nota na primeira linha do painel. Para os detectados o identificador é
 `/etc/shells`; para o WSL, um nome de distribuição de letras, números,
 `.`, `_` e `-`. Um arquivo de sessão copiado ou editado à mão não consegue
 pedir outro executável.
+
+## Conexões SSH
+
+O Porecatu abre uma aba num servidor SSH como abre uma aba de shell: um perfil
+do tipo `ssh`, escolhido no menu do `+` (clique direito) ou por
+`profile.new_tab_N`. A conexão é feita pelo cliente SSH **embutido**, sem o
+programa `ssh` do sistema. Esta seção é o roteiro; os detalhes de cada
+diálogo estão em "Perfis SSH", acima.
+
+### Criar o perfil
+
+- **Pela tela**: configurações (`Ctrl+Shift+O`), grupo **Perfis**, **+ Perfil
+  SSH**. Preencha nome, host, porta, usuário, autenticação e arquivo de chave,
+  e **Salvar**. O `porecatu.toml` muda só nas linhas do perfil: seus
+  comentários e a ordem ficam como estão.
+- **Pelo arquivo**: um `[[profiles.list]]` com `type = "ssh"`, como em "Perfis
+  SSH". Vale para abas novas, sem reiniciar.
+- **Do `~/.ssh/config`**: **Importar do ~/.ssh/config**, no mesmo grupo (veja
+  "Importar" abaixo).
+
+### Como o app se autentica
+
+`auth` lista os métodos na ordem em que são tentados, e para no primeiro que o
+servidor aceita:
+
+1. **`agent`** — o agente do sistema: o do OpenSSH no Windows, o `SSH_AUTH_SOCK`
+   no macOS e no Linux, ou o Pageant. Sem agente rodando, esse método é pulado
+   em silêncio.
+2. **`key`** — o `identity_file`. Chave com passphrase pede a passphrase num
+   campo mascarado.
+3. **`password`** — a senha, também num campo mascarado.
+
+Sem `auth`, a ordem é essa, e a chave só entra se houver `identity_file`.
+Servidor que pede uma senha por keyboard-interactive com **um** campo oculto é
+tratado como senha.
+
+### O cofre e como esquecer
+
+A caixa **Lembrar no cofre do sistema** guarda a senha ou a passphrase no
+Gerenciador de Credenciais (Windows), no Keychain (macOS) ou no Secret Service
+(Linux), com o nome de serviço `porecatu-ssh`. Ela só grava **depois** de o
+servidor aceitar: senha errada nunca fica salva. **Nada** vai para o
+`porecatu.toml`, para a sessão, para uma nota ou para o título da aba.
+
+Para esquecer: no formulário do perfil SSH (grupo **Perfis**), **Senha salva** e
+**Passphrase salva** têm o botão **Esquecer**, que age na hora. Ao **excluir**
+um perfil SSH que nenhum outro usa, o diálogo traz a caixa **Apagar também a
+senha e a passphrase salvas**, já marcada; o cofre só é mexido no **Salvar**, e
+**Descartar** desfaz tudo.
+
+### A chave do servidor e o `known_hosts`
+
+O app confere a chave do servidor no **`~/.ssh/known_hosts` do OpenSSH**: o
+que você já confia no `ssh` vale aqui, e o contrário. Num host novo, um diálogo mostra o tipo e a impressão digital
+`SHA256:…`; **Confiar e conectar** acrescenta uma linha ao fim do arquivo (o app
+**só acrescenta**, nunca edita nem apaga linha). Se a chave **mudou**, a conexão
+é bloqueada, sem botão de continuar, mostrando a impressão digital nova, a
+antiga e a linha divergente. Se foi uma troca legítima do servidor, remova a
+linha **fora do app**:
+
+```
+ssh-keygen -R "[host]:porta"
+```
+
+e conecte de novo. O app nunca oferece substituir a chave.
+
+### Quando a conexão cai
+
+Uma conexão que cai **sozinha** (rede, servidor reiniciado, o computador
+suspendeu) é refeita: até 5 tentativas, com 1, 2, 4, 8 e 16 s de espera, cada
+uma anunciada por uma nota no terminal. Uma rede que some sem fechar a conexão
+é percebida em até cerca de 60 s. **O que se perde**: o processo remoto — o
+shell novo é outro login, e uma nota diz que o anterior não foi retomado
+(`tmux` ou `screen` no servidor guardam o programa); e o que você digitar
+durante a queda, que é descartado. O scrollback fica, e o shell novo começa
+embaixo dele. `exit` no servidor **não** reconecta. Para tentar de novo à mão:
+`ssh.reconnect` ou **Reconectar** no menu da aba.
+
+### Reabrir o app
+
+Abas SSH restauradas voltam **sem conectar**, mesmo com `lazy_restore = false` e
+mesmo sendo a aba ativa: mostram "Enter para conectar a `nome`" e conectam no
+primeiro clique ou `Enter`. Abrir o app nunca pede senha nem abre o diálogo de
+chave do servidor.
+
+### Importar do `~/.ssh/config`
+
+Em **Perfis**, **Importar do ~/.ssh/config** lista os blocos `Host` de destino
+concreto (veja "Editar os perfis pela tela"). É uma **cópia**: mudar o
+`~/.ssh/config` depois não muda os perfis. Um arquivo com `Match` é recusado
+inteiro, com a frase e a linha.
+
+### O que não é suportado
+
+Fica fora, de propósito, e o app avisa em vez de fingir:
+
+- **`ProxyJump` e `ProxyCommand`** (saltar por um bastião);
+- **encaminhamentos de porta** — `LocalForward`, `RemoteForward`,
+  `DynamicForward`;
+- **segundo fator** e keyboard-interactive com mais de um campo ou campo
+  visível;
+- **certificados** (`CertificateFile`).
+
+Um bloco do `~/.ssh/config` com algo disso aparece desabilitado na importação,
+com o motivo. Para esses casos, abra uma aba comum e use o `ssh` do sistema:
+`ssh usuario@host`, que respeita o seu `~/.ssh/config` inteiro.
 
 ## Dividir a aba em painéis
 
