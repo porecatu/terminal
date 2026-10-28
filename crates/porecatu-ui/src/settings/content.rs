@@ -136,6 +136,9 @@ pub(crate) enum ControlView {
         /// Largura do texto, medida uma vez quando o conteúdo é montado: o
         /// campo numérico alinha à direita e não pode medir por quadro.
         text_width: f32,
+        /// Dica cinza de um campo vazio (o badge de um perfil SSH mostra o
+        /// `SSH` que o parser lhe dá); vazia quando o campo não tem dica.
+        placeholder: String,
     },
     /// Escolha de até três valores: botões colados.
     Segmented {
@@ -794,6 +797,31 @@ user = "deploy"
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn an_empty_badge_of_an_ssh_profile_shows_the_default_as_placeholder() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(1);
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+        let ControlView::Field {
+            text, placeholder, ..
+        } = &rows[2].control
+        else {
+            panic!("a text field");
+        };
+        assert_eq!((text.as_str(), placeholder.as_str()), ("", "SSH"));
+        // A local profile's badge has no hint, and neither has the name.
+        draft.select(0);
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+        for row in [&rows[0], &rows[2]] {
+            let ControlView::Field { placeholder, .. } = &row.control else {
+                panic!("a text field");
+            };
+            assert!(placeholder.is_empty());
+        }
     }
 
     #[test]
@@ -1517,6 +1545,7 @@ fn field(
         width,
         right_aligned,
         text_width,
+        placeholder: String::new(),
     }
 }
 
@@ -1893,9 +1922,18 @@ fn push_profile_form(
         } else {
             m.text_field_width
         };
+        let mut control = self::field(text.clone(), width, right_aligned, m, measurer);
+        if field == Field::Badge
+            && text.is_empty()
+            && form.kind == porecatu_config::ProfileKind::Ssh
+            && let ControlView::Field { placeholder, .. } = &mut control
+        {
+            // The form blanks the parser's default badge; say what it stands for.
+            *placeholder = super::profiles_draft::DEFAULT_SSH_BADGE.to_owned();
+        }
         blocks.push(form_row(
             field_label(catalog, field),
-            self::field(text.clone(), width, right_aligned, m, measurer),
+            control,
             text,
             problems
                 .get(&field)
@@ -2438,6 +2476,7 @@ mod tests {
             width,
             right_aligned,
             text_width,
+            ..
         } = by_id("font_size").control
         else {
             panic!("o tamanho da fonte é um campo numérico")

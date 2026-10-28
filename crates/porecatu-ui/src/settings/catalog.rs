@@ -517,7 +517,6 @@ label_modules! {
     acrylic_blur => (acrylic_blur_label, acrylic_blur_description),
     decorations => (decorations_label, decorations_description),
     show_close_button => (show_close_button_label, show_close_button_description),
-    show_index => (show_index_label, show_index_description),
     show_activity_indicator => (show_activity_indicator_label, show_activity_indicator_description),
     show_bell_indicator => (show_bell_indicator_label, show_bell_indicator_description),
     show_new_tab_button => (show_new_tab_button_label, show_new_tab_button_description),
@@ -1011,14 +1010,6 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         close_button
     ),
     option!(
-        show_index,
-        Appearance,
-        Tabs,
-        "appearance.tabs.show_index",
-        TOGGLE,
-        |c| EditValue::Bool(c.appearance.tabs.show_index)
-    ),
-    option!(
         show_activity_indicator,
         Appearance,
         Tabs,
@@ -1148,13 +1139,13 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        // As 55 do RF-16.11 e as duas do topo do grupo "Perfis" (ADR-0075 §6).
-        assert_eq!(OPTIONS.len(), 57);
+        // As 54 do RF-16.11 (o número da aba saiu) e as duas do topo do grupo "Perfis" (ADR-0075 §6).
+        assert_eq!(OPTIONS.len(), 56);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 2, 24, 15, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 2, 24, 14, 4, 2, 1, 2, 0]);
     }
 
     /// RF-19.18: as duas opções do acrílico ficam no grupo Aparência, logo

@@ -55,7 +55,7 @@ args = ["-d", "Ubuntu"]
 
 - **`[profiles]` é uma tabela e `list` é a lista** — TOML não permite `[profiles]` e `[[profiles]]` ao mesmo tempo, e as duas chaves de controle precisam de casa.
 - **`id`** casa `^[a-z0-9][a-z0-9_-]{0,31}$`. É o que a sessão grava (§4) e não é exibido. Prefixo `auto:` é reservado aos detectados (§5) e recusado na config.
-- **`badge`**: de 1 a 4 escalares Unicode, exibido em maiúsculas como escrito. O teto é o que cabe no badge de 9px sem morder o rótulo além do que o índice (`show_index`) já morde.
+- **`badge`**: de 1 a 4 escalares Unicode, exibido em maiúsculas como escrito. O teto é o que cabe no badge de 9px sem morder o rótulo além do que o índice (`show_index`, removido depois) morderia.
 - **`type`**: `"local"` (default, omitido no exemplo) ou `"ssh"`. Perfil `"ssh"` é **recusado com erro de config** até o PRD de conexões SSH ser aprovado e implementado — reservar o valor agora impede que um perfil `local` com `program = "ssh"` seja confundido com ele depois, e recusar impede que alguém escreva uma config que vai mudar de significado.
 - **`name`** é obrigatório e não pode ser vazio depois de aparado; é texto livre, exibido no menu.
 - **`env`** é mesclado **sobre** `[shell.env]`, que continua valendo para todo perfil `local`: é o lugar onde o usuário já põe `EDITOR` e afins. **Não é lugar de segredo**, pela mesma razão que `[shell.env]` não é: o `porecatu.toml` é um arquivo de texto que o usuário versiona. O app não grava `env` em lugar nenhum além do próprio arquivo — nem na sessão (§4) —, e o comentário da chave no arquivo de exemplo diz isso.
@@ -173,7 +173,7 @@ Os detectados ainda não prontos não têm linha de "carregando": a seção apar
 
 Anatomia da §2.5 item 1, que já está na especificação: mono 9px/500, raio 3, `padding: 2px 4px`, `letter-spacing: .4px`, texto na cor do grupo, fundo na cor do grupo com o alfa de `[appearance.groups] badge_tint_strength` (0.14). **Nenhum valor novo.**
 
-- Entra **à esquerda do rótulo**, com o `gap: 8` da aba, e **consome largura do rótulo**, como o prefixo de `show_index` (§2.5). Com o ponto de atividade ou de campainha (§2.17, que já reservou "a posição que o badge ocupará"), a ordem é **badge, ponto, rótulo**, com o mesmo `gap` entre os três: o badge é o dado estável da aba e fica na ponta; o ponto vai e vem, e fica colado no rótulo que ele qualifica. A aba continua com 229px: a largura fixa é o que impede a barra de refluir quando o título muda, e o badge não pode ser exceção.
+- Entra **à esquerda do rótulo**, com o `gap: 8` da aba, e **consome largura do rótulo**, como o prefixo de `show_index` (§2.5, opção removida depois). Com o ponto de atividade ou de campainha (§2.17, que já reservou "a posição que o badge ocupará"), a ordem é **badge, ponto, rótulo**, com o mesmo `gap` entre os três: o badge é o dado estável da aba e fica na ponta; o ponto vai e vem, e fica colado no rótulo que ele qualifica. A aba continua com 229px: a largura fixa é o que impede a barra de refluir quando o título muda, e o badge não pode ser exceção.
 - Aparece **só em painel cujo perfil não é o padrão** (RF-7.13), e a aba deriva do painel focado.
 - `[appearance.tabs] show_profile_badge` deixa de ser reserva de nome e passa a ter consumidor. Classe A.
 - Na árvore de acessibilidade ([ADR-0043](0043-arvore-de-acessibilidade.md)), o nome do perfil entra na descrição do nó da aba, não no nome — o nome continua sendo o título.

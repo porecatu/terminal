@@ -217,6 +217,9 @@ pub fn paint(
     hover_zone_button: Option<tab_bar::ZoneButtonHit>,
     // Botão da zona fixa armado pelo press, ainda sem release.
     pressed_zone_button: Option<tab_bar::ZoneButtonHit>,
+    // "+" armado pelo press, ainda sem release: aparece pressionado enquanto
+    // o cursor segue sobre ele (o release é quem abre a aba).
+    pressed_bar_button: Option<tab_bar::TabBarHit>,
     // ADR-0062 §3: a imagem de fundo da janela está **exibida** (pronta e com
     // opacidade > 0). A barra deixa de pintar o `Quad` opaco de
     // `bar_background` sobre ela; sem imagem, o `Quad` continua e o binário é
@@ -541,13 +544,18 @@ pub fn paint(
             } else {
                 pal.chrome_icon
             };
-            // Sem borda (pedido do dono do produto): só o ícone.
-            out.push(centered_glyph(
-                icon::PLUS,
+            let hovered =
+                matches!(hover, Some(tab_bar::TabBarHit::GroupNewTab(id)) if id == group.id);
+            paint_zone_icon_button(
                 group_button,
+                icon::PLUS,
                 new_tab_icon_size,
+                (hovered, hovered && pressed_bar_button == hover),
                 icon_color,
-            ));
+                style,
+                pal,
+                &mut out,
+            );
         }
     }
 
@@ -610,13 +618,17 @@ pub fn paint(
     // isso, à vista, que o distingue do "+" que cria dentro de um grupo.
     if let Some(rect) = layout.ungrouped_new_tab_button {
         let button = shift(rect, scroll_dx);
-        // Sem borda (pedido do dono do produto): só o ícone.
-        out.push(centered_glyph(
-            icon::PLUS,
+        let hovered = hover == Some(tab_bar::TabBarHit::UngroupedNewTab);
+        paint_zone_icon_button(
             button,
+            icon::PLUS,
             new_tab_icon_size,
+            (hovered, hovered && pressed_bar_button == hover),
             pal.chrome_icon,
-        ));
+            style,
+            pal,
+            &mut out,
+        );
     }
 
     out.push(Primitive::PopClip);
@@ -655,8 +667,8 @@ pub fn paint(
             rect,
             glyph,
             settings_icon_size,
-            hovered,
-            pressed,
+            (hovered, pressed),
+            pal.chrome_icon,
             style,
             pal,
             &mut out,
@@ -867,19 +879,20 @@ fn with_alpha(color: Color, alpha: f64) -> Color {
     Color { a: alpha, ..color }
 }
 
-/// Botão de ícone da zona fixa (engrenagem, sessões -- ADR-0055 §1): o
+/// Botão de ícone (engrenagem, sessões -- ADR-0055 §1 -- e "+" de nova aba): o
 /// ícone centrado num quadrado de cantos arredondados, sem borda. Em
 /// repouso só o ícone aparece; hover e pressed "revelam" o botão com o
 /// fundo dos botões de janela (`window_controls.hover_background` /
-/// `pressed_background`), e o ícone nunca muda de cor. Extraído aqui para
-/// os dois botões nunca divergirem entre si.
+/// `pressed_background`), e o ícone só muda de cor onde o fundo exige (o "+"
+/// sobre a cápsula de um grupo). Extraído aqui para
+/// os botões (sessões, engrenagem, "+") nunca divergirem entre si.
 #[allow(clippy::too_many_arguments)]
 fn paint_zone_icon_button(
     rect: Rect,
     icon: icon::Icon,
     icon_size: f32,
-    hovered: bool,
-    pressed: bool,
+    (hovered, pressed): (bool, bool),
+    icon_color: Color,
     style: &TabBarStyle,
     pal: &ResolvedPalette,
     out: &mut Vec<Primitive>,
@@ -905,7 +918,7 @@ fn paint_zone_icon_button(
         border_color: palette::TRANSPARENT,
         border_width: 0.0,
     }));
-    out.push(centered_glyph(icon, rect, icon_size, pal.chrome_icon));
+    out.push(centered_glyph(icon, rect, icon_size, icon_color));
 }
 
 /// `filter: brightness(mult)` (espec §1.10), resolvido em CPU: multiplica
@@ -1552,8 +1565,8 @@ mod tests {
             rect,
             icon::SETTINGS,
             style.icon_em_size,
-            hovered,
-            pressed,
+            (hovered, pressed),
+            default_palette().chrome_icon,
             &style,
             &default_palette(),
             &mut out,
@@ -1651,6 +1664,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 false,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
@@ -1716,6 +1730,7 @@ mod tests {
                 &mut m,
                 false,
                 false,
+                None,
                 None,
                 None,
                 None,
@@ -1794,6 +1809,7 @@ mod tests {
             &mut m,
             false,
             false,
+            None,
             None,
             None,
             None,

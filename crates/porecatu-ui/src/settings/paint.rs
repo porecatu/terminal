@@ -610,18 +610,32 @@ fn paint_control(
             text: value,
             right_aligned,
             text_width,
+            placeholder,
             ..
         } => {
             if let Some(editing) = editing(EditPart::Field) {
                 paint_editing_field(input, rect, editing, invalid, measurer, out);
             } else {
                 paint_field_box(input, rect, invalid, out);
-                let x = if *right_aligned {
-                    rect.x + rect.width - m.field_padding_x - text_width
+                if value.is_empty() && !placeholder.is_empty() {
+                    out.push(text(
+                        (
+                            rect.x + m.field_padding_x,
+                            centered_y(rect, m.field_font_size),
+                        ),
+                        placeholder,
+                        BODY_FONT,
+                        m.field_font_size,
+                        input.pal.editor_section_text,
+                    ));
                 } else {
-                    rect.x + m.field_padding_x
-                };
-                paint_field_text(input, value, x, rect, out);
+                    let x = if *right_aligned {
+                        rect.x + rect.width - m.field_padding_x - text_width
+                    } else {
+                        rect.x + m.field_padding_x
+                    };
+                    paint_field_text(input, value, x, rect, out);
+                }
             }
         }
         ControlView::Segmented {

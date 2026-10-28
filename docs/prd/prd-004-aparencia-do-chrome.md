@@ -69,7 +69,7 @@ Todo usuário, com defaults que funcionam sem configuração alguma. A profundid
 
 > *Emendado em 2026-10-21* ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)): a fonte do título da aba **não** é mais independente — família e tamanho são os de `[terminal.font]`, e as chaves `[appearance.tabs] font_family`/`font_size` saíram. O zoom de sessão continua só na grade.
 
-**RF-4.11** — Configuráveis, cada um ligável e desligável: botão de fechar, número de índice da aba, indicador de atividade, indicador de campainha, botão de nova aba na barra.
+**RF-4.11** — Configuráveis, cada um ligável e desligável: botão de fechar, indicador de atividade, indicador de campainha, botão de nova aba na barra. *(Emendado: o número de índice da aba foi removido — a opção nunca teve efeito.)*
 
 **RF-4.12** — Configurável: se o botão de fechar aparece sempre ou apenas no hover.
 

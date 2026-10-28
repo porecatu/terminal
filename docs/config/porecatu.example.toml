@@ -392,7 +392,6 @@ min_rows = 5
 [appearance.tabs]
 # "always" (sempre), "hover" (ao passar o mouse) ou "never" (nunca).
 show_close_button = "always"
-show_index = false
 show_activity_indicator = true
 show_bell_indicator = true
 show_new_tab_button = true
@@ -478,7 +477,7 @@ severity_bar_width = 2
 
 [appearance.dialog]
 corner_radius = 10
-width = 760
+width = 360
 padding = 16
 gap = 14
 title_font_size = 13.0

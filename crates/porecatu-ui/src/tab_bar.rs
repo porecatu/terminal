@@ -892,11 +892,12 @@ fn layout_inset(
             if pill.is_some() || !tabs.is_empty() {
                 inner_x += style.tab_gap;
             }
+            // Mesmo botão quadrado dos da zona fixa (sessões, configurações).
             let rect = Rect {
                 x: inner_x,
-                y: tab_top + (tab_h - style.close_button_size) / 2.0,
-                width: style.icon_button_width(style.close_button_size),
-                height: style.close_button_size,
+                y: tab_top + (tab_h - style.right_zone_button_size) / 2.0,
+                width: style.right_zone_button_size,
+                height: style.right_zone_button_size,
             };
             inner_x += rect.width;
             Some(rect)
@@ -905,6 +906,11 @@ fn layout_inset(
         };
 
         if !loose {
+            // Um pouco mais de margem à direita do "+" que o resto do
+            // wrapper: o quadrado hover encostava na borda da cápsula.
+            if new_tab_button.is_some() {
+                inner_x += style.icon_button_padding_x / 2.0;
+            }
             inner_x += style.wrapper_padding;
         }
         let wrapper_rect = Rect {
@@ -939,9 +945,10 @@ fn layout_inset(
         let rect = Rect {
             x,
             y: track_top
-                + (style.tab_height + style.wrapper_padding * 2.0 - style.close_button_size) / 2.0,
-            width: style.icon_button_width(style.close_button_size),
-            height: style.close_button_size,
+                + (style.tab_height + style.wrapper_padding * 2.0 - style.right_zone_button_size)
+                    / 2.0,
+            width: style.right_zone_button_size,
+            height: style.right_zone_button_size,
         };
         x += rect.width;
         Some(rect)
@@ -1972,13 +1979,23 @@ mod tests {
 
         for (nome, rect) in [
             ("fechar", group.tabs[0].close_button),
-            ("+ do grupo", group.new_tab_button.unwrap()),
-            ("+ de aba solta", layout.ungrouped_new_tab_button.unwrap()),
             ("caret", group.pill.as_ref().unwrap().caret_rect),
         ] {
             assert!(
                 rect.width > rect.height,
                 "{nome} deveria ter respiro horizontal: {rect:?}"
+            );
+        }
+
+        // O "+" é o quadrado dos botões da zona fixa, sem respiro lateral, no
+        // grupo e fora dele.
+        for rect in [
+            group.new_tab_button.unwrap(),
+            layout.ungrouped_new_tab_button.unwrap(),
+        ] {
+            assert_eq!(
+                (rect.width, rect.height),
+                (style.right_zone_button_size, style.right_zone_button_size)
             );
         }
         assert_eq!(

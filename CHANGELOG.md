@@ -18,6 +18,17 @@ primeiro release.
 
 ### Alterado
 
+- **Largura dos diálogos** de 760 para 360 (`appearance.dialog.width`); a
+  largura é piso, o diálogo cresce se botões ou linhas de dado exigirem.
+- Removida a opção `appearance.tabs.show_index` (número da aba) da config e
+  da tela de configurações: nunca teve efeito no render. A chave, se estiver
+  num `porecatu.toml` antigo, gera o aviso comum de chave desconhecida.
+- O botão de nova aba (`+`) vira um botão quadrado de 30×30, sem respiro
+  lateral, com cantos arredondados e hover/pressed, como os de sessões e
+  configurações; a aba nova abre no release do mouse, não no press, e o botão de fechar da
+  aba também.
+- O campo "Badge" de um perfil SSH vazio mostra o default `SSH` como
+  placeholder.
 - Os avisos do app (convite de integração de shell, falha, queda e reconexão
   SSH, código de saída, diretório ou perfil que sumiu, `.porecatu`) deixam de
   ser impressos no terminal e viram um diálogo modal centralizado na janela

@@ -40,7 +40,6 @@ pub struct Tabs {
     /// Tamanho de EM dos ícones do chrome, não do desenho. Ver ADR-0024.
     pub icon_em_size: i32,
     pub show_close_button: CloseButtonVisibility,
-    pub show_index: bool,
     pub show_activity_indicator: bool,
     pub show_bell_indicator: bool,
     pub show_new_tab_button: bool,
@@ -68,7 +67,6 @@ impl Default for Tabs {
             icon_button_padding_x: 4,
             icon_em_size: 20,
             show_close_button: CloseButtonVisibility::Always,
-            show_index: false,
             show_activity_indicator: true,
             show_bell_indicator: true,
             show_new_tab_button: true,

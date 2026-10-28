@@ -441,7 +441,7 @@ pub fn layout_dialog(
     measurer: &mut TextMeasurer,
 ) -> DialogLayout {
     let cfg = &config.appearance.dialog;
-    // Nunca mais larga que a janela (a largura configurada é 760).
+    // Nunca mais larga que a janela (a largura configurada é 360).
     let width = (cfg.width as f32).min(window_width - cfg.padding as f32 * 2.0);
     let padding = cfg.padding as f32;
     let title_size = cfg.title_font_size as f32;
@@ -3127,7 +3127,7 @@ mod tests {
     }
 
     #[test]
-    fn the_host_key_data_lines_fit_the_configured_dialog_in_every_language() {
+    fn the_host_key_data_lines_fit_the_grown_dialog_in_every_language() {
         let config = porecatu_config::Config::default();
         let cfg = &config.appearance.dialog;
         let mut measurer = TextMeasurer::new();
@@ -3137,8 +3137,9 @@ mod tests {
             let dialog = host_key_dialog(&catalog, &["ssh-ed25519"], 12);
             let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
 
-            // The dialog did not have to grow past the configured width...
-            assert_eq!(layout.modal_rect.width, cfg.width as f32, "{locale}");
+            // The configured width is a floor: the 50-character fingerprint makes
+            // the dialog grow past it (data lines are never cut)...
+            assert!(layout.modal_rect.width >= cfg.width as f32, "{locale}");
             // ...and no data line is wider than the content box (so none is cut).
             let budget = layout.modal_rect.width - cfg.padding as f32 * 2.0;
             for line in &dialog.lines {
@@ -3351,21 +3352,24 @@ mod tests {
     }
 
     #[test]
-    fn every_dialog_has_the_configured_width_and_never_more_than_the_window() {
+    fn the_configured_width_is_a_floor_and_the_dialog_stays_inside_the_window() {
         let config = porecatu_config::Config::default();
         let mut measurer = TextMeasurer::new();
         let delete =
             ConfirmDialog::delete_profile(&crate::messages::test_support::pt_br(), "prod", 0, true);
-        for dialog in [delete, two_button_dialog()] {
-            let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
-            assert_eq!(layout.modal_rect.width, 760.0);
-            let narrow = layout_dialog(500.0, 700.0, &dialog, &config, &mut measurer);
-            assert!(
-                narrow.modal_rect.width <= 500.0,
-                "{}",
-                narrow.modal_rect.width
-            );
-        }
+        // The delete dialog's checkbox row may need more than the floor.
+        let layout = layout_dialog(1000.0, 700.0, &delete, &config, &mut measurer);
+        assert!(layout.modal_rect.width >= 360.0);
+        // A dialog whose content fits has exactly the configured width, and
+        // never more than the window.
+        let layout = layout_dialog(1000.0, 700.0, &two_button_dialog(), &config, &mut measurer);
+        assert_eq!(layout.modal_rect.width, 360.0);
+        let narrow = layout_dialog(300.0, 700.0, &two_button_dialog(), &config, &mut measurer);
+        assert!(
+            narrow.modal_rect.width <= 300.0,
+            "{}",
+            narrow.modal_rect.width
+        );
     }
 
     #[test]
@@ -3384,7 +3388,8 @@ mod tests {
         let field = layout.field_rect.expect("field");
         let row = layout.remember_rect.expect("box row");
         let toggle = layout.toggle_rect.expect("toggle");
-        assert_eq!(modal.width, 760.0);
+        // The floor, or wider when the "remember" row needs it.
+        assert!(modal.width >= config.appearance.dialog.width as f32);
         assert_eq!(
             field.height,
             config.appearance.group_editor.input_height as f32

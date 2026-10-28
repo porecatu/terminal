@@ -678,8 +678,6 @@ registry! {
             decorations_description(),
             show_close_button_label(),
             show_close_button_description(),
-            show_index_label(),
-            show_index_description(),
             show_activity_indicator_label(),
             show_activity_indicator_description(),
             show_bell_indicator_label(),

@@ -1186,14 +1186,12 @@ enum GroupEditorOutcome {
 /// O que `WindowState::handle_bar_click` não pode resolver sozinho: o
 /// botão "+" de um grupo (pedido do usuário, fora da espec.) pede
 /// `open_tab`, que precisa de `cell_metrics`/`proxy`/`startup_directory`
-/// -- só `App` tem. `WindowEmptied`: mesmo caso de `ActionOutcome`, pelo
-/// botão de fechar da aba em vez do atalho de teclado.
+/// -- só `App` tem.
 enum NewTabRequest {
     None,
     InGroup(GroupId),
     /// "+" ao fim da trilha, fora de qualquer wrapper.
     Ungrouped,
-    WindowEmptied,
     /// Secondary click on a `+`: the profile menu hangs from `anchor` (window
     /// coordinates). `App` builds the rows, which need the config and keymap.
     OpenProfileMenu {
@@ -1253,6 +1251,10 @@ struct WindowState {
     pressed_window_button: Option<tab_bar::WindowButtonHit>,
     /// Botão de sessões/configurações armado pelo press; dispara no release.
     pressed_zone_button: Option<tab_bar::ZoneButtonHit>,
+    // "+" (de grupo ou de aba solta) ou botão de fechar de aba armado pelo
+    // press: a ação só dispara no release sobre o mesmo botão, como nos
+    // botões de sessões/configurações.
+    pressed_bar_button: Option<tab_bar::TabBarHit>,
     click_tracker: ClickTracker,
     /// Modo de captura do ADR-0008 passo 1 -- rename inline (RF-1.8).
     rename: RenameState,
@@ -2421,6 +2423,7 @@ impl WindowState {
             mouse_button_down: None,
             pressed_window_button: None,
             pressed_zone_button: None,
+            pressed_bar_button: None,
             click_tracker: ClickTracker::default(),
             rename: RenameState::Idle,
             scroll_offset: 0.0,
@@ -5106,6 +5109,36 @@ impl WindowState {
         tab_bar::zone_button_release(self.pressed_zone_button.take(), released_over)
     }
 
+    /// O "+" ou o botão de fechar sob o ponto, se houver: o que o release
+    /// compara com o botão armado pelo press.
+    fn bar_button_hit_at(
+        &mut self,
+        logical_point: (f32, f32),
+        gpu: &mut GpuContext,
+        style: &TabBarStyle,
+    ) -> Option<tab_bar::TabBarHit> {
+        if !self.in_bar(self.cursor_position.1, style) {
+            return None;
+        }
+        let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
+        let layout = tab_bar::fit_width(
+            &self.workspace,
+            style,
+            trilha_width,
+            gpu.text_measurer(),
+            is_macos(),
+        );
+        let content_point = (logical_point.0 + self.scroll_offset, logical_point.1);
+        tab_bar::hit_test(&layout, content_point).filter(|hit| {
+            matches!(
+                hit,
+                tab_bar::TabBarHit::GroupNewTab(_)
+                    | tab_bar::TabBarHit::UngroupedNewTab
+                    | tab_bar::TabBarHit::CloseButton(_)
+            )
+        })
+    }
+
     /// Resolve o que um clique na área da barra de abas atinge e dispara a
     /// ação correspondente. Indicadores de overflow (espec §2.18) primeiro
     /// -- ficam em coordenadas de tela, fora do recorte que rola com a
@@ -5133,8 +5166,6 @@ impl WindowState {
         gpu: &mut GpuContext,
         right_click: bool,
         style: &TabBarStyle,
-        confirm_close_with_process: bool,
-        catalog: &Catalog,
     ) -> NewTabRequest {
         let bar_width = self.logical_width;
         let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos());
@@ -5342,17 +5373,11 @@ impl WindowState {
                 }
                 NewTabRequest::None
             }
+            // O press só arma o botão de fechar; quem fecha é o release sobre
+            // o mesmo botão (ramo `!pressed` de `dispatch_mouse_input`).
             TabBarHit::CloseButton(id) => {
-                match self.close_tab_via_button(id, confirm_close_with_process, catalog) {
-                    Some(TabCloseOutcome::Dialog(dialog)) => {
-                        self.dialog = Some(dialog);
-                        NewTabRequest::None
-                    }
-                    Some(TabCloseOutcome::Closed { window_empty: true }) => {
-                        NewTabRequest::WindowEmptied
-                    }
-                    _ => NewTabRequest::None,
-                }
+                self.pressed_bar_button = Some(TabBarHit::CloseButton(id));
+                NewTabRequest::None
             }
             TabBarHit::Pill(id) => {
                 // Espec §2.19.1/RF-2.19: arma o possível arraste do
@@ -10201,6 +10226,7 @@ impl ApplicationHandler<Wakeup> for App {
                     state.mouse_button_down = None;
                     state.pressed_window_button = None;
                     state.pressed_zone_button = None;
+                    state.pressed_bar_button = None;
                     state.window.request_redraw();
                 }
             }
@@ -11690,6 +11716,66 @@ impl App {
                 }
                 return;
             }
+            if button == MouseButton::Left && state.pressed_bar_button.is_some() {
+                let armed = state.pressed_bar_button.take();
+                let logical_point = (
+                    state.cursor_position.0 as f32 / state.scale,
+                    state.cursor_position.1 as f32 / state.scale,
+                );
+                let released_on = match &mut self.gpu {
+                    Some(gpu) => state.bar_button_hit_at(logical_point, gpu, &self.style),
+                    None => None,
+                };
+                if released_on.is_some() && released_on == armed {
+                    match armed {
+                        Some(tab_bar::TabBarHit::UngroupedNewTab) => {
+                            state.action_new_tab_ungrouped(
+                                self.cell_metrics,
+                                &self.proxy,
+                                &self.startup_directory,
+                                Instant::now(),
+                                &self.style,
+                                &self.term_params,
+                                &self.config,
+                                &self.config.project_file,
+                            );
+                        }
+                        Some(tab_bar::TabBarHit::GroupNewTab(group)) => {
+                            state.action_new_tab_in_group(
+                                group,
+                                self.cell_metrics,
+                                &self.proxy,
+                                &self.startup_directory,
+                                Instant::now(),
+                                &self.style,
+                                &self.term_params,
+                                &self.config,
+                                &self.config.project_file,
+                            );
+                        }
+                        Some(tab_bar::TabBarHit::CloseButton(id)) => {
+                            match state.close_tab_via_button(
+                                id,
+                                self.config.general.confirm_close_with_process,
+                                &self.catalog,
+                            ) {
+                                Some(TabCloseOutcome::Dialog(dialog)) => {
+                                    state.dialog = Some(dialog);
+                                }
+                                // `state` não vale mais depois disto.
+                                Some(TabCloseOutcome::Closed { window_empty: true }) => {
+                                    self.close_window_unconditionally(window_id, event_loop);
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                state.window.request_redraw();
+                return;
+            }
             if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
                 if let Some(gpu) = &mut self.gpu {
                     state.finish_drag(gpu, &self.style);
@@ -12197,8 +12283,6 @@ impl App {
                     gpu,
                     true,
                     &self.style,
-                    self.config.general.confirm_close_with_process,
-                    &self.catalog,
                 )
             {
                 let rows = profile_menu::profile_menu_rows(
@@ -12223,41 +12307,16 @@ impl App {
                 gpu,
                 false,
                 &self.style,
-                self.config.general.confirm_close_with_process,
-                &self.catalog,
             ) {
+                // O press só arma o "+"; quem abre a aba é o release sobre o
+                // mesmo botão (mais abaixo, no ramo `!pressed`).
                 NewTabRequest::Ungrouped => {
-                    state.action_new_tab_ungrouped(
-                        self.cell_metrics,
-                        &self.proxy,
-                        &self.startup_directory,
-                        Instant::now(),
-                        &self.style,
-                        &self.term_params,
-                        &self.config,
-                        &self.config.project_file,
-                    );
+                    state.pressed_bar_button = Some(tab_bar::TabBarHit::UngroupedNewTab);
                     state.window.request_redraw();
                 }
                 NewTabRequest::InGroup(group) => {
-                    state.action_new_tab_in_group(
-                        group,
-                        self.cell_metrics,
-                        &self.proxy,
-                        &self.startup_directory,
-                        Instant::now(),
-                        &self.style,
-                        &self.term_params,
-                        &self.config,
-                        &self.config.project_file,
-                    );
+                    state.pressed_bar_button = Some(tab_bar::TabBarHit::GroupNewTab(group));
                     state.window.request_redraw();
-                }
-                // Pedido do usuário: fechar a última aba (sem grupo, sem
-                // solta) fecha a janela sozinha -- `state` não é mais
-                // válido depois disto, então nada de `request_redraw`.
-                NewTabRequest::WindowEmptied => {
-                    self.close_window_unconditionally(window_id, event_loop);
                 }
                 // Only the secondary click asks for the profile menu.
                 NewTabRequest::None | NewTabRequest::OpenProfileMenu { .. } => {
@@ -12620,6 +12679,7 @@ impl App {
             bar_hover,
             hover_zone_button,
             state.pressed_zone_button,
+            state.pressed_bar_button,
             window_image.is_some(),
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);

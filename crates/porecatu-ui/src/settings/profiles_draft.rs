@@ -29,7 +29,7 @@ use porecatu_config::{
 use porecatu_term::Destination;
 
 /// O badge que o parser dá a um perfil SSH sem `badge` (ADR-0072 §6).
-const DEFAULT_SSH_BADGE: &str = "SSH";
+pub(crate) const DEFAULT_SSH_BADGE: &str = "SSH";
 
 /// Onde o array de perfis mora no arquivo.
 pub(crate) const LIST: &str = "profiles.list";
