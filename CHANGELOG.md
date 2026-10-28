@@ -16,6 +16,47 @@ primeiro release.
 
 ## [Não publicado]
 
+## [0.9.6] - 2026-10-27
+
+O app ganha **perfis de aba** e **conexões SSH**: um servidor vira um perfil,
+aberto numa aba pelo cliente SSH embutido, com cofre do sistema para os
+segredos, reconexão automática e importação do `~/.ssh/config`.
+
+### Adicionado
+
+- **Perfis de aba** ([PRD-007](docs/prd/prd-007-perfis-de-aba.md),
+  [ADR-0070](docs/adr/0070-perfis-de-aba.md)): `[profiles]` e
+  `[[profiles.list]]` declaram formas de abrir uma aba (programa, argumentos,
+  `env`, `cwd`, badge); o `[shell]` segue como o perfil padrão implícito. O
+  clique direito num `+` abre o **menu de perfis** (o clique esquerdo não
+  mudou), e as ações `profile.open_menu` e `profile.new_tab_1` … `_9`,
+  sem tecla de fábrica, o espelham no teclado. O painel grava o perfil na
+  sessão, e a restauração, a divisão e a aba nova seguem as regras do ADR.
+- **Shells detectados** no menu de perfis (`pwsh`, `powershell`, `cmd`, WSL,
+  `/etc/shells`), sob demanda e em thread, desligáveis com
+  `[profiles] detect = false`.
+- **Badge de perfil na aba**, na cor do grupo, só em aba cujo perfil não é o
+  padrão; `show_profile_badge` o esconde.
+- **Conexões SSH** ([PRD-020](docs/prd/prd-020-conexoes-ssh.md),
+  [ADR-0071](docs/adr/0071-backend-de-terminal.md) a
+  [ADR-0076](docs/adr/0076-reconexao-automatica.md)): um perfil `type = "ssh"`
+  abre uma aba num servidor pelo cliente SSH embutido (`russh`), com
+  autenticação por agente, chave (com ou sem passphrase) e senha; segredos só
+  no cofre do sistema, gravados depois de o servidor aceitar; chave do servidor
+  conferida no `~/.ssh/known_hosts` do OpenSSH (só acréscimo); dividir um
+  painel reaproveita a conexão; uma conexão que cai é refeita em até 5
+  tentativas, e a aba restaurada só conecta no clique ou `Enter`. Ações
+  `ssh.reconnect` e item **Reconectar** no menu da aba.
+- **Grupo "Perfis" na tela de configurações**: lista, formulário, exclusão com
+  confirmação (e caixa para apagar o segredo do cofre), botões **Esquecer** e
+  **Importar do ~/.ssh/config** (cópia, não vínculo; `Match` recusa o
+  arquivo).
+
+### Alterado
+
+- **Largura dos diálogos** de 380 para 760 (`appearance.dialog.width`): o texto
+  do diálogo de excluir perfil saía cortado.
+
 ## [0.9.5] - 2026-10-22
 
 O app ganha o **efeito acrílico** no fundo do terminal e **temas em arquivos

@@ -8,6 +8,9 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::backend::EndReason;
+use crate::prompt::{Prompt, TermNotice};
+
 /// Evento traduzido de `alacritty_terminal::event::Event` -- nenhum tipo do
 /// motor atravessa esta fronteira (mesma disciplina do snapshot, ADR-0002).
 #[derive(Debug, Clone)]
@@ -27,15 +30,29 @@ pub enum TermEvent {
     ClipboardRead(ClipboardResponder),
     /// OSC 4 / 10 / 11, consulta de cor (frente, fundo, paleta indexada).
     ColorQuery(ColorQueryResponder),
-    /// Fim do processo (RF-1.3). Não vem do motor VT -- vem de
-    /// `porecatu-pty::PtyHandle::try_wait`, detectado por `Terminal`
-    /// (Etapa 3) e injetado neste mesmo canal.
-    Exit { success: bool, code: u32 },
+    /// Fim da sessão (RF-1.3), com a razão (ADR-0071 §3). Não vem do motor
+    /// VT -- vem de `Backend::try_wait`, detectado por `Terminal` e injetado
+    /// neste mesmo canal.
+    Exit(EndReason),
+    /// O backend pergunta algo à UI e espera (ADR-0071 §5). A resposta volta
+    /// por `Terminal::answer`, com o `id` da pergunta.
+    Prompt(Prompt),
+    /// O backend tem algo a dizer ao usuário que não pede resposta (canal 1
+    /// do ADR-0014): hoje, o segredo que não coube no cofre.
+    Notice(TermNotice),
+    /// O backend remoto abriu o shell (ADR-0076 §3): é o sinal de que uma
+    /// tentativa de reconexão deu certo. Uma vez por sessão de backend; nunca
+    /// vem de um backend local.
+    Connected,
     /// OSC 7 (ADR-0017 item 1). Captura própria de `porecatu-term`, fora do
     /// motor -- ver `crate::osc7`. Herdado por `tab.new`/`window.new`;
     /// `None` continua sendo o fallback de `startup_directory` até o
     /// primeiro OSC 7 chegar.
-    Cwd(PathBuf),
+    ///
+    /// `host` é o que o shell pôs na URI. Num painel local não importa; num
+    /// painel SSH o caminho é do servidor e só vale com o host do perfil
+    /// (RF-20.21).
+    Cwd { path: PathBuf, host: Option<String> },
     /// Marcador de dispensa do convite de integração de shell digitado
     /// pelo usuário (ADR-0039 §4). Captura própria, fora do motor -- ver
     /// `crate::dismiss`.

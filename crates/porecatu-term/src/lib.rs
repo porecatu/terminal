@@ -9,6 +9,7 @@
 //!   struct de parâmetros próprio, montado por `porecatu-ui`.
 //! - Cor de célula não é resolvida aqui -- ver [`TermColor`].
 
+mod backend;
 mod color;
 mod dismiss;
 mod engine;
@@ -17,20 +18,35 @@ mod keys;
 mod mouse;
 mod osc7;
 mod params;
+mod prompt;
 mod scroll;
 mod search;
 mod selection;
 mod snapshot;
+mod ssh_backend;
 mod terminal;
 
+pub use backend::{
+    BackendSpec, EndReason, FailCause, HostKeyEntry, HostKeyPresented, KnownHostsCause, Liveness,
+    LostCause,
+};
 pub use color::TermColor;
 pub use dismiss::DISMISS_MARKER as SHELL_INTEGRATION_DISMISS_MARKER;
 pub use engine::{TermEngine, TermSize};
 pub use event::{ClipboardResponder, ColorQueryResponder, TermEvent};
 pub use keys::{Modifiers, TermKey, encode_ctrl_char, encode_key, encode_text, wrap_paste};
 pub use mouse::{MouseAction, MouseButton, encode_mouse_report};
-pub use osc7::parse_file_uri;
+pub use osc7::{Osc7Cwd, parse_file_uri, parse_file_uri_with_host};
 pub use params::TermParams;
+pub use prompt::{
+    Answer, Prompt, PromptId, PromptKind, PromptSink, Secret, SecretLabel, TermNotice,
+};
+// ADR-0073 §4: o cofre só é alcançável por aqui; a UI pergunta se existe e pede
+// para esquecer, e nunca lê um segredo.
+pub use porecatu_ssh::{
+    Destination, VaultError, connection_is_alive, forget_passphrase, forget_password,
+    vault_available,
+};
 pub use scroll::TermScroll;
 pub use search::{
     DEFAULT_SEARCH_LINES_PER_STEP, GridPos, InvalidPattern, Occurrence, SearchJob, SearchMode,
@@ -55,3 +71,6 @@ pub use terminal::{ShutdownWait, Terminal, TerminalSpawnError};
 pub use porecatu_pty::{
     ProcessGroup, PtyError, PtyErrorKind, PtySize, SpawnConfig, resolve_default_shell, search_path,
 };
+// Mesma regra para o SSH (ADR-0071 §2): `porecatu-ui` não depende de
+// `porecatu-ssh`, e nenhum tipo do `russh` atravessa a fronteira.
+pub use porecatu_ssh::{AuthMethod, Connection, ConnectionId, SshSpawn};

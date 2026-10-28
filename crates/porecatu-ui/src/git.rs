@@ -732,7 +732,7 @@ fn pull_args(repo: &Path) -> Vec<OsString> {
 }
 
 #[cfg(windows)]
-fn suppress_console_window(command: &mut Command) {
+pub(crate) fn suppress_console_window(command: &mut Command) {
     // ADR-0052 §6: a flag é API **segura** da extensão de `Command` para
     // Windows -- verificado ao escrever aquela decisão, com um binário
     // mínimo sob `#![deny(unsafe_code)]`. `unsafe_code = "deny"` do
@@ -743,7 +743,7 @@ fn suppress_console_window(command: &mut Command) {
 }
 
 #[cfg(not(windows))]
-fn suppress_console_window(_command: &mut Command) {}
+pub(crate) fn suppress_console_window(_command: &mut Command) {}
 
 enum GitProcessResult {
     Exited {

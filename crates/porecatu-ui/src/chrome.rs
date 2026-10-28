@@ -459,11 +459,16 @@ pub fn paint(
                 border_width,
             }));
 
-            let dot_reserve = if tab.indicator.is_some() {
-                style.indicator_dot_size + style.internal_gap
-            } else {
-                0.0
-            };
+            // Order: badge, indicator dot, label (ADR-0070 §7).
+            push_tab_badge(
+                &mut out,
+                tab,
+                tab_rect,
+                style,
+                group_color,
+                fade_in,
+                measurer,
+            );
             if let Some(indicator) = tab.indicator {
                 let color = match indicator {
                     Indicator::Activity => pal.activity_indicator,
@@ -471,7 +476,7 @@ pub fn paint(
                 };
                 out.push(Primitive::RoundedQuad(RoundedQuad {
                     rect: Rect {
-                        x: tab_rect.x + style.padding_left,
+                        x: tab_rect.x + tab.dot_offset(style),
                         y: tab_rect.y + (tab_rect.height - style.indicator_dot_size) / 2.0,
                         width: style.indicator_dot_size,
                         height: style.indicator_dot_size,
@@ -490,7 +495,7 @@ pub fn paint(
             } else {
                 let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
                 out.push(Primitive::Text(TextRun {
-                    origin: (tab_rect.x + style.padding_left + dot_reserve, label_y),
+                    origin: (tab_rect.x + tab.label_offset(style), label_y),
                     text: tab.label.clone(),
                     font: LABEL_FONT,
                     size_px: style.font_size,
@@ -579,14 +584,19 @@ pub fn paint(
             border_color: scale_alpha(border, fade_out),
             border_width: 1.0,
         }));
-        let dot_reserve = if old_tab.indicator.is_some() {
-            style.indicator_dot_size + style.internal_gap
-        } else {
-            0.0
-        };
+        let group_color = tab_group_color(workspace, pal, old_tab.id);
+        push_tab_badge(
+            &mut out,
+            old_tab,
+            tab_rect,
+            style,
+            group_color,
+            fade_out,
+            measurer,
+        );
         let label_y = tab_rect.y + (tab_rect.height - style.font_size) / 2.0;
         out.push(Primitive::Text(TextRun {
-            origin: (tab_rect.x + style.padding_left + dot_reserve, label_y),
+            origin: (tab_rect.x + old_tab.label_offset(style), label_y),
             text: old_tab.label.clone(),
             font: LABEL_FONT,
             size_px: style.font_size,
@@ -728,14 +738,11 @@ pub fn paint(
             border_color: border,
             border_width,
         }));
-        let dot_reserve = if tab.indicator.is_some() {
-            style.indicator_dot_size + style.internal_gap
-        } else {
-            0.0
-        };
+        let group_color = tab_group_color(workspace, pal, tab.id);
+        push_tab_badge(&mut out, tab, ghost_rect, style, group_color, 1.0, measurer);
         let label_y = ghost_rect.y + (ghost_rect.height - style.font_size) / 2.0;
         out.push(Primitive::Text(TextRun {
-            origin: (ghost_rect.x + style.padding_left + dot_reserve, label_y),
+            origin: (ghost_rect.x + tab.label_offset(style), label_y),
             text: tab.label.clone(),
             font: LABEL_FONT,
             size_px: style.font_size,
@@ -975,6 +982,154 @@ fn label_color(text_color: Color, not_started: bool) -> Color {
         with_alpha(text_color, NOT_STARTED_LABEL_ALPHA)
     } else {
         text_color
+    }
+}
+
+// Profile badge (spec §2.5 item 1): mono 9px/500, radius 3, `padding: 2px 4px`,
+// `letter-spacing: .4px`. Text in the group color, background the same color at
+// `[appearance.groups] badge_tint_strength`. Spec values with no TOML key.
+const BADGE_FONT: FontFace = FontFace::Mono { bold: true };
+const BADGE_FONT_SIZE: f32 = 9.0;
+const BADGE_RADIUS: f32 = 3.0;
+const BADGE_PADDING_X: f32 = 4.0;
+const BADGE_PADDING_Y: f32 = 2.0;
+const BADGE_LETTER_SPACING: f32 = 0.4;
+
+/// Width and height of the badge for `text`. `TextRun` has no letter spacing,
+/// so [`push_badge`] places one run per character; the mono advance is the
+/// same for every character, so the width is `n * (advance + spacing)`.
+pub(crate) fn badge_size(text: &str, measurer: &mut porecatu_render::TextMeasurer) -> (f32, f32) {
+    let advance = measurer.measure_width("M", BADGE_FONT, BADGE_FONT_SIZE);
+    let chars = text.chars().count() as f32;
+    (
+        chars * (advance + BADGE_LETTER_SPACING) + BADGE_PADDING_X * 2.0,
+        BADGE_FONT_SIZE * 1.2 + BADGE_PADDING_Y * 2.0,
+    )
+}
+
+/// Paints the badge with its top-left corner at `origin` and returns its
+/// rectangle. Reused by the profile menu now and by the tab (prompt 06).
+pub(crate) fn push_badge(
+    out: &mut Vec<Primitive>,
+    origin: (f32, f32),
+    text: &str,
+    color: Color,
+    tint_strength: f64,
+    measurer: &mut porecatu_render::TextMeasurer,
+) -> Rect {
+    let (width, height) = badge_size(text, measurer);
+    let rect = Rect {
+        x: origin.0,
+        y: origin.1,
+        width,
+        height,
+    };
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: BADGE_RADIUS,
+        color: with_alpha(color, tint_strength),
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+    let advance = measurer.measure_width("M", BADGE_FONT, BADGE_FONT_SIZE);
+    let mut x = rect.x + BADGE_PADDING_X;
+    for ch in text.chars() {
+        out.push(Primitive::Text(TextRun {
+            origin: (x, rect.y + BADGE_PADDING_Y),
+            text: ch.to_string(),
+            font: BADGE_FONT,
+            size_px: BADGE_FONT_SIZE,
+            color,
+        }));
+        x += advance + BADGE_LETTER_SPACING;
+    }
+    rect
+}
+
+/// Color of the group a tab belongs to (the ungrouped color for an implicit
+/// run), the one its badge takes.
+fn tab_group_color(workspace: &Workspace, pal: &ResolvedPalette, tab: TabId) -> Color {
+    workspace
+        .group_of_tab(tab)
+        .and_then(|id| workspace.group(id))
+        .and_then(|g| g.color())
+        .map(|c| pal.group_color(c))
+        .unwrap_or_else(|| pal.ungrouped_group_color())
+}
+
+/// Paints the tab's profile badge, vertically centered at the left padding.
+/// Nothing when the tab has none. `fade` is the tab's own opacity (the
+/// reflow and the close animation).
+fn push_tab_badge(
+    out: &mut Vec<Primitive>,
+    tab: &tab_bar::TabRect,
+    tab_rect: Rect,
+    style: &TabBarStyle,
+    group_color: Color,
+    fade: f32,
+    measurer: &mut porecatu_render::TextMeasurer,
+) {
+    let Some(badge) = &tab.badge else {
+        return;
+    };
+    let (_, height) = badge_size(&badge.text, measurer);
+    push_badge(
+        out,
+        (
+            tab_rect.x + style.padding_left,
+            tab_rect.y + (tab_rect.height - height) / 2.0,
+        ),
+        &badge.text,
+        scale_alpha(group_color, fade),
+        // `[appearance.groups] badge_tint_strength`, the value the drag
+        // highlight already carries.
+        style.drag_highlight_tint_strength * f64::from(fade),
+        measurer,
+    );
+}
+
+#[cfg(test)]
+mod badge_tests {
+    use super::*;
+    use porecatu_render::TextMeasurer;
+
+    #[test]
+    fn badge_grows_by_one_advance_plus_spacing_per_character() {
+        let mut m = TextMeasurer::new();
+        let (one, h1) = badge_size("P", &mut m);
+        let (three, h3) = badge_size("WSL", &mut m);
+        let advance = m.measure_width("M", BADGE_FONT, BADGE_FONT_SIZE);
+        assert!((three - one - 2.0 * (advance + BADGE_LETTER_SPACING)).abs() < 1e-3);
+        assert_eq!(h1, h3);
+    }
+
+    #[test]
+    fn badge_paints_a_tinted_box_and_one_run_per_character() {
+        let mut m = TextMeasurer::new();
+        let color = Color {
+            r: 0.4,
+            g: 0.6,
+            b: 0.9,
+            a: 1.0,
+        };
+        let mut out = Vec::new();
+        let rect = push_badge(&mut out, (10.0, 20.0), "WSL", color, 0.14, &mut m);
+        assert_eq!((rect.x, rect.y), (10.0, 20.0));
+        let Primitive::RoundedQuad(quad) = &out[0] else {
+            panic!("the box comes first");
+        };
+        assert_eq!(quad.color.a, 0.14);
+        assert_eq!(quad.radius, 3.0);
+        let runs: Vec<_> = out
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(runs.len(), 3);
+        assert!(runs.iter().all(|t| t.color == color));
+        assert!(runs[1].origin.0 > runs[0].origin.0);
     }
 }
 

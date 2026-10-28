@@ -127,7 +127,7 @@ impl ProjectScript {
 
 /// Expande um `~` inicial via `dirs::home_dir`; qualquer outro caminho
 /// volta inalterado.
-fn expand_tilde(entry: &str) -> PathBuf {
+pub fn expand_tilde(entry: &str) -> PathBuf {
     match entry.strip_prefix('~') {
         Some(rest) => {
             let rest = rest

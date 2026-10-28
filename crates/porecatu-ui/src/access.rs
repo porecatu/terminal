@@ -29,13 +29,14 @@ use porecatu_core::{GroupColor, GroupId, PaneId, TabId, Workspace};
 use porecatu_locale::Catalog;
 use porecatu_render::TextMeasurer;
 
-use crate::context_menu::{ContextMenu, TAB_MENU_ITEMS};
-use crate::dialog::{ConfirmDialog, DialogButton};
+use crate::context_menu::ContextMenu;
+use crate::dialog::{ConfirmDialog, DialogButton, SecretFocus};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
 use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
+use crate::profile_menu::ProfileMenu;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
 use crate::settings::{
@@ -90,6 +91,9 @@ const SESSION_PICKER_SAVE_ITEM_ID: NodeId = NodeId(103);
 /// O botão do meio do diálogo de três saídas (RF-16.4): fora da faixa dos
 /// dois fixos, que ficam juntos em 14 e 15.
 const DIALOG_DISCARD_ID: NodeId = NodeId(104);
+/// O campo de senha e a caixa "Lembrar" do diálogo de segredo (RF-20.35).
+const DIALOG_SECRET_FIELD_ID: NodeId = NodeId(105);
+const DIALOG_SECRET_REMEMBER_ID: NodeId = NodeId(106);
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -126,6 +130,9 @@ fn pane_node_id(tab: TabId, pane: PaneId) -> NodeId {
 }
 
 const WARNING_ITEM_BASE: u64 = 300_000;
+/// As linhas de dado e de aviso do diálogo de host desconhecido (ADR-0075 §3).
+/// Fora das faixas dos painéis (até 1_600_000) e das configurações (2_000_000).
+const DIALOG_LINE_BASE: u64 = 1_700_000;
 const MENU_ITEM_BASE: u64 = 400_000;
 const SWATCH_BASE: u64 = 500_000;
 const EDITOR_ACTION_BASE: u64 = 500_100;
@@ -195,6 +202,7 @@ pub(crate) fn build_tree(
     dialog: &Option<ConfirmDialog>,
     context_menu: &Option<ContextMenu>,
     group_context_menu: &Option<GroupContextMenu>,
+    profile_menu: &Option<ProfileMenu>,
     terminal_context_menu: &Option<TerminalContextMenu>,
     group_editor: &Option<GroupEditor>,
     move_to_group: &Option<MoveToGroupPopover>,
@@ -310,6 +318,8 @@ pub(crate) fn build_tree(
         focus = build_tab_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(m) = group_context_menu {
         focus = build_group_menu(m, workspace, catalog, &mut nodes, &mut root_children);
+    } else if let Some(m) = profile_menu {
+        focus = build_profile_menu(m, &mut nodes, &mut root_children);
     } else if let Some(m) = terminal_context_menu {
         focus = build_terminal_menu(m, catalog, &mut nodes, &mut root_children);
     } else if let Some(e) = group_editor {
@@ -399,6 +409,11 @@ fn build_tab_list(
                 None => {}
             }
             node.set_label(label);
+            // ADR-0070 §7: the profile's name is the **description**; the
+            // name stays the title.
+            if let Some(profile) = tab.profile_badge() {
+                node.set_description(profile.name.clone());
+            }
             node.add_action(accesskit::Action::Focus);
             let close_id = tab_close_button_id(tab_rect.id);
             let mut children = vec![close_id];
@@ -593,11 +608,61 @@ fn build_dialog(
     ));
     buttons.push(DIALOG_CONFIRM_ID);
 
+    // As linhas de dado e de aviso entram como texto, antes dos botões: o
+    // leitor de tela lê a impressão digital que o usuário vai confiar.
+    let mut children = Vec::new();
+    for (index, line) in dialog.lines.iter().enumerate() {
+        let id = NodeId(DIALOG_LINE_BASE + index as u64);
+        nodes.push((id, leaf(Role::Label, line.text.clone())));
+        children.push(id);
+    }
+    // Diálogo de segredo (RF-20.35): o campo é um campo de **senha**, sem valor
+    // exposto -- nem o texto, nem os pontos --, e a caixa "Lembrar" uma
+    // alternância. O foco inicial é o campo.
+    let mut focused_id = focused_id;
+    // A caixa de marcar do diálogo de excluir perfil: uma alternância.
+    if let Some(checkbox) = &dialog.checkbox {
+        let mut node = leaf(Role::Switch, checkbox.label.clone());
+        node.set_toggled(if checkbox.checked {
+            accesskit::Toggled::True
+        } else {
+            accesskit::Toggled::False
+        });
+        nodes.push((DIALOG_SECRET_REMEMBER_ID, node));
+        children.push(DIALOG_SECRET_REMEMBER_ID);
+    }
+    if let Some(facts) = &dialog.secret {
+        let mut field = Node::new(Role::PasswordInput);
+        field.set_label(dialog.title.clone());
+        nodes.push((DIALOG_SECRET_FIELD_ID, field));
+        children.push(DIALOG_SECRET_FIELD_ID);
+
+        let mut remember = leaf(Role::Switch, facts.remember_label.clone());
+        remember.set_toggled(if facts.remember {
+            accesskit::Toggled::True
+        } else {
+            accesskit::Toggled::False
+        });
+        if !facts.vault_available {
+            remember.set_disabled();
+            remember.set_description(facts.unavailable_note.clone());
+        }
+        nodes.push((DIALOG_SECRET_REMEMBER_ID, remember));
+        children.push(DIALOG_SECRET_REMEMBER_ID);
+
+        focused_id = match facts.focus {
+            SecretFocus::Field => DIALOG_SECRET_FIELD_ID,
+            SecretFocus::Remember => DIALOG_SECRET_REMEMBER_ID,
+            SecretFocus::Buttons => focused_id,
+        };
+    }
+    children.extend(buttons);
+
     let mut node = Node::new(Role::Dialog);
     node.set_modal();
     node.set_label(dialog.title.clone());
     node.set_description(dialog.body.clone());
-    node.set_children(buttons);
+    node.set_children(children);
     nodes.push((DIALOG_ID, node));
     root_children.push(DIALOG_ID);
     focused_id
@@ -611,7 +676,7 @@ fn build_tab_menu(
 ) -> NodeId {
     let mut children = Vec::new();
     let mut focus = MENU_ID;
-    for (index, item) in TAB_MENU_ITEMS.iter().enumerate() {
+    for (index, item) in menu.items().iter().enumerate() {
         let id = menu_item_id(index);
         let mut node = Node::new(Role::MenuItem);
         node.set_label(item.action.label(catalog));
@@ -646,6 +711,28 @@ fn build_group_menu(
     for (index, item) in items.iter().enumerate() {
         let id = menu_item_id(index);
         nodes.push((id, leaf(Role::MenuItem, item.label.clone())));
+        children.push(id);
+        if index == menu.highlighted() {
+            focus = id;
+        }
+    }
+    nodes.push((MENU_ID, container(Role::Menu, children)));
+    root_children.push(MENU_ID);
+    focus
+}
+
+/// The profile menu enters the tree like the other context menus; each item's
+/// name is the profile name (ADR-0070 §6), not the badge.
+fn build_profile_menu(
+    menu: &ProfileMenu,
+    nodes: &mut Vec<(NodeId, Node)>,
+    root_children: &mut Vec<NodeId>,
+) -> NodeId {
+    let mut children = Vec::new();
+    let mut focus = MENU_ID;
+    for (index, row) in menu.rows().iter().enumerate() {
+        let id = menu_item_id(index);
+        nodes.push((id, leaf(Role::MenuItem, row.label.clone())));
         children.push(id);
         if index == menu.highlighted() {
             focus = id;
@@ -1171,6 +1258,14 @@ fn settings_row_node(
             node.set_selected(*selected);
             nodes.push((id, node));
         }
+        // Um perfil da lista (ADR-0075 §6): uma opção de lista, escolhida ou
+        // não; a descrição diz o programa ou o destino.
+        ControlView::ProfileItem { selected, .. } => {
+            let mut node = leaf(Role::ListBoxOption, row.name.clone());
+            node.set_selected(*selected);
+            describe(&mut node);
+            nodes.push((id, node));
+        }
         ControlView::GitPoll { on, seconds, .. } => {
             let switch_id = NodeId(id.0 + 1);
             let mut switch = leaf(Role::Switch, row.name.clone());
@@ -1203,7 +1298,7 @@ mod tests {
     use porecatu_core::{GroupColor, Workspace};
 
     use super::*;
-    use crate::context_menu::{ContextMenu, MenuAction};
+    use crate::context_menu::{ContextMenu, MenuAction, TAB_MENU_ITEMS};
     use crate::dialog::DialogAction;
 
     fn measurer() -> TextMeasurer {
@@ -1227,6 +1322,7 @@ mod tests {
         build_tree(
             ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1299,6 +1395,27 @@ mod tests {
         assert!(b_node.is_selected().unwrap_or(false));
     }
 
+    /// ADR-0070 §7: the profile's name is the node's **description**; the
+    /// name stays the title. A tab without a badge has no description.
+    #[test]
+    fn the_profile_name_is_the_tab_description_not_its_name() {
+        let mut ws = Workspace::new();
+        let plain = ws.append_tab("zsh", None);
+        let wsl = ws.append_tab("bash", None);
+        for pane in ws.tab_mut(wsl).unwrap().panes_mut().panes_mut() {
+            pane.set_profile_badge(Some(porecatu_core::ProfileBadge {
+                badge: "WSL".to_owned(),
+                name: "Ubuntu-24.04".to_owned(),
+            }));
+        }
+        let update = build(&ws);
+        let badged = node(&update, tab_node_id(wsl));
+        assert_eq!(badged.description(), Some("Ubuntu-24.04"));
+        assert!(!badged.label().unwrap().contains("Ubuntu"));
+        assert!(!badged.label().unwrap().contains("WSL"));
+        assert_eq!(node(&update, tab_node_id(plain)).description(), None);
+    }
+
     #[test]
     fn tab_list_order_matches_visual_order() {
         let mut ws = Workspace::new();
@@ -1340,6 +1457,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1390,6 +1508,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1451,6 +1570,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -1494,6 +1614,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1570,6 +1691,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             Some(&layout),
             None,
             &TabBarStyle::DEFAULT,
@@ -1611,6 +1733,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1661,6 +1784,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -1677,6 +1801,178 @@ mod tests {
         assert_eq!(update.focus, DIALOG_CANCEL_ID);
     }
 
+    /// ADR-0075 §3, acessibilidade: as linhas de dado e de aviso entram como
+    /// texto dentro do diálogo, antes dos botões -- o leitor de tela lê a
+    /// impressão digital que o usuário vai confiar --, e o foco inicial é o
+    /// cancelar.
+    #[test]
+    fn the_host_key_dialog_exposes_its_data_lines_as_text_before_the_buttons() {
+        use crate::dialog::HostKeyFacts;
+        use porecatu_core::{PaneId, TabId};
+        use porecatu_term::PromptId;
+
+        let pt = crate::messages::test_support::pt_br();
+        let dialog = Some(ConfirmDialog::host_key(
+            &pt,
+            &HostKeyFacts {
+                host: "10.4.1.20".to_owned(),
+                algorithm: "ssh-ed25519".to_owned(),
+                fingerprint: "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE".to_owned(),
+                known_types: vec!["ssh-rsa".to_owned()],
+                skipped_lines: 2,
+            },
+            DialogAction::HostKey(TabId::new(0), PaneId::new(0), PromptId::new(1)),
+        ));
+        let ws = Workspace::new();
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &dialog,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &pt,
+            "pt-BR",
+            &mut measurer(),
+        );
+
+        let dialog_node = node(&update, DIALOG_ID);
+        assert_eq!(dialog_node.role(), Role::Dialog);
+        assert!(dialog_node.is_modal());
+        assert_eq!(dialog_node.label(), Some("Host desconhecido: 10.4.1.20"));
+        // Five lines (type, label, fingerprint, other type, skipped), then the
+        // two buttons.
+        let children = dialog_node.children();
+        assert_eq!(children.len(), 7);
+        let labels: Vec<String> = children
+            .iter()
+            .take(5)
+            .map(|id| node(&update, *id).label().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(labels[0], "Tipo: ssh-ed25519");
+        assert_eq!(labels[1], "Impressão digital:");
+        assert_eq!(
+            labels[2],
+            "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE"
+        );
+        assert_eq!(labels[3], "Outro tipo já registrado: ssh-rsa");
+        assert_eq!(labels[4], "2 linhas do known_hosts não puderam ser lidas.");
+        assert!(
+            children[..5]
+                .iter()
+                .all(|id| node(&update, *id).role() == Role::Label)
+        );
+        assert_eq!(children[5], DIALOG_CANCEL_ID);
+        assert_eq!(children[6], DIALOG_CONFIRM_ID);
+        // The initial focus is on Cancel, as in every dialog (ADR-0014).
+        assert_eq!(update.focus, DIALOG_CANCEL_ID);
+    }
+
+    fn secret_tree(vault_available: bool, remember: bool) -> TreeUpdate {
+        use porecatu_core::{PaneId, TabId};
+        use porecatu_term::{PromptId, SecretLabel};
+
+        let pt = crate::messages::test_support::pt_br();
+        let mut dialog = ConfirmDialog::secret(
+            &pt,
+            &SecretLabel::Password {
+                user: "deploy".to_owned(),
+                host: "10.4.1.20".to_owned(),
+            },
+            vault_available,
+            false,
+            DialogAction::Secret(TabId::new(0), PaneId::new(0), PromptId::new(1)),
+        );
+        if remember {
+            dialog.toggle_remember();
+        }
+        build_tree(
+            &Workspace::new(),
+            &WarningStack::default(),
+            &Some(dialog),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            0.0,
+            &pt,
+            "pt-BR",
+            &mut measurer(),
+        )
+    }
+
+    #[test]
+    fn the_secret_field_is_a_password_input_with_no_value_and_it_starts_focused() {
+        let update = secret_tree(true, false);
+
+        let field = node(&update, DIALOG_SECRET_FIELD_ID);
+        assert_eq!(field.role(), Role::PasswordInput);
+        assert_eq!(field.label(), Some("Senha para deploy@10.4.1.20"));
+        // RF-20.35: nothing of what is typed -- not the text, not the dots --
+        // is exposed.
+        assert_eq!(field.value(), None);
+        assert_eq!(field.description(), None);
+        assert_eq!(update.focus, DIALOG_SECRET_FIELD_ID);
+        // Field, box, then the buttons.
+        let children = node(&update, DIALOG_ID).children().to_vec();
+        assert_eq!(
+            children,
+            [
+                DIALOG_SECRET_FIELD_ID,
+                DIALOG_SECRET_REMEMBER_ID,
+                DIALOG_CANCEL_ID,
+                DIALOG_CONFIRM_ID
+            ]
+        );
+    }
+
+    #[test]
+    fn the_remember_box_is_a_switch_that_follows_its_state_and_the_vault() {
+        let on = secret_tree(true, true);
+        let remember = node(&on, DIALOG_SECRET_REMEMBER_ID);
+        assert_eq!(remember.role(), Role::Switch);
+        assert_eq!(remember.label(), Some("Lembrar no cofre do sistema"));
+        assert_eq!(remember.toggled(), Some(accesskit::Toggled::True));
+        assert!(!remember.is_disabled());
+
+        let off = secret_tree(true, false);
+        assert_eq!(
+            node(&off, DIALOG_SECRET_REMEMBER_ID).toggled(),
+            Some(accesskit::Toggled::False)
+        );
+
+        let no_vault = secret_tree(false, true);
+        let disabled = node(&no_vault, DIALOG_SECRET_REMEMBER_ID);
+        assert!(disabled.is_disabled());
+        assert_eq!(
+            disabled.toggled(),
+            Some(accesskit::Toggled::False),
+            "without a vault the box cannot be ticked"
+        );
+        assert_eq!(
+            disabled.description(),
+            Some("O cofre do sistema não está disponível.")
+        );
+    }
+
     #[test]
     fn tab_menu_disabled_item_stays_in_the_tree_but_marked_disabled() {
         let mut ws = Workspace::new();
@@ -1687,6 +1983,7 @@ mod tests {
             &WarningStack::default(),
             &None,
             &menu,
+            &None,
             &None,
             &None,
             &None,
@@ -1747,6 +2044,7 @@ mod tests {
             &None,
             &None,
             &None,
+            &None,
             &picker,
             &None,
             None,
@@ -1777,6 +2075,7 @@ mod tests {
         let update = build_tree(
             &ws,
             &WarningStack::default(),
+            &None,
             &None,
             &None,
             &None,
@@ -1858,7 +2157,7 @@ mod settings_tree_tests {
     }
 
     #[test]
-    fn the_sidebar_is_a_list_with_the_nine_groups_and_one_selected() {
+    fn the_sidebar_is_a_list_with_the_ten_groups_and_one_selected() {
         let update = tree(Group::Terminal, false, true, "pt-BR");
         let list = node(&update, SETTINGS_GROUP_LIST_ID);
         assert_eq!(list.role(), Role::ListBox);
@@ -1873,6 +2172,7 @@ mod settings_tree_tests {
             [
                 "Geral",
                 "Shell",
+                "Perfis",
                 "Terminal",
                 "Aparência",
                 "Sessão",

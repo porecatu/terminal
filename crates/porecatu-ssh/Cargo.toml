@@ -1,0 +1,33 @@
+[package]
+name = "porecatu-ssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# ADR-0072 §2. Versão exata: o `russh` fixa `ssh-key` e `rsa` em pré-lançamento
+# com `=`, e subir um sem o outro quebra em silêncio. Subir é tarefa própria,
+# conferindo RUSTSEC (piso 0.62.4). Sem `dsa`; `ring` em vez de `aws-lc-rs`
+# (sem NASM no Windows).
+russh = { version = "=0.65.0", default-features = false, features = ["ring", "rsa", "flate2"] }
+# ADR-0072 §2: `tokio` é declarado só aqui, nunca em `[workspace.dependencies]`,
+# para nenhum outro crate importá-lo por conveniência.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time", "io-util"] }
+# ADR-0074 §2: o hash do `known_hosts` e a comparação em tempo constante vêm da
+# pilha RustCrypto que o `russh` já traz, nas versões da árvore. `ring` é o
+# backend que o `russh` usa, e aqui só sorteia o sal de uma entrada em hash.
+hmac = "0.13"
+sha1 = "0.11"
+subtle = "2.6"
+ring = "0.17"
+dirs = "7"
+# ADR-0073 §5: o segredo vive num `Zeroizing<String>`. A versão é a que a pilha
+# RustCrypto do `russh` já traz.
+zeroize = "1.9"
+# ADR-0073 §1. Pinar exato; subir é tarefa própria. Só o módulo `vault` o usa.
+keyring = { version = "=4.2.0", default-features = false, features = ["v1"] }

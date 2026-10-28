@@ -450,6 +450,301 @@ no grupo Atalhos, ou na seção `[keybindings]` do arquivo (e
 desvio por plataforma) — [`porecatu.example.toml`](config/porecatu.example.toml)
 tem a tabela inteira, comentada.
 
+## Perfis de aba
+
+Um **perfil** é uma forma de abrir uma aba: um programa, seus argumentos e o
+que mais ele precisar. Quem usa um shell só não precisa de nada disso — sem
+perfil declarado, o `+`, os atalhos e a barra se comportam como sempre, e
+nenhum badge aparece. O `[shell]` do arquivo de configuração continua
+sendo o perfil padrão.
+
+### Declarar perfis
+
+Cada perfil é um `[[profiles.list]]`; `[profiles] default` diz qual abre
+quando você clica no `+` ou usa `Ctrl+Shift+T`:
+
+```toml
+[profiles]
+default = "pwsh"     # o "id" de um perfil; vazio é o [shell]
+detect  = true       # procura shells na máquina (veja abaixo)
+
+[[profiles.list]]
+id      = "pwsh"
+name    = "PowerShell 7"
+badge   = "PS"       # até 4 caracteres, aparece na aba
+program = "pwsh.exe"
+
+[[profiles.list]]
+id      = "ubuntu"
+name    = "Ubuntu"
+badge   = "WSL"
+program = "wsl.exe"
+args    = ["-d", "Ubuntu"]
+cwd     = "~/projetos"            # opcional: diretório inicial
+env     = { EDITOR = "nvim" }     # opcional: soma-se a [shell.env]
+```
+
+`id` é letras minúsculas, números, `-` e `_`, e não se repete. Um perfil com
+erro (id repetido, `program` vazio, `type` desconhecido) é descartado e os
+outros continuam valendo; o aviso diz a linha e a coluna.
+Um servidor SSH é um perfil com `type = "ssh"`, descrito na seção "Perfis SSH" abaixo.
+
+> **`env` não é lugar de segredo.** O `porecatu.toml` é texto puro, costuma
+> ir para repositório de dotfiles, e o ambiente de um processo é legível
+> por quem roda na mesma conta. Senhas e tokens ficam no cofre do sistema
+> ou no próprio programa.
+
+Mudar `[profiles]` com o app aberto vale para **abas novas**; as abertas
+seguem como estão.
+
+### Perfis SSH
+
+Um perfil `type = "ssh"` abre uma aba que fala com um servidor, pelo cliente SSH embutido — sem o programa `ssh` do sistema:
+
+```toml
+[[profiles.list]]
+id            = "prod"
+name          = "prod-web-01"
+type          = "ssh"
+host          = "10.4.1.20"
+port          = 22                       # opcional
+user          = "deploy"                 # obrigatório
+auth          = ["agent", "key"]         # opcional: a ordem tentada
+identity_file = "~/.ssh/id_ed25519"      # opcional; "~" é a sua pasta pessoal
+```
+
+- `host` e `user` são obrigatórios e não aceitam espaço nem os caracteres `, | [ ] @ # * ? !` (e `user` também não aceita `@` nem `:`): eles viram uma linha do `known_hosts`. Um endereço IPv6 se escreve sem colchetes.
+- `program`, `args`, `env` e `cwd` **não valem** num perfil SSH e são erro: o perfil é ignorado, com um aviso que diz a linha.
+- `auth` é a ordem em que os métodos são tentados (`agent`, `key`, `password`), parando no primeiro aceito; um método fora da lista não é tentado. Sem `auth`, a ordem é agente, depois a chave **se** houver `identity_file`, depois senha. `auth = ["key"]` sem `identity_file` é erro. A autenticação funciona por agente, por chave (com ou sem passphrase) e por senha; veja "Conexões SSH" abaixo.
+- O `badge` é `SSH` se você não escrever outro.
+- **Senha e passphrase não vão no `porecatu.toml`.** Uma chave de perfil com `password`, `passphrase` ou `secret` no nome é ignorada, com um aviso: o valor nem é lido.
+
+**Primeira conexão.** O Porecatu confere a chave do servidor no `~/.ssh/known_hosts`, o mesmo arquivo do OpenSSH: o que você já confia lá vale aqui, e o contrário. Com um host que o arquivo não conhece, abre um diálogo com o tipo da chave e a impressão digital `SHA256:…`; **Cancelar** é o foco inicial. **Confiar e conectar** acrescenta uma linha ao fim do arquivo (em hash, se o seu arquivo já usa hash) e conecta. Se a chave do host **mudou**, ou foi marcada `@revoked`, a conexão é bloqueada com uma nota que diz a impressão digital apresentada e o arquivo e a linha da entrada — o Porecatu nunca oferece "substituir": quem resolve é o seu editor, ou o `ssh-keygen -R`. Se o `known_hosts` existe e não pode ser lido (por exemplo, regravado em UTF-16 pelo PowerShell 5), a conexão nem é tentada.
+
+Se a pergunta chega com a aba em segundo plano, o diálogo **não rouba o foco**: a campainha da aba acende, e o diálogo abre quando você chega ao painel.
+
+**Senha e passphrase.** Quando o agente e a chave não bastam (ou a chave tem passphrase, ou `auth` inclui `password`), um diálogo pede o segredo num **campo mascarado**: cada caractere vira `•`, `Ctrl+C` e `Ctrl+X` não fazem nada nele e colar (`Ctrl+V`) funciona. O foco já está no campo; `Enter` conecta, `Esc` cancela (a aba fica com a nota de autenticação cancelada). Um servidor que só oferece senha por keyboard-interactive com **um campo oculto** é atendido do mesmo jeito, e o diálogo usa sempre os textos do Porecatu, nunca o que o servidor escreveu. Keyboard-interactive com mais de um campo, campo visível ou segundo fator **não é suportado**: a conexão falha com uma nota que diz isso, sem pedir senha, e você usa o `ssh` do sistema.
+
+A caixa **"Lembrar no cofre do sistema"** (Gerenciador de Credenciais do Windows, Keychain do macOS, Secret Service no Linux) vem desmarcada. Marcada, o segredo só é gravado **depois** de o servidor aceitá-lo: senha errada nunca fica salva. Na próxima conexão ele é tentado sem perguntar; se o servidor **recusar a senha** (e continuar oferecendo o método), a entrada é apagada e o diálogo volta com "O servidor recusou a senha." Uma conexão derrubada no meio da autenticação (`fail2ban`, `MaxAuthTries`) ou um método retirado **não** apagam nada. Sem cofre (Linux sem Secret Service), a caixa fica desabilitada, com a nota dizendo por quê, e o segredo é pedido a cada conexão: não há outro lugar onde guardá-lo. Se o cofre recusar a gravação, a conexão segue e um aviso diz que o segredo não foi salvo. As entradas aparecem no cofre do sistema com o nome de serviço `porecatu-ssh`, uma por `usuário@host:porta` (senha) e uma por arquivo de chave (passphrase), e é lá que você as apaga à mão.
+
+O estado da conexão (conectando, falhou, caiu) aparece como nota no próprio terminal, abaixo do conteúdo.
+
+**Dividir.** Dividir um painel SSH abre um **segundo shell na mesma conexão**: não autentica de novo, não pede senha e não abre outra conexão TCP. Uma **aba nova** do mesmo perfil nunca compartilha conexão, para que uma queda ou um `exit` não leve as duas. Se a conexão do painel de origem não está viva, o painel novo abre uma própria.
+
+**Reconexão automática.** Quando a conexão **cai sozinha** (rede, servidor reiniciado, a máquina suspendeu), o Porecatu tenta de novo: até **5 tentativas**, com 1, 2, 4, 8 e 16 s de espera antes de cada uma. O scrollback fica inteiro e o shell novo começa embaixo dele; cada tentativa escreve uma nota ("reconectando (tentativa 2 de 5) em 2 s"), e a contagem é uma frase, não se reescreve. A primeira volta escreve também que **o processo remoto não foi retomado**: é outro shell, num login novo (`tmux` ou `screen` no servidor continuam sendo o caminho para manter o programa). Detalhes:
+
+- Um servidor que **encerrou** a sessão (`exit`, o shell saiu) não dispara reconexão. Uma aba que **nunca conectou** (host recusado, senha errada) também não.
+- Várias divisões da mesma conexão reconectam **juntas**: o painel mais antigo tenta, e os outros entram na conexão nova quando ela abre. Uma senha não salva é pedida **uma vez**, no diálogo do painel que tenta, que espera você chegar a ele.
+- Cancelar o diálogo de senha, uma chave de host que mudou, uma chave ilegível e uma autenticação recusada **interrompem** as tentativas na hora; uma recusa de conexão ou um tempo esgotado seguem até a quinta.
+- O que você digita durante a queda é **descartado**, não enfileirado: nunca chega ao shell novo.
+- Durante o ciclo a conexão conta como aberta: fechar a aba ou o painel pede confirmação.
+- Esgotadas as tentativas, o painel fica encerrado com a nota da última falha.
+
+**Reconectar à mão.** A ação `ssh.reconnect` (sem tecla padrão) e o item **Reconectar** do menu de contexto da aba, que só existe em aba SSH, agem no painel SSH focado: se ele espera a próxima tentativa, ela vem agora; se desistiu ou está encerrado, a contagem recomeça do 1. Em qualquer outro painel, não fazem nada.
+
+**O rótulo e a barra de status.** Sem título seu e enquanto o servidor não manda um, a aba se chama como o perfil (`prod-web-01`). A barra de status mostra `usuário@host` no lugar do nome do shell. A pasta aparece só se o shell do servidor informá-la (OSC 7, como no [convite de integração de shell](reference/integracao-de-shell.md)) **com o mesmo nome de host do perfil**: um perfil escrito com o IP e um shell que diz o nome da máquina não mostram pasta. Os segmentos de Git não aparecem — o repositório que o Porecatu enxerga é o local.
+
+**Fechar.** Fechar uma aba, um painel ou a janela com uma conexão SSH **aberta** (conectando, autenticando ou conectada) pede confirmação, atrás de `general.confirm_close_with_process`, como um programa em primeiro plano. Cada painel conta por si: o painel cujo shell remoto já saiu fecha sem perguntar. Aba já encerrada, ou que nunca conectou, também. Quando o servidor encerra a sessão, vale o de um shell local: `exit` (código 0) fecha a aba; qualquer outro código, ou um sinal, deixa a aba aberta com a nota; uma conexão que falhou ou caiu fica aberta com a causa.
+
+**Reabrir o app.** Todo painel SSH restaurado — ao abrir o app ou ao abrir uma sessão nomeada — volta **esmaecido, sem conectar**, com a nota "Enter para conectar a `nome`", **mesmo com `lazy_restore = false` e mesmo sendo o painel ativo**. Ele conecta no primeiro **clique** dentro dele ou no primeiro **Enter** com ele focado; trocar de aba, `Ctrl+Tab` e `tab.goto_N` só o mostram. Abrir o app nunca pede senha nem abre o diálogo de chave de host sozinho. Painéis locais voltam como sempre.
+
+**Pastas.** `tab.new` numa aba SSH abre o perfil padrão na pasta de início (`startup_directory`), nunca numa pasta do servidor; o `.porecatu` nunca roda numa aba SSH; a sessão grava o perfil do painel e **nada da conexão** — nem pasta, nem segredo.
+
+### Editar os perfis pela tela
+
+O grupo **Perfis** da tela de configurações (logo depois de Shell) tem o perfil
+padrão e a detecção de shells no topo, os botões **+ Perfil local** e
+**+ Perfil SSH**, a lista dos perfis e o formulário do escolhido. O tipo do
+perfil é fixo na criação. O `id` nasce do nome e pode ser editado; um campo
+inválido mostra o motivo na própria linha e **não impede salvar os outros
+perfis**. O Salvar mexe só nas linhas tocadas do `porecatu.toml`: comentários e
+ordem ficam como estão.
+
+- **Excluir** (o `X` da linha) pede confirmação. Num perfil SSH que nenhum outro
+  usa (mesmo destino ou mesmo arquivo de chave), a caixa **Apagar também a
+  senha e a passphrase salvas** vem marcada. A exclusão é uma alteração
+  pendente: o arquivo e o cofre só mudam no **Salvar**, e **Descartar** desfaz.
+- **Senha salva — Esquecer** e **Passphrase salva — Esquecer**, no formulário SSH
+  (só quando o cofre do sistema responde), apagam o segredo na hora.
+- **Importar do ~/.ssh/config** abre, no lugar do formulário, uma lista com um
+  interruptor por bloco `Host` de destino concreto (sem `*`, `?` nem `!`),
+  mostrando `usuário@host:porta` já resolvidos (`HostName`, `User`, `Port`;
+  sem `User`, entra o seu usuário local). Marque os que quiser e use
+  **Importar marcados**: cada um vira um perfil SSH nas alterações pendentes,
+  gravado só no **Salvar**. É uma **cópia**: mudar o `~/.ssh/config` depois não
+  muda os perfis. Aparecem desabilitados, com o motivo, os blocos que o cliente
+  embutido não suporta (`ProxyJump`, `ProxyCommand`, `LocalForward`,
+  `RemoteForward`, `DynamicForward`, `CertificateFile`), os que o perfil
+  recusaria (host ou usuário com caractere proibido) e os que já são um perfil
+  (mesmo host, porta e usuário). `Include` é resolvido. Um arquivo com **`Match`**
+  é recusado inteiro: o Porecatu não lê `Match`, e a lista diz isso, com a
+  linha, em vez de importar dados trocados. O mesmo vale para uma diretiva que o
+  leitor não conhece.
+
+### Escolher o perfil
+
+- **Clique direito no `+`** (de um grupo, ou o de abas soltas) abre o menu
+  de perfis: o padrão primeiro, os declarados, o `[shell]` quando não é o
+  padrão, os detectados e, no fim, "Novo grupo de abas". Escolher uma linha
+  abre a aba **naquele grupo**. O **clique esquerdo** no `+` não mudou: abre
+  o padrão, sem menu.
+- **`profile.open_menu`** abre o mesmo menu no `+` do grupo da aba ativa.
+- **`profile.new_tab_1` … `profile.new_tab_9`** abrem o N-ésimo perfil
+  **declarado** (na ordem do arquivo) no grupo da aba ativa; sem N-ésimo,
+  não fazem nada. O índice nunca conta os detectados, então um atalho não
+  muda de alvo porque a máquina ganhou um shell.
+
+Nenhuma dessas ações tem tecla de fábrica. Para ligar uma, no
+`porecatu.toml`:
+
+```toml
+[keybindings]
+"ctrl+shift+m" = "profile.open_menu"
+"ctrl+f1"      = "profile.new_tab_1"
+```
+
+O menu mostra, à direita de cada linha, a tecla que você ligou.
+
+### O badge na aba
+
+A aba mostra o **badge** do perfil, na cor do grupo, **só quando o perfil
+dela não é o padrão** — e nunca para o `[shell]`. Ele consome espaço do
+título, e a aba não muda de largura. Numa aba com atividade, a ordem é
+badge, ponto, título. `show_profile_badge = false` em `[appearance.tabs]`
+esconde o badge em todas as abas.
+
+### Shells detectados
+
+Na **primeira vez que o menu abre** num processo, e com `detect = true`, o
+app procura os shells da máquina — `pwsh`, `powershell` e `cmd` no Windows,
+mais as distribuições do WSL; o que estiver em `/etc/shells` no Linux e no
+macOS — e os acrescenta ao menu quando a busca termina, sem fechá-lo nem
+mover a linha realçada. Passados 3 segundos a busca desiste em silêncio. O
+que repete uma linha acima (mesmo programa e argumentos) não aparece de
+novo. Os detectados não têm atalho nem entram na conta de
+`profile.new_tab_N`. **`detect = false` desliga a busca por inteiro**: nada
+é lançado, nem o `wsl.exe`.
+
+### O que a sessão grava
+
+O **painel** guarda o identificador do perfil com que nasceu, não o
+comando. Ao reabrir, a aba volta com o mesmo perfil, mesmo que o padrão
+tenha mudado; dividir um painel abre outro **do mesmo perfil**. Um
+`profile` que não existe mais na configuração abre o perfil padrão, com uma
+nota na primeira linha do painel. Para os detectados o identificador é
+`auto:shell:pwsh.exe`, `auto:shell:/bin/zsh` ou `auto:wsl:Ubuntu`, e é
+**revalidado** ao restaurar: o Windows só aceita `pwsh.exe`,
+`powershell.exe` e `cmd.exe`; Linux e macOS, um caminho que esteja em
+`/etc/shells`; para o WSL, um nome de distribuição de letras, números,
+`.`, `_` e `-`. Um arquivo de sessão copiado ou editado à mão não consegue
+pedir outro executável.
+
+## Conexões SSH
+
+O Porecatu abre uma aba num servidor SSH como abre uma aba de shell: um perfil
+do tipo `ssh`, escolhido no menu do `+` (clique direito) ou por
+`profile.new_tab_N`. A conexão é feita pelo cliente SSH **embutido**, sem o
+programa `ssh` do sistema. Esta seção é o roteiro; os detalhes de cada
+diálogo estão em "Perfis SSH", acima.
+
+### Criar o perfil
+
+- **Pela tela**: configurações (`Ctrl+Shift+O`), grupo **Perfis**, **+ Perfil
+  SSH**. Preencha nome, host, porta, usuário, autenticação e arquivo de chave,
+  e **Salvar**. O `porecatu.toml` muda só nas linhas do perfil: seus
+  comentários e a ordem ficam como estão.
+- **Pelo arquivo**: um `[[profiles.list]]` com `type = "ssh"`, como em "Perfis
+  SSH". Vale para abas novas, sem reiniciar.
+- **Do `~/.ssh/config`**: **Importar do ~/.ssh/config**, no mesmo grupo (veja
+  "Importar" abaixo).
+
+### Como o app se autentica
+
+`auth` lista os métodos na ordem em que são tentados, e para no primeiro que o
+servidor aceita:
+
+1. **`agent`** — o agente do sistema: o do OpenSSH no Windows, o `SSH_AUTH_SOCK`
+   no macOS e no Linux, ou o Pageant. Sem agente rodando, esse método é pulado
+   em silêncio.
+2. **`key`** — o `identity_file`. Chave com passphrase pede a passphrase num
+   campo mascarado.
+3. **`password`** — a senha, também num campo mascarado.
+
+Sem `auth`, a ordem é essa, e a chave só entra se houver `identity_file`.
+Servidor que pede uma senha por keyboard-interactive com **um** campo oculto é
+tratado como senha.
+
+### O cofre e como esquecer
+
+A caixa **Lembrar no cofre do sistema** guarda a senha ou a passphrase no
+Gerenciador de Credenciais (Windows), no Keychain (macOS) ou no Secret Service
+(Linux), com o nome de serviço `porecatu-ssh`. Ela só grava **depois** de o
+servidor aceitar: senha errada nunca fica salva. **Nada** vai para o
+`porecatu.toml`, para a sessão, para uma nota ou para o título da aba.
+
+Para esquecer: no formulário do perfil SSH (grupo **Perfis**), **Senha salva** e
+**Passphrase salva** têm o botão **Esquecer**, que age na hora. Ao **excluir**
+um perfil SSH que nenhum outro usa, o diálogo traz a caixa **Apagar também a
+senha e a passphrase salvas**, já marcada; o cofre só é mexido no **Salvar**, e
+**Descartar** desfaz tudo.
+
+### A chave do servidor e o `known_hosts`
+
+O app confere a chave do servidor no **`~/.ssh/known_hosts` do OpenSSH**: o
+que você já confia no `ssh` vale aqui, e o contrário. Num host novo, um diálogo mostra o tipo e a impressão digital
+`SHA256:…`; **Confiar e conectar** acrescenta uma linha ao fim do arquivo (o app
+**só acrescenta**, nunca edita nem apaga linha). Se a chave **mudou**, a conexão
+é bloqueada, sem botão de continuar, mostrando a impressão digital nova, a
+antiga e a linha divergente. Se foi uma troca legítima do servidor, remova a
+linha **fora do app**:
+
+```
+ssh-keygen -R "[host]:porta"
+```
+
+e conecte de novo. O app nunca oferece substituir a chave.
+
+### Quando a conexão cai
+
+Uma conexão que cai **sozinha** (rede, servidor reiniciado, o computador
+suspendeu) é refeita: até 5 tentativas, com 1, 2, 4, 8 e 16 s de espera, cada
+uma anunciada por uma nota no terminal. Uma rede que some sem fechar a conexão
+é percebida em até cerca de 60 s. **O que se perde**: o processo remoto — o
+shell novo é outro login, e uma nota diz que o anterior não foi retomado
+(`tmux` ou `screen` no servidor guardam o programa); e o que você digitar
+durante a queda, que é descartado. O scrollback fica, e o shell novo começa
+embaixo dele. `exit` no servidor **não** reconecta. Para tentar de novo à mão:
+`ssh.reconnect` ou **Reconectar** no menu da aba.
+
+### Reabrir o app
+
+Abas SSH restauradas voltam **sem conectar**, mesmo com `lazy_restore = false` e
+mesmo sendo a aba ativa: mostram "Enter para conectar a `nome`" e conectam no
+primeiro clique ou `Enter`. Abrir o app nunca pede senha nem abre o diálogo de
+chave do servidor.
+
+### Importar do `~/.ssh/config`
+
+Em **Perfis**, **Importar do ~/.ssh/config** lista os blocos `Host` de destino
+concreto (veja "Editar os perfis pela tela"). É uma **cópia**: mudar o
+`~/.ssh/config` depois não muda os perfis. Um arquivo com `Match` é recusado
+inteiro, com a frase e a linha.
+
+### O que não é suportado
+
+Fica fora, de propósito, e o app avisa em vez de fingir:
+
+- **`ProxyJump` e `ProxyCommand`** (saltar por um bastião);
+- **encaminhamentos de porta** — `LocalForward`, `RemoteForward`,
+  `DynamicForward`;
+- **segundo fator** e keyboard-interactive com mais de um campo ou campo
+  visível;
+- **certificados** (`CertificateFile`).
+
+Um bloco do `~/.ssh/config` com algo disso aparece desabilitado na importação,
+com o motivo. Para esses casos, abra uma aba comum e use o `ssh` do sistema:
+`ssh usuario@host`, que respeita o seu `~/.ssh/config` inteiro.
+
 ## Dividir a aba em painéis
 
 Uma aba pode ser dividida em vários terminais, cada um com o próprio

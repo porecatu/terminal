@@ -551,6 +551,43 @@ fn links_distintos_adjacentes_nao_se_fundem() {
     assert_eq!(snap.hyperlink_spans[1].start_col, 2);
 }
 
+/// Uma nota de várias linhas (a de chave alterada, a do convite de shell)
+/// escreve um `\n` sozinho. O terminal só desce com ele -- sem voltar à coluna
+/// 0 --, e a nota virava uma escada para a direita. `inject_note` normaliza.
+#[test]
+fn inject_note_multilinha_volta_a_coluna_zero_a_cada_linha() {
+    let (mut term, _rx) = engine(8, 40);
+
+    term.inject_note("primeira\n  segunda\nterceira", (0x5e, 0xd3, 0xbc));
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+    let row_text = |row: usize| -> String {
+        (0..snap.cols)
+            .map(|col| cell_char(&snap, row, col))
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    };
+    // The note starts on a fresh line: row 0 is empty, then the three lines,
+    // each from column 0 (the second keeps its own two leading spaces).
+    assert_eq!(row_text(1), "primeira");
+    assert_eq!(row_text(2), "  segunda");
+    assert_eq!(row_text(3), "terceira");
+}
+
+#[test]
+fn inject_note_com_crlf_no_texto_nao_vira_linha_em_branco() {
+    let (mut term, _rx) = engine(8, 40);
+
+    term.inject_note("a\r\nb", (0x5e, 0xd3, 0xbc));
+
+    let mut snap = porecatu_term::GridSnapshot::default();
+    term.snapshot_into(&mut snap);
+    assert_eq!(cell_char(&snap, 1, 0), 'a');
+    assert_eq!(cell_char(&snap, 2, 0), 'b');
+}
+
 #[test]
 fn resize_para_o_mesmo_tamanho_nao_e_aplicado() {
     let (mut term, _rx) = engine(3, 10);

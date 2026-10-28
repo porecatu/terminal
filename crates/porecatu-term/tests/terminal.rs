@@ -12,7 +12,9 @@
 use std::time::{Duration, Instant};
 
 use porecatu_pty::{PtySize, SpawnConfig};
-use porecatu_term::{CellText, GridSnapshot, TermEvent, TermParams, Terminal};
+use porecatu_term::{
+    BackendSpec, CellText, EndReason, GridSnapshot, TermEvent, TermParams, Terminal,
+};
 
 fn trivial_command() -> (Option<String>, Vec<String>) {
     if cfg!(target_os = "windows") {
@@ -54,13 +56,13 @@ fn snapshot_text(snap: &GridSnapshot) -> String {
 fn terminal_spawna_escreve_saida_no_snapshot_e_responde_dsr_sozinho() {
     let (program, args) = trivial_command();
     let terminal = Terminal::spawn(
-        SpawnConfig {
+        BackendSpec::Local(SpawnConfig {
             program,
             args,
             env: Vec::new(),
             cwd: None,
             size: default_size(),
-        },
+        }),
         TermParams::default(),
         || {},
     )
@@ -82,7 +84,8 @@ fn terminal_spawna_escreve_saida_no_snapshot_e_responde_dsr_sozinho() {
     let start = Instant::now();
     let mut exited = None;
     while start.elapsed() < Duration::from_secs(5) {
-        if let Some(TermEvent::Exit { success, .. }) = terminal.try_recv_event() {
+        if let Some(TermEvent::Exit(EndReason::Exited { success, .. })) = terminal.try_recv_event()
+        {
             exited = Some(success);
             break;
         }
@@ -117,13 +120,13 @@ fn long_running_command() -> (String, Vec<String>) {
 fn spawn_long_running() -> Terminal {
     let (program, args) = long_running_command();
     Terminal::spawn(
-        SpawnConfig {
+        BackendSpec::Local(SpawnConfig {
             program: Some(program),
             args,
             env: Vec::new(),
             cwd: None,
             size: default_size(),
-        },
+        }),
         TermParams::default(),
         || {},
     )
@@ -193,13 +196,13 @@ fn terminal_close_devolve_na_hora_sem_esperar_confirmacao() {
 fn inject_note_escreve_no_grid_como_saida_do_programa() {
     let (program, args) = trivial_command();
     let terminal = Terminal::spawn(
-        SpawnConfig {
+        BackendSpec::Local(SpawnConfig {
             program,
             args,
             env: Vec::new(),
             cwd: None,
             size: default_size(),
-        },
+        }),
         TermParams::default(),
         || {},
     )
@@ -210,4 +213,66 @@ fn inject_note_escreve_no_grid_como_saida_do_programa() {
     let mut snap = GridSnapshot::default();
     terminal.snapshot_into(&mut snap);
     assert!(snapshot_text(&snap).contains("processo encerrado (codigo 1)"));
+}
+
+/// RF-20.33: o painel restaurado espera o gesto com a grade já desenhada --
+/// motor sem backend, que aceita nota, não termina sozinho e não pede
+/// confirmação ao fechar.
+#[test]
+fn terminal_adormecido_mostra_nota_nao_termina_e_nao_pede_confirmacao() {
+    let terminal = Terminal::spawn(
+        BackendSpec::Dormant { rows: 24, cols: 80 },
+        TermParams::default(),
+        || {},
+    )
+    .expect("spawn falhou");
+
+    terminal.inject_note("Enter para conectar", (0x5e, 0xd3, 0xbc));
+    terminal.write(b"digitado sem backend".to_vec());
+    std::thread::sleep(Duration::from_millis(350));
+
+    let mut snap = GridSnapshot::default();
+    terminal.snapshot_into(&mut snap);
+    let text = snapshot_text(&snap);
+    assert!(text.contains("Enter para conectar"));
+    assert!(!text.contains("digitado sem backend"));
+    assert!(terminal.try_recv_event().is_none(), "nada terminou");
+    assert_eq!(terminal.liveness(), porecatu_term::Liveness::Idle);
+}
+
+/// O gesto liga o backend de verdade ao **mesmo** motor: a nota que estava na
+/// grade continua lá (ADR-0071 §4).
+#[test]
+fn terminal_adormecido_recebe_backend_depois_e_guarda_a_grade() {
+    let mut terminal = Terminal::spawn(
+        BackendSpec::Dormant { rows: 24, cols: 80 },
+        TermParams::default(),
+        || {},
+    )
+    .expect("spawn falhou");
+    terminal.inject_note("nota antiga", (0x5e, 0xd3, 0xbc));
+
+    let (program, args) = trivial_command();
+    terminal
+        .reattach(BackendSpec::Local(SpawnConfig {
+            program,
+            args,
+            env: Vec::new(),
+            cwd: None,
+            size: default_size(),
+        }))
+        .expect("reattach falhou");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut snap = GridSnapshot::default();
+        terminal.snapshot_into(&mut snap);
+        let text = snapshot_text(&snap);
+        if text.contains("hello-terminal") {
+            assert!(text.contains("nota antiga"));
+            return;
+        }
+        assert!(Instant::now() < deadline, "saida do backend nao chegou");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

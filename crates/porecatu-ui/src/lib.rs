@@ -15,12 +15,13 @@ use porecatu_core::{
 use porecatu_locale::Catalog;
 
 use messages::msg;
+use porecatu_config::ResolvedProfile;
 use porecatu_render::{Color, Frame, GpuContext, Layer, Rect, TextMeasurer, WindowSurface};
 use porecatu_session::named::{EntryStatus, NamedSessionEntry};
 use porecatu_term::{
-    DEFAULT_SEARCH_LINES_PER_STEP, GridSnapshot, HyperlinkSpan, Modifiers, MouseReporting, PtySize,
-    SpawnConfig, TermEvent, TermModes, TermParams, TermScroll, Terminal, resolve_default_shell,
-    search_path,
+    Answer, BackendSpec, DEFAULT_SEARCH_LINES_PER_STEP, EndReason, GridSnapshot, HyperlinkSpan,
+    Liveness, Modifiers, MouseReporting, PromptKind, PtySize, SpawnConfig, TermEvent, TermModes,
+    TermNotice, TermParams, TermScroll, Terminal,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{
@@ -34,6 +35,7 @@ mod access;
 mod acrylic;
 mod animation;
 mod app_icon;
+mod app_reconnect;
 mod background_image;
 mod box_glyphs;
 mod chrome;
@@ -49,15 +51,22 @@ mod hyperlink;
 mod input;
 mod keymap;
 mod language;
+mod masked_field;
 mod messages;
 mod move_to_group;
 mod overlay;
 mod paint;
 mod palette;
 mod panes;
+mod profile_detect;
+mod profile_menu;
+mod profile_spawn;
+mod prompt_queue;
+mod reconnect;
 mod reload;
 mod rename;
 mod search_bar;
+mod secret_dialog;
 mod selection;
 mod session_picker;
 mod session_writer;
@@ -76,7 +85,7 @@ mod warning;
 use animation::AnimationClock;
 use chrome::{DragGhost, GroupDragGhost};
 use context_menu::{ContextMenu, MenuAction};
-use dialog::{ConfirmDialog, DialogAction, DialogButton};
+use dialog::{ConfirmDialog, DialogAction, DialogButton, HostKeyFacts};
 use group_editor::{EditorRegion, GroupEditor};
 use group_menu::{GroupAction, GroupContextMenu};
 use input::ClickTracker;
@@ -84,6 +93,7 @@ use keymap::Chord;
 use move_to_group::{MoveTarget, MoveToGroupPopover};
 use paint::CellMetrics;
 use porecatu_core::GroupColor;
+use profile_menu::{ProfileMenu, ProfileMenuTarget, ProfileRowKind};
 use reload::{ConfigReload, LanguageReload, Reload};
 use rename::RenameState;
 use search_bar::{SearchBarHit, SearchBarState};
@@ -480,6 +490,9 @@ enum Wakeup {
     /// `RemoteIntegrationResult` não passa dos 56 bytes (`PathBuf` mais um
     /// enum com `String`), bem dentro dos 80 que `AccessKit` já reserva.
     GitIntegrationResult(git::RemoteIntegrationResult),
+    /// The shell detection finished (ADR-0070 §5): data, never a command.
+    /// `App::apply_detected_profiles` keeps it and refreshes an open menu.
+    ProfilesDetected(Vec<profile_detect::DetectedProfile>),
     /// A thread de carga da imagem de fundo terminou (PRD-017, ADR-0061 §7):
     /// dado chaveado por caminho, `mtime` e tamanho -- `App::
     /// apply_background_image_result` o descarta se a chave já não é a
@@ -564,6 +577,40 @@ struct PaneRuntime {
     /// autorizado, à espera da nota. Drenado por `App`, que é quem sabe se a
     /// nota desta execução já foi escrita.
     pending_project_notice: Option<PathBuf>,
+    /// `Some(host)` num painel SSH (ADR-0072 §6): é o que as notas e o diálogo
+    /// de host desconhecido citam. `None` num painel local.
+    ssh_host: Option<String>,
+    /// `usuário@host` de um painel SSH: o que a barra de status mostra no lugar
+    /// do nome do shell (RF-20.21).
+    ssh_target: Option<String>,
+    /// O diretório **do servidor** que o OSC 7 informou, só com o host do
+    /// perfil (RF-20.21). Vive aqui e **nunca** em `Pane::cwd`: é daí que saem
+    /// o `cwd` herdado por `tab.new`, o fallback de `cwd` e o que a sessão
+    /// grava, e nenhum deles pode ver um caminho remoto (RF-20.22, RF-20.32).
+    remote_cwd: Option<PathBuf>,
+    /// Painel SSH restaurado que ainda espera o primeiro gesto do usuário
+    /// (RF-20.33): o motor existe e mostra a nota, nenhum backend roda. Só
+    /// `WindowState::connect_dormant_pane` desliga isto.
+    dormant: bool,
+    /// O que abre a conexão deste painel SSH, para a reconexão refazê-la
+    /// (ADR-0076 §3): destino, métodos, chave. A conexão e o tamanho são
+    /// preenchidos a cada tentativa. `None` num painel local.
+    ssh_spawn: Option<porecatu_term::SshSpawn>,
+    /// O painel está num ciclo de reconexão (ADR-0076 §4): a conexão conta como
+    /// **aberta** para o RF-20.25, mesmo com o backend que caiu já encerrado.
+    reconnecting: bool,
+}
+
+impl PaneRuntime {
+    /// A atividade do painel para a confirmação de fechar. Num ciclo de
+    /// reconexão a conexão conta como aberta (ADR-0076 §4).
+    fn liveness(&self) -> Liveness {
+        if self.reconnecting {
+            Liveness::OpenConnection
+        } else {
+            self.terminal.liveness()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -586,7 +633,7 @@ mod pane_runtime_map_key_tests {
             )
         };
         Terminal::spawn(
-            SpawnConfig {
+            BackendSpec::Local(SpawnConfig {
                 program,
                 args,
                 env: Vec::new(),
@@ -597,7 +644,7 @@ mod pane_runtime_map_key_tests {
                     pixel_width: 0,
                     pixel_height: 0,
                 },
-            },
+            }),
             TermParams::default(),
             || {},
         )
@@ -614,6 +661,12 @@ mod pane_runtime_map_key_tests {
             first_output_at: None,
             pending_project_command: None,
             pending_project_notice: None,
+            ssh_host: None,
+            ssh_target: None,
+            remote_cwd: None,
+            dormant: false,
+            ssh_spawn: None,
+            reconnecting: false,
         }
     }
 
@@ -1094,6 +1147,9 @@ enum ActionOutcome {
     OpenSessionPicker {
         edit_name: bool,
     },
+    /// `ssh.reconnect` (ADR-0076 §5): o ciclo de reconexão é do processo, não
+    /// da janela.
+    SshReconnect,
     Unhandled,
 }
 
@@ -1136,6 +1192,12 @@ enum NewTabRequest {
     /// "+" ao fim da trilha, fora de qualquer wrapper.
     Ungrouped,
     WindowEmptied,
+    /// Secondary click on a `+`: the profile menu hangs from `anchor` (window
+    /// coordinates). `App` builds the rows, which need the config and keymap.
+    OpenProfileMenu {
+        target: ProfileMenuTarget,
+        anchor: Rect,
+    },
 }
 
 /// Onde uma aba nova nasce. As três origens querem coisas diferentes:
@@ -1208,12 +1270,24 @@ struct WindowState {
     /// Diálogo de confirmação em andamento (ADR-0014, RF-10.18), no máximo
     /// um por janela -- "modal é por janela, não por app".
     dialog: Option<ConfirmDialog>,
+    /// O campo mascarado do diálogo de segredo (ADR-0075 §2): o único pedaço
+    /// dele que não é dado puro (`ConfirmDialog` é `Clone`). Existe **só**
+    /// enquanto `dialog` é um `DialogAction::Secret`; cai (e é zerado) com ele.
+    secret_field: Option<masked_field::MaskedFieldState>,
     /// Menu de contexto de aba em andamento (ADR-0014 §2.16, RF-10.19).
     context_menu: Option<ContextMenu>,
     /// Menu de contexto de grupo (RF-2.22, ADR-0023) -- mutuamente
     /// exclusivo com `context_menu`/`group_editor`/`move_to_group`
     /// (`close_all_popovers`).
     group_context_menu: Option<GroupContextMenu>,
+    /// Profile menu (ADR-0070 §6): the context menu anchored on a `+`.
+    profile_menu: Option<ProfileMenu>,
+    /// The panes' tab badges need recomputing (ADR-0070 §7): after a spawn, a
+    /// restore (starts `true`) or a config reload.
+    profile_badges_dirty: bool,
+    /// Perguntas de um backend que esperam o usuário chegar ao painel
+    /// (ADR-0075 §4).
+    pending_prompts: prompt_queue::PendingPrompts,
     /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
     /// mesma exclusão mútua de `close_all_popovers`.
     terminal_context_menu: Option<TerminalContextMenu>,
@@ -1302,6 +1376,66 @@ struct WindowState {
     catalog: Arc<Catalog>,
 }
 
+/// Reduz o fim de uma sessão ao que o tratamento de hoje entende: se fecha
+/// o painel (`true`) ou o deixa aberto com nota, e o código dessa nota.
+/// Só `Exited` é produzido por enquanto; as outras razões (SSH, ADR-0071
+/// §3) recebem o tratamento de saída com código ≠ 0 -- painel aberto, com
+/// nota -- até quem as produz definir o seu.
+fn exit_outcome(reason: &EndReason) -> (bool, u32) {
+    match reason {
+        EndReason::Exited { success, code } => (*success, *code),
+        // ADR-0071 §3: o servidor encerrou com código 0 e sem sinal -- é o
+        // `exit` de sempre, e o painel fecha. Com código ≠ 0, com sinal, ou
+        // sem nenhum dos dois, fica aberto com a nota.
+        EndReason::RemoteEnded {
+            code: Some(0),
+            signal: None,
+        } => (true, 0),
+        // Um sinal com código 0 (ou nenhum código) não é saída limpa: o
+        // painel marca ≠ 0 para nunca parecer um `exit` bem-sucedido.
+        EndReason::RemoteEnded { code, .. } => (false, code.filter(|code| *code != 0).unwrap_or(1)),
+        // `Lost` e `Failed` não são saída de processo nenhuma: a aba fica
+        // aberta com a nota da causa. Uma conexão que caiu sozinha nunca chega
+        // aqui: é do ciclo de reconexão (`app_reconnect.rs`, ADR-0076), que só
+        // devolve o painel a este caminho ao desistir.
+        EndReason::Lost { .. } | EndReason::Failed { .. } => (false, 1),
+    }
+}
+
+/// O `cwd` local de um painel: o dele, a menos que seja SSH -- o diretório de
+/// um servidor nunca é um diretório desta máquina (RF-20.22).
+fn local_cwd(remote: bool, tab_cwd: Option<&PathBuf>) -> Option<PathBuf> {
+    if remote { None } else { tab_cwd.cloned() }
+}
+
+/// O `cwd` herdado por `tab.new`/`window.new` (ADR-0017 item 1): o local da aba
+/// ativa e, sem ele, o `startup_directory` -- que é também o que uma aba SSH
+/// dá, por não ter diretório local (RF-20.22).
+fn inherited_cwd(local: Option<PathBuf>, startup_directory: &Option<PathBuf>) -> Option<PathBuf> {
+    local.or_else(|| startup_directory.clone())
+}
+
+/// A nota que abre um painel SSH: a de conectando, ou -- num painel restaurado
+/// que espera o gesto (RF-20.33) -- a que diz como conectar.
+fn ssh_start_note(catalog: &Catalog, dormant: bool, host: &str, name: &str) -> String {
+    if dormant {
+        messages::ssh_dormant_note(catalog, name)
+    } else {
+        messages::ssh_connecting_note(catalog, host)
+    }
+}
+
+/// RF-20.25, ADR-0034, ADR-0071 §6: o que o `Terminal` diz estar vivo conta
+/// como "tem algo a perder" para a confirmação de fechamento -- processo extra
+/// no PTY **e** conexão SSH aberta, **do canal deste painel**. `Idle` é o
+/// painel local só com o shell, o SSH já encerrado e o dormente.
+fn liveness_needs_confirmation(liveness: Liveness) -> bool {
+    match liveness {
+        Liveness::Idle => false,
+        Liveness::ExtraProcesses | Liveness::OpenConnection => true,
+    }
+}
+
 /// RF-1.6 (ADR-0017, ADR-0034): decide se `tab.close`/o botão de fechar
 /// devem confirmar antes de fechar -- dois sinais em OU, ambos atrás da
 /// config `confirm_close_with_process`. Função livre e pura (sem
@@ -1316,6 +1450,23 @@ fn should_confirm_tab_close(
         && (modes.alt_screen
             || modes.mouse_reporting != MouseReporting::None
             || has_extra_processes)
+}
+
+/// ADR-0053 §10: fechar a aba pergunta se **qualquer** painel dela tem algo a
+/// perder. Cada painel entra com o que o `Terminal` dele diz -- e `Liveness`
+/// é **por canal** (ADR-0071 §6): dois painéis na mesma conexão, um com o
+/// shell remoto já encerrado, e só o outro pesa.
+fn any_pane_needs_confirmation(
+    confirm_close_with_process: bool,
+    panes: impl IntoIterator<Item = (TermModes, Liveness)>,
+) -> bool {
+    panes.into_iter().any(|(modes, liveness)| {
+        should_confirm_tab_close(
+            confirm_close_with_process,
+            modes,
+            liveness_needs_confirmation(liveness),
+        )
+    })
 }
 
 /// ADR-0034 §6, ADR-0037 §3: decide se `window.close`/`app.quit` devem
@@ -2045,6 +2196,192 @@ mod should_confirm_tab_close_tests {
         };
         assert!(!should_confirm_tab_close(false, modes, true));
     }
+
+    /// RF-20.22: `tab.new` a partir de uma aba SSH abre o padrão no
+    /// `startup_directory`; a partir de uma aba local, herda o diretório dela.
+    #[test]
+    fn a_new_tab_from_an_ssh_tab_starts_in_the_startup_directory() {
+        let startup = Some(PathBuf::from("/home/me"));
+        let tab_cwd = PathBuf::from("/work/project");
+
+        let from_local = inherited_cwd(local_cwd(false, Some(&tab_cwd)), &startup);
+        let from_ssh = inherited_cwd(local_cwd(true, Some(&tab_cwd)), &startup);
+        assert_eq!(from_local, Some(tab_cwd.clone()));
+        assert_eq!(from_ssh, startup);
+        // No startup directory either: the OS decides, never the remote path.
+        assert_eq!(inherited_cwd(local_cwd(true, Some(&tab_cwd)), &None), None);
+    }
+
+    /// RF-20.25: a conexão aberta confirma como o processo extra, atrás da
+    /// mesma chave -- e o painel SSH já encerrado, o dormente e o local só com
+    /// o shell, não.
+    #[test]
+    fn every_liveness_has_its_confirmation_decision() {
+        let table = [
+            (Liveness::Idle, false),
+            (Liveness::ExtraProcesses, true),
+            (Liveness::OpenConnection, true),
+        ];
+        for (liveness, confirms) in table {
+            assert_eq!(liveness_needs_confirmation(liveness), confirms);
+            assert_eq!(
+                should_confirm_tab_close(
+                    true,
+                    quiet_modes(),
+                    liveness_needs_confirmation(liveness)
+                ),
+                confirms,
+                "{liveness:?}"
+            );
+            // `confirm_close_with_process = false` silences all of them.
+            assert!(!should_confirm_tab_close(
+                false,
+                quiet_modes(),
+                liveness_needs_confirmation(liveness)
+            ));
+        }
+    }
+
+    /// ADR-0071 §6: o painel cujo shell remoto saiu fecha sem perguntar mesmo
+    /// com a conexão viva por causa do outro. O estado do canal é simulado:
+    /// a conexão compartilhada ainda não existe (prompt 14).
+    #[test]
+    fn with_two_panes_on_one_connection_only_the_open_channel_weighs() {
+        let ended = (quiet_modes(), Liveness::Idle);
+        let open = (quiet_modes(), Liveness::OpenConnection);
+        // The pane that closes alone: its own channel decides.
+        assert!(!any_pane_needs_confirmation(true, [ended]));
+        assert!(any_pane_needs_confirmation(true, [open]));
+        // The tab with both: the open channel is enough, whatever the order.
+        assert!(any_pane_needs_confirmation(true, [ended, open]));
+        assert!(any_pane_needs_confirmation(true, [open, ended]));
+        // Both ended (or never started): nothing to lose.
+        assert!(!any_pane_needs_confirmation(true, [ended, ended]));
+        // A busy local pane next to an ended SSH one still asks.
+        let busy_local = (quiet_modes(), Liveness::ExtraProcesses);
+        assert!(any_pane_needs_confirmation(true, [ended, busy_local]));
+        assert!(!any_pane_needs_confirmation(false, [open, busy_local]));
+        assert!(!any_pane_needs_confirmation(true, []));
+    }
+
+    #[test]
+    fn exited_keeps_its_own_success_and_code() {
+        let ok = EndReason::Exited {
+            success: true,
+            code: 0,
+        };
+        let bad = EndReason::Exited {
+            success: false,
+            code: 3,
+        };
+        assert_eq!(exit_outcome(&ok), (true, 0));
+        assert_eq!(exit_outcome(&bad), (false, 3));
+    }
+
+    /// ADR-0071 §3: o servidor encerrou com código 0 e sem sinal, o `exit` de
+    /// sempre -- o painel fecha como o de um shell local.
+    #[test]
+    fn a_clean_remote_exit_closes_the_pane_like_a_local_one() {
+        let clean = EndReason::RemoteEnded {
+            code: Some(0),
+            signal: None,
+        };
+        assert_eq!(exit_outcome(&clean), (true, 0));
+    }
+
+    #[test]
+    fn a_remote_exit_with_a_code_a_signal_or_nothing_keeps_the_pane_open() {
+        let with_code = EndReason::RemoteEnded {
+            code: Some(3),
+            signal: None,
+        };
+        let by_signal = EndReason::RemoteEnded {
+            code: None,
+            signal: Some("TERM".into()),
+        };
+        // A signal next to a "0" is still not a clean exit.
+        let signal_and_zero = EndReason::RemoteEnded {
+            code: Some(0),
+            signal: Some("KILL".into()),
+        };
+        let closed_by_the_server = EndReason::RemoteEnded {
+            code: None,
+            signal: None,
+        };
+        assert_eq!(exit_outcome(&with_code), (false, 3));
+        assert_eq!(exit_outcome(&by_signal), (false, 1));
+        assert_eq!(exit_outcome(&signal_and_zero), (false, 1));
+        assert_eq!(exit_outcome(&closed_by_the_server), (false, 1));
+    }
+
+    #[test]
+    fn a_lost_or_failed_connection_keeps_the_pane_open_with_the_cause_as_a_note() {
+        use porecatu_term::{FailCause, LostCause};
+        let lost = EndReason::Lost {
+            cause: LostCause::Transport,
+        };
+        let failed = EndReason::Failed {
+            cause: FailCause::Refused,
+        };
+        assert_eq!(exit_outcome(&lost), (false, 1));
+        assert_eq!(exit_outcome(&failed), (false, 1));
+    }
+
+    /// RF-20.26, ADR-0071 §3: a tabela inteira, do fim da sessão ao destino da
+    /// aba -- só o `exit` limpo (local ou do servidor) fecha. `Lost` e todo
+    /// `Failed` ficam abertos com nota, e nenhum deles reconecta aqui.
+    #[test]
+    fn the_whole_table_of_end_reasons_decides_closed_or_kept() {
+        use porecatu_term::{FailCause, LostCause};
+        let remote = |code, signal: Option<&str>| EndReason::RemoteEnded {
+            code,
+            signal: signal.map(str::to_owned),
+        };
+        let mut table = vec![
+            (
+                EndReason::Exited {
+                    success: true,
+                    code: 0,
+                },
+                true,
+            ),
+            (
+                EndReason::Exited {
+                    success: false,
+                    code: 1,
+                },
+                false,
+            ),
+            (remote(Some(0), None), true),
+            (remote(Some(3), None), false),
+            (remote(None, Some("HUP")), false),
+            (remote(Some(0), Some("HUP")), false),
+            (remote(None, None), false),
+        ];
+        for cause in [
+            LostCause::KeepaliveTimeout,
+            LostCause::Transport,
+            LostCause::ServerDisconnect,
+        ] {
+            table.push((EndReason::Lost { cause }, false));
+        }
+        for cause in [
+            FailCause::Refused,
+            FailCause::Timeout,
+            FailCause::AuthRejected,
+            FailCause::AuthCancelled,
+            FailCause::AuthUnsupported,
+            FailCause::KeyUnreadable,
+            FailCause::HostKeyRejectedByUser,
+            FailCause::ChannelRefused,
+            FailCause::Runtime,
+        ] {
+            table.push((EndReason::Failed { cause }, false));
+        }
+        for (reason, closes) in table {
+            assert_eq!(exit_outcome(&reason).0, closes, "{reason:?}");
+        }
+    }
 }
 
 impl WindowState {
@@ -2079,8 +2416,12 @@ impl WindowState {
             hover: Hover::default(),
             warnings: WarningStack::default(),
             dialog: None,
+            secret_field: None,
             context_menu: None,
             group_context_menu: None,
+            profile_menu: None,
+            profile_badges_dirty: true,
+            pending_prompts: prompt_queue::PendingPrompts::default(),
             terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
@@ -2145,6 +2486,7 @@ impl WindowState {
         let dialog = &self.dialog;
         let context_menu = &self.context_menu;
         let group_context_menu = &self.group_context_menu;
+        let profile_menu = &self.profile_menu;
         let terminal_context_menu = &self.terminal_context_menu;
         let group_editor = &self.group_editor;
         let move_to_group = &self.move_to_group;
@@ -2159,6 +2501,7 @@ impl WindowState {
                 dialog,
                 context_menu,
                 group_context_menu,
+                profile_menu,
                 terminal_context_menu,
                 group_editor,
                 move_to_group,
@@ -2229,6 +2572,7 @@ impl WindowState {
     fn close_all_popovers(&mut self) {
         self.context_menu = None;
         self.group_context_menu = None;
+        self.profile_menu = None;
         self.terminal_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
@@ -2278,11 +2622,25 @@ impl WindowState {
     /// aba ativa -> diretório de início do app -> nenhum (o SO decide,
     /// tipicamente home).
     fn resolve_new_tab_cwd(&self, startup_directory: &Option<PathBuf>) -> Option<PathBuf> {
-        self.workspace
-            .active_tab()
-            .and_then(|id| self.workspace.tab(id))
-            .and_then(|tab| tab.cwd().cloned())
-            .or_else(|| startup_directory.clone())
+        inherited_cwd(
+            self.workspace
+                .active_tab()
+                .and_then(|id| self.local_cwd_of(id)),
+            startup_directory,
+        )
+    }
+
+    /// O `cwd` **local** da aba (do painel focado), ou `None` quando esse painel
+    /// é SSH -- o diretório de um servidor nunca é herdado como local
+    /// (RF-20.22). O remoto nem passa por `Tab::cwd` (ver `remote_cwd`); isto
+    /// é a segunda trava, para um `cwd` herdado antes de o perfil ser SSH.
+    fn local_cwd_of(&self, id: TabId) -> Option<PathBuf> {
+        let tab = self.workspace.tab(id)?;
+        let remote = self
+            .panes
+            .get(&(id, tab.panes().focused_id()))
+            .is_some_and(|rt| rt.ssh_host.is_some());
+        local_cwd(remote, tab.cwd())
     }
 
     /// `cwd` herdado por `group.new_tab` (RF-2.8): a última aba **do grupo
@@ -2299,8 +2657,7 @@ impl WindowState {
         self.workspace
             .group(group)
             .and_then(|g| g.tabs().last())
-            .and_then(|&id| self.workspace.tab(id))
-            .and_then(|tab| tab.cwd().cloned())
+            .and_then(|&id| self.local_cwd_of(id))
             .or_else(|| self.resolve_new_tab_cwd(startup_directory))
     }
 
@@ -2317,24 +2674,6 @@ impl WindowState {
             self.logical_height,
         );
         grid_size_for_rect(content, cell_metrics)
-    }
-
-    /// Nome de exibição do shell (fallback de última instância da
-    /// precedência de título, RF-1.7/ADR-0017) -- `[shell] program`
-    /// presente vence (mesma precedência de `SpawnConfig.program`); vazio
-    /// cai na mesma resolução que `porecatu_pty::spawn` usa. Reduzido ao
-    /// nome-base (sem caminho nem extensão) nos dois casos.
-    fn shell_display_name(shell: &porecatu_config::Shell) -> String {
-        let resolved = if shell.program.is_empty() {
-            resolve_default_shell(std::env::var("SHELL").ok().as_deref(), search_path)
-        } else {
-            shell.program.clone()
-        };
-        std::path::Path::new(&resolved)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(resolved)
     }
 
     /// RF-1.18: rola a trilha o mínimo necessário para que a aba ativa
@@ -2411,6 +2750,42 @@ impl WindowState {
         self.pane_runtime(id)
     }
 
+    /// Grava no painel o perfil com que ele está sendo lançado (ADR-0070
+    /// §4) -- `None` para o `[shell]`, e é o que a sessão grava -- e o nome
+    /// do shell que sobe, que numa restauração pode divergir do gravado.
+    fn set_pane_profile(&mut self, tab_id: TabId, pane_id: PaneId, profile: &ResolvedProfile) {
+        if let Some(pane) = self
+            .workspace
+            .tab_mut(tab_id)
+            .and_then(|t| t.panes_mut().pane_mut(pane_id))
+        {
+            pane.set_profile(profile_spawn::pane_profile_id(profile));
+            pane.set_shell_name(profile_spawn::display_name(profile));
+        }
+        self.profile_badges_dirty = true;
+    }
+
+    /// Recomputes the badge of every pane from its profile and the config
+    /// (ADR-0070 §7). Runs before a frame, only when something changed: a
+    /// spawn, a restore or a reload; resolving a profile is too much work to
+    /// repeat per frame.
+    fn refresh_profile_badges(&mut self, config: &porecatu_config::Config) {
+        if !self.profile_badges_dirty {
+            return;
+        }
+        self.profile_badges_dirty = false;
+        let tabs: Vec<TabId> = self.workspace.visual_order().collect();
+        for id in tabs {
+            let Some(tab) = self.workspace.tab_mut(id) else {
+                continue;
+            };
+            for pane in tab.panes_mut().panes_mut() {
+                let badge = profile_spawn::badge_to_show(config, pane.profile());
+                pane.set_profile_badge(badge);
+            }
+        }
+    }
+
     /// Cria uma aba, herdando `cwd` (RF-1.1, ADR-0017), e spawna a
     /// `Terminal` dela via [`Self::spawn_tab_runtime`]. Aba nova nasce
     /// sempre `Running` (ADR-0037 §1) -- `spawn_tab_runtime` não muda
@@ -2425,11 +2800,20 @@ impl WindowState {
         target: NewTabTarget,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
+        profile: Option<&str>,
     ) {
-        let shell_name = Self::shell_display_name(shell);
+        // ADR-0070 §2: a new tab launches the default profile, unless the
+        // user chose one (profile menu, `profile.new_tab_N`).
+        let spawn_profile = match profile {
+            Some(id) => profile_spawn::chosen_profile(config, id),
+            None => profile_spawn::default_profile(config),
+        };
+        let shell_name = profile_spawn::display_name(&spawn_profile.resolved);
+        // A connection has no local directory to start in (RF-20.22).
+        let cwd = local_cwd(spawn_profile.resolved.ssh.is_some(), cwd.as_ref());
         let tab_id = match target {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
                 Some(g) => {
@@ -2455,7 +2839,7 @@ impl WindowState {
             now,
             style,
             term_params,
-            shell,
+            &spawn_profile,
             SpawnOrigin::New,
             project_file,
             startup_directory,
@@ -2488,7 +2872,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        spawn_profile: &profile_spawn::SpawnProfile,
         origin: SpawnOrigin,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
@@ -2497,6 +2881,17 @@ impl WindowState {
         // gesto de split, é sempre o único painel dela.
         let Some(pane_id) = self.workspace.tab(tab_id).map(|t| t.panes().focused_id()) else {
             return;
+        };
+        let profile = &spawn_profile.resolved;
+        // The pane records the profile it is launched with (ADR-0070 §4), so
+        // a restored pane whose profile is gone is saved as the default.
+        self.set_pane_profile(tab_id, pane_id, profile);
+        // A new tab starts in the profile's `cwd` when it has one (it
+        // overrides the one inherited from the active tab); a restored tab
+        // keeps the directory it was saved in.
+        let cwd = match origin {
+            SpawnOrigin::New => profile.cwd.clone().or(cwd),
+            SpawnOrigin::Restored => cwd.or_else(|| profile.cwd.clone()),
         };
         let (rows, cols) = self.grid_size(cell_metrics, style);
         let window_id = self.window.id();
@@ -2508,35 +2903,35 @@ impl WindowState {
         // `resolve_tab_cwd` substituir `cwd` -- veja `project_file_
         // candidate_dir` para a regra em si.
         let project_dir = project_file_candidate_dir(origin, cwd_exists, cwd.as_deref());
-        // Cuidado: o shell a considerar é o que **vai ser lançado agora**
-        // (`shell`, de onde `pty_config.program` abaixo sai), nunca
+        // Cuidado: o shell a considerar é o do perfil que **vai ser lançado
+        // agora** (`profile`, de onde `pty_config.program` abaixo sai), nunca
         // `Tab::shell_name()` -- numa aba restaurada aquele valor veio do
-        // arquivo de sessão, e a restauração ignora esse campo ao spawnar
-        // (sempre usa `config.shell`); os dois podem divergir se o usuário
-        // trocou de shell entre uma execução e outra.
-        let project_outcome = project_dir.as_deref().map(|dir| {
-            porecatu_config::resolve_project_file(
-                dir,
-                &Self::shell_display_name(shell),
-                project_file,
-            )
-        });
+        // arquivo de sessão, e os dois podem divergir se o usuário trocou
+        // de shell ou editou o perfil entre uma execução e outra.
+        // Um painel SSH não lê `.porecatu`: o diretório é do servidor.
+        let project_outcome = project_dir
+            .as_deref()
+            .filter(|_| profile.ssh.is_none())
+            .map(|dir| {
+                porecatu_config::resolve_project_file(
+                    dir,
+                    &profile_spawn::display_name(profile),
+                    project_file,
+                )
+            });
         let (cwd, missing_cwd_note) =
             session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
-            // Vazio = detecta automaticamente (`porecatu_pty::spawn` cai em
-            // `resolve_default_shell`) -- `[shell] program` presente tem
+            // `None` = detecta automaticamente (`porecatu_pty::spawn` cai em
+            // `resolve_default_shell`) -- `program` presente tem
             // precedência total (doc de `SpawnConfig`).
-            program: (!shell.program.is_empty()).then(|| shell.program.clone()),
-            args: shell.args.clone(),
-            // `[shell.env]` é aplicado **depois** do ambiente base
-            // (TERM/COLORTERM/...) por `porecatu_pty::spawn` -- a config do
-            // usuário pode sobrescrevê-lo (ADR-0012).
-            env: shell
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            program: profile.program.clone(),
+            args: profile.args.clone(),
+            // `[shell.env]` (com o `env` do perfil por cima) é aplicado
+            // **depois** do ambiente base (TERM/COLORTERM/...) por
+            // `porecatu_pty::spawn` -- a config do usuário pode
+            // sobrescrevê-lo (ADR-0012).
+            env: profile.env.clone(),
             cwd: cwd.clone(),
             size: PtySize {
                 rows: rows as u16,
@@ -2546,7 +2941,25 @@ impl WindowState {
             },
         };
 
-        match Terminal::spawn(pty_config, term_params.clone(), move || {
+        let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+        let ssh_name = profile.ssh.as_ref().map(|ssh| ssh.name.clone());
+        let ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
+        let ssh_spawn = profile
+            .ssh
+            .as_ref()
+            .map(|ssh| profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16));
+        // RF-20.33: a restored SSH pane never connects by itself.
+        let dormant = origin == SpawnOrigin::Restored && profile.ssh.is_some();
+        let spec = match &ssh_spawn {
+            Some(_) if dormant => BackendSpec::Dormant {
+                rows: rows as u16,
+                cols: cols as u16,
+            },
+            // Aba nova de um perfil SSH: conexão nova, sempre (ADR-0072 §5).
+            Some(spawn) => BackendSpec::Ssh(spawn.clone()),
+            None => BackendSpec::Local(pty_config),
+        };
+        match Terminal::spawn(spec, term_params.clone(), move || {
             let _ = proxy.send_event(Wakeup::TabDirty {
                 window: window_id,
                 tab,
@@ -2554,9 +2967,25 @@ impl WindowState {
             });
         }) {
             Ok(terminal) => {
-                if let Some(missing) = &missing_cwd_note {
+                // O `cwd` local não vale para um servidor remoto.
+                if ssh_host.is_none()
+                    && let Some(missing) = &missing_cwd_note
+                {
                     terminal.inject_note(
                         &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                // ADR-0075 §5: o estado da conexão é nota no grid.
+                if let (Some(host), Some(name)) = (&ssh_host, &ssh_name) {
+                    terminal.inject_note(
+                        &ssh_start_note(&self.catalog, dormant, host, name),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(id) = &spawn_profile.missing {
+                    terminal.inject_note(
+                        &msg::note::profile_missing(&self.catalog, id),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2594,11 +3023,20 @@ impl WindowState {
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
-                        received_osc7: false,
+                        // An SSH pane has no local shell to invite to emit
+                        // OSC 7, and the session never asks it for a local
+                        // directory: it counts as "already has it".
+                        received_osc7: ssh_host.is_some(),
                         #[cfg(windows)]
                         first_output_at: None,
                         pending_project_command,
                         pending_project_notice,
+                        ssh_host,
+                        ssh_target,
+                        remote_cwd: None,
+                        dormant,
+                        ssh_spawn,
+                        reconnecting: false,
                     },
                 );
             }
@@ -2645,10 +3083,17 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        spawn_profile: &profile_spawn::SpawnProfile,
         now: Instant,
         startup_directory: &Option<PathBuf>,
+        dormant: bool,
+        share_connection: Option<porecatu_term::ConnectionId>,
     ) {
+        let profile = &spawn_profile.resolved;
+        self.set_pane_profile(tab_id, pane_id, profile);
+        // The directory inherited from the origin pane (or saved) wins; the
+        // profile's `cwd` only fills in when there is none.
+        let cwd = cwd.or_else(|| profile.cwd.clone());
         let content = paint::pane_content_rect(pane_rect, style);
         let (rows, cols) = grid_size_for_rect(content, cell_metrics);
         let window_id = self.window.id();
@@ -2657,13 +3102,9 @@ impl WindowState {
         let (cwd, missing_cwd_note) =
             session_writer::resolve_tab_cwd(cwd, cwd_exists, startup_directory);
         let pty_config = SpawnConfig {
-            program: (!shell.program.is_empty()).then(|| shell.program.clone()),
-            args: shell.args.clone(),
-            env: shell
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
+            program: profile.program.clone(),
+            args: profile.args.clone(),
+            env: profile.env.clone(),
             cwd: cwd.clone(),
             size: PtySize {
                 rows: rows as u16,
@@ -2672,7 +3113,33 @@ impl WindowState {
                 pixel_height: 0,
             },
         };
-        match Terminal::spawn(pty_config, term_params.clone(), move || {
+        let ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+        let ssh_name = profile.ssh.as_ref().map(|ssh| ssh.name.clone());
+        let ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
+        let ssh_spawn = profile
+            .ssh
+            .as_ref()
+            .map(|ssh| profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16));
+        let spec = match &ssh_spawn {
+            Some(_) if dormant => BackendSpec::Dormant {
+                rows: rows as u16,
+                cols: cols as u16,
+            },
+            // RF-20.23: dividir um painel SSH abre um canal na **mesma
+            // conexão**, sem autenticar de novo. Sem conexão viva para
+            // dividir, abre uma própria, como uma aba nova.
+            Some(spawn) => {
+                let mut spawn = spawn.clone();
+                if let Some(id) = share_connection
+                    && porecatu_term::connection_is_alive(id)
+                {
+                    spawn.connection = porecatu_term::Connection::Share(id);
+                }
+                BackendSpec::Ssh(spawn)
+            }
+            None => BackendSpec::Local(pty_config),
+        };
+        match Terminal::spawn(spec, term_params.clone(), move || {
             let _ = proxy.send_event(Wakeup::TabDirty {
                 window: window_id,
                 tab: tab_id,
@@ -2680,9 +3147,23 @@ impl WindowState {
             });
         }) {
             Ok(terminal) => {
-                if let Some(missing) = &missing_cwd_note {
+                if ssh_host.is_none()
+                    && let Some(missing) = &missing_cwd_note
+                {
                     terminal.inject_note(
                         &msg::note::cwd_missing(&self.catalog, missing.display()),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let (Some(host), Some(name)) = (&ssh_host, &ssh_name) {
+                    terminal.inject_note(
+                        &ssh_start_note(&self.catalog, dormant, host, name),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(id) = &spawn_profile.missing {
+                    terminal.inject_note(
+                        &msg::note::profile_missing(&self.catalog, id),
                         palette::NOTE_ACCENT_RGB,
                     );
                 }
@@ -2692,11 +3173,17 @@ impl WindowState {
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
-                        received_osc7: false,
+                        received_osc7: ssh_host.is_some(),
                         #[cfg(windows)]
                         first_output_at: None,
                         pending_project_command: None,
                         pending_project_notice: None,
+                        ssh_host,
+                        ssh_target,
+                        remote_cwd: None,
+                        dormant,
+                        ssh_spawn,
+                        reconnecting: false,
                     },
                 );
             }
@@ -2733,7 +3220,7 @@ impl WindowState {
         proxy: &EventLoopProxy<Wakeup>,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         now: Instant,
         startup_directory: &Option<PathBuf>,
     ) {
@@ -2742,13 +3229,20 @@ impl WindowState {
         };
         let focused = tab.panes().focused_id();
         let box_rect = self.active_tab_box_rect(style);
-        let siblings: Vec<(PaneId, Option<PathBuf>, Rect)> =
+        // ADR-0070 §4: each sibling launches the profile it was saved with,
+        // resolved now, when the process starts.
+        let siblings: Vec<(PaneId, Option<PathBuf>, Rect, profile_spawn::SpawnProfile)> =
             panes::layout(tab.panes(), box_rect, style)
                 .into_iter()
                 .filter(|(id, _)| *id != focused)
-                .filter_map(|(id, rect)| tab.panes().pane(id).map(|p| (id, p.cwd().cloned(), rect)))
+                .filter_map(|(id, rect)| {
+                    tab.panes().pane(id).map(|p| {
+                        let profile = profile_spawn::restored_profile(config, p.profile());
+                        (id, p.cwd().cloned(), rect, profile)
+                    })
+                })
                 .collect();
-        for (pane_id, cwd, pane_rect) in siblings {
+        for (pane_id, cwd, pane_rect, spawn_profile) in siblings {
             if self.panes.contains_key(&(tab_id, pane_id)) {
                 continue;
             }
@@ -2761,9 +3255,12 @@ impl WindowState {
                 proxy,
                 style,
                 term_params,
-                shell,
+                &spawn_profile,
                 now,
                 startup_directory,
+                // RF-20.33: an SSH sibling waits for its own gesture.
+                spawn_profile.resolved.ssh.is_some(),
+                None,
             );
         }
     }
@@ -2783,7 +3280,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         panes_config: &porecatu_config::Panes,
         startup_directory: &Option<PathBuf>,
     ) {
@@ -2794,7 +3291,10 @@ impl WindowState {
             return;
         };
         let focused = tab.panes().focused_id();
-        let shell_name = Self::shell_display_name(shell);
+        // RF-7.15/ADR-0070 §2: dividir lança o perfil do painel de origem,
+        // `None` (o `[shell]`) inclusive -- nunca consulta o padrão.
+        let spawn_profile = profile_spawn::split_profile(config, tab.panes().focused().profile());
+        let shell_name = profile_spawn::display_name(&spawn_profile.resolved);
         // RF-6.3: o painel novo herda o `cwd` do painel de origem -- o
         // mesmo valor que a barra de status/o título já mostram para ele.
         let cwd = tab.cwd().cloned();
@@ -2832,6 +3332,13 @@ impl WindowState {
             return;
         };
         let new_pane_rect = self.pane_box_rect(style, new_pane_id);
+        // RF-20.23: the new pane joins the connection of the one it came from,
+        // when that one is a live SSH pane (not dormant, not reconnecting).
+        let share_connection = self
+            .panes
+            .get(&(tab_id, focused))
+            .filter(|rt| rt.ssh_spawn.is_some() && !rt.dormant && !rt.reconnecting)
+            .and_then(|rt| rt.terminal.connection_id());
         self.spawn_split_pane_runtime(
             tab_id,
             new_pane_id,
@@ -2841,9 +3348,12 @@ impl WindowState {
             proxy,
             style,
             term_params,
-            shell,
+            &spawn_profile,
             now,
             startup_directory,
+            // A split is the user asking for "one more of these": it connects.
+            false,
+            share_connection,
         );
         // O painel de origem encolheu na árvore, mas o `Terminal` dele já
         // existia antes do split e não sabe disso sozinho -- sem isto, um
@@ -2895,7 +3405,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
     ) {
@@ -2908,7 +3418,16 @@ impl WindowState {
         if !tab.is_not_started() {
             return;
         }
+        // RF-20.33: a focused SSH pane stays `NotStarted` in the model after
+        // its dormant runtime exists -- the tab has been dealt with already.
+        if self.panes.contains_key(&(id, tab.panes().focused_id())) {
+            return;
+        }
         let cwd = tab.cwd().cloned();
+        // ADR-0070 §4: o perfil é resolvido agora, no primeiro foco -- ele
+        // pode ter sido editado entre a restauração e este momento.
+        let spawn_profile =
+            profile_spawn::restored_profile(config, tab.panes().focused().profile());
         // ADR-0037 §1/ADR-0051 §1: `NotStarted` só é criada pela
         // restauração de sessão -- este caminho é sempre `Restored`.
         self.spawn_tab_runtime(
@@ -2919,7 +3438,7 @@ impl WindowState {
             now,
             style,
             term_params,
-            shell,
+            &spawn_profile,
             SpawnOrigin::Restored,
             project_file,
             startup_directory,
@@ -2930,21 +3449,155 @@ impl WindowState {
         // continua sendo o foco da aba, mas ele sobe **todos** os painéis
         // dela de uma vez -- `Tab::start()` só formaliza o focado, então
         // cada painel da árvore recebe o próprio `Pane::start()` aqui.
-        if let Some(tab) = self.workspace.tab_mut(id) {
-            for pane in tab.panes_mut().panes_mut() {
-                pane.start();
-            }
-        }
         self.spawn_restored_sibling_panes(
             id,
             cell_metrics,
             proxy,
             style,
             term_params,
-            shell,
+            config,
             now,
             startup_directory,
         );
+        self.start_live_panes(id);
+        // RF-20.33: this is where a dormant SSH pane becomes the active one
+        // (`Ctrl+Tab`, `tab.goto_N`, the tab the restore picked). Gaining
+        // focus is not a gesture on the pane, and the one decision says so.
+        if profile_spawn::gesture_connects(profile_spawn::PaneGesture::Focus)
+            && let Some((tab, pane)) = self.dormant_focused_pane()
+        {
+            self.connect_dormant_pane(tab, pane, config, startup_directory, now);
+        }
+    }
+
+    /// Formaliza `NotStarted -> Running` em todo painel da aba que ganhou um
+    /// processo -- ou seja, em todos menos os SSH dormentes (RF-20.33), que
+    /// só `Self::connect_dormant_pane` inicia. Roda **depois** de os painéis
+    /// irmãos subirem, para já ver quais ficaram dormentes.
+    fn start_live_panes(&mut self, tab_id: TabId) {
+        let Some(tab) = self.workspace.tab_mut(tab_id) else {
+            return;
+        };
+        for pane in tab.panes_mut().panes_mut() {
+            if !self
+                .panes
+                .get(&(tab_id, pane.id()))
+                .is_some_and(|rt| rt.dormant)
+            {
+                pane.start();
+            }
+        }
+    }
+
+    fn is_dormant(&self, tab: TabId, pane: PaneId) -> bool {
+        self.panes.get(&(tab, pane)).is_some_and(|rt| rt.dormant)
+    }
+
+    /// O painel focado da aba ativa, se for um SSH dormente.
+    fn dormant_focused_pane(&self) -> Option<(TabId, PaneId)> {
+        let tab = self.workspace.active_tab()?;
+        let pane = self.focused_pane_of(tab)?;
+        self.is_dormant(tab, pane).then_some((tab, pane))
+    }
+
+    /// Aba que não tem nenhum processo ainda -- `NotStarted` **e** sem
+    /// runtime. Uma aba cujo painel focado é um SSH dormente também é
+    /// `NotStarted` no modelo, mas tem runtime (o motor com a nota) e outros
+    /// painéis podem ter processo: ela passa pela agregação normal.
+    fn tab_has_nothing_running(&self, id: TabId) -> bool {
+        self.workspace.tab(id).is_some_and(|t| {
+            t.is_not_started() && !self.panes.contains_key(&(id, t.panes().focused_id()))
+        })
+    }
+
+    /// RF-20.33: o primeiro gesto do usuário sobre um painel SSH restaurado
+    /// -- clique nele ou `Enter` com ele focado -- liga o backend ao motor que
+    /// já está lá. O perfil é resolvido agora, como em todo spawn
+    /// (ADR-0070 §4): se ele deixou de ser SSH desde a restauração, sobe o
+    /// que ele é hoje.
+    fn connect_dormant_pane(
+        &mut self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        config: &porecatu_config::Config,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+    ) {
+        if !self.is_dormant(tab_id, pane_id) {
+            return;
+        }
+        let saved = self
+            .workspace
+            .tab(tab_id)
+            .and_then(|t| t.panes().pane(pane_id))
+            .and_then(|p| p.profile().map(str::to_owned));
+        let spawn_profile = profile_spawn::restored_profile(config, saved.as_deref());
+        let profile = &spawn_profile.resolved;
+        self.set_pane_profile(tab_id, pane_id, profile);
+        let Some(runtime) = self.panes.get_mut(&(tab_id, pane_id)) else {
+            return;
+        };
+        let (rows, cols) = match (runtime.snapshot.rows, runtime.snapshot.cols) {
+            (0, _) | (_, 0) => (24, 80),
+            (rows, cols) => (rows as u16, cols as u16),
+        };
+        let spec = match &profile.ssh {
+            Some(ssh) => BackendSpec::Ssh(profile_spawn::ssh_spawn(ssh, rows, cols)),
+            None => BackendSpec::Local(SpawnConfig {
+                program: profile.program.clone(),
+                args: profile.args.clone(),
+                env: profile.env.clone(),
+                cwd: profile
+                    .cwd
+                    .clone()
+                    .or_else(|| startup_directory.clone())
+                    .filter(|dir| dir.is_dir()),
+                size: PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+            }),
+        };
+        match runtime.terminal.reattach(spec) {
+            Ok(()) => {
+                runtime.dormant = false;
+                runtime.ssh_host = profile.ssh.as_ref().map(|ssh| ssh.host.clone());
+                runtime.ssh_target = profile.ssh.as_ref().map(profile_spawn::ssh_target);
+                runtime.received_osc7 = runtime.ssh_host.is_some();
+                runtime.remote_cwd = None;
+                if let Some(ssh) = &profile.ssh {
+                    runtime.terminal.inject_note(
+                        &messages::ssh_connecting_note(&self.catalog, &ssh.host),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(id) = &spawn_profile.missing {
+                    runtime.terminal.inject_note(
+                        &msg::note::profile_missing(&self.catalog, id),
+                        palette::NOTE_ACCENT_RGB,
+                    );
+                }
+                if let Some(pane) = self
+                    .workspace
+                    .tab_mut(tab_id)
+                    .and_then(|t| t.panes_mut().pane_mut(pane_id))
+                {
+                    pane.start();
+                }
+                self.mark_session_dirty();
+            }
+            Err(err) => {
+                self.warnings.push(
+                    Severity::Error,
+                    msg::notice::spawn_failed::title(&self.catalog),
+                    messages::terminal_spawn_error(&self.catalog, &err),
+                    now,
+                );
+            }
+        }
+        self.sync_window_title();
     }
 
     /// Fecha uma aba sem perguntar: sinaliza o processo sem bloquear
@@ -3055,7 +3708,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
@@ -3070,9 +3723,10 @@ impl WindowState {
             NewTabTarget::ActiveGroup,
             style,
             term_params,
-            shell,
+            config,
             project_file,
             startup_directory,
+            None,
         );
     }
 
@@ -3091,7 +3745,7 @@ impl WindowState {
         let id = self.workspace.active_tab()?;
         // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
         // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup`.
-        if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
+        if self.tab_has_nothing_running(id) {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
@@ -3099,21 +3753,16 @@ impl WindowState {
         // tem processo ativo -- não só o focado. Diferente de
         // `action_close_pane`, que fecha um painel só e por isso olha
         // apenas o runtime dele.
-        let any_pane_needs_confirmation = self
-            .workspace
-            .tab(id)?
-            .panes()
-            .leaves_in_order()
-            .iter()
-            .any(|pane| {
-                self.panes.get(&(id, *pane)).is_some_and(|runtime| {
-                    should_confirm_tab_close(
-                        confirm_close_with_process,
-                        runtime.terminal.modes(),
-                        runtime.terminal.has_extra_processes(),
-                    )
-                })
-            });
+        let any_pane_needs_confirmation = any_pane_needs_confirmation(
+            confirm_close_with_process,
+            self.workspace
+                .tab(id)?
+                .panes()
+                .leaves_in_order()
+                .iter()
+                .filter_map(|pane| self.panes.get(&(id, *pane)))
+                .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
+        );
         if any_pane_needs_confirmation {
             let title = self
                 .workspace
@@ -3151,7 +3800,7 @@ impl WindowState {
         if should_confirm_tab_close(
             confirm_close_with_process,
             runtime.terminal.modes(),
-            runtime.terminal.has_extra_processes(),
+            liveness_needs_confirmation(runtime.liveness()),
         ) {
             let title = tab.title().to_string();
             return Some(TabCloseOutcome::Dialog(ConfirmDialog::close_pane(
@@ -3370,6 +4019,100 @@ impl WindowState {
         });
     }
 
+    /// Fecha o diálogo sem confirmar -- `Esc`, o botão Cancelar, um clique
+    /// fora. Num diálogo de host desconhecido isso **responde `Cancel`** à
+    /// pergunta que o abriu (ADR-0075 §3): o backend nunca fica esperando, e
+    /// quem não confirmou não confiou.
+    fn dismiss_dialog(&mut self) {
+        let Some(dialog) = self.dialog.take() else {
+            return;
+        };
+        // O que foi digitado morre aqui, zerado, sem ir a lugar nenhum.
+        self.secret_field = None;
+        if let DialogAction::HostKey(tab_id, pane_id, prompt_id)
+        | DialogAction::Secret(tab_id, pane_id, prompt_id) = dialog.action
+            && let Some(runtime) = self.panes.get(&(tab_id, pane_id))
+        {
+            runtime.terminal.answer(prompt_id, Answer::Cancel);
+        }
+    }
+
+    /// Abre o diálogo da primeira pergunta pendente cujo painel a janela
+    /// mostra agora (ADR-0075 §4): aba ativa, painel focado, janela em foco e
+    /// nenhum outro diálogo aberto. Chamado a cada volta do laço de eventos,
+    /// então "o usuário chegou ao painel" não depende de saber por qual gesto
+    /// -- clique, `Ctrl+Tab`, foco de painel, foco da janela.
+    fn open_ready_prompt(&mut self, catalog: &Catalog) {
+        // Sem diálogo, nenhum texto digitado sobrevive: cai e é zerado.
+        if self.dialog.is_none() {
+            self.secret_field = None;
+        }
+        if self.pending_prompts.is_empty() {
+            return;
+        }
+        let active_tab = self.workspace.active_tab();
+        let focused_pane = active_tab
+            .and_then(|id| self.workspace.tab(id))
+            .map(|tab| tab.panes().focused_id());
+        let view = prompt_queue::FocusView {
+            window_focused: self.focused,
+            active_tab,
+            focused_pane,
+            dialog_open: self.dialog.is_some(),
+        };
+        let panes = &self.panes;
+        let Some(ready) = self
+            .pending_prompts
+            .take_ready(&view, |tab, pane| panes.contains_key(&(tab, pane)))
+        else {
+            return;
+        };
+        match ready.prompt.kind {
+            PromptKind::HostKey {
+                algorithm,
+                fingerprint,
+                known_types,
+                skipped_lines,
+            } => {
+                let host = self
+                    .panes
+                    .get(&(ready.tab, ready.pane))
+                    .and_then(|runtime| runtime.ssh_host.clone())
+                    .unwrap_or_default();
+                let facts = HostKeyFacts {
+                    host,
+                    algorithm,
+                    fingerprint,
+                    known_types,
+                    skipped_lines,
+                };
+                self.dialog = Some(ConfirmDialog::host_key(
+                    catalog,
+                    &facts,
+                    DialogAction::HostKey(ready.tab, ready.pane, ready.prompt.id),
+                ));
+            }
+            // ADR-0075 §2: o campo nasce com o foco, a caixa desmarcada.
+            PromptKind::Secret {
+                label,
+                vault_available,
+                retry,
+            } => {
+                self.dialog = Some(ConfirmDialog::secret(
+                    catalog,
+                    &label,
+                    vault_available,
+                    retry,
+                    DialogAction::Secret(ready.tab, ready.pane, ready.prompt.id),
+                ));
+                self.secret_field = Some(masked_field::MaskedFieldState::new());
+            }
+        }
+        // Visitar o painel apaga a campainha que a pergunta acendeu.
+        self.workspace.activate_tab(ready.tab);
+        self.window.request_redraw();
+    }
+
     /// `Enter` aciona o botão focado, `Esc` cancela (RF-10.18); `Left`/
     /// `Right`/`Tab` trocam o foco entre os dois botões. Devolve a ação
     /// resolvida se o usuário confirmou -- `lib.rs` executa de verdade,
@@ -3381,9 +4124,40 @@ impl WindowState {
         let Some(dialog) = &mut self.dialog else {
             return None;
         };
+        // Diálogo de segredo: o foco anda por campo, caixa e botões, e as
+        // teclas de texto vão ao campo mascarado (ADR-0075 §2).
+        if let Some(field) = self.secret_field.as_mut() {
+            let outcome = secret_dialog::apply_secret_key(
+                field,
+                dialog,
+                &event.logical_key,
+                event.text.as_deref(),
+                self.modifiers,
+            );
+            return match outcome {
+                secret_dialog::SecretKey::None => None,
+                secret_dialog::SecretKey::Cancel => {
+                    self.dismiss_dialog();
+                    None
+                }
+                secret_dialog::SecretKey::Submit => {
+                    // O diálogo e o campo seguem de pé: `run_dialog_action` lê a
+                    // caixa "Lembrar", tira o campo e o entrega, movido.
+                    Some(dialog.action.clone())
+                }
+                secret_dialog::SecretKey::Paste => {
+                    // O texto da área de transferência não é nosso: é zerado
+                    // assim que entra no campo.
+                    if let Some(pasted) = clipboard::paste().map(zeroize::Zeroizing::new) {
+                        field.paste(&pasted);
+                    }
+                    None
+                }
+            };
+        }
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => {
-                self.dialog = None;
+                self.dismiss_dialog();
                 None
             }
             Key::Named(NamedKey::Enter) => {
@@ -3393,7 +4167,7 @@ impl WindowState {
                     self.dialog = None;
                     Some(action)
                 } else {
-                    self.dialog = None;
+                    self.dismiss_dialog();
                     None
                 }
             }
@@ -3464,6 +4238,186 @@ impl WindowState {
             }
             _ => None,
         }
+    }
+
+    /// Opens the profile menu hanging from `anchor`, closing every other
+    /// popover first (ADR-0023).
+    fn open_profile_menu(
+        &mut self,
+        target: ProfileMenuTarget,
+        anchor: Rect,
+        rows: Vec<profile_menu::ProfileRow>,
+        config: &porecatu_config::Config,
+        measurer: &mut TextMeasurer,
+    ) {
+        self.close_all_popovers();
+        self.hover.dismiss();
+        let width = overlay::profile_menu_width(&rows, config, measurer);
+        self.profile_menu = Some(ProfileMenu::new(target, anchor, width, rows));
+    }
+
+    /// `profile.open_menu` (RF-7.12): the menu of the group the active tab is
+    /// in, hanging from that group's `+`, or from the active tab when the
+    /// button is hidden. Nothing happens without an active tab.
+    fn action_open_profile_menu(
+        &mut self,
+        gpu: &mut GpuContext,
+        style: &TabBarStyle,
+        rows: Vec<profile_menu::ProfileRow>,
+        config: &porecatu_config::Config,
+    ) {
+        let Some(active) = self.workspace.active_tab() else {
+            return;
+        };
+        let Some(group) = self.workspace.group_of_tab(active) else {
+            return;
+        };
+        let layout = tab_bar::fit_width(
+            &self.workspace,
+            style,
+            self.logical_width,
+            gpu.text_measurer(),
+            is_macos(),
+        );
+        let Some(rect) = profile_menu::open_menu_anchor(&layout, group, active) else {
+            return;
+        };
+        // A `+` scrolled out of the track still anchors at the track's edge,
+        // never over the fixed buttons on the right.
+        let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
+        let anchor = Rect {
+            x: (rect.x - self.scroll_offset).clamp(0.0, (trilha_width - rect.width).max(0.0)),
+            ..rect
+        };
+        // The first row is highlighted, which `ProfileMenu::new` already does.
+        self.open_profile_menu(
+            ProfileMenuTarget::Group(group),
+            anchor,
+            rows,
+            config,
+            gpu.text_measurer(),
+        );
+    }
+
+    /// Arrows move the highlight, `Enter` chooses, `Esc` closes. Devolve a
+    /// linha escolhida, com o alvo do menu.
+    fn handle_profile_menu_key(
+        &mut self,
+        event: &KeyEvent,
+    ) -> Option<(ProfileMenuTarget, ProfileRowKind)> {
+        if event.state != ElementState::Pressed {
+            return None;
+        }
+        let menu = self.profile_menu.as_mut()?;
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.profile_menu = None;
+                None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                menu.move_highlight(-1);
+                None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                menu.move_highlight(1);
+                None
+            }
+            Key::Named(NamedKey::Enter) => {
+                let chosen = menu.selected().map(|row| (menu.target, row.kind.clone()));
+                self.profile_menu = None;
+                chosen
+            }
+            _ => None,
+        }
+    }
+
+    /// Runs the chosen row: a tab with that profile in the menu's group, which
+    /// inherits the `cwd` like `tab.new` (the profile's own `cwd` wins), or
+    /// `group.create`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_profile_menu_row(
+        &mut self,
+        target: ProfileMenuTarget,
+        kind: ProfileRowKind,
+        gpu: &mut GpuContext,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        config: &porecatu_config::Config,
+        project_file: &porecatu_config::ProjectFile,
+        catalog: &Catalog,
+    ) {
+        match kind {
+            ProfileRowKind::Profile { id } => {
+                if self.rename.editing_tab().is_some() {
+                    self.commit_rename();
+                }
+                let (new_tab_target, cwd) = match target {
+                    ProfileMenuTarget::Group(group) => (
+                        NewTabTarget::Group(group),
+                        self.resolve_group_new_tab_cwd(group, startup_directory),
+                    ),
+                    ProfileMenuTarget::Ungrouped => (
+                        NewTabTarget::Ungrouped,
+                        self.resolve_new_tab_cwd(startup_directory),
+                    ),
+                };
+                self.open_tab(
+                    cell_metrics,
+                    proxy,
+                    cwd,
+                    now,
+                    new_tab_target,
+                    style,
+                    term_params,
+                    config,
+                    project_file,
+                    startup_directory,
+                    Some(&id),
+                );
+            }
+            ProfileRowKind::NewGroup => self.action_group_create(gpu, style, catalog),
+        }
+    }
+
+    /// `profile.new_tab_N` (RF-7.11): the N-th declared profile, in the group of
+    /// the active tab. No N-th profile: nothing happens.
+    #[allow(clippy::too_many_arguments)]
+    fn action_profile_new_tab(
+        &mut self,
+        n: u8,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        config: &porecatu_config::Config,
+        project_file: &porecatu_config::ProjectFile,
+    ) {
+        let Some(id) = profile_menu::nth_declared_id(config, n) else {
+            return;
+        };
+        if self.rename.editing_tab().is_some() {
+            self.commit_rename();
+        }
+        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        self.open_tab(
+            cell_metrics,
+            proxy,
+            cwd,
+            now,
+            NewTabTarget::ActiveGroup,
+            style,
+            term_params,
+            config,
+            project_file,
+            startup_directory,
+            Some(id),
+        );
     }
 
     /// Espelha `handle_group_menu_key`, sobre `terminal_context_menu`.
@@ -3693,10 +4647,11 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         panes_config: &porecatu_config::Panes,
         keymap: &HashMap<Chord, Action>,
+        detected: &[profile_detect::DetectedProfile],
         confirm_close_with_process: bool,
         catalog: &Catalog,
     ) -> ActionOutcome {
@@ -3734,7 +4689,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     project_file,
                     catalog,
                 );
@@ -3751,7 +4706,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     project_file,
                 );
                 ActionOutcome::Handled
@@ -3897,7 +4852,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     panes_config,
                     startup_directory,
                 );
@@ -3911,7 +4866,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     panes_config,
                     startup_directory,
                 );
@@ -3956,6 +4911,28 @@ impl WindowState {
             // ADR-0054 §7/ADR-0055 §3: abre o popover de sessões.
             Action::SessionSaveNamed => ActionOutcome::OpenSessionPicker { edit_name: true },
             Action::SessionOpenList => ActionOutcome::OpenSessionPicker { edit_name: false },
+            Action::SshReconnect => ActionOutcome::SshReconnect,
+            // ADR-0070 §8: no default key; the menu hangs from the `+` of the
+            // active tab's group.
+            Action::ProfileOpenMenu => {
+                let rows = profile_menu::profile_menu_rows(config, catalog, keymap, detected);
+                self.action_open_profile_menu(gpu, style, rows, config);
+                ActionOutcome::Handled
+            }
+            Action::ProfileNewTab(n) => {
+                self.action_profile_new_tab(
+                    n,
+                    cell_metrics,
+                    proxy,
+                    startup_directory,
+                    now,
+                    style,
+                    term_params,
+                    config,
+                    project_file,
+                );
+                ActionOutcome::Handled
+            }
             // `Arg`: `FromStr` as rejeita, então nunca entram no mapa
             // resolvido -- inalcançável na prática, mas o `match` precisa
             // ser exaustivo.
@@ -4126,7 +5103,17 @@ impl WindowState {
             match hit {
                 TabBarHit::Tab(id) | TabBarHit::CloseButton(id) => {
                     self.close_all_popovers();
-                    self.context_menu = Some(ContextMenu::new(id, logical_point));
+                    // ADR-0075 §8: "Reconectar" só no menu de uma aba SSH.
+                    let ssh = self
+                        .workspace
+                        .tab(id)
+                        .map(|tab| tab.panes().focused_id())
+                        .is_some_and(|pane| {
+                            self.panes
+                                .get(&(id, pane))
+                                .is_some_and(|runtime| runtime.ssh_spawn.is_some())
+                        });
+                    self.context_menu = Some(ContextMenu::for_tab(id, logical_point, ssh));
                     self.hover.dismiss();
                 }
                 TabBarHit::Pill(id) => {
@@ -4134,7 +5121,20 @@ impl WindowState {
                     self.group_context_menu = Some(GroupContextMenu::new(id, logical_point));
                     self.hover.dismiss();
                 }
-                TabBarHit::GroupNewTab(_) | TabBarHit::UngroupedNewTab => {}
+                TabBarHit::GroupNewTab(_) | TabBarHit::UngroupedNewTab => {
+                    // RF-7.8: the menu belongs to the group of the `+` hit.
+                    if let Some(target) = profile_menu::target_for_hit(hit)
+                        && let Some(button) = profile_menu::plus_rect(&layout, target)
+                    {
+                        return NewTabRequest::OpenProfileMenu {
+                            target,
+                            anchor: Rect {
+                                x: button.x - self.scroll_offset,
+                                ..button
+                            },
+                        };
+                    }
+                }
             }
             return NewTabRequest::None;
         }
@@ -4361,26 +5361,21 @@ impl WindowState {
     ) -> Option<TabCloseOutcome> {
         // ADR-0037 §3 -- mesma checagem de `action_close_tab`, antes da
         // detecção do ADR-0034.
-        if self.workspace.tab(id).is_some_and(|t| t.is_not_started()) {
+        if self.tab_has_nothing_running(id) {
             let window_empty = self.close_tab_unconditionally(id);
             return Some(TabCloseOutcome::Closed { window_empty });
         }
         // ADR-0053 §10 -- mesma agregação de `action_close_tab`.
-        let any_pane_needs_confirmation = self
-            .workspace
-            .tab(id)?
-            .panes()
-            .leaves_in_order()
-            .iter()
-            .any(|pane| {
-                self.panes.get(&(id, *pane)).is_some_and(|runtime| {
-                    should_confirm_tab_close(
-                        confirm_close_with_process,
-                        runtime.terminal.modes(),
-                        runtime.terminal.has_extra_processes(),
-                    )
-                })
-            });
+        let any_pane_needs_confirmation = any_pane_needs_confirmation(
+            confirm_close_with_process,
+            self.workspace
+                .tab(id)?
+                .panes()
+                .leaves_in_order()
+                .iter()
+                .filter_map(|pane| self.panes.get(&(id, *pane)))
+                .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
+        );
         if any_pane_needs_confirmation {
             let title = self
                 .workspace
@@ -4541,7 +5536,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         catalog: &Catalog,
     ) {
@@ -4558,7 +5553,7 @@ impl WindowState {
                     now,
                     style,
                     term_params,
-                    shell,
+                    config,
                     project_file,
                 );
             }
@@ -4595,7 +5590,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
@@ -4610,9 +5605,10 @@ impl WindowState {
             NewTabTarget::Ungrouped,
             style,
             term_params,
-            shell,
+            config,
             project_file,
             startup_directory,
+            None,
         );
     }
 
@@ -4626,7 +5622,7 @@ impl WindowState {
         now: Instant,
         style: &TabBarStyle,
         term_params: &TermParams,
-        shell: &porecatu_config::Shell,
+        config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
     ) {
         if self.rename.editing_tab().is_some() {
@@ -4641,9 +5637,10 @@ impl WindowState {
             NewTabTarget::Group(group),
             style,
             term_params,
-            shell,
+            config,
             project_file,
             startup_directory,
+            None,
         );
     }
 
@@ -4749,6 +5746,25 @@ impl WindowState {
         // sinal de verdade: `Tab::cwd` sozinho não serve, porque uma aba
         // nova **herda** o `cwd` do grupo sem nunca ter recebido OSC 7.
         let runtime = self.pane_runtime(tab_id);
+        // RF-20.21: numa aba SSH a barra mostra `usuário@host` e, se o OSC 7
+        // veio com o host do perfil, o diretório do servidor -- e nada de
+        // Git, porque o repositório que o app enxerga é local.
+        if let Some(target) = runtime.and_then(|rt| rt.ssh_target.clone()) {
+            return status_bar::StatusBarContent {
+                group: self
+                    .workspace
+                    .group_of_tab(tab_id)
+                    .and_then(|g| self.workspace.group(g))
+                    .and_then(|g| g.name())
+                    .map(str::to_owned),
+                pane_count_label: status_bar::pane_count_label(
+                    &self.catalog,
+                    tab.map_or(0, |t| t.panes().leaves_in_order().len()),
+                ),
+                system: std::env::consts::OS.to_owned(),
+                ..status_bar::ssh_content(target, runtime.and_then(|rt| rt.remote_cwd.as_deref()))
+            };
+        }
         let received_osc7 = runtime.is_some_and(|rt| rt.received_osc7);
         let cwd_path = tab
             .and_then(|t| t.cwd())
@@ -5240,6 +6256,10 @@ enum StartupNotice {
     /// RF-19.8, RF-19.12: o acrílico ligado sem uma das condições, ou com
     /// `blur` fora da faixa, já na config do arranque.
     Acrylic(acrylic::AcrylicNotice),
+    /// RF-7.5: um `[[profiles.list]]` recusado (ou `default` inexistente).
+    ProfileProblem(porecatu_config::ProfileProblem),
+    /// ADR-0072 §6: chave de perfil com cara de segredo, ignorada.
+    SecretProfileKey(String),
 }
 
 impl StartupNotice {
@@ -5273,6 +6293,8 @@ impl StartupNotice {
                 (Severity::Warning, title, body)
             }
             StartupNotice::Acrylic(notice) => notice.compose(catalog),
+            StartupNotice::ProfileProblem(problem) => messages::profile_problem(catalog, problem),
+            StartupNotice::SecretProfileKey(key) => messages::secret_profile_key(catalog, key),
         }
     }
 }
@@ -5339,6 +6361,9 @@ struct App {
     /// árvore de comparação.
     keymap: HashMap<Chord, Action>,
     windows: HashMap<WindowId, WindowState>,
+    /// Os ciclos de reconexão, **por conexão** (a que caiu): estado do
+    /// processo chaveado pelo que descreve, nunca pela janela (ADR-0076 §3).
+    reconnects: app_reconnect::Cycles,
     /// A janela de configurações (ADR-0059 §1): no máximo uma, **fora** de
     /// `windows` -- sessão, wakeup de PTY e contagem de abas nunca a veem. O
     /// estado dela morre com a janela.
@@ -5449,6 +6474,12 @@ struct App {
     /// RF-13.3: `true` depois do primeiro aviso de intervalo elevado ao
     /// piso -- uma vez por execução, mesmo padrão do campo acima.
     git_poll_interval_warned: bool,
+    /// ADR-0070 §5: shells found by the detection thread, kept for the whole
+    /// process. Empty until the result arrives (and forever when it fails or
+    /// `[profiles] detect = false`).
+    detected_profiles: Vec<profile_detect::DetectedProfile>,
+    /// `true` once the thread was started: detection runs once per process.
+    profile_detection_started: bool,
     /// PRD-017/ADR-0061 §7: a imagem de fundo do terminal, do **processo**,
     /// nunca da janela -- uma decodificação por processo (RF-17.18). Escrito
     /// só em `sync_background_image` (a cada aplicação de config) e
@@ -5468,6 +6499,41 @@ struct App {
 /// Separa das chaves desconhecidas do `porecatu.toml` as de cor (ADR-0067):
 /// devolve as demais, que seguem avisadas uma a uma, e quantas eram de
 /// cor, que viram um aviso só.
+/// Separa as chaves de perfil com cara de segredo (ADR-0072 §6) das demais
+/// chaves desconhecidas: elas têm frase própria.
+fn split_secret_keys(keys: Vec<String>) -> (Vec<String>, Vec<String>) {
+    keys.into_iter()
+        .partition(|key| !porecatu_config::is_secret_profile_key(key))
+}
+
+#[cfg(test)]
+mod split_secret_keys_tests {
+    use super::split_secret_keys;
+
+    #[test]
+    fn secret_looking_profile_keys_get_their_own_list_and_the_rest_stay_unknown_keys() {
+        let keys = vec![
+            "general.foo".to_owned(),
+            "profiles.list.0.password".to_owned(),
+            "profiles.list.1.bar".to_owned(),
+            "profiles.list.1.ssh_passphrase".to_owned(),
+            // Outside a profile, `password` is just an unknown key.
+            "shell.password".to_owned(),
+        ];
+
+        let (unknown, secret) = split_secret_keys(keys);
+
+        assert_eq!(
+            unknown,
+            ["general.foo", "profiles.list.1.bar", "shell.password"]
+        );
+        assert_eq!(
+            secret,
+            ["profiles.list.0.password", "profiles.list.1.ssh_passphrase"]
+        );
+    }
+}
+
 fn split_color_keys(keys: &[String]) -> (Vec<String>, usize) {
     let other: Vec<String> = keys
         .iter()
@@ -5592,13 +6658,25 @@ impl App {
             porecatu_config::LoadResult::Invalid { error, .. } => {
                 pending_startup_warnings.push(StartupNotice::ConfigInvalid(error.clone()));
             }
-            porecatu_config::LoadResult::Loaded { unknown_keys, .. } => {
+            porecatu_config::LoadResult::Loaded {
+                unknown_keys,
+                profile_problems,
+                ..
+            } => {
                 // RF-4.22: chave desconhecida é aviso, não erro -- mesma
                 // severidade/título do hot reload (`apply_config_reload`).
                 // As de cor viram um aviso só (ADR-0067).
                 let (keys, colors) = split_color_keys(unknown_keys);
+                // A chave de perfil com cara de segredo tem frase própria.
+                let (keys, secrets) = split_secret_keys(keys);
                 for key in keys {
                     pending_startup_warnings.push(StartupNotice::UnknownConfigKey(key));
+                }
+                for key in secrets {
+                    pending_startup_warnings.push(StartupNotice::SecretProfileKey(key));
+                }
+                for problem in profile_problems {
+                    pending_startup_warnings.push(StartupNotice::ProfileProblem(problem.clone()));
                 }
                 if colors > 0 {
                     pending_startup_warnings.push(StartupNotice::ColorsIgnored(colors));
@@ -5699,6 +6777,7 @@ impl App {
             term_params,
             keymap,
             windows: HashMap::new(),
+            reconnects: HashMap::new(),
             settings: None,
             settings_last_group: settings::Group::General,
             deferred_quit: None,
@@ -5720,6 +6799,8 @@ impl App {
             git_remotes: HashMap::new(),
             git_disabled: false,
             git_poll_interval_warned: false,
+            detected_profiles: Vec::new(),
+            profile_detection_started: false,
             background_image: background_image::BackgroundImageStore::default(),
             pty_output_seen: false,
             deferred_background_loads: Vec::new(),
@@ -6004,9 +7085,10 @@ impl App {
             NewTabTarget::ActiveGroup,
             &self.style,
             &self.term_params,
-            &self.config.shell,
+            &self.config,
             &self.config.project_file,
             &self.startup_directory,
+            None,
         );
         self.windows.insert(window_id, state);
     }
@@ -6110,6 +7192,8 @@ impl App {
             &window_v1.tabs,
             window_v1.active_tab,
             lazy_restore,
+            // RF-20.33: an SSH pane is born `NotStarted` whatever else is set.
+            &|id| profile_spawn::restores_as_ssh(&self.config, id),
         );
 
         // RF-3.8: só a aba ativa sobe agora; com `lazy_restore = false`,
@@ -6123,6 +7207,12 @@ impl App {
         let now = Instant::now();
         for tab_id in to_start {
             let cwd = state.workspace.tab(tab_id).and_then(|t| t.cwd().cloned());
+            let saved_profile = state
+                .workspace
+                .tab(tab_id)
+                .and_then(|t| t.panes().focused().profile().map(str::to_owned));
+            let spawn_profile =
+                profile_spawn::restored_profile(&self.config, saved_profile.as_deref());
             state.spawn_tab_runtime(
                 tab_id,
                 cwd,
@@ -6131,25 +7221,22 @@ impl App {
                 now,
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &spawn_profile,
                 SpawnOrigin::Restored,
                 &self.config.project_file,
                 &self.startup_directory,
             );
             // RF-6.23: sobe todos os painéis da árvore de uma vez, não só
             // o focado -- mesma razão de `Self::ensure_active_tab_started`.
-            if let Some(tab) = state.workspace.tab_mut(tab_id) {
-                for pane in tab.panes_mut().panes_mut() {
-                    pane.start();
-                }
-            }
+            // Os irmãos primeiro: `start_live_panes` pula os SSH dormentes
+            // (RF-20.33), e só os conhece depois de subirem.
             state.spawn_restored_sibling_panes(
                 tab_id,
                 self.cell_metrics,
                 &self.proxy,
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &self.config,
                 now,
                 &self.startup_directory,
             );
@@ -6169,9 +7256,10 @@ impl App {
                 NewTabTarget::ActiveGroup,
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &self.config,
                 &self.config.project_file,
                 &self.startup_directory,
+                None,
             );
         }
         state.sync_window_title();
@@ -6619,13 +7707,14 @@ impl App {
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let significant_tab_count = state.panes.len();
+        // RF-20.33: a dormant SSH pane is a grid with a note, nothing to lose.
+        let significant_tab_count = state.panes.values().filter(|rt| !rt.dormant).count();
         let confirm_close_with_process = self.config.general.confirm_close_with_process;
         let any_tab_busy = state.panes.values().any(|runtime| {
             should_confirm_tab_close(
                 confirm_close_with_process,
                 runtime.terminal.modes(),
-                runtime.terminal.has_extra_processes(),
+                liveness_needs_confirmation(runtime.liveness()),
             )
         });
         if window_close_needs_confirmation(significant_tab_count, any_tab_busy) {
@@ -6691,7 +7780,42 @@ impl App {
             }
             // Vive na janela de configurações, que a resolve sozinha: um
             // diálogo de `WindowState` nunca o carrega.
-            DialogAction::SettingsPending => {}
+            DialogAction::SettingsPending | DialogAction::DeleteProfile(_) => {}
+            // RF-20.16: "Confiar e conectar". O backend grava a linha no
+            // `known_hosts` e segue; é a única saída que confia (as outras,
+            // `dismiss_dialog`, respondem `Cancel`).
+            DialogAction::HostKey(tab_id, pane_id, prompt_id) => {
+                if let Some(state) = self.windows.get(&window_id) {
+                    if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
+                        runtime.terminal.answer(prompt_id, Answer::Confirm);
+                    }
+                    state.window.request_redraw();
+                }
+            }
+            // RF-20.12: "Conectar". O texto do campo sai por movimento para o
+            // `Secret`, que atravessa `porecatu-term` até a tarefa SSH sem ser
+            // guardado; o campo fica vazio e cai com o diálogo.
+            DialogAction::Secret(tab_id, pane_id, prompt_id) => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    let field = state.secret_field.take();
+                    let remember = state
+                        .dialog
+                        .take()
+                        .and_then(|dialog| dialog.secret)
+                        .is_some_and(|facts| facts.remember && facts.vault_available);
+                    if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
+                        let answer = match field {
+                            Some(mut field) => Answer::Secret {
+                                value: field.take(),
+                                remember,
+                            },
+                            None => Answer::Cancel,
+                        };
+                        runtime.terminal.answer(prompt_id, answer);
+                    }
+                    state.window.request_redraw();
+                }
+            }
         }
     }
 
@@ -6717,7 +7841,7 @@ impl App {
                         Instant::now(),
                         &self.style,
                         &self.term_params,
-                        &self.config.shell,
+                        &self.config,
                         &self.config.project_file,
                     );
                     state.window.request_redraw();
@@ -6760,6 +7884,17 @@ impl App {
                     state.close_all_popovers();
                     state.move_to_group = Some(MoveToGroupPopover::new(tab, menu.anchor, targets));
                     state.window.request_redraw();
+                }
+            }
+            // ADR-0075 §8: o painel focado da aba do menu.
+            MenuAction::Reconnect => {
+                let pane = self
+                    .windows
+                    .get(&window_id)
+                    .and_then(|state| state.workspace.tab(tab))
+                    .map(|t| t.panes().focused_id());
+                if let Some(pane) = pane {
+                    self.ssh_reconnect_pane((window_id, tab, pane), Instant::now());
                 }
             }
         }
@@ -6998,6 +8133,11 @@ impl App {
         // ainda vazio no início da execução, nenhum outro prazo garante
         // que `tick_all` rode a tempo de descobrir o primeiro repositório.
         self.check_git_remote_queries(now);
+        self.check_profile_detection();
+        self.open_ready_prompts();
+        // ADR-0076 §2: as tentativas de reconexão cujo prazo venceu começam
+        // aqui, e o próximo prazo entra no `WaitUntil` logo abaixo.
+        self.poll_reconnects(now);
         let next = self
             .windows
             .values()
@@ -7007,6 +8147,7 @@ impl App {
             .chain(self.shell_integration_invite_deadline())
             .chain(self.project_command_deadline())
             .chain(self.git_next_deadline(now))
+            .chain(self.reconnect_deadline())
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
@@ -7112,6 +8253,57 @@ impl App {
             git::spawn_query(repo, branch, move |result| {
                 let _ = proxy.send_event(Wakeup::GitQueryResult(result));
             });
+        }
+    }
+
+    /// ADR-0070 §5: the first time a profile menu is open in the process, with
+    /// `detect = true`, starts the detection thread. Checked from
+    /// `about_to_wait`, so every way of opening the menu (click, key) is
+    /// covered by one place; never again afterwards, whatever the outcome.
+    /// ADR-0075 §4: abre, em cada janela, o diálogo da pergunta pendente cujo
+    /// painel acabou de ficar à vista. Barato quando nada está pendente.
+    fn open_ready_prompts(&mut self) {
+        for state in self.windows.values_mut() {
+            state.open_ready_prompt(&self.catalog);
+        }
+    }
+
+    fn check_profile_detection(&mut self) {
+        let menu_open = self.windows.values().any(|w| w.profile_menu.is_some());
+        if !profile_detect::detection_due(
+            self.profile_detection_started,
+            self.config.profiles.detect,
+            menu_open,
+        ) {
+            return;
+        }
+        self.profile_detection_started = true;
+        let proxy = self.proxy.clone();
+        profile_detect::spawn(move |found| {
+            let _ = proxy.send_event(Wakeup::ProfilesDetected(found));
+        });
+    }
+
+    /// Keeps the detection result for the process and rebuilds the rows of any
+    /// open menu, which keeps its highlight on the same profile.
+    fn apply_detected_profiles(&mut self, found: Vec<profile_detect::DetectedProfile>) {
+        self.detected_profiles = found;
+        for state in self.windows.values_mut() {
+            let Some(menu) = state.profile_menu.as_mut() else {
+                continue;
+            };
+            let rows = profile_menu::profile_menu_rows(
+                &self.config,
+                &self.catalog,
+                &self.keymap,
+                &self.detected_profiles,
+            );
+            let width = match &mut self.gpu {
+                Some(gpu) => overlay::profile_menu_width(&rows, &self.config, gpu.text_measurer()),
+                None => menu.width,
+            };
+            menu.replace_rows(rows, width);
+            state.window.request_redraw();
         }
     }
 
@@ -7670,7 +8862,7 @@ impl App {
     /// regra 2) -- sucesso troca o `Arc` inteiro (dono é o processo, não
     /// a janela) e aplica as classes A/B/C em todas as janelas.
     fn apply_config_reload(&mut self, outcome: ConfigReload, now: Instant) {
-        let (new_config, unknown_keys, theme_problems) = match outcome {
+        let (new_config, unknown_keys, profile_problems, theme_problems) = match outcome {
             ConfigReload::Invalid { error } => {
                 // A tela de configurações também vê o arquivo (ADR-0059 §4):
                 // inválido, ela passa a somente leitura.
@@ -7689,10 +8881,12 @@ impl App {
             ConfigReload::Loaded {
                 config,
                 unknown_keys,
+                profile_problems,
                 theme_problems,
-            } => (config, unknown_keys, theme_problems),
+            } => (config, unknown_keys, profile_problems, theme_problems),
         };
         let (unknown_keys, ignored_colors) = split_color_keys(&unknown_keys);
+        let (unknown_keys, secret_keys) = split_secret_keys(unknown_keys);
 
         let effects = reload::diff(&self.config, &new_config);
         // RF-19.12: o aviso sai na recarga que **cria** o bloqueio (ou troca o
@@ -7701,6 +8895,11 @@ impl App {
         self.config = Arc::new(*new_config);
         self.warn_acrylic(acrylic_notices);
         self.style = TabBarStyle::from_config(&self.config);
+        // ADR-0070 §7: a new default or a new `[[profiles.list]]` changes
+        // which tabs show a badge.
+        for state in self.windows.values_mut() {
+            state.profile_badges_dirty = true;
+        }
         // PRD-017, classe A (ADR-0061 §9): a chave é reavaliada a cada recarga
         // aplicada; só `path` novo, ou arquivo trocado no disco, abre carga.
         self.sync_background_image();
@@ -7833,6 +9032,14 @@ impl App {
                     key.clone(),
                     now,
                 );
+            }
+            for key in &secret_keys {
+                let (severity, title, body) = messages::secret_profile_key(&self.catalog, key);
+                state.warnings.push(severity, title, body, now);
+            }
+            for problem in &profile_problems {
+                let (severity, title, body) = messages::profile_problem(&self.catalog, problem);
+                state.warnings.push(severity, title, body, now);
             }
             if ignored_colors > 0 {
                 let (severity, title, body) =
@@ -8468,6 +9675,10 @@ impl ApplicationHandler<Wakeup> for App {
                 self.apply_git_integration_result(result);
                 return;
             }
+            Wakeup::ProfilesDetected(found) => {
+                self.apply_detected_profiles(found);
+                return;
+            }
             Wakeup::BackgroundImageLoaded(result) => {
                 self.apply_background_image_result(*result);
                 return;
@@ -8524,8 +9735,26 @@ impl ApplicationHandler<Wakeup> for App {
         }
 
         let mut window_should_close = false;
+        // O que um painel SSH diz sobre a conexão vai para `App`, depois do
+        // laço: o ciclo de reconexão mexe em mais de um painel (ADR-0076 §3).
+        let key: app_reconnect::PaneKey = (window, tab_id, pane_id);
+        let mut ssh_events: Vec<app_reconnect::SshEvent> = Vec::new();
         for term_event in pending {
             match term_event {
+                TermEvent::Connected => ssh_events.push(app_reconnect::SshEvent::Connected),
+                // Uma conexão que caiu sozinha, ou o resultado de uma
+                // tentativa, é do ciclo (ADR-0076 §1); o resto segue o
+                // caminho de sempre.
+                TermEvent::Exit(reason)
+                    if app_reconnect::end_belongs_to_a_cycle(
+                        state.panes.get(&(tab_id, pane_id)),
+                        &self.reconnects,
+                        key,
+                        &reason,
+                    ) =>
+                {
+                    ssh_events.push(app_reconnect::SshEvent::Ended(reason));
+                }
                 // Do painel `pane_id`, não necessariamente o focado da aba
                 // (ADR-0053 §2) -- `Tab::title` já lê o focado sob demanda
                 // (RF-6.17), então só a escrita precisa saber de onde veio.
@@ -8555,20 +9784,36 @@ impl ApplicationHandler<Wakeup> for App {
                 }
                 // Depende de tema resolvido -- F4.
                 TermEvent::ColorQuery(_) => {}
-                TermEvent::Cwd(cwd) => {
-                    // RF-3.1 (ADR-0039 §2): sinal de verdade de que esta
-                    // instância tem OSC 7 -- diferente de `Tab::cwd()`,
-                    // que uma aba nova já pode ter por herança (ver o
-                    // comentário do campo em `PaneRuntime`).
-                    if let Some(rt) = state.panes.get_mut(&(tab_id, pane_id)) {
-                        rt.received_osc7 = true;
-                    }
+                TermEvent::Cwd { path: cwd, host } => {
+                    // RF-20.22: num painel SSH o caminho é do servidor. Fica
+                    // no runtime, só com o host do perfil, e **nunca** chega
+                    // a `Pane::cwd` -- de lá saem o `cwd` herdado, o fallback
+                    // e a sessão.
+                    let is_remote = match state.panes.get_mut(&(tab_id, pane_id)) {
+                        Some(rt) => match rt.ssh_host.clone() {
+                            Some(profile_host) => {
+                                rt.remote_cwd =
+                                    profile_spawn::remote_cwd(&profile_host, host.as_deref(), &cwd);
+                                true
+                            }
+                            // RF-3.1 (ADR-0039 §2): sinal de verdade de que
+                            // esta instância tem OSC 7 -- diferente de
+                            // `Tab::cwd()`, que uma aba nova já pode ter por
+                            // herança (ver o comentário do campo em
+                            // `PaneRuntime`).
+                            None => {
+                                rt.received_osc7 = true;
+                                false
+                            }
+                        },
+                        None => false,
+                    };
                     // No painel `pane_id`, não no focado da aba (ADR-0053
                     // §2) -- `tab.set_cwd` gravaria no painel focado *no
                     // instante em que este evento é processado*, que pode
                     // já não ser mais `pane_id` se o foco mudou entre o
                     // evento ser gerado e ser lido aqui.
-                    if let Some(tab) = state.workspace.tab_mut(tab_id) {
+                    if !is_remote && let Some(tab) = state.workspace.tab_mut(tab_id) {
                         tab.set_pane_cwd(pane_id, cwd);
                         state.mark_session_dirty();
                     }
@@ -8579,13 +9824,31 @@ impl ApplicationHandler<Wakeup> for App {
                 // `App`; um shell que por acaso emita a mesma string
                 // (extremamente improvável) não dispensa nada sem o
                 // convite ter chegado a existir.
+                // ADR-0071 §5, ADR-0075 §4: a pergunta é do painel `pane_id`
+                // e **espera o foco nele** -- nunca a do painel focado. O
+                // diálogo não rouba o foco: fica pendente, acende a campainha
+                // do painel e abre quando o usuário chega a ele
+                // (`WindowState::open_ready_prompt`).
+                // A chave de host e o segredo esperam o foco do mesmo jeito.
+                TermEvent::Prompt(prompt) => {
+                    state.pending_prompts.push(tab_id, pane_id, prompt);
+                    if let Some(tab) = state.workspace.tab_mut(tab_id) {
+                        tab.mark_pane_bell(pane_id);
+                    }
+                }
+                // ADR-0073 §3, ADR-0075 §5: o único consumidor novo do canal 1.
+                TermEvent::Notice(TermNotice::SecretNotSaved) => {
+                    let (severity, title, body) = messages::secret_not_saved(&self.catalog);
+                    state.warnings.push(severity, title, body, Instant::now());
+                }
                 TermEvent::ShellIntegrationDismiss => {
                     if self.shell_integration_invite_claimed {
                         self.shell_integration_dismissed = true;
                         state.mark_session_dirty();
                     }
                 }
-                TermEvent::Exit { success, code } => {
+                TermEvent::Exit(reason) => {
+                    let (success, code) = exit_outcome(&reason);
                     if success {
                         // RF-1.3/RF-6.10: código zero não deixa rastro -- o
                         // painel que gerou o evento fecha; se era o último
@@ -8610,10 +9873,19 @@ impl ApplicationHandler<Wakeup> for App {
                         }
                     } else {
                         if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
-                            runtime.terminal.inject_note(
-                                &msg::note::process_exited(&self.catalog, code),
-                                palette::NOTE_ACCENT_RGB,
-                            );
+                            // Um painel SSH diz por que acabou (ADR-0075 §5); o
+                            // local e o `exit` de sempre seguem com a frase do
+                            // código de saída.
+                            let note = runtime
+                                .ssh_host
+                                .as_deref()
+                                .and_then(|host| {
+                                    messages::ssh_end_note(&self.catalog, host, &reason)
+                                })
+                                .unwrap_or_else(|| msg::note::process_exited(&self.catalog, code));
+                            runtime
+                                .terminal
+                                .inject_note(&note, palette::NOTE_ACCENT_RGB);
                         }
                         // O painel que saiu é `pane_id`, não necessariamente
                         // o focado da aba -- endereça pelo id de verdade.
@@ -8631,6 +9903,10 @@ impl ApplicationHandler<Wakeup> for App {
                     }
                 }
             }
+        }
+
+        if !ssh_events.is_empty() {
+            self.handle_ssh_events(key, ssh_events, Instant::now());
         }
 
         if window_should_close {
@@ -8817,7 +10093,7 @@ impl ApplicationHandler<Wakeup> for App {
                 Instant::now(),
                 &self.style,
                 &self.term_params,
-                &self.config.shell,
+                &self.config,
                 &self.config.project_file,
                 &self.startup_directory,
             );
@@ -8981,7 +10257,31 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
+                    &self.config.project_file,
+                    &self.catalog,
+                );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+        if state.profile_menu.is_some() {
+            if let Some((target, kind)) = state.handle_profile_menu_key(&key)
+                && let Some(gpu) = &mut self.gpu
+            {
+                state.run_profile_menu_row(
+                    target,
+                    kind,
+                    gpu,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
+                    &self.style,
+                    &self.term_params,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -9019,7 +10319,7 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -9115,10 +10415,11 @@ impl App {
             Instant::now(),
             &self.style,
             &self.term_params,
-            &self.config.shell,
+            &self.config,
             &self.config.project_file,
             &self.config.panes,
             &self.keymap,
+            &self.detected_profiles,
             self.config.general.confirm_close_with_process,
             &self.catalog,
         );
@@ -9147,6 +10448,43 @@ impl App {
             ActionOutcome::OpenSessionPicker { edit_name } => {
                 state.open_session_picker(edit_name);
                 state.window.request_redraw();
+            }
+            // ADR-0076 §5: o painel focado da aba ativa.
+            ActionOutcome::SshReconnect => {
+                let target = state.workspace.active_tab().and_then(|tab| {
+                    state
+                        .workspace
+                        .tab(tab)
+                        .map(|t| (tab, t.panes().focused_id()))
+                });
+                if let Some((tab, pane)) = target {
+                    self.ssh_reconnect_pane((window_id, tab, pane), Instant::now());
+                }
+            }
+            ActionOutcome::Unhandled if state.dormant_focused_pane().is_some() => {
+                // RF-20.33: o painel SSH restaurado só entende `Enter`. Nenhuma
+                // outra tecla chega a ele -- não há processo para recebê-la.
+                if let Some((tab, pane)) = state.dormant_focused_pane() {
+                    let enter = key.state == ElementState::Pressed
+                        && key.logical_key == Key::Named(NamedKey::Enter)
+                        && !state.modifiers.ctrl
+                        && !state.modifiers.alt;
+                    let gesture = if enter {
+                        profile_spawn::PaneGesture::Enter
+                    } else {
+                        profile_spawn::PaneGesture::Key
+                    };
+                    if profile_spawn::gesture_connects(gesture) {
+                        state.connect_dormant_pane(
+                            tab,
+                            pane,
+                            &self.config,
+                            &self.startup_directory,
+                            Instant::now(),
+                        );
+                    }
+                    state.window.request_redraw();
+                }
             }
             ActionOutcome::Unhandled => {
                 if let Some(runtime) = state.active_runtime() {
@@ -9358,7 +10696,7 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -9376,6 +10714,7 @@ impl App {
         if state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
         {
@@ -9500,6 +10839,24 @@ impl App {
                 state.logical_height,
             );
             if let Some(index) = overlay::group_menu_hit(&layout, logical_point) {
+                menu.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+        // Menu de perfis: mesmo tratamento.
+        if let Some(menu) = &mut state.profile_menu {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let layout = overlay::layout_profile_menu(
+                menu,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            if let Some(index) = overlay::profile_menu_hit(&layout, logical_point) {
                 menu.set_highlight(index);
             }
             state.window.request_redraw();
@@ -9951,6 +11308,7 @@ impl App {
         let overlay_open = state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
@@ -10222,18 +11580,61 @@ impl App {
             ))
         }) {
             if button == MouseButton::Left {
-                if let Some(clicked) = overlay::dialog_hit(&layout, logical_point) {
-                    if clicked == DialogButton::Confirm {
+                // Dentro do campo mascarado ou da caixa "Lembrar" (diálogo de
+                // segredo): o clique é do diálogo, nunca o cancela.
+                let secret_hit = state
+                    .secret_field
+                    .as_ref()
+                    .and_then(|_| overlay::secret_hit(&layout, logical_point));
+                // Conectar sem nada digitado não faz nada, como o `Enter`.
+                let nothing_typed = state
+                    .secret_field
+                    .as_ref()
+                    .is_some_and(|field| field.is_empty());
+                let clicked_button = overlay::dialog_hit(&layout, logical_point);
+                if let Some(hit) = secret_hit {
+                    let dots = state.secret_field.as_ref().map_or(0, |field| field.len());
+                    let scalar = match (hit, self.gpu.as_mut()) {
+                        (overlay::SecretHit::Field, Some(gpu)) => overlay::secret_field_scalar_at(
+                            &layout,
+                            logical_point.0,
+                            &self.config,
+                            dots,
+                            gpu.text_measurer(),
+                        ),
+                        _ => dots,
+                    };
+                    match hit {
+                        overlay::SecretHit::Field => {
+                            if let Some(dialog) = state.dialog.as_mut() {
+                                dialog.focus_secret(dialog::SecretFocus::Field);
+                            }
+                            if let Some(field) = state.secret_field.as_mut() {
+                                field.click_at_scalar(scalar);
+                            }
+                        }
+                        overlay::SecretHit::Remember => {
+                            if let Some(dialog) = state.dialog.as_mut() {
+                                dialog.focus_secret(dialog::SecretFocus::Remember);
+                                dialog.toggle_remember();
+                            }
+                        }
+                    }
+                } else if clicked_button == Some(DialogButton::Confirm) {
+                    if !nothing_typed {
                         let action = state.dialog.as_ref().map(|d| d.action.clone());
-                        state.dialog = None;
+                        // O diálogo de segredo segue de pé até a ação: ela lê a
+                        // caixa "Lembrar" e leva o campo, movido.
+                        if !matches!(action, Some(DialogAction::Secret(..))) {
+                            state.dialog = None;
+                        }
                         if let Some(action) = action {
                             self.run_dialog_action(window_id, action, event_loop);
                         }
-                    } else {
-                        state.dialog = None;
                     }
                 } else {
-                    state.dialog = None;
+                    // Cancelar, ou um clique fora de tudo.
+                    state.dismiss_dialog();
                 }
             }
             if let Some(state) = self.windows.get(&window_id) {
@@ -10254,14 +11655,9 @@ impl App {
             state.context_menu = None;
             if button == MouseButton::Left
                 && let Some(index) = hit
-                && context_menu::TAB_MENU_ITEMS[index].enabled
+                && menu.items()[index].enabled
             {
-                self.run_menu_action(
-                    window_id,
-                    menu,
-                    context_menu::TAB_MENU_ITEMS[index].action,
-                    event_loop,
-                );
+                self.run_menu_action(window_id, menu, menu.items()[index].action, event_loop);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -10305,7 +11701,45 @@ impl App {
                     Instant::now(),
                     &self.style,
                     &self.term_params,
-                    &self.config.shell,
+                    &self.config,
+                    &self.config.project_file,
+                    &self.catalog,
+                );
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
+        // Menu de perfis: clique esquerdo numa linha a escolhe, qualquer outro
+        // clique fecha.
+        if let Some(menu) = state.profile_menu.take() {
+            let layout = overlay::layout_profile_menu(
+                &menu,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            let chosen = (button == MouseButton::Left)
+                .then(|| overlay::profile_menu_hit(&layout, logical_point))
+                .flatten()
+                .and_then(|index| menu.rows().get(index))
+                .map(|row| row.kind.clone());
+            if let Some(kind) = chosen
+                && let Some(gpu) = &mut self.gpu
+            {
+                state.run_profile_menu_row(
+                    menu.target,
+                    kind,
+                    gpu,
+                    self.cell_metrics,
+                    &self.proxy,
+                    &self.startup_directory,
+                    Instant::now(),
+                    &self.style,
+                    &self.term_params,
+                    &self.config,
                     &self.config.project_file,
                     &self.catalog,
                 );
@@ -10573,15 +12007,23 @@ impl App {
             && state.in_bar(state.cursor_position.1, &self.style)
         {
             state.hover.dismiss();
-            if let Some(gpu) = &mut self.gpu {
-                state.handle_bar_click(
+            if let Some(gpu) = &mut self.gpu
+                && let NewTabRequest::OpenProfileMenu { target, anchor } = state.handle_bar_click(
                     logical_point,
                     gpu,
                     true,
                     &self.style,
                     self.config.general.confirm_close_with_process,
                     &self.catalog,
+                )
+            {
+                let rows = profile_menu::profile_menu_rows(
+                    &self.config,
+                    &self.catalog,
+                    &self.keymap,
+                    &self.detected_profiles,
                 );
+                state.open_profile_menu(target, anchor, rows, &self.config, gpu.text_measurer());
             }
             state.window.request_redraw();
             return;
@@ -10608,7 +12050,7 @@ impl App {
                         Instant::now(),
                         &self.style,
                         &self.term_params,
-                        &self.config.shell,
+                        &self.config,
                         &self.config.project_file,
                     );
                     state.window.request_redraw();
@@ -10622,7 +12064,7 @@ impl App {
                         Instant::now(),
                         &self.style,
                         &self.term_params,
-                        &self.config.shell,
+                        &self.config,
                         &self.config.project_file,
                     );
                     state.window.request_redraw();
@@ -10633,7 +12075,8 @@ impl App {
                 NewTabRequest::WindowEmptied => {
                     self.close_window_unconditionally(window_id, event_loop);
                 }
-                NewTabRequest::None => {
+                // Only the secondary click asks for the profile menu.
+                NewTabRequest::None | NewTabRequest::OpenProfileMenu { .. } => {
                     state.window.request_redraw();
                 }
             }
@@ -10732,6 +12175,26 @@ impl App {
                     state.search = None;
                 }
             }
+            // RF-20.33: o clique num painel SSH restaurado é o gesto que o
+            // conecta -- e é consumido por inteiro, não há programa a quem
+            // entregá-lo.
+            if button == MouseButton::Left
+                && pressed
+                && let Some(id) = active_id
+                && state.is_dormant(id, pane)
+            {
+                if profile_spawn::gesture_connects(profile_spawn::PaneGesture::Click) {
+                    state.connect_dormant_pane(
+                        id,
+                        pane,
+                        &self.config,
+                        &self.startup_directory,
+                        Instant::now(),
+                    );
+                }
+                state.window.request_redraw();
+                return;
+            }
             if let Some(runtime) = active_id.and_then(|tab| state.panes.get(&(tab, pane))) {
                 input::handle_mouse_button(
                     &runtime.terminal,
@@ -10768,6 +12231,7 @@ impl App {
         let style = &self.style;
         let pal = &self.pal;
         let config = &self.config;
+        state.refresh_profile_badges(config);
         let bar_width = state.logical_width;
         let is_mac = is_macos();
         let trilha_width = tab_bar::trilha_width(style, bar_width, is_mac);
@@ -11004,6 +12468,7 @@ impl App {
         let hyperlink_overlay_blocks_hover = state.dialog.is_some()
             || state.context_menu.is_some()
             || state.group_context_menu.is_some()
+            || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
@@ -11285,6 +12750,32 @@ impl App {
                 gpu.text_measurer(),
             ));
         }
+        if let Some(menu) = &state.profile_menu {
+            let layout = overlay::layout_profile_menu(
+                menu,
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            // The badges take the color of the group the new tab joins.
+            let badge_color = match menu.target {
+                ProfileMenuTarget::Group(id) => state
+                    .workspace
+                    .group(id)
+                    .and_then(|g| g.color())
+                    .map(|c| pal.group_color(c))
+                    .unwrap_or_else(|| pal.ungrouped_group_color()),
+                ProfileMenuTarget::Ungrouped => pal.ungrouped_group_color(),
+            };
+            popover.extend(overlay::paint_profile_menu(
+                &layout,
+                menu,
+                badge_color,
+                config,
+                pal,
+                gpu.text_measurer(),
+            ));
+        }
         if let Some(menu) = &state.terminal_context_menu {
             let items = match state.pane_and_rect_at(style, menu.anchor) {
                 Some((tab, pane, pane_rect)) => terminal_menu_context_items(
@@ -11429,6 +12920,13 @@ impl App {
                 config,
                 gpu.text_measurer(),
             );
+            let secret_view = state
+                .secret_field
+                .as_ref()
+                .map(|field| overlay::SecretView {
+                    field,
+                    selection_color: self.term_pal.selection_background,
+                });
             let primitives = overlay::paint_dialog(
                 &layout,
                 dialog,
@@ -11436,6 +12934,7 @@ impl App {
                 pal,
                 state.logical_width,
                 state.logical_height,
+                secret_view.as_ref(),
                 gpu.text_measurer(),
             );
             frame.set_layer(Layer::Modal, primitives);

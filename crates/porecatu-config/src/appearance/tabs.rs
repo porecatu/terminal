@@ -44,7 +44,9 @@ pub struct Tabs {
     pub show_activity_indicator: bool,
     pub show_bell_indicator: bool,
     pub show_new_tab_button: bool,
-    /// `[v2]` badge de perfil na aba (PRD-007). Reserva de nome.
+    /// Badge do perfil na aba (PRD-007 RF-7.13/RF-7.14, ADR-0070 §7): só em
+    /// aba cujo perfil não é o padrão. `false` o esconde em todas as abas.
+    /// Recarga A.
     pub show_profile_badge: bool,
     pub colors: TabsColors,
     pub rename: TabsRename,

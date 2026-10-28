@@ -304,7 +304,7 @@ Cada item é decisão, não esquecimento. Os motivos completos estão no [ADR-00
 - **Divisor desenhado**, como linha de 1px. O vão já separa; uma linha entre dois quadros que já têm sombra é a terceira separação no mesmo lugar, que é o argumento com que a §2.8 da [especificação visual](../design/especificacao-visual.md) já tirou a borda do topo da barra de status.
 - **Zoom de painel** (RF-6.26). Conveniência clássica, e nada nesta entrega a impede depois.
 - **Mover painel entre abas ou janelas** (RF-6.25).
-- **Layouts salvos e nomeados**, e abrir aba já dividida por perfil. Depende do [PRD-007](prd-007-perfis-de-aba.md), que é rascunho.
+- **Layouts salvos e nomeados**, e abrir aba já dividida por perfil. Depende do [PRD-007](prd-007-perfis-de-aba.md), que é rascunho. *(Emenda, 2026-10-27: o PRD-007 foi aprovado e o painel novo herda o perfil do de origem, RF-7.15; abrir uma aba **já dividida** por perfil continua fora.)*
 - **Sincronizar input entre painéis** (digitar nos dois ao mesmo tempo). Recurso de administração de frota; o produto é de desenvolvimento.
 - **Painéis flutuantes ou sobrepostos.** A divisão é do retângulo, sem sobreposição, pela mesma razão que os grupos são contíguos ([ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md)): o que não é desenhável de forma legível não ajuda.
 - **Fonte ou tema por painel.** O zoom de fonte continua sendo do processo inteiro, com a dívida do `zoom_scope` registrada desde a F4.

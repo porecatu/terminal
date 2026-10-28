@@ -39,6 +39,15 @@ pub enum PaneState {
     Exited { exit_code: i32 },
 }
 
+/// What the tab shows of a non-default profile: the badge text and the
+/// profile's name (the accessibility description). Both are data from the
+/// config or the detection, not interface phrases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileBadge {
+    pub badge: String,
+    pub name: String,
+}
+
 /// Um painel: um terminal completo, com PTY, grade, scrollback, diretório e
 /// ciclo de vida próprios (RF-6.5). Não carrega PTY nem motor VT -- isso é
 /// `porecatu-term`, do outro lado da fronteira da seção 4 da arquitetura.
@@ -52,6 +61,15 @@ pub struct Pane {
     /// Nome do shell spawnado -- fallback de última instância, sempre
     /// presente.
     shell_name: String,
+    /// Identificador do perfil com que o painel nasceu (ADR-0070 §4); `None`
+    /// é o `[shell]`. Vale também no painel `NotStarted`, que o resolve só
+    /// no primeiro foco.
+    profile: Option<String>,
+    /// Badge the tab shows for this pane's profile (ADR-0070 §7): resolved by
+    /// the UI from the config, `None` for the default profile and the
+    /// `[shell]`. Derived display state, never persisted.
+    #[serde(skip)]
+    profile_badge: Option<ProfileBadge>,
     /// Diretório de trabalho conhecido, capturado por OSC 7. `None` até o
     /// primeiro OSC 7 chegar; quem decide o fallback (`startup_directory`)
     /// é o chamador, não este tipo.
@@ -71,6 +89,8 @@ impl Pane {
             id,
             process_title: None,
             shell_name: shell_name.into(),
+            profile: None,
+            profile_badge: None,
             cwd: None,
             state: PaneState::Running,
             activity: false,
@@ -113,6 +133,30 @@ impl Pane {
         &self.shell_name
     }
 
+    /// Perfil do painel (ADR-0070 §4); `None` é o `[shell]`.
+    pub fn profile(&self) -> Option<&str> {
+        self.profile.as_deref()
+    }
+
+    pub fn set_profile(&mut self, profile: Option<String>) {
+        self.profile = profile;
+    }
+
+    /// Badge to show on the tab, or `None` (ADR-0070 §7, RF-7.13).
+    pub const fn profile_badge(&self) -> Option<&ProfileBadge> {
+        self.profile_badge.as_ref()
+    }
+
+    pub fn set_profile_badge(&mut self, badge: Option<ProfileBadge>) {
+        self.profile_badge = badge;
+    }
+
+    /// Nome do shell que **foi lançado** (ADR-0070 §4): numa restauração o
+    /// valor gravado pode já não ser o que sobe (perfil editado ou ausente).
+    pub fn set_shell_name(&mut self, shell_name: impl Into<String>) {
+        self.shell_name = shell_name.into();
+    }
+
     /// Captura de OSC 7.
     pub fn set_cwd(&mut self, cwd: PathBuf) {
         self.cwd = Some(cwd);
@@ -149,6 +193,15 @@ impl Pane {
         self.state = PaneState::Exited { exit_code };
         self.activity = false;
         self.bell = false;
+    }
+
+    /// `ssh.reconnect` (RF-20.31): um painel SSH `Exited` volta a `Running`
+    /// porque ganhou um backend novo no mesmo motor. É a **única** volta de
+    /// `Exited`, e só um painel SSH a usa; `NotStarted` e `Running` não mudam.
+    pub fn resume(&mut self) {
+        if matches!(self.state, PaneState::Exited { .. }) {
+            self.state = PaneState::Running;
+        }
     }
 
     pub const fn activity(&self) -> bool {
@@ -783,6 +836,22 @@ mod tests {
 
     fn leaf_count(tree: &PaneTree) -> usize {
         tree.leaves_in_order().len()
+    }
+
+    #[test]
+    fn resume_brings_an_exited_pane_back_and_touches_no_other_state() {
+        let mut tree = PaneTree::new("zsh");
+        let id = tree.focused_id();
+        let pane = tree.pane_mut(id).unwrap();
+
+        pane.resume();
+        assert!(!pane.is_exited(), "a running pane stays running");
+
+        pane.mark_exited(3);
+        assert!(pane.is_exited());
+        pane.resume();
+        assert!(!pane.is_exited());
+        assert!(pane.accepts_input());
     }
 
     // -----------------------------------------------------------------

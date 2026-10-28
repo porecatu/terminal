@@ -158,6 +158,11 @@ impl Tab {
         self.panes.focused().shell_name()
     }
 
+    /// Profile badge of the focused pane (RF-7.13: the tab derives from it).
+    pub fn profile_badge(&self) -> Option<&crate::ProfileBadge> {
+        self.panes.focused().profile_badge()
+    }
+
     pub fn is_exited(&self) -> bool {
         self.panes.focused().is_exited()
     }

@@ -6,7 +6,7 @@ Guia operacional do projeto. Leia antes de mexer em qualquer coisa. O porquê de
 
 **Porecatu** — emulador de terminal cross-platform em Rust. Diferencial: gestão de muitos terminais (abas, grupos nomeados, sessão persistente), não conformidade VT.
 
-**Estado:** F0 a F6 fechadas (o v1 inteiro); versão atual **0.9.5** (a primeira publicada foi `0.7.0`, não `1.0.0` — [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md)). Detalhe por fase e etapa em [docs/roadmap.md](docs/roadmap.md). A verificação interativa é **dívida assumida**, não critério pendente: a proteção de foco do Windows atrapalha input sintético e não há Linux/macOS no fluxo — fases e recursos fecham com teste automatizado, smoke test e verificação ao vivo só no Windows.
+**Estado:** F0 a F6 fechadas (o v1 inteiro); versão atual **0.9.6** (a primeira publicada foi `0.7.0`, não `1.0.0` — [ADR-0045](docs/adr/0045-primeira-versao-0-7-0.md)). Detalhe por fase e etapa em [docs/roadmap.md](docs/roadmap.md). A verificação interativa é **dívida assumida**, não critério pendente: a proteção de foco do Windows atrapalha input sintético e não há Linux/macOS no fluxo — fases e recursos fecham com teste automatizado, smoke test e verificação ao vivo só no Windows.
 
 Recursos entregues **fora da ordem de fases**, todos implementados (detalhe e dívida de verificação de cada um no roadmap):
 
@@ -21,6 +21,8 @@ Recursos entregues **fora da ordem de fases**, todos implementados (detalhe e d�
 - **Temas em arquivos próprios** — [ADR-0067](docs/adr/0067-temas-em-arquivos-proprios.md). `thm_<nome>.toml` ao lado do `porecatu.toml` é o único lugar de cor.
 - **Efeito acrílico** — [PRD-019](docs/prd/prd-019-efeito-acrilico-no-fundo-do-terminal.md), [ADR-0068](docs/adr/0068-efeito-acrilico-no-fundo-do-terminal.md). Único passe de filtro do render; aval visual **pendente**.
 
+- **Perfis de aba e conexões SSH** — **implementados e verificados ao vivo só no Windows** (macOS, Linux, agente do OpenSSH/Pageant e WSL real são dívida, no roadmap); aval visual do dono **pendente**, exceto o diálogo de excluir perfil. [PRD-007](docs/prd/prd-007-perfis-de-aba.md), [ADR-0070](docs/adr/0070-perfis-de-aba.md); [PRD-020](docs/prd/prd-020-conexoes-ssh.md), [ADR-0071](docs/adr/0071-backend-de-terminal.md) a [ADR-0076](docs/adr/0076-reconexao-automatica.md). Grupo "Perfis" na tela de configurações e importação do `~/.ssh/config` (cópia, `Match` recusa o arquivo, `ssh2-config` em `porecatu-config`); todo diálogo tem largura 760. `[shell]` é o perfil padrão implícito; o perfil é **do painel** e a sessão grava o identificador (`auto:` validado na restauração); clique esquerdo no `+` não muda, o menu é o clique direito; sem cor por perfil. SSH é tipo de perfil: cliente embutido (`russh`) em `porecatu-ssh`, **único crate com `tokio`**, criado na primeira conexão; segredo só no cofre do SO, gravado só depois de aceito; `~/.ssh/known_hosts` do OpenSSH, só acréscimo; motor sobrevive à reconexão (`Terminal::reattach`). `type = "ssh"` é aceito (agente, chave, chave com passphrase, senha e keyboard-interactive de um campo oculto; diálogo de segredo com campo mascarado `MaskedFieldState`, `Secret` zerado e sem `Clone`, cofre `keyring` só no módulo `vault`, gravado só depois do aceite e apagado só quando o servidor recusa a credencial; chave do host contra o `known_hosts`, com diálogo de host desconhecido); a aba SSH confirma ao fechar (conexão aberta, por canal), volta `NotStarted` na restauração e conecta só no clique ou `Enter` (`BackendSpec::Dormant`), mostra `usuário@host` na barra e **nunca** guarda `cwd` remoto em `Pane::cwd` (fica em `PaneRuntime::remote_cwd`); dividir um painel SSH abre um canal na **mesma conexão** (`Connection::Share`, registro de conexões em `porecatu-ssh`, sem reautenticar); uma conexão que cai sozinha é refeita (5 tentativas, 1/2/4/8/16 s, máquina pura em `reconnect.rs`, ciclo por conexão no `App` em `app_reconnect.rs`, `WaitUntil` sem thread), o que se digita durante a queda é descartado, e `ssh.reconnect` mais o item "Reconectar" do menu da aba SSH reconectam à mão.
+
 Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da área — o código segue o que está escrito lá, incluindo os desvios anotados. Grupos, seleção, animação e popover: ADR-0020 a 0023. Sessão: ADR-0036 a 0040.
 
 ### Regras que vieram dos recursos e continuam valendo
@@ -34,7 +36,7 @@ Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da ár
 
 ## Stack travada
 
-`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `arboard` (clipboard) · TOML+`serde` (config).
+`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `russh` com `ring` (cliente SSH, em `porecatu-ssh`, [ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) · `arboard` (clipboard) · TOML+`serde` (config). Decidido, a implementar: `keyring` (cofre do SO, [ADR-0073](docs/adr/0073-credenciais-no-cofre-do-sistema.md)).
 
 Toolchain: stable **pinada** em `rust-toolchain.toml`, edition 2024, lints em `[workspace.lints]` ([ADR-0011](docs/adr/0011-toolchain-rust.md)).
 
@@ -47,6 +49,7 @@ porecatu (bin)
    ├── porecatu-ui ──── porecatu-render
    │        │
    │        ├── porecatu-term ──── porecatu-pty
+   │        │        └──────────── porecatu-ssh   (ADR-0072)
    │        ├── porecatu-config
    │        ├── porecatu-locale
    │        └── porecatu-session ── porecatu-core
@@ -60,7 +63,8 @@ Dependências apontam **só para baixo**. Em particular:
 | `porecatu-core` | nada do projeto | tudo o mais |
 | `porecatu-config` | `core` | GUI, PTY |
 | `porecatu-pty` | — | GUI, `core` |
-| `porecatu-term` | `pty` | GUI, `config` |
+| `porecatu-term` | `pty`, `ssh` | GUI, `config` |
+| `porecatu-ssh` | — | todo crate do projeto; único com `tokio` e `russh` ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) |
 | `porecatu-render` | — | `core`, `config`, `term` |
 | `porecatu-ui` | `core`, `config`, `term`, `render` | — |
 | `porecatu-session` | `core` | GUI, PTY |
@@ -140,7 +144,7 @@ Decisão aceita **não se edita**. Para mudar:
 
 1. Escreva um ADR novo com o próximo número, referenciando o antigo em `Supersedes: ADR-NNNN`.
 2. Marque o antigo como `Status: Superseded by ADR-MMMM`.
-3. Atualize a tabela em [docs/adr/0000-template.md](docs/adr/0000-template.md) e a tabela de stack do README.
+3. Atualize a tabela em [docs/adr/0000-template.md](docs/adr/0000-template.md) e, se a decisão for de stack, a lista "Stack travada" acima.
 
 Correção de erro factual ou clareza no texto de um ADR aceito é permitida. Mudança de *decisão*, não. Revisão parcial de seção aceita entra como **blockquote de revisão** na própria seção, apontando o ADR novo.
 
@@ -158,7 +162,7 @@ Versão curta. Texto completo, com sintoma e custo, no [Apêndice A de docs/desc
 
 **Dependências**
 
-- **`alacritty_terminal`, `wgpu`, `toml_edit`**: pinar versão exata; subir é tarefa própria. `alacritty_terminal` isolado em `porecatu-term`; `toml_edit` isolado em `porecatu-config`.
+- **`alacritty_terminal`, `wgpu`, `toml_edit`, `russh`**: pinar versão exata; subir é tarefa própria. `alacritty_terminal` isolado em `porecatu-term`; `toml_edit` isolado em `porecatu-config`; `russh` (`=0.65.0`, feature `ring`, sem `dsa`) isolado em `porecatu-ssh`, com piso de segurança 0.62.4 e RUSTSEC conferido a cada subida — o `rsa` que ele traz em pré-lançamento tem o RUSTSEC-2023-0071 aberto, sem versão corrigida ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md), "Riscos"). `tokio` **fora** de `[workspace.dependencies]`, declarado só em `porecatu-ssh`; `cargo tree -i tokio` tem de mostrar um único caminho. Quando entrar, `keyring` também exato e isolado em `porecatu-ssh`.
 - **`accesskit_winit`** é acoplado a uma versão de `winit`: subir os dois juntos e conferir `cargo tree -p porecatu-ui -i winit` (uma ocorrência só).
 - **Clipboard no Wayland** é o ponto frágil do `arboard`; encapsulado em `porecatu-ui/clipboard.rs`, `copypasta` é o plano B, verificação pendente.
 
@@ -199,7 +203,7 @@ Descobertas por fase (F1 a F6, pós-F6 e cada recurso fora de fase) vivem em [do
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, tabela de fases, histórico. Descreve o binário ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
 - [docs/adr/](docs/adr/) — decisões arquiteturais
-- [docs/prd/](docs/prd/) — requisitos de produto: 000–006 e 009–019 aprovados; 007 e 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
+- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–020 aprovados; 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
 - [docs/roadmap.md](docs/roadmap.md) — fases e etapas, com a dívida de verificação de cada uma
 - [docs/descobertas.md](docs/descobertas.md) — descobertas e armadilhas, texto completo
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo **fechado** de ações; ação fora dele é erro de config

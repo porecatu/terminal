@@ -23,7 +23,9 @@ use super::catalog::{Control, Group, OptionDef, ReloadScope, Section, options_in
 use super::draft::{Draft, ValueError};
 use super::field_edit::{display_text, number_text};
 use super::file_state::Banner;
+use super::import_list::ImportList;
 use super::layout::{self, BannerButton, BlockSpec, ControlPart, Metrics, PanelGeometry};
+use super::profiles_draft::ProfilesDraft;
 use super::shortcuts::{Capturing, Shortcuts};
 use crate::keymap::Chord;
 use crate::messages::msg;
@@ -71,6 +73,15 @@ pub(crate) struct ViewExtras<'a> {
     /// O arquivo de configuração em uso: a base de um caminho relativo da
     /// imagem de fundo (RF-17.3), para a nota de "não encontrado" (RF-17.21).
     pub config_path: Option<&'a std::path::Path>,
+    /// O rascunho do grupo "Perfis" (a lista e o formulário), no molde de
+    /// `shortcuts`: estado próprio, fora do catálogo de opções.
+    pub profiles: Option<&'a ProfilesDraft>,
+    /// "Importar do ~/.ssh/config" está aberto: a lista de marcar ocupa o
+    /// lugar do formulário (ADR-0075 §7).
+    pub import: Option<&'a ImportList>,
+    /// O cofre do sistema responde: só então o formulário SSH mostra os
+    /// botões "Esquecer".
+    pub vault: bool,
 }
 
 /// Um botão da faixa, com a largura já medida.
@@ -163,6 +174,36 @@ pub(crate) enum ControlView {
     Chips {
         chips: Vec<ChipView>,
     },
+    /// Um perfil da lista do grupo "Perfis" (ADR-0075 §6): o badge à esquerda
+    /// do controle e o `X` de excluir à direita. A linha inteira escolhe o
+    /// perfil, como a de um tema escolhe o tema.
+    ProfileItem {
+        badge: String,
+        /// Largura do badge (anatomia do ADR-0070 §7), medida uma vez.
+        badge_width: f32,
+        selected: bool,
+    },
+}
+
+/// A que o grupo "Perfis" pertence uma linha que não é de opção.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProfileTarget {
+    /// A linha dos três botões "+ Perfil local", "+ Perfil SSH" e "Importar".
+    Actions,
+    /// O perfil `n` da lista.
+    Item(usize),
+    /// Um campo de texto do formulário do perfil escolhido.
+    Field(super::profiles_draft::Field),
+    /// A escolha de autenticação do formulário (perfil SSH).
+    Auth,
+    /// A lista de argumentos ou de ambiente do formulário (perfil local).
+    List(super::profiles_draft::ListKind),
+    /// "Senha salva" / "Passphrase salva" com o botão "Esquecer".
+    Forget(super::profiles_draft::SecretKind),
+    /// O candidato `n` da lista de importar do `~/.ssh/config`.
+    Candidate(usize),
+    /// Os botões "Importar marcados" e "Cancelar" da lista.
+    ImportActions,
 }
 
 impl ControlView {
@@ -193,6 +234,10 @@ impl ControlView {
                 chips.iter().map(|chip| chip.width).sum::<f32>()
                     + chips.len().saturating_sub(1) as f32 * m.list_gap,
                 m.chip_height,
+            ),
+            ControlView::ProfileItem { badge_width, .. } => (
+                badge_width + m.list_gap + m.restore_width,
+                m.restore_height.max(m.chip_height),
             ),
         }
     }
@@ -257,6 +302,9 @@ impl ControlView {
                 })
             }
             ControlView::Themes { .. } => None,
+            // O `X` fica à direita do badge; o resto é a linha inteira.
+            ControlView::ProfileItem { .. } => (point.0 >= rect.x + rect.width - m.restore_width)
+                .then_some(ControlPart::ListRemove(0)),
             ControlView::Chips { chips } => {
                 let mut x = rect.x;
                 for (index, chip) in chips.iter().enumerate() {
@@ -303,6 +351,9 @@ pub(crate) struct RowView {
     pub can_reset: bool,
     /// A ação de uma linha do grupo Atalhos; `None` nas linhas de opção.
     pub action: Option<Action>,
+    /// A linha do grupo "Perfis" que não é de opção: os botões de acrescentar
+    /// ou um perfil da lista. `None` nas linhas de opção e de atalho.
+    pub profile: Option<ProfileTarget>,
     /// Uma linha de aviso em 11px na cor de Aviso, abaixo do nome: o conflito
     /// de atalho (RF-16.30) e a combinação que o terminal perde (RF-16.29).
     /// Cortada ao orçamento da linha, como a razão de um valor recusado.
@@ -481,6 +532,19 @@ pub(crate) fn build(
         }
     }
 
+    if let (Group::Profiles, Some(profiles)) = (key.group, extras.profiles) {
+        push_profile_blocks(
+            &mut blocks,
+            profiles,
+            extras.import,
+            extras.vault,
+            catalog,
+            m,
+            panel_width,
+            measurer,
+        );
+    }
+
     let specs: Vec<BlockSpec> = blocks
         .iter()
         .map(|block| match block {
@@ -584,6 +648,636 @@ fn banner_view(
     }
 }
 
+/// O que o seletor de perfil padrão mostra para o `id` `id`: o `[shell]` para o
+/// vazio, o nome do perfil quando ele existe, e o próprio `id` quando o arquivo
+/// aponta para um que não existe mais.
+pub(crate) fn profile_choice_label(
+    catalog: &Catalog,
+    list: &[porecatu_config::ProfileDef],
+    id: &str,
+) -> String {
+    if id.is_empty() {
+        return msg::settings::group::shell(catalog);
+    }
+    list.iter()
+        .find(|profile| profile.id == id)
+        .map_or_else(|| id.to_owned(), |profile| profile.name.clone())
+}
+
+#[cfg(test)]
+mod profile_list_tests {
+    use porecatu_config::{Config, ProfileKind};
+
+    use super::*;
+    use crate::messages::test_support;
+    use crate::settings::profiles_draft::{Field, ProfilesDraft};
+
+    const FILE: &str = r#"[[profiles.list]]
+id = "wsl"
+name = "WSL Ubuntu"
+badge = "WSL"
+program = "wsl.exe"
+
+[[profiles.list]]
+id = "prod"
+name = "prod-web-01"
+type = "ssh"
+host = "10.4.1.20"
+user = "deploy"
+"#;
+
+    fn metrics() -> Metrics {
+        Metrics::from_config(&Config::default(), 52.0)
+    }
+
+    fn config() -> Config {
+        porecatu_config::parse(FILE).unwrap().0
+    }
+
+    fn build_profiles(profiles: &ProfilesDraft, import: Option<&ImportList>) -> Content {
+        build(
+            ContentKey {
+                group: Group::Profiles,
+                panel_width_bits: 700.0_f32.to_bits(),
+                generation: 0,
+            },
+            &Draft::new(&config()),
+            &ViewExtras {
+                profiles: Some(profiles),
+                import,
+                ..ViewExtras::default()
+            },
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        )
+    }
+
+    /// Os botões e a lista: as linhas que não são do formulário.
+    fn profile_rows(content: &Content) -> Vec<&RowView> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Row(row)
+                    if matches!(
+                        row.profile,
+                        Some(ProfileTarget::Actions | ProfileTarget::Item(_))
+                    ) =>
+                {
+                    Some(&**row)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// As linhas do formulário do perfil escolhido, na ordem.
+    fn form_rows(content: &Content) -> Vec<&RowView> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Row(row)
+                    if matches!(
+                        row.profile,
+                        Some(
+                            ProfileTarget::Field(_)
+                                | ProfileTarget::Auth
+                                | ProfileTarget::List(_)
+                                | ProfileTarget::Forget(_)
+                        )
+                    ) =>
+                {
+                    Some(&**row)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_form_of_a_local_profile_has_its_fields_then_the_two_lists_and_no_host() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(0);
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Nome",
+                "Identificador",
+                "Badge",
+                "Programa",
+                "Diretório",
+                "Argumentos",
+                "Ambiente"
+            ]
+        );
+        let ControlView::Field { text, .. } = &rows[0].control else {
+            panic!("a text field");
+        };
+        assert_eq!(text, "WSL Ubuntu");
+        assert!(matches!(
+            rows[5].control,
+            ControlView::List {
+                two_fields: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rows[6].control,
+            ControlView::List {
+                two_fields: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_form_of_an_ssh_profile_puts_the_authentication_between_user_and_key_file() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(1);
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Nome",
+                "Identificador",
+                "Badge",
+                "Host",
+                "Porta",
+                "Usuário",
+                "Autenticação",
+                "Arquivo da chave"
+            ]
+        );
+        // The port is a right-aligned number box; the authentication a choice.
+        assert!(matches!(
+            rows[4].control,
+            ControlView::Field {
+                right_aligned: true,
+                ..
+            }
+        ));
+        let ControlView::Choice { text } = &rows[6].control else {
+            panic!("a choice");
+        };
+        assert_eq!(text, "Agente, chave, senha");
+        assert_eq!(rows[6].profile, Some(ProfileTarget::Auth));
+    }
+
+    #[test]
+    fn an_authentication_that_is_no_preset_reads_as_a_custom_order() {
+        let text = "[[profiles.list]]\nid=\"c\"\nname=\"c\"\ntype=\"ssh\"\nhost=\"h\"\nuser=\"u\"\nauth=[\"password\",\"agent\"]\n";
+        let list = porecatu_config::parse(text).unwrap().0.profiles.list;
+        let draft = ProfilesDraft::new(&list);
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+        let ControlView::Choice { text } = &rows[6].control else {
+            panic!("a choice");
+        };
+        assert_eq!(text, "Ordem personalizada");
+    }
+
+    #[test]
+    fn a_refused_field_carries_the_reason_of_the_parser_on_its_own_row() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(1);
+        draft.set_text(1, Field::Host, "a b");
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+
+        let host = rows.iter().find(|row| row.name == "Host").unwrap();
+        assert!(
+            host.invalid
+                .as_deref()
+                .is_some_and(|reason| reason.contains("host"))
+        );
+        let name = rows.iter().find(|row| row.name == "Nome").unwrap();
+        assert!(name.invalid.is_none(), "only the host is wrong");
+    }
+
+    #[test]
+    fn a_new_profile_opens_its_form_and_the_form_follows_the_selection() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.add_local("Meu shell", "SH");
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+        assert_eq!(rows[0].value_text, "Meu shell");
+
+        draft.select(0);
+        let rows_after = build_profiles(&draft, None);
+        assert_eq!(form_rows(&rows_after)[0].value_text, "WSL Ubuntu");
+    }
+
+    #[test]
+    fn the_lists_show_the_arguments_and_the_environment_with_the_bad_name_marked() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(0);
+        draft.set_args(0, vec!["-d".into(), "Debian".into()]);
+        draft.set_env(0, vec![("A".into(), "1".into()), ("A".into(), "2".into())]);
+        let content = build_profiles(&draft, None);
+        let rows = form_rows(&content);
+
+        let ControlView::List { items, .. } = &rows[5].control else {
+            panic!("args");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].first, "Debian");
+        let ControlView::List { items, .. } = &rows[6].control else {
+            panic!("env");
+        };
+        assert!(items.iter().all(|item| item.invalid), "both names repeat");
+    }
+
+    #[test]
+    fn a_form_click_edits_a_field_opens_the_choice_or_works_a_list() {
+        use crate::settings::field_edit::EditPart;
+        use crate::settings::profiles_draft::ListKind;
+        use ProfileClick as C;
+        let field = ProfileTarget::Field(Field::Name);
+        assert_eq!(
+            profile_click(field, ControlPart::Whole),
+            C::Edit(EditPart::Field)
+        );
+        assert_eq!(
+            profile_click(ProfileTarget::Auth, ControlPart::Whole),
+            C::OpenAuth
+        );
+        let list = ProfileTarget::List(ListKind::Env);
+        assert_eq!(
+            profile_click(
+                list,
+                ControlPart::ListField {
+                    item: 2,
+                    second: true
+                }
+            ),
+            C::Edit(EditPart::ListSecond(2))
+        );
+        assert_eq!(
+            profile_click(list, ControlPart::ListRemove(1)),
+            C::ListRemove(ListKind::Env, 1)
+        );
+        assert_eq!(
+            profile_click(list, ControlPart::ListAdd),
+            C::ListAdd(ListKind::Env)
+        );
+    }
+
+    #[test]
+    fn the_authentication_labels_are_translated() {
+        for catalog in test_support::all_catalogs() {
+            for preset in [Some(0), Some(1), Some(2), Some(3), Some(4), None] {
+                assert!(!auth_label(&catalog, preset).is_empty());
+            }
+        }
+        assert_eq!(auth_label(&test_support::pt_br(), Some(3)), "Só a senha");
+    }
+
+    #[test]
+    fn the_group_has_the_two_options_then_the_buttons_then_one_row_per_profile_in_file_order() {
+        let draft = ProfilesDraft::new(&config().profiles.list);
+        let content = build_profiles(&draft, None);
+
+        let options: Vec<_> = content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Row(row) => row.option,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(options, ["profiles_default", "profiles_detect"]);
+
+        let rows = profile_rows(&content);
+        let targets: Vec<_> = rows.iter().filter_map(|row| row.profile).collect();
+        assert_eq!(
+            targets,
+            [
+                ProfileTarget::Actions,
+                ProfileTarget::Item(0),
+                ProfileTarget::Item(1)
+            ]
+        );
+        assert_eq!(rows[1].name, "WSL Ubuntu");
+        assert_eq!(rows[2].name, "prod-web-01");
+        // The second line says the program or the destination.
+        assert_eq!(rows[1].description, "wsl.exe");
+        assert_eq!(rows[2].description, "deploy@10.4.1.20:22");
+    }
+
+    #[test]
+    fn the_three_buttons_are_a_segmented_control_with_nothing_chosen() {
+        let draft = ProfilesDraft::new(&config().profiles.list);
+        let content = build_profiles(&draft, None);
+        let actions = &profile_rows(&content)[0];
+
+        let ControlView::Segmented {
+            labels, selected, ..
+        } = &actions.control
+        else {
+            panic!("the buttons are a segmented control: {:?}", actions.control);
+        };
+        assert_eq!(
+            labels,
+            &[
+                "+ Perfil local",
+                "+ Perfil SSH",
+                "Importar do ~/.ssh/config"
+            ]
+        );
+        assert_eq!(*selected, usize::MAX, "no button is the chosen one");
+    }
+
+    #[test]
+    fn the_chosen_profile_is_marked_and_the_badge_is_the_profile_s_or_ssh() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(1);
+        let content = build_profiles(&draft, None);
+        let rows = profile_rows(&content);
+
+        let ControlView::ProfileItem {
+            badge, selected, ..
+        } = &rows[1].control
+        else {
+            panic!("a profile row");
+        };
+        assert_eq!((badge.as_str(), *selected), ("WSL", false));
+        let ControlView::ProfileItem {
+            badge, selected, ..
+        } = &rows[2].control
+        else {
+            panic!("a profile row");
+        };
+        // No badge written: the SSH default (RF-20.20).
+        assert_eq!((badge.as_str(), *selected), ("SSH", true));
+    }
+
+    #[test]
+    fn a_profile_with_a_pending_change_shows_the_pending_dot_and_a_new_one_appears() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.set_text(0, Field::Name, "WSL Debian");
+        let new = draft.add_ssh("Homolog");
+
+        let content = build_profiles(&draft, None);
+        let rows = profile_rows(&content);
+
+        assert!(rows[1].pending, "edited");
+        assert!(!rows[2].pending, "untouched");
+        assert!(rows[1 + new].pending, "new");
+        assert_eq!(rows[1].name, "WSL Debian");
+        assert_eq!(rows.len(), 4);
+    }
+
+    #[test]
+    fn an_empty_list_says_so_and_the_import_state_takes_its_note() {
+        let draft = ProfilesDraft::new(&[]);
+        let content = build_profiles(&draft, None);
+        let notes: Vec<String> = content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Note { lines, .. } => Some(lines.join(" ")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notes, ["Nenhum perfil declarado ainda."]);
+        assert_eq!(profile_rows(&content).len(), 1, "only the buttons");
+
+        let with_import = build_profiles(&draft, Some(&ImportList::Missing));
+        let has_import_note = with_import.blocks.iter().any(|block| {
+            matches!(block, Block::Note { lines, .. } if lines.join(" ") == "Não há ~/.ssh/config neste computador.")
+        });
+        assert!(has_import_note);
+    }
+
+    fn candidate(
+        alias: &str,
+        status: porecatu_config::SshImportStatus,
+    ) -> porecatu_config::SshImportCandidate {
+        porecatu_config::SshImportCandidate {
+            alias: alias.to_owned(),
+            host: format!("{alias}.example"),
+            user: "deploy".to_owned(),
+            port: 2222,
+            identity_file: String::new(),
+            status,
+        }
+    }
+
+    fn import_rows(content: &Content) -> Vec<&RowView> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Row(row)
+                    if matches!(
+                        row.profile,
+                        Some(ProfileTarget::Candidate(_) | ProfileTarget::ImportActions)
+                    ) =>
+                {
+                    Some(&**row)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_import_list_takes_the_place_of_the_form() {
+        use porecatu_config::{SshConfigImport, SshImportStatus as S, SshImportUnsupported as No};
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.select(0);
+        let mut list = ImportList::from_result(Ok(SshConfigImport {
+            file_found: true,
+            candidates: vec![
+                candidate("web", S::Importable),
+                candidate("old", S::AlreadyImported),
+                candidate("hop", S::Unsupported(No::ProxyJump)),
+            ],
+        }));
+        list.toggle(0);
+        let content = build_profiles(&draft, Some(&list));
+        assert!(form_rows(&content).is_empty(), "the form gives way");
+        let rows = import_rows(&content);
+        assert_eq!(rows.len(), 4, "three candidates and the buttons");
+        assert_eq!(rows[0].name, "web");
+        assert_eq!(rows[0].description, "deploy@web.example:2222");
+        assert!(matches!(rows[0].control, ControlView::Toggle { on: true }));
+        assert!(rows[0].unavailable.is_none());
+        assert_eq!(
+            rows[1].unavailable.as_deref(),
+            Some("Já existe um perfil com este destino.")
+        );
+        assert_eq!(
+            rows[2].unavailable.as_deref(),
+            Some("Usa ProxyJump, que o cliente embutido não suporta.")
+        );
+        assert!(matches!(rows[1].control, ControlView::Toggle { on: false }));
+        assert_eq!(rows[3].profile, Some(ProfileTarget::ImportActions));
+    }
+
+    #[test]
+    fn a_refused_file_shows_the_catalog_sentence_with_the_line_and_no_buttons() {
+        use porecatu_config::SshConfigImportErrorKind as Kind;
+        let draft = ProfilesDraft::new(&[]);
+        let list = ImportList::Refused {
+            line: Some(7),
+            kind: Kind::Match,
+        };
+        let content = build_profiles(&draft, Some(&list));
+        let text: String = content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Note { lines, .. } => Some(lines.join(" ")),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(text.contains("usa Match"), "{text}");
+        assert!(text.contains("Linha 7."), "{text}");
+        assert!(!text.contains("unknown field"), "{text}");
+        assert!(import_rows(&content).is_empty());
+    }
+
+    #[test]
+    fn the_import_clicks_are_decided_by_the_part() {
+        assert_eq!(
+            profile_click(ProfileTarget::Candidate(2), ControlPart::Whole),
+            ProfileClick::ToggleCandidate(2)
+        );
+        assert_eq!(
+            profile_click(ProfileTarget::ImportActions, ControlPart::Segment(0)),
+            ProfileClick::ImportChecked
+        );
+        assert_eq!(
+            profile_click(ProfileTarget::ImportActions, ControlPart::Segment(1)),
+            ProfileClick::CancelImport
+        );
+    }
+
+    #[test]
+    fn the_list_is_not_built_for_any_other_group() {
+        let draft = ProfilesDraft::new(&config().profiles.list);
+        let content = build(
+            ContentKey {
+                group: Group::Shell,
+                panel_width_bits: 700.0_f32.to_bits(),
+                generation: 0,
+            },
+            &Draft::new(&config()),
+            &ViewExtras {
+                profiles: Some(&draft),
+                ..ViewExtras::default()
+            },
+            &test_support::pt_br(),
+            &metrics(),
+            &mut TextMeasurer::new(),
+        );
+        assert!(profile_rows(&content).is_empty());
+    }
+
+    #[test]
+    fn only_the_x_is_a_part_of_a_profile_row_and_the_rest_is_the_whole_row() {
+        let m = metrics();
+        let control = ControlView::ProfileItem {
+            badge: "WSL".to_owned(),
+            badge_width: 30.0,
+            selected: false,
+        };
+        let (width, height) = control.size(&m);
+        let rect = Rect {
+            x: 100.0,
+            y: 50.0,
+            width,
+            height,
+        };
+
+        let remove = (rect.x + rect.width - 2.0, rect.y + height / 2.0);
+        let badge = (rect.x + 5.0, rect.y + height / 2.0);
+        assert_eq!(
+            control.part_at(rect, &m, remove),
+            Some(ControlPart::ListRemove(0))
+        );
+        assert_eq!(control.part_at(rect, &m, badge), None);
+        assert_eq!(control.part_at(rect, &m, (rect.x - 5.0, rect.y)), None);
+    }
+
+    #[test]
+    fn a_click_is_decided_by_target_and_part() {
+        use ProfileClick as C;
+        let actions = ProfileTarget::Actions;
+        assert_eq!(profile_click(actions, ControlPart::Segment(0)), C::AddLocal);
+        assert_eq!(profile_click(actions, ControlPart::Segment(1)), C::AddSsh);
+        assert_eq!(
+            profile_click(actions, ControlPart::Segment(2)),
+            C::OpenImport
+        );
+        assert_eq!(profile_click(actions, ControlPart::Segment(3)), C::Nothing);
+        assert_eq!(profile_click(actions, ControlPart::Whole), C::Nothing);
+        let item = ProfileTarget::Item(4);
+        assert_eq!(
+            profile_click(item, ControlPart::ListRemove(0)),
+            C::Delete(4)
+        );
+        assert_eq!(profile_click(item, ControlPart::Whole), C::Select);
+    }
+
+    #[test]
+    fn the_badge_of_a_profile_follows_the_adr() {
+        let draft = ProfilesDraft::new(&config().profiles.list);
+        assert_eq!(profile_badge(draft.form(0).unwrap()), "WSL");
+        assert_eq!(profile_badge(draft.form(1).unwrap()), "SSH");
+        assert_eq!(draft.form(1).unwrap().kind, ProfileKind::Ssh);
+    }
+
+    #[test]
+    fn the_dirty_dot_row_and_the_list_use_the_same_pending_rule() {
+        let mut draft = ProfilesDraft::new(&config().profiles.list);
+        draft.delete(0, false);
+        // A deletion is pending in the count, though no row stays to carry the dot.
+        assert_eq!(draft.pending_count(), 1);
+        let content = build_profiles(&draft, None);
+        assert_eq!(
+            profile_rows(&content).len(),
+            2,
+            "the buttons and one profile"
+        );
+    }
+}
+
+#[cfg(test)]
+mod profile_choice_tests {
+    use super::*;
+    use crate::messages::test_support;
+
+    fn list() -> Vec<porecatu_config::ProfileDef> {
+        let text = "[[profiles.list]]\nid = \"wsl\"\nname = \"WSL Ubuntu\"\nbadge = \"WSL\"\nprogram = \"wsl.exe\"\n";
+        porecatu_config::parse(text).unwrap().0.profiles.list
+    }
+
+    #[test]
+    fn the_choice_shows_the_name_of_the_profile_and_the_shell_for_empty() {
+        let pt = test_support::pt_br();
+        assert_eq!(profile_choice_label(&pt, &list(), "wsl"), "WSL Ubuntu");
+        assert_eq!(profile_choice_label(&pt, &list(), ""), "Shell");
+    }
+
+    #[test]
+    fn a_default_that_points_nowhere_shows_its_own_id() {
+        let pt = test_support::pt_br();
+        assert_eq!(profile_choice_label(&pt, &list(), "gone"), "gone");
+    }
+}
+
 fn option_row(
     option: &OptionDef,
     draft: &Draft,
@@ -597,9 +1291,17 @@ fn option_row(
         Control::StringList | Control::StringMap => draft.rows(option),
         _ => Vec::new(),
     };
+    // O perfil padrão mostra o **nome** do perfil, não o `id` que o arquivo guarda.
+    let shown =
+        match (option.control, &value) {
+            (Control::ProfileChoice, EditValue::String(id)) => EditValue::String(
+                profile_choice_label(catalog, &draft.file_config().profiles.list, id),
+            ),
+            _ => value.clone(),
+        };
     let control = control_view(
         option,
-        &value,
+        &shown,
         draft.raw(option),
         &rows,
         catalog,
@@ -675,6 +1377,7 @@ fn option_row(
         invalid,
         can_reset: draft.can_reset(option) && unavailable.is_none(),
         action: None,
+        profile: None,
         notice: None,
         unavailable,
     }
@@ -719,8 +1422,8 @@ fn control_view(
 ) -> ControlView {
     match (option.control, value) {
         (Control::Toggle, EditValue::Bool(on)) => ControlView::Toggle { on: *on },
-        (Control::Text | Control::Language, EditValue::String(text)) => {
-            if option.control == Control::Language {
+        (Control::Text | Control::Language | Control::ProfileChoice, EditValue::String(text)) => {
+            if matches!(option.control, Control::Language | Control::ProfileChoice) {
                 ControlView::Choice { text: text.clone() }
             } else {
                 field(
@@ -993,10 +1696,566 @@ fn push_shortcut_blocks(
                 invalid: None,
                 can_reset: view.state.can_reset(action),
                 action: Some(action),
+                profile: None,
                 notice,
                 unavailable: None,
             })));
         }
+    }
+}
+
+/// O que o clique numa linha do grupo Perfis pede.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProfileClick {
+    AddLocal,
+    AddSsh,
+    OpenImport,
+    /// O `X` do perfil `n`.
+    Delete(usize),
+    /// O resto da linha de um perfil: escolhe-o.
+    Select,
+    /// Começa a editar este campo (de texto, ou de um item de lista).
+    Edit(super::field_edit::EditPart),
+    /// Abre a lista de escolha da autenticação.
+    OpenAuth,
+    /// "Esquecer" do segredo salvo.
+    Forget(super::profiles_draft::SecretKind),
+    /// Marca ou desmarca o candidato `n` da importação.
+    ToggleCandidate(usize),
+    /// "Importar marcados".
+    ImportChecked,
+    /// "Cancelar": fecha a lista de importar.
+    CancelImport,
+    /// O `X` do item `n` da lista de argumentos ou de ambiente.
+    ListRemove(super::profiles_draft::ListKind, usize),
+    /// "Adicionar" da lista.
+    ListAdd(super::profiles_draft::ListKind),
+    Nothing,
+}
+
+/// Decide o clique numa parte de uma linha do grupo Perfis. Pura: a janela só
+/// executa o que ela diz.
+pub(crate) fn profile_click(target: ProfileTarget, part: ControlPart) -> ProfileClick {
+    use super::field_edit::EditPart;
+    match (target, part) {
+        (ProfileTarget::Actions, ControlPart::Segment(0)) => ProfileClick::AddLocal,
+        (ProfileTarget::Actions, ControlPart::Segment(1)) => ProfileClick::AddSsh,
+        (ProfileTarget::Actions, ControlPart::Segment(2)) => ProfileClick::OpenImport,
+        (ProfileTarget::Actions, _) => ProfileClick::Nothing,
+        (ProfileTarget::Item(item), ControlPart::ListRemove(_)) => ProfileClick::Delete(item),
+        (ProfileTarget::Item(_), _) => ProfileClick::Select,
+        (ProfileTarget::Field(_), ControlPart::Whole) => ProfileClick::Edit(EditPart::Field),
+        (ProfileTarget::Field(_), _) => ProfileClick::Nothing,
+        (ProfileTarget::Auth, ControlPart::Whole) => ProfileClick::OpenAuth,
+        (ProfileTarget::Auth, _) => ProfileClick::Nothing,
+        (ProfileTarget::Forget(kind), ControlPart::Segment(0)) => ProfileClick::Forget(kind),
+        (ProfileTarget::Forget(_), _) => ProfileClick::Nothing,
+        (ProfileTarget::Candidate(item), _) => ProfileClick::ToggleCandidate(item),
+        (ProfileTarget::ImportActions, ControlPart::Segment(0)) => ProfileClick::ImportChecked,
+        (ProfileTarget::ImportActions, ControlPart::Segment(1)) => ProfileClick::CancelImport,
+        (ProfileTarget::ImportActions, _) => ProfileClick::Nothing,
+        (ProfileTarget::List(_), ControlPart::ListField { item, second }) => {
+            ProfileClick::Edit(if second {
+                EditPart::ListSecond(item)
+            } else {
+                EditPart::ListFirst(item)
+            })
+        }
+        (ProfileTarget::List(kind), ControlPart::ListRemove(item)) => {
+            ProfileClick::ListRemove(kind, item)
+        }
+        (ProfileTarget::List(kind), ControlPart::ListAdd) => ProfileClick::ListAdd(kind),
+        (ProfileTarget::List(_), _) => ProfileClick::Nothing,
+    }
+}
+
+fn field_label(catalog: &Catalog, field: super::profiles_draft::Field) -> String {
+    use super::profiles_draft::Field;
+    use msg::settings::profiles as p;
+    match field {
+        Field::Name => p::field_name(catalog),
+        Field::Id => p::field_id(catalog),
+        Field::Badge => p::field_badge(catalog),
+        Field::Program => p::field_program(catalog),
+        Field::Cwd => p::field_cwd(catalog),
+        Field::Host => p::field_host(catalog),
+        Field::Port => p::field_port(catalog),
+        Field::User => p::field_user(catalog),
+        Field::IdentityFile => p::field_identity_file(catalog),
+        Field::Auth => p::field_auth(catalog),
+    }
+}
+
+/// O texto da escolha de autenticação: o conjunto de métodos, ou "ordem
+/// personalizada" para uma lista do arquivo que nenhum dos conjuntos é.
+pub(crate) fn auth_label(catalog: &Catalog, preset: Option<usize>) -> String {
+    use msg::settings::profiles as p;
+    match preset {
+        Some(0) => p::auth_all(catalog),
+        Some(1) => p::auth_agent(catalog),
+        Some(2) => p::auth_key(catalog),
+        Some(3) => p::auth_password(catalog),
+        Some(4) => p::auth_key_password(catalog),
+        _ => p::auth_custom(catalog),
+    }
+}
+
+/// Uma linha do formulário: o nome, o controle, e a razão se o campo está
+/// recusado. Sem descrição (o nome do campo basta) e sem restaurar padrão.
+#[allow(clippy::too_many_arguments)]
+fn form_row(
+    name: String,
+    control: ControlView,
+    value_text: String,
+    invalid: Option<String>,
+    target: ProfileTarget,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) -> Block {
+    let _ = catalog;
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    let (name, _) = measurer.truncate(&name, BODY_FONT, m.name_size, budget);
+    let invalid = invalid.map(|reason| {
+        measurer
+            .truncate(&reason, BODY_FONT, m.description_size, budget)
+            .0
+    });
+    Block::Row(Box::new(RowView {
+        option: None,
+        name,
+        description: String::new(),
+        description_full: String::new(),
+        description_truncated: false,
+        scope: None,
+        control,
+        value_text,
+        pending: false,
+        invalid,
+        can_reset: false,
+        action: None,
+        profile: Some(target),
+        notice: None,
+        unavailable: None,
+    }))
+}
+
+/// ADR-0075 §6: o formulário do perfil escolhido, abaixo da lista, com os
+/// controles que a tela já tem -- campo de texto, escolha, lista de textos e
+/// lista de nome e valor. O tipo decide os campos.
+fn push_profile_form(
+    blocks: &mut Vec<Block>,
+    profiles: &ProfilesDraft,
+    vault: bool,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    use super::profiles_draft::{Field, ListKind, SecretKind};
+    let Some(selected) = profiles.selected() else {
+        return;
+    };
+    let Some(form) = profiles.form(selected) else {
+        return;
+    };
+    let problems = profiles.problems(selected);
+    blocks.push(Block::Section(msg::settings::profiles::section_form(
+        catalog,
+    )));
+
+    for field in form.fields().iter().copied() {
+        // Autenticação entre o usuário e o arquivo da chave (o desenho do ADR).
+        if field == Field::IdentityFile {
+            let preset = form.auth_preset();
+            let label = auth_label(catalog, preset);
+            blocks.push(form_row(
+                field_label(catalog, Field::Auth),
+                ControlView::Choice {
+                    text: label.clone(),
+                },
+                label,
+                problems
+                    .get(&Field::Auth)
+                    .map(|kind| crate::messages::profile_problem_reason(catalog, kind)),
+                ProfileTarget::Auth,
+                catalog,
+                m,
+                panel_width,
+                measurer,
+            ));
+        }
+        let text = form.text(field).to_owned();
+        let right_aligned = field == Field::Port;
+        let width = if right_aligned {
+            m.number_field_width
+        } else {
+            m.text_field_width
+        };
+        blocks.push(form_row(
+            field_label(catalog, field),
+            self::field(text.clone(), width, right_aligned, m, measurer),
+            text,
+            problems
+                .get(&field)
+                .map(|kind| crate::messages::profile_problem_reason(catalog, kind)),
+            ProfileTarget::Field(field),
+            catalog,
+            m,
+            panel_width,
+            measurer,
+        ));
+    }
+
+    if vault && form.kind == porecatu_config::ProfileKind::Ssh {
+        let button = msg::settings::profiles::forget(catalog);
+        let width = measurer.measure_width(&button, BODY_FONT, m.button_font_size)
+            + m.button_padding_x * 2.0;
+        for (kind, label) in [
+            (
+                SecretKind::Password,
+                msg::settings::profiles::saved_password(catalog),
+            ),
+            (
+                SecretKind::Passphrase,
+                msg::settings::profiles::saved_passphrase(catalog),
+            ),
+        ] {
+            blocks.push(form_row(
+                label.clone(),
+                ControlView::Segmented {
+                    labels: vec![button.clone()],
+                    widths: vec![width],
+                    selected: usize::MAX,
+                },
+                label,
+                None,
+                ProfileTarget::Forget(kind),
+                catalog,
+                m,
+                panel_width,
+                measurer,
+            ));
+        }
+    }
+
+    if form.kind == porecatu_config::ProfileKind::Local {
+        for (kind, label, two_fields) in [
+            (
+                ListKind::Args,
+                msg::settings::profiles::field_args(catalog),
+                false,
+            ),
+            (
+                ListKind::Env,
+                msg::settings::profiles::field_env(catalog),
+                true,
+            ),
+        ] {
+            let items = profiles
+                .list_rows(selected, kind)
+                .into_iter()
+                .enumerate()
+                .map(|(item, (first, second))| ListItemView {
+                    first,
+                    second,
+                    invalid: kind == ListKind::Env && profiles.env_item_invalid(selected, item),
+                })
+                .collect();
+            blocks.push(form_row(
+                label,
+                ControlView::List {
+                    items,
+                    two_fields,
+                    add_label: msg::settings::button::add_item(catalog),
+                },
+                String::new(),
+                None,
+                ProfileTarget::List(kind),
+                catalog,
+                m,
+                panel_width,
+                measurer,
+            ));
+        }
+    }
+}
+
+/// O texto que o badge de um perfil mostra: o que o perfil escreve, e o `SSH`
+/// de sempre num perfil SSH que não escreveu nenhum (RF-20.20).
+pub(crate) fn profile_badge(form: &super::profiles_draft::Form) -> String {
+    if !form.badge.is_empty() {
+        form.badge.clone()
+    } else if form.kind == porecatu_config::ProfileKind::Ssh {
+        "SSH".to_owned()
+    } else {
+        String::new()
+    }
+}
+
+/// A segunda linha de um perfil na lista: o programa, ou `usuário@host:porta`.
+fn profile_summary(form: &super::profiles_draft::Form) -> String {
+    match form.kind {
+        porecatu_config::ProfileKind::Local => form.program.clone(),
+        porecatu_config::ProfileKind::Ssh => {
+            format!("{}@{}:{}", form.user, form.host, form.port)
+        }
+    }
+}
+
+/// ADR-0075 §6: a lista de perfis e a linha dos botões, abaixo das duas opções
+/// do topo -- blocos empilhados na mesma coluna, com os controles que a tela já
+/// tem. O formulário do perfil escolhido vem depois da lista.
+#[allow(clippy::too_many_arguments)]
+fn push_profile_blocks(
+    blocks: &mut Vec<Block>,
+    profiles: &ProfilesDraft,
+    import: Option<&ImportList>,
+    vault: bool,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    use msg::settings::profiles as p;
+    let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+    blocks.push(Block::Section(p::section_list(catalog)));
+
+    // Os três botões: um segmentado em que nenhum está escolhido.
+    let labels = vec![
+        p::add_local(catalog),
+        p::add_ssh(catalog),
+        p::import(catalog),
+    ];
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|label| {
+            measurer.measure_width(label, BODY_FONT, m.button_font_size) + m.button_padding_x * 2.0
+        })
+        .collect();
+    let control = ControlView::Segmented {
+        labels,
+        widths,
+        selected: usize::MAX,
+    };
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    let name = p::actions_label(catalog);
+    let description_full = p::actions_description(catalog);
+    let (description, description_truncated) =
+        measurer.truncate(&description_full, BODY_FONT, m.description_size, budget);
+    blocks.push(Block::Row(Box::new(RowView {
+        option: None,
+        name: name.clone(),
+        description,
+        description_full,
+        description_truncated,
+        scope: None,
+        control,
+        value_text: name,
+        pending: false,
+        invalid: None,
+        can_reset: false,
+        action: None,
+        profile: Some(ProfileTarget::Actions),
+        notice: None,
+        unavailable: None,
+    })));
+    if profiles.len() == 0 {
+        blocks.push(Block::Note {
+            lines: wrap(&p::empty(catalog), m.description_size, width, measurer),
+            tone: NoteTone::Muted,
+        });
+    }
+    push_profile_items(blocks, profiles, catalog, m, panel_width, measurer);
+    // ADR-0075 §7: a lista de marcar ocupa o lugar do formulário.
+    if let Some(import) = import {
+        push_import_blocks(blocks, import, catalog, m, panel_width, measurer);
+    } else {
+        push_profile_form(blocks, profiles, vault, catalog, m, panel_width, measurer);
+    }
+}
+
+/// A frase do estado de uma lista que não tem o que marcar, ou do arquivo
+/// recusado: sai do catálogo, nunca da mensagem em inglês do leitor.
+fn import_note(catalog: &Catalog, import: &ImportList) -> Option<String> {
+    use msg::settings::profiles as p;
+    use porecatu_config::SshConfigImportErrorKind as Kind;
+    match import {
+        ImportList::Missing => Some(p::import_missing(catalog)),
+        ImportList::Empty => Some(p::import_none(catalog)),
+        ImportList::Refused { line, kind } => {
+            let sentence = match kind {
+                Kind::Unreadable => p::import_refused_unreadable(catalog),
+                Kind::Match => p::import_refused_match(catalog),
+                Kind::UnknownDirective { name } => p::import_refused_directive(catalog, name),
+                Kind::InvalidValue => p::import_refused_value(catalog),
+                Kind::Include => p::import_refused_include(catalog),
+            };
+            Some(match line {
+                Some(line) => format!("{sentence} {}", p::import_line(catalog, line)),
+                None => sentence,
+            })
+        }
+        ImportList::Candidates { .. } => None,
+    }
+}
+
+/// Por que um candidato está desabilitado, em texto do catálogo.
+fn import_reason(catalog: &Catalog, status: &porecatu_config::SshImportStatus) -> Option<String> {
+    use msg::settings::profiles as p;
+    use porecatu_config::SshImportUnsupported as No;
+    use porecatu_config::{SshImportInvalid as Bad, SshImportStatus as Status};
+    Some(match status {
+        Status::Importable => return None,
+        Status::AlreadyImported => p::import_reason_already(catalog),
+        Status::Unsupported(No::ProxyJump) => p::import_reason_proxy_jump(catalog),
+        Status::Unsupported(No::ProxyCommand) => p::import_reason_proxy_command(catalog),
+        Status::Unsupported(No::LocalForward) => p::import_reason_local_forward(catalog),
+        Status::Unsupported(No::RemoteForward) => p::import_reason_remote_forward(catalog),
+        Status::Unsupported(No::DynamicForward) => p::import_reason_dynamic_forward(catalog),
+        Status::Unsupported(No::CertificateFile) => p::import_reason_certificate_file(catalog),
+        Status::Invalid(Bad::Host) => p::import_reason_invalid_host(catalog),
+        Status::Invalid(Bad::User) => p::import_reason_invalid_user(catalog),
+    })
+}
+
+/// A lista de importar: uma linha por candidato, com o interruptor que a tela
+/// já tem (desabilitado e com o motivo, quando não dá para importar), e os
+/// botões. Sem candidato, só a frase do estado.
+fn push_import_blocks(
+    blocks: &mut Vec<Block>,
+    import: &ImportList,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    use msg::settings::profiles as p;
+    let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+    blocks.push(Block::Section(p::import_section(catalog)));
+    if let Some(text) = import_note(catalog, import) {
+        blocks.push(Block::Note {
+            lines: wrap(&text, m.description_size, width, measurer),
+            tone: NoteTone::Muted,
+        });
+        return;
+    }
+    let ImportList::Candidates { items, .. } = import else {
+        return;
+    };
+    for (index, item) in items.iter().enumerate() {
+        let control = ControlView::Toggle {
+            on: import.is_checked(index),
+        };
+        let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+        let (name, _) = measurer.truncate(&item.alias, BODY_FONT, m.name_size, budget);
+        let summary = format!("{}@{}:{}", item.user, item.host, item.port);
+        let (description, description_truncated) =
+            measurer.truncate(&summary, BODY_FONT, m.description_size, budget);
+        let unavailable = import_reason(catalog, &item.status).map(|reason| {
+            measurer
+                .truncate(&reason, BODY_FONT, m.description_size, budget)
+                .0
+        });
+        blocks.push(Block::Row(Box::new(RowView {
+            option: None,
+            name,
+            description,
+            description_full: summary,
+            description_truncated,
+            scope: None,
+            control,
+            value_text: item.alias.clone(),
+            pending: false,
+            invalid: None,
+            can_reset: false,
+            action: None,
+            profile: Some(ProfileTarget::Candidate(index)),
+            notice: None,
+            unavailable,
+        })));
+    }
+    let labels = vec![p::import_confirm(catalog), p::import_cancel(catalog)];
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|label| {
+            measurer.measure_width(label, BODY_FONT, m.button_font_size) + m.button_padding_x * 2.0
+        })
+        .collect();
+    let control = ControlView::Segmented {
+        labels,
+        widths,
+        selected: usize::MAX,
+    };
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    let name = p::import(catalog);
+    let (name_text, _) = measurer.truncate(&name, BODY_FONT, m.name_size, budget);
+    blocks.push(Block::Row(Box::new(RowView {
+        option: None,
+        name: name_text,
+        description: String::new(),
+        description_full: String::new(),
+        description_truncated: false,
+        scope: None,
+        control,
+        value_text: name,
+        pending: false,
+        invalid: None,
+        can_reset: false,
+        action: None,
+        profile: Some(ProfileTarget::ImportActions),
+        notice: None,
+        unavailable: None,
+    })));
+}
+
+/// Uma linha por perfil, na ordem do arquivo.
+fn push_profile_items(
+    blocks: &mut Vec<Block>,
+    profiles: &ProfilesDraft,
+    _catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    for index in 0..profiles.len() {
+        let Some(form) = profiles.form(index) else {
+            continue;
+        };
+        let badge = profile_badge(form);
+        let badge_width = if badge.is_empty() {
+            0.0
+        } else {
+            crate::chrome::badge_size(&badge, measurer).0
+        };
+        let control = ControlView::ProfileItem {
+            badge,
+            badge_width,
+            selected: profiles.selected() == Some(index),
+        };
+        let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+        let (name, _) = measurer.truncate(&form.name, BODY_FONT, m.name_size, budget);
+        let summary = profile_summary(form);
+        let (description, description_truncated) =
+            measurer.truncate(&summary, BODY_FONT, m.description_size, budget);
+        blocks.push(Block::Row(Box::new(RowView {
+            option: None,
+            name,
+            description,
+            description_full: summary,
+            description_truncated,
+            scope: None,
+            control,
+            value_text: form.name.clone(),
+            pending: profiles.is_pending(index),
+            invalid: None,
+            can_reset: false,
+            action: None,
+            profile: Some(ProfileTarget::Item(index)),
+            notice: None,
+            unavailable: None,
+        })));
     }
 }
 
@@ -1058,6 +2317,7 @@ fn push_theme_rows(
             // Sem botão de restaurar por linha (ADR-0060 §3).
             can_reset: false,
             action: None,
+            profile: None,
             notice: None,
             unavailable: None,
         })));

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use porecatu_core::{GroupId, PaneId, TabId};
 use porecatu_locale::Catalog;
+use porecatu_term::{PromptId, SecretLabel};
 
 use crate::messages::msg;
 
@@ -56,6 +57,86 @@ pub enum DialogAction {
     /// alterações pendentes. Quem responde é a própria janela de
     /// configurações, que guarda o rascunho; `App` só vê a resposta.
     SettingsPending,
+    /// RF-20.4 (ADR-0075 §6): excluir o perfil `n` da lista da tela de
+    /// configurações. Quem responde é a própria janela de configurações, que
+    /// tem o rascunho dos perfis; um diálogo de `WindowState` nunca o carrega.
+    DeleteProfile(usize),
+    /// RF-20.16 (ADR-0075 §3): confiar numa chave de host desconhecida.
+    /// Confirmar responde `Confirm` à pergunta `prompt` do painel; qualquer
+    /// outra saída (cancelar, `Esc`) responde `Cancel`.
+    HostKey(TabId, PaneId, PromptId),
+    /// RF-20.12 (ADR-0075 §2): senha ou passphrase. Confirmar responde à
+    /// pergunta `prompt` do painel com o texto do campo, **movido**; qualquer
+    /// outra saída responde `Cancel`. O campo mascarado não mora aqui (este
+    /// enum é `Clone`): vive em `WindowState::secret_input`.
+    Secret(TabId, PaneId, PromptId),
+}
+
+/// Onde as teclas vão no diálogo de segredo. Aqui o foco inicial é o **campo**,
+/// não o cancelar: o diálogo não é destrutivo, e o que o usuário veio fazer é
+/// digitar (ADR-0075 §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretFocus {
+    Field,
+    Remember,
+    /// Um dos botões; qual, está em [`ConfirmDialog::focused`].
+    Buttons,
+}
+
+/// Uma caixa de marcar no corpo de um diálogo de confirmação, com a anatomia da
+/// alternância da tela de configurações: "Apagar também a senha e a passphrase
+/// salvas" ao excluir um perfil SSH (RF-20.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckboxFacts {
+    pub label: String,
+    pub checked: bool,
+}
+
+/// O que o diálogo de segredo tem além de um diálogo de confirmação: só dado.
+/// O **texto digitado** é a única coisa que não mora aqui (este tipo é `Clone`
+/// e `Debug`): vive num `MaskedFieldState` em `WindowState::secret_field`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretFacts {
+    pub remember_label: String,
+    /// Sem cofre, a caixa fica desabilitada e leva a nota esmaecida
+    /// (RF-20.14).
+    pub vault_available: bool,
+    pub unavailable_note: String,
+    /// O corpo é o caminho de uma chave: trunca no **meio** (ADR-0075 §2).
+    pub body_is_path: bool,
+    /// A caixa "Lembrar no cofre do sistema", desmarcada ao abrir.
+    pub remember: bool,
+    pub focus: SecretFocus,
+}
+
+/// O tom de uma linha abaixo do corpo (ADR-0075 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineTone {
+    /// Dado, em mono: cor "Secundário" (`#a8b0bb`, §1.4). Nunca truncado.
+    Data,
+    /// Aviso, na cor de aviso da §2.14.
+    Warning,
+}
+
+/// Uma linha de dado ou de aviso entre o corpo e os botões. O texto de uma
+/// linha de dado não passa pelo catálogo (é a impressão digital, como no
+/// `ssh`); os rótulos passam.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogLine {
+    pub text: String,
+    pub tone: LineTone,
+}
+
+/// O que o diálogo de host desconhecido mostra: dado, não frase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostKeyFacts {
+    pub host: String,
+    pub algorithm: String,
+    pub fingerprint: String,
+    /// Tipos de chave que o host já tem registrados (ADR-0074 §3).
+    pub known_types: Vec<String>,
+    /// Linhas do `known_hosts` que o leitor não entendeu (ADR-0074 §2).
+    pub skipped_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +151,18 @@ pub struct ConfirmDialog {
     /// outros, que continuam com dois botões.
     pub discard_label: Option<String>,
     pub action: DialogAction,
+    /// Linhas entre o corpo e os botões; vazio nos diálogos de sempre.
+    pub lines: Vec<DialogLine>,
+    /// Só no diálogo de segredo: o campo e a caixa "Lembrar" entram entre o
+    /// corpo e os botões.
+    /// Em caixa: o diálogo viaja em enums pequenos (`TabCloseOutcome`), e só um
+    /// em cada centena é de segredo.
+    pub secret: Option<Box<SecretFacts>>,
+    /// Uma caixa de marcar entre o corpo e os botões, sem campo (o diálogo de
+    /// excluir perfil). Exclusiva do `secret`, que tem a própria.
+    pub checkbox: Option<Box<CheckboxFacts>>,
+    /// O corpo é a linha de erro (segredo recusado): pintado na cor de erro.
+    pub body_is_error: bool,
     focused: DialogButton,
     /// O botão sob o cursor, só no diálogo de três saídas: os de dois botões
     /// não têm realce de hover.
@@ -91,6 +184,10 @@ impl ConfirmDialog {
             cancel_label: cancel_label.into(),
             discard_label: None,
             action,
+            lines: Vec::new(),
+            secret: None,
+            checkbox: None,
+            body_is_error: false,
             focused: DialogButton::Cancel,
             hovered: None,
         }
@@ -189,6 +286,171 @@ impl ConfirmDialog {
         );
         dialog.discard_label = Some(msg::settings::dialog::discard_and_close(catalog));
         dialog
+    }
+
+    /// RF-20.4 (ADR-0075 §6): excluir o perfil `index` da lista. Com
+    /// `offers_forget` (perfil SSH que nenhum outro compartilha), a caixa
+    /// "Apagar também a senha e a passphrase salvas" vem **marcada**. Excluir é
+    /// o confirmar destrutivo de sempre, e o foco inicial é o cancelar.
+    pub fn delete_profile(
+        catalog: &Catalog,
+        name: &str,
+        index: usize,
+        offers_forget: bool,
+    ) -> Self {
+        let mut dialog = Self::new(
+            msg::settings::dialog::delete_profile_title(catalog, name),
+            msg::settings::dialog::delete_profile_body(catalog),
+            msg::settings::dialog::delete_profile_confirm(catalog),
+            msg::dialog::cancel(catalog),
+            DialogAction::DeleteProfile(index),
+        );
+        if offers_forget {
+            dialog.checkbox = Some(Box::new(CheckboxFacts {
+                label: msg::settings::dialog::delete_profile_forget(catalog),
+                checked: true,
+            }));
+        }
+        dialog
+    }
+
+    /// A caixa de marcar está marcada (e existe).
+    pub fn checkbox_checked(&self) -> bool {
+        self.checkbox
+            .as_ref()
+            .is_some_and(|checkbox| checkbox.checked)
+    }
+
+    pub fn toggle_checkbox(&mut self) {
+        if let Some(checkbox) = self.checkbox.as_mut() {
+            checkbox.checked = !checkbox.checked;
+        }
+    }
+
+    /// RF-20.16 (ADR-0075 §3): host desconhecido. O corpo tem uma linha; abaixo
+    /// vêm o tipo da chave e a impressão digital (dado, sem truncar) e, quando
+    /// há, os avisos de outro tipo registrado e de linhas puladas. O foco
+    /// inicial é o cancelar, como em todo diálogo: um `Enter` distraído não
+    /// confia num host.
+    pub fn host_key(catalog: &Catalog, facts: &HostKeyFacts, action: DialogAction) -> Self {
+        let mut dialog = Self::new(
+            msg::dialog::host_key::title(catalog, &facts.host),
+            msg::dialog::host_key::body(catalog),
+            msg::dialog::host_key::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            action,
+        );
+        let data = |text: String| DialogLine {
+            text,
+            tone: LineTone::Data,
+        };
+        dialog.lines = vec![
+            data(msg::dialog::host_key::type_line(catalog, &facts.algorithm)),
+            data(msg::dialog::host_key::fingerprint_label(catalog)),
+            data(facts.fingerprint.clone()),
+        ];
+        if !facts.known_types.is_empty() {
+            dialog.lines.push(DialogLine {
+                text: msg::dialog::host_key::other_type(catalog, facts.known_types.join(", ")),
+                tone: LineTone::Warning,
+            });
+        }
+        if facts.skipped_lines > 0 {
+            dialog.lines.push(DialogLine {
+                text: msg::dialog::host_key::skipped_lines(catalog, facts.skipped_lines),
+                tone: LineTone::Warning,
+            });
+        }
+        dialog
+    }
+
+    /// RF-20.12 (ADR-0075 §2): senha ou passphrase. Todo texto é do app: o que
+    /// o servidor escreveu num keyboard-interactive não chega aqui. Segredo
+    /// recusado (`retry`) põe a linha de erro no lugar do corpo.
+    pub fn secret(
+        catalog: &Catalog,
+        label: &SecretLabel,
+        vault_available: bool,
+        retry: bool,
+        action: DialogAction,
+    ) -> Self {
+        let (title, plain_body, body_is_path, refused) = match label {
+            SecretLabel::Password { user, host } => {
+                let target = format!("{user}@{host}");
+                (
+                    msg::dialog::secret::title_password(catalog, &target),
+                    target,
+                    false,
+                    msg::dialog::secret::refused_password(catalog),
+                )
+            }
+            SecretLabel::KeyPassphrase { path } => (
+                msg::dialog::secret::title_passphrase(catalog),
+                path.display().to_string(),
+                true,
+                msg::dialog::secret::refused_passphrase(catalog),
+            ),
+        };
+        let mut dialog = Self::new(
+            title,
+            if retry { refused } else { plain_body },
+            msg::dialog::secret::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            action,
+        );
+        dialog.body_is_error = retry;
+        dialog.secret = Some(Box::new(SecretFacts {
+            remember_label: msg::dialog::secret::remember(catalog),
+            vault_available,
+            unavailable_note: msg::dialog::secret::remember_unavailable(catalog),
+            body_is_path: body_is_path && !retry,
+            remember: false,
+            focus: SecretFocus::Field,
+        }));
+        dialog
+    }
+
+    /// A caixa só vale com cofre (RF-20.14).
+    pub fn toggle_remember(&mut self) {
+        if let Some(facts) = self.secret.as_mut()
+            && facts.vault_available
+        {
+            facts.remember = !facts.remember;
+        }
+    }
+
+    /// Foco no campo ou na caixa, por clique.
+    pub fn focus_secret(&mut self, focus: SecretFocus) {
+        if let Some(facts) = self.secret.as_mut() {
+            facts.focus = focus;
+        }
+    }
+
+    /// Anda `delta` posições, em círculo, na ordem de leitura e de `Tab`:
+    /// campo, caixa (se há cofre), Cancelar, Conectar.
+    pub fn step_secret_focus(&mut self, delta: i32) {
+        let Some(facts) = self.secret.as_ref() else {
+            return;
+        };
+        let mut order = vec![(SecretFocus::Field, DialogButton::Cancel)];
+        if facts.vault_available {
+            order.push((SecretFocus::Remember, DialogButton::Cancel));
+        }
+        order.push((SecretFocus::Buttons, DialogButton::Cancel));
+        order.push((SecretFocus::Buttons, DialogButton::Confirm));
+        let at = order
+            .iter()
+            .position(|(focus, button)| {
+                *focus == facts.focus && (*focus != SecretFocus::Buttons || *button == self.focused)
+            })
+            .unwrap_or(0) as i32;
+        let (focus, button) = order[(at + delta).rem_euclid(order.len() as i32) as usize];
+        if focus == SecretFocus::Buttons {
+            self.focused = button;
+        }
+        if let Some(facts) = self.secret.as_mut() {
+            facts.focus = focus;
+        }
     }
 
     /// O botão sob o cursor, realçado só no diálogo de três saídas.
@@ -332,6 +594,23 @@ mod tests {
     }
 
     #[test]
+    fn the_delete_profile_dialog_checks_the_forget_box_only_when_offered() {
+        let pt = test_support::pt_br();
+        let mut dialog = ConfirmDialog::delete_profile(&pt, "prod", 1, true);
+        assert_eq!(dialog.action, DialogAction::DeleteProfile(1));
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        assert!(dialog.checkbox_checked());
+        dialog.toggle_checkbox();
+        assert!(!dialog.checkbox_checked());
+        dialog.toggle_checkbox();
+        assert!(dialog.checkbox_checked());
+
+        let plain = ConfirmDialog::delete_profile(&pt, "prod", 1, false);
+        assert!(plain.checkbox.is_none());
+        assert!(!plain.checkbox_checked());
+    }
+
+    #[test]
     fn the_settings_dialog_has_three_buttons_and_starts_on_cancel() {
         let dialog = ConfirmDialog::settings_pending(&test_support::pt_br(), 3);
         assert_eq!(dialog.title, "Fechar com alterações pendentes?");
@@ -361,6 +640,131 @@ mod tests {
         assert_eq!(dialog.focused(), DialogButton::Cancel);
         dialog.step_focus(-1);
         assert_eq!(dialog.focused(), DialogButton::Confirm);
+    }
+
+    fn facts(known_types: &[&str], skipped_lines: usize) -> HostKeyFacts {
+        HostKeyFacts {
+            host: "10.4.1.20".to_owned(),
+            algorithm: "ssh-ed25519".to_owned(),
+            fingerprint: "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE".to_owned(),
+            known_types: known_types.iter().map(|t| (*t).to_owned()).collect(),
+            skipped_lines,
+        }
+    }
+
+    fn host_key_action() -> DialogAction {
+        DialogAction::HostKey(TabId::new(2), PaneId::new(1), PromptId::new(7))
+    }
+
+    /// ADR-0014 / ADR-0075 §3: o foco inicial é o cancelar -- um `Enter`
+    /// distraído não confia num host.
+    #[test]
+    fn the_host_key_dialog_starts_on_cancel_and_enter_does_not_trust() {
+        let dialog =
+            ConfirmDialog::host_key(&test_support::pt_br(), &facts(&[], 0), host_key_action());
+
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        assert_eq!(
+            dialog.buttons(),
+            [DialogButton::Cancel, DialogButton::Confirm]
+        );
+        assert_eq!(dialog.action, host_key_action());
+    }
+
+    #[test]
+    fn the_host_key_dialog_reads_as_title_body_data_and_two_buttons() {
+        let pt = test_support::pt_br();
+        let dialog = ConfirmDialog::host_key(&pt, &facts(&[], 0), host_key_action());
+
+        assert_eq!(dialog.title, "Host desconhecido: 10.4.1.20");
+        assert_eq!(
+            dialog.body,
+            "A autenticidade deste host não pode ser confirmada."
+        );
+        assert_eq!(dialog.cancel_label, "Cancelar");
+        assert_eq!(dialog.confirm_label, "Confiar e conectar");
+        assert_eq!(dialog.discard_label, None);
+        let texts: Vec<&str> = dialog.lines.iter().map(|l| l.text.as_str()).collect();
+        // The labels come from the catalog; the type and the fingerprint do not.
+        assert_eq!(
+            texts,
+            [
+                "Tipo: ssh-ed25519",
+                "Impressão digital:",
+                "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE",
+            ]
+        );
+        assert!(dialog.lines.iter().all(|l| l.tone == LineTone::Data));
+    }
+
+    #[test]
+    fn the_host_key_dialog_adds_a_warning_for_another_registered_type_and_for_skipped_lines() {
+        let pt = test_support::pt_br();
+
+        let other_type = ConfirmDialog::host_key(
+            &pt,
+            &facts(&["ecdsa-sha2-nistp256", "ssh-rsa"], 0),
+            host_key_action(),
+        );
+        let warnings: Vec<&str> = other_type
+            .lines
+            .iter()
+            .filter(|l| l.tone == LineTone::Warning)
+            .map(|l| l.text.as_str())
+            .collect();
+        assert_eq!(
+            warnings,
+            ["Outro tipo já registrado: ecdsa-sha2-nistp256, ssh-rsa"]
+        );
+
+        let skipped = ConfirmDialog::host_key(&pt, &facts(&[], 1), host_key_action());
+        assert_eq!(
+            skipped.lines.last().map(|l| l.text.as_str()),
+            Some("1 linha do known_hosts não pôde ser lida.")
+        );
+        let many = ConfirmDialog::host_key(&pt, &facts(&[], 3), host_key_action());
+        assert_eq!(
+            many.lines.last().map(|l| l.text.as_str()),
+            Some("3 linhas do known_hosts não puderam ser lidas.")
+        );
+
+        // Neither: just the three data lines.
+        assert_eq!(
+            ConfirmDialog::host_key(&pt, &facts(&[], 0), host_key_action())
+                .lines
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn the_host_key_dialog_is_translated_but_its_data_is_not() {
+        for locale in ["en_US", "es_ES", "fr_FR", "de_DE"] {
+            let catalog = test_support::catalog(locale);
+            let dialog =
+                ConfirmDialog::host_key(&catalog, &facts(&["ssh-rsa"], 2), host_key_action());
+            assert!(dialog.title.contains("10.4.1.20"), "{locale}");
+            // Fingerprint and algorithm travel verbatim.
+            assert!(
+                dialog.lines.iter().any(|l| l.text.contains("ssh-ed25519")),
+                "{locale}"
+            );
+            assert!(
+                dialog
+                    .lines
+                    .iter()
+                    .any(|l| l.text == "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AbCdE"),
+                "{locale}"
+            );
+            assert_ne!(dialog.confirm_label, "Confiar e conectar", "{locale}");
+        }
+    }
+
+    #[test]
+    fn the_ordinary_dialogs_have_no_extra_lines() {
+        let pt = test_support::pt_br();
+        assert!(ConfirmDialog::close_window(&pt, 2).lines.is_empty());
+        assert!(ConfirmDialog::settings_pending(&pt, 1).lines.is_empty());
     }
 
     #[test]

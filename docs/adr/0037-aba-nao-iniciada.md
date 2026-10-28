@@ -46,6 +46,8 @@ O shell sobe quando a aba se torna a **aba ativa** da janela, por qualquer camin
 
 Não há "passar por cima sem iniciar". Navegar por `Ctrl+Tab` mostra o conteúdo da aba na tela; uma aba ativa mostrando uma área vazia porque o gesto foi rápido demais seria um estado que o usuário não pediu e não entende. Quem passa por dez abas com `Ctrl+Tab` sobe dez shells, e isso é o comportamento correto — o custo do lazy restore é no start, não na navegação.
 
+> **Revisto pelo [ADR-0075](0075-superficies-de-ui-do-ssh.md) §5, só para painéis SSH.** Um painel de perfil `ssh` restaurado **não** inicia no foco: conecta no primeiro **gesto sobre ele** — clique no painel ou `Enter` —, inclusive quando é o painel ativo escolhido pela restauração. Passar por ele com `Ctrl+Tab` mostra a nota "`Enter` para conectar". O raciocínio acima vale para um shell local, que sobe em milissegundos e sem efeito fora da máquina; uma conexão SSH pode pedir senha, abrir um diálogo de chave de host e tocar um servidor de produção, e nenhuma dessas coisas pode acontecer porque o usuário navegou ([PRD-020](../prd/prd-020-conexoes-ssh.md) RF-20.33). Painéis locais continuam exatamente como descrito aqui.
+
 ### 3. Sem processo é sem processo, e o fechamento não confirma
 
 Aba `NotStarted` fecha **sem diálogo**. Não há processo a perder, não há trabalho a interromper, e confirmar seria pedir permissão para descartar nada.
@@ -77,6 +79,8 @@ Três razões, nesta ordem:
 ### 6. `lazy_restore = false`
 
 Com a chave desligada, a restauração inicia o shell de **todas** as abas no start e nenhuma nasce `NotStarted`. O estado continua existindo no modelo; simplesmente ninguém o produz. É o que mantém a chave como uma decisão de start, sem um segundo caminho de código para manter.
+
+> **Revisto pelo [ADR-0075](0075-superficies-de-ui-do-ssh.md) §5.** Com `lazy_restore = false`, painéis de perfil `ssh` nascem `NotStarted` mesmo assim: a chave decide quando os **shells locais** sobem, e a regra do SSH é a de cima — conexão só por gesto. A decisão "nasce `NotStarted`?" passa a depender do perfil do painel, além de `lazy_restore` e de a aba ser a ativa (hoje em `crates/porecatu-session/src/convert.rs`, `not_started = lazy_restore && !is_active`).
 
 ## Alternativas consideradas
 

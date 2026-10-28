@@ -112,6 +112,35 @@ pub enum Edit {
     Set(KeyPath, EditValue),
     /// Drops the key's line. Removing an absent key is a no-op.
     Remove(KeyPath),
+    /// Appends a new element to the array of tables at `array`
+    /// (`[[profiles.list]]`), its `entries` written in order. The array (and
+    /// the tables above it) is created if the file has none yet.
+    AppendTable {
+        array: KeyPath,
+        entries: Vec<(String, EditValue)>,
+    },
+    /// Sets `key` in the element of `array` whose `id` is `id`. The element is
+    /// found **by its `id`, never by position**: positions change when another
+    /// element is removed (ADR-0075 §6).
+    SetInTable {
+        array: KeyPath,
+        id: String,
+        key: String,
+        value: EditValue,
+    },
+    /// Drops `key` from that element. An absent key is a no-op; an absent
+    /// element is [`EditError::NoSuchElement`].
+    RemoveInTable {
+        array: KeyPath,
+        id: String,
+        key: String,
+    },
+    /// Removes the element whose `id` is `id`, with the comments that sit on
+    /// its own lines.
+    RemoveTable {
+        array: KeyPath,
+        id: String,
+    },
 }
 
 /// Why an edit could not be built or applied. Typed, no interface text: the
@@ -135,6 +164,9 @@ pub enum EditError {
     /// `path` names a table where a value was expected (`Set` of a scalar,
     /// `Remove`).
     NotAValue { path: KeyPath },
+    /// No element of the array of tables `array` has `id = "<id>"` (or `array`
+    /// is not an array of tables at all). Typed, no interface text.
+    NoSuchElement { array: KeyPath, id: String },
     /// The edited text would not load as a config (ADR-0058 §4): the same
     /// typed error `parse` gives the loader, with line and column. Nothing
     /// was written.
@@ -164,6 +196,9 @@ impl fmt::Display for EditError {
             Self::Syntax { detail, .. } => f.write_str(detail),
             Self::NotATable { path } => write!(f, "`{path}` is not a table"),
             Self::NotAValue { path } => write!(f, "`{path}` is a table, not a value"),
+            Self::NoSuchElement { array, id } => {
+                write!(f, "`{array}` has no element with id {id:?}")
+            }
             Self::Invalid(error) => write!(f, "edited text does not load: {error}"),
             Self::Changed { .. } => f.write_str("file changed on disk"),
             Self::Io { path, cause, .. } => write!(f, "{}: {cause}", path.display()),
@@ -295,6 +330,18 @@ impl ConfigDocument {
             match edit {
                 Edit::Set(path, value) => set(&mut doc, path, value)?,
                 Edit::Remove(path) => remove(&mut doc, path)?,
+                Edit::AppendTable { array, entries } => append_table(&mut doc, array, entries)?,
+                Edit::SetInTable {
+                    array,
+                    id,
+                    key,
+                    value,
+                } => set_in_table(&mut doc, array, id, key, value)?,
+                Edit::RemoveInTable { array, id, key } => {
+                    let table = element_mut(&mut doc, array, id)?;
+                    table.remove(key);
+                }
+                Edit::RemoveTable { array, id } => remove_table(&mut doc, array, id)?,
             }
         }
         Ok(self.render(&doc))
@@ -842,6 +889,142 @@ fn place(doc: &mut DocumentMut, deposit: Deposit, head: &str) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Elements of an array of tables, found by `id`
+// ---------------------------------------------------------------------------
+
+/// The value `new` as a `toml_edit` value; a map becomes an inline table.
+fn element_value(value: &EditValue) -> Value {
+    match value {
+        EditValue::Bool(value) => Value::from(*value),
+        EditValue::Integer(value) => Value::from(*value),
+        EditValue::Float(value) => Value::from(*value),
+        EditValue::String(value) => Value::from(value.as_str()),
+        EditValue::StringList(values) => Value::Array(values.iter().map(String::as_str).collect()),
+        EditValue::StringMap(map) => {
+            let mut table = InlineTable::new();
+            for (name, text) in map {
+                table.insert(name, Value::from(text.as_str()));
+            }
+            Value::InlineTable(table)
+        }
+    }
+}
+
+/// The array of tables at `array`, optionally created (with the implicit
+/// tables above it).
+fn array_of_tables<'a>(
+    doc: &'a mut DocumentMut,
+    array: &KeyPath,
+    create: bool,
+) -> Result<Option<&'a mut toml_edit::ArrayOfTables>, EditError> {
+    let Some((leaf, parents)) = array.segments().split_last() else {
+        return Err(EditError::EmptyKeyPath);
+    };
+    let mut current: &mut dyn TableLike = doc.as_table_mut();
+    for (index, segment) in parents.iter().enumerate() {
+        if current.get(segment).is_none() {
+            if !create {
+                return Ok(None);
+            }
+            let mut table = Table::new();
+            table.set_implicit(true);
+            current.insert(segment, Item::Table(table));
+        }
+        current = current
+            .get_mut(segment)
+            .and_then(Item::as_table_like_mut)
+            .ok_or_else(|| EditError::NotATable {
+                path: array.prefix(index + 1),
+            })?;
+    }
+    if current.get(leaf).is_none() {
+        if !create {
+            return Ok(None);
+        }
+        current.insert(leaf, Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
+    }
+    match current.get_mut(leaf) {
+        Some(Item::ArrayOfTables(found)) => Ok(Some(found)),
+        _ => Err(EditError::NoSuchElement {
+            array: array.clone(),
+            id: String::new(),
+        }),
+    }
+}
+
+/// The element of `array` with `id = "<id>"`.
+fn element_mut<'a>(
+    doc: &'a mut DocumentMut,
+    array: &KeyPath,
+    id: &str,
+) -> Result<&'a mut Table, EditError> {
+    let missing = || EditError::NoSuchElement {
+        array: array.clone(),
+        id: id.to_owned(),
+    };
+    array_of_tables(doc, array, false)?
+        .ok_or_else(missing)?
+        .iter_mut()
+        .find(|table| table.get("id").and_then(Item::as_str) == Some(id))
+        .ok_or_else(missing)
+}
+
+fn append_table(
+    doc: &mut DocumentMut,
+    array: &KeyPath,
+    entries: &[(String, EditValue)],
+) -> Result<(), EditError> {
+    let list = array_of_tables(doc, array, true)?.ok_or_else(|| EditError::NoSuchElement {
+        array: array.clone(),
+        id: String::new(),
+    })?;
+    let mut table = Table::new();
+    for (key, value) in entries {
+        table.insert(key, Item::Value(element_value(value)));
+    }
+    list.push(table);
+    Ok(())
+}
+
+fn set_in_table(
+    doc: &mut DocumentMut,
+    array: &KeyPath,
+    id: &str,
+    key: &str,
+    value: &EditValue,
+) -> Result<(), EditError> {
+    let table = element_mut(doc, array, id)?;
+    let mut new = element_value(value);
+    match table.get_mut(key) {
+        // The old value's decor (space after `=`, end-of-line comment) stays.
+        Some(Item::Value(old)) => {
+            *new.decor_mut() = old.decor().clone();
+            *old = new;
+        }
+        _ => {
+            table.insert(key, Item::Value(new));
+        }
+    }
+    Ok(())
+}
+
+fn remove_table(doc: &mut DocumentMut, array: &KeyPath, id: &str) -> Result<(), EditError> {
+    let list = array_of_tables(doc, array, false)?.ok_or_else(|| EditError::NoSuchElement {
+        array: array.clone(),
+        id: id.to_owned(),
+    })?;
+    let at = list
+        .iter()
+        .position(|table| table.get("id").and_then(Item::as_str) == Some(id))
+        .ok_or_else(|| EditError::NoSuchElement {
+            array: array.clone(),
+            id: id.to_owned(),
+        })?;
+    list.remove(at);
+    Ok(())
 }
 
 fn table_mut<'a>(root: &'a mut Table, path: &[(String, usize)]) -> Option<&'a mut Table> {

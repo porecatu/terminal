@@ -104,6 +104,8 @@ Se o render segurasse o lock, a thread de leitura ficaria esperando a GPU — e 
 
 Idiomático em Rust moderno, e evita N threads do sistema. Descartada porque não há ganho real: a contagem de abas é dezenas, não milhares — o custo de N threads bloqueadas é irrelevante. Em troca, arrastaríamos um runtime inteiro e a ponte entre o event loop do `winit` (que não é async) e o executor async seria um ponto permanente de atrito. A leitura de PTY é justamente o caso em que uma thread bloqueada é a solução simples e correta.
 
+> **Revisto pelo [ADR-0072](0072-cliente-ssh-embutido.md) §3.** Um runtime `tokio` passa a existir, **só dentro de `porecatu-ssh`**, criado na primeira conexão SSH, com duas threads de trabalho para o processo inteiro: o cliente SSH escolhido é async, e uma conexão ociosa custa uma tarefa em vez de uma thread. A recusa acima continua valendo para o que ela descreve — o PTY local segue com threads bloqueantes, a main thread e o render seguem sem async, e a fronteira entre `porecatu-ssh` e `porecatu-term` é síncrona. O atrito com o `winit` que esta seção previa não aparece, porque o runtime nunca toca o event loop.
+
 ### Uma thread única multiplexando todos os PTYs (`epoll`/`kqueue`/IOCP)
 
 Escala melhor e é o que emuladores clássicos fazem. Descartada por complexidade de plataforma: IOCP no Windows é um modelo diferente de `epoll`, e o ConPTY não se encaixa limpo em multiplexação por readiness. Uma thread por aba é chata e funciona nas três plataformas com o mesmo código. Revisitar só se o uso mostrar centenas de abas simultâneas.

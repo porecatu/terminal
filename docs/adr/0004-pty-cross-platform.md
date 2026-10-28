@@ -28,6 +28,8 @@ Usar o crate **`portable-pty`** (do projeto WezTerm) como camada de abstração,
 
 Nada mais. Nenhum outro crate importa `portable-pty`.
 
+> **Revisto pelo [ADR-0071](0071-backend-de-terminal.md).** O PTY local deixa de ser o único jeito de alimentar um terminal: `porecatu-term` passa a ter um trait interno de backend, e `porecatu-pty` vira a implementação `PtyBackend` dele, ao lado de um `SshBackend` sobre `porecatu-ssh` ([ADR-0072](0072-cliente-ssh-embutido.md)). Tudo o que esta seção decide sobre o PTY continua valendo para o PTY — inclusive que nenhum outro crate importa `portable-pty`, e o encerramento sem fechar o ConPTY, que desce para dentro do `PtyBackend`.
+
 ### Comportamento de shell padrão
 
 | Plataforma | Ordem de resolução |

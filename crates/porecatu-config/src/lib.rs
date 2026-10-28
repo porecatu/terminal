@@ -22,9 +22,11 @@ mod git;
 mod keybindings;
 mod panes;
 mod path;
+mod profiles;
 mod project_file;
 mod session;
 mod shell;
+mod ssh_import;
 mod terminal;
 mod theme;
 
@@ -41,12 +43,22 @@ pub use git::Git;
 pub use keybindings::Keybindings;
 pub use panes::Panes;
 pub use path::resolve_config_path;
+pub use profiles::{
+    AutoPlatform, MissingProfile, ProfileDef, ProfileKind, ProfileProblem, ProfileProblemKind,
+    ProfileRef, ProfilesConfig, ResolvedProfile, ResolvedSsh, SshAuth, SshProfile,
+    is_secret_profile_key, resolve_auto_profile, resolve_profile,
+};
 pub use project_file::{
-    PROJECT_FILE_NAME, ProjectFile, ProjectFileOutcome, ProjectScript, is_trusted,
+    PROJECT_FILE_NAME, ProjectFile, ProjectFileOutcome, ProjectScript, expand_tilde, is_trusted,
     parse as parse_project_file, resolve as resolve_project_file,
 };
 pub use session::Session;
 pub use shell::Shell;
+pub use ssh_import::{
+    SshConfigImport, SshConfigImportError, SshConfigImportErrorKind, SshImportCandidate,
+    SshImportInvalid, SshImportStatus, SshImportUnsupported, default_ssh_config_path,
+    local_user_name, read_ssh_config,
+};
 pub use terminal::{
     Acrylic, AcrylicBlock, AcrylicState, AnsiPalette, BackgroundImage, BackgroundImageMode,
     Clipboard, Colors as TerminalColors, Cursor, CursorShape, DEFAULT_BLUR, Font, MAX_BLUR,
@@ -70,6 +82,7 @@ use serde::Deserialize;
 pub struct Config {
     pub general: General,
     pub shell: Shell,
+    pub profiles: ProfilesConfig,
     pub appearance: Appearance,
     pub terminal: Terminal,
     /// Os temas conhecidos: os embutidos, mais os `thm_*.toml` do disco
@@ -89,6 +102,7 @@ impl Default for Config {
         Self {
             general: General::default(),
             shell: Shell::default(),
+            profiles: ProfilesConfig::default(),
             appearance: Appearance::default(),
             terminal: Terminal::default(),
             themes: theme::built_in_themes(),
@@ -122,6 +136,9 @@ pub enum LoadResult {
     Loaded {
         config: Config,
         unknown_keys: Vec<String>,
+        /// `[[profiles.list]]` itens recusados e `[profiles] default`
+        /// inexistente (ADR-0070 §1, RF-7.5): a config já só tem os válidos.
+        profile_problems: Vec<ProfileProblem>,
     },
     /// Arquivo presente mas inválido -- sintaticamente ou semanticamente
     /// (ADR-0003 regra 2: config inválida no start devolve o erro **e**
@@ -166,10 +183,11 @@ pub fn load(cli_config: Option<&Path>) -> LoadResult {
             };
         }
     };
-    match parse(&text) {
-        Ok((config, unknown_keys)) => LoadResult::Loaded {
-            config,
-            unknown_keys,
+    match parse_checked(&text) {
+        Ok(parsed) => LoadResult::Loaded {
+            config: parsed.config,
+            unknown_keys: parsed.unknown_keys,
+            profile_problems: parsed.profile_problems,
         },
         Err(error) => {
             let mut config = Config::default();
@@ -200,13 +218,52 @@ fn raw_language(text: &str) -> Option<String> {
 /// sintaticamente inválido ou tipo errado num campo. Os temas são só os
 /// embutidos: os do disco entram por `load_theme_files`.
 pub fn parse(text: &str) -> Result<(Config, Vec<String>), ConfigError> {
+    let parsed = parse_checked(text)?;
+    Ok((parsed.config, parsed.unknown_keys))
+}
+
+/// What `parse_checked` read: the config, the unknown-key warnings and the
+/// profile items that were refused (ADR-0070 §1, RF-7.5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parsed {
+    pub config: Config,
+    pub unknown_keys: Vec<String>,
+    /// Refused `[[profiles.list]]` items and a dangling `[profiles] default`,
+    /// in file order. The config already holds only the valid ones.
+    pub profile_problems: Vec<ProfileProblem>,
+}
+
+/// Like [`parse`], but also reports the profile items it dropped. A refused
+/// item is a localized problem, not a `ConfigError`: the rest of the file
+/// keeps applying.
+pub fn parse_checked(text: &str) -> Result<Parsed, ConfigError> {
     let deserializer =
         toml::de::Deserializer::parse(text).map_err(|err| ConfigError::from_toml(text, err))?;
     let mut unknown_keys = Vec::new();
-    let config: Config =
-        serde_ignored::deserialize(deserializer, |path| unknown_keys.push(path.to_string()))
-            .map_err(|err| ConfigError::from_toml(text, err))?;
-    Ok((config, unknown_keys))
+    let mut config: Config = serde_ignored::deserialize(deserializer, |path| {
+        // `Spanned` (profile items) puts a private segment in the path.
+        unknown_keys.push(
+            path.to_string()
+                .replace(".$__serde_spanned_private_value", ""),
+        );
+    })
+    .map_err(|err| ConfigError::from_toml(text, err))?;
+    let profile_problems = std::mem::take(&mut config.profiles.problems)
+        .into_iter()
+        .map(|problem| {
+            let (line, column) = error::line_column_at(text, problem.offset);
+            ProfileProblem {
+                line,
+                column,
+                kind: problem.kind,
+            }
+        })
+        .collect();
+    Ok(Parsed {
+        config,
+        unknown_keys,
+        profile_problems,
+    })
 }
 
 #[cfg(test)]

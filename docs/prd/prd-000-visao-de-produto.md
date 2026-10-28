@@ -75,6 +75,8 @@ Vários deles **já estão desenhados** no design canvas ([`docs/design/`](../de
 
   > **Emenda de 2026-09-15.** Este item **deixou de ser não-objetivo**: o [PRD-006](prd-006-paineis-divididos.md) foi aprovado e o [ADR-0053](../adr/0053-paineis-divididos.md) escrito, fora da ordem de fases, por decisão do dono do produto — o mesmo caminho da barra de status. A razão original não foi refutada, ela **expirou**: "fazer os dois ao mesmo tempo dilui ambos" era um argumento sobre o v1, e o v1 está fechado com grupos entregues. O ADR próprio que o item exigia é o 0053, e a mudança de modelo que ele previa aconteceu exatamente como descrita. Os demais itens desta lista continuam sendo não-objetivos.
 - **Perfis de aba** (aba que abre WSL, aba que abre SSH). Recurso natural para v2; não é do núcleo. — *desenhado, `[v2]`, [PRD-007](prd-007-perfis-de-aba.md) (rascunho)*
+
+  > **Emenda de 2026-10-27.** Deixou de ser não-objetivo: o [PRD-007](prd-007-perfis-de-aba.md) foi aprovado e o [ADR-0070](../adr/0070-perfis-de-aba.md) escrito, fora da ordem de fases, por decisão do dono do produto — o caminho dos painéis divididos. O gatilho foi o pedido de **sessões SSH**, que entram como um tipo de perfil, com cliente SSH embutido; isso não reabre a **multiplexação remota** abaixo, que é anexar a uma sessão que vive no servidor, e continua não-objetivo.
 - **Paleta de comandos.** Busca unificada de abas, grupos e ações. — *desenhado, `[v2]`, [PRD-008](prd-008-paleta-de-comandos.md) (rascunho)*
 - **Configuração por interface gráfica.** No v1, a config é o arquivo TOML ([ADR-0003](../adr/0003-formato-de-configuracao.md)). — *desenhado, `[v2]`; quando existir, escreverá no TOML ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md))*
 
