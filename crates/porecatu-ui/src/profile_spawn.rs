@@ -434,7 +434,8 @@ mod tests {
 
     #[test]
     fn display_name_is_the_base_name_of_the_program() {
-        let config = config(&format!("{WSL}[shell]\nprogram = \"C:\\\\x\\\\zsh.exe\"\n"));
+        // Forward slashes: a backslash is a separator only on Windows.
+        let config = config(&format!("{WSL}[shell]\nprogram = \"C:/x/zsh.exe\"\n"));
         assert_eq!(
             display_name(&resolve_profile(&config, ProfileRef::Id("wsl")).unwrap()),
             "wsl"
