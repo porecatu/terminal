@@ -505,6 +505,7 @@ body_generic = "Shell not recognized, so there is no ready-made snippet to sugge
 # (grupo, aba) têm uma frase por combinação ou peças com identificador próprio,
 # para a ordem das palavras ficar livre para o tradutor.
 [access]
+app_menu_button = "Application menu"
 new_tab_ungrouped = "New tab outside a group"
 new_tab_in_group = "New tab in this group"
 sessions_button = "Saved sessions"

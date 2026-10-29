@@ -66,7 +66,7 @@ use std::time::Instant;
 
 use porecatu_core::{GroupId, TabId, Workspace};
 use porecatu_render::{
-    Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun, icon,
+    Color, FontFace, ImageId, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun, icon,
 };
 
 use crate::animation::AnimationClock;
@@ -225,6 +225,10 @@ pub fn paint(
     // `bar_background` sobre ela; sem imagem, o `Quad` continua e o binário é
     // o de hoje. Parâmetro explícito, nunca estado lido daqui.
     window_image_shown: bool,
+    // Textura do ícone do app no botão de menu (zona fixa à esquerda). `None`
+    // enquanto não subiu para a GPU, ou se a decodificação falhou: o botão
+    // pinta igual, só sem o ícone.
+    app_icon: Option<ImageId>,
 ) -> Vec<Primitive> {
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
@@ -268,20 +272,38 @@ pub fn paint(
     // tirar. Divergência da espec, mesma classe das já registradas na
     // seção 4.4 dela.
 
+    // Botão de menu do app: zona fixa à esquerda, antes da trilha, fora do
+    // recorte e do scroll. Sem ação por ora -- só hover e pressed, como o
+    // resto da barra.
+    paint_app_menu_button(
+        tab_bar::app_menu_button_rect(style, is_macos),
+        (
+            hover_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu),
+            pressed_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu)
+                && hover_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu),
+        ),
+        app_icon,
+        style,
+        pal,
+        &mut out,
+    );
+
     // Recorte de verdade da trilha (ADR-0018, espec §2.18: "um recorte só,
     // na camada de chrome; as abas fora da vista desaparecem pelo clip").
     // Tudo dentro deste par desloca pelo scroll -- inclusive o botão "+" de
     // cada grupo, que "acompanha o scroll" igual às abas dele (fora da
-    // espec., mesmo raciocínio do §2.6 aplicado ao botão por grupo). Só vai
-    // até `trilha_width` -- a zona fixa da direita (pedido do usuário) fica
-    // de fora do recorte e do scroll.
+    // espec., mesmo raciocínio do §2.6 aplicado ao botão por grupo). Vai de
+    // `track_shift` (depois do botão de menu) até `trilha_width` -- as zonas
+    // fixas das duas pontas ficam de fora do recorte e do scroll.
+    let track_left = tab_bar::track_shift(style, is_macos);
     out.push(Primitive::PushClip(Rect {
-        x: 0.0,
+        x: track_left,
         y: 0.0,
         width: tab_bar::trilha_width(style, bar_width, is_macos),
         height: bar_height,
     }));
-    let scroll_dx = -overflow.scroll_offset;
+    // Conteúdo -> tela: a origem do conteúdo é o início da trilha.
+    let scroll_dx = track_left - overflow.scroll_offset;
 
     for group in &layout.groups {
         // Espec §2.19.1: "o wrapper de origem colapsa pra largura zero" --
@@ -660,6 +682,8 @@ pub fn paint(
             tab_bar::ZoneButtonHit::Settings => {
                 tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos)
             }
+            // Not an icon button: painted before the track.
+            tab_bar::ZoneButtonHit::AppMenu => continue,
         };
         let hovered = hover_zone_button == Some(hit);
         let pressed = hovered && pressed_zone_button == Some(hit);
@@ -677,7 +701,7 @@ pub fn paint(
 
     // Botões de janela (ADR-0027): minimizar/maximizar-restaurar/fechar,
     // colados na borda direita. Não existem no macOS -- lá é o semáforo
-    // nativo (`left_inset` na trilha, não zona de botão aqui).
+    // nativo (`left_inset` antes do botão de menu, não zona de botão aqui).
     if !is_macos {
         paint_window_buttons(
             style,
@@ -700,6 +724,7 @@ pub fn paint(
             style,
             pal,
             OverflowSide::Left,
+            track_left,
             trilha_width,
             bar_height,
             &mut out,
@@ -710,6 +735,7 @@ pub fn paint(
             style,
             pal,
             OverflowSide::Right,
+            track_left,
             trilha_width,
             bar_height,
             &mut out,
@@ -919,6 +945,60 @@ fn paint_zone_icon_button(
         border_width: 0.0,
     }));
     out.push(centered_glyph(icon, rect, icon_size, icon_color));
+}
+
+/// Botão de menu do app: a caixa de uma aba solta (mesmas cores, raio,
+/// borda e sombra de [`tab_colors`]/`push_shadow`) com o ícone do app no
+/// meio. Hover clareia o fundo como o de uma aba (`tab_hover_brightness`);
+/// pressed usa as cores de aba **ativa**, a única "marcada" que a aba tem
+/// -- ela mesma não tem estado pressed. `app_icon` ausente: só a caixa.
+fn paint_app_menu_button(
+    rect: Rect,
+    (hovered, pressed): (bool, bool),
+    app_icon: Option<ImageId>,
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    out: &mut Vec<Primitive>,
+) {
+    let (bg, border, border_width, _text) = tab_colors(pal, style, false, pressed);
+    let bg = if hovered {
+        brighten(bg, style.tab_hover_brightness)
+    } else {
+        bg
+    };
+    if style.group_shadow_enabled {
+        push_shadow(out, rect, style.tab_corner_radius);
+    }
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: style.tab_corner_radius,
+        color: bg,
+        border_color: border,
+        border_width,
+    }));
+    if let Some(image) = app_icon {
+        let side = style.icon_em_size;
+        let icon_rect = Rect {
+            x: rect.x + (rect.width - side) / 2.0,
+            y: rect.y + (rect.height - side) / 2.0,
+            width: side,
+            height: side,
+        };
+        out.push(Primitive::Image {
+            rect: icon_rect,
+            uv: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            repeat: false,
+            mask: icon_rect,
+            mask_radius: 0.0,
+            alpha: 1.0,
+            image,
+        });
+    }
 }
 
 /// `filter: brightness(mult)` (espec §1.10), resolvido em CPU: multiplica
@@ -1261,11 +1341,12 @@ fn paint_overflow_pill(
     style: &TabBarStyle,
     pal: &ResolvedPalette,
     side: OverflowSide,
-    bar_width: f32,
+    track_left: f32,
+    track_width: f32,
     bar_height: f32,
     out: &mut Vec<Primitive>,
 ) {
-    let rect = tab_bar::overflow_pill_rect(style, side, bar_width, bar_height);
+    let rect = tab_bar::overflow_pill_rect(style, side, track_left, track_width, bar_height);
     // Pedido do usuário: círculo (raio = metade da largura = metade da
     // altura), só o chevron -- a contagem saiu. Raio derivado da
     // geometria, não uma chave própria.
@@ -1611,6 +1692,7 @@ mod tests {
             tab_bar::ZoneButtonHit::Settings => {
                 tab_bar::settings_button_rect(&style, 800.0, 52.0, false)
             }
+            tab_bar::ZoneButtonHit::AppMenu => tab_bar::app_menu_button_rect(&style, false),
         };
         let sessions = rect_of(tab_bar::ZoneButtonHit::Sessions);
         let settings = rect_of(tab_bar::ZoneButtonHit::Settings);
@@ -1666,6 +1748,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -1737,6 +1820,7 @@ mod tests {
                 None,
                 None,
                 window_image_shown,
+                None,
             )
         };
         let whole_bar_quads = |out: &[Primitive]| {
@@ -1816,6 +1900,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         );
 
         let expected = bar_height(&style);
@@ -1844,5 +1929,176 @@ mod tests {
             tab.rect.y + tab.rect.height + style.trilha_padding <= expected,
             "aba sem respiro até o fim da barra"
         );
+    }
+
+    /// The `RoundedQuad` the app menu button paints for a (hover, pressed).
+    fn app_menu_quad(hovered: bool, pressed: bool) -> (RoundedQuad, Vec<Primitive>) {
+        let style = TabBarStyle::DEFAULT;
+        let mut out = Vec::new();
+        paint_app_menu_button(
+            tab_bar::app_menu_button_rect(&style, false),
+            (hovered, pressed),
+            Some(ImageId::from_raw(1)),
+            &style,
+            &default_palette(),
+            &mut out,
+        );
+        let quad = out
+            .iter()
+            .rev()
+            .find_map(|p| match p {
+                Primitive::RoundedQuad(q) => Some(*q),
+                _ => None,
+            })
+            .expect("o botão pinta um quad arredondado");
+        (quad, out)
+    }
+
+    #[test]
+    fn app_menu_button_is_a_loose_tab_sized_square_with_tab_colors() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let (rest, _) = app_menu_quad(false, false);
+        assert_eq!(
+            rest.rect.width,
+            style.tab_height + style.wrapper_padding * 2.0
+        );
+        assert_eq!(rest.rect.width, rest.rect.height, "quadrado");
+        assert_eq!(rest.radius, style.tab_corner_radius);
+        assert_eq!(rest.color, pal.tab_inactive_background);
+        assert_eq!(rest.border_color, pal.tab_inactive_border);
+        // Same top and height as a loose tab in the layout.
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = TextMeasurer::new();
+        let layout = tab_bar::layout(&ws, &style, &mut m);
+        let tab = &layout.groups[0].tabs[0];
+        assert_eq!(rest.rect.y, tab.rect.y);
+        assert_eq!(rest.rect.height, tab.rect.height);
+    }
+
+    #[test]
+    fn app_menu_button_hover_brightens_and_pressed_takes_the_active_tab_colors() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let (rest, _) = app_menu_quad(false, false);
+        let (hover, _) = app_menu_quad(true, false);
+        assert_eq!(
+            hover.color,
+            brighten(pal.tab_inactive_background, style.tab_hover_brightness)
+        );
+        assert_ne!(hover.color, rest.color);
+
+        let (pressed, _) = app_menu_quad(true, true);
+        assert_eq!(
+            pressed.color,
+            brighten(pal.tab_active_background, style.tab_hover_brightness)
+        );
+        assert_eq!(pressed.border_color, pal.tab_active_border);
+    }
+
+    #[test]
+    fn app_menu_button_paints_the_icon_centered_on_top_only_when_loaded() {
+        let style = TabBarStyle::DEFAULT;
+        let (_, with_icon) = app_menu_quad(false, false);
+        let Some(Primitive::Image { rect, image, .. }) = with_icon.last() else {
+            panic!("o ícone vem por último, sobre o fundo");
+        };
+        assert_eq!(*image, ImageId::from_raw(1));
+        let button = tab_bar::app_menu_button_rect(&style, false);
+        assert_eq!(rect.width, style.icon_em_size);
+        assert_eq!(rect.x + rect.width / 2.0, button.x + button.width / 2.0);
+        assert_eq!(rect.y + rect.height / 2.0, button.y + button.height / 2.0);
+
+        let mut without = Vec::new();
+        paint_app_menu_button(
+            button,
+            (false, false),
+            None,
+            &style,
+            &default_palette(),
+            &mut without,
+        );
+        assert!(
+            !without.iter().any(|p| matches!(p, Primitive::Image { .. })),
+            "sem textura, só a caixa"
+        );
+    }
+
+    /// The track starts after the fixed app menu button: the clip's left
+    /// edge is `track_shift`, and the first tab sits `trilha_padding` past it.
+    #[test]
+    fn the_track_clip_starts_after_the_app_menu_button() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let term_pal = default_term_palette();
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+        let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m, false);
+        let out = paint(
+            &layout,
+            &ws,
+            ws.active_tab(),
+            &RenameState::Idle,
+            &Selection::default(),
+            None,
+            &style,
+            &pal,
+            &term_pal,
+            bar_width,
+            Overflow {
+                scroll_offset: 0.0,
+                hidden_left: 0,
+                hidden_right: 0,
+            },
+            None,
+            None,
+            None,
+            &AnimationClock::default(),
+            Instant::now(),
+            &mut m,
+            false,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        );
+        let clip = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::PushClip(rect) => Some(*rect),
+                _ => None,
+            })
+            .expect("recorte da trilha");
+        let button = tab_bar::app_menu_button_rect(&style, false);
+        assert_eq!(clip.x, tab_bar::track_shift(&style, false));
+        assert_eq!(
+            clip.x,
+            button.x + button.width,
+            "colado no botão, sem sobrepor"
+        );
+        assert_eq!(clip.width, tab_bar::trilha_width(&style, bar_width, false));
+
+        // First tab: after the button, a `trilha_padding` past the clip edge.
+        let first_tab = layout.groups[0].tabs[0].rect;
+        let tab_quad = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::RoundedQuad(q)
+                    if q.color == pal.tab_active_background && q.rect.width == first_tab.width =>
+                {
+                    Some(q.rect)
+                }
+                _ => None,
+            })
+            .expect("fundo da aba ativa");
+        assert_eq!(tab_quad.x, clip.x + style.trilha_padding);
     }
 }

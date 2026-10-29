@@ -94,6 +94,8 @@ const DIALOG_DISCARD_ID: NodeId = NodeId(104);
 /// O campo de senha e a caixa "Lembrar" do diálogo de segredo (RF-20.35).
 const DIALOG_SECRET_FIELD_ID: NodeId = NodeId(105);
 const DIALOG_SECRET_REMEMBER_ID: NodeId = NodeId(106);
+/// ADR-0079: botão de menu do app, à esquerda da trilha.
+const APP_MENU_BUTTON_ID: NodeId = NodeId(107);
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -224,6 +226,13 @@ pub(crate) fn build_tree(
     let trilha_width = tab_bar::trilha_width(style, logical_width, is_mac);
     let layout = tab_bar::layout(workspace, style, measurer);
     let overflow = tab_bar::overflow_state(&layout, trilha_width, scroll_offset);
+
+    // Primeiro na ordem de leitura, como é o primeiro da barra na tela.
+    nodes.push((
+        APP_MENU_BUTTON_ID,
+        leaf(Role::Button, msg::access::app_menu_button(catalog)),
+    ));
+    root_children.push(APP_MENU_BUTTON_ID);
 
     build_tab_list(
         workspace,

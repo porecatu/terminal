@@ -476,6 +476,7 @@ body_cmd = "cmd.exe n'a aucun moyen fiable d'émettre ce signal -- utilisez Powe
 body_generic = "Shell non reconnu, donc aucun extrait prêt à proposer. OSC 7 est la séquence que le shell émet à chaque changement de répertoire -- consultez docs/reference/integracao-de-shell.md dans le dépôt de Porecatu pour configurer le vôtre."
 
 [access]
+app_menu_button = "Menu de l'application"
 new_tab_ungrouped = "Nouvel onglet hors d'un groupe"
 new_tab_in_group = "Nouvel onglet dans ce groupe"
 sessions_button = "Sessions enregistrées"

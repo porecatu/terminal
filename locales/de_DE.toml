@@ -476,6 +476,7 @@ body_cmd = "cmd.exe kann dieses Signal nicht zuverlässig senden -- verwende Pow
 body_generic = "Shell nicht erkannt, daher gibt es kein fertiges Snippet. OSC 7 ist die Sequenz, die die Shell bei jedem Verzeichniswechsel sendet -- siehe docs/reference/integracao-de-shell.md im Porecatu-Repository, um deine einzurichten."
 
 [access]
+app_menu_button = "Anwendungsmenü"
 new_tab_ungrouped = "Neuer Tab außerhalb einer Gruppe"
 new_tab_in_group = "Neuer Tab in dieser Gruppe"
 sessions_button = "Gespeicherte Sitzungen"

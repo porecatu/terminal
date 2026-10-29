@@ -476,6 +476,7 @@ body_cmd = "cmd.exe no tiene una forma fiable de emitir esta señal -- usa Power
 body_generic = "Shell no reconocido, así que no hay un fragmento listo que sugerir. OSC 7 es la secuencia que el shell emite en cada cambio de directorio -- consulta docs/reference/integracao-de-shell.md en el repositorio de Porecatu para configurar el tuyo."
 
 [access]
+app_menu_button = "Menú de la aplicación"
 new_tab_ungrouped = "Nueva pestaña fuera de un grupo"
 new_tab_in_group = "Nueva pestaña en este grupo"
 sessions_button = "Sesiones guardadas"

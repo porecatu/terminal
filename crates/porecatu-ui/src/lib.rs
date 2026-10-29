@@ -2746,7 +2746,7 @@ impl WindowState {
             .iter()
             .find(|g| g.id == group)
             .and_then(|g| g.pill.as_ref())
-            .map(|p| p.rect.x - self.scroll_offset)
+            .map(|p| p.rect.x + tab_bar::track_shift(style, is_macos()) - self.scroll_offset)
             .unwrap_or(0.0)
     }
 
@@ -4404,8 +4404,10 @@ impl WindowState {
         // A `+` scrolled out of the track still anchors at the track's edge,
         // never over the fixed buttons on the right.
         let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
+        let track_left = tab_bar::track_shift(style, is_macos());
         let anchor = Rect {
-            x: (rect.x - self.scroll_offset).clamp(0.0, (trilha_width - rect.width).max(0.0)),
+            x: track_left
+                + (rect.x - self.scroll_offset).clamp(0.0, (trilha_width - rect.width).max(0.0)),
             ..rect
         };
         // The first row is highlighted, which `ProfileMenu::new` already does.
@@ -5128,7 +5130,11 @@ impl WindowState {
             gpu.text_measurer(),
             is_macos(),
         );
-        let content_point = (logical_point.0 + self.scroll_offset, logical_point.1);
+        let track_left = tab_bar::track_shift(style, is_macos());
+        let content_point = (
+            logical_point.0 - track_left + self.scroll_offset,
+            logical_point.1,
+        );
         tab_bar::hit_test(&layout, content_point).filter(|hit| {
             matches!(
                 hit,
@@ -5169,6 +5175,7 @@ impl WindowState {
     ) -> NewTabRequest {
         let bar_width = self.logical_width;
         let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos());
+        let track_left = tab_bar::track_shift(style, is_macos());
         let h = bar_height(style);
         let layout = tab_bar::fit_width(
             &self.workspace,
@@ -5210,6 +5217,7 @@ impl WindowState {
                 && tab_bar::point_in_overflow_pill(
                     style,
                     OverflowSide::Left,
+                    track_left,
                     trilha_width,
                     h,
                     logical_point,
@@ -5222,6 +5230,7 @@ impl WindowState {
                 && tab_bar::point_in_overflow_pill(
                     style,
                     OverflowSide::Right,
+                    track_left,
                     trilha_width,
                     h,
                     logical_point,
@@ -5232,7 +5241,19 @@ impl WindowState {
             }
         }
 
-        let content_point = (logical_point.0 + self.scroll_offset, logical_point.1);
+        // Left of the track (the app menu button's zone, already handled
+        // above for a left click, plus its margins): not a tab, even one
+        // scrolled out of view under the clip. The rest is drag region.
+        if logical_point.0 < track_left {
+            if !right_click {
+                self.resolve_titlebar_drag();
+            }
+            return NewTabRequest::None;
+        }
+        let content_point = (
+            logical_point.0 - track_left + self.scroll_offset,
+            logical_point.1,
+        );
         let Some(hit) = tab_bar::hit_test(&layout, content_point) else {
             // Nem aba, nem pílula, nem botão de "+", nem (verificado acima)
             // botão de janela ou de configurações: o resto da barra é a
@@ -5276,7 +5297,7 @@ impl WindowState {
                         return NewTabRequest::OpenProfileMenu {
                             target,
                             anchor: Rect {
-                                x: button.x - self.scroll_offset,
+                                x: button.x + track_left - self.scroll_offset,
                                 ..button
                             },
                         };
@@ -5297,7 +5318,7 @@ impl WindowState {
                 {
                     let field_content = chrome::rename_field_rect(tab_rect, style);
                     let field_screen = Rect {
-                        x: field_content.x - self.scroll_offset,
+                        x: field_content.x + track_left - self.scroll_offset,
                         y: field_content.y,
                         width: field_content.width,
                         height: field_content.height,
@@ -5363,7 +5384,7 @@ impl WindowState {
                     self.sync_window_title();
                     self.ensure_active_tab_visible(gpu, style);
                     if let Some(rect) = tab_bar::tab_rect(&layout, id) {
-                        let screen_x = rect.x - self.scroll_offset;
+                        let screen_x = rect.x + track_left - self.scroll_offset;
                         self.drag = Drag::TabPressed {
                             tab: id,
                             start: logical_point,
@@ -5385,7 +5406,7 @@ impl WindowState {
                 // `finish_drag` trata como clique de verdade (colapso ou
                 // duplo clique, RF-2.13/RF-2.22).
                 if let Some(rect) = tab_bar::pill_rect(&layout, id) {
-                    let screen_x = rect.x - self.scroll_offset;
+                    let screen_x = rect.x + track_left - self.scroll_offset;
                     self.drag = Drag::GroupPressed {
                         group: id,
                         start: logical_point,
@@ -6314,7 +6335,8 @@ impl WindowState {
                 gpu.text_measurer(),
                 is_macos(),
             );
-            let content_point = (bar_point.0 + self.scroll_offset, bar_point.1);
+            let track_left = tab_bar::track_shift(style, is_macos());
+            let content_point = (bar_point.0 - track_left + self.scroll_offset, bar_point.1);
             layout
                 .groups
                 .into_iter()
@@ -6323,7 +6345,7 @@ impl WindowState {
                 .and_then(|t| {
                     let title = self.workspace.tab(t.id)?.title().to_string();
                     let screen_rect = Rect {
-                        x: t.rect.x - self.scroll_offset,
+                        x: t.rect.x + track_left - self.scroll_offset,
                         ..t.rect
                     };
                     Some((HoverKey::Tab(t.id), screen_rect, title))
@@ -6629,6 +6651,10 @@ struct App {
     /// Dois slots, `Terminal` e `Window` (ADR-0062 §6); só o do terminal é
     /// lido para desenhar por enquanto.
     background_image: background_image::BackgroundImageStore,
+    /// Textura do ícone do app no botão de menu da barra, do **processo**
+    /// (uma por `GpuContext`, lida por toda janela). `None` até o
+    /// `GpuContext` existir, ou se a decodificação do PNG embutido falhou.
+    app_icon_image: Option<porecatu_render::ImageId>,
     /// `true` depois do primeiro byte de PTY do processo (o prompt chegou).
     /// Independe de `PORECATU_TRACE`, ao contrário de
     /// `first_pty_output_reported`.
@@ -6944,6 +6970,7 @@ impl App {
             detected_profiles: Vec::new(),
             profile_detection_started: false,
             background_image: background_image::BackgroundImageStore::default(),
+            app_icon_image: None,
             pty_output_seen: false,
             deferred_background_loads: Vec::new(),
         };
@@ -7067,6 +7094,30 @@ impl App {
                 self.for_each_surface(|surface| surface.request_redraw());
             }
         }
+    }
+
+    /// Sobe o PNG embutido do app (com mips: 512 px desenhado a poucas
+    /// dezenas de px faria alias sem eles) para o `GpuContext` do processo,
+    /// para o botão de menu da barra. Falha de decodificação deixa
+    /// `app_icon_image` em `None` -- o botão aparece sem ícone, é asset
+    /// embutido e não vale derrubar o app por ele.
+    fn upload_app_icon(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        let Ok(decoded) = background_image::decode(
+            std::io::Cursor::new(app_icon::png_bytes()),
+            gpu.max_texture_dimension_2d(),
+        ) else {
+            return;
+        };
+        let (width, height) = decoded.size;
+        let levels: Vec<&[u8]> = decoded
+            .levels
+            .iter()
+            .map(|level| level.rgba.as_slice())
+            .collect();
+        self.app_icon_image = Some(gpu.create_image(width, height, &levels));
     }
 
     /// Cria a textura da imagem decodificada no `GpuContext` do processo
@@ -7716,6 +7767,7 @@ impl App {
                 ));
             }
             self.gpu = Some(gpu);
+            self.upload_app_icon();
             // RF-17.17: a carga do arranque pode ter terminado antes de haver
             // `GpuContext`; a textura sai agora.
             self.upload_background_image();
@@ -11322,7 +11374,8 @@ impl App {
             );
             if let Some(tab_rect) = tab_bar::tab_rect(&layout, id) {
                 let field_content = chrome::rename_field_rect(tab_rect, style);
-                let field_screen_x = field_content.x - state.scroll_offset;
+                let field_screen_x =
+                    field_content.x + tab_bar::track_shift(style, is_macos()) - state.scroll_offset;
                 let buffer = state
                     .rename
                     .field()
@@ -11379,11 +11432,12 @@ impl App {
             }
             Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {
                 let logical_x = position.x as f32 / state.scale;
-                let trilha_width =
-                    tab_bar::trilha_width(&self.style, state.logical_width, is_macos());
-                if logical_x < DRAG_EDGE_ZONE_PX {
+                let track_left = tab_bar::track_shift(&self.style, is_macos());
+                let track_right = track_left
+                    + tab_bar::trilha_width(&self.style, state.logical_width, is_macos());
+                if logical_x < track_left + DRAG_EDGE_ZONE_PX {
                     state.scroll_offset = (state.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
-                } else if logical_x > trilha_width - DRAG_EDGE_ZONE_PX {
+                } else if logical_x > track_right - DRAG_EDGE_ZONE_PX {
                     state.scroll_offset += DRAG_AUTOSCROLL_STEP_PX;
                 }
                 true
@@ -11712,7 +11766,11 @@ impl App {
                         state.open_session_picker(false);
                         state.window.request_redraw();
                     }
-                    None => state.window.request_redraw(),
+                    // ADR-0079: the app menu button has no action yet; the
+                    // release only clears the pressed look.
+                    Some(tab_bar::ZoneButtonHit::AppMenu) | None => {
+                        state.window.request_redraw();
+                    }
                 }
                 return;
             }
@@ -12469,6 +12527,8 @@ impl App {
         let bar_width = state.logical_width;
         let is_mac = is_macos();
         let trilha_width = tab_bar::trilha_width(style, bar_width, is_mac);
+        // Tela -> conteúdo é `x - track_left + scroll_offset`.
+        let track_left = tab_bar::track_shift(style, is_mac);
         let base_layout = tab_bar::fit_width(
             &state.workspace,
             style,
@@ -12530,7 +12590,10 @@ impl App {
                     state.cursor_position.0 as f32 / state.scale,
                     state.cursor_position.1 as f32 / state.scale,
                 );
-                let content_point = (cursor_logical.0 + state.scroll_offset, cursor_logical.1);
+                let content_point = (
+                    cursor_logical.0 - track_left + state.scroll_offset,
+                    cursor_logical.1,
+                );
                 tab_bar::hit_test(&base_layout, content_point)
             } else {
                 None
@@ -12550,7 +12613,7 @@ impl App {
             } => {
                 let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
                 let ghost_screen_x = cursor_logical_x - grab_offset;
-                let ghost_content_x = ghost_screen_x + state.scroll_offset;
+                let ghost_content_x = ghost_screen_x - track_left + state.scroll_offset;
                 // `base_layout` (não o preview): a fonte do conteúdo do
                 // fantasma tem que existir sempre, mesmo quando o alvo
                 // corrente é um grupo colapsado -- lá o preview não gera
@@ -12594,7 +12657,7 @@ impl App {
             } => {
                 let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
                 let ghost_screen_x = cursor_logical_x - grab_offset;
-                let ghost_content_x = ghost_screen_x + state.scroll_offset;
+                let ghost_content_x = ghost_screen_x - track_left + state.scroll_offset;
                 let width = tab_bar::pill_rect(&base_layout, group)
                     .map(|r| r.width)
                     .unwrap_or(0.0);
@@ -12672,6 +12735,7 @@ impl App {
             state.pressed_zone_button,
             state.pressed_bar_button,
             window_image.is_some(),
+            self.app_icon_image,
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 

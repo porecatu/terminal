@@ -617,32 +617,20 @@ pub enum TabBarHit {
 /// um. Não sabe qual aba está ativa, em hover ou sendo renomeada -- isso é
 /// estado de `porecatu-ui` que colore o resultado deste layout, não
 /// entrada dele.
+///
+/// As coordenadas são **de conteúdo**: a origem é o início da trilha, que
+/// começa depois do botão de menu do app (ver [`track_shift`]) -- o inset do
+/// semáforo do macOS e o próprio botão moram na zona fixa à esquerda, não
+/// aqui.
 pub fn layout(
     workspace: &Workspace,
     style: &TabBarStyle,
     measurer: &mut TextMeasurer,
 ) -> TabBarLayout {
-    layout_inset(workspace, style, measurer, 0.0)
-}
-
-/// Como [`layout`], com um deslocamento extra à esquerda do início da
-/// trilha -- o inset do semáforo nativo do macOS (ADR-0027,
-/// [`left_inset`]). `layout` é o caso comum (`left_inset = 0.0`); esta
-/// função existe separada pra não obrigar toda chamada interna de
-/// `layout` (inclusive os testes deste arquivo, que testam geometria
-/// independente de plataforma) a passar um parâmetro que quase nunca
-/// muda.
-fn layout_inset(
-    workspace: &Workspace,
-    style: &TabBarStyle,
-    measurer: &mut TextMeasurer,
-    left_inset: f32,
-) -> TabBarLayout {
     let mut groups = Vec::new();
     // Todo o conteúdo da trilha nasce deslocado pelo respiro das bordas
-    // (`trilha_padding`), mais o inset do semáforo do macOS quando houver
-    // -- não em (0, 0).
-    let mut x = style.trilha_padding + left_inset;
+    // (`trilha_padding`) -- não em (0, 0).
+    let mut x = style.trilha_padding;
     let track_top = style.trilha_padding;
 
     for group in workspace.groups() {
@@ -1017,22 +1005,20 @@ fn aggregate_indicator(workspace: &Workspace, tabs: &[TabId]) -> Option<Indicato
 /// vez de encolhendo. `available_width` continua no parâmetro pra não mudar
 /// a assinatura que todo chamador já tem em mãos, mesmo sem uso aqui dentro.
 ///
-/// `is_macos` decide o inset do semáforo nativo (ADR-0027,
-/// [`left_inset`]) -- é o único efeito que esta função tem sobre
-/// [`layout_inset`] além de repassar `workspace`/`style`/`measurer`.
+/// `is_macos` não muda mais o layout: o inset do semáforo nativo (ADR-0027,
+/// [`left_inset`]) desloca o botão de menu do app e a origem da trilha
+/// ([`track_shift`]), não o conteúdo.
 pub fn fit_width(
     workspace: &Workspace,
     style: &TabBarStyle,
     _available_width: f32,
     measurer: &mut TextMeasurer,
-    is_macos: bool,
+    _is_macos: bool,
 ) -> TabBarLayout {
-    if is_macos {
-        layout_inset(workspace, style, measurer, left_inset(style, true))
-    } else {
-        // Caso comum, sem inset -- `layout` já é exatamente isto.
-        layout(workspace, style, measurer)
-    }
+    // O inset do semáforo do macOS saiu daqui: ele agora desloca o botão de
+    // menu do app, na zona fixa à esquerda (`track_shift`), e a trilha toda
+    // junto -- o layout é o mesmo em toda plataforma.
+    layout(workspace, style, measurer)
 }
 
 /// Estado de rolagem da trilha (espec. §2.18) para um `content_width` e uma
@@ -1083,17 +1069,21 @@ pub enum OverflowSide {
 /// rolam com a trilha -- ficam "por dentro" das pontas, sempre visíveis).
 /// `[appearance.tabs.overflow]`: círculo (largura = altura, raio = metade),
 /// só o chevron -- a contagem saiu (pedido do usuário, espec. §2.18).
+///
+/// `track_left` é onde a trilha começa na tela ([`track_shift`]) e
+/// `track_width` a largura dela ([`trilha_width`]).
 pub fn overflow_pill_rect(
     style: &TabBarStyle,
     side: OverflowSide,
-    bar_width: f32,
+    track_left: f32,
+    track_width: f32,
     bar_height: f32,
 ) -> Rect {
     let size = style.overflow_indicator_size;
     let inset = style.overflow_edge_inset;
     let x = match side {
-        OverflowSide::Left => inset,
-        OverflowSide::Right => bar_width - inset - size,
+        OverflowSide::Left => track_left + inset,
+        OverflowSide::Right => track_left + track_width - inset - size,
     };
     Rect {
         x,
@@ -1106,12 +1096,13 @@ pub fn overflow_pill_rect(
 pub fn point_in_overflow_pill(
     style: &TabBarStyle,
     side: OverflowSide,
-    bar_width: f32,
+    track_left: f32,
+    track_width: f32,
     bar_height: f32,
     point: (f32, f32),
 ) -> bool {
     rect_contains(
-        overflow_pill_rect(style, side, bar_width, bar_height),
+        overflow_pill_rect(style, side, track_left, track_width, bar_height),
         point,
     )
 }
@@ -1145,11 +1136,44 @@ pub fn right_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
     }
 }
 
-/// Largura da trilha rolável: a barra inteira menos a zona fixa da
-/// direita -- é o `available_width` que [`overflow_state`] e o cálculo de
-/// arraste na borda devem usar, não a largura total da janela.
+/// Lado do botão de menu do app: a caixa inteira de uma aba solta
+/// (`tab_height` mais o respiro do wrapper dos dois lados, o mesmo que
+/// [`layout`] dá à aba sem grupo) -- quadrado, sem número próprio.
+pub fn app_menu_button_size(style: &TabBarStyle) -> f32 {
+    style.tab_height + style.wrapper_padding * 2.0
+}
+
+/// Onde a trilha rolável começa na tela: o inset do semáforo do macOS
+/// ([`left_inset`]), o respiro das bordas e o botão de menu do app. É a
+/// origem do conteúdo de [`layout`] -- `tela = conteúdo + track_shift -
+/// scroll_offset` -- e a borda esquerda do recorte da trilha.
+pub fn track_shift(style: &TabBarStyle, is_macos: bool) -> f32 {
+    left_inset(style, is_macos) + style.trilha_padding + app_menu_button_size(style)
+}
+
+/// Retângulo do botão de menu do app, em coordenadas de tela da barra (zona
+/// fixa à esquerda, não rola). Mesmo topo e mesma caixa de uma aba solta
+/// ([`layout`]): `trilha_padding` do topo, lado de [`app_menu_button_size`].
+pub fn app_menu_button_rect(style: &TabBarStyle, is_macos: bool) -> Rect {
+    let size = app_menu_button_size(style);
+    Rect {
+        x: left_inset(style, is_macos) + style.trilha_padding,
+        y: style.trilha_padding,
+        width: size,
+        height: size,
+    }
+}
+
+pub fn point_in_app_menu_button(style: &TabBarStyle, is_macos: bool, point: (f32, f32)) -> bool {
+    rect_contains(app_menu_button_rect(style, is_macos), point)
+}
+
+/// Largura da trilha rolável: a barra inteira menos as zonas fixas -- a do
+/// botão de menu à esquerda ([`track_shift`]) e a da direita -- é o
+/// `available_width` que [`overflow_state`] e o cálculo de arraste na borda
+/// devem usar, não a largura total da janela.
 pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool) -> f32 {
-    (bar_width - right_zone_width(style, is_macos)).max(0.0)
+    (bar_width - track_shift(style, is_macos) - right_zone_width(style, is_macos)).max(0.0)
 }
 
 /// Retângulo do botão de configurações, em coordenadas de tela da barra
@@ -1226,15 +1250,19 @@ pub fn point_in_sessions_button(
     )
 }
 
-/// Qual botão da zona fixa (sessões ou configurações) um ponto atinge.
+/// Qual botão fixo da barra (menu do app, sessões ou configurações) um
+/// ponto atinge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneButtonHit {
+    /// Botão de menu do app, à esquerda da trilha.
+    AppMenu,
     Sessions,
     Settings,
 }
 
-/// Testa um ponto contra os dois botões da zona fixa. Mesma geometria de
-/// `sessions_button_rect`/`settings_button_rect`, nunca recalculada.
+/// Testa um ponto contra os botões fixos. Mesma geometria de
+/// `app_menu_button_rect`/`sessions_button_rect`/`settings_button_rect`,
+/// nunca recalculada.
 pub fn point_in_zone_button(
     style: &TabBarStyle,
     bar_width: f32,
@@ -1242,7 +1270,9 @@ pub fn point_in_zone_button(
     is_macos: bool,
     point: (f32, f32),
 ) -> Option<ZoneButtonHit> {
-    if point_in_sessions_button(style, bar_width, bar_height, is_macos, point) {
+    if point_in_app_menu_button(style, is_macos, point) {
+        Some(ZoneButtonHit::AppMenu)
+    } else if point_in_sessions_button(style, bar_width, bar_height, is_macos, point) {
         Some(ZoneButtonHit::Sessions)
     } else if point_in_settings_button(style, bar_width, bar_height, is_macos, point) {
         Some(ZoneButtonHit::Settings)
@@ -1778,7 +1808,8 @@ mod tests {
         );
         assert_eq!(
             trilha_width(&style, bar_width, false),
-            bar_width - right_zone_width(&style, false)
+            bar_width - track_shift(&style, false) - right_zone_width(&style, false),
+            "a trilha é o que sobra entre a zona do botão de menu e a da direita"
         );
 
         let sem_botao_de_aba = TabBarStyle {
@@ -1845,10 +1876,100 @@ mod tests {
         assert_eq!(
             trilha_width(&style, bar_width, false) + 44.0,
             bar_width
+                - track_shift(&style, false)
                 - (old_zone_before_window_controls
                     + style.window_controls_gap
                     + window_controls_width(&style, false)),
             "a trilha de hoje, menos 44px, é a trilha nova"
+        );
+    }
+
+    /// ADR-0079: the app menu button is the box of a loose tab, fixed at the
+    /// left; the track (and its content origin) starts right after it.
+    #[test]
+    fn app_menu_button_has_the_box_of_a_loose_tab_at_the_left_edge() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        let tab = layout.groups[0].tabs[0].rect;
+
+        let button = app_menu_button_rect(&style, false);
+        assert_eq!(button.width, button.height, "quadrado");
+        assert_eq!(button.height, tab.height, "mesma altura da aba solta");
+        assert_eq!(button.y, tab.y, "mesmo topo da aba solta");
+        assert_eq!(button.x, style.trilha_padding);
+        assert_eq!(button.x + button.width, track_shift(&style, false));
+
+        // macOS: the traffic lights' inset goes before the button, and the
+        // whole track moves with it.
+        let mac = app_menu_button_rect(&style, true);
+        assert_eq!(
+            mac.x,
+            style.macos_traffic_light_inset + style.trilha_padding
+        );
+        assert_eq!(
+            track_shift(&style, true) - track_shift(&style, false),
+            style.macos_traffic_light_inset
+        );
+    }
+
+    #[test]
+    fn the_layout_no_longer_depends_on_the_platform() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let style = TabBarStyle::DEFAULT;
+        let mut m = measurer();
+        let plain = fit_width(&ws, &style, 800.0, &mut m, false);
+        let mac = fit_width(&ws, &style, 800.0, &mut m, true);
+        assert_eq!(plain.groups[0].tabs[0].rect, mac.groups[0].tabs[0].rect);
+        assert_eq!(plain.content_width, mac.content_width);
+    }
+
+    #[test]
+    fn app_menu_button_is_hit_in_screen_coordinates_before_anything_else() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_height = crate::chrome::bar_height(&style);
+        let button = app_menu_button_rect(&style, false);
+        let center = (
+            button.x + button.width / 2.0,
+            button.y + button.height / 2.0,
+        );
+        assert_eq!(
+            point_in_zone_button(&style, 800.0, bar_height, false, center),
+            Some(ZoneButtonHit::AppMenu)
+        );
+        // Just past the button: the track, not the button.
+        let past = (button.x + button.width + 1.0, center.1);
+        assert_eq!(
+            point_in_zone_button(&style, 800.0, bar_height, false, past),
+            None
+        );
+        // Press and release on the same button fires; elsewhere does not.
+        assert_eq!(
+            zone_button_release(Some(ZoneButtonHit::AppMenu), Some(ZoneButtonHit::AppMenu)),
+            Some(ZoneButtonHit::AppMenu)
+        );
+        assert_eq!(
+            zone_button_release(Some(ZoneButtonHit::AppMenu), None),
+            None
+        );
+    }
+
+    #[test]
+    fn overflow_pills_sit_inside_the_track_not_the_bar() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_height = crate::chrome::bar_height(&style);
+        let left = track_shift(&style, false);
+        let width = 500.0;
+        let l = overflow_pill_rect(&style, OverflowSide::Left, left, width, bar_height);
+        let r = overflow_pill_rect(&style, OverflowSide::Right, left, width, bar_height);
+        assert_eq!(l.x, left + style.overflow_edge_inset);
+        assert_eq!(
+            r.x + r.width,
+            left + width - style.overflow_edge_inset,
+            "a pílula direita acaba por dentro da ponta direita da trilha"
         );
     }
 

@@ -14,6 +14,12 @@ use winit::window::Icon;
 
 const PNG_BYTES: &[u8] = include_bytes!("../../../assets/icon/porecatu.png");
 
+/// O PNG embutido, para quem o desenha dentro da interface (botão de menu
+/// do app, na barra) em vez de usá-lo como ícone da janela.
+pub(crate) fn png_bytes() -> &'static [u8] {
+    PNG_BYTES
+}
+
 /// Decodifica o ícone embutido. Painica em PNG malformado ou fora do
 /// RGBA8 esperado -- é asset do binário, não entrada do usuário, e um
 /// `assets/icon/porecatu.png` corrompido é bug de build, não algo a

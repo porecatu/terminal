@@ -507,6 +507,7 @@ body_generic = "Shell não reconhecido para sugerir um trecho pronto. OSC 7 é a
 # (grupo, aba) têm uma frase por combinação ou peças com identificador próprio,
 # para a ordem das palavras ficar livre para o tradutor.
 [access]
+app_menu_button = "Menu do aplicativo"
 new_tab_ungrouped = "Nova aba fora de grupo"
 new_tab_in_group = "Nova aba neste grupo"
 sessions_button = "Sessões salvas"

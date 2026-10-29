@@ -1021,6 +1021,7 @@ registry! {
         },
     }
     access {
+        app_menu_button(),
         new_tab_ungrouped(),
         new_tab_in_group(),
         sessions_button(),

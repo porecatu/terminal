@@ -16,6 +16,14 @@ primeiro release.
 
 ## [Não publicado]
 
+### Adicionado
+
+- **Botão de menu do app**
+  ([ADR-0079](docs/adr/0079-botao-de-menu-do-app.md)): botão quadrado fixo à
+  esquerda da barra de abas, com a caixa de uma aba solta e o ícone do app.
+  Hover clareia como a aba, pressionado usa as cores de aba ativa; ainda sem
+  ação. A trilha rolável começa depois dele.
+
 ### Alterado
 
 - **Texto de diálogo nunca é cortado com reticências**
