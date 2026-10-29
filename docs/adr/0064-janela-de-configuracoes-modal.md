@@ -21,6 +21,8 @@ Enquanto ela está aberta, **todas** as janelas de terminal ficam desabilitadas 
 
 Todas, e não só a dona: com outra janela de terminal ativa, ela poderia ser fechada (ou o app encerrado) por baixo, e a janela possuída morreria junto com a dona sem o diálogo de pendências do ADR-0059 §2.
 
+> **Revisto pelo [ADR-0080](0080-editor-de-perfil-em-janela-propria.md) — decidido, a implementar.** A modalidade encadeia: com o editor de perfil aberto, ele é possuído pela janela de configurações e a desabilita do mesmo jeito; fechar o editor reabilita a de configurações **antes** de destruí-lo, pelo mesmo motivo. As janelas de terminal continuam desabilitadas pela de configurações. Fora do Windows, a modalidade do editor é lógica (o input da tela é descartado).
+
 ### 3. Minimizar minimiza as janelas de terminal
 
 O botão de minimizar do cabeçalho da tela continua desenhado (a aparência não muda) e passa a minimizar as janelas de terminal; a possuída some com elas e volta quando a dona é restaurada pela barra de tarefas. Minimizar só ela a deixaria sem botão na barra de tarefas e com as janelas de terminal desabilitadas — o app pareceria travado. O minimizar do menu do sistema fica desligado pelo mesmo motivo.

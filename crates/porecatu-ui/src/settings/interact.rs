@@ -10,11 +10,30 @@
 //! medido quando foi. Um valor recusado **fica** no rascunho, marcado na linha
 //! (RF-16.18), e conta como tocado.
 
+use std::time::{Duration, Instant};
+
 use porecatu_config::EditValue;
 
 use super::catalog::{Control, GIT_POLL_MIN, OptionDef};
 use super::draft::Draft;
 use super::field_edit::{parse_text, step_number};
+
+/// O clique simples `item` (a linha do perfil na lista) em `now`, sabendo o
+/// anterior (`last`): devolve se ele **completa um duplo clique** -- o anterior
+/// foi na mesma linha, a no máximo `threshold` atrás --, que abre o editor, e o
+/// que guardar para o próximo. Um duplo clique gasta o par: o terceiro clique
+/// começa de novo. Pura, para testar sem janela e sem relógio.
+pub(crate) fn profile_row_click(
+    last: Option<(usize, Instant)>,
+    item: usize,
+    now: Instant,
+    threshold: Duration,
+) -> (bool, Option<(usize, Instant)>) {
+    let double = last.is_some_and(|(last_item, at)| {
+        last_item == item && now.saturating_duration_since(at) <= threshold
+    });
+    (double, if double { None } else { Some((item, now)) })
+}
 
 /// Alterna uma opção booleana.
 pub(crate) fn toggle(draft: &mut Draft, option: &OptionDef) -> bool {
@@ -508,6 +527,43 @@ copy_on_select = false
                 EditValue::StringList(vec!["C:\\Projetos".into()])
             )]
         );
+    }
+
+    #[test]
+    fn two_clicks_on_the_same_profile_row_within_the_threshold_are_a_double_click() {
+        let threshold = Duration::from_millis(500);
+        let t0 = Instant::now();
+        // O primeiro clique só guarda.
+        let (double, last) = profile_row_click(None, 1, t0, threshold);
+        assert!(!double);
+        assert_eq!(last, Some((1, t0)));
+        // O segundo, na mesma linha e a tempo, completa o duplo clique...
+        let (double, last) = profile_row_click(last, 1, t0 + Duration::from_millis(300), threshold);
+        assert!(double);
+        assert_eq!(last, None, "the pair is spent");
+        // ...e o terceiro recomeça: não é um duplo clique de novo.
+        let (double, _) = profile_row_click(last, 1, t0 + Duration::from_millis(400), threshold);
+        assert!(!double);
+    }
+
+    #[test]
+    fn a_slow_click_or_a_click_on_another_row_is_not_a_double_click() {
+        let threshold = Duration::from_millis(500);
+        let t0 = Instant::now();
+        let first = Some((1, t0));
+        // No limite ainda vale; passando dele, não.
+        assert!(profile_row_click(first, 1, t0 + threshold, threshold).0);
+        let (double, last) = profile_row_click(first, 1, t0 + threshold * 2, threshold);
+        assert!(!double);
+        assert_eq!(
+            last,
+            Some((1, t0 + threshold * 2)),
+            "the slow click starts over"
+        );
+        // Outra linha: nunca, por rápido que seja.
+        let (double, last) = profile_row_click(first, 2, t0 + Duration::from_millis(50), threshold);
+        assert!(!double);
+        assert_eq!(last.map(|(item, _)| item), Some(2));
     }
 
     #[test]

@@ -193,6 +193,21 @@ pub fn vault_available() -> bool {
     false
 }
 
+/// Há senha guardada para o destino? Só o **sim ou não** sai daqui: o segredo é
+/// lido para dentro do `Secret`, que o zera ao ser solto, e a UI nunca o vê
+/// (ADR-0073 §4). Quem pergunta é o botão "Esquecer" do editor de perfil, que
+/// fica desabilitado sem o que esquecer. Cofre ausente, trancado ou com falha
+/// responde `false`: o lado seguro, o botão fica desabilitado.
+pub fn has_password(dest: &Destination) -> bool {
+    matches!(SystemVault.read(&dest.password_account()), Ok(Some(_)))
+}
+
+/// Há passphrase guardada para o arquivo de chave? Mesma regra de
+/// [`has_password`].
+pub fn has_passphrase(key_file: &Path) -> bool {
+    matches!(SystemVault.read(&passphrase_account(key_file)), Ok(Some(_)))
+}
+
 /// Apaga a senha guardada para o destino (RF-20.4). Nenhuma outra entrada é
 /// tocada.
 pub fn forget_password(dest: &Destination) -> Result<(), VaultError> {

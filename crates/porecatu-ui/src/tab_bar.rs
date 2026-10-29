@@ -1344,17 +1344,42 @@ pub fn point_in_window_button(
     bar_height: f32,
     point: (f32, f32),
 ) -> Option<WindowButtonHit> {
+    point_in_window_button_of(
+        style,
+        is_macos,
+        bar_width,
+        bar_height,
+        point,
+        &WINDOW_BUTTONS,
+    )
+}
+
+/// Os três botões de janela, na ordem em que a geometria os numera.
+pub const WINDOW_BUTTONS: [WindowButtonHit; 3] = [
+    WindowButtonHit::Minimize,
+    WindowButtonHit::MaximizeRestore,
+    WindowButtonHit::Close,
+];
+
+/// [`point_in_window_button`] só entre os botões de `shown`: uma janela que
+/// mostra apenas alguns (o editor de perfil só tem o de fechar, ADR-0080 §3)
+/// não responde ao clique no lugar dos outros. A geometria é a mesma -- o
+/// de fechar continua colado na borda direita.
+pub fn point_in_window_button_of(
+    style: &TabBarStyle,
+    is_macos: bool,
+    bar_width: f32,
+    bar_height: f32,
+    point: (f32, f32),
+    shown: &[WindowButtonHit],
+) -> Option<WindowButtonHit> {
     if is_macos {
         return None;
     }
-    for (i, hit) in [
-        WindowButtonHit::Minimize,
-        WindowButtonHit::MaximizeRestore,
-        WindowButtonHit::Close,
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (i, hit) in WINDOW_BUTTONS.into_iter().enumerate() {
+        if !shown.contains(&hit) {
+            continue;
+        }
         if rect_contains(
             window_button_rect(style, i as u8, bar_width, bar_height),
             point,

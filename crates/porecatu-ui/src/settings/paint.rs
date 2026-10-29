@@ -22,7 +22,7 @@ use super::content::{
 use super::field_edit::{EditPart, Editing};
 use super::layout::{
     BlockGeometry, ControlPart, FOOTER_BUTTONS, Focus, FooterButton, Hit, Layout, Metrics,
-    RowGeometry, banner_geometry, list_geometry,
+    RowGeometry, banner_geometry, list_geometry, profile_item_buttons,
 };
 use super::{
     Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON, RESTORE_ICON, RESTORE_RADIUS, TOGGLE_OFF,
@@ -71,6 +71,45 @@ impl Input<'_> {
     /// A cor de um texto ou controle de linha: a do desenho, ou `#5c646f`
     /// (o esmaecido da §2.16) em somente leitura.
     fn ink(&self, color: Color) -> Color {
+        self.ctx().ink(color)
+    }
+
+    /// O que a pintura de um **controle** lê do corpo: o recorte de [`Input`]
+    /// que não fala de guia, rodapé nem de painel.
+    pub(super) fn ctx(&self) -> ControlCtx<'_> {
+        ControlCtx {
+            metrics: self.metrics,
+            hovered: self.hovered,
+            editing: self.editing,
+            selection_color: self.selection_color,
+            read_only: self.read_only,
+            style: self.style,
+            pal: self.pal,
+            config: self.config,
+        }
+    }
+}
+
+/// Tudo o que a pintura de um controle lê (campo, escolha, lista, botão). É o
+/// que a tela de configurações e o formulário do editor de perfil têm em
+/// comum: o editor pinta os mesmos controles, só que em coluna, e não tem guia,
+/// grupo nem rodapé de tela.
+#[derive(Clone, Copy)]
+pub(super) struct ControlCtx<'a> {
+    pub metrics: &'a Metrics,
+    pub hovered: Option<Hit>,
+    pub editing: Option<&'a Editing>,
+    pub selection_color: Color,
+    pub read_only: bool,
+    pub style: &'a TabBarStyle,
+    pub pal: &'a ResolvedPalette,
+    pub config: &'a Config,
+}
+
+impl ControlCtx<'_> {
+    /// A cor de um texto ou controle de linha: a do desenho, ou `#5c646f`
+    /// (o esmaecido da §2.16) em somente leitura.
+    fn ink(&self, color: Color) -> Color {
         if self.read_only {
             self.pal.editor_section_text
         } else {
@@ -105,7 +144,7 @@ fn rounded(rect: Rect, radius: f32, color: Color, border: Color, border_width: f
 }
 
 /// O anel de foco do teclado: `1px` no acento do diálogo (ADR-0060 §3).
-fn ring(rect: Rect, radius: f32, pal: &ResolvedPalette) -> Primitive {
+pub(super) fn ring(rect: Rect, radius: f32, pal: &ResolvedPalette) -> Primitive {
     rounded(
         rect,
         radius,
@@ -115,7 +154,13 @@ fn ring(rect: Rect, radius: f32, pal: &ResolvedPalette) -> Primitive {
     )
 }
 
-fn text(origin: (f32, f32), text: &str, font: FontFace, size_px: f32, color: Color) -> Primitive {
+pub(super) fn text(
+    origin: (f32, f32),
+    text: &str,
+    font: FontFace,
+    size_px: f32,
+    color: Color,
+) -> Primitive {
     Primitive::Text(TextRun {
         origin,
         text: text.to_owned(),
@@ -448,6 +493,10 @@ fn paint_row(
         1.0,
     ));
 
+    if let ControlView::ProfileItem { badge, .. } = &row.control {
+        paint_profile_badge(&input.ctx(), rect, badge, measurer, out);
+    }
+
     let name_origin = (geometry.name_origin.0 + dx, geometry.name_origin.1 + dy);
     out.push(text(
         name_origin,
@@ -520,7 +569,7 @@ fn paint_row(
     }
 
     paint_control(
-        input,
+        &input.ctx(),
         index,
         row,
         shift(geometry.control, dx, dy),
@@ -586,8 +635,8 @@ fn paint_restore(
 
 // ---- controles
 
-fn paint_control(
-    input: &Input<'_>,
+pub(super) fn paint_control(
+    input: &ControlCtx<'_>,
     index: usize,
     row: &RowView,
     rect: Rect,
@@ -677,9 +726,7 @@ fn paint_control(
                 ));
             }
         }
-        ControlView::ProfileItem { badge, .. } => {
-            paint_profile_item(input, index, badge, rect, measurer, out);
-        }
+        ControlView::ProfileItem { .. } => paint_profile_item(input, index, rect, out),
         ControlView::Chips { chips } => paint_chips(input, chips, rect, measurer, out),
         ControlView::GitPoll {
             on,
@@ -713,7 +760,7 @@ fn paint_control(
 
 /// O campo de texto: fundo, borda e raio do editor de grupo (ADR-0060 §3). A
 /// borda fica em Erro quando o valor foi recusado (RF-16.18).
-fn paint_field_box(input: &Input<'_>, rect: Rect, invalid: bool, out: &mut Vec<Primitive>) {
+fn paint_field_box(input: &ControlCtx<'_>, rect: Rect, invalid: bool, out: &mut Vec<Primitive>) {
     let pal = input.pal;
     out.push(rounded(
         rect,
@@ -728,7 +775,13 @@ fn paint_field_box(input: &Input<'_>, rect: Rect, invalid: bool, out: &mut Vec<P
     ));
 }
 
-fn paint_field_text(input: &Input<'_>, value: &str, x: f32, rect: Rect, out: &mut Vec<Primitive>) {
+fn paint_field_text(
+    input: &ControlCtx<'_>,
+    value: &str,
+    x: f32,
+    rect: Rect,
+    out: &mut Vec<Primitive>,
+) {
     let m = input.metrics;
     let inner = Rect {
         x: rect.x + m.field_padding_x,
@@ -761,7 +814,7 @@ pub(crate) fn editing_text_x(m: &Metrics, field: Rect, text_width: f32) -> f32 {
 /// deste campo por quadro -- um só, o que está recebendo teclas, como o campo
 /// de rename da barra de abas.
 fn paint_editing_field(
-    input: &Input<'_>,
+    input: &ControlCtx<'_>,
     rect: Rect,
     editing: &Editing,
     invalid: bool,
@@ -832,7 +885,7 @@ fn paint_editing_field(
 }
 
 /// O caret do botão de escolha, à direita do campo (ADR-0060 §3).
-fn paint_caret(input: &Input<'_>, rect: Rect, out: &mut Vec<Primitive>) {
+fn paint_caret(input: &ControlCtx<'_>, rect: Rect, out: &mut Vec<Primitive>) {
     let style = input.style;
     let width = style.icon_button_width(style.pill_caret_size);
     let caret = Rect {
@@ -854,7 +907,7 @@ fn paint_caret(input: &Input<'_>, rect: Rect, out: &mut Vec<Primitive>) {
 /// moldura inteira leva o raio e o escolhido de uma ponta o herda; um do meio
 /// é reto.
 fn paint_segmented(
-    input: &Input<'_>,
+    input: &ControlCtx<'_>,
     labels: &[String],
     widths: &[f32],
     selected: usize,
@@ -929,9 +982,9 @@ fn paint_filter(
         .editing
         .filter(|editing| editing.block == index && editing.part == EditPart::Filter);
     if let Some(editing) = editing {
-        paint_editing_field(input, rect, editing, false, measurer, out);
+        paint_editing_field(&input.ctx(), rect, editing, false, measurer, out);
     } else {
-        paint_field_box(input, rect, false, out);
+        paint_field_box(&input.ctx(), rect, false, out);
         if value.is_empty() {
             let inner = Rect {
                 x: rect.x + m.field_padding_x,
@@ -949,7 +1002,7 @@ fn paint_filter(
             ));
             out.push(Primitive::PopClip);
         } else {
-            paint_field_text(input, value, rect.x + m.field_padding_x, rect, out);
+            paint_field_text(&input.ctx(), value, rect.x + m.field_padding_x, rect, out);
         }
     }
     if input.focus == Focus::Row(index) {
@@ -961,45 +1014,61 @@ fn paint_filter(
 /// borda `#2a2f38`, raio 4 -- lado a lado com o `gap: 6`; "Nenhum atalho"
 /// esmaecido; e o chip em captura com a borda Acento e a frase esmaecida
 /// (ADR-0060 §3).
-/// Um perfil da lista (ADR-0075 §6): o badge (a anatomia do ADR-0070 §7, na cor
-/// neutra do grupo implícito, porque aqui não há grupo) e, à direita, o `X` de
-/// excluir -- a anatomia do botão de fechar da aba, a mesma do `X` das listas
-/// editáveis.
-fn paint_profile_item(
-    input: &Input<'_>,
-    index: usize,
+/// O badge de um perfil da lista (ADR-0075 §6): a anatomia do ADR-0070 §7, na cor
+/// neutra do grupo implícito, porque aqui não há grupo. Abre a linha (ADR-0080
+/// §7), no `padding` dela e centrado na vertical, antes do nome.
+fn paint_profile_badge(
+    input: &ControlCtx<'_>,
+    row: Rect,
     badge: &str,
-    rect: Rect,
     measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
-    let m = input.metrics;
-    if !badge.is_empty() {
-        let (_, badge_height) = crate::chrome::badge_size(badge, measurer);
-        crate::chrome::push_badge(
-            out,
-            (rect.x, rect.y + (rect.height - badge_height) / 2.0),
-            badge,
-            input.pal.ungrouped_group_color(),
-            // O tingimento do badge é `[appearance.groups] badge_tint_strength`,
-            // que o estilo da barra carrega.
-            input.style.drag_highlight_tint_strength,
-            measurer,
-        );
+    if badge.is_empty() {
+        return;
     }
-    let remove = Rect {
-        x: rect.x + rect.width - m.restore_width,
-        y: rect.y + (rect.height - m.restore_height) / 2.0,
-        width: m.restore_width,
-        height: m.restore_height,
-    };
-    let hovered = matches!(
-        input.hovered,
-        Some(Hit::Control(hit_index, ControlPart::ListRemove(_))) if hit_index == index
+    let (_, badge_height) = crate::chrome::badge_size(badge, measurer);
+    crate::chrome::push_badge(
+        out,
+        (
+            row.x + input.metrics.row_padding_x,
+            row.y + (row.height - badge_height) / 2.0,
+        ),
+        badge,
+        input.pal.ungrouped_group_color(),
+        // O tingimento do badge é `[appearance.groups] badge_tint_strength`,
+        // que o estilo da barra carrega.
+        input.style.drag_highlight_tint_strength,
+        measurer,
     );
-    if hovered {
+}
+
+/// Como um botão de ícone reage ao ponteiro: o ícone muda de cor, e -- só no
+/// `Backed` -- o botão ganha um fundo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IconHover {
+    /// O fundo `#39404b` de raio 4 aparece sob o ícone, que vai a `#e4e8ee`: o
+    /// botão de fechar da aba, o `X` das listas editáveis e o restaurar padrão.
+    Backed,
+    /// **Sem fundo**: só o ícone vai de `#727a86` a `#e4e8ee`. O lápis e o `X`
+    /// de um perfil da lista (pedido do dono do produto depois de ver a linha).
+    IconOnly,
+}
+
+/// Um botão de ícone de uma linha: o ícone na em do chrome, `#727a86`, e no
+/// hover `#e4e8ee` -- com o fundo `#39404b` de raio 4 ou sem ele, conforme
+/// `hover`. O lápis e o `X` de um perfil saem daqui, então nunca divergem.
+fn paint_icon_button(
+    input: &ControlCtx<'_>,
+    rect: Rect,
+    what: icon::Icon,
+    hovered: bool,
+    hover: IconHover,
+    out: &mut Vec<Primitive>,
+) {
+    if hovered && hover == IconHover::Backed {
         out.push(rounded(
-            remove,
+            rect,
             RESTORE_RADIUS,
             RESTORE_HOVER_BACKGROUND,
             palette::TRANSPARENT,
@@ -1007,8 +1076,8 @@ fn paint_profile_item(
         ));
     }
     out.push(centered_glyph(
-        icon::X,
-        remove,
+        what,
+        rect,
         input.style.icon_em_size,
         if hovered {
             RESTORE_HOVER_ICON
@@ -1018,8 +1087,38 @@ fn paint_profile_item(
     ));
 }
 
+/// Os botões de um perfil da lista (ADR-0080 §7): o lápis, que abre o editor, e
+/// à direita dele o `X` de excluir -- os dois com o mesmo tamanho e o mesmo ícone
+/// de [`paint_icon_button`], mas **sem fundo** no hover (só o ícone muda de cor),
+/// nos retângulos de `layout::profile_item_buttons`.
+fn paint_profile_item(input: &ControlCtx<'_>, index: usize, rect: Rect, out: &mut Vec<Primitive>) {
+    let (edit, remove) = profile_item_buttons(rect, input.metrics);
+    let hovered = |part: fn(&ControlPart) -> bool| {
+        matches!(
+            input.hovered,
+            Some(Hit::Control(hit_index, hit_part)) if hit_index == index && part(&hit_part)
+        )
+    };
+    paint_icon_button(
+        input,
+        edit,
+        icon::PENCIL,
+        hovered(|part| matches!(part, ControlPart::EditProfile)),
+        IconHover::IconOnly,
+        out,
+    );
+    paint_icon_button(
+        input,
+        remove,
+        icon::X,
+        hovered(|part| matches!(part, ControlPart::ListRemove(_))),
+        IconHover::IconOnly,
+        out,
+    );
+}
+
 fn paint_chips(
-    input: &Input<'_>,
+    input: &ControlCtx<'_>,
     chips: &[ChipView],
     rect: Rect,
     _measurer: &mut TextMeasurer,
@@ -1067,7 +1166,7 @@ fn paint_chips(
 /// linha mostra: os itens, se há dois campos por item, e o texto do
 /// "Adicionar".
 fn paint_list(
-    input: &Input<'_>,
+    input: &ControlCtx<'_>,
     index: usize,
     list: (&[ListItemView], bool, &str),
     rect: Rect,
@@ -1111,28 +1210,15 @@ fn paint_list(
                 paint_field_text(input, value, field.x + m.field_padding_x, field, out);
             }
         }
-        // O `X`: a anatomia do botão de fechar da aba -- ícone `#727a86`, e
-        // no hover fundo `#39404b` com o ícone `#e4e8ee`.
-        let hovered = hovered_part == Some(ControlPart::ListRemove(item_index));
-        if hovered {
-            out.push(rounded(
-                rects.remove,
-                RESTORE_RADIUS,
-                RESTORE_HOVER_BACKGROUND,
-                palette::TRANSPARENT,
-                0.0,
-            ));
-        }
-        out.push(centered_glyph(
-            icon::X,
+        // O `X`: o botão de ícone da tela, o mesmo do lápis e do `X` de um perfil.
+        paint_icon_button(
+            input,
             rects.remove,
-            style.icon_em_size,
-            if hovered {
-                RESTORE_HOVER_ICON
-            } else {
-                RESTORE_ICON
-            },
-        ));
+            icon::X,
+            hovered_part == Some(ControlPart::ListRemove(item_index)),
+            IconHover::Backed,
+            out,
+        );
     }
     let add = geometry.add;
     if hovered_part == Some(ControlPart::ListAdd) {
@@ -1183,64 +1269,97 @@ fn paint_footer(input: &Input<'_>, out: &mut Vec<Primitive>) {
     ));
     for (index, (button, rect)) in input.footer.iter().enumerate() {
         let available = input.footer_available[index];
-        let hovered = available && input.hovered == Some(Hit::Footer(*button));
         let label = match button {
             FooterButton::OpenFile => msg::settings::button::open_file(input.catalog),
             FooterButton::Discard => msg::settings::button::discard(input.catalog),
             FooterButton::Save => msg::settings::button::save(input.catalog),
         };
-        let primary = *button == FooterButton::Save;
-        let (fill, border, color) = match (primary, available) {
-            // Salvar, o primeiro botão primário do app: o par "ligado" da
-            // alternância, com hover por brilho (ADR-0060 §4).
-            (true, true) => {
-                let fill = if hovered {
-                    crate::chrome::brighten(TOGGLE_ON, input.style.tab_hover_brightness)
-                } else {
-                    TOGGLE_ON
-                };
-                (fill, palette::TRANSPARENT, TOGGLE_KNOB_COLOR)
-            }
-            // Indisponível: texto esmaecido e sem fundo, como item de menu
-            // indisponível.
-            (true, false) => (
-                palette::TRANSPARENT,
-                palette::TRANSPARENT,
-                pal.menu_item_disabled_text,
-            ),
-            // Estilo cancelar: borda e texto do botão do diálogo, hover no
-            // tom da borda.
-            (false, true) => (
-                if hovered {
-                    pal.dialog_cancel_border
-                } else {
-                    palette::TRANSPARENT
-                },
-                pal.dialog_cancel_border,
-                pal.dialog_cancel_text,
-            ),
-            (false, false) => (
-                palette::TRANSPARENT,
-                pal.dialog_cancel_border,
-                pal.menu_item_disabled_text,
-            ),
-        };
-        out.push(rounded(*rect, m.button_radius, fill, border, 1.0));
-        out.push(text(
-            (
-                rect.x + m.button_padding_x,
-                centered_y(*rect, m.button_font_size),
-            ),
-            &label,
-            BODY_FONT,
-            m.button_font_size,
-            color,
-        ));
-        if input.focus == Focus::Footer(*button) {
-            out.push(ring(*rect, m.button_radius, pal));
-        }
+        paint_button(
+            &FooterButtonView {
+                rect: *rect,
+                label: &label,
+                primary: *button == FooterButton::Save,
+                available,
+                hovered: available && input.hovered == Some(Hit::Footer(*button)),
+                focused: input.focus == Focus::Footer(*button),
+            },
+            m,
+            pal,
+            input.style,
+            out,
+        );
     }
     debug_assert_eq!(input.footer.len(), FOOTER_BUTTONS.len());
+}
+
+/// Um botão do rodapé, como a pintura o recebe: o da tela de configurações e os
+/// do editor de perfil (ADR-0080 §5) saem da mesma função.
+pub(super) struct FooterButtonView<'a> {
+    pub rect: Rect,
+    pub label: &'a str,
+    /// O botão primário da janela (Salvar, OK): o par "ligado" da alternância.
+    pub primary: bool,
+    pub available: bool,
+    pub hovered: bool,
+    pub focused: bool,
+}
+
+pub(super) fn paint_button(
+    button: &FooterButtonView<'_>,
+    m: &Metrics,
+    pal: &ResolvedPalette,
+    style: &TabBarStyle,
+    out: &mut Vec<Primitive>,
+) {
+    let (fill, border, color) = match (button.primary, button.available) {
+        // Salvar, o primeiro botão primário do app: o par "ligado" da
+        // alternância, com hover por brilho (ADR-0060 §4).
+        (true, true) => {
+            let fill = if button.hovered {
+                crate::chrome::brighten(TOGGLE_ON, style.tab_hover_brightness)
+            } else {
+                TOGGLE_ON
+            };
+            (fill, palette::TRANSPARENT, TOGGLE_KNOB_COLOR)
+        }
+        // Indisponível: texto esmaecido e sem fundo, como item de menu
+        // indisponível.
+        (true, false) => (
+            palette::TRANSPARENT,
+            palette::TRANSPARENT,
+            pal.menu_item_disabled_text,
+        ),
+        // Estilo cancelar: borda e texto do botão do diálogo, hover no
+        // tom da borda.
+        (false, true) => (
+            if button.hovered {
+                pal.dialog_cancel_border
+            } else {
+                palette::TRANSPARENT
+            },
+            pal.dialog_cancel_border,
+            pal.dialog_cancel_text,
+        ),
+        (false, false) => (
+            palette::TRANSPARENT,
+            pal.dialog_cancel_border,
+            pal.menu_item_disabled_text,
+        ),
+    };
+    out.push(rounded(button.rect, m.button_radius, fill, border, 1.0));
+    out.push(text(
+        (
+            button.rect.x + m.button_padding_x,
+            centered_y(button.rect, m.button_font_size),
+        ),
+        button.label,
+        BODY_FONT,
+        m.button_font_size,
+        color,
+    ));
+    if button.focused {
+        out.push(ring(button.rect, m.button_radius, pal));
+    }
 }
 
 #[cfg(test)]

@@ -144,7 +144,7 @@ pub const ARROW_DOWN: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 13] = [
+pub const ALL: [(&str, Icon); 14] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -158,6 +158,7 @@ pub const ALL: [(&str, Icon); 13] = [
     ("arrow-down", ARROW_DOWN),
     ("bookmark", BOOKMARK),
     ("rotate-ccw", ROTATE_CCW),
+    ("pencil", PENCIL),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
@@ -210,4 +211,13 @@ pub const ROTATE_CCW: Icon = Icon {
     glyph: "\u{e148}",
     ink_width_em: 0.84,
     ink_height_em: 0.84,
+};
+
+/// `pencil` -- botão de editar na linha de um perfil do grupo "Perfis", à
+/// esquerda do `x` de excluir (ADR-0080 §7). O codepoint vem do `cmap` do
+/// `Lucide.ttf` embutido (glifo `pencil`).
+pub const PENCIL: Icon = Icon {
+    glyph: "\u{e1f9}",
+    ink_width_em: 0.925,
+    ink_height_em: 0.92,
 };

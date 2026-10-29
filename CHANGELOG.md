@@ -29,9 +29,35 @@ primeiro release.
   (no macOS, até o semáforo).
 - **Tint roxo fixo no botão de menu do app**: o fundo da caixa leva `#A78BFA`
   misturado a 30%; não é configurável.
+- **Editor de perfil em janela própria**
+  ([ADR-0080](docs/adr/0080-editor-de-perfil-em-janela-propria.md)): o
+  formulário do perfil abre numa janela do SO filha e modal da tela de
+  configurações, com os campos em coluna (rótulo acima, campo na largura da
+  janela, nota de erro abaixo) e o rodapé Cancelar/OK. Trabalha numa cópia: OK
+  valida e leva o perfil às alterações pendentes **sem gravar** (o Salvar é o da
+  tela) e, com problema, não fecha e leva o foco ao primeiro campo inválido;
+  Cancelar, `Esc` e o botão de fechar descartam. Um perfil inválido deixa de
+  entrar na lista pela tela. O cabeçalho só tem o botão de fechar. Nome,
+  identificador e badge dividem uma linha, e host e porta outra. Num perfil SSH
+  com cofre do sistema, **Esquecer senha** e **Esquecer passphrase** ficam no
+  rodapé, à esquerda, e desabilitados quando não há segredo guardado para o
+  perfil.
+- **Lápis na linha do perfil**: botão de editar à esquerda do ✕ (ícone `pencil`
+  do Lucide, `icon::PENCIL`). Lápis, duplo clique na linha e `Enter` com a linha
+  escolhida abrem o editor; o clique simples só escolhe. **+ Perfil local** e
+  **+ Perfil SSH** abrem o editor com um perfil novo, sem criar nada antes do OK.
+- **Tamanho da janela do editor**: `[appearance.settings] profile_window_width`
+  (560), `profile_window_height` (398), `profile_min_width` (420) e
+  `profile_min_height` (360); valem na próxima abertura do editor.
 
 ### Alterado
 
+- **A seção "Perfil escolhido" sai do grupo "Perfis"**: o formulário do perfil
+  deixa o painel (ADR-0080). A linha da lista passa à ordem badge, nome,
+  sub-linha, ponto de pendente, lápis e ✕, com o ✕ na borda direita; antes o
+  badge ficava junto do ✕ e o ponto depois dele. O lápis e o ✕ do perfil reagem
+  ao ponteiro só no ícone (sem fundo no hover). **Importar do ~/.ssh/config**
+  passa a abrir a lista de marcar abaixo da lista de perfis.
 - **Texto de diálogo nunca é cortado com reticências**
   ([ADR-0078](docs/adr/0078-largura-e-quebra-de-texto-do-dialogo.md)): o
   diálogo cresce de 360 até 720 (o dobro do piso), com 20 de margem da janela,

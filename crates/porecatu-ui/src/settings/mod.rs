@@ -16,6 +16,7 @@ mod choice_list;
 pub(crate) mod closing;
 mod content;
 mod draft;
+mod editor_modal;
 mod field_edit;
 mod file_state;
 mod import_list;
@@ -23,6 +24,12 @@ mod interact;
 mod layout;
 mod paint;
 mod phrases;
+// Sem consumidor até a janela do editor de perfil (ADR-0080): estado puro,
+// testado por inteiro em `profiles_draft`.
+#[allow(dead_code)]
+mod profile_editor;
+mod profile_form;
+mod profile_window;
 // Sem consumidor até as camadas da tela (grupo, lista, formulário): o modelo é
 // dado puro e é testado por inteiro aqui.
 #[allow(dead_code)]
@@ -42,6 +49,14 @@ pub(crate) use content::{BannerView, ControlView, RowView};
 pub(crate) use content::{ChipTone, ChipView, ListItemView};
 pub(crate) use file_state::Disk;
 pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
+pub(crate) use profile_editor::ProfileEditor;
+#[cfg(test)]
+pub(crate) use profile_form::rows_for_test as profile_editor_rows_for_test;
+#[cfg(test)]
+pub(crate) use profile_window::layout_for_test as profile_editor_layout_for_test;
+pub(crate) use profile_window::{
+    EDITOR_BUTTONS, EditorButton, EditorFocus, EditorPress, ProfileEditorWindow,
+};
 pub(crate) use window::{DialogAnswer, Env, Press, SettingsWindow};
 
 use crate::palette;
@@ -93,6 +108,49 @@ pub(crate) fn centered_position(
     (x, y)
 }
 
+/// Onde uma janela de `size` físico fica centrada sobre `origin`, no monitor
+/// dela -- a conta de `centered_position` com a geometria lida da janela do SO.
+/// `None` se o SO não diz onde `origin` está.
+pub(crate) fn centered_over_window(
+    origin: &winit::window::Window,
+    size: (u32, u32),
+) -> Option<(i32, i32)> {
+    let origin_position = origin.outer_position().ok()?;
+    let origin_size = origin.outer_size();
+    let monitor = origin.current_monitor().map(|m| {
+        let position = m.position();
+        let size = m.size();
+        ((position.x, position.y), (size.width, size.height))
+    });
+    Some(centered_position(
+        (origin_position.x, origin_position.y),
+        (origin_size.width, origin_size.height),
+        size,
+        monitor,
+    ))
+}
+
+/// Para qual das janelas que não são de terminal um evento vai (ADR-0080 §1):
+/// o editor de perfil primeiro, depois a tela de configurações, e o resto é do
+/// caminho das janelas de terminal, intocado. Pura, para testar o roteamento
+/// com as três janelas sem criá-las.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Route {
+    ProfileEditor,
+    Settings,
+    Terminal,
+}
+
+pub(crate) fn route<Id: PartialEq>(id: Id, editor: Option<Id>, settings: Option<Id>) -> Route {
+    if editor.is_some_and(|editor| editor == id) {
+        Route::ProfileEditor
+    } else if settings.is_some_and(|settings| settings == id) {
+        Route::Settings
+    } else {
+        Route::Terminal
+    }
+}
+
 /// Atributos da janela de configurações: os comuns a toda janela do app
 /// (`base_window_attributes`: sem decoração nativa fora do macOS, ADR-0027)
 /// mais título, tamanho e mínimo, lidos de `[appearance.settings]` (classe C:
@@ -105,17 +163,60 @@ pub(crate) fn window_attributes(
     owner: Option<&winit::window::Window>,
 ) -> WindowAttributes {
     let settings = &config.appearance.settings;
+    child_window_attributes(
+        title,
+        (settings.window_width, settings.window_height),
+        (settings.min_width, settings.min_height),
+        position,
+        owner,
+        // ADR-0064: sem minimizar a possuída (ver abaixo); maximizar vale.
+        winit::window::WindowButtons::CLOSE | winit::window::WindowButtons::MAXIMIZE,
+        winit::window::WindowButtons::all(),
+    )
+}
+
+/// Atributos da janela do editor de perfil (ADR-0080 §1 a §3): os da tela de
+/// configurações -- mesma decoração, mesma dona no Windows, mesmo tipo de
+/// diálogo no X11 --, com o tamanho de `[appearance.settings] profile_*` e
+/// **só o botão de fechar**: minimizar só ela deixaria a tela desabilitada e
+/// sem nada à vista. `owner` é a tela de configurações.
+pub(crate) fn profile_editor_window_attributes(
+    title: &str,
+    position: Option<(i32, i32)>,
+    config: &Config,
+    owner: &winit::window::Window,
+) -> WindowAttributes {
+    let settings = &config.appearance.settings;
+    child_window_attributes(
+        title,
+        (
+            settings.profile_window_width,
+            settings.profile_window_height,
+        ),
+        (settings.profile_min_width, settings.profile_min_height),
+        position,
+        Some(owner),
+        winit::window::WindowButtons::CLOSE,
+        winit::window::WindowButtons::CLOSE,
+    )
+}
+
+/// O que a tela e o editor têm em comum. `owned_buttons` são os botões que a
+/// janela possuída mantém no Windows, e no macOS (onde a decoração é nativa).
+fn child_window_attributes(
+    title: &str,
+    size: (i32, i32),
+    min_size: (i32, i32),
+    position: Option<(i32, i32)>,
+    owner: Option<&winit::window::Window>,
+    owned_buttons: winit::window::WindowButtons,
+    mac_buttons: winit::window::WindowButtons,
+) -> WindowAttributes {
     #[allow(unused_mut)]
     let mut attributes = crate::base_window_attributes(false)
         .with_title(title)
-        .with_inner_size(LogicalSize::new(
-            settings.window_width as f32,
-            settings.window_height as f32,
-        ))
-        .with_min_inner_size(LogicalSize::new(
-            settings.min_width as f32,
-            settings.min_height as f32,
-        ));
+        .with_inner_size(LogicalSize::new(size.0 as f32, size.1 as f32))
+        .with_min_inner_size(LogicalSize::new(min_size.0 as f32, min_size.1 as f32));
     // macOS: decoração nativa **com** título (ADR-0059 §2) -- diferente da
     // janela de terminal, que esconde o título e estende o conteúdo por
     // baixo da barra para pôr as abas ali. Esta não tem barra nossa.
@@ -125,8 +226,11 @@ pub(crate) fn window_attributes(
         attributes = attributes
             .with_title_hidden(false)
             .with_titlebar_transparent(false)
-            .with_fullsize_content_view(false);
+            .with_fullsize_content_view(false)
+            .with_enabled_buttons(mac_buttons);
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = mac_buttons;
     // ADR-0064: no Windows, a janela de origem é a **dona** desta. Janela
     // possuída não ganha botão próprio na barra de tarefas (não parecem dois
     // Porecatus abertos), fica sempre na frente da dona e minimiza com ela.
@@ -143,13 +247,11 @@ pub(crate) fn window_attributes(
         {
             attributes = attributes
                 .with_owner_window(win32.hwnd.get())
-                .with_enabled_buttons(
-                    winit::window::WindowButtons::CLOSE | winit::window::WindowButtons::MAXIMIZE,
-                );
+                .with_enabled_buttons(owned_buttons);
         }
     }
     #[cfg(not(windows))]
-    let _ = owner;
+    let _ = (owner, owned_buttons);
     // No X11, a janela de configurações se declara diálogo
     // (`_NET_WM_WINDOW_TYPE_DIALOG`): gerenciador tiling (i3, bspwm...) a
     // deixa flutuar sobre a de terminal em vez de dividir a tela com ela.
@@ -190,6 +292,45 @@ pub(crate) fn rows_for_test(group: Group) -> Vec<RowView> {
         key,
         &draft::Draft::new(&config),
         &content::ViewExtras::default(),
+        &crate::messages::test_support::pt_br(),
+        &metrics,
+        &mut TextMeasurer::new(),
+    )
+    .blocks
+    .into_iter()
+    .filter_map(|block| match block {
+        content::Block::Row(row) => Some(*row),
+        content::Block::Section(_)
+        | content::Block::Note { .. }
+        | content::Block::Filter { .. } => None,
+    })
+    .collect()
+}
+
+/// As linhas do grupo "Perfis" -- os botões e uma por perfil da fixture --,
+/// montadas sobre o `Config` padrão e o catálogo pt_BR, para os testes da árvore
+/// de acessibilidade. O segundo perfil (`prod-web-01`) é o escolhido.
+#[cfg(test)]
+pub(crate) fn profile_list_rows_for_test() -> Vec<RowView> {
+    use porecatu_render::TextMeasurer;
+
+    let config = porecatu_config::Config::default();
+    let metrics = layout::Metrics::from_config(&config, 52.0);
+    let mut draft = profile_form::fixture_draft();
+    draft.select(1);
+    let key = content::ContentKey {
+        group: Group::Profiles,
+        panel_width_bits: (config.appearance.settings.window_width as f32 - metrics.sidebar_width)
+            .to_bits(),
+        generation: 0,
+    };
+    content::build(
+        key,
+        &draft::Draft::new(&config),
+        &content::ViewExtras {
+            profiles: Some(&draft),
+            ..content::ViewExtras::default()
+        },
         &crate::messages::test_support::pt_br(),
         &metrics,
         &mut TextMeasurer::new(),
@@ -301,6 +442,29 @@ mod tests {
         let (x, y) = centered_position((-1900, 20), (300, 300), (900, 640), monitor);
         assert!(x >= -1920 && x + 900 <= 0);
         assert!(y >= 0 && y + 640 <= 1080);
+    }
+
+    #[test]
+    fn an_event_goes_to_the_editor_first_then_the_settings_then_the_terminals() {
+        let (terminal, settings, editor) = (1_u64, 2_u64, 3_u64);
+        // As três abertas.
+        assert_eq!(
+            route(editor, Some(editor), Some(settings)),
+            Route::ProfileEditor
+        );
+        assert_eq!(
+            route(settings, Some(editor), Some(settings)),
+            Route::Settings
+        );
+        assert_eq!(
+            route(terminal, Some(editor), Some(settings)),
+            Route::Terminal
+        );
+        // Sem o editor, o id dele não é de ninguém: cai no caminho de terminal.
+        assert_eq!(route(editor, None, Some(settings)), Route::Terminal);
+        assert_eq!(route(settings, None, Some(settings)), Route::Settings);
+        // Sem nenhuma das duas, tudo é de terminal.
+        assert_eq!(route(settings, None, None), Route::Terminal);
     }
 
     #[test]

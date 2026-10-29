@@ -61,6 +61,8 @@ Tomadas em 2026-10-27, antes da escrita deste documento. Cada uma tem alternativ
 
 **RF-20.3** — Perfis SSH são criados, editados e excluídos **na tela de configurações**, num grupo novo de perfis que lista todos os perfis — locais e SSH — e edita cada um num formulário. A tela escreve no `porecatu.toml`, como toda opção dela ([ADR-0058](../adr/0058-escrita-do-arquivo-de-configuracao.md)); o arquivo continua sendo a única fonte de verdade, e editar à mão continua valendo. A anatomia é do ADR-0075.
 
+> **Emenda, 2026-10-29 ([ADR-0080](../adr/0080-editor-de-perfil-em-janela-propria.md)).** O formulário abre numa **janela própria**, à frente da tela de configurações e modal sobre ela, com o rótulo acima de cada campo. Abre pelo lápis da linha (à esquerda do ✕), por duplo clique na linha ou por `Enter` na linha escolhida; "+ Perfil local" e "+ Perfil SSH" o abrem com um perfil novo. **OK** leva o perfil às alterações pendentes da tela e **não grava** o arquivo — gravar continua sendo o Salvar da tela; OK não fecha enquanto houver campo inválido. **Cancelar** (ou fechar a janela, ou `Esc`) não muda nada e, num perfil novo, não cria nada. A importação do `~/.ssh/config` continua no painel do grupo.
+
 **RF-20.4** — Excluir um perfil SSH pergunta, no mesmo diálogo de confirmação, se a senha e a passphrase salvas para ele no cofre também devem ser apagadas. A resposta padrão é **apagar**. A pergunta **não aparece** quando outro perfil aponta para o mesmo destino ou o mesmo arquivo de chave: o segredo é da conta no servidor, não do perfil, e apagá-lo quebraria o outro perfil ([ADR-0073](../adr/0073-credenciais-no-cofre-do-sistema.md) §4).
 
 ### Importar do `~/.ssh/config`

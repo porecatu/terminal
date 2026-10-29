@@ -553,20 +553,61 @@ O estado da conexão (conectando, falhou, caiu) aparece como nota no próprio te
 ### Editar os perfis pela tela
 
 O grupo **Perfis** da tela de configurações (logo depois de Shell) tem o perfil
-padrão e a detecção de shells no topo, os botões **+ Perfil local** e
-**+ Perfil SSH**, a lista dos perfis e o formulário do escolhido. O tipo do
-perfil é fixo na criação. O `id` nasce do nome e pode ser editado; um campo
-inválido mostra o motivo na própria linha e **não impede salvar os outros
-perfis**. O Salvar mexe só nas linhas tocadas do `porecatu.toml`: comentários e
-ordem ficam como estão.
+padrão e a detecção de shells no topo, os botões **+ Perfil local**, **+ Perfil
+SSH** e **Importar do ~/.ssh/config**, e a lista dos perfis. Cada linha mostra o
+badge, o nome, o programa ou `usuário@host:porta`, o ponto de alteração
+pendente, o **lápis** e o `X`. O tipo do perfil é fixo na criação. O Salvar mexe
+só nas linhas tocadas do `porecatu.toml`: comentários e ordem ficam como estão.
+
+**O editor de perfil.** Os campos do perfil não ficam no painel: abrem numa
+janela própria, o **editor**, que fica na frente da tela de configurações
+enquanto estiver aberto (a tela e as janelas de terminal não respondem a nada
+até você fechá-lo). Para abrir o editor de um perfil da lista:
+
+- clique no **lápis** da linha;
+- dê **duplo clique** na linha (fora do lápis e do `X`);
+- escolha a linha (clique, ou as setas) e aperte **Enter**.
+
+Um clique simples só **escolhe** a linha. **+ Perfil local** e **+ Perfil SSH**
+abrem o editor com um perfil novo, e **nada entra na lista antes do OK**. O
+título diz o que é: "Editar perfil — nome", "Novo perfil local" ou "Novo
+perfil SSH".
+
+No editor, cada campo tem o rótulo acima. **Nome, identificador e badge** ficam
+na mesma linha (nome e identificador mais largos, badge curto), e **host e
+porta** noutra (a porta curta); os demais campos ocupam a largura da janela. A
+janela rola se os campos passam da altura. O `id` nasce do nome (num perfil
+novo) e pode ser editado; um campo inválido mostra o motivo logo abaixo da linha.
+
+- **OK não grava o arquivo.** Ele valida o perfil e o leva às **alterações
+  pendentes** da tela — a linha ganha o ponto, e o número de alterações do
+  rodapé sobe —, e o `porecatu.toml` só muda no **Salvar** da tela, como para
+  qualquer opção. **Descartar**, na tela, desfaz também o que o editor levou.
+- **OK com um campo inválido não fecha** o editor: as notas aparecem e o foco
+  vai para o primeiro campo errado. Um perfil inválido nunca entra na lista pela
+  tela. Um perfil que já veio inválido do arquivo (editado à mão) continua na
+  lista e **não impede salvar os outros**; abrir o editor nele mostra os erros,
+  e o OK só fecha com eles corrigidos.
+- **Cancelar**, `Esc` e o botão de fechar da janela **descartam** o que foi
+  digitado; num perfil novo, nada é criado. Fechar a tela de configurações com o
+  editor aberto o fecha como Cancelar.
+- **Teclado:** `Tab` e `Shift+Tab` andam pelos campos e depois pelos botões;
+  `Enter` num campo de uma linha é **OK**; nas listas de argumentos e de
+  ambiente, `Enter` confirma o item. `Esc` desfaz o texto digitado num campo e,
+  sem texto por confirmar, cancela o editor. `Ctrl+S` não faz nada ali: salvar é
+  da tela.
+- Se o arquivo mudar por fora com o editor aberto, ele mantém o que você
+  digitou; se o perfil sumiu do arquivo, o OK o devolve à lista como novo.
 
 - **Excluir** (o `X` da linha) pede confirmação. Num perfil SSH que nenhum outro
   usa (mesmo destino ou mesmo arquivo de chave), a caixa **Apagar também a
   senha e a passphrase salvas** vem marcada. A exclusão é uma alteração
   pendente: o arquivo e o cofre só mudam no **Salvar**, e **Descartar** desfaz.
-- **Senha salva — Esquecer** e **Passphrase salva — Esquecer**, no formulário SSH
-  (só quando o cofre do sistema responde), apagam o segredo na hora.
-- **Importar do ~/.ssh/config** abre, no lugar do formulário, uma lista com um
+- **Esquecer senha** e **Esquecer passphrase**, no rodapé do editor de um perfil
+  SSH, à esquerda (só quando o cofre do sistema responde), apagam o segredo
+  **na hora**: Cancelar o editor não os traz de volta. Ficam **desabilitados**
+  quando não há senha ou passphrase guardada para o perfil.
+- **Importar do ~/.ssh/config** abre, abaixo da lista de perfis, uma lista com um
   interruptor por bloco `Host` de destino concreto (sem `*`, `?` nem `!`),
   mostrando `usuário@host:porta` já resolvidos (`HostName`, `User`, `Port`;
   sem `User`, entra o seu usuário local). Marque os que quiser e use
@@ -650,9 +691,12 @@ diálogo estão em "Perfis SSH", acima.
 ### Criar o perfil
 
 - **Pela tela**: configurações (`Ctrl+Shift+O`), grupo **Perfis**, **+ Perfil
-  SSH**. Preencha nome, host, porta, usuário, autenticação e arquivo de chave,
-  e **Salvar**. O `porecatu.toml` muda só nas linhas do perfil: seus
-  comentários e a ordem ficam como estão.
+  SSH**. No editor que abre, preencha nome, host, porta, usuário, autenticação
+  e arquivo de chave e aperte **OK** — o perfil vira uma alteração pendente,
+  sem gravar nada —, depois **Salvar** na tela. **Cancelar** descarta, e o
+  perfil novo nem chega à lista. O `porecatu.toml` muda só nas linhas do
+  perfil: seus comentários e a ordem ficam como estão. Para mudar depois, o
+  lápis da linha (ou duplo clique, ou `Enter`) abre o mesmo editor.
 - **Pelo arquivo**: um `[[profiles.list]]` com `type = "ssh"`, como em "Perfis
   SSH". Vale para abas novas, sem reiniciar.
 - **Do `~/.ssh/config`**: **Importar do ~/.ssh/config**, no mesmo grupo (veja
@@ -682,8 +726,9 @@ Gerenciador de Credenciais (Windows), no Keychain (macOS) ou no Secret Service
 servidor aceitar: senha errada nunca fica salva. **Nada** vai para o
 `porecatu.toml`, para a sessão, para uma nota ou para o título da aba.
 
-Para esquecer: no formulário do perfil SSH (grupo **Perfis**), **Senha salva** e
-**Passphrase salva** têm o botão **Esquecer**, que age na hora. Ao **excluir**
+Para esquecer: no editor do perfil SSH (grupo **Perfis**, o lápis da linha), os
+botões **Esquecer senha** e **Esquecer passphrase**, no rodapé, agem na hora e
+ficam desabilitados quando não há o que esquecer. Ao **excluir**
 um perfil SSH que nenhum outro usa, o diálogo traz a caixa **Apagar também a
 senha e a passphrase salvas**, já marcada; o cofre só é mexido no **Salvar**, e
 **Descartar** desfaz tudo.

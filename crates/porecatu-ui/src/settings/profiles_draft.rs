@@ -28,6 +28,8 @@ use porecatu_config::{
 };
 use porecatu_term::Destination;
 
+use super::profile_editor::{EditorProblems, Focus, ProfileEditor, Target};
+
 /// O badge que o parser dá a um perfil SSH sem `badge` (ADR-0072 §6).
 pub(crate) const DEFAULT_SSH_BADGE: &str = "SSH";
 
@@ -318,6 +320,188 @@ impl Form {
         }
         found
     }
+
+    /// The parser's problems plus a repeated `id` (only visible against the
+    /// other profiles, `others` being their ids). One rule for the draft's
+    /// profiles and for the editor's copy.
+    pub(crate) fn problems_against(&self, others: &[&str]) -> BTreeMap<Field, ProfileProblemKind> {
+        let mut found = self.problems();
+        if !self.id.is_empty() && others.contains(&self.id.as_str()) {
+            found.insert(
+                Field::Id,
+                ProfileProblemKind::IdDuplicate {
+                    id: self.id.clone(),
+                },
+            );
+        }
+        found
+    }
+
+    /// The text fields in the order the form shows them: the authentication
+    /// choice sits between the user and the key file (ADR-0080 §4).
+    pub(crate) fn form_order(&self) -> Vec<Field> {
+        let mut order = self.fields().to_vec();
+        if let Some(at) = order.iter().position(|f| *f == Field::IdentityFile) {
+            order.insert(at, Field::Auth);
+        }
+        order
+    }
+
+    /// Writes a text field. Renaming a profile whose `id` nobody edited takes
+    /// the `id` along (`id_follows_name`, `taken` being the other profiles'
+    /// ids); editing the `id` drops that link. A field the kind does not show
+    /// is ignored.
+    pub(crate) fn set_text(
+        &mut self,
+        field: Field,
+        value: &str,
+        id_follows_name: &mut bool,
+        taken: &[&str],
+    ) {
+        if !self.fields().contains(&field) {
+            return;
+        }
+        let value = value.to_owned();
+        match field {
+            Field::Id => {
+                self.id = value;
+                *id_follows_name = false;
+            }
+            Field::Name => {
+                self.name = value;
+                if *id_follows_name {
+                    self.id = id_from_name(&self.name, taken);
+                }
+            }
+            Field::Badge => self.badge = value,
+            Field::Program => self.program = value,
+            Field::Cwd => self.cwd = value,
+            Field::Host => self.host = value,
+            Field::Port => self.port = value,
+            Field::User => self.user = value,
+            Field::IdentityFile => self.identity_file = value,
+            Field::Auth => {}
+        }
+    }
+
+    pub(crate) fn set_args(&mut self, args: Vec<String>) {
+        if self.kind == ProfileKind::Local {
+            self.args = args;
+        }
+    }
+
+    pub(crate) fn set_env(&mut self, env: Vec<(String, String)>) {
+        if self.kind == ProfileKind::Local {
+            self.env = env;
+        }
+    }
+
+    /// Picks one of the [`AUTH_PRESETS`] (SSH only).
+    pub(crate) fn set_auth_preset(&mut self, preset: usize) {
+        if let Some(methods) = AUTH_PRESETS.get(preset)
+            && self.kind == ProfileKind::Ssh
+        {
+            self.auth = methods.to_vec();
+        }
+    }
+
+    /// The arguments or environment list as the screen shows it: one argument
+    /// per row (the second text empty), or name and value.
+    pub(crate) fn list_rows(&self, kind: ListKind) -> Vec<(String, String)> {
+        match kind {
+            ListKind::Args => self
+                .args
+                .iter()
+                .map(|arg| (arg.clone(), String::new()))
+                .collect(),
+            ListKind::Env => self.env.clone(),
+        }
+    }
+
+    fn set_list_rows(&mut self, kind: ListKind, rows: Vec<(String, String)>) {
+        if self.kind != ProfileKind::Local {
+            return;
+        }
+        match kind {
+            ListKind::Args => self.args = rows.into_iter().map(|(arg, _)| arg).collect(),
+            ListKind::Env => self.env = rows,
+        }
+    }
+
+    /// Changes one text of a list item; `false` if nothing changed.
+    pub(crate) fn set_list_text(
+        &mut self,
+        kind: ListKind,
+        item: usize,
+        second: bool,
+        text: &str,
+    ) -> bool {
+        let mut rows = self.list_rows(kind);
+        let Some(row) = rows.get_mut(item) else {
+            return false;
+        };
+        let field = if second { &mut row.1 } else { &mut row.0 };
+        if field == text {
+            return false;
+        }
+        *field = text.to_owned();
+        self.set_list_rows(kind, rows);
+        true
+    }
+
+    /// Appends an empty item and returns its index.
+    pub(crate) fn list_add(&mut self, kind: ListKind) -> Option<usize> {
+        if self.kind != ProfileKind::Local {
+            return None;
+        }
+        let mut rows = self.list_rows(kind);
+        rows.push((String::new(), String::new()));
+        let at = rows.len() - 1;
+        self.set_list_rows(kind, rows);
+        Some(at)
+    }
+
+    pub(crate) fn list_remove(&mut self, kind: ListKind, item: usize) -> bool {
+        let mut rows = self.list_rows(kind);
+        if item >= rows.len() {
+            return false;
+        }
+        rows.remove(item);
+        self.set_list_rows(kind, rows);
+        true
+    }
+
+    /// Item `item` of the environment has an empty name (with a value) or a
+    /// repeated one: the field border goes to Error and the profile is not
+    /// written until fixed.
+    pub(crate) fn env_item_invalid(&self, item: usize) -> bool {
+        let rows = self.list_rows(ListKind::Env);
+        let Some((name, value)) = rows.get(item) else {
+            return false;
+        };
+        if name.is_empty() {
+            return !value.is_empty();
+        }
+        rows.iter().filter(|(other, _)| other == name).count() > 1
+    }
+
+    /// The first invalid item of the environment, if any.
+    pub(crate) fn env_problem(&self) -> Option<usize> {
+        let count = self.list_rows(ListKind::Env).len();
+        (0..count).find(|item| self.env_item_invalid(*item))
+    }
+
+    /// What the "Esquecer" button of this profile wipes from the vault: the
+    /// password of the destination, or the passphrase of the key file (none,
+    /// without a file). Only an SSH profile has them.
+    pub(crate) fn forget_target(&self, kind: SecretKind) -> Option<Forget> {
+        let (destination, key) = ProfilesDraft::ssh_targets(self)?;
+        match kind {
+            SecretKind::Password => Some(Forget::Password(destination)),
+            SecretKind::Passphrase => (!key.trim().is_empty())
+                .then(|| Forget::Passphrase(porecatu_config::expand_tilde(&key))),
+        }
+    }
 }
 
 /// O campo a que um problema do parser se refere.
@@ -383,6 +567,10 @@ pub(crate) fn id_from_name(name: &str, taken: &[&str]) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Item {
+    /// Stable identity inside this draft: never the position, never reused, and
+    /// untouched by `rebase`/`delete` (unlike `origin`, which `rebase` moves).
+    /// It is what an open profile editor points at (ADR-0080 §6).
+    key: u64,
     /// O `id` que o perfil tem no arquivo; `None` num perfil criado na tela.
     origin: Option<String>,
     form: Form,
@@ -422,6 +610,8 @@ pub(crate) struct ProfilesDraft {
     removed: Vec<String>,
     forgets: Vec<Forget>,
     selected: Option<usize>,
+    /// The `key` the next item gets.
+    next_key: u64,
 }
 
 impl ProfilesDraft {
@@ -430,21 +620,7 @@ impl ProfilesDraft {
             .iter()
             .map(|def| (def.id.clone(), Form::from_def(def)))
             .collect();
-        let items = base
-            .iter()
-            .map(|(id, form)| Item {
-                origin: Some(id.clone()),
-                form: form.clone(),
-                id_follows_name: false,
-            })
-            .collect::<Vec<_>>();
-        Self {
-            selected: (!items.is_empty()).then_some(0),
-            base,
-            items,
-            removed: Vec::new(),
-            forgets: Vec::new(),
-        }
+        Self::from_base(&base, 0)
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -483,20 +659,23 @@ impl ProfilesDraft {
     /// que os tira do catálogo de idiomas) e o escolhe.
     pub(crate) fn add_local(&mut self, name: &str, badge: &str) -> usize {
         let id = id_from_name(name, &self.taken_ids());
-        self.push_new(Form::new_local(id, name, badge))
+        self.push_new(Form::new_local(id, name, badge), true)
     }
 
     /// Acrescenta um perfil SSH e o escolhe.
     pub(crate) fn add_ssh(&mut self, name: &str) -> usize {
         let id = id_from_name(name, &self.taken_ids());
-        self.push_new(Form::new_ssh(id, name))
+        self.push_new(Form::new_ssh(id, name), true)
     }
 
-    fn push_new(&mut self, form: Form) -> usize {
+    fn push_new(&mut self, form: Form, id_follows_name: bool) -> usize {
+        let key = self.next_key;
+        self.next_key += 1;
         self.items.push(Item {
+            key,
             origin: None,
             form,
-            id_follows_name: true,
+            id_follows_name,
         });
         let index = self.items.len() - 1;
         self.selected = Some(index);
@@ -517,55 +696,27 @@ impl ProfilesDraft {
         let Some(item) = self.items.get_mut(index) else {
             return;
         };
-        if !item.form.fields().contains(&field) {
-            return;
-        }
-        let value = value.to_owned();
-        match field {
-            Field::Id => {
-                item.form.id = value;
-                item.id_follows_name = false;
-            }
-            Field::Name => {
-                item.form.name = value;
-                if item.id_follows_name {
-                    let taken: Vec<&str> = others.iter().map(String::as_str).collect();
-                    item.form.id = id_from_name(&item.form.name, &taken);
-                }
-            }
-            Field::Badge => item.form.badge = value,
-            Field::Program => item.form.program = value,
-            Field::Cwd => item.form.cwd = value,
-            Field::Host => item.form.host = value,
-            Field::Port => item.form.port = value,
-            Field::User => item.form.user = value,
-            Field::IdentityFile => item.form.identity_file = value,
-            Field::Auth => {}
-        }
+        let taken: Vec<&str> = others.iter().map(String::as_str).collect();
+        item.form
+            .set_text(field, value, &mut item.id_follows_name, &taken);
     }
 
     pub(crate) fn set_args(&mut self, index: usize, args: Vec<String>) {
-        if let Some(item) = self.items.get_mut(index)
-            && item.form.kind == ProfileKind::Local
-        {
-            item.form.args = args;
+        if let Some(item) = self.items.get_mut(index) {
+            item.form.set_args(args);
         }
     }
 
     pub(crate) fn set_env(&mut self, index: usize, env: Vec<(String, String)>) {
-        if let Some(item) = self.items.get_mut(index)
-            && item.form.kind == ProfileKind::Local
-        {
-            item.form.env = env;
+        if let Some(item) = self.items.get_mut(index) {
+            item.form.set_env(env);
         }
     }
 
     /// Escolhe um dos [`AUTH_PRESETS`] (só num perfil SSH).
     pub(crate) fn set_auth_preset(&mut self, index: usize, preset: usize) {
-        if let (Some(item), Some(methods)) = (self.items.get_mut(index), AUTH_PRESETS.get(preset))
-            && item.form.kind == ProfileKind::Ssh
-        {
-            item.form.auth = methods.to_vec();
+        if let Some(item) = self.items.get_mut(index) {
+            item.form.set_auth_preset(preset);
         }
     }
 
@@ -575,21 +726,14 @@ impl ProfilesDraft {
         let Some(item) = self.items.get(index) else {
             return BTreeMap::new();
         };
-        let mut found = item.form.problems();
-        let repeated = self
+        let others: Vec<&str> = self
             .items
             .iter()
             .enumerate()
-            .any(|(i, other)| i != index && other.form.id == item.form.id);
-        if repeated && !item.form.id.is_empty() {
-            found.insert(
-                Field::Id,
-                ProfileProblemKind::IdDuplicate {
-                    id: item.form.id.clone(),
-                },
-            );
-        }
-        found
+            .filter(|(i, _)| *i != index)
+            .map(|(_, other)| other.form.id.as_str())
+            .collect();
+        item.form.problems_against(&others)
     }
 
     pub(crate) fn is_valid(&self, index: usize) -> bool {
@@ -599,31 +743,10 @@ impl ProfilesDraft {
     /// A lista de argumentos ou de ambiente do perfil `index`, como a tela a
     /// mostra: um argumento por linha (o segundo texto vazio), ou nome e valor.
     pub(crate) fn list_rows(&self, index: usize, kind: ListKind) -> Vec<(String, String)> {
-        let Some(item) = self.items.get(index) else {
-            return Vec::new();
-        };
-        match kind {
-            ListKind::Args => item
-                .form
-                .args
-                .iter()
-                .map(|arg| (arg.clone(), String::new()))
-                .collect(),
-            ListKind::Env => item.form.env.clone(),
-        }
-    }
-
-    fn set_list_rows(&mut self, index: usize, kind: ListKind, rows: Vec<(String, String)>) {
-        let Some(item) = self.items.get_mut(index) else {
-            return;
-        };
-        if item.form.kind != ProfileKind::Local {
-            return;
-        }
-        match kind {
-            ListKind::Args => item.form.args = rows.into_iter().map(|(arg, _)| arg).collect(),
-            ListKind::Env => item.form.env = rows,
-        }
+        self.items
+            .get(index)
+            .map(|item| item.form.list_rows(kind))
+            .unwrap_or_default()
     }
 
     /// Muda um texto de um item de lista; `false` se não mudou nada.
@@ -635,58 +758,33 @@ impl ProfilesDraft {
         second: bool,
         text: &str,
     ) -> bool {
-        let mut rows = self.list_rows(index, kind);
-        let Some(row) = rows.get_mut(item) else {
-            return false;
-        };
-        let field = if second { &mut row.1 } else { &mut row.0 };
-        if field == text {
-            return false;
-        }
-        *field = text.to_owned();
-        self.set_list_rows(index, kind, rows);
-        true
+        self.items
+            .get_mut(index)
+            .is_some_and(|it| it.form.set_list_text(kind, item, second, text))
     }
 
     /// Acrescenta um item vazio e devolve o índice dele.
     pub(crate) fn list_add(&mut self, index: usize, kind: ListKind) -> Option<usize> {
-        if self.items.get(index)?.form.kind != ProfileKind::Local {
-            return None;
-        }
-        let mut rows = self.list_rows(index, kind);
-        rows.push((String::new(), String::new()));
-        let at = rows.len() - 1;
-        self.set_list_rows(index, kind, rows);
-        Some(at)
+        self.items.get_mut(index)?.form.list_add(kind)
     }
 
     pub(crate) fn list_remove(&mut self, index: usize, kind: ListKind, item: usize) -> bool {
-        let mut rows = self.list_rows(index, kind);
-        if item >= rows.len() {
-            return false;
-        }
-        rows.remove(item);
-        self.set_list_rows(index, kind, rows);
-        true
+        self.items
+            .get_mut(index)
+            .is_some_and(|it| it.form.list_remove(kind, item))
     }
 
     /// O item `item` da lista de ambiente tem nome vazio (com valor) ou repetido:
     /// a borda do campo fica em Erro, e o perfil não é gravado até corrigir.
     pub(crate) fn env_item_invalid(&self, index: usize, item: usize) -> bool {
-        let rows = self.list_rows(index, ListKind::Env);
-        let Some((name, value)) = rows.get(item) else {
-            return false;
-        };
-        if name.is_empty() {
-            return !value.is_empty();
-        }
-        rows.iter().filter(|(other, _)| other == name).count() > 1
+        self.items
+            .get(index)
+            .is_some_and(|it| it.form.env_item_invalid(item))
     }
 
     /// Algum item do ambiente é inválido.
     pub(crate) fn env_problem(&self, index: usize) -> Option<usize> {
-        let count = self.list_rows(index, ListKind::Env).len();
-        (0..count).find(|item| self.env_item_invalid(index, *item))
+        self.items.get(index)?.form.env_problem()
     }
 
     /// Algum perfil tem problema. Não bloqueia o Salvar (ADR-0075 §6): só aquele
@@ -718,12 +816,7 @@ impl ProfilesDraft {
     /// O que o botão "Esquecer" de `index` apaga do cofre: a senha do destino,
     /// ou a passphrase do arquivo de chave (nenhuma, sem arquivo informado).
     pub(crate) fn forget_target(&self, index: usize, kind: SecretKind) -> Option<Forget> {
-        let (destination, key) = Self::ssh_targets(&self.items.get(index)?.form)?;
-        match kind {
-            SecretKind::Password => Some(Forget::Password(destination)),
-            SecretKind::Passphrase => (!key.trim().is_empty())
-                .then(|| Forget::Passphrase(porecatu_config::expand_tilde(&key))),
-        }
+        self.items.get(index)?.form.forget_target(kind)
     }
 
     /// Os destinos SSH que o rascunho tem agora, com o que o formulário diz:
@@ -757,7 +850,7 @@ impl ProfilesDraft {
             form.port = candidate.port.to_string();
             form.user = candidate.user.clone();
             form.identity_file = candidate.identity_file.clone();
-            self.push_new(form);
+            self.push_new(form, true);
         }
     }
 
@@ -915,17 +1008,22 @@ impl ProfilesDraft {
     /// Descarta tudo o que é pendente: a lista volta ao arquivo.
     pub(crate) fn discard(&mut self) {
         let selected = self.selected;
-        *self = Self::from_base(&self.base);
+        // Keys keep counting: an editor opened before the discard must never
+        // land on a profile that got its old key.
+        *self = Self::from_base(&self.base, self.next_key);
         self.selected = selected.filter(|index| *index < self.items.len());
         if self.selected.is_none() && !self.items.is_empty() {
             self.selected = Some(0);
         }
     }
 
-    fn from_base(base: &[(String, Form)]) -> Self {
+    /// The draft as the file has it, the items keyed from `first_key` on.
+    fn from_base(base: &[(String, Form)], first_key: u64) -> Self {
         let items = base
             .iter()
-            .map(|(id, form)| Item {
+            .zip(first_key..)
+            .map(|((id, form), key)| Item {
+                key,
                 origin: Some(id.clone()),
                 form: form.clone(),
                 id_follows_name: false,
@@ -934,10 +1032,100 @@ impl ProfilesDraft {
         Self {
             selected: (!items.is_empty()).then_some(0),
             base: base.to_vec(),
+            next_key: first_key + items.len() as u64,
             items,
             removed: Vec::new(),
             forgets: Vec::new(),
         }
+    }
+
+    // --- Profile editor (ADR-0080 §6) -------------------------------------
+    //
+    // The editor works on a copy; the draft does not change while it is open,
+    // and cancelling is dropping it. Everything below reuses the draft's own
+    // rules (`Form`'s setters and `problems_against`): there is no second
+    // validation.
+
+    /// The ids of the profiles the editor's copy is compared against: every
+    /// profile of the draft but its source (pending ones included).
+    pub(super) fn other_ids(&self, target: Target) -> Vec<&str> {
+        self.items
+            .iter()
+            .filter(|item| Some(item.key) != target.key())
+            .map(|item| item.form.id.as_str())
+            .collect()
+    }
+
+    /// Opens an editor on the profile at `index`, which is remembered by its
+    /// key, never by the position.
+    pub(crate) fn open_editor(&self, index: usize) -> Option<ProfileEditor> {
+        let item = self.items.get(index)?;
+        Some(ProfileEditor::from_parts(
+            Target::Existing { key: item.key },
+            item.form.clone(),
+            item.id_follows_name,
+        ))
+    }
+
+    /// Opens an editor on a new local profile (`name` and `badge` come from the
+    /// catalog, as in [`Self::add_local`]). Nothing enters the draft until OK.
+    pub(crate) fn open_editor_new_local(&self, name: &str, badge: &str) -> ProfileEditor {
+        let id = id_from_name(name, &self.taken_ids());
+        ProfileEditor::from_parts(Target::New, Form::new_local(id, name, badge), true)
+    }
+
+    /// Opens an editor on a new SSH profile.
+    pub(crate) fn open_editor_new_ssh(&self, name: &str) -> ProfileEditor {
+        let id = id_from_name(name, &self.taken_ids());
+        ProfileEditor::from_parts(Target::New, Form::new_ssh(id, name), true)
+    }
+
+    /// What is wrong with the editor's copy **as if it were in the draft**: the
+    /// parser's problems, the environment's, and an `id` repeated against any
+    /// other profile.
+    pub(crate) fn editor_problems(&self, editor: &ProfileEditor) -> EditorProblems {
+        let form = editor.form();
+        let fields = form.problems_against(&self.other_ids(editor.target()));
+        let env_item = form.env_problem();
+        let first = form
+            .form_order()
+            .into_iter()
+            .find(|field| fields.contains_key(field))
+            .map(Focus::Field)
+            .or(env_item.map(Focus::EnvItem));
+        EditorProblems {
+            fields,
+            env_item,
+            first,
+        }
+    }
+
+    /// OK: with problems, returns them and changes nothing; without, the copy
+    /// replaces its source (which stays where it is, pending) or, for a new
+    /// profile -- or one whose source left the draft by a reload or a deletion
+    /// -- is appended at the end as new. Returns the profile's index, now the
+    /// chosen one. Nothing is written to disk.
+    pub(crate) fn apply_editor(&mut self, editor: &ProfileEditor) -> Result<usize, EditorProblems> {
+        let problems = self.editor_problems(editor);
+        if !problems.is_empty() {
+            return Err(problems);
+        }
+        let form = editor.form().clone();
+        let source = editor
+            .target()
+            .key()
+            .and_then(|key| self.items.iter().position(|item| item.key == key));
+        let index = match source {
+            Some(index) => {
+                let item = &mut self.items[index];
+                item.form = form;
+                item.id_follows_name = editor.id_follows_name();
+                index
+            }
+            None => self.push_new(form, editor.id_follows_name()),
+        };
+        self.selected = Some(index);
+        Ok(index)
     }
 
     /// O Salvar deu certo: `list` é o arquivo agora. Os perfis válidos que
@@ -1805,5 +1993,352 @@ user = "deploy"
         let parsed = porecatu_config::parse_checked(&text).unwrap();
         assert_eq!(parsed.config.profiles.list.len(), 1);
         assert!(text.starts_with("[shell]\nprogram = \"x\"\n"));
+    }
+
+    // --- Profile editor ---------------------------------------------------
+
+    fn forms(draft: &ProfilesDraft) -> Vec<Form> {
+        (0..draft.len())
+            .map(|i| draft.form(i).unwrap().clone())
+            .collect()
+    }
+
+    fn ids(draft: &ProfilesDraft) -> Vec<String> {
+        (0..draft.len())
+            .map(|i| draft.form(i).unwrap().id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn editing_and_cancelling_leaves_the_draft_as_it_was() {
+        let mut draft = draft();
+        draft.set_text(0, Field::Name, "Mine"); // a pending edit that must survive
+        let before = (forms(&draft), draft.pending_count(), draft.selected());
+
+        let mut editor = draft.open_editor(1).unwrap();
+        editor.set_text(&draft, Field::Port, "2222");
+        editor.set_text(&draft, Field::Id, "other");
+        editor.set_auth_preset(3);
+        drop(editor); // Cancel
+
+        assert_eq!(
+            (forms(&draft), draft.pending_count(), draft.selected()),
+            before
+        );
+        assert_eq!(ids(&draft), ["wsl", "prod", "stage"]);
+        assert_eq!(draft.edits().len(), 1, "only the edit made before it");
+        assert!(draft.open_editor(9).is_none());
+    }
+
+    #[test]
+    fn ok_with_a_problem_returns_the_fields_and_changes_nothing() {
+        let mut draft = draft();
+        let before = forms(&draft);
+        let mut editor = draft.open_editor(1).unwrap();
+        editor.set_text(&draft, Field::Host, "a b");
+
+        let problems = draft.apply_editor(&editor).unwrap_err();
+
+        assert!(problems.fields.contains_key(&Field::Host), "{problems:?}");
+        assert_eq!(problems.first, Some(Focus::Field(Field::Host)));
+        assert_eq!(forms(&draft), before);
+        assert!(!draft.is_dirty());
+
+        // Fixed, the same editor goes through.
+        editor.set_text(&draft, Field::Host, "10.4.1.20");
+        assert_eq!(draft.apply_editor(&editor), Ok(1));
+    }
+
+    #[test]
+    fn the_first_problem_follows_the_order_of_the_form_and_the_environment_comes_last() {
+        let draft = draft();
+        let mut editor = draft.open_editor(0).unwrap();
+        let item = editor.list_add(ListKind::Env).unwrap();
+        editor.set_list_text(ListKind::Env, item, true, "value-without-name");
+        assert!(editor.env_item_invalid(item));
+
+        let problems = draft.editor_problems(&editor);
+        assert!(problems.fields.is_empty());
+        assert_eq!(problems.env_item, Some(item));
+        assert_eq!(problems.first, Some(Focus::EnvItem(item)));
+
+        // A field problem comes before the environment's.
+        editor.set_text(&draft, Field::Program, "");
+        assert_eq!(
+            draft.editor_problems(&editor).first,
+            Some(Focus::Field(Field::Program))
+        );
+
+        // SSH order: the authentication sits between the user and the key file.
+        let ssh = draft.open_editor(1).unwrap();
+        let order = ssh.form().form_order();
+        let at = |field| order.iter().position(|f| *f == field).unwrap();
+        assert!(at(Field::User) < at(Field::Auth) && at(Field::Auth) < at(Field::IdentityFile));
+    }
+
+    #[test]
+    fn the_editor_validates_with_the_drafts_own_rules() {
+        // The same input, through the draft's own item and through the editor.
+        for (field, value) in [
+            (Field::Host, "a b"),
+            (Field::Port, "70000"),
+            (Field::User, ""),
+            (Field::Name, ""),
+            (Field::Id, "UPPER"),
+            (Field::Id, "wsl"), // repeated against another profile
+        ] {
+            let mut direct = draft();
+            direct.set_text(1, field, value);
+            let via_editor = {
+                let draft = draft();
+                let mut editor = draft.open_editor(1).unwrap();
+                editor.set_text(&draft, field, value);
+                draft.editor_problems(&editor).fields
+            };
+            assert!(!via_editor.is_empty(), "{field:?} = {value:?}");
+            assert_eq!(via_editor, direct.problems(1), "{field:?} = {value:?}");
+        }
+    }
+
+    #[test]
+    fn ok_without_a_problem_changes_only_the_source_profile_which_becomes_pending() {
+        let mut draft = draft();
+        let mut editor = draft.open_editor(1).unwrap();
+        editor.set_text(&draft, Field::Port, "2222");
+        let others = (forms(&draft)[0].clone(), forms(&draft)[2].clone());
+
+        assert_eq!(draft.apply_editor(&editor), Ok(1));
+
+        assert_eq!(ids(&draft), ["wsl", "prod", "stage"], "same order");
+        assert_eq!(draft.form(1).unwrap().port, "2222");
+        assert_eq!((forms(&draft)[0].clone(), forms(&draft)[2].clone()), others);
+        assert_eq!(draft.selected(), Some(1));
+        assert!(draft.is_pending(1) && !draft.is_pending(0) && !draft.is_pending(2));
+        assert_eq!(draft.pending_count(), 1);
+        // Nothing was written: the edits are the ones the Save will make.
+        let edits = draft.edits();
+        assert!(matches!(
+            edits.as_slice(),
+            [Edit::SetInTable { id, key, .. }] if id == "prod" && key == "port"
+        ));
+    }
+
+    #[test]
+    fn a_new_profile_cancelled_creates_nothing_and_confirmed_is_appended_with_a_derived_id() {
+        let mut draft = draft();
+        let mut cancelled = draft.open_editor_new_ssh("Homolog");
+        cancelled.set_text(&draft, Field::Host, "10.9.9.9");
+        cancelled.set_text(&draft, Field::User, "ops");
+        assert!(cancelled.is_new());
+        drop(cancelled);
+        assert_eq!(ids(&draft), ["wsl", "prod", "stage"]);
+        assert!(!draft.is_dirty());
+
+        let mut editor = draft.open_editor_new_local("Meu shell", "SH");
+        assert_eq!(editor.form().id, "meu-shell");
+        assert_eq!(draft.len(), 3, "opening adds nothing");
+        editor.set_text(&draft, Field::Program, "zsh");
+        editor.set_text(&draft, Field::Name, "Outro shell");
+        assert_eq!(editor.form().id, "outro-shell", "the id follows the name");
+
+        assert_eq!(draft.apply_editor(&editor), Ok(3));
+
+        assert_eq!(ids(&draft), ["wsl", "prod", "stage", "outro-shell"]);
+        assert!(draft.is_new(3) && draft.is_pending(3));
+        assert_eq!(draft.selected(), Some(3));
+        let (_, profiles) = saved(&draft);
+        assert_eq!(profiles.last().unwrap().program, "zsh");
+    }
+
+    #[test]
+    fn the_id_of_a_new_profile_avoids_the_other_ones_and_stops_following_once_edited() {
+        let mut draft = draft();
+        let mut first = draft.open_editor_new_local("Extra", "EX");
+        first.set_text(&draft, Field::Program, "sh");
+        draft.apply_editor(&first).unwrap();
+
+        // "extra" is taken by a pending profile: the next one gets `-2`.
+        let mut second = draft.open_editor_new_local("Extra", "EX");
+        assert_eq!(second.form().id, "extra-2");
+        second.set_text(&draft, Field::Program, "sh");
+        second.set_text(&draft, Field::Id, "mine");
+        second.set_text(&draft, Field::Name, "Whatever");
+        assert_eq!(second.form().id, "mine", "edited by hand: left alone");
+        assert_eq!(draft.apply_editor(&second), Ok(4));
+        assert_eq!(ids(&draft), ["wsl", "prod", "stage", "extra", "mine"]);
+    }
+
+    #[test]
+    fn a_repeated_id_against_a_pending_profile_is_refused() {
+        let mut draft = draft();
+        let index = draft.add_local("Extra", "EX");
+        draft.set_text(index, Field::Program, "sh");
+        let before = forms(&draft);
+
+        // An existing profile taking the pending one's id...
+        let mut editor = draft.open_editor(0).unwrap();
+        editor.set_text(&draft, Field::Id, "extra");
+        let problems = draft.apply_editor(&editor).unwrap_err();
+        assert!(matches!(
+            problems.fields.get(&Field::Id),
+            Some(ProfileProblemKind::IdDuplicate { id }) if id == "extra"
+        ));
+        assert_eq!(problems.first, Some(Focus::Field(Field::Id)));
+        assert_eq!(forms(&draft), before);
+
+        // ...and a new profile does the same.
+        let mut new = draft.open_editor_new_local("Another", "AN");
+        new.set_text(&draft, Field::Program, "sh");
+        new.set_text(&draft, Field::Id, "extra");
+        assert!(draft.apply_editor(&new).is_err());
+        assert_eq!(forms(&draft), before);
+
+        // Its own id is not a repeat of itself.
+        let mut itself = draft.open_editor(index).unwrap();
+        itself.set_text(&draft, Field::Badge, "XX");
+        assert_eq!(draft.apply_editor(&itself), Ok(index));
+    }
+
+    #[test]
+    fn deleting_an_earlier_profile_with_the_editor_open_and_confirming_hits_the_right_one() {
+        let mut draft = draft();
+        let mut editor = draft.open_editor(2).unwrap(); // stage
+        editor.set_text(&draft, Field::Host, "10.4.2.99");
+
+        draft.delete(0, false); // wsl: stage is the second now
+
+        assert_eq!(draft.apply_editor(&editor), Ok(1));
+        assert_eq!(ids(&draft), ["prod", "stage"]);
+        assert_eq!(draft.form(1).unwrap().host, "10.4.2.99");
+        assert_eq!(draft.form(0).unwrap().host, "10.4.1.20", "prod untouched");
+        assert!(!draft.is_new(1), "still the file's profile, not an append");
+        let (_, profiles) = saved(&draft);
+        let ids: Vec<&str> = profiles.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["prod", "stage"]);
+        assert_eq!(profiles[1].ssh.as_ref().unwrap().host, "10.4.2.99");
+    }
+
+    #[test]
+    fn a_source_that_left_the_draft_comes_back_as_new_at_the_end() {
+        let mut draft = draft();
+        let mut editor = draft.open_editor(1).unwrap(); // prod
+        editor.set_text(&draft, Field::Port, "2222");
+
+        draft.delete(1, false);
+        assert_eq!(ids(&draft), ["wsl", "stage"]);
+
+        assert_eq!(draft.apply_editor(&editor), Ok(2));
+        assert_eq!(ids(&draft), ["wsl", "stage", "prod"]);
+        assert!(draft.is_new(2), "its origin is gone: the Save appends it");
+        assert_eq!(draft.form(2).unwrap().port, "2222");
+
+        // A reload that dropped the source from the file does not drop the item:
+        // it turns into a new one, and the editor still finds it by its key.
+        let mut draft = ProfilesDraft::new(&list(FILE));
+        let mut editor = draft.open_editor(0).unwrap();
+        editor.set_text(&draft, Field::Name, "Mine");
+        let without_wsl = list(
+            &FILE
+                .split("[[profiles.list]]")
+                .skip(2)
+                .fold(String::new(), |acc, part| acc + "[[profiles.list]]" + part),
+        );
+        draft.rebase(&without_wsl);
+        assert_eq!(
+            draft.apply_editor(&editor),
+            Ok(0),
+            "the item is still there"
+        );
+    }
+
+    #[test]
+    fn a_pending_new_profile_reopens_in_place_even_after_an_earlier_deletion() {
+        let mut draft = draft();
+        let mut first = draft.open_editor_new_local("Extra", "EX");
+        first.set_text(&draft, Field::Program, "sh");
+        let index = draft.apply_editor(&first).unwrap();
+        assert!(draft.is_new(index), "no file origin to find it by");
+
+        let mut again = draft.open_editor(index).unwrap();
+        again.set_text(&draft, Field::Program, "bash");
+        draft.delete(0, false);
+        assert_eq!(draft.apply_editor(&again), Ok(index - 1));
+
+        assert_eq!(ids(&draft), ["prod", "stage", "extra"]);
+        assert_eq!(draft.form(2).unwrap().program, "bash");
+        assert_eq!(draft.len(), 3, "edited in place, not appended again");
+    }
+
+    #[test]
+    fn the_editor_lists_and_auth_edit_the_copy_only() {
+        let mut draft = draft();
+        let mut editor = draft.open_editor(0).unwrap();
+        let item = editor.list_add(ListKind::Args).unwrap();
+        assert_eq!(item, 2);
+        assert!(editor.set_list_text(ListKind::Args, item, false, "--login"));
+        assert!(!editor.set_list_text(ListKind::Args, item, false, "--login"));
+        assert!(editor.list_remove(ListKind::Args, 0));
+        editor.set_env(vec![("A".into(), "1".into())]);
+        assert!(!editor.list_remove(ListKind::Args, 9));
+        assert_eq!(
+            editor.list_rows(ListKind::Args),
+            [
+                ("Ubuntu".to_owned(), String::new()),
+                ("--login".to_owned(), String::new())
+            ]
+        );
+        assert_eq!(
+            draft.list_rows(0, ListKind::Args).len(),
+            2,
+            "draft untouched"
+        );
+        assert!(draft.edits().is_empty());
+
+        // The lists exist only in a local profile; the preset, only in an SSH one.
+        let mut ssh = draft.open_editor(2).unwrap();
+        assert_eq!(ssh.list_add(ListKind::Args), None);
+        ssh.set_args(vec!["x".into()]);
+        assert!(ssh.form().args.is_empty());
+        ssh.set_auth_preset(3);
+        assert_eq!(ssh.form().auth, [SshAuth::Password]);
+        let mut local = draft.open_editor(0).unwrap();
+        local.set_auth_preset(3);
+        assert!(local.form().auth.is_empty());
+
+        draft.apply_editor(&editor).unwrap();
+        let (_, profiles) = saved(&draft);
+        assert_eq!(profiles[0].args, ["Ubuntu", "--login"]);
+        assert_eq!(profiles[0].env.get("A").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn an_invalid_profile_from_the_file_stays_in_the_list_and_does_not_stop_the_others() {
+        let mut defs = list(FILE);
+        defs[0].program.clear(); // hand-edited into an invalid profile
+        let mut draft = ProfilesDraft::new(&defs);
+
+        assert_eq!(draft.len(), 3, "still listed");
+        assert!(!draft.is_valid(0) && draft.has_invalid());
+        assert_eq!(draft.valid_ids(), ["prod", "stage"]);
+
+        let mut editor = draft.open_editor(1).unwrap();
+        editor.set_text(&draft, Field::Port, "2222");
+        assert_eq!(draft.apply_editor(&editor), Ok(1));
+        let edits = draft.edits();
+        assert!(matches!(
+            edits.as_slice(),
+            [Edit::SetInTable { id, key, .. }] if id == "prod" && key == "port"
+        ));
+
+        // Opening the invalid one shows its errors, and OK waits for the fix.
+        let mut broken = draft.open_editor(0).unwrap();
+        assert_eq!(
+            draft.apply_editor(&broken).unwrap_err().first,
+            Some(Focus::Field(Field::Program))
+        );
+        assert_eq!(draft.len(), 3);
+        broken.set_text(&draft, Field::Program, "wsl.exe");
+        assert_eq!(draft.apply_editor(&broken), Ok(0));
+        assert!(draft.is_valid(0));
     }
 }

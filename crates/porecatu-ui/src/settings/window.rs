@@ -46,6 +46,7 @@ use super::content::{
     ViewExtras, choice_label,
 };
 use super::draft::Draft;
+use super::editor_modal;
 use super::field_edit::{EditPart, Editing};
 use super::file_state::{Banner, Disk, Effect, FileState};
 use super::import_list::ImportList;
@@ -55,7 +56,9 @@ use super::layout::{
     banner_geometry, focus_order_with_banner, footer_buttons, group_items, hit_test, next_focus,
 };
 use super::paint;
-use super::profiles_draft::{self, Forget, ListKind, ProfilesDraft, SecretKind};
+use super::profile_editor::ProfileEditor;
+use super::profile_window::ProfileEditorWindow;
+use super::profiles_draft::{Forget, ProfilesDraft};
 use super::save::Saved;
 use super::shortcuts::{Capturing, Conflict, Shortcuts};
 use super::{Group, HEADER_GAP_PX, TITLE_SIZE_PX};
@@ -70,7 +73,7 @@ const SSH_CONFIG_ENV: &str = "PORECATU_SSH_CONFIG";
 /// O cofre esquece o que a exclusão de um perfil pediu (ADR-0073 §4). Esquecer o
 /// que não existe não é erro, e uma falha do cofre não desfaz a gravação do
 /// arquivo, que já aconteceu.
-fn forget_in_vault(target: &Forget) {
+pub(super) fn forget_in_vault(target: &Forget) {
     match target {
         Forget::Password(destination) => {
             let _ = porecatu_term::forget_password(destination);
@@ -235,6 +238,15 @@ pub(crate) struct SettingsWindow {
     /// caminho relativo da imagem de fundo, para a nota de "não encontrado"
     /// (RF-17.21).
     config_path: Option<PathBuf>,
+    /// O editor de perfil, janela filha e modal desta (ADR-0080 §1). Campo
+    /// **daqui**, não de `App`: ele não tem sentido sem a tela e cai com ela.
+    profile_editor: Option<ProfileEditorWindow>,
+    /// Um editor que a tela pediu e `App` ainda não abriu: criar a janela do SO
+    /// precisa do `event_loop` e do `GpuContext`, que a tela não tem.
+    editor_request: Option<ProfileEditor>,
+    /// O último clique simples numa linha de perfil, para o duplo clique que abre
+    /// o editor: a linha (o índice na lista) e o instante.
+    last_profile_click: Option<(usize, Instant)>,
 }
 
 impl SettingsWindow {
@@ -287,6 +299,128 @@ impl SettingsWindow {
             capturing: None,
             file: FileState::new(disk),
             config_path,
+            profile_editor: None,
+            editor_request: None,
+            last_profile_click: None,
+        }
+    }
+
+    // ---- o editor de perfil (ADR-0080)
+
+    pub(crate) fn window(&self) -> &Window {
+        &self.window
+    }
+
+    /// O id da janela do editor, se ele existe: o roteamento do topo de
+    /// `window_event` o testa antes do da tela.
+    pub(crate) fn profile_editor_id(&self) -> Option<WindowId> {
+        self.profile_editor
+            .as_ref()
+            .map(|editor| editor.window_id())
+    }
+
+    /// Dá a `f` a janela do editor e o rascunho de perfis **só para leitura**:
+    /// o editor edita a cópia, e do rascunho lê os `id` que ela não pode repetir
+    /// e a validação de OK. É um empréstimo dividido de dois campos da tela, que
+    /// duas chamadas de método não conseguiriam.
+    pub(crate) fn with_profile_editor<R>(
+        &mut self,
+        f: impl FnOnce(&mut ProfileEditorWindow, &ProfilesDraft) -> R,
+    ) -> Option<R> {
+        let editor = self.profile_editor.as_mut()?;
+        Some(f(editor, &self.profiles))
+    }
+
+    /// O editor que a tela pediu e ainda não tem janela, uma vez só.
+    pub(crate) fn take_editor_request(&mut self) -> Option<ProfileEditor> {
+        self.editor_request.take()
+    }
+
+    /// Pede o editor do perfil `item` do rascunho: o lápis, o duplo clique e o
+    /// `Enter` (ADR-0080 §7). Com um já aberto, o traz para a frente em vez de
+    /// abrir outro (§1: no máximo um).
+    fn request_profile_editor(&mut self, item: usize) {
+        if let Some(editor) = &self.profile_editor {
+            editor.bring_to_front();
+            return;
+        }
+        self.editor_request = self.profiles.open_editor(item);
+    }
+
+    /// A janela do editor, já criada por `App`. A tela fica desabilitada
+    /// enquanto ele existe (§2); as de terminal já estão, pela própria tela.
+    pub(crate) fn attach_profile_editor(&mut self, editor: ProfileEditorWindow) {
+        self.set_enabled(false);
+        self.profile_editor = Some(editor);
+        self.hovered = None;
+        self.hover.dismiss();
+        self.window.request_redraw();
+    }
+
+    /// Fecha o editor **descartando** a cópia: Cancelar, `Esc`, o botão de
+    /// fechar, e a tela que fecha por baixo dele. A tela é reabilitada **antes**
+    /// de a janela do editor ser destruída: com a dona desabilitada, o Windows
+    /// passaria o foco a outro programa (ADR-0064 §2).
+    pub(crate) fn close_profile_editor(&mut self) {
+        self.set_enabled(true);
+        self.profile_editor = None;
+        self.editor_request = None;
+        self.window.request_redraw();
+    }
+
+    /// OK (§6): valida a cópia contra o rascunho com ela no lugar. Sem problema,
+    /// ela vira pendência da tela -- nada vai ao disco -- e o editor fecha; com
+    /// problema, o editor não fecha e guarda os campos.
+    pub(crate) fn confirm_profile_editor(&mut self) {
+        let Some(window) = &self.profile_editor else {
+            return;
+        };
+        match self.profiles.apply_editor(window.editor()) {
+            Ok(_) => {
+                self.import = None;
+                self.close_profile_editor();
+                self.invalidate();
+            }
+            Err(problems) => {
+                if let Some(window) = &mut self.profile_editor {
+                    window.refuse(&problems);
+                }
+            }
+        }
+    }
+
+    /// Modalidade do SO, onde há: a tela desabilitada enquanto o editor existe.
+    /// Nas outras plataformas a modalidade é lógica (`editor_modal::gate`).
+    fn set_enabled(&self, enabled: bool) {
+        #[cfg(windows)]
+        {
+            use winit::platform::windows::WindowExtWindows;
+            self.window.set_enable(enabled);
+        }
+        #[cfg(not(windows))]
+        let _ = enabled;
+    }
+
+    /// Descarta o evento de entrada se o editor está aberto (§2). `true` quando
+    /// descartou; um clique, antes, traz o editor para a frente.
+    fn discards(&self, input: editor_modal::Input) -> bool {
+        match editor_modal::gate(self.profile_editor.is_some(), input) {
+            editor_modal::Gate::Pass => false,
+            editor_modal::Gate::Discard {
+                bring_editor_to_front,
+            } => {
+                if bring_editor_to_front && let Some(editor) = &self.profile_editor {
+                    editor.bring_to_front();
+                }
+                true
+            }
+        }
+    }
+
+    /// Fechar a tela fecha antes o editor aberto, como Cancelar (§6).
+    fn close_editor_before(&mut self, reason: editor_modal::CloseReason) {
+        if editor_modal::closes_editor_first(self.profile_editor.is_some(), reason) {
+            self.close_profile_editor();
         }
     }
 
@@ -479,6 +613,7 @@ impl SettingsWindow {
     /// `Esc`. Sem pendências fecha; com elas abre o diálogo de três saídas, e
     /// com o diálogo já aberto o pedido conta como Cancelar.
     pub(crate) fn request_close(&mut self) -> Press {
+        self.close_editor_before(editor_modal::CloseReason::Request);
         if self.dialog.is_some() {
             return self.answer(DialogAnswer::Cancel);
         }
@@ -496,6 +631,7 @@ impl SettingsWindow {
     /// encerramento espera pela resposta (RF-16.5). Devolve se há o que
     /// perguntar; sem pendências, quem chama encerra direto.
     pub(crate) fn ask_before_quit(&mut self) -> bool {
+        self.close_editor_before(editor_modal::CloseReason::Quit);
         self.commit_edit();
         if !self.has_unsaved() {
             return false;
@@ -649,6 +785,10 @@ impl SettingsWindow {
         self.catalog = Arc::clone(catalog);
         self.window
             .set_title(&msg::settings::window_title(&self.catalog));
+        // O editor é desta tela: a troca de idioma chega nele também.
+        if let Some(editor) = &mut self.profile_editor {
+            editor.set_catalog(catalog);
+        }
         // A lista aberta tem os rótulos cortados no idioma antigo.
         self.choice = None;
         self.invalidate();
@@ -673,8 +813,13 @@ impl SettingsWindow {
         self.window.request_redraw();
     }
 
+    /// Pede quadro à tela e ao editor, se ele existe: recarga de config e troca
+    /// de tema chegam às duas (ADR-0080 §2).
     pub(crate) fn request_redraw(&self) {
         self.window.request_redraw();
+        if let Some(editor) = &self.profile_editor {
+            editor.request_redraw();
+        }
     }
 
     pub(crate) fn is_minimized(&self) -> bool {
@@ -687,6 +832,9 @@ impl SettingsWindow {
     pub(crate) fn refresh_after_show(&mut self) {
         self.settle_frames = 1;
         self.window.request_redraw();
+        if let Some(editor) = &mut self.profile_editor {
+            editor.refresh_after_show();
+        }
     }
 
     /// Acompanha o tamanho físico novo da janela. Minimizada, o Windows
@@ -715,14 +863,8 @@ impl SettingsWindow {
 
     // ---- geometria
 
-    /// Altura do cabeçalho: a da barra de abas fora do macOS (ADR-0060 §1),
-    /// zero onde a decoração é nativa.
-    fn header_height(style: &TabBarStyle) -> f32 {
-        if is_macos() { 0.0 } else { bar_height(style) }
-    }
-
     fn metrics(&self, env: Env<'_>) -> Metrics {
-        Metrics::from_config(env.config, Self::header_height(env.style))
+        Metrics::from_config(env.config, header_height(env.style))
     }
 
     fn layout(&self, env: Env<'_>) -> Layout {
@@ -812,7 +954,6 @@ impl SettingsWindow {
                 import: self.import.as_ref(),
                 // Não bloqueia: a primeira chamada só inicia a sondagem e
                 // responde `false`; a montagem seguinte já vê a resposta.
-                vault: porecatu_term::vault_available(),
             };
             self.content = Some(content::build(
                 key,
@@ -1020,6 +1161,9 @@ impl SettingsWindow {
         now: Instant,
     ) {
         self.cursor_position = (position.x, position.y);
+        if self.discards(editor_modal::Input::MouseMove) {
+            return;
+        }
         self.ensure_content(env, measurer);
         let point = self.cursor_logical();
         let resize_border = env.config.appearance.window_controls.resize_border as f32;
@@ -1199,6 +1343,9 @@ impl SettingsWindow {
         env: Env<'_>,
         measurer: &mut TextMeasurer,
     ) {
+        if self.discards(editor_modal::Input::Wheel) {
+            return;
+        }
         self.ensure_content(env, measurer);
         let layout = self.layout(env);
         if !tab_bar::rect_contains(layout.panel_body, self.cursor_logical()) {
@@ -1224,6 +1371,9 @@ impl SettingsWindow {
     /// region do cabeçalho; depois o que o painel tem -- um grupo da guia, o
     /// rodapé, o controle de uma linha.
     pub(crate) fn left_pressed(&mut self, env: Env<'_>, measurer: &mut TextMeasurer) -> Press {
+        if self.discards(editor_modal::Input::MousePress) {
+            return Press::Nothing;
+        }
         self.ensure_content(env, measurer);
         self.hover.dismiss();
         let style = env.style;
@@ -1247,8 +1397,8 @@ impl SettingsWindow {
                 let _ = self.window.drag_resize_window(direction);
                 return Press::Nothing;
             }
-            if point.1 < Self::header_height(style) {
-                self.resolve_titlebar_drag();
+            if point.1 < header_height(style) {
+                titlebar_drag(&self.window, &mut self.last_titlebar_click, true);
                 return Press::Nothing;
             }
         }
@@ -1321,11 +1471,15 @@ impl SettingsWindow {
                 }
                 self.commit_edit();
                 self.focus = Focus::Row(index);
-                // A linha de um tema escolhe o tema; a de um perfil, o perfil.
+                // A linha de um tema escolhe o tema; a de um perfil, o perfil (e,
+                // no duplo clique, abre o editor).
+                let profile = self.profile_of_row(index);
                 if !(self.file.allows_edit()
                     && (self.choose_theme(index) || self.choose_profile(index)))
                 {
                     self.window.request_redraw();
+                } else if let Some(item) = profile {
+                    self.note_profile_click(item);
                 }
                 Press::Nothing
             }
@@ -1341,6 +1495,9 @@ impl SettingsWindow {
     /// sobre ele -- disparar no press deixava o release cair na janela de
     /// trás.
     pub(crate) fn left_released(&mut self, env: Env<'_>) -> Press {
+        if self.discards(editor_modal::Input::MouseRelease) {
+            return Press::Nothing;
+        }
         self.dragging_field = false;
         let armed = self.pressed_window_button.take();
         if armed.is_none() || is_macos() {
@@ -1442,7 +1599,7 @@ impl SettingsWindow {
         // Uma linha do grupo Perfis: os três botões, ou o `X` de um perfil.
         if let Some(target) = self.content().row(index).and_then(|row| row.profile) {
             self.commit_edit();
-            self.click_profile(env, measurer, index, target, part, point);
+            self.click_profile(index, target, part);
             self.window.request_redraw();
             return;
         }
@@ -1511,11 +1668,20 @@ impl SettingsWindow {
         }
     }
 
+    /// O perfil da lista que a linha `index` mostra, se a linha é de perfil.
+    fn profile_of_row(&self, index: usize) -> Option<usize> {
+        match self.content().row(index)?.profile? {
+            ProfileTarget::Item(item) => Some(item),
+            _ => None,
+        }
+    }
+
     /// Escolhe o perfil da linha `index`, se a linha é de perfil: a linha inteira
-    /// é o alvo do clique, como a de um tema.
+    /// é o alvo do clique, como a de um tema. **Só escolhe** (o destaque e o
+    /// alvo do teclado): abrir o editor é do lápis, do duplo clique e do `Enter`
+    /// (ADR-0080 §7).
     fn choose_profile(&mut self, index: usize) -> bool {
-        let Some(ProfileTarget::Item(item)) = self.content().row(index).and_then(|row| row.profile)
-        else {
+        let Some(item) = self.profile_of_row(index) else {
             return false;
         };
         self.profiles.select(item);
@@ -1524,28 +1690,28 @@ impl SettingsWindow {
         true
     }
 
-    /// O clique numa parte de uma linha do grupo Perfis.
-    fn click_profile(
-        &mut self,
-        env: Env<'_>,
-        measurer: &mut TextMeasurer,
-        index: usize,
-        target: ProfileTarget,
-        part: ControlPart,
-        point: (f32, f32),
-    ) {
+    /// Um clique simples numa linha de perfil: se completa um duplo clique com
+    /// o anterior -- na mesma linha, dentro do `DOUBLE_CLICK_THRESHOLD` do app,
+    /// o mesmo da barra de abas --, abre o editor.
+    fn note_profile_click(&mut self, item: usize) {
+        let (double, next) = interact::profile_row_click(
+            self.last_profile_click,
+            item,
+            Instant::now(),
+            DOUBLE_CLICK_THRESHOLD,
+        );
+        self.last_profile_click = next;
+        if double {
+            self.request_profile_editor(item);
+        }
+    }
+
+    /// O clique numa parte de uma linha do grupo Perfis. Os controles do
+    /// formulário (campo, autenticação, listas, "Esquecer") são da janela do
+    /// editor, que os trata; esta tela só vê os botões, o lápis e o `X` de um
+    /// perfil, e a lista de importar.
+    fn click_profile(&mut self, index: usize, target: ProfileTarget, part: ControlPart) {
         match content::profile_click(target, part) {
-            content::ProfileClick::Edit(edit) => {
-                self.begin_or_continue_edit(env, measurer, index, edit, point);
-            }
-            content::ProfileClick::OpenAuth => self.open_choice(env, measurer, index),
-            content::ProfileClick::ListRemove(kind, item) => {
-                if let Some(selected) = self.profiles.selected() {
-                    self.profiles.list_remove(selected, kind, item);
-                    self.invalidate();
-                }
-            }
-            content::ProfileClick::ListAdd(kind) => self.add_profile_list_item(index, kind),
             content::ProfileClick::AddLocal => self.add_profile(false),
             content::ProfileClick::AddSsh => self.add_profile(true),
             content::ProfileClick::OpenImport => self.open_import(),
@@ -1564,75 +1730,38 @@ impl SettingsWindow {
                 self.profiles.select(item);
                 self.delete_profile(item);
             }
+            // O lápis: escolhe a linha e abre o editor.
+            content::ProfileClick::EditProfile(item) => {
+                self.choose_profile(index);
+                self.request_profile_editor(item);
+            }
             content::ProfileClick::Select => {
                 self.choose_profile(index);
             }
-            content::ProfileClick::Forget(kind) => self.click_profile_forget(kind),
-            content::ProfileClick::Nothing => {}
+            content::ProfileClick::Edit(_)
+            | content::ProfileClick::OpenAuth
+            | content::ProfileClick::ListRemove(..)
+            | content::ProfileClick::ListAdd(_)
+            | content::ProfileClick::Nothing => {}
         }
     }
 
-    /// "Esquecer" é imediato (o segredo não é do arquivo); esquecer o que não
-    /// existe não é erro.
-    fn click_profile_forget(&mut self, kind: SecretKind) {
-        if let Some(target) = self
-            .profiles
-            .selected()
-            .and_then(|selected| self.profiles.forget_target(selected, kind))
-        {
-            forget_in_vault(&target);
-        }
-    }
-
-    /// Acrescenta um item vazio à lista do formulário na linha `index` e põe o
-    /// primeiro campo dele em edição (o conteúdo medido ainda é o antigo: a
-    /// edição nasce direto).
-    fn add_profile_list_item(&mut self, index: usize, kind: ListKind) {
-        let Some(selected) = self.profiles.selected() else {
-            return;
-        };
-        if let Some(item) = self.profiles.list_add(selected, kind) {
-            self.invalidate();
-            self.editing = Some(Editing::new(
-                index,
-                EditPart::ListFirst(item),
-                String::new(),
-            ));
-        }
-    }
-
-    /// Confirma o texto de um campo do formulário no perfil escolhido.
-    fn commit_profile_edit(&mut self, target: ProfileTarget, part: EditPart, text: &str) {
-        let Some(selected) = self.profiles.selected() else {
-            return;
-        };
-        match (target, part) {
-            (ProfileTarget::Field(field), EditPart::Field) => {
-                self.profiles.set_text(selected, field, text);
-            }
-            (ProfileTarget::List(kind), EditPart::ListFirst(item)) => {
-                self.profiles
-                    .set_list_text(selected, kind, item, false, text);
-            }
-            (ProfileTarget::List(kind), EditPart::ListSecond(item)) => {
-                self.profiles
-                    .set_list_text(selected, kind, item, true, text);
-            }
-            _ => {}
-        }
-    }
-
-    /// Acrescenta um perfil local ou SSH e o escolhe; o formulário dele abre
-    /// logo abaixo da lista.
+    /// "+ Perfil local" e "+ Perfil SSH" abrem o editor com um perfil **novo**
+    /// daquele tipo. Nada entra na lista antes do OK (ADR-0080 §7): cancelar não
+    /// cria nada.
     fn add_profile(&mut self, ssh: bool) {
         use msg::settings::profiles as p;
-        if ssh {
-            self.profiles.add_ssh(&p::new_ssh_name(&self.catalog));
+        self.import = None;
+        if self.profile_editor.is_some() {
+            return;
+        }
+        self.editor_request = Some(if ssh {
+            self.profiles
+                .open_editor_new_ssh(&p::new_ssh_name(&self.catalog))
         } else {
             self.profiles
-                .add_local(&p::new_local_name(&self.catalog), NEW_LOCAL_BADGE);
-        }
-        self.import = None;
+                .open_editor_new_local(&p::new_local_name(&self.catalog), NEW_LOCAL_BADGE)
+        });
         self.invalidate();
     }
 
@@ -1844,21 +1973,6 @@ impl SettingsWindow {
             self.window.request_redraw();
             return;
         }
-        // Um campo do formulário de perfil: o rascunho de perfis, não o de opções.
-        if let Some(target) = self
-            .content
-            .as_ref()
-            .and_then(|content| content.row(editing.block))
-            .and_then(|row| row.profile)
-        {
-            if editing.changed() {
-                self.commit_profile_edit(target, editing.part, editing.state.text());
-                self.invalidate();
-            } else {
-                self.window.request_redraw();
-            }
-            return;
-        }
         if editing.changed()
             && let Some(option) = self.option_at(editing.block)
         {
@@ -1958,12 +2072,6 @@ impl SettingsWindow {
     /// `locales/` (com o do valor em vista, mesmo que o arquivo dele tenha
     /// sumido), ou os valores nomeados da opção.
     fn open_choice(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, index: usize) {
-        // A autenticação do formulário: os conjuntos de métodos, e "ordem
-        // personalizada" se a lista do arquivo é uma que nenhum deles é.
-        if self.content().row(index).and_then(|row| row.profile) == Some(ProfileTarget::Auth) {
-            self.open_auth_choice(env, measurer, index);
-            return;
-        }
         let Some(option) = self.option_at(index) else {
             return;
         };
@@ -2023,42 +2131,6 @@ impl SettingsWindow {
         self.window.request_redraw();
     }
 
-    /// Abre a lista da autenticação do formulário do perfil escolhido. O valor
-    /// de cada item é o índice do conjunto; "custom" é a ordem do arquivo.
-    fn open_auth_choice(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, index: usize) {
-        let Some(selected) = self.profiles.selected() else {
-            return;
-        };
-        let Some(form) = self.profiles.form(selected) else {
-            return;
-        };
-        let preset = form.auth_preset();
-        let current = preset.map_or_else(|| "custom".to_owned(), |p| p.to_string());
-        let mut values: Vec<(String, Option<usize>)> = (0..profiles_draft::AUTH_PRESETS.len())
-            .map(|p| (p.to_string(), Some(p)))
-            .collect();
-        if preset.is_none() {
-            values.push(("custom".to_owned(), None));
-        }
-        let Some(anchor) = self.control_rect(env, index) else {
-            return;
-        };
-        let items = values
-            .into_iter()
-            .map(|(value, preset)| ChoiceItem {
-                label: choice_list::fit_label(
-                    &content::auth_label(&self.catalog, preset),
-                    env.config,
-                    anchor.width,
-                    measurer,
-                ),
-                value,
-            })
-            .collect();
-        self.choice = Some(ChoiceList::open(index, items, &current));
-        self.window.request_redraw();
-    }
-
     /// Onde a lista aberta fica, ancorada ao controle da linha dela.
     fn choice_layout(&self, env: Env<'_>) -> Option<ChoiceLayout> {
         let list = self.choice.as_ref()?;
@@ -2077,41 +2149,12 @@ impl SettingsWindow {
         let Some(list) = self.choice.take() else {
             return;
         };
-        // A autenticação de um perfil: o valor é o índice do conjunto.
-        if self.content().row(list.block).and_then(|row| row.profile) == Some(ProfileTarget::Auth) {
-            if let (Some(selected), Some(Ok(preset))) = (
-                self.profiles.selected(),
-                list.highlighted_value().map(str::parse::<usize>),
-            ) {
-                self.profiles.set_auth_preset(selected, preset);
-                self.invalidate();
-            }
-            self.window.request_redraw();
-            return;
-        }
         if let (Some(option), Some(value)) = (self.option_at(list.block), list.highlighted_value())
         {
             interact::choose_value(&mut self.draft, option, value);
             self.invalidate();
         }
         self.window.request_redraw();
-    }
-
-    /// Clique na drag region: duplo clique maximiza/restaura, e o resto
-    /// arrasta a janela. Resolvido no *press*, antes de `drag_window` -- ela
-    /// entrega o gesto ao loop modal do SO, sem garantia de ver o `Released`
-    /// de volta (mesma razão de `WindowState::resolve_titlebar_drag`).
-    fn resolve_titlebar_drag(&mut self) {
-        let now = Instant::now();
-        let is_double_click = self
-            .last_titlebar_click
-            .is_some_and(|at| now.duration_since(at) <= DOUBLE_CLICK_THRESHOLD);
-        self.last_titlebar_click = if is_double_click { None } else { Some(now) };
-        if is_double_click {
-            self.window.set_maximized(!self.window.is_maximized());
-        } else {
-            let _ = self.window.drag_window();
-        }
     }
 
     // ---- teclado
@@ -2142,6 +2185,9 @@ impl SettingsWindow {
         measurer: &mut TextMeasurer,
     ) -> Press {
         if event.state != winit::event::ElementState::Pressed {
+            return Press::Nothing;
+        }
+        if self.discards(editor_modal::Input::Key) {
             return Press::Nothing;
         }
         self.ensure_content(env, measurer);
@@ -2250,28 +2296,13 @@ impl SettingsWindow {
             self.start_capture(action, first);
             return;
         }
-        // Uma linha do grupo Perfis: `Enter` escolhe o perfil, edita o campo,
-        // abre a autenticação, ou entra na lista.
+        // Uma linha do grupo Perfis: `Enter` num perfil o escolhe e abre o editor
+        // (ADR-0080 §7); numa linha da importação, marca ou desmarca.
         if let Some(target) = self.content().row(index).and_then(|row| row.profile) {
             match target {
-                ProfileTarget::Item(_) => {
+                ProfileTarget::Item(item) => {
                     self.choose_profile(index);
-                }
-                ProfileTarget::Field(_) => self.start_edit(index, EditPart::Field),
-                ProfileTarget::Auth => self.open_choice(env, measurer, index),
-                ProfileTarget::List(kind) => {
-                    let empty = self
-                        .profiles
-                        .selected()
-                        .is_none_or(|selected| self.profiles.list_rows(selected, kind).is_empty());
-                    if empty {
-                        self.add_profile_list_item(index, kind);
-                    } else {
-                        self.start_edit(index, EditPart::ListFirst(0));
-                    }
-                }
-                ProfileTarget::Forget(kind) => {
-                    self.click_profile_forget(kind);
+                    self.request_profile_editor(item);
                 }
                 ProfileTarget::Candidate(item) => {
                     if let Some(list) = &mut self.import {
@@ -2279,7 +2310,12 @@ impl SettingsWindow {
                         self.invalidate();
                     }
                 }
-                ProfileTarget::Actions | ProfileTarget::ImportActions => {}
+                // O formulário é da janela do editor, e os botões, do clique.
+                ProfileTarget::Actions
+                | ProfileTarget::ImportActions
+                | ProfileTarget::Field(_)
+                | ProfileTarget::Auth
+                | ProfileTarget::List(_) => {}
             }
             self.window.request_redraw();
             return;
@@ -2764,7 +2800,14 @@ impl SettingsWindow {
         ));
         if let Some(header) = layout.header {
             out.push(quad(header, pal.bar_background));
-            self.paint_header_content(header, env.style, pal, &mut out);
+            paint_header_title(
+                header,
+                env.style,
+                pal,
+                Some(icon::SETTINGS),
+                &msg::settings::window_title(&self.catalog),
+                &mut out,
+            );
             chrome::paint_window_buttons(
                 env.style,
                 pal,
@@ -2825,43 +2868,6 @@ impl SettingsWindow {
         frame
     }
 
-    /// Ícone e título à esquerda do cabeçalho (ADR-0060 §1): no
-    /// `trilha_padding` mais o `padding_left` da aba, o ícone `SETTINGS` na
-    /// em de ícone do chrome × `0.8` -- o multiplicador do botão de
-    /// configurações da barra --, e o título 15px/500 depois de um `gap: 8`.
-    fn paint_header_content(
-        &self,
-        header: Rect,
-        style: &TabBarStyle,
-        pal: &ResolvedPalette,
-        out: &mut Vec<Primitive>,
-    ) {
-        let icon_size = style.icon_em_size * 0.8;
-        let icon_x = style.trilha_padding + style.padding_left;
-        let icon_width = icon::SETTINGS.ink_width(icon_size);
-        out.push(chrome::centered_glyph(
-            icon::SETTINGS,
-            Rect {
-                x: icon_x,
-                y: header.y,
-                width: icon_width,
-                height: header.height,
-            },
-            icon_size,
-            pal.chrome_icon,
-        ));
-        out.push(Primitive::Text(TextRun {
-            origin: (
-                icon_x + icon_width + HEADER_GAP_PX,
-                header.y + (header.height - TITLE_SIZE_PX) / 2.0,
-            ),
-            text: msg::settings::window_title(&self.catalog),
-            font: overlay::TITLE_FONT,
-            size_px: TITLE_SIZE_PX,
-            color: pal.dialog_title_text,
-        }));
-    }
-
     /// Submete o quadro. O fundo de limpeza é o do painel, que é o que
     /// ocupa a maior parte da janela.
     pub(crate) fn render(&mut self, gpu: &mut GpuContext, pal: &ResolvedPalette, frame: &Frame) {
@@ -2876,4 +2882,68 @@ impl SettingsWindow {
 
 fn quad(rect: Rect, color: porecatu_render::Color) -> Primitive {
     Primitive::Quad(Quad { rect, color })
+}
+
+/// Altura do cabeçalho: a da barra de abas fora do macOS (ADR-0060 §1), zero
+/// onde a decoração é nativa. A tela e o editor de perfil a leem daqui.
+pub(super) fn header_height(style: &TabBarStyle) -> f32 {
+    if is_macos() { 0.0 } else { bar_height(style) }
+}
+
+/// Ícone e título à esquerda do cabeçalho (ADR-0060 §1): no `trilha_padding`
+/// mais o `padding_left` da aba, o ícone na em de ícone do chrome × `0.8` -- o
+/// multiplicador do botão de configurações da barra --, e o título 15px/500
+/// depois de um `gap: 8`. A tela leva o ícone `SETTINGS`; o editor de perfil
+/// não tem ícone decidido (ADR-0080 §3), e o título começa onde ele começaria.
+pub(super) fn paint_header_title(
+    header: Rect,
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    glyph: Option<icon::Icon>,
+    title: &str,
+    out: &mut Vec<Primitive>,
+) {
+    let icon_size = style.icon_em_size * 0.8;
+    let icon_x = style.trilha_padding + style.padding_left;
+    let title_x = match glyph {
+        Some(glyph) => {
+            let icon_width = glyph.ink_width(icon_size);
+            out.push(chrome::centered_glyph(
+                glyph,
+                Rect {
+                    x: icon_x,
+                    y: header.y,
+                    width: icon_width,
+                    height: header.height,
+                },
+                icon_size,
+                pal.chrome_icon,
+            ));
+            icon_x + icon_width + HEADER_GAP_PX
+        }
+        None => icon_x,
+    };
+    out.push(Primitive::Text(TextRun {
+        origin: (title_x, header.y + (header.height - TITLE_SIZE_PX) / 2.0),
+        text: title.to_owned(),
+        font: overlay::TITLE_FONT,
+        size_px: TITLE_SIZE_PX,
+        color: pal.dialog_title_text,
+    }));
+}
+
+/// Clique na drag region: duplo clique maximiza/restaura (se `maximizable`), e o
+/// resto arrasta a janela. Resolvido no *press*, antes de `drag_window` -- ela
+/// entrega o gesto ao loop modal do SO, sem garantia de ver o `Released` de
+/// volta (mesma razão de `WindowState::resolve_titlebar_drag`).
+pub(super) fn titlebar_drag(window: &Window, last_click: &mut Option<Instant>, maximizable: bool) {
+    let now = Instant::now();
+    let is_double_click =
+        last_click.is_some_and(|at| now.duration_since(at) <= DOUBLE_CLICK_THRESHOLD);
+    *last_click = if is_double_click { None } else { Some(now) };
+    if !is_double_click {
+        let _ = window.drag_window();
+    } else if maximizable {
+        window.set_maximized(!window.is_maximized());
+    }
 }

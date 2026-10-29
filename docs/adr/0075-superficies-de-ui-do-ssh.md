@@ -129,6 +129,8 @@ Um décimo grupo na guia lateral, **depois de "Shell"**, cujo assunto ele estend
 └────────────┘└─────────────────────────────────────────────────────────────┘
 ```
 
+> **Revisto pelo [ADR-0080](0080-editor-de-perfil-em-janela-propria.md) — decidido, a implementar.** O formulário sai do painel: abre numa **janela própria**, filha e modal da tela de configurações, com o rótulo **acima** de cada campo. A linha da lista ganha um **lápis** à esquerda do ✕; lápis, duplo clique e `Enter` abrem o editor, e o clique simples só escolhe. "+ Perfil local" e "+ Perfil SSH" abrem o editor com um perfil novo. O OK do editor leva o perfil às alterações pendentes (sem gravar) e **não aceita** perfil inválido; a regra de que perfil inválido não impede salvar os outros fica só para o que vem inválido do arquivo. A importação continua no painel, abaixo da lista. O resto desta seção continua.
+
 - **No topo**, as duas chaves de `[profiles]` (`default`, `detect`) como linhas comuns — um `Choice` cujas opções são o `[shell]` e os identificadores declarados, e um `Toggle`.
 - **A lista**: uma linha por perfil de `[[profiles.list]]`, na ordem do arquivo — badge (a anatomia do [ADR-0070](0070-perfis-de-aba.md) §7, na cor neutra do grupo implícito, `#7b838f`, porque aqui não há grupo), nome, e o `✕` de excluir com a anatomia da linha do popover de sessões. Clique escolhe; setas navegam. **Sem arrastar para reordenar** nesta leva: a ordem é a do arquivo e decide `profile.new_tab_N`, e mudá-la de lugar sem querer muda atalhos.
 - **O formulário** do perfil escolhido, abaixo da lista, com os controles que a tela já tem: `Text` (identificador, nome, badge, host, usuário, programa, arquivo da chave, diretório), `Number` (porta), `Choice` (tipo — só na criação —, autenticação), `StringList` (argumentos), `StringMap` (ambiente). O tipo decide os campos: perfil local não mostra host; perfil SSH não mostra programa.
@@ -174,6 +176,8 @@ Abrir na hora, mesmo com a aba em segundo plano. Recusada: uma reconexão de mad
 ### Perfis editados num diálogo à parte, fora da tela de configurações
 
 Evitaria o padrão de lista e formulário. Recusada pelo PRD-020 (RF-20.3) e pela regra do [PRD-016](../prd/prd-016-tela-de-configuracoes.md) de que a tela edita o arquivo inteiro num lugar só.
+
+> **Nota ([ADR-0080](0080-editor-de-perfil-em-janela-propria.md)).** O editor de perfil em janela própria **não** reabre esta alternativa: ele só abre a partir da tela de configurações, morre com ela, e o que produz é pendência da tela, gravada pelo mesmo Salvar.
 
 ### Estado da conexão como cor ou ícone na aba
 

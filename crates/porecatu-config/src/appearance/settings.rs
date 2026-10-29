@@ -22,6 +22,12 @@ pub struct Settings {
     /// Menor tamanho a que o usuário pode reduzir a janela.
     pub min_width: i32,
     pub min_height: i32,
+    /// O mesmo, para a janela do editor de perfil (ADR-0080 §10): tamanho de
+    /// abertura e o menor a que ela pode ser reduzida.
+    pub profile_window_width: i32,
+    pub profile_window_height: i32,
+    pub profile_min_width: i32,
+    pub profile_min_height: i32,
     /// Largura da guia lateral.
     pub sidebar_width: i32,
     /// Largura do campo de texto e do botão de escolha.
@@ -54,6 +60,10 @@ impl Default for Settings {
             window_height: 640,
             min_width: 640,
             min_height: 420,
+            profile_window_width: 560,
+            profile_window_height: 398,
+            profile_min_width: 420,
+            profile_min_height: 360,
             sidebar_width: 200,
             text_field_width: 240,
             number_field_width: 88,
@@ -79,6 +89,16 @@ mod tests {
         assert_eq!(s.sidebar_width, 200);
         assert_eq!((s.text_field_width, s.number_field_width), (240, 88));
         assert_eq!((s.row_gap, s.theme_swatch_size), (8, 12));
+    }
+
+    #[test]
+    fn the_profile_editor_window_has_the_size_the_adr_0080_gives() {
+        let s = Settings::default();
+        assert_eq!(
+            (s.profile_window_width, s.profile_window_height),
+            (560, 398)
+        );
+        assert_eq!((s.profile_min_width, s.profile_min_height), (420, 360));
     }
 
     #[test]

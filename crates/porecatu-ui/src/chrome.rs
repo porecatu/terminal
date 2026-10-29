@@ -1535,6 +1535,33 @@ pub(crate) fn paint_window_buttons(
     pressed_window_button: Option<tab_bar::WindowButtonHit>,
     out: &mut Vec<Primitive>,
 ) {
+    paint_window_buttons_of(
+        style,
+        pal,
+        bar_width,
+        bar_height,
+        show_restore_icon,
+        hover_window_button,
+        pressed_window_button,
+        &tab_bar::WINDOW_BUTTONS,
+        out,
+    );
+}
+
+/// [`paint_window_buttons`] só com os botões de `shown`; os outros não são
+/// desenhados nem ocupam lugar (ADR-0080 §3).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn paint_window_buttons_of(
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    bar_width: f32,
+    bar_height: f32,
+    show_restore_icon: bool,
+    hover_window_button: Option<tab_bar::WindowButtonHit>,
+    pressed_window_button: Option<tab_bar::WindowButtonHit>,
+    shown: &[tab_bar::WindowButtonHit],
+    out: &mut Vec<Primitive>,
+) {
     // Menor que o "+"/configurações -- convenção Windows: glyphs finos de
     // minimizar/maximizar/fechar (ADR-0027). Sem chave própria.
     let window_button_icon_size = style.icon_em_size * 0.7;
@@ -1553,6 +1580,9 @@ pub(crate) fn paint_window_buttons(
         (2u8, tab_bar::WindowButtonHit::Close, icon::X, true),
     ];
     for (index, hit, glyph, is_close) in buttons {
+        if !shown.contains(&hit) {
+            continue;
+        }
         let rect = tab_bar::window_button_rect(style, index, bar_width, bar_height);
         let hovered = hover_window_button == Some(hit);
         let pressed = hovered && pressed_window_button == Some(hit);

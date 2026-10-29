@@ -40,6 +40,8 @@ Recusado: um `enum WindowKind { Terminal(WindowState), Settings(..) }` dentro de
 - **Fora da sessão.** Não entra em `SessionFileV1`, não conta em "fechar janela com mais de uma aba" e não é restaurada.
 - **Não segura o processo.** Fechar a última janela de **terminal** encerra o app, como o RF-1.4 manda. Antes de encerrar, `App` pergunta à janela de configurações se há pendências; se houver, o encerramento é **adiado**: a janela vem para a frente com o diálogo de três saídas (RF-16.4, RF-16.5), e só a resposta dele conclui ou cancela o encerramento. `app.quit` passa pelo mesmo ponto.
 > **Revisto pelo [ADR-0064](0064-janela-de-configuracoes-modal.md).** No Windows, a janela de configurações passa a ser **possuída** pela janela de terminal de origem (sem botão próprio na barra de tarefas) e **modal**: as janelas de terminal ficam desabilitadas enquanto ela está aberta. O resto desta seção continua.
+>
+> **Revisto pelo [ADR-0080](0080-editor-de-perfil-em-janela-propria.md) — decidido, a implementar.** A tela deixa de ser a única janela que não é de terminal: ela pode abrir **uma** janela filha, o editor de perfil, guardada num campo dela (`SettingsWindow::profile_editor`), não em `App`. O editor é modal sobre a tela, fecha como Cancelar quando a tela fecha, e também fica fora da sessão. "No máximo uma" continua valendo para a tela.
 
 - **Fechar com pendências** usa o diálogo de confirmação do [ADR-0014](0014-superficie-de-aviso-e-dialogo.md), na camada modal **da janela de configurações** — o primeiro diálogo de três botões do app; a anatomia está no [ADR-0060](0060-anatomia-da-tela-de-configuracoes.md) §4.
 

@@ -45,7 +45,7 @@ pub use prompt::{
 // para esquecer, e nunca lê um segredo.
 pub use porecatu_ssh::{
     Destination, VaultError, connection_is_alive, forget_passphrase, forget_password,
-    vault_available,
+    has_passphrase, has_password, vault_available,
 };
 pub use scroll::TermScroll;
 pub use search::{

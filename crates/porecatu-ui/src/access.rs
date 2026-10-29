@@ -40,7 +40,8 @@ use crate::profile_menu::ProfileMenu;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
 use crate::settings::{
-    BannerView, ControlView, FOOTER_BUTTONS, FooterButton, Group, Layout as SettingsLayout, RowView,
+    BannerView, ControlView, EDITOR_BUTTONS, EditorButton, EditorFocus, FOOTER_BUTTONS,
+    FooterButton, Group, Layout as SettingsLayout, RowView,
 };
 use crate::status_bar::{SegmentRole, StatusBarLayout};
 use crate::tab_bar::{self, Indicator, TabBarStyle};
@@ -1100,7 +1101,9 @@ pub(crate) fn build_settings_tree(
         panel_children.push(SETTINGS_FILTER_ID);
     }
     for (index, row) in rows.iter().enumerate() {
-        panel_children.push(settings_row_node(index, row, read_only, &mut nodes));
+        panel_children.push(settings_row_node(
+            index, row, read_only, catalog, &mut nodes,
+        ));
     }
     panel_children.push(SETTINGS_FOOTER_ID);
 
@@ -1136,6 +1139,132 @@ pub(crate) fn build_settings_tree(
     }
 }
 
+// ---- Janela do editor de perfil (ADR-0080 §8)
+
+/// Bloco de `NodeId` do editor de perfil, acima do da tela de configurações:
+/// cada janela tem a sua árvore, e o bloco próprio evita confundir um nó com o
+/// de outra em teste e em log (o princípio de `SETTINGS_ID_BASE`).
+const PROFILE_EDITOR_ID_BASE: u64 = 4_000_000;
+const PROFILE_EDITOR_ROOT_ID: NodeId = NodeId(PROFILE_EDITOR_ID_BASE);
+const PROFILE_EDITOR_FOOTER_ID: NodeId = NodeId(PROFILE_EDITOR_ID_BASE + 1);
+const PROFILE_EDITOR_WINDOW_CLOSE_ID: NodeId = NodeId(PROFILE_EDITOR_ID_BASE + 2);
+const PROFILE_EDITOR_FORM_ID: NodeId = NodeId(PROFILE_EDITOR_ID_BASE + 3);
+const PROFILE_EDITOR_FOOTER_BUTTON_BASE: u64 = PROFILE_EDITOR_ID_BASE + 10;
+/// Uma faixa de mil `NodeId` por linha do formulário, como a tela faz com as
+/// linhas de opção: o nó do controle, mais os itens de uma lista, e -- no fim da
+/// faixa -- o nó do rótulo a que o controle se liga.
+const PROFILE_EDITOR_ROW_BASE: u64 = PROFILE_EDITOR_ID_BASE + 10_000;
+const PROFILE_EDITOR_ROW_STRIDE: u64 = 1_000;
+
+fn profile_editor_row_id(index: usize) -> NodeId {
+    NodeId(PROFILE_EDITOR_ROW_BASE + index as u64 * PROFILE_EDITOR_ROW_STRIDE)
+}
+
+/// O nó do rótulo da linha `index`: o último da faixa dela.
+fn profile_editor_label_id(index: usize) -> NodeId {
+    NodeId(profile_editor_row_id(index).0 + PROFILE_EDITOR_ROW_STRIDE - 1)
+}
+
+fn profile_editor_button_id(button: EditorButton) -> NodeId {
+    let index = EDITOR_BUTTONS
+        .iter()
+        .position(|candidate| *candidate == button)
+        .expect("todo botão do editor está em EDITOR_BUTTONS");
+    NodeId(PROFILE_EDITOR_FOOTER_BUTTON_BASE + index as u64)
+}
+
+/// Monta a árvore da janela do editor de perfil: projeção do mesmo `Layout` que
+/// a pintura consome (ADR-0043 §2). Nesta etapa existem a janela -- com o título
+/// e o idioma do catálogo em uso --, o botão de fechar (só onde o cabeçalho é
+/// nosso, e **só ele**, ADR-0080 §3), o formulário e o rodapé (`footer`: os
+/// botões que existem e se cada um está disponível). O formulário é uma projeção do mesmo `FormView` que a pintura lê: cada
+/// linha vira um rótulo -- o texto **acima** do campo -- e o nó do controle,
+/// com o mesmo papel que a tela dá a ele, ligado ao rótulo (`labelled_by`) e,
+/// quando o campo está recusado, com a razão como descrição. O foco vai para a
+/// linha ou o botão focado, ou para a janela.
+pub(crate) fn build_profile_editor_tree(
+    layout: &SettingsLayout,
+    title: &str,
+    rows: &[RowView],
+    footer: &[(EditorButton, bool)],
+    focused: Option<EditorFocus>,
+    catalog: &Catalog,
+    language: &str,
+) -> TreeUpdate {
+    let mut nodes: Vec<(NodeId, Node)> = Vec::new();
+    let mut root_children: Vec<NodeId> = Vec::new();
+
+    if layout.header.is_some() {
+        nodes.push((
+            PROFILE_EDITOR_WINDOW_CLOSE_ID,
+            leaf(Role::Button, msg::access::window_close(catalog)),
+        ));
+        root_children.push(PROFILE_EDITOR_WINDOW_CLOSE_ID);
+    }
+
+    // O formulário: um grupo com as linhas, na ordem em que aparecem.
+    let mut form_children = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let label_id = profile_editor_label_id(index);
+        nodes.push((label_id, leaf(Role::Label, row.name.clone())));
+        form_children.push(label_id);
+        let id = profile_editor_row_id(index);
+        // A razão de um campo recusado é a descrição dele.
+        row_control_node(
+            id,
+            row,
+            row.invalid.as_deref().unwrap_or(""),
+            false,
+            catalog,
+            &mut nodes,
+        );
+        if let Some((_, node)) = nodes.iter_mut().rev().find(|(node_id, _)| *node_id == id) {
+            node.set_labelled_by(vec![label_id]);
+        }
+        form_children.push(id);
+    }
+    let mut form = container(Role::Group, form_children);
+    form.set_label(title.to_owned());
+    nodes.push((PROFILE_EDITOR_FORM_ID, form));
+    root_children.push(PROFILE_EDITOR_FORM_ID);
+
+    // O rodapé: os botões que existem, da esquerda para a direita. Um "Esquecer"
+    // sem o que esquecer é anunciado como indisponível, como na tela.
+    let mut footer_children = Vec::new();
+    for (button, available) in footer {
+        let id = profile_editor_button_id(*button);
+        let mut node = leaf(Role::Button, button.label(catalog));
+        if !available {
+            node.set_disabled();
+        }
+        nodes.push((id, node));
+        footer_children.push(id);
+    }
+    nodes.push((
+        PROFILE_EDITOR_FOOTER_ID,
+        container(Role::Group, footer_children),
+    ));
+    root_children.push(PROFILE_EDITOR_FOOTER_ID);
+
+    let mut root = Node::new(Role::Window);
+    root.set_label(title.to_owned());
+    // ADR-0056 §11: o idioma do catálogo **efetivamente carregado**.
+    root.set_language(language);
+    root.set_children(root_children);
+    nodes.push((PROFILE_EDITOR_ROOT_ID, root));
+
+    TreeUpdate {
+        nodes,
+        tree: Some(TreeInfo::new(PROFILE_EDITOR_ROOT_ID)),
+        tree_id: TreeId::ROOT,
+        focus: match focused {
+            Some(EditorFocus::Row(index)) if index < rows.len() => profile_editor_row_id(index),
+            Some(EditorFocus::Button(button)) => profile_editor_button_id(button),
+            _ => PROFILE_EDITOR_ROOT_ID,
+        },
+    }
+}
+
 /// Um nó por linha de opção, com o papel que o controle pede (ADR-0059 §5):
 /// alternância é `Switch`, campo de texto `TextInput`, numérico `SpinButton`,
 /// escolha `ComboBox`, lista `List`. Devolve o id do nó da linha e empilha os
@@ -1144,6 +1273,7 @@ fn settings_row_node(
     index: usize,
     row: &RowView,
     read_only: bool,
+    catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
 ) -> NodeId {
     let id = NodeId(SETTINGS_ROW_BASE + index as u64 * SETTINGS_ROW_STRIDE);
@@ -1171,9 +1301,24 @@ fn settings_row_node(
         Some(note) => format!("{description} {note}"),
         None => description,
     };
+    row_control_node(id, row, &description, read_only, catalog, nodes);
+    id
+}
+
+/// O nó do controle de `row`, com `description` como descrição: o papel que o
+/// controle pede (ADR-0059 §5). A tela e o editor de perfil (ADR-0080 §8) usam
+/// a mesma função, então o mesmo controle tem o mesmo papel nas duas.
+fn row_control_node(
+    id: NodeId,
+    row: &RowView,
+    description: &str,
+    read_only: bool,
+    catalog: &Catalog,
+    nodes: &mut Vec<(NodeId, Node)>,
+) {
     let describe = |node: &mut Node| {
         if !description.is_empty() {
-            node.set_description(description.clone());
+            node.set_description(description.to_owned());
         }
         if row.unavailable.is_some() {
             node.set_disabled();
@@ -1273,9 +1418,19 @@ fn settings_row_node(
             nodes.push((id, node));
         }
         // Um perfil da lista (ADR-0075 §6): uma opção de lista, escolhida ou
-        // não; a descrição diz o programa ou o destino.
+        // não, com o lápis -- o botão "Editar <nome>" (ADR-0080 §8) -- dentro
+        // dela; a descrição diz o programa ou o destino.
         ControlView::ProfileItem { selected, .. } => {
-            let mut node = leaf(Role::ListBoxOption, row.name.clone());
+            let edit_id = NodeId(id.0 + 1);
+            nodes.push((
+                edit_id,
+                leaf(
+                    Role::Button,
+                    msg::settings::profiles::edit_profile(catalog, &row.value_text),
+                ),
+            ));
+            let mut node = container(Role::ListBoxOption, vec![edit_id]);
+            node.set_label(row.name.clone());
             node.set_selected(*selected);
             describe(&mut node);
             nodes.push((id, node));
@@ -1302,7 +1457,6 @@ fn settings_row_node(
             nodes.push((id, node));
         }
     }
-    id
 }
 
 #[cfg(test)]
@@ -2278,6 +2432,88 @@ mod settings_tree_tests {
         }
     }
 
+    /// Os perfis da lista como a árvore os projeta: cada um é uma opção de lista.
+    fn profile_options(update: &TreeUpdate) -> Vec<&Node> {
+        update
+            .nodes
+            .iter()
+            .map(|(_, node)| node)
+            .filter(|node| node.role() == Role::ListBoxOption && !node.children().is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn each_profile_row_stays_a_list_option_with_the_pencil_as_a_button_inside() {
+        let rows = crate::settings::profile_list_rows_for_test();
+        let update = tree_with_rows(Group::Profiles, false, true, "pt-BR", &rows);
+        let options = profile_options(&update);
+        assert_eq!(options.len(), 2, "one option per profile");
+        for (option, (name, button)) in options.iter().zip([
+            ("WSL Ubuntu", "Editar WSL Ubuntu"),
+            ("prod-web-01", "Editar prod-web-01"),
+        ]) {
+            assert_eq!(option.label(), Some(name));
+            assert_eq!(option.children().len(), 1, "the pencil, and only it");
+            let pencil = node(&update, option.children()[0]);
+            assert_eq!(pencil.role(), Role::Button);
+            assert_eq!(pencil.label(), Some(button));
+        }
+    }
+
+    #[test]
+    fn the_chosen_profile_is_the_selected_option_and_the_pencil_is_not_selected() {
+        let rows = crate::settings::profile_list_rows_for_test();
+        let update = tree_with_rows(Group::Profiles, false, true, "pt-BR", &rows);
+        let options = profile_options(&update);
+        assert_eq!(
+            options.iter().map(|o| o.is_selected()).collect::<Vec<_>>(),
+            [Some(false), Some(true)]
+        );
+        let pencil = node(&update, options[1].children()[0]);
+        assert_eq!(pencil.is_selected(), None);
+    }
+
+    #[test]
+    fn the_pencil_name_follows_the_language() {
+        let rows = crate::settings::profile_list_rows_for_test();
+        let layout = layout_for_test(true);
+        let refs: Vec<&RowView> = rows.iter().collect();
+        let update = build_settings_tree(
+            &layout,
+            &Group::ALL,
+            Group::Profiles,
+            false,
+            &refs,
+            None,
+            None,
+            None,
+            &test_support::en_us(),
+            "en-US",
+        );
+        let labels: Vec<&str> = profile_options(&update)
+            .iter()
+            .map(|option| node(&update, option.children()[0]).label().unwrap())
+            .collect();
+        assert_eq!(labels, ["Edit WSL Ubuntu", "Edit prod-web-01"]);
+    }
+
+    #[test]
+    fn only_a_profile_row_has_a_pencil() {
+        let rows = crate::settings::profile_list_rows_for_test();
+        let update = tree_with_rows(Group::Profiles, false, true, "pt-BR", &rows);
+        let pencils = update
+            .nodes
+            .iter()
+            .filter(|(_, node)| {
+                node.role() == Role::Button
+                    && node
+                        .label()
+                        .is_some_and(|label| label.starts_with("Editar "))
+            })
+            .count();
+        assert_eq!(pencils, 2, "the buttons row and the options carry none");
+    }
+
     #[test]
     fn a_language_switch_changes_the_labels_and_the_language() {
         let layout = layout_for_test(true);
@@ -2708,6 +2944,260 @@ mod settings_tree_tests {
                 for child in node.children() {
                     assert!(known.contains(child), "{group:?}: filho {child:?} fora");
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod profile_editor_tree_tests {
+    use super::*;
+    use crate::messages::test_support;
+    use crate::settings::{profile_editor_layout_for_test, profile_editor_rows_for_test};
+
+    fn tree(
+        with_header: bool,
+        rows: &[RowView],
+        focused: Option<EditorFocus>,
+        catalog: &Catalog,
+    ) -> TreeUpdate {
+        build_profile_editor_tree(
+            &profile_editor_layout_for_test(with_header),
+            "Editar perfil — prod",
+            rows,
+            &[(EditorButton::Cancel, true), (EditorButton::Ok, true)],
+            focused,
+            catalog,
+            "pt-BR",
+        )
+    }
+
+    fn node(update: &TreeUpdate, id: NodeId) -> &Node {
+        &update
+            .nodes
+            .iter()
+            .find(|(n, _)| *n == id)
+            .expect("nó ausente")
+            .1
+    }
+
+    fn pt() -> Catalog {
+        test_support::pt_br()
+    }
+
+    #[test]
+    fn the_root_is_a_window_titled_after_the_profile() {
+        let update = tree(true, &[], None, &pt());
+        let root = node(&update, PROFILE_EDITOR_ROOT_ID);
+        assert_eq!(root.role(), Role::Window);
+        assert_eq!(root.label(), Some("Editar perfil — prod"));
+        assert_eq!(root.language(), Some("pt-BR"));
+        assert_eq!(update.tree.as_ref().unwrap().root, PROFILE_EDITOR_ROOT_ID);
+        assert_eq!(update.focus, PROFILE_EDITOR_ROOT_ID);
+    }
+
+    #[test]
+    fn the_footer_has_cancel_then_ok_and_the_focused_one_takes_the_focus() {
+        let update = tree(
+            true,
+            &[],
+            Some(EditorFocus::Button(EditorButton::Ok)),
+            &pt(),
+        );
+        let footer = node(&update, PROFILE_EDITOR_FOOTER_ID);
+        let labels: Vec<&str> = footer
+            .children()
+            .iter()
+            .map(|id| node(&update, *id).label().unwrap())
+            .collect();
+        assert_eq!(labels, ["Cancelar", "OK"]);
+        assert_eq!(update.focus, profile_editor_button_id(EditorButton::Ok));
+    }
+
+    #[test]
+    fn the_only_window_button_is_close_and_only_with_our_header() {
+        let with = tree(true, &[], None, &pt());
+        let without = tree(false, &[], None, &pt());
+        let children =
+            |update: &TreeUpdate| node(update, PROFILE_EDITOR_ROOT_ID).children().to_vec();
+        assert!(children(&with).contains(&PROFILE_EDITOR_WINDOW_CLOSE_ID));
+        assert!(!children(&without).contains(&PROFILE_EDITOR_WINDOW_CLOSE_ID));
+        // Fechar, o formulário e o rodapé: nenhum minimizar nem maximizar.
+        assert_eq!(children(&with).len(), 3);
+        assert_eq!(children(&without).len(), 2);
+    }
+
+    #[test]
+    fn the_forget_buttons_come_first_and_a_missing_secret_makes_one_disabled() {
+        let footer = [
+            (EditorButton::ForgetPassword, true),
+            (EditorButton::ForgetPassphrase, false),
+            (EditorButton::Cancel, true),
+            (EditorButton::Ok, true),
+        ];
+        let update = build_profile_editor_tree(
+            &profile_editor_layout_for_test(true),
+            "Editar perfil — prod",
+            &[],
+            &footer,
+            None,
+            &pt(),
+            "pt-BR",
+        );
+        let group = node(&update, PROFILE_EDITOR_FOOTER_ID);
+        let buttons: Vec<(&str, bool)> = group
+            .children()
+            .iter()
+            .map(|id| {
+                let button = node(&update, *id);
+                (button.label().unwrap(), button.is_disabled())
+            })
+            .collect();
+        assert_eq!(
+            buttons,
+            [
+                ("Esquecer senha", false),
+                ("Esquecer passphrase", true),
+                ("Cancelar", false),
+                ("OK", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_language_switch_changes_the_button_labels() {
+        let update = tree(true, &[], None, &test_support::en_us());
+        let footer = node(&update, PROFILE_EDITOR_FOOTER_ID);
+        let labels: Vec<&str> = footer
+            .children()
+            .iter()
+            .map(|id| node(&update, *id).label().unwrap())
+            .collect();
+        assert_eq!(labels, ["Cancel", "OK"]);
+    }
+
+    #[test]
+    fn every_field_is_tied_to_the_label_above_it() {
+        let rows = profile_editor_rows_for_test(true, false);
+        let update = tree(true, &rows, None, &pt());
+        for (index, row) in rows.iter().enumerate() {
+            let label = node(&update, profile_editor_label_id(index));
+            assert_eq!(label.role(), Role::Label);
+            assert_eq!(label.label(), Some(row.name.as_str()), "row {index}");
+            let control = node(&update, profile_editor_row_id(index));
+            assert_eq!(
+                control.labelled_by(),
+                [profile_editor_label_id(index)],
+                "{} must be labelled by its label",
+                row.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_form_rows_come_in_the_order_the_form_shows_them() {
+        let rows = profile_editor_rows_for_test(true, false);
+        let update = tree(true, &rows, None, &pt());
+        let form = node(&update, PROFILE_EDITOR_FORM_ID);
+        let labels: Vec<&str> = form
+            .children()
+            .iter()
+            .filter(|id| node(&update, **id).role() == Role::Label)
+            .map(|id| node(&update, *id).label().unwrap())
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Nome",
+                "Identificador",
+                "Badge",
+                "Host",
+                "Porta",
+                "Usuário",
+                "Autenticação",
+                "Arquivo da chave"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_roles_are_the_ones_the_settings_screen_gives_the_same_controls() {
+        let rows = profile_editor_rows_for_test(true, false);
+        let update = tree(true, &rows, None, &pt());
+        let role_of = |name: &str| {
+            let index = rows.iter().position(|row| row.name == name).unwrap();
+            node(&update, profile_editor_row_id(index)).role()
+        };
+        assert_eq!(role_of("Nome"), Role::TextInput);
+        assert_eq!(role_of("Host"), Role::TextInput);
+        assert_eq!(role_of("Porta"), Role::SpinButton);
+        assert_eq!(role_of("Autenticação"), Role::ComboBox);
+        let local = profile_editor_rows_for_test(false, false);
+        let update = tree(true, &local, None, &pt());
+        let args = local
+            .iter()
+            .position(|row| row.name == "Argumentos")
+            .unwrap();
+        assert_eq!(
+            node(&update, profile_editor_row_id(args)).role(),
+            Role::List
+        );
+    }
+
+    #[test]
+    fn a_refused_field_is_invalid_and_its_reason_is_the_description() {
+        let rows = profile_editor_rows_for_test(true, true);
+        let update = tree(true, &rows, None, &pt());
+        let refused: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.invalid.is_some())
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(refused.len(), 1, "the fixture refuses exactly one field");
+        let index = refused[0];
+        let control = node(&update, profile_editor_row_id(index));
+        assert_eq!(control.description(), rows[index].invalid.as_deref());
+        assert_eq!(control.invalid(), Some(accesskit::Invalid::True));
+        // E nenhum dos outros leva descrição nem marca de inválido.
+        for (other, _) in rows.iter().enumerate().filter(|(i, _)| *i != index) {
+            let control = node(&update, profile_editor_row_id(other));
+            assert_eq!(control.description(), None, "row {other}");
+            assert_eq!(control.invalid(), None, "row {other}");
+        }
+    }
+
+    #[test]
+    fn the_focused_row_takes_the_accessibility_focus() {
+        let rows = profile_editor_rows_for_test(true, false);
+        let update = tree(true, &rows, Some(EditorFocus::Row(2)), &pt());
+        assert_eq!(update.focus, profile_editor_row_id(2));
+        // Uma linha que não existe não deixa o foco solto.
+        let update = tree(true, &rows, Some(EditorFocus::Row(99)), &pt());
+        assert_eq!(update.focus, PROFILE_EDITOR_ROOT_ID);
+    }
+
+    #[test]
+    fn every_node_id_is_unique_and_inside_the_editor_block() {
+        let rows = profile_editor_rows_for_test(false, true);
+        let update = tree(
+            true,
+            &rows,
+            Some(EditorFocus::Button(EditorButton::Cancel)),
+            &pt(),
+        );
+        let mut ids: Vec<u64> = update.nodes.iter().map(|(id, _)| id.0).collect();
+        assert!(ids.iter().all(|id| *id >= PROFILE_EDITOR_ID_BASE));
+        let total = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), total);
+        // Acima do bloco da tela de configurações, inclusive das linhas dela.
+        const { assert!(PROFILE_EDITOR_ID_BASE > SETTINGS_ROW_BASE + 1_000 * SETTINGS_ROW_STRIDE) };
+        let known: Vec<NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+        for (_, node) in &update.nodes {
+            for child in node.children() {
+                assert!(known.contains(child), "filho {child:?} fora da árvore");
             }
         }
     }

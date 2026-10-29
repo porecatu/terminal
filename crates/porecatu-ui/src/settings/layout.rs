@@ -353,6 +353,12 @@ pub(crate) enum BlockSpec {
         control: (f32, f32),
         two_lines: bool,
         reason: bool,
+        /// A linha é a de um perfil da lista (ADR-0080 §7): o badge, de que
+        /// este é a largura (zero, sem badge), vem **antes** do nome, e à
+        /// direita ficam, nesta ordem, o ponto de pendente e o `control` -- o
+        /// lápis e o `X` --, encostado na borda. `None` nas outras linhas, que
+        /// têm o controle antes do ponto e do restaurar padrão.
+        profile_badge: Option<f32>,
     },
     /// O campo de filtro do grupo Atalhos (RF-16.28), em largura cheia no
     /// topo.
@@ -420,6 +426,53 @@ pub(crate) fn row_left_width(m: &Metrics, panel_width: f32, control_width: f32) 
     (row_width - m.row_padding_x - right_cluster - m.row_gap).max(0.0)
 }
 
+/// O espaço que o badge de um perfil toma antes do nome: o desenho e o vão
+/// (`list_gap`) até o nome; nada, sem badge.
+fn badge_space(m: &Metrics, badge_width: f32) -> f32 {
+    if badge_width > 0.0 {
+        badge_width + m.list_gap
+    } else {
+        0.0
+    }
+}
+
+/// [`row_left_width`] da linha de um perfil (ADR-0080 §7): a linha menos os dois
+/// `padding`, o badge antes do nome, e o grupo da direita -- o controle (lápis
+/// e `X`), o ponto de pendente e os vãos entre eles e o nome. É a conta de
+/// [`panel_geometry`] para uma linha com `profile_badge`.
+pub(crate) fn profile_left_width(
+    m: &Metrics,
+    panel_width: f32,
+    badge_width: f32,
+    control_width: f32,
+) -> f32 {
+    let row_width = panel_width - m.panel_padding * 2.0;
+    let right_cluster = control_width + m.row_gap + m.dot_size + m.row_gap;
+    (row_width - m.row_padding_x * 2.0 - badge_space(m, badge_width) - right_cluster).max(0.0)
+}
+
+/// Os dois botões do controle de um perfil, dentro do retângulo `control`: o
+/// `X` de excluir encostado na direita e, **imediatamente à esquerda dele**, o
+/// lápis -- os dois com o tamanho do botão de restaurar (a anatomia do botão
+/// de fechar da aba) e o vão `list_gap` entre eles, o mesmo que separa o campo
+/// do `X` nas listas. Uma conta só para a pintura, o clique e a árvore.
+pub(crate) fn profile_item_buttons(control: Rect, m: &Metrics) -> (Rect, Rect) {
+    let button = |x: f32| Rect {
+        x,
+        y: control.y + (control.height - m.restore_height) / 2.0,
+        width: m.restore_width,
+        height: m.restore_height,
+    };
+    let remove = button(control.x + control.width - m.restore_width);
+    let edit = button(remove.x - m.list_gap - m.restore_width);
+    (edit, remove)
+}
+
+/// Largura do controle de um perfil: o lápis, o vão e o `X`.
+pub(crate) fn profile_control_width(m: &Metrics) -> f32 {
+    m.restore_width + m.list_gap + m.restore_width
+}
+
 /// Posiciona título, rótulos de seção e linhas, de cima para baixo.
 pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec]) -> PanelGeometry {
     let x = m.panel_padding;
@@ -445,6 +498,7 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 control,
                 two_lines,
                 reason,
+                profile_badge,
             } => {
                 if previous_was_row {
                     y += m.row_gap;
@@ -468,26 +522,59 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                     width,
                     height,
                 };
-                let inner_x = x + m.row_padding_x;
                 let right = x + width - m.row_padding_x;
                 let center_y = y + height / 2.0;
-                let restore = Rect {
-                    x: right - m.restore_width,
-                    y: center_y - m.restore_height / 2.0,
-                    width: m.restore_width,
-                    height: m.restore_height,
-                };
-                let dot = Rect {
-                    x: restore.x - m.row_gap - m.dot_size,
+                let dot_at = |x: f32| Rect {
+                    x,
                     y: center_y - m.dot_size / 2.0,
                     width: m.dot_size,
                     height: m.dot_size,
                 };
-                let control_rect = Rect {
-                    x: dot.x - m.row_gap - control.0,
+                let control_at = |x: f32| Rect {
+                    x,
                     y: center_y - control.1 / 2.0,
                     width: control.0,
                     height: control.1,
+                };
+                // Uma linha de opção: o controle, o ponto e o restaurar padrão,
+                // nessa ordem. A de um perfil não tem restaurar: o controle (lápis
+                // e `X`) encosta na borda, o ponto vem antes dele, e o badge
+                // abre a linha, antes do nome.
+                let (inner_x, control_rect, dot, restore) = match profile_badge {
+                    None => {
+                        let restore = Rect {
+                            x: right - m.restore_width,
+                            y: center_y - m.restore_height / 2.0,
+                            width: m.restore_width,
+                            height: m.restore_height,
+                        };
+                        let dot = dot_at(restore.x - m.row_gap - m.dot_size);
+                        let control_rect = control_at(dot.x - m.row_gap - control.0);
+                        (x + m.row_padding_x, control_rect, dot, restore)
+                    }
+                    Some(badge_width) => {
+                        let control_rect = control_at(right - control.0);
+                        let dot = dot_at(control_rect.x - m.row_gap - m.dot_size);
+                        let restore = Rect {
+                            x: right,
+                            y: center_y - m.restore_height / 2.0,
+                            width: 0.0,
+                            height: m.restore_height,
+                        };
+                        (
+                            x + m.row_padding_x + badge_space(m, badge_width),
+                            control_rect,
+                            dot,
+                            restore,
+                        )
+                    }
+                };
+                // O nome e a descrição acabam antes do que vem à direita: o
+                // controle, ou -- numa linha de perfil -- o ponto.
+                let name_end = if profile_badge.is_some() {
+                    dot.x
+                } else {
+                    control_rect.x
                 };
                 let top = center_y - left_height / 2.0;
                 blocks.push(BlockGeometry::Row(RowGeometry {
@@ -498,7 +585,7 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                     control: control_rect,
                     dot,
                     restore,
-                    left_width: (control_rect.x - m.row_gap - inner_x).max(0.0),
+                    left_width: (name_end - m.row_gap - inner_x).max(0.0),
                 }));
                 y += height;
                 previous_was_row = true;
@@ -534,6 +621,135 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
     PanelGeometry {
         title_origin,
         blocks,
+        content_height: y + m.panel_padding,
+    }
+}
+
+// ---- coluna (ADR-0080 §4)
+
+/// O que o layout em coluna precisa saber de cada campo do formulário do editor
+/// de perfil: a altura do controle (já medida por quem chama), se há a nota de
+/// erro, e em que linha ele fica.
+///
+/// Uma **linha** do formulário tem um ou mais campos lado a lado, cada um com o
+/// rótulo acima do seu controle: o campo com `new_line` abre a linha, e os
+/// seguintes sem `new_line` entram nela, da esquerda para a direita. Um campo
+/// `fixed` tem a largura que se pede (a porta e o badge ficam com o campo
+/// numérico, `number_field_width`); os outros dividem **por igual** o que
+/// sobra, descontado o vão `list_gap` entre campos -- o mesmo que separa o campo
+/// de nome e o de valor nas listas. Um campo sozinho na linha leva a largura
+/// útil inteira.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ColumnSpec {
+    pub control_height: f32,
+    pub reason: bool,
+    pub new_line: bool,
+    /// A largura do controle, se é fixa; `None` divide o que sobra da linha.
+    pub fixed: Option<f32>,
+}
+
+/// A geometria de um campo em coluna, em coordenadas de **conteúdo**: `x`
+/// relativo à borda esquerda do painel, `y` ao topo do corpo rolável.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ColumnRow {
+    /// Do rótulo ao fim do controle, na largura da célula: o alvo do clique que
+    /// só leva o foco ao campo.
+    pub rect: Rect,
+    pub label_origin: (f32, f32),
+    pub control: Rect,
+    /// Onde a nota de erro começa; `None` sem erro. A nota fica **abaixo da
+    /// linha**, alinhada à esquerda do formulário e na largura útil -- o campo
+    /// de uma célula estreita não comportaria a frase --, e as notas de uma
+    /// mesma linha se empilham, na ordem dos campos.
+    pub reason_origin: Option<(f32, f32)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ColumnGeometry {
+    /// Um por campo, na ordem de `specs`.
+    pub rows: Vec<ColumnRow>,
+    /// Altura total, com o `padding` de baixo.
+    pub content_height: f32,
+}
+
+/// Posiciona as linhas do formulário, de cima para baixo: o rótulo, o controle
+/// **abaixo** dele, e a nota de erro abaixo da linha, com `row_gap` entre uma
+/// linha e a seguinte. A largura útil é a do painel menos o `padding` dos dois
+/// lados; nenhum valor é novo -- o vão entre rótulo e controle é o do nome e da
+/// descrição de uma linha de opção ([`NAME_DESCRIPTION_GAP`]), e o vão entre
+/// campos de uma linha é o `list_gap`.
+pub(crate) fn column_geometry(
+    m: &Metrics,
+    panel_width: f32,
+    specs: &[ColumnSpec],
+) -> ColumnGeometry {
+    let x = m.panel_padding;
+    let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+    let mut y = m.panel_padding;
+    let mut rows: Vec<ColumnRow> = Vec::with_capacity(specs.len());
+    let mut at = 0;
+    let mut first_line = true;
+    while at < specs.len() {
+        // A linha: este campo e os que o seguem sem abrir outra.
+        let end = (at + 1..specs.len())
+            .find(|i| specs[*i].new_line)
+            .unwrap_or(specs.len());
+        let line = &specs[at..end];
+        if !first_line {
+            y += m.row_gap;
+        }
+        first_line = false;
+
+        let gaps = m.list_gap * line.len().saturating_sub(1) as f32;
+        let fixed: f32 = line.iter().filter_map(|spec| spec.fixed).sum();
+        let flexible = line.iter().filter(|spec| spec.fixed.is_none()).count();
+        let flex_width = if flexible == 0 {
+            0.0
+        } else {
+            ((width - fixed - gaps) / flexible as f32).max(0.0)
+        };
+
+        let top = y;
+        let control_y = top + m.name_size + NAME_DESCRIPTION_GAP;
+        let mut cell_x = x;
+        let mut controls_bottom = control_y;
+        for spec in line {
+            let cell_width = spec.fixed.unwrap_or(flex_width);
+            let control = Rect {
+                x: cell_x,
+                y: control_y,
+                width: cell_width,
+                height: spec.control_height,
+            };
+            controls_bottom = controls_bottom.max(control.y + control.height);
+            rows.push(ColumnRow {
+                rect: Rect {
+                    x: cell_x,
+                    y: top,
+                    width: cell_width,
+                    height: control.y + control.height - top,
+                },
+                label_origin: (cell_x, top),
+                control,
+                reason_origin: None,
+            });
+            cell_x += cell_width + m.list_gap;
+        }
+
+        // As notas, abaixo da linha, uma sob a outra.
+        let mut bottom = controls_bottom;
+        for (cell, spec) in rows[at..].iter_mut().zip(line) {
+            if spec.reason {
+                let origin = (x, bottom + NAME_DESCRIPTION_GAP);
+                cell.reason_origin = Some(origin);
+                bottom = origin.1 + m.description_size;
+            }
+        }
+        y = bottom;
+        at = end;
+    }
+    ColumnGeometry {
+        rows,
         content_height: y + m.panel_padding,
     }
 }
@@ -640,24 +856,67 @@ pub(crate) fn footer_buttons(
     footer: Rect,
     widths: [f32; 3],
 ) -> [(FooterButton, Rect); 3] {
-    let y = footer.y + FOOTER_PADDING_Y;
-    let rect = |x: f32, width: f32| Rect {
-        x,
-        y,
-        width,
-        height: m.button_height,
+    let open_file = Rect {
+        x: footer.x + m.panel_padding,
+        width: widths[0],
+        ..right_aligned_buttons(m, footer, [0.0])[0]
     };
-    let open_file = rect(footer.x + m.panel_padding, widths[0]);
-    let save = rect(
-        footer.x + footer.width - m.panel_padding - widths[2],
-        widths[2],
-    );
-    let discard = rect(save.x - m.button_gap - widths[1], widths[1]);
+    let [discard, save] = right_aligned_buttons(m, footer, [widths[1], widths[2]]);
     [
         (FooterButton::OpenFile, open_file),
         (FooterButton::Discard, discard),
         (FooterButton::Save, save),
     ]
+}
+
+/// Os botões do rodapé colados à direita, na ordem de `widths` (o último
+/// encosta no `padding` do painel; cada um fica a `button_gap` do seguinte).
+/// É a conta de Descartar e Salvar, e a dos dois do editor de perfil
+/// (ADR-0080 §5): uma só.
+pub(crate) fn right_aligned_buttons<const N: usize>(
+    m: &Metrics,
+    footer: Rect,
+    widths: [f32; N],
+) -> [Rect; N] {
+    let y = footer.y + FOOTER_PADDING_Y;
+    let mut right = footer.x + footer.width - m.panel_padding;
+    let mut rects = [Rect {
+        x: 0.0,
+        y,
+        width: 0.0,
+        height: m.button_height,
+    }; N];
+    for (rect, width) in rects.iter_mut().zip(widths).rev() {
+        rect.x = right - width;
+        rect.width = width;
+        right = rect.x - m.button_gap;
+    }
+    rects
+}
+
+/// Os botões do rodapé colados à esquerda, na ordem de `widths` (o primeiro
+/// encosta no `padding` do painel; cada um fica a `button_gap` do seguinte). É o
+/// espelho de [`right_aligned_buttons`], e a conta dos botões "Esquecer" do
+/// editor de perfil (ADR-0080 §5).
+pub(crate) fn left_aligned_buttons<const N: usize>(
+    m: &Metrics,
+    footer: Rect,
+    widths: [f32; N],
+) -> [Rect; N] {
+    let y = footer.y + FOOTER_PADDING_Y;
+    let mut left = footer.x + m.panel_padding;
+    let mut rects = [Rect {
+        x: 0.0,
+        y,
+        width: 0.0,
+        height: m.button_height,
+    }; N];
+    for (rect, width) in rects.iter_mut().zip(widths) {
+        rect.x = left;
+        rect.width = width;
+        left += width + m.button_gap;
+    }
+    rects
 }
 
 // ---- hit-test e foco
@@ -707,6 +966,8 @@ pub(crate) enum ControlPart {
     },
     /// O `X` que remove o item.
     ListRemove(usize),
+    /// O lápis de uma linha de perfil, que abre o editor (ADR-0080 §7).
+    EditProfile,
     /// O item "Adicionar" no fim da lista.
     ListAdd,
     /// O chip `n` de uma linha de atalho: clicar nele entra em captura
@@ -986,6 +1247,7 @@ mod tests {
             control,
             two_lines,
             reason: false,
+            profile_badge: None,
         }
     }
 
@@ -1039,6 +1301,7 @@ mod tests {
                 control,
                 two_lines: true,
                 reason: true,
+                profile_badge: None,
             }],
         );
         let plain = row_of(&plain.blocks[0]);
@@ -1066,6 +1329,7 @@ mod tests {
                 control: (88.0, 30.0),
                 two_lines: false,
                 reason: true,
+                profile_badge: None,
             }],
         );
         let row = row_of(&geometry.blocks[0]);
@@ -1404,6 +1668,7 @@ mod tests {
             control: (m.text_field_width, m.field_height),
             two_lines: true,
             reason: false,
+            profile_badge: None,
         };
         let specs = [
             BlockSpec::Section,

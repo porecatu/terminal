@@ -8754,6 +8754,23 @@ impl App {
         };
         settings.set_session_theme(self.session_theme.as_deref());
         settings.refresh_access_tree(env, gpu.text_measurer(), &self.language_tag);
+        self.refresh_profile_editor_access_tree();
+    }
+
+    /// A árvore da janela do editor de perfil (ADR-0080 §8), no mesmo ponto
+    /// único das outras (ADR-0043 §3).
+    fn refresh_profile_editor_access_tree(&mut self) {
+        let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
+            return;
+        };
+        let env = settings::Env {
+            style: &self.style,
+            config: &self.config,
+        };
+        let language = &self.language_tag;
+        settings.with_profile_editor(|editor, draft| {
+            editor.refresh_access_tree(env, gpu.text_measurer(), language, draft);
+        });
     }
 
     /// RF-3.1 (ADR-0039 §2), gatilho temporal do Windows: mais próxima
@@ -9352,21 +9369,8 @@ impl App {
             (self.config.appearance.settings.window_width as f32 * scale).round() as u32,
             (self.config.appearance.settings.window_height as f32 * scale).round() as u32,
         );
-        let position = origin_window.and_then(|window| {
-            let origin_position = window.outer_position().ok()?;
-            let origin_size = window.outer_size();
-            let monitor = window.current_monitor().map(|m| {
-                let position = m.position();
-                let size = m.size();
-                ((position.x, position.y), (size.width, size.height))
-            });
-            Some(settings::centered_position(
-                (origin_position.x, origin_position.y),
-                (origin_size.width, origin_size.height),
-                size,
-                monitor,
-            ))
-        });
+        let position =
+            origin_window.and_then(|window| settings::centered_over_window(window, size));
         let attributes = settings::window_attributes(
             &msg::settings::window_title(&self.catalog),
             position,
@@ -9456,10 +9460,160 @@ impl App {
         Some(settings)
     }
 
+    /// Abre a janela do editor de perfil que a tela de configurações pediu
+    /// (ADR-0080 §1): centrada sobre a tela, no monitor dela, e entregue a ela --
+    /// o dono do estado é a tela, `App` só tem o `event_loop` e o `GpuContext`.
+    /// Com um editor já aberto a tela o traz para a frente antes, e nada chega
+    /// aqui.
+    fn open_profile_editor(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        editor: settings::ProfileEditor,
+    ) {
+        let Some(owner) = self.settings.as_ref().map(SettingsWindow::window) else {
+            return;
+        };
+        let scale = owner.scale_factor() as f32;
+        let size = (
+            (self.config.appearance.settings.profile_window_width as f32 * scale).round() as u32,
+            (self.config.appearance.settings.profile_window_height as f32 * scale).round() as u32,
+        );
+        let attributes = settings::profile_editor_window_attributes(
+            &settings::ProfileEditorWindow::title_for(&editor, &self.catalog),
+            settings::centered_over_window(owner, size),
+            &self.config,
+            owner,
+        );
+        let Some(window) = self.create_profile_editor_window(event_loop, attributes, editor) else {
+            return;
+        };
+        if let Some(settings) = &mut self.settings {
+            settings.attach_profile_editor(window);
+        }
+    }
+
+    /// Cria a janela do SO e a surface `wgpu` do editor de perfil, como
+    /// `create_settings_window` faz para a tela. O título vem do próprio editor
+    /// (idioma em uso) e já vem nos atributos.
+    fn create_profile_editor_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        attributes: WindowAttributes,
+        editor: settings::ProfileEditor,
+    ) -> Option<settings::ProfileEditorWindow> {
+        let gpu = self.gpu.as_mut()?;
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => Arc::new(window),
+            Err(err) => {
+                eprintln!("porecatu: falha ao criar a janela do editor de perfil: {err}");
+                return None;
+            }
+        };
+        // ADR-0043 §1: o adaptador exige a janela ainda invisível.
+        let access_adapter = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        );
+        let size = window.inner_size();
+        let scale = window.scale_factor() as f32;
+        let mut surface =
+            match gpu.create_window_surface(Arc::clone(&window), size.width, size.height, false) {
+                Ok(surface) => surface,
+                Err(err) => {
+                    eprintln!(
+                        "porecatu: falha ao criar surface da janela do editor de perfil: {err}"
+                    );
+                    return None;
+                }
+            };
+        surface.resize(gpu, size.width, size.height, scale);
+        let editor_window = settings::ProfileEditorWindow::new(
+            Arc::clone(&window),
+            surface,
+            scale,
+            Arc::clone(&self.catalog),
+            access_adapter,
+            editor,
+        );
+        window.set_visible(true);
+        editor_window.request_redraw();
+        Some(editor_window)
+    }
+
+    /// Evento da janela do editor de perfil -- o primeiro teste do roteamento no
+    /// topo de `window_event` (ADR-0080 §1). Como a tela, não consulta o
+    /// `keymap` do processo: o editor lê o próprio teclado.
+    fn profile_editor_window_event(&mut self, event: WindowEvent) {
+        let env = settings::Env {
+            style: &self.style,
+            config: &self.config,
+        };
+        let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) else {
+            return;
+        };
+        // O editor e o rascunho de perfis da tela, num empréstimo só: a janela
+        // edita a cópia e do rascunho só lê (ADR-0080 §6).
+        let (pal, term_pal) = (&self.pal, &self.term_pal);
+        let press = settings.with_profile_editor(|editor, draft| {
+            editor.process_access_event(&event);
+            let mut press = settings::EditorPress::Nothing;
+            match event {
+                WindowEvent::CloseRequested => press = settings::EditorPress::Cancel,
+                WindowEvent::Resized(size) => editor.resize(gpu, size.width, size.height),
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    editor.rescale(gpu, scale_factor as f32);
+                }
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    editor.modifiers_changed(modifiers.state());
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    editor.cursor_moved(position, env, gpu.text_measurer(), draft);
+                }
+                WindowEvent::CursorLeft { .. } => editor.cursor_left(),
+                WindowEvent::MouseWheel { delta, .. } => {
+                    editor.wheel(delta, env, gpu.text_measurer(), draft);
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                } => press = editor.left_pressed(env, gpu.text_measurer(), draft),
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                    ..
+                } => press = editor.left_released(env),
+                WindowEvent::Focused(false) => editor.focus_lost(),
+                WindowEvent::KeyboardInput { event: key, .. } => {
+                    press = editor.key(&key, env, gpu.text_measurer(), draft);
+                }
+                // Minimizada não há o que mostrar; a restauração pede o
+                // próximo quadro.
+                WindowEvent::RedrawRequested if !editor.is_minimized() => {
+                    let frame = editor.paint(env, pal, term_pal, gpu.text_measurer(), draft);
+                    editor.render(gpu, pal, &frame);
+                }
+                _ => {}
+            }
+            press
+        });
+        match press {
+            None | Some(settings::EditorPress::Nothing) => {}
+            Some(settings::EditorPress::Cancel) => settings.close_profile_editor(),
+            Some(settings::EditorPress::Ok) => settings.confirm_profile_editor(),
+        }
+    }
+
     /// Fecha a janela de configurações sem encerrar o app (ADR-0059 §2) e
     /// guarda o grupo em que ela estava (RF-16.9). Soltar o `SettingsWindow`
     /// fecha a janela do SO.
     fn close_settings(&mut self) {
+        // O editor aberto cai como Cancelar, e a tela é reabilitada antes de a
+        // janela dele ser destruída (ADR-0080 §2, §6).
+        if let Some(settings) = &mut self.settings {
+            settings.close_profile_editor();
+        }
         // Reabilitar **antes** de destruir a janela: o Windows ativa a dona
         // quando a janela possuída some, e uma dona ainda desabilitada
         // passaria o foco para outro programa.
@@ -9653,6 +9807,15 @@ impl App {
             settings::Press::OpenFile => self.open_config_file_from_settings(),
             settings::Press::Save => self.save_settings(),
             settings::Press::Minimize => self.minimize_settings(),
+        }
+        // O que a tela pediu durante o evento e só `App` sabe atender: abrir o
+        // editor de perfil (ADR-0080 §1).
+        if let Some(editor) = self
+            .settings
+            .as_mut()
+            .and_then(SettingsWindow::take_editor_request)
+        {
+            self.open_profile_editor(event_loop, editor);
         }
     }
 
@@ -10180,15 +10343,25 @@ impl ApplicationHandler<Wakeup> for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        // ADR-0059 §1: a janela de configurações é roteada aqui, no topo, e
-        // nenhum handler de janela de terminal a vê.
-        if self
-            .settings
-            .as_ref()
-            .is_some_and(|settings| settings.window_id() == window_id)
-        {
-            self.settings_window_event(event, event_loop);
-            return;
+        // ADR-0059 §1, ADR-0080 §1: as janelas que não são de terminal são
+        // roteadas aqui, no topo -- o editor de perfil primeiro, depois a tela
+        // de configurações --, e nenhum handler de janela de terminal as vê.
+        match settings::route(
+            window_id,
+            self.settings
+                .as_ref()
+                .and_then(SettingsWindow::profile_editor_id),
+            self.settings.as_ref().map(SettingsWindow::window_id),
+        ) {
+            settings::Route::ProfileEditor => {
+                self.profile_editor_window_event(event);
+                return;
+            }
+            settings::Route::Settings => {
+                self.settings_window_event(event, event_loop);
+                return;
+            }
+            settings::Route::Terminal => {}
         }
         // ADR-0043 §1: "deve ser chamado sempre que um evento de janela
         // novo é recebido e antes dele ser tratado pela aplicação" -- o
@@ -10401,6 +10574,15 @@ impl App {
     /// montagem nem roda, custo zero. Nunca chama `request_redraw`: a
     /// árvore e o frame são consumidores independentes do mesmo estado.
     fn refresh_access_tree(&mut self, window_id: WindowId) {
+        // Cada janela tem a sua árvore: a do editor de perfil e a da tela.
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.profile_editor_id() == Some(window_id))
+        {
+            self.refresh_profile_editor_access_tree();
+            return;
+        }
         if self
             .settings
             .as_ref()
