@@ -16,6 +16,16 @@ primeiro release.
 
 ## [Não publicado]
 
+### Alterado
+
+- **Texto de diálogo nunca é cortado com reticências**
+  ([ADR-0078](docs/adr/0078-largura-e-quebra-de-texto-do-dialogo.md)): o
+  diálogo cresce de 360 até 720 (o dobro do piso), com 20 de margem da janela,
+  e o texto que ainda não cabe quebra em linhas e cresce o modal em altura.
+  Vale para título, corpo, linhas e nota; o caminho de chave do diálogo de
+  senha deixa de ser cortado no meio. As linhas quebradas ficam a
+  `appearance.notices.line_height` uma da outra.
+
 ## [0.9.7] - 2026-10-28
 
 Avisos do app em diálogo modal, botão `+` quadrado e diálogos mais estreitos.

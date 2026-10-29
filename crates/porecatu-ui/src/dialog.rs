@@ -127,8 +127,6 @@ pub struct SecretFacts {
     /// (RF-20.14).
     pub vault_available: bool,
     pub unavailable_note: String,
-    /// O corpo é o caminho de uma chave: trunca no **meio** (ADR-0075 §2).
-    pub body_is_path: bool,
     /// A caixa "Lembrar no cofre do sistema", desmarcada ao abrir.
     pub remember: bool,
     pub focus: SecretFocus,
@@ -528,20 +526,18 @@ impl ConfirmDialog {
         retry: bool,
         action: DialogAction,
     ) -> Self {
-        let (title, plain_body, body_is_path, refused) = match label {
+        let (title, plain_body, refused) = match label {
             SecretLabel::Password { user, host } => {
                 let target = format!("{user}@{host}");
                 (
                     msg::dialog::secret::title_password(catalog, &target),
                     target,
-                    false,
                     msg::dialog::secret::refused_password(catalog),
                 )
             }
             SecretLabel::KeyPassphrase { path } => (
                 msg::dialog::secret::title_passphrase(catalog),
                 path.display().to_string(),
-                true,
                 msg::dialog::secret::refused_passphrase(catalog),
             ),
         };
@@ -557,7 +553,6 @@ impl ConfirmDialog {
             remember_label: msg::dialog::secret::remember(catalog),
             vault_available,
             unavailable_note: msg::dialog::secret::remember_unavailable(catalog),
-            body_is_path: body_is_path && !retry,
             remember: false,
             focus: SecretFocus::Field,
         }));

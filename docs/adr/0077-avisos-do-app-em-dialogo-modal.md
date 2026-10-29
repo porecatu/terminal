@@ -35,6 +35,6 @@ O dono do produto pediu que essas mensagens deixem de ser impressas no terminal 
 
 | Risco | Probabilidade | Impacto | Mitigação |
 |---|---|---|---|
-| Linha longa do aviso cortada no fim (`measurer.truncate`) | Média | Baixo | As frases do catálogo cabiam na largura 760 (o default agora é 360: frase mais longa que o piso é cortada com reticências); as de erro do SSH têm uma ideia por linha |
+| Linha longa do aviso cortada no fim (`measurer.truncate`) — **revisto pelo [ADR-0078](0078-largura-e-quebra-de-texto-do-dialogo.md): o diálogo cresce até 720 e quebra, nunca corta** | Média | Baixo | As frases do catálogo cabiam na largura 760 (o default agora é 360: frase mais longa que o piso é cortada com reticências); as de erro do SSH têm uma ideia por linha |
 | Modal interrompe quem digita no painel | Baixa | Médio | Abre só no painel focado e **Esc** fecha; o aviso vivo fechado não volta até o estado final |
 | Aval visual do dono ainda não dado ao binário | Alta | Baixo | Registrado no roadmap como pendente |

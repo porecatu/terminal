@@ -53,6 +53,8 @@ Sobre a anatomia da §2.15 — overlay, largura 380, título, botões —, na or
 > **Nova revisão (largura 500).** O dono reduziu depois o default de `appearance.dialog.width` de 760 para **500**; a largura é piso e o diálogo cresce quando o conteúdo exige. Onde este ADR diz 760, leia 500.
 >
 > **Nova revisão (largura 360).** O default caiu depois para **360**; onde este ADR diz 760 ou 500, leia 360.
+>
+> **Revisão de texto longo ([ADR-0078](0078-largura-e-quebra-de-texto-do-dialogo.md)).** A largura 360 é piso e o diálogo cresce até 720; o texto que não cabe **quebra**, nunca é cortado. Onde este ADR diz "corpo de uma linha", "truncado no meio" (caminho da chave) ou "cortada ao conteúdo" (linhas de aviso), leia: quebra em linhas, o caminho de chave por caractere.
 
 | Elemento | Origem |
 |---|---|

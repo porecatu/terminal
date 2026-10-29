@@ -317,18 +317,16 @@ mod tests {
     }
 
     #[test]
-    fn the_passphrase_dialog_shows_the_key_path_to_truncate_in_the_middle() {
+    fn the_passphrase_dialog_shows_the_key_path_and_a_retry_swaps_it_for_the_error() {
         let key = SecretLabel::KeyPassphrase {
             path: "/home/me/.ssh/id_ed25519".into(),
         };
         let dialog = ConfirmDialog::secret(&test_support::pt_br(), &key, true, false, action());
         assert_eq!(dialog.title, "Passphrase da chave");
         assert_eq!(dialog.body, "/home/me/.ssh/id_ed25519");
-        assert!(facts(&dialog).body_is_path);
 
         let retry = ConfirmDialog::secret(&test_support::pt_br(), &key, true, true, action());
         assert_eq!(retry.body, "A passphrase não abre a chave.");
-        assert!(!facts(&retry).body_is_path);
     }
 
     #[test]

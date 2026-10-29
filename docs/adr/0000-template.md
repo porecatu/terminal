@@ -79,6 +79,7 @@
 | [0075](0075-superficies-de-ui-do-ssh.md) | Superfícies de UI do SSH: diálogo com campo mascarado e linhas de dado, pergunta que espera o foco da aba, grupo "Perfis" na tela de configurações | Aceito — aval visual pendente |
 | [0076](0076-reconexao-automatica.md) | Reconexão automática: keepalive de 15 s, cinco tentativas em 1-2-4-8-16 s decididas por estado puro em `porecatu-ui`, uma reconexão por conexão | Aceito |
 | [0077](0077-avisos-do-app-em-dialogo-modal.md) | Avisos do app em diálogo modal, no lugar de nota escrita no grid | Aceito |
+| [0078](0078-largura-e-quebra-de-texto-do-dialogo.md) | Largura e quebra de texto do diálogo: piso 360, teto 720, nunca reticências | Aceito |
 
 ## Convenção
 

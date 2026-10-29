@@ -31,8 +31,8 @@
 //! terminal_frame]`): a decisão do ADR-0032 é fixa, não alternável.
 //! `TextRun` é sempre uma linha: o corpo do **aviso** quebra em várias
 //! (`wrap_body`, uma run por linha, o card cresce em altura); o do diálogo
-//! trunca em uma só com o `TextMeasurer`, em vez do "três linhas com
-//! reticências" literal.
+//! também: cresce em largura até o teto e, passando dele, quebra em linhas e
+//! cresce em altura -- nunca é cortado com reticências (ADR-0078).
 //!
 //! F4 etapa 2: toda geometria e cor daqui vem de `&porecatu_config::Config`
 //! (parâmetro `config`) e `&palette::ResolvedPalette` (parâmetro `pal`),
@@ -136,12 +136,18 @@ fn warning_body_max_width(config: &porecatu_config::Config) -> f32 {
 
 /// Maior prefixo de `word` (em bytes) que cabe em `width`; no mínimo um
 /// caractere, para a quebra sempre avançar.
-fn fitting_prefix_bytes(word: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> usize {
+fn fitting_prefix_bytes(
+    word: &str,
+    font: FontFace,
+    size: f32,
+    width: f32,
+    measurer: &mut TextMeasurer,
+) -> usize {
     let ends: Vec<usize> = word.char_indices().map(|(i, c)| i + c.len_utf8()).collect();
     let (mut low, mut high) = (1, ends.len());
     while low < high {
         let mid = (low + high).div_ceil(2);
-        if measurer.measure_width(&word[..ends[mid - 1]], BODY_FONT, size) <= width {
+        if measurer.measure_width(&word[..ends[mid - 1]], font, size) <= width {
             low = mid;
         } else {
             high = mid - 1;
@@ -154,8 +160,14 @@ fn fitting_prefix_bytes(word: &str, size: f32, width: f32, measurer: &mut TextMe
 /// palavra mais larga que a linha (caminho, URL) é partida por caractere.
 /// `\n` do texto é respeitado. Só mede quando o texto não cabe numa linha --
 /// o caso comum (aviso curto) custa um shaping.
-fn wrap_body(text: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> Vec<String> {
-    if !text.contains('\n') && measurer.measure_width(text, BODY_FONT, size) <= width {
+fn wrap_body(
+    text: &str,
+    font: FontFace,
+    size: f32,
+    width: f32,
+    measurer: &mut TextMeasurer,
+) -> Vec<String> {
+    if !text.contains('\n') && measurer.measure_width(text, font, size) <= width {
         return vec![text.to_owned()];
     }
     let mut lines: Vec<String> = Vec::new();
@@ -167,7 +179,7 @@ fn wrap_body(text: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> 
             } else {
                 format!("{current} {word}")
             };
-            if measurer.measure_width(&candidate, BODY_FONT, size) <= width {
+            if measurer.measure_width(&candidate, font, size) <= width {
                 current = candidate;
                 continue;
             }
@@ -175,8 +187,8 @@ fn wrap_body(text: &str, size: f32, width: f32, measurer: &mut TextMeasurer) -> 
                 lines.push(std::mem::take(&mut current));
             }
             current = word.to_owned();
-            while measurer.measure_width(&current, BODY_FONT, size) > width {
-                let cut = fitting_prefix_bytes(&current, size, width, measurer);
+            while measurer.measure_width(&current, font, size) > width {
+                let cut = fitting_prefix_bytes(&current, font, size, width, measurer);
                 let rest = current.split_off(cut);
                 lines.push(std::mem::replace(&mut current, rest));
             }
@@ -224,7 +236,13 @@ pub fn layout_warnings(
         // Título e corpo; `paint_warnings` desenha a primeira linha do
         // corpo em `title_y + line_height`, então a altura reserva uma
         // `line_height` por linha já quebrada (no mínimo uma).
-        let body_lines = wrap_body(&warning.body, body_size, body_max_width, measurer);
+        let body_lines = wrap_body(
+            &warning.body,
+            BODY_FONT,
+            body_size,
+            body_max_width,
+            measurer,
+        );
         let height =
             padding_y * 2.0 + title_size.max(line_height) + line_height * body_lines.len() as f32;
         let rect = Rect {
@@ -383,6 +401,71 @@ pub struct DialogLayout {
     pub toggle_rect: Option<Rect>,
     /// A nota esmaecida abaixo da caixa, sem cofre (RF-20.14).
     pub note_rect: Option<Rect>,
+    /// O texto já quebrado na largura do diálogo (ADR-0078): a altura de
+    /// `modal_rect` depende dele, e o paint não mede de novo. Uma entrada de
+    /// `line_rows` por linha de `ConfirmDialog::lines`.
+    pub title_rows: Vec<String>,
+    pub body_rows: Vec<String>,
+    pub line_rows: Vec<Vec<String>>,
+    pub note_rows: Vec<String>,
+}
+
+/// Margem mínima entre o diálogo e a borda da janela, dos dois lados.
+const DIALOG_WINDOW_MARGIN: f32 = 20.0;
+/// O teto de largura do diálogo, em múltiplos da largura configurada (o piso).
+const DIALOG_MAX_WIDTH_FACTOR: f32 = 2.0;
+
+/// Altura de um bloco de texto de `rows` linhas: a primeira custa o corpo da
+/// fonte, cada continuação a entrelinha do aviso (`[appearance.notices]`).
+/// Um lugar só -- layout e paint têm de concordar.
+fn dialog_block_height(rows: usize, size: f32, line_height: f32) -> f32 {
+    size + rows.saturating_sub(1) as f32 * line_height
+}
+
+/// Largura do parágrafo mais largo de `text`, sem quebrar.
+fn natural_width(text: &str, font: FontFace, size: f32, measurer: &mut TextMeasurer) -> f32 {
+    text.lines()
+        .map(|line| measurer.measure_width(line, font, size))
+        .fold(0.0_f32, f32::max)
+}
+
+/// `text` em linhas que cabem no diálogo de largura `width`. O que já coube
+/// na medição de `natural_width` não é medido de novo.
+fn dialog_rows(
+    text: &str,
+    natural: f32,
+    font: FontFace,
+    size: f32,
+    width: f32,
+    padding: f32,
+    measurer: &mut TextMeasurer,
+) -> Vec<String> {
+    if natural + padding * 2.0 <= width && !text.contains('\n') {
+        return vec![text.to_owned()];
+    }
+    wrap_body(text, font, size, (width - padding * 2.0).max(0.0), measurer)
+}
+
+/// Uma run por linha de `rows`, a primeira em `y` e cada continuação uma
+/// entrelinha abaixo.
+fn push_rows(
+    out: &mut Vec<Primitive>,
+    rows: &[String],
+    origin: (f32, f32),
+    line_height: f32,
+    font: FontFace,
+    size: f32,
+    color: Color,
+) {
+    for (i, row) in rows.iter().enumerate() {
+        out.push(Primitive::Text(TextRun {
+            origin: (origin.0, origin.1 + i as f32 * line_height),
+            text: row.clone(),
+            font,
+            size_px: size,
+            color,
+        }));
+    }
 }
 
 /// O que `paint_dialog` precisa do diálogo de segredo além do que o
@@ -399,40 +482,6 @@ pub struct SecretView<'a> {
 /// avanço de célula (ADR-0075 §1).
 const MASK_FONT: FontFace = FontFace::Mono { bold: false };
 
-/// Corta `text` no **meio** com reticências até caber em `max_width`: o começo e
-/// o fim de um caminho são o que o identifica (ADR-0075 §2).
-fn truncate_middle(
-    text: &str,
-    font: FontFace,
-    size: f32,
-    max_width: f32,
-    measurer: &mut TextMeasurer,
-) -> String {
-    if measurer.measure_width(text, font, size) <= max_width {
-        return text.to_owned();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let build = |keep: usize| {
-        let head = keep.div_ceil(2);
-        let tail = keep / 2;
-        let mut out: String = chars[..head].iter().collect();
-        out.push('…');
-        out.extend(&chars[chars.len() - tail..]);
-        out
-    };
-    // O maior número de caracteres mantidos que ainda cabe.
-    let (mut low, mut high) = (0, chars.len().saturating_sub(1));
-    while low < high {
-        let mid = (low + high).div_ceil(2);
-        if measurer.measure_width(&build(mid), font, size) <= max_width {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    build(low)
-}
-
 pub fn layout_dialog(
     window_width: f32,
     window_height: f32,
@@ -441,11 +490,15 @@ pub fn layout_dialog(
     measurer: &mut TextMeasurer,
 ) -> DialogLayout {
     let cfg = &config.appearance.dialog;
-    // Nunca mais larga que a janela (a largura configurada é 360).
-    let width = (cfg.width as f32).min(window_width - cfg.padding as f32 * 2.0);
+    // A largura configurada é o piso e o dobro dela é o teto (ADR-0078);
+    // nenhum dos dois passa da janela menos a margem dos dois lados.
+    let window_room = (window_width - DIALOG_WINDOW_MARGIN * 2.0).max(0.0);
+    let floor = (cfg.width as f32).min(window_room);
+    let ceiling = (cfg.width as f32 * DIALOG_MAX_WIDTH_FACTOR).min(window_room);
     let padding = cfg.padding as f32;
     let title_size = cfg.title_font_size as f32;
     let body_size = cfg.font_size as f32;
+    let line_height = config.appearance.notices.line_height as f32;
     let gap = cfg.gap as f32;
     let button_height = cfg.button_height as f32;
     let button_gap = cfg.button_gap as f32;
@@ -475,16 +528,31 @@ pub fn layout_dialog(
             0.0
         }
         + discard_width.map_or(0.0, |discard| discard + button_gap);
-    // As linhas de dado nunca são truncadas (ADR-0075 §3): se alguma não
-    // coube na largura configurada -- outra fonte, outra escala --, o diálogo
-    // cresce o que for preciso, como já faz para os botões.
-    let widest_data = dialog
+    // O texto -- título, corpo, linhas e nota -- nunca é cortado (ADR-0078):
+    // o diálogo cresce até o teto para ele caber numa linha; passando do
+    // teto, o texto quebra (abaixo). Mede-se uma vez por texto.
+    let title_natural = natural_width(&dialog.title, TITLE_FONT, title_size, measurer);
+    let body_natural = natural_width(&dialog.body, BODY_FONT, body_size, measurer);
+    let line_naturals: Vec<f32> = dialog
         .lines
         .iter()
-        .filter(|line| line.tone == LineTone::Data)
-        .map(|line| measurer.measure_width(&line.text, BODY_FONT, body_size))
+        .map(|line| natural_width(&line.text, BODY_FONT, body_size, measurer))
+        .collect();
+    // Sem cofre, a nota explica a caixa desabilitada.
+    let note = dialog
+        .secret
+        .as_ref()
+        .filter(|facts| !facts.vault_available)
+        .map(|facts| {
+            let natural = natural_width(&facts.unavailable_note, BODY_FONT, body_size, measurer);
+            (facts.unavailable_note.as_str(), natural)
+        });
+    let widest_text = line_naturals
+        .iter()
+        .copied()
+        .chain([title_natural, body_natural, note.map_or(0.0, |(_, n)| n)])
         .fold(0.0_f32, f32::max);
-    // A linha da caixa "Lembrar" (trilho, vão, rótulo) também não é cortada.
+    // A linha da caixa "Lembrar" (trilho, vão, rótulo) não quebra nem é cortada.
     let remember_width = dialog.secret.as_ref().map_or(0.0, |facts| {
         TOGGLE_TRACK_WIDTH
             + button_gap
@@ -496,21 +564,65 @@ pub fn layout_dialog(
             + button_gap
             + measurer.measure_width(&checkbox.label, BODY_FONT, body_size)
     }));
-    let width = width
+    // Botões e a linha da caixa não quebram: crescem o que precisarem, mas
+    // nunca além da janela com a margem.
+    let width = (widest_text + padding * 2.0)
+        .clamp(floor, ceiling)
         .max(buttons_width + padding * 2.0)
-        .max(widest_data + padding * 2.0)
-        .max(remember_width + padding * 2.0);
+        .max(remember_width + padding * 2.0)
+        .min(window_room);
 
-    // Cada linha extra custa o `gap` e a própria altura, como o corpo.
-    let lines_height = dialog.lines.len() as f32 * (gap + body_size);
+    let title_rows = dialog_rows(
+        &dialog.title,
+        title_natural,
+        TITLE_FONT,
+        title_size,
+        width,
+        padding,
+        measurer,
+    );
+    let body_rows = dialog_rows(
+        &dialog.body,
+        body_natural,
+        BODY_FONT,
+        body_size,
+        width,
+        padding,
+        measurer,
+    );
+    let line_rows: Vec<Vec<String>> = dialog
+        .lines
+        .iter()
+        .zip(&line_naturals)
+        .map(|(line, &natural)| {
+            dialog_rows(
+                &line.text, natural, BODY_FONT, body_size, width, padding, measurer,
+            )
+        })
+        .collect();
+    let note_rows = note.map_or_else(Vec::new, |(text, natural)| {
+        dialog_rows(
+            text, natural, BODY_FONT, body_size, width, padding, measurer,
+        )
+    });
+
+    let title_height = dialog_block_height(title_rows.len(), title_size, line_height);
+    let body_height = dialog_block_height(body_rows.len(), body_size, line_height);
+    // Cada linha extra custa o `gap` e a própria altura (uma entrelinha por
+    // linha quebrada), como o corpo.
+    let lines_height: f32 = line_rows
+        .iter()
+        .map(|rows| gap + dialog_block_height(rows.len(), body_size, line_height))
+        .sum();
     // O diálogo de segredo ganha o campo (a altura do campo do editor), a
     // linha da caixa e, sem cofre, a nota.
     let field_height = config.appearance.group_editor.input_height as f32;
+    let note_height = dialog_block_height(note_rows.len(), body_size, line_height);
     let secret_height = dialog.secret.as_ref().map_or(0.0, |facts| {
         let note = if facts.vault_available {
             0.0
         } else {
-            gap + body_size
+            gap + note_height
         };
         gap + field_height + gap + TOGGLE_TRACK_HEIGHT + note
     });
@@ -520,9 +632,9 @@ pub fn layout_dialog(
     } else {
         0.0
     };
-    let content_height = title_size
+    let content_height = title_height
         + gap
-        + body_size
+        + body_height
         + lines_height
         + secret_height
         + checkbox_height
@@ -571,7 +683,7 @@ pub fn layout_dialog(
     if let Some(facts) = &dialog.secret {
         let content_x = modal_rect.x + padding;
         let content_width = modal_rect.width - padding * 2.0;
-        let below_body = modal_rect.y + padding + title_size + gap + body_size + lines_height;
+        let below_body = modal_rect.y + padding + title_height + gap + body_height + lines_height;
         let field = Rect {
             x: content_x,
             y: below_body + gap,
@@ -597,12 +709,12 @@ pub fn layout_dialog(
                 x: content_x,
                 y: row.y + row.height + gap,
                 width: content_width,
-                height: body_size,
+                height: note_height,
             });
         }
     }
     if dialog.checkbox.is_some() {
-        let below_body = modal_rect.y + padding + title_size + gap + body_size + lines_height;
+        let below_body = modal_rect.y + padding + title_height + gap + body_height + lines_height;
         let row = Rect {
             x: modal_rect.x + padding,
             y: below_body + gap,
@@ -627,6 +739,10 @@ pub fn layout_dialog(
         remember_rect,
         toggle_rect,
         note_rect,
+        title_rows,
+        body_rows,
+        line_rows,
+        note_rows,
     }
 }
 
@@ -806,71 +922,56 @@ pub fn paint_dialog(
         border_width: 1.0,
     }));
 
+    // O texto já vem quebrado do layout (ADR-0078): aqui só se empilha, com o
+    // mesmo `dialog_block_height` que deu a altura do modal.
+    let line_height = config.appearance.notices.line_height as f32;
     let text_x = layout.modal_rect.x + padding;
     let mut y = layout.modal_rect.y + padding;
-    out.push(Primitive::Text(TextRun {
-        origin: (text_x, y),
-        text: dialog.title.clone(),
-        font: TITLE_FONT,
-        size_px: title_size,
-        color: pal.dialog_title_text,
-    }));
-    y += title_size + gap;
-    let body_max_width = layout.modal_rect.width - padding * 2.0;
-    // O caminho de uma chave se corta no meio; o resto, no fim.
-    let body = if dialog
-        .secret
-        .as_ref()
-        .is_some_and(|facts| facts.body_is_path)
-    {
-        truncate_middle(&dialog.body, BODY_FONT, body_size, body_max_width, measurer)
-    } else {
-        measurer
-            .truncate(&dialog.body, BODY_FONT, body_size, body_max_width)
-            .0
-    };
-    out.push(Primitive::Text(TextRun {
-        origin: (text_x, y),
-        text: body,
-        font: BODY_FONT,
-        size_px: body_size,
+    push_rows(
+        &mut out,
+        &layout.title_rows,
+        (text_x, y),
+        line_height,
+        TITLE_FONT,
+        title_size,
+        pal.dialog_title_text,
+    );
+    y += dialog_block_height(layout.title_rows.len(), title_size, line_height) + gap;
+    push_rows(
+        &mut out,
+        &layout.body_rows,
+        (text_x, y),
+        line_height,
+        BODY_FONT,
+        body_size,
         // A linha de erro de um segredo recusado fica na cor de erro (§2.14).
-        color: if dialog.body_is_error {
+        if dialog.body_is_error {
             pal.warning_severity_error
         } else {
             pal.dialog_body_text
         },
-    }));
-    // Linhas de dado e de aviso (ADR-0075 §3): dado em "Secundário" sem
-    // truncar, aviso na cor de aviso da §2.14 e cortado ao conteúdo.
-    for line in &dialog.lines {
-        y += body_size + gap;
-        let (text, color) = match line.tone {
-            LineTone::Data => (line.text.clone(), pal.warning_body_text),
-            LineTone::Warning => (
-                measurer
-                    .truncate(&line.text, BODY_FONT, body_size, body_max_width)
-                    .0,
-                pal.warning_severity_warning,
-            ),
-            LineTone::Text => (
-                measurer
-                    .truncate(&line.text, BODY_FONT, body_size, body_max_width)
-                    .0,
-                if dialog.body_is_error {
-                    pal.warning_severity_error
-                } else {
-                    pal.dialog_body_text
-                },
-            ),
+    );
+    y += dialog_block_height(layout.body_rows.len(), body_size, line_height);
+    // Linhas de dado e de aviso (ADR-0075 §3): dado em "Secundário", aviso na
+    // cor de aviso da §2.14.
+    for (line, rows) in dialog.lines.iter().zip(&layout.line_rows) {
+        y += gap;
+        let color = match line.tone {
+            LineTone::Data => pal.warning_body_text,
+            LineTone::Warning => pal.warning_severity_warning,
+            LineTone::Text if dialog.body_is_error => pal.warning_severity_error,
+            LineTone::Text => pal.dialog_body_text,
         };
-        out.push(Primitive::Text(TextRun {
-            origin: (text_x, y),
-            text,
-            font: BODY_FONT,
-            size_px: body_size,
+        push_rows(
+            &mut out,
+            rows,
+            (text_x, y),
+            line_height,
+            BODY_FONT,
+            body_size,
             color,
-        }));
+        );
+        y += dialog_block_height(rows.len(), body_size, line_height);
     }
 
     // Campo mascarado e caixa "Lembrar" (ADR-0075 §2).
@@ -913,15 +1014,15 @@ pub fn paint_dialog(
             }));
         }
         if let Some(note) = layout.note_rect {
-            out.push(Primitive::Text(TextRun {
-                origin: (note.x, note.y),
-                text: measurer
-                    .truncate(&facts.unavailable_note, BODY_FONT, body_size, note.width)
-                    .0,
-                font: BODY_FONT,
-                size_px: body_size,
-                color: pal.menu_item_disabled_text,
-            }));
+            push_rows(
+                &mut out,
+                &layout.note_rows,
+                (note.x, note.y),
+                line_height,
+                BODY_FONT,
+                body_size,
+                pal.menu_item_disabled_text,
+            );
         }
     }
     // A caixa de marcar do diálogo de excluir perfil: a alternância da tela de
@@ -3372,6 +3473,258 @@ mod tests {
         );
     }
 
+    // ---- o texto cresce até o teto e quebra, sem reticências (ADR-0078)
+
+    use crate::dialog::DialogLine;
+
+    /// Palavras `lorem` até o texto medir pelo menos `target` px numa linha.
+    fn text_wider_than(target: f32, measurer: &mut TextMeasurer) -> String {
+        let mut text = String::from("lorem");
+        while measurer.measure_width(&text, BODY_FONT, 12.5) < target {
+            text.push_str(" lorem");
+        }
+        text
+    }
+
+    fn dialog_with_body(body: &str) -> ConfirmDialog {
+        let mut dialog = two_button_dialog();
+        dialog.body = body.to_owned();
+        dialog
+    }
+
+    fn layout_in(
+        window: (f32, f32),
+        dialog: &ConfirmDialog,
+        measurer: &mut TextMeasurer,
+    ) -> DialogLayout {
+        let config = porecatu_config::Config::default();
+        layout_dialog(window.0, window.1, dialog, &config, measurer)
+    }
+
+    #[test]
+    fn a_body_that_fits_the_floor_keeps_the_floor_width_and_one_row() {
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_in((1000.0, 700.0), &dialog_with_body("Corpo"), &mut measurer);
+        assert_eq!(layout.modal_rect.width, 360.0);
+        assert_eq!(layout.body_rows, vec!["Corpo".to_owned()]);
+    }
+
+    #[test]
+    fn a_body_wider_than_the_floor_grows_the_dialog_instead_of_being_cut() {
+        let mut measurer = TextMeasurer::new();
+        let body = text_wider_than(500.0, &mut measurer);
+        assert!(
+            measurer.measure_width(&body, BODY_FONT, 12.5) < 640.0,
+            "{body}"
+        );
+
+        let layout = layout_in((1000.0, 700.0), &dialog_with_body(&body), &mut measurer);
+
+        assert!(layout.modal_rect.width > 360.0 && layout.modal_rect.width < 720.0);
+        assert_eq!(layout.body_rows, vec![body]);
+    }
+
+    #[test]
+    fn a_body_wider_than_the_ceiling_stops_at_double_the_floor_and_wraps_without_loss() {
+        let mut measurer = TextMeasurer::new();
+        let body = text_wider_than(2000.0, &mut measurer);
+
+        let layout = layout_in((1000.0, 700.0), &dialog_with_body(&body), &mut measurer);
+
+        assert_eq!(layout.modal_rect.width, 720.0);
+        assert!(layout.body_rows.len() > 1);
+        let budget = 720.0 - 16.0 * 2.0;
+        for row in &layout.body_rows {
+            assert!(!row.contains('…'), "{row}");
+            assert!(measurer.measure_width(row, BODY_FONT, 12.5) <= budget + 0.01);
+        }
+        assert_eq!(layout.body_rows.join(" "), body);
+    }
+
+    #[test]
+    fn the_dialog_keeps_a_margin_of_twenty_on_each_side_of_the_window() {
+        let mut measurer = TextMeasurer::new();
+        let body = text_wider_than(2000.0, &mut measurer);
+
+        // The ceiling (720) does not fit a 500 wide window.
+        let layout = layout_in((500.0, 700.0), &dialog_with_body(&body), &mut measurer);
+        assert_eq!(layout.modal_rect.width, 500.0 - 40.0);
+        assert_eq!(layout.modal_rect.x, 20.0);
+
+        // Nor does the floor fit a 360 wide window.
+        let layout = layout_in((360.0, 700.0), &two_button_dialog(), &mut measurer);
+        assert_eq!(layout.modal_rect.width, 360.0 - 40.0);
+    }
+
+    #[test]
+    fn a_word_wider_than_the_ceiling_is_split_by_character() {
+        let mut measurer = TextMeasurer::new();
+        let word = "SHA256:AbCdEf0123456789".repeat(20);
+        let mut dialog = two_button_dialog();
+        dialog.lines.push(DialogLine {
+            text: word.clone(),
+            tone: LineTone::Data,
+        });
+
+        let layout = layout_in((1000.0, 700.0), &dialog, &mut measurer);
+
+        assert_eq!(layout.modal_rect.width, 720.0);
+        let rows = &layout.line_rows[0];
+        assert!(rows.len() > 1);
+        assert_eq!(rows.concat(), word);
+    }
+
+    #[test]
+    fn a_long_title_wraps_with_the_title_font() {
+        let mut measurer = TextMeasurer::new();
+        let mut dialog = two_button_dialog();
+        dialog.title = "Senha para ".to_owned() + &"servidor-com-nome-longo ".repeat(40);
+
+        let layout = layout_in((1000.0, 700.0), &dialog, &mut measurer);
+
+        assert_eq!(layout.modal_rect.width, 720.0);
+        assert!(layout.title_rows.len() > 1);
+        for row in &layout.title_rows {
+            assert!(measurer.measure_width(row, TITLE_FONT, 13.0) <= 720.0 - 32.0 + 0.01);
+        }
+    }
+
+    #[test]
+    fn a_wrapped_paragraph_costs_one_line_height_per_extra_row() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let line_height = config.appearance.notices.line_height as f32;
+        let mut measurer = TextMeasurer::new();
+        let plain = layout_in((1000.0, 700.0), &two_button_dialog(), &mut measurer);
+
+        let long = text_wider_than(2000.0, &mut measurer);
+        let body = layout_in((1000.0, 700.0), &dialog_with_body(&long), &mut measurer);
+        let extra = (body.body_rows.len() - 1) as f32;
+        assert!(extra >= 1.0);
+        assert_eq!(
+            body.modal_rect.height,
+            plain.modal_rect.height + extra * line_height
+        );
+
+        // A wrapped extra line: the usual gap and body, plus its continuations.
+        let mut with_line = two_button_dialog();
+        with_line.lines.push(DialogLine {
+            text: long,
+            tone: LineTone::Text,
+        });
+        let line = layout_in((1000.0, 700.0), &with_line, &mut measurer);
+        let extra = (line.line_rows[0].len() - 1) as f32;
+        assert_eq!(
+            line.modal_rect.height,
+            plain.modal_rect.height + cfg.gap as f32 + cfg.font_size as f32 + extra * line_height
+        );
+    }
+
+    #[test]
+    fn wrapped_rows_are_painted_top_down_without_ellipsis_and_above_the_buttons() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let long = text_wider_than(2000.0, &mut measurer);
+        let mut dialog = dialog_with_body(&long);
+        dialog.title = "Título ".to_owned() + &long;
+        dialog.lines.push(DialogLine {
+            text: long.clone(),
+            tone: LineTone::Text,
+        });
+        dialog.lines.push(DialogLine {
+            text: long,
+            tone: LineTone::Warning,
+        });
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+
+        let primitives = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            None,
+            &mut measurer,
+        );
+
+        let runs: Vec<&TextRun> = primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Primitive::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+        let rows = layout.title_rows.len()
+            + layout.body_rows.len()
+            + layout.line_rows.iter().map(Vec::len).sum::<usize>();
+        // The rows come first, in order; the button labels follow them.
+        let ys: Vec<f32> = runs.iter().take(rows).map(|run| run.origin.1).collect();
+        assert!(ys.windows(2).all(|pair| pair[0] < pair[1]), "{ys:?}");
+        assert!(runs.iter().all(|run| !run.text.contains('…')));
+        let last = ys.last().copied().unwrap();
+        assert!(last + 12.5 <= layout.confirm_rect.y, "{last}");
+        let modal = layout.modal_rect;
+        assert!(modal.x >= 20.0 && modal.x + modal.width <= 980.0);
+    }
+
+    #[test]
+    fn the_secret_note_wraps_in_a_narrow_window_and_the_box_stays_below_the_body() {
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        // A 180 wide window leaves a 140 wide dialog: the note cannot fit one row.
+        let layout = layout_dialog(
+            180.0,
+            700.0,
+            &secret_dialog(false, false),
+            &config,
+            &mut measurer,
+        );
+
+        assert!(layout.note_rows.len() > 1);
+        let note = layout.note_rect.expect("note");
+        let line_height = config.appearance.notices.line_height as f32;
+        assert_eq!(
+            note.height,
+            config.appearance.dialog.font_size as f32
+                + (layout.note_rows.len() - 1) as f32 * line_height
+        );
+        assert!(note.y + note.height <= layout.confirm_rect.y);
+    }
+
+    #[test]
+    fn the_secret_dialog_wraps_a_long_key_path_instead_of_cutting_it() {
+        use porecatu_core::{PaneId, TabId};
+        use porecatu_term::{PromptId, SecretLabel};
+        let config = porecatu_config::Config::default();
+        let mut measurer = TextMeasurer::new();
+        let path =
+            "/home/someone/.ssh/work/projects/very/long/folder/names/".repeat(4) + "id_ed25519";
+        let key = |path: &str| {
+            ConfirmDialog::secret(
+                &test_support::pt_br(),
+                &SecretLabel::KeyPassphrase { path: path.into() },
+                true,
+                false,
+                DialogAction::Secret(TabId::new(0), PaneId::new(0), PromptId::new(0)),
+            )
+        };
+
+        let long = layout_dialog(1000.0, 700.0, &key(&path), &config, &mut measurer);
+        let short = layout_dialog(1000.0, 700.0, &key("/id"), &config, &mut measurer);
+
+        assert!(long.body_rows.len() > 1);
+        assert_eq!(long.body_rows.concat(), path);
+        // The field sits one line height lower per extra body row.
+        let below_body = |layout: &DialogLayout| layout.field_rect.unwrap().y - layout.modal_rect.y;
+        let extra = (long.body_rows.len() - 1) as f32;
+        assert_eq!(
+            below_body(&long),
+            below_body(&short) + extra * config.appearance.notices.line_height as f32
+        );
+    }
+
     #[test]
     fn the_secret_dialog_stacks_field_box_and_buttons_inside_the_configured_modal() {
         let config = porecatu_config::Config::default();
@@ -3715,28 +4068,6 @@ mod tests {
             at(start + dot * 99.0, &mut measurer),
             5,
             "clamped to the end"
-        );
-    }
-
-    #[test]
-    fn a_long_key_path_is_cut_in_the_middle_and_keeps_both_ends() {
-        let mut measurer = TextMeasurer::new();
-        let path = "/home/someone/.ssh/work/projects/very/long/folder/names/id_ed25519";
-        let full = measurer.measure_width(path, BODY_FONT, 12.5);
-
-        let cut = truncate_middle(path, BODY_FONT, 12.5, full / 2.0, &mut measurer);
-
-        assert!(cut.contains('…'));
-        assert!(cut.starts_with("/home"), "{cut}");
-        assert!(
-            cut.ends_with("id_ed25519") || cut.ends_with("ed25519"),
-            "{cut}"
-        );
-        assert!(measurer.measure_width(&cut, BODY_FONT, 12.5) <= full / 2.0);
-        // What fits is left alone.
-        assert_eq!(
-            truncate_middle("short", BODY_FONT, 12.5, 1000.0, &mut measurer),
-            "short"
         );
     }
 
