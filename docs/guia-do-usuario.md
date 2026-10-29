@@ -302,7 +302,7 @@ for_window [title="^Configurações$"] floating enable
 | **Geral** | idioma, diretório inicial, confirmações ao fechar aba e janela |
 | **Shell** | programa, argumentos e variáveis de ambiente do shell |
 | **Terminal** | fonte (do terminal **e** da barra de abas e grupos), cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
-| **Aparência** | tema, animações, opacidade e decoração da janela, imagem de fundo da janela, posição da barra de abas, o que a aba mostra, barra de status |
+| **Aparência** | tema, animações, opacidade e decoração da janela, imagem de fundo da janela, posição da barra de abas, o que a aba mostra, botão de menu do app (`show_app_menu_button`, o ícone do app à esquerda da barra de abas), barra de status |
 | **Sessão** | gravar e restaurar a sessão, restauração preguiçosa, geometria das janelas, convite de integração de shell |
 | **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |
 | **Git** | consultar o remoto e o intervalo |

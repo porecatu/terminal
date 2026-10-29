@@ -228,11 +228,14 @@ pub(crate) fn build_tree(
     let overflow = tab_bar::overflow_state(&layout, trilha_width, scroll_offset);
 
     // Primeiro na ordem de leitura, como é o primeiro da barra na tela.
-    nodes.push((
-        APP_MENU_BUTTON_ID,
-        leaf(Role::Button, msg::access::app_menu_button(catalog)),
-    ));
-    root_children.push(APP_MENU_BUTTON_ID);
+    // Oculto (`show_app_menu_button = false`): sem nó.
+    if style.show_app_menu_button {
+        nodes.push((
+            APP_MENU_BUTTON_ID,
+            leaf(Role::Button, msg::access::app_menu_button(catalog)),
+        ));
+        root_children.push(APP_MENU_BUTTON_ID);
+    }
 
     build_tab_list(
         workspace,

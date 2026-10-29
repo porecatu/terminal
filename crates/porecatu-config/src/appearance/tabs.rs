@@ -43,6 +43,9 @@ pub struct Tabs {
     pub show_activity_indicator: bool,
     pub show_bell_indicator: bool,
     pub show_new_tab_button: bool,
+    /// Botão de menu do app, à esquerda da barra (ADR-0079). `false` o
+    /// oculta e a trilha de abas recua até a borda. Recarga A.
+    pub show_app_menu_button: bool,
     /// Badge do perfil na aba (PRD-007 RF-7.13/RF-7.14, ADR-0070 §7): só em
     /// aba cujo perfil não é o padrão. `false` o esconde em todas as abas.
     /// Recarga A.
@@ -70,6 +73,7 @@ impl Default for Tabs {
             show_activity_indicator: true,
             show_bell_indicator: true,
             show_new_tab_button: true,
+            show_app_menu_button: true,
             show_profile_badge: true,
             colors: TabsColors::default(),
             rename: TabsRename::default(),

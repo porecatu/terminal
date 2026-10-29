@@ -23,6 +23,12 @@ primeiro release.
   esquerda da barra de abas, com a caixa de uma aba solta e o ícone do app.
   Hover clareia como a aba, pressionado usa as cores de aba ativa; ainda sem
   ação. A trilha rolável começa depois dele.
+- **Ocultar o botão de menu do app**: `[appearance.tabs] show_app_menu_button`
+  (default `true`) e toggle no grupo Aparência da tela de configurações. Oculto,
+  o botão não é desenhado nem atingido e a trilha de abas recua até a borda
+  (no macOS, até o semáforo).
+- **Tint roxo fixo no botão de menu do app**: o fundo da caixa leva `#A78BFA`
+  misturado a 30%; não é configurável. Aval visual do dono pendente.
 
 ### Alterado
 

@@ -684,6 +684,8 @@ registry! {
             show_bell_indicator_description(),
             show_new_tab_button_label(),
             show_new_tab_button_description(),
+            show_app_menu_button_label(),
+            show_app_menu_button_description(),
             status_bar_enabled_label(),
             status_bar_enabled_description(),
             session_enabled_label(),

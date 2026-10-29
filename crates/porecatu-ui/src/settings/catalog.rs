@@ -520,6 +520,7 @@ label_modules! {
     show_activity_indicator => (show_activity_indicator_label, show_activity_indicator_description),
     show_bell_indicator => (show_bell_indicator_label, show_bell_indicator_description),
     show_new_tab_button => (show_new_tab_button_label, show_new_tab_button_description),
+    show_app_menu_button => (show_app_menu_button_label, show_app_menu_button_description),
     status_bar_enabled => (status_bar_enabled_label, status_bar_enabled_description),
     session_enabled => (session_enabled_label, session_enabled_description),
     lazy_restore => (lazy_restore_label, lazy_restore_description),
@@ -1034,6 +1035,14 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         |c| EditValue::Bool(c.appearance.tabs.show_new_tab_button)
     ),
     option!(
+        show_app_menu_button,
+        Appearance,
+        Tabs,
+        "appearance.tabs.show_app_menu_button",
+        TOGGLE,
+        |c| EditValue::Bool(c.appearance.tabs.show_app_menu_button)
+    ),
+    option!(
         status_bar_enabled,
         Appearance,
         StatusBar,
@@ -1139,13 +1148,13 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        // As 54 do RF-16.11 (o número da aba saiu) e as duas do topo do grupo "Perfis" (ADR-0075 §6).
-        assert_eq!(OPTIONS.len(), 56);
+        // As 54 do RF-16.11 (o número da aba saiu), as duas do topo do grupo "Perfis" (ADR-0075 §6) e a do botão de menu do app (ADR-0079).
+        assert_eq!(OPTIONS.len(), 57);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 2, 24, 14, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 2, 24, 15, 4, 2, 1, 2, 0]);
     }
 
     /// RF-19.18: as duas opções do acrílico ficam no grupo Aparência, logo

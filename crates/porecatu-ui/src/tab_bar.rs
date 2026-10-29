@@ -128,6 +128,9 @@ pub struct TabBarStyle {
     /// grupo, que desde a remoção do botão global é o único botão de nova
     /// aba da barra.
     pub show_new_tab_button: bool,
+    /// `[appearance.tabs] show_app_menu_button` -- `false` oculta o botão de
+    /// menu do app e a trilha recua até [`left_inset`] (ADR-0079).
+    pub show_app_menu_button: bool,
     /// `[appearance.tabs] show_profile_badge` -- `false` esconde o badge de
     /// perfil em todas as abas (RF-7.14).
     pub show_profile_badge: bool,
@@ -276,6 +279,7 @@ impl TabBarStyle {
         trilha_padding: 6.0,
         right_zone_button_size: 30.0,
         show_new_tab_button: true,
+        show_app_menu_button: true,
         show_profile_badge: true,
         show_close_button: porecatu_config::CloseButtonVisibility::Always,
         font_size: 14.0, // = `[terminal.font] size` (ADR-0065)
@@ -352,6 +356,7 @@ impl TabBarStyle {
             trilha_padding: tabs.trilha_padding as f32,
             right_zone_button_size: Self::DEFAULT.right_zone_button_size,
             show_new_tab_button: tabs.show_new_tab_button,
+            show_app_menu_button: tabs.show_app_menu_button,
             show_profile_badge: tabs.show_profile_badge,
             show_close_button: tabs.show_close_button,
             font_size: config.terminal.font.size as f32,
@@ -1148,6 +1153,9 @@ pub fn app_menu_button_size(style: &TabBarStyle) -> f32 {
 /// origem do conteúdo de [`layout`] -- `tela = conteúdo + track_shift -
 /// scroll_offset` -- e a borda esquerda do recorte da trilha.
 pub fn track_shift(style: &TabBarStyle, is_macos: bool) -> f32 {
+    if !style.show_app_menu_button {
+        return left_inset(style, is_macos);
+    }
     left_inset(style, is_macos) + style.trilha_padding + app_menu_button_size(style)
 }
 
@@ -1164,8 +1172,10 @@ pub fn app_menu_button_rect(style: &TabBarStyle, is_macos: bool) -> Rect {
     }
 }
 
+/// Botão oculto (`show_app_menu_button = false`) nunca é atingido: sem este
+/// guarda, o retângulo ainda existiria e cobriria a primeira aba.
 pub fn point_in_app_menu_button(style: &TabBarStyle, is_macos: bool, point: (f32, f32)) -> bool {
-    rect_contains(app_menu_button_rect(style, is_macos), point)
+    style.show_app_menu_button && rect_contains(app_menu_button_rect(style, is_macos), point)
 }
 
 /// Largura da trilha rolável: a barra inteira menos as zonas fixas -- a do
@@ -1953,6 +1963,40 @@ mod tests {
         );
         assert_eq!(
             zone_button_release(Some(ZoneButtonHit::AppMenu), None),
+            None
+        );
+    }
+
+    /// `show_app_menu_button = false`: a trilha recua até o inset da
+    /// plataforma e o ponto onde o botão estava deixa de ser um botão.
+    #[test]
+    fn hidden_app_menu_button_gives_its_room_back_to_the_track() {
+        let shown = TabBarStyle::DEFAULT;
+        let hidden = TabBarStyle {
+            show_app_menu_button: false,
+            ..TabBarStyle::DEFAULT
+        };
+        let bar_height = crate::chrome::bar_height(&hidden);
+
+        assert_eq!(track_shift(&hidden, false), 0.0);
+        assert_eq!(
+            track_shift(&hidden, true),
+            hidden.macos_traffic_light_inset,
+            "no macOS o semáforo continua reservado"
+        );
+        assert_eq!(
+            trilha_width(&hidden, 800.0, false) - trilha_width(&shown, 800.0, false),
+            track_shift(&shown, false),
+        );
+
+        let was_button = app_menu_button_rect(&shown, false);
+        let center = (
+            was_button.x + was_button.width / 2.0,
+            was_button.y + was_button.height / 2.0,
+        );
+        assert!(!point_in_app_menu_button(&hidden, false, center));
+        assert_eq!(
+            point_in_zone_button(&hidden, 800.0, bar_height, false, center),
             None
         );
     }

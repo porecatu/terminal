@@ -18,6 +18,12 @@ O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grup
 6. **Coordenadas.** `tela = conteúdo + track_shift − scroll_offset`. `trilha_width` passou a descontar as duas zonas, e `overflow_state` segue em coordenadas de conteúdo; as pílulas de overflow recebem `track_left` e `track_width`. `fit_width` deixou de depender da plataforma: o inset do macOS saiu do conteúdo e foi para a zona fixa.
 7. **Acessibilidade.** Nó `Button` "Menu do aplicativo" (`access.app_menu_button`, nos cinco idiomas), o primeiro da barra na ordem de leitura. Sem tooltip: nenhum botão da barra tem.
 
+> **Revisão (pedido do dono, 2026-10-29) — ocultar e tint roxo.** Não muda as decisões 1–7 com o botão visível; acrescenta duas coisas.
+>
+> **a) Ocultar.** `[appearance.tabs] show_app_menu_button` (bool, default `true`, recarga A) e o toggle correspondente no grupo Aparência da tela de configurações ([PRD-016](../prd/prd-016-tela-de-configuracoes.md) RF-16.11). Com `false`: nada é desenhado, o retângulo não é atingido (`point_in_app_menu_button` devolve `false`), o nó de acessibilidade some e `track_shift` cai para `left_inset` — 0 fora do macOS, 78 no macOS, onde o semáforo continua reservado. Nenhuma outra conversão tela↔conteúdo muda: todas passam por `track_shift`. A trilha ganha de volta os 46 px.
+>
+> **b) Tint roxo fixo.** O fundo da caixa é a cor de aba (inativa; ativa no pressed) misturada com `#A78BFA` (`APP_MENU_TINT`, em `chrome.rs`) na proporção `APP_MENU_TINT_MIX = 0.30`, **antes** do brilho de hover; borda e ícone ficam como estavam. É uma cor **fixa por decisão do dono**: sem chave no TOML e fora dos `thm_*.toml`, portanto não entra na regra de "cor nova em `Config`". A proporção `0.30` é valor de implementação, **sujeito ao aval visual do dono**.
+
 ## Consequências
 
 - A trilha rolável fica 46 px mais estreita (40 do botão + 6 de respiro); a rolagem, as pílulas de overflow, o arraste de aba e a âncora do menu de perfil usam a nova origem.

@@ -274,19 +274,21 @@ pub fn paint(
 
     // Botão de menu do app: zona fixa à esquerda, antes da trilha, fora do
     // recorte e do scroll. Sem ação por ora -- só hover e pressed, como o
-    // resto da barra.
-    paint_app_menu_button(
-        tab_bar::app_menu_button_rect(style, is_macos),
-        (
-            hover_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu),
-            pressed_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu)
-                && hover_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu),
-        ),
-        app_icon,
-        style,
-        pal,
-        &mut out,
-    );
+    // resto da barra. `show_app_menu_button = false`: nada é desenhado.
+    if style.show_app_menu_button {
+        paint_app_menu_button(
+            tab_bar::app_menu_button_rect(style, is_macos),
+            (
+                hover_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu),
+                pressed_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu)
+                    && hover_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu),
+            ),
+            app_icon,
+            style,
+            pal,
+            &mut out,
+        );
+    }
 
     // Recorte de verdade da trilha (ADR-0018, espec §2.18: "um recorte só,
     // na camada de chrome; as abas fora da vista desaparecem pelo clip").
@@ -947,11 +949,38 @@ fn paint_zone_icon_button(
     out.push(centered_glyph(icon, rect, icon_size, icon_color));
 }
 
+/// Tint roxo (`#A78BFA`) do fundo do botão de menu do app. Fixo por decisão
+/// do dono (ADR-0079): sem chave no TOML e fora dos `thm_*.toml`.
+const APP_MENU_TINT: Color = Color {
+    r: 167.0 / 255.0,
+    g: 139.0 / 255.0,
+    b: 250.0 / 255.0,
+    a: 1.0,
+};
+
+/// Parte do [`APP_MENU_TINT`] na mistura com o fundo da aba. Aguarda aval
+/// visual do dono (ADR-0079).
+const APP_MENU_TINT_MIX: f64 = 0.30;
+
+/// Interpola `from` em direção a `to` por `t` (0 = `from`, 1 = `to`), canal a
+/// canal, em hex cru (sem gestão de cor, como o resto do chrome). Alfa de
+/// `from` intocado.
+fn mix(from: Color, to: Color, t: f64) -> Color {
+    Color {
+        r: from.r + (to.r - from.r) * t,
+        g: from.g + (to.g - from.g) * t,
+        b: from.b + (to.b - from.b) * t,
+        a: from.a,
+    }
+}
+
 /// Botão de menu do app: a caixa de uma aba solta (mesmas cores, raio,
 /// borda e sombra de [`tab_colors`]/`push_shadow`) com o ícone do app no
 /// meio. Hover clareia o fundo como o de uma aba (`tab_hover_brightness`);
 /// pressed usa as cores de aba **ativa**, a única "marcada" que a aba tem
 /// -- ela mesma não tem estado pressed. `app_icon` ausente: só a caixa.
+/// O fundo leva um tint roxo fixo ([`APP_MENU_TINT`]), aplicado antes do
+/// hover.
 fn paint_app_menu_button(
     rect: Rect,
     (hovered, pressed): (bool, bool),
@@ -961,6 +990,7 @@ fn paint_app_menu_button(
     out: &mut Vec<Primitive>,
 ) {
     let (bg, border, border_width, _text) = tab_colors(pal, style, false, pressed);
+    let bg = mix(bg, APP_MENU_TINT, APP_MENU_TINT_MIX);
     let bg = if hovered {
         brighten(bg, style.tab_hover_brightness)
     } else {
@@ -1965,7 +1995,15 @@ mod tests {
         );
         assert_eq!(rest.rect.width, rest.rect.height, "quadrado");
         assert_eq!(rest.radius, style.tab_corner_radius);
-        assert_eq!(rest.color, pal.tab_inactive_background);
+        assert_eq!(
+            rest.color,
+            mix(
+                pal.tab_inactive_background,
+                APP_MENU_TINT,
+                APP_MENU_TINT_MIX
+            ),
+            "cor de aba inativa com o tint roxo"
+        );
         assert_eq!(rest.border_color, pal.tab_inactive_border);
         // Same top and height as a loose tab in the layout.
         let mut ws = Workspace::new();
@@ -1985,16 +2023,51 @@ mod tests {
         let (hover, _) = app_menu_quad(true, false);
         assert_eq!(
             hover.color,
-            brighten(pal.tab_inactive_background, style.tab_hover_brightness)
+            brighten(
+                mix(
+                    pal.tab_inactive_background,
+                    APP_MENU_TINT,
+                    APP_MENU_TINT_MIX
+                ),
+                style.tab_hover_brightness
+            )
         );
         assert_ne!(hover.color, rest.color);
 
         let (pressed, _) = app_menu_quad(true, true);
         assert_eq!(
             pressed.color,
-            brighten(pal.tab_active_background, style.tab_hover_brightness)
+            brighten(
+                mix(pal.tab_active_background, APP_MENU_TINT, APP_MENU_TINT_MIX),
+                style.tab_hover_brightness
+            )
         );
         assert_eq!(pressed.border_color, pal.tab_active_border);
+    }
+
+    #[test]
+    fn app_menu_button_tint_is_the_fixed_purple_and_keeps_the_alpha() {
+        assert_eq!(
+            (
+                (APP_MENU_TINT.r * 255.0).round() as u8,
+                (APP_MENU_TINT.g * 255.0).round() as u8,
+                (APP_MENU_TINT.b * 255.0).round() as u8,
+            ),
+            (0xA7, 0x8B, 0xFA)
+        );
+        let base = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.5,
+        };
+        assert_eq!(mix(base, APP_MENU_TINT, 0.0), base);
+        let full = mix(base, APP_MENU_TINT, 1.0);
+        assert_eq!(
+            (full.r, full.g, full.b),
+            (APP_MENU_TINT.r, APP_MENU_TINT.g, APP_MENU_TINT.b)
+        );
+        assert_eq!(full.a, 0.5);
     }
 
     #[test]
@@ -2100,5 +2173,74 @@ mod tests {
             })
             .expect("fundo da aba ativa");
         assert_eq!(tab_quad.x, clip.x + style.trilha_padding);
+    }
+
+    /// `show_app_menu_button = false`: nada do botão é pintado e o recorte da
+    /// trilha começa na borda da barra.
+    #[test]
+    fn a_hidden_app_menu_button_paints_nothing_and_the_clip_starts_at_the_edge() {
+        let style = TabBarStyle {
+            show_app_menu_button: false,
+            ..TabBarStyle::DEFAULT
+        };
+        let pal = default_palette();
+        let term_pal = default_term_palette();
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+        let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m, false);
+        let out = paint(
+            &layout,
+            &ws,
+            ws.active_tab(),
+            &RenameState::Idle,
+            &Selection::default(),
+            None,
+            &style,
+            &pal,
+            &term_pal,
+            bar_width,
+            Overflow {
+                scroll_offset: 0.0,
+                hidden_left: 0,
+                hidden_right: 0,
+            },
+            None,
+            None,
+            None,
+            &AnimationClock::default(),
+            Instant::now(),
+            &mut m,
+            false,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        );
+        let tinted = mix(
+            pal.tab_inactive_background,
+            APP_MENU_TINT,
+            APP_MENU_TINT_MIX,
+        );
+        assert!(
+            !out.iter()
+                .any(|p| matches!(p, Primitive::RoundedQuad(q) if q.color == tinted)),
+            "nenhum quad tingido do botão"
+        );
+        let clip = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::PushClip(rect) => Some(*rect),
+                _ => None,
+            })
+            .expect("recorte da trilha");
+        assert_eq!(clip.x, 0.0);
+        assert_eq!(clip.width, tab_bar::trilha_width(&style, bar_width, false));
     }
 }
