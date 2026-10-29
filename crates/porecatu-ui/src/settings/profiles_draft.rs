@@ -1663,11 +1663,7 @@ user = "deploy"
         let mut draft = draft();
         draft.set_text(1, Field::Port, "2222");
         // Somebody else removed "wsl" and renamed "stage" in the file.
-        let outside = list(
-            &FILE
-                .replace("name = \"WSL Ubuntu\"", "name = \"WSL Ubuntu\"")
-                .replace("name = \"stage\"", "name = \"stage-renamed\""),
-        );
+        let outside = list(&FILE.replace("name = \"stage\"", "name = \"stage-renamed\""));
 
         draft.rebase(&outside);
 
