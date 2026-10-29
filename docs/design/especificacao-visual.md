@@ -487,7 +487,7 @@ botões de sessões (§2.22) e de configurações, na zona fixa), no grupo e for
 (`window_controls.hover_background`) e **pressed** o `pressed_background`, como nos botões
 da zona fixa (mesma função de desenho, `paint_zone_icon_button`). A aba nova abre no
 **release** sobre o mesmo botão, não no press (o botão de fechar da aba também
-dispara no release). Dentro de um grupo, o "+" ganha à direita
+dispara no release, e a regra vale para todo botão e item do app, [ADR-0081](../adr/0081-disparo-no-release-para-botoes-e-itens.md): rodapé, faixa e guia da tela de configurações, editor de perfil, overlays; o estado pressionado é um passo de brilho acima do hover, hoje só nos botões do rodapé, da faixa e nos itens da guia). Dentro de um grupo, o "+" ganha à direita
 metade de `icon_button_padding_x` a mais que o `wrapper_padding` das outras bordas. A descrição anterior (17×17 de desenho,
 25×17 de alvo, borda `1px #262b34`, hover `#262b34`) deixou de valer.
 

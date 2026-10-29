@@ -1215,6 +1215,31 @@ enum NewTabTarget {
     Ungrouped,
 }
 
+/// O botão ou item de overlay que um press esquerdo pode armar (ADR-0081).
+/// Cada variante guarda o que identifica o alvo, para o release conferir que
+/// o cursor ainda está sobre o mesmo. Campo de texto e clique fora não estão
+/// aqui: agem no press.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OverlayTarget {
+    Dialog(DialogButton),
+    /// A caixa "Lembrar" do diálogo de segredo.
+    DialogRemember,
+    ContextMenu(usize),
+    GroupMenu(usize),
+    ProfileMenu(usize),
+    TerminalMenu(usize),
+    /// Um swatch ou uma ação do editor de grupo (nunca o campo de nome).
+    GroupEditor(overlay::GroupEditorHit),
+    MoveToGroup(usize),
+    /// Item de salvar (navegando), linha ou `X` do popover de sessões.
+    Session(overlay::SessionPickerHit),
+    WarningClose(usize),
+    /// Fechar, regex, anterior ou próximo da barra de busca.
+    Search(SearchBarHit),
+    /// O indicador ahead/behind da barra de status.
+    GitIndicator,
+}
+
 /// Estado por janela (ADR-0015: "um `Workspace` independente por janela").
 /// `App` guarda um `HashMap<WindowId, WindowState>`; o que não varia por
 /// janela (GPU do processo, diretório de início, métricas de célula --
@@ -1255,6 +1280,12 @@ struct WindowState {
     // press: a ação só dispara no release sobre o mesmo botão, como nos
     // botões de sessões/configurações.
     pressed_bar_button: Option<tab_bar::TabBarHit>,
+    /// O botão ou item de overlay sob o press esquerdo (ADR-0081): o press só
+    /// arma, e o release sobre o mesmo alvo é que age.
+    armed_overlay: Option<OverlayTarget>,
+    /// O press foi de um overlay (armou ou fechou/focou): o release
+    /// correspondente não chega ao terminal.
+    overlay_press_consumed: bool,
     click_tracker: ClickTracker,
     /// Modo de captura do ADR-0008 passo 1 -- rename inline (RF-1.8).
     rename: RenameState,
@@ -2400,6 +2431,25 @@ mod should_confirm_tab_close_tests {
 }
 
 impl WindowState {
+    /// Algum overlay modal está aberto: o press seguinte é todo dele, aja ou
+    /// só feche (dialog, menus, editor de grupo, popovers).
+    fn modal_overlay_open(&self) -> bool {
+        self.dialog.is_some()
+            || self.context_menu.is_some()
+            || self.group_context_menu.is_some()
+            || self.profile_menu.is_some()
+            || self.terminal_context_menu.is_some()
+            || self.group_editor.is_some()
+            || self.move_to_group.is_some()
+            || self.session_picker.is_some()
+    }
+
+    /// O release que fecha um press de overlay: consome a marca, e o chamador
+    /// o descarta ou o cumpre (`armed_overlay`).
+    fn take_overlay_release(&mut self) -> bool {
+        std::mem::take(&mut self.overlay_press_consumed)
+    }
+
     fn new(
         window: Arc<Window>,
         window_surface: WindowSurface,
@@ -2424,6 +2474,8 @@ impl WindowState {
             pressed_window_button: None,
             pressed_zone_button: None,
             pressed_bar_button: None,
+            armed_overlay: None,
+            overlay_press_consumed: false,
             click_tracker: ClickTracker::default(),
             rename: RenameState::Idle,
             scroll_offset: 0.0,
@@ -9583,7 +9635,7 @@ impl App {
                     state: ElementState::Released,
                     button: MouseButton::Left,
                     ..
-                } => press = editor.left_released(env),
+                } => press = editor.left_released(env, gpu.text_measurer(), draft),
                 WindowEvent::Focused(false) => editor.focus_lost(),
                 WindowEvent::KeyboardInput { event: key, .. } => {
                     press = editor.key(&key, env, gpu.text_measurer(), draft);
@@ -9775,12 +9827,12 @@ impl App {
                 button: MouseButton::Left,
                 ..
             } => {
-                if let Some(settings) = &mut self.settings {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
                     let env = settings::Env {
                         style: &self.style,
                         config: &self.config,
                     };
-                    press = settings.left_released(env);
+                    press = settings.left_released(env, gpu.text_measurer());
                 }
             }
             WindowEvent::Focused(false) => {
@@ -10452,6 +10504,8 @@ impl ApplicationHandler<Wakeup> for App {
                     state.pressed_window_button = None;
                     state.pressed_zone_button = None;
                     state.pressed_bar_button = None;
+                    state.armed_overlay = None;
+                    state.overlay_press_consumed = false;
                     state.window.request_redraw();
                 }
             }
@@ -11912,10 +11966,188 @@ impl App {
         button: MouseButton,
         event_loop: &ActiveEventLoop,
     ) {
+        self.dispatch_mouse_input_impl(window_id, element_state, button, event_loop, false);
+    }
+
+    /// O alvo de ação (botão, item) de um overlay sob o cursor, na mesma
+    /// ordem de precedência da cascata de `dispatch_mouse_input_impl`
+    /// (ADR-0081). Um overlay modal aberto decide sozinho: sem alvo de ação
+    /// sob o cursor (campo de texto, clique fora), devolve `None` e o press
+    /// segue a cascata de sempre.
+    fn overlay_target(&mut self, window_id: WindowId) -> Option<OverlayTarget> {
+        let state = self.windows.get_mut(&window_id)?;
+        let point = (
+            state.cursor_position.0 as f32 / state.scale,
+            state.cursor_position.1 as f32 / state.scale,
+        );
+        let (width, height) = (state.logical_width, state.logical_height);
+        if let Some(dialog) = state.dialog.as_ref() {
+            let gpu = self.gpu.as_mut()?;
+            let layout =
+                overlay::layout_dialog(width, height, dialog, &self.config, gpu.text_measurer());
+            let secret = state
+                .secret_field
+                .as_ref()
+                .and_then(|_| overlay::secret_hit(&layout, point));
+            return match secret {
+                Some(overlay::SecretHit::Remember) => Some(OverlayTarget::DialogRemember),
+                Some(overlay::SecretHit::Field) => None,
+                None => overlay::dialog_hit(&layout, point).map(OverlayTarget::Dialog),
+            };
+        }
+        if let Some(menu) = state.context_menu {
+            let layout = overlay::layout_context_menu(&menu, &self.config, width, height);
+            return overlay::context_menu_hit(&layout, point)
+                .filter(|&index| menu.items()[index].enabled)
+                .map(OverlayTarget::ContextMenu);
+        }
+        if let Some(menu) = state.group_context_menu {
+            let group = state.workspace.group(menu.group);
+            let is_collapsed = group.is_some_and(|g| g.is_collapsed());
+            let tab_count = group.map_or(0, |g| g.tabs().len());
+            let count =
+                group_menu::group_action_items(&self.catalog, is_collapsed, tab_count).len();
+            let layout = overlay::layout_group_menu(&menu, count, &self.config, width, height);
+            return overlay::group_menu_hit(&layout, point).map(OverlayTarget::GroupMenu);
+        }
+        if let Some(menu) = state.profile_menu.as_ref() {
+            let layout = overlay::layout_profile_menu(menu, &self.config, width, height);
+            return overlay::profile_menu_hit(&layout, point).map(OverlayTarget::ProfileMenu);
+        }
+        if let Some(menu) = state.terminal_context_menu {
+            let items = match state.pane_and_rect_at(&self.style, menu.anchor) {
+                Some((tab, pane, pane_rect)) => terminal_menu_context_items(
+                    &state.panes,
+                    tab,
+                    &self.style,
+                    self.cell_metrics,
+                    pane_rect,
+                    pane,
+                    menu.anchor,
+                ),
+                None => terminal_menu_items(false, false),
+            };
+            let layout =
+                overlay::layout_terminal_menu(&menu, items.len(), &self.config, width, height);
+            return overlay::terminal_menu_hit(&layout, point)
+                .filter(|&index| items[index].enabled)
+                .map(OverlayTarget::TerminalMenu);
+        }
+        if let Some(group) = state.group_editor.as_ref().map(|editor| editor.group) {
+            let gpu = self.gpu.as_mut()?;
+            let anchor_x = state.group_pill_screen_x(group, gpu, &self.style);
+            let layout = overlay::layout_group_editor(
+                anchor_x,
+                bar_height(&self.style),
+                &self.config,
+                width,
+                height,
+            );
+            return match overlay::group_editor_hit(&layout, point) {
+                Some(overlay::GroupEditorHit::NameField) | None => None,
+                Some(hit) => Some(OverlayTarget::GroupEditor(hit)),
+            };
+        }
+        if let Some(popover) = state.move_to_group.as_ref() {
+            let layout = overlay::layout_move_to_group(popover, &self.config, width, height);
+            return overlay::move_to_group_hit(&layout, point).map(OverlayTarget::MoveToGroup);
+        }
+        if let Some(picker) = state.session_picker.as_ref() {
+            let layout = overlay::layout_session_picker(
+                picker,
+                &self.config,
+                &self.style,
+                width,
+                bar_height(&self.style),
+                is_macos(),
+                width,
+                height,
+            );
+            return match overlay::session_picker_hit(&layout, point) {
+                // O campo de nome, em edição, é de texto: foca no press.
+                Some(overlay::SessionPickerHit::SaveArea)
+                    if !matches!(picker.mode(), SessionMode::Browsing) =>
+                {
+                    None
+                }
+                Some(hit) => Some(OverlayTarget::Session(hit)),
+                None => None,
+            };
+        }
+        let gpu = self.gpu.as_mut()?;
+        let warning_layout = overlay::layout_warnings(
+            &state.warnings,
+            &self.config,
+            bar_height(&self.style),
+            width,
+            gpu.text_measurer(),
+        );
+        match overlay::hit_test_warnings(&warning_layout, point) {
+            Some(overlay::WarningHit::Close(index)) => {
+                return Some(OverlayTarget::WarningClose(index));
+            }
+            Some(overlay::WarningHit::Body) => return None,
+            None => {}
+        }
+        if let Some(search_pane) = state.search.as_ref().map(|search| search.pane()) {
+            let box_rect = state.pane_box_rect(&self.style, search_pane);
+            let layout = search_bar::layout_search_bar(box_rect, &self.style);
+            let bar = layout.bar_rect;
+            let inside_bar = point.0 >= bar.x
+                && point.0 < bar.x + bar.width
+                && point.1 >= bar.y
+                && point.1 < bar.y + bar.height;
+            if inside_bar {
+                return match search_bar::search_bar_hit(&layout, point) {
+                    Some(SearchBarHit::Field) | None => None,
+                    Some(hit) => Some(OverlayTarget::Search(hit)),
+                };
+            }
+        }
+        state
+            .status_bar_hit(
+                &self.style,
+                &self.git_remotes,
+                self.startup_directory.as_deref(),
+                gpu.text_measurer(),
+                point,
+            )
+            .map(|_| OverlayTarget::GitIndicator)
+    }
+
+    /// Botão do mouse acionado. `replay` é o release que cumpre um press
+    /// armado num overlay (ADR-0081): refaz o press, que age, sem rearmar.
+    fn dispatch_mouse_input_impl(
+        &mut self,
+        window_id: WindowId,
+        element_state: ElementState,
+        button: MouseButton,
+        event_loop: &ActiveEventLoop,
+        replay: bool,
+    ) {
+        let pressed = element_state == ElementState::Pressed;
+        // Botão e item de overlay só armam no press; quem age é o release
+        // sobre o mesmo alvo (ADR-0081). Clique fora e campo de texto seguem
+        // a cascata abaixo, já no press.
+        if pressed && !replay {
+            if let Some(state) = self.windows.get_mut(&window_id) {
+                state.armed_overlay = None;
+                state.overlay_press_consumed = state.modal_overlay_open();
+            }
+            if button == MouseButton::Left
+                && let Some(target) = self.overlay_target(window_id)
+                && let Some(state) = self.windows.get_mut(&window_id)
+            {
+                state.animations.clear();
+                state.armed_overlay = Some(target);
+                state.overlay_press_consumed = true;
+                state.window.request_redraw();
+                return;
+            }
+        }
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        let pressed = element_state == ElementState::Pressed;
         if pressed {
             // ADR-0022: qualquer clique descarta animação em curso.
             state.animations.clear();
@@ -11923,6 +12155,27 @@ impl App {
 
         if !pressed {
             state.mouse_button_down = None;
+            if state.take_overlay_release() {
+                // O press foi de um overlay: o release cumpre o que ele armou
+                // (se o cursor ainda está sobre o mesmo alvo) ou é descartado
+                // -- nunca chega ao terminal.
+                let armed = state.armed_overlay.take();
+                state.window.request_redraw();
+                if let Some(armed) = armed
+                    && button == MouseButton::Left
+                    && input::release_on_armed(Some(armed), self.overlay_target(window_id))
+                        .is_some()
+                {
+                    self.dispatch_mouse_input_impl(
+                        window_id,
+                        ElementState::Pressed,
+                        MouseButton::Left,
+                        event_loop,
+                        true,
+                    );
+                }
+                return;
+            }
             if button == MouseButton::Left && state.pressed_window_button.is_some() {
                 // ADR-0027: o botão de janela dispara no release, não no
                 // press. Fechar invalida `state`, então nada depois disto.

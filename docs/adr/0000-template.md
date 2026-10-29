@@ -82,6 +82,7 @@
 | [0078](0078-largura-e-quebra-de-texto-do-dialogo.md) | Largura e quebra de texto do diálogo: piso 360, teto 720, nunca reticências | Aceito |
 | [0079](0079-botao-de-menu-do-app.md) | Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app; hover e pressionado, sem ação | Aceito |
 | [0080](0080-editor-de-perfil-em-janela-propria.md) | Editor de perfil em janela própria: formulário em coluna, modal sobre a tela de configurações, OK que só leva às pendências | Aceito — aval visual pendente |
+| [0081](0081-disparo-no-release-para-botoes-e-itens.md) | Disparo no release para botões e itens: o press arma, o release sobre o mesmo alvo age; clique fora, texto e gestos de terminal seguem no press | Aceito — aval visual do estado pressionado pendente |
 
 ## Convenção
 

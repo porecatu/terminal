@@ -128,6 +128,20 @@ pub(crate) enum Press {
     Minimize,
 }
 
+/// O alvo que um press esquerdo armou (ADR-0081). Dois press-release só
+/// disparam se o release cai no mesmo alvo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Armed {
+    /// Um botão, item ou controle do painel, da guia, do rodapé ou da faixa.
+    Hit(Hit),
+    /// Um botão do diálogo de pendências ou de excluir perfil.
+    DialogButton(DialogButton),
+    /// A caixa de marcar do diálogo de excluir perfil.
+    DialogCheckbox,
+    /// O item `n` da lista aberta de um botão de escolha.
+    ChoiceItem(usize),
+}
+
 /// O que o usuário respondeu ao diálogo de pendências (RF-16.4). Cancelar
 /// vale também para fechar a janela do sistema durante o diálogo, e para
 /// "Salvar e fechar" com um valor recusado -- a tela volta para o usuário
@@ -209,6 +223,9 @@ pub(crate) struct SettingsWindow {
     /// o release sobre o mesmo botão é que dispara
     /// (`tab_bar::window_button_release`).
     pressed_window_button: Option<WindowButtonHit>,
+    /// O botão ou item do painel sob o press esquerdo (ADR-0081): o press só
+    /// arma, e o release sobre o mesmo alvo é que age.
+    armed: Option<Armed>,
     /// A lista de um botão de escolha, aberta.
     choice: Option<ChoiceList>,
     /// Onde procurar arquivos de idioma, para a lista do idioma.
@@ -288,6 +305,7 @@ impl SettingsWindow {
             editing: None,
             dragging_field: false,
             pressed_window_button: None,
+            armed: None,
             choice: None,
             locale_dirs,
             session_theme: None,
@@ -715,33 +733,6 @@ impl SettingsWindow {
         } else {
             CursorIcon::Default
         });
-    }
-
-    /// Clique com o diálogo aberto: um botão responde; fora dele, nada.
-    fn dialog_click(
-        &mut self,
-        env: Env<'_>,
-        measurer: &mut TextMeasurer,
-        point: (f32, f32),
-    ) -> Press {
-        let Some(layout) = self.dialog_layout(env, measurer) else {
-            return Press::Nothing;
-        };
-        // A caixa de marcar do diálogo de excluir alterna sem fechá-lo.
-        if overlay::checkbox_hit(&layout, point) {
-            if let Some(dialog) = &mut self.dialog {
-                dialog.toggle_checkbox();
-            }
-            self.window.request_redraw();
-            return Press::Nothing;
-        }
-        match overlay::dialog_hit(&layout, point) {
-            Some(button) if self.is_delete_dialog() => {
-                self.answer_delete(button == DialogButton::Confirm)
-            }
-            Some(button) => self.answer(Self::button_answer(button)),
-            None => Press::Nothing,
-        }
     }
 
     /// Teclas com o diálogo aberto (ADR-0014): `Esc` cancela, `Enter` aciona o
@@ -1405,12 +1396,14 @@ impl SettingsWindow {
         // O diálogo de pendências cobre a janela inteira: só ele recebe o
         // clique.
         if self.dialog.is_some() {
-            return self.dialog_click(env, measurer, point);
+            self.arm_dialog(env, measurer, point);
+            return Press::Nothing;
         }
-        // A lista aberta é modal: um clique escolhe um item ou a fecha, e em
-        // nenhum dos dois casos chega ao que está por baixo.
+        // A lista aberta é modal: um clique escolhe um item (no release) ou a
+        // fecha (no press), e em nenhum dos dois casos chega ao que está por
+        // baixo.
         if self.choice.is_some() {
-            self.click_choice(env, point);
+            self.arm_choice(env, point);
             return Press::Nothing;
         }
         let hit = self.hit_at(env, point);
@@ -1427,6 +1420,26 @@ impl SettingsWindow {
             self.capturing = None;
             self.invalidate();
         }
+        // Botão e item só armam: agem no release (ADR-0081). O que recebe o
+        // foco ou o arraste de texto age já no press.
+        match hit {
+            Some(hit) if self.defers(hit) => {
+                self.armed = Some(Armed::Hit(hit));
+                self.window.request_redraw();
+                Press::Nothing
+            }
+            hit => self.activate_hit(env, measurer, hit, point),
+        }
+    }
+
+    /// O alvo do clique age (no release, ou no press se for de texto).
+    fn activate_hit(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        hit: Option<Hit>,
+        point: (f32, f32),
+    ) -> Press {
         match hit {
             Some(Hit::Group(group)) => {
                 self.focus = Focus::Sidebar;
@@ -1494,11 +1507,16 @@ impl SettingsWindow {
     /// dispara o botão de janela armado pelo press, se o cursor ainda está
     /// sobre ele -- disparar no press deixava o release cair na janela de
     /// trás.
-    pub(crate) fn left_released(&mut self, env: Env<'_>) -> Press {
+    pub(crate) fn left_released(&mut self, env: Env<'_>, measurer: &mut TextMeasurer) -> Press {
         if self.discards(editor_modal::Input::MouseRelease) {
             return Press::Nothing;
         }
         self.dragging_field = false;
+        if let Some(armed) = self.armed.take() {
+            // Apaga o estado armado mesmo sem disparar.
+            self.window.request_redraw();
+            return self.release_armed(env, measurer, armed);
+        }
         let armed = self.pressed_window_button.take();
         if armed.is_none() || is_macos() {
             return Press::Nothing;
@@ -1527,9 +1545,132 @@ impl SettingsWindow {
     /// A janela perdeu o foco: um press armado num botão de janela não
     /// recebe mais o release correspondente.
     pub(crate) fn focus_lost(&mut self) {
-        if self.pressed_window_button.take().is_some() {
+        let window_button = self.pressed_window_button.take().is_some();
+        let armed = self.armed.take().is_some();
+        if window_button || armed {
             self.window.request_redraw();
         }
+    }
+
+    /// O alvo sob `point` no mesmo tipo de `armed`, para comparar com ele.
+    fn armed_at(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        armed: Armed,
+        point: (f32, f32),
+    ) -> Option<Armed> {
+        match armed {
+            Armed::Hit(_) => {
+                self.ensure_content(env, measurer);
+                self.hit_at(env, point).map(Armed::Hit)
+            }
+            Armed::DialogButton(_) | Armed::DialogCheckbox => {
+                let layout = self.dialog_layout(env, measurer)?;
+                Self::dialog_target(&layout, point)
+            }
+            Armed::ChoiceItem(_) => {
+                let layout = self.choice_layout(env)?;
+                choice_list::hit(&layout, point).map(Armed::ChoiceItem)
+            }
+        }
+    }
+
+    /// O botão ou a caixa de marcar do diálogo sob `point`.
+    fn dialog_target(layout: &overlay::DialogLayout, point: (f32, f32)) -> Option<Armed> {
+        if overlay::checkbox_hit(layout, point) {
+            Some(Armed::DialogCheckbox)
+        } else {
+            overlay::dialog_hit(layout, point).map(Armed::DialogButton)
+        }
+    }
+
+    /// O release de um alvo armado: age se o cursor ainda está sobre ele.
+    fn release_armed(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, armed: Armed) -> Press {
+        let point = self.cursor_logical();
+        let over = self.armed_at(env, measurer, armed, point);
+        match crate::input::release_on_armed(Some(armed), over) {
+            Some(Armed::Hit(hit)) => self.activate_hit(env, measurer, Some(hit), point),
+            Some(Armed::DialogButton(button)) if self.dialog.is_some() => {
+                if self.is_delete_dialog() {
+                    self.answer_delete(button == DialogButton::Confirm)
+                } else {
+                    self.answer(Self::button_answer(button))
+                }
+            }
+            // A caixa de marcar do diálogo de excluir alterna sem fechá-lo.
+            Some(Armed::DialogCheckbox) => {
+                if let Some(dialog) = &mut self.dialog {
+                    dialog.toggle_checkbox();
+                }
+                self.window.request_redraw();
+                Press::Nothing
+            }
+            Some(Armed::ChoiceItem(index)) => {
+                if let Some(list) = &mut self.choice {
+                    list.highlighted = index;
+                }
+                self.select_choice();
+                Press::Nothing
+            }
+            Some(Armed::DialogButton(_)) | None => Press::Nothing,
+        }
+    }
+
+    /// O clique neste alvo só age no release (ADR-0081)? Campos de texto,
+    /// não: o press leva o foco e começa o arraste de seleção.
+    fn defers(&self, hit: Hit) -> bool {
+        match hit {
+            Hit::Row(index) => {
+                !matches!(self.content().blocks.get(index), Some(Block::Filter { .. }))
+            }
+            Hit::Control(index, part) => !self.edits_text(index, part),
+            _ => true,
+        }
+    }
+
+    /// A parte do controle é um campo de texto da linha `index`?
+    fn edits_text(&self, index: usize, part: ControlPart) -> bool {
+        let Some(row) = self.content().row(index) else {
+            return false;
+        };
+        if row.action.is_some() || row.profile.is_some() {
+            return false;
+        }
+        matches!(
+            (&row.control, part),
+            (ControlView::Field { .. }, _)
+                | (
+                    ControlView::GitPoll { on: true, .. },
+                    ControlPart::GitNumber
+                )
+                | (ControlView::List { .. }, ControlPart::ListField { .. })
+        )
+    }
+
+    /// Press com o diálogo aberto: arma o botão ou a caixa sob o cursor; fora
+    /// deles, nada.
+    fn arm_dialog(&mut self, env: Env<'_>, measurer: &mut TextMeasurer, point: (f32, f32)) {
+        let Some(layout) = self.dialog_layout(env, measurer) else {
+            return;
+        };
+        self.armed = Self::dialog_target(&layout, point);
+        self.window.request_redraw();
+    }
+
+    /// Press com a lista aberta: arma o item sob o cursor; fora do menu a
+    /// fecha já no press.
+    fn arm_choice(&mut self, env: Env<'_>, point: (f32, f32)) {
+        let Some(layout) = self.choice_layout(env) else {
+            self.choice = None;
+            return;
+        };
+        match choice_list::hit(&layout, point) {
+            Some(index) => self.armed = Some(Armed::ChoiceItem(index)),
+            None if choice_list::contains(&layout, point) => {}
+            None => self.choice = None,
+        }
+        self.window.request_redraw();
     }
 
     /// Clique num botão do rodapé. Descartar e Salvar indisponíveis não fazem
@@ -1860,27 +2001,6 @@ impl SettingsWindow {
         interact::choose_value(&mut self.draft, option, &name);
         self.invalidate();
         true
-    }
-
-    /// Clique na lista aberta: um item a escolhe; fora do menu a fecha.
-    fn click_choice(&mut self, env: Env<'_>, point: (f32, f32)) {
-        let Some(layout) = self.choice_layout(env) else {
-            self.choice = None;
-            return;
-        };
-        match choice_list::hit(&layout, point) {
-            Some(index) => {
-                if let Some(list) = &mut self.choice {
-                    list.highlighted = index;
-                }
-                self.select_choice();
-            }
-            None if choice_list::contains(&layout, point) => {}
-            None => {
-                self.choice = None;
-                self.window.request_redraw();
-            }
-        }
     }
 
     /// Clique na parte de um campo: se o campo já é o que está em edição, só
@@ -2785,6 +2905,10 @@ impl SettingsWindow {
                 selected: self.selected_group,
                 focus: self.focus,
                 hovered: self.hovered,
+                pressed: match self.armed {
+                    Some(Armed::Hit(hit)) => Some(hit),
+                    _ => None,
+                },
                 scroll: self.scroll,
                 pending_groups: &pending_groups,
                 editing: self.editing.as_ref(),

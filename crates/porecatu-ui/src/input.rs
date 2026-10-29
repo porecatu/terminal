@@ -35,6 +35,16 @@ use crate::paint::CellMetrics;
 /// SO usa; 500ms é a faixa comum (é também o default do Windows).
 const MULTI_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 
+/// Release decision shared by every button-like target (ADR-0081): the press
+/// only arms, and the action runs when the button is released over the very
+/// same target. Released elsewhere (or over nothing) cancels.
+pub(crate) fn release_on_armed<T: PartialEq + Copy>(
+    armed: Option<T>,
+    released_over: Option<T>,
+) -> Option<T> {
+    armed.filter(|target| released_over == Some(*target))
+}
+
 pub fn modifiers_from(state: ModifiersState) -> Modifiers {
     Modifiers {
         shift: state.shift_key(),
@@ -445,6 +455,18 @@ pub fn handle_mouse_motion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-0081: a button fires only when released over the very target the
+    /// press armed; released elsewhere, over nothing, or never armed, it does
+    /// not.
+    #[test]
+    fn release_fires_only_over_the_armed_target() {
+        assert_eq!(release_on_armed(Some(3), Some(3)), Some(3));
+        assert_eq!(release_on_armed(Some(3), Some(4)), None);
+        assert_eq!(release_on_armed(Some(3), None), None);
+        assert_eq!(release_on_armed(None, Some(3)), None);
+        assert_eq!(release_on_armed::<u8>(None, None), None);
+    }
 
     /// Regressão: um clique no "mesmo lugar lógico" tem que cair na mesma
     /// célula não importa o `scale_factor` da janela -- o bug original

@@ -49,6 +49,9 @@ pub(crate) struct Input<'a> {
     pub selected: Group,
     pub focus: Focus,
     pub hovered: Option<Hit>,
+    /// O alvo armado pelo press esquerdo (ADR-0081): só aparece pressionado
+    /// enquanto o cursor segue sobre ele.
+    pub pressed: Option<Hit>,
     pub scroll: f32,
     /// Grupos com alteração pendente: o ponto ao lado do nome.
     pub pending_groups: &'a [Group],
@@ -246,11 +249,15 @@ fn paint_banner(input: &Input<'_>, out: &mut Vec<Primitive>) {
         ));
     }
     for (view, button_rect) in banner.buttons.iter().zip(&geometry.buttons) {
-        let hovered = input.hovered == Some(Hit::Banner(view.button));
+        let hit = Hit::Banner(view.button);
+        let hovered = input.hovered == Some(hit);
+        let pressed = hovered && input.pressed == Some(hit);
         out.push(rounded(
             *button_rect,
             m.button_radius,
-            if hovered {
+            if pressed {
+                pressed_fill(pal.dialog_cancel_border, input.style)
+            } else if hovered {
                 pal.dialog_cancel_border
             } else {
                 palette::TRANSPARENT
@@ -285,6 +292,7 @@ fn paint_sidebar(input: &Input<'_>, out: &mut Vec<Primitive>) {
     for (group, rect) in input.items {
         let selected = *group == input.selected;
         let hovered = input.hovered == Some(Hit::Group(*group));
+        let pressed = hovered && input.pressed == Some(Hit::Group(*group));
         if selected {
             out.push(rounded(
                 *rect,
@@ -297,7 +305,11 @@ fn paint_sidebar(input: &Input<'_>, out: &mut Vec<Primitive>) {
             out.push(rounded(
                 *rect,
                 radius,
-                pal.menu_item_hover,
+                if pressed {
+                    pressed_fill(pal.menu_item_hover, input.style)
+                } else {
+                    pal.menu_item_hover
+                },
                 palette::TRANSPARENT,
                 0.0,
             ));
@@ -1281,6 +1293,9 @@ fn paint_footer(input: &Input<'_>, out: &mut Vec<Primitive>) {
                 primary: *button == FooterButton::Save,
                 available,
                 hovered: available && input.hovered == Some(Hit::Footer(*button)),
+                pressed: available
+                    && input.hovered == Some(Hit::Footer(*button))
+                    && input.pressed == Some(Hit::Footer(*button)),
                 focused: input.focus == Focus::Footer(*button),
             },
             m,
@@ -1301,7 +1316,16 @@ pub(super) struct FooterButtonView<'a> {
     pub primary: bool,
     pub available: bool,
     pub hovered: bool,
+    /// Armado pelo press e o cursor ainda sobre ele (ADR-0081): um passo de
+    /// brilho acima do hover.
+    pub pressed: bool,
     pub focused: bool,
+}
+
+/// O fundo de um alvo pressionado: o do hover com mais um passo do mesmo
+/// brilho de hover (`tab_hover_brightness`), sem cor nova (ADR-0081).
+pub(crate) fn pressed_fill(hover_fill: Color, style: &TabBarStyle) -> Color {
+    crate::chrome::brighten(hover_fill, style.tab_hover_brightness)
 }
 
 pub(super) fn paint_button(
@@ -1315,8 +1339,11 @@ pub(super) fn paint_button(
         // Salvar, o primeiro botão primário do app: o par "ligado" da
         // alternância, com hover por brilho (ADR-0060 §4).
         (true, true) => {
-            let fill = if button.hovered {
-                crate::chrome::brighten(TOGGLE_ON, style.tab_hover_brightness)
+            let hover_fill = crate::chrome::brighten(TOGGLE_ON, style.tab_hover_brightness);
+            let fill = if button.pressed {
+                pressed_fill(hover_fill, style)
+            } else if button.hovered {
+                hover_fill
             } else {
                 TOGGLE_ON
             };
@@ -1332,7 +1359,9 @@ pub(super) fn paint_button(
         // Estilo cancelar: borda e texto do botão do diálogo, hover no
         // tom da borda.
         (false, true) => (
-            if button.hovered {
+            if button.pressed {
+                pressed_fill(pal.dialog_cancel_border, style)
+            } else if button.hovered {
                 pal.dialog_cancel_border
             } else {
                 palette::TRANSPARENT
@@ -1449,6 +1478,7 @@ mod tests {
                     Focus::Sidebar
                 },
                 hovered: hovered(index),
+                pressed: None,
                 scroll: 0.0,
                 pending_groups: &[],
                 editing,
@@ -1700,6 +1730,7 @@ mod tests {
                 selected: group,
                 focus: Focus::Sidebar,
                 hovered: hovered(index),
+                pressed: None,
                 scroll: 0.0,
                 pending_groups: &[],
                 editing,
@@ -1969,6 +2000,7 @@ mod tests {
                 selected: Group::Shortcuts,
                 focus,
                 hovered: None,
+                pressed: None,
                 scroll: 0.0,
                 pending_groups: &[],
                 editing,
@@ -2168,6 +2200,7 @@ mod tests {
                 selected: Group::Terminal,
                 focus,
                 hovered,
+                pressed: None,
                 scroll: 0.0,
                 pending_groups: &[],
                 editing: None,
@@ -2273,6 +2306,57 @@ mod tests {
         )));
     }
 
+    /// ADR-0081: a footer button armed by the press takes one more hover
+    /// step, and only while it is also hovered; no new color.
+    #[test]
+    fn a_pressed_footer_button_takes_one_more_hover_step() {
+        let f = fixture();
+        let m = Metrics::from_config(&f.config, 52.0);
+        let fill_of = |hovered: bool, pressed: bool, primary: bool| -> Color {
+            let mut out = Vec::new();
+            paint_button(
+                &FooterButtonView {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 80.0,
+                        height: 28.0,
+                    },
+                    label: "Ok",
+                    primary,
+                    available: true,
+                    hovered,
+                    pressed,
+                    focused: false,
+                },
+                &m,
+                &f.pal,
+                &f.style,
+                &mut out,
+            );
+            out.iter()
+                .find_map(|p| match p {
+                    Primitive::RoundedQuad(q) => Some(q.color),
+                    _ => None,
+                })
+                .expect("the button paints a rounded quad")
+        };
+        // Primary: hover brightens, pressed brightens once more.
+        let hover = crate::chrome::brighten(TOGGLE_ON, f.style.tab_hover_brightness);
+        assert_eq!(fill_of(true, false, true), hover);
+        assert_eq!(
+            fill_of(true, true, true),
+            crate::chrome::brighten(hover, f.style.tab_hover_brightness)
+        );
+        // Cancel style: hover takes the border tone, pressed one step above.
+        assert_eq!(fill_of(true, false, false), f.pal.dialog_cancel_border);
+        assert_eq!(
+            fill_of(true, true, false),
+            crate::chrome::brighten(f.pal.dialog_cancel_border, f.style.tab_hover_brightness)
+        );
+        assert_eq!(fill_of(false, false, false), palette::TRANSPARENT);
+    }
+
     #[test]
     fn read_only_paints_row_names_and_field_texts_in_the_dim_color() {
         let f = fixture();
@@ -2349,6 +2433,7 @@ mod tests {
                     Focus::Sidebar
                 },
                 hovered: hover.then_some(Hit::Row(index)),
+                pressed: None,
                 scroll: 0.0,
                 pending_groups: &[],
                 editing: None,

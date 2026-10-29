@@ -153,6 +153,18 @@ pub(crate) enum EditorFocus {
     Button(EditorButton),
 }
 
+/// O alvo que um press esquerdo armou (ADR-0081): só age se o release cai no
+/// mesmo alvo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Armed {
+    /// Um botão do rodapé.
+    Button(EditorButton),
+    /// Um botão de uma linha (autenticação, `X`, "Adicionar").
+    Control(usize, ControlPart),
+    /// O item `n` da lista aberta.
+    ChoiceItem(usize),
+}
+
 /// A ordem do `Tab`: as `rows` linhas do formulário, depois os botões do rodapé
 /// (`buttons`, de [`footer_buttons`]) da esquerda para a direita (ADR-0080 §5).
 /// Um botão desabilitado não é parada.
@@ -272,6 +284,9 @@ pub(crate) struct ProfileEditorWindow {
     hovered_window_button: Option<WindowButtonHit>,
     /// O botão de janela armado pelo press (ADR-0066): dispara no release.
     pressed_window_button: Option<WindowButtonHit>,
+    /// O botão, controle ou item da lista sob o press esquerdo (ADR-0081): o
+    /// press só arma, e o release sobre o mesmo alvo é que age.
+    armed: Option<Armed>,
     last_titlebar_click: Option<Instant>,
     catalog: Arc<Catalog>,
     /// Adaptador de acessibilidade, criado antes de a janela ficar visível.
@@ -333,6 +348,7 @@ impl ProfileEditorWindow {
             cursor_position: (0.0, 0.0),
             hovered_window_button: None,
             pressed_window_button: None,
+            armed: None,
             last_titlebar_click: None,
             catalog,
             access_adapter,
@@ -1032,7 +1048,7 @@ impl ProfileEditorWindow {
         // A lista aberta é modal: um clique escolhe um item ou a fecha, e em
         // nenhum dos dois casos chega ao que está por baixo.
         if self.choice.is_some() {
-            self.click_choice(env, point);
+            self.arm_choice(env, point);
             return EditorPress::Nothing;
         }
         if let Some((button, available)) = self.button_at(env, measurer, point) {
@@ -1040,18 +1056,21 @@ impl ProfileEditorWindow {
             if !available {
                 return EditorPress::Nothing;
             }
+            // O foco vai no press; a ação, no release (ADR-0081).
             self.commit_edit(env, measurer, draft);
             self.focus = Some(EditorFocus::Button(button));
+            self.armed = Some(Armed::Button(button));
             self.window.request_redraw();
-            return self.press_button(button);
+            return EditorPress::Nothing;
         }
-        let body = self.layout(env).panel_body;
-        let m = Self::metrics(env);
-        let hit = self
-            .form
-            .as_ref()
-            .and_then(|form| form.hit(&m, body, self.scroll, point));
+        let hit = self.form_hit(env, point);
         match hit {
+            // Campo de texto: foco e arraste de seleção já no press. Botão de
+            // linha: arma e age no release.
+            Some(Hit::Control(index, part)) if self.defers(index, part) => {
+                self.armed = Some(Armed::Control(index, part));
+                self.window.request_redraw();
+            }
             Some(Hit::Control(index, part)) => {
                 self.click_control(env, measurer, draft, index, part);
             }
@@ -1104,28 +1123,95 @@ impl ProfileEditorWindow {
         }
     }
 
-    /// Um clique com a lista aberta: escolhe o item sob o ponteiro ou, fora
-    /// do menu, a fecha.
-    fn click_choice(&mut self, env: Env<'_>, point: (f32, f32)) {
+    /// O alvo do formulário sob `point`.
+    fn form_hit(&self, env: Env<'_>, point: (f32, f32)) -> Option<Hit> {
+        let body = self.layout(env).panel_body;
+        let m = Self::metrics(env);
+        self.form
+            .as_ref()
+            .and_then(|form| form.hit(&m, body, self.scroll, point))
+    }
+
+    /// O clique nesta parte de controle só age no release (ADR-0081)? O campo
+    /// de texto não: o press leva o foco e começa o arraste de seleção.
+    fn defers(&self, index: usize, part: ControlPart) -> bool {
+        self.row_target(index).is_some_and(|target| {
+            !matches!(content::profile_click(target, part), ProfileClick::Edit(_))
+        })
+    }
+
+    /// Press com a lista aberta: arma o item sob o ponteiro; fora do menu a
+    /// fecha já no press.
+    fn arm_choice(&mut self, env: Env<'_>, point: (f32, f32)) {
         let Some(layout) = self.choice_layout(env) else {
             self.choice = None;
             return;
         };
         if let Some(index) = choice_list::hit(&layout, point) {
-            if let Some(list) = &mut self.choice {
-                list.highlighted = index;
-            }
-            self.select_choice();
+            self.armed = Some(Armed::ChoiceItem(index));
         } else if !choice_list::contains(&layout, point) {
             self.choice = None;
-            self.window.request_redraw();
+        }
+        self.window.request_redraw();
+    }
+
+    /// O release de um alvo armado: age se o cursor ainda está sobre ele.
+    fn release_armed(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        draft: &ProfilesDraft,
+        armed: Armed,
+    ) -> EditorPress {
+        let point = self.cursor_logical();
+        let over = match armed {
+            Armed::Button(_) => self
+                .button_at(env, measurer, point)
+                .filter(|(_, available)| *available)
+                .map(|(button, _)| Armed::Button(button)),
+            Armed::Control(..) => match self.form_hit(env, point) {
+                Some(Hit::Control(index, part)) => Some(Armed::Control(index, part)),
+                _ => None,
+            },
+            Armed::ChoiceItem(_) => self
+                .choice_layout(env)
+                .and_then(|layout| choice_list::hit(&layout, point))
+                .map(Armed::ChoiceItem),
+        };
+        match crate::input::release_on_armed(Some(armed), over) {
+            Some(Armed::Button(button)) => {
+                self.window.request_redraw();
+                self.press_button(button)
+            }
+            Some(Armed::Control(index, part)) => {
+                self.click_control(env, measurer, draft, index, part);
+                EditorPress::Nothing
+            }
+            Some(Armed::ChoiceItem(index)) => {
+                if let Some(list) = &mut self.choice {
+                    list.highlighted = index;
+                }
+                self.select_choice();
+                EditorPress::Nothing
+            }
+            None => EditorPress::Nothing,
         }
     }
 
-    /// O botão esquerdo foi solto: acaba o arraste de seleção e dispara o botão
-    /// de janela armado, se o cursor ainda está sobre ele. Fechar é Cancelar.
-    pub(crate) fn left_released(&mut self, env: Env<'_>) -> EditorPress {
+    /// O botão esquerdo foi solto: acaba o arraste de seleção, age no alvo
+    /// armado se o cursor ainda está sobre ele (ADR-0081) e dispara o botão de
+    /// janela armado do mesmo jeito. Fechar é Cancelar.
+    pub(crate) fn left_released(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        draft: &ProfilesDraft,
+    ) -> EditorPress {
         self.dragging_field = false;
+        if let Some(armed) = self.armed.take() {
+            self.window.request_redraw();
+            return self.release_armed(env, measurer, draft, armed);
+        }
         let armed = self.pressed_window_button.take();
         if armed.is_none() || is_macos() {
             return EditorPress::Nothing;
@@ -1141,7 +1227,9 @@ impl ProfileEditorWindow {
     /// A janela perdeu o foco: um press armado não recebe mais o release.
     pub(crate) fn focus_lost(&mut self) {
         self.dragging_field = false;
-        if self.pressed_window_button.take().is_some() {
+        let window_button = self.pressed_window_button.take().is_some();
+        let armed = self.armed.take().is_some();
+        if window_button || armed {
             self.window.request_redraw();
         }
     }
@@ -1484,6 +1572,8 @@ impl ProfileEditorWindow {
                     primary: button == EditorButton::Ok,
                     available,
                     hovered: self.hovered_button == Some(button),
+                    pressed: self.hovered_button == Some(button)
+                        && self.armed == Some(Armed::Button(button)),
                     focused: self.focus == Some(EditorFocus::Button(button)),
                 },
                 &m,

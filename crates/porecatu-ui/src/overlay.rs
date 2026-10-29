@@ -366,6 +366,7 @@ pub fn paint_warnings(
 /// Acha, em ordem de desenho, o aviso ou o botão de fechar sob `point`
 /// (coordenadas lógicas da janela). Botão de fechar tem prioridade -- o
 /// mesmo critério do `TabBarHit` da barra de abas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WarningHit {
     Close(usize),
     Body,
@@ -2162,6 +2163,7 @@ pub fn paint_group_editor(
     out
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupEditorHit {
     NameField,
     Swatch(usize),
@@ -2822,6 +2824,7 @@ pub fn paint_session_picker(
 /// precedência do `X` da aba contra o corpo dela
 /// (`hit_test_close_button_wins_over_tab_body`): o `X` primeiro, porque
 /// fica **dentro** do retângulo da linha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionPickerHit {
     /// Item de salvar (navegação) ou campo de nome (edição) -- o mesmo
     /// retângulo fixo, `lib.rs` decide o que fazer por `picker.mode()`.
