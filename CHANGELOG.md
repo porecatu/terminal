@@ -28,7 +28,7 @@ primeiro release.
   o botão não é desenhado nem atingido e a trilha de abas recua até a borda
   (no macOS, até o semáforo).
 - **Tint roxo fixo no botão de menu do app**: o fundo da caixa leva `#A78BFA`
-  misturado a 30%; não é configurável. Aval visual do dono pendente.
+  misturado a 30%; não é configurável.
 
 ### Alterado
 

@@ -1,12 +1,12 @@
 # ADR-0079 — Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app
 
-**Status:** Aceito — aval visual pendente
+**Status:** Aceito
 **Data:** 2026-10-29
 **Relacionados:** [ADR-0027](0027-controles-de-janela-e-resize-proprios.md), [ADR-0032](0032-interface-do-v1-fechada.md), [ADR-0055](0055-botao-e-popover-de-sessoes.md), [ADR-0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md)
 
 ## Contexto
 
-O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grupos e abas, "exatamente no mesmo formato de uma aba solta", com o ícone do app. Ele será o botão de menu do app; por ora não tem ação, mas já tem hover e clique. A interface do v1 está fechada ([ADR-0032](0032-interface-do-v1-fechada.md)): mexer na anatomia da barra exige ADR, e este é o ADR. O pedido dá o aval para a mudança; o aval visual do resultado, como nas outras, fica pendente.
+O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grupos e abas, "exatamente no mesmo formato de uma aba solta", com o ícone do app. Ele será o botão de menu do app; por ora não tem ação, mas já tem hover e clique. A interface do v1 está fechada ([ADR-0032](0032-interface-do-v1-fechada.md)): mexer na anatomia da barra exige ADR, e este é o ADR. O pedido dá o aval para a mudança, e o dono deu depois o aval visual do botão e do tint roxo.
 
 ## Decisão
 
@@ -22,7 +22,7 @@ O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grup
 >
 > **a) Ocultar.** `[appearance.tabs] show_app_menu_button` (bool, default `true`, recarga A) e o toggle correspondente no grupo Aparência da tela de configurações ([PRD-016](../prd/prd-016-tela-de-configuracoes.md) RF-16.11). Com `false`: nada é desenhado, o retângulo não é atingido (`point_in_app_menu_button` devolve `false`), o nó de acessibilidade some e `track_shift` cai para `left_inset` — 0 fora do macOS, 78 no macOS, onde o semáforo continua reservado. Nenhuma outra conversão tela↔conteúdo muda: todas passam por `track_shift`. A trilha ganha de volta os 46 px.
 >
-> **b) Tint roxo fixo.** O fundo da caixa é a cor de aba (inativa; ativa no pressed) misturada com `#A78BFA` (`APP_MENU_TINT`, em `chrome.rs`) na proporção `APP_MENU_TINT_MIX = 0.30`, **antes** do brilho de hover; borda e ícone ficam como estavam. É uma cor **fixa por decisão do dono**: sem chave no TOML e fora dos `thm_*.toml`, portanto não entra na regra de "cor nova em `Config`". A proporção `0.30` é valor de implementação, **sujeito ao aval visual do dono**.
+> **b) Tint roxo fixo.** O fundo da caixa é a cor de aba (inativa; ativa no pressed) misturada com `#A78BFA` (`APP_MENU_TINT`, em `chrome.rs`) na proporção `APP_MENU_TINT_MIX = 0.30`, **antes** do brilho de hover; borda e ícone ficam como estavam. É uma cor **fixa por decisão do dono**: sem chave no TOML e fora dos `thm_*.toml`, portanto não entra na regra de "cor nova em `Config`". A proporção `0.30` é valor de implementação, aprovado em tela pelo dono.
 
 ## Consequências
 
@@ -36,5 +36,4 @@ O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grup
 | Risco | Probabilidade | Impacto | Mitigação |
 |---|---|---|---|
 | Algum ponto tela↔conteúdo esquecido desloca clique/hover | Média | Médio | Testes de geometria; busca por `scroll_offset` |
-| Aval visual do dono ainda não dado (ícone, pressed com cor de aba ativa) | Alta | Baixo | Registrado no roadmap como pendente |
 | Ícone sem alias depende dos mips | Baixa | Baixo | Reuso de `background_image::decode`, que já os gera |
