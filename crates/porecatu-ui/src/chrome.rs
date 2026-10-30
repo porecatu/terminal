@@ -2063,7 +2063,8 @@ mod tests {
     }
 
     /// The track starts after the fixed app menu button: the clip's left
-    /// edge is `track_shift`, and the first tab sits `trilha_padding` past it.
+    /// edge is `track_shift`, a `trilha_padding` past the button (the margin
+    /// the button has on its other sides), and the first tab sits on it.
     #[test]
     fn the_track_clip_starts_after_the_app_menu_button() {
         let style = TabBarStyle::DEFAULT;
@@ -2118,12 +2119,13 @@ mod tests {
         assert_eq!(clip.x, tab_bar::track_shift(&style, false));
         assert_eq!(
             clip.x,
-            button.x + button.width,
-            "colado no botão, sem sobrepor"
+            button.x + button.width + style.trilha_padding,
+            "respiro entre o botão e o recorte"
         );
         assert_eq!(clip.width, tab_bar::trilha_width(&style, bar_width, false));
 
-        // First tab: after the button, a `trilha_padding` past the clip edge.
+        // First tab: on the clip edge, so at rest it sits a `trilha_padding`
+        // past the button, as it did before the margin moved into the clip.
         let first_tab = layout.groups[0].tabs[0].rect;
         let tab_quad = out
             .iter()
@@ -2136,7 +2138,8 @@ mod tests {
                 _ => None,
             })
             .expect("fundo da aba ativa");
-        assert_eq!(tab_quad.x, clip.x + style.trilha_padding);
+        assert_eq!(tab_quad.x, clip.x);
+        assert_eq!(tab_quad.x, button.x + button.width + style.trilha_padding);
     }
 
     /// `show_app_menu_button = false`: nada do botão é pintado e o recorte da

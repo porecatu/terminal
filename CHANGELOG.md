@@ -27,6 +27,10 @@ primeiro release.
   (default `true`) e toggle no grupo Aparência da tela de configurações. Oculto,
   o botão não é desenhado nem atingido e a trilha de abas recua até a borda
   (no macOS, até o semáforo).
+- **Margem entre o botão de menu do app e a trilha de abas**: com a barra
+  cheia, a aba rolada deixa de ser cortada rente ao botão e some 6 px antes
+  dele, a mesma margem que o botão tem nos outros cantos. Em repouso nada
+  muda, e com o botão oculto a trilha segue como antes.
 - **Botão de menu do app com a aparência da aba ativa**: fundo, borda, hover e
   pressionado idênticos aos da aba ativa (dimensões mantidas). Substitui o tint
   roxo fixo `#A78BFA`, que foi removido junto com as constantes dele.

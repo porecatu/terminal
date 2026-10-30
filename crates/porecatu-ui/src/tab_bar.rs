@@ -633,9 +633,15 @@ pub fn layout(
     measurer: &mut TextMeasurer,
 ) -> TabBarLayout {
     let mut groups = Vec::new();
-    // Todo o conteúdo da trilha nasce deslocado pelo respiro das bordas
-    // (`trilha_padding`) -- não em (0, 0).
-    let mut x = style.trilha_padding;
+    // Sem o botão de menu do app, o conteúdo da trilha nasce deslocado pelo
+    // respiro das bordas (`trilha_padding`) -- não em (0, 0). Com ele, esse
+    // respiro já está em `track_shift` (entre o botão e o recorte), e repeti-lo
+    // aqui o dobraria.
+    let mut x = if style.show_app_menu_button {
+        0.0
+    } else {
+        style.trilha_padding
+    };
     let track_top = style.trilha_padding;
 
     for group in workspace.groups() {
@@ -1149,14 +1155,16 @@ pub fn app_menu_button_size(style: &TabBarStyle) -> f32 {
 }
 
 /// Onde a trilha rolável começa na tela: o inset do semáforo do macOS
-/// ([`left_inset`]), o respiro das bordas e o botão de menu do app. É a
-/// origem do conteúdo de [`layout`] -- `tela = conteúdo + track_shift -
-/// scroll_offset` -- e a borda esquerda do recorte da trilha.
+/// ([`left_inset`]), o respiro das bordas, o botão de menu do app e mais um
+/// respiro (`trilha_padding`) entre ele e a trilha -- a mesma margem que o
+/// botão tem nos outros cantos, para a aba rolada não ser cortada rente a
+/// ele. É a origem do conteúdo de [`layout`] -- `tela = conteúdo +
+/// track_shift - scroll_offset` -- e a borda esquerda do recorte da trilha.
 pub fn track_shift(style: &TabBarStyle, is_macos: bool) -> f32 {
     if !style.show_app_menu_button {
         return left_inset(style, is_macos);
     }
-    left_inset(style, is_macos) + style.trilha_padding + app_menu_button_size(style)
+    left_inset(style, is_macos) + style.trilha_padding * 2.0 + app_menu_button_size(style)
 }
 
 /// Retângulo do botão de menu do app, em coordenadas de tela da barra (zona
@@ -1696,7 +1704,26 @@ mod tests {
         let mut m = measurer();
         let layout = layout(&ws, &style, &mut m);
 
-        assert_eq!(layout.groups[0].rect.x, pad, "primeiro wrapper na borda");
+        // Com o botão de menu, o respiro da esquerda mora em `track_shift`
+        // (entre o botão e o recorte), não no conteúdo.
+        assert_eq!(layout.groups[0].rect.x, 0.0, "respiro dobrado à esquerda");
+        let button = app_menu_button_rect(&style, false);
+        assert_eq!(
+            track_shift(&style, false) - (button.x + button.width),
+            pad,
+            "recorte da trilha colado no botão"
+        );
+        // Sem o botão, o respiro volta para o conteúdo, junto da borda da barra.
+        let hidden = TabBarStyle {
+            show_app_menu_button: false,
+            ..style
+        };
+        let hidden_layout = super::layout(&ws, &hidden, &mut m);
+        assert_eq!(
+            hidden_layout.groups[0].rect.x, pad,
+            "primeiro wrapper na borda"
+        );
+        assert_eq!(hidden_layout.content_width, layout.content_width + pad);
         for group in &layout.groups {
             assert_eq!(group.rect.y, pad, "wrapper encostando no topo");
             assert_eq!(
@@ -1935,7 +1962,11 @@ mod tests {
         assert_eq!(button.height, tab.height, "mesma altura da aba solta");
         assert_eq!(button.y, tab.y, "mesmo topo da aba solta");
         assert_eq!(button.x, style.trilha_padding);
-        assert_eq!(button.x + button.width, track_shift(&style, false));
+        assert_eq!(
+            button.x + button.width + style.trilha_padding,
+            track_shift(&style, false),
+            "a trilha abre um respiro depois do botão"
+        );
 
         // macOS: the traffic lights' inset goes before the button, and the
         // whole track moves with it.
@@ -2056,8 +2087,9 @@ mod tests {
         assert_eq!(tab.label, "zsh");
         assert!(!tab.label_truncated);
         // Aba solta (run implícito): sem cápsula, sem `wrapper_padding` --
-        // encosta direto no respiro da trilha.
-        assert_eq!(tab.rect.x, TabBarStyle::DEFAULT.trilha_padding);
+        // encosta direto na origem da trilha (o respiro da esquerda é do
+        // `track_shift`, por causa do botão de menu).
+        assert_eq!(tab.rect.x, 0.0);
 
         // botão de nova aba do grupo vem depois da aba, com o tab_gap
         assert_eq!(
