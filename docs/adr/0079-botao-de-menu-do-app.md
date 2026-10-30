@@ -24,6 +24,8 @@ O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grup
 >
 > **b) Tint roxo fixo.** O fundo da caixa é a cor de aba (inativa; ativa no pressed) misturada com `#A78BFA` (`APP_MENU_TINT`, em `chrome.rs`) na proporção `APP_MENU_TINT_MIX = 0.30`, **antes** do brilho de hover; borda e ícone ficam como estavam. É uma cor **fixa por decisão do dono**: sem chave no TOML e fora dos `thm_*.toml`, portanto não entra na regra de "cor nova em `Config`". A proporção `0.30` é valor de implementação, aprovado em tela pelo dono.
 
+> **Revisão (pedido do dono, 2026-10-29) — aparência da aba ativa; o tint sai.** Substitui a decisão 3 e a alínea b) acima. O botão passa a ter **exatamente** a aparência de uma aba solta **ativa**: fundo `tab_active_background`, borda `tab_active_border` com `active_border_width`, hover pelo brilho `tab_hover_brightness` sobre o fundo ativo. O pressed é o da aba ativa apertada: a aba não pinta um estado próprio, mas o press arma `Drag::TabPressed`, que suprime o hover da barra (`bar_hover`), e ela volta ao fundo ativo **sem** o brilho — mais escuro que no hover. O botão faz o mesmo (só com o cursor sobre o botão armado). `APP_MENU_TINT`, `APP_MENU_TINT_MIX` e `mix` foram removidos de `chrome.rs`. Dimensões, sombra de aba solta, ícone, zona fixa e demais decisões não mudam. Aval visual do dono **pendente**.
+
 ## Consequências
 
 - A trilha rolável fica 46 px mais estreita (40 do botão + 6 de respiro); a rolagem, as pílulas de overflow, o arraste de aba e a âncora do menu de perfil usam a nova origem.

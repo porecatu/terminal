@@ -274,7 +274,8 @@ pub fn paint(
 
     // Botão de menu do app: zona fixa à esquerda, antes da trilha, fora do
     // recorte e do scroll. Sem ação por ora -- só hover e pressed, como o
-    // resto da barra. `show_app_menu_button = false`: nada é desenhado.
+    // resto da barra (o pressed é o da aba ativa apertada, sem o brilho do
+    // hover). `show_app_menu_button = false`: nada é desenhado.
     if style.show_app_menu_button {
         paint_app_menu_button(
             tab_bar::app_menu_button_rect(style, is_macos),
@@ -949,38 +950,14 @@ fn paint_zone_icon_button(
     out.push(centered_glyph(icon, rect, icon_size, icon_color));
 }
 
-/// Tint roxo (`#A78BFA`) do fundo do botão de menu do app. Fixo por decisão
-/// do dono (ADR-0079): sem chave no TOML e fora dos `thm_*.toml`.
-const APP_MENU_TINT: Color = Color {
-    r: 167.0 / 255.0,
-    g: 139.0 / 255.0,
-    b: 250.0 / 255.0,
-    a: 1.0,
-};
-
-/// Parte do [`APP_MENU_TINT`] na mistura com o fundo da aba. Aguarda aval
-/// visual do dono (ADR-0079).
-const APP_MENU_TINT_MIX: f64 = 0.30;
-
-/// Interpola `from` em direção a `to` por `t` (0 = `from`, 1 = `to`), canal a
-/// canal, em hex cru (sem gestão de cor, como o resto do chrome). Alfa de
-/// `from` intocado.
-fn mix(from: Color, to: Color, t: f64) -> Color {
-    Color {
-        r: from.r + (to.r - from.r) * t,
-        g: from.g + (to.g - from.g) * t,
-        b: from.b + (to.b - from.b) * t,
-        a: from.a,
-    }
-}
-
-/// Botão de menu do app: a caixa de uma aba solta (mesmas cores, raio,
-/// borda e sombra de [`tab_colors`]/`push_shadow`) com o ícone do app no
-/// meio. Hover clareia o fundo como o de uma aba (`tab_hover_brightness`);
-/// pressed usa as cores de aba **ativa**, a única "marcada" que a aba tem
-/// -- ela mesma não tem estado pressed. `app_icon` ausente: só a caixa.
-/// O fundo leva um tint roxo fixo ([`APP_MENU_TINT`]), aplicado antes do
-/// hover.
+/// Botão de menu do app: a caixa de uma aba solta **ativa** (mesmas cores,
+/// raio, borda e sombra de [`tab_colors`]/`push_shadow`) com o ícone do app
+/// no meio. Hover clareia o fundo como o da aba ativa
+/// (`tab_hover_brightness`). Pressed é o da aba ativa apertada: a aba não
+/// pinta um estado próprio, mas o press arma `Drag::TabPressed`, que
+/// suprime o hover da barra (`bar_hover`, em `lib.rs`) -- ela volta ao fundo
+/// ativo sem o brilho, mais escuro que no hover. O botão faz o mesmo: sem
+/// brilho enquanto pressionado. `app_icon` ausente: só a caixa.
 fn paint_app_menu_button(
     rect: Rect,
     (hovered, pressed): (bool, bool),
@@ -989,9 +966,8 @@ fn paint_app_menu_button(
     pal: &ResolvedPalette,
     out: &mut Vec<Primitive>,
 ) {
-    let (bg, border, border_width, _text) = tab_colors(pal, style, false, pressed);
-    let bg = mix(bg, APP_MENU_TINT, APP_MENU_TINT_MIX);
-    let bg = if hovered {
+    let (bg, border, border_width, _text) = tab_colors(pal, style, false, true);
+    let bg = if hovered && !pressed {
         brighten(bg, style.tab_hover_brightness)
     } else {
         bg
@@ -2015,7 +1991,7 @@ mod tests {
     }
 
     #[test]
-    fn app_menu_button_is_a_loose_tab_sized_square_with_tab_colors() {
+    fn app_menu_button_is_a_loose_tab_sized_square_with_active_tab_colors() {
         let style = TabBarStyle::DEFAULT;
         let pal = default_palette();
         let (rest, _) = app_menu_quad(false, false);
@@ -2025,16 +2001,8 @@ mod tests {
         );
         assert_eq!(rest.rect.width, rest.rect.height, "quadrado");
         assert_eq!(rest.radius, style.tab_corner_radius);
-        assert_eq!(
-            rest.color,
-            mix(
-                pal.tab_inactive_background,
-                APP_MENU_TINT,
-                APP_MENU_TINT_MIX
-            ),
-            "cor de aba inativa com o tint roxo"
-        );
-        assert_eq!(rest.border_color, pal.tab_inactive_border);
+        assert_eq!(rest.color, pal.tab_active_background);
+        assert_eq!(rest.border_color, pal.tab_active_border);
         // Same top and height as a loose tab in the layout.
         let mut ws = Workspace::new();
         ws.append_tab("zsh", None);
@@ -2046,58 +2014,24 @@ mod tests {
     }
 
     #[test]
-    fn app_menu_button_hover_brightens_and_pressed_takes_the_active_tab_colors() {
+    fn app_menu_button_hover_brightens_and_pressed_drops_the_brightness_like_the_active_tab() {
         let style = TabBarStyle::DEFAULT;
         let pal = default_palette();
         let (rest, _) = app_menu_quad(false, false);
         let (hover, _) = app_menu_quad(true, false);
         assert_eq!(
             hover.color,
-            brighten(
-                mix(
-                    pal.tab_inactive_background,
-                    APP_MENU_TINT,
-                    APP_MENU_TINT_MIX
-                ),
-                style.tab_hover_brightness
-            )
+            brighten(pal.tab_active_background, style.tab_hover_brightness)
         );
         assert_ne!(hover.color, rest.color);
+        assert_eq!(hover.border_color, pal.tab_active_border);
 
+        // Pressed: the bar's hover is suppressed while a tab is pressed, so
+        // the active tab falls back to its plain (darker) background.
         let (pressed, _) = app_menu_quad(true, true);
-        assert_eq!(
-            pressed.color,
-            brighten(
-                mix(pal.tab_active_background, APP_MENU_TINT, APP_MENU_TINT_MIX),
-                style.tab_hover_brightness
-            )
-        );
+        assert_eq!(pressed.color, pal.tab_active_background);
+        assert_eq!(pressed.color, rest.color);
         assert_eq!(pressed.border_color, pal.tab_active_border);
-    }
-
-    #[test]
-    fn app_menu_button_tint_is_the_fixed_purple_and_keeps_the_alpha() {
-        assert_eq!(
-            (
-                (APP_MENU_TINT.r * 255.0).round() as u8,
-                (APP_MENU_TINT.g * 255.0).round() as u8,
-                (APP_MENU_TINT.b * 255.0).round() as u8,
-            ),
-            (0xA7, 0x8B, 0xFA)
-        );
-        let base = Color {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.5,
-        };
-        assert_eq!(mix(base, APP_MENU_TINT, 0.0), base);
-        let full = mix(base, APP_MENU_TINT, 1.0);
-        assert_eq!(
-            (full.r, full.g, full.b),
-            (APP_MENU_TINT.r, APP_MENU_TINT.g, APP_MENU_TINT.b)
-        );
-        assert_eq!(full.a, 0.5);
     }
 
     #[test]
@@ -2253,15 +2187,15 @@ mod tests {
             false,
             None,
         );
-        let tinted = mix(
-            pal.tab_inactive_background,
-            APP_MENU_TINT,
-            APP_MENU_TINT_MIX,
-        );
+        let button = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
         assert!(
             !out.iter()
-                .any(|p| matches!(p, Primitive::RoundedQuad(q) if q.color == tinted)),
-            "nenhum quad tingido do botão"
+                .any(|p| matches!(p, Primitive::RoundedQuad(q) if q.rect == button)),
+            "nenhum quad na caixa do botão"
+        );
+        assert!(
+            !out.iter().any(|p| matches!(p, Primitive::Image { .. })),
+            "nenhum ícone do app"
         );
         let clip = out
             .iter()

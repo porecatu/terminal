@@ -21,14 +21,15 @@ primeiro release.
 - **Botão de menu do app**
   ([ADR-0079](docs/adr/0079-botao-de-menu-do-app.md)): botão quadrado fixo à
   esquerda da barra de abas, com a caixa de uma aba solta e o ícone do app.
-  Hover clareia como a aba, pressionado usa as cores de aba ativa; ainda sem
-  ação. A trilha rolável começa depois dele.
+  Hover clareia como a aba ativa, pressionado perde o brilho como ela; ainda
+  sem ação. A trilha rolável começa depois dele.
 - **Ocultar o botão de menu do app**: `[appearance.tabs] show_app_menu_button`
   (default `true`) e toggle no grupo Aparência da tela de configurações. Oculto,
   o botão não é desenhado nem atingido e a trilha de abas recua até a borda
   (no macOS, até o semáforo).
-- **Tint roxo fixo no botão de menu do app**: o fundo da caixa leva `#A78BFA`
-  misturado a 30%; não é configurável.
+- **Botão de menu do app com a aparência da aba ativa**: fundo, borda, hover e
+  pressionado idênticos aos da aba ativa (dimensões mantidas). Substitui o tint
+  roxo fixo `#A78BFA`, que foi removido junto com as constantes dele.
 - **Editor de perfil em janela própria**
   ([ADR-0080](docs/adr/0080-editor-de-perfil-em-janela-propria.md)): o
   formulário do perfil abre numa janela do SO filha e modal da tela de
