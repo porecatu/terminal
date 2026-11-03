@@ -155,7 +155,7 @@ Cor de aba sem grupo: `#7b838f`.
 | **Botão de janela** (minimizar / maximizar / fechar) | **46px de largura, altura cheia da barra** — ADR-0027, §2.2.1 |
 | **Zona de resize da janela** | **6px** em toda borda (ADR-0027) |
 | Botão de fechar da aba | 17×17 de desenho, **25×17** de alvo com o respiro de `icon_button_padding_x` |
-| Botões da zona fixa à direita (sessões, configurações) | 30×30 de desenho, **38×30** de alvo cada — mesma anatomia (§2.22, §2.2) |
+| Botões da zona fixa à direita (sessões, configurações) e "+" de aba avulsa | **40×40** cada, o tamanho do botão de menu do app (`app_menu_button_size`, ADR-0082) — mesma anatomia (§2.22, §2.2). O "+" de dentro de um grupo fica 30×30 (§2.6) |
 | **Indicador de overflow** | **18×18**, círculo (§2.18) |
 | Botões do painel `[v2]` | 22×20 |
 | Swatch de cor | 28×28 |
@@ -168,7 +168,7 @@ Cor de aba sem grupo: `#7b838f`.
 | Nome da pílula do grupo | teto de **140px** (`pill_name_max_width`), truncado com reticências |
 | **Guia da janela de configurações** | **200px** (`sidebar_width`) — a largura mínima do menu de contexto, que é o que a guia é: uma lista de itens de menu (ADR-0060 §5) |
 | Campo de texto e campo numérico da tela de configurações | **240px** (`text_field_width`) e **88px** (`number_field_width`) — o numérico cabe `102400` com folga para um sétimo dígito; os dois em `[appearance.settings]` (ADR-0060 §5) |
-| Trilha | largura da barra **menos** a zona fixa à direita (`right_zone_width` = `trilha_gap` 6 nas pontas e entre os dois botões + dois botões de 38px = **94px**, fora do macOS; **50px** era o valor com um botão só). No macOS reserva-se ainda `MACOS_TRAFFIC_LIGHT_INSET` (78px) à esquerda, para a trilha não desenhar sob o semáforo nativo |
+| Trilha | largura da barra **menos** a zona fixa à direita (`right_zone_width` = `trilha_gap` 6 antes do botão de sessões + dois botões de 40px + `window_controls.gap` 3 entre sessões e configurações e entre configurações e os botões de janela = **92px** antes dos botões de janela fora do macOS, e **95px** no macOS, com o `trilha_gap` da borda no lugar do último respiro — [ADR-0082](../adr/0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md), [ADR-0083](../adr/0083-gap-entre-os-botoes-da-zona-fixa.md); eram 94px com botões de 38px e **50px** com um botão só). No macOS reserva-se ainda `MACOS_TRAFFIC_LIGHT_INSET` (78px) à esquerda, para a trilha não desenhar sob o semáforo nativo |
 
 | Espaçamento | Valor |
 |---|---|
@@ -178,7 +178,7 @@ Cor de aba sem grupo: `#7b838f`.
 | Cápsula de grupo | `padding: 3` (`wrapper_padding`). **Não** se aplica a run implícito: sem cápsula não há o que absorva o respiro, e aplicá-lo abria entre grupo e aba solta um vão maior — e sem cor — do que entre dois grupos |
 | Aba | `padding: 0 6px 0 10px`, `gap: 8` |
 | Pílula | `padding: 0 9px 0 10px`, `gap: 7` (o `label_padding_left` subiu de 8 para 10) |
-| **Dentro de todo botão de ícone** | `icon_button_padding_x` **4px de cada lado** — fechar da aba e caret da pílula ficam mais largos que altos; a altura não muda, senão o botão de fechar deixaria de caber na aba. O "+" e os botões da zona fixa são quadrados de 30×30, sem esse respiro (§2.6) |
+| **Dentro de todo botão de ícone** | `icon_button_padding_x` **4px de cada lado** — fechar da aba e caret da pílula ficam mais largos que altos; a altura não muda, senão o botão de fechar deixaria de caber na aba. O "+" e os botões da zona fixa são quadrados, sem esse respiro: 30×30 o "+" de grupo e 40×40 os demais (§2.6, ADR-0082) |
 | **Quadro do terminal** | 6px de margem da borda da janela nos três lados que não encostam na barra, e 6px de padding entre a borda do quadro e a grade (§2.7) |
 | **Vão entre painéis** | o mesmo valor do quadro do terminal, **6px** — o divisor é esse vão e não tem valor próprio (§2.7.1) |
 | Cabeçalho do painel `[v2]` | `padding: 7px 12px` — do canvas; o cabeçalho de painel foi recusado ([ADR-0053](../adr/0053-paineis-divididos.md)), ver §4.3 |
@@ -480,8 +480,10 @@ fantasma do arraste de grupo.
 
 ### 2.6 Botão de nova aba `[v1]`
 
-**Quadrado de 30×30, sem respiro lateral** (`right_zone_button_size`, o mesmo dos
-botões de sessões (§2.22) e de configurações, na zona fixa), no grupo e fora dele, raio da aba
+**Quadrado, sem respiro lateral**: **30×30** dentro de um grupo explícito (`right_zone_button_size`,
+o que cabe na aba) e **40×40** fora dele — o "+" de um run de abas soltas e o avulso ao fim da
+trilha —, o mesmo dos botões de sessões (§2.22) e de configurações e do
+botão de menu do app (`app_menu_button_size`, [ADR-0082](../adr/0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md)). Raio da aba
 (`tab_corner_radius`), ícone Lucide `plus` na em de 20px, **sem borda**. Em repouso só o
 ícone aparece; **hover** revela o fundo dos botões de janela
 (`window_controls.hover_background`) e **pressed** o `pressed_background`, como nos botões
@@ -1189,6 +1191,8 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Diálogo de confirmação com modal de largura 380 (§2.15) | **Largura 360 em todo diálogo** (`appearance.dialog.width`; antes 380, depois 760 e 500). O corpo do diálogo de excluir perfil saía cortado com reticências nos 380; o dono pediu 760 e depois reduziu a 500 e a 360, que é piso — diálogo com conteúdo largo cresce | pedido do dono do produto, prompt 16 (ADR-0075 §2, nota de revisão) |
 | Corpo do diálogo de uma linha, cortado com reticências quando não cabe nos 360 (§2.15) | **Cresce até 720 (o dobro do piso), com 20 de margem da janela; passando disso, quebra em linhas** — título, corpo, linhas e nota; nunca reticências. Texto longo ficava ilegível num modal bem mais estreito que a janela | pedido do dono do produto ([ADR-0078](../adr/0078-largura-e-quebra-de-texto-do-dialogo.md)) |
 | A faixa de identidade da barra de título `[v2]` (logo, nome do app, §2.1) é a única presença do ícone do app no chrome | **Botão de menu do app** na zona fixa à esquerda da barra de abas, com a caixa de uma aba solta **ativa** e o ícone do app; hover e pressionado como os da aba ativa, sem ação por ora (§2.2). A trilha rolável ficou 52px mais estreita | pedido do dono do produto ([ADR-0079](../adr/0079-botao-de-menu-do-app.md)) |
+| Botões de sessões e configurações com 38×30 de alvo e o "+" de aba avulsa com 30×30, ao lado do botão de menu do app de 40×40 (§2.2, §2.6, §2.22) | **Os três com 40×40**, o tamanho do botão de menu do app (`app_menu_button_size`); só o tamanho muda, o aspecto (transparente em repouso, hover e pressionado) não. O "+" de dentro de um grupo explícito fica 30×30, que é o que cabe na aba; o de um run de abas soltas tem os 40×40. `right_zone_width` vai de 94 para **98px**, e a trilha perde 4px | pedido do dono do produto ([ADR-0082](../adr/0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md)), aval visual pendente |
+| 6px entre os botões de sessões e configurações, e **12px** entre configurações e os botões de janela (`trilha_gap` 6 + `window_controls.gap` 6) | **3px** nos dois (`[appearance.window_controls] gap`, que passa de 6 a 3 e governa os dois respiros). O 6px antes do botão de sessões e o da borda no macOS continuam. A zona fixa vai de 98 para **92px** antes dos botões de janela (**95px** no macOS), e a trilha ganha 12px fora do macOS | pedido do dono do produto ([ADR-0083](../adr/0083-gap-entre-os-botoes-da-zona-fixa.md)), aval visual pendente |
 | O formulário do perfil escolhido aparecia **abaixo da lista**, no painel do grupo "Perfis", montado como linha de opção — rótulo à esquerda, controle de 240 à direita (§2.12, ADR-0075 §6) | **Uma janela própria, o editor de perfil**: filha e modal da tela, com os campos **em coluna**, o rótulo acima e o campo na largura útil, e o rodapé Cancelar/OK; o painel fica com o topo, os botões e a lista. Na linha da lista, o badge abre a linha e o lápis fica à esquerda do ✕. OK leva à pendência sem gravar. Pedido do dono do produto: o formulário mudava de tamanho com o tipo, disputava a rolagem com a lista e apertava host, caminho de chave e diretório | [ADR-0080](../adr/0080-editor-de-perfil-em-janela-propria.md), fora de fase |
 | O canvas dá a cada perfil uma cor própria no menu de perfis (§2.9) | **Sem cor por perfil**: o badge usa a cor do grupo, na aba e no menu. Uma cor por item de uma lista do usuário não tem onde morar no tema ([ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)), e `[[profiles.list]]` não tem chave `color` | ADR-0070 (alternativas) |
 

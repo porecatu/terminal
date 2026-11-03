@@ -83,6 +83,8 @@
 | [0079](0079-botao-de-menu-do-app.md) | Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app; hover e pressionado, sem ação | Aceito |
 | [0080](0080-editor-de-perfil-em-janela-propria.md) | Editor de perfil em janela própria: formulário em coluna, modal sobre a tela de configurações, OK que só leva às pendências | Aceito — aval visual pendente |
 | [0081](0081-disparo-no-release-para-botoes-e-itens.md) | Disparo no release para botões e itens: o press arma, o release sobre o mesmo alvo age; clique fora, texto e gestos de terminal seguem no press | Aceito — aval visual do estado pressionado pendente |
+| [0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md) | Botões da barra com o tamanho do botão de menu do app: sessões, configurações e "+" avulso em 40×40; "+" de grupo fica 30×30; zona fixa de 94 para 98px | Aceito — aval visual pendente |
+| [0083](0083-gap-entre-os-botoes-da-zona-fixa.md) | Gap entre os botões da zona fixa: `window_controls.gap` de 6 para 3px, entre sessões, configurações e botões de janela; zona fixa de 98 para 92px | Aceito — aval visual pendente |
 
 ## Convenção
 

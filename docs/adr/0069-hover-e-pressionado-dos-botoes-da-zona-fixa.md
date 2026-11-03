@@ -18,6 +18,8 @@ O dono do produto pediu para os dois ganharem hover e clique como os botões de 
 
 Em repouso só o ícone aparece, como hoje. No hover e no pressionado pinta-se, atrás do ícone, um quadrado de lado igual à altura do botão (`right_zone_button_size`, 30), centrado no retângulo do botão, com o raio `tab_corner_radius` (6) e **sem borda**. O alvo de clique continua o retângulo do botão (38×30, com o respiro lateral de `icon_button_padding_x`), então o fundo é uns 4px mais estreito que o alvo de cada lado.
 
+> **Revisão ([ADR-0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md)):** os botões passaram a ser quadrados de 40×40 (o tamanho do botão de menu do app), então o fundo revelado é 40×40 e coincide com o alvo de clique. Os valores 30 e 38×30 acima são os que valiam aqui.
+
 ### 2. Cores dos botões de janela, sem chave nova
 
 Hover: `[appearance.window_controls] hover_background`. Pressionado: `pressed_background`. São as dos botões de minimizar e maximizar, e os temas já as sobrescrevem. Nenhuma cor, chave ou dimensão nova; o arquivo de exemplo e os temas não mudam.

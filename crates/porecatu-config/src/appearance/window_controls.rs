@@ -38,7 +38,7 @@ impl Default for WindowControls {
     fn default() -> Self {
         Self {
             button_width: 46,
-            gap: 6,
+            gap: 3,
             hover_background: Color::hex("#ffffff1a"),
             close_hover_background: Color::hex("#c4413fd9"),
             close_hover_foreground: Color::hex("#ffffff"),
@@ -60,7 +60,7 @@ mod tests {
             WindowControls::default(),
             WindowControls {
                 button_width: 46,
-                gap: 6,
+                gap: 3,
                 hover_background: Color::hex("#ffffff1a"),
                 close_hover_background: Color::hex("#c4413fd9"),
                 close_hover_foreground: Color::hex("#ffffff"),

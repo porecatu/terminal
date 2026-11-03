@@ -118,11 +118,12 @@ pub struct TabBarStyle {
     /// só o horizontal em 2px (campo à parte do vertical) não ficou bem em
     /// tela -- revertida, os dois eixos voltam a compartilhar este valor.
     pub trilha_padding: f32,
-    /// Lado do botão da zona fixa à direita. Herda o "30×30" que a espec.
-    /// §2.6 dava ao botão de nova aba global, que ocupava esta zona antes
-    /// -- hoje quem mora aqui é o botão de configurações. Sem chave
-    /// própria no TOML. O botão é centrado na barra, não colado à altura
-    /// da aba.
+    /// Lado do "+" de **dentro de um grupo explícito** (o de um run solto é
+    /// do tamanho do botão de menu do app). Herda o "30×30" que a espec.
+    /// §2.6 dava ao botão de nova aba global. Desde o ADR-0082 os botões da
+    /// zona fixa (sessões, configurações) e o "+" avulso têm o lado do botão
+    /// de menu do app ([`app_menu_button_size`]); este é só o que cabe na
+    /// aba de um grupo. Sem chave própria no TOML.
     pub right_zone_button_size: f32,
     /// `[appearance.tabs] show_new_tab_button` -- governa o "+" de cada
     /// grupo, que desde a remoção do botão global é o único botão de nova
@@ -176,8 +177,9 @@ pub struct TabBarStyle {
     pub overflow_scroll_step: f32,
     /// `[appearance.window_controls] button_width` -- ADR-0027.
     pub window_button_width: f32,
-    /// `[appearance.window_controls] gap` -- entre a zona de configurações
-    /// e a zona de botões de janela.
+    /// `[appearance.window_controls] gap` -- entre o botão de configurações
+    /// e a zona de botões de janela, e também entre os botões de sessões e
+    /// configurações (ADR-0083).
     pub window_controls_gap: f32,
     /// `[appearance.window_controls] macos_traffic_light_inset`.
     pub macos_traffic_light_inset: f32,
@@ -297,7 +299,7 @@ impl TabBarStyle {
         overflow_edge_inset: 4.0,
         overflow_scroll_step: 90.0,
         window_button_width: 46.0,
-        window_controls_gap: 6.0,
+        window_controls_gap: 3.0,
         macos_traffic_light_inset: 78.0,
         icon_em_size: 20.0,
         tab_corner_radius: 6.0,
@@ -539,6 +541,8 @@ pub struct GroupWrapperRect {
     /// `None` quando `show_new_tab_button` está desligado. Desde a
     /// remoção do botão global, é este o botão que a chave governa -- e a
     /// largura dele sai do wrapper junto, senão sobraria um vão.
+    /// Quadrado de `right_zone_button_size` num grupo explícito; num run
+    /// solto (sem cápsula) é o do tamanho do botão de menu do app (ADR-0082).
     pub new_tab_button: Option<Rect>,
 }
 
@@ -891,12 +895,20 @@ pub fn layout(
             if pill.is_some() || !tabs.is_empty() {
                 inner_x += style.tab_gap;
             }
-            // Mesmo botão quadrado dos da zona fixa (sessões, configurações).
+            // Num run solto (sem cápsula) o "+" é o avulso: tem a caixa do
+            // botão de menu do app, que é a do wrapper (ADR-0082). Dentro de
+            // um grupo é o quadrado de `right_zone_button_size`, que é o que
+            // cabe na aba.
+            let side = if loose {
+                app_menu_button_size(style)
+            } else {
+                style.right_zone_button_size
+            };
             let rect = Rect {
                 x: inner_x,
-                y: tab_top + (tab_h - style.right_zone_button_size) / 2.0,
-                width: style.right_zone_button_size,
-                height: style.right_zone_button_size,
+                y: tab_top + (tab_h - side) / 2.0,
+                width: side,
+                height: side,
             };
             inner_x += rect.width;
             Some(rect)
@@ -941,13 +953,14 @@ pub fn layout(
             .is_some_and(|g| g.is_explicit())
     {
         x += style.trilha_gap;
+        // Mesma caixa do botão de menu do app (ADR-0082), que é a do
+        // wrapper: topo e base alinhados com ele e com as abas soltas.
+        let size = app_menu_button_size(style);
         let rect = Rect {
             x,
-            y: track_top
-                + (style.tab_height + style.wrapper_padding * 2.0 - style.right_zone_button_size)
-                    / 2.0,
-            width: style.right_zone_button_size,
-            height: style.right_zone_button_size,
+            y: track_top,
+            width: size,
+            height: size,
         };
         x += rect.width;
         Some(rect)
@@ -1119,13 +1132,23 @@ pub fn point_in_overflow_pill(
 }
 
 /// Largura combinada dos dois botões de ícone da zona fixa (sessões +
-/// configurações) e do respiro entre eles: `trilha_gap` antes do botão de
-/// sessões, entre os dois botões, e depois da engrenagem -- três vezes o
-/// mesmo respiro que separa grupos, reaproveitado em vez de inventar um
-/// padding próprio (ADR-0055 §1: 6 + 38 + 6 + 38 + 6 = 94px fora do
-/// macOS, o mesmo sem os botões de janela).
-fn icon_buttons_zone_width(style: &TabBarStyle) -> f32 {
-    style.trilha_gap * 3.0 + style.icon_button_width(style.right_zone_button_size) * 2.0
+/// configurações) e dos respiros em volta: `trilha_gap` antes do botão de
+/// sessões (o que separa a trilha dele, o mesmo respiro que separa grupos),
+/// `window_controls_gap` entre os dois botões e `window_controls_gap` entre a
+/// engrenagem e os botões de janela (ADR-0083). No macOS não há botões de
+/// janela, e depois da engrenagem fica o `trilha_gap` da borda da barra.
+/// Com os tamanhos do ADR-0082: 6 + 40 + 3 + 40 + 3 = 92px antes dos botões
+/// de janela fora do macOS; 6 + 40 + 3 + 40 + 6 = 95px no macOS.
+fn icon_buttons_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
+    let after_settings = if is_macos {
+        style.trilha_gap
+    } else {
+        style.window_controls_gap
+    };
+    style.trilha_gap
+        + app_menu_button_size(style) * 2.0
+        + style.window_controls_gap
+        + after_settings
 }
 
 /// Largura da zona fixa à direita da barra (pedido do usuário, fora da
@@ -1139,17 +1162,20 @@ fn icon_buttons_zone_width(style: &TabBarStyle) -> f32 {
 /// `is_macos` é falso -- no macOS eles não existem aqui (semáforo nativo,
 /// ver [`left_inset`]).
 pub fn right_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
-    let buttons_zone = icon_buttons_zone_width(style);
+    let buttons_zone = icon_buttons_zone_width(style, is_macos);
     if is_macos {
         buttons_zone
     } else {
-        buttons_zone + style.window_controls_gap + window_controls_width(style, is_macos)
+        buttons_zone + window_controls_width(style, is_macos)
     }
 }
 
 /// Lado do botão de menu do app: a caixa inteira de uma aba solta
 /// (`tab_height` mais o respiro do wrapper dos dois lados, o mesmo que
-/// [`layout`] dá à aba sem grupo) -- quadrado, sem número próprio.
+/// [`layout`] dá à aba sem grupo) -- quadrado, sem número próprio. É também o
+/// lado dos botões de sessões e configurações e do "+" de aba avulsa
+/// (ADR-0082): só o "+" de dentro de um grupo fica menor
+/// (`right_zone_button_size`).
 pub fn app_menu_button_size(style: &TabBarStyle) -> f32 {
     style.tab_height + style.wrapper_padding * 2.0
 }
@@ -1207,19 +1233,19 @@ pub fn settings_button_rect(
     bar_height: f32,
     is_macos: bool,
 ) -> Rect {
-    let window_controls_zone = if is_macos {
-        0.0
+    // À direita da engrenagem: os botões de janela e `window_controls_gap`
+    // entre eles; no macOS, o `trilha_gap` da borda da barra.
+    let right_margin = if is_macos {
+        style.trilha_gap
     } else {
         style.window_controls_gap + window_controls_width(style, is_macos)
     };
+    let size = app_menu_button_size(style);
     Rect {
-        x: bar_width
-            - window_controls_zone
-            - style.trilha_gap
-            - style.icon_button_width(style.right_zone_button_size),
-        y: (bar_height - style.right_zone_button_size) / 2.0,
-        width: style.icon_button_width(style.right_zone_button_size),
-        height: style.right_zone_button_size,
+        x: bar_width - right_margin - size,
+        y: (bar_height - size) / 2.0,
+        width: size,
+        height: size,
     }
 }
 
@@ -1238,8 +1264,9 @@ pub fn point_in_settings_button(
 
 /// Retângulo do botão de sessões nomeadas (ADR-0054, ADR-0055 §1),
 /// imediatamente à esquerda da engrenagem, separado dela por
-/// `trilha_gap` -- mesma anatomia, ancorado a partir dela em vez de um
-/// cálculo independente, para os dois nunca poderem divergir.
+/// `window_controls_gap` (o mesmo respiro que a separa dos botões de janela,
+/// ADR-0083) -- mesma anatomia, ancorado a partir dela em vez de um cálculo
+/// independente, para os dois nunca poderem divergir.
 pub fn sessions_button_rect(
     style: &TabBarStyle,
     bar_width: f32,
@@ -1248,7 +1275,7 @@ pub fn sessions_button_rect(
 ) -> Rect {
     let settings = settings_button_rect(style, bar_width, bar_height, is_macos);
     Rect {
-        x: settings.x - style.trilha_gap - settings.width,
+        x: settings.x - style.window_controls_gap - settings.width,
         y: settings.y,
         width: settings.width,
         height: settings.height,
@@ -1809,6 +1836,27 @@ mod tests {
         assert_eq!(button_mid, tab.rect.y + tab.rect.height / 2.0);
     }
 
+    /// ADR-0082: num run solto (sem nenhum grupo explícito) o "+" é o avulso,
+    /// com a caixa do botão de menu do app -- e não o quadrado menor do "+"
+    /// de dentro de um grupo --, alinhado ao topo e à base da aba solta.
+    #[test]
+    fn loose_run_new_tab_button_has_the_size_of_the_app_menu_button() {
+        let mut ws = Workspace::new();
+        ws.append_ungrouped_tab("bash", None);
+        let style = TabBarStyle::DEFAULT;
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+
+        let group = &layout.groups[0];
+        let tab = group.tabs[0].rect;
+        let button = group.new_tab_button.expect("botão ligado no default");
+        let app = app_menu_button_rect(&style, false);
+        assert_eq!((button.width, button.height), (app.width, app.height));
+        assert_eq!(button.y, tab.y, "mesmo topo da aba solta");
+        assert_eq!(button.y, app.y, "mesmo topo do botão de menu do app");
+        assert_eq!(button.y + button.height, tab.y + tab.height);
+    }
+
     /// A altura da barra tem de acompanhar os dois respiros, senão o
     /// conteúdo deslocado vaza por baixo dela -- e é `bar_height` que
     /// `lib.rs` usa para deslocar a grade e converter clique.
@@ -1856,17 +1904,18 @@ mod tests {
         let bar_width = 400.0;
         let bar_height = crate::chrome::bar_height(&style);
         let button = settings_button_rect(&style, bar_width, bar_height, false);
-        let width = style.icon_button_width(style.right_zone_button_size);
+        let width = app_menu_button_size(&style);
         let window_controls = style.window_controls_gap + window_controls_width(&style, false);
         assert_eq!(
             button.x,
-            bar_width - style.trilha_gap - width - window_controls,
-            "a zona de botões de janela (ADR-0027) empurra o botão de configurações"
+            bar_width - width - window_controls,
+            "a zona de botões de janela (ADR-0027) empurra o botão de configurações, \
+             com `window_controls_gap` entre eles (ADR-0083)"
         );
         assert_eq!(button.width, width);
         assert_eq!(
-            button.height, style.right_zone_button_size,
-            "o respiro entra só na largura"
+            button.height, width,
+            "quadrado, do tamanho do botão de menu do app (ADR-0082)"
         );
         assert_eq!(
             trilha_width(&style, bar_width, false),
@@ -1891,11 +1940,11 @@ mod tests {
     }
 
     /// ADR-0055 §1: o botão de sessões fica à esquerda da engrenagem,
-    /// separado dela por `trilha_gap`, sem sobrepor nem vazar da zona
-    /// fixa -- e a trilha perde exatamente os 44px que os dois novos
-    /// elementos (botão + respiro) custam.
+    /// separado dela por `window_controls_gap` (ADR-0083), sem sobrepor nem
+    /// vazar da zona fixa -- e a trilha perde exatamente o que os dois
+    /// elementos novos (botão + respiro) custam.
     #[test]
-    fn sessions_button_sits_left_of_settings_with_trilha_gap_between() {
+    fn sessions_button_sits_left_of_settings_with_the_zone_gap_between() {
         let style = TabBarStyle::DEFAULT;
         let bar_width = 400.0;
         let bar_height = crate::chrome::bar_height(&style);
@@ -1909,8 +1958,8 @@ mod tests {
             assert_eq!(sessions.y, settings.y, "mesma anatomia");
             assert_eq!(
                 settings.x - (sessions.x + sessions.width),
-                style.trilha_gap,
-                "distância entre os dois botões é trilha_gap, nem mais nem menos"
+                style.window_controls_gap,
+                "distância entre os dois botões é window_controls_gap, nem mais nem menos"
             );
             assert!(
                 sessions.x >= bar_width - right_zone_width(&style, is_macos),
@@ -1922,27 +1971,36 @@ mod tests {
             );
         }
 
-        // A trilha perde exatamente 44px (trilha_gap + icon_button_width,
-        // o custo do botão novo e do respiro que o acompanha) em relação
-        // ao que valia antes deste ADR (zona de 50px antes dos botões de
-        // janela, teste `settings_button_sits_in_the_fixed_right_zone`).
-        let old_zone_before_window_controls =
-            style.trilha_gap * 2.0 + style.icon_button_width(style.right_zone_button_size);
-        let new_zone_before_window_controls =
-            style.trilha_gap * 3.0 + style.icon_button_width(style.right_zone_button_size) * 2.0;
+        // Fora do macOS a zona fixa é o `trilha_gap` antes do botão de
+        // sessões, dois botões do tamanho do botão de menu do app
+        // (ADR-0082) e dois `window_controls_gap` (entre os botões e entre a
+        // engrenagem e os de janela, ADR-0083): 6 + 40 + 3 + 40 + 3 = 92px,
+        // mais os botões de janela. No macOS, o `trilha_gap` da borda no
+        // lugar do segundo respiro: 6 + 40 + 3 + 40 + 6 = 95px.
+        let side = app_menu_button_size(&style);
+        assert_eq!(side, 40.0, "ADR-0082: o tamanho do botão de menu do app");
+        assert_eq!(style.window_controls_gap, 3.0, "ADR-0083");
         assert_eq!(
-            new_zone_before_window_controls - old_zone_before_window_controls,
-            44.0,
-            "ADR-0055 §1: a trilha perde 44px"
+            right_zone_width(&style, false),
+            92.0 + window_controls_width(&style, false),
+            "ADR-0083: 6 + 40 + 3 + 40 + 3, mais os botões de janela"
         );
         assert_eq!(
-            trilha_width(&style, bar_width, false) + 44.0,
+            right_zone_width(&style, true),
+            95.0,
+            "macOS: 6 + 40 + 3 + 40 + 6"
+        );
+        // Com um botão só (antes do ADR-0055) seriam o respiro da trilha, um
+        // botão e o da borda; o de sessões custa um botão e um respiro.
+        assert_eq!(
+            trilha_width(&style, bar_width, false) + style.window_controls_gap + side,
             bar_width
                 - track_shift(&style, false)
-                - (old_zone_before_window_controls
+                - (style.trilha_gap
+                    + side
                     + style.window_controls_gap
                     + window_controls_width(&style, false)),
-            "a trilha de hoje, menos 44px, é a trilha nova"
+            "a trilha de hoje, menos um botão e um respiro, é a trilha nova"
         );
     }
 
@@ -1979,6 +2037,40 @@ mod tests {
             track_shift(&style, true) - track_shift(&style, false),
             style.macos_traffic_light_inset
         );
+    }
+
+    /// ADR-0082: sessions, settings and the loose "+" have the same width and
+    /// height as the app menu button, and share its top.
+    #[test]
+    fn bar_buttons_share_the_size_of_the_app_menu_button() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_width = 800.0;
+        let bar_height = crate::chrome::bar_height(&style);
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "servidor", GroupColor::Green).unwrap();
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+
+        let app = app_menu_button_rect(&style, false);
+        for (nome, rect) in [
+            (
+                "sessões",
+                sessions_button_rect(&style, bar_width, bar_height, false),
+            ),
+            (
+                "configurações",
+                settings_button_rect(&style, bar_width, bar_height, false),
+            ),
+            ("+ avulso", layout.ungrouped_new_tab_button.unwrap()),
+        ] {
+            assert_eq!(
+                (rect.width, rect.height),
+                (app.width, app.height),
+                "{nome}: mesmo tamanho do botão de menu do app"
+            );
+            assert_eq!(rect.y, app.y, "{nome}: mesmo topo do botão de menu do app");
+        }
     }
 
     #[test]
@@ -2209,17 +2301,17 @@ mod tests {
             );
         }
 
-        // O "+" é o quadrado dos botões da zona fixa, sem respiro lateral, no
-        // grupo e fora dele.
-        for rect in [
-            group.new_tab_button.unwrap(),
-            layout.ungrouped_new_tab_button.unwrap(),
-        ] {
-            assert_eq!(
-                (rect.width, rect.height),
-                (style.right_zone_button_size, style.right_zone_button_size)
-            );
-        }
+        // O "+" é quadrado, sem respiro lateral: o de dentro do grupo cabe na
+        // aba (`right_zone_button_size`); o avulso tem a caixa do botão de
+        // menu do app (ADR-0082).
+        let in_group = group.new_tab_button.unwrap();
+        assert_eq!(
+            (in_group.width, in_group.height),
+            (style.right_zone_button_size, style.right_zone_button_size)
+        );
+        let loose = layout.ungrouped_new_tab_button.unwrap();
+        let side = app_menu_button_size(&style);
+        assert_eq!((loose.width, loose.height), (side, side));
         assert_eq!(
             group.tabs[0].close_button.height, style.close_button_size,
             "a altura do botão de fechar não muda"

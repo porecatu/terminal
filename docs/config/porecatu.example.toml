@@ -429,7 +429,7 @@ scroll_step = 90
 
 [appearance.window_controls]
 button_width = 46
-gap = 6
+gap = 3
 resize_border = 6
 macos_traffic_light_inset = 78
 
