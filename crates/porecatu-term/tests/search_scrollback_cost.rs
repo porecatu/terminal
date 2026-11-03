@@ -80,11 +80,41 @@ fn fill_scrollback(term: &mut TermEngine, lines: usize) {
     }
 }
 
+/// Quantas vezes uma medição que estoura o orçamento é refeita antes de
+/// valer. Runner de CI compartilhado (macOS em especial) tem picos de
+/// escalonamento que levam um único passo a 185ms contra ~10ms típicos;
+/// uma regressão real de custo estoura **em toda** tentativa, ruído não.
+const MAX_ATTEMPTS: usize = 3;
+
 /// Mede o **pior passo** (o mais lento entre todos os lotes até `Done`) de
 /// uma busca sobre um scrollback cheio -- é o número que importa: um só
 /// lote lento já é um frame perdido, não importa quantos rápidos vieram
-/// antes.
+/// antes. Se a medição estoura o orçamento, repete até `MAX_ATTEMPTS` e
+/// devolve a menor, para um pico de ruído do runner não reprovar o CI.
 fn measure_worst_step(
+    scrollback_lines: usize,
+    rows: usize,
+    cols: usize,
+    pattern: &str,
+    mode: SearchMode,
+) -> u128 {
+    let mut best = u128::MAX;
+    for _ in 0..MAX_ATTEMPTS {
+        best = best.min(measure_worst_step_once(
+            scrollback_lines,
+            rows,
+            cols,
+            pattern,
+            mode,
+        ));
+        if best < frame_budget_ms() {
+            break;
+        }
+    }
+    best
+}
+
+fn measure_worst_step_once(
     scrollback_lines: usize,
     rows: usize,
     cols: usize,
