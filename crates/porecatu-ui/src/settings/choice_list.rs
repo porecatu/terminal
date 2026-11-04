@@ -14,8 +14,8 @@
 use porecatu_config::Config;
 use porecatu_render::{Primitive, Rect, RoundedQuad, TextMeasurer, TextRun};
 
+use super::content::BODY_FONT;
 use crate::chrome::push_shadow;
-use crate::overlay::BODY_FONT;
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::rect_contains;
 

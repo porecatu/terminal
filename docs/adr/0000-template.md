@@ -19,7 +19,7 @@
 | [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito · menu de contexto revisto por ADR-0070 (**parcial**: o menu de perfis, ancorado num botão) · diálogo e canais revistos por ADR-0075 (**parcial**: campo, caixa de marcar e linhas de dado; consumidores do SSH) |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito · "Escopo" Superseded by ADR-0059 (**parcial**: uma janela sem abas, a de configurações) |
-| [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 |
+| [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 · "embutidas" revisto por ADR-0084 (**parcial**: a fonte de interface é a do sistema) |
 | [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034, ADR-0037 e ADR-0053 (os três **parcialmente**) · cobertura do RF-1.6 revista por ADR-0071 (**parcial**: aba SSH do cliente embutido confirma) |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
 | [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
@@ -29,7 +29,7 @@
 | [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Superseded by ADR-0035 (parcial) |
 | [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
 | [0025](0025-iosevka-no-lugar-da-ibm-plex.md) | Iosevka no lugar da IBM Plex | Superseded by [ADR-0026](0026-chrome-unificado-em-iosevka-fixed.md) (**parcial**: só a família do chrome; Fixed no terminal e o recorte continuam valendo) |
-| [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito |
+| [0026](0026-chrome-unificado-em-iosevka-fixed.md) | Chrome unificado em Iosevka Fixed | Aceito · fonte do chrome revista por ADR-0084 (**parcial**: rótulos, popovers, diálogos, status e configurações passam à fonte do sistema) |
 | [0027](0027-controles-de-janela-e-resize-proprios.md) | Controles de janela e resize próprios (Windows/Linux) | Aceito · botões revistos por ADR-0066 (estado pressionado) |
 | [0028](0028-o-binario-como-referencia-visual.md) | O binário como referência visual | Aceito |
 | [0029](0029-enum-de-acao-e-gramatica-de-tecla.md) | Enum de ação e gramática de tecla | Aceito |
@@ -66,7 +66,7 @@
 | [0062](0062-imagem-de-fundo-da-janela.md) | Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots | Aceito · §4 Superseded by ADR-0063 (**parcial**: sem furo até o desktop com imagem da janela) |
 | [0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) | Imagem da janela sem furo até o desktop | Aceito |
 | [0064](0064-janela-de-configuracoes-modal.md) | Janela de configurações modal, possuída pela janela de terminal | Aceito · §4 revisto (no X11, tipo diálogo para flutuar em gerenciador tiling) · §2 revisto por ADR-0080 (**parcial**: modalidade encadeada do editor de perfil) |
-| [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito |
+| [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito · família revista por ADR-0084 (**parcial**: a barra de abas usa a fonte do sistema; o tamanho continua `[terminal.font] size`) |
 | [0066](0066-estado-pressionado-dos-botoes-de-janela.md) | Estado pressionado dos botões de janela | Aceito · cores revistas por ADR-0067 (fundos translúcidos) |
 | [0067](0067-temas-em-arquivos-proprios.md) | Temas em arquivos próprios (`thm_*.toml`), cor só no tema, botões de janela translúcidos | Aceito |
 | [0068](0068-efeito-acrilico-no-fundo-do-terminal.md) | Efeito acrílico no fundo do terminal: desfoque da camada da janela em passe próprio, amostrado por quadro | Aceito — aval visual pendente |
@@ -85,6 +85,7 @@
 | [0081](0081-disparo-no-release-para-botoes-e-itens.md) | Disparo no release para botões e itens: o press arma, o release sobre o mesmo alvo age; clique fora, texto e gestos de terminal seguem no press | Aceito — aval visual do estado pressionado pendente |
 | [0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md) | Botões da barra com o tamanho do botão de menu do app: sessões, configurações e "+" avulso em 40×40; "+" de grupo fica 30×30; zona fixa de 94 para 98px | Aceito — aval visual pendente |
 | [0083](0083-gap-entre-os-botoes-da-zona-fixa.md) | Gap entre os botões da zona fixa: `window_controls.gap` de 6 para 3px, entre sessões, configurações e botões de janela; zona fixa de 98 para 92px | Aceito — aval visual pendente |
+| [0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) | Fonte do sistema no chrome e ajustes da barra de abas: sem botões de overflow, rótulo de grupo sem fundo e com pontos no colapso, aba de grupo sem borda, aba de 209px, hover no "x", centragem pela altura de versal, clique só dentro da trilha | Aceito — aval visual do dono (Windows) |
 
 ## Convenção
 

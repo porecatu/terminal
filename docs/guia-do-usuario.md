@@ -89,9 +89,13 @@ reiniciar) — o app assiste o arquivo e recarrega sozinho. Algumas mudanças
 (fonte, por exemplo) exigem recalcular a grade e podem levar um instante a
 mais para aparecer; nenhuma exige fechar e reabrir o app.
 
-A fonte é **uma só**: `[terminal.font] family` e `size` valem para o
-terminal e também para a barra de abas — título da aba, nome do grupo e
-campo de renomear ([ADR-0065](adr/0065-fonte-unica-para-terminal-e-chrome.md)).
+`[terminal.font] family` e `size` valem para o terminal; o **tamanho** vale
+também para o texto da barra de abas — título da aba, nome do grupo e campo de
+renomear ([ADR-0065](adr/0065-fonte-unica-para-terminal-e-chrome.md)). A
+**família** da interface (abas, grupos, menus, popovers, diálogos, avisos,
+barra de status e telas de configurações) é a fonte de interface do sistema —
+Segoe UI no Windows, Helvetica Neue no macOS —, que não tem chave de
+configuração ([ADR-0084](adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)).
 As antigas `[appearance.tabs] font_family`/`font_size`,
 `[appearance.tabs.rename] font_size` e `[appearance.groups] label_font_size`
 não existem mais; se estiverem no seu arquivo, viram aviso de chave
@@ -301,7 +305,7 @@ for_window [title="^Configurações$"] floating enable
 |---|---|
 | **Geral** | idioma, diretório inicial, confirmações ao fechar aba e janela |
 | **Shell** | programa, argumentos e variáveis de ambiente do shell |
-| **Terminal** | fonte (do terminal **e** da barra de abas e grupos), cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
+| **Terminal** | fonte (a família é a do terminal; o tamanho vale também para a barra de abas), cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
 | **Aparência** | tema, animações, opacidade e decoração da janela, imagem de fundo da janela, posição da barra de abas, o que a aba mostra, botão de menu do app (`show_app_menu_button`, o ícone do app à esquerda da barra de abas), barra de status |
 | **Sessão** | gravar e restaurar a sessão, restauração preguiçosa, geometria das janelas, convite de integração de shell |
 | **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |

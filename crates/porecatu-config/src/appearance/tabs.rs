@@ -62,7 +62,7 @@ impl Default for Tabs {
             tab_height: 34,
             trilha_padding: 6,
             max_width: 260,
-            min_width: 229,
+            min_width: 209,
             padding_left: 10,
             padding_right: 6,
             gap: 4,
@@ -181,25 +181,17 @@ impl Default for TabsRename {
     }
 }
 
-/// Indicador de abas fora da vista (RF-1.19).
+/// Rolagem da trilha de abas (RF-1.19). Os botões de abas fora da vista
+/// saíram; sobra o passo da roda do mouse.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct TabsOverflow {
-    pub indicator_size: i32,
-    #[serde(skip_deserializing)]
-    pub indicator_background: Color,
-    pub edge_inset: i32,
     pub scroll_step: i32,
 }
 
 impl Default for TabsOverflow {
     fn default() -> Self {
-        Self {
-            indicator_size: 18,
-            indicator_background: Color::hex("#12151a"),
-            edge_inset: 4,
-            scroll_step: 90,
-        }
+        Self { scroll_step: 90 }
     }
 }
 
@@ -214,6 +206,6 @@ mod tests {
         assert_eq!(tabs.show_close_button, CloseButtonVisibility::Always);
         assert_eq!(tabs.colors.bar_background, Color::hex("#1b1f26"));
         assert_eq!(tabs.rename.width, 120);
-        assert_eq!(tabs.overflow.indicator_size, 18);
+        assert_eq!(tabs.overflow.scroll_step, 90);
     }
 }

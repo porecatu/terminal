@@ -15,7 +15,7 @@
 use porecatu_config::EditValue;
 use porecatu_core::Action;
 use porecatu_locale::Catalog;
-use porecatu_render::{Color, FontFace, Rect, TextMeasurer};
+use porecatu_render::{Color, FontFace, Rect, SansWeight, TextMeasurer};
 use porecatu_term::TermColor;
 
 use super::actions::label as action_label;
@@ -29,7 +29,6 @@ use super::profiles_draft::ProfilesDraft;
 use super::shortcuts::{Capturing, Shortcuts};
 use crate::keymap::Chord;
 use crate::messages::msg;
-use crate::overlay::BODY_FONT;
 use crate::palette::ResolvedTermPalette;
 use crate::tab_bar::rect_contains;
 
@@ -38,6 +37,17 @@ use crate::tab_bar::rect_contains;
 pub(crate) const SWATCH_COUNT: usize = 10;
 /// Vão entre os quadrados da amostra (ADR-0060 §3: `gap: 2`).
 pub(crate) const SWATCH_GAP: f32 = 2.0;
+
+/// Fontes das telas de configurações e de edição de perfil: a fonte do
+/// sistema (experimento visual), não a Iosevka do terminal -- a mesma face de
+/// `overlay::{BODY,TITLE}_FONT`, que os diálogos e tooltips dessas janelas
+/// usam. `SemiBold` no título porque a Segoe UI não tem 500.
+pub(crate) const BODY_FONT: FontFace = FontFace::System {
+    weight: SansWeight::Regular,
+};
+pub(crate) const TITLE_FONT: FontFace = FontFace::System {
+    weight: SansWeight::SemiBold,
+};
 
 /// A fonte do chip de atalho: mono, 400 (ADR-0060 §3).
 pub(crate) const CHIP_FONT: FontFace = FontFace::Mono { bold: false };
@@ -2630,7 +2640,12 @@ mod tests {
         );
         for row in truncated {
             assert!(row.description.ends_with('…'));
-            assert!(row.description_full.len() > row.description.len());
+            // Em bytes não dá: o "…" tem 3, e numa fonte proporcional o
+            // corte pode tirar só um caractere. O que vale é o cortado ser
+            // um prefixo do completo, e diferente dele.
+            let kept = row.description.trim_end_matches('…').trim_end();
+            assert!(row.description_full.starts_with(kept));
+            assert_ne!(row.description, row.description_full);
         }
     }
 

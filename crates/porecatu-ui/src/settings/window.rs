@@ -83,11 +83,11 @@ pub(super) fn forget_in_vault(target: &Forget) {
         }
     }
 }
+use super::content::BODY_FONT;
 use crate::dialog::{ConfirmDialog, DialogAction, DialogButton};
 use crate::input::modifiers_from;
 use crate::keymap::{Capture, Chord, Platform};
 use crate::messages::msg;
-use crate::overlay::BODY_FONT;
 use crate::palette::{ResolvedPalette, ResolvedTermPalette};
 use crate::tab_bar::{self, TabBarStyle, WindowButtonHit};
 use crate::text_field::apply_text_field_key;
@@ -3050,7 +3050,7 @@ pub(super) fn paint_header_title(
     out.push(Primitive::Text(TextRun {
         origin: (title_x, header.y + (header.height - TITLE_SIZE_PX) / 2.0),
         text: title.to_owned(),
-        font: overlay::TITLE_FONT,
+        font: content::TITLE_FONT,
         size_px: TITLE_SIZE_PX,
         color: pal.dialog_title_text,
     }));

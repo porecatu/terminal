@@ -66,13 +66,17 @@ use crate::terminal_menu::{TerminalContextMenu, TerminalMenuItem};
 use crate::toggle::{TOGGLE_TRACK_HEIGHT, TOGGLE_TRACK_WIDTH};
 use crate::warning::{Severity, WarningStack};
 
-pub(crate) const TITLE_FONT: FontFace = FontFace::Sans {
-    weight: SansWeight::Medium,
+// Fonte do sistema (experimento visual), não a Iosevka do terminal -- vale
+// para os menus, popovers, tooltip, editor de grupo, diálogos e avisos, que
+// pintam tudo com estas duas constantes. `SemiBold` porque a Segoe UI não
+// tem 500.
+pub(crate) const TITLE_FONT: FontFace = FontFace::System {
+    weight: SansWeight::SemiBold,
 };
 // `pub(crate)`: `lib.rs::dispatch_group_editor_click` mede o mesmo texto
 // com a mesma face pra achar o índice de caractere sob o clique
 // (ADR-0035) -- tem que ser a mesma constante que pinta, nunca uma cópia.
-pub(crate) const BODY_FONT: FontFace = FontFace::Sans {
+pub(crate) const BODY_FONT: FontFace = FontFace::System {
     weight: SansWeight::Regular,
 };
 

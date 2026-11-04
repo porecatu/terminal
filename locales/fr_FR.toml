@@ -495,8 +495,6 @@ tab_close = "Fermer l'onglet"
 regex_toggle = "Expression régulière"
 group_editor = "Éditeur de groupe"
 unnamed_group = "Groupe"
-tabs_hidden_left = { one = "{count} onglet masqué à gauche", other = "{count} onglets masqués à gauche" }
-tabs_hidden_right = { one = "{count} onglet masqué à droite", other = "{count} onglets masqués à droite" }
 group = "Groupe {name}"
 group_collapsed = "Groupe {name}, réduit"
 group_colored = "Groupe {name}, couleur {color}"

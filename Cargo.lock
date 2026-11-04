@@ -3322,7 +3322,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "porecatu-ui",
  "winres",
@@ -3330,7 +3330,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-config"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "dirs",
  "serde",
@@ -3343,7 +3343,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-core"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -3351,7 +3351,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-locale"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "tempfile",
  "toml 1.1.6+spec-1.1.0",
@@ -3359,7 +3359,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-pty"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "portable-pty",
  "sysinfo",
@@ -3368,7 +3368,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-render"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "bytemuck",
  "glyphon",
@@ -3379,7 +3379,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-session"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "dirs",
  "porecatu-core",
@@ -3390,7 +3390,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-ssh"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "dirs",
  "hmac",
@@ -3405,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-term"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "alacritty_terminal",
  "bitflags 2.13.2",
@@ -3415,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "porecatu-ui"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "accesskit",
  "accesskit_winit",

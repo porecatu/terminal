@@ -266,17 +266,13 @@ VALORES = [
     ("font_size da aba", "tab_bar.rs", "font_size", "terminal.font.size",
      "14px"),
     ("font_size da pílula", "tab_bar.rs", "pill_font_size",
-     "terminal.font.size", "14px/**500**"),
+     "terminal.font.size", "14px/**600**"),
     ("label_max_width", "tab_bar.rs", "pill_name_max_width",
      "appearance.groups.label_max_width", "**140px** (`pill_name_max_width`)"),
     ("wrapper_padding", "tab_bar.rs", "wrapper_padding",
      "appearance.groups.wrapper_padding", "`padding: 3` (`wrapper_padding`)"),
     ("gap entre grupos", "tab_bar.rs", "trilha_gap", "appearance.groups.gap",
      "`gap: 6` (`trilha_gap`)"),
-    ("indicador de overflow", "tabs.rs", "indicator_size",
-     "appearance.tabs.overflow.indicator_size", "**18×18**"),
-    ("recuo do overflow", "tabs.rs", "edge_inset",
-     "appearance.tabs.overflow.edge_inset", None),
     ("passo do overflow", "tabs.rs", "scroll_step",
      "appearance.tabs.overflow.scroll_step", "90 px"),
     ("botão de janela", "window_controls.rs", "button_width",
@@ -367,7 +363,8 @@ def candidatos_de(arquivo: str) -> list[str]:
 
 
 def constante_rust(fonte: str, nome: str, escopo: str | None = None) -> float | None:
-    """Valor numérico de um `const NOME: T = v;` ou de um campo `nome: v,`.
+    """Valor numérico de um `const NOME: T = v;` ou de um campo `nome: v,`
+    (ou `nome: v }`, quando o rustfmt deixa o struct numa linha só).
 
     `escopo`, se dado, é uma substring que precisa aparecer antes do campo
     -- usa-se quando o mesmo nome de campo se repete em mais de um struct
@@ -380,7 +377,7 @@ def constante_rust(fonte: str, nome: str, escopo: str | None = None) -> float | 
         fonte = fonte[pos:]
     for padrao in (
         rf"\bconst\s+{nome}\s*:\s*[^=]+=\s*([0-9]+(?:\.[0-9]+)?)",
-        rf"\b{nome}\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*,",
+        rf"\b{nome}\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*[,}}]",
     ):
         m = re.search(padrao, fonte)
         if m:

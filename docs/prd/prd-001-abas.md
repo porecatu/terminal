@@ -81,6 +81,8 @@ Todo usuário do Porecatu. Este é o recurso de base.
 
 **RF-1.19** — Um indicador mostra que há abas fora da vista, com contagem.
 
+> **Emendado ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)).** O indicador **saiu**: a barra não desenha botões nem contagem de abas fora da vista. A trilha rola pela roda do mouse, e a aba ativa continua sendo trazida para a área visível (RF-1.18).
+
 ### Indicadores de estado
 
 **RF-1.20** — Uma aba em segundo plano cuja saída mudou desde a última visita exibe um indicador de atividade. *(É o que permite deixar um build rodando em outra aba e perceber que terminou.)*

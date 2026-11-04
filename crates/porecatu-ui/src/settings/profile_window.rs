@@ -41,6 +41,7 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
 use super::choice_list::{self, ChoiceLayout, ChoiceList};
+use super::content::BODY_FONT;
 use super::content::{self, ControlView, ProfileClick, ProfileTarget};
 use super::field_edit::{EditPart, Editing};
 use super::layout::{
@@ -53,7 +54,6 @@ use super::profiles_draft::{Field, Forget, ListKind, ProfilesDraft, SecretKind};
 use super::window::{Env, forget_in_vault, header_height, paint_header_title, titlebar_drag};
 use crate::input::modifiers_from;
 use crate::messages::msg;
-use crate::overlay::BODY_FONT;
 use crate::palette::{ResolvedPalette, ResolvedTermPalette};
 use crate::tab_bar::{self, WindowButtonHit};
 use crate::text_field::apply_text_field_key;

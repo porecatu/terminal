@@ -44,6 +44,9 @@ pub enum FontFace {
     Mono { bold: bool },
     /// Chrome: título de aba, rótulo, menu.
     Sans { weight: SansWeight },
+    /// Fonte de interface do sistema (Segoe UI no Windows), não a do
+    /// terminal. Rótulos de aba e de grupo.
+    System { weight: SansWeight },
     /// Glyphs de ícone (Lucide) -- fechar, nova aba, chevron. Face
     /// própria para que o desenho do chrome não dependa da fonte de
     /// texto: quando ele era feito de glyphs Unicode (U+2715, U+25B6,

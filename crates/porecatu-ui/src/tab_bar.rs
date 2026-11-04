@@ -30,21 +30,27 @@ use porecatu_core::{GroupId, TabId, Workspace};
 use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer};
 
 /// Fonte de rótulo de aba (espec. §1.1: "12.5px, rótulo da aba").
-const LABEL_FONT: FontFace = FontFace::Sans {
+const LABEL_FONT: FontFace = FontFace::System {
     weight: SansWeight::Regular,
 };
 
-/// **Bold**, por pedido do usuário -- reverte a decisão anterior de igualar
-/// ao peso do rótulo da aba (§1.1, 400). `SansWeight::Medium` é o peso mais
-/// pesado que a face embute hoje (ADR-0026: Iosevka Fixed só tem 400/500).
-/// O tamanho continua igual ao da aba -- ver `TabBarStyle::pill_font_size`.
-pub(crate) const PILL_NAME_FONT: FontFace = FontFace::Sans {
-    weight: SansWeight::Medium,
+/// Fonte do sistema, mais pesada que o rótulo da aba, por pedido do usuário.
+/// `SemiBold` porque a Segoe UI não tem 500 (cairia no 400). O tamanho
+/// continua igual ao da aba -- ver `TabBarStyle::pill_font_size`.
+pub(crate) const PILL_NAME_FONT: FontFace = FontFace::System {
+    weight: SansWeight::SemiBold,
 };
-/// Espec. §2.4, item 3: "contador mono 10px". Sem chave própria de fonte no
-/// TOML -- só cor/fundo/raio (`count_*`) têm chave.
-pub(crate) const PILL_COUNT_FONT: FontFace = FontFace::Mono { bold: false };
+/// Contador de abas de cada linha do popover "mover para grupo" (a pílula do
+/// grupo não tem mais contador). Fonte do sistema como o resto do popover
+/// (experimento visual), não mais o mono da espec. §2.4. Sem chave própria de
+/// fonte no TOML.
+pub(crate) const PILL_COUNT_FONT: FontFace = FontFace::System {
+    weight: SansWeight::Regular,
+};
 pub(crate) const PILL_COUNT_FONT_SIZE: f32 = 10.0;
+/// Pedido do usuário (experimento visual): espaço horizontal entre os pontos
+/// de um grupo colapsado e os componentes ao redor deles.
+const COLLAPSED_DOTS_GAP: f32 = 8.0;
 
 /// Qual dos dois indicadores da aba (espec. §2.17, RF-1.20/RF-1.21) mostrar.
 /// Espec. §2.17: "ponto circular 6×6" (`style.indicator_dot_size`, chave
@@ -168,12 +174,7 @@ pub struct TabBarStyle {
     /// largura ao colapsar. Espec. §2.4, item 4: "▶ 8px" -- o desenho de
     /// hoje é maior, junto com o resto dos ícones. Sem chave no TOML.
     pub pill_caret_size: f32,
-    /// `[appearance.tabs.overflow] indicator_size` -- largura = altura do
-    /// círculo do indicador de abas fora da vista (espec. §2.18).
-    pub overflow_indicator_size: f32,
-    /// `[appearance.tabs.overflow] edge_inset`.
-    pub overflow_edge_inset: f32,
-    /// `[appearance.tabs.overflow] scroll_step`.
+    /// `[appearance.tabs.overflow] scroll_step` -- passo da roda do mouse.
     pub overflow_scroll_step: f32,
     /// `[appearance.window_controls] button_width` -- ADR-0027.
     pub window_button_width: f32,
@@ -196,8 +197,6 @@ pub struct TabBarStyle {
     /// resolvido em CPU (F4 etapa 6, ADR-0032 §2): multiplica os canais
     /// da cor de fundo e clampa, sem primitiva nova em `porecatu-render`.
     pub tab_hover_brightness: f64,
-    /// `[appearance.groups] label_hover_brightness`, mesma técnica.
-    pub pill_hover_brightness: f64,
     /// `[appearance.tabs.colors] active_border_width`.
     pub active_border_width: f32,
     /// `[appearance.tabs.colors] inactive_border_width`.
@@ -268,7 +267,7 @@ impl TabBarStyle {
     pub const DEFAULT: Self = Self {
         tab_height: 34.0,
         max_width: 260.0,
-        label_max_width: 180.0,
+        label_max_width: 160.0, // experimento visual: era 180 (aba 229 -> 209)
         padding_left: 10.0,
         padding_right: 6.0,
         tab_gap: 4.0,
@@ -295,8 +294,6 @@ impl TabBarStyle {
         // tamanho vive do outro lado, em `chrome.rs`; o teste
         // `pill_caret_slot_fits_the_widest_caret` amarra os dois.
         pill_caret_size: 11.8,
-        overflow_indicator_size: 18.0,
-        overflow_edge_inset: 4.0,
         overflow_scroll_step: 90.0,
         window_button_width: 46.0,
         window_controls_gap: 3.0,
@@ -304,7 +301,6 @@ impl TabBarStyle {
         icon_em_size: 20.0,
         tab_corner_radius: 6.0,
         tab_hover_brightness: 1.18,
-        pill_hover_brightness: 1.25,
         active_border_width: 1.0,
         inactive_border_width: 1.0,
         selected_border_width: 1.0,
@@ -368,8 +364,6 @@ impl TabBarStyle {
             pill_font_size: config.terminal.font.size as f32,
             pill_name_max_width: groups.label_max_width as f32,
             pill_caret_size: Self::DEFAULT.pill_caret_size,
-            overflow_indicator_size: tabs.overflow.indicator_size as f32,
-            overflow_edge_inset: tabs.overflow.edge_inset as f32,
             overflow_scroll_step: tabs.overflow.scroll_step as f32,
             window_button_width: window_controls.button_width as f32,
             window_controls_gap: window_controls.gap as f32,
@@ -377,7 +371,6 @@ impl TabBarStyle {
             icon_em_size: tabs.icon_em_size as f32,
             tab_corner_radius: tabs.corner_radius as f32,
             tab_hover_brightness: tabs.colors.hover_brightness,
-            pill_hover_brightness: groups.label_hover_brightness,
             active_border_width: tabs.colors.active_border_width as f32,
             inactive_border_width: tabs.colors.inactive_border_width as f32,
             selected_border_width: tabs.colors.selected_border_width as f32,
@@ -407,6 +400,14 @@ impl TabBarStyle {
 }
 
 impl TabBarStyle {
+    /// Lado do quadrado de hover/pressed do botão de fechar da aba:
+    /// semelhante ao do "+" (`right_zone_button_size`), mas menor pelo
+    /// respiro do wrapper (`wrapper_padding` de cada lado), para caber com
+    /// folga dentro de uma aba de grupo. Derivado de tokens existentes.
+    pub fn close_hover_size(&self) -> f32 {
+        self.right_zone_button_size - self.wrapper_padding * 2.0
+    }
+
     /// Largura de um botão de ícone de lado `size`: o desenho continua
     /// centrado num quadrado desse lado, e o respiro entra só na largura.
     pub fn icon_button_width(&self, size: f32) -> f32 {
@@ -547,8 +548,8 @@ pub struct GroupWrapperRect {
 }
 
 /// Geometria da pílula de grupo (espec. §2.4, divergente): nome (já
-/// truncado) e caret de colapso. A cor resolvida (fundo da pílula,
-/// tingimento do wrapper) não mora aqui -- só geometria; `chrome.rs`
+/// truncado) e, colapsado, os pontos de aba. A cor resolvida (tingimento do
+/// wrapper) não mora aqui -- só geometria; `chrome.rs`
 /// resolve `GroupColor` via `palette::group_color` no momento de pintar, no
 /// mesmo padrão de `TabRect` (que também não carrega cor). Sem swatch --
 /// removido a pedido do usuário: a pílula inteira é pintada com a cor do
@@ -573,7 +574,12 @@ pub struct GroupPillRect {
     /// Decide o tooltip do ADR-0019 (nome completo), mesmo padrão de
     /// `TabRect::label_truncated`.
     pub name_truncated: bool,
-    pub caret_rect: Rect,
+    /// Origem do primeiro ponto de aba colapsada -- só significativa quando
+    /// `dot_count > 0`. Os pontos seguem à direita, `indicator_dot_size` de
+    /// largura e `tab_gap` entre eles.
+    pub dots_origin: (f32, f32),
+    /// Um ponto por aba do grupo, **só colapsado** (0 expandido).
+    pub dot_count: usize,
 }
 
 /// O layout inteiro da trilha: um por redraw da barra, construído por
@@ -732,16 +738,25 @@ pub fn layout(
             );
             let name_width = measurer.measure_width(&name, PILL_NAME_FONT, style.pill_font_size);
             let name_origin = (px, pill_y + (pill_height - style.pill_font_size) / 2.0);
-            px += name_width + style.pill_gap;
+            px += name_width;
 
-            let caret_width = style.icon_button_width(style.pill_caret_size);
-            let caret_rect = Rect {
-                x: px,
-                y: pill_y + (pill_height - style.pill_caret_size) / 2.0,
-                width: caret_width,
-                height: style.pill_caret_size,
-            };
-            px += caret_width + style.pill_padding_right;
+            // Colapsado: um ponto por aba escondida, à direita do nome, onde
+            // ficava o caret (que saiu). Expandido não reserva nada.
+            let dot_count = if collapsed { group.tabs().len() } else { 0 };
+            let dots_origin = (
+                px + COLLAPSED_DOTS_GAP,
+                pill_y + (pill_height - style.indicator_dot_size) / 2.0,
+            );
+            if dot_count > 0 {
+                // 8px entre os pontos e cada vizinho (o nome, à esquerda; a
+                // borda da pílula, à direita, no lugar do padding direito).
+                px += COLLAPSED_DOTS_GAP
+                    + dot_count as f32 * style.indicator_dot_size
+                    + (dot_count - 1) as f32 * style.tab_gap
+                    + COLLAPSED_DOTS_GAP;
+            } else {
+                px += style.pill_padding_right;
+            }
 
             let pill_rect = Rect {
                 x: inner_x,
@@ -757,7 +772,8 @@ pub fn layout(
                 name_origin,
                 name,
                 name_truncated,
-                caret_rect,
+                dots_origin,
+                dot_count,
             })
         } else {
             None
@@ -829,11 +845,15 @@ pub fn layout(
                 height: tab_h,
             };
             let close_width = style.icon_button_width(style.close_button_size);
+            // A altura é a do quadrado de hover/pressed (`close_hover_size`),
+            // não a do desenho (`close_button_size`): o fundo revelado é esse
+            // quadrado, e o retângulo de acerto tem de cobri-lo.
+            let close_side = style.close_hover_size();
             let close_button = Rect {
                 x: inner_x + tab_width - style.padding_right - close_width,
-                y: tab_top + (tab_h - style.close_button_size) / 2.0,
+                y: tab_top + (tab_h - close_side) / 2.0,
                 width: close_width,
-                height: style.close_button_size,
+                height: close_side,
             };
             let close_hit_rect =
                 if style.show_close_button == porecatu_config::CloseButtonVisibility::Never {
@@ -1047,88 +1067,19 @@ pub fn fit_width(
 
 /// Estado de rolagem da trilha (espec. §2.18) para um `content_width` e uma
 /// largura disponível dados: deslocamento já saturado em
-/// `[0, content_width - available_width]`, e a contagem de abas inteiramente
-/// fora da janela visível de cada lado (RF-1.19 -- "um indicador... com
-/// contagem"). Aba parcialmente visível não conta como oculta.
+/// `[0, content_width - available_width]`. Não há mais botões de abas fora
+/// da vista (RF-1.19 emendado): a trilha rola pela roda do mouse e pelo
+/// arraste, então a contagem de abas ocultas deixou de existir.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Overflow {
     pub scroll_offset: f32,
-    pub hidden_left: usize,
-    pub hidden_right: usize,
 }
 
 pub fn overflow_state(layout: &TabBarLayout, available_width: f32, scroll_offset: f32) -> Overflow {
     let max_scroll = (layout.content_width - available_width).max(0.0);
-    let offset = scroll_offset.clamp(0.0, max_scroll);
-    let window_start = offset;
-    let window_end = offset + available_width;
-
-    let mut hidden_left = 0;
-    let mut hidden_right = 0;
-    for group in &layout.groups {
-        for tab in &group.tabs {
-            let tab_end = tab.rect.x + tab.rect.width;
-            if tab_end <= window_start {
-                hidden_left += 1;
-            } else if tab.rect.x >= window_end {
-                hidden_right += 1;
-            }
-        }
-    }
     Overflow {
-        scroll_offset: offset,
-        hidden_left,
-        hidden_right,
+        scroll_offset: scroll_offset.clamp(0.0, max_scroll),
     }
-}
-
-/// Lado da trilha em que um indicador de overflow (espec. §2.18) aparece.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OverflowSide {
-    Left,
-    Right,
-}
-
-/// Retângulo da pílula de overflow, em coordenadas de tela da barra (não
-/// rolam com a trilha -- ficam "por dentro" das pontas, sempre visíveis).
-/// `[appearance.tabs.overflow]`: círculo (largura = altura, raio = metade),
-/// só o chevron -- a contagem saiu (pedido do usuário, espec. §2.18).
-///
-/// `track_left` é onde a trilha começa na tela ([`track_shift`]) e
-/// `track_width` a largura dela ([`trilha_width`]).
-pub fn overflow_pill_rect(
-    style: &TabBarStyle,
-    side: OverflowSide,
-    track_left: f32,
-    track_width: f32,
-    bar_height: f32,
-) -> Rect {
-    let size = style.overflow_indicator_size;
-    let inset = style.overflow_edge_inset;
-    let x = match side {
-        OverflowSide::Left => track_left + inset,
-        OverflowSide::Right => track_left + track_width - inset - size,
-    };
-    Rect {
-        x,
-        y: (bar_height - size) / 2.0,
-        width: size,
-        height: size,
-    }
-}
-
-pub fn point_in_overflow_pill(
-    style: &TabBarStyle,
-    side: OverflowSide,
-    track_left: f32,
-    track_width: f32,
-    bar_height: f32,
-    point: (f32, f32),
-) -> bool {
-    rect_contains(
-        overflow_pill_rect(style, side, track_left, track_width, bar_height),
-        point,
-    )
 }
 
 /// Largura combinada dos dois botões de ícone da zona fixa (sessões +
@@ -1218,6 +1169,16 @@ pub fn point_in_app_menu_button(style: &TabBarStyle, is_macos: bool, point: (f32
 /// devem usar, não a largura total da janela.
 pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool) -> f32 {
     (bar_width - track_shift(style, is_macos) - right_zone_width(style, is_macos)).max(0.0)
+}
+
+/// `x` (tela, lógico) está dentro da janela visível da trilha -- o recorte
+/// de [`trilha_width`]. Fora dela (as zonas fixas das pontas) não há aba:
+/// uma aba rolada para fora de vista continua no layout e o `hit_test`
+/// a acharia por baixo dos botões, então quem testa clique/hover da trilha
+/// confere isto antes.
+pub fn point_in_track(style: &TabBarStyle, bar_width: f32, is_macos: bool, x: f32) -> bool {
+    let left = track_shift(style, is_macos);
+    x >= left && x < left + trilha_width(style, bar_width, is_macos)
 }
 
 /// Retângulo do botão de configurações, em coordenadas de tela da barra
@@ -2150,22 +2111,6 @@ mod tests {
     }
 
     #[test]
-    fn overflow_pills_sit_inside_the_track_not_the_bar() {
-        let style = TabBarStyle::DEFAULT;
-        let bar_height = crate::chrome::bar_height(&style);
-        let left = track_shift(&style, false);
-        let width = 500.0;
-        let l = overflow_pill_rect(&style, OverflowSide::Left, left, width, bar_height);
-        let r = overflow_pill_rect(&style, OverflowSide::Right, left, width, bar_height);
-        assert_eq!(l.x, left + style.overflow_edge_inset);
-        assert_eq!(
-            r.x + r.width,
-            left + width - style.overflow_edge_inset,
-            "a pílula direita acaba por dentro da ponta direita da trilha"
-        );
-    }
-
-    #[test]
     fn single_tab_lays_out_left_to_right() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", None);
@@ -2247,7 +2192,7 @@ mod tests {
         let style = TabBarStyle::DEFAULT;
         assert_eq!(
             style.tab_width(),
-            10.0 + 180.0 + 8.0 + style.icon_button_width(17.0) + 6.0
+            10.0 + 160.0 + 8.0 + style.icon_button_width(17.0) + 6.0
         );
         let tight = TabBarStyle {
             max_width: 100.0,
@@ -2291,15 +2236,11 @@ mod tests {
         let layout = layout(&ws, &style, &mut m);
         let group = &layout.groups[0];
 
-        for (nome, rect) in [
-            ("fechar", group.tabs[0].close_button),
-            ("caret", group.pill.as_ref().unwrap().caret_rect),
-        ] {
-            assert!(
-                rect.width > rect.height,
-                "{nome} deveria ter respiro horizontal: {rect:?}"
-            );
-        }
+        let close = group.tabs[0].close_button;
+        assert!(
+            close.width > close.height,
+            "fechar deveria ter respiro horizontal: {close:?}"
+        );
 
         // O "+" é quadrado, sem respiro lateral: o de dentro do grupo cabe na
         // aba (`right_zone_button_size`); o avulso tem a caixa do botão de
@@ -2313,8 +2254,13 @@ mod tests {
         let side = app_menu_button_size(&style);
         assert_eq!((loose.width, loose.height), (side, side));
         assert_eq!(
-            group.tabs[0].close_button.height, style.close_button_size,
-            "a altura do botão de fechar não muda"
+            group.tabs[0].close_button.height,
+            style.close_hover_size(),
+            "a altura do botão de fechar é a do quadrado de hover"
+        );
+        assert!(
+            style.close_hover_size() < style.right_zone_button_size,
+            "menor que o \"+\" para caber na aba de grupo"
         );
     }
 
@@ -2623,7 +2569,7 @@ mod tests {
     }
 
     #[test]
-    fn overflow_state_clamps_scroll_and_counts_hidden_tabs() {
+    fn overflow_state_clamps_scroll() {
         let mut ws = Workspace::new();
         for _ in 0..10 {
             ws.append_tab("zsh", None);
@@ -2633,14 +2579,12 @@ mod tests {
         assert!(fitted.content_width > 300.0);
 
         let none = overflow_state(&fitted, 300.0, 0.0);
-        assert_eq!(none.hidden_left, 0);
-        assert!(none.hidden_right > 0);
+        assert_eq!(none.scroll_offset, 0.0);
+        assert_eq!(overflow_state(&fitted, 300.0, -40.0).scroll_offset, 0.0);
 
         let max_scroll = fitted.content_width - 300.0;
         let clamped = overflow_state(&fitted, 300.0, max_scroll + 500.0);
         assert_eq!(clamped.scroll_offset, max_scroll);
-        assert_eq!(clamped.hidden_right, 0);
-        assert!(clamped.hidden_left > 0);
     }
 
     #[test]
@@ -2872,8 +2816,106 @@ mod tests {
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         let pill = layout.groups[0].pill.as_ref().unwrap();
-        assert!(pill.name_origin.0 < pill.caret_rect.x);
-        assert!(pill.caret_rect.x + pill.caret_rect.width <= pill.rect.x + pill.rect.width);
+        assert!(pill.name_origin.0 >= pill.rect.x);
+        assert!(pill.name_origin.0 < pill.rect.x + pill.rect.width);
+        assert_eq!(pill.dot_count, 0, "expandido não tem pontos");
+    }
+
+    /// Colapsado: um ponto por aba à direita do nome, com 8px até o nome e
+    /// 8px até a borda da pílula, e `tab_gap` entre os pontos. Expandido não
+    /// reserva nada além do padding direito.
+    #[test]
+    fn collapsed_group_dots_sit_right_of_the_name_with_8px_gaps() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..3).map(|_| ws.append_tab("zsh", None)).collect();
+        let group = ws.group_tabs(&ids, "srv", GroupColor::Red).unwrap();
+        let mut m = measurer();
+
+        let expanded = layout(&ws, &style, &mut m);
+        let expanded_pill = expanded.groups[0].pill.as_ref().unwrap();
+        assert_eq!(expanded_pill.dot_count, 0);
+        let name_width = m.measure_width(&expanded_pill.name, PILL_NAME_FONT, style.pill_font_size);
+        assert!(
+            (expanded_pill.rect.width
+                - (style.pill_padding_left + name_width + style.pill_padding_right))
+                .abs()
+                < 0.01,
+            "sem caret nem folga reservada"
+        );
+
+        ws.collapse_group(group, true);
+        let collapsed = layout(&ws, &style, &mut m);
+        let pill = collapsed.groups[0].pill.as_ref().unwrap();
+        assert_eq!(pill.dot_count, 3);
+        let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(near(
+            pill.dots_origin.0,
+            pill.name_origin.0 + name_width + COLLAPSED_DOTS_GAP
+        ));
+        let dots_width = 3.0 * style.indicator_dot_size + 2.0 * style.tab_gap;
+        assert!(near(
+            pill.rect.x + pill.rect.width,
+            pill.dots_origin.0 + dots_width + COLLAPSED_DOTS_GAP,
+        ));
+        assert_eq!(COLLAPSED_DOTS_GAP, 8.0);
+        // Os pontos ficam centrados na altura da pílula.
+        assert!(near(
+            pill.dots_origin.1,
+            pill.rect.y + (pill.rect.height - style.indicator_dot_size) / 2.0
+        ));
+    }
+
+    /// Só a janela visível da trilha conta como trilha: as zonas fixas das
+    /// pontas (menu do app à esquerda; sessões, engrenagem e botões de janela
+    /// à direita) não, mesmo que uma aba rolada para fora de vista esteja ali
+    /// por baixo.
+    #[test]
+    fn point_in_track_covers_only_the_visible_window_of_the_track() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_width = 800.0;
+        let left = track_shift(&style, false);
+        let width = trilha_width(&style, bar_width, false);
+        assert!(width > 0.0);
+
+        assert!(point_in_track(&style, bar_width, false, left));
+        assert!(point_in_track(&style, bar_width, false, left + width - 0.5));
+        assert!(!point_in_track(&style, bar_width, false, left - 0.5));
+        assert!(!point_in_track(&style, bar_width, false, left + width));
+        // Sobre os botões da direita.
+        let settings = settings_button_rect(&style, bar_width, 52.0, false);
+        assert!(!point_in_track(
+            &style,
+            bar_width,
+            false,
+            settings.x + settings.width / 2.0
+        ));
+    }
+
+    /// O quadrado de hover do "x" é menor que o do "+" -- cabe com folga numa
+    /// aba de grupo -- e a área de acerto o cobre por inteiro.
+    #[test]
+    fn close_button_hover_square_fits_inside_a_group_tab() {
+        let style = TabBarStyle::DEFAULT;
+        assert!(style.close_hover_size() < style.right_zone_button_size);
+        assert!(style.close_hover_size() < style.tab_height);
+
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "srv", GroupColor::Red).unwrap();
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        let tab = &layout.groups[0].tabs[0];
+        assert!(tab.close_button.y > tab.rect.y);
+        assert!(
+            tab.close_button.y + tab.close_button.height < tab.rect.y + tab.rect.height,
+            "o quadrado não encosta nas bordas da aba"
+        );
+        let top_edge = (
+            tab.close_button.x + tab.close_button.width / 2.0,
+            tab.close_button.y,
+        );
+        assert_eq!(hit_test(&layout, top_edge), Some(TabBarHit::CloseButton(a)));
     }
 
     #[test]

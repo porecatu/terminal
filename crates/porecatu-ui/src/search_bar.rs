@@ -21,10 +21,12 @@
 
 use porecatu_core::{PaneId, TabId};
 use porecatu_locale::Catalog;
-use porecatu_render::{Color, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun, icon};
+use porecatu_render::{
+    Color, FontFace, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextMeasurer, TextRun, icon,
+};
 use porecatu_term::{Occurrence, OccurrenceSpan, SearchJob, SearchMode, SearchStep, Terminal};
 
-use crate::chrome::{ICON_FONT, LABEL_FONT};
+use crate::chrome::ICON_FONT;
 use crate::messages::msg;
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::TabBarStyle;
@@ -58,6 +60,11 @@ const COUNTER_WIDTH: f32 = 92.0;
 /// `pub(crate)`: `lib.rs` reusa os dois pra achar o índice de caractere
 /// sob o clique (mesmo padrão de `chrome::LABEL_FONT` para o rename).
 pub(crate) const FIELD_FONT_SIZE: f32 = 13.0;
+/// Fonte do campo da busca: a face do chrome (Iosevka). Só rótulos de aba e
+/// de grupo usam a fonte do sistema (`chrome::LABEL_FONT`).
+pub(crate) const FIELD_FONT: FontFace = FontFace::Sans {
+    weight: SansWeight::Regular,
+};
 pub(crate) const FIELD_PADDING_X: f32 = 9.0;
 
 /// Estado de uma busca aberta numa aba. `WindowState::search` guarda no
@@ -481,7 +488,7 @@ pub fn paint_search_bar(
     let field = state.field();
     let buffer = field.text();
     let text_area = (layout.field_rect.width - FIELD_PADDING_X * 2.0).max(0.0);
-    let text_width = measurer.measure_width(buffer, LABEL_FONT, FIELD_FONT_SIZE);
+    let text_width = measurer.measure_width(buffer, FIELD_FONT, FIELD_FONT_SIZE);
     let text_x = crate::tab_bar::scrolled_text_x(
         layout.field_rect.x,
         FIELD_PADDING_X,
@@ -492,8 +499,8 @@ pub fn paint_search_bar(
     out.push(Primitive::PushClip(layout.field_rect));
     let selection_range = field.selection_range();
     if let Some((start, end)) = selection_range {
-        let sel_x0 = text_x + measurer.measure_width(&buffer[..start], LABEL_FONT, FIELD_FONT_SIZE);
-        let sel_x1 = text_x + measurer.measure_width(&buffer[..end], LABEL_FONT, FIELD_FONT_SIZE);
+        let sel_x0 = text_x + measurer.measure_width(&buffer[..start], FIELD_FONT, FIELD_FONT_SIZE);
+        let sel_x1 = text_x + measurer.measure_width(&buffer[..end], FIELD_FONT, FIELD_FONT_SIZE);
         out.push(Primitive::Quad(Quad {
             rect: Rect {
                 x: sel_x0,
@@ -507,13 +514,13 @@ pub fn paint_search_bar(
     out.push(Primitive::Text(TextRun {
         origin: (text_x, text_y),
         text: buffer.to_string(),
-        font: LABEL_FONT,
+        font: FIELD_FONT,
         size_px: FIELD_FONT_SIZE,
         color: pal.editor_input_text,
     }));
     if selection_range.is_none() {
         let cursor_width =
-            measurer.measure_width(&buffer[..field.cursor()], LABEL_FONT, FIELD_FONT_SIZE);
+            measurer.measure_width(&buffer[..field.cursor()], FIELD_FONT, FIELD_FONT_SIZE);
         let caret_x =
             (text_x + cursor_width).min(layout.field_rect.x + layout.field_rect.width - 1.0);
         out.push(Primitive::Quad(Quad {
@@ -545,7 +552,7 @@ pub fn paint_search_bar(
     out.push(Primitive::Text(TextRun {
         origin: (layout.counter_rect.x, counter_y),
         text: counter_text,
-        font: LABEL_FONT,
+        font: FIELD_FONT,
         size_px: COUNTER_FONT_SIZE,
         color: counter_color,
     }));

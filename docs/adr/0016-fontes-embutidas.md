@@ -4,6 +4,9 @@
 **Data:** 2026-08-26
 **Relacionados:** ADR-0009, ADR-0010, PRD-004, PRD-005
 
+> **Revisão ([ADR-0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)):** a fonte de interface do chrome deixou de ser embutida: `FontFace::System` pede a família genérica `sans-serif`, registrada na fonte de interface da plataforma. As faces embutidas são a Iosevka Fixed e o Lucide; a aparência do chrome volta a depender da máquina, de propósito.
+
+
 ## Contexto
 
 Duas afirmações do projeto não podem ser verdadeiras ao mesmo tempo hoje.
