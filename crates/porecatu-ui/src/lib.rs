@@ -104,7 +104,7 @@ use session_picker::{
 };
 use session_writer::SessionScheduler;
 use settings::SettingsWindow;
-use tab_bar::{DragDrop, OverflowSide, TabBarHit, TabBarStyle};
+use tab_bar::{DragDrop, TabBarHit, TabBarStyle};
 use terminal_menu::{
     TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
 };
@@ -2562,8 +2562,6 @@ impl WindowState {
         let move_to_group = &self.move_to_group;
         let session_picker = &self.session_picker;
         let search = &self.search;
-        let logical_width = self.logical_width;
-        let scroll_offset = self.scroll_offset;
         self.access_adapter.update_if_active(move || {
             access::build_tree(
                 workspace,
@@ -2580,8 +2578,6 @@ impl WindowState {
                 status_bar_layout.as_ref(),
                 active_pane_order.as_deref(),
                 style,
-                logical_width,
-                scroll_offset,
                 catalog,
                 language,
                 measurer,
@@ -5171,7 +5167,9 @@ impl WindowState {
         gpu: &mut GpuContext,
         style: &TabBarStyle,
     ) -> Option<tab_bar::TabBarHit> {
-        if !self.in_bar(self.cursor_position.1, style) {
+        if !self.in_bar(self.cursor_position.1, style)
+            || !tab_bar::point_in_track(style, self.logical_width, is_macos(), logical_point.0)
+        {
             return None;
         }
         let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
@@ -5198,9 +5196,9 @@ impl WindowState {
     }
 
     /// Resolve o que um clique na área da barra de abas atinge e dispara a
-    /// ação correspondente. Indicadores de overflow (espec §2.18) primeiro
-    /// -- ficam em coordenadas de tela, fora do recorte que rola com a
-    /// trilha; só então o clique é convertido pra coordenadas de conteúdo
+    /// ação correspondente. Botões das zonas fixas primeiro -- ficam em
+    /// coordenadas de tela, fora do recorte que rola com a trilha; só então
+    /// o clique é convertido pra coordenadas de conteúdo
     /// (somando `scroll_offset`) e testado contra `tab_bar::hit_test`, que
     /// espera as mesmas coordenadas não-roladas de `fit_width`. Clicar numa
     /// aba diferente da que está sendo renomeada confirma o rename primeiro
@@ -5254,49 +5252,24 @@ impl WindowState {
             }
             // Botões de sessões nomeadas (ADR-0054/ADR-0055) e de
             // configurações (RF-11.27): zona fixa à direita, fora da trilha
-            // que rola -- resolvidos em coordenadas de tela, como as
-            // pílulas de overflow logo abaixo, não pelo hit-test de
-            // conteúdo. Como os botões de janela, o press só arma; quem
-            // dispara (`settings.open`, ADR-0059 §6, ou o popover de
-            // sessões) é o release (`release_zone_button`).
+            // que rola -- resolvidos em coordenadas de tela, não pelo
+            // hit-test de conteúdo. Como os botões de janela, o press só
+            // arma; quem dispara (`settings.open`, ADR-0059 §6, ou o popover
+            // de sessões) é o release (`release_zone_button`).
             if let Some(hit) =
                 tab_bar::point_in_zone_button(style, bar_width, h, is_macos(), logical_point)
             {
                 self.pressed_zone_button = Some(hit);
                 return NewTabRequest::None;
             }
-            if overflow.hidden_left > 0
-                && tab_bar::point_in_overflow_pill(
-                    style,
-                    OverflowSide::Left,
-                    track_left,
-                    trilha_width,
-                    h,
-                    logical_point,
-                )
-            {
-                self.scroll_offset = (self.scroll_offset - style.overflow_scroll_step).max(0.0);
-                return NewTabRequest::None;
-            }
-            if overflow.hidden_right > 0
-                && tab_bar::point_in_overflow_pill(
-                    style,
-                    OverflowSide::Right,
-                    track_left,
-                    trilha_width,
-                    h,
-                    logical_point,
-                )
-            {
-                self.scroll_offset += style.overflow_scroll_step;
-                return NewTabRequest::None;
-            }
         }
 
-        // Left of the track (the app menu button's zone, already handled
-        // above for a left click, plus its margins): not a tab, even one
-        // scrolled out of view under the clip. The rest is drag region.
-        if logical_point.0 < track_left {
+        // Outside the track's visible window -- left of it (the app menu
+        // button's zone, already handled above for a left click, plus its
+        // margins) or right of it (the fixed zone of the sessions/settings/
+        // window buttons, including the gaps between them): not a tab, even
+        // one scrolled out of view under the clip. The rest is drag region.
+        if !tab_bar::point_in_track(style, bar_width, is_macos(), logical_point.0) {
             if !right_click {
                 self.resolve_titlebar_drag();
             }
@@ -11561,7 +11534,7 @@ impl App {
                 let buffer = search.field().text().to_string();
                 let text_width = measurer.measure_width(
                     &buffer,
-                    chrome::LABEL_FONT,
+                    search_bar::FIELD_FONT,
                     search_bar::FIELD_FONT_SIZE,
                 );
                 let text_area =
@@ -11575,7 +11548,7 @@ impl App {
                 let local_x = logical_point.0 - text_x;
                 let byte_index = measurer.index_at_offset(
                     &buffer,
-                    chrome::LABEL_FONT,
+                    search_bar::FIELD_FONT,
                     search_bar::FIELD_FONT_SIZE,
                     local_x,
                 );
@@ -12648,7 +12621,7 @@ impl App {
                                     let buffer = search.field().text().to_string();
                                     let text_width = measurer.measure_width(
                                         &buffer,
-                                        chrome::LABEL_FONT,
+                                        search_bar::FIELD_FONT,
                                         search_bar::FIELD_FONT_SIZE,
                                     );
                                     let text_area = (layout.field_rect.width
@@ -12663,7 +12636,7 @@ impl App {
                                     let local_x = logical_point.0 - text_x;
                                     let byte_index = measurer.index_at_offset(
                                         &buffer,
-                                        chrome::LABEL_FONT,
+                                        search_bar::FIELD_FONT,
                                         search_bar::FIELD_FONT_SIZE,
                                         local_x,
                                     );
@@ -13029,7 +13002,11 @@ impl App {
                     cursor_logical.0 - track_left + state.scroll_offset,
                     cursor_logical.1,
                 );
-                tab_bar::hit_test(&base_layout, content_point)
+                if tab_bar::point_in_track(style, bar_width, is_mac, cursor_logical.0) {
+                    tab_bar::hit_test(&base_layout, content_point)
+                } else {
+                    None
+                }
             } else {
                 None
             };

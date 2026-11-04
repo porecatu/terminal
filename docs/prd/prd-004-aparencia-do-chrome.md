@@ -55,7 +55,7 @@ Todo usuário, com defaults que funcionam sem configuração alguma. A profundid
 
 **RF-4.6** — Configuráveis por estado — ativa, inativa, hover — as cores de fundo e de texto.
 
-*Emendado.* O **hover não tem cores próprias**: é um multiplicador de brilho sobre o estado atual (`hover_brightness`, `label_hover_brightness`). Com seis cores de grupo, cor de hover por estado exigiria doze tokens para dizer o que um multiplicador diz. O realce em si é uma das **duas** mudanças visuais aprovadas para o v1 ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2) e entra na etapa 6 da F4; hoje o hover existe como hit-test e alimenta o tooltip, sem mudar aparência. O fundo da aba ganhou um alfa (`background_alpha`, `0.85`) para deixar passar a cor da cápsula do grupo por baixo.
+*Emendado.* O **hover não tem cores próprias**: é um multiplicador de brilho sobre o estado atual (`hover_brightness`; a `label_hover_brightness` do rótulo do grupo saiu com o hover dele, [ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)). Com seis cores de grupo, cor de hover por estado exigiria doze tokens para dizer o que um multiplicador diz. O realce em si é uma das **duas** mudanças visuais aprovadas para o v1 ([ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2) e entra na etapa 6 da F4; hoje o hover existe como hit-test e alimenta o tooltip, sem mudar aparência. O fundo da aba ganhou um alfa (`background_alpha`, `0.85`) para deixar passar a cor da cápsula do grupo por baixo.
 
 **RF-4.7** — Configuráveis: cor de fundo da barra (atrás das abas), cor e espessura da borda da aba ativa, e cor da borda de aba selecionada ([PRD-002](prd-002-grupos-de-abas.md), RF-2.2).
 
@@ -80,6 +80,8 @@ Todo usuário, com defaults que funcionam sem configuração alguma. A profundid
 > *Emendado em 2026-10-21* ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)): o tamanho da fonte do rótulo deixa de ser configurável à parte — é o de `[terminal.font] size`, e `[appearance.groups] label_font_size` saiu. O peso continua próprio (500).
 
 **RF-4.14** — O **indicador de grupo** é a **pílula** — nome e caret na cor cheia do grupo — mais a **cápsula** atrás das abas. Não é configurável, e é a única forma.
+
+> **Emendado ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)).** A pílula é **só o nome**, sem fundo, borda, caret nem hover; quem dá a cor do grupo é a cápsula. O grupo colapsado mostra um ponto por aba à direita do nome. A aba de dentro de um grupo não tem borda, e a fonte do chrome é a de interface do sistema.
 
 *Emendado em 2026-09-02* ([ADR-0032](../adr/0032-interface-do-v1-fechada.md), que supersede o [ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md) §5). Este requisito oferecia quatro estilos numa lista combinável — `pill`, `underline`, `left-bar`, `outline` — e sobrou um:
 

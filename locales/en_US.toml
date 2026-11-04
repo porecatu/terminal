@@ -524,8 +524,6 @@ tab_close = "Close tab"
 regex_toggle = "Regular expression"
 group_editor = "Group editor"
 unnamed_group = "Group"
-tabs_hidden_left = { one = "{count} tab hidden on the left", other = "{count} tabs hidden on the left" }
-tabs_hidden_right = { one = "{count} tab hidden on the right", other = "{count} tabs hidden on the right" }
 # Uma frase por combinação de colapsado e cor.
 group = "Group {name}"
 group_collapsed = "Group {name}, collapsed"

@@ -69,7 +69,6 @@ bell_indicator = "#ef8a8a"            # ponto de "campainha"
 rename_background = "#0e1116"         # campo de renomear aba
 rename_border = "#5ed3bc"
 rename_foreground = "#e4e8ee"
-overflow_indicator_background = "#12151a"  # setas quando as abas não cabem
 
 # Botões minimizar, maximizar e fechar.
 [window_controls]

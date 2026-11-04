@@ -1038,8 +1038,6 @@ registry! {
         regex_toggle(),
         group_editor(),
         unnamed_group(),
-        tabs_hidden_left(plural),
-        tabs_hidden_right(plural),
         group(name),
         group_collapsed(name),
         group_colored(name, color),
@@ -1783,9 +1781,7 @@ mod tests {
         let missing = schema["notice.language_missing_messages.body"];
         assert!(missing.plural);
         assert_eq!(missing.placeholders, ["count", "locale"]);
-        // Plural com marcador extra, e frase de uma tabela de primeiro nível
-        // dentro de `access`.
-        assert!(schema["access.tabs_hidden_left"].plural);
+        // Frase de uma tabela de primeiro nível dentro de `access`.
         assert_eq!(
             schema["access.warning"].placeholders,
             ["severity", "title", "body"]

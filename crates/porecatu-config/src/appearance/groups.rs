@@ -27,7 +27,6 @@ pub struct Groups {
     /// 400 | 500 -- a face Fixed só embute os dois.
     pub label_font_weight: i32,
     pub label_corner_radius: i32,
-    pub label_hover_brightness: f64,
     /// Teto do nome do grupo (RF-2.12); sem piso.
     pub label_max_width: i32,
     #[serde(skip_deserializing)]
@@ -79,7 +78,6 @@ impl Default for Groups {
             label_padding_right: 9,
             label_font_weight: 500,
             label_corner_radius: 6,
-            label_hover_brightness: 1.25,
             label_max_width: 140,
             count_background: Color::hex("#12151a"),
             count_foreground: Color::hex("#7b838f"),

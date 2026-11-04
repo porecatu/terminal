@@ -56,8 +56,6 @@ const ROOT_ID: NodeId = NodeId(0);
 const TAB_LIST_ID: NodeId = NodeId(1);
 const UNGROUPED_NEW_TAB_ID: NodeId = NodeId(2);
 const SETTINGS_BUTTON_ID: NodeId = NodeId(3);
-const OVERFLOW_LEFT_ID: NodeId = NodeId(4);
-const OVERFLOW_RIGHT_ID: NodeId = NodeId(5);
 const WINDOW_MINIMIZE_ID: NodeId = NodeId(6);
 const WINDOW_MAXIMIZE_ID: NodeId = NodeId(7);
 const WINDOW_CLOSE_ID: NodeId = NodeId(8);
@@ -214,8 +212,6 @@ pub(crate) fn build_tree(
     status_bar: Option<&StatusBarLayout>,
     active_pane_order: Option<&[PaneId]>,
     style: &TabBarStyle,
-    logical_width: f32,
-    scroll_offset: f32,
     catalog: &Catalog,
     language: &str,
     measurer: &mut TextMeasurer,
@@ -224,9 +220,7 @@ pub(crate) fn build_tree(
     let mut nodes: Vec<(NodeId, Node)> = Vec::new();
     let mut root_children: Vec<NodeId> = Vec::new();
 
-    let trilha_width = tab_bar::trilha_width(style, logical_width, is_mac);
     let layout = tab_bar::layout(workspace, style, measurer);
-    let overflow = tab_bar::overflow_state(&layout, trilha_width, scroll_offset);
 
     // Primeiro na ordem de leitura, como é o primeiro da barra na tela.
     // Oculto (`show_app_menu_button = false`): sem nó.
@@ -246,27 +240,6 @@ pub(crate) fn build_tree(
         &mut nodes,
         &mut root_children,
     );
-
-    if overflow.hidden_left > 0 {
-        nodes.push((
-            OVERFLOW_LEFT_ID,
-            leaf(
-                Role::Button,
-                msg::access::tabs_hidden_left(catalog, overflow.hidden_left),
-            ),
-        ));
-        root_children.push(OVERFLOW_LEFT_ID);
-    }
-    if overflow.hidden_right > 0 {
-        nodes.push((
-            OVERFLOW_RIGHT_ID,
-            leaf(
-                Role::Button,
-                msg::access::tabs_hidden_right(catalog, overflow.hidden_right),
-            ),
-        ));
-        root_children.push(OVERFLOW_RIGHT_ID);
-    }
 
     if layout.ungrouped_new_tab_button.is_some() {
         nodes.push((
@@ -1502,8 +1475,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             language,
             &mut measurer(),
@@ -1637,8 +1608,6 @@ mod tests {
             None,
             Some(&order),
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -1688,8 +1657,6 @@ mod tests {
             None,
             Some(&order),
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -1742,8 +1709,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -1794,8 +1759,6 @@ mod tests {
             Some(&layout),
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -1863,8 +1826,6 @@ mod tests {
             Some(&layout),
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -1913,8 +1874,6 @@ mod tests {
             Some(&layout),
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -1956,8 +1915,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -2007,8 +1964,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &pt,
             "pt-BR",
             &mut measurer(),
@@ -2079,8 +2034,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &pt,
             "pt-BR",
             &mut measurer(),
@@ -2161,8 +2114,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -2218,8 +2169,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
@@ -2255,8 +2204,6 @@ mod tests {
             None,
             None,
             &TabBarStyle::DEFAULT,
-            800.0,
-            0.0,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),

@@ -15,7 +15,9 @@
 //! [`layout_status_bar`], pintura em [`paint_status_bar`], e nada aqui
 //! chama `Instant::now` nem toca estado.
 
-use porecatu_render::{Color, FontFace, Primitive, Quad, Rect, TextMeasurer, TextRun, icon};
+use porecatu_render::{
+    Color, FontFace, Primitive, Quad, Rect, SansWeight, TextMeasurer, TextRun, icon,
+};
 
 use crate::chrome::ICON_FONT;
 use crate::palette::ResolvedPalette;
@@ -23,7 +25,10 @@ use crate::tab_bar::TabBarStyle;
 
 /// A barra usa a face **monoespaçada** (espec. §1.1, que já listava
 /// "barra de status" entre os usos dela desde o ADR-0009).
-const FONT: FontFace = FontFace::Mono { bold: false };
+/// Fonte do sistema (experimento visual), não a Iosevka do terminal.
+const FONT: FontFace = FontFace::System {
+    weight: SansWeight::Regular,
+};
 
 /// Codificação exibida na zona direita. Constante de propósito: o app
 /// decodifica UTF-8 e só (ADR-0002), então um campo que consultasse algo

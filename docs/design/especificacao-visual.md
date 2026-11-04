@@ -16,22 +16,24 @@ Registro dos valores de aparência do chrome. **O binário é a referência norm
 
 | Uso | Família | Pesos | Onde |
 |---|---|---|---|
-| Interface | `Iosevka Fixed` | 400, 500 | títulos de aba, rótulos de grupo, menus, configurações |
-| Monoespaçada | `Iosevka Fixed` | 400, 500 | conteúdo do terminal, badges, chips de tecla, contadores, barra de status |
-| Ícones | `Lucide` | — | fechar, nova aba, caret de grupo, chevron de overflow |
+| Interface | **fonte do sistema** (`FontFace::System`: Segoe UI no Windows, Helvetica Neue no macOS, o padrão do `fontdb` no Linux) | 400, 600 | rótulos de aba e de grupo, menus, popovers, tooltip, diálogos, avisos, barra de status, configurações e edição de perfil |
+| Monoespaçada | `Iosevka Fixed` | 400, 500 | conteúdo do terminal, badges, chips de tecla, campo da busca, campo de senha mascarado |
+| Ícones | `Lucide` | — | fechar, nova aba, chevrons dos seletores |
 
-Interface e conteúdo do terminal usam a **mesma família** desde o [ADR-0026](../adr/0026-chrome-unificado-em-iosevka-fixed.md): o [ADR-0025](../adr/0025-iosevka-no-lugar-da-ibm-plex.md) tinha trocado IBM Plex Sans/Mono por Iosevka Aile/Fixed, mas Aile e Fixed são desenhadas diferente dentro da mesma superfamília (Aile é a variante proporcional/humanista) — lado a lado na barra, a diferença de desenho lia como duas fontes, não como uma identidade só. O peso 600 (`SemiBold`) saiu de uso: a Fixed recortada só embute 400/500. O **mockup ainda mostra IBM Plex** e não será regerado (ADR-0028) — registro na seção 4.4.
+> **Revisão ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)):** a interface **deixou** de usar a Iosevka e passou à fonte de interface do sistema, que não é embutida e não tem chave de configuração (o tamanho continua `[terminal.font] size`). Peso 400 no texto e **600** (`SemiBold`) no nome do grupo e nos títulos, porque a Segoe UI não tem 500. O texto de uma run `System` é deslocado no render para o centro da altura de versal cair onde o chrome mira (`origem + size_px / 2`) — a Segoe UI, de ascent alto, saía 1 a 2px baixa. O parágrafo a seguir é o que valia antes.
 
-Fallback de UI: `system-ui, sans-serif`. Fallback mono: `monospace`.
+Interface e conteúdo do terminal usavam a **mesma família** desde o [ADR-0026](../adr/0026-chrome-unificado-em-iosevka-fixed.md): o [ADR-0025](../adr/0025-iosevka-no-lugar-da-ibm-plex.md) tinha trocado IBM Plex Sans/Mono por Iosevka Aile/Fixed, mas Aile e Fixed são desenhadas diferente dentro da mesma superfamília (Aile é a variante proporcional/humanista) — lado a lado na barra, a diferença de desenho lia como duas fontes, não como uma identidade só. O peso 600 (`SemiBold`) saiu de uso: a Fixed recortada só embute 400/500. O **mockup ainda mostra IBM Plex** e não será regerado (ADR-0028) — registro na seção 4.4.
 
-> **Estas três faces são embutidas no binário** ([ADR-0016](../adr/0016-fontes-embutidas.md)): nenhuma delas vem instalada por default em Windows, macOS ou Linux, e sem embuti-las a aparência mudaria de máquina para máquina — métrica de fonte diferente muda largura de célula, de aba e onde o título trunca. Itálico e negrito fora desses pesos seguem sintetizados (RF-5.4). A cadeia de fallback (Nerd Font, emoji, CJK) **não** é embutida e continua vindo do sistema.
+Fallback de UI: a cadeia da plataforma (`cosmic-text`). Fallback mono: `monospace`.
+
+> **Estas faces são embutidas no binário** (Iosevka Fixed 400/500 e Lucide; a fonte de interface do sistema **não**) ([ADR-0016](../adr/0016-fontes-embutidas.md)): nenhuma delas vem instalada por default em Windows, macOS ou Linux, e sem embuti-las a aparência mudaria de máquina para máquina — métrica de fonte diferente muda largura de célula, de aba e onde o título trunca. Itálico e negrito fora desses pesos seguem sintetizados (RF-5.4). A cadeia de fallback (Nerd Font, emoji, CJK) **não** é embutida e continua vindo do sistema.
 
 | Tamanho | Uso |
 |---|---|
 | 19px / 500 | título da tela de nova aba |
 | 15px / 500 | título do painel de configurações |
 | 14.5px | campo de busca da paleta de comandos |
-| 14px | **conteúdo do terminal**, **rótulo da aba** (peso 400), **nome da pílula do grupo** (peso 500, `Medium` — lê como bold; ver seção 4.4) e **campo de rename da aba** — um valor só, `[terminal.font] size`, na família de `[terminal.font] family` ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)); o zoom de sessão muda só a grade |
+| 14px | **conteúdo do terminal**, **rótulo da aba** (peso 400), **nome do grupo** (peso **600**, `SemiBold` — lê como bold; ver seção 4.4) e **campo de rename da aba** — um valor só, `[terminal.font] size` ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)); a **família** do chrome é a fonte do sistema ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)), a do terminal é `[terminal.font] family`; o zoom de sessão muda só a grade |
 | 13px | nome de perfil, item de resultado, campo de nome de grupo |
 | 12.5px | itens de menu |
 | 12px | nome do app |
@@ -41,7 +43,7 @@ Fallback de UI: `system-ui, sans-serif`. Fallback mono: `monospace`.
 | 9.5px | chips de tecla |
 | 9px | badge de perfil (`letter-spacing: .4px`) |
 | 8px | glyph do logotipo |
-| **20px de em** | **todo ícone do chrome** (`chrome::ICON_EM_SIZE`) — é a em, não o desenho: o Lucide preenche ~0.6 dela, então o ✕ sai em 11.8px e o caret do grupo em 11.8px. Configurações usa `0.8 ×` da em e os botões de janela `0.7 ×`, para o desenho bater com o do "+" |
+| **20px de em** | **todo ícone do chrome** (`chrome::ICON_EM_SIZE`) — é a em, não o desenho: o Lucide preenche ~0.6 dela, então o ✕ sai em 11.8px. Configurações usa `0.8 ×` da em e os botões de janela `0.7 ×`, para o desenho bater com o do "+" |
 
 Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuário na F3 e a 14 depois, para o avanço cair em pixel inteiro -- a Iosevka Fixed avança 0.5 em em todo glyph, então `size / 2 * scale` precisa ser inteiro para a célula não ser arredondada), `line-height: 1.75`.
 
@@ -56,7 +58,7 @@ Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuári
 | Aba ativa | `#282e37` | |
 | Aba inativa | `#191d23` | |
 | Pílula de grupo | `#1f242c` | **fora de uso** — a pílula é pintada com a cor cheia do grupo (§2.4) |
-| Contador do grupo | `#12151a` | também o botão de busca, o fundo do indicador de overflow (§2.18) e o traço do "+", do nome e do caret que caem sobre a cápsula de cor cheia (§2.4, §2.6) |
+| Contador do grupo | `#12151a` | também o botão de busca e o traço do "+", do nome e dos pontos de aba colapsada que caem sobre a cápsula de cor cheia (§2.4, §2.6) |
 | Popover | `#1a1e25` | menu de perfis, editor de grupo, paleta de comandos |
 | Drawer | `#171b21` | painel de configurações (`[appearance.settings] panel_background`, tematizável por `[settings]` de um `thm_*.toml`, como a linha `#1c2028`, o chip `#1e232b` e o separador do rodapé `#23272f`) |
 | Campo de rename | `#0e1116` | |
@@ -67,7 +69,7 @@ Terminal: **14px** (espec. original pedia 12.5px; foi a 13 por pedido do usuári
 | Botão de janela | `#ffffff` a `.10` (hover) · `#ffffff` a `.16` (pressionado) | minimizar e maximizar/restaurar (§2.2.1). Translúcido: o que está atrás da barra continua aparecendo. No tema claro, `#000000` com os mesmos alfas ([ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)) |
 | Hover destrutivo | `#2e2224` | "Fechar grupo" |
 | Chips de tecla | `#1d222a` · `#1e232b` · `#232830` | por componente |
-| Vidro (rim) | `#ffffff` a `.16` | borda translúcida de 1px da cápsula e da pílula do grupo (§2.3, §2.4) |
+| Vidro (rim) | `#ffffff` a `.16` | borda translúcida de 1px da cápsula do grupo (§2.3); a pílula não tem mais a dela (§2.4) |
 | Sombra em camadas | preto a `.16` / `.10` / `.06` | três `RoundedQuad` empilhados (spread 1/2.5/4.5, offset Y 1/2/3) sob a cápsula de grupo, a aba solta e o quadro do terminal (§2.3, §2.5, §2.7). É a aproximação de sombra do projeto: a sombra **não** usa o passo de desfoque. Há um passo de desfoque em `porecatu-render`, mas **só para o efeito acrílico** (§2.7, [ADR-0068](../adr/0068-efeito-acrilico-no-fundo-do-terminal.md)), que revoga o "sem passo de filtro" apenas para ele — reaproveitá-lo para a sombra ou para o hover exigiria ADR próprio |
 
 ### 1.3 Bordas
@@ -139,7 +141,7 @@ Cor de aba sem grupo: `#7b838f`.
 | 5px | item de menu, input de grupo, badge de perfil grande |
 | 4px | botão de fechar da aba, botões do painel, campo de rename |
 | 3px | badge de perfil, chips de tecla, logotipo, swatch do grupo |
-| 9px | indicador de overflow (círculo de 18px, raio = metade — §2.18); era o contador do grupo, hoje fora de uso na pílula |
+| 9px | contador do grupo, hoje fora de uso (o indicador de overflow, círculo de 18px, saiu — §2.18) |
 | 50% | ponto de status do painel |
 
 | Altura | Valor |
@@ -154,9 +156,8 @@ Cor de aba sem grupo: `#7b838f`.
 | Botão da barra de título `[v2]` | 44px de largura |
 | **Botão de janela** (minimizar / maximizar / fechar) | **46px de largura, altura cheia da barra** — ADR-0027, §2.2.1 |
 | **Zona de resize da janela** | **6px** em toda borda (ADR-0027) |
-| Botão de fechar da aba | 17×17 de desenho, **25×17** de alvo com o respiro de `icon_button_padding_x` |
+| Botão de fechar da aba | 17×17 de desenho, **25×24** de alvo: o respiro de `icon_button_padding_x` na largura e, na altura, o quadrado de hover/pressed `close_hover_size` = `right_zone_button_size` 30 − 2 × `wrapper_padding` 3 = **24** (§2.5) |
 | Botões da zona fixa à direita (sessões, configurações) e "+" de aba avulsa | **40×40** cada, o tamanho do botão de menu do app (`app_menu_button_size`, ADR-0082) — mesma anatomia (§2.22, §2.2). O "+" de dentro de um grupo fica 30×30 (§2.6) |
-| **Indicador de overflow** | **18×18**, círculo (§2.18) |
 | Botões do painel `[v2]` | 22×20 |
 | Swatch de cor | 28×28 |
 | Toggle `[v2]` | 34×19, botão 15×15, deslocamento 15px |
@@ -164,7 +165,7 @@ Cor de aba sem grupo: `#7b838f`.
 
 | Largura | Valor |
 |---|---|
-| **Aba** | **fixa e igual para toda aba**: `padding_left` 10 + rótulo 180 + `internal_gap` 8 + botão de fechar 25 + `padding_right` 6 = **229px**, saturada em `max_width` 260. O teto de 180px do rótulo é também o piso — título, indicador e renomeação não refluem a trilha (§2.5) |
+| **Aba** | **fixa e igual para toda aba**: `padding_left` 10 + rótulo 160 + `internal_gap` 8 + botão de fechar 25 + `padding_right` 6 = **209px**, saturada em `max_width` 260 (eram 180 e 229px antes do [ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)). O teto de 160px do rótulo é também o piso — título, indicador e renomeação não refluem a trilha (§2.5) |
 | Nome da pílula do grupo | teto de **140px** (`pill_name_max_width`), truncado com reticências |
 | **Guia da janela de configurações** | **200px** (`sidebar_width`) — a largura mínima do menu de contexto, que é o que a guia é: uma lista de itens de menu (ADR-0060 §5) |
 | Campo de texto e campo numérico da tela de configurações | **240px** (`text_field_width`) e **88px** (`number_field_width`) — o numérico cabe `102400` com folga para um sétimo dígito; os dois em `[appearance.settings]` (ADR-0060 §5) |
@@ -177,8 +178,8 @@ Cor de aba sem grupo: `#7b838f`.
 | **Entre grupos** | `gap: 6` (`trilha_gap`) — também o gap antes do botão de nova aba e o respiro das zonas fixas |
 | Cápsula de grupo | `padding: 3` (`wrapper_padding`). **Não** se aplica a run implícito: sem cápsula não há o que absorva o respiro, e aplicá-lo abria entre grupo e aba solta um vão maior — e sem cor — do que entre dois grupos |
 | Aba | `padding: 0 6px 0 10px`, `gap: 8` |
-| Pílula | `padding: 0 9px 0 10px`, `gap: 7` (o `label_padding_left` subiu de 8 para 10) |
-| **Dentro de todo botão de ícone** | `icon_button_padding_x` **4px de cada lado** — fechar da aba e caret da pílula ficam mais largos que altos; a altura não muda, senão o botão de fechar deixaria de caber na aba. O "+" e os botões da zona fixa são quadrados, sem esse respiro: 30×30 o "+" de grupo e 40×40 os demais (§2.6, ADR-0082) |
+| Rótulo do grupo | `padding: 0 9px 0 10px`, `gap: 7` entre o ponto agregado e o nome; **8px** entre o nome e os pontos de aba colapsada e entre os pontos e a borda (`COLLAPSED_DOTS_GAP`) |
+| **Dentro de todo botão de ícone** | `icon_button_padding_x` **4px de cada lado** — o fechar da aba fica mais largo que alto (25×24); a altura é a do quadrado de hover (§2.5), menor que a do "+" para caber na aba de grupo. O "+" e os botões da zona fixa são quadrados, sem esse respiro: 30×30 o "+" de grupo e 40×40 os demais (§2.6, ADR-0082) |
 | **Quadro do terminal** | 6px de margem da borda da janela nos três lados que não encostam na barra, e 6px de padding entre a borda do quadro e a grade (§2.7) |
 | **Vão entre painéis** | o mesmo valor do quadro do terminal, **6px** — o divisor é esse vão e não tem valor próprio (§2.7.1) |
 | Cabeçalho do painel `[v2]` | `padding: 7px 12px` — do canvas; o cabeçalho de painel foi recusado ([ADR-0053](../adr/0053-paineis-divididos.md)), ver §4.3 |
@@ -201,7 +202,7 @@ Derivados da cor do grupo, por composição alfa. Cápsula e pílula são pintad
 | Alvo | Alfa | Efeito |
 |---|---|---|
 | **Cápsula do grupo** | `.85` da cor cheia | também com o grupo **colapsado**, abraçando a pílula sozinha — é a cápsula que diz de que cor o grupo é. Por trás dela passa `BAR_BACKGROUND` |
-| **Pílula do grupo** | `.92` da cor cheia | fica por cima da cápsula, do mesmo tom: duas camadas translúcidas empilhadas, "vidro sobre vidro" |
+| **Fantasma de arraste do grupo** | `.92` da cor cheia | só o fantasma (§2.19.1) leva esse preenchimento, por cima da barra; o rótulo no lugar não tem fundo (§2.4) |
 | **Fundo da aba** | `.85` do próprio tom (ativa `#282e37`, inativa `#191d23`) | deixa passar 15% da cápsula atrás dela como indício da cor do grupo |
 | Realce de fronteira do arraste | `.14` da cor do grupo, borda na cor a `.45` | §2.19. O `.16` que a prosa daquela seção citava arredondava o `badge_tint_strength` do arquivo de exemplo, que vale `.14` — o TOML é a fonte numérica |
 | Fundo do badge de perfil | `.14` | texto do badge usa a cor cheia |
@@ -237,7 +238,7 @@ Só as oito brilhantes de cor (`red` a `cyan`) são valores novos; `black`, `whi
 | `slidein` | `.16s ease-out`, de `translateX(24px)` + `opacity 0` | drawer de configurações do canvas (a tela de configurações do binário não anima, §2.12) |
 | Transições | `.15s` | rotação do caret, cor do trilho e posição do botão do toggle |
 | `reflow` | `.18s` linear ao formar grupo; **`.15s`** no colapso e na expansão | reordenação das abas ao formar grupo (RF-2.5) e ao arrastar grupo; colapso e expansão de grupo. São duas durações, uma por consumidor (`GROUP_CREATE_REFLOW_DURATION`, `COLLAPSE_REFLOW_DURATION`) |
-| Hover por brilho | `filter: brightness(1.25)` na pílula, `1.18` na aba | evita definir uma cor de hover por grupo. Resolvido em CPU (`chrome::brighten`), sem primitiva de filtro em `porecatu-render` (F4 etapa 6, [ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2). Os botões de janela (ADR-0027) continuam sendo o único hover que troca fundo e ícone, e o único com estado pressionado (ADR-0066) |
+| Hover por brilho | `filter: brightness(1.18)` na aba (o rótulo do grupo não tem hover) | evita definir uma cor de hover por grupo. Resolvido em CPU (`chrome::brighten`), sem primitiva de filtro em `porecatu-render` (F4 etapa 6, [ADR-0032](../adr/0032-interface-do-v1-fechada.md) §2). Os botões de janela (ADR-0027) continuam sendo o único hover que troca fundo e ícone, e o único com estado pressionado (ADR-0066) |
 
 O hover por `brightness` é uma decisão relevante: com seis cores de grupo, definir hover por cor exigiria doze tokens. O filtro resolve com um.
 
@@ -286,14 +287,14 @@ Zonas, da esquerda para a direita:
 3. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
 4. **Zona de botões de janela** `[v1]` — minimizar, maximizar/restaurar, fechar (ADR-0027; anatomia em §2.2.1). Ausente no macOS: lá o semáforo nativo faz esse papel, e a trilha reserva espaço à **esquerda** (§2.2.1) em vez de perder espaço à direita.
 
-**Por que a zona fixa existe.** Com a trilha rolando como um componente só, um botão ao final dela sai de vista com muitas abas — botão que o usuário não alcança. A largura da trilha é a da barra menos as duas zonas fixas (botão de menu à esquerda, esta à direita), e é essa largura que o cálculo de overflow e o auto-scroll do arraste usam. O recorte da trilha começa na borda direita do botão de menu, e as pílulas de overflow ficam por dentro das pontas dele.
+**Por que a zona fixa existe.** Com a trilha rolando como um componente só, um botão ao final dela sai de vista com muitas abas — botão que o usuário não alcança. A largura da trilha é a da barra menos as duas zonas fixas (botão de menu à esquerda, esta à direita), e é essa largura que o cálculo de overflow e o auto-scroll do arraste usam. O recorte da trilha começa na borda direita do botão de menu. **Clique e hover da barra só valem dentro desse recorte** (`tab_bar::point_in_track`, [ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) §7): uma aba rolada para fora de vista continua no layout, e sem essa checagem o clique direito num botão da zona fixa abria o menu dela.
 
 Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
 - **Número da aba** (`show_index`, RF-4.11): **removido**. A opção nunca teve consumidor no render e foi retirada da config e da tela de configurações; uma chave `show_index` que sobre num `porecatu.toml` antigo gera o aviso comum de chave desconhecida e deve ser apagada à mão.
 - **Janela sem foco:** a barra **não muda**. É omissão deliberada, não pendência: o `unfocused_hollow` do cursor (seção 2.7) já diz qual janela tem o foco, e no lugar onde o usuário está olhando. Esmaecer a barra inteira de cada janela inativa é ruído maior que a informação que carrega.
 
-**Folga de acerto:** o botão de fechar de 17×17 e o `gap: 4` entre abas são alvos pequenos. O hit-testing dá 2 px de folga em volta do botão de fechar, o `icon_button_padding_x` da §1.7 alarga o alvo em 4 px de cada lado, e a fronteira entre abas vizinhas parte o `gap` ao meio — nenhum pixel da barra fica sem dono.
+**Folga de acerto:** o botão de fechar (alvo de 25×24) e o `gap: 4` entre abas são alvos pequenos. O hit-testing dá 2 px de folga em volta do botão de fechar, o `icon_button_padding_x` da §1.7 alarga o alvo em 4 px de cada lado, e a fronteira entre abas vizinhas parte o `gap` ao meio — nenhum pixel da barra fica sem dono.
 
 ### 2.2.1 Controles de janela e resize `[v1]`
 
@@ -339,30 +340,33 @@ Registro na seção 4.4.
 
 ### 2.4 Pílula de grupo `[v1]`
 
-Altura **34** (a mesma da aba), `padding: 0 9px 0 10px`, raio 6, `gap: 7`.
-**Fundo: a cor cheia do grupo a `.92`** (§1.8), com o mesmo rim de vidro de 1px da
-cápsula (§1.2). Ela fica por cima da cápsula, do mesmo tom — duas camadas
-translúcidas empilhadas. Hover `brightness(1.25)` (F4 etapa 6, §1.10).
+> **Revisão ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)):** a pílula **perdeu o fundo, o rim de vidro, o hover e o chevron**. É só o nome, sobre a cápsula (§2.3), e o grupo colapsado mostra **um ponto por aba**. O que está abaixo já descreve o binário; a pílula de fundo cheio a `.92` e o caret estão no registro da seção 4.4.
+
+Altura **34** (a mesma da aba), `padding: 0 9px 0 10px`, `gap: 7`. Sem fundo e sem
+borda: quem dá a cor do grupo é a cápsula atrás. A área de clique continua sendo o
+retângulo da pílula.
 
 Da esquerda para a direita:
 
-1. **Nome** 14px/**500** (`Medium`, para ler como bold contra o 400 da aba) em
-   `#12151a`, sem quebra, `max-width: 140px`, truncado com reticências (RF-2.12).
-   Nome completo em tooltip (seção 2.20), pelo mesmo caminho da aba.
-2. **Caret** — ícone Lucide `chevron-right` colapsado, `chevron-down` expandido, na
-   em de 20px da §1.1, em `#12151a`. Não há rotação: `porecatu-render` não tem
-   transformação afim, e a troca de ícone é o equivalente estático.
+1. **Nome** 14px/**600** (`SemiBold` da fonte do sistema, para ler como bold contra
+   o 400 da aba) em `#12151a`, sem quebra, `max-width: 140px`, truncado com
+   reticências (RF-2.12). Nome completo em tooltip (seção 2.20), pelo mesmo caminho
+   da aba.
+2. **Pontos de aba colapsada** — só com o grupo **colapsado**: um ponto de 6×6,
+   raio 50% (`indicator_dot_size`), por aba do grupo, em `#12151a`, com `tab_gap`
+   (4px) entre eles. **8px** entre o nome e o primeiro ponto e **8px** entre o último
+   e a borda da pílula, no lugar do padding direito (`COLLAPSED_DOTS_GAP`). Expandido
+   não há nada depois do nome além do padding. A largura cresce 10px por aba e não tem
+   teto.
 
-**Nome e caret em `#12151a`** porque caem sobre a cor cheia do grupo, onde o claro
+**Nome e pontos em `#12151a`** porque caem sobre a cor cheia do grupo, onde o claro
 perde contraste — é o mesmo escuro do "+" de dentro do grupo (§2.6), pela mesma
 razão. O **swatch de 8×8** que a pílula tinha à esquerda saiu junto com a borda
-neutra `#2b313b`: com a pílula inteira pintada na cor do grupo, o quadrado ficou
-redundante e a borda virou contorno cinza sem função. Tudo pedido do usuário; ver a
-seção 4.4.
+neutra `#2b313b`, e depois saíram o fundo e o chevron; ver a seção 4.4.
 
 Interação: clique alterna colapso; duplo clique abre o editor.
 
-**Teto do nome, e nenhum piso.** O teto de 140 px é o da aba (180) menos os 41 px de
+**Teto do nome, e nenhum piso.** O teto de 140 px é o da aba (180, na época; hoje 160) menos os 41 px de
 cromo que a §2.18 contabiliza — uma pílula não deve poder ficar mais larga que a aba
 que ela rotula. **Não há piso:** o nome nunca encolhe abaixo do teto, porque nada
 encolhe — a trilha rola (§2.18). O piso de 60 px que esta seção especificava, e a
@@ -371,7 +375,7 @@ dez grupos do [PRD-002](../prd/prd-002-grupos-de-abas.md) continua valendo por
 rolagem, não por encolhimento.
 
 **Indicador agregado de grupo colapsado (RF-2.16).** Ponto de 6×6, raio 50%,
-antes do nome, com o mesmo `gap: 7` dos demais elementos — as cores são
+antes do nome, com o mesmo `gap: 7` do nome — as cores são
 as da seção 2.17 (`#86c56a` atividade, `#ef8a8a` campainha), e vale a mesma regra
 de **um ponto só, campainha vence**. Só aparece com o grupo **colapsado**: com o
 grupo expandido, cada aba mostra o seu próprio ponto e um agregado seria
@@ -380,12 +384,11 @@ da pílula.
 
 **A pílula não tem contador.** O contador mono 10px sobre `#12151a` que o mockup
 desenha entre o nome e o caret **saiu**, por pedido do usuário. `show_tab_count_when_collapsed`
-(RF-4.17) fica no arquivo de exemplo e volta a governar um contador se ele voltar; os
-tokens `count_background`/`count_foreground` continuam em uso, mas noutros lugares —
-o escuro virou a cor de nome, caret e "+" sobre a cápsula, e o fundo do indicador de
-overflow (§2.18). Registro na seção 4.4.
+(RF-4.17) fica no arquivo de exemplo e volta a governar um contador se ele voltar; o
+token `count_background` continua em uso noutro lugar — o escuro virou a cor do nome,
+dos pontos de aba colapsada e do "+" sobre a cápsula. Registro na seção 4.4.
 
-**Grupo colapsado** muda três coisas e nada mais: o caret troca de ícone, o "+" do
+**Grupo colapsado** muda três coisas e nada mais: os pontos de aba aparecem, o "+" do
 grupo desaparece (§2.6) e o indicador agregado pode aparecer. A cápsula **continua
 pintada** (§2.3) e a pílula mantém altura, paddings e teto. As abas somem da trilha,
 e o que anima nesse movimento é a largura da cápsula mais a opacidade delas
@@ -394,7 +397,9 @@ e o que anima nesse movimento é a largura da cápsula mais a opacidade delas
 ### 2.5 Aba `[v1]`
 
 Altura **34** dentro de um grupo e **40** solta (§1.7), `padding: 0 6px 0 10px`,
-raio 6, `gap: 8`, **borda 1px** em todo estado, **largura fixa de 229px**. Hover
+raio 6, `gap: 8`, **borda 1px** na aba solta e **sem borda dentro de um grupo**
+([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md); a borda de
+seleção continua), **largura fixa de 209px**. Hover
 `brightness(1.18)` (F4 etapa 6, §1.10).
 
 **A aba solta é mais alta.** Dentro de um grupo ela cede o `wrapper_padding` ao bloco
@@ -403,8 +408,8 @@ As duas alinham topo e base na barra, em vez de a solta parecer encolhida no mei
 um vão vazio. A aba solta leva também a sombra em camadas (§1.7) e a borda de
 controle `#262b34` — o que a cápsula carrega pelas agrupadas.
 
-**A largura é fixa e igual para toda aba** (§1.7): `padding_left` + o teto de 180px do
-rótulo + `gap` + botão de fechar + `padding_right`. O teto do rótulo virou também o
+**A largura é fixa e igual para toda aba** (§1.7): `padding_left` + o teto de 160px do
+rótulo + `gap` + botão de fechar + `padding_right` (eram 180px e 229px). O teto do rótulo virou também o
 piso, porque largura por conteúdo refluía a trilha inteira a cada título novo —
 trocar de aba, renomear ou abrir um programa que muda o título mexia na posição de
 todas as outras. `max_width` continua no arquivo de exemplo, agora como saturação.
@@ -446,6 +451,16 @@ e a espessura é a do `selected_border_width` que o arquivo de
 exemplo já usava. Como a espessura é a mesma em todo estado, o que distingue a aba
 selecionada é só a **cor** do token.
 
+> **Dentro de um grupo não há borda** ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)): a cápsula de cor cheia já delimita a aba, e a borda só pesava sobre ela. Vale também para a aba que esmaece ao colapsar. A **selecionada** mantém a borda de seleção (é o único sinal dela), e a aba solta mantém a sua.
+
+**Botão de fechar: hover e pressionado como o "+"** (ADR-0084 §5). Em repouso só o
+ícone; no hover, um quadrado arredondado (raio da aba) com `window_controls.hover_background`,
+e no pressionado, com `pressed_background`, que vale enquanto o botão está armado e o
+cursor segue sobre ele. O quadrado tem **24px** (`close_hover_size`: o lado do "+" de
+grupo, 30, menos o `wrapper_padding` de cada lado), de modo que sobram 5px acima e abaixo
+numa aba de grupo de 34px. O alvo de clique é o retângulo do botão (25×24) mais a folga
+de 2px. O fechamento continua disparando no release (ADR-0081).
+
 **Não há sublinhado de grupo, e não há como ligá-lo.** O `box-shadow: inset 0 -2px 0
 <cor do grupo>` na base da aba existia para dizer a que grupo ela pertence quando a
 pílula sai da vista por rolagem; desde que a cápsula passou a ser pintada com a cor
@@ -466,7 +481,7 @@ Conteúdo:
 
 **Campo de rename** `[v1]` — substitui o rótulo no lugar. Largura 120, fundo `#0e1116`, borda `1px #5ed3bc`, raio 4, texto `#e4e8ee` 14px (o tamanho do rótulo e do terminal, [ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)), `padding: 2px 5px`, `outline: none`, foco automático. Confirma em `Enter` e no blur; cancela em `Esc`.
 
-A largura é `min(120, largura disponível do rótulo)` — a cláusula sobrevive à mudança da §2.18, que deixou o rótulo sempre no teto de 180 px, porque um título curto ainda dá uma aba mais estreita que o campo. **A aba não muda de largura ao entrar em rename**: mudar reflui a barra enquanto o usuário digita. Título mais longo que o campo rola dentro dele, com o caret sempre visível. OSC 0/2 que chegue com o campo aberto é registrado mas **não redesenha o campo**: o texto sob o cursor do usuário não muda sozinho.
+A largura é `min(120, largura disponível do rótulo)` — a cláusula sobrevive à mudança da §2.18, que deixou o rótulo sempre no teto (160 px; eram 180), porque um título curto ainda dá uma aba mais estreita que o campo. **A aba não muda de largura ao entrar em rename**: mudar reflui a barra enquanto o usuário digita. Título mais longo que o campo rola dentro dele, com o caret sempre visível. OSC 0/2 que chegue com o campo aberto é registrado mas **não redesenha o campo**: o texto sob o cursor do usuário não muda sozinho.
 
 **Desde o [ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md)**, o cursor navega pelo texto (setas, `Home`/`End`) e o campo aceita seleção — clique posiciona o cursor no caractere sob o ponto, clique e arraste seleciona, `Ctrl+A`/`Cmd+A` seleciona tudo. O trecho selecionado pinta um retângulo opaco na cor `[terminal.colors] selection_background` por baixo do texto; o caret some enquanto há seleção ativa.
 
@@ -849,7 +864,7 @@ O ponto consome largura do rótulo — 6 px mais o `gap: 8` —, e o truncamento
 Sem representação no canvas — estava na seção 4.2. O canvas resolve a trilha com `overflow-x: auto`, que é a rolagem do navegador, não um desenho.
 
 **Nada cede: a trilha rola.** Ao faltar espaço, nenhum elemento da aba encolhe —
-rótulo no teto de 180 px de `max-width`, `padding: 0 6px 0 10px`, `gap: 8`, botão de
+rótulo no teto de 160 px (180 antes do ADR-0084), `padding: 0 6px 0 10px`, `gap: 8`, botão de
 fechar 17×17 e ponto de 6 px, todos fixos —, e a trilha inteira rola como um
 componente só. Os 41 px de cromo da aba seguem sendo a conta que dá o teto de 140 px
 do nome da pílula (§2.4); o que eles não dão mais é piso de encolhimento.
@@ -869,20 +884,16 @@ O botão de fechar **não desaparece por falta de espaço**. `show_close_button`
 
 - Gesto: roda do mouse sobre a barra rola a trilha na horizontal, com ou sem `Shift`. Passo de 90 px por notch — era a largura de uma aba no piso, e sobreviveu como valor de passo ao fim do encolhimento. Não reaproveita `scroll_multiplier`, que conta linhas do grid.
 - Sem inércia e sem easing, pela mesma razão do indicador que não pisca: rolagem contínua é um frame por quadro de animação; rolagem discreta é um frame por evento.
-- **Sem barra de rolagem desenhada.** Não há token de scrollbar, e 6 px numa barra de 52 px sairiam do rótulo. A affordance é o indicador abaixo.
+- **Sem barra de rolagem desenhada.** Não há token de scrollbar, e 6 px numa barra de 52 px sairiam do rótulo. Também não há botões de rolagem (ver abaixo): a affordance é o recorte da trilha na ponta.
 - Trazer a aba ativa para a vista (RF-1.18) é **rolagem mínima**: alinha à borda esquerda da trilha se ela está à esquerda, à direita se está à direita. Nunca centraliza — centralizar move mais que o necessário e desorienta.
 
-**Indicador de abas fora da vista (RF-1.19).** Nas duas pontas da trilha, por dentro
-(4 px de recuo), desenhado sobre o clip e centrado na altura da barra. **Círculo de
-18×18** — raio 9, a metade da largura —, fundo `#12151a` (o `count_background` da §1.2)
-e só o chevron Lucide `chevron-left` / `chevron-right` em `#e4e8ee`, na em de 20 px.
-
-**Sem contagem.** Esta seção especificava uma cápsula de 34×18 com o chevron mais o
-número de abas ocultas, nos tokens do contador da pílula (§2.4) — pedido do usuário
-para trocar por um círculo só com o chevron, porque a cápsula lia como "comprida"
-demais para o que informa. Registro na seção 4.4.
-
-Cada ponta só aparece se houver aba oculta naquele lado. Clique rola uma aba (90 px).
+**Indicador de abas fora da vista (RF-1.19): removido** ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) §1). Esta seção especificava dois
+círculos de 18×18 com chevron, um por ponta, que rolavam a trilha em 90 px por clique;
+antes deles houve uma cápsula de 34×18 com a contagem de abas ocultas. Saíram os
+botões, a contagem, as chaves `[appearance.tabs.overflow] indicator_size` e `edge_inset`,
+a cor `[tabs] overflow_indicator_background` dos temas e os dois nós de acessibilidade.
+A trilha rola pela roda do mouse (acima) e ao trazer a aba ativa à vista, e **o recorte
+na ponta é o único sinal** de que há mais abas. Registro na seção 4.4.
 
 ### 2.19 Arraste de aba `[v1]`
 
@@ -921,8 +932,8 @@ inteiro, com suas abas.
 - **Mesmo limiar de 4 px** do arraste de aba, e mesmo cursor `Grabbing`.
 - **O fantasma é a pílula sozinha**, não o wrapper com as N abas. Um wrapper de
   oito abas é mais largo que a janela e o fantasma cobriria a barra que o usuário
-  precisa ver para escolher o destino. A pílula carrega a cor cheia do grupo e o nome
-  (§2.4) — identidade suficiente para saber o que se está movendo.
+  precisa ver para escolher o destino. A pílula carrega a cor cheia do grupo (preenchimento
+  sem borda, só no fantasma) e o nome (§2.4) — identidade suficiente para saber o que se está movendo.
 - **O buraco é o marcador**, como no arraste de aba: o wrapper de origem colapsa
   para largura zero e os wrappers vizinhos deslizam, abrindo o vão onde o grupo
   vai cair. O destino é sempre uma **fronteira entre grupos**, nunca o interior de
@@ -1009,9 +1020,9 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Campo de rename inline | `[v1]` | PRD-001 RF-1.8 |
 | Botão de nova aba | `[v1]` | PRD-001 RF-1.1, PRD-004 RF-4.11 |
 | Cápsula de grupo (cor cheia, vidro, sombra) | `[v1]` | [PRD-002](../prd/prd-002-grupos-de-abas.md), PRD-004 RF-4.19 |
-| Pílula: nome e caret, na cor cheia do grupo | `[v1]` | PRD-002 RF-2.9 a RF-2.13, RF-2.17 |
-| Indicador de grupo: pílula e cápsula | `[v1]` | PRD-004 RF-4.14 — forma única, sem chave de estilo ([ADR-0032](../adr/0032-interface-do-v1-fechada.md)) |
-| Grupo colapsado (só pílula) | `[v1]` | PRD-002 RF-2.13 |
+| Rótulo do grupo: nome e, colapsado, um ponto por aba | `[v1]` | PRD-002 RF-2.9 a RF-2.13, RF-2.17 |
+| Indicador de grupo: rótulo e cápsula | `[v1]` | PRD-004 RF-4.14 — forma única, sem chave de estilo ([ADR-0032](../adr/0032-interface-do-v1-fechada.md)) |
+| Grupo colapsado (só o rótulo, com os pontos) | `[v1]` | PRD-002 RF-2.13 |
 | Abas sem grupo (wrapper sem pílula) | `[v1]` | [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md) |
 | Editor de grupo: nome, swatches, ações | `[v1]` | PRD-002 RF-2.9 a RF-2.11, RF-2.22 |
 | Área de terminal (quadro arredondado), prompt, cursor | `[v1]` | [PRD-005](../prd/prd-005-aparencia-do-terminal.md) |
@@ -1074,7 +1085,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | PRD-001 RF-1.14 (aba ativa inequívoca) | fundo, borda **e** cor de texto mudam juntos — não só matiz |
 | PRD-002 RF-2.9 (nome do grupo) | pílula + input do editor |
 | PRD-002 RF-2.10, RF-2.11 (cor e indicador) | swatches do editor, cápsula de cor cheia, pílula na cor do grupo |
-| PRD-002 RF-2.13 (colapso) | troca de ícone do caret, abas ocultas, cápsula abraçando a pílula |
+| PRD-002 RF-2.13 (colapso) | pontos de aba no lugar do caret, abas ocultas, cápsula abraçando o rótulo |
 | PRD-002 RF-2.22, RF-2.23 (ações e confirmação) | editor: colapsar, desagrupar, "Fechar grupo (N abas)" |
 | PRD-004 RF-4.18 (paleta) | seis swatches |
 | PRD-004 RF-4.19 (tingimento) | cápsula na cor cheia a `.85` (`tint_strength` default `1.0`) |
@@ -1195,6 +1206,13 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | 6px entre os botões de sessões e configurações, e **12px** entre configurações e os botões de janela (`trilha_gap` 6 + `window_controls.gap` 6) | **3px** nos dois (`[appearance.window_controls] gap`, que passa de 6 a 3 e governa os dois respiros). O 6px antes do botão de sessões e o da borda no macOS continuam. A zona fixa vai de 98 para **92px** antes dos botões de janela (**95px** no macOS), e a trilha ganha 12px fora do macOS | pedido do dono do produto ([ADR-0083](../adr/0083-gap-entre-os-botoes-da-zona-fixa.md)), aval visual pendente |
 | O formulário do perfil escolhido aparecia **abaixo da lista**, no painel do grupo "Perfis", montado como linha de opção — rótulo à esquerda, controle de 240 à direita (§2.12, ADR-0075 §6) | **Uma janela própria, o editor de perfil**: filha e modal da tela, com os campos **em coluna**, o rótulo acima e o campo na largura útil, e o rodapé Cancelar/OK; o painel fica com o topo, os botões e a lista. Na linha da lista, o badge abre a linha e o lápis fica à esquerda do ✕. OK leva à pendência sem gravar. Pedido do dono do produto: o formulário mudava de tamanho com o tipo, disputava a rolagem com a lista e apertava host, caminho de chave e diretório | [ADR-0080](../adr/0080-editor-de-perfil-em-janela-propria.md), fora de fase |
 | O canvas dá a cada perfil uma cor própria no menu de perfis (§2.9) | **Sem cor por perfil**: o badge usa a cor do grupo, na aba e no menu. Uma cor por item de uma lista do usuário não tem onde morar no tema ([ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)), e `[[profiles.list]]` não tem chave `color` | ADR-0070 (alternativas) |
+| Pílula de fundo cheio a `.92` com rim de vidro, hover `brightness(1.25)` e chevron (§2.4) | **Só o nome**, sobre a cápsula: sem fundo, sem borda, sem hover, sem chevron e sem o espaço dele. O grupo colapsado mostra **um ponto de 6×6 por aba** à direita do nome, com 8px até o nome e 8px até a borda. `[appearance.groups] label_hover_brightness` sai do schema. O fantasma de arraste do grupo mantém o preenchimento, sem borda | pedido do dono do produto ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)), aval visual dado |
+| Indicador de overflow: círculo 18×18 com chevron nas duas pontas da trilha (§2.18, linha acima) | **Removido.** A trilha rola pela roda do mouse e ao trazer a aba ativa à vista; saem as chaves `overflow.indicator_size`/`edge_inset`, a cor `overflow_indicator_background` dos temas e os nós `tabs_hidden_*` da árvore de acessibilidade | pedido do dono do produto (ADR-0084 §1) |
+| Aba com borda 1px em todo estado (§2.5) | **Sem borda dentro de grupo**; a aba solta e a borda de seleção continuam | pedido do dono do produto (ADR-0084 §3) |
+| Aba de 229px, rótulo de até 180px (§1.7, §2.5) | **209px**, rótulo de até 160px (`label_max_width`, constante) | pedido do dono do produto (ADR-0084 §4) |
+| Botão de fechar da aba sem estado visual além da cor do ícone (§2.5) | **Hover e pressionado como o "+"**: quadrado arredondado de 24px (`close_hover_size` = 30 − 2 × 3, menor que o do "+" para caber na aba de grupo); o retângulo do botão passa de 25×17 para 25×24 | pedido do dono do produto (ADR-0084 §5) |
+| Interface na Iosevka Fixed, a fonte do terminal (§1.1, [ADR-0026](../adr/0026-chrome-unificado-em-iosevka-fixed.md), [ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)) | **Fonte de interface do sistema** (Segoe UI no Windows, Helvetica Neue no macOS) nos rótulos de aba e de grupo, popovers, diálogos, avisos, barra de status e telas de configurações e de perfil; peso 600 no nome do grupo e nos títulos. Iosevka fica no terminal, badges, chips, campo da busca e campo de senha. O texto `System` é deslocado no render para o centro da altura de versal cair no centro da caixa | pedido do dono do produto (ADR-0084 §6), aval visual só no Windows |
+| Clique direito sobre um botão da zona fixa da direita abria o menu de uma aba rolada para fora de vista, por baixo dele | **Clique e hover da barra só dentro do recorte da trilha** (`tab_bar::point_in_track`); fora dele o clique direito não faz nada e o esquerdo, entre botões, arrasta a janela | correção de defeito (ADR-0084 §7) |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.
 

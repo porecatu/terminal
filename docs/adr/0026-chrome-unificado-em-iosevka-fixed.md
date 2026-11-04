@@ -5,6 +5,9 @@
 **Supersedes:** ADR-0025 (parcial: só a escolha de família para o chrome)
 **Relacionados:** ADR-0016, ADR-0018, ADR-0025
 
+> **Revisão ([ADR-0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)):** o chrome deixou de usar a Iosevka Fixed: rótulos de aba e de grupo, popovers, diálogos, avisos, barra de status e as telas de configurações e de perfil passam a usar a **fonte de interface do sistema** (`FontFace::System`). A Iosevka Fixed continua no terminal, nos badges, nos chips de atalho e no campo da busca. O que está abaixo é o que valia aqui.
+
+
 ## Contexto
 
 O [ADR-0025](0025-iosevka-no-lugar-da-ibm-plex.md) trocou IBM Plex Sans/Mono por Iosevka Aile/Fixed: Fixed para o conteúdo do terminal, Aile para o chrome (título de aba, rótulo de grupo, menu). A troca resolveu o problema que motivou o ADR — cobertura de braille, powerline, geométricos e cirílico —, mas manteve a divisão de família entre terminal e chrome que já existia com a IBM Plex.

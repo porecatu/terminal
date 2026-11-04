@@ -495,8 +495,6 @@ tab_close = "Tab schließen"
 regex_toggle = "Regulärer Ausdruck"
 group_editor = "Gruppeneditor"
 unnamed_group = "Gruppe"
-tabs_hidden_left = { one = "{count} Tab links ausgeblendet", other = "{count} Tabs links ausgeblendet" }
-tabs_hidden_right = { one = "{count} Tab rechts ausgeblendet", other = "{count} Tabs rechts ausgeblendet" }
 group = "Gruppe {name}"
 group_collapsed = "Gruppe {name}, eingeklappt"
 group_colored = "Gruppe {name}, Farbe {color}"

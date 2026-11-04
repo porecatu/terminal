@@ -9,14 +9,16 @@
 //! `FontSystem` carregando as cinco faces embutidas (ADR-0016), nunca
 //! dois.
 
+use std::collections::HashMap;
+
 use glyphon::{
     Buffer, FontSystem, Metrics, Shaping, SwashCache, TextArea, TextAtlas, TextBounds,
     TextRenderer, Viewport,
 };
 
 use crate::frame::{Layer, ResolvedText};
-use crate::primitives::scale_rect;
-use crate::text_measurer::{FontFamilies, attrs_for};
+use crate::primitives::{FontFace, scale_rect};
+use crate::text_measurer::{FontFamilies, attrs_for, cap_center_fraction};
 
 fn color_to_cosmic(color: wgpu::Color) -> glyphon::Color {
     glyphon::Color::rgba(
@@ -54,6 +56,9 @@ struct TextLayerState {
 /// Estado por janela: um [`TextLayerState`] por camada.
 pub(crate) struct TextWindowState {
     layers: [TextLayerState; 5],
+    /// Centro da altura de versal por face, em múltiplos de `size_px` (ver
+    /// [`cap_center_fraction`]) -- medido uma vez por face, não por run.
+    cap_center: HashMap<FontFace, Option<f32>>,
 }
 
 impl TextWindowState {
@@ -62,7 +67,10 @@ impl TextWindowState {
             renderer: TextRenderer::new(atlas, device, wgpu::MultisampleState::default(), None),
             buffers: Vec::new(),
         });
-        Self { layers }
+        Self {
+            layers,
+            cap_center: HashMap::new(),
+        }
     }
 
     /// Shapa e prepara o texto de `layer` para o frame corrente. `scale`
@@ -83,6 +91,24 @@ impl TextWindowState {
         resolved: &[ResolvedText],
         scale: f32,
     ) {
+        // Fonte do sistema: o chrome centra texto por `origem = centro -
+        // size_px / 2`, o que só acerta para as métricas da Iosevka. Para
+        // `System` desloca o topo para o centro da altura de versal cair
+        // onde essa conta mira (`origem + size_px / 2`).
+        let cap_center = &mut self.cap_center;
+        let top_offsets: Vec<f32> = resolved
+            .iter()
+            .map(|item| {
+                if !matches!(item.run.font, FontFace::System { .. }) {
+                    return 0.0;
+                }
+                let fraction = *cap_center
+                    .entry(item.run.font)
+                    .or_insert_with(|| cap_center_fraction(font_system, families, item.run.font));
+                fraction.map_or(0.0, |fraction| item.run.size_px * (0.5 - fraction))
+            })
+            .collect();
+
         let state = &mut self.layers[layer.index()];
         state.buffers.clear();
         state.buffers.reserve(resolved.len());
@@ -109,7 +135,8 @@ impl TextWindowState {
         let areas = resolved
             .iter()
             .zip(state.buffers.iter())
-            .map(|(item, buffer)| TextArea {
+            .zip(&top_offsets)
+            .map(|((item, buffer), top_offset)| TextArea {
                 buffer,
                 // Arredondado ao pixel físico: origem fracionária faz
                 // `cosmic-text`/`swash` rasterizar cada glyph num bin de
@@ -122,7 +149,7 @@ impl TextWindowState {
                 // inteiro de pixels físicos; isto fecha a mesma garantia na
                 // origem do run.
                 left: (item.run.origin.0 * scale).round(),
-                top: (item.run.origin.1 * scale).round(),
+                top: ((item.run.origin.1 + top_offset) * scale).round(),
                 scale: 1.0,
                 bounds: to_text_bounds(item.clip, scale),
                 default_color: color_to_cosmic(item.run.color),

@@ -231,9 +231,9 @@ pub struct ResolvedPalette {
     /// (ADR-0017).
     pub tab_exited_text: Color,
     /// `close_button_foreground` -- reaproveitado (pedido do usuário,
-    /// "nenhuma cor nova") pelo "+" fora de cápsula, pelo chevron de
-    /// overflow e pelo ícone de configurações: todos são o mesmo Lucide
-    /// cinza-claro sobre a barra escura.
+    /// "nenhuma cor nova") pelo "+" fora de cápsula, pelo "x" da aba e pelo
+    /// ícone de configurações: todos são o mesmo Lucide cinza-claro sobre a
+    /// barra escura.
     pub chrome_icon: Color,
     pub selected_border: Color,
     pub activity_indicator: Color,
@@ -242,13 +242,10 @@ pub struct ResolvedPalette {
     pub rename_border: Color,
     pub rename_text: Color,
 
-    // [appearance.tabs.overflow]
-    pub overflow_count_background: Color,
-
     // [appearance.groups]
     /// `count_background` -- reaproveitado (mesma nota do TOML) como cor de
-    /// nome/caret da pílula e do "+" **sobre a cápsula cheia**, onde o
-    /// claro perde contraste.
+    /// nome do grupo, dos pontos de grupo colapsado e do "+" **sobre a
+    /// cápsula cheia**, onde o claro perde contraste.
     pub group_new_tab_icon: Color,
     pub glass_border: Color,
     /// `[appearance.groups] border` -- borda de 1px da cápsula/aba solta.
@@ -383,8 +380,6 @@ impl ResolvedPalette {
             rename_background: cvt(tabs.colors.rename_background),
             rename_border: cvt(tabs.colors.rename_border),
             rename_text: cvt(tabs.colors.rename_foreground),
-
-            overflow_count_background: cvt(tabs.overflow.indicator_background),
 
             group_new_tab_icon: cvt(groups.count_background),
             // `glass_border` (RGB) e `glass_border_alpha` são chaves
@@ -538,8 +533,6 @@ mod tests {
         assert_eq!(pal.rename_background, hex(0x0e, 0x11, 0x16));
         assert_eq!(pal.rename_border, hex(0x5e, 0xd3, 0xbc));
         assert_eq!(pal.rename_text, hex(0xe4, 0xe8, 0xee));
-
-        assert_eq!(pal.overflow_count_background, hex(0x12, 0x15, 0x1a));
 
         assert_eq!(pal.group_new_tab_icon, hex(0x12, 0x15, 0x1a));
         // Rim de vidro translúcido -- não branco opaco (`glass_border` e

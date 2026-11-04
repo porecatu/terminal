@@ -75,8 +75,7 @@ use crate::palette::{self, ResolvedPalette};
 use crate::rename::RenameState;
 use crate::selection::Selection;
 use crate::tab_bar::{
-    self, GroupPillRect, Indicator, Overflow, OverflowSide, PILL_NAME_FONT, TabBarLayout,
-    TabBarStyle,
+    self, GroupPillRect, Indicator, Overflow, PILL_NAME_FONT, TabBarLayout, TabBarStyle,
 };
 
 /// Fonte dos ícones da barra (fechar, nova aba, chevron): a face Lucide
@@ -89,7 +88,7 @@ pub(crate) const ICON_FONT: FontFace = FontFace::Icon;
 // `pub(crate)`: `lib.rs::handle_bar_click` mede o mesmo texto com a mesma
 // face pra achar o índice de caractere sob o clique no campo de rename
 // (ADR-0035) -- tem que ser a mesma constante que pinta.
-pub(crate) const LABEL_FONT: FontFace = FontFace::Sans {
+pub(crate) const LABEL_FONT: FontFace = FontFace::System {
     weight: SansWeight::Regular,
 };
 
@@ -116,8 +115,6 @@ const NOT_STARTED_LABEL_ALPHA: f64 = DRAG_HIGHLIGHT_BORDER_ALPHA;
 // Espec §2.4, item 4: "▶ 8px, rotate(0deg) colapsado, rotate(90deg)
 // expandido". Sem primitiva de rotação (ver nota do módulo) -- a troca de
 // ícone é o equivalente estático.
-const PILL_CARET_COLLAPSED: icon::Icon = icon::CHEVRON_RIGHT;
-const PILL_CARET_EXPANDED: icon::Icon = icon::CHEVRON_DOWN;
 
 /// Sombra da cápsula de grupo e da aba solta (pedido do usuário,
 /// `[appearance.groups] shadow` liga/desliga -- ver `TabBarStyle::
@@ -169,8 +166,8 @@ pub struct GroupDragGhost {
 
 /// Monta as primitivas da barra inteira: fundo, separador, cada aba (fundo,
 /// borda, sublinhado, indicador, rótulo ou campo de rename, botão de
-/// fechar), o botão de nova aba, os indicadores de overflow (espec §2.18) e
-/// o fantasma de arraste (espec §2.19), se algum estiver em andamento.
+/// fechar), o botão de nova aba e o fantasma de arraste (espec §2.19), se
+/// algum estiver em andamento.
 ///
 /// `layout` já reflete, durante um arraste, o preview de reordenação
 /// (`lib.rs` monta um `Workspace` clonado com a troca aplicada antes de
@@ -342,7 +339,6 @@ pub fn paint(
         };
 
         let core_group = workspace.group(group.id);
-        let is_collapsed = core_group.is_some_and(|g| g.is_collapsed());
         // Cor de grupo: `ungrouped_color` para run implícito (ADR-0006),
         // a cor do grupo para explícito. Mesma resolução para a cápsula, o
         // fundo da pílula e o realce de fronteira do arraste.
@@ -350,15 +346,6 @@ pub fn paint(
             .and_then(|g| g.color())
             .map(|c| pal.group_color(c))
             .unwrap_or_else(|| pal.ungrouped_group_color());
-        // Hover por brilho na pílula (espec §1.10, `1.25`): a cápsula
-        // atrás **não** brilha, só a pílula -- é ela que tem hit-test de
-        // pílula (`TabBarHit::Pill`), a cápsula não é alvo de clique.
-        let pill_group_color = if hover == Some(tab_bar::TabBarHit::Pill(group.id)) {
-            brighten(group_color, style.pill_hover_brightness)
-        } else {
-            group_color
-        };
-
         // Ajuste pedido pelo usuário (F3 etapa 6, fora da espec.): o grupo
         // é uma "cápsula" pintada com a cor cheia -- não o tingimento de
         // 7% da espec §2.3, que ficava quase invisível atrás do fundo
@@ -418,8 +405,6 @@ pub fn paint(
                 pill,
                 pal,
                 style,
-                pill_group_color,
-                is_collapsed,
                 live_name,
                 style.pill_font_size,
                 dx,
@@ -467,8 +452,12 @@ pub fn paint(
             // RF-2.2/espec §2.5: selecionada é um modificador de borda, não
             // um quarto estado -- fundo e texto continuam vindo de
             // Ativa/Inativa acima.
+            // Aba de dentro de grupo (cápsula atrás) não leva borda
+            // (experimento visual); a de seleção continua, é feedback.
             let (border, border_width) = if selection.is_selected(tab.id) {
                 (pal.selected_border, style.selected_border_width)
+            } else if group.pill.is_some() {
+                (palette::TRANSPARENT, 0.0)
             } else {
                 (border, border_width)
             };
@@ -541,12 +530,18 @@ pub fn paint(
                 ),
             };
             if show_close {
-                out.push(centered_glyph(
-                    icon::X,
+                // Mesmo hover/pressed do "+" (`paint_zone_icon_button`).
+                let close_hovered = hover == Some(tab_bar::TabBarHit::CloseButton(tab.id));
+                paint_zone_icon_button(
                     shift(tab.close_button, dx),
+                    icon::X,
                     close_icon_size,
+                    (close_hovered, close_hovered && pressed_bar_button == hover),
                     scale_alpha(pal.chrome_icon, fade_in),
-                ));
+                    style,
+                    pal,
+                    &mut out,
+                );
             }
         }
 
@@ -610,12 +605,22 @@ pub fn paint(
         let is_active = active == Some(old_tab.id);
         let (bg, border, _border_width, text_color) = tab_colors(pal, style, exited, is_active);
         let text_color = label_color(text_color, not_started);
+        // Mesma regra da aba parada: dentro de grupo explícito, sem borda.
+        let in_group = workspace
+            .group_of_tab(old_tab.id)
+            .and_then(|id| workspace.group(id))
+            .is_some_and(|g| g.is_explicit());
+        let (border, border_width) = if in_group {
+            (palette::TRANSPARENT, 0.0)
+        } else {
+            (border, 1.0)
+        };
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: tab_rect,
             radius: style.tab_corner_radius,
             color: scale_alpha(bg, fade_out),
             border_color: scale_alpha(border, fade_out),
-            border_width: 1.0,
+            border_width,
         }));
         let group_color = tab_group_color(workspace, pal, old_tab.id);
         push_tab_badge(
@@ -718,32 +723,8 @@ pub fn paint(
         );
     }
 
-    // Pílulas de overflow (espec §2.18) ficam dentro da trilha rolável, não
-    // da barra inteira -- senão a da direita cairia por cima da zona fixa
-    // da direita.
-    let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos);
-    if overflow.hidden_left > 0 {
-        paint_overflow_pill(
-            style,
-            pal,
-            OverflowSide::Left,
-            track_left,
-            trilha_width,
-            bar_height,
-            &mut out,
-        );
-    }
-    if overflow.hidden_right > 0 {
-        paint_overflow_pill(
-            style,
-            pal,
-            OverflowSide::Right,
-            track_left,
-            trilha_width,
-            bar_height,
-            &mut out,
-        );
-    }
+    // Sem botões de overflow (experimento visual): a trilha só rola pela
+    // roda do mouse e pelo arraste.
 
     if let Some(ghost) = &drag {
         let tab = &ghost.source;
@@ -807,9 +788,6 @@ pub fn paint(
             .and_then(|g| g.color())
             .map(|c| pal.group_color(c))
             .unwrap_or_else(|| pal.ungrouped_group_color());
-        let is_collapsed = workspace
-            .group(ghost.group)
-            .is_some_and(|g| g.is_collapsed());
         let ghost_dx = ghost.screen_x - pill.rect.x;
         // ADR-0032 §2: sombra em camadas "nos cinco widgets de chrome e
         // no fantasma de arraste" -- este é o fantasma do RF-2.19 (pílula
@@ -821,12 +799,20 @@ pub fn paint(
                 style.pill_corner_radius,
             );
         }
+        // O rótulo em si não tem fundo (experimento visual), mas o fantasma
+        // flutua sobre a barra e sem fundo ficaria só o texto: ele mantém o
+        // preenchimento na cor do grupo, sem borda.
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: shift(pill.rect, ghost_dx),
+            radius: style.pill_corner_radius,
+            color: with_alpha(color, style.pill_glass_alpha),
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
         paint_group_pill(
             pill,
             pal,
             style,
-            color,
-            is_collapsed,
             None,
             style.pill_font_size,
             ghost_dx,
@@ -1259,33 +1245,23 @@ mod label_color_tests {
     }
 }
 
-/// Pílula de grupo (espec §2.4, divergente): fundo, nome e caret, na cor
-/// do grupo já resolvida por quem chama (`group_color` em [`paint`]). Sem
-/// contador de abas -- pedido do usuário. Sem swatch tampouco -- também
-/// pedido do usuário: a pílula inteira é pintada com `color`, no lugar do
-/// pequeno quadrado que a marcava antes. Texto e caret usam
-/// `pal.group_new_tab_icon` -- o mesmo escuro do "+" do grupo, pela mesma
-/// razão: sobre a cor cheia do grupo o claro perde contraste.
+/// Rótulo de grupo (espec §2.4, divergente): só o nome e, com o grupo
+/// colapsado, um ponto por aba escondida à direita dele. Sem fundo nem
+/// borda (experimento visual): quem dá a cor do grupo é a cápsula atrás.
+/// Texto e pontos usam `pal.group_new_tab_icon` -- o mesmo escuro do "+" do
+/// grupo, pela mesma razão: sobre a cor cheia do grupo o claro perde
+/// contraste.
 #[allow(clippy::too_many_arguments)]
 fn paint_group_pill(
     pill: &GroupPillRect,
     pal: &ResolvedPalette,
     style: &TabBarStyle,
-    color: Color,
-    is_collapsed: bool,
     live_name: Option<&str>,
     name_font_size: f32,
     dx: f32,
     measurer: &mut porecatu_render::TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect: shift(pill.rect, dx),
-        radius: style.pill_corner_radius,
-        color: with_alpha(color, style.pill_glass_alpha),
-        border_color: pal.glass_border,
-        border_width: style.glass_border_width,
-    }));
     if let Some(indicator) = pill.aggregate_indicator {
         let dot_color = match indicator {
             Indicator::Activity => pal.activity_indicator,
@@ -1308,12 +1284,11 @@ fn paint_group_pill(
         }));
     }
     let name_text = match live_name {
-        // Cap aproximado: o espaço que o nome já ocupava no layout
-        // committed (`name_origin` até `caret_rect`) -- não recalcula o
-        // orçamento exato do indicador agregado (nota do módulo,
-        // simplificação enquanto o editor está aberto).
+        // Cap aproximado: o teto do nome (`pill_name_max_width`) -- não
+        // recalcula o orçamento exato do indicador agregado (nota do
+        // módulo, simplificação enquanto o editor está aberto).
         Some(buffer) => {
-            let cap = (pill.caret_rect.x - pill.name_origin.0).max(0.0);
+            let cap = style.pill_name_max_width;
             let (truncated, _) = measurer.truncate(buffer, PILL_NAME_FONT, name_font_size, cap);
             truncated
         }
@@ -1326,54 +1301,24 @@ fn paint_group_pill(
         size_px: name_font_size,
         color: pal.group_new_tab_icon,
     }));
-    let caret_glyph = if is_collapsed {
-        PILL_CARET_COLLAPSED
-    } else {
-        PILL_CARET_EXPANDED
-    };
-    out.push(centered_glyph(
-        caret_glyph,
-        shift(pill.caret_rect, dx),
-        style.icon_em_size,
-        pal.group_new_tab_icon,
-    ));
-}
-
-/// Indicador de abas fora da vista (espec §2.18, RF-1.19): círculo com
-/// chevron, ancorado por dentro da ponta da trilha, fora do recorte de
-/// rolagem. Divergência da espec (que pedia cápsula com contagem, §2.18),
-/// a pedido do usuário -- registrar na seção 4.4.
-fn paint_overflow_pill(
-    style: &TabBarStyle,
-    pal: &ResolvedPalette,
-    side: OverflowSide,
-    track_left: f32,
-    track_width: f32,
-    bar_height: f32,
-    out: &mut Vec<Primitive>,
-) {
-    let rect = tab_bar::overflow_pill_rect(style, side, track_left, track_width, bar_height);
-    // Pedido do usuário: círculo (raio = metade da largura = metade da
-    // altura), só o chevron -- a contagem saiu. Raio derivado da
-    // geometria, não uma chave própria.
-    out.push(Primitive::RoundedQuad(RoundedQuad {
-        rect,
-        radius: rect.width / 2.0,
-        color: pal.overflow_count_background,
-        border_color: palette::TRANSPARENT,
-        border_width: 0.0,
-    }));
-
-    let chevron = match side {
-        OverflowSide::Left => icon::CHEVRON_LEFT,
-        OverflowSide::Right => icon::CHEVRON_RIGHT,
-    };
-    out.push(centered_glyph(
-        chevron,
-        rect,
-        style.icon_em_size,
-        pal.chrome_icon,
-    ));
+    // Um ponto por aba colapsada (`dot_count` é 0 com o grupo expandido).
+    for i in 0..pill.dot_count {
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: shift(
+                Rect {
+                    x: pill.dots_origin.0 + i as f32 * (style.indicator_dot_size + style.tab_gap),
+                    y: pill.dots_origin.1,
+                    width: style.indicator_dot_size,
+                    height: style.indicator_dot_size,
+                },
+                dx,
+            ),
+            radius: style.indicator_dot_size / 2.0,
+            color: pal.group_new_tab_icon,
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
+    }
 }
 
 /// Retângulo do campo de rename dentro de `tab_rect` -- função pura,
@@ -1764,11 +1709,7 @@ mod tests {
                 &pal,
                 &term_pal,
                 bar_width,
-                Overflow {
-                    scroll_offset: 0.0,
-                    hidden_left: 0,
-                    hidden_right: 0,
-                },
+                Overflow { scroll_offset: 0.0 },
                 None,
                 None,
                 None,
@@ -1809,6 +1750,199 @@ mod tests {
         assert_eq!(paint_capsules(&ws, &mut m), 1, "colapsado");
     }
 
+    /// Pinta a barra de `ws` (800px, sem arraste nem rename) com o hover e o
+    /// botão armado dados; devolve o layout usado e as primitivas.
+    fn paint_workspace(
+        ws: &Workspace,
+        hover: Option<tab_bar::TabBarHit>,
+        pressed_bar_button: Option<tab_bar::TabBarHit>,
+    ) -> (TabBarLayout, Vec<Primitive>) {
+        let style = TabBarStyle::DEFAULT;
+        let mut m = TextMeasurer::new();
+        let layout = tab_bar::fit_width(ws, &style, 800.0, &mut m, false);
+        let out = paint(
+            &layout,
+            ws,
+            ws.active_tab(),
+            &RenameState::Idle,
+            &Selection::default(),
+            None,
+            &style,
+            &default_palette(),
+            &default_term_palette(),
+            800.0,
+            Overflow { scroll_offset: 0.0 },
+            None,
+            None,
+            None,
+            &AnimationClock::default(),
+            Instant::now(),
+            &mut m,
+            false,
+            false,
+            None,
+            None,
+            hover,
+            None,
+            None,
+            pressed_bar_button,
+            false,
+            None,
+        );
+        (layout, out)
+    }
+
+    fn rounded_quads(out: &[Primitive]) -> Vec<&RoundedQuad> {
+        out.iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q) => Some(q),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// O rótulo do grupo é só o nome: sem o fundo da pílula (a cor do grupo
+    /// vem da cápsula) e sem o chevron.
+    #[test]
+    fn the_group_label_paints_no_background_and_no_chevron() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "srv", GroupColor::Cyan).unwrap();
+
+        for collapsed in [false, true] {
+            ws.collapse_group(group, collapsed);
+            let (_, out) = paint_workspace(&ws, None, None);
+            let pill_fill = with_alpha(pal.group_color(GroupColor::Cyan), style.pill_glass_alpha);
+            assert!(
+                rounded_quads(&out).iter().all(|q| q.color != pill_fill),
+                "sem fundo de pílula (colapsado: {collapsed})"
+            );
+            let chevrons = [icon::CHEVRON_DOWN.glyph, icon::CHEVRON_RIGHT.glyph];
+            assert!(
+                out.iter().all(|p| !matches!(
+                    p,
+                    Primitive::Text(t) if t.font == ICON_FONT && chevrons.contains(&t.text.as_str())
+                )),
+                "sem chevron (colapsado: {collapsed})"
+            );
+        }
+    }
+
+    /// Aba de dentro de grupo não leva borda; a solta mantém a dela.
+    #[test]
+    fn tabs_inside_a_group_have_no_border_and_loose_tabs_keep_theirs() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        let grouped = ws.append_tab("zsh", None);
+        let loose = ws.append_tab("bash", None);
+        ws.group_tabs(&[grouped], "srv", GroupColor::Cyan).unwrap();
+
+        let (layout, out) = paint_workspace(&ws, None, None);
+        let border_of = |id: TabId| {
+            let rect = layout
+                .groups
+                .iter()
+                .flat_map(|g| &g.tabs)
+                .find(|t| t.id == id)
+                .unwrap()
+                .rect;
+            // A trilha pinta deslocada pela origem dela na barra.
+            let rect = Rect {
+                x: rect.x + tab_bar::track_shift(&style, false),
+                ..rect
+            };
+            rounded_quads(&out)
+                .into_iter()
+                .find(|q| q.rect == rect && q.radius == style.tab_corner_radius)
+                .map(|q| q.border_width)
+                .expect("a aba pinta o próprio retângulo")
+        };
+        assert_eq!(border_of(grouped), 0.0);
+        assert!(border_of(loose) > 0.0);
+    }
+
+    /// Colapsado: um ponto por aba, na cor do texto do rótulo; expandido,
+    /// nenhum.
+    #[test]
+    fn a_collapsed_group_paints_one_dot_per_tab() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..3).map(|_| ws.append_tab("zsh", None)).collect();
+        let group = ws.group_tabs(&ids, "srv", GroupColor::Cyan).unwrap();
+
+        let dots = |out: &[Primitive]| {
+            rounded_quads(out)
+                .iter()
+                .filter(|q| {
+                    q.rect.width == style.indicator_dot_size
+                        && q.rect.height == style.indicator_dot_size
+                        && q.color == pal.group_new_tab_icon
+                })
+                .count()
+        };
+        let (_, expanded) = paint_workspace(&ws, None, None);
+        assert_eq!(dots(&expanded), 0, "expandido");
+
+        ws.collapse_group(group, true);
+        let (_, collapsed) = paint_workspace(&ws, None, None);
+        assert_eq!(dots(&collapsed), 3, "colapsado");
+    }
+
+    /// O "x" da aba revela um quadrado no hover e outro, mais escuro, no
+    /// pressed -- como o "+".
+    #[test]
+    fn the_tab_close_button_reveals_a_square_on_hover_and_pressed() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut ws = Workspace::new();
+        let id = ws.append_tab("zsh", None);
+        let hit = Some(tab_bar::TabBarHit::CloseButton(id));
+
+        let square_color = |hover, pressed| {
+            let (layout, out) = paint_workspace(&ws, hover, pressed);
+            let close = layout.groups[0].tabs[0].close_button;
+            assert_eq!(close.height, style.close_hover_size());
+            let square = Rect {
+                x: close.x
+                    + tab_bar::track_shift(&style, false)
+                    + (close.width - close.height) / 2.0,
+                y: close.y,
+                width: close.height,
+                height: close.height,
+            };
+            rounded_quads(&out)
+                .into_iter()
+                .find(|q| q.rect == square)
+                .map(|q| q.color)
+                .expect("o botão pinta o quadrado")
+        };
+        assert_eq!(square_color(None, None), palette::TRANSPARENT);
+        assert_eq!(square_color(hit, None), pal.window_button_hover_bg);
+        assert_eq!(square_color(hit, hit), pal.window_button_pressed_bg);
+        // Armado e arrastado para fora: volta ao repouso.
+        assert_eq!(square_color(None, hit), palette::TRANSPARENT);
+    }
+
+    /// Sem botões de overflow: mesmo com a trilha estourada, nenhum chevron
+    /// é pintado na barra.
+    #[test]
+    fn an_overflowing_track_paints_no_scroll_buttons() {
+        let mut ws = Workspace::new();
+        for _ in 0..30 {
+            ws.append_tab("zsh", None);
+        }
+        let (layout, out) = paint_workspace(&ws, None, None);
+        assert!(layout.content_width > 800.0, "a trilha tem de estourar");
+        let chevrons = [icon::CHEVRON_LEFT.glyph, icon::CHEVRON_RIGHT.glyph];
+        assert!(out.iter().all(|p| !matches!(
+            p,
+            Primitive::Text(t) if t.font == ICON_FONT && chevrons.contains(&t.text.as_str())
+        )));
+    }
+
     /// ADR-0062 §3, RF-18.10: com a imagem da janela exibida a barra não pinta
     /// o `Quad` opaco de `bar_background` sobre ela; sem imagem, pinta (o
     /// binário é o de hoje). O resto da barra -- aba, cápsula, ícones -- não
@@ -1836,11 +1970,7 @@ mod tests {
                 &pal,
                 &term_pal,
                 bar_width,
-                Overflow {
-                    scroll_offset: 0.0,
-                    hidden_left: 0,
-                    hidden_right: 0,
-                },
+                Overflow { scroll_offset: 0.0 },
                 None,
                 None,
                 None,
@@ -1903,11 +2033,7 @@ mod tests {
         let mut m = TextMeasurer::new();
         let bar_width = 800.0;
         let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m, false);
-        let overflow = Overflow {
-            scroll_offset: 0.0,
-            hidden_left: 0,
-            hidden_right: 0,
-        };
+        let overflow = Overflow { scroll_offset: 0.0 };
 
         let out = paint(
             &layout,
@@ -2086,11 +2212,7 @@ mod tests {
             &pal,
             &term_pal,
             bar_width,
-            Overflow {
-                scroll_offset: 0.0,
-                hidden_left: 0,
-                hidden_right: 0,
-            },
+            Overflow { scroll_offset: 0.0 },
             None,
             None,
             None,
@@ -2168,11 +2290,7 @@ mod tests {
             &pal,
             &term_pal,
             bar_width,
-            Overflow {
-                scroll_offset: 0.0,
-                hidden_left: 0,
-                hidden_right: 0,
-            },
+            Overflow { scroll_offset: 0.0 },
             None,
             None,
             None,

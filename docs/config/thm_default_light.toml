@@ -57,7 +57,6 @@ bell_indicator = "#d20f39"
 rename_background = "#eff1f5"
 rename_border = "#179299"
 rename_foreground = "#4c4f69"
-overflow_indicator_background = "#dce0e8"
 
 [window_controls]
 hover_background = "#0000001a"

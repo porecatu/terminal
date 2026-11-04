@@ -495,8 +495,6 @@ tab_close = "Cerrar pestaña"
 regex_toggle = "Expresión regular"
 group_editor = "Editor de grupo"
 unnamed_group = "Grupo"
-tabs_hidden_left = { one = "{count} pestaña oculta a la izquierda", other = "{count} pestañas ocultas a la izquierda" }
-tabs_hidden_right = { one = "{count} pestaña oculta a la derecha", other = "{count} pestañas ocultas a la derecha" }
 group = "Grupo {name}"
 group_collapsed = "Grupo {name}, contraído"
 group_colored = "Grupo {name}, color {color}"

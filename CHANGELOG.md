@@ -54,6 +54,18 @@ primeiro release.
 - **Tamanho da janela do editor**: `[appearance.settings] profile_window_width`
   (560), `profile_window_height` (398), `profile_min_width` (420) e
   `profile_min_height` (360); valem na próxima abertura do editor.
+- **Hover e pressionado no botão de fechar da aba**
+  ([ADR-0084](docs/adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)): o
+  "x" revela um quadrado arredondado de 24 px, com as cores do "+", e fecha no
+  release como antes. É menor que o do "+" para caber na aba de um grupo.
+- **Pontos de aba no grupo colapsado**: um ponto por aba escondida, à direita
+  do nome do grupo, com 8 px até o nome e 8 px até a borda.
+- **Fonte de interface do sistema** (Segoe UI no Windows, Helvetica Neue no
+  macOS): rótulos de aba e de grupo, menus, popovers, tooltip, diálogos,
+  avisos, barra de status e telas de configurações e de edição de perfil. O
+  terminal, os badges, os chips de atalho, o campo da busca e o campo de senha
+  seguem na Iosevka Fixed. O texto é centrado na vertical pela altura de
+  versal da fonte.
 
 ### Alterado
 
@@ -70,6 +82,23 @@ primeiro release.
   Vale para título, corpo, linhas e nota; o caminho de chave do diálogo de
   senha deixa de ser cortado no meio. As linhas quebradas ficam a
   `appearance.notices.line_height` uma da outra.
+- **Barra de abas sem botões de overflow, pílula e bordas**
+  ([ADR-0084](docs/adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)): os
+  dois botões de chevron das pontas da trilha saem (a roda do mouse continua
+  rolando); o rótulo do grupo é só o nome, sem fundo, borda, chevron nem hover;
+  a aba de dentro de um grupo não tem borda; e a aba passa de 229 para 209 px
+  (o rótulo, de 180 para 160 px). O nome do grupo e os títulos passam a `SemiBold`.
+- **Clique e hover da barra só dentro da trilha**: um clique com o botão direito
+  sobre um botão de sessões, configurações ou de janela deixa de abrir o menu de
+  uma aba rolada para fora de vista, por baixo dele.
+
+### Removido
+
+- **Chaves sem uso**: `[appearance.tabs.overflow] indicator_size` e `edge_inset`,
+  `[appearance.groups] label_hover_brightness`, a cor `[tabs]
+  overflow_indicator_background` dos temas e as frases `access.tabs_hidden_left`
+  e `tabs_hidden_right` dos idiomas. Quem as tinha no `porecatu.toml` vê um
+  aviso de chave desconhecida, e nada mais muda.
 
 ## [0.9.7] - 2026-10-28
 

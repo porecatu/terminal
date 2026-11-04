@@ -526,8 +526,6 @@ tab_close = "Fechar aba"
 regex_toggle = "Expressão regular"
 group_editor = "Editor de grupo"
 unnamed_group = "Grupo"
-tabs_hidden_left = { one = "{count} aba oculta à esquerda", other = "{count} abas ocultas à esquerda" }
-tabs_hidden_right = { one = "{count} aba oculta à direita", other = "{count} abas ocultas à direita" }
 # Uma frase por combinação de colapsado e cor.
 group = "Grupo {name}"
 group_collapsed = "Grupo {name}, colapsado"

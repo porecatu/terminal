@@ -201,10 +201,58 @@ pub(crate) fn attrs_for<'a>(font: FontFace, families: &'a FontFamilies) -> Attrs
                 .family(Family::Name(&families.sans))
                 .weight(weight)
         }
+        FontFace::System { weight } => {
+            let weight = match weight {
+                SansWeight::Regular => Weight::NORMAL,
+                SansWeight::Medium => Weight::MEDIUM,
+                SansWeight::SemiBold => Weight::SEMIBOLD,
+            };
+            // Genérica `sans-serif`: o `fontdb` a resolve para a família
+            // registrada em `set_sans_serif_family` (ver `build`).
+            Attrs::new().family(Family::SansSerif).weight(weight)
+        }
         FontFace::Icon => Attrs::new()
             .family(Family::Name(ICON_FAMILY))
             .weight(Weight::NORMAL),
     }
+}
+
+/// Distância do **topo da caixa de linha** de um `TextRun` até o centro
+/// vertical da altura de versal (a tinta do `H`) de `font`, em múltiplos de
+/// `size_px`. `None` se o `H` não shapar/rasterizar.
+///
+/// Existe porque o `cosmic-text` põe a baseline segundo ascent/descent da
+/// **própria** face dentro da linha de `size_px * 1.2`: cada família assenta
+/// o texto numa altura diferente, e o chrome inteiro centra texto por
+/// `origem = centro - size_px / 2`, conta que só acerta para a face cujas
+/// métricas casam com ela (a Segoe UI, de ascent alto, saía 1-2px baixa).
+/// Medido da rasterização real (baseline do `cosmic-text` e tinta do `H` via
+/// `swash`) num tamanho grande, para não herdar o arredondamento ao pixel; o
+/// resultado escala linearmente com `size_px`.
+pub(crate) fn cap_center_fraction(
+    font_system: &mut FontSystem,
+    families: &FontFamilies,
+    font: FontFace,
+) -> Option<f32> {
+    use glyphon::SwashCache;
+
+    const REFERENCE_PX: f32 = 200.0;
+    let metrics = Metrics::new(REFERENCE_PX, REFERENCE_PX * 1.2);
+    let mut buffer = Buffer::new(font_system, metrics);
+    buffer.set_size(None, None);
+    let attrs = attrs_for(font, families);
+    buffer.set_text("H", &attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(font_system, false);
+
+    let run = buffer.layout_runs().next()?;
+    let glyph = run.glyphs.first()?;
+    let physical = glyph.physical((0.0, 0.0), 1.0);
+    let mut swash = SwashCache::new();
+    let image = swash.get_image_uncached(font_system, physical.cache_key)?;
+    // `placement.top` é a tinta acima da baseline (positivo para cima).
+    let ink_center_above_baseline =
+        image.placement.top as f32 - image.placement.height as f32 / 2.0;
+    Some((run.line_y - ink_center_above_baseline) / REFERENCE_PX)
 }
 
 /// Tamanho em que [`TextMeasurer::advance_em`] mede, antes de normalizar
@@ -250,6 +298,12 @@ impl TextMeasurer {
             db.load_font_data(bytes.to_vec());
         }
         db.load_system_fonts();
+        // Fonte de interface do sistema (`FontFace::System`). Linux fica no
+        // default do `fontdb`/fontconfig.
+        #[cfg(target_os = "windows")]
+        db.set_sans_serif_family("Segoe UI");
+        #[cfg(target_os = "macos")]
+        db.set_sans_serif_family("Helvetica Neue");
         let missing_mono_family = (!db
             .faces()
             .any(|face| face.families.iter().any(|(name, _)| *name == families.mono)))
@@ -1087,5 +1141,56 @@ mod tests {
         m.align_mono_advance_to(snapped_width, size);
         let whole_again = m.measure_width(text, font, size);
         assert_eq!(whole, whole_again);
+    }
+
+    /// `FontFace::System` pede a família genérica `sans-serif` (que o `fontdb`
+    /// resolve para a fonte de interface do sistema), no peso pedido -- não a
+    /// família do terminal.
+    #[test]
+    fn the_system_face_asks_for_sans_serif_in_the_requested_weight() {
+        let families = FontFamilies::default();
+        for (weight, expected) in [
+            (SansWeight::Regular, Weight::NORMAL),
+            (SansWeight::Medium, Weight::MEDIUM),
+            (SansWeight::SemiBold, Weight::SEMIBOLD),
+        ] {
+            let attrs = attrs_for(FontFace::System { weight }, &families);
+            assert_eq!(attrs.family, Family::SansSerif);
+            assert_eq!(attrs.weight, expected);
+        }
+        let sans = attrs_for(
+            FontFace::Sans {
+                weight: SansWeight::Regular,
+            },
+            &families,
+        );
+        assert_eq!(sans.family, Family::Name(&families.sans));
+    }
+
+    /// O centro da altura de versal fica dentro da linha de `1.2` em e abaixo
+    /// do meio da em: é o número que o render usa para centrar a fonte do
+    /// sistema onde o chrome mira (`origem + size_px / 2`).
+    #[test]
+    fn cap_center_sits_inside_the_line_box_for_every_text_face() {
+        let mut m = TextMeasurer::new();
+        for font in [
+            FontFace::Mono { bold: false },
+            FontFace::Sans {
+                weight: SansWeight::Regular,
+            },
+            FontFace::System {
+                weight: SansWeight::Regular,
+            },
+            FontFace::System {
+                weight: SansWeight::SemiBold,
+            },
+        ] {
+            let fraction = cap_center_fraction(&mut m.font_system, &m.families, font)
+                .unwrap_or_else(|| panic!("o H deveria rasterizar em {font:?}"));
+            assert!(
+                (0.3..1.2).contains(&fraction),
+                "{font:?}: centro de versal em {fraction} em fora da linha"
+            );
+        }
     }
 }

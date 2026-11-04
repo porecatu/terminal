@@ -79,8 +79,7 @@ pub struct ThemeWindow {
     pub border: Option<Color>,
 }
 
-/// `[tabs]` do tema -- cores de `[appearance.tabs.colors]`, mais o fundo
-/// do indicador de overflow (`[appearance.tabs.overflow]`).
+/// `[tabs]` do tema -- cores de `[appearance.tabs.colors]`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default)]
 pub struct ThemeTabs {
@@ -102,7 +101,6 @@ pub struct ThemeTabs {
     pub rename_background: Option<Color>,
     pub rename_border: Option<Color>,
     pub rename_foreground: Option<Color>,
-    pub overflow_indicator_background: Option<Color>,
 }
 
 /// `[groups]` do tema. `palette` é substituída inteira, nunca mesclada por
@@ -416,7 +414,6 @@ fn mergeable_fields(theme: &Theme) -> Vec<MergeField> {
         "appearance.tabs.colors.rename_background" => appearance.tabs.colors.rename_background <= tabs.rename_background;
         "appearance.tabs.colors.rename_border" => appearance.tabs.colors.rename_border <= tabs.rename_border;
         "appearance.tabs.colors.rename_foreground" => appearance.tabs.colors.rename_foreground <= tabs.rename_foreground;
-        "appearance.tabs.overflow.indicator_background" => appearance.tabs.overflow.indicator_background <= tabs.overflow_indicator_background;
         "appearance.window_controls.hover_background" => appearance.window_controls.hover_background <= window_controls.hover_background;
         "appearance.window_controls.close_hover_background" => appearance.window_controls.close_hover_background <= window_controls.close_hover_background;
         "appearance.window_controls.close_hover_foreground" => appearance.window_controls.close_hover_foreground <= window_controls.close_hover_foreground;

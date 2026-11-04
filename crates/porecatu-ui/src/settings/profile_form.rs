@@ -22,11 +22,11 @@ use porecatu_config::ProfileProblemKind;
 use porecatu_locale::Catalog;
 use porecatu_render::{Primitive, Rect, TextMeasurer};
 
+use super::content::BODY_FONT;
 use super::content::{self, Block, ControlView, ProfileTarget, RowView};
 use super::layout::{self, ColumnGeometry, ColumnSpec, Hit, Metrics};
 use super::paint::{self, ControlCtx};
 use super::profiles_draft::{Field, Form};
-use crate::overlay::BODY_FONT;
 use crate::tab_bar::rect_contains;
 
 /// As linhas do formulário medidas e posicionadas.

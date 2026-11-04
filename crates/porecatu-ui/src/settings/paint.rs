@@ -15,6 +15,7 @@ use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun, icon,
 };
 
+use super::content::{BODY_FONT, TITLE_FONT};
 use super::content::{
     Block, CHIP_FONT, ChipTone, ChipView, Content, ControlView, ListItemView, NoteTone, RowView,
     SWATCH_COUNT, SWATCH_GAP,
@@ -30,7 +31,6 @@ use super::{
 };
 use crate::chrome::centered_glyph;
 use crate::messages::msg;
-use crate::overlay::{BODY_FONT, TITLE_FONT};
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::{TabBarStyle, scrolled_text_x};
 use crate::toggle::{TOGGLE_KNOB_COLOR, push_toggle};
