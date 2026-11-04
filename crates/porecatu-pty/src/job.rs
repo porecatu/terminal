@@ -123,7 +123,8 @@ impl ProcessGroup {
     /// função é erro de compilação, não decisão em runtime.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn cwd(&self) -> Option<PathBuf> {
-        let mut system = sysinfo::System::new();
+        // `System::new` é falível desde o sysinfo 0.40: sem ele, sem fallback.
+        let mut system = sysinfo::System::new().ok()?;
         let pid = sysinfo::Pid::from_u32(self.root_pid);
         system.refresh_processes_specifics(
             sysinfo::ProcessesToUpdate::Some(&[pid]),
@@ -170,9 +171,12 @@ impl ProcessGroup {
         {
             pids.extend(list.into_iter().map(|pid| pid as u32));
         }
-        let system = refreshed_system();
-        for pid in descendants_of(&system, sysinfo::Pid::from_u32(self.root_pid)) {
-            pids.insert(pid.as_u32());
+        // Sem a varredura do SO (`System::new` falhou) ficam só o raiz e a
+        // lista do Job -- degradação, não erro.
+        if let Some(system) = refreshed_system() {
+            for pid in descendants_of(&system, sysinfo::Pid::from_u32(self.root_pid)) {
+                pids.insert(pid.as_u32());
+            }
         }
         pids
     }
@@ -191,7 +195,9 @@ impl ProcessGroup {
     #[cfg(windows)]
     pub fn kill_tree(self) {
         drop(self.job);
-        let system = refreshed_system();
+        let Some(system) = refreshed_system() else {
+            return;
+        };
         for pid in descendants_of(&system, sysinfo::Pid::from_u32(self.root_pid)) {
             if let Some(process) = system.process(pid) {
                 let _ = process.kill();
@@ -204,10 +210,11 @@ impl ProcessGroup {
 }
 
 #[cfg(windows)]
-fn refreshed_system() -> sysinfo::System {
-    let mut system = sysinfo::System::new();
+fn refreshed_system() -> Option<sysinfo::System> {
+    // `System::new` é falível desde o sysinfo 0.40.
+    let mut system = sysinfo::System::new().ok()?;
     system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    system
+    Some(system)
 }
 
 /// Todos os descendentes de `root` (não inclui `root`), varrendo a lista
@@ -399,12 +406,16 @@ mod tests {
         // CI Windows já passou de 5s (CI de `main` no merge do #84).
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let root_pid = group.root_pid;
-        let mut descendants_before: Vec<sysinfo::Pid> =
-            descendants_of(&refreshed_system(), sysinfo::Pid::from_u32(root_pid));
+        let mut descendants_before: Vec<sysinfo::Pid> = descendants_of(
+            &refreshed_system().expect("sysinfo"),
+            sysinfo::Pid::from_u32(root_pid),
+        );
         while descendants_before.is_empty() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            descendants_before =
-                descendants_of(&refreshed_system(), sysinfo::Pid::from_u32(root_pid));
+            descendants_before = descendants_of(
+                &refreshed_system().expect("sysinfo"),
+                sysinfo::Pid::from_u32(root_pid),
+            );
         }
         assert!(
             !descendants_before.is_empty(),
@@ -441,10 +452,10 @@ mod tests {
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         for pid in &descendants_before {
-            let mut alive = refreshed_system().process(*pid).is_some();
+            let mut alive = refreshed_system().expect("sysinfo").process(*pid).is_some();
             while alive && std::time::Instant::now() < deadline {
                 std::thread::sleep(std::time::Duration::from_millis(50));
-                alive = refreshed_system().process(*pid).is_some();
+                alive = refreshed_system().expect("sysinfo").process(*pid).is_some();
             }
             assert!(
                 !alive,
