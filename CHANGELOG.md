@@ -16,6 +16,10 @@ primeiro release.
 
 ## [Não publicado]
 
+## [0.9.8] - 2026-11-04
+
+Fonte de interface do sistema, barra de abas mais limpa (sem botões de overflow, sem pílula de fundo, pontos de aba no grupo colapsado) e hover no botão de fechar da aba.
+
 ### Adicionado
 
 - **Botão de menu do app**
@@ -91,6 +95,10 @@ primeiro release.
 - **Clique e hover da barra só dentro da trilha**: um clique com o botão direito
   sobre um botão de sessões, configurações ou de janela deixa de abrir o menu de
   uma aba rolada para fora de vista, por baixo dele.
+- **Dependências**: `sysinfo` 0.39 para 0.40 (o código de `porecatu-pty` se
+  adapta ao `System::new()` falível), `notify` 8.2.1, `accesskit` 0.25.2 e
+  `accesskit_winit` 0.34.2, mais as Actions `rust-cache`, `setup-python`,
+  `upload-artifact` e `download-artifact` do CI.
 
 ### Removido
 
