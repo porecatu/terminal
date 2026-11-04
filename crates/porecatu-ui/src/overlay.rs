@@ -3363,9 +3363,14 @@ mod tests {
             config.appearance.dialog.width as f32
         );
         // Cancelar à esquerda de Confirmar, com o vão do botão entre eles.
-        assert_eq!(
-            layout.confirm_rect.x - (layout.cancel_rect.x + layout.cancel_rect.width),
-            config.appearance.dialog.button_gap as f32
+        // Com tolerância: a largura do botão vem da medida do texto (fonte
+        // proporcional), e a soma de `f32` erra no último bit por plataforma.
+        assert!(
+            (layout.confirm_rect.x
+                - (layout.cancel_rect.x + layout.cancel_rect.width)
+                - config.appearance.dialog.button_gap as f32)
+                .abs()
+                < 0.01
         );
         assert_eq!(
             dialog_hit(&layout, center(layout.cancel_rect)),
@@ -3387,16 +3392,23 @@ mod tests {
         let discard = layout.discard_rect.expect("o botão do meio");
         let gap = cfg.button_gap as f32;
         assert!(layout.cancel_rect.x < discard.x && discard.x < layout.confirm_rect.x);
-        assert_eq!(
+        // Com tolerância: larguras de botão saem da medida do texto (fonte
+        // proporcional), e a soma de `f32` erra no último bit por plataforma
+        // (7.9999695 contra 8.0 no macOS).
+        let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(near(
             discard.x - (layout.cancel_rect.x + layout.cancel_rect.width),
             gap
-        );
-        assert_eq!(layout.confirm_rect.x - (discard.x + discard.width), gap);
+        ));
+        assert!(near(
+            layout.confirm_rect.x - (discard.x + discard.width),
+            gap
+        ));
         // O último fica rente ao padding da direita, como no diálogo de dois.
-        assert_eq!(
+        assert!(near(
             layout.modal_rect.x + layout.modal_rect.width - cfg.padding as f32,
             layout.confirm_rect.x + layout.confirm_rect.width
-        );
+        ));
         // E os três cabem dentro do diálogo, com a largura configurada.
         assert!(layout.cancel_rect.x >= layout.modal_rect.x + cfg.padding as f32);
         for (rect, button) in [
