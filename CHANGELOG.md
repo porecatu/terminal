@@ -16,6 +16,15 @@ primeiro release.
 
 ## [Não publicado]
 
+### Alterado
+
+- **Atividade no ponto da aba do grupo colapsado**
+  ([ADR-0085](docs/adr/0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md)):
+  o ponto da aba com atividade (ou campainha) ganha a cor do indicador, e o
+  ponto agregado à esquerda do nome do grupo saiu.
+- **Margem direita do "x" da aba igual à vertical**: 8 px na aba solta (era
+  6,5) e 5 px na aba de grupo (era 6,5).
+
 ## [0.9.8] - 2026-11-04
 
 Fonte de interface do sistema, barra de abas mais limpa (sem botões de overflow, sem pílula de fundo, pontos de aba no grupo colapsado) e hover no botão de fechar da aba.

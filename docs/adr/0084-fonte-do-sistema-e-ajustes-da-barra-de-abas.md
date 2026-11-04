@@ -28,6 +28,8 @@ Saem do schema `[appearance.tabs.overflow] indicator_size` e `edge_inset`, a cor
 - Sem fundo, sem borda de vidro, sem chevron e sem o espaço reservado a ele. Sem hover por brilho (`[appearance.groups] label_hover_brightness` sai); o clique continua alternando o colapso e o duplo clique abrindo o editor. Quem dá a cor do grupo é a cápsula atrás.
 - **Colapsado**, um ponto de `indicator_dot_size` (6px) por aba do grupo, à direita do nome, com `tab_gap` (4px) entre os pontos e **8px** (`COLLAPSED_DOTS_GAP`, em `tab_bar.rs`) entre o nome e o primeiro ponto e entre o último e a borda da pílula, no lugar do padding direito. Expandido não reserva nada além do `label_padding_right`. Os pontos têm a cor do nome (`group_new_tab_icon`).
 - O ponto agregado de atividade/campainha (RF-2.16) continua à esquerda do nome.
+
+  > **Revisto pelo [ADR-0085](0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md):** o ponto agregado saiu; o ponto da aba com atividade/campainha leva a cor do indicador.
 - O **fantasma de arraste** do grupo ([espec. §2.19.1](../design/especificacao-visual.md)) mantém o preenchimento na cor do grupo (`label_alpha`), **sem borda**: flutua sobre a barra, e só com o texto não teria onde se apoiar.
 
 ### 3. Aba de dentro de grupo não leva borda

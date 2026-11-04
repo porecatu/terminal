@@ -178,7 +178,7 @@ Cor de aba sem grupo: `#7b838f`.
 | **Entre grupos** | `gap: 6` (`trilha_gap`) — também o gap antes do botão de nova aba e o respiro das zonas fixas |
 | Cápsula de grupo | `padding: 3` (`wrapper_padding`). **Não** se aplica a run implícito: sem cápsula não há o que absorva o respiro, e aplicá-lo abria entre grupo e aba solta um vão maior — e sem cor — do que entre dois grupos |
 | Aba | `padding: 0 6px 0 10px`, `gap: 8` |
-| Rótulo do grupo | `padding: 0 9px 0 10px`, `gap: 7` entre o ponto agregado e o nome; **8px** entre o nome e os pontos de aba colapsada e entre os pontos e a borda (`COLLAPSED_DOTS_GAP`) |
+| Rótulo do grupo | `padding: 0 9px 0 10px`; **8px** entre o nome e os pontos de aba colapsada e entre os pontos e a borda (`COLLAPSED_DOTS_GAP`) |
 | **Dentro de todo botão de ícone** | `icon_button_padding_x` **4px de cada lado** — o fechar da aba fica mais largo que alto (25×24); a altura é a do quadrado de hover (§2.5), menor que a do "+" para caber na aba de grupo. O "+" e os botões da zona fixa são quadrados, sem esse respiro: 30×30 o "+" de grupo e 40×40 os demais (§2.6, ADR-0082) |
 | **Quadro do terminal** | 6px de margem da borda da janela nos três lados que não encostam na barra, e 6px de padding entre a borda do quadro e a grade (§2.7) |
 | **Vão entre painéis** | o mesmo valor do quadro do terminal, **6px** — o divisor é esse vão e não tem valor próprio (§2.7.1) |
@@ -374,13 +374,13 @@ encolhe — a trilha rola (§2.18). O piso de 60 px que esta seção especificav
 dez grupos do [PRD-002](../prd/prd-002-grupos-de-abas.md) continua valendo por
 rolagem, não por encolhimento.
 
-**Indicador agregado de grupo colapsado (RF-2.16).** Ponto de 6×6, raio 50%,
-antes do nome, com o mesmo `gap: 7` do nome — as cores são
-as da seção 2.17 (`#86c56a` atividade, `#ef8a8a` campainha), e vale a mesma regra
-de **um ponto só, campainha vence**. Só aparece com o grupo **colapsado**: com o
-grupo expandido, cada aba mostra o seu próprio ponto e um agregado seria
-redundante. Como a §2.17, **não pisca**, e o ponto consome largura do nome, não
-da pílula.
+**Atividade no grupo colapsado (RF-2.16).** Não há ponto agregado: o ponto de 6×6 de
+cada aba (um por aba, à direita do nome) ganha a cor do indicador da **própria aba** —
+as da seção 2.17 (`#86c56a` atividade, `#ef8a8a` campainha), com a mesma regra de
+**campainha vence atividade** e sem indicador na aba `Exited`; sem nada pendente, o ponto
+fica na cor do nome. Como a §2.17, **não pisca**, e não muda a largura da pílula
+([ADR-0085](../adr/0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md); o ponto
+agregado à esquerda do nome, do [ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md), saiu).
 
 **A pílula não tem contador.** O contador mono 10px sobre `#12151a` que o mockup
 desenha entre o nome e o caret **saiu**, por pedido do usuário. `show_tab_count_when_collapsed`
@@ -389,7 +389,7 @@ token `count_background` continua em uso noutro lugar — o escuro virou a cor d
 dos pontos de aba colapsada e do "+" sobre a cápsula. Registro na seção 4.4.
 
 **Grupo colapsado** muda três coisas e nada mais: os pontos de aba aparecem, o "+" do
-grupo desaparece (§2.6) e o indicador agregado pode aparecer. A cápsula **continua
+grupo desaparece (§2.6) e o ponto da aba com atividade ou campainha ganha a cor do indicador. A cápsula **continua
 pintada** (§2.3) e a pílula mantém altura, paddings e teto. As abas somem da trilha,
 e o que anima nesse movimento é a largura da cápsula mais a opacidade delas
 (§1.10).
@@ -460,6 +460,12 @@ cursor segue sobre ele. O quadrado tem **24px** (`close_hover_size`: o lado do "
 grupo, 30, menos o `wrapper_padding` de cada lado), de modo que sobram 5px acima e abaixo
 numa aba de grupo de 34px. O alvo de clique é o retângulo do botão (25×24) mais a folga
 de 2px. O fechamento continua disparando no release (ADR-0081).
+
+**Margem direita do "x"** ([ADR-0085](../adr/0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md)):
+a borda direita do quadrado de hover fica a `(altura da aba − 24) / 2` da borda direita
+da aba, a mesma distância do topo e da base — **8px** na aba solta (40px) e **5px** na
+de grupo (34px). Não depende de `padding_right`, que segue governando só a largura fixa
+da aba e o teto do rótulo.
 
 **Não há sublinhado de grupo, e não há como ligá-lo.** O `box-shadow: inset 0 -2px 0
 <cor do grupo>` na base da aba existia para dizer a que grupo ela pertence quando a
@@ -1038,7 +1044,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Tooltip de texto truncado | `[v1]` | [ADR-0019](../adr/0019-tooltip.md); PRD-001 RF-1.10, PRD-002 RF-2.12 — sem representação no canvas |
 | Aba selecionada (seleção múltipla) | `[v1]` | PRD-002 RF-2.2, PRD-004 RF-4.7; [ADR-0021](../adr/0021-selecao-multipla-e-gestos-da-barra.md) — sem representação no canvas |
 | Campo de nome inline na pílula | `[v1]` | PRD-002 RF-2.4, RF-2.9; [ADR-0023](../adr/0023-editor-de-grupo.md) — sem representação no canvas |
-| Indicador agregado de grupo colapsado | `[v1]` | PRD-002 RF-2.16 — sem representação no canvas |
+| Atividade no ponto da aba do grupo colapsado | `[v1]` | PRD-002 RF-2.16; [ADR-0085](../adr/0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md) — sem representação no canvas |
 | Realce da fronteira do grupo no arraste | `[v1]` | PRD-001 RF-1.16, PRD-002 RF-2.18 — sem representação no canvas |
 | Arraste do rótulo do grupo | `[v1]` | PRD-002 RF-2.19 — sem representação no canvas |
 | Popover de grupo de destino | `[v1]` | PRD-002 RF-2.20; ADR-0023 — sem representação no canvas |
@@ -1212,6 +1218,8 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Aba de 229px, rótulo de até 180px (§1.7, §2.5) | **209px**, rótulo de até 160px (`label_max_width`, constante) | pedido do dono do produto (ADR-0084 §4) |
 | Botão de fechar da aba sem estado visual além da cor do ícone (§2.5) | **Hover e pressionado como o "+"**: quadrado arredondado de 24px (`close_hover_size` = 30 − 2 × 3, menor que o do "+" para caber na aba de grupo); o retângulo do botão passa de 25×17 para 25×24 | pedido do dono do produto (ADR-0084 §5) |
 | Interface na Iosevka Fixed, a fonte do terminal (§1.1, [ADR-0026](../adr/0026-chrome-unificado-em-iosevka-fixed.md), [ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)) | **Fonte de interface do sistema** (Segoe UI no Windows, Helvetica Neue no macOS) nos rótulos de aba e de grupo, popovers, diálogos, avisos, barra de status e telas de configurações e de perfil; peso 600 no nome do grupo e nos títulos. Iosevka fica no terminal, badges, chips, campo da busca e campo de senha. O texto `System` é deslocado no render para o centro da altura de versal cair no centro da caixa | pedido do dono do produto (ADR-0084 §6), aval visual só no Windows |
+| Ponto agregado de atividade/campainha à esquerda do nome do grupo colapsado (RF-2.16, §2.4) | **Sem ponto agregado**: o ponto da aba com atividade/campainha, à direita do nome, ganha a cor do indicador | pedido do dono do produto (ADR-0085 §1) |
+| Margem direita do quadrado do "x" fixa em 6,5px (`padding_right` + centragem) | **Igual à margem vertical**: 8px na aba solta, 5px na de grupo | pedido do dono do produto (ADR-0085 §2) |
 | Clique direito sobre um botão da zona fixa da direita abria o menu de uma aba rolada para fora de vista, por baixo dele | **Clique e hover da barra só dentro do recorte da trilha** (`tab_bar::point_in_track`); fora dele o clique direito não faz nada e o esquerdo, entre botões, arrasta a janela | correção de defeito (ADR-0084 §7) |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.

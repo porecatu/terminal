@@ -7,7 +7,7 @@
 //! geometria de arraste do §2.19 (`drag_target`). Desde a F3 etapa 3,
 //! também a geometria da pílula de grupo (§2.4). Desde a F3 etapa 4, grupo
 //! colapsado não gera `TabRect` nenhum (§2.4: "suas abas somem da barra")
-//! e a pílula ganha o indicador agregado (RF-2.16) e um alvo de hit-test
+//! e a pílula ganha um ponto por aba, com a cor do indicador (RF-2.16), e um alvo de hit-test
 //! próprio (`TabBarHit::Pill`). Desde a F3 etapa 6, `drag_target` cruza
 //! fronteira de grupo (ADR-0021 §4) e `group_drag_target_index`/
 //! `pill_rect` cobrem o arraste do rótulo do grupo inteiro (espec.
@@ -224,8 +224,8 @@ pub struct TabBarStyle {
     /// Ponto de status (espec. §2.17): indicador de atividade/campainha da
     /// aba. Sem chave própria em `[appearance.tabs]` -- reaproveita
     /// `[appearance.groups] collapsed_indicator_size`, o mesmo token de 6px
-    /// de "ponto de status" da espec. (§1.7), já declarado para o
-    /// indicador agregado do grupo colapsado.
+    /// de "ponto de status" da espec. (§1.7), já declarado para os pontos
+    /// do grupo colapsado.
     pub indicator_dot_size: f32,
     /// `[appearance.tabs.rename] height`.
     pub rename_field_height: f32,
@@ -558,15 +558,6 @@ pub struct GroupWrapperRect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupPillRect {
     pub rect: Rect,
-    /// Indicador agregado (espec. §2.4, RF-2.16): só `Some` com o grupo
-    /// **colapsado** e alguma aba dele com atividade/campainha pendente --
-    /// "com o grupo expandido, cada aba mostra o seu próprio ponto e um
-    /// agregado seria redundante". Mesma regra de "um ponto só, campainha
-    /// vence" da §2.17.
-    pub aggregate_indicator: Option<Indicator>,
-    /// Origem do ponto agregado -- só significativa quando
-    /// `aggregate_indicator` é `Some`, mesmo padrão de `name_origin`.
-    pub aggregate_indicator_origin: (f32, f32),
     /// Origem do texto do nome (já truncado com reticências, RF-2.12) --
     /// sem retângulo próprio, mesmo padrão do rótulo da aba.
     pub name_origin: (f32, f32),
@@ -580,6 +571,11 @@ pub struct GroupPillRect {
     pub dots_origin: (f32, f32),
     /// Um ponto por aba do grupo, **só colapsado** (0 expandido).
     pub dot_count: usize,
+    /// Indicador de cada ponto, na ordem das abas (`len() == dot_count`):
+    /// o ponto da aba com atividade/campainha pendente leva a cor do
+    /// indicador, mesma regra da aba expandida (`tab_indicator`). `None` =
+    /// ponto neutro.
+    pub dot_indicators: Vec<Option<Indicator>>,
 }
 
 /// O layout inteiro da trilha: um por redraw da barra, construído por
@@ -704,37 +700,11 @@ pub fn layout(
             let pill_height = style.tab_height;
             let mut px = inner_x + style.pill_padding_left;
 
-            // Indicador agregado (espec. §2.4, RF-2.16): só colapsado, e só
-            // se houver atividade/campainha pendente entre as abas do
-            // grupo -- que continuam existindo em `group.tabs()` mesmo sem
-            // `TabRect` (elas "somem da barra", não do modelo). Consome
-            // largura do **nome**, não da pílula -- por isso o `dot_reserve`
-            // é subtraído do teto de nome abaixo, no mesmo padrão do
-            // indicador de aba (`dot_reserve` no laço de abas).
-            let aggregate_indicator = if collapsed {
-                aggregate_indicator(workspace, group.tabs())
-            } else {
-                None
-            };
-            let aggregate_indicator_origin = if aggregate_indicator.is_some() {
-                let origin = (px, pill_y + (pill_height - style.indicator_dot_size) / 2.0);
-                px += style.indicator_dot_size + style.pill_gap;
-                origin
-            } else {
-                (0.0, 0.0)
-            };
-            let name_dot_reserve = if aggregate_indicator.is_some() {
-                style.indicator_dot_size + style.pill_gap
-            } else {
-                0.0
-            };
-            let name_cap = (style.pill_name_max_width - name_dot_reserve).max(0.0);
-
             let (name, name_truncated) = measurer.truncate(
                 group.name().unwrap_or_default(),
                 PILL_NAME_FONT,
                 style.pill_font_size,
-                name_cap,
+                style.pill_name_max_width,
             );
             let name_width = measurer.measure_width(&name, PILL_NAME_FONT, style.pill_font_size);
             let name_origin = (px, pill_y + (pill_height - style.pill_font_size) / 2.0);
@@ -743,6 +713,17 @@ pub fn layout(
             // Colapsado: um ponto por aba escondida, à direita do nome, onde
             // ficava o caret (que saiu). Expandido não reserva nada.
             let dot_count = if collapsed { group.tabs().len() } else { 0 };
+            // A atividade/campainha de uma aba escondida aparece no ponto
+            // dela (não há ponto agregado à parte).
+            let dot_indicators: Vec<Option<Indicator>> = if collapsed {
+                group
+                    .tabs()
+                    .iter()
+                    .map(|&id| workspace.tab(id).and_then(tab_indicator))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let dots_origin = (
                 px + COLLAPSED_DOTS_GAP,
                 pill_y + (pill_height - style.indicator_dot_size) / 2.0,
@@ -767,13 +748,12 @@ pub fn layout(
             inner_x = px;
             Some(GroupPillRect {
                 rect: pill_rect,
-                aggregate_indicator,
-                aggregate_indicator_origin,
                 name_origin,
                 name,
                 name_truncated,
                 dots_origin,
                 dot_count,
+                dot_indicators,
             })
         } else {
             None
@@ -800,15 +780,7 @@ pub fn layout(
 
             // Espec. §2.17: aba `Exited` não mostra indicador nenhum;
             // campainha vence atividade quando as duas são verdadeiras.
-            let indicator = if tab.is_exited() {
-                None
-            } else if tab.bell() {
-                Some(Indicator::Bell)
-            } else if tab.activity() {
-                Some(Indicator::Activity)
-            } else {
-                None
-            };
+            let indicator = tab_indicator(tab);
             // O ponto consome largura do rótulo, não soma chrome novo
             // (§2.17: "a aba não muda de largura por causa do
             // indicador") -- o teto de rótulo encolhe pelo tamanho do
@@ -849,8 +821,14 @@ pub fn layout(
             // não a do desenho (`close_button_size`): o fundo revelado é esse
             // quadrado, e o retângulo de acerto tem de cobri-lo.
             let close_side = style.close_hover_size();
+            // A margem direita do quadrado de hover é a mesma de cima e de
+            // baixo (`(tab_h - close_side) / 2`): 8 na aba solta (a caixa
+            // do wrapper), 5 na aba de grupo. O quadrado fica centrado no
+            // retângulo do botão (`paint_zone_icon_button`), então a borda
+            // direita dele é `x + (close_width + close_side) / 2`.
+            let close_margin = (tab_h - close_side) / 2.0;
             let close_button = Rect {
-                x: inner_x + tab_width - style.padding_right - close_width,
+                x: inner_x + tab_width - close_margin - (close_width + close_side) / 2.0,
                 y: tab_top + (tab_h - close_side) / 2.0,
                 width: close_width,
                 height: close_side,
@@ -1005,28 +983,20 @@ pub fn layout(
     }
 }
 
-/// Indicador agregado (espec. §2.4, RF-2.16) sobre as abas de um grupo
-/// colapsado: campainha vence atividade (mesma regra da §2.17), aba
-/// `Exited` nunca contribui (mesma exclusão da §2.17 -- o motivo de ela
-/// ficar aberta já está escrito no grid, não num indicador). `None` quando
-/// nenhuma aba tem nada pendente.
-fn aggregate_indicator(workspace: &Workspace, tabs: &[TabId]) -> Option<Indicator> {
-    let mut any_activity = false;
-    for &id in tabs {
-        let Some(tab) = workspace.tab(id) else {
-            continue;
-        };
-        if tab.is_exited() {
-            continue;
-        }
-        if tab.bell() {
-            return Some(Indicator::Bell);
-        }
-        if tab.activity() {
-            any_activity = true;
-        }
+/// Indicador de uma aba (espec. §2.17): aba `Exited` não mostra nenhum (o
+/// motivo de ela ficar aberta já está escrito no grid, não num indicador);
+/// campainha vence atividade quando as duas são verdadeiras. Serve ao ponto
+/// da aba expandida e ao ponto dela no grupo colapsado.
+fn tab_indicator(tab: &porecatu_core::Tab) -> Option<Indicator> {
+    if tab.is_exited() {
+        None
+    } else if tab.bell() {
+        Some(Indicator::Bell)
+    } else if tab.activity() {
+        Some(Indicator::Activity)
+    } else {
+        None
     }
-    any_activity.then_some(Indicator::Activity)
 }
 
 /// Layout da trilha pra uma largura disponível. **Não encolhe mais nada**
@@ -2264,6 +2234,44 @@ mod tests {
         );
     }
 
+    /// A margem direita do quadrado de hover do "x" é a de cima e a de
+    /// baixo, na aba solta (8px) e na de grupo (5px).
+    #[test]
+    fn close_button_right_margin_equals_the_vertical_margin() {
+        let mut ws = Workspace::new();
+        let loose = ws.append_tab("zsh", None);
+        let grouped = ws.append_tab("bash", None);
+        ws.group_tabs(&[grouped], "g", GroupColor::Green).unwrap();
+
+        let style = TabBarStyle::DEFAULT;
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        for tab in layout.groups.iter().flat_map(|g| &g.tabs) {
+            let close = tab.close_button;
+            let square_right = close.x + (close.width + close.height) / 2.0;
+            let right_margin = tab.rect.x + tab.rect.width - square_right;
+            let top_margin = close.y - tab.rect.y;
+            let bottom_margin = tab.rect.y + tab.rect.height - (close.y + close.height);
+            assert!((right_margin - top_margin).abs() < 1e-3, "{:?}", tab.id);
+            assert!((top_margin - bottom_margin).abs() < 1e-3, "{:?}", tab.id);
+        }
+        let margin = |id: TabId| {
+            let tab = layout
+                .groups
+                .iter()
+                .flat_map(|g| &g.tabs)
+                .find(|t| t.id == id)
+                .unwrap();
+            close_margin_of(tab)
+        };
+        assert_eq!(margin(loose), 8.0);
+        assert_eq!(margin(grouped), 5.0);
+    }
+
+    fn close_margin_of(tab: &TabRect) -> f32 {
+        tab.close_button.y - tab.rect.y
+    }
+
     /// Espec. §2.17: "a aba não muda de largura por causa do indicador" --
     /// o ponto sai do orçamento do rótulo.
     #[test]
@@ -3121,7 +3129,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_group_has_no_aggregate_indicator() {
+    fn expanded_group_has_no_dot_indicators() {
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
         ws.tab_mut(a).unwrap().mark_activity();
@@ -3129,17 +3137,40 @@ mod tests {
 
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let pill = layout.groups[0].pill.as_ref().unwrap();
+        assert!(pill.dot_indicators.is_empty());
+        assert_eq!(pill.dot_count, 0);
+    }
+
+    /// Só o ponto da aba com atividade leva a cor do indicador, na ordem das
+    /// abas; os outros ficam neutros.
+    #[test]
+    fn collapsed_group_activity_colors_only_its_tab_dot() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let c = ws.append_tab("fish", None);
+        ws.tab_mut(b).unwrap().mark_activity();
+        let group = ws.group_tabs(&[a, b, c], "g", GroupColor::Cyan).unwrap();
+        ws.collapse_group(group, true);
+
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        let pill = layout.groups[0].pill.as_ref().unwrap();
+        assert_eq!(pill.dot_count, 3);
         assert_eq!(
-            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
-            None
+            pill.dot_indicators,
+            vec![None, Some(Indicator::Activity), None]
         );
     }
 
     #[test]
-    fn collapsed_group_shows_aggregate_activity_indicator() {
+    fn collapsed_group_bell_wins_over_activity_in_the_same_tab_dot() {
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
         let b = ws.append_tab("bash", None);
+        ws.tab_mut(a).unwrap().mark_activity();
+        ws.tab_mut(a).unwrap().mark_bell();
         ws.tab_mut(b).unwrap().mark_activity();
         let group = ws.group_tabs(&[a, b], "g", GroupColor::Cyan).unwrap();
         ws.collapse_group(group, true);
@@ -3147,31 +3178,13 @@ mod tests {
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         assert_eq!(
-            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
-            Some(Indicator::Activity)
+            layout.groups[0].pill.as_ref().unwrap().dot_indicators,
+            vec![Some(Indicator::Bell), Some(Indicator::Activity)]
         );
     }
 
     #[test]
-    fn collapsed_group_aggregate_bell_wins_over_activity() {
-        let mut ws = Workspace::new();
-        let a = ws.append_tab("zsh", None);
-        let b = ws.append_tab("bash", None);
-        ws.tab_mut(a).unwrap().mark_activity();
-        ws.tab_mut(b).unwrap().mark_bell();
-        let group = ws.group_tabs(&[a, b], "g", GroupColor::Cyan).unwrap();
-        ws.collapse_group(group, true);
-
-        let mut m = measurer();
-        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
-        assert_eq!(
-            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
-            Some(Indicator::Bell)
-        );
-    }
-
-    #[test]
-    fn collapsed_group_exited_tab_does_not_trigger_aggregate_indicator() {
+    fn collapsed_group_exited_tab_dot_has_no_indicator() {
         let mut ws = Workspace::new();
         let a = ws.append_tab("zsh", None);
         ws.tab_mut(a).unwrap().mark_activity();
@@ -3182,9 +3195,32 @@ mod tests {
         let mut m = measurer();
         let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
         assert_eq!(
-            layout.groups[0].pill.as_ref().unwrap().aggregate_indicator,
-            None
+            layout.groups[0].pill.as_ref().unwrap().dot_indicators,
+            vec![None]
         );
+    }
+
+    /// O ponto de atividade não reserva largura: a pílula colapsada tem a
+    /// mesma largura com e sem atividade.
+    #[test]
+    fn collapsed_group_activity_does_not_change_the_pill_width() {
+        let build = |active: bool| {
+            let mut ws = Workspace::new();
+            let a = ws.append_tab("zsh", None);
+            if active {
+                ws.tab_mut(a).unwrap().mark_activity();
+            }
+            let group = ws.group_tabs(&[a], "g", GroupColor::Cyan).unwrap();
+            ws.collapse_group(group, true);
+            let mut m = measurer();
+            layout(&ws, &TabBarStyle::DEFAULT, &mut m).groups[0]
+                .pill
+                .as_ref()
+                .unwrap()
+                .rect
+                .width
+        };
+        assert_eq!(build(true), build(false));
     }
 
     #[test]

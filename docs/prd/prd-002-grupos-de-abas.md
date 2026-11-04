@@ -96,7 +96,7 @@ Definido em [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), resumido aqui po
 
 **RF-2.15** — Abas de grupo colapsado **não participam** da navegação sequencial nem do acesso por índice ([PRD-001](prd-001-abas.md)). Continuam vivas: seus processos rodam e sua saída é acumulada.
 
-**RF-2.16** — Grupo colapsado com atividade em alguma aba exibe indicador agregado no rótulo.
+**RF-2.16** — Grupo colapsado com atividade em alguma aba exibe, no ponto dessa aba, a cor do indicador de atividade (campainha vence atividade). *Emendado pelo [ADR-0085](../adr/0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md): antes, um indicador agregado no rótulo.*
 
 **RF-2.17** — Ativar uma aba de grupo colapsado (por busca ou restauração de sessão) expande o grupo.
 

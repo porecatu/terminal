@@ -29,8 +29,8 @@
 //! continua fora de escopo.
 //!
 //! Desde a F3 etapa 4, grupo colapsado não desenha abas (o layout já não as
-//! gera, ver `tab_bar.rs`) e a pílula ganha o indicador agregado (RF-2.16),
-//! pintado aqui com as mesmas cores de `Indicator` da seção 2.17. Clique na
+//! gera, ver `tab_bar.rs`) e a pílula ganha um ponto por aba (RF-2.16), o da
+//! aba com atividade pintado aqui com as cores de `Indicator` da seção 2.17. Clique na
 //! pílula (`group.toggle_collapse`, RF-2.13) e duplo clique (editor, F3
 //! etapa 5) são wiring de `lib.rs`, fora desta função de pintura pura.
 //!
@@ -1262,31 +1262,7 @@ fn paint_group_pill(
     measurer: &mut porecatu_render::TextMeasurer,
     out: &mut Vec<Primitive>,
 ) {
-    if let Some(indicator) = pill.aggregate_indicator {
-        let dot_color = match indicator {
-            Indicator::Activity => pal.activity_indicator,
-            Indicator::Bell => pal.bell_indicator,
-        };
-        out.push(Primitive::RoundedQuad(RoundedQuad {
-            rect: shift(
-                Rect {
-                    x: pill.aggregate_indicator_origin.0,
-                    y: pill.aggregate_indicator_origin.1,
-                    width: style.indicator_dot_size,
-                    height: style.indicator_dot_size,
-                },
-                dx,
-            ),
-            radius: style.indicator_dot_size / 2.0,
-            color: dot_color,
-            border_color: palette::TRANSPARENT,
-            border_width: 0.0,
-        }));
-    }
     let name_text = match live_name {
-        // Cap aproximado: o teto do nome (`pill_name_max_width`) -- não
-        // recalcula o orçamento exato do indicador agregado (nota do
-        // módulo, simplificação enquanto o editor está aberto).
         Some(buffer) => {
             let cap = style.pill_name_max_width;
             let (truncated, _) = measurer.truncate(buffer, PILL_NAME_FONT, name_font_size, cap);
@@ -1301,8 +1277,14 @@ fn paint_group_pill(
         size_px: name_font_size,
         color: pal.group_new_tab_icon,
     }));
-    // Um ponto por aba colapsada (`dot_count` é 0 com o grupo expandido).
+    // Um ponto por aba colapsada (`dot_count` é 0 com o grupo expandido); o
+    // da aba com atividade/campainha leva a cor do indicador.
     for i in 0..pill.dot_count {
+        let dot_color = match pill.dot_indicators.get(i).copied().flatten() {
+            Some(Indicator::Activity) => pal.activity_indicator,
+            Some(Indicator::Bell) => pal.bell_indicator,
+            None => pal.group_new_tab_icon,
+        };
         out.push(Primitive::RoundedQuad(RoundedQuad {
             rect: shift(
                 Rect {
@@ -1314,7 +1296,7 @@ fn paint_group_pill(
                 dx,
             ),
             radius: style.indicator_dot_size / 2.0,
-            color: pal.group_new_tab_icon,
+            color: dot_color,
             border_color: palette::TRANSPARENT,
             border_width: 0.0,
         }));

@@ -85,7 +85,8 @@
 | [0081](0081-disparo-no-release-para-botoes-e-itens.md) | Disparo no release para botões e itens: o press arma, o release sobre o mesmo alvo age; clique fora, texto e gestos de terminal seguem no press | Aceito — aval visual do estado pressionado pendente |
 | [0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md) | Botões da barra com o tamanho do botão de menu do app: sessões, configurações e "+" avulso em 40×40; "+" de grupo fica 30×30; zona fixa de 94 para 98px | Aceito — aval visual pendente |
 | [0083](0083-gap-entre-os-botoes-da-zona-fixa.md) | Gap entre os botões da zona fixa: `window_controls.gap` de 6 para 3px, entre sessões, configurações e botões de janela; zona fixa de 98 para 92px | Aceito — aval visual pendente |
-| [0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) | Fonte do sistema no chrome e ajustes da barra de abas: sem botões de overflow, rótulo de grupo sem fundo e com pontos no colapso, aba de grupo sem borda, aba de 209px, hover no "x", centragem pela altura de versal, clique só dentro da trilha | Aceito — aval visual do dono (Windows) |
+| [0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) | Fonte do sistema no chrome e ajustes da barra de abas: sem botões de overflow, rótulo de grupo sem fundo e com pontos no colapso, aba de grupo sem borda, aba de 209px, hover no "x", centragem pela altura de versal, clique só dentro da trilha | Aceito — aval visual do dono (Windows) · ponto agregado do grupo colapsado revisto por ADR-0085 |
+| [0085](0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md) | Atividade no ponto da aba do grupo colapsado (sem ponto agregado) e margem direita do "x" igual à vertical: 8px na aba solta, 5px na de grupo | Aceito — aval visual do dono (Windows) |
 
 ## Convenção
 
