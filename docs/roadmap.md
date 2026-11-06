@@ -1244,7 +1244,7 @@ Fora da ordem de fases, a pedido do dono do produto, e a promoção de um item q
 
 **Escopo:** RF-21.1 a RF-21.30.
 
-**Aparência:** zona nova à esquerda da trilha, com caixas de aba solta (40 px), `trilha_padding` nas pontas e `trilha_gap` entre caixas. **Zero valor visual novo, zero cor nova.** Cada fixada tira 46 px da trilha. Aval visual do dono **pendente**, com um ponto marcado no ADR-0087: uma fixada ativa sem ícone próprio fica igual ao botão do app.
+**Aparência:** zona nova à esquerda da trilha, com caixas de aba solta (40 px), `trilha_padding` nas pontas e `trilha_gap` entre caixas. **Zero valor visual novo, zero cor nova.** Cada fixada tira 46 px da trilha. Aval visual do dono **pendente**. O ponto marcado no ADR-0087 (uma fixada ativa sem ícone próprio ficava igual ao botão do app) foi fechado quando o botão perdeu fundo e borda (revisão de 2026-11-06 do ADR-0079).
 
 **Dependências:** nenhuma nova.
 

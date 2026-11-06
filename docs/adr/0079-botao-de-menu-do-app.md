@@ -38,6 +38,8 @@ O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grup
 > nada. A regra `tela = conteúdo + track_shift − scroll_offset` continua sendo a única
 > conversão; o conteúdo nasce em `x = 0` sempre que `k > 0`.
 
+> **Revisão (pedido do dono, 2026-11-06) — sem fundo e sem borda, como o botão de configurações.** Substitui a decisão 3 e a revisão "aparência da aba ativa" acima. O botão deixa de ser a caixa de uma aba: em repouso só o ícone do app aparece, sem fundo, sem borda e sem sombra. **Hover** e **pressed** são os do botão de configurações ([ADR-0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md)): revelam atrás do ícone um quadrado de raio `tab_corner_radius` com o fundo dos botões de janela (`hover_background` / `pressed_background`), o botão inteiro (ele já é quadrado, `app_menu_button_size`); pressed só com o cursor sobre o botão armado. A regra do fundo é uma função só (`chrome::zone_button_background`), usada pelos botões de ícone da zona fixa e por este, para nunca divergirem. Dimensões, posição, ícone, `track_shift` e demais decisões não mudam. Efeito colateral: uma aba fixada ativa (caixa de aba ativa com o ícone do app) deixa de ficar igual ao botão, o que fecha o ponto marcado no [ADR-0087](0087-zona-de-abas-fixadas-na-barra.md). Zero valor novo. **Aval visual do dono dado**, só no Windows.
+
 ## Consequências
 
 - A trilha rolável fica 46 px mais estreita (40 do botão + 6 de respiro); a rolagem, as pílulas de overflow, o arraste de aba e a âncora do menu de perfil usam a nova origem.

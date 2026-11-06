@@ -296,9 +296,9 @@ pub fn paint(
     // seção 4.4 dela.
 
     // Botão de menu do app: zona fixa à esquerda, antes da trilha, fora do
-    // recorte e do scroll. Sem ação por ora -- só hover e pressed, como o
-    // resto da barra (o pressed é o da aba ativa apertada, sem o brilho do
-    // hover). `show_app_menu_button = false`: nada é desenhado.
+    // recorte e do scroll. Sem ação por ora -- só hover e pressed, os do
+    // botão de configurações (sem fundo nem borda em repouso).
+    // `show_app_menu_button = false`: nada é desenhado.
     if style.show_app_menu_button {
         paint_app_menu_button(
             tab_bar::app_menu_button_rect(style, is_macos),
@@ -1009,11 +1009,7 @@ fn paint_zone_icon_button(
     pal: &ResolvedPalette,
     out: &mut Vec<Primitive>,
 ) {
-    let bg = match (hovered, pressed) {
-        (_, true) => pal.window_button_pressed_bg,
-        (true, false) => pal.window_button_hover_bg,
-        (false, false) => palette::TRANSPARENT,
-    };
+    let bg = zone_button_background((hovered, pressed), pal);
     // O retângulo do botão é mais largo que alto (respiro lateral,
     // `icon_button_padding_x`); o fundo revelado é o quadrado de lado
     // `height` centrado nele.
@@ -1033,14 +1029,23 @@ fn paint_zone_icon_button(
     out.push(centered_glyph(icon, rect, icon_size, icon_color));
 }
 
-/// Botão de menu do app: a caixa de uma aba solta **ativa** (mesmas cores,
-/// raio, borda e sombra de [`tab_colors`]/`push_shadow`) com o ícone do app
-/// no meio. Hover clareia o fundo como o da aba ativa
-/// (`tab_hover_brightness`). Pressed é o da aba ativa apertada: a aba não
-/// pinta um estado próprio, mas o press arma `Drag::TabPressed`, que
-/// suprime o hover da barra (`bar_hover`, em `lib.rs`) -- ela volta ao fundo
-/// ativo sem o brilho, mais escuro que no hover. O botão faz o mesmo: sem
-/// brilho enquanto pressionado. `app_icon` ausente: só a caixa.
+/// Fundo revelado de um botão da zona fixa (ADR-0069): transparente em
+/// repouso, o dos botões de janela no hover e no pressed. Um só lugar para
+/// os botões de ícone e o botão de menu do app nunca divergirem.
+fn zone_button_background((hovered, pressed): (bool, bool), pal: &ResolvedPalette) -> Color {
+    match (hovered, pressed) {
+        (_, true) => pal.window_button_pressed_bg,
+        (true, false) => pal.window_button_hover_bg,
+        (false, false) => palette::TRANSPARENT,
+    }
+}
+
+/// Botão de menu do app: o ícone do app centrado num quadrado sem fundo,
+/// borda nem sombra em repouso -- o comportamento do botão de configurações
+/// ([`paint_zone_icon_button`]): hover e pressed revelam o fundo dos botões
+/// de janela atrás do ícone ([`zone_button_background`]). O botão é
+/// quadrado (`app_menu_button_size`), então o fundo revelado é ele inteiro.
+/// `app_icon` ausente: só o fundo revelado.
 fn paint_app_menu_button(
     rect: Rect,
     (hovered, pressed): (bool, bool),
@@ -1049,21 +1054,12 @@ fn paint_app_menu_button(
     pal: &ResolvedPalette,
     out: &mut Vec<Primitive>,
 ) {
-    let (bg, border, border_width, _text) = tab_colors(pal, style, false, true);
-    let bg = if hovered && !pressed {
-        brighten(bg, style.tab_hover_brightness)
-    } else {
-        bg
-    };
-    if style.group_shadow_enabled {
-        push_shadow(out, rect, style.tab_corner_radius);
-    }
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect,
         radius: style.tab_corner_radius,
-        color: bg,
-        border_color: border,
-        border_width,
+        color: zone_button_background((hovered, pressed), pal),
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
     }));
     if let Some(image) = app_icon {
         let side = style.icon_em_size;
@@ -2335,18 +2331,25 @@ mod tests {
     }
 
     #[test]
-    fn app_menu_button_is_a_loose_tab_sized_square_with_active_tab_colors() {
+    fn app_menu_button_is_a_loose_tab_sized_square_without_background_or_border() {
         let style = TabBarStyle::DEFAULT;
-        let pal = default_palette();
-        let (rest, _) = app_menu_quad(false, false);
+        let (rest, out) = app_menu_quad(false, false);
         assert_eq!(
             rest.rect.width,
             style.tab_height + style.wrapper_padding * 2.0
         );
         assert_eq!(rest.rect.width, rest.rect.height, "quadrado");
         assert_eq!(rest.radius, style.tab_corner_radius);
-        assert_eq!(rest.color, pal.tab_active_background);
-        assert_eq!(rest.border_color, pal.tab_active_border);
+        assert_eq!(rest.color, palette::TRANSPARENT);
+        assert_eq!(rest.border_width, 0.0);
+        assert_eq!(rest.border_color, palette::TRANSPARENT);
+        assert_eq!(
+            out.iter()
+                .filter(|p| matches!(p, Primitive::RoundedQuad(_)))
+                .count(),
+            1,
+            "sem sombra"
+        );
         // Same top and height as a loose tab in the layout.
         let mut ws = Workspace::new();
         ws.append_tab("zsh", None);
@@ -2358,24 +2361,35 @@ mod tests {
     }
 
     #[test]
-    fn app_menu_button_hover_brightens_and_pressed_drops_the_brightness_like_the_active_tab() {
-        let style = TabBarStyle::DEFAULT;
+    fn app_menu_button_hover_and_pressed_reveal_the_settings_button_background() {
         let pal = default_palette();
-        let (rest, _) = app_menu_quad(false, false);
         let (hover, _) = app_menu_quad(true, false);
-        assert_eq!(
-            hover.color,
-            brighten(pal.tab_active_background, style.tab_hover_brightness)
-        );
-        assert_ne!(hover.color, rest.color);
-        assert_eq!(hover.border_color, pal.tab_active_border);
-
-        // Pressed: the bar's hover is suppressed while a tab is pressed, so
-        // the active tab falls back to its plain (darker) background.
+        assert_eq!(hover.color, pal.window_button_hover_bg);
+        assert_eq!(hover.border_width, 0.0);
         let (pressed, _) = app_menu_quad(true, true);
-        assert_eq!(pressed.color, pal.tab_active_background);
-        assert_eq!(pressed.color, rest.color);
-        assert_eq!(pressed.border_color, pal.tab_active_border);
+        assert_eq!(pressed.color, pal.window_button_pressed_bg);
+        assert_eq!(pressed.border_width, 0.0);
+
+        // Same backgrounds as the settings button, state by state.
+        let style = TabBarStyle::DEFAULT;
+        for state in [(false, false), (true, false), (true, true)] {
+            let mut out = Vec::new();
+            let rect = tab_bar::settings_button_rect(&style, 800.0, 52.0, false);
+            paint_zone_icon_button(
+                rect,
+                icon::SETTINGS,
+                style.icon_em_size,
+                state,
+                pal.chrome_icon,
+                &style,
+                &pal,
+                &mut out,
+            );
+            let Some(Primitive::RoundedQuad(settings)) = out.first() else {
+                panic!("o botão de configurações pinta o fundo primeiro");
+            };
+            assert_eq!(app_menu_quad(state.0, state.1).0.color, settings.color);
+        }
     }
 
     #[test]
