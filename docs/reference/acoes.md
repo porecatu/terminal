@@ -42,7 +42,7 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > zona (RF-21.4). `tab.move_left`/`tab.move_right` sobre uma fixada reordenam dentro
 > da zona e **param na borda** — atravessar é `tab.toggle_pin` (RF-21.11).
 > `tab.move_to_group` e `tab.rename` ficam indisponíveis numa fixada (RF-21.12).
-> `tab.close` numa fixada **sempre** confirma, fora de `confirm_close`, e a
+> `tab.close` numa fixada **sempre** confirma, fora de `[general] confirm_close_with_process`, e a
 > **desafixa** (RF-21.22, RF-21.23); com fixadas na janela, fechar a última aba da
 > trilha não fecha a janela (RF-21.25).
 

@@ -163,6 +163,8 @@ Consequência aceita: com `lazy_restore = true` e uma fixada ativa no encerramen
 
 `App` ganha `pinned_opened: bool`. No arranque, **depois** que a primeira janela existe — pelo caminho que for: `open_window_from_session` da primeira `WindowV1`, a janela nova da sessão desligada ou ausente, a do modo posicional ([ADR-0040](0040-superficie-de-linha-de-comando.md)), a do arquivo inválido —, `open_pinned_tabs(window)` roda uma vez e liga a flag. `window.new` e a restauração nomeada nunca a chamam (RF-21.13). Fechar a primeira janela não reabre as fixadas em lugar nenhum: a flag continua ligada até o processo acabar.
 
+**Antes do primeiro quadro.** `open_pinned_tabs` roda antes do primeiro redesenho da janela, de modo que a zona e o `track_shift` com a contagem de fixadas ([ADR-0087](0087-zona-de-abas-fixadas-na-barra.md) §1) já nascem no primeiro quadro — inserir depois faria a trilha pular 46 px por fixada logo depois de aparecer. Só o ícone chega depois ([ADR-0088](0088-icone-da-aba-fixada.md) §4), com o ícone do app no lugar até lá.
+
 Para cada entrada, na ordem da lista: `insert_pinned_tab_with_panes` com a árvore do retrato, e o spawn de cada painel com **`SpawnOrigin::Pinned`**, uma terceira variante ao lado de `New` e `Restored`:
 
 | | `New` | `Restored` | `Pinned` |
@@ -202,7 +204,7 @@ O que fica, e é dito em voz alta: quem escreve no diretório de estado do usuá
 
 ### 7. Fechar, sair, fechar a janela, desafixar
 
-**Fechar uma fixada** — `tab.close`, clique do meio, item do menu — abre sempre o diálogo `DialogAction::ClosePinnedTab(TabId)`, **fora** do alcance de `confirm_close` (RF-21.23). Quando a aba também confirmaria pelo RF-1.6 — processo em primeiro plano, conexão SSH aberta ([ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md), revisto pelo ADR-0071) —, a frase de processo ativo entra **no mesmo diálogo**, como uma linha a mais: nunca dois diálogos em sequência. Confirmado, o encerramento é o de sempre ([ADR-0017](0017-ciclo-de-vida-da-aba.md) §4, ConPTY sem fechar o pseudo-console), seguido de `Workspace::close_tab`, da remoção da entrada e da escrita do §3.
+**Fechar uma fixada** — `tab.close`, clique do meio, item do menu — abre sempre o diálogo `DialogAction::ClosePinnedTab(TabId)`, **fora** do alcance de `[general] confirm_close_with_process` (RF-21.23). Quando a aba também confirmaria pelo RF-1.6 — processo em primeiro plano, conexão SSH aberta ([ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md), revisto pelo ADR-0071) —, a frase de processo ativo entra **no mesmo diálogo**, como uma linha a mais: nunca dois diálogos em sequência. Confirmado, o encerramento é o de sempre ([ADR-0017](0017-ciclo-de-vida-da-aba.md) §4, ConPTY sem fechar o pseudo-console), seguido de `Workspace::close_tab`, da remoção da entrada e da escrita do §3.
 
 **O processo sair sozinho** (RF-21.24): `TermEvent::Exit` com código zero fecha o painel, como o ADR-0053 §10 decidiu, **exceto o último painel de uma fixada**, que fica `Exited` e mantém a aba. Painéis que não são o último fecham como sempre. A aba fixada com o painel `Exited` não muda a lista; fechá-la cai no parágrafo anterior. A decisão é tomada em `porecatu-ui`, no tratamento de `Exit`, perguntando `Workspace::is_pinned` — não há estado novo.
 
