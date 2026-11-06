@@ -11,6 +11,8 @@ new = "Nueva pestaña"
 close = "Cerrar pestaña"
 move_to_group = "Mover al grupo"
 reconnect = "Reconectar"
+pin = "Fijar pestaña"
+unpin = "Desfijar pestaña"
 
 [terminal_menu]
 copy = "Copiar"
@@ -329,6 +331,7 @@ tab_goto = "Ir a la pestaña {n}"
 tab_rename = "Renombrar pestaña"
 tab_move_left = "Mover pestaña a la izquierda"
 tab_move_right = "Mover pestaña a la derecha"
+tab_toggle_pin = "Fijar o desfijar la pestaña"
 group_create = "Crear grupo"
 group_dissolve = "Desagrupar"
 group_rename = "Renombrar grupo"
@@ -419,6 +422,12 @@ title = "¿Cerrar la pestaña?"
 body = "«{title}» tiene un programa ejecutándose en primer plano. ¿Cerrar de todos modos?"
 confirm = "Cerrar pestaña"
 
+[dialog.close_pinned_tab]
+title = "¿Cerrar la pestaña fijada?"
+body = "«{title}» deja de estar entre las pestañas fijadas y ya no se abrirá con Porecatu."
+process = "Hay un programa en primer plano, que se cerrará."
+confirm = "Cerrar y desfijar"
+
 [dialog.close_pane]
 title = "¿Cerrar el panel?"
 body = "«{title}» tiene un programa ejecutándose en primer plano. ¿Cerrar de todos modos?"
@@ -501,6 +510,7 @@ group_colored = "Grupo {name}, color {color}"
 group_collapsed_colored = "Grupo {name}, contraído, color {color}"
 tab_state = " ({state})"
 state_active = "activa"
+state_pinned = "fijada"
 state_not_started = "sin iniciar"
 state_bell = "campana"
 state_activity = "actividad"
@@ -623,6 +633,24 @@ body = "El formato guardado (versión {found}) es más reciente que el que admit
 [notice.named_session_unreadable]
 title = "No se pudo restaurar la sesión"
 body = "No se pudo leer el archivo."
+
+[notice.pinned_corrupt]
+title = "Archivo de pestañas fijadas dañado"
+body = "El archivo se conservó en \"{path}\". La lista de pestañas fijadas empezó vacía."
+
+[notice.pinned_newer]
+title = "Pestañas fijadas de una versión más reciente"
+body = "El formato guardado (versión {found}) es más reciente que el que admite esta versión de Porecatu (hasta {supported}). Las pestañas fijadas no se abrieron y no se pueden cambiar en esta versión."
+
+[notice.pinned_save_failed]
+title = "No se pudieron guardar las pestañas fijadas"
+body = "El cambio vale para esta ejecución, pero no se guardó: {reason}"
+read_only = "el archivo es de una versión más reciente de Porecatu"
+no_path = "no se encontró el directorio de estado"
+
+[notice.pinned_refused]
+title = "No se pudo fijar la pestaña"
+body = "El archivo de pestañas fijadas lo guardó una versión más reciente de Porecatu y no se puede cambiar en esta versión."
 
 [notice.overwrite_blocked]
 title = "No se puede sobrescribir"

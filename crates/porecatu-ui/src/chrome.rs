@@ -61,7 +61,7 @@
 //! (`AnimationClock::had_tab` devolve falso) entram com opacidade
 //! subindo, junto com o progresso da reflui do próprio wrapper delas.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use porecatu_core::{GroupId, TabId, Workspace};
@@ -72,6 +72,7 @@ use porecatu_render::{
 use crate::animation::AnimationClock;
 use crate::group_editor::GroupEditor;
 use crate::palette::{self, ResolvedPalette};
+use crate::pinned_icon::{self, IconTexture};
 use crate::rename::RenameState;
 use crate::selection::Selection;
 use crate::tab_bar::{
@@ -146,11 +147,32 @@ pub struct DragGhost {
     /// Coordenada de tela (sem o deslocamento de rolagem) do canto
     /// esquerdo do fantasma.
     pub screen_x: f32,
-    /// Retângulo/rótulo/indicador de `base_layout` (`lib.rs`), de antes de
-    /// qualquer preview -- garante conteúdo mesmo quando o alvo do
-    /// arraste (F3 etapa 6) é um grupo colapsado, cujo preview não gera
-    /// `TabRect` nenhum pra essa aba (§2.4: "abas somem da barra").
-    pub source: tab_bar::TabRect,
+    /// De onde o fantasma tira a forma e o conteúdo (ver [`GhostSource`]).
+    pub source: GhostSource,
+    /// The boxes of the pinned zone as the drag previews them, in slot order
+    /// (`tab_bar::pinned_preview_order`, ADR-0087 §5): the gap that opens for
+    /// an incoming tab, the hole of a box that leaves. `dragged` is skipped
+    /// when painting.
+    pub pinned_order: Vec<TabId>,
+    /// The zone highlight (ADR-0087 §5), in screen coordinates: `Some` only
+    /// while the target is the zone.
+    pub zone_highlight: Option<Rect>,
+}
+
+/// O fantasma mantém a forma de **origem** durante todo o gesto (ADR-0087
+/// §5): trocá-la quando o centro cruza a fronteira faria o fantasma pular
+/// sob o cursor.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GhostSource {
+    /// Arrastada da trilha: o fantasma de sempre. Retângulo/rótulo/indicador
+    /// de `base_layout` (`lib.rs`), de antes de qualquer preview -- garante
+    /// conteúdo mesmo quando o alvo do arraste (F3 etapa 6) é um grupo
+    /// colapsado, cujo preview não gera `TabRect` nenhum pra essa aba (§2.4:
+    /// "abas somem da barra").
+    Track(tab_bar::TabRect),
+    /// Arrastada da zona de fixadas: a caixa quadrada, pintada como a
+    /// fixada, mesmo sobre a trilha.
+    Pinned,
 }
 
 /// O grupo sendo arrastado pelo rótulo (espec §2.19.1): o fantasma é só a
@@ -226,6 +248,10 @@ pub fn paint(
     // enquanto não subiu para a GPU, ou se a decodificação falhou: o botão
     // pinta igual, só sem o ícone.
     app_icon: Option<ImageId>,
+    // ADR-0088 §5: the own texture of each pinned tab that resolved one (by
+    // `TabId`, of this window). A pinned tab without an entry -- not yet
+    // resolved, or resolved to the app icon -- draws `app_icon`.
+    pinned_icons: &HashMap<TabId, IconTexture>,
 ) -> Vec<Primitive> {
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
@@ -288,6 +314,48 @@ pub fn paint(
         );
     }
 
+    // Abas fixadas (ADR-0087 §1/§2): a mesma fileira do botão do app, à direita
+    // dele, fora do recorte e do scroll. Sem fixadas nada é desenhado -- a
+    // barra é a de antes, primitiva por primitiva.
+    //
+    // During a tab drag the zone is the preview of it (ADR-0087 §5): the slots
+    // follow `pinned_order` (the gap for an incoming tab opens, the neighbours
+    // slide there with the `.15s` reflow), the dragged box is a hole, and the
+    // zone highlight -- the implicit run's, `ungrouped_color` -- goes under the
+    // boxes, over the rectangle of the slots.
+    if let Some(rect) = drag.as_ref().and_then(|ghost| ghost.zone_highlight) {
+        let color = pal.ungrouped_group_color();
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect,
+            radius: style.wrapper_corner_radius,
+            color: with_alpha(color, style.drag_highlight_tint_strength),
+            border_color: with_alpha(color, DRAG_HIGHLIGHT_BORDER_ALPHA),
+            border_width: DRAG_HIGHLIGHT_BORDER_WIDTH,
+        }));
+    }
+    let zone_order: &[TabId] = drag
+        .as_ref()
+        .map_or(workspace.pinned(), |ghost| &ghost.pinned_order);
+    for (i, &id) in zone_order.iter().enumerate() {
+        if drag.as_ref().is_some_and(|ghost| ghost.tab == id) {
+            continue;
+        }
+        let mut slot = tab_bar::pinned_rect(style, is_macos, i);
+        slot.x = animations.pinned_x(id, slot.x, now);
+        let Some(paint) = pinned_paint(
+            workspace,
+            id,
+            slot,
+            hover == Some(tab_bar::TabBarHit::Tab(id)),
+            active,
+            pinned_icons.get(&id).copied(),
+            app_icon,
+        ) else {
+            continue;
+        };
+        paint_pinned_tab(&paint, style, pal, &mut out);
+    }
+
     // Recorte de verdade da trilha (ADR-0018, espec §2.18: "um recorte só,
     // na camada de chrome; as abas fora da vista desaparecem pelo clip").
     // Tudo dentro deste par desloca pelo scroll -- inclusive o botão "+" de
@@ -295,11 +363,12 @@ pub fn paint(
     // espec., mesmo raciocínio do §2.6 aplicado ao botão por grupo). Vai de
     // `track_shift` (depois do botão de menu) até `trilha_width` -- as zonas
     // fixas das duas pontas ficam de fora do recorte e do scroll.
-    let track_left = tab_bar::track_shift(style, is_macos);
+    let pinned_count = workspace.pinned().len();
+    let track_left = tab_bar::track_shift(style, is_macos, pinned_count);
     out.push(Primitive::PushClip(Rect {
         x: track_left,
         y: 0.0,
-        width: tab_bar::trilha_width(style, bar_width, is_macos),
+        width: tab_bar::trilha_width(style, bar_width, is_macos, pinned_count),
         height: bar_height,
     }));
     // Conteúdo -> tela: a origem do conteúdo é o início da trilha.
@@ -726,8 +795,36 @@ pub fn paint(
     // Sem botões de overflow (experimento visual): a trilha só rola pela
     // roda do mouse e pelo arraste.
 
-    if let Some(ghost) = &drag {
-        let tab = &ghost.source;
+    // A box dragged out of the zone stays the square box, on the track too:
+    // drawn here, past the clip of the track and over the zones (ADR-0087 §5).
+    if let Some(ghost) = &drag
+        && ghost.source == GhostSource::Pinned
+    {
+        let side = tab_bar::app_menu_button_size(style);
+        let rect = Rect {
+            x: ghost.screen_x,
+            y: tab_bar::pinned_rect(style, is_macos, 0).y,
+            width: side,
+            height: side,
+        };
+        // `hovered`: the ghost always carries the hover brightness, like the
+        // track one (it follows the cursor; there is no "being over it").
+        if let Some(paint) = pinned_paint(
+            workspace,
+            ghost.tab,
+            rect,
+            true,
+            active,
+            pinned_icons.get(&ghost.tab).copied(),
+            app_icon,
+        ) {
+            paint_pinned_tab(&paint, style, pal, &mut out);
+        }
+    }
+
+    if let Some(ghost) = &drag
+        && let GhostSource::Track(tab) = &ghost.source
+    {
         let exited = workspace.tab(tab.id).is_some_and(|t| t.is_exited());
         let not_started = workspace.tab(tab.id).is_some_and(|t| t.is_not_started());
         let is_active = active == Some(tab.id);
@@ -990,6 +1087,141 @@ fn paint_app_menu_button(
             alpha: 1.0,
             image,
         });
+    }
+}
+
+/// What one pinned tab box needs to be painted (ADR-0087 §2). A plain struct
+/// instead of a long argument list.
+pub(crate) struct PinnedTabPaint {
+    /// The box, in screen coordinates (`tab_bar::pinned_rect`).
+    pub rect: Rect,
+    pub active: bool,
+    /// `Exited` (RF-21.24): inactive colors even when active, icon at `.45`.
+    pub exited: bool,
+    /// `NotStarted` (dormant SSH, ADR-0037): icon at `.45`.
+    pub not_started: bool,
+    /// The cursor is over the box and no press or drag suppresses the hover.
+    pub hovered: bool,
+    pub indicator: Option<Indicator>,
+    /// The icon texture; `None` paints the box alone.
+    pub icon: Option<ImageId>,
+    /// Size in pixels of level 0 of `icon`, for the *contain* fit (ADR-0088
+    /// §6). A square (`(1, 1)`) fills the whole square of `icon_em_size`.
+    pub icon_size: (u32, u32),
+}
+
+/// The paint of pinned tab `id` in `rect`: its state from the workspace, the
+/// one place the zone and the drag ghost take it from. `None` if the tab is
+/// gone from the workspace.
+///
+/// The icon (ADR-0088 §4, RF-21.21): the tab's own texture once its result
+/// arrived, the app icon until then and whenever the chain ended there. The
+/// app icon is drawn as a square, as the menu button does.
+fn pinned_paint(
+    workspace: &Workspace,
+    id: TabId,
+    rect: Rect,
+    hovered: bool,
+    active: Option<TabId>,
+    own_icon: Option<IconTexture>,
+    app_icon: Option<ImageId>,
+) -> Option<PinnedTabPaint> {
+    let tab = workspace.tab(id)?;
+    let (icon, icon_size) = match own_icon {
+        Some(texture) => (Some(texture.id), texture.size),
+        None => (app_icon, (1, 1)),
+    };
+    Some(PinnedTabPaint {
+        rect,
+        active: active == Some(id),
+        exited: tab.is_exited(),
+        not_started: tab.is_not_started(),
+        hovered,
+        indicator: tab_bar::tab_indicator(tab),
+        icon,
+        icon_size,
+    })
+}
+
+/// A pinned tab (ADR-0087 §2): the box of a loose tab -- same radius, border,
+/// shadow and colors as [`tab_colors`] gives it by state -- with the icon
+/// centered where the label would be. Hover brightens the background like any
+/// tab; a press arms `Drag::TabPressed`, which clears `hovered` upstream, so
+/// the pressed box is the one without the brightness. `NotStarted` and
+/// `Exited` dim the icon to `NOT_STARTED_LABEL_ALPHA` (the `.45` of the spec),
+/// and `Exited` also takes the inactive background. The activity/bell dot
+/// (spec 2.17) sits over the top-right corner, `padding_right` from the top
+/// and right edges, and never on an exited box.
+pub(crate) fn paint_pinned_tab(
+    tab: &PinnedTabPaint,
+    style: &TabBarStyle,
+    pal: &ResolvedPalette,
+    out: &mut Vec<Primitive>,
+) {
+    let rect = tab.rect;
+    let (bg, border, border_width, _text) = tab_colors(pal, style, tab.exited, tab.active);
+    let bg = if tab.hovered {
+        brighten(bg, style.tab_hover_brightness)
+    } else {
+        bg
+    };
+    if style.group_shadow_enabled {
+        push_shadow(out, rect, style.tab_corner_radius);
+    }
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: style.tab_corner_radius,
+        color: bg,
+        border_color: border,
+        border_width,
+    }));
+    if let Some(image) = tab.icon {
+        // ADR-0088 §6: *contain* in the square of `icon_em_size`, centered in
+        // the box; a non-square image leaves transparency on the two sides.
+        let (width, height) = pinned_icon::contain(style.icon_em_size, tab.icon_size);
+        let icon_rect = Rect {
+            x: rect.x + (rect.width - width) / 2.0,
+            y: rect.y + (rect.height - height) / 2.0,
+            width,
+            height,
+        };
+        let alpha = if tab.exited || tab.not_started {
+            NOT_STARTED_LABEL_ALPHA as f32
+        } else {
+            1.0
+        };
+        out.push(Primitive::Image {
+            rect: icon_rect,
+            uv: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            repeat: false,
+            mask: icon_rect,
+            mask_radius: 0.0,
+            alpha,
+            image,
+        });
+    }
+    if let Some(indicator) = tab.indicator.filter(|_| !tab.exited) {
+        let color = match indicator {
+            Indicator::Activity => pal.activity_indicator,
+            Indicator::Bell => pal.bell_indicator,
+        };
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: Rect {
+                x: rect.x + rect.width - style.padding_right - style.indicator_dot_size,
+                y: rect.y + style.padding_right,
+                width: style.indicator_dot_size,
+                height: style.indicator_dot_size,
+            },
+            radius: style.indicator_dot_size / 2.0,
+            color,
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
     }
 }
 
@@ -1708,6 +1940,7 @@ mod tests {
                 None,
                 false,
                 None,
+                &HashMap::new(),
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -1770,6 +2003,7 @@ mod tests {
             pressed_bar_button,
             false,
             None,
+            &HashMap::new(),
         );
         (layout, out)
     }
@@ -1832,7 +2066,7 @@ mod tests {
                 .rect;
             // A trilha pinta deslocada pela origem dela na barra.
             let rect = Rect {
-                x: rect.x + tab_bar::track_shift(&style, false),
+                x: rect.x + tab_bar::track_shift(&style, false, 0),
                 ..rect
             };
             rounded_quads(&out)
@@ -1889,7 +2123,7 @@ mod tests {
             assert_eq!(close.height, style.close_hover_size());
             let square = Rect {
                 x: close.x
-                    + tab_bar::track_shift(&style, false)
+                    + tab_bar::track_shift(&style, false, 0)
                     + (close.width - close.height) / 2.0,
                 y: close.y,
                 width: close.height,
@@ -1969,6 +2203,7 @@ mod tests {
                 None,
                 window_image_shown,
                 None,
+                &HashMap::new(),
             )
         };
         let whole_bar_quads = |out: &[Primitive]| {
@@ -2045,6 +2280,7 @@ mod tests {
             None,
             false,
             None,
+            &HashMap::new(),
         );
 
         let expected = bar_height(&style);
@@ -2211,6 +2447,7 @@ mod tests {
             None,
             false,
             None,
+            &HashMap::new(),
         );
         let clip = out
             .iter()
@@ -2220,13 +2457,16 @@ mod tests {
             })
             .expect("recorte da trilha");
         let button = tab_bar::app_menu_button_rect(&style, false);
-        assert_eq!(clip.x, tab_bar::track_shift(&style, false));
+        assert_eq!(clip.x, tab_bar::track_shift(&style, false, 0));
         assert_eq!(
             clip.x,
             button.x + button.width + style.trilha_padding,
             "respiro entre o botão e o recorte"
         );
-        assert_eq!(clip.width, tab_bar::trilha_width(&style, bar_width, false));
+        assert_eq!(
+            clip.width,
+            tab_bar::trilha_width(&style, bar_width, false, 0)
+        );
 
         // First tab: on the clip edge, so at rest it sits a `trilha_padding`
         // past the button, as it did before the margin moved into the clip.
@@ -2244,6 +2484,654 @@ mod tests {
             .expect("fundo da aba ativa");
         assert_eq!(tab_quad.x, clip.x);
         assert_eq!(tab_quad.x, button.x + button.width + style.trilha_padding);
+    }
+
+    /// The whole bar for `ws`, with the cursor over `hover` and the app icon
+    /// loaded -- the frame the pinned-tab tests read.
+    fn paint_bar(
+        ws: &Workspace,
+        style: &TabBarStyle,
+        hover: Option<tab_bar::TabBarHit>,
+    ) -> Vec<Primitive> {
+        let pal = default_palette();
+        let term_pal = default_term_palette();
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+        let layout = tab_bar::fit_width(ws, style, bar_width, &mut m, false);
+        paint(
+            &layout,
+            ws,
+            ws.active_tab(),
+            &RenameState::Idle,
+            &Selection::default(),
+            None,
+            style,
+            &pal,
+            &term_pal,
+            bar_width,
+            Overflow { scroll_offset: 0.0 },
+            None,
+            None,
+            None,
+            &AnimationClock::default(),
+            Instant::now(),
+            &mut m,
+            false,
+            false,
+            None,
+            None,
+            hover,
+            None,
+            None,
+            None,
+            false,
+            Some(ImageId::from_raw(1)),
+            &HashMap::new(),
+        )
+    }
+
+    /// What `paint_pinned_tab` draws for one state: the box quad (the one on
+    /// the rect itself, not a shadow layer), the icon alpha and the dot.
+    struct PinnedPainted {
+        quad: RoundedQuad,
+        icon_alpha: Option<f32>,
+        dot: Option<RoundedQuad>,
+    }
+
+    fn paint_pinned(tab: &PinnedTabPaint) -> PinnedPainted {
+        let style = TabBarStyle::DEFAULT;
+        let mut out = Vec::new();
+        paint_pinned_tab(tab, &style, &default_palette(), &mut out);
+        let quad = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.rect == tab.rect => Some(*q),
+                _ => None,
+            })
+            .expect("a caixa da fixada");
+        let icon_alpha = out.iter().find_map(|p| match p {
+            Primitive::Image { alpha, .. } => Some(*alpha),
+            _ => None,
+        });
+        let dot = out.iter().find_map(|p| match p {
+            Primitive::RoundedQuad(q) if q.rect.width == style.indicator_dot_size => Some(*q),
+            _ => None,
+        });
+        PinnedPainted {
+            quad,
+            icon_alpha,
+            dot,
+        }
+    }
+
+    fn pinned_state(rect: Rect) -> PinnedTabPaint {
+        PinnedTabPaint {
+            rect,
+            active: false,
+            exited: false,
+            not_started: false,
+            hovered: false,
+            indicator: None,
+            icon: Some(ImageId::from_raw(1)),
+            icon_size: (1, 1),
+        }
+    }
+
+    /// ADR-0088 §6: a rectangular icon is fitted (*contain*) in the square of
+    /// `icon_em_size`, centered in the box, aspect kept, no mask radius.
+    #[test]
+    fn a_rectangular_pinned_icon_is_contained_and_centered() {
+        let style = TabBarStyle::DEFAULT;
+        let rect = tab_bar::pinned_rect(&style, false, 0);
+        for (size, expected) in [
+            ((200, 100), (style.icon_em_size, style.icon_em_size / 2.0)),
+            ((100, 200), (style.icon_em_size / 2.0, style.icon_em_size)),
+        ] {
+            let mut out = Vec::new();
+            let tab = PinnedTabPaint {
+                icon_size: size,
+                ..pinned_state(rect)
+            };
+            paint_pinned_tab(&tab, &style, &default_palette(), &mut out);
+            let Some(Primitive::Image {
+                rect: icon,
+                mask,
+                mask_radius,
+                ..
+            }) = out.last()
+            else {
+                panic!("the icon comes last");
+            };
+            assert_eq!((icon.width, icon.height), expected, "{size:?}");
+            assert_eq!(icon.x + icon.width / 2.0, rect.x + rect.width / 2.0);
+            assert_eq!(icon.y + icon.height / 2.0, rect.y + rect.height / 2.0);
+            assert_eq!(mask, icon);
+            assert_eq!(*mask_radius, 0.0);
+        }
+    }
+
+    /// RF-21.21: the own texture of a pinned tab wins; without one, the app
+    /// icon (drawn as a square).
+    #[test]
+    fn a_pinned_tab_draws_its_own_texture_or_the_app_icon() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        ws.pin_tab(a, 0);
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 30.0,
+            height: 30.0,
+        };
+        let own = IconTexture {
+            id: ImageId::from_raw(7),
+            size: (64, 32),
+        };
+        let app = Some(ImageId::from_raw(1));
+
+        let with_own = pinned_paint(&ws, a, rect, false, None, Some(own), app).unwrap();
+        assert_eq!(with_own.icon, Some(ImageId::from_raw(7)));
+        assert_eq!(with_own.icon_size, (64, 32));
+
+        let fallback = pinned_paint(&ws, a, rect, false, None, None, app).unwrap();
+        assert_eq!(fallback.icon, app);
+        assert_eq!(fallback.icon_size, (1, 1));
+
+        let nothing = pinned_paint(&ws, a, rect, false, None, None, None).unwrap();
+        assert_eq!(nothing.icon, None);
+    }
+
+    /// ADR-0087 §2, the table of states: colors and border by state, hover
+    /// brightens, `Exited` is inactive even when active, and `NotStarted` and
+    /// `Exited` dim the icon to `.45`.
+    #[test]
+    fn a_pinned_box_paints_the_state_table_of_the_adr() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let rect = tab_bar::pinned_rect(&style, false, 0);
+        let base = pinned_state(rect);
+
+        let inactive = paint_pinned(&base);
+        assert_eq!(inactive.quad.color, pal.tab_inactive_background);
+        assert_eq!(inactive.quad.border_color, pal.tab_inactive_border);
+        assert_eq!(inactive.quad.border_width, style.inactive_border_width);
+        assert_eq!(inactive.quad.radius, style.tab_corner_radius);
+        assert_eq!(inactive.icon_alpha, Some(1.0));
+        assert!(inactive.dot.is_none());
+
+        let active = paint_pinned(&PinnedTabPaint {
+            active: true,
+            ..pinned_state(rect)
+        });
+        assert_eq!(active.quad.color, pal.tab_active_background);
+        assert_eq!(active.quad.border_color, pal.tab_active_border);
+        assert_eq!(active.quad.border_width, style.active_border_width);
+        assert_eq!(active.icon_alpha, Some(1.0));
+
+        let hover = paint_pinned(&PinnedTabPaint {
+            hovered: true,
+            ..pinned_state(rect)
+        });
+        assert_eq!(
+            hover.quad.color,
+            brighten(pal.tab_inactive_background, style.tab_hover_brightness)
+        );
+        assert_eq!(hover.quad.border_color, pal.tab_inactive_border);
+
+        // Dormant: the base state's box, the icon at `.45`.
+        let dormant = paint_pinned(&PinnedTabPaint {
+            active: true,
+            not_started: true,
+            ..pinned_state(rect)
+        });
+        assert_eq!(dormant.quad.color, pal.tab_active_background);
+        assert_eq!(dormant.icon_alpha, Some(NOT_STARTED_LABEL_ALPHA as f32));
+        assert_eq!(dormant.icon_alpha, Some(0.45));
+
+        // Exited: inactive background **even when active**, the icon at `.45`.
+        let exited = paint_pinned(&PinnedTabPaint {
+            active: true,
+            exited: true,
+            ..pinned_state(rect)
+        });
+        assert_eq!(exited.quad.color, pal.tab_inactive_background);
+        assert_eq!(exited.quad.border_color, pal.tab_inactive_border);
+        assert_eq!(exited.icon_alpha, Some(0.45));
+    }
+
+    #[test]
+    fn a_pinned_box_has_the_icon_centered_and_a_shadow_like_a_loose_tab() {
+        let style = TabBarStyle::DEFAULT;
+        let rect = tab_bar::pinned_rect(&style, false, 1);
+        let mut out = Vec::new();
+        paint_pinned_tab(&pinned_state(rect), &style, &default_palette(), &mut out);
+        let Some(Primitive::Image {
+            rect: icon,
+            mask_radius,
+            ..
+        }) = out.last()
+        else {
+            panic!("o ícone vem por último, sobre o fundo");
+        };
+        assert_eq!(icon.width, style.icon_em_size);
+        assert_eq!(icon.x + icon.width / 2.0, rect.x + rect.width / 2.0);
+        assert_eq!(icon.y + icon.height / 2.0, rect.y + rect.height / 2.0);
+        assert_eq!(*mask_radius, 0.0);
+        // The shadow layers sit behind the box, like the loose tab's.
+        let box_at = out
+            .iter()
+            .position(|p| matches!(p, Primitive::RoundedQuad(q) if q.rect == rect))
+            .unwrap();
+        assert_eq!(
+            box_at,
+            SHADOW_LAYERS.len(),
+            "as camadas da sombra vêm antes da caixa"
+        );
+        // No texture yet: the box alone.
+        let mut bare = Vec::new();
+        paint_pinned_tab(
+            &PinnedTabPaint {
+                icon: None,
+                ..pinned_state(rect)
+            },
+            &style,
+            &default_palette(),
+            &mut bare,
+        );
+        assert!(!bare.iter().any(|p| matches!(p, Primitive::Image { .. })));
+    }
+
+    /// ADR-0087 §3: the dot is 6x6 in the top-right corner, `padding_right`
+    /// from the top and right edges; bell wins (decided by `tab_indicator`)
+    /// and an exited box never has one.
+    #[test]
+    fn the_pinned_box_dot_sits_in_the_top_right_corner() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let rect = tab_bar::pinned_rect(&style, false, 0);
+        for (indicator, color) in [
+            (Indicator::Activity, pal.activity_indicator),
+            (Indicator::Bell, pal.bell_indicator),
+        ] {
+            let painted = paint_pinned(&PinnedTabPaint {
+                indicator: Some(indicator),
+                ..pinned_state(rect)
+            });
+            let dot = painted.dot.expect("o ponto");
+            assert_eq!(dot.color, color);
+            assert_eq!(dot.rect.width, 6.0);
+            assert_eq!(dot.rect.height, 6.0);
+            assert_eq!(dot.rect.y - rect.y, style.padding_right);
+            assert_eq!(
+                (rect.x + rect.width) - (dot.rect.x + dot.rect.width),
+                style.padding_right
+            );
+            assert_eq!(dot.radius, 3.0, "círculo");
+        }
+        let exited = paint_pinned(&PinnedTabPaint {
+            indicator: Some(Indicator::Bell),
+            exited: true,
+            ..pinned_state(rect)
+        });
+        assert!(exited.dot.is_none(), "nunca em caixa encerrada");
+
+        // Through the whole bar: a tab with activity and bell paints the bell.
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        ws.append_tab("b", None);
+        ws.pin_tab(a, 0);
+        ws.tab_mut(a).unwrap().mark_activity();
+        ws.tab_mut(a).unwrap().mark_bell();
+        let out = paint_bar(&ws, &style, None);
+        assert!(
+            out.iter().any(|p| matches!(
+                p,
+                Primitive::RoundedQuad(q)
+                    if q.color == pal.bell_indicator && q.rect.width == style.indicator_dot_size
+            )),
+            "campainha vence atividade"
+        );
+        assert!(!out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == pal.activity_indicator
+        )));
+    }
+
+    /// The pinned boxes are painted in the fixed zone, outside the track's
+    /// clip, one per pinned tab and in the order of the zone; the clip starts
+    /// after them. Without pinned tabs the frame holds one icon only -- the
+    /// app button's -- and the clip is where it always was.
+    #[test]
+    fn pinned_boxes_are_painted_outside_the_clip_and_the_bar_without_them_is_unchanged() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+
+        let mut plain = Workspace::new();
+        plain.append_tab("a", None);
+        plain.append_tab("b", None);
+        let before = paint_bar(&plain, &style, None);
+        let icons = |out: &[Primitive]| {
+            out.iter()
+                .filter(|p| matches!(p, Primitive::Image { .. }))
+                .count()
+        };
+        assert_eq!(icons(&before), 1);
+        let clip_of = |out: &[Primitive]| {
+            out.iter()
+                .find_map(|p| match p {
+                    Primitive::PushClip(rect) => Some(*rect),
+                    _ => None,
+                })
+                .expect("recorte da trilha")
+        };
+        assert_eq!(clip_of(&before).x, tab_bar::track_shift(&style, false, 0));
+
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let b = ws.append_tab("b", None);
+        ws.append_tab("c", None);
+        ws.pin_tab(a, 0);
+        ws.pin_tab(b, 1);
+        let out = paint_bar(&ws, &style, None);
+        assert_eq!(icons(&out), 3, "botão do app e duas fixadas");
+        let clip_at = out
+            .iter()
+            .position(|p| matches!(p, Primitive::PushClip(_)))
+            .unwrap();
+        let clip = clip_of(&out);
+        assert_eq!(clip.x, tab_bar::track_shift(&style, false, 2));
+        assert_eq!(
+            clip.width,
+            tab_bar::trilha_width(&style, 800.0, false, 2),
+            "a trilha encolhe pelas fixadas"
+        );
+        for i in 0..2 {
+            let rect = tab_bar::pinned_rect(&style, false, i);
+            let at = out
+                .iter()
+                .position(|p| matches!(p, Primitive::RoundedQuad(q) if q.rect == rect))
+                .unwrap_or_else(|| panic!("caixa da fixada {i}"));
+            assert!(at < clip_at, "fixada {i} fora do recorte");
+            assert!(rect.x + rect.width <= clip.x, "fixada {i} antes da trilha");
+        }
+        // The last appended tab is the active one, so both boxes are inactive.
+        let first = tab_bar::pinned_rect(&style, false, 0);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.rect == first && q.color == pal.tab_inactive_background
+        )));
+
+        // The cursor over the second box brightens it, and only it.
+        let hovered = paint_bar(&ws, &style, Some(tab_bar::TabBarHit::Tab(b)));
+        let second = tab_bar::pinned_rect(&style, false, 1);
+        let bg_of = |out: &[Primitive], rect: Rect| {
+            out.iter().find_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.rect == rect => Some(q.color),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            bg_of(&hovered, second),
+            Some(brighten(
+                pal.tab_inactive_background,
+                style.tab_hover_brightness
+            ))
+        );
+        assert_eq!(bg_of(&hovered, first), bg_of(&out, first));
+    }
+
+    /// The bar of `ws` with a tab drag in progress (`drag`) and `animations`
+    /// at `now`.
+    fn paint_bar_dragging(
+        ws: &Workspace,
+        style: &TabBarStyle,
+        drag: DragGhost,
+        animations: &AnimationClock,
+        now: Instant,
+    ) -> Vec<Primitive> {
+        let pal = default_palette();
+        let term_pal = default_term_palette();
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+        let layout = tab_bar::fit_width(ws, style, bar_width, &mut m, false);
+        paint(
+            &layout,
+            ws,
+            ws.active_tab(),
+            &RenameState::Idle,
+            &Selection::default(),
+            None,
+            style,
+            &pal,
+            &term_pal,
+            bar_width,
+            Overflow { scroll_offset: 0.0 },
+            Some(drag),
+            None,
+            None,
+            animations,
+            now,
+            &mut m,
+            false,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            Some(ImageId::from_raw(1)),
+            &HashMap::new(),
+        )
+    }
+
+    /// Two pinned tabs (`a`, `b`) and a track tab `c`, the last one active.
+    fn pinned_pair_and_a_track_tab() -> (Workspace, TabId, TabId, TabId) {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let b = ws.append_tab("b", None);
+        let c = ws.append_tab("c", None);
+        ws.pin_tab(a, 0);
+        ws.pin_tab(b, 1);
+        (ws, a, b, c)
+    }
+
+    fn box_quad_at(out: &[Primitive], rect: Rect) -> Option<usize> {
+        out.iter()
+            .position(|p| matches!(p, Primitive::RoundedQuad(q) if q.rect == rect))
+    }
+
+    /// ADR-0087 §5: a box dragged out of the zone is the square box (the same
+    /// paint, brightened like the track ghost), drawn **after** the clip of the
+    /// track so it does not vanish on the border, and its slot is a hole.
+    #[test]
+    fn a_pinned_ghost_is_the_square_box_painted_past_the_clip() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let (ws, a, b, _c) = pinned_pair_and_a_track_tab();
+        let ghost = DragGhost {
+            tab: a,
+            screen_x: 300.0,
+            source: GhostSource::Pinned,
+            pinned_order: ws.pinned().to_vec(),
+            zone_highlight: None,
+        };
+        let out = paint_bar_dragging(
+            &ws,
+            &style,
+            ghost,
+            &AnimationClock::default(),
+            Instant::now(),
+        );
+
+        let side = tab_bar::app_menu_button_size(&style);
+        let ghost_rect = Rect {
+            x: 300.0,
+            y: tab_bar::pinned_rect(&style, false, 0).y,
+            width: side,
+            height: side,
+        };
+        let ghost_at = box_quad_at(&out, ghost_rect).expect("o fantasma quadrado");
+        let pop_at = out
+            .iter()
+            .position(|p| matches!(p, Primitive::PopClip))
+            .unwrap();
+        assert!(ghost_at > pop_at, "fora do recorte da trilha");
+        let Primitive::RoundedQuad(quad) = &out[ghost_at] else {
+            unreachable!()
+        };
+        assert_eq!(quad.radius, style.tab_corner_radius);
+        assert_eq!(
+            quad.color,
+            brighten(pal.tab_inactive_background, style.tab_hover_brightness),
+            "o brilho do fantasma"
+        );
+        // Its own slot is the hole; the neighbour stays where it was.
+        assert_eq!(
+            box_quad_at(&out, tab_bar::pinned_rect(&style, false, 0)),
+            None
+        );
+        assert!(box_quad_at(&out, tab_bar::pinned_rect(&style, false, 1)).is_some());
+        let _ = b;
+    }
+
+    /// With the zone as the target: the highlight of the implicit run (its
+    /// tint and a border at `.45`) goes under the boxes, the gap is the slot of
+    /// the incoming tab and the neighbours sit past it.
+    #[test]
+    fn the_zone_target_paints_the_highlight_under_the_boxes_and_opens_the_gap() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let (ws, a, b, c) = pinned_pair_and_a_track_tab();
+        let order =
+            tab_bar::pinned_preview_order(ws.pinned(), c, tab_bar::DragDrop::Pinned { pos: 1 });
+        assert_eq!(order, [a, c, b]);
+        let highlight = tab_bar::pinned_zone_rect(&style, false, order.len());
+        let ghost = DragGhost {
+            tab: c,
+            screen_x: 90.0,
+            source: GhostSource::Track(track_rect_of(&ws, &style, c)),
+            pinned_order: order,
+            zone_highlight: Some(highlight),
+        };
+        let out = paint_bar_dragging(
+            &ws,
+            &style,
+            ghost,
+            &AnimationClock::default(),
+            Instant::now(),
+        );
+
+        let highlight_at = box_quad_at(&out, highlight).expect("o realce da zona");
+        let Primitive::RoundedQuad(quad) = &out[highlight_at] else {
+            unreachable!()
+        };
+        let implicit = pal.ungrouped_group_color();
+        assert_eq!(quad.color.a, style.drag_highlight_tint_strength);
+        assert_eq!(
+            (quad.color.r, quad.color.g, quad.color.b),
+            (implicit.r, implicit.g, implicit.b)
+        );
+        assert_eq!(quad.border_color.a, 0.45);
+        assert_eq!(quad.border_width, 1.0);
+
+        // Under every box of the zone.
+        let first = box_quad_at(&out, tab_bar::pinned_rect(&style, false, 0)).unwrap();
+        let last = box_quad_at(&out, tab_bar::pinned_rect(&style, false, 2)).unwrap();
+        assert!(highlight_at < first && highlight_at < last);
+        // `a` keeps slot 0, `b` slid to slot 2, and slot 1 is the gap: the
+        // incoming tab has no box in the zone before the drop.
+        assert!(box_quad_at(&out, tab_bar::pinned_rect(&style, false, 1)).is_none());
+        let _ = (a, b);
+    }
+
+    /// Without a zone target the frame has no highlight, and the zone is the
+    /// real one.
+    #[test]
+    fn a_track_target_paints_no_zone_highlight() {
+        let style = TabBarStyle::DEFAULT;
+        let (ws, _a, _b, c) = pinned_pair_and_a_track_tab();
+        let ghost = DragGhost {
+            tab: c,
+            screen_x: 200.0,
+            source: GhostSource::Track(track_rect_of(&ws, &style, c)),
+            pinned_order: ws.pinned().to_vec(),
+            zone_highlight: None,
+        };
+        let out = paint_bar_dragging(
+            &ws,
+            &style,
+            ghost,
+            &AnimationClock::default(),
+            Instant::now(),
+        );
+        let zone = tab_bar::pinned_zone_rect(&style, false, 2);
+        assert_eq!(box_quad_at(&out, zone), None);
+        for i in 0..2 {
+            assert!(box_quad_at(&out, tab_bar::pinned_rect(&style, false, i)).is_some());
+        }
+    }
+
+    /// The neighbours slide (ADR-0087 §5): mid-slide a box is drawn between
+    /// where it was and its slot.
+    #[test]
+    fn a_sliding_pinned_box_is_drawn_between_its_old_x_and_its_slot() {
+        let style = TabBarStyle::DEFAULT;
+        let (ws, a, b, c) = pinned_pair_and_a_track_tab();
+        // The gap opened at slot 1: `b` goes from slot 1 to slot 2.
+        let order =
+            tab_bar::pinned_preview_order(ws.pinned(), c, tab_bar::DragDrop::Pinned { pos: 1 });
+        let slot1 = tab_bar::pinned_rect(&style, false, 1);
+        let slot2 = tab_bar::pinned_rect(&style, false, 2);
+        let mut clock = AnimationClock::default();
+        let now = Instant::now();
+        clock.start_pinned_slide(
+            std::collections::HashMap::from([
+                (a, tab_bar::pinned_rect(&style, false, 0).x),
+                (b, slot1.x),
+            ]),
+            std::time::Duration::from_millis(100),
+            now,
+        );
+        let ghost = DragGhost {
+            tab: c,
+            screen_x: 90.0,
+            source: GhostSource::Track(track_rect_of(&ws, &style, c)),
+            pinned_order: order,
+            zone_highlight: None,
+        };
+        let out = paint_bar_dragging(
+            &ws,
+            &style,
+            ghost,
+            &clock,
+            now + std::time::Duration::from_millis(50),
+        );
+        // At the start `b` would be at slot 1 and at the end at slot 2: halfway
+        // it is on neither.
+        assert!(box_quad_at(&out, slot2).is_none());
+        let halfway = Rect {
+            x: slot1.x + (slot2.x - slot1.x) / 2.0,
+            ..slot1
+        };
+        let drawn = out.iter().any(|p| {
+            matches!(p, Primitive::RoundedQuad(q)
+                if (q.rect.x - halfway.x).abs() < 0.5 && q.rect.width == halfway.width && q.rect.y == halfway.y)
+        });
+        assert!(drawn, "b is halfway between its old x and its slot");
+    }
+
+    /// The `TabRect` of track tab `id`, as `lib.rs` takes it from `base_layout`.
+    fn track_rect_of(ws: &Workspace, style: &TabBarStyle, id: TabId) -> tab_bar::TabRect {
+        let mut m = TextMeasurer::new();
+        tab_bar::fit_width(ws, style, 800.0, &mut m, false)
+            .groups
+            .iter()
+            .flat_map(|g| g.tabs.iter())
+            .find(|t| t.id == id)
+            .cloned()
+            .expect("track tab")
     }
 
     /// `show_app_menu_button = false`: nada do botão é pintado e o recorte da
@@ -2289,6 +3177,7 @@ mod tests {
             None,
             false,
             None,
+            &HashMap::new(),
         );
         let button = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
         assert!(
@@ -2308,6 +3197,9 @@ mod tests {
             })
             .expect("recorte da trilha");
         assert_eq!(clip.x, 0.0);
-        assert_eq!(clip.width, tab_bar::trilha_width(&style, bar_width, false));
+        assert_eq!(
+            clip.width,
+            tab_bar::trilha_width(&style, bar_width, false, 0)
+        );
     }
 }

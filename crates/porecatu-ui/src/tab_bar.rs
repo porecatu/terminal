@@ -26,7 +26,7 @@
 //! `palette.rs` (F1). Valor sem chave é geometria fixa da espec. visual,
 //! citada por seção.
 
-use porecatu_core::{GroupId, TabId, Workspace};
+use porecatu_core::{GroupId, TabId, UnpinTarget, Workspace};
 use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer};
 
 /// Fonte de rótulo de aba (espec. §1.1: "12.5px, rótulo da aba").
@@ -639,11 +639,12 @@ pub fn layout(
     measurer: &mut TextMeasurer,
 ) -> TabBarLayout {
     let mut groups = Vec::new();
-    // Sem o botão de menu do app, o conteúdo da trilha nasce deslocado pelo
-    // respiro das bordas (`trilha_padding`) -- não em (0, 0). Com ele, esse
-    // respiro já está em `track_shift` (entre o botão e o recorte), e repeti-lo
+    // Sem nenhuma caixa na zona da esquerda (sem o botão de menu do app e
+    // sem fixadas), o conteúdo da trilha nasce deslocado pelo respiro das
+    // bordas (`trilha_padding`) -- não em (0, 0). Com alguma, esse respiro já
+    // está em `track_shift` (entre a última caixa e o recorte), e repeti-lo
     // aqui o dobraria.
-    let mut x = if style.show_app_menu_button {
+    let mut x = if left_row_len(style, workspace.pinned().len()) > 0 {
         0.0
     } else {
         style.trilha_padding
@@ -943,14 +944,21 @@ pub fn layout(
     // daquele run cria a mesma coisa, no mesmo lugar. Fica **fora** de
     // qualquer wrapper, sobre o fundo da barra -- é o que o distingue,
     // à vista, do "+" que cria dentro de um grupo.
-    let ungrouped_new_tab_button = if style.show_new_tab_button
-        && workspace
-            .groups()
-            .iter()
-            .rfind(|g| !g.tabs().is_empty())
-            .is_some_and(|g| g.is_explicit())
-    {
-        x += style.trilha_gap;
+    //
+    // Track with no tab at all but pinned tabs in the zone (ADR-0086 §1):
+    // there is no run whose "+" could create a tab, so this button is the
+    // only way to open one with the mouse -- it shows up too.
+    let last_group = workspace.groups().iter().rfind(|g| !g.tabs().is_empty());
+    let wants_ungrouped_button = match last_group {
+        Some(group) => group.is_explicit(),
+        None => !workspace.pinned().is_empty(),
+    };
+    let ungrouped_new_tab_button = if style.show_new_tab_button && wants_ungrouped_button {
+        // Alone in the track it is the first item: no gap before it, like
+        // the first group.
+        if !groups.is_empty() {
+            x += style.trilha_gap;
+        }
         // Mesma caixa do botão de menu do app (ADR-0082), que é a do
         // wrapper: topo e base alinhados com ele e com as abas soltas.
         let size = app_menu_button_size(style);
@@ -970,7 +978,7 @@ pub fn layout(
     // encostaria na zona fixa ao rolar até o fim. Barra sem grupo nenhum
     // não tem conteúdo a padear: largura zero, senão o `overflow_state`
     // passaria a ver conteúdo onde não há.
-    let content_width = if groups.is_empty() {
+    let content_width = if groups.is_empty() && ungrouped_new_tab_button.is_none() {
         0.0
     } else {
         x + style.trilha_padding
@@ -987,7 +995,7 @@ pub fn layout(
 /// motivo de ela ficar aberta já está escrito no grid, não num indicador);
 /// campainha vence atividade quando as duas são verdadeiras. Serve ao ponto
 /// da aba expandida e ao ponto dela no grupo colapsado.
-fn tab_indicator(tab: &porecatu_core::Tab) -> Option<Indicator> {
+pub(crate) fn tab_indicator(tab: &porecatu_core::Tab) -> Option<Indicator> {
     if tab.is_exited() {
         None
     } else if tab.bell() {
@@ -1101,30 +1109,54 @@ pub fn app_menu_button_size(style: &TabBarStyle) -> f32 {
     style.tab_height + style.wrapper_padding * 2.0
 }
 
+/// Number of boxes in the fixed left row: the app menu button (when shown)
+/// plus the pinned tabs of the window (ADR-0087 §1).
+fn left_row_len(style: &TabBarStyle, pinned: usize) -> usize {
+    usize::from(style.show_app_menu_button) + pinned
+}
+
+/// Box `index` (0 = the first of the row) of the fixed left row, in screen
+/// coordinates: the app menu button when shown, then the pinned tabs. One
+/// formula for every box -- `trilha_padding` before the first one and above
+/// all, `trilha_gap` between neighbours, side [`app_menu_button_size`]
+/// (ADR-0087 §1) -- so the button, the pinned tabs and [`track_shift`] can
+/// never diverge.
+fn left_row_box(style: &TabBarStyle, is_macos: bool, index: usize) -> Rect {
+    let size = app_menu_button_size(style);
+    Rect {
+        x: left_inset(style, is_macos)
+            + style.trilha_padding
+            + index as f32 * (size + style.trilha_gap),
+        y: style.trilha_padding,
+        width: size,
+        height: size,
+    }
+}
+
 /// Onde a trilha rolável começa na tela: o inset do semáforo do macOS
-/// ([`left_inset`]), o respiro das bordas, o botão de menu do app e mais um
-/// respiro (`trilha_padding`) entre ele e a trilha -- a mesma margem que o
-/// botão tem nos outros cantos, para a aba rolada não ser cortada rente a
-/// ele. É a origem do conteúdo de [`layout`] -- `tela = conteúdo +
-/// track_shift - scroll_offset` -- e a borda esquerda do recorte da trilha.
-pub fn track_shift(style: &TabBarStyle, is_macos: bool) -> f32 {
-    if !style.show_app_menu_button {
+/// ([`left_inset`]), a fileira de `k` caixas -- o botão de menu do app (se
+/// visível) e as `pinned` abas fixadas da janela (ADR-0087 §1) -- e mais um
+/// respiro (`trilha_padding`) depois da última, a mesma margem que ela tem
+/// nos outros cantos, para a aba rolada não ser cortada rente a ela. Sem
+/// nenhuma caixa (`k = 0`) é só o inset. É a origem do conteúdo de [`layout`]
+/// -- `tela = conteúdo + track_shift - scroll_offset` -- e a borda esquerda do
+/// recorte da trilha; **toda** conversão tela-conteúdo passa por aqui, e a
+/// contagem de fixadas chega por parâmetro, nunca por uma segunda fórmula.
+pub fn track_shift(style: &TabBarStyle, is_macos: bool, pinned: usize) -> f32 {
+    let k = left_row_len(style, pinned);
+    if k == 0 {
         return left_inset(style, is_macos);
     }
-    left_inset(style, is_macos) + style.trilha_padding * 2.0 + app_menu_button_size(style)
+    let last = left_row_box(style, is_macos, k - 1);
+    last.x + last.width + style.trilha_padding
 }
 
 /// Retângulo do botão de menu do app, em coordenadas de tela da barra (zona
 /// fixa à esquerda, não rola). Mesmo topo e mesma caixa de uma aba solta
 /// ([`layout`]): `trilha_padding` do topo, lado de [`app_menu_button_size`].
+/// É sempre a primeira caixa da fileira.
 pub fn app_menu_button_rect(style: &TabBarStyle, is_macos: bool) -> Rect {
-    let size = app_menu_button_size(style);
-    Rect {
-        x: left_inset(style, is_macos) + style.trilha_padding,
-        y: style.trilha_padding,
-        width: size,
-        height: size,
-    }
+    left_row_box(style, is_macos, 0)
 }
 
 /// Botão oculto (`show_app_menu_button = false`) nunca é atingido: sem este
@@ -1133,12 +1165,31 @@ pub fn point_in_app_menu_button(style: &TabBarStyle, is_macos: bool, point: (f32
     style.show_app_menu_button && rect_contains(app_menu_button_rect(style, is_macos), point)
 }
 
+/// Caixa da aba fixada de índice `i` (0 = a primeira da zona), em coordenadas
+/// de tela: depois do botão de menu do app, se visível (ADR-0087 §1). A zona
+/// não rola, então não há `scroll_offset`.
+pub fn pinned_rect(style: &TabBarStyle, is_macos: bool, i: usize) -> Rect {
+    left_row_box(style, is_macos, usize::from(style.show_app_menu_button) + i)
+}
+
+/// Qual aba fixada (índice na zona) `point` atinge -- coordenadas de tela, sem
+/// `scroll_offset` (ADR-0087 §4). As margens e os vãos entre as caixas não
+/// são alvo: são drag region.
+pub fn point_in_pinned(
+    style: &TabBarStyle,
+    is_macos: bool,
+    pinned: usize,
+    point: (f32, f32),
+) -> Option<usize> {
+    (0..pinned).find(|&i| rect_contains(pinned_rect(style, is_macos, i), point))
+}
+
 /// Largura da trilha rolável: a barra inteira menos as zonas fixas -- a do
-/// botão de menu à esquerda ([`track_shift`]) e a da direita -- é o
-/// `available_width` que [`overflow_state`] e o cálculo de arraste na borda
-/// devem usar, não a largura total da janela.
-pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool) -> f32 {
-    (bar_width - track_shift(style, is_macos) - right_zone_width(style, is_macos)).max(0.0)
+/// botão de menu e as `pinned` fixadas à esquerda ([`track_shift`]) e a da
+/// direita -- é o `available_width` que [`overflow_state`] e o cálculo de
+/// arraste na borda devem usar, não a largura total da janela.
+pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool, pinned: usize) -> f32 {
+    (bar_width - track_shift(style, is_macos, pinned) - right_zone_width(style, is_macos)).max(0.0)
 }
 
 /// `x` (tela, lógico) está dentro da janela visível da trilha -- o recorte
@@ -1146,9 +1197,15 @@ pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool) -> f32 
 /// uma aba rolada para fora de vista continua no layout e o `hit_test`
 /// a acharia por baixo dos botões, então quem testa clique/hover da trilha
 /// confere isto antes.
-pub fn point_in_track(style: &TabBarStyle, bar_width: f32, is_macos: bool, x: f32) -> bool {
-    let left = track_shift(style, is_macos);
-    x >= left && x < left + trilha_width(style, bar_width, is_macos)
+pub fn point_in_track(
+    style: &TabBarStyle,
+    bar_width: f32,
+    is_macos: bool,
+    pinned: usize,
+    x: f32,
+) -> bool {
+    let left = track_shift(style, is_macos, pinned);
+    x >= left && x < left + trilha_width(style, bar_width, is_macos, pinned)
 }
 
 /// Retângulo do botão de configurações, em coordenadas de tela da barra
@@ -1407,11 +1464,138 @@ pub fn pill_rect(layout: &TabBarLayout, id: GroupId) -> Option<Rect> {
 /// já existente, numa posição entre as abas restantes dele -- mesma
 /// convenção de índice que [`Group::move_within`]/`Workspace::move_tab`
 /// esperam --, ou fora de qualquer wrapper, criando um run implícito novo
-/// na posição dada da lista de grupos.
+/// na posição dada da lista de grupos -- ou, desde o ADR-0087 §5 (que revê o
+/// ADR-0021 §4), na zona de fixadas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DragDrop {
+    IntoGroup {
+        group: GroupId,
+        pos: usize,
+    },
+    NewRun {
+        group_index: usize,
+    },
+    /// Soltar na zona fixa (ADR-0087 §5). `pos` é a posição na zona **sem a
+    /// aba arrastada** -- a mesma convenção de [`Workspace::pin_tab`] e de
+    /// [`Workspace::move_pinned`], e a de `IntoGroup`.
+    Pinned {
+        pos: usize,
+    },
+}
+
+/// What dropping a dragged tab does (ADR-0087 §5, the table of the decision):
+/// the one translation of (origin, target) into an operation, for the paint
+/// of the preview and for the drop alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropOp {
+    /// A track tab dropped on the zone: pins it at `pos`.
+    Pin { pos: usize },
+    /// A pinned tab dropped on the zone: reorders it to `pos`.
+    ReorderPinned { pos: usize },
+    /// A pinned tab dropped on the track: unpins it into `target`.
+    Unpin(UnpinTarget),
+    /// A track tab dropped into an existing group (the usual move).
     IntoGroup { group: GroupId, pos: usize },
+    /// A track tab dropped outside every wrapper (the usual move).
     NewRun { group_index: usize },
+}
+
+/// Translates (`from_zone`: the dragged tab is pinned, `target`) into the
+/// operation of the table in ADR-0087 §5.
+pub fn drop_op(from_zone: bool, target: DragDrop) -> DropOp {
+    match (from_zone, target) {
+        (false, DragDrop::Pinned { pos }) => DropOp::Pin { pos },
+        (true, DragDrop::Pinned { pos }) => DropOp::ReorderPinned { pos },
+        (true, DragDrop::IntoGroup { group, pos }) => {
+            DropOp::Unpin(UnpinTarget::IntoGroup { group, pos })
+        }
+        (true, DragDrop::NewRun { group_index }) => {
+            DropOp::Unpin(UnpinTarget::NewRun { group_index })
+        }
+        (false, DragDrop::IntoGroup { group, pos }) => DropOp::IntoGroup { group, pos },
+        (false, DragDrop::NewRun { group_index }) => DropOp::NewRun { group_index },
+    }
+}
+
+/// Where a drop on the pinned zone lands (ADR-0087 §5): `pos` among the pinned
+/// boxes **other than `dragged`**, by comparing `ghost_center_x` (screen
+/// coordinates) against the center of each of those boxes at its real place --
+/// the same rule [`drag_target`] applies to the tabs of a group, and as stable
+/// during the drag, because the boxes it compares against never move. Over the
+/// app menu button, or before the first box, it is `0`; past the last, the end.
+pub fn pinned_drop_pos(
+    style: &TabBarStyle,
+    is_macos: bool,
+    pinned: &[TabId],
+    dragged: TabId,
+    ghost_center_x: f32,
+) -> usize {
+    let mut others = 0;
+    for (slot, &id) in pinned.iter().enumerate() {
+        if id == dragged {
+            continue;
+        }
+        let rect = pinned_rect(style, is_macos, slot);
+        if ghost_center_x < rect.x + rect.width / 2.0 {
+            return others;
+        }
+        others += 1;
+    }
+    others
+}
+
+/// The target of a tab drag, whatever the origin (ADR-0087 §5): with the
+/// ghost center (screen coordinates) **left of [`track_shift`]** -- over the
+/// row, the app menu button included -- the zone ([`DragDrop::Pinned`]);
+/// right of it, [`drag_target`] on the content coordinates. A row with no box
+/// at all (no app button and nothing pinned) is no zone: there is nowhere to
+/// drop, and the track decides.
+pub fn tab_drag_target(
+    layout: &TabBarLayout,
+    style: &TabBarStyle,
+    is_macos: bool,
+    pinned: &[TabId],
+    dragged: TabId,
+    ghost_center_x: f32,
+    scroll_offset: f32,
+) -> DragDrop {
+    let track_left = track_shift(style, is_macos, pinned.len());
+    if left_row_len(style, pinned.len()) > 0 && ghost_center_x < track_left {
+        return DragDrop::Pinned {
+            pos: pinned_drop_pos(style, is_macos, pinned, dragged, ghost_center_x),
+        };
+    }
+    drag_target(layout, dragged, ghost_center_x - track_left + scroll_offset)
+}
+
+/// The boxes of the zone as the drag previews them, in slot order, `dragged`
+/// included wherever it has a slot (ADR-0087 §5): with a [`DragDrop::Pinned`]
+/// target it sits at `pos` -- the gap where it will land, and the hole when
+/// the box comes from the zone -- and with any other target the zone is the
+/// real one (a pinned `dragged` keeps its slot as a hole; the zone closes
+/// only on the drop). The painter skips `dragged`.
+pub fn pinned_preview_order(pinned: &[TabId], dragged: TabId, target: DragDrop) -> Vec<TabId> {
+    let mut order = pinned.to_vec();
+    if let DragDrop::Pinned { pos } = target {
+        order.retain(|&id| id != dragged);
+        order.insert(pos.min(order.len()), dragged);
+    }
+    order
+}
+
+/// The rectangle the zone highlight covers while the target is the zone
+/// (ADR-0087 §5): from the first to the last of `slots` boxes of the row,
+/// gaps included -- `slots` is the length of [`pinned_preview_order`], so the
+/// gap that opens for the incoming tab is inside it.
+pub fn pinned_zone_rect(style: &TabBarStyle, is_macos: bool, slots: usize) -> Rect {
+    let first = pinned_rect(style, is_macos, 0);
+    let last = pinned_rect(style, is_macos, slots.saturating_sub(1));
+    Rect {
+        x: first.x,
+        y: first.y,
+        width: last.x + last.width - first.x,
+        height: first.height,
+    }
 }
 
 /// Resolve onde `ghost_center_x` cairia (ADR-0021 §4): dentro do wrapper
@@ -1667,7 +1851,7 @@ mod tests {
         assert_eq!(layout.groups[0].rect.x, 0.0, "respiro dobrado à esquerda");
         let button = app_menu_button_rect(&style, false);
         assert_eq!(
-            track_shift(&style, false) - (button.x + button.width),
+            track_shift(&style, false, 0) - (button.x + button.width),
             pad,
             "recorte da trilha colado no botão"
         );
@@ -1849,8 +2033,8 @@ mod tests {
             "quadrado, do tamanho do botão de menu do app (ADR-0082)"
         );
         assert_eq!(
-            trilha_width(&style, bar_width, false),
-            bar_width - track_shift(&style, false) - right_zone_width(&style, false),
+            trilha_width(&style, bar_width, false, 0),
+            bar_width - track_shift(&style, false, 0) - right_zone_width(&style, false),
             "a trilha é o que sobra entre a zona do botão de menu e a da direita"
         );
 
@@ -1924,9 +2108,9 @@ mod tests {
         // Com um botão só (antes do ADR-0055) seriam o respiro da trilha, um
         // botão e o da borda; o de sessões custa um botão e um respiro.
         assert_eq!(
-            trilha_width(&style, bar_width, false) + style.window_controls_gap + side,
+            trilha_width(&style, bar_width, false, 0) + style.window_controls_gap + side,
             bar_width
-                - track_shift(&style, false)
+                - track_shift(&style, false, 0)
                 - (style.trilha_gap
                     + side
                     + style.window_controls_gap
@@ -1953,7 +2137,7 @@ mod tests {
         assert_eq!(button.x, style.trilha_padding);
         assert_eq!(
             button.x + button.width + style.trilha_padding,
-            track_shift(&style, false),
+            track_shift(&style, false, 0),
             "a trilha abre um respiro depois do botão"
         );
 
@@ -1965,7 +2149,7 @@ mod tests {
             style.macos_traffic_light_inset + style.trilha_padding
         );
         assert_eq!(
-            track_shift(&style, true) - track_shift(&style, false),
+            track_shift(&style, true, 0) - track_shift(&style, false, 0),
             style.macos_traffic_light_inset
         );
     }
@@ -2057,15 +2241,15 @@ mod tests {
         };
         let bar_height = crate::chrome::bar_height(&hidden);
 
-        assert_eq!(track_shift(&hidden, false), 0.0);
+        assert_eq!(track_shift(&hidden, false, 0), 0.0);
         assert_eq!(
-            track_shift(&hidden, true),
+            track_shift(&hidden, true, 0),
             hidden.macos_traffic_light_inset,
             "no macOS o semáforo continua reservado"
         );
         assert_eq!(
-            trilha_width(&hidden, 800.0, false) - trilha_width(&shown, 800.0, false),
-            track_shift(&shown, false),
+            trilha_width(&hidden, 800.0, false, 0) - trilha_width(&shown, 800.0, false, 0),
+            track_shift(&shown, false, 0),
         );
 
         let was_button = app_menu_button_rect(&shown, false);
@@ -2078,6 +2262,217 @@ mod tests {
             point_in_zone_button(&hidden, 800.0, bar_height, false, center),
             None
         );
+    }
+
+    /// A workspace with `pinned` pinned tabs (in order) and one track tab.
+    fn workspace_with_pinned(pinned: usize) -> (Workspace, Vec<TabId>, TabId) {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..pinned)
+            .map(|i| ws.append_tab(format!("p{i}"), None))
+            .collect();
+        let track = ws.append_tab("track", None);
+        for (pos, &id) in ids.iter().enumerate() {
+            assert!(ws.pin_tab(id, pos));
+        }
+        (ws, ids, track)
+    }
+
+    /// ADR-0087 §1: `k` = app button + pinned boxes; each pinned tab costs
+    /// `size + trilha_gap` (46 px at the defaults), `k = 1` is the 52 px of
+    /// before and `k = 0` is only the platform inset.
+    #[test]
+    fn track_shift_counts_the_pinned_boxes() {
+        let shown = TabBarStyle::DEFAULT;
+        let hidden = TabBarStyle {
+            show_app_menu_button: false,
+            ..shown
+        };
+        let step = app_menu_button_size(&shown) + shown.trilha_gap;
+        assert_eq!(step, 46.0, "cada fixada custa 46 px de trilha");
+
+        assert_eq!(track_shift(&shown, false, 0), 52.0);
+        assert_eq!(track_shift(&shown, false, 1), 52.0 + step);
+        assert_eq!(track_shift(&shown, false, 3), 52.0 + 3.0 * step);
+        // Without the button the first pinned box takes its place: one box
+        // is 12 + 40, three are 12 + 3 * 40 + 2 * 6.
+        assert_eq!(track_shift(&hidden, false, 0), 0.0);
+        assert_eq!(track_shift(&hidden, false, 1), 52.0);
+        assert_eq!(track_shift(&hidden, false, 3), 144.0);
+        // The macOS inset comes first, with or without boxes.
+        let inset = shown.macos_traffic_light_inset;
+        assert_eq!(track_shift(&hidden, true, 0), inset);
+        assert_eq!(track_shift(&shown, true, 3), inset + 52.0 + 3.0 * step);
+        // The track narrows by the same amount.
+        assert_eq!(
+            trilha_width(&shown, 800.0, false, 0) - trilha_width(&shown, 800.0, false, 3),
+            3.0 * step
+        );
+        // Never negative, however many are pinned.
+        assert_eq!(trilha_width(&shown, 800.0, false, 40), 0.0);
+    }
+
+    /// The pinned boxes continue the row of the app button: the same top, the
+    /// same side, `trilha_gap` between neighbours; `track_shift` is a
+    /// `trilha_padding` past the last one.
+    #[test]
+    fn pinned_rects_continue_the_row_of_the_app_menu_button() {
+        let style = TabBarStyle::DEFAULT;
+        let app = app_menu_button_rect(&style, false);
+        let size = app_menu_button_size(&style);
+        for i in 0..3 {
+            let rect = pinned_rect(&style, false, i);
+            assert_eq!(rect.y, app.y);
+            assert_eq!((rect.width, rect.height), (size, size));
+            assert_eq!(
+                rect.x,
+                app.x + (i + 1) as f32 * (size + style.trilha_gap),
+                "pinned {i}"
+            );
+        }
+        let last = pinned_rect(&style, false, 2);
+        assert_eq!(
+            track_shift(&style, false, 3),
+            last.x + last.width + style.trilha_padding
+        );
+        // Without the button the first pinned box takes the button's place.
+        let hidden = TabBarStyle {
+            show_app_menu_button: false,
+            ..style
+        };
+        assert_eq!(pinned_rect(&hidden, false, 0), app);
+        // macOS: after the traffic-light inset, like the button.
+        assert_eq!(
+            pinned_rect(&style, true, 0).x - pinned_rect(&style, false, 0).x,
+            style.macos_traffic_light_inset
+        );
+    }
+
+    #[test]
+    fn point_in_pinned_hits_the_boxes_and_not_the_gaps_or_margins() {
+        let style = TabBarStyle::DEFAULT;
+        let count = 3;
+        for i in 0..count {
+            let rect = pinned_rect(&style, false, i);
+            let center = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+            assert_eq!(point_in_pinned(&style, false, count, center), Some(i));
+            // The edges: inside at the top-left corner, out one pixel past.
+            assert_eq!(
+                point_in_pinned(&style, false, count, (rect.x, rect.y)),
+                Some(i)
+            );
+            assert_eq!(
+                point_in_pinned(&style, false, count, (rect.x + rect.width, center.1)),
+                None
+            );
+            assert_eq!(
+                point_in_pinned(&style, false, count, (center.0, rect.y - 1.0)),
+                None,
+                "margem de cima"
+            );
+            assert_eq!(
+                point_in_pinned(&style, false, count, (center.0, rect.y + rect.height)),
+                None
+            );
+        }
+        // The gap between two boxes is drag region, and so is the margin
+        // after the last.
+        let first = pinned_rect(&style, false, 0);
+        let second = pinned_rect(&style, false, 1);
+        let gap = (
+            first.x + first.width + style.trilha_gap / 2.0,
+            first.y + 5.0,
+        );
+        assert!(gap.0 < second.x);
+        assert_eq!(point_in_pinned(&style, false, count, gap), None);
+        let last = pinned_rect(&style, false, count - 1);
+        let after = (
+            last.x + last.width + style.trilha_padding / 2.0,
+            last.y + 5.0,
+        );
+        assert_eq!(point_in_pinned(&style, false, count, after), None);
+        // The app button is not a pinned box.
+        let app = app_menu_button_rect(&style, false);
+        let on_app = (app.x + 5.0, app.y + 5.0);
+        assert_eq!(point_in_pinned(&style, false, count, on_app), None);
+        assert!(point_in_app_menu_button(&style, false, on_app));
+        // A box that does not exist (index past the count) is never hit.
+        let phantom = pinned_rect(&style, false, count);
+        assert_eq!(
+            point_in_pinned(&style, false, count, (phantom.x + 5.0, phantom.y + 5.0)),
+            None
+        );
+        // Without the button the first box is at the edge.
+        let hidden = TabBarStyle {
+            show_app_menu_button: false,
+            ..style
+        };
+        let box0 = pinned_rect(&hidden, false, 0);
+        assert_eq!(
+            point_in_pinned(&hidden, false, 1, (box0.x + 5.0, box0.y + 5.0)),
+            Some(0)
+        );
+    }
+
+    /// `layout` starts the content at `x = 0` whenever the left zone has a
+    /// box -- the button **or** a pinned tab; with neither, the content keeps
+    /// its own `trilha_padding`. The pinned tabs are not in the track.
+    #[test]
+    fn layout_origin_follows_the_left_zone_with_pinned_tabs() {
+        let (ws, ids, track) = workspace_with_pinned(2);
+        let hidden = TabBarStyle {
+            show_app_menu_button: false,
+            ..TabBarStyle::DEFAULT
+        };
+        let mut m = measurer();
+
+        let with_button = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(with_button.groups[0].rect.x, 0.0);
+        let only_pinned = layout(&ws, &hidden, &mut m);
+        assert_eq!(
+            only_pinned.groups[0].rect.x, 0.0,
+            "fixadas ocupam a zona: o respiro já está em track_shift"
+        );
+        for id in &ids {
+            assert_eq!(tab_rect(&with_button, *id), None, "fixada fora da trilha");
+        }
+        assert!(tab_rect(&with_button, track).is_some());
+
+        let mut plain = Workspace::new();
+        plain.append_tab("only", None);
+        let none = layout(&plain, &hidden, &mut m);
+        assert_eq!(none.groups[0].rect.x, hidden.trilha_padding);
+    }
+
+    /// ADR-0087 §4: a pinned box answers before the track, and the track
+    /// answers only inside its clip -- a tab scrolled under the zone never
+    /// takes the click.
+    #[test]
+    fn the_pinned_zone_wins_over_a_track_scrolled_underneath() {
+        let (ws, _ids, track) = workspace_with_pinned(2);
+        let style = TabBarStyle::DEFAULT;
+        let mut m = measurer();
+        let bar_width = 800.0;
+        let layout = layout(&ws, &style, &mut m);
+        let tab = tab_rect(&layout, track).unwrap();
+
+        // Scroll the track so its tab sits right under the first pinned box.
+        let box0 = pinned_rect(&style, false, 0);
+        let screen = (box0.x + 5.0, box0.y + 5.0);
+        let shift = track_shift(&style, false, 2);
+        let scroll = tab.x + shift - screen.0;
+        let content = (screen.0 - shift + scroll, screen.1);
+        assert_eq!(
+            hit_test(&layout, content),
+            Some(TabBarHit::Tab(track)),
+            "por baixo, a aba da trilha seria atingida"
+        );
+        assert_eq!(point_in_pinned(&style, false, 2, screen), Some(0));
+        assert!(
+            !point_in_track(&style, bar_width, false, 2, screen.0),
+            "e a trilha só atende dentro do recorte"
+        );
+        assert!(point_in_track(&style, bar_width, false, 2, shift));
+        assert!(!point_in_track(&style, bar_width, false, 2, shift - 0.5));
     }
 
     #[test]
@@ -2762,6 +3157,280 @@ mod tests {
         assert_eq!(group_drag_target_index(&layout, g2, far_left), 0);
     }
 
+    /// Center (screen x) of the pinned box in slot `i`.
+    fn slot_center(style: &TabBarStyle, i: usize) -> f32 {
+        let rect = pinned_rect(style, false, i);
+        rect.x + rect.width / 2.0
+    }
+
+    #[test]
+    fn pinned_drop_pos_compares_against_the_center_of_each_box() {
+        let style = TabBarStyle::DEFAULT;
+        let (ws, ids, _) = workspace_with_pinned(3);
+        let pinned = ws.pinned();
+        // A tab coming from the track: nobody is ignored.
+        let outsider = TabId::new(999);
+        assert_eq!(pinned, ids.as_slice());
+        // Before the first box, and over the app menu button: the front.
+        assert_eq!(pinned_drop_pos(&style, false, pinned, outsider, 0.0), 0);
+        let button = app_menu_button_rect(&style, false);
+        let over_button = button.x + button.width / 2.0;
+        assert_eq!(
+            pinned_drop_pos(&style, false, pinned, outsider, over_button),
+            0
+        );
+        // Just before / just after the center of box 0 and box 1.
+        let c0 = slot_center(&style, 0);
+        let c1 = slot_center(&style, 1);
+        assert_eq!(
+            pinned_drop_pos(&style, false, pinned, outsider, c0 - 1.0),
+            0
+        );
+        assert_eq!(
+            pinned_drop_pos(&style, false, pinned, outsider, c0 + 1.0),
+            1
+        );
+        assert_eq!(
+            pinned_drop_pos(&style, false, pinned, outsider, c1 + 1.0),
+            2
+        );
+        // Past the last box: the end.
+        let c2 = slot_center(&style, 2);
+        assert_eq!(
+            pinned_drop_pos(&style, false, pinned, outsider, c2 + 1.0),
+            3
+        );
+        assert_eq!(pinned_drop_pos(&style, false, pinned, outsider, 1.0e4), 3);
+        // An empty zone: always the front.
+        assert_eq!(pinned_drop_pos(&style, false, &[], outsider, 100.0), 0);
+    }
+
+    /// The dragged box ignores its own slot, as `resolve_within_group` ignores
+    /// the dragged tab: `pos` counts the others, and the result is what
+    /// `Workspace::move_pinned` takes.
+    #[test]
+    fn pinned_drop_pos_ignores_the_dragged_box_and_matches_move_pinned() {
+        let style = TabBarStyle::DEFAULT;
+        let (mut ws, ids, _) = workspace_with_pinned(3);
+        let dragged = ids[1];
+        let (c0, c1, c2) = (
+            slot_center(&style, 0),
+            slot_center(&style, 1),
+            slot_center(&style, 2),
+        );
+        let pos = |x: f32| pinned_drop_pos(&style, false, ws.pinned(), dragged, x);
+        assert_eq!(pos(c0 - 1.0), 0);
+        // Over its own slot the next box's center is the one to beat: between
+        // box 0 and box 2 the answer is "stay".
+        assert_eq!(pos(c1), 1);
+        assert_eq!(pos(c0 + 1.0), 1);
+        assert_eq!(pos(c2 - 1.0), 1);
+        assert_eq!(pos(c2 + 1.0), 2);
+
+        // The resulting orders, fixed one by one.
+        let order_after = |ws: &Workspace| ws.pinned().to_vec();
+        let mut front = ws.clone();
+        assert!(front.move_pinned(dragged, pos(c0 - 1.0)));
+        assert_eq!(order_after(&front), [dragged, ids[0], ids[2]]);
+        let mut stay = ws.clone();
+        assert!(stay.move_pinned(dragged, pos(c1)));
+        assert_eq!(order_after(&stay), [ids[0], dragged, ids[2]]);
+        let end = pos(c2 + 1.0);
+        assert!(ws.move_pinned(dragged, end));
+        assert_eq!(order_after(&ws), [ids[0], ids[2], dragged]);
+    }
+
+    /// ADR-0087 §5: left of `track_shift` is the zone, right of it the usual
+    /// track target in content coordinates.
+    #[test]
+    fn tab_drag_target_splits_at_track_shift() {
+        let style = TabBarStyle::DEFAULT;
+        let (ws, ids, track) = workspace_with_pinned(2);
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        let shift = track_shift(&style, false, 2);
+
+        // Just left of the track: the zone, after the last box.
+        assert_eq!(
+            tab_drag_target(&layout, &style, false, ws.pinned(), track, shift - 1.0, 0.0),
+            DragDrop::Pinned { pos: 2 }
+        );
+        // Over the first box's left half: the front of the zone.
+        assert_eq!(
+            tab_drag_target(&layout, &style, false, ws.pinned(), track, 20.0, 0.0),
+            DragDrop::Pinned { pos: 0 }
+        );
+        // Right of it: the track, exactly what `drag_target` says for the
+        // matching content x.
+        let group = ws.group_of_tab(track).unwrap();
+        let wrapper = &layout.groups[0];
+        let content_x = wrapper.rect.x + wrapper.rect.width - 1.0;
+        assert_eq!(
+            tab_drag_target(
+                &layout,
+                &style,
+                false,
+                ws.pinned(),
+                ids[0],
+                shift + content_x,
+                0.0
+            ),
+            DragDrop::IntoGroup { group, pos: 1 }
+        );
+        // Scrolled: the same screen x is a different content x.
+        assert_eq!(
+            tab_drag_target(
+                &layout,
+                &style,
+                false,
+                ws.pinned(),
+                ids[0],
+                shift + content_x - 50.0,
+                50.0
+            ),
+            DragDrop::IntoGroup { group, pos: 1 }
+        );
+    }
+
+    /// With no pinned tab, the app button is the whole zone: dropping on it
+    /// pins at 0 (ADR-0087 §5).
+    #[test]
+    fn dropping_on_the_app_button_with_nothing_pinned_pins_at_the_front() {
+        let style = TabBarStyle::DEFAULT;
+        let (ws, _, track) = workspace_with_pinned(0);
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        let button = app_menu_button_rect(&style, false);
+        let target = tab_drag_target(
+            &layout,
+            &style,
+            false,
+            ws.pinned(),
+            track,
+            button.x + button.width / 2.0,
+            0.0,
+        );
+        assert_eq!(target, DragDrop::Pinned { pos: 0 });
+        assert_eq!(drop_op(false, target), DropOp::Pin { pos: 0 });
+    }
+
+    /// No box in the row at all (button hidden, nothing pinned): no zone.
+    #[test]
+    fn a_row_without_boxes_is_not_a_drop_zone() {
+        let style = TabBarStyle {
+            show_app_menu_button: false,
+            ..TabBarStyle::DEFAULT
+        };
+        let (ws, _, track) = workspace_with_pinned(0);
+        let mut m = measurer();
+        let layout = layout(&ws, &style, &mut m);
+        let target = tab_drag_target(&layout, &style, true, ws.pinned(), track, 1.0, 0.0);
+        assert!(!matches!(target, DragDrop::Pinned { .. }));
+    }
+
+    /// The whole table of ADR-0087 §5.
+    #[test]
+    fn drop_op_is_the_table_of_the_adr() {
+        let group = {
+            let mut ws = Workspace::new();
+            let a = ws.append_tab("zsh", None);
+            ws.group_of_tab(a).unwrap()
+        };
+        let into = DragDrop::IntoGroup { group, pos: 3 };
+        let run = DragDrop::NewRun { group_index: 2 };
+        let zone = DragDrop::Pinned { pos: 1 };
+
+        // From the track.
+        assert_eq!(drop_op(false, zone), DropOp::Pin { pos: 1 });
+        assert_eq!(drop_op(false, into), DropOp::IntoGroup { group, pos: 3 });
+        assert_eq!(drop_op(false, run), DropOp::NewRun { group_index: 2 });
+        // From the zone.
+        assert_eq!(drop_op(true, zone), DropOp::ReorderPinned { pos: 1 });
+        assert_eq!(
+            drop_op(true, into),
+            DropOp::Unpin(UnpinTarget::IntoGroup { group, pos: 3 })
+        );
+        assert_eq!(
+            drop_op(true, run),
+            DropOp::Unpin(UnpinTarget::NewRun { group_index: 2 })
+        );
+    }
+
+    /// The drop operations, applied to a real workspace, fix the resulting
+    /// order (not just invariants).
+    #[test]
+    fn the_drop_operations_give_the_expected_orders() {
+        let (mut ws, ids, track) = workspace_with_pinned(2);
+        // Pin the track tab between the two boxes.
+        let DropOp::Pin { pos } = drop_op(false, DragDrop::Pinned { pos: 1 }) else {
+            panic!("a track tab on the zone pins");
+        };
+        assert!(ws.pin_tab(track, pos));
+        assert_eq!(ws.pinned(), [ids[0], track, ids[1]]);
+        assert_eq!(ws.track_order().count(), 0);
+
+        // Reorder the last box to the front.
+        let DropOp::ReorderPinned { pos } = drop_op(true, DragDrop::Pinned { pos: 0 }) else {
+            panic!("a pinned tab on the zone reorders");
+        };
+        assert!(ws.move_pinned(ids[1], pos));
+        assert_eq!(ws.pinned(), [ids[1], ids[0], track]);
+
+        // Unpin into a new run at the start of the track.
+        let DropOp::Unpin(target) = drop_op(true, DragDrop::NewRun { group_index: 0 }) else {
+            panic!("a pinned tab on the track unpins");
+        };
+        assert!(ws.unpin_tab(ids[0], target));
+        assert_eq!(ws.pinned(), [ids[1], track]);
+        assert_eq!(ws.track_order().collect::<Vec<_>>(), [ids[0]]);
+    }
+
+    /// The preview of the zone: the incoming tab opens a gap at `pos`; a box
+    /// that leaves keeps its slot as a hole; any other target is the real zone.
+    #[test]
+    fn pinned_preview_order_opens_the_gap_and_keeps_the_hole() {
+        let (ws, ids, track) = workspace_with_pinned(3);
+        let zone = ws.pinned();
+        let gap = |dragged, pos| pinned_preview_order(zone, dragged, DragDrop::Pinned { pos });
+        // From the track: inserted at `pos`.
+        assert_eq!(gap(track, 0), [track, ids[0], ids[1], ids[2]]);
+        assert_eq!(gap(track, 2), [ids[0], ids[1], track, ids[2]]);
+        assert_eq!(gap(track, 3), [ids[0], ids[1], ids[2], track]);
+        // From the zone: the dragged box moves to `pos`, same length.
+        assert_eq!(gap(ids[0], 2), [ids[1], ids[2], ids[0]]);
+        assert_eq!(gap(ids[2], 0), [ids[2], ids[0], ids[1]]);
+        // Another target: the real zone, hole included.
+        let run = DragDrop::NewRun { group_index: 0 };
+        assert_eq!(pinned_preview_order(zone, ids[1], run), zone);
+        assert_eq!(pinned_preview_order(zone, track, run), zone);
+    }
+
+    #[test]
+    fn the_zone_highlight_covers_the_slots_gaps_included() {
+        let style = TabBarStyle::DEFAULT;
+        let first = pinned_rect(&style, false, 0);
+        let last = pinned_rect(&style, false, 2);
+        let rect = pinned_zone_rect(&style, false, 3);
+        assert_eq!(
+            (rect.x, rect.y, rect.height),
+            (first.x, first.y, first.height)
+        );
+        assert_eq!(rect.x + rect.width, last.x + last.width);
+        // One slot is just that box.
+        assert_eq!(pinned_zone_rect(&style, false, 1), first);
+    }
+
+    #[test]
+    fn drag_highlight_rect_is_none_for_the_zone_target() {
+        let (ws, _, _) = workspace_with_pinned(1);
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert_eq!(
+            drag_highlight_rect(&layout, DragDrop::Pinned { pos: 0 }),
+            None
+        );
+    }
+
     #[test]
     fn tab_rect_finds_by_id() {
         let mut ws = Workspace::new();
@@ -2882,20 +3551,27 @@ mod tests {
     fn point_in_track_covers_only_the_visible_window_of_the_track() {
         let style = TabBarStyle::DEFAULT;
         let bar_width = 800.0;
-        let left = track_shift(&style, false);
-        let width = trilha_width(&style, bar_width, false);
+        let left = track_shift(&style, false, 0);
+        let width = trilha_width(&style, bar_width, false, 0);
         assert!(width > 0.0);
 
-        assert!(point_in_track(&style, bar_width, false, left));
-        assert!(point_in_track(&style, bar_width, false, left + width - 0.5));
-        assert!(!point_in_track(&style, bar_width, false, left - 0.5));
-        assert!(!point_in_track(&style, bar_width, false, left + width));
+        assert!(point_in_track(&style, bar_width, false, 0, left));
+        assert!(point_in_track(
+            &style,
+            bar_width,
+            false,
+            0,
+            left + width - 0.5
+        ));
+        assert!(!point_in_track(&style, bar_width, false, 0, left - 0.5));
+        assert!(!point_in_track(&style, bar_width, false, 0, left + width));
         // Sobre os botões da direita.
         let settings = settings_button_rect(&style, bar_width, 52.0, false);
         assert!(!point_in_track(
             &style,
             bar_width,
             false,
+            0,
             settings.x + settings.width / 2.0
         ));
     }
@@ -3074,6 +3750,43 @@ mod tests {
         assert!(layout.ungrouped_new_tab_button.is_none());
         // O run solto, esse, tem o dele.
         assert!(layout.groups[1].new_tab_button.is_some());
+    }
+
+    /// Only pinned tabs (ADR-0086 §1): the track has no run whose "+" could
+    /// open a tab, so the loose "+" is the only one -- it must show, as the
+    /// first item of the track (no gap before it), and give the track a
+    /// width so it can be painted and hit.
+    #[test]
+    fn ungrouped_button_shows_when_only_pinned_tabs_exist() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        assert!(ws.pin_tab(a, 0));
+        assert!(ws.groups().iter().all(|g| g.tabs().is_empty()));
+
+        let mut m = measurer();
+        let style = TabBarStyle::DEFAULT;
+        let layout = layout(&ws, &style, &mut m);
+        let button = layout
+            .ungrouped_new_tab_button
+            .expect("só fixadas: o \"+\" solto é o único jeito de abrir aba");
+        assert!(layout.groups.is_empty());
+        assert_eq!(button.x, 0.0, "primeiro item da trilha, sem vão antes");
+        assert_eq!(layout.content_width, button.width + style.trilha_padding);
+        assert_eq!(
+            hit_test(&layout, (button.x + 1.0, button.y + 1.0)),
+            Some(TabBarHit::UngroupedNewTab)
+        );
+    }
+
+    /// No tab at all, pinned or not: the empty bar stays as before -- no
+    /// button, no content.
+    #[test]
+    fn no_ungrouped_button_on_an_empty_workspace() {
+        let ws = Workspace::new();
+        let mut m = measurer();
+        let layout = layout(&ws, &TabBarStyle::DEFAULT, &mut m);
+        assert!(layout.ungrouped_new_tab_button.is_none());
+        assert_eq!(layout.content_width, 0.0);
     }
 
     /// Barra sem grupo explícito nenhum também não precisa dele.

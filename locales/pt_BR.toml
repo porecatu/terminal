@@ -27,6 +27,8 @@ new = "Nova aba"
 close = "Fechar aba"
 move_to_group = "Mover para grupo"
 reconnect = "Reconectar"
+pin = "Fixar aba"
+unpin = "Desafixar aba"
 
 [terminal_menu]
 copy = "Copiar"
@@ -347,6 +349,7 @@ tab_goto = "Ir para a aba {n}"
 tab_rename = "Renomear aba"
 tab_move_left = "Mover aba para a esquerda"
 tab_move_right = "Mover aba para a direita"
+tab_toggle_pin = "Fixar ou desafixar a aba"
 group_create = "Criar grupo"
 group_dissolve = "Desagrupar"
 group_rename = "Renomear grupo"
@@ -439,6 +442,12 @@ cancel = "Cancelar"
 title = "Fechar aba?"
 body = "\"{title}\" tem um programa em primeiro plano. Fechar mesmo assim?"
 confirm = "Fechar aba"
+
+[dialog.close_pinned_tab]
+title = "Fechar aba fixada?"
+body = "\"{title}\" sai das abas fixadas e deixa de abrir junto com o Porecatu."
+process = "Há um programa em primeiro plano, que será encerrado."
+confirm = "Fechar e desafixar"
 
 [dialog.close_pane]
 title = "Fechar painel?"
@@ -534,6 +543,7 @@ group_collapsed_colored = "Grupo {name}, colapsado, cor {color}"
 # Estados da aba: cada um é uma peça, encaixada depois do título por tab_state.
 tab_state = " ({state})"
 state_active = "ativa"
+state_pinned = "fixada"
 state_not_started = "não iniciada"
 state_bell = "campainha"
 state_activity = "atividade"
@@ -662,6 +672,24 @@ body = "O formato salvo (versão {found}) é mais novo que o suportado por esta 
 [notice.named_session_unreadable]
 title = "Não foi possível restaurar a sessão"
 body = "O arquivo não pôde ser lido."
+
+[notice.pinned_corrupt]
+title = "Arquivo de abas fixadas corrompido"
+body = "O arquivo foi preservado em \"{path}\". A lista de abas fixadas começou vazia."
+
+[notice.pinned_newer]
+title = "Abas fixadas de uma versão mais nova"
+body = "O formato salvo (versão {found}) é mais novo que o suportado por esta versão do Porecatu (até {supported}). As abas fixadas não foram abertas e não podem ser alteradas nesta versão."
+
+[notice.pinned_save_failed]
+title = "Não foi possível gravar as abas fixadas"
+body = "A mudança vale nesta execução, mas não foi gravada: {reason}"
+read_only = "o arquivo é de uma versão mais nova do Porecatu"
+no_path = "não foi possível localizar o diretório de estado"
+
+[notice.pinned_refused]
+title = "Não foi possível fixar a aba"
+body = "O arquivo de abas fixadas foi gravado por uma versão mais nova do Porecatu e não pode ser alterado nesta versão."
 
 [notice.overwrite_blocked]
 title = "Não é possível sobrescrever"

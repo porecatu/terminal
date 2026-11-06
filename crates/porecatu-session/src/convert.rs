@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use porecatu_core::{
-    ExternalNode, GroupColor, Pane, PaneNode, PaneTree, SplitAxis, TabId, Workspace,
+    ExternalNode, GroupColor, Pane, PaneNode, PaneTree, SplitAxis, Tab, TabId, Workspace,
 };
 
 use crate::schema::v1::{GroupV1, PaneNodeV1, PaneTreeV1, PaneV1, SplitAxisV1, TabV1};
@@ -49,29 +49,85 @@ pub fn window_from_workspace(ws: &Workspace) -> (Vec<GroupV1>, Vec<TabV1>, Optio
         });
     }
 
+    // ADR-0086 §4: the session never writes a pinned tab -- it walks the
+    // track, not the whole bar, otherwise every pinned tab would open twice
+    // (once from `pinned.json`, once from here).
     let mut tabs = Vec::new();
-    for id in ws.visual_order() {
+    for id in ws.track_order() {
         let Some(tab) = ws.tab(id) else { continue };
         if tab.is_exited() {
             continue;
         }
-        tabs.push(TabV1 {
-            id: id.get(),
-            custom_title: tab.has_custom_title().then(|| tab.title().to_string()),
-            cwd: tab.cwd().cloned(),
-            spawn_program: Some(tab.shell_name().to_string()),
-            // ADR-0070 §4: with `panes` present, the profile lives in each leaf.
-            profile: None,
-            panes: Some(pane_tree_v1(tab.panes())),
-        });
+        tabs.push(tab_v1_from_tab(tab, id.get()));
     }
 
+    // A pinned active tab is not in `tabs`: `None` here (the field naming
+    // which pinned tab was active is `WindowV1::active_pinned`, ADR-0086 §4,
+    // filled by the caller, who knows the position in `pinned.json`).
     let active_tab = ws
         .active_tab()
+        .filter(|&id| !ws.is_pinned(id))
         .filter(|&id| ws.tab(id).is_some_and(|t| !t.is_exited()))
         .map(TabId::get);
 
     (groups, tabs, active_tab)
+}
+
+/// The `TabV1` the session would write for `tab`, with `id` as the file id
+/// (ADR-0086 §2). Shared by `window_from_workspace` and by the pinned-tab
+/// snapshot, so there is one way to write a tab to disk, not two: the same
+/// conversion follows every future change of the tab schema.
+pub fn tab_v1_from_tab(tab: &Tab, id: u32) -> TabV1 {
+    TabV1 {
+        id,
+        custom_title: tab.has_custom_title().then(|| tab.title().to_string()),
+        cwd: tab.cwd().cloned(),
+        spawn_program: Some(tab.shell_name().to_string()),
+        // ADR-0070 §4: with `panes` present, the profile lives in each leaf.
+        profile: None,
+        panes: Some(pane_tree_v1(tab.panes())),
+    }
+}
+
+/// Rebuilds a pinned tab from its snapshot and inserts it at `pos` of the
+/// pinned zone (ADR-0086 §2/§5). Unlike a restored tab it never waits for
+/// `lazy_restore`: a pinned tab always comes up (RF-21.15), so every pane
+/// is built running -- except an SSH pane (per `is_ssh_profile`), which
+/// still waits for a gesture (RF-20.33). Does not activate anything
+/// (RF-21.14). Without `panes` (defensive, a hand-edited file) the tab is a
+/// single pane built from `cwd`/`spawn_program`/`profile`, as in the legacy
+/// branch of [`workspace_from_window`].
+pub fn insert_pinned_from_v1(
+    ws: &mut Workspace,
+    tab: &TabV1,
+    pos: usize,
+    is_ssh_profile: &dyn Fn(&str) -> bool,
+) -> TabId {
+    let tree_v1 = tab
+        .panes
+        .clone()
+        .unwrap_or_else(|| single_pane_tree_v1(tab));
+    let tree = pane_tree_from_v1(&tree_v1, false, is_ssh_profile);
+    let id = ws.insert_pinned_tab_with_panes(tree, pos);
+    if let Some(title) = &tab.custom_title {
+        ws.tab_mut(id)
+            .expect("just created")
+            .set_custom_title(Some(title.clone()));
+    }
+    id
+}
+
+/// A one-leaf tree from the tab-level fields of a `TabV1` without `panes`.
+fn single_pane_tree_v1(tab: &TabV1) -> PaneTreeV1 {
+    PaneTreeV1 {
+        root: PaneNodeV1::Leaf(PaneV1 {
+            id: 0,
+            cwd: tab.cwd.clone(),
+            spawn_program: tab.spawn_program.clone(),
+            profile: tab.profile.clone(),
+        }),
+        focused: 0,
+    }
 }
 
 /// Reconstrói um `Workspace` a partir de `groups`/`tabs`/`active_tab` de
@@ -634,6 +690,204 @@ mod tests {
         assert!(!groups.iter().any(|g| g.id == grupo.get()));
     }
 
+    /// A workspace with `[loose, pinned, grouped...]` ids, for the pinned
+    /// tests below. The pinned tab is the second created, pinned afterwards.
+    fn workspace_with_a_pinned_tab() -> (Workspace, TabId, TabId, TabId) {
+        let mut ws = Workspace::new();
+        let loose = ws.append_tab("zsh", Some(PathBuf::from("/loose")));
+        let pinned = ws.append_tab("bash", Some(PathBuf::from("/pinned")));
+        let grouped = ws.append_tab("fish", Some(PathBuf::from("/grouped")));
+        ws.group_tabs(&[grouped], "g", GroupColor::Blue).unwrap();
+        assert!(ws.pin_tab(pinned, 0));
+        (ws, loose, pinned, grouped)
+    }
+
+    /// ADR-0086 §4: the session writes the track only. The pinned tab is in
+    /// neither `tabs` nor `groups`, and the loose and grouped tabs keep
+    /// their order.
+    #[test]
+    fn a_pinned_tab_is_not_written_to_the_session() {
+        let (ws, loose, pinned, grouped) = workspace_with_a_pinned_tab();
+        assert_eq!(ws.visual_order().next(), Some(pinned));
+
+        let (groups, tabs, _) = window_from_workspace(&ws);
+
+        let written: Vec<u32> = tabs.iter().map(|t| t.id).collect();
+        assert_eq!(written, [loose.get(), grouped.get()]);
+        assert!(
+            groups
+                .iter()
+                .flat_map(|g| g.tabs.iter())
+                .all(|&id| id != pinned.get())
+        );
+    }
+
+    /// ADR-0086 §4: an active pinned tab is `None` in `active_tab`; a loose
+    /// active tab is still written.
+    #[test]
+    fn an_active_pinned_tab_is_written_as_no_active_tab() {
+        let (mut ws, loose, pinned, _) = workspace_with_a_pinned_tab();
+
+        ws.activate_tab(pinned);
+        let (_, _, active) = window_from_workspace(&ws);
+        assert_eq!(active, None);
+
+        ws.activate_tab(loose);
+        let (_, _, active) = window_from_workspace(&ws);
+        assert_eq!(active, Some(loose.get()));
+    }
+
+    /// The pinned snapshot and the session write the same `TabV1` for the
+    /// same tab: there is one conversion, not two (ADR-0086 §2).
+    #[test]
+    fn tab_v1_from_tab_is_what_the_session_writes() {
+        let mut ws = Workspace::new();
+        let id = ws.append_tab("zsh", Some(PathBuf::from("/srv")));
+        let first = ws.tab(id).unwrap().panes().focused_id();
+        ws.tab_mut(id)
+            .unwrap()
+            .panes_mut()
+            .split(first, SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        ws.tab_mut(id)
+            .unwrap()
+            .set_custom_title(Some("api".to_string()));
+
+        let (_, tabs, _) = window_from_workspace(&ws);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tab_v1_from_tab(ws.tab(id).unwrap(), id.get()), tabs[0]);
+        // The id argument is the file id, whatever the tab's own id is.
+        assert_eq!(tab_v1_from_tab(ws.tab(id).unwrap(), 9).id, 9);
+    }
+
+    /// Snapshot -> insert: same tree, cwd and title; goes to the pinned
+    /// zone, not to a group; nothing gets activated.
+    #[test]
+    fn insert_pinned_from_v1_round_trips_the_snapshot_without_activating() {
+        let mut source = Workspace::new();
+        let id = source.append_tab("zsh", Some(PathBuf::from("/srv/api")));
+        let top = source.tab(id).unwrap().panes().focused_id();
+        let right = source
+            .tab_mut(id)
+            .unwrap()
+            .panes_mut()
+            .split(
+                top,
+                SplitAxis::Vertical,
+                "bash",
+                Some(PathBuf::from("/srv/logs")),
+            )
+            .unwrap();
+        source
+            .tab_mut(id)
+            .unwrap()
+            .panes_mut()
+            .set_ratio(right, 0.3);
+        source.tab_mut(id).unwrap().panes_mut().focus(top);
+        source
+            .tab_mut(id)
+            .unwrap()
+            .set_custom_title(Some("api".to_string()));
+        let snapshot = tab_v1_from_tab(source.tab(id).unwrap(), 0);
+
+        let mut ws = Workspace::new();
+        let loose = ws.append_tab("zsh", None);
+        ws.activate_tab(loose);
+        let new_id = insert_pinned_from_v1(&mut ws, &snapshot, 0, &|_| false);
+
+        assert_eq!(ws.pinned(), [new_id]);
+        assert!(ws.is_pinned(new_id));
+        assert_eq!(ws.group_of_tab(new_id), None, "not in any group");
+        assert_eq!(ws.active_tab(), Some(loose), "insertion never activates");
+        // The restored snapshot writes the same `TabV1` back.
+        assert_eq!(
+            tab_v1_from_tab(ws.tab(new_id).unwrap(), 0),
+            snapshot,
+            "same tree, ratios, cwd, focus and title"
+        );
+        assert_eq!(ws.tab(new_id).unwrap().title(), "api");
+        let states: Vec<PaneState> = {
+            let tree = ws.tab(new_id).unwrap().panes();
+            tree.leaves_in_order()
+                .into_iter()
+                .map(|p| tree.pane(p).unwrap().state())
+                .collect()
+        };
+        assert_eq!(states, [PaneState::Running, PaneState::Running]);
+    }
+
+    /// `pos` orders the zone: inserting at 0 puts the new one first.
+    #[test]
+    fn insert_pinned_from_v1_honors_the_position() {
+        let mut ws = Workspace::new();
+        let a = insert_pinned_from_v1(&mut ws, &tab_v1(0, "zsh"), 0, &|_| false);
+        let b = insert_pinned_from_v1(&mut ws, &tab_v1(1, "zsh"), 1, &|_| false);
+        let c = insert_pinned_from_v1(&mut ws, &tab_v1(2, "zsh"), 0, &|_| false);
+        assert_eq!(ws.pinned(), [c, a, b]);
+    }
+
+    /// RF-21.15 / RF-20.33: a pinned tab always starts (no lazy restore),
+    /// but an SSH pane comes back dormant and loses its directory.
+    #[test]
+    fn insert_pinned_from_v1_starts_local_panes_and_keeps_ssh_dormant() {
+        let leaf = |id, profile: Option<&str>| {
+            PaneNodeV1::Leaf(PaneV1 {
+                id,
+                cwd: Some(PathBuf::from("/srv")),
+                spawn_program: Some("zsh".to_string()),
+                profile: profile.map(str::to_string),
+            })
+        };
+        let tab = TabV1 {
+            panes: Some(PaneTreeV1 {
+                root: PaneNodeV1::Split {
+                    axis: SplitAxisV1::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(leaf(0, None)),
+                    second: Box::new(leaf(1, Some("prod"))),
+                },
+                focused: 0,
+            }),
+            ..tab_v1(0, "zsh")
+        };
+        let mut ws = Workspace::new();
+        let id = insert_pinned_from_v1(&mut ws, &tab, 0, &|p| p == "prod");
+
+        let tree = ws.tab(id).unwrap().panes();
+        let leaves = tree.leaves_in_order();
+        assert_eq!(tree.pane(leaves[0]).unwrap().state(), PaneState::Running);
+        assert_eq!(tree.pane(leaves[1]).unwrap().state(), PaneState::NotStarted);
+        assert_eq!(tree.pane(leaves[1]).unwrap().cwd(), None);
+        assert_eq!(tree.pane(leaves[1]).unwrap().profile(), Some("prod"));
+        assert_eq!(tree.focused_id(), leaves[0]);
+    }
+
+    /// Defensive: a snapshot without `panes` becomes a single pane from the
+    /// tab-level fields, SSH rule included.
+    #[test]
+    fn insert_pinned_from_v1_without_panes_builds_a_single_pane() {
+        let mut local = tab_v1(0, "zsh");
+        local.cwd = Some(PathBuf::from("/home/user"));
+        local.profile = Some("wsl".to_string());
+        let mut ssh = tab_v1(1, "zsh");
+        ssh.cwd = Some(PathBuf::from("/remote"));
+        ssh.profile = Some("prod".to_string());
+
+        let mut ws = Workspace::new();
+        let a = insert_pinned_from_v1(&mut ws, &local, 0, &|p| p == "prod");
+        let b = insert_pinned_from_v1(&mut ws, &ssh, 1, &|p| p == "prod");
+
+        let pa = ws.tab(a).unwrap().panes();
+        assert_eq!(pa.leaves_in_order().len(), 1);
+        assert_eq!(pa.focused().state(), PaneState::Running);
+        assert_eq!(pa.focused().cwd(), Some(&PathBuf::from("/home/user")));
+        assert_eq!(pa.focused().profile(), Some("wsl"));
+
+        let pb = ws.tab(b).unwrap().panes();
+        assert_eq!(pb.focused().state(), PaneState::NotStarted);
+        assert_eq!(pb.focused().cwd(), None);
+    }
+
     /// Cobertura de campo: reprova quando um campo novo de `Tab` não foi
     /// classificado como gravado ou explicitamente descartado. O domínio
     /// deriva `Serialize` (ADR-0006), então introspeccionar as chaves do
@@ -825,7 +1079,7 @@ mod tests {
 
         for lazy in [false, true] {
             let ws = workspace_from_window(
-                &[group.clone()],
+                std::slice::from_ref(&group),
                 &[mixed.clone(), legacy.clone(), local_legacy.clone()],
                 Some(0),
                 lazy,
@@ -1056,6 +1310,10 @@ mod tests {
             "groups",
             "tabs",
             "active_tab",
+            // ADR-0086 §4: never written here -- the pinned zone is written
+            // to `pinned.json` (snapshot via `tab_v1_from_tab`), and the
+            // session only names the active one (`WindowV1::active_pinned`).
+            "pinned",
             "next_tab_id",
             "next_group_id",
         ];

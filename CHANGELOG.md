@@ -16,6 +16,27 @@ primeiro release.
 
 ## [Não publicado]
 
+### Adicionado
+
+- **Abas fixadas** ([PRD-021](docs/prd/prd-021-abas-fixadas.md),
+  [ADR-0086](docs/adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md),
+  [ADR-0087](docs/adr/0087-zona-de-abas-fixadas-na-barra.md),
+  [ADR-0088](docs/adr/0088-icone-da-aba-fixada.md)): os apps que abrem junto
+  com o Porecatu. A aba fixada vira uma caixa quadrada, sem rótulo, com ícone,
+  numa zona logo à direita do botão do app que não rola, fora de todo grupo.
+  Fixa-se pelo item **Fixar aba** do menu de contexto, pela ação
+  `tab.toggle_pin` (sem atalho padrão) ou arrastando a aba para a zona;
+  desafixa-se pelo mesmo caminho, sem reiniciar o processo. A lista vive em
+  `pinned.json`, ao lado do `session.json`, gravada só por gesto, e abre uma
+  vez por execução, na primeira janela, independentemente da sessão — com
+  `lazy_restore` ligado ela sobe mesmo assim, e o `.porecatu` do diretório
+  roda sem exigir `trusted_paths` (a fixada SSH volta não iniciada). Fechar a
+  fixada a desafixa, sempre com confirmação; `exit` e fechar a janela não. O
+  ícone sai da seção nova `[icon]` do `.porecatu`, senão de um `icon.png` no
+  diretório, senão é o do app, decodificado numa thread. Tooltip com o
+  título, ponto de atividade na caixa e nó de acessibilidade. Quem não fixa
+  nada não vê nenhum pixel novo. Aval visual do dono pendente.
+
 ### Alterado
 
 - **Atividade no ponto da aba do grupo colapsado**

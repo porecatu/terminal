@@ -13,8 +13,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use porecatu_core::{PaneId, TabId, Workspace};
-use porecatu_session::{GeometryV1, MonitorIdV1, PaneNodeV1, WindowV1};
+use porecatu_core::{PaneId, Tab, TabId, Workspace};
+use porecatu_session::{GeometryV1, MonitorIdV1, PaneNodeV1, TabV1, WindowV1};
 use winit::dpi::PhysicalPosition;
 use winit::window::Window;
 
@@ -128,20 +128,13 @@ pub fn window_v1(
     monitor: Option<MonitorIdV1>,
     theme: Option<String>,
     zoom_steps: i32,
+    active_pinned: Option<u32>,
     cwd_fallback: impl Fn(TabId, PaneId) -> Option<PathBuf>,
 ) -> WindowV1 {
     let (groups, mut tabs, active_tab) =
         porecatu_session::convert::window_from_workspace(workspace);
     for tab in &mut tabs {
-        let tab_id = TabId::new(tab.id);
-        if let Some(tree) = &mut tab.panes {
-            apply_pane_cwd_fallback(&mut tree.root, tab_id, &cwd_fallback);
-            if let Some(cwd) = find_leaf_cwd(&tree.root, tree.focused) {
-                tab.cwd = cwd;
-            }
-        } else if let Some(fallback) = cwd_fallback(tab_id, PaneId::new(0)) {
-            tab.cwd = Some(fallback);
-        }
+        apply_tab_cwd_fallback(tab, TabId::new(tab.id), &cwd_fallback);
     }
     WindowV1 {
         geometry,
@@ -149,8 +142,42 @@ pub fn window_v1(
         groups,
         tabs,
         active_tab,
+        // ADR-0086 §4: the position in `pinned.json` of the active pinned
+        // tab, when the active tab is a pinned one (then `active_tab` is
+        // `None`). Computed by the caller, which owns the registry; `None`
+        // keeps the file byte for byte as it was.
+        active_pinned,
         theme,
         zoom_steps,
+    }
+}
+
+/// The snapshot a pinned tab is saved as (ADR-0086 §2, RF-21.9): the very
+/// `TabV1` the session would write for the tab, **including** the
+/// per-pane `cwd` fallback of RF-3.10 -- one path for both, not two. Used
+/// by the pin gesture (`App::pin_tab_gesture`).
+pub fn pinned_tab_v1(tab: &Tab, cwd_fallback: impl Fn(TabId, PaneId) -> Option<PathBuf>) -> TabV1 {
+    let mut saved = porecatu_session::convert::tab_v1_from_tab(tab, tab.id().get());
+    apply_tab_cwd_fallback(&mut saved, tab.id(), &cwd_fallback);
+    saved
+}
+
+/// RF-3.10/ADR-0038 §2 for one saved tab: every pane gets the fallback
+/// `cwd` the caller decides, and `TabV1::cwd`/`spawn_program` (the focused
+/// pane, for reading by an earlier version) are realigned from the focused
+/// leaf. Shared by [`window_v1`] and [`pinned_tab_v1`].
+fn apply_tab_cwd_fallback(
+    tab: &mut TabV1,
+    tab_id: TabId,
+    cwd_fallback: &impl Fn(TabId, PaneId) -> Option<PathBuf>,
+) {
+    if let Some(tree) = &mut tab.panes {
+        apply_pane_cwd_fallback(&mut tree.root, tab_id, cwd_fallback);
+        if let Some(cwd) = find_leaf_cwd(&tree.root, tree.focused) {
+            tab.cwd = cwd;
+        }
+    } else if let Some(fallback) = cwd_fallback(tab_id, PaneId::new(0)) {
+        tab.cwd = Some(fallback);
     }
 }
 
@@ -391,13 +418,14 @@ mod tests {
         second.group_tabs(&[a], "api", GroupColor::Blue).unwrap();
 
         let windows = [
-            window_v1(&first, geometry(0), None, None, 0, |_, _| None),
+            window_v1(&first, geometry(0), None, None, 0, None, |_, _| None),
             window_v1(
                 &second,
                 geometry(830),
                 None,
                 Some("dracula".to_string()),
                 2,
+                None,
                 |_, _| None,
             ),
         ];
@@ -426,7 +454,7 @@ mod tests {
     fn osc7_cwd_wins_when_fallback_declines() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", Some(PathBuf::from("/from/osc7")));
-        let window = window_v1(&ws, geometry(0), None, None, 0, |_, _| None);
+        let window = window_v1(&ws, geometry(0), None, None, 0, None, |_, _| None);
         assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/from/osc7")));
     }
 
@@ -440,7 +468,7 @@ mod tests {
     fn inherited_cwd_without_osc7_confirmation_is_overwritten_by_fallback() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", Some(PathBuf::from("/inherited/from/other/tab")));
-        let window = window_v1(&ws, geometry(0), None, None, 0, |_, _| {
+        let window = window_v1(&ws, geometry(0), None, None, 0, None, |_, _| {
             Some(PathBuf::from("/real/cwd/of/this/tab"))
         });
         assert_eq!(
@@ -457,10 +485,90 @@ mod tests {
     fn missing_cwd_falls_back_by_tab_id() {
         let mut ws = Workspace::new();
         let id = ws.append_tab("zsh", None);
-        let window = window_v1(&ws, geometry(0), None, None, 0, move |tab_id, _pane_id| {
-            (tab_id == id).then(|| PathBuf::from("/fallback"))
-        });
+        let window = window_v1(
+            &ws,
+            geometry(0),
+            None,
+            None,
+            0,
+            None,
+            move |tab_id, _pane_id| (tab_id == id).then(|| PathBuf::from("/fallback")),
+        );
         assert_eq!(window.tabs[0].cwd, Some(PathBuf::from("/fallback")));
+    }
+
+    /// ADR-0086 §4: `active_pinned` chega ao `WindowV1` como veio (o
+    /// `None` omitido do JSON é teste de `porecatu-session`).
+    #[test]
+    fn active_pinned_is_written_as_given() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+
+        let without = window_v1(&ws, geometry(0), None, None, 0, None, |_, _| None);
+        assert_eq!(without.active_pinned, None);
+
+        let with = window_v1(&ws, geometry(0), None, None, 0, Some(2), |_, _| None);
+        assert_eq!(with.active_pinned, Some(2));
+    }
+
+    /// ADR-0086 §4: com a fixada ativa, a sessão grava `active_tab = None`
+    /// e a fixada fora de `tabs`; o `active_pinned` é do chamador.
+    #[test]
+    fn a_pinned_active_tab_is_not_written_but_names_its_position() {
+        let mut ws = Workspace::new();
+        let loose = ws.append_tab("zsh", None);
+        let pinned = ws.append_tab("bash", None);
+        assert!(ws.pin_tab(pinned, 0));
+        ws.activate_tab(pinned);
+
+        let window = window_v1(&ws, geometry(0), None, None, 0, Some(0), |_, _| None);
+
+        assert_eq!(window.active_tab, None);
+        assert_eq!(window.active_pinned, Some(0));
+        let written: Vec<u32> = window.tabs.iter().map(|t| t.id).collect();
+        assert_eq!(written, [loose.get()]);
+    }
+
+    /// ADR-0086 §2: o retrato da fixada e a aba da sessão são o mesmo
+    /// `TabV1`, **inclusive** com o fallback de `cwd` por painel -- um
+    /// caminho só. Aba com dois painéis, título próprio e fallback
+    /// diferente por painel.
+    #[test]
+    fn pinned_snapshot_equals_the_session_tab_for_the_same_tab() {
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", Some(PathBuf::from("/srv/api")));
+        let first_pane = ws.tab(tab_id).unwrap().panes().focused_id();
+        let second_pane = ws
+            .tab_mut(tab_id)
+            .unwrap()
+            .panes_mut()
+            .split(first_pane, porecatu_core::SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        ws.tab_mut(tab_id)
+            .unwrap()
+            .set_custom_title(Some("api".to_string()));
+        let fallback = move |t: TabId, p: PaneId| {
+            assert_eq!(t, tab_id);
+            if p == first_pane {
+                Some(PathBuf::from("/first"))
+            } else if p == second_pane {
+                Some(PathBuf::from("/second"))
+            } else {
+                None
+            }
+        };
+
+        let window = window_v1(&ws, geometry(0), None, None, 0, None, fallback);
+        let snapshot = pinned_tab_v1(ws.tab(tab_id).unwrap(), fallback);
+
+        assert_eq!(window.tabs.len(), 1);
+        assert_eq!(snapshot, window.tabs[0]);
+        assert_eq!(
+            snapshot.cwd,
+            Some(PathBuf::from("/second")),
+            "the focused leaf"
+        );
+        assert_eq!(snapshot.custom_title.as_deref(), Some("api"));
     }
 
     /// Nenhuma das duas fontes tem valor -- fica `None`, não inventa nada.
@@ -468,7 +576,7 @@ mod tests {
     fn missing_cwd_without_fallback_stays_none() {
         let mut ws = Workspace::new();
         ws.append_tab("zsh", None);
-        let window = window_v1(&ws, geometry(0), None, None, 0, |_, _| None);
+        let window = window_v1(&ws, geometry(0), None, None, 0, None, |_, _| None);
         assert_eq!(window.tabs[0].cwd, None);
     }
 
@@ -489,7 +597,7 @@ mod tests {
             .split(first_pane, porecatu_core::SplitAxis::Vertical, "zsh", None)
             .unwrap();
 
-        let window = window_v1(&ws, geometry(0), None, None, 0, move |t, p| {
+        let window = window_v1(&ws, geometry(0), None, None, 0, None, move |t, p| {
             assert_eq!(t, tab_id);
             if p == first_pane {
                 Some(PathBuf::from("/first"))

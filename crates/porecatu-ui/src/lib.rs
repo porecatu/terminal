@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use porecatu_core::{
-    Action, Direction as PaneDirection, GroupId, PaneId, Side, SplitAxis, TabId, Workspace,
+    Action, Direction as PaneDirection, GroupId, PaneId, Side, SplitAxis, TabId, UnpinTarget,
+    Workspace,
 };
 use porecatu_locale::Catalog;
 
@@ -59,6 +60,8 @@ mod overlay;
 mod paint;
 mod palette;
 mod panes;
+mod pinned;
+mod pinned_icon;
 mod profile_detect;
 mod profile_menu;
 mod profile_spawn;
@@ -84,7 +87,7 @@ mod trace;
 mod warning;
 
 use animation::AnimationClock;
-use chrome::{DragGhost, GroupDragGhost};
+use chrome::{DragGhost, GhostSource, GroupDragGhost};
 use context_menu::{ContextMenu, MenuAction};
 use dialog::{ConfirmDialog, DialogAction, DialogButton, HostKeyFacts};
 use group_editor::{EditorRegion, GroupEditor};
@@ -104,7 +107,7 @@ use session_picker::{
 };
 use session_writer::SessionScheduler;
 use settings::SettingsWindow;
-use tab_bar::{DragDrop, TabBarHit, TabBarStyle};
+use tab_bar::{DragDrop, DropOp, TabBarHit, TabBarStyle};
 use terminal_menu::{
     TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
 };
@@ -368,6 +371,10 @@ fn base_window_attributes(transparent: bool) -> WindowAttributes {
 /// relógio de animação usa.
 const COLLAPSE_REFLOW_DURATION: std::time::Duration = std::time::Duration::from_millis(150);
 const GROUP_CREATE_REFLOW_DURATION: std::time::Duration = std::time::Duration::from_millis(180);
+/// ADR-0087 §5: the pinned boxes slide as the drag opens or closes the gap,
+/// with the `.15s` transition of the spec §1.10 (the same `.15s` as
+/// `COLLAPSE_REFLOW_DURATION`, a third consumer of the animation clock).
+const PINNED_SLIDE_DURATION: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Estado do arraste na barra (espec §2.19/§2.19.1, RF-1.15/RF-1.16/
 /// RF-2.18/RF-2.19, F3 etapa 6). `TabPressed`/`GroupPressed` são o meio-
@@ -502,6 +509,12 @@ enum Wakeup {
     /// reserva -- medido em `the_image_result_does_not_widen_wakeup`, que reprova
     /// se a conta mudar.
     BackgroundImageLoaded(Box<background_image::BackgroundImageResult>),
+    /// The thread that resolves pinned-tab icons finished one (ADR-0088 §4):
+    /// data keyed by `PinnedKey`, never a command --
+    /// `App::apply_pinned_icon_result` drops it if the entry is not open
+    /// anymore. `Box` for the same reason as the variant above (the decoded
+    /// bytes plus a `PathBuf`).
+    PinnedIconResolved(Box<pinned_icon::PinnedIconResult>),
 }
 
 impl From<accesskit_winit::Event> for Wakeup {
@@ -513,12 +526,37 @@ impl From<accesskit_winit::Event> for Wakeup {
 /// ADR-0051 §1: distingue aba restaurada de aba nova no ponto exato em que
 /// o `Terminal` é spawnado -- parâmetro, não campo inferido, para que o
 /// compilador force uma decisão em todo ponto de chamada de
-/// `WindowState::spawn_tab_runtime`. Só `Restored` pode produzir
+/// `WindowState::spawn_tab_runtime`. Só `Restored` e `Pinned` podem produzir
 /// `pending_project_command`/`pending_project_notice` (RF-12.12).
+///
+/// `Pinned` (ADR-0086 §5) é a abertura de uma aba fixada no arranque: o
+/// `cwd` gravado e o SSH dormente valem como em `Restored`, ela sobe sempre
+/// (nunca espera `lazy_restore`) e o `.porecatu` dela dispensa
+/// `trusted_paths` -- fixar é o gesto de confiança (`Trust::Pinned`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SpawnOrigin {
     New,
     Restored,
+    Pinned,
+}
+
+impl SpawnOrigin {
+    /// Quem autoriza a leitura do `.porecatu` desta origem (ADR-0086 §6): a
+    /// allowlist para uma aba restaurada, a própria fixada para uma fixada.
+    /// `New` nunca chega a `resolve_project_file` (RF-12.12), mas cai na
+    /// regra mais estrita.
+    fn project_trust(self) -> porecatu_config::Trust {
+        match self {
+            SpawnOrigin::Pinned => porecatu_config::Trust::Pinned,
+            SpawnOrigin::New | SpawnOrigin::Restored => porecatu_config::Trust::Allowlist,
+        }
+    }
+
+    /// RF-20.33: um painel SSH que volta de uma restauração ou da abertura
+    /// de uma fixada nunca conecta sozinho.
+    fn starts_ssh_dormant(self) -> bool {
+        matches!(self, SpawnOrigin::Restored | SpawnOrigin::Pinned)
+    }
 }
 
 /// ADR-0051 §6. Some quando o comando é escrito -- é o que garante "uma vez
@@ -610,6 +648,23 @@ impl PaneRuntime {
             Liveness::OpenConnection
         } else {
             self.terminal.liveness()
+        }
+    }
+
+    /// RF-3.10/ADR-0038 §2: o `cwd` que a gravação (sessão, sessão nomeada,
+    /// retrato de fixada) usa para este painel quando ele **não** recebeu
+    /// OSC 7 de verdade -- `received_osc7` é o sinal, não `Tab::cwd()`, que
+    /// uma aba nova já herda. Com OSC 7 confirmado, `None`: não sobrescreve.
+    /// Sem confirmação, o fallback do terminal (`ProcessGroup::cwd` fora do
+    /// Windows) ou o `cwd` de spawn. Uma só definição para os três
+    /// gravadores.
+    fn session_cwd_fallback(&self) -> Option<PathBuf> {
+        if self.received_osc7 {
+            None
+        } else {
+            self.terminal
+                .cwd_fallback()
+                .or_else(|| self.spawn_cwd.clone())
         }
     }
 }
@@ -1151,6 +1206,13 @@ enum ActionOutcome {
     /// `ssh.reconnect` (ADR-0076 §5): o ciclo de reconexão é do processo, não
     /// da janela.
     SshReconnect,
+    /// `tab.toggle_pin` (ADR-0086 §7): a lista de fixadas e o `pinned.json`
+    /// são do processo, não da janela.
+    TogglePin,
+    /// `tab.move_left`/`tab.move_right` com uma fixada ativa mudaram a ordem
+    /// da zona: a lista do processo precisa seguir e ser gravada (RF-21.11,
+    /// ADR-0086 §3).
+    PinnedReordered,
     Unhandled,
 }
 
@@ -1651,6 +1713,66 @@ mod decide_named_session_submit_tests {
     }
 }
 
+/// A "garantia de terminal mínimo" de `open_window_from_session`: uma janela
+/// restaurada sem nenhuma aba abre uma nova. Conta as fixadas (ADR-0086 §5):
+/// `visual_order()` as inclui, então uma janela que só tinha fixadas -- já
+/// abertas quando esta pergunta é feita -- não ganha uma aba extra a cada
+/// arranque.
+fn window_needs_a_minimum_tab(workspace: &porecatu_core::Workspace) -> bool {
+    workspace.visual_order().next().is_none()
+}
+
+#[cfg(test)]
+mod window_needs_a_minimum_tab_tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_workspace_needs_one() {
+        assert!(window_needs_a_minimum_tab(&porecatu_core::Workspace::new()));
+    }
+
+    /// ADR-0086 §5: só fixadas, nenhuma na trilha -- não precisa.
+    #[test]
+    fn a_workspace_with_only_pinned_tabs_does_not() {
+        let mut ws = porecatu_core::Workspace::new();
+        ws.insert_pinned_tab_with_panes(porecatu_core::PaneTree::new("zsh"), 0);
+        assert_eq!(ws.track_order().count(), 0);
+        assert!(!window_needs_a_minimum_tab(&ws));
+    }
+
+    #[test]
+    fn a_workspace_with_a_track_tab_does_not() {
+        let mut ws = porecatu_core::Workspace::new();
+        ws.append_tab("zsh", None);
+        assert!(!window_needs_a_minimum_tab(&ws));
+    }
+}
+
+#[cfg(test)]
+mod pinned_notice_text_tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_names_the_preserved_file() {
+        let notice = pinned::PinnedLoadNotice::Corrupt(PathBuf::from("/state/pinned.json.corrupt"));
+        let (title, body) = pinned_notice_text(&messages::test_support::pt_br(), &notice);
+        assert!(title.contains("fixadas"), "{title}");
+        assert!(body.contains("pinned.json.corrupt"), "{body}");
+        let (title, _) = pinned_notice_text(&messages::test_support::en_us(), &notice);
+        assert!(title.contains("Pinned"), "{title}");
+    }
+
+    #[test]
+    fn newer_schema_says_both_versions() {
+        let notice = pinned::PinnedLoadNotice::NewerSchema {
+            found: 7,
+            supported: 1,
+        };
+        let (_, body) = pinned_notice_text(&messages::test_support::pt_br(), &notice);
+        assert!(body.contains('7') && body.contains('1'), "{body}");
+    }
+}
+
 #[cfg(test)]
 mod window_close_needs_confirmation_tests {
     use super::*;
@@ -1739,18 +1861,19 @@ fn shell_integration_note_timing(alt_screen_active: bool) -> ShellIntegrationNot
     }
 }
 
-/// RF-12.12/RF-12.13/RF-12.14 (ADR-0051 §1): só uma aba `Restored`, com o
-/// `cwd` gravado ainda existente, é candidata a ter um `.porecatu`
-/// procurado -- pura, testável sem `Terminal`/PTY reais. Aba `New` nunca
-/// produz candidato aqui, o que garante RF-12.12 (aba nova/`cd` não
-/// disparam) antes mesmo de `porecatu_config::resolve_project_file` ser
-/// chamado.
+/// RF-12.12/RF-12.13/RF-12.14 (ADR-0051 §1, ADR-0086 §6): só uma aba
+/// `Restored` ou `Pinned`, com o `cwd` gravado ainda existente, é candidata
+/// a ter um `.porecatu` procurado -- pura, testável sem `Terminal`/PTY
+/// reais. Aba `New` nunca produz candidato aqui, o que garante RF-12.12
+/// (aba nova/`cd` não disparam) antes mesmo de
+/// `porecatu_config::resolve_project_file` ser chamado. Se a candidata é
+/// autorizada pela allowlist ou pela fixada é `SpawnOrigin::project_trust`.
 fn project_file_candidate_dir(
     origin: SpawnOrigin,
     cwd_exists: bool,
     cwd: Option<&Path>,
 ) -> Option<PathBuf> {
-    (origin == SpawnOrigin::Restored && cwd_exists)
+    (matches!(origin, SpawnOrigin::Restored | SpawnOrigin::Pinned) && cwd_exists)
         .then(|| cwd.map(Path::to_path_buf))
         .flatten()
 }
@@ -2022,6 +2145,58 @@ mod project_file_candidate_dir_tests {
             project_file_candidate_dir(SpawnOrigin::Restored, true, None),
             None
         );
+    }
+
+    /// ADR-0086 §6: a fixada aberta no arranque é candidata, como a restaurada.
+    #[test]
+    fn pinned_tab_with_existing_cwd_is_a_candidate() {
+        assert_eq!(
+            project_file_candidate_dir(SpawnOrigin::Pinned, true, Some(Path::new("/projetos/api"))),
+            Some(PathBuf::from("/projetos/api"))
+        );
+    }
+
+    /// RF-21.30/RF-12.14: o diretório da fixada que sumiu não procura nada.
+    #[test]
+    fn pinned_tab_with_missing_cwd_produces_no_candidate() {
+        assert_eq!(
+            project_file_candidate_dir(
+                SpawnOrigin::Pinned,
+                false,
+                Some(Path::new("/projetos/api"))
+            ),
+            None
+        );
+        assert_eq!(
+            project_file_candidate_dir(SpawnOrigin::Pinned, true, None),
+            None
+        );
+    }
+
+    /// ADR-0086 §6: só a fixada dispensa `trusted_paths`; a restaurada (e a
+    /// nova, que nem chega lá) continua na allowlist.
+    #[test]
+    fn only_a_pinned_origin_skips_the_allowlist() {
+        assert_eq!(
+            SpawnOrigin::Pinned.project_trust(),
+            porecatu_config::Trust::Pinned
+        );
+        assert_eq!(
+            SpawnOrigin::Restored.project_trust(),
+            porecatu_config::Trust::Allowlist
+        );
+        assert_eq!(
+            SpawnOrigin::New.project_trust(),
+            porecatu_config::Trust::Allowlist
+        );
+    }
+
+    /// RF-20.33 / RF-21.15: SSH volta dormente na restauração e na fixada.
+    #[test]
+    fn restored_and_pinned_ssh_panes_start_dormant_but_new_ones_connect() {
+        assert!(SpawnOrigin::Restored.starts_ssh_dormant());
+        assert!(SpawnOrigin::Pinned.starts_ssh_dormant());
+        assert!(!SpawnOrigin::New.starts_ssh_dormant());
     }
 }
 
@@ -2757,10 +2932,18 @@ impl WindowState {
             gpu.text_measurer(),
             is_macos(),
         );
+        // A pinned tab is not in the track layout: `tab_rect` is `None` and
+        // the track stays where it is -- the zone never scrolls and is always
+        // in view (ADR-0087 §3, RF-1.18).
         let Some(rect) = tab_bar::tab_rect(&layout, active) else {
             return;
         };
-        let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
+        let trilha_width = tab_bar::trilha_width(
+            style,
+            self.logical_width,
+            is_macos(),
+            self.workspace.pinned().len(),
+        );
         let window_start = self.scroll_offset;
         let window_end = self.scroll_offset + trilha_width;
         if rect.x < window_start {
@@ -2794,7 +2977,10 @@ impl WindowState {
             .iter()
             .find(|g| g.id == group)
             .and_then(|g| g.pill.as_ref())
-            .map(|p| p.rect.x + tab_bar::track_shift(style, is_macos()) - self.scroll_offset)
+            .map(|p| {
+                p.rect.x + tab_bar::track_shift(style, is_macos(), self.workspace.pinned().len())
+                    - self.scroll_offset
+            })
             .unwrap_or(0.0)
     }
 
@@ -2957,7 +3143,7 @@ impl WindowState {
         // keeps the directory it was saved in.
         let cwd = match origin {
             SpawnOrigin::New => profile.cwd.clone().or(cwd),
-            SpawnOrigin::Restored => cwd.or_else(|| profile.cwd.clone()),
+            SpawnOrigin::Restored | SpawnOrigin::Pinned => cwd.or_else(|| profile.cwd.clone()),
         };
         let (rows, cols) = self.grid_size(cell_metrics, style);
         let window_id = self.window.id();
@@ -2983,6 +3169,7 @@ impl WindowState {
                     dir,
                     &profile_spawn::display_name(profile),
                     project_file,
+                    origin.project_trust(),
                 )
             });
         let (cwd, missing_cwd_note) =
@@ -3014,8 +3201,8 @@ impl WindowState {
             .ssh
             .as_ref()
             .map(|ssh| profile_spawn::ssh_spawn(ssh, rows as u16, cols as u16));
-        // RF-20.33: a restored SSH pane never connects by itself.
-        let dormant = origin == SpawnOrigin::Restored && profile.ssh.is_some();
+        // RF-20.33: a restored (or pinned) SSH pane never connects by itself.
+        let dormant = origin.starts_ssh_dormant() && profile.ssh.is_some();
         let spec = match &ssh_spawn {
             Some(_) if dormant => BackendSpec::Dormant {
                 rows: rows as u16,
@@ -3286,6 +3473,13 @@ impl WindowState {
     /// `tab_id`, nunca via [`Self::pane_box_rect`] (que só enxerga a aba
     /// ativa) -- com `lazy_restore = false`, `open_window_from_session`
     /// sobe abas em segundo plano também.
+    ///
+    /// Serve também as fixadas abertas no arranque (ADR-0086 §5,
+    /// `open_pinned_tabs_into`): o irmão nunca é candidato a `.porecatu` (só
+    /// o painel focado é, e `spawn_tab_runtime` já o tratou com
+    /// `SpawnOrigin::Pinned`), e o `cwd` gravado e o SSH dormente são
+    /// exatamente as regras de `Pinned`, então não há origem a passar --
+    /// `spawn_split_pane_runtime` não tem o conceito.
     #[allow(clippy::too_many_arguments)]
     fn spawn_restored_sibling_panes(
         &mut self,
@@ -3807,6 +4001,43 @@ impl WindowState {
         );
     }
 
+    /// `tab.new` e o item "Nova aba": [`Self::action_new_tab`] e, com a ativa
+    /// **fixada**, a trilha rola até a aba nova (ADR-0087 §6, RF-1.18) -- ela
+    /// nasce num *run* implícito no fim da trilha (`Workspace::append_tab`),
+    /// que pode estar fora da vista, ao contrário da aba que nasce ao lado da
+    /// ativa.
+    #[allow(clippy::too_many_arguments)]
+    fn action_new_tab_revealing(
+        &mut self,
+        gpu: &mut GpuContext,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        config: &porecatu_config::Config,
+        project_file: &porecatu_config::ProjectFile,
+    ) {
+        let from_pinned = self
+            .workspace
+            .active_tab()
+            .is_some_and(|id| self.workspace.is_pinned(id));
+        self.action_new_tab(
+            cell_metrics,
+            proxy,
+            startup_directory,
+            now,
+            style,
+            term_params,
+            config,
+            project_file,
+        );
+        if from_pinned {
+            self.ensure_active_tab_visible(gpu, style);
+        }
+    }
+
     /// RF-1.6 (ADR-0017, ADR-0034): fechar a aba ativa pede confirmação
     /// quando ela tem tela alternativa/reporte de mouse ligado, **ou**
     /// (Windows, ADR-0034) mais de um processo no Job do shell -- os dois
@@ -3820,38 +4051,61 @@ impl WindowState {
         catalog: &Catalog,
     ) -> Option<TabCloseOutcome> {
         let id = self.workspace.active_tab()?;
+        self.close_tab_outcome(id, confirm_close_with_process, catalog)
+    }
+
+    /// O que fechar `id` por gesto (`tab.close`, o item do menu, o botão de
+    /// fechar) faz primeiro -- um só lugar para os três caminhos, para a
+    /// regra do RF-1.6 e a da fixada (RF-21.23) nunca divergirem entre eles.
+    ///
+    /// Uma aba **fixada** abre sempre o diálogo de fixada, fora de
+    /// `confirm_close_with_process`; se ela também confirmaria pelo RF-1.6, a
+    /// frase de processo ativo entra no **mesmo** diálogo (ADR-0086 §7). Quem
+    /// responde é `App::run_dialog_action` (`ClosePinnedTab`), que também
+    /// tira a entrada da lista.
+    fn close_tab_outcome(
+        &mut self,
+        id: TabId,
+        confirm_close_with_process: bool,
+        catalog: &Catalog,
+    ) -> Option<TabCloseOutcome> {
+        let pinned = self.workspace.is_pinned(id);
         // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
         // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup`.
-        if self.tab_has_nothing_running(id) {
-            let window_empty = self.close_tab_unconditionally(id);
-            return Some(TabCloseOutcome::Closed { window_empty });
+        let process_would_confirm = !self.tab_has_nothing_running(id)
+            // ADR-0053 §10: fechar a aba pergunta se **qualquer** painel dela
+            // tem processo ativo -- não só o focado. Diferente de
+            // `action_close_pane`, que fecha um painel só e por isso olha
+            // apenas o runtime dele.
+            && any_pane_needs_confirmation(
+                confirm_close_with_process,
+                self.workspace
+                    .tab(id)?
+                    .panes()
+                    .leaves_in_order()
+                    .iter()
+                    .filter_map(|pane| self.panes.get(&(id, *pane)))
+                    .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
+            );
+        match pinned::close_ask(pinned, process_would_confirm) {
+            pinned::CloseAsk::Direct => {
+                let window_empty = self.close_tab_unconditionally(id);
+                Some(TabCloseOutcome::Closed { window_empty })
+            }
+            ask => {
+                let title = self
+                    .workspace
+                    .tab(id)
+                    .map(|t| t.title().to_string())
+                    .unwrap_or_default();
+                Some(TabCloseOutcome::Dialog(match ask {
+                    pinned::CloseAsk::Pinned { active_process } => {
+                        ConfirmDialog::close_pinned_tab(catalog, &title, id, active_process)
+                    }
+                    _ => ConfirmDialog::close_tab(catalog, &title, id),
+                }))
+            }
         }
-        // ADR-0053 §10: fechar a aba pergunta se **qualquer** painel dela
-        // tem processo ativo -- não só o focado. Diferente de
-        // `action_close_pane`, que fecha um painel só e por isso olha
-        // apenas o runtime dele.
-        let any_pane_needs_confirmation = any_pane_needs_confirmation(
-            confirm_close_with_process,
-            self.workspace
-                .tab(id)?
-                .panes()
-                .leaves_in_order()
-                .iter()
-                .filter_map(|pane| self.panes.get(&(id, *pane)))
-                .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
-        );
-        if any_pane_needs_confirmation {
-            let title = self
-                .workspace
-                .tab(id)
-                .map(|t| t.title().to_string())
-                .unwrap_or_default();
-            return Some(TabCloseOutcome::Dialog(ConfirmDialog::close_tab(
-                catalog, &title, id,
-            )));
-        }
-        let window_empty = self.close_tab_unconditionally(id);
-        Some(TabCloseOutcome::Closed { window_empty })
     }
 
     /// RF-6.10: fecha o painel **focado**. Fechar o último painel de uma
@@ -3894,6 +4148,11 @@ impl WindowState {
         let Some(id) = self.workspace.active_tab() else {
             return;
         };
+        // ADR-0087 §6: uma fixada não tem rótulo onde editar -- `tab.rename`
+        // com ela ativa não faz nada.
+        if self.workspace.is_pinned(id) {
+            return;
+        }
         let Some(tab) = self.workspace.tab(id) else {
             return;
         };
@@ -3951,28 +4210,43 @@ impl WindowState {
     /// posição-alvo vem da ordem *dentro do grupo* da aba ativa, não da
     /// ordem visual da janela inteira -- com mais de um grupo (F3) as duas
     /// divergem.
-    fn action_move_tab(&mut self, delta: isize, gpu: &mut GpuContext, style: &TabBarStyle) {
+    ///
+    /// Com a ativa **fixada** (RF-21.11, ADR-0086 §1) a reordenação é a da
+    /// zona (`Workspace::move_pinned`) e **para na borda**: nunca atravessa
+    /// para a trilha. Devolve `true` quando a ordem da zona mudou -- quem
+    /// chama leva a nova ordem à lista de fixadas e a grava
+    /// ([`App::sync_pinned_order`]); a lista é do processo, não da janela.
+    fn action_move_tab(&mut self, delta: isize, gpu: &mut GpuContext, style: &TabBarStyle) -> bool {
         let Some(active) = self.workspace.active_tab() else {
-            return;
+            return false;
         };
+        if self.workspace.is_pinned(active) {
+            let Some(target) = pinned::zone_move_target(self.workspace.pinned(), active, delta)
+            else {
+                return false;
+            };
+            self.touch_workspace(|ws| ws.move_pinned(active, target));
+            return true;
+        }
         let Some(group_id) = self.workspace.group_of_tab(active) else {
-            return;
+            return false;
         };
         let Some(group) = self.workspace.group(group_id) else {
-            return;
+            return false;
         };
         let order = group.tabs();
         let Some(index) = order.iter().position(|&id| id == active) else {
-            return;
+            return false;
         };
         let Some(target) = index.checked_add_signed(delta) else {
-            return;
+            return false;
         };
         if target >= order.len() {
-            return;
+            return false;
         }
         self.touch_workspace(|ws| ws.move_tab(active, target));
         self.ensure_active_tab_visible(gpu, style);
+        false
     }
 
     /// Passo 1 do ADR-0008 (modo de captura): consome tudo, exceto `Esc` e
@@ -4451,8 +4725,13 @@ impl WindowState {
         };
         // A `+` scrolled out of the track still anchors at the track's edge,
         // never over the fixed buttons on the right.
-        let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
-        let track_left = tab_bar::track_shift(style, is_macos());
+        let trilha_width = tab_bar::trilha_width(
+            style,
+            self.logical_width,
+            is_macos(),
+            self.workspace.pinned().len(),
+        );
+        let track_left = tab_bar::track_shift(style, is_macos(), self.workspace.pinned().len());
         let anchor = Rect {
             x: track_left
                 + (rect.x - self.scroll_offset).clamp(0.0, (trilha_width - rect.width).max(0.0)),
@@ -4868,7 +5147,8 @@ impl WindowState {
 
         match action {
             Action::TabNew => {
-                self.action_new_tab(
+                self.action_new_tab_revealing(
+                    gpu,
                     cell_metrics,
                     proxy,
                     startup_directory,
@@ -4909,13 +5189,22 @@ impl WindowState {
                 ActionOutcome::Handled
             }
             Action::TabMoveLeft => {
-                self.action_move_tab(-1, gpu, style);
-                ActionOutcome::Handled
+                if self.action_move_tab(-1, gpu, style) {
+                    ActionOutcome::PinnedReordered
+                } else {
+                    ActionOutcome::Handled
+                }
             }
             Action::TabMoveRight => {
-                self.action_move_tab(1, gpu, style);
-                ActionOutcome::Handled
+                if self.action_move_tab(1, gpu, style) {
+                    ActionOutcome::PinnedReordered
+                } else {
+                    ActionOutcome::Handled
+                }
             }
+            // ADR-0086 §7: o registro de fixadas é do processo -- bubble pra
+            // `App`, mesmo caminho de `ssh.reconnect`.
+            Action::TabTogglePin => ActionOutcome::TogglePin,
             Action::GroupCreate => {
                 self.action_group_create(gpu, style, catalog);
                 ActionOutcome::Handled
@@ -5168,11 +5457,22 @@ impl WindowState {
         style: &TabBarStyle,
     ) -> Option<tab_bar::TabBarHit> {
         if !self.in_bar(self.cursor_position.1, style)
-            || !tab_bar::point_in_track(style, self.logical_width, is_macos(), logical_point.0)
+            || !tab_bar::point_in_track(
+                style,
+                self.logical_width,
+                is_macos(),
+                self.workspace.pinned().len(),
+                logical_point.0,
+            )
         {
             return None;
         }
-        let trilha_width = tab_bar::trilha_width(style, self.logical_width, is_macos());
+        let trilha_width = tab_bar::trilha_width(
+            style,
+            self.logical_width,
+            is_macos(),
+            self.workspace.pinned().len(),
+        );
         let layout = tab_bar::fit_width(
             &self.workspace,
             style,
@@ -5180,7 +5480,7 @@ impl WindowState {
             gpu.text_measurer(),
             is_macos(),
         );
-        let track_left = tab_bar::track_shift(style, is_macos());
+        let track_left = tab_bar::track_shift(style, is_macos(), self.workspace.pinned().len());
         let content_point = (
             logical_point.0 - track_left + self.scroll_offset,
             logical_point.1,
@@ -5224,8 +5524,9 @@ impl WindowState {
         style: &TabBarStyle,
     ) -> NewTabRequest {
         let bar_width = self.logical_width;
-        let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos());
-        let track_left = tab_bar::track_shift(style, is_macos());
+        let trilha_width =
+            tab_bar::trilha_width(style, bar_width, is_macos(), self.workspace.pinned().len());
+        let track_left = tab_bar::track_shift(style, is_macos(), self.workspace.pinned().len());
         let h = bar_height(style);
         let layout = tab_bar::fit_width(
             &self.workspace,
@@ -5264,12 +5565,32 @@ impl WindowState {
             }
         }
 
+        // ADR-0087 §4: the pinned boxes come after the zone buttons and before
+        // the track -- they live in screen coordinates, outside the clip, so
+        // a track scrolled underneath them never answers in their place. The
+        // margins and the gaps between the boxes are drag region (below).
+        if let Some(i) = tab_bar::point_in_pinned(
+            style,
+            is_macos(),
+            self.workspace.pinned().len(),
+            logical_point,
+        ) && let Some(&id) = self.workspace.pinned().get(i)
+        {
+            return self.handle_pinned_tab_click(id, i, logical_point, right_click, style);
+        }
+
         // Outside the track's visible window -- left of it (the app menu
         // button's zone, already handled above for a left click, plus its
-        // margins) or right of it (the fixed zone of the sessions/settings/
+        // margins and the pinned zone) or right of it (the fixed zone of the sessions/settings/
         // window buttons, including the gaps between them): not a tab, even
         // one scrolled out of view under the clip. The rest is drag region.
-        if !tab_bar::point_in_track(style, bar_width, is_macos(), logical_point.0) {
+        if !tab_bar::point_in_track(
+            style,
+            bar_width,
+            is_macos(),
+            self.workspace.pinned().len(),
+            logical_point.0,
+        ) {
             if !right_click {
                 self.resolve_titlebar_drag();
             }
@@ -5295,19 +5616,7 @@ impl WindowState {
         if right_click {
             match hit {
                 TabBarHit::Tab(id) | TabBarHit::CloseButton(id) => {
-                    self.close_all_popovers();
-                    // ADR-0075 §8: "Reconectar" só no menu de uma aba SSH.
-                    let ssh = self
-                        .workspace
-                        .tab(id)
-                        .map(|tab| tab.panes().focused_id())
-                        .is_some_and(|pane| {
-                            self.panes
-                                .get(&(id, pane))
-                                .is_some_and(|runtime| runtime.ssh_spawn.is_some())
-                        });
-                    self.context_menu = Some(ContextMenu::for_tab(id, logical_point, ssh));
-                    self.hover.dismiss();
+                    self.open_tab_context_menu(id, logical_point);
                 }
                 TabBarHit::Pill(id) => {
                     self.close_all_popovers();
@@ -5394,13 +5703,21 @@ impl WindowState {
                 } else {
                     self.modifiers.ctrl
                 };
-                if self.modifiers.shift {
+                // ADR-0086 §1, RF-21.3: uma fixada não entra em seleção
+                // múltipla -- `Ctrl`/`Shift`+clique nela é um clique simples.
+                let selectable = !self.workspace.is_pinned(id);
+                if self.modifiers.shift && selectable {
                     // ADR-0021 §2: intervalo sobre a ordem navegável --
                     // atravessa fronteira de grupo e já exclui abas de
-                    // grupo colapsado.
-                    let order: Vec<TabId> = self.workspace.navigable_order().collect();
+                    // grupo colapsado. As fixadas (que vêm na frente da
+                    // ordem navegável) ficam de fora do intervalo.
+                    let order: Vec<TabId> = self
+                        .workspace
+                        .navigable_order()
+                        .filter(|&tab| !self.workspace.is_pinned(tab))
+                        .collect();
                     self.selection.select_range(&order, id);
-                } else if select_modifier {
+                } else if select_modifier && selectable {
                     self.selection.toggle(id);
                 } else {
                     // RF-2.3: clique sem modificador limpa a seleção e ativa.
@@ -5443,6 +5760,66 @@ impl WindowState {
             TabBarHit::GroupNewTab(id) => NewTabRequest::InGroup(id),
             TabBarHit::UngroupedNewTab => NewTabRequest::Ungrouped,
         }
+    }
+
+    /// Opens the context menu of tab `id` at `point` (RF-1.1, ADR-0087 §6):
+    /// the one entry point for a click on a track tab and on a pinned box.
+    fn open_tab_context_menu(&mut self, id: TabId, point: (f32, f32)) {
+        self.close_all_popovers();
+        // ADR-0075 §8: "Reconectar" só no menu de uma aba SSH.
+        let ssh = self
+            .workspace
+            .tab(id)
+            .map(|tab| tab.panes().focused_id())
+            .is_some_and(|pane| {
+                self.panes
+                    .get(&(id, pane))
+                    .is_some_and(|runtime| runtime.ssh_spawn.is_some())
+            });
+        // ADR-0087 §6: "Desafixar" e "Mover para grupo" esmaecido no menu de
+        // uma fixada.
+        let pinned = self.workspace.is_pinned(id);
+        self.context_menu = Some(ContextMenu::for_tab(id, point, ssh, pinned));
+        self.hover.dismiss();
+    }
+
+    /// Press on pinned box `index` (tab `id`), ADR-0087 §4. It takes the same
+    /// path as a click on a track tab, minus what a box cannot do: there is
+    /// no close button and no label to rename, and `Ctrl`/`Shift` make no
+    /// selection (RF-21.3) -- the modified click is a plain click. The right
+    /// button opens the tab menu; the left activates and arms
+    /// `Drag::TabPressed`, which is what makes the pressed box lose the hover
+    /// brightness. The pinned zone never scrolls the track (RF-1.18), so
+    /// there is nothing to bring into view.
+    fn handle_pinned_tab_click(
+        &mut self,
+        id: TabId,
+        index: usize,
+        logical_point: (f32, f32),
+        right_click: bool,
+        style: &TabBarStyle,
+    ) -> NewTabRequest {
+        if right_click {
+            self.open_tab_context_menu(id, logical_point);
+            return NewTabRequest::None;
+        }
+        if self
+            .rename
+            .editing_tab()
+            .is_some_and(|current| current != id)
+        {
+            self.commit_rename();
+        }
+        self.selection.clear();
+        self.touch_workspace(|ws| ws.activate_tab(id));
+        self.sync_window_title();
+        let rect = tab_bar::pinned_rect(style, is_macos(), index);
+        self.drag = Drag::TabPressed {
+            tab: id,
+            start: logical_point,
+            grab_offset: logical_point.0 - rect.x,
+        };
+        NewTabRequest::None
     }
 
     /// ADR-0050: `F11` -- entra ou sai de tela cheia, desmaximizando antes
@@ -5538,43 +5915,15 @@ impl WindowState {
 
     /// RF-1.6 aplicado ao botão de fechar de uma aba que não é
     /// necessariamente a ativa (o clique pode ser em qualquer aba da
-    /// trilha) -- mesma condição de `action_close_tab`, mas sobre `id`
-    /// explícito.
+    /// trilha) e ao item "Fechar aba" do menu -- a mesma decisão de
+    /// `action_close_tab`, sobre `id` explícito (`close_tab_outcome`).
     fn close_tab_via_button(
         &mut self,
         id: TabId,
         confirm_close_with_process: bool,
         catalog: &Catalog,
     ) -> Option<TabCloseOutcome> {
-        // ADR-0037 §3 -- mesma checagem de `action_close_tab`, antes da
-        // detecção do ADR-0034.
-        if self.tab_has_nothing_running(id) {
-            let window_empty = self.close_tab_unconditionally(id);
-            return Some(TabCloseOutcome::Closed { window_empty });
-        }
-        // ADR-0053 §10 -- mesma agregação de `action_close_tab`.
-        let any_pane_needs_confirmation = any_pane_needs_confirmation(
-            confirm_close_with_process,
-            self.workspace
-                .tab(id)?
-                .panes()
-                .leaves_in_order()
-                .iter()
-                .filter_map(|pane| self.panes.get(&(id, *pane)))
-                .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
-        );
-        if any_pane_needs_confirmation {
-            let title = self
-                .workspace
-                .tab(id)
-                .map(|t| t.title().to_string())
-                .unwrap_or_default();
-            return Some(TabCloseOutcome::Dialog(ConfirmDialog::close_tab(
-                catalog, &title, id,
-            )));
-        }
-        let window_empty = self.close_tab_unconditionally(id);
-        Some(TabCloseOutcome::Closed { window_empty })
+        self.close_tab_outcome(id, confirm_close_with_process, catalog)
     }
 
     /// RF-2.13: clique na pílula alterna colapso. Ao **colapsar**, a
@@ -5604,11 +5953,18 @@ impl WindowState {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
+        // ADR-0086 §1: só a trilha agrupa -- uma fixada nunca entra num grupo
+        // (`group_tabs` também a recusa; filtrar aqui evita abrir o editor
+        // de um grupo que não nasceu).
         let ids: Vec<TabId> = if self.selection.is_empty() {
-            self.workspace.active_tab().into_iter().collect()
+            self.workspace
+                .active_tab()
+                .filter(|&id| !self.workspace.is_pinned(id))
+                .into_iter()
+                .collect()
         } else {
             self.workspace
-                .visual_order()
+                .track_order()
                 .filter(|id| self.selection.is_selected(*id))
                 .collect()
         };
@@ -5861,16 +6217,35 @@ impl WindowState {
     /// `press`, porque só agora se sabe que não foi arraste. `TabPressed`
     /// sem `TabDragging` não precisa de nada: o clique já ativou a aba na
     /// hora do `press`.
-    fn finish_drag(&mut self, gpu: &mut GpuContext, style: &TabBarStyle) {
+    ///
+    /// O que mexe na zona de fixadas (fixar, reordenar, desafixar --
+    /// ADR-0087 §5) não é daqui: precisa da lista do processo, que mora em
+    /// `App`. Volta como `(aba, operação)` para quem chamou aplicar com os
+    /// gestos de `App` (`App::apply_zone_drop`); a tradução (origem, alvo) →
+    /// operação é uma só, `tab_bar::drop_op`.
+    fn finish_drag(
+        &mut self,
+        gpu: &mut GpuContext,
+        style: &TabBarStyle,
+    ) -> Option<(TabId, DropOp)> {
         let drag = std::mem::replace(&mut self.drag, Drag::Idle);
+        // A slide of the pinned zone in progress dies with the drag: the zone
+        // settles at once on the drop, or goes back on a cancel.
+        if matches!(drag, Drag::TabDragging { .. }) {
+            self.animations.clear();
+        }
+        let mut zone_op = None;
         match drag {
             Drag::TabDragging { tab, target, .. } if self.in_bar(self.cursor_position.1, style) => {
-                match target {
-                    DragDrop::IntoGroup { group, pos } => {
+                match tab_bar::drop_op(self.workspace.is_pinned(tab), target) {
+                    DropOp::IntoGroup { group, pos } => {
                         self.touch_workspace(|ws| ws.move_tab_to_group_at(tab, group, pos));
                     }
-                    DragDrop::NewRun { group_index } => {
+                    DropOp::NewRun { group_index } => {
                         self.touch_workspace(|ws| ws.move_tab_to_new_run(tab, group_index));
+                    }
+                    op @ (DropOp::Pin { .. } | DropOp::ReorderPinned { .. } | DropOp::Unpin(_)) => {
+                        zone_op = Some((tab, op));
                     }
                 }
             }
@@ -5893,6 +6268,7 @@ impl WindowState {
             Drag::Idle => {}
         }
         self.window.set_cursor(CursorIcon::Default);
+        zone_op
     }
 
     /// `y` físico está dentro da faixa da barra de abas (topo da janela).
@@ -6360,21 +6736,37 @@ impl WindowState {
                 gpu.text_measurer(),
                 is_macos(),
             );
-            let track_left = tab_bar::track_shift(style, is_macos());
+            let pinned_count = self.workspace.pinned().len();
+            let track_left = tab_bar::track_shift(style, is_macos(), pinned_count);
             let content_point = (bar_point.0 - track_left + self.scroll_offset, bar_point.1);
-            layout
-                .groups
-                .into_iter()
-                .flat_map(|g| g.tabs)
-                .find(|t| t.label_truncated && tab_bar_rect_contains(t.rect, content_point))
-                .and_then(|t| {
-                    let title = self.workspace.tab(t.id)?.title().to_string();
-                    let screen_rect = Rect {
-                        x: t.rect.x + track_left - self.scroll_offset,
-                        ..t.rect
-                    };
-                    Some((HoverKey::Tab(t.id), screen_rect, title))
-                })
+            // ADR-0087 §3: a pinned box has no label -- it is truncated to
+            // zero -- so it **always** has the tooltip, with the tab title
+            // (the same `Tab::title` the bar's labels come from). The track's
+            // tabs only when their label was cut (ADR-0019).
+            tooltip::pinned_target(&self.workspace, style, is_macos(), bar_point).or_else(|| {
+                if !tab_bar::point_in_track(
+                    style,
+                    self.logical_width,
+                    is_macos(),
+                    pinned_count,
+                    bar_point.0,
+                ) {
+                    return None;
+                }
+                layout
+                    .groups
+                    .into_iter()
+                    .flat_map(|g| g.tabs)
+                    .find(|t| t.label_truncated && tab_bar_rect_contains(t.rect, content_point))
+                    .and_then(|t| {
+                        let title = self.workspace.tab(t.id)?.title().to_string();
+                        let screen_rect = Rect {
+                            x: t.rect.x + track_left - self.scroll_offset,
+                            ..t.rect
+                        };
+                        Some((HoverKey::Tab(t.id), screen_rect, title))
+                    })
+            })
         } else {
             None
         };
@@ -6449,6 +6841,9 @@ enum StartupNotice {
     ProfileProblem(porecatu_config::ProfileProblem),
     /// ADR-0072 §6: chave de perfil com cara de segredo, ignorada.
     SecretProfileKey(String),
+    /// ADR-0086 §3 (RF-21.29): o `pinned.json` ilegível (preservado) ou de
+    /// um schema mais novo (intacto, lista somente leitura).
+    Pinned(pinned::PinnedLoadNotice),
 }
 
 impl StartupNotice {
@@ -6484,7 +6879,27 @@ impl StartupNotice {
             StartupNotice::Acrylic(notice) => notice.compose(catalog),
             StartupNotice::ProfileProblem(problem) => messages::profile_problem(catalog, problem),
             StartupNotice::SecretProfileKey(key) => messages::secret_profile_key(catalog, key),
+            StartupNotice::Pinned(notice) => {
+                let (title, body) = pinned_notice_text(catalog, notice);
+                (Severity::Error, title, body)
+            }
         }
+    }
+}
+
+/// ADR-0086 §3 (RF-21.29): texto do aviso do `pinned.json` (canal 1,
+/// ADR-0014), o par de [`session_notice_text`] -- só a tradução de dado
+/// para texto.
+fn pinned_notice_text(catalog: &Catalog, notice: &pinned::PinnedLoadNotice) -> (String, String) {
+    match notice {
+        pinned::PinnedLoadNotice::Corrupt(path) => (
+            msg::notice::pinned_corrupt::title(catalog),
+            msg::notice::pinned_corrupt::body(catalog, path.display()),
+        ),
+        pinned::PinnedLoadNotice::NewerSchema { found, supported } => (
+            msg::notice::pinned_newer::title(catalog),
+            msg::notice::pinned_newer::body(catalog, found, supported),
+        ),
     }
 }
 
@@ -6655,6 +7070,17 @@ struct App {
     /// (dispatch) e `apply_git_query_result` (resultado); lido em
     /// `status_bar_content` a cada quadro.
     git_remotes: HashMap<PathBuf, git::RemoteEntry>,
+    /// PRD-021/ADR-0086 §2: a lista de abas fixadas do **processo** (as
+    /// entradas, na ordem de `pinned.json`, e onde cada uma está viva).
+    /// Carregada em `App::new` sempre, independente de `[session] enabled`
+    /// e do modo posicional (RF-21.13, RF-21.27); só um gesto a reescreve
+    /// no disco (RF-21.24), e nenhuma recarga ou fechamento de janela muda
+    /// as entradas (RF-21.25).
+    pinned: pinned::PinnedRegistry<WindowId>,
+    /// ADR-0086 §5: `true` depois de `open_pinned_tabs_into` ter rodado na
+    /// primeira janela do arranque -- uma vez por execução. Fechar a
+    /// primeira janela não o desliga: as fixadas não reabrem em lugar nenhum.
+    pinned_opened: bool,
     /// RF-13.19: `true` depois do primeiro `git` não encontrado --
     /// desliga a consulta pelo resto da execução (a branch da barra,
     /// que não usa processo nenhum, continua funcionando). Nunca volta
@@ -6687,6 +7113,15 @@ struct App {
     /// As cargas das imagens do arranque (as chaves dos dois slots, sem
     /// repetir), esperando o prompt (`release_deferred_background_load`).
     deferred_background_loads: Vec<background_image::BackgroundImageKey>,
+    /// ADR-0088 §5: the textures of the pinned-tab icons, one per resolved
+    /// path, of the **process**. A pinned tab without an entry draws the app
+    /// icon (`app_icon_image`).
+    pinned_icons: pinned_icon::PinnedIconCache,
+    /// ADR-0088 §4: the startup batch of icon requests (key and saved
+    /// directory), held until the first PTY byte like the background image
+    /// load -- never before the first frame -- and sent as **one** thread
+    /// (`dispatch_pinned_icon_requests`).
+    deferred_pinned_icons: Vec<(pinned::PinnedKey, PathBuf)>,
 }
 
 /// Separa das chaves desconhecidas do `porecatu.toml` as de cor (ADR-0067):
@@ -6952,6 +7387,24 @@ impl App {
         let pending_session =
             (config.session.enabled && cli_directory.is_none()).then(porecatu_session::load);
 
+        // ADR-0086 §3 / RF-21.13, RF-21.27: a lista de fixadas é lida **sempre**
+        // -- com a sessão desligada, no modo posicional, com a sessão inválida
+        // ou de schema mais novo --, porque a fixada é lembrança pedida, não
+        // estado automático. Na main thread, antes da primeira janela (alguns
+        // kilobytes, como o `session.json` logo acima). O aviso vai para a
+        // mesma fila de avisos de arranque.
+        let pinned_path = porecatu_session::pinned_path();
+        let pinned_outcome = pinned_path
+            .as_deref()
+            .map_or(porecatu_session::PinnedLoadOutcome::Missing, |path| {
+                porecatu_session::load_pinned_from(path)
+            });
+        let (pinned, pinned_notice) =
+            pinned::PinnedRegistry::from_load(pinned_outcome, pinned_path);
+        if let Some(notice) = pinned_notice {
+            pending_startup_warnings.push(StartupNotice::Pinned(notice));
+        }
+
         let mut app = Self {
             gpu: None,
             proxy,
@@ -6990,6 +7443,8 @@ impl App {
             pending_first_frame_since: None,
             pending_resumed_metric: None,
             git_remotes: HashMap::new(),
+            pinned,
+            pinned_opened: false,
             git_disabled: false,
             git_poll_interval_warned: false,
             detected_profiles: Vec::new(),
@@ -6998,6 +7453,8 @@ impl App {
             app_icon_image: None,
             pty_output_seen: false,
             deferred_background_loads: Vec::new(),
+            pinned_icons: pinned_icon::PinnedIconCache::default(),
+            deferred_pinned_icons: Vec::new(),
         };
         // RF-17.17: o arranque não espera pela imagem -- só um `metadata` aqui,
         // e a decodificação numa thread.
@@ -7094,6 +7551,10 @@ impl App {
             return;
         }
         self.pty_output_seen = true;
+        // ADR-0088 §4: the startup batch of pinned icons, one thread, after
+        // the prompt like the background image.
+        let icons = std::mem::take(&mut self.deferred_pinned_icons);
+        self.dispatch_pinned_icon_requests(icons);
         for key in std::mem::take(&mut self.deferred_background_loads) {
             let wanted = background_image::BackgroundImageSlot::ALL
                 .into_iter()
@@ -7193,6 +7654,84 @@ impl App {
         }
     }
 
+    /// ADR-0088 §4: opens the one thread that resolves the icons of
+    /// `requests` (key and saved directory). Called at the startup batch
+    /// (`release_deferred_background_load`, after the first PTY byte) and at
+    /// the pin gesture -- never at any other moment (RF-21.21: no `cd`, no
+    /// hot reload). `[project_file]` is read here, once: `enabled = false`
+    /// skips the `.porecatu` and keeps `icon.png`.
+    fn dispatch_pinned_icon_requests(&self, requests: Vec<(pinned::PinnedKey, PathBuf)>) {
+        let requests: Vec<pinned_icon::PinnedIconRequest> = requests
+            .into_iter()
+            .map(|(key, dir)| pinned_icon::PinnedIconRequest {
+                key,
+                dir: Some(dir),
+                project_file: self.config.project_file.clone(),
+            })
+            .collect();
+        let proxy = self.proxy.clone();
+        pinned_icon::spawn_resolve(requests, move |result| {
+            let _ = proxy.send_event(Wakeup::PinnedIconResolved(Box::new(result)));
+        });
+    }
+
+    /// The directory a pinned entry's icon is looked up in, from its
+    /// snapshot (ADR-0088 §4): `None` for SSH or a snapshot without one, which
+    /// are the app icon with no thread at all.
+    fn pinned_icon_dir(&self, saved: &porecatu_session::TabV1) -> Option<PathBuf> {
+        pinned_icon::saved_dir(saved, |id| profile_spawn::restores_as_ssh(&self.config, id))
+    }
+
+    /// Applies a resolved icon (ADR-0088 §4/§5): a result for an entry that
+    /// is not open anymore -- unpinned, closed, its window gone -- is dropped
+    /// and lifts no texture; otherwise the cache keeps it (sharing a path's
+    /// texture, or lifting a new one) and the window it lives in redraws.
+    fn apply_pinned_icon_result(&mut self, result: pinned_icon::PinnedIconResult) {
+        let Some((window, _)) = self.pinned.live_of(result.key) else {
+            return;
+        };
+        self.pinned_icons.apply(result);
+        self.upload_pinned_icons();
+        self.release_pinned_icon_textures();
+        if let Some(state) = self.windows.get(&window) {
+            state.window.request_redraw();
+        }
+    }
+
+    /// Lifts the texture of each decoded pinned icon that waits for one. A
+    /// result that arrived before the `GpuContext` waits here and is lifted
+    /// when it is created (same as the background image, RF-17.17).
+    fn upload_pinned_icons(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        self.pinned_icons.upload(|decoded| {
+            let (width, height) = decoded.size;
+            let levels: Vec<&[u8]> = decoded
+                .levels
+                .iter()
+                .map(|level| level.rgba.as_slice())
+                .collect();
+            gpu.create_image(width, height, &levels)
+        });
+    }
+
+    /// Frees on the GPU the pinned-icon textures the cache let go of.
+    fn release_pinned_icon_textures(&mut self) {
+        for id in self.pinned_icons.drain_released() {
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.remove_image(id);
+            }
+        }
+    }
+
+    /// An entry left the list or its tab ended: its use of a texture goes,
+    /// and the texture with it when it was the last (ADR-0088 §5).
+    fn forget_pinned_icon(&mut self, key: pinned::PinnedKey) {
+        self.pinned_icons.forget(key);
+        self.release_pinned_icon_textures();
+    }
+
     /// RF-17.14, RF-18.17: a falha da imagem de fundo é **um** aviso por slot,
     /// não um por janela -- vai para a primeira janela, como os avisos de
     /// sessão do arranque; sem janela ainda, espera `resumed` em
@@ -7276,7 +7815,8 @@ impl App {
         let cwd = origin_state
             .and_then(|s| s.resolve_new_tab_cwd(&self.startup_directory))
             .or_else(|| self.startup_directory.clone());
-        self.open_window_with(event_loop, attributes, cwd);
+        // RF-21.13: `window.new` nunca abre fixadas.
+        self.open_window_with(event_loop, attributes, cwd, false);
     }
 
     /// Núcleo comum a [`Self::open_window`] e ao arranque em modo
@@ -7284,11 +7824,16 @@ impl App {
     /// primeira aba com o `cwd` já resolvido por quem chama -- só ele sabe
     /// se veio da janela de origem (cascata), de `startup_directory`, ou
     /// do caminho posicional da linha de comando, que vence os dois.
+    ///
+    /// `open_pinned` (ADR-0086 §5): `true` só para a janela do arranque que
+    /// não vem de sessão (modo posicional, sessão ausente/desligada/vazia/
+    /// inválida) -- ela recebe as fixadas depois da aba dela, sem ativá-las.
     fn open_window_with(
         &mut self,
         event_loop: &ActiveEventLoop,
         attributes: WindowAttributes,
         cwd: Option<PathBuf>,
+        open_pinned: bool,
     ) {
         let Some(mut state) = self.create_window_with_attributes(event_loop, attributes) else {
             return;
@@ -7308,7 +7853,366 @@ impl App {
             &self.startup_directory,
             None,
         );
+        if open_pinned {
+            self.open_pinned_tabs_into(&mut state, None);
+        }
         self.windows.insert(window_id, state);
+    }
+
+    /// ADR-0086 §5 (RF-21.13, RF-21.14, RF-21.15): abre as abas fixadas do
+    /// registro em `state`, a primeira janela do arranque -- **uma vez por
+    /// execução** (`pinned_opened`), pelo caminho que a criou (sessão
+    /// restaurada, posicional, sessão ausente/desligada/inválida). Roda antes
+    /// do primeiro redesenho dela, para a zona e o `track_shift` já nascerem
+    /// com a contagem certa. `window.new` e a restauração nomeada nunca a
+    /// chamam.
+    ///
+    /// Cada entrada, na ordem da lista, entra em `pinned[n]` com a árvore do
+    /// retrato e sobe sempre (nunca espera `lazy_restore`), com
+    /// `SpawnOrigin::Pinned`; um painel SSH volta dormente. **Não ativa**
+    /// nada -- a ativa é a que a sessão disse --, com duas exceções:
+    /// `active_pinned` (ADR-0086 §4), a posição da fixada que era a ativa no
+    /// encerramento, e a janela que ficou sem aba ativa nenhuma (só
+    /// fixadas, ou `lazy_restore` com a fixada ativa), que ativa a primeira
+    /// aba navegável. Erro de spawn desfaz a aba e avisa, como sempre
+    /// (`spawn_tab_runtime`); a entrada **fica** na lista (RF-21.30) e só não
+    /// ganha vínculo vivo.
+    fn open_pinned_tabs_into(&mut self, state: &mut WindowState, active_pinned: Option<u32>) {
+        if self.pinned_opened {
+            return;
+        }
+        self.pinned_opened = true;
+        let window_id = state.window.id();
+        let now = Instant::now();
+        let snapshots: Vec<(pinned::PinnedKey, porecatu_session::TabV1)> = self
+            .pinned
+            .entries()
+            .iter()
+            .map(|entry| (entry.key, entry.saved.clone()))
+            .collect();
+        // Por posição na lista, para o `active_pinned` da sessão.
+        let mut opened: Vec<Option<TabId>> = Vec::with_capacity(snapshots.len());
+        let mut icon_requests: Vec<(pinned::PinnedKey, PathBuf)> = Vec::new();
+        for (key, saved) in &snapshots {
+            let pos = state.workspace.pinned().len();
+            let tab_id = porecatu_session::convert::insert_pinned_from_v1(
+                &mut state.workspace,
+                saved,
+                pos,
+                // RF-20.33: an SSH pane is born `NotStarted` whatever else is set.
+                &|id| profile_spawn::restores_as_ssh(&self.config, id),
+            );
+            let cwd = state.workspace.tab(tab_id).and_then(|t| t.cwd().cloned());
+            let saved_profile = state
+                .workspace
+                .tab(tab_id)
+                .and_then(|t| t.panes().focused().profile().map(str::to_owned));
+            let spawn_profile =
+                profile_spawn::restored_profile(&self.config, saved_profile.as_deref());
+            state.spawn_tab_runtime(
+                tab_id,
+                cwd,
+                self.cell_metrics,
+                &self.proxy,
+                now,
+                &self.style,
+                &self.term_params,
+                &spawn_profile,
+                SpawnOrigin::Pinned,
+                &self.config.project_file,
+                &self.startup_directory,
+            );
+            // RF-6.23: todos os painéis da árvore; os irmãos nunca consideram
+            // `.porecatu` (só o focado, acima) e os SSH ficam dormentes. As
+            // folhas já nasceram `Running` (`insert_pinned_from_v1`), então
+            // não há `start_live_panes` a fazer.
+            state.spawn_restored_sibling_panes(
+                tab_id,
+                self.cell_metrics,
+                &self.proxy,
+                &self.style,
+                &self.term_params,
+                &self.config,
+                now,
+                &self.startup_directory,
+            );
+            // `spawn_tab_runtime` desfaz a aba se o spawn falhou.
+            if state.workspace.tab(tab_id).is_some() {
+                self.pinned.bind_live(*key, window_id, tab_id);
+                opened.push(Some(tab_id));
+                // ADR-0088 §4: SSH and a snapshot without a directory are the
+                // app icon already, with nothing to resolve.
+                if let Some(dir) = self.pinned_icon_dir(saved) {
+                    icon_requests.push((*key, dir));
+                }
+            } else {
+                opened.push(None);
+            }
+        }
+        // One batch for the whole list, after the first frame: it waits for
+        // the first PTY byte like the background image, or goes now if that
+        // already happened.
+        self.deferred_pinned_icons.extend(icon_requests);
+        if self.pty_output_seen {
+            let icons = std::mem::take(&mut self.deferred_pinned_icons);
+            self.dispatch_pinned_icon_requests(icons);
+        }
+
+        let wanted =
+            active_pinned.and_then(|position| opened.get(position as usize).copied().flatten());
+        if let Some(id) = wanted {
+            state.workspace.activate_tab(id);
+            state.sync_window_title();
+        } else if opened.iter().any(Option::is_some) && state.workspace.active_tab().is_none() {
+            let first = state.workspace.navigable_order().next();
+            if let Some(first) = first {
+                state.workspace.activate_tab(first);
+                state.sync_window_title();
+            }
+        }
+    }
+
+    /// ADR-0086 §4: a posição em `pinned.json` da fixada ativa de `state`,
+    /// quando a aba ativa dela é uma fixada -- o que `WindowV1::active_pinned`
+    /// grava (e `active_tab` sai `None`). `None` com a ativa na trilha, ou
+    /// uma fixada sem entrada viva.
+    fn active_pinned_position(&self, state: &WindowState) -> Option<u32> {
+        let active = state
+            .workspace
+            .active_tab()
+            .filter(|&id| state.workspace.is_pinned(id))?;
+        let key = self.pinned.key_of(state.window.id(), active)?;
+        u32::try_from(self.pinned.index_of(key)?).ok()
+    }
+
+    /// ADR-0086 §3: grava a lista de fixadas **na hora**, síncrono, a cada
+    /// gesto que a muda. Falha vira aviso do app com a razão, na janela do
+    /// gesto (RF-21.28): o gesto continua valendo nesta execução, e o aviso
+    /// diz que não foi gravado. Nunca chamado por derivação de estado.
+    fn save_pinned_list(&mut self, window_id: WindowId) {
+        let Err(error) = self.pinned.save() else {
+            return;
+        };
+        let body = messages::pinned_save_failure(&self.catalog, &error);
+        if let Some(state) = self.windows.get_mut(&window_id) {
+            state.warnings.push(
+                Severity::Error,
+                msg::notice::pinned_save_failed::title(&self.catalog),
+                body,
+                Instant::now(),
+            );
+            state.window.request_redraw();
+        }
+    }
+
+    /// Rola a trilha até a aba ativa da janela (RF-1.18), a mesma convenção
+    /// de `tab.next`/`tab.goto_N`.
+    fn reveal_active_tab(&mut self, window_id: WindowId) {
+        if let (Some(gpu), Some(state)) = (self.gpu.as_mut(), self.windows.get_mut(&window_id)) {
+            state.ensure_active_tab_visible(gpu, &self.style);
+        }
+    }
+
+    /// Gesto de fixar (ADR-0086 §1/§2/§3, RF-21.7 a RF-21.9): o item "Fixar
+    /// aba", `tab.toggle_pin` e, na etapa do arraste, a queda na zona.
+    /// `pos` é a posição na zona (`None` = o fim, RF-21.8); o arraste passa a
+    /// posição de queda. Devolve `true` se a aba foi fixada.
+    ///
+    /// - **Recusa** com aviso quando o `pinned.json` é de um schema mais novo
+    ///   (§3): fixar só em memória mostraria uma fixada que não volta.
+    /// - O retrato (`pinned_tab_v1`, com o mesmo fallback de `cwd` que a
+    ///   sessão usa) é montado **antes** de mover a aba (RF-21.9).
+    /// - Não reinicia nada e não roda `.porecatu`: não há spawn (RF-21.8). A
+    ///   sessão fica suja -- a aba sai do que ela grava.
+    /// - A lista é gravada na hora; falha de gravação é aviso, e a aba fica
+    ///   fixada nesta execução.
+    pub(crate) fn pin_tab_gesture(
+        &mut self,
+        window_id: WindowId,
+        tab: TabId,
+        pos: Option<usize>,
+    ) -> bool {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return false;
+        };
+        if state.workspace.tab(tab).is_none() || state.workspace.is_pinned(tab) {
+            return false;
+        }
+        if !self.pinned.is_writable() {
+            state.warnings.push(
+                Severity::Warning,
+                msg::notice::pinned_refused::title(&self.catalog),
+                msg::notice::pinned_refused::body(&self.catalog),
+                Instant::now(),
+            );
+            state.window.request_redraw();
+            return false;
+        }
+        // A fixada não tem rótulo onde editar: o que se digitava vale agora,
+        // e o retrato já o leva.
+        if state.rename.editing_tab() == Some(tab) {
+            state.commit_rename();
+        }
+        let saved = {
+            let panes = &state.panes;
+            state.workspace.tab(tab).map(|t| {
+                session_writer::pinned_tab_v1(t, |tab_id, pane_id| {
+                    panes
+                        .get(&(tab_id, pane_id))
+                        .and_then(PaneRuntime::session_cwd_fallback)
+                })
+            })
+        };
+        let Some(saved) = saved else {
+            return false;
+        };
+        let zone_len = state.workspace.pinned().len();
+        let pos = pos.unwrap_or(zone_len).min(zone_len);
+        let left_neighbor = pinned::left_neighbor_in_zone(state.workspace.pinned(), pos)
+            .and_then(|neighbor| self.pinned.key_of(window_id, neighbor));
+        // RF-21.3: uma fixada não é selecionável; a ordem de antes da
+        // mudança é a que "âncora mais próxima" usa (ADR-0021 §2).
+        let order: Vec<TabId> = state.workspace.visual_order().collect();
+        state.selection.remove_tab(tab, &order);
+        if !state.touch_workspace(|ws| ws.pin_tab(tab, pos)) {
+            return false;
+        }
+        // ADR-0088 §4: ao fixar, um pedido de ícone para esta aba, com a
+        // chave que acabou de nascer e o diretório do retrato (o gravado).
+        let icon_dir = self.pinned_icon_dir(&saved);
+        let key = self
+            .pinned
+            .insert_for_pin(window_id, tab, saved, left_neighbor);
+        if let Some(dir) = icon_dir {
+            self.dispatch_pinned_icon_requests(vec![(key, dir)]);
+        }
+        self.save_pinned_list(window_id);
+        if let Some(state) = self.windows.get(&window_id) {
+            state.window.request_redraw();
+        }
+        true
+    }
+
+    /// Gesto de desafixar (ADR-0086 §1/§3, RF-21.10): o item "Desafixar
+    /// aba", `tab.toggle_pin` e, na etapa do arraste, a queda fora da zona.
+    /// O processo **segue vivo**; a aba vira aba solta em `target`, sai da
+    /// lista e a lista é gravada na hora. Devolve `true` se a aba foi
+    /// desafixada.
+    pub(crate) fn unpin_tab_gesture(
+        &mut self,
+        window_id: WindowId,
+        tab: TabId,
+        target: UnpinTarget,
+    ) -> bool {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return false;
+        };
+        if !state.workspace.is_pinned(tab) {
+            return false;
+        }
+        let key = self.pinned.key_of(window_id, tab);
+        if !state.touch_workspace(|ws| ws.unpin_tab(tab, target)) {
+            return false;
+        }
+        if let Some(key) = key {
+            self.pinned.remove(key);
+            self.forget_pinned_icon(key);
+            self.save_pinned_list(window_id);
+        }
+        if let Some(state) = self.windows.get(&window_id) {
+            state.window.request_redraw();
+        }
+        true
+    }
+
+    /// `tab.toggle_pin` (ADR-0086 §7): a ativa fixada é desafixada (início da
+    /// trilha, e a trilha rola até ela); senão é fixada, no fim da zona.
+    fn toggle_pin_of_active_tab(&mut self, window_id: WindowId) {
+        let Some(state) = self.windows.get(&window_id) else {
+            return;
+        };
+        let Some(tab) = state.workspace.active_tab() else {
+            return;
+        };
+        if state.workspace.is_pinned(tab) {
+            if self.unpin_tab_gesture(window_id, tab, UnpinTarget::TrackStart) {
+                self.reveal_active_tab(window_id);
+            }
+        } else {
+            self.pin_tab_gesture(window_id, tab, None);
+        }
+    }
+
+    /// Applies a drop that touches the pinned zone (ADR-0087 §5, the table of
+    /// the decision), once the drag has ended: the same gestures the menu and
+    /// the keyboard use, so the list is written on the spot and a failure is
+    /// the warning of RF-21.28. `op` comes from `tab_bar::drop_op`; the two
+    /// track operations are applied by `WindowState::finish_drag` itself.
+    fn apply_zone_drop(&mut self, window_id: WindowId, tab: TabId, op: DropOp) {
+        match op {
+            DropOp::Pin { pos } => {
+                self.pin_tab_gesture(window_id, tab, Some(pos));
+            }
+            DropOp::ReorderPinned { pos } => {
+                let Some(state) = self.windows.get_mut(&window_id) else {
+                    return;
+                };
+                let before = state.workspace.pinned().to_vec();
+                if state.touch_workspace(|ws| ws.move_pinned(tab, pos))
+                    && state.workspace.pinned() != before
+                {
+                    self.sync_pinned_order(window_id);
+                }
+            }
+            DropOp::Unpin(target) => {
+                self.unpin_tab_gesture(window_id, tab, target);
+            }
+            // The track operations never get here.
+            DropOp::IntoGroup { .. } | DropOp::NewRun { .. } => {}
+        }
+    }
+
+    /// RF-21.11, ADR-0086 §2/§3: a zona de `window_id` foi reordenada (por
+    /// teclado ou por arraste, ADR-0087 §5) -- a lista do processo segue,
+    /// permutando só as posições que as fixadas desta janela já ocupam, e é
+    /// gravada na hora.
+    fn sync_pinned_order(&mut self, window_id: WindowId) {
+        let Some(state) = self.windows.get(&window_id) else {
+            return;
+        };
+        self.pinned
+            .reorder_window(window_id, state.workspace.pinned());
+        self.save_pinned_list(window_id);
+        if let Some(state) = self.windows.get(&window_id) {
+            state.window.request_redraw();
+        }
+    }
+
+    /// Confirmação do diálogo de fixada (`DialogAction::ClosePinnedTab`,
+    /// RF-21.22): o encerramento é o de sempre, a entrada sai da lista e a
+    /// lista é gravada na hora. Fechar a janela e o `exit` do processo **não**
+    /// passam por aqui (RF-21.24, RF-21.25).
+    fn close_pinned_tab_confirmed(
+        &mut self,
+        window_id: WindowId,
+        tab: TabId,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let key = self.pinned.key_of(window_id, tab);
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let window_empty = state.close_tab_unconditionally(tab);
+        if let Some(key) = key {
+            self.pinned.remove(key);
+            self.forget_pinned_icon(key);
+            self.save_pinned_list(window_id);
+        }
+        if window_empty {
+            self.close_window_unconditionally(window_id, event_loop);
+        } else if let Some(state) = self.windows.get(&window_id) {
+            state.window.request_redraw();
+        }
     }
 
     /// RF-3.7/RF-3.17 (metade de restauração, F5 etapa 4): recria uma
@@ -7335,11 +8239,16 @@ impl App {
     /// `create_window_with_attributes`) -- PRD-000/etapa 6 da F6 usa o da
     /// primeira janela restaurada pra fechar a métrica de "restauração de
     /// sessão até janela interativa" em `resumed`/`redraw`.
+    ///
+    /// `open_pinned` (ADR-0086 §5) é `true` só para a **primeira** janela do
+    /// arranque: ela recebe as abas fixadas (uma vez por execução) e honra
+    /// `WindowV1::active_pinned`. A restauração nomeada passa sempre `false`.
     fn open_window_from_session(
         &mut self,
         event_loop: &ActiveEventLoop,
         window_v1: &porecatu_session::WindowV1,
         placement: WindowPlacement,
+        open_pinned: bool,
     ) -> Option<WindowId> {
         let mut attributes = base_window_attributes(wants_transparent(&self.config));
         match placement {
@@ -7420,7 +8329,9 @@ impl App {
         let to_start: Vec<TabId> = if lazy_restore {
             state.workspace.active_tab().into_iter().collect()
         } else {
-            state.workspace.visual_order().collect()
+            // ADR-0086 §4: a sessão restaura a trilha; as fixadas sobem por
+            // `open_pinned_tabs_into`, com a origem delas.
+            state.workspace.track_order().collect()
         };
         let now = Instant::now();
         for tab_id in to_start {
@@ -7459,12 +8370,19 @@ impl App {
                 &self.startup_directory,
             );
         }
+        // ADR-0086 §5: as fixadas entram **antes** da garantia abaixo, na
+        // janela que as recebe (a primeira do arranque) -- senão toda janela
+        // que só tinha fixadas ganharia uma aba extra a cada arranque.
+        if open_pinned {
+            self.open_pinned_tabs_into(&mut state, window_v1.active_pinned);
+        }
         // Garantia de terminal mínimo: se o workspace ficou vazio após a
         // restauração -- p.ex. todas as abas estavam `Exited` na gravação
         // (shells que saíram com código 0 antes de o app ser fechado) --
         // abre uma aba nova em vez de restaurar uma janela sem terminal.
-        // A geometria/monitor gravados ainda são respeitados.
-        if state.workspace.visual_order().next().is_none() {
+        // A geometria/monitor gravados ainda são respeitados. A pergunta
+        // conta as fixadas como abas (`window_needs_a_minimum_tab`).
+        if window_needs_a_minimum_tab(&state.workspace) {
             let cwd = self.startup_directory.clone();
             state.open_tab(
                 self.cell_metrics,
@@ -7508,6 +8426,8 @@ impl App {
                 event_loop,
                 window_v1,
                 WindowPlacement::CascadeFrom(origin),
+                // RF-21.13: a restauração nomeada nunca abre fixadas.
+                false,
             );
             return;
         }
@@ -7559,14 +8479,14 @@ impl App {
             monitor,
             theme,
             zoom_steps,
+            // ADR-0086 §4: a sessão nomeada nunca abre fixadas, então nunca
+            // grava qual era a ativa.
+            None,
             |tab_id, pane_id| {
-                state.panes.get(&(tab_id, pane_id)).and_then(|rt| {
-                    if rt.received_osc7 {
-                        None
-                    } else {
-                        rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
-                    }
-                })
+                state
+                    .panes
+                    .get(&(tab_id, pane_id))
+                    .and_then(PaneRuntime::session_cwd_fallback)
             },
         );
         porecatu_session::named::save_named(name, window)
@@ -7796,6 +8716,8 @@ impl App {
             // RF-17.17: a carga do arranque pode ter terminado antes de haver
             // `GpuContext`; a textura sai agora.
             self.upload_background_image();
+            // ADR-0088 §4: o mesmo para um ícone de fixada que chegou antes.
+            self.upload_pinned_icons();
             window_surface
         };
 
@@ -7875,6 +8797,17 @@ impl App {
             // trava a saída -- no máximo `eprintln!` (ver o método).
             self.write_session_now(std::iter::once(&state));
         }
+        // RF-21.25: fechar a janela encerra as fixadas dela com as outras
+        // abas, apaga os vínculos e **não** mexe na lista -- nada é escrito.
+        // Depois da gravação da sessão acima, que ainda precisa do vínculo
+        // para dizer qual fixada estava ativa.
+        // ADR-0088 §5: their tabs die with the window and are not reopened
+        // before the next startup, so the icon textures go too.
+        for key in self.pinned.live_keys_in(window_id) {
+            self.pinned_icons.forget(key);
+        }
+        self.release_pinned_icon_textures();
+        self.pinned.forget_window(window_id);
         let waits: Vec<_> = state
             .panes
             .into_values()
@@ -7966,6 +8899,11 @@ impl App {
                         state.window.request_redraw();
                     }
                 }
+            }
+            // RF-21.22: fechar uma fixada a desafixa -- o encerramento de
+            // sempre, mais a entrada fora da lista e a gravação.
+            DialogAction::ClosePinnedTab(id) => {
+                self.close_pinned_tab_confirmed(window_id, id, event_loop);
             }
             DialogAction::ClosePane(tab_id, pane_id) => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
@@ -8080,8 +9018,11 @@ impl App {
         let tab = menu.tab;
         match action {
             MenuAction::NewTab => {
-                if let Some(state) = self.windows.get_mut(&window_id) {
-                    state.action_new_tab(
+                if let (Some(state), Some(gpu)) =
+                    (self.windows.get_mut(&window_id), self.gpu.as_mut())
+                {
+                    state.action_new_tab_revealing(
+                        gpu,
                         self.cell_metrics,
                         &self.proxy,
                         &self.startup_directory,
@@ -8092,6 +9033,16 @@ impl App {
                         &self.config.project_file,
                     );
                     state.window.request_redraw();
+                }
+            }
+            // ADR-0087 §6: o gesto é o mesmo de `tab.toggle_pin`, sobre a
+            // aba **clicada** (não a ativa).
+            MenuAction::Pin => {
+                self.pin_tab_gesture(window_id, tab, None);
+            }
+            MenuAction::Unpin => {
+                if self.unpin_tab_gesture(window_id, tab, UnpinTarget::TrackStart) {
+                    self.reveal_active_tab(window_id);
                 }
             }
             MenuAction::CloseTab => {
@@ -8119,7 +9070,13 @@ impl App {
                 }
             }
             MenuAction::MoveToGroup => {
-                if let Some(state) = self.windows.get_mut(&window_id) {
+                // RF-21.12: o item vem esmaecido numa fixada, e o popover
+                // não abre (ela não pertence a grupo).
+                if let Some(state) = self
+                    .windows
+                    .get_mut(&window_id)
+                    .filter(|state| !state.workspace.is_pinned(tab))
+                {
                     let current_group = state.workspace.group_of_tab(tab);
                     let targets: Vec<GroupId> = state
                         .workspace
@@ -8291,25 +9248,14 @@ impl App {
                         monitor,
                         theme.clone(),
                         zoom_steps,
+                        self.active_pinned_position(state),
+                        // RF-3.10/ADR-0038 §2, por painel (ADR-0053 §11):
+                        // cada folha da árvore tem o PTY dela.
                         |tab_id, pane_id| {
-                            state.panes.get(&(tab_id, pane_id)).and_then(|rt| {
-                                // RF-3.10/ADR-0038 §2: `rt.received_osc7` é o
-                                // sinal de verdade, não `Tab::cwd().is_some()`
-                                // -- uma aba nova herda `cwd` do grupo na
-                                // criação (ADR-0017 item 1) sem nunca ter
-                                // recebido OSC 7. Com OSC 7 confirmado, não
-                                // sobrescreve (`None`); sem confirmação,
-                                // consulta o fallback (`ProcessGroup::cwd`
-                                // fora do Windows, senão o `cwd` de spawn).
-                                // ADR-0053 §11: por painel, não mais só o
-                                // focado -- cada folha da árvore tem o PTY
-                                // dela.
-                                if rt.received_osc7 {
-                                    None
-                                } else {
-                                    rt.terminal.cwd_fallback().or_else(|| rt.spawn_cwd.clone())
-                                }
-                            })
+                            state
+                                .panes
+                                .get(&(tab_id, pane_id))
+                                .and_then(PaneRuntime::session_cwd_fallback)
                         },
                     )
                 })
@@ -10021,10 +10967,12 @@ impl ApplicationHandler<Wakeup> for App {
         // `App::new`) -- os avisos de arranque continuam sendo entregues
         // aqui, mesmo que a restauração de sessão nem rode neste modo.
         if let Some(dir) = self.positional_directory.clone() {
+            // RF-21.13: o modo posicional ignora a sessão, **não** as fixadas.
             self.open_window_with(
                 event_loop,
                 base_window_attributes(wants_transparent(&self.config)),
                 Some(dir),
+                true,
             );
             self.deliver_pending_startup_warnings();
             return;
@@ -10039,10 +10987,12 @@ impl ApplicationHandler<Wakeup> for App {
                 self.apply_restored_session_state(session);
                 let mut restored_window_id = None;
                 for window_v1 in &session.windows {
+                    // ADR-0086 §5: só a primeira janela criada recebe as fixadas.
                     let window_id = self.open_window_from_session(
                         event_loop,
                         window_v1,
                         WindowPlacement::Saved,
+                        restored_window_id.is_none(),
                     );
                     if restored_window_id.is_none() {
                         restored_window_id = window_id;
@@ -10054,7 +11004,14 @@ impl ApplicationHandler<Wakeup> for App {
                     self.pending_resumed_metric = Some((window_id, resumed_start));
                 }
             }
-            _ => self.open_window(event_loop, None),
+            // Sessão ausente, desligada, vazia ou inválida: a janela de sempre
+            // (o que `open_window(event_loop, None)` faria), com as fixadas.
+            _ => self.open_window_with(
+                event_loop,
+                base_window_attributes(wants_transparent(&self.config)),
+                self.startup_directory.clone(),
+                true,
+            ),
         }
         if (!outcome.notices.is_empty() || self.vanished_restored_theme.is_some())
             && let Some(state) = self.windows.values_mut().next()
@@ -10106,6 +11063,10 @@ impl ApplicationHandler<Wakeup> for App {
             }
             Wakeup::BackgroundImageLoaded(result) => {
                 self.apply_background_image_result(*result);
+                return;
+            }
+            Wakeup::PinnedIconResolved(result) => {
+                self.apply_pinned_icon_result(*result);
                 return;
             }
         };
@@ -10274,21 +11235,29 @@ impl ApplicationHandler<Wakeup> for App {
                 }
                 TermEvent::Exit(reason) => {
                     let (success, code) = exit_outcome(&reason);
-                    if success {
-                        // RF-1.3/RF-6.10: código zero não deixa rastro -- o
-                        // painel que gerou o evento fecha; se era o último
-                        // da aba, a aba inteira fecha (mesmo caminho de
-                        // `tab.close`). Nunca o painel focado por default --
-                        // `pane_id` é o dono de verdade do evento.
-                        let is_last_pane = state
-                            .workspace
-                            .tab(tab_id)
-                            .is_some_and(|t| t.panes().leaves_in_order().len() <= 1);
-                        if is_last_pane {
+                    let is_last_pane = state
+                        .workspace
+                        .tab(tab_id)
+                        .is_some_and(|t| t.panes().leaves_in_order().len() <= 1);
+                    // RF-1.3/RF-6.10: código zero não deixa rastro -- o
+                    // painel que gerou o evento fecha; se era o último da
+                    // aba, a aba inteira fecha (mesmo caminho de `tab.close`).
+                    // Nunca o painel focado por default -- `pane_id` é o dono
+                    // de verdade do evento. RF-21.24, ADR-0086 §7: **exceto**
+                    // o último painel de uma fixada, que fica `Exited` --
+                    // um `exit` digitado não pode custar a lista. A decisão é
+                    // uma função só (`pinned::exit_disposition`).
+                    match pinned::exit_disposition(
+                        success,
+                        is_last_pane,
+                        state.workspace.is_pinned(tab_id),
+                    ) {
+                        pinned::ExitDisposition::CloseTab => {
                             if state.close_tab_unconditionally(tab_id) {
                                 window_should_close = true;
                             }
-                        } else {
+                        }
+                        pinned::ExitDisposition::ClosePane => {
                             state.close_pane_unconditionally(
                                 tab_id,
                                 pane_id,
@@ -10296,41 +11265,42 @@ impl ApplicationHandler<Wakeup> for App {
                                 &self.style,
                             );
                         }
-                    } else {
-                        // A conexão que não abriu deixa de estar "conectando".
-                        state.forget_notice(dialog::NoticeSlot::Connecting(tab_id, pane_id));
-                        if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
-                            // Um painel SSH diz por que acabou (ADR-0075 §5); o
-                            // local e o `exit` de sempre seguem com a frase do
-                            // código de saída.
-                            let ssh_note = runtime.ssh_host.as_deref().and_then(|host| {
-                                messages::ssh_end_note(&self.catalog, host, &reason)
-                            });
-                            let dialog = match ssh_note {
-                                Some(note) => ConfirmDialog::error_notice(
-                                    &self.catalog,
-                                    msg::dialog::notice::title_ssh(&self.catalog),
-                                    &note,
-                                ),
-                                None => info_dialog(
-                                    &self.catalog,
-                                    &msg::note::process_exited(&self.catalog, code),
-                                ),
-                            };
-                            state.notices.push(tab_id, pane_id, dialog);
-                        }
-                        // O painel que saiu é `pane_id`, não necessariamente
-                        // o focado da aba -- endereça pelo id de verdade.
-                        if let Some(pane) = state
-                            .workspace
-                            .tab_mut(tab_id)
-                            .and_then(|t| t.panes_mut().pane_mut(pane_id))
-                        {
-                            pane.mark_exited(code as i32);
-                            // Aba `Exited` não é gravada (ADR-0036 §3): a
-                            // sessão precisa de uma escrita nova pra ela
-                            // parar de aparecer no arquivo.
-                            state.mark_session_dirty();
+                        pinned::ExitDisposition::KeepExited => {
+                            // A conexão que não abriu deixa de estar "conectando".
+                            state.forget_notice(dialog::NoticeSlot::Connecting(tab_id, pane_id));
+                            if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
+                                // Um painel SSH diz por que acabou (ADR-0075 §5); o
+                                // local e o `exit` de sempre seguem com a frase do
+                                // código de saída.
+                                let ssh_note = runtime.ssh_host.as_deref().and_then(|host| {
+                                    messages::ssh_end_note(&self.catalog, host, &reason)
+                                });
+                                let dialog = match ssh_note {
+                                    Some(note) => ConfirmDialog::error_notice(
+                                        &self.catalog,
+                                        msg::dialog::notice::title_ssh(&self.catalog),
+                                        &note,
+                                    ),
+                                    None => info_dialog(
+                                        &self.catalog,
+                                        &msg::note::process_exited(&self.catalog, code),
+                                    ),
+                                };
+                                state.notices.push(tab_id, pane_id, dialog);
+                            }
+                            // O painel que saiu é `pane_id`, não necessariamente
+                            // o focado da aba -- endereça pelo id de verdade.
+                            if let Some(pane) = state
+                                .workspace
+                                .tab_mut(tab_id)
+                                .and_then(|t| t.panes_mut().pane_mut(pane_id))
+                            {
+                                pane.mark_exited(code as i32);
+                                // Aba `Exited` não é gravada (ADR-0036 §3): a
+                                // sessão precisa de uma escrita nova pra ela
+                                // parar de aparecer no arquivo.
+                                state.mark_session_dirty();
+                            }
                         }
                     }
                 }
@@ -10895,6 +11865,14 @@ impl App {
                 }
             }
             ActionOutcome::OpenSettings => self.open_settings(event_loop, window_id),
+            // ADR-0086 §7: a aba ativa; a lista de fixadas é do processo.
+            ActionOutcome::TogglePin => {
+                self.toggle_pin_of_active_tab(window_id);
+                if let Some(state) = self.windows.get(&window_id) {
+                    state.window.request_redraw();
+                }
+            }
+            ActionOutcome::PinnedReordered => self.sync_pinned_order(window_id),
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
             ActionOutcome::CycleTheme => self.cycle_theme(),
             // ADR-0055 §3: `session.save_named` abre em edição (campo em
@@ -11573,7 +12551,8 @@ impl App {
             );
             let style = &self.style;
             let bar_width = state.logical_width;
-            let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos());
+            let pinned_count = state.workspace.pinned().len();
+            let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos(), pinned_count);
             let layout = tab_bar::fit_width(
                 &state.workspace,
                 style,
@@ -11583,8 +12562,9 @@ impl App {
             );
             if let Some(tab_rect) = tab_bar::tab_rect(&layout, id) {
                 let field_content = chrome::rename_field_rect(tab_rect, style);
-                let field_screen_x =
-                    field_content.x + tab_bar::track_shift(style, is_macos()) - state.scroll_offset;
+                let field_screen_x = field_content.x
+                    + tab_bar::track_shift(style, is_macos(), pinned_count)
+                    - state.scroll_offset;
                 let buffer = state
                     .rename
                     .field()
@@ -11623,6 +12603,9 @@ impl App {
                     position.x as f32 / state.scale,
                     position.y as f32 / state.scale,
                 );
+                // A pinned box drags like a track tab (ADR-0087 §5): past the
+                // threshold it becomes `TabDragging`, and `redraw` gives it
+                // the square ghost (it has no `TabRect` in the track layout).
                 let past_threshold = (logical.0 - start.0).abs() > DRAG_THRESHOLD_PX
                     || (logical.1 - start.1).abs() > DRAG_THRESHOLD_PX;
                 if past_threshold {
@@ -11641,10 +12624,19 @@ impl App {
             }
             Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {
                 let logical_x = position.x as f32 / state.scale;
-                let track_left = tab_bar::track_shift(&self.style, is_macos());
+                let pinned_count = state.workspace.pinned().len();
+                let track_left = tab_bar::track_shift(&self.style, is_macos(), pinned_count);
                 let track_right = track_left
-                    + tab_bar::trilha_width(&self.style, state.logical_width, is_macos());
-                if logical_x < track_left + DRAG_EDGE_ZONE_PX {
+                    + tab_bar::trilha_width(
+                        &self.style,
+                        state.logical_width,
+                        is_macos(),
+                        pinned_count,
+                    );
+                // ADR-0087 §5: only inside the track. Over the pinned zone (left
+                // of `track_left`) the track does not scroll, which is where a
+                // drop on the zone is aimed.
+                if logical_x >= track_left && logical_x < track_left + DRAG_EDGE_ZONE_PX {
                     state.scroll_offset = (state.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
                 } else if logical_x > track_right - DRAG_EDGE_ZONE_PX {
                     state.scroll_offset += DRAG_AUTOSCROLL_STEP_PX;
@@ -12242,9 +13234,12 @@ impl App {
                 state.window.request_redraw();
                 return;
             }
+            // ADR-0087 §5: a drop that touches the pinned zone is applied by
+            // `App` below, once `state` is out of use (it owns the list).
+            let mut zone_drop = None;
             if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
                 if let Some(gpu) = &mut self.gpu {
-                    state.finish_drag(gpu, &self.style);
+                    zone_drop = state.finish_drag(gpu, &self.style);
                 }
             } else if !state.in_bar(state.cursor_position.1, &self.style)
                 && !state.in_status_bar(state.cursor_position.1, &self.style)
@@ -12279,6 +13274,9 @@ impl App {
                 }
             }
             state.window.request_redraw();
+            if let Some((tab, op)) = zone_drop {
+                self.apply_zone_drop(window_id, tab, op);
+            }
             return;
         }
 
@@ -12934,9 +13932,10 @@ impl App {
         state.refresh_profile_badges(config);
         let bar_width = state.logical_width;
         let is_mac = is_macos();
-        let trilha_width = tab_bar::trilha_width(style, bar_width, is_mac);
+        let pinned_count = state.workspace.pinned().len();
+        let trilha_width = tab_bar::trilha_width(style, bar_width, is_mac, pinned_count);
         // Tela -> conteúdo é `x - track_left + scroll_offset`.
-        let track_left = tab_bar::track_shift(style, is_mac);
+        let track_left = tab_bar::track_shift(style, is_mac, pinned_count);
         let base_layout = tab_bar::fit_width(
             &state.workspace,
             style,
@@ -12992,24 +13991,39 @@ impl App {
         // frame a partir do cursor, nunca guardado. `None` durante
         // arraste: o alvo já tem o fantasma como feedback próprio, e a
         // pílula/aba de origem não deveria brilhar por baixo dele.
-        let bar_hover =
-            if matches!(state.drag, Drag::Idle) && state.in_bar(state.cursor_position.1, style) {
-                let cursor_logical = (
-                    state.cursor_position.0 as f32 / state.scale,
-                    state.cursor_position.1 as f32 / state.scale,
-                );
-                let content_point = (
-                    cursor_logical.0 - track_left + state.scroll_offset,
-                    cursor_logical.1,
-                );
-                if tab_bar::point_in_track(style, bar_width, is_mac, cursor_logical.0) {
-                    tab_bar::hit_test(&base_layout, content_point)
-                } else {
-                    None
-                }
+        let bar_hover = if matches!(state.drag, Drag::Idle)
+            && state.in_bar(state.cursor_position.1, style)
+        {
+            let cursor_logical = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            let content_point = (
+                cursor_logical.0 - track_left + state.scroll_offset,
+                cursor_logical.1,
+            );
+            // ADR-0087 §4: a pinned box answers before the track, with the
+            // same `TabBarHit::Tab` a track tab gives.
+            if let Some(i) = tab_bar::point_in_pinned(style, is_mac, pinned_count, cursor_logical) {
+                state
+                    .workspace
+                    .pinned()
+                    .get(i)
+                    .map(|&id| tab_bar::TabBarHit::Tab(id))
+            } else if tab_bar::point_in_track(
+                style,
+                bar_width,
+                is_mac,
+                pinned_count,
+                cursor_logical.0,
+            ) {
+                tab_bar::hit_test(&base_layout, content_point)
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         // Durante um arraste, o `Workspace` de verdade não é tocado -- só
         // um clone com o preview aplicado é usado pra desenhar (espec
@@ -13021,45 +14035,102 @@ impl App {
         let now = Instant::now();
         let paint_layout = match state.drag {
             Drag::TabDragging {
-                tab, grab_offset, ..
+                tab,
+                grab_offset,
+                target: previous_target,
             } => {
                 let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
                 let ghost_screen_x = cursor_logical_x - grab_offset;
-                let ghost_content_x = ghost_screen_x - track_left + state.scroll_offset;
-                // `base_layout` (não o preview): a fonte do conteúdo do
-                // fantasma tem que existir sempre, mesmo quando o alvo
-                // corrente é um grupo colapsado -- lá o preview não gera
-                // `TabRect` nenhum pra esta aba (nota de `chrome::DragGhost`).
-                let source = base_layout
-                    .groups
-                    .iter()
-                    .flat_map(|g| &g.tabs)
-                    .find(|t| t.id == tab)
-                    .cloned();
-                let width = source.as_ref().map(|t| t.rect.width).unwrap_or(0.0);
-                let ghost_center = ghost_content_x + width / 2.0;
-                let target = tab_bar::drag_target(&base_layout, tab, ghost_center);
+                let pinned: Vec<TabId> = state.workspace.pinned().to_vec();
+                let from_zone = state.workspace.is_pinned(tab);
+                // O fantasma mantém a forma de **origem** (ADR-0087 §5): a
+                // caixa quadrada para quem vem da zona, a aba de sempre para
+                // quem vem da trilha. `base_layout` (não o preview): a fonte
+                // do conteúdo do fantasma tem que existir sempre, mesmo
+                // quando o alvo corrente é um grupo colapsado -- lá o preview
+                // não gera `TabRect` nenhum pra esta aba (nota de
+                // `chrome::DragGhost`).
+                let source = if from_zone {
+                    Some(GhostSource::Pinned)
+                } else {
+                    base_layout
+                        .groups
+                        .iter()
+                        .flat_map(|g| &g.tabs)
+                        .find(|t| t.id == tab)
+                        .cloned()
+                        .map(GhostSource::Track)
+                };
+                let width = match &source {
+                    Some(GhostSource::Pinned) => tab_bar::app_menu_button_size(style),
+                    Some(GhostSource::Track(t)) => t.rect.width,
+                    None => 0.0,
+                };
+                // O centro do fantasma, em coordenadas de **tela**: à esquerda
+                // de `track_shift` é a zona de fixadas, à direita o alvo de
+                // trilha de sempre (`tab_bar::tab_drag_target`).
+                let ghost_center = ghost_screen_x + width / 2.0;
+                let target = tab_bar::tab_drag_target(
+                    &base_layout,
+                    style,
+                    is_mac,
+                    &pinned,
+                    tab,
+                    ghost_center,
+                    state.scroll_offset,
+                );
+                // A zona como o arraste a mostra: o vão para a aba que chega,
+                // o buraco da caixa que sai. Quando muda, as caixas deslizam da
+                // posição em que estão agora para a nova (`.15s`).
+                let zone_before = tab_bar::pinned_preview_order(&pinned, tab, previous_target);
+                let zone_after = tab_bar::pinned_preview_order(&pinned, tab, target);
+                if zone_before != zone_after {
+                    let from = zone_before
+                        .iter()
+                        .enumerate()
+                        .map(|(slot, &id)| {
+                            let slot_x = tab_bar::pinned_rect(style, is_mac, slot).x;
+                            (id, state.animations.pinned_x(id, slot_x, now))
+                        })
+                        .collect();
+                    state
+                        .animations
+                        .start_pinned_slide(from, PINNED_SLIDE_DURATION, now);
+                }
                 state.drag = Drag::TabDragging {
                     tab,
                     grab_offset,
                     target,
                 };
                 if let Some(source) = source {
+                    let zone_highlight = matches!(target, DragDrop::Pinned { .. })
+                        .then(|| tab_bar::pinned_zone_rect(style, is_mac, zone_after.len()));
                     drag_ghost = Some(DragGhost {
                         tab,
                         screen_x: ghost_screen_x,
                         source,
+                        pinned_order: zone_after,
+                        zone_highlight,
                     });
                 }
                 drag_highlight = tab_bar::drag_highlight_rect(&base_layout, target);
 
                 let mut preview = state.workspace.clone();
-                match target {
-                    DragDrop::IntoGroup { group, pos } => {
+                match tab_bar::drop_op(from_zone, target) {
+                    DropOp::IntoGroup { group, pos } => {
                         preview.move_tab_to_group_at(tab, group, pos);
                     }
-                    DragDrop::NewRun { group_index } => {
+                    DropOp::NewRun { group_index } => {
                         preview.move_tab_to_new_run(tab, group_index);
+                    }
+                    DropOp::Pin { pos } => {
+                        preview.pin_tab(tab, pos);
+                    }
+                    DropOp::ReorderPinned { pos } => {
+                        preview.move_pinned(tab, pos);
+                    }
+                    DropOp::Unpin(unpin_target) => {
+                        preview.unpin_tab(tab, unpin_target);
                     }
                 }
                 tab_bar::fit_width(&preview, style, bar_width, gpu.text_measurer(), is_mac)
@@ -13120,6 +14191,14 @@ impl App {
             acrylic::blur_source(&self.config, pal.bar_background, window_image, window_rect);
         let acrylic_active = blur_source.is_some();
         state.window_surface.set_blur_source(blur_source);
+        // ADR-0088 §5/§6: the own textures of this window's pinned tabs; the
+        // others draw the app icon.
+        let pinned_icons = pinned_icon::textures_for(
+            &self.pinned,
+            &self.pinned_icons,
+            state.window.id(),
+            state.workspace.pinned(),
+        );
         let chrome_primitives = chrome::paint(
             &paint_layout,
             &state.workspace,
@@ -13148,6 +14227,7 @@ impl App {
             state.pressed_bar_button,
             window_image.is_some(),
             self.app_icon_image,
+            &pinned_icons,
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 

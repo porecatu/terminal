@@ -37,6 +37,7 @@ use porecatu_term::{
 
 use crate::SaveNamedFailure;
 use crate::keymap::{ChordParseError, KeymapIssue};
+use crate::pinned::PinnedSaveError;
 use crate::warning::Severity;
 
 /// Texto de uma falha que veio do sistema operacional ou de uma biblioteca
@@ -370,6 +371,17 @@ pub(crate) fn save_named_failure(catalog: &Catalog, failure: &SaveNamedFailure) 
     }
 }
 
+/// Corpo do aviso de falha ao gravar o `pinned.json` (RF-21.28): a razão, e
+/// que a mudança vale nesta execução mas não foi gravada.
+pub(crate) fn pinned_save_failure(catalog: &Catalog, error: &PinnedSaveError) -> String {
+    let reason = match error {
+        PinnedSaveError::ReadOnly => msg::notice::pinned_save_failed::read_only(catalog),
+        PinnedSaveError::NoPath => msg::notice::pinned_save_failed::no_path(catalog),
+        PinnedSaveError::Io(err) => os_cause(err),
+    };
+    msg::notice::pinned_save_failed::body(catalog, reason)
+}
+
 /// Corpo do aviso "Keybinding inválido".
 pub(crate) fn keymap_issue(catalog: &Catalog, issue: &KeymapIssue) -> String {
     use msg::notice::keybinding_invalid as kb;
@@ -519,6 +531,8 @@ registry! {
         close(),
         move_to_group(),
         reconnect(),
+        pin(),
+        unpin(),
     }
     terminal_menu {
         copy(),
@@ -879,6 +893,7 @@ registry! {
         profile_open_menu(),
         profile_new_tab(n),
         ssh_reconnect(),
+        tab_toggle_pin(),
     }
     profile_menu {
         new_group(),
@@ -924,6 +939,12 @@ registry! {
         close_tab {
             title(),
             body(title),
+            confirm(),
+        },
+        close_pinned_tab {
+            title(),
+            body(title),
+            process(),
             confirm(),
         },
         close_pane {
@@ -1044,6 +1065,7 @@ registry! {
         group_collapsed_colored(name, color),
         tab_state(state),
         state_active(),
+        state_pinned(),
         state_not_started(),
         state_bell(),
         state_activity(),
@@ -1196,6 +1218,24 @@ registry! {
             body(found, supported),
         },
         named_session_unreadable {
+            title(),
+            body(),
+        },
+        pinned_corrupt {
+            title(),
+            body(path),
+        },
+        pinned_newer {
+            title(),
+            body(found, supported),
+        },
+        pinned_save_failed {
+            title(),
+            body(reason),
+            read_only(),
+            no_path(),
+        },
+        pinned_refused {
             title(),
             body(),
         },
@@ -1842,6 +1882,25 @@ mod tests {
             msg::group_editor::section_group(&test_support::en_us()),
             "GROUP"
         );
+    }
+
+    #[test]
+    fn a_pinned_save_failure_says_it_was_not_saved_and_why() {
+        let io_error = PinnedSaveError::Io(std::io::Error::other("disk full"));
+        for catalog in test_support::all_catalogs() {
+            let io = pinned_save_failure(&catalog, &io_error);
+            assert!(io.contains("disk full"), "{io}");
+            assert!(!io.starts_with("notice."), "missing phrase: {io}");
+            for error in [PinnedSaveError::ReadOnly, PinnedSaveError::NoPath] {
+                let body = pinned_save_failure(&catalog, &error);
+                assert!(!body.contains("notice."), "missing phrase: {body}");
+                assert!(!body.contains("{reason}"), "{body}");
+            }
+            assert_ne!(
+                pinned_save_failure(&catalog, &PinnedSaveError::ReadOnly),
+                pinned_save_failure(&catalog, &PinnedSaveError::NoPath)
+            );
+        }
     }
 
     #[test]

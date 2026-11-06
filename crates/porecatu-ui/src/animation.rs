@@ -61,6 +61,11 @@ struct Reflow {
     /// "novas" pra começar a opacidade em zero). Espec. §2.4: "o que anima
     /// de fato é o resto do colapso: as abas... desaparecendo da trilha".
     old_tabs: HashMap<TabId, TabRect>,
+    /// Screen X each pinned box was drawn at when a slide of the zone began
+    /// (ADR-0087 §5, the neighbours sliding as the drag opens the gap).
+    /// Empty for the group reflows above; those and this one share the
+    /// duration, the progress and the clock, nothing else.
+    pinned_from: HashMap<TabId, f32>,
 }
 
 impl Reflow {
@@ -130,7 +135,46 @@ impl AnimationClock {
             duration,
             wrapper_rect,
             old_tabs,
+            pinned_from: HashMap::new(),
         });
+    }
+
+    /// Starts the slide of the pinned boxes (ADR-0087 §5): `from` holds the
+    /// screen X each box is drawn at **now** (see [`Self::pinned_x`], so a
+    /// slide begun mid-slide continues from where the boxes are), and
+    /// [`Self::pinned_x`] interpolates from there to the slot each box has
+    /// by then. No-op with `animations = false`, like [`Self::start_reflow`].
+    pub fn start_pinned_slide(
+        &mut self,
+        from: HashMap<TabId, f32>,
+        duration: Duration,
+        now: Instant,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        self.active.push(Reflow {
+            started_at: now,
+            duration,
+            wrapper_rect: HashMap::new(),
+            old_tabs: HashMap::new(),
+            pinned_from: from,
+        });
+    }
+
+    /// Where pinned box `id` is drawn: `slot_x` (the screen X of its slot)
+    /// outside a slide, otherwise the interpolation from where the most recent
+    /// slide that carries it started to `slot_x`.
+    pub fn pinned_x(&self, id: TabId, slot_x: f32, now: Instant) -> f32 {
+        self.active
+            .iter()
+            .rev()
+            .find_map(|r| {
+                r.pinned_from
+                    .get(&id)
+                    .map(|&from| from + (slot_x - from) * r.progress(now))
+            })
+            .unwrap_or(slot_x)
     }
 
     /// Remove animações concluídas -- chamado no `tick` da janela, junto
@@ -389,5 +433,60 @@ mod tests {
         assert_eq!(clock.next_deadline(now), Some(now + FRAME_INTERVAL));
         clock.tick(now + Duration::from_millis(200));
         assert_eq!(clock.next_deadline(now + Duration::from_millis(200)), None);
+    }
+
+    /// ADR-0087 §5: a pinned box slides from where it was to its slot.
+    #[test]
+    fn pinned_slide_interpolates_from_the_captured_x_to_the_slot() {
+        let a = TabId::new(1);
+        let b = TabId::new(2);
+        let mut clock = AnimationClock::default();
+        let now = Instant::now();
+        // Without a slide a box is at its slot.
+        assert_eq!(clock.pinned_x(a, 100.0, now), 100.0);
+
+        clock.start_pinned_slide(HashMap::from([(a, 52.0)]), Duration::from_millis(100), now);
+        assert!(!clock.is_empty(), "the slide asks for frames");
+        assert_eq!(clock.pinned_x(a, 98.0, now), 52.0, "starts where it was");
+        let halfway = clock.pinned_x(a, 98.0, now + Duration::from_millis(50));
+        assert!((halfway - 75.0).abs() < 0.5);
+        assert_eq!(
+            clock.pinned_x(a, 98.0, now + Duration::from_millis(500)),
+            98.0,
+            "ends at the slot"
+        );
+        // A box the slide does not carry is at its slot.
+        assert_eq!(clock.pinned_x(b, 144.0, now), 144.0);
+        // It also finishes and goes away like any reflow.
+        clock.tick(now + Duration::from_millis(150));
+        assert!(clock.is_empty());
+    }
+
+    #[test]
+    fn a_slide_begun_mid_slide_continues_from_where_the_box_is() {
+        let a = TabId::new(1);
+        let mut clock = AnimationClock::default();
+        let now = Instant::now();
+        clock.start_pinned_slide(HashMap::from([(a, 52.0)]), Duration::from_millis(100), now);
+        let later = now + Duration::from_millis(50);
+        let here = clock.pinned_x(a, 98.0, later);
+        clock.start_pinned_slide(
+            HashMap::from([(a, here)]),
+            Duration::from_millis(100),
+            later,
+        );
+        // The newest slide wins, and it starts exactly where the box was drawn.
+        assert_eq!(clock.pinned_x(a, 52.0, later), here);
+    }
+
+    #[test]
+    fn pinned_slide_is_a_no_op_with_animations_off() {
+        let a = TabId::new(1);
+        let mut clock = AnimationClock::default();
+        clock.set_enabled(false);
+        let now = Instant::now();
+        clock.start_pinned_slide(HashMap::from([(a, 52.0)]), Duration::from_millis(100), now);
+        assert!(clock.is_empty());
+        assert_eq!(clock.pinned_x(a, 98.0, now), 98.0);
     }
 }

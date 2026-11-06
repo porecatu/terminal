@@ -37,6 +37,13 @@ pub struct WindowV1 {
     pub groups: Vec<GroupV1>,
     pub tabs: Vec<TabV1>,
     pub active_tab: Option<u32>,
+    /// ADR-0086 §4: position in `pinned.json` of the active pinned tab, when
+    /// the active tab was a pinned one. Only the window that receives the
+    /// pinned tabs at startup honors it. Omitted when `None`, so a file
+    /// written without an active pinned tab stays byte for byte the same as
+    /// before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_pinned: Option<u32>,
     /// Tema de sessão, por janela (ADR-0031, ADR-0036 §3).
     pub theme: Option<String>,
     /// Passos de zoom de sessão, por janela.

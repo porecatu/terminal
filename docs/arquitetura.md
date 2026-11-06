@@ -135,6 +135,7 @@ O mesmo vale para o chrome: mudança de hover, foco ou config marca a barra de a
 | `Config` | main thread | `Arc<Config>`, trocado inteiro no reload |
 | Handle de escrita do PTY | `mpsc` | clonável |
 | Estado remoto do Git, por repositório | main thread | exclusivo, sem lock — **um por processo**, não por janela ([ADR-0052](adr/0052-sincronizacao-com-o-remoto-do-git.md) §3) |
+| Lista de abas fixadas (`PinnedRegistry`) e cache de texturas dos ícones | main thread | exclusivo, sem lock — **um por processo** ([ADR-0086](adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §2, [ADR-0088](adr/0088-icone-da-aba-fixada.md) §5); a thread do ícone devolve resultado chaveado por `PinnedKey` |
 
 `Workspace` só é tocado pela main thread, então não precisa de lock. `Config` é imutável e trocado por inteiro no hot reload — nenhum lock, só uma troca de `Arc`.
 
@@ -359,6 +360,8 @@ O parser (seções cruas, escolha da seção por `shell_name`) e a checagem de `
 
 É também o primeiro caso em que o app escreve no PTY um byte que não veio de tecla, clipboard, mouse ou resposta ao programa hospedado. A regra da seção 2 continua valendo — a escrita passa pelo mesmo canal e pela mesma thread —, e o que muda é só a origem.
 
+> **Revisto pelas abas fixadas ([ADR-0086](adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §6, [ADR-0088](adr/0088-icone-da-aba-fixada.md)).** Dois acréscimos, nenhuma aresta nova. `resolve` ganhou o parâmetro `Trust` (`Allowlist` ou `Pinned`): a aba fixada aberta no arranque (`SpawnOrigin::Pinned` em `porecatu-ui`) dispensa `trusted_paths`, e `enabled = false` continua sendo o primeiro passo. E o formato ganhou o único nome de seção reservado, `[icon]`, lido por `resolve_icon` — que recusa pelo **texto** caminho de rede ou dispositivo antes de tocar o disco. A cadeia `[icon]` → `icon.png` → ícone do app e a decodificação rodam numa thread de `porecatu-ui` (`pinned_icon.rs`). `porecatu-session` passou a participar, mas só com o arquivo próprio das fixadas: `pinned.json` (`pinned.rs`), ao lado do `session.json`, com o mesmo `TabV1` da sessão como retrato de cada aba. A sessão grava só `track_order()` — nunca as fixadas, que abririam duas vezes.
+
 ---
 
 ## 7. Estratégia de teste
@@ -367,7 +370,7 @@ O parser (seções cruas, escolha da seção por `shell_name`) e a checagem de `
 |---|---|
 | `porecatu-core` | testes unitários puros: mover aba entre grupos, agrupar, desagrupar, invariantes de ordenação |
 | `porecatu-config` | round-trip TOML, defaults completos, rejeição de config inválida com erro legível |
-| `porecatu-session` | round-trip **pelo DTO** (`Workspace` → `WindowV1` → JSON → `WindowV1` → `Workspace`), cobertura de campo do domínio no DTO, migração de `schema_version`, recuperação de arquivo corrompido e de schema mais novo ([ADR-0036](adr/0036-formato-do-arquivo-de-sessao.md)) |
+| `porecatu-session` | round-trip **pelo DTO** (`Workspace` → `WindowV1` → JSON → `WindowV1` → `Workspace`), cobertura de campo do domínio no DTO, migração de `schema_version`, recuperação de arquivo corrompido e de schema mais novo ([ADR-0036](adr/0036-formato-do-arquivo-de-sessao.md)); o mesmo para o `pinned.json` das abas fixadas, e a sessão sem fixadas ([ADR-0086](adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md)) |
 | `porecatu-term` | golden files: sequência de escape na entrada, dump de grid esperado na saída |
 | `porecatu-pty` | teste de integração por plataforma: spawn de `echo`, resize, encerramento |
 | `porecatu-render` | geometria e resolução de camada são puras e testadas sem GPU; pipeline e pintura, verificação manual e screenshot |

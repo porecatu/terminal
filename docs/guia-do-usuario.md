@@ -1052,12 +1052,80 @@ Formato completo, exemplos por shell e o que fazer quando não funciona:
 [docs/reference/arquivo-de-projeto.md](reference/arquivo-de-projeto.md).
 
 O que o `.porecatu` **não** faz: não roda em aba nova (só na restauração
-de uma sessão gravada), não roda quando você dá `cd` para o diretório,
+de uma sessão gravada e na abertura de uma aba fixada), não roda quando você dá `cd` para o diretório,
 não sobe a árvore de diretórios (um arquivo na raiz do projeto não
 alcança uma aba em `src/`), não roda duas vezes na mesma aba, e não roda
 escondido — o comando é escrito no terminal como se você o tivesse
 digitado, aparece na tela, entra no histórico do shell e `Ctrl+C` o
 interrompe. Para desligar tudo, `[project_file] enabled = false`.
+
+A exceção é a **aba fixada** (abaixo): fixar a aba é a autorização, e o
+`.porecatu` do diretório dela roda a cada arranque mesmo fora de
+`trusted_paths`. A autorização é do diretório, não do conteúdo — um
+`.porecatu` que muda depois (um `git pull`, por exemplo) roda no próximo
+arranque sem você o ter visto. `enabled = false` desliga também esse caso.
+
+## Abas fixadas
+
+Para os programas que você quer **sempre** abertos com o Porecatu — o
+servidor de desenvolvimento, um `htop`, a conexão SSH de sempre —, fixe a
+aba. Ela sai do grupo em que estava e vira uma caixa quadrada, sem rótulo,
+com um ícone, numa zona logo à direita do botão do app, que não rola com a
+trilha.
+
+**Fixar e desafixar.** Clique direito na aba e escolha **Fixar aba** (na
+fixada, **Desafixar aba**), ou arraste a aba para a zona (e para fora dela).
+A ação `tab.toggle_pin` faz o mesmo sobre a aba ativa; não tem atalho por
+padrão — associe um em `[keybindings]` se quiser. Fixar e desafixar não
+reiniciam nada: o processo continua rodando. Desafixada pelo menu, a aba
+volta como aba solta no início da trilha; arrastada, entra onde for solta.
+
+**O que é gravado.** Ao fixar, o app grava um **retrato** da aba: painéis
+e proporções, diretório, programa e perfil de cada painel, e o título que
+você deu a ela. O que muda depois — um `cd`, um painel novo — vale só até
+fechar o app. Para atualizar o retrato, desafixe e fixe de novo.
+
+**No arranque.** As fixadas abrem **uma vez por execução**, na primeira
+janela, antes das abas da sessão — com a sessão automática ligada ou
+desligada, com o app aberto por um caminho (`porecatu <caminho>`) e mesmo
+com a sessão inválida. Elas sobem o processo na hora, mesmo com
+`[session] lazy_restore = true`, e rodam o `.porecatu` do diretório delas
+(acima). A aba que fica ativa continua sendo a da sessão. Janelas abertas
+depois (`window.new`, uma sessão nomeada) não as abrem de novo: um
+servidor aberto duas vezes brigaria pela porta. A fixada **SSH** volta não
+iniciada e conecta no clique ou no `Enter`, como todo painel SSH
+restaurado. Diretório que não existe mais abre no diretório inicial, com a
+nota de sempre, e a fixada **continua** na lista.
+
+**Sem rótulo.** Pare o mouse sobre a caixa para ver o título no tooltip.
+O ponto de atividade e de campainha aparece no canto da caixa, como nas
+outras abas. Na navegação (`tab.next`, `tab.goto_N`) as fixadas vêm
+primeiro; `tab.move_left`/`tab.move_right` reordenam dentro da zona e
+param na borda.
+
+**O ícone** sai do diretório gravado: o arquivo apontado pela seção
+`[icon]` do `.porecatu`, senão um `icon.png` no diretório, senão o ícone do
+app. PNG ou JPEG. É lido no arranque e ao fixar — trocar o arquivo com o
+app aberto só aparece na próxima execução. Formato da seção `[icon]` em
+[docs/reference/arquivo-de-projeto.md](reference/arquivo-de-projeto.md).
+
+**Fechar e encerrar.**
+
+- **Fechar a aba fixada a desafixa.** Sempre pede confirmação, com ou sem
+  processo ativo; confirmado, o processo encerra e a aba sai da lista.
+- O processo **sair sozinho** (`exit`, `Ctrl+D`) não fecha a fixada: a
+  caixa fica esmaecida, no estado encerrado, e a aba volta no próximo
+  arranque.
+- **Fechar a janela** das fixadas não as desafixa: elas encerram com a
+  janela e voltam no próximo arranque.
+
+**Onde a lista fica**, num arquivo `pinned.json` ao lado do `session.json`
+(Windows: `%LOCALAPPDATA%\porecatu\pinned.json`; Linux:
+`$XDG_STATE_HOME/porecatu/pinned.json`; macOS: `~/Library/Application
+Support/porecatu/pinned.json`). Ele é gravado a cada fixar, desafixar e
+reordenar, e só nesses momentos. Arquivo inválido é preservado com
+`.corrupt` e o app abre sem fixadas, avisando; arquivo de uma versão mais
+nova do app nunca é sobrescrito — nesse caso, fixar avisa em vez de gravar.
 
 ## Sessões nomeadas
 

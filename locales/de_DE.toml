@@ -11,6 +11,8 @@ new = "Neuer Tab"
 close = "Tab schließen"
 move_to_group = "In Gruppe verschieben"
 reconnect = "Neu verbinden"
+pin = "Tab anheften"
+unpin = "Tab lösen"
 
 [terminal_menu]
 copy = "Kopieren"
@@ -329,6 +331,7 @@ tab_goto = "Zu Tab {n} wechseln"
 tab_rename = "Tab umbenennen"
 tab_move_left = "Tab nach links verschieben"
 tab_move_right = "Tab nach rechts verschieben"
+tab_toggle_pin = "Tab anheften oder lösen"
 group_create = "Gruppe erstellen"
 group_dissolve = "Gruppierung aufheben"
 group_rename = "Gruppe umbenennen"
@@ -419,6 +422,12 @@ title = "Tab schließen?"
 body = "In «{title}» läuft ein Programm im Vordergrund. Trotzdem schließen?"
 confirm = "Tab schließen"
 
+[dialog.close_pinned_tab]
+title = "Angehefteten Tab schließen?"
+body = "«{title}» wird nicht mehr angeheftet und öffnet sich nicht mehr mit Porecatu."
+process = "Im Vordergrund läuft ein Programm, das beendet wird."
+confirm = "Schließen und lösen"
+
 [dialog.close_pane]
 title = "Bereich schließen?"
 body = "In «{title}» läuft ein Programm im Vordergrund. Trotzdem schließen?"
@@ -501,6 +510,7 @@ group_colored = "Gruppe {name}, Farbe {color}"
 group_collapsed_colored = "Gruppe {name}, eingeklappt, Farbe {color}"
 tab_state = " ({state})"
 state_active = "aktiv"
+state_pinned = "angeheftet"
 state_not_started = "nicht gestartet"
 state_bell = "Glocke"
 state_activity = "Aktivität"
@@ -623,6 +633,24 @@ body = "Das gespeicherte Format (Version {found}) ist neuer als das, was diese V
 [notice.named_session_unreadable]
 title = "Sitzung konnte nicht wiederhergestellt werden"
 body = "Die Datei konnte nicht gelesen werden."
+
+[notice.pinned_corrupt]
+title = "Datei der angehefteten Tabs beschädigt"
+body = "Die Datei wurde unter \"{path}\" aufbewahrt. Die Liste der angehefteten Tabs begann leer."
+
+[notice.pinned_newer]
+title = "Angeheftete Tabs einer neueren Version"
+body = "Das gespeicherte Format (Version {found}) ist neuer als das, was diese Version von Porecatu unterstützt (bis {supported}). Die angehefteten Tabs wurden nicht geöffnet und können in dieser Version nicht geändert werden."
+
+[notice.pinned_save_failed]
+title = "Die angehefteten Tabs konnten nicht gespeichert werden"
+body = "Die Änderung gilt für diese Sitzung, wurde aber nicht gespeichert: {reason}"
+read_only = "die Datei stammt von einer neueren Version von Porecatu"
+no_path = "das Zustandsverzeichnis wurde nicht gefunden"
+
+[notice.pinned_refused]
+title = "Tab konnte nicht angeheftet werden"
+body = "Die Datei der angehefteten Tabs wurde von einer neueren Version von Porecatu geschrieben und kann in dieser Version nicht geändert werden."
 
 [notice.overwrite_blocked]
 title = "Überschreiben nicht möglich"

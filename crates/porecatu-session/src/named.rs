@@ -382,6 +382,7 @@ mod tests {
                 panes: None,
             }],
             active_tab: Some(0),
+            active_pinned: None,
             theme: None,
             zoom_steps: 0,
         }

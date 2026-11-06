@@ -3,7 +3,9 @@
 Referência do formato do arquivo `.porecatu`: o que ele é, como se escreve, e o
 que é preciso para que ele rode. Requisito em
 [PRD-012](../prd/prd-012-comando-de-projeto-por-diretorio.md), decisões em
-[ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md).
+[ADR-0051](../adr/0051-arquivo-de-projeto-porecatu.md); a seção `[icon]` e a
+leitura numa aba fixada vêm de [PRD-021](../prd/prd-021-abas-fixadas.md) e
+[ADR-0088](../adr/0088-icone-da-aba-fixada.md).
 
 > Diferente de [integracao-de-shell.md](integracao-de-shell.md), este arquivo
 > **não** é embutido no binário: o app não mostra nada daqui na tela. É
@@ -117,6 +119,79 @@ Para desligar o recurso inteiro, inclusive essa nota:
 [project_file]
 enabled = false
 ```
+
+### Aba fixada: o diretório é autorizado pelo gesto de fixar
+
+Numa [aba fixada](../prd/prd-021-abas-fixadas.md) o `.porecatu` roda **sem**
+`trusted_paths`: fixar a aba já é a autorização daquele diretório
+([ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §6).
+`enabled = false` continua valendo primeiro, e o resto do que está acima —
+seção do shell, uma vez por aba, nada em aba nova — é o mesmo.
+
+**O custo dessa escolha é seu.** A autorização é **do diretório, não do
+conteúdo**: se o `.porecatu` daquele diretório mudar depois — um `git pull`, uma
+troca de branch —, o que mudou é o que roda no próximo arranque, sem pergunta
+nenhuma. Fixe abas em diretórios cujo conteúdo você controla; para um
+repositório de terceiros, prefira não fixar, ou mantenha `enabled = false`.
+
+## O ícone da aba fixada: a seção `[icon]`
+
+Uma aba fixada aparece na barra como uma caixa só com o ícone, e o ícone sai do
+diretório gravado quando ela foi fixada
+([ADR-0088](../adr/0088-icone-da-aba-fixada.md)). A seção `[icon]` aponta o
+arquivo:
+
+```
+[icon]
+assets/logo.png
+
+[pwsh]
+npm run dev
+```
+
+- **`icon` é um nome reservado: não é shell.** Um shell cujo programa se chame
+  `icon` não casa com a seção `[icon]`: cai em `[default]`, como qualquer shell
+  sem seção. E **`[default]` não substitui `[icon]`** — `[default]` é o script
+  para qualquer shell, e um ícone não é script.
+- **O corpo é um caminho**: a **primeira linha não vazia**, sem os espaços das
+  pontas. As demais linhas são ignoradas. Corpo vazio é o mesmo que não ter a
+  seção. Duas seções `[icon]`: a primeira vence.
+- **O caminho** pode ser relativo ao diretório do `.porecatu`, começar com `~`
+  (o seu home) ou ser absoluto. Pode apontar para fora do projeto
+  (`~/icones/api.png`).
+- **Recusados**, pelo texto, antes de o app tocar o disco: caminho que comece com
+  duas barras, de qualquer tipo — `\\servidor\pasta\x.png`, `//servidor/x.png`,
+  `\\?\...`, `\\.\...`. No Windows, só abrir um caminho de rede já faz o sistema
+  oferecer as suas credenciais ao servidor. Também é recusado o que não é
+  arquivo regular (uma pasta, um dispositivo). Unidade de rede mapeada (`Z:`) é
+  aceita: foi você que a mapeou.
+- **Formatos**: PNG e JPEG, reconhecidos pelo conteúdo, não pela extensão. A
+  imagem é reduzida para, no máximo, 128 pixels no lado maior, e é desenhada
+  inteira (sem cortar) dentro do quadrado do ícone, com a proporção mantida:
+  imagem retangular deixa uma sobra transparente nos dois lados.
+
+### A ordem de escolha
+
+1. o arquivo declarado em `[icon]`;
+2. um arquivo chamado exatamente `icon.png` no diretório;
+3. o ícone do app.
+
+Qualquer passo que falhe — caminho recusado, arquivo ausente, formato não
+suportado, imagem corrompida — **segue para o próximo, sem aviso nenhum**: o
+ícone do app no lugar já é o sinal visível. Uma aba SSH, ou cujo diretório não
+existe mais, fica no ícone do app, sem procurar nada.
+
+O `[icon]` é lido **com ou sem `trusted_paths`** (quem lê é uma aba fixada, e
+fixar já autorizou o diretório). Com `[project_file] enabled = false` o
+`.porecatu` não é lido, e a escolha começa no `icon.png`.
+
+### Quando o ícone muda
+
+O ícone é resolvido **no arranque** e **no momento de fixar** — e em nenhum
+outro. Ele não segue o `cd`, não observa o arquivo e não muda com a recarga da
+configuração: trocar o ícone exige **reiniciar o app** (ou desafixar e fixar de
+novo). Enquanto o resultado não chega, e sempre que nenhum passo achou imagem, a
+caixa mostra o ícone do app.
 
 ## Exemplos
 

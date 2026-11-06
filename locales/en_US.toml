@@ -25,6 +25,8 @@ new = "New tab"
 close = "Close tab"
 move_to_group = "Move to group"
 reconnect = "Reconnect"
+pin = "Pin tab"
+unpin = "Unpin tab"
 
 [terminal_menu]
 copy = "Copy"
@@ -345,6 +347,7 @@ tab_goto = "Go to tab {n}"
 tab_rename = "Rename tab"
 tab_move_left = "Move tab left"
 tab_move_right = "Move tab right"
+tab_toggle_pin = "Pin or unpin the tab"
 group_create = "Create group"
 group_dissolve = "Ungroup"
 group_rename = "Rename group"
@@ -437,6 +440,12 @@ cancel = "Cancel"
 title = "Close tab?"
 body = "\"{title}\" has a program running in the foreground. Close anyway?"
 confirm = "Close tab"
+
+[dialog.close_pinned_tab]
+title = "Close pinned tab?"
+body = "\"{title}\" leaves the pinned tabs and will no longer open with Porecatu."
+process = "A program is running in the foreground and will be ended."
+confirm = "Close and unpin"
 
 [dialog.close_pane]
 title = "Close pane?"
@@ -532,6 +541,7 @@ group_collapsed_colored = "Group {name}, collapsed, color {color}"
 # Estados da aba: cada um é uma peça, encaixada depois do título por tab_state.
 tab_state = " ({state})"
 state_active = "active"
+state_pinned = "pinned"
 state_not_started = "not started"
 state_bell = "bell"
 state_activity = "activity"
@@ -660,6 +670,24 @@ body = "The saved format (version {found}) is newer than the one this version of
 [notice.named_session_unreadable]
 title = "Could not restore the session"
 body = "The file could not be read."
+
+[notice.pinned_corrupt]
+title = "Pinned tabs file corrupted"
+body = "The file was kept at \"{path}\". The pinned tabs list started empty."
+
+[notice.pinned_newer]
+title = "Pinned tabs from a newer version"
+body = "The saved format (version {found}) is newer than the one this version of Porecatu supports (up to {supported}). The pinned tabs were not opened and cannot be changed in this version."
+
+[notice.pinned_save_failed]
+title = "Could not save the pinned tabs"
+body = "The change applies to this run, but it was not saved: {reason}"
+read_only = "the file is from a newer version of Porecatu"
+no_path = "the state directory could not be located"
+
+[notice.pinned_refused]
+title = "Could not pin the tab"
+body = "The pinned tabs file was written by a newer version of Porecatu and cannot be changed in this version."
 
 [notice.overwrite_blocked]
 title = "Cannot overwrite"

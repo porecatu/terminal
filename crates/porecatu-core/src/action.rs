@@ -50,6 +50,10 @@ pub enum Action {
     TabMoveRight,
     /// `Arg` -- não vinculável, `FromStr` rejeita.
     TabMoveToGroup(MoveDestination),
+    /// ADR-0086 §7, RF-21.7. Fixa a aba ativa (fim da zona) ou, se ela já é
+    /// fixada, a desafixa (início da trilha). Vinculável e **sem default**
+    /// em nenhuma plataforma -- mesmo precedente de `group.new_tab`.
+    TabTogglePin,
 
     GroupCreate,
     GroupDissolve,
@@ -126,7 +130,7 @@ pub enum Action {
     SshReconnect,
 }
 
-/// As 67 linhas do catálogo fechado, na grafia exata que `FromStr`/
+/// As 68 linhas do catálogo fechado, na grafia exata que `FromStr`/
 /// `Display` usam. Único array-fonte: o teste bidirecional
 /// (`tests::every_catalog_name_round_trips`) e a sugestão de erro
 /// (`closest_name`) partem dele, então as duas checagens não podem
@@ -154,6 +158,7 @@ pub const CATALOG: &[&str] = &[
     "tab.move_left",
     "tab.move_right",
     "tab.move_to_group",
+    "tab.toggle_pin",
     "group.create",
     "group.dissolve",
     "group.rename",
@@ -268,6 +273,7 @@ impl FromStr for Action {
             "tab.rename" => Action::TabRename,
             "tab.move_left" => Action::TabMoveLeft,
             "tab.move_right" => Action::TabMoveRight,
+            "tab.toggle_pin" => Action::TabTogglePin,
             "group.create" => Action::GroupCreate,
             "group.dissolve" => Action::GroupDissolve,
             "group.rename" => Action::GroupRename,
@@ -332,6 +338,7 @@ impl fmt::Display for Action {
             Action::TabMoveLeft => "tab.move_left",
             Action::TabMoveRight => "tab.move_right",
             Action::TabMoveToGroup(_) => "tab.move_to_group",
+            Action::TabTogglePin => "tab.toggle_pin",
             Action::GroupCreate => "group.create",
             Action::GroupDissolve => "group.dissolve",
             Action::GroupRename => "group.rename",
@@ -449,6 +456,7 @@ mod tests {
             Action::TabRename,
             Action::TabMoveLeft,
             Action::TabMoveRight,
+            Action::TabTogglePin,
             Action::GroupCreate,
             Action::GroupDissolve,
             Action::GroupRename,
@@ -500,6 +508,17 @@ mod tests {
                 "{name} não está em CATALOG"
             );
         }
+    }
+
+    /// ADR-0086 §7: um nome só para fixar e desafixar; `tab.pin`/`tab.unpin`
+    /// separados continuam não existindo.
+    #[test]
+    fn tab_toggle_pin_is_one_name_for_both_directions() {
+        assert_eq!("tab.toggle_pin".parse::<Action>(), Ok(Action::TabTogglePin));
+        assert_eq!(Action::TabTogglePin.to_string(), "tab.toggle_pin");
+        assert!(CATALOG.contains(&"tab.toggle_pin"));
+        assert!("tab.pin".parse::<Action>().is_err());
+        assert!("tab.unpin".parse::<Action>().is_err());
     }
 
     #[test]

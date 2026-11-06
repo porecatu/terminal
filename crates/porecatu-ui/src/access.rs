@@ -342,7 +342,24 @@ fn build_tab_list(
     root_children: &mut Vec<NodeId>,
 ) {
     let mut tab_list_children = Vec::new();
-    let active_tab = workspace.active_tab();
+
+    // ADR-0087 §3: the pinned tabs come first in the list -- the order of
+    // `visual_order()` -- and have no close button (RF-21.22).
+    for &id in workspace.pinned() {
+        let Some(tab) = workspace.tab(id) else {
+            continue;
+        };
+        push_tab_node(
+            workspace,
+            id,
+            tab,
+            tab_bar::tab_indicator(tab),
+            active_pane_order,
+            catalog,
+            nodes,
+        );
+        tab_list_children.push(tab_node_id(id));
+    }
 
     for group_wrapper in &layout.groups {
         let group = workspace.group(group_wrapper.id);
@@ -371,70 +388,15 @@ fn build_tab_list(
             let Some(tab) = workspace.tab(tab_rect.id) else {
                 continue;
             };
-            let mut node = Node::new(Role::Tab);
-            // O título vem primeiro; cada estado é uma peça do catálogo
-            // (`access.state_*`) encaixada por `access.tab_state`, então a
-            // ordem das palavras **dentro** de cada peça é do tradutor. A
-            // ordem título-depois-estados e a soma de até quatro estados
-            // ficam no código: as combinações passam de dez, e uma frase
-            // por combinação seria pior que a ordem fixa.
-            let mut label = tab.title().to_owned();
-            let mut push_state = |state: String| {
-                label.push_str(&msg::access::tab_state(catalog, state));
-            };
-            if Some(tab_rect.id) == active_tab {
-                node.set_selected(true);
-                push_state(msg::access::state_active(catalog));
-            }
-            if tab.is_not_started() {
-                push_state(msg::access::state_not_started(catalog));
-            }
-            match tab_rect.indicator {
-                Some(Indicator::Bell) => push_state(msg::access::state_bell(catalog)),
-                Some(Indicator::Activity) => push_state(msg::access::state_activity(catalog)),
-                None => {}
-            }
-            node.set_label(label);
-            // ADR-0070 §7: the profile's name is the **description**; the
-            // name stays the title.
-            if let Some(profile) = tab.profile_badge() {
-                node.set_description(profile.name.clone());
-            }
-            node.add_action(accesskit::Action::Focus);
-            let close_id = tab_close_button_id(tab_rect.id);
-            let mut children = vec![close_id];
-            // ADR-0053 §13: painéis como filhos do nó da aba, projeção da
-            // mesma ordem de travessia que `panes::layout` usa para
-            // desenhar (nunca uma segunda descrição da árvore). Só para a
-            // aba **ativa** -- é a única com painéis de verdade em tela; e
-            // só com dois ou mais, mesma regra de ausência do segmento de
-            // contagem da barra de status (RF-6.20): um painel só não diz
-            // nada que o próprio nó da aba já não diga.
-            if Some(tab_rect.id) == active_tab
-                && let Some(order) = active_pane_order
-                && order.len() > 1
-            {
-                let focused = tab.panes().focused_id();
-                for &pane_id in order {
-                    let Some(pane) = tab.panes().pane(pane_id) else {
-                        continue;
-                    };
-                    let label = if pane_id == focused {
-                        msg::access::pane_focused(catalog, pane.title())
-                    } else {
-                        pane.title().to_owned()
-                    };
-                    let id = pane_node_id(tab_rect.id, pane_id);
-                    nodes.push((id, leaf(Role::GenericContainer, label)));
-                    children.push(id);
-                }
-            }
-            node.set_children(children);
-            nodes.push((tab_node_id(tab_rect.id), node));
-            nodes.push((
-                close_id,
-                leaf(Role::Button, msg::access::tab_close(catalog)),
-            ));
+            push_tab_node(
+                workspace,
+                tab_rect.id,
+                tab,
+                tab_rect.indicator,
+                active_pane_order,
+                catalog,
+                nodes,
+            );
             tab_list_children.push(tab_node_id(tab_rect.id));
         }
 
@@ -450,6 +412,91 @@ fn build_tab_list(
 
     nodes.push((TAB_LIST_ID, container(Role::TabList, tab_list_children)));
     root_children.push(TAB_LIST_ID);
+}
+
+/// The node of one tab -- a track tab or a pinned box -- and its children:
+/// the close button (not for a pinned tab, RF-21.22) and the panes of the
+/// active tab. The caller adds the id to the tab list.
+fn push_tab_node(
+    workspace: &Workspace,
+    tab_id: TabId,
+    tab: &porecatu_core::Tab,
+    indicator: Option<Indicator>,
+    active_pane_order: Option<&[PaneId]>,
+    catalog: &Catalog,
+    nodes: &mut Vec<(NodeId, Node)>,
+) {
+    let active_tab = workspace.active_tab();
+    let pinned = workspace.is_pinned(tab_id);
+    let mut node = Node::new(Role::Tab);
+    // O título vem primeiro; cada estado é uma peça do catálogo
+    // (`access.state_*`) encaixada por `access.tab_state`, então a
+    // ordem das palavras **dentro** de cada peça é do tradutor. A
+    // ordem título-depois-estados e a soma de até cinco estados
+    // ficam no código: as combinações passam de dez, e uma frase
+    // por combinação seria pior que a ordem fixa.
+    let mut label = tab.title().to_owned();
+    let mut push_state = |state: String| {
+        label.push_str(&msg::access::tab_state(catalog, state));
+    };
+    if Some(tab_id) == active_tab {
+        node.set_selected(true);
+        push_state(msg::access::state_active(catalog));
+    }
+    if pinned {
+        push_state(msg::access::state_pinned(catalog));
+    }
+    if tab.is_not_started() {
+        push_state(msg::access::state_not_started(catalog));
+    }
+    match indicator {
+        Some(Indicator::Bell) => push_state(msg::access::state_bell(catalog)),
+        Some(Indicator::Activity) => push_state(msg::access::state_activity(catalog)),
+        None => {}
+    }
+    node.set_label(label);
+    // ADR-0070 §7: the profile's name is the **description**; the
+    // name stays the title.
+    if let Some(profile) = tab.profile_badge() {
+        node.set_description(profile.name.clone());
+    }
+    node.add_action(accesskit::Action::Focus);
+    let close_id = tab_close_button_id(tab_id);
+    let mut children = if pinned { Vec::new() } else { vec![close_id] };
+    // ADR-0053 §13: painéis como filhos do nó da aba, projeção da
+    // mesma ordem de travessia que `panes::layout` usa para
+    // desenhar (nunca uma segunda descrição da árvore). Só para a
+    // aba **ativa** -- é a única com painéis de verdade em tela; e
+    // só com dois ou mais, mesma regra de ausência do segmento de
+    // contagem da barra de status (RF-6.20): um painel só não diz
+    // nada que o próprio nó da aba já não diga.
+    if Some(tab_id) == active_tab
+        && let Some(order) = active_pane_order
+        && order.len() > 1
+    {
+        let focused = tab.panes().focused_id();
+        for &pane_id in order {
+            let Some(pane) = tab.panes().pane(pane_id) else {
+                continue;
+            };
+            let label = if pane_id == focused {
+                msg::access::pane_focused(catalog, pane.title())
+            } else {
+                pane.title().to_owned()
+            };
+            let id = pane_node_id(tab_id, pane_id);
+            nodes.push((id, leaf(Role::GenericContainer, label)));
+            children.push(id);
+        }
+    }
+    node.set_children(children);
+    nodes.push((tab_node_id(tab_id), node));
+    if !pinned {
+        nodes.push((
+            close_id,
+            leaf(Role::Button, msg::access::tab_close(catalog)),
+        ));
+    }
 }
 
 fn build_search_bar(
@@ -1439,7 +1486,7 @@ mod tests {
     use porecatu_core::{GroupColor, Workspace};
 
     use super::*;
-    use crate::context_menu::{ContextMenu, MenuAction, TAB_MENU_ITEMS};
+    use crate::context_menu::{ContextMenu, MenuAction, PINNED_TAB_MENU_ITEMS, TAB_MENU_ITEMS};
     use crate::dialog::DialogAction;
 
     fn measurer() -> TextMeasurer {
@@ -1572,6 +1619,58 @@ mod tests {
             .position(|id| *id == tab_node_id(b))
             .unwrap();
         assert!(pos_a < pos_b);
+    }
+
+    /// ADR-0087 §3: a pinned tab is a `Tab` node of the same list, **before**
+    /// the tabs of the track (the order of `visual_order()`), with the "fixada"
+    /// piece in its name and no close button (RF-21.22).
+    #[test]
+    fn a_pinned_tab_node_comes_first_in_the_list_with_the_pinned_state() {
+        let mut ws = Workspace::new();
+        let track = ws.append_tab("track", None);
+        let pinned = ws.append_tab("fixed", None);
+        assert!(ws.pin_tab(pinned, 0));
+        let update = build(&ws);
+
+        let children = node(&update, TAB_LIST_ID).children().to_vec();
+        let pos_pinned = children
+            .iter()
+            .position(|id| *id == tab_node_id(pinned))
+            .unwrap();
+        let pos_track = children
+            .iter()
+            .position(|id| *id == tab_node_id(track))
+            .unwrap();
+        assert!(pos_pinned < pos_track);
+
+        let pinned_node = node(&update, tab_node_id(pinned));
+        assert_eq!(pinned_node.role(), Role::Tab);
+        let label = pinned_node.label().unwrap();
+        assert!(label.starts_with("fixed"));
+        assert!(label.contains("(fixada)"), "{label}");
+        assert!(
+            pinned_node.children().is_empty(),
+            "fixada não tem botão de fechar"
+        );
+        assert!(
+            !update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == tab_close_button_id(pinned)),
+            "nenhum nó de fechar para a fixada"
+        );
+        // The track tab keeps its close button and no pinned piece.
+        let track_node = node(&update, tab_node_id(track));
+        assert!(!track_node.label().unwrap().contains("fixada"));
+        assert_eq!(track_node.children(), [tab_close_button_id(track)]);
+        // The app button still comes before the list.
+        let root = node(&update, ROOT_ID).children().to_vec();
+        let app = root
+            .iter()
+            .position(|id| *id == APP_MENU_BUTTON_ID)
+            .unwrap();
+        let list = root.iter().position(|id| *id == TAB_LIST_ID).unwrap();
+        assert!(app < list);
     }
 
     /// ADR-0053 §13: com dois ou mais painéis na aba ativa, cada um vira
@@ -2127,6 +2226,57 @@ mod tests {
             .unwrap();
         let move_item = node(&update, menu_item_id(move_index));
         assert_eq!(move_item.is_disabled(), !TAB_MENU_ITEMS[move_index].enabled);
+    }
+
+    /// RF-21.12 (ADR-0087 §6): o menu de uma fixada mantém "Mover para grupo"
+    /// na árvore, esmaecido, e troca "Fixar" por "Desafixar".
+    #[test]
+    fn pinned_tab_menu_dims_move_to_group_and_offers_unpin() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let menu = Some(ContextMenu::for_tab(a, (0.0, 0.0), false, true));
+        let catalog = crate::messages::test_support::pt_br();
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &menu,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            &catalog,
+            "pt-BR",
+            &mut measurer(),
+        );
+        let menu_node = node(&update, MENU_ID);
+        assert_eq!(menu_node.children().len(), PINNED_TAB_MENU_ITEMS.len());
+        for (index, item) in PINNED_TAB_MENU_ITEMS.iter().enumerate() {
+            let menu_item = node(&update, menu_item_id(index));
+            assert_eq!(menu_item.is_disabled(), !item.enabled, "{:?}", item.action);
+            assert_eq!(
+                menu_item.label(),
+                Some(item.action.label(&catalog).as_str()),
+                "{:?}",
+                item.action
+            );
+        }
+        assert!(
+            PINNED_TAB_MENU_ITEMS
+                .iter()
+                .any(|item| item.action == MenuAction::Unpin)
+        );
+        assert!(
+            PINNED_TAB_MENU_ITEMS
+                .iter()
+                .all(|item| item.action != MenuAction::Pin)
+        );
     }
 
     /// ADR-0054/ADR-0055 §5: em navegação, o item de salvar é um item de

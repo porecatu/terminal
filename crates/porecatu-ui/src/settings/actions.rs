@@ -40,6 +40,7 @@ pub(crate) fn label(catalog: &Catalog, action: Action) -> Option<String> {
         Action::TabMoveLeft => a::tab_move_left(catalog),
         Action::TabMoveRight => a::tab_move_right(catalog),
         Action::TabMoveToGroup(_) => return None,
+        Action::TabTogglePin => a::tab_toggle_pin(catalog),
         Action::GroupCreate => a::group_create(catalog),
         Action::GroupDissolve => a::group_dissolve(catalog),
         Action::GroupRename => a::group_rename(catalog),

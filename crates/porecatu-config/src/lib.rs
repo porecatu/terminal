@@ -49,8 +49,9 @@ pub use profiles::{
     is_secret_profile_key, resolve_auto_profile, resolve_profile,
 };
 pub use project_file::{
-    PROJECT_FILE_NAME, ProjectFile, ProjectFileOutcome, ProjectScript, expand_tilde, is_trusted,
-    parse as parse_project_file, resolve as resolve_project_file,
+    ICON_PNG_FILE_NAME, PROJECT_FILE_NAME, ProjectFile, ProjectFileOutcome, ProjectScript,
+    RESERVED_SECTIONS, Trust, expand_tilde, is_trusted, is_unc_or_device_path,
+    parse as parse_project_file, resolve as resolve_project_file, resolve_icon,
 };
 pub use session::Session;
 pub use shell::Shell;

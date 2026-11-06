@@ -9,6 +9,11 @@
 //! afetar a ordem navegável, não só o desenho -- `navigable_order()` ao
 //! lado de `visual_order()`. `new_tab` recebe o grupo de destino em vez de
 //! escrever em `groups[0]`.
+//!
+//! Abas fixadas (ADR-0086 §1): `pinned` é uma lista ao lado de
+//! `Vec<Group>`, fora de todo grupo. Toda `TabId` de `tabs` está em
+//! exatamente um lugar -- `pinned` ou um `Group`. As operações de grupo
+//! recusam fixada; atravessar a fronteira da zona é só `pin_tab`/`unpin_tab`.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -19,11 +24,31 @@ use crate::group::{Group, GroupColor};
 use crate::id::{GroupId, TabId};
 use crate::tab::Tab;
 
+/// Destino de [`Workspace::unpin_tab`] (ADR-0086 §1): onde a aba
+/// desafixada entra na trilha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpinTarget {
+    /// Menu e ação (RF-21.10): um run implícito novo na frente de todos os
+    /// grupos (funde com o primeiro grupo se ele já for implícito).
+    TrackStart,
+    /// Arraste para dentro de um grupo existente, na posição dada (mesma
+    /// convenção de [`Workspace::move_tab_to_group_at`]).
+    IntoGroup { group: GroupId, pos: usize },
+    /// Arraste para fora de qualquer wrapper: run implícito novo no índice
+    /// dado da lista de grupos (mesma convenção de
+    /// [`Workspace::move_tab_to_new_run`]).
+    NewRun { group_index: usize },
+}
+
 // `Eq` não dá para derivar: `Tab` carrega a árvore de painéis (ADR-0053
 // §1), e o `ratio` do divisor é `f32`, que não é `Eq`. `PartialEq` continua
 // -- é o que `assert_eq!` exige, e é usado nos testes deste módulo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
+    /// ADR-0086 §1: a zona de abas fixadas, na ordem da zona. Fora de todo
+    /// grupo.
+    #[serde(default)]
+    pinned: Vec<TabId>,
     groups: Vec<Group>,
     /// Dados das abas, sem relação com a ordem visual -- a ordem visual
     /// vive só em `Group::tabs`.
@@ -39,6 +64,7 @@ impl Workspace {
     /// implícito.
     pub fn new() -> Self {
         Self {
+            pinned: Vec::new(),
             groups: Vec::new(),
             tabs: Vec::new(),
             active_tab: None,
@@ -82,23 +108,45 @@ impl Workspace {
         self.active_tab
     }
 
-    /// Ordem visual: grupos na ordem do `Vec`, abas na ordem dentro de cada
-    /// grupo (ADR-0006: "a ordem visual é a ordem do modelo"). É o que a
-    /// barra desenha e o que a sessão grava (ADR-0020 §2). **Não muda de
-    /// definição** com a F3.
-    pub fn visual_order(&self) -> impl Iterator<Item = TabId> + '_ {
+    /// A zona de abas fixadas, na ordem da zona (ADR-0086 §1).
+    pub fn pinned(&self) -> &[TabId] {
+        &self.pinned
+    }
+
+    /// `true` se a aba está na zona de fixadas.
+    pub fn is_pinned(&self, id: TabId) -> bool {
+        self.pinned.contains(&id)
+    }
+
+    /// Ordem da **trilha**: grupos na ordem do `Vec`, abas na ordem dentro
+    /// de cada grupo (ADR-0006: "a ordem visual é a ordem do modelo"). Não
+    /// inclui as fixadas. É a definição antiga de `visual_order()` e é o
+    /// que a sessão grava (ADR-0086 §1/§4).
+    pub fn track_order(&self) -> impl Iterator<Item = TabId> + '_ {
         self.groups.iter().flat_map(|g| g.tabs().iter().copied())
     }
 
-    /// `visual_order()` menos as abas de grupo colapsado (RF-2.15,
-    /// ADR-0020 §2). Base de `tab.next`/`tab.prev`/`tab.goto_N`. Derivada
-    /// por filtro, **nunca** construída em paralelo -- é o que garante que
-    /// ela é sempre subsequência de `visual_order()`.
+    /// Ordem visual: as fixadas na ordem da zona, seguidas de
+    /// [`Self::track_order`]. É o que a barra inteira desenha. **Revê o
+    /// ADR-0020 §2** (ADR-0086 §1): ela deixou de ser o que a sessão grava
+    /// -- a sessão usa `track_order()`, senão toda fixada abriria duas
+    /// vezes.
+    pub fn visual_order(&self) -> impl Iterator<Item = TabId> + '_ {
+        self.pinned.iter().copied().chain(self.track_order())
+    }
+
+    /// As fixadas, seguidas das abas de grupo não colapsado (RF-2.15,
+    /// ADR-0020 §2, RF-21.4). Base de `tab.next`/`tab.prev`/`tab.goto_N`.
+    /// A zona nunca colapsa. Continua sendo subsequência de
+    /// `visual_order()` -- as duas partes são as mesmas, uma filtrada --,
+    /// o que o teste de invariante confere.
     pub fn navigable_order(&self) -> impl Iterator<Item = TabId> + '_ {
-        self.groups
-            .iter()
-            .filter(|g| !g.is_collapsed())
-            .flat_map(|g| g.tabs().iter().copied())
+        self.pinned.iter().copied().chain(
+            self.groups
+                .iter()
+                .filter(|g| !g.is_collapsed())
+                .flat_map(|g| g.tabs().iter().copied()),
+        )
     }
 
     fn fresh_group_id(&mut self) -> GroupId {
@@ -181,6 +229,23 @@ impl Workspace {
         id
     }
 
+    /// ADR-0086 §1/§5: o par de [`Self::insert_tab_with_panes`] para a
+    /// abertura das fixadas -- a aba nasce direto na zona, em
+    /// `pinned[pos]` (saturando no fim), fora de todo grupo. Não ativa
+    /// nada (RF-21.14).
+    pub fn insert_pinned_tab_with_panes(
+        &mut self,
+        panes: crate::pane::PaneTree,
+        pos: usize,
+    ) -> TabId {
+        let id = TabId::new(self.next_tab_id);
+        self.next_tab_id += 1;
+        self.tabs.push(Tab::from_panes(id, panes));
+        let pos = pos.min(self.pinned.len());
+        self.pinned.insert(pos, id);
+        id
+    }
+
     /// Núcleo comum de [`Self::new_tab`]/[`Self::new_tab_not_started`]:
     /// gera o `cwd`, insere no `Vec<Tab>` e posiciona no grupo (existente,
     /// ou um run implícito novo no fim se `group` for `None`/inexistente).
@@ -214,7 +279,15 @@ impl Workspace {
     /// Conveniência de `tab.new`: sempre no fim do grupo da aba ativa, ou
     /// num run implícito novo se não houver aba ativa (workspace vazio).
     /// É o caminho que `porecatu-ui` (RF-1.1) usa.
+    ///
+    /// Com a aba ativa **fixada** (sem grupo), a aba nova vai para o fim
+    /// da trilha, como [`Self::append_ungrouped_tab`] (ADR-0087 §6): no
+    /// último run implícito se a trilha terminar em um, num run novo caso
+    /// contrário -- nunca para dentro da zona.
     pub fn append_tab(&mut self, shell_name: impl Into<String>, cwd: Option<PathBuf>) -> TabId {
+        if self.active_tab.is_some_and(|id| self.is_pinned(id)) {
+            return self.append_ungrouped_tab(shell_name, cwd);
+        }
         let group = self.active_tab().and_then(|id| self.group_of_tab(id));
         let pos = group
             .and_then(|g| self.group(g))
@@ -297,7 +370,24 @@ impl Workspace {
             .iter()
             .chain(before.iter().rev())
             .filter(|g| g.is_collapsed())
-            .find_map(|g| g.last_active().or_else(|| g.tabs().first().copied()))
+            .find_map(collapsed_group_target)
+    }
+
+    /// A aba que a escada da trilha daria **a partir do início**
+    /// (ADR-0086 §1): a primeira aba de grupo não colapsado; se só houver
+    /// grupo colapsado, o equivalente de [`Self::collapsed_fallback`]
+    /// (ativá-la o expande, RF-2.17). Destino de fechar a última fixada.
+    fn track_start_target(&self) -> Option<TabId> {
+        self.groups
+            .iter()
+            .filter(|g| !g.is_collapsed())
+            .find_map(|g| g.tabs().first().copied())
+            .or_else(|| {
+                self.groups
+                    .iter()
+                    .filter(|g| g.is_collapsed())
+                    .find_map(collapsed_group_target)
+            })
     }
 
     /// RF-1.2/RF-1.5: remove a aba. Devolve a aba ativa do workspace
@@ -307,8 +397,37 @@ impl Workspace {
     /// chamar isto. Se o grupo de origem ficar vazio, ele é removido
     /// (RF-2.7); se isso deixar dois runs implícitos lado a lado, eles se
     /// fundem (ADR-0020 §1).
+    ///
+    /// ADR-0086 §1, foco depois de fechar: uma **fixada** ativa passa o
+    /// foco para a fixada seguinte, senão a anterior, senão a primeira aba
+    /// alcançável da trilha. Uma aba da trilha segue a escada de sempre e,
+    /// se ela não achar nada, cai na **última** fixada -- o que impede
+    /// `None` com fixadas vivas (RF-21.25).
     pub fn close_tab(&mut self, id: TabId) -> Option<TabId> {
         let tab_index = self.tabs.iter().position(|t| t.id() == id)?;
+        if let Some(pin_pos) = self.pinned.iter().position(|&t| t == id) {
+            self.pinned.remove(pin_pos);
+            self.tabs.remove(tab_index);
+            if self.active_tab == Some(id) {
+                let next = self
+                    .pinned
+                    .get(pin_pos)
+                    .or_else(|| {
+                        pin_pos
+                            .checked_sub(1)
+                            .and_then(|previous| self.pinned.get(previous))
+                    })
+                    .copied()
+                    .or_else(|| self.track_start_target());
+                match next {
+                    Some(next) => {
+                        self.activate_tab(next);
+                    }
+                    None => self.active_tab = None,
+                }
+            }
+            return self.active_tab;
+        }
         let group_index = self
             .groups
             .iter()
@@ -336,7 +455,8 @@ impl Workspace {
             // fazia a UI fechar a janela com abas vivas dentro dele.
             let next = self
                 .focus_ladder(group_index, next_sibling, prev_sibling)
-                .or_else(|| self.collapsed_fallback(group_index));
+                .or_else(|| self.collapsed_fallback(group_index))
+                .or_else(|| self.pinned.last().copied());
             match next {
                 Some(next) => {
                     self.activate_tab(next);
@@ -351,7 +471,9 @@ impl Workspace {
 
     /// RF-1.15 (arraste) e RF-1.17 (teclado): reordena dentro do próprio
     /// grupo. Mover entre grupos é o arraste/`tab.move_to_group` da etapa
-    /// 6 -- fora do escopo deste método de propósito.
+    /// 6 -- fora do escopo deste método de propósito. Uma aba **fixada**
+    /// não está em grupo: devolve `false` (a zona reordena com
+    /// [`Self::move_pinned`], ADR-0086 §1).
     pub fn move_tab(&mut self, id: TabId, pos: usize) -> bool {
         let Some(group) = self.groups.iter_mut().find(|g| g.position_of(id).is_some()) else {
             return false;
@@ -510,7 +632,12 @@ impl Workspace {
             && let Some(active) = self.active_tab
             && self.groups[group_index].position_of(active).is_some()
         {
-            match self.focus_ladder(group_index, None, None) {
+            // Sem aba alcançável na trilha, o foco cai na última fixada
+            // (ADR-0086 §1) -- a zona nunca colapsa.
+            match self
+                .focus_ladder(group_index, None, None)
+                .or_else(|| self.pinned.last().copied())
+            {
                 Some(next) => {
                     self.activate_tab(next);
                 }
@@ -578,14 +705,20 @@ impl Workspace {
         if ids.is_empty() {
             return None;
         }
-        let selected: HashSet<TabId> = ids.iter().copied().collect();
+        let mut selected: HashSet<TabId> = ids.iter().copied().collect();
         if !selected.iter().all(|id| self.tab(*id).is_some()) {
+            return None;
+        }
+        // ADR-0086 §1: fixada não entra em grupo -- sai da seleção, e se
+        // nada sobrar o comportamento é o de seleção vazia.
+        selected.retain(|id| !self.is_pinned(*id));
+        if selected.is_empty() {
             return None;
         }
 
         let new_group_id = self.fresh_group_id();
         let new_group_tabs: Vec<TabId> = self
-            .visual_order()
+            .track_order()
             .filter(|t| selected.contains(t))
             .collect();
         let mut new_group_slot = {
@@ -732,12 +865,93 @@ impl Workspace {
             return false;
         };
         self.groups[from_index].remove(tab);
+        self.insert_in_new_run(tab, group_index);
+        true
+    }
+
+    /// Núcleo de [`Self::move_tab_to_new_run`] e do `NewRun`/`TrackStart`
+    /// de [`Self::unpin_tab`]: `tab` (já fora de qualquer lugar) entra
+    /// sozinha num run implícito novo no índice `group_index` (saturando
+    /// no fim), e `normalize_groups` funde o que ficar adjacente.
+    fn insert_in_new_run(&mut self, tab: TabId, group_index: usize) {
         let fresh_id = self.fresh_group_id();
         let mut new_group = Group::new_implicit(fresh_id);
         new_group.insert(0, tab);
         let insert_at = group_index.min(self.groups.len());
         self.groups.insert(insert_at, new_group);
         self.normalize_groups();
+    }
+
+    /// ADR-0086 §1 (RF-21.3): fixa `id` em `pinned[pos]` (saturando no
+    /// fim). A aba sai do grupo dela -- grupo vazio é removido e runs
+    /// implícitos vizinhos se fundem (`normalize_groups`, RF-2.7). Não
+    /// ativa nem desativa nada. `false` se a aba não existe ou já é
+    /// fixada.
+    pub fn pin_tab(&mut self, id: TabId, pos: usize) -> bool {
+        if self.tab(id).is_none() || self.is_pinned(id) {
+            return false;
+        }
+        let Some(group_index) = self.groups.iter().position(|g| g.position_of(id).is_some()) else {
+            return false;
+        };
+        self.groups[group_index].remove(id);
+        let pos = pos.min(self.pinned.len());
+        self.pinned.insert(pos, id);
+        self.normalize_groups();
+        true
+    }
+
+    /// ADR-0086 §1 (RF-21.10): tira `id` da zona e a põe na trilha, em
+    /// `target`. `IntoGroup`/`NewRun` têm a semântica de
+    /// [`Self::move_tab_to_group_at`]/[`Self::move_tab_to_new_run`];
+    /// `TrackStart` é um run implícito novo na frente de todos os grupos
+    /// (se o primeiro já for implícito, `normalize_groups` os funde e a aba
+    /// fica no início da trilha). Não muda a aba ativa -- só, se a
+    /// desafixada **for** a ativa e cair em grupo colapsado, o grupo
+    /// expande, para a ativa nunca ficar fora da trilha (RF-2.17). `false`
+    /// se a aba não é fixada, ou se o grupo de `IntoGroup` não existe (nada
+    /// muda).
+    pub fn unpin_tab(&mut self, id: TabId, target: UnpinTarget) -> bool {
+        let Some(pin_pos) = self.pinned.iter().position(|&t| t == id) else {
+            return false;
+        };
+        if let UnpinTarget::IntoGroup { group, .. } = target
+            && self.group(group).is_none()
+        {
+            return false;
+        }
+        self.pinned.remove(pin_pos);
+        match target {
+            UnpinTarget::TrackStart => self.insert_in_new_run(id, 0),
+            UnpinTarget::NewRun { group_index } => self.insert_in_new_run(id, group_index),
+            UnpinTarget::IntoGroup { group, pos } => {
+                let index = self.group_index(group).expect("checado acima");
+                self.groups[index].insert(pos, id);
+                self.normalize_groups();
+            }
+        }
+        if self.active_tab == Some(id)
+            && let Some(group) = self.group_of_tab(id).and_then(|g| self.group_mut(g))
+        {
+            group.set_last_active(id);
+            group.set_collapsed(false);
+        }
+        true
+    }
+
+    /// ADR-0086 §1 (RF-21.11): reordena dentro da zona. `pos` é clampado
+    /// -- além da borda a aba **para na borda**, nunca atravessa para a
+    /// trilha. `false` se `id` não é fixada. A reordenação por teclado
+    /// (RF-1.17) usa isto quando a ativa é fixada.
+    pub fn move_pinned(&mut self, id: TabId, pos: usize) -> bool {
+        let Some(from) = self.pinned.iter().position(|&t| t == id) else {
+            return false;
+        };
+        let pos = pos.min(self.pinned.len() - 1);
+        if from != pos {
+            self.pinned.remove(from);
+            self.pinned.insert(pos, id);
+        }
         true
     }
 
@@ -822,6 +1036,14 @@ fn next_group_id(counter: &mut u32) -> GroupId {
     let id = GroupId::new(*counter);
     *counter += 1;
     id
+}
+
+/// De um grupo colapsado, a aba que a escada ativa: a última visitada
+/// (ADR-0020 §6), senão a primeira.
+fn collapsed_group_target(group: &Group) -> Option<TabId> {
+    group
+        .last_active()
+        .or_else(|| group.tabs().first().copied())
 }
 
 fn implicit_group_from(id: GroupId, tabs: Vec<TabId>) -> Group {
@@ -1775,7 +1997,35 @@ mod tests {
         assert_eq!(ws.visual_order().collect::<Vec<_>>(), [b, c, d]);
     }
 
+    /// ADR-0086 §1: toda `TabId` de `tabs` está em exatamente um lugar --
+    /// `pinned` ou um `Group` --, e nenhum lugar guarda id que não existe.
+    fn assert_single_place(ws: &Workspace) {
+        let mut places: Vec<TabId> = ws.pinned.clone();
+        for group in ws.groups() {
+            places.extend_from_slice(group.tabs());
+        }
+        let mut placed = places.clone();
+        placed.sort_by_key(|id| id.get());
+        let mut known = tab_ids(ws);
+        known.sort_by_key(|id| id.get());
+        assert_eq!(
+            placed, known,
+            "abas fora de lugar ou duplicadas: pinned={:?} groups={:?}",
+            ws.pinned, ws.groups
+        );
+        assert_eq!(ws.visual_order().count(), ws.tabs.len());
+        assert_eq!(
+            ws.visual_order().collect::<Vec<_>>(),
+            ws.pinned()
+                .iter()
+                .copied()
+                .chain(ws.track_order())
+                .collect::<Vec<_>>()
+        );
+    }
+
     fn assert_invariants(ws: &Workspace) {
+        assert_single_place(ws);
         assert!(
             ws.groups().iter().all(|g| !g.is_empty()),
             "grupo vazio sobrevivendo: {:?}",
@@ -1798,6 +2048,725 @@ mod tests {
             assert!(vi < visual.len(), "navigable_order não é subsequência");
             vi += 1;
         }
+    }
+
+    // ---------------------------------------------------------------
+    // ADR-0086 §1: abas fixadas (`Workspace::pinned`)
+    // ---------------------------------------------------------------
+
+    fn order(ws: &Workspace) -> Vec<TabId> {
+        ws.visual_order().collect()
+    }
+
+    fn track(ws: &Workspace) -> Vec<TabId> {
+        ws.track_order().collect()
+    }
+
+    fn navigable(ws: &Workspace) -> Vec<TabId> {
+        ws.navigable_order().collect()
+    }
+
+    /// Fixar a única aba de um grupo explícito remove o grupo, e os dois
+    /// runs implícitos que ficaram vizinhos se fundem num só.
+    #[test]
+    fn pin_tab_removes_the_emptied_group_and_merges_neighbouring_runs() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b], "solo", GroupColor::Red).unwrap();
+        assert_eq!(ws.groups().len(), 3); // [a] [solo:b] [c]
+
+        assert!(ws.pin_tab(b, 0));
+        assert_invariants(&ws);
+        assert!(ws.group(group).is_none());
+        assert_eq!(ws.groups().len(), 1);
+        assert!(ws.groups()[0].is_implicit());
+        assert_eq!(ws.pinned(), [b]);
+        assert_eq!(track(&ws), [a, c]);
+        assert_eq!(order(&ws), [b, a, c]);
+        assert_eq!(navigable(&ws), [b, a, c]);
+        assert_eq!(ws.group_of_tab(b), None);
+        assert!(ws.is_pinned(b));
+        assert!(!ws.is_pinned(a));
+    }
+
+    /// Fixar a aba ativa não a desativa, e fixar outra não a muda.
+    #[test]
+    fn pin_tab_keeps_the_active_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        ws.activate_tab(b);
+
+        assert!(ws.pin_tab(b, 0));
+        assert_eq!(ws.active_tab(), Some(b));
+        assert!(ws.pin_tab(c, 1));
+        assert_eq!(ws.active_tab(), Some(b));
+        assert_eq!(ws.pinned(), [b, c]);
+        assert_eq!(track(&ws), [a]);
+        assert_invariants(&ws);
+    }
+
+    /// A posição é a da zona, saturando no fim; fixar duas vezes ou um id
+    /// que não existe é recusado sem efeito.
+    #[test]
+    fn pin_tab_inserts_at_the_given_position() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let d = ws.append_tab("zsh", None);
+
+        assert!(ws.pin_tab(a, 0));
+        assert!(ws.pin_tab(b, 0));
+        assert!(ws.pin_tab(c, 99));
+        assert_eq!(ws.pinned(), [b, a, c]);
+        assert_eq!(order(&ws), [b, a, c, d]);
+        assert_invariants(&ws);
+
+        let before = ws.clone();
+        assert!(!ws.pin_tab(a, 0), "já fixada");
+        assert!(!ws.pin_tab(TabId::new(999), 0), "inexistente");
+        assert_eq!(ws, before);
+    }
+
+    /// Fixar a última aba da trilha deixa a trilha vazia e nenhum run
+    /// implícito vazio para trás.
+    #[test]
+    fn pin_tab_of_the_only_track_tab_leaves_an_empty_track() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        assert!(ws.pin_tab(a, 0));
+        assert!(ws.groups().is_empty());
+        assert_eq!(order(&ws), [a]);
+        assert_eq!(ws.active_tab(), Some(a));
+        assert_invariants(&ws);
+    }
+
+    /// `TrackStart` com o primeiro grupo **explícito**: um run implícito
+    /// novo na frente de todos.
+    #[test]
+    fn unpin_track_start_before_an_explicit_first_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b], "g", GroupColor::Blue).unwrap();
+        assert!(ws.pin_tab(a, 0));
+        assert_eq!(ws.groups().len(), 2); // [g:b] [c]
+
+        assert!(ws.unpin_tab(a, UnpinTarget::TrackStart));
+        assert_invariants(&ws);
+        assert!(ws.pinned().is_empty());
+        assert_eq!(track(&ws), [a, b, c]);
+        assert_eq!(order(&ws), [a, b, c]);
+        assert_eq!(ws.groups().len(), 3);
+        assert!(ws.groups()[0].is_implicit());
+        assert_eq!(ws.groups()[0].tabs(), [a]);
+        assert_eq!(ws.groups()[1].id(), group);
+    }
+
+    /// `TrackStart` com o primeiro grupo **implícito**: funde, e a aba fica
+    /// no começo da trilha.
+    #[test]
+    fn unpin_track_start_merges_into_a_leading_implicit_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        assert!(ws.pin_tab(a, 0));
+
+        assert!(ws.unpin_tab(a, UnpinTarget::TrackStart));
+        assert_invariants(&ws);
+        assert_eq!(ws.groups().len(), 1);
+        assert_eq!(track(&ws), [a, b, c]);
+    }
+
+    /// Desafixar não ativa nada: a ativa continua a mesma.
+    #[test]
+    fn unpin_tab_keeps_the_active_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        assert!(ws.pin_tab(a, 0));
+        ws.activate_tab(b);
+
+        assert!(ws.unpin_tab(a, UnpinTarget::TrackStart));
+        assert_eq!(ws.active_tab(), Some(b));
+    }
+
+    /// Desafixar a ativa para dentro de grupo colapsado expande o grupo --
+    /// a ativa nunca fica fora da trilha (RF-2.17).
+    #[test]
+    fn unpin_active_tab_into_a_collapsed_group_expands_it() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b, c], "g", GroupColor::Blue).unwrap();
+        assert!(ws.pin_tab(a, 0));
+        ws.collapse_group(group, true);
+        ws.activate_tab(a);
+
+        assert!(ws.unpin_tab(a, UnpinTarget::IntoGroup { group, pos: 0 }));
+        assert_eq!(ws.active_tab(), Some(a));
+        assert!(!ws.group(group).unwrap().is_collapsed());
+        assert_eq!(ws.group(group).unwrap().tabs(), [a, b, c]);
+        assert_invariants(&ws);
+    }
+
+    #[test]
+    fn unpin_into_group_inserts_at_the_given_position() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b, c], "g", GroupColor::Blue).unwrap();
+        assert!(ws.pin_tab(a, 0));
+
+        assert!(ws.unpin_tab(a, UnpinTarget::IntoGroup { group, pos: 1 }));
+        assert_invariants(&ws);
+        assert_eq!(ws.group(group).unwrap().tabs(), [b, a, c]);
+        assert_eq!(ws.group_of_tab(a), Some(group));
+        assert_eq!(order(&ws), [b, a, c]);
+        assert!(ws.pinned().is_empty());
+    }
+
+    /// Grupo de destino que não existe: recusa sem mudar nada (a aba
+    /// continua fixada).
+    #[test]
+    fn unpin_into_an_unknown_group_changes_nothing() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.append_tab("zsh", None);
+        assert!(ws.pin_tab(a, 0));
+        let before = ws.clone();
+
+        assert!(!ws.unpin_tab(
+            a,
+            UnpinTarget::IntoGroup {
+                group: GroupId::new(999),
+                pos: 0
+            }
+        ));
+        assert_eq!(ws, before);
+    }
+
+    #[test]
+    fn unpin_new_run_inserts_a_run_at_the_given_index() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b, c], "g", GroupColor::Blue).unwrap();
+        assert!(ws.pin_tab(a, 0));
+        assert_eq!(ws.groups().len(), 1); // [g:b,c]
+
+        // Depois do único grupo: run implícito novo no fim.
+        assert!(ws.unpin_tab(a, UnpinTarget::NewRun { group_index: 1 }));
+        assert_invariants(&ws);
+        assert_eq!(ws.groups().len(), 2);
+        assert_eq!(ws.groups()[0].id(), group);
+        assert!(ws.groups()[1].is_implicit());
+        assert_eq!(track(&ws), [b, c, a]);
+        assert_eq!(order(&ws), [b, c, a]);
+        assert!(ws.pinned().is_empty());
+    }
+
+    /// `NewRun` colado num run implícito existente funde, como
+    /// `move_tab_to_new_run`.
+    #[test]
+    fn unpin_new_run_merges_with_an_adjacent_implicit_run() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        assert!(ws.pin_tab(a, 0)); // trilha: [b,c] implícito
+
+        assert!(ws.unpin_tab(a, UnpinTarget::NewRun { group_index: 1 }));
+        assert_invariants(&ws);
+        assert_eq!(ws.groups().len(), 1);
+        assert_eq!(track(&ws), [b, c, a]);
+    }
+
+    #[test]
+    fn unpin_of_a_tab_that_is_not_pinned_is_refused() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let before = ws.clone();
+        assert!(!ws.unpin_tab(a, UnpinTarget::TrackStart));
+        assert!(!ws.unpin_tab(TabId::new(999), UnpinTarget::TrackStart));
+        assert_eq!(ws, before);
+    }
+
+    /// Reordena dentro da zona e **para na borda** (RF-21.11): `pos`
+    /// além da borda não atravessa para a trilha.
+    #[test]
+    fn move_pinned_reorders_and_stops_at_the_edge() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..4).map(|_| ws.append_tab("zsh", None)).collect();
+        let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3]);
+        assert!(ws.pin_tab(a, 0));
+        assert!(ws.pin_tab(b, 1));
+        assert!(ws.pin_tab(c, 2));
+        assert_eq!(ws.pinned(), [a, b, c]);
+
+        assert!(ws.move_pinned(c, 0));
+        assert_eq!(ws.pinned(), [c, a, b]);
+        assert!(ws.move_pinned(c, 1));
+        assert_eq!(ws.pinned(), [a, c, b]);
+        // Além da borda direita: para na última posição da zona.
+        assert!(ws.move_pinned(a, 99));
+        assert_eq!(ws.pinned(), [c, b, a]);
+        assert_eq!(order(&ws), [c, b, a, d]);
+        // "pos - 1" a partir de 0, no teclado, vira `saturating_sub`: fica.
+        assert!(ws.move_pinned(c, 0));
+        assert_eq!(ws.pinned(), [c, b, a]);
+        assert_eq!(track(&ws), [d]);
+        assert_invariants(&ws);
+    }
+
+    #[test]
+    fn move_pinned_refuses_a_tab_that_is_not_pinned() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        ws.pin_tab(b, 0);
+        let before = ws.clone();
+        assert!(!ws.move_pinned(a, 0));
+        assert!(!ws.move_pinned(TabId::new(999), 0));
+        assert_eq!(ws, before);
+    }
+
+    /// As operações de grupo recusam fixada, sem mudar nada (o `Workspace`
+    /// inteiro, comparado antes e depois).
+    #[test]
+    fn group_operations_refuse_a_pinned_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b], "g", GroupColor::Red).unwrap();
+        assert!(ws.pin_tab(a, 0));
+        let before = ws.clone();
+
+        assert!(!ws.move_tab(a, 0));
+        assert!(!ws.move_tab_to_group(a, group));
+        assert!(!ws.move_tab_to_group_at(a, group, 0));
+        assert!(!ws.move_tab_to_new_run(a, 0));
+        assert_eq!(ws.group_tabs(&[a], "x", GroupColor::Blue), None);
+        assert_eq!(ws, before);
+        assert_eq!(ws.pinned(), [a]);
+        assert_eq!(order(&ws), [a, b, c]);
+    }
+
+    /// Colapsar, desagrupar, renomear e recolorir nunca tocam `pinned`.
+    #[test]
+    fn group_lifecycle_does_not_touch_the_pinned_zone() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        ws.pin_tab(a, 0);
+        let group = ws.group_tabs(&[b, c], "g", GroupColor::Red).unwrap();
+
+        assert!(ws.collapse_group(group, true));
+        assert_eq!(ws.pinned(), [a]);
+        assert!(ws.collapse_group(group, false));
+        assert!(ws.rename_group(group, "h"));
+        assert!(ws.set_group_color(group, GroupColor::Green));
+        assert!(ws.move_group(group, 0));
+        assert!(ws.ungroup(group));
+        assert_eq!(ws.pinned(), [a]);
+        assert_eq!(order(&ws), [a, b, c]);
+        assert_invariants(&ws);
+    }
+
+    /// Seleção mista: a fixada sai da seleção, o resto agrupa.
+    #[test]
+    fn group_tabs_filters_pinned_tabs_out_of_the_selection() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        ws.pin_tab(a, 0);
+
+        let group = ws.group_tabs(&[a, b], "g", GroupColor::Blue).unwrap();
+        assert_invariants(&ws);
+        assert_eq!(ws.group(group).unwrap().tabs(), [b]);
+        assert_eq!(ws.pinned(), [a]);
+        assert_eq!(order(&ws), [a, b, c]);
+        assert_eq!(track(&ws), [b, c]);
+    }
+
+    /// Seleção só de fixadas se comporta como seleção vazia: `None`, sem
+    /// consumir `GroupId`.
+    #[test]
+    fn group_tabs_with_only_pinned_tabs_is_an_empty_selection() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.append_tab("zsh", None);
+        ws.pin_tab(a, 0);
+        let before = ws.clone();
+        assert_eq!(ws.group_tabs(&[a], "g", GroupColor::Blue), None);
+        assert_eq!(ws, before);
+    }
+
+    /// Fixada ativa, fecha: foco na fixada **seguinte**.
+    #[test]
+    fn closing_the_active_pinned_tab_focuses_the_next_pinned() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..4).map(|_| ws.append_tab("zsh", None)).collect();
+        let (p1, p2, p3, t) = (ids[0], ids[1], ids[2], ids[3]);
+        ws.pin_tab(p1, 0);
+        ws.pin_tab(p2, 1);
+        ws.pin_tab(p3, 2);
+        ws.activate_tab(p2);
+
+        assert_eq!(ws.close_tab(p2), Some(p3));
+        assert_eq!(ws.active_tab(), Some(p3));
+        assert_eq!(ws.pinned(), [p1, p3]);
+        assert_eq!(order(&ws), [p1, p3, t]);
+        assert_invariants(&ws);
+    }
+
+    /// Sem seguinte, a **anterior**.
+    #[test]
+    fn closing_the_last_active_pinned_tab_focuses_the_previous_pinned() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..3).map(|_| ws.append_tab("zsh", None)).collect();
+        let (p1, p2, t) = (ids[0], ids[1], ids[2]);
+        ws.pin_tab(p1, 0);
+        ws.pin_tab(p2, 1);
+        ws.activate_tab(p2);
+
+        assert_eq!(ws.close_tab(p2), Some(p1));
+        assert_eq!(ws.pinned(), [p1]);
+        assert_eq!(track(&ws), [t]);
+        assert_invariants(&ws);
+    }
+
+    /// Sem outras fixadas, a primeira navegável da trilha.
+    #[test]
+    fn closing_the_only_pinned_tab_focuses_the_first_navigable_track_tab() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..4).map(|_| ws.append_tab("zsh", None)).collect();
+        let (p, a, b, c) = (ids[0], ids[1], ids[2], ids[3]);
+        let collapsed = ws.group_tabs(&[a], "col", GroupColor::Red).unwrap();
+        ws.collapse_group(collapsed, true);
+        ws.pin_tab(p, 0);
+        ws.activate_tab(p);
+
+        // `a` está em grupo colapsado e é pulado: a primeira navegável é `b`.
+        assert_eq!(ws.close_tab(p), Some(b));
+        assert_eq!(ws.active_tab(), Some(b));
+        assert!(ws.pinned().is_empty());
+        assert!(ws.group(collapsed).unwrap().is_collapsed());
+        assert_eq!(order(&ws), [a, b, c]);
+        assert_invariants(&ws);
+    }
+
+    /// Só grupo colapsado na trilha: o equivalente do `collapsed_fallback`
+    /// (a aba dele, e ativá-la expande o grupo).
+    #[test]
+    fn closing_the_only_pinned_tab_falls_back_to_a_collapsed_group() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "col", GroupColor::Red).unwrap();
+        ws.collapse_group(group, true);
+        ws.pin_tab(p, 0);
+        ws.activate_tab(p);
+
+        assert_eq!(ws.close_tab(p), Some(a));
+        assert!(!ws.group(group).unwrap().is_collapsed());
+    }
+
+    /// Fixada ativa, fecha, e não há mais nada: `None`.
+    #[test]
+    fn closing_the_last_tab_of_all_leaves_no_active_tab() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        ws.pin_tab(p, 0);
+        assert_eq!(ws.close_tab(p), None);
+        assert!(ws.pinned().is_empty());
+        assert!(ws.groups().is_empty());
+    }
+
+    /// Fechar fixada que não é a ativa não mexe no foco.
+    #[test]
+    fn closing_an_inactive_pinned_tab_keeps_focus() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        ws.pin_tab(p, 0);
+        ws.activate_tab(a);
+        assert_eq!(ws.close_tab(p), Some(a));
+        assert!(ws.pinned().is_empty());
+    }
+
+    /// Fecha a última aba da trilha com fixadas vivas: foco na **última**
+    /// fixada, nunca `None` (é o que impediria a UI de fechar a janela).
+    #[test]
+    fn closing_the_last_track_tab_focuses_the_last_pinned() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..3).map(|_| ws.append_tab("zsh", None)).collect();
+        let (p1, p2, t) = (ids[0], ids[1], ids[2]);
+        ws.pin_tab(p1, 0);
+        ws.pin_tab(p2, 1);
+        ws.activate_tab(t);
+
+        assert_eq!(ws.close_tab(t), Some(p2));
+        assert_eq!(ws.active_tab(), Some(p2));
+        assert!(ws.groups().is_empty());
+        assert_eq!(ws.pinned(), [p1, p2]);
+        assert_invariants(&ws);
+    }
+
+    /// Fecha a última aba **visível** da trilha com o resto em grupo
+    /// colapsado: o `collapsed_fallback` vem antes da fixada.
+    #[test]
+    fn closing_a_track_tab_prefers_the_collapsed_fallback_over_a_pinned() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        let t = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "col", GroupColor::Red).unwrap();
+        ws.pin_tab(p, 0);
+        ws.collapse_group(group, true);
+        ws.activate_tab(t);
+
+        assert_eq!(ws.close_tab(t), Some(a));
+    }
+
+    /// Fechar aba da trilha com vizinha continua pela escada de sempre --
+    /// a fixada só entra quando a escada não acha nada.
+    #[test]
+    fn closing_a_track_tab_with_a_neighbour_ignores_the_pinned_zone() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..3).map(|_| ws.append_tab("zsh", None)).collect();
+        let (p, a, b) = (ids[0], ids[1], ids[2]);
+        ws.pin_tab(p, 0);
+        ws.activate_tab(b);
+
+        assert_eq!(ws.close_tab(b), Some(a));
+    }
+
+    /// Colapsar o grupo da ativa sem mais nada na trilha cai na última
+    /// fixada (a escada é compartilhada com `close_tab`).
+    #[test]
+    fn collapsing_the_only_track_group_focuses_the_last_pinned() {
+        let mut ws = Workspace::new();
+        let p1 = ws.append_tab("zsh", None);
+        let p2 = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "g", GroupColor::Red).unwrap();
+        ws.pin_tab(p1, 0);
+        ws.pin_tab(p2, 1);
+        ws.activate_tab(a);
+
+        assert!(ws.collapse_group(group, true));
+        assert_eq!(ws.active_tab(), Some(p2));
+        assert!(ws.group(group).unwrap().is_collapsed());
+    }
+
+    /// Ativar fixada funciona: não há grupo a expandir nem MRU a atualizar.
+    #[test]
+    fn activating_a_pinned_tab_works_and_clears_indicators() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        ws.pin_tab(p, 0);
+        ws.tab_mut(p).unwrap().mark_bell();
+        assert_eq!(ws.active_tab(), Some(a));
+
+        assert!(ws.activate_tab(p));
+        assert_eq!(ws.active_tab(), Some(p));
+        assert!(!ws.tab(p).unwrap().bell());
+    }
+
+    /// `navigable_order`: fixadas na frente, depois só as abas de grupo
+    /// não colapsado; `tab_at_navigable_index` e `tab.next`/`tab.prev`
+    /// seguem a mesma ordem.
+    #[test]
+    fn navigable_order_puts_pinned_first_and_skips_collapsed_groups() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..5).map(|_| ws.append_tab("zsh", None)).collect();
+        let (p1, p2, a, b, c) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
+        let collapsed = ws.group_tabs(&[b], "col", GroupColor::Red).unwrap();
+        ws.pin_tab(p1, 0);
+        ws.pin_tab(p2, 1);
+        ws.collapse_group(collapsed, true);
+
+        assert_eq!(order(&ws), [p1, p2, a, b, c]);
+        assert_eq!(track(&ws), [a, b, c]);
+        assert_eq!(navigable(&ws), [p1, p2, a, c]);
+        assert_eq!(ws.tab_at_navigable_index(0), Some(p1));
+        assert_eq!(ws.tab_at_navigable_index(1), Some(p2));
+        assert_eq!(ws.tab_at_navigable_index(2), Some(a));
+        assert_eq!(ws.tab_at_navigable_index(3), Some(c));
+        assert_eq!(ws.tab_at_navigable_index(4), None);
+        assert_eq!(ws.activate_navigable_index(1), Some(p2));
+
+        // `tab.next` anda da zona para a trilha e dá a volta pela zona.
+        assert_eq!(ws.next_tab(), Some(a));
+        assert_eq!(ws.next_tab(), Some(c));
+        assert_eq!(ws.next_tab(), Some(p1));
+        assert_eq!(ws.prev_tab(), Some(c));
+        assert_invariants(&ws);
+    }
+
+    /// `group.next`/`group.prev` não envolvem fixadas: com a ativa fixada
+    /// não há grupo de origem, e o gesto entra pela ponta (primeiro indo
+    /// para frente, último indo para trás).
+    #[test]
+    fn group_navigation_from_a_pinned_tab_enters_from_the_edge() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "api", GroupColor::Red).unwrap();
+        ws.group_tabs(&[b], "web", GroupColor::Blue).unwrap();
+        ws.pin_tab(p, 0);
+
+        let mut indo = ws.clone();
+        indo.activate_tab(p);
+        assert_eq!(indo.next_group(), Some(a));
+        assert_eq!(indo.pinned(), [p]);
+
+        let mut voltando = ws.clone();
+        voltando.activate_tab(p);
+        assert_eq!(voltando.prev_group(), Some(b));
+    }
+
+    /// `tab.new` com a ativa fixada vai para o **fim** da trilha, no
+    /// último run implícito se a trilha terminar em um (ADR-0087 §6).
+    #[test]
+    fn append_tab_from_a_pinned_tab_joins_the_trailing_implicit_run() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "g", GroupColor::Red).unwrap(); // [g:a] [b]
+        ws.pin_tab(p, 0);
+        ws.activate_tab(p);
+
+        let n = ws.append_tab("zsh", None);
+        assert_invariants(&ws);
+        assert_eq!(ws.active_tab(), Some(n));
+        assert_eq!(ws.pinned(), [p]);
+        assert_eq!(track(&ws), [a, b, n]);
+        assert_eq!(ws.groups().len(), 2);
+        assert_eq!(ws.group_of_tab(n), ws.group_of_tab(b));
+    }
+
+    /// Trilha terminando em grupo explícito: run implícito novo no fim.
+    #[test]
+    fn append_tab_from_a_pinned_tab_opens_a_new_run_after_an_explicit_group() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a], "g", GroupColor::Red).unwrap();
+        ws.pin_tab(p, 0);
+        ws.activate_tab(p);
+
+        let n = ws.append_tab("zsh", None);
+        assert_invariants(&ws);
+        assert_eq!(track(&ws), [a, n]);
+        assert_eq!(ws.groups().len(), 2);
+        assert_eq!(ws.groups()[0].id(), group);
+        assert!(ws.groups()[1].is_implicit());
+        assert_eq!(ws.pinned(), [p]);
+    }
+
+    /// Só fixadas e nenhuma trilha: `tab.new` cria o primeiro run.
+    #[test]
+    fn append_tab_from_a_pinned_tab_with_an_empty_track_creates_a_run() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        ws.pin_tab(p, 0);
+        assert!(ws.groups().is_empty());
+
+        let n = ws.append_tab("zsh", None);
+        assert_invariants(&ws);
+        assert_eq!(order(&ws), [p, n]);
+        assert_eq!(ws.groups().len(), 1);
+    }
+
+    /// A abertura das fixadas: entra na zona na posição dada e **não**
+    /// ativa nada; nasce fora de todo grupo.
+    #[test]
+    fn insert_pinned_tab_with_panes_does_not_activate() {
+        use crate::pane::PaneTree;
+
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        assert_eq!(ws.active_tab(), Some(a));
+
+        let p1 = ws.insert_pinned_tab_with_panes(PaneTree::new("zsh"), 0);
+        let p2 = ws.insert_pinned_tab_with_panes(PaneTree::new("zsh"), 99);
+        let p3 = ws.insert_pinned_tab_with_panes(PaneTree::new("zsh"), 1);
+        assert_invariants(&ws);
+        assert_eq!(ws.active_tab(), Some(a));
+        assert_eq!(ws.pinned(), [p1, p3, p2]);
+        assert_eq!(order(&ws), [p1, p3, p2, a]);
+        assert_eq!(track(&ws), [a]);
+        assert_eq!(ws.group_of_tab(p1), None);
+        assert!(ws.tab(p3).is_some());
+        // IDs seguem monotônicos: a próxima aba não reaproveita nenhum.
+        let n = ws.append_tab("zsh", None);
+        assert!(![p1, p2, p3, a].contains(&n));
+    }
+
+    /// A zona faz round-trip pelo JSON, e um JSON sem o campo (`pinned`
+    /// ausente) carrega como zona vazia (`#[serde(default)]`).
+    #[test]
+    fn pinned_round_trips_and_defaults_to_empty() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        ws.append_tab("zsh", None);
+        ws.pin_tab(a, 0);
+        let json = serde_json::to_string(&ws).expect("serializa");
+        let restored: Workspace = serde_json::from_str(&json).expect("deserializa");
+        assert_eq!(ws, restored);
+
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("pinned");
+        let old: Workspace = serde_json::from_value(value).expect("campo ausente tem default");
+        assert!(old.pinned().is_empty());
+    }
+
+    /// Uma sequência misturada de operações mantém o invariante de lugar
+    /// único após cada passo.
+    #[test]
+    fn single_place_invariant_holds_after_mixed_operations() {
+        let mut ws = Workspace::new();
+        let ids: Vec<TabId> = (0..6).map(|_| ws.append_tab("zsh", None)).collect();
+        assert_invariants(&ws);
+        let group = ws
+            .group_tabs(&[ids[1], ids[2]], "g", GroupColor::Red)
+            .unwrap();
+        assert_invariants(&ws);
+        ws.pin_tab(ids[0], 0);
+        assert_invariants(&ws);
+        ws.pin_tab(ids[1], 1);
+        assert_invariants(&ws);
+        ws.move_pinned(ids[1], 0);
+        assert_invariants(&ws);
+        ws.unpin_tab(ids[0], UnpinTarget::IntoGroup { group, pos: 0 });
+        assert_invariants(&ws);
+        ws.pin_tab(ids[4], 1);
+        assert_invariants(&ws);
+        ws.unpin_tab(ids[1], UnpinTarget::NewRun { group_index: 0 });
+        assert_invariants(&ws);
+        ws.close_tab(ids[4]);
+        assert_invariants(&ws);
+        ws.close_tab(ids[3]);
+        assert_invariants(&ws);
+        ws.ungroup(group);
+        assert_invariants(&ws);
     }
 
     // Invariante do ADR-0006: round-trip Workspace -> JSON -> Workspace

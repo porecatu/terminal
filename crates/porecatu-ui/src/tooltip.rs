@@ -2,7 +2,9 @@
 
 //! Hover e tooltip (ADR-0019, RF-1.10): só aparece pra alvo com texto
 //! truncado, depois de 600ms de hover parado. F2 só tem alvo de aba
-//! (rótulo); grupo (RF-2.12) é F3. Desde o ADR-0055 §2, também a linha
+//! (rótulo); grupo (RF-2.12) é F3. A aba fixada (ADR-0087 §3) é o caso-limite:
+//! o rótulo dela está truncado a zero, então **sempre** tem tooltip
+//! ([`pinned_target`]). Desde o ADR-0055 §2, também a linha
 //! do popover de sessões (`HoverKey::SessionRow`) -- `Hover` não conhece
 //! ali `TabId` como o único tipo de alvo possível, só um `HoverKey` que
 //! distingue os dois por igualdade, o que é tudo que a máquina de estado
@@ -13,8 +15,10 @@
 
 use std::time::{Duration, Instant};
 
-use porecatu_core::TabId;
+use porecatu_core::{TabId, Workspace};
 use porecatu_render::Rect;
+
+use crate::tab_bar::{self, TabBarStyle};
 
 /// Espec. §2.20: "após 600ms de hover parado".
 pub const HOVER_DELAY: Duration = Duration::from_millis(600);
@@ -34,6 +38,31 @@ pub enum HoverKey {
     /// (ADR-0060 §2: "Restaurar padrão", espec. §2.20); o índice é o do bloco
     /// no painel. Ícone sem texto: o tooltip diz o que ele faz.
     SettingsRestore(usize),
+}
+
+/// The tooltip target of a pinned box under `point` (screen coordinates), or
+/// `None` over a gap, a margin or anything else (ADR-0087 §3). A pinned box
+/// has no label -- its label is truncated to zero -- so it **always** has a
+/// tooltip, with the title of the tab (the one the bar's own labels are made
+/// from, RF-1.7), anchored by the box: [`paint_tooltip`] puts it below the
+/// box, aligned to its left edge. Same key as a track tab: a tab is in one
+/// place at a time, and the state machine only compares keys.
+///
+/// [`paint_tooltip`]: crate::overlay::paint_tooltip
+pub fn pinned_target(
+    workspace: &Workspace,
+    style: &TabBarStyle,
+    is_macos: bool,
+    point: (f32, f32),
+) -> Option<(HoverKey, Rect, String)> {
+    let i = tab_bar::point_in_pinned(style, is_macos, workspace.pinned().len(), point)?;
+    let id = *workspace.pinned().get(i)?;
+    let title = workspace.tab(id)?.title().to_owned();
+    Some((
+        HoverKey::Tab(id),
+        tab_bar::pinned_rect(style, is_macos, i),
+        title,
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -229,5 +258,44 @@ mod tests {
         assert_eq!(hover.visible(), None);
         hover.tick(t(700));
         assert_eq!(hover.visible(), Some((rect(), "igual")));
+    }
+
+    /// ADR-0087 §3: a pinned box always has a tooltip -- the tab title, even
+    /// a short one that no track label would ever need -- anchored by the box
+    /// itself, and only over the box: a gap or a margin has none.
+    #[test]
+    fn a_pinned_box_always_has_a_tooltip_with_the_title() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let b = ws.append_tab("b", None);
+        ws.append_tab("track", None);
+        ws.pin_tab(a, 0);
+        ws.pin_tab(b, 1);
+        let style = TabBarStyle::DEFAULT;
+
+        let second = tab_bar::pinned_rect(&style, false, 1);
+        let over = (second.x + 3.0, second.y + 3.0);
+        assert_eq!(
+            pinned_target(&ws, &style, false, over),
+            Some((HoverKey::Tab(b), second, "b".to_owned()))
+        );
+        let first = tab_bar::pinned_rect(&style, false, 0);
+        let gap = (first.x + first.width + 1.0, first.y + 3.0);
+        assert!(gap.0 < second.x);
+        assert_eq!(pinned_target(&ws, &style, false, gap), None);
+        // Past the zone, the track answers: no pinned target there.
+        let past = tab_bar::track_shift(&style, false, 2) + 10.0;
+        assert_eq!(pinned_target(&ws, &style, false, (past, 10.0)), None);
+
+        // The state machine shows it after the usual 600 ms, and drops it
+        // when the cursor leaves.
+        let mut hover = Hover::default();
+        hover.update(pinned_target(&ws, &style, false, over), t(0));
+        hover.tick(t(599));
+        assert_eq!(hover.visible(), None);
+        hover.tick(t(600));
+        assert_eq!(hover.visible(), Some((second, "b")));
+        hover.update(pinned_target(&ws, &style, false, gap), t(700));
+        assert_eq!(hover, Hover::None);
     }
 }

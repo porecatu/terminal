@@ -11,6 +11,8 @@ new = "Nouvel onglet"
 close = "Fermer l'onglet"
 move_to_group = "Déplacer vers le groupe"
 reconnect = "Reconnecter"
+pin = "Épingler l'onglet"
+unpin = "Désépingler l'onglet"
 
 [terminal_menu]
 copy = "Copier"
@@ -329,6 +331,7 @@ tab_goto = "Aller à l'onglet {n}"
 tab_rename = "Renommer l'onglet"
 tab_move_left = "Déplacer l'onglet vers la gauche"
 tab_move_right = "Déplacer l'onglet vers la droite"
+tab_toggle_pin = "Épingler ou désépingler l'onglet"
 group_create = "Créer un groupe"
 group_dissolve = "Dissocier"
 group_rename = "Renommer le groupe"
@@ -419,6 +422,12 @@ title = "Fermer l'onglet ?"
 body = "« {title} » exécute un programme au premier plan. Fermer quand même ?"
 confirm = "Fermer l'onglet"
 
+[dialog.close_pinned_tab]
+title = "Fermer l'onglet épinglé ?"
+body = "« {title} » quitte les onglets épinglés et ne s'ouvrira plus avec Porecatu."
+process = "Un programme s'exécute au premier plan et sera arrêté."
+confirm = "Fermer et désépingler"
+
 [dialog.close_pane]
 title = "Fermer le volet ?"
 body = "« {title} » exécute un programme au premier plan. Fermer quand même ?"
@@ -501,6 +510,7 @@ group_colored = "Groupe {name}, couleur {color}"
 group_collapsed_colored = "Groupe {name}, réduit, couleur {color}"
 tab_state = " ({state})"
 state_active = "actif"
+state_pinned = "épinglé"
 state_not_started = "non démarré"
 state_bell = "cloche"
 state_activity = "activité"
@@ -623,6 +633,24 @@ body = "Le format enregistré (version {found}) est plus récent que celui pris 
 [notice.named_session_unreadable]
 title = "Impossible de restaurer la session"
 body = "Le fichier n'a pas pu être lu."
+
+[notice.pinned_corrupt]
+title = "Fichier des onglets épinglés corrompu"
+body = "Le fichier a été conservé dans \"{path}\". La liste des onglets épinglés a démarré vide."
+
+[notice.pinned_newer]
+title = "Onglets épinglés d'une version plus récente"
+body = "Le format enregistré (version {found}) est plus récent que celui pris en charge par cette version de Porecatu (jusqu'à {supported}). Les onglets épinglés n'ont pas été ouverts et ne peuvent pas être modifiés dans cette version."
+
+[notice.pinned_save_failed]
+title = "Impossible d'enregistrer les onglets épinglés"
+body = "Le changement vaut pour cette exécution, mais n'a pas été enregistré : {reason}"
+read_only = "le fichier provient d'une version plus récente de Porecatu"
+no_path = "le répertoire d'état est introuvable"
+
+[notice.pinned_refused]
+title = "Impossible d'épingler l'onglet"
+body = "Le fichier des onglets épinglés a été écrit par une version plus récente de Porecatu et ne peut pas être modifié dans cette version."
 
 [notice.overwrite_blocked]
 title = "Écrasement impossible"

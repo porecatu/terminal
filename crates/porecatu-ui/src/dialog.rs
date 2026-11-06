@@ -39,6 +39,11 @@ pub enum DialogAction {
     /// RF-1.6 (ADR-0017): fechar aba com tela alternativa ou reporte de
     /// mouse ligado.
     CloseTab(TabId),
+    /// RF-21.22, RF-21.23 (ADR-0086 §7): fechar uma aba **fixada**. Sempre
+    /// pergunta, com ou sem processo ativo, fora de `[general]
+    /// confirm_close_with_process`; confirmado, o encerramento é o de sempre
+    /// e a aba sai da lista de fixadas.
+    ClosePinnedTab(TabId),
     /// RF-6.10/RF-1.6: fechar um painel (não o último da aba) com tela
     /// alternativa ou reporte de mouse ligado.
     ClosePane(TabId, PaneId),
@@ -240,6 +245,33 @@ impl ConfirmDialog {
             msg::dialog::cancel(catalog),
             DialogAction::CloseTab(tab),
         )
+    }
+
+    /// RF-21.23 (ADR-0086 §7): fechar uma aba fixada diz que ela sai das
+    /// fixadas. Quando a aba também confirmaria pelo RF-1.6 (`active_process`),
+    /// a frase do processo ativo entra **neste** diálogo, como uma linha a
+    /// mais -- nunca dois diálogos em sequência. O foco inicial é o cancelar
+    /// (o padrão de todo diálogo).
+    pub fn close_pinned_tab(
+        catalog: &Catalog,
+        title: &str,
+        tab: TabId,
+        active_process: bool,
+    ) -> Self {
+        let mut dialog = Self::new(
+            msg::dialog::close_pinned_tab::title(catalog),
+            msg::dialog::close_pinned_tab::body(catalog, title),
+            msg::dialog::close_pinned_tab::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            DialogAction::ClosePinnedTab(tab),
+        );
+        if active_process {
+            dialog.lines.push(DialogLine {
+                text: msg::dialog::close_pinned_tab::process(catalog),
+                tone: LineTone::Text,
+            });
+        }
+        dialog
     }
 
     /// RF-6.10: fechar um painel (não o último da aba) com processo ativo.
@@ -693,6 +725,39 @@ mod tests {
         assert_eq!(dialog.confirm_label, "Fechar aba");
         assert_eq!(dialog.cancel_label, "Cancelar");
         assert_eq!(dialog.action, DialogAction::CloseTab(TabId::new(1)));
+    }
+
+    #[test]
+    fn closing_a_pinned_tab_says_it_leaves_the_pinned_ones_with_focus_on_cancel() {
+        let pt = test_support::pt_br();
+        let dialog = ConfirmDialog::close_pinned_tab(&pt, "api", TabId::new(3), false);
+        assert_eq!(dialog.title, "Fechar aba fixada?");
+        assert!(dialog.body.contains("\"api\""), "{}", dialog.body);
+        assert!(dialog.body.contains("fixadas"), "{}", dialog.body);
+        assert_eq!(dialog.confirm_label, "Fechar e desafixar");
+        assert_eq!(dialog.action, DialogAction::ClosePinnedTab(TabId::new(3)));
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        assert!(dialog.lines.is_empty());
+    }
+
+    #[test]
+    fn closing_a_pinned_tab_with_a_process_adds_a_line_to_the_same_dialog() {
+        for catalog in test_support::all_catalogs() {
+            let plain = ConfirmDialog::close_pinned_tab(&catalog, "api", TabId::new(3), false);
+            let busy = ConfirmDialog::close_pinned_tab(&catalog, "api", TabId::new(3), true);
+            // One dialog, the same title, body and action: only a line more.
+            assert_eq!(busy.title, plain.title);
+            assert_eq!(busy.body, plain.body);
+            assert_eq!(busy.action, plain.action);
+            assert_eq!(busy.lines.len(), 1);
+            assert!(!busy.lines[0].text.is_empty());
+            assert!(
+                !busy.lines[0].text.starts_with("dialog."),
+                "missing phrase: {}",
+                busy.lines[0].text
+            );
+            assert_eq!(busy.focused(), DialogButton::Cancel);
+        }
     }
 
     #[test]

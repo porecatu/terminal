@@ -9,12 +9,19 @@
 pub mod convert;
 pub mod named;
 pub mod path;
+pub mod pinned;
 pub mod schema;
 
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
+pub use pinned::{
+    PINNED_FILE_NAME, PINNED_SCHEMA_VERSION, PinnedFileV1, PinnedLoadOutcome, load_pinned,
+    load_pinned_from, pinned_path, save_pinned, save_pinned_to,
+};
 pub use schema::CURRENT_SCHEMA_VERSION;
 pub use schema::v1::{
     GeometryV1, GroupV1, MonitorIdV1, PaneNodeV1, PaneTreeV1, PaneV1, SessionFileV1, SplitAxisV1,
@@ -100,7 +107,7 @@ fn quarantine(session_path: &Path) -> LoadOutcome {
     }
 }
 
-fn rename_to_first_free_corrupt(session_path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn rename_to_first_free_corrupt(session_path: &Path) -> io::Result<PathBuf> {
     let mut suffix = None;
     let candidate = loop {
         let candidate = corrupt_path(session_path, suffix);
@@ -136,24 +143,32 @@ pub fn save(session: &SessionFileV1) -> io::Result<()> {
 /// `fsync`, `rename` atômico sobre o caminho final. Nunca trunca o
 /// arquivo bom antes de ter o novo completo (ADR-0005/ADR-0036 §5).
 pub fn save_to(session_path: &Path, session: &SessionFileV1) -> io::Result<()> {
-    if let Some(dir) = session_path.parent() {
+    write_json_atomic(session_path, session)
+}
+
+/// Atomic JSON write shared by `session.json` and `pinned.json` (ADR-0086
+/// §3): `<name>.tmp` in the same directory, `fsync`, then an atomic
+/// `rename` over the final path. The good file is never truncated before
+/// the new one is complete.
+pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
 
-    let mut tmp_name = session_path
+    let mut tmp_name = path
         .file_name()
         .map(std::ffi::OsStr::to_os_string)
         .unwrap_or_default();
     tmp_name.push(".tmp");
-    let tmp_path = session_path.with_file_name(tmp_name);
+    let tmp_path = path.with_file_name(tmp_name);
 
-    let bytes = serde_json::to_vec_pretty(session)?;
+    let bytes = serde_json::to_vec_pretty(value)?;
     let mut file = fs::File::create(&tmp_path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     drop(file);
 
-    fs::rename(&tmp_path, session_path)?;
+    fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
@@ -187,6 +202,7 @@ mod tests {
                 panes: None,
             }],
             active_tab,
+            active_pinned: None,
             theme: None,
             zoom_steps: 0,
         }
@@ -262,6 +278,25 @@ mod tests {
 
         let outcome = load_from(&path);
         assert_eq!(outcome.session, Some(session));
+    }
+
+    /// ADR-0086 §4: `active_pinned` is omitted when `None` (the file stays
+    /// byte for byte as before the field existed) and round-trips when set.
+    #[test]
+    fn active_pinned_is_omitted_when_none_and_round_trips_when_set() {
+        let none = window(Some(0));
+        let value = serde_json::to_value(&none).unwrap();
+        assert!(!value.as_object().unwrap().contains_key("active_pinned"));
+
+        let mut some = window(None);
+        some.active_pinned = Some(2);
+        let json = serde_json::to_string(&some).unwrap();
+        assert!(json.contains("\"active_pinned\":2"));
+        assert_eq!(serde_json::from_str::<WindowV1>(&json).unwrap(), some);
+
+        // A file written before the field existed reads as `None`.
+        let old: WindowV1 = serde_json::from_str(r#"{"active_tab":1}"#).unwrap();
+        assert_eq!(old.active_pinned, None);
     }
 
     #[test]

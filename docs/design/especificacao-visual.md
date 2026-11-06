@@ -281,13 +281,15 @@ Altura **52px** (§1.7), fundo `#1b1f26`, e o conteúdo recuado por `trilha_padd
 
 Zonas, da esquerda para a direita:
 
-0. **Botão de menu do app** `[v1]` ([ADR-0079](../adr/0079-botao-de-menu-do-app.md)) — zona fixa à esquerda, antes da trilha; não rola. Quadrado de **40×40** (`tab_height + 2 · wrapper_padding`, a caixa de uma aba solta, §1.7), topo em `trilha_padding`, `x = trilha_padding` (no macOS, depois dos 78px dos semáforos, §2.2.1). Aparência de **aba solta ativa**: fundo e borda de aba ativa (`tab_active_background`/`tab_active_border`, `active_border_width`), raio 6, sombra de aba solta, e o **ícone do app** (o PNG do ícone da janela) de 20px centrado; sem tint próprio. **Oculto** por `appearance.tabs.show_app_menu_button = false`: nada é desenhado, a trilha começa em `left_inset` (0, ou 78px no macOS) e ganha os 52px de volta. **Hover**: o fundo clareia pelo mesmo brilho da aba (`1.18`), como o da aba ativa. **Pressionado**: o da aba ativa apertada — o press arma o arraste (`Drag::TabPressed`), que suprime o hover da barra, e a aba volta ao fundo ativo **sem** o brilho (mais escuro que no hover); só com o cursor sobre o botão armado. Dispara no release sobre o mesmo botão, como os da zona fixa — e **por ora não faz nada**: é o futuro menu do app. Sem tooltip; nó de acessibilidade "Menu do aplicativo". A trilha — e o recorte dela, de modo que a aba rolada some antes de encostar — começa `trilha_padding` (6px, a mesma margem do botão no topo e à esquerda) depois dele.
-1. **Trilha rolável** `[v1]` — ocupa toda a largura que sobra entre o botão de menu e a zona fixa da direita, `gap: 6`, recortada nas duas pontas. Contém os wrappers de grupo, e só eles. Rola como **um componente só**: nada dentro dela encolhe (§2.18).
+0. **Botão de menu do app** `[v1]` ([ADR-0079](../adr/0079-botao-de-menu-do-app.md)) — zona fixa à esquerda, antes da trilha; não rola. Quadrado de **40×40** (`tab_height + 2 · wrapper_padding`, a caixa de uma aba solta, §1.7), topo em `trilha_padding`, `x = trilha_padding` (no macOS, depois dos 78px dos semáforos, §2.2.1). Aparência de **aba solta ativa**: fundo e borda de aba ativa (`tab_active_background`/`tab_active_border`, `active_border_width`), raio 6, sombra de aba solta, e o **ícone do app** (o PNG do ícone da janela) de 20px centrado; sem tint próprio. **Oculto** por `appearance.tabs.show_app_menu_button = false`: nada é desenhado, a trilha começa em `left_inset` (0, ou 78px no macOS) e ganha os 52px de volta. **Hover**: o fundo clareia pelo mesmo brilho da aba (`1.18`), como o da aba ativa. **Pressionado**: o da aba ativa apertada — o press arma o arraste (`Drag::TabPressed`), que suprime o hover da barra, e a aba volta ao fundo ativo **sem** o brilho (mais escuro que no hover); só com o cursor sobre o botão armado. Dispara no release sobre o mesmo botão, como os da zona fixa — e **por ora não faz nada**: é o futuro menu do app. Sem tooltip; nó de acessibilidade "Menu do aplicativo". A trilha — e o recorte dela, de modo que a aba rolada some antes de encostar — começa `trilha_padding` (6px, a mesma margem do botão no topo e à esquerda) depois da última caixa da zona da esquerda: o botão ou, havendo abas fixadas, a última delas (item 0.5).
+
+0.5. **Zona de abas fixadas** `[v1]` ([PRD-021](../prd/prd-021-abas-fixadas.md), [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md) §1) — logo à direita do botão de menu, na mesma fileira e também fora do recorte: não rola e não tem teto. Uma **caixa de aba solta sem rótulo por aba fixada** da janela (anatomia na §2.5.1), de **40×40** como o botão, topo em `trilha_padding`, com `trilha_gap` (6px) entre caixas — o mesmo vão que separa os wrappers da trilha, de modo que botão, fixadas e o primeiro grupo ficam todos a 6px um do outro. A fileira é `left_inset │ 6 │ [app] │ 6 │ [fix 1] │ 6 │ [fix 2] │ 6 │ trilha…`; cada fixada custa **46px** de trilha (`40 + 6`), e sem nenhuma a barra é pixel por pixel a de antes. Com `show_app_menu_button = false` a primeira fixada ocupa o lugar do botão. Sem fixadas e sem botão a trilha volta a `left_inset`, e o conteúdo dela recupera o `trilha_padding` da esquerda (`tab_bar::layout` decide pela existência de **alguma** caixa na fileira, não só pelo botão). A largura da trilha desconta a zona (`tab_bar::trilha_width`), e vinte fixadas numa janela de 1280px já deixam a trilha mais estreita que uma aba — uso que o PRD-021 registra como não otimizado.
+1. **Trilha rolável** `[v1]` — ocupa toda a largura que sobra entre a zona da esquerda (botão de menu e abas fixadas) e a zona fixa da direita, `gap: 6`, recortada nas duas pontas. Contém os wrappers de grupo, e só eles. Rola como **um componente só**: nada dentro dela encolhe (§2.18).
 2. **Zona fixa à direita** `[v1]` — não rola, e a largura disponível para a trilha é a da barra **menos** esta zona. Carrega **dois** botões, da esquerda para a direita: **sessões** e **configurações**, com o mesmo `gap: 6` da trilha nas duas pontas e entre os dois. Os dois têm a mesma anatomia: 30×30 de desenho (38×30 de alvo), sem borda e sem fundo em repouso. No **hover** e no **pressionado** um quadrado 30×30 de raio 6, centrado no alvo, se revela atrás do ícone, com o fundo `hover_background` / `pressed_background` dos botões de janela; o ícone não muda de cor. Como os botões de janela, disparam no **release** sobre o mesmo botão do press, e o pressionado só aparece com o cursor sobre o botão armado ([ADR-0069](../adr/0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md)). O de **configurações** (engrenagem Lucide) **abre o arquivo de config** no editor do sistema, criando-o a partir do exemplo embutido se ainda não existir ([PRD-011](../prd/prd-011-polimento.md) RF-11.27, F6). O de **sessões** (`bookmark` Lucide, [ADR-0054](../adr/0054-sessoes-nomeadas.md)/[ADR-0055](../adr/0055-botao-e-popover-de-sessoes.md)) abre o popover de sessões nomeadas — anatomia na §2.22. A zona nasceu na F3 para o botão de nova aba global, que saiu (§2.6); o botão de configurações a herdou sozinho, e o de sessões é o segundo ocupante — a razão de a zona ter ficado reservada.
 3. **Botão de busca** `[v2]` — altura 30, `padding: 0 10`, raio 6, fundo `#12151a`, borda `#262b34` (hover `#39404b`). Texto "Buscar" 11px `#6b737e` + chip `Ctrl+Shift+P` mono 9.5px `#7b838f` sobre `#1d222a`, raio 3, `padding: 2px 5px`.
 4. **Zona de botões de janela** `[v1]` — minimizar, maximizar/restaurar, fechar (ADR-0027; anatomia em §2.2.1). Ausente no macOS: lá o semáforo nativo faz esse papel, e a trilha reserva espaço à **esquerda** (§2.2.1) em vez de perder espaço à direita.
 
-**Por que a zona fixa existe.** Com a trilha rolando como um componente só, um botão ao final dela sai de vista com muitas abas — botão que o usuário não alcança. A largura da trilha é a da barra menos as duas zonas fixas (botão de menu à esquerda, esta à direita), e é essa largura que o cálculo de overflow e o auto-scroll do arraste usam. O recorte da trilha começa na borda direita do botão de menu. **Clique e hover da barra só valem dentro desse recorte** (`tab_bar::point_in_track`, [ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) §7): uma aba rolada para fora de vista continua no layout, e sem essa checagem o clique direito num botão da zona fixa abria o menu dela.
+**Por que a zona fixa existe.** Com a trilha rolando como um componente só, um botão ao final dela sai de vista com muitas abas — botão que o usuário não alcança. A largura da trilha é a da barra menos as duas zonas fixas (a da esquerda — botão de menu e abas fixadas —, esta à direita), e é essa largura que o cálculo de overflow e o auto-scroll do arraste usam. O recorte da trilha começa `trilha_padding` depois da última caixa da zona da esquerda. **Clique e hover da barra só valem dentro desse recorte** (`tab_bar::point_in_track`, [ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) §7): uma aba rolada para fora de vista continua no layout, e sem essa checagem o clique direito num botão da zona fixa abria o menu dela.
 
 Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
@@ -300,7 +302,7 @@ Quatro comportamentos que o canvas não mostra e que a configuração alcança:
 
 [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md): fora do macOS a janela perde a decoração nativa (`decorations = false`), e a própria barra de abas assume o que a decoração fazia — sem token de design próprio, a espec. nunca cobriu janela sem decoração nativa antes deste ADR.
 
-**Drag region** — a área vazia da barra (fora de aba, pílula, "+", botão de menu do app, botão de sessões, botão de configurações e botões de janela) arrasta a janela. As margens à esquerda da trilha (em volta do botão de menu) também arrastam. Duplo clique nela maximiza/restaura.
+**Drag region** — a área vazia da barra (fora de aba, pílula, "+", botão de menu do app, botão de sessões, botão de configurações e botões de janela) arrasta a janela. As margens à esquerda da trilha (em volta do botão de menu) também arrastam, assim como as margens e os **vãos de `trilha_gap` entre as caixas das abas fixadas** (§2.2, item 0.5): ali as caixas são separadas como botões, e a folga de "nenhum pixel sem dono" da §2.2 é da trilha, onde as abas são vizinhas coladas. Duplo clique nela maximiza/restaura.
 
 **Botões de janela** — três, **46px** de largura cada, altura cheia da barra (52px), colados na borda direita: minimizar, maximizar/restaurar, fechar. Ícones Lucide 14px (`ICON_EM_SIZE * 0.7`): `minus`, `square`, `copy` (sem ícone dedicado de "restore" no Lucide; dois quadrados sobrepostos, aproximação comum de outras suítes) para minimizar/maximizar/restaurar, `x` para fechar — mesmo ícone da aba. Cor de repouso `#8b929e`, hover `#ffffff` a `.10`; fechar em hover vira `#c4413f` a `.85` com ícone `#ffffff`. **Pressionado** ([ADR-0066](../adr/0066-estado-pressionado-dos-botoes-de-janela.md)): fundo `#ffffff` a `.16` (o alfa do rim de vidro), fechar `#a33533` a `.90` com ícone `#ffffff`, só enquanto o cursor está sobre o botão armado pelo press; arrastado para fora, volta ao repouso. Os quatro fundos são **translúcidos** desde o [ADR-0067](../adr/0067-temas-em-arquivos-proprios.md): com imagem de fundo na janela ou janela transparente, o que está atrás da barra continua aparecendo sob o botão. No tema claro, o branco vira `#000000` com os mesmos alfas e o vermelho é o do tema.
 
@@ -499,6 +501,29 @@ seção 1.6 — o `ungrouped_color` do arquivo de exemplo. Sem sublinhado e sem 
 quem ainda o usa é o realce de fronteira do arraste sobre um run implícito (§2.19) e o
 fantasma do arraste de grupo.
 
+### 2.5.1 Aba fixada `[v1]`
+
+[PRD-021](../prd/prd-021-abas-fixadas.md), [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md) §2 e §3, [ADR-0088](../adr/0088-icone-da-aba-fixada.md). A aba fixada é uma **caixa de aba solta sem rótulo**, quadrada (**40×40**, a caixa do botão de menu do app, §2.2 item 0), na zona de fixadas da §2.2 (item 0.5). O desenho é o da aba solta da §2.5 — raio 6 (`tab_corner_radius`), borda de aba solta, sombra em camadas quando `[appearance.groups] shadow` — com o **ícone** de 20px (`icon_em_size`) centrado onde estaria o rótulo. **Não tem botão de fechar**: o gesto de fechar é o menu de contexto ou o atalho, e fechar uma fixada a desafixa (§2.15, diálogo). Nenhum valor novo: caixa, margens, vão, cores, raio, sombra, alfa e ponto saem de tokens que já existem.
+
+| Estado | Fundo e borda | Ícone |
+|---|---|---|
+| Inativa | `tab_inactive_*`, `inactive_border_width` | alfa 1 |
+| Ativa | `tab_active_*`, `active_border_width` | alfa 1 |
+| Hover | o do estado, com `brightness(1.18)` | — |
+| Pressionada | o do estado **sem** o brilho: o press arma `Drag::TabPressed`, que suprime o hover da barra, como em toda aba e no botão de menu | — |
+| Não iniciada (fixada SSH dormente, [ADR-0037](../adr/0037-aba-nao-iniciada.md)) | o do estado de base | alfa **`.45`** |
+| Encerrada (`Exited`) | `tab_inactive_*` **mesmo ativa** | alfa **`.45`** |
+
+As duas linhas de baixo traduzem a §2.5 para uma caixa sem texto: **não iniciada** é modificador e só esmaece o que seria o rótulo — aqui o ícone —, com o alfa `.45` que a §2.5 já usa; **encerrada** mantém o fundo de inativa e troca o esmaecimento do rótulo (`#727a86`, uma cor de texto que não se aplica a uma imagem) pelo mesmo `.45`. Uma fixada dormente inativa e uma encerrada inativa ficam iguais na barra: a diferença está no grid (a nota de conexão, o código de saída) e no tooltip. **Seleção não se aplica** (RF-21.3): `Ctrl`/`Shift`+clique numa fixada é um clique simples, e o intervalo do `Shift` exclui as fixadas.
+
+**Ícone.** Por ora toda fixada desenha o **ícone do app**, o mesmo PNG do botão de menu; o ícone próprio de cada fixada (`[icon]` / `icon.png`, ADR-0088) é uma etapa seguinte. Enquanto isso, **uma fixada ativa fica igual ao botão do app** — as duas usam a caixa de aba solta ativa e o mesmo PNG; só a posição as separa (o botão é sempre o primeiro, e a fixada tem tooltip). O risco está registrado no ADR-0087 e a decisão fica pendente do aval visual do dono.
+
+**Ponto de atividade e campainha** (§2.17): o ponto de 6×6 é desenhado **sobre a caixa**, no canto superior direito, a `padding_right` (6px) das bordas de cima e da direita — a margem que a aba dá ao botão de fechar —, sem mudar o tamanho da caixa. Mesmas cores e mesma regra de "campainha vence"; nunca em caixa encerrada.
+
+**Tooltip** (§2.20): a fixada **sempre** tem tooltip, com o título da aba, depois dos 600 ms de hover parado. O rótulo dela está truncado a zero, e a regra do ADR-0019 existe para mostrar o texto que não coube.
+
+**Gestos.** O clique ativa; o menu de contexto (§2.16) tem "Desafixar aba"; **duplo clique só ativa** — não há rótulo onde editar, e `tab.rename` com a fixada ativa não faz nada. A fixada ativa **não faz a trilha rolar** (§2.18): a zona já está sempre à vista. Acessibilidade: um nó `Tab` no mesmo `TabList`, **antes** das abas da trilha e depois do botão do app, com o título e os estados de sempre mais "fixada" (`access.state_pinned`), e sem nó de botão de fechar. A fixada **arrasta** como uma aba da trilha, com o fantasma quadrado, e o arraste de e para a zona é o da §2.19 ("Arraste de e para a zona de fixadas").
+
 ### 2.6 Botão de nova aba `[v1]`
 
 **Quadrado, sem respiro lateral**: **30×30** dentro de um grupo explícito (`right_zone_button_size`,
@@ -529,7 +554,9 @@ sobre o fundo da barra, e cria uma aba fora de todo grupo. Só aparece quando o 
 grupo da barra é **explícito**: se a barra já termina num run de abas soltas, o "+"
 daquele run cria exatamente isso, no mesmo lugar. É ele que cobre o caso em que toda
 aba está em grupo — sem ele, um workspace com um único grupo colapsado não tem gesto
-nenhum que crie uma aba solta.
+nenhum que crie uma aba solta. Aparece também quando a trilha está **vazia** mas a
+zona tem abas fixadas (§2.5.1): não há run nenhum cujo "+" crie a aba, e ele é então o
+primeiro item da trilha, sem `trilha_gap` antes.
 
 **A cor do ícone depende do que está atrás dele**, e é o único lugar do chrome que
 decide cor assim: `#12151a` sobre a cápsula de cor cheia de um grupo explícito,
@@ -846,6 +873,8 @@ Largura máxima **320**, a do aviso; rótulo mais longo trunca com reticências.
 
 Camada **popover** do [ADR-0018](../adr/0018-composicao-de-frame.md), compartilhada com o tooltip da seção 2.20.
 
+**Itens do menu da aba**, na ordem: **Nova aba**, **Fixar aba** (ou **Desafixar aba**, no menu de uma fixada), **Fechar aba**, **Mover para grupo** e, numa aba SSH, **Reconectar** por último ([PRD-021](../prd/prd-021-abas-fixadas.md) RF-21.12, [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md) §6). Numa **fixada**, "Mover para grupo" fica **esmaecido, nunca ausente** — ela não pertence a grupo —, e "Fechar aba" mantém o rótulo: o diálogo da §2.15 é quem diz que fechar desafixa. A ordem é a do binário; o ADR-0087 §6 listava "Mover para grupo" antes de "Fechar aba".
+
 Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal ([PRD-011](../prd/prd-011-polimento.md) RF-11.14, F6: copiar, colar, selecionar tudo, buscar, mais os itens de link quando o clique cai sobre um hyperlink). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md). Um quarto, o menu de perfis (§2.9), é este mesmo menu **ancorado num botão**: nasce do `+` em vez do cursor, abre abaixo dele e vira nos dois eixos, com a coluna de badge como única diferença de anatomia.
 
 ### 2.17 Indicadores da aba `[v1]`
@@ -864,6 +893,8 @@ Ponto circular **6×6, raio 50%** — o token do ponto de status do painel —, 
 **Não pisca.** Indicador animado em trinta abas de fundo é um frame por intervalo de piscada, contra a regra do [ADR-0007](../adr/0007-modelo-de-threading.md) de que terminal ocioso não gera frame. Presença é o sinal.
 
 O ponto consome largura do rótulo — 6 px mais o `gap: 8` —, e o truncamento é recalculado com isso: a aba **não** muda de largura por causa do indicador. Ambos somem ao visitar a aba (RF-1.22) e são desligáveis na config. Aba no estado `Exited` do [ADR-0017](../adr/0017-ciclo-de-vida-da-aba.md) não exibe nenhum dos dois — não há mais saída possível.
+
+**Na aba fixada** (§2.5.1), que não tem rótulo ao lado do qual pôr o ponto, ele é desenhado **sobre a caixa**: canto superior direito, a `padding_right` (6px) das bordas de cima e da direita, sem consumir largura de nada. Mesmas cores, mesma regra de campainha, mesmo apagar ao visitar.
 
 ### 2.18 Overflow da trilha `[v1]`
 
@@ -908,7 +939,7 @@ Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15 e, desde 
 - **Limiar de 4 px** de movimento com o botão apertado — o `gap` entre abas. Abaixo disso o gesto é clique, e ativa a aba (RF-1.13). Sem limiar, todo clique com micro-tremor vira arraste.
 - **Aba fantasma:** a aba arrastada continua desenhada, seguindo o cursor no eixo X e presa ao Y da barra. Não sai da barra: arrastar aba entre janelas não é gesto do v1 (RF-10.24). Desde a F4 etapa 6, o fantasma leva `filter: brightness(1.18)` (sempre ligado, não condicionado a hover) e a sombra em camadas que a separam da trilha (§1.7, §1.10).
 - **O buraco é o marcador.** A posição de origem fica vazia, mostrando o fundo da barra `#1b1f26`, e as vizinhas deslizam com a transição `.15s` da seção 1.10. Não há caret de inserção separado: ele diria a mesma coisa que o buraco.
-- **Auto-scroll:** cursor a menos de 30 px de uma ponta da trilha rola naquela direção, uma aba a cada `.15s`.
+- **Auto-scroll:** cursor a menos de 30 px de uma ponta da trilha rola naquela direção, uma aba a cada `.15s`. **Só dentro da trilha:** com o cursor sobre a zona de fixadas (à esquerda do recorte) a trilha não rola.
 - `Esc` cancela e a aba volta à origem; soltar fora da trilha cancela também.
 - Cursor `Grabbing` durante o arraste. É o único elemento do gesto que vem do sistema, e não há alternativa desenhável — o ponteiro não é superfície nossa.
 
@@ -929,6 +960,15 @@ Um wrapper realçado por vez. O destino é o que a regra de fronteira do
 entre wrappers pertence ao grupo da esquerda, e soltar sobre a pílula entra no
 início do grupo. Soltar sobre grupo **colapsado** realça a pílula, não um wrapper
 — não há trilha para realçar. O contador que incrementava ao soltar saiu da pílula (§2.4); o que confirma a chegada é a aba aparecer ao expandir.
+
+**Arraste de e para a zona de fixadas.** [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md) §5, [PRD-021](../prd/prd-021-abas-fixadas.md) RF-21.7, RF-21.8, RF-21.10 e RF-21.11. A zona é um destino a mais, ao lado dos grupos, e nenhum valor novo entra: limiar, `Esc`, soltar fora, cursor, brilho e sombra do fantasma são os acima.
+
+- **Alvo.** Com o **centro do fantasma à esquerda do recorte da trilha** (`track_shift`) — sobre a fileira, inclusive sobre o botão de menu do app —, o alvo é a **zona**, e a posição é a comparação do centro com o centro de cada caixa de fixada, como as abas de um grupo (§2.19; sobre o botão do app, a primeira posição; a própria caixa, quando a aba vem da zona, não conta). À direita do recorte vale o alvo de trilha de sempre. Uma fileira sem nenhuma caixa (botão do app oculto e nada fixado) não é zona.
+- **O que o soltar faz.** Da trilha para a zona, **fixa** na posição; da zona para a zona, **reordena**; da zona para a trilha — dentro de um grupo ou fora de todos —, **desafixa** para ali; da trilha para a trilha, o de sempre. Um grupo não se fixa: o arraste do rótulo (§2.19.1) continua tendo como alvo só as fronteiras entre grupos.
+- **O fantasma mantém a forma de origem.** Quem vem da trilha é o fantasma de 209px de sempre, mesmo sobre a zona; quem vem da zona é a **caixa quadrada** (§2.5.1, com o brilho `1.18` e a sombra do fantasma), mesmo sobre a trilha. Trocar a forma quando o centro cruza a fronteira o faria pular sob o cursor. É desenhado **fora do recorte da trilha**, por cima das zonas, para não sumir ao cruzar a borda.
+- **Realce e vão.** Com a zona como alvo, ela recebe o **realce do *run* implícito** — `ungrouped_color` `#7b838f` com alfa `.14` e borda `1px` a `.45`, o mesmo do run implícito acima — sobre o retângulo das caixas, **vão incluído**, por baixo delas. O vão abre onde a aba vai cair: as caixas à direita **deslizam** 46px (caixa mais `trilha_gap`) com a transição `.15s` da §1.10, e a caixa de origem, quando a aba vem da zona, é o buraco. Arrastada da zona para a trilha, a caixa de origem continua sendo o buraco e a zona só se fecha ao soltar; a trilha mostra o vão e o realce de sempre.
+- **Auto-scroll** (acima): só dentro da trilha. Levar uma aba da trilha à zona passa pela ponta esquerda e pode rolar a trilha alguns passos no caminho.
+- **Aval visual do dono pendente.**
 
 ### 2.19.1 Arraste do rótulo do grupo `[v1]`
 
@@ -952,7 +992,7 @@ inteiro, com suas abas.
 
 Definido em [ADR-0019](../adr/0019-tooltip.md), que também não tem representação no canvas: os valores reaproveitam tokens de popover, sem cor nova.
 
-Aparece **só quando o texto do alvo foi truncado**, após 600 ms de hover parado. Uma linha, largura máxima 320 — a do aviso —, texto além disso truncado com reticências.
+Aparece **só quando o texto do alvo foi truncado**, após 600 ms de hover parado — e **sempre sobre uma aba fixada** (§2.5.1), cujo rótulo está truncado a zero: o tooltip dela traz o título da aba. Uma linha, largura máxima 320 — a do aviso —, texto além disso truncado com reticências.
 
 Fundo `#1a1e25`, borda `1px #2e343e`, raio **6** (não o 8 de popover: num retângulo de uma linha o 8 pesa, e o 6 é a classe dos elementos de altura de aba da barra). Texto 11px `#d7dce3`, `padding: 7px 8px` — o espaçamento do item de menu. Desde a F4 etapa 6, sombra em camadas (§1.7) junto da borda de 1px, como os outros quatro widgets; a animação `pop .13s` não entra (§2.10).
 
@@ -1058,6 +1098,7 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Menu de contexto do terminal | `[v1]` | PRD-011 RF-11.14; ADR-0014 — mesma anatomia da §2.16 |
 | Botão de sessões salvas da zona fixa | `[v1]` | [PRD-014](../prd/prd-014-sessoes-nomeadas.md); [ADR-0055](../adr/0055-botao-e-popover-de-sessoes.md) — fora da ordem de fases; sem representação no canvas |
 | Popover de sessões (salvar, lista rolável, excluir) | `[v1]` | PRD-014; ADR-0055 — fora da ordem de fases; sem representação no canvas |
+| Zona de abas fixadas: caixas de aba solta sem rótulo à direita do botão de menu, com ícone, ponto sobreposto e tooltip sempre (§2.2 item 0.5, §2.5.1) | `[v1]` | [PRD-021](../prd/prd-021-abas-fixadas.md), [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md) — fora da ordem de fases; sem representação no canvas. **Aval visual do dono pendente** |
 | Ícone da janela e do executável | fora de fase | estava listado em F6 no roadmap; entregue antes, ver o roadmap |
 | Painéis divididos (§2.7.1): quadro por painel, divisor que é só o vão, cursor vazado no painel sem foco | `[v1]` | [PRD-006](../prd/prd-006-paineis-divididos.md), [ADR-0053](../adr/0053-paineis-divididos.md) — fora da ordem de fases |
 | Imagem de fundo do terminal, dentro do quadro de cada painel (§2.7), recortada pelo raio dele — descrita na §2.7 | `[v1]` | [PRD-017](../prd/prd-017-imagem-de-fundo-do-terminal.md), [ADR-0061](../adr/0061-imagem-de-fundo-do-terminal.md) — fora da ordem de fases; sem representação no canvas |
@@ -1221,6 +1262,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Ponto agregado de atividade/campainha à esquerda do nome do grupo colapsado (RF-2.16, §2.4) | **Sem ponto agregado**: o ponto da aba com atividade/campainha, à direita do nome, ganha a cor do indicador | pedido do dono do produto (ADR-0085 §1) |
 | Margem direita do quadrado do "x" fixa em 6,5px (`padding_right` + centragem) | **Igual à margem vertical**: 8px na aba solta, 5px na de grupo | pedido do dono do produto (ADR-0085 §2) |
 | Clique direito sobre um botão da zona fixa da direita abria o menu de uma aba rolada para fora de vista, por baixo dele | **Clique e hover da barra só dentro do recorte da trilha** (`tab_bar::point_in_track`); fora dele o clique direito não faz nada e o esquerdo, entre botões, arrasta a janela | correção de defeito (ADR-0084 §7) |
+| Barra de abas com o botão de menu do app como única caixa da zona fixa à esquerda (§2.2, item 0) | **Zona de abas fixadas à direita do botão**: uma caixa de aba solta de 40×40 por fixada, sem rótulo, com `trilha_gap` entre as caixas; cada uma custa 46px de trilha, e sem fixadas a barra é a de antes, pixel por pixel. Os estados são os da aba solta, com o ícone no lugar do rótulo (não iniciada e encerrada a `.45`), o ponto de atividade/campainha vai sobre o canto da caixa e o tooltip é sempre mostrado. **Registro do que o dono do produto ainda não viu:** por ora toda fixada desenha o ícone do app, e uma **fixada ativa fica igual ao botão do app** (mesma caixa ativa, mesmo PNG; só a posição e o tooltip as distinguem) — se não bastar, a revisão é no botão do app (ADR-0079), não um valor novo na fixada. **Aval visual do dono pendente.** Zero valor novo | [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md), fora de fase |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.
 
