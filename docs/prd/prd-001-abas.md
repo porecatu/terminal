@@ -154,6 +154,8 @@ Cenário: confirmação ao fechar com processo ativo
 - Miniatura de preview no hover
 - Perfis de aba (aba que abre WSL, SSH, container)
 
+> **Emenda (2026-11-06).** "Fixar aba" saiu desta lista: o [PRD-021](prd-021-abas-fixadas.md) foi aprovado fora da ordem de fases. A aba fixada é uma exceção a dois requisitos deste documento, só para ela: o RF-1.3 (o último painel que sai com código zero **não** fecha a fixada, RF-21.24) e o RF-1.4 (com fixadas na janela, fechar a última aba da trilha não fecha a janela, RF-21.25). Fechar uma fixada a desafixa (RF-21.22).
+
 > **Emenda (2026-10-27).** Perfis de aba saíram desta lista: o [PRD-007](prd-007-perfis-de-aba.md) foi aprovado fora da ordem de fases. O clique esquerdo no `+` e `tab.new` continuam como descritos aqui, com o perfil padrão — que, sem nada declarado, é o `[shell]` de sempre. Perfis de container continuam fora.
 
 ## Métricas de sucesso

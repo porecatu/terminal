@@ -1,6 +1,6 @@
 # ADR-0017 — Ciclo de vida e identidade da aba
 
-**Status:** Superseded by [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) (parcial — só a seção 3, sobre o critério de confirmação do RF-1.6) e por [ADR-0037](0037-aba-nao-iniciada.md) (parcial — só a seção 6, que enumerava `Running` e `Exited` como os dois estados possíveis da aba)
+**Status:** Superseded by [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) (parcial — só a seção 3, sobre o critério de confirmação do RF-1.6) e por [ADR-0037](0037-aba-nao-iniciada.md) (parcial — só a seção 6, que enumerava `Running` e `Exited` como os dois estados possíveis da aba) · §6 revisto por [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) (parcial — o último painel de uma aba fixada não fecha a aba com código zero)
 **Data:** 2026-08-27
 **Relacionados:** ADR-0004, ADR-0005, ADR-0007, ADR-0008, ADR-0012, ADR-0014, ADR-0015, PRD-001, PRD-003, PRD-010
 
@@ -125,6 +125,11 @@ O RF-1.3 mantém a aba aberta depois de o processo morrer. Isso é um estado, e 
 > **o painel**, e só fecha a aba quando era o último dela; e a confirmação do RF-1.6
 > (§3 acima) passa a perguntar por painel — fechar a aba confirma se **qualquer**
 > painel dela tem processo ativo.
+
+> **Revisto pelo [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §7.** Exceção para a aba **fixada**: o último painel
+> dela **não** fecha a aba quando o processo sai com código zero — fica `Exited`, e a
+> aba fica na zona (PRD-021 RF-21.24). Painéis que não são o último fecham como
+> sempre. Fechar a fixada, depois disso, é o gesto que a desafixa.
 
 ### 7. `app.quit` e RF-1.4 na F2
 

@@ -28,6 +28,16 @@ O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grup
 
 > **Revisão (pedido do dono, 2026-10-29) — margem entre o botão e o recorte da trilha.** Altera a decisão 2. Com a trilha cheia, a aba rolada era cortada rente à borda direita do botão: o respiro de `trilha_padding` entre os dois morava **dentro** do conteúdo (`layout` nascia em `x = trilha_padding`) e rolava junto. Agora o respiro mora em `track_shift`: `left_inset + 2 · trilha_padding + lado` (46 → 52 px com o botão, a mesma margem de 6 px que ele tem no topo e à esquerda), e o recorte abre aí. Com o botão **visível**, o conteúdo nasce em `x = 0`, então em repouso a primeira aba fica onde sempre ficou (a 6 px do botão); rolada, some a 6 px dele. Com o botão **oculto** nada muda: `track_shift = left_inset` e o conteúdo mantém o respiro de `trilha_padding` das bordas, como antes. A trilha rolável fica 6 px mais estreita. Efeito colateral aceito: a sombra do primeiro grupo, que ocupava esse respiro, é cortada pelo recorte no lado esquerdo.
 
+> **Revisto pelo [ADR-0087](0087-zona-de-abas-fixadas-na-barra.md) §1 — a zona esquerda vira uma fileira.** Altera as
+> decisões 2 e 6. A zona fixa da esquerda passa a ter `k` caixas do lado deste botão
+> — ele (se visível) mais as abas fixadas da janela —, com `trilha_padding` nas pontas
+> e `trilha_gap` entre as caixas. `track_shift(style, is_macos, pinned)` passa a
+> receber a contagem de fixadas: `left_inset` com `k = 0`, e
+> `left_inset + 2 · trilha_padding + k · lado + (k − 1) · trilha_gap` com `k > 0`. Com
+> `k = 1` a conta é a desta revisão acima (52 px), então nada muda para quem não fixa
+> nada. A regra `tela = conteúdo + track_shift − scroll_offset` continua sendo a única
+> conversão; o conteúdo nasce em `x = 0` sempre que `k > 0`.
+
 ## Consequências
 
 - A trilha rolável fica 46 px mais estreita (40 do botão + 6 de respiro); a rolagem, as pílulas de overflow, o arraste de aba e a âncora do menu de perfil usam a nova origem.

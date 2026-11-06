@@ -143,6 +143,14 @@ participa. Esta tabela é a regra que faltava para a barra.
 Consequência em código: `tab_bar::drag_target_index` hoje só resolve posição
 dentro do grupo da aba arrastada; passa a devolver `(GroupId, usize)`.
 
+> **Revisto pelo [ADR-0087](0087-zona-de-abas-fixadas-na-barra.md) §5.** O alvo do arraste ganha a **zona de abas
+> fixadas**: com o centro do fantasma à esquerda de `track_shift` (sobre a fileira,
+> inclusive sobre o botão do app), o alvo é `DragDrop::Pinned { pos }`, com `pos`
+> resolvido contra o centro de cada caixa. Da trilha para a zona fixa a aba; da zona
+> para a trilha a desafixa no destino que estas regras dão; dentro da zona, reordena.
+> As regras desta seção continuam valendo, sem mudança, para todo alvo na trilha. O
+> arraste do rótulo do grupo não alcança a zona.
+
 ## Alternativas consideradas
 
 ### Seleção em `Workspace`, persistida com a sessão

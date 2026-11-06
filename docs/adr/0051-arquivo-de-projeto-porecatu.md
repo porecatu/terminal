@@ -30,6 +30,12 @@ A busca acontece **só no diretório exato**, sem subir a árvore. Um `.porecatu
 
 E, se o diretório gravado não existe mais e a aba caiu no home pelo RF-3.10, **nada é procurado**. O home do usuário é o último lugar onde um `.porecatu` de outro projeto deveria rodar por acidente.
 
+> **Revisto pelo [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §5 e §6.** O gatilho ganha um segundo evento: a **aba
+> fixada aberta no arranque** (`SpawnOrigin::Pinned`, PRD-021 RF-21.16), que sobe
+> mesmo com `lazy_restore = true`. Continua valendo todo o resto deste parágrafo:
+> só o diretório exato, nada no `cd`, nada em aba nova, nada em diretório que caiu no
+> home. Fixar uma aba viva **não** dispara: não há spawn.
+
 ### 2. Formato: seções cruas, corpo literal
 
 Uma linha que case `^\[[A-Za-z0-9_.+-]+\]\s*$` abre uma seção. Todo o resto é corpo, literal, linha por linha, até a próxima seção ou o fim do arquivo. Linhas antes da primeira seção são preâmbulo e são ignoradas — é ali que vive o comentário sobre o arquivo.
@@ -42,6 +48,13 @@ Três consequências que decidem a escolha:
 
 O parser cabe em trinta linhas e não tem estado de erro: qualquer arquivo é um arquivo válido, possivelmente sem a seção que interessa. O único caminho de falha é de I/O — arquivo ilegível ou fora de UTF-8 —, e ele informa (RF-12.4).
 
+> **Revisto pelo [ADR-0088](0088-icone-da-aba-fixada.md) §1.** O formato ganha o primeiro **nome de seção
+> reservado**: `[icon]`, com a sintaxe de cabeçalho de sempre, cujo corpo não é
+> script — é o caminho do ícone da aba fixada (a primeira linha não vazia, aparada).
+> Nenhum arquivo existente muda de leitura. A lista de reservados é uma constante de
+> `porecatu-config::project_file` (`RESERVED_SECTIONS`), e nome reservado novo exige
+> ADR.
+
 ### 3. Seleção da seção: nome exato do shell, depois `[default]`
 
 A chave é `Tab::shell_name`, que o domínio já carrega e que a sessão já grava: o `file_stem` minúsculo do programa de spawn, sem caminho e sem extensão — `"pwsh"`, `"bash"`, `"cmd"`, nunca `pwsh.exe` nem `/bin/zsh`. Casamento **exato**, insensível a maiúsculas. Sem seção correspondente, `[default]`. Sem nenhuma das duas, nada acontece e nada é informado: o arquivo declara os shells que suporta, e não suportar o seu não é erro dele nem do app.
@@ -49,6 +62,11 @@ A chave é `Tab::shell_name`, que o domínio já carrega e que a sessão já gra
 **Não há tabela de apelidos.** `pwsh` não cai em `[powershell]`, e `bash` não cai em `[sh]`. Uma tabela de compatibilidade entre shells é conhecimento que o app teria de manter, que envelhece, e que estaria errado com frequência incômoda: `&&` e `??` do PowerShell 7 não existem no 5.1, e `nvm use` num `sh` puro não é a mesma coisa que num `bash` com o `nvm` carregado pelo `.bashrc`. Quem quer os dois escreve as duas seções — que é uma linha a mais, contra uma classe inteira de "rodou o script errado e nem sei por quê".
 
 `[default]` existe justamente para quem prefere não enumerar: é o apelido de todos, declarado pelo autor do arquivo em vez de inferido pelo app.
+
+> **Revisto pelo [ADR-0088](0088-icone-da-aba-fixada.md) §1.** A escolha de seção **nunca** devolve um nome
+> reservado: um shell cujo programa se chame `icon` cai em `[default]`, como um shell
+> sem seção. E `[default]` não substitui `[icon]` — ele é o script de qualquer shell,
+> e um ícone não é script.
 
 ### 4. Confiança: allowlist declarada na config, vazia por default
 
@@ -65,6 +83,15 @@ Regras da comparação, todas obrigatórias:
 - **Caminho da lista que não existe é ignorado em silêncio**, não é erro de config. Dotfiles são compartilhados entre máquinas, e um `~/work` que só existe na máquina do escritório não pode derrubar a config na de casa.
 
 Se `[project_file] enabled = false`, nada disso acontece: o recurso é desligado antes de qualquer leitura de disco, incluindo a do §5.
+
+> **Revisto pelo [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §6.** A allowlist deixa de ser a **única** forma de
+> autorizar: fixar uma aba autoriza o diretório gravado dela, e `resolve` ganha
+> `Trust::Pinned`, que pula `is_trusted`. `enabled = false` continua sendo o primeiro
+> passo, antes de qualquer leitura, também para a fixada. A alternativa recusada mais
+> abaixo — autorização por gesto gravada em `session.json` — **continua recusada**: o
+> ADR-0086 explica por que o `pinned.json`, escrito só por gesto e com falha fechada,
+> não é o arquivo de conveniência que motivou a recusa, e registra o custo que fica
+> (a autorização é do diretório, não do conteúdo).
 
 ### 5. Arquivo encontrado e não autorizado: nota no grid, uma vez por execução
 
@@ -124,6 +151,11 @@ Um crate `porecatu-project` foi considerado e não paga: é um parser de trinta 
 - **Metadados por seção** (`title`, `working_dir`, `enabled`): cada um é uma chave a manter para sempre num formato que só nós versionamos, e nenhum foi pedido.
 - **Ação no catálogo para reexecutar à mão.** O catálogo é fechado ([acoes.md](../reference/acoes.md)) e ação sem RF não entra. Se aparecer o pedido, ele vem com requisito antes.
 - **Autorizar pela interface.** O app não escreve na config do usuário — decisão consistente desde o [ADR-0031](0031-temas-nomeados.md) e reafirmada pelo [ADR-0039](0039-convite-a-integracao-de-shell.md) §4. Ver a primeira consequência negativa.
+
+> **Revisto pelo [ADR-0088](0088-icone-da-aba-fixada.md) §1.** A recusa de "metadados por seção" continua
+> valendo para o que ela nomeia — chaves dentro de cada seção de shell. `[icon]` é
+> uma exceção **de arquivo**, não de seção: um dado do projeto inteiro, com requisito
+> aprovado ([PRD-021](../prd/prd-021-abas-fixadas.md) RF-21.18).
 
 ## Alternativas consideradas
 

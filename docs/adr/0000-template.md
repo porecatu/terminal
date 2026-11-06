@@ -20,11 +20,11 @@
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito · menu de contexto revisto por ADR-0070 (**parcial**: o menu de perfis, ancorado num botão) · diálogo e canais revistos por ADR-0075 (**parcial**: campo, caixa de marcar e linhas de dado; consumidores do SSH) |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito · "Escopo" Superseded by ADR-0059 (**parcial**: uma janela sem abas, a de configurações) |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 · "embutidas" revisto por ADR-0084 (**parcial**: a fonte de interface é a do sistema) |
-| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034, ADR-0037 e ADR-0053 (os três **parcialmente**) · cobertura do RF-1.6 revista por ADR-0071 (**parcial**: aba SSH do cliente embutido confirma) |
+| [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034, ADR-0037 e ADR-0053 (os três **parcialmente**) · cobertura do RF-1.6 revista por ADR-0071 (**parcial**: aba SSH do cliente embutido confirma) · §6 revisto por ADR-0086 (**parcial**: último painel de aba fixada não fecha a aba) |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
-| [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito |
-| [0020](0020-grupos-explicitos.md) | Grupos explícitos: multiplicidade do implícito, colapso e foco | Aceito |
-| [0021](0021-selecao-multipla-e-gestos-da-barra.md) | Seleção múltipla e gestos da barra de abas | Aceito |
+| [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito · gatilho revisto por ADR-0087 (**parcial**: aba fixada sempre tem tooltip) |
+| [0020](0020-grupos-explicitos.md) | Grupos explícitos: multiplicidade do implícito, colapso e foco | Aceito · §2 e §3 revistos por ADR-0086 (**parcial**: fixadas na frente da ordem visual, `track_order()`, escada de foco com a zona) |
+| [0021](0021-selecao-multipla-e-gestos-da-barra.md) | Seleção múltipla e gestos da barra de abas | Aceito · §4 revisto por ADR-0087 (**parcial**: o alvo do arraste ganha a zona de fixadas) |
 | [0022](0022-animacao-de-interface.md) | Animação de interface sob render damage-driven | Aceito |
 | [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Superseded by ADR-0035 (parcial) |
 | [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
@@ -39,7 +39,7 @@
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito · "Decisão" revista por ADR-0071 (**parcial**: conexão SSH aberta também confirma) |
 | [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
-| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) · §1 e §6 Superseded by ADR-0054 (**parcial**: dois campos opcionais e o diretório `sessions/`) · §3 revisto por ADR-0070 (**parcial**: `profile` por painel, sem subir a versão) |
+| [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) · §1 e §6 Superseded by ADR-0054 (**parcial**: dois campos opcionais e o diretório `sessions/`) · §3 revisto por ADR-0070 (**parcial**: `profile` por painel, sem subir a versão) · §3 revisto por ADR-0086 (**parcial**: fixadas fora da sessão, `active_pinned` opcional) |
 | [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito · Superseded by ADR-0053 (**parcial**: só a granularidade) · §2 e §6 revistos por ADR-0075 (**parcial**: painel SSH conecta por gesto, nunca por foco nem por `lazy_restore = false`) |
 | [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
 | [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito · Superseded by ADR-0053 (**parcial**: só o endereço da nota) |
@@ -52,7 +52,7 @@
 | [0048](0048-barra-de-status.md) | Barra de status: faixa no rodapé que encolhe a grade | Aceito · §8 Superseded by ADR-0049 (**parcial**) · §3, §5 e §8 Superseded by ADR-0052 (**parcial**) · §5 Superseded by ADR-0053 (**parcial**: a contagem de painéis volta) |
 | [0049](0049-branch-git-na-barra-de-status.md) | Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore | Aceito · §7 Superseded by ADR-0052 (**parcial**: só ahead/behind) |
 | [0050](0050-tela-cheia.md) | Tela cheia por `F11`: janela `Borderless`, sem estado novo em `Config` | Aceito |
-| [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito · §6 Superseded by ADR-0053 (**parcial**: qual terminal recebe o comando) |
+| [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito · §6 Superseded by ADR-0053 (**parcial**: qual terminal recebe o comando) · §1 e §4 revistos por ADR-0086 (**parcial**: fixada aberta no arranque dispara sem `trusted_paths`) · §2, §3 e §8 revistos por ADR-0088 (**parcial**: nome de seção reservado `[icon]`) |
 | [0052](0052-sincronizacao-com-o-remoto-do-git.md) | Sincronização com o remoto do Git: poll em thread, contagem por `rev-list`, integração só por clique | Aceito |
 | [0053](0053-paineis-divididos.md) | Painéis divididos: árvore binária no core, divisor que é ausência de pixel, foco pelo cursor | Aceito |
 | [0054](0054-sessoes-nomeadas.md) | Sessões nomeadas: um arquivo por sessão ao lado do `session.json`, mesmo schema, restauração pelo caminho do arranque | Aceito |
@@ -80,13 +80,16 @@
 | [0076](0076-reconexao-automatica.md) | Reconexão automática: keepalive de 15 s, cinco tentativas em 1-2-4-8-16 s decididas por estado puro em `porecatu-ui`, uma reconexão por conexão | Aceito |
 | [0077](0077-avisos-do-app-em-dialogo-modal.md) | Avisos do app em diálogo modal, no lugar de nota escrita no grid | Aceito |
 | [0078](0078-largura-e-quebra-de-texto-do-dialogo.md) | Largura e quebra de texto do diálogo: piso 360, teto 720, nunca reticências | Aceito |
-| [0079](0079-botao-de-menu-do-app.md) | Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app; hover e pressionado, sem ação | Aceito |
+| [0079](0079-botao-de-menu-do-app.md) | Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app; hover e pressionado, sem ação | Aceito · decisões 2 e 6 revistas por ADR-0087 (**parcial**: `track_shift` soma a zona de fixadas) |
 | [0080](0080-editor-de-perfil-em-janela-propria.md) | Editor de perfil em janela própria: formulário em coluna, modal sobre a tela de configurações, OK que só leva às pendências | Aceito — aval visual pendente |
 | [0081](0081-disparo-no-release-para-botoes-e-itens.md) | Disparo no release para botões e itens: o press arma, o release sobre o mesmo alvo age; clique fora, texto e gestos de terminal seguem no press | Aceito — aval visual do estado pressionado pendente |
 | [0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md) | Botões da barra com o tamanho do botão de menu do app: sessões, configurações e "+" avulso em 40×40; "+" de grupo fica 30×30; zona fixa de 94 para 98px | Aceito — aval visual pendente |
 | [0083](0083-gap-entre-os-botoes-da-zona-fixa.md) | Gap entre os botões da zona fixa: `window_controls.gap` de 6 para 3px, entre sessões, configurações e botões de janela; zona fixa de 98 para 92px | Aceito — aval visual pendente |
 | [0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) | Fonte do sistema no chrome e ajustes da barra de abas: sem botões de overflow, rótulo de grupo sem fundo e com pontos no colapso, aba de grupo sem borda, aba de 209px, hover no "x", centragem pela altura de versal, clique só dentro da trilha | Aceito — aval visual do dono (Windows) · ponto agregado do grupo colapsado revisto por ADR-0085 |
 | [0085](0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md) | Atividade no ponto da aba do grupo colapsado (sem ponto agregado) e margem direita do "x" igual à vertical: 8px na aba solta, 5px na de grupo | Aceito — aval visual do dono (Windows) |
+| [0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) | Abas fixadas: lista própria no `Workspace`, arquivo `pinned.json` ao lado da sessão, abertura uma vez por execução e fixar como gesto de confiança | Aceito |
+| [0087](0087-zona-de-abas-fixadas-na-barra.md) | Zona de abas fixadas: caixas de aba solta à direita do botão do app, fora do recorte da trilha | Aceito — aval visual do dono pendente |
+| [0088](0088-icone-da-aba-fixada.md) | Ícone da aba fixada: seção reservada `[icon]` no `.porecatu`, `icon.png`, ícone do app; resolução e decodificação fora da main thread | Aceito |
 
 ## Convenção
 

@@ -69,11 +69,15 @@ A referência completa do formato está em [docs/reference/arquivo-de-projeto.md
 
 **RF-12.3** — A seção é escolhida pelo nome do shell da aba, por casamento **exato** e insensível a maiúsculas. Sem seção correspondente, vale `[default]`. Sem nenhuma das duas, nada acontece e nada é informado — o arquivo declara os shells que suporta, e não suportar um não é erro.
 
+> **Emenda ([PRD-021](prd-021-abas-fixadas.md) RF-21.18, [ADR-0088](../adr/0088-icone-da-aba-fixada.md) §1).** `[icon]` é um nome **reservado**: a seção existe, mas não é shell e não é script — o corpo é o caminho do ícone da aba fixada. O RF-12.3 nunca a escolhe: um shell chamado `icon` cai em `[default]`, e `[default]` não substitui `[icon]`.
+
 **RF-12.4** — Arquivo ilegível, ou fora de UTF-8, não executa nada e informa o motivo na própria aba.
 
 ### Confiança
 
 **RF-12.5** — O script só é executado se o diretório estiver declarado confiável na configuração do usuário, em `[project_file] trusted_paths`. Um caminho listado cobre a árvore inteira sob ele. **A lista é vazia por default:** numa instalação recém-feita, nenhum `.porecatu` roda.
+
+> **Emenda ([PRD-021](prd-021-abas-fixadas.md) RF-21.16, [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §5 e §6).** Exceções só para **abas fixadas**: além da aba restaurada (RF-12.1, RF-12.12), dispara a fixada aberta no arranque; o diretório gravado dela **não** precisa estar em `trusted_paths`, porque fixar é o gesto de confiança; e ela sobe no arranque mesmo com `lazy_restore = true` (RF-12.11). O RF-12.7 continua valendo inteiro: `enabled = false` desliga também a fixada.
 
 **RF-12.6** — Um `.porecatu` encontrado em diretório **não** autorizado não roda e **não passa em silêncio**: o app informa uma vez por execução, na aba onde o encontrou, dizendo o caminho e a linha exata a acrescentar na config para autorizá-lo. Silêncio aqui seria indistinguível de um recurso quebrado.
 

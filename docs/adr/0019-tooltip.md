@@ -28,6 +28,11 @@ O RF-1.10 é da F2, e ele é a metade que dá sentido ao truncamento: truncar o 
 
 Só quando o texto do alvo foi **efetivamente truncado**. O `TextMeasurer` do [ADR-0018](0018-composicao-de-frame.md) já devolve se houve corte ao ajustar o rótulo à largura disponível; esse booleano é a condição. Aba cujo título cabe inteiro não tem tooltip — nada a revelar, e um popover que repete o que já está na tela é ruído.
 
+> **Revisto pelo [ADR-0087](0087-zona-de-abas-fixadas-na-barra.md) §3.** A **aba fixada** não tem rótulo: o título dela é
+> o caso-limite desta regra, truncado a zero, e por isso ela **sempre** tem tooltip,
+> com o título da aba. Nada mais muda — atraso, anatomia, posicionamento (abaixo da
+> caixa, alinhado à borda esquerda dela) e dispensa são os desta decisão.
+
 Atraso de 600 ms de hover parado sobre o alvo. É comportamento, não token de design: a seção 1.10 não tem entrada de atraso, e o valor entra como chave de configuração com origem neste ADR.
 
 ### Anatomia

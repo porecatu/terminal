@@ -121,6 +121,16 @@ Isso corrige a linha do ADR-0006 que classifica `collapse_group` como *"só afet
 o desenho, não a estrutura"*: colapso afeta a ordem navegável, e por isso vive
 em `porecatu-core`, não em `porecatu-ui`.
 
+> **Revisto pelo [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §1.** As abas fixadas moram numa lista própria do
+> `Workspace`, fora de `Vec<Group>`, e a ordem visual ganha as fixadas **na frente**.
+> A definição antiga de `visual_order()` passa a se chamar `track_order()` — só a
+> trilha — e é ela, não a `visual_order()`, que a sessão grava. `visual_order()` é
+> `pinned` seguido de `track_order()`, e `navigable_order()` é `pinned` seguido das
+> abas de grupo não colapsado. A zona nunca colapsa, então a navegável continua
+> sendo subsequência da visual por filtro, como esta seção exige. A frase "**não muda
+> de definição**" acima deixa de valer para `visual_order()` e passa a valer para
+> `track_order()`.
+
 ### 3. Foco depois de fechar e depois de colapsar
 
 O RF-1.5 ganha a mesma preferência em todos os níveis — **seguinte, depois
@@ -142,6 +152,13 @@ O RF-2.14 (colapsar o grupo que contém a aba ativa) usa a mesma escada a partir
 do grupo colapsado, começando no nível 3. O RF-2.17 (*"ativar uma aba de grupo
 colapsado expande o grupo"*) continua valendo: ele descreve o caminho inverso —
 alguém pede aquela aba nominalmente —, e aí expandir é o que o usuário quis.
+
+> **Revisto pelo [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §1.** A escada ganha a zona de fixadas. Fechar uma
+> fixada ativa vai para a fixada **seguinte**, depois para a **anterior**, e só então
+> para a aba que esta escada daria a partir do início da trilha. Fechar uma aba da
+> trilha segue os níveis 1 a 4 sem mudança, e o nível 5 deixa de ser "nenhuma"
+> quando há fixadas: cai na **última** fixada — é o que impede a janela de fechar com
+> fixadas vivas (PRD-021 RF-21.25).
 
 ### 4. Grupo vazio existe, mas não sobrevive a uma interação
 

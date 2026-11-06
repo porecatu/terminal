@@ -1227,3 +1227,27 @@ Série de ajustes visuais pedidos pelo dono do produto, registrados juntos no [A
 2. **Testes automatizados — feitos.** Layout (pontos e gaps do grupo colapsado, `point_in_track`, quadrado de hover do "x"), pintura (sem fundo nem chevron no rótulo, borda só na aba solta, um ponto por aba, hover e pressionado do "x", nenhum chevron com a trilha estourada) e render (face `System` pede `sans-serif` no peso certo; centro da altura de versal de cada face).
 3. **Verificação ao vivo — feita só no Windows, pelo dono.** Aval visual dado em 2026-11-04.
 4. **Dívida de verificação.** macOS (Helvetica Neue) e Linux (família padrão do `fontdb`/fontconfig): ninguém viu a fonte do sistema nem a centragem vertical lá, e a cadeia de fallback é a da plataforma. Clique direito sob os botões da direita só foi conferido no Windows.
+
+## Depois do v1 — abas fixadas — documentada, a implementar
+
+Fora da ordem de fases, a pedido do dono do produto, e a promoção de um item que o [PRD-001](prd/prd-001-abas.md) deixava em "Fora de escopo" (*"Fixar aba"*). Abas fixadas são os apps que abrem junto com o Porecatu: caixas quadradas, sem rótulo, com ícone, numa zona fixa à direita do botão do app, fora de todo grupo, abertas uma vez por execução na primeira janela, independentemente da sessão. Requisito no [PRD-021](prd/prd-021-abas-fixadas.md); modelo, arquivo `pinned.json` e ciclo de vida no [ADR-0086](adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md); zona na barra no [ADR-0087](adr/0087-zona-de-abas-fixadas-na-barra.md); ícone (`[icon]` do `.porecatu`, `icon.png`, ícone do app) no [ADR-0088](adr/0088-icone-da-aba-fixada.md).
+
+**Etapas:**
+
+1. **Documentação e decisão — feita.** PRD-021; ADR-0086, 0087 e 0088, aceitos; blockquotes de revisão nos ADR-0017 §6, 0019, 0020 §2 e §3, 0021 §4, 0036 §3, 0051 §1, §2, §3, §4 e §8 e 0079 (decisões 2 e 6); emendas ao PRD-001 ("Fora de escopo", RF-1.3, RF-1.4) e ao PRD-012 (RF-12.3, RF-12.5); `tab.toggle_pin` no catálogo de [ações](reference/acoes.md), com `tab.pin` revisto em "ações que não existem"; tabela de ADRs; CLAUDE.md. **A especificação visual, a [referência do arquivo de projeto](reference/arquivo-de-projeto.md), o guia do usuário e a arquitetura ficam para as etapas que mudam o binário** ([ADR-0028](adr/0028-o-binario-como-referencia-visual.md)).
+2. **`porecatu-core`.** `Workspace::pinned`; `track_order()`, `visual_order()` e `navigable_order()` com as fixadas na frente; `pin_tab`, `unpin_tab`, `move_pinned`, `insert_pinned_tab_with_panes`; operações de grupo recusando fixada; escada de foco com a zona; `Action::TabTogglePin`. Testes que fixam a **ordem resultante** de cada operação, e o invariante de lugar único. Sem comportamento observável.
+3. **`porecatu-session` e `porecatu-config`.** `pinned.rs` (`PinnedFileV1`, carga com quarentena e schema mais novo, gravação atômica), `tab_v1_from_tab` público, `window_from_workspace` sobre `track_order()`, `WindowV1::active_pinned`; `project_file::Trust`, `RESERVED_SECTIONS`, `command_for` pulando reservados, `resolve_icon` com a recusa **textual** de UNC e dispositivo (teste que confere que nenhuma função de `std::fs` é chamada nesse caso). Sem comportamento observável.
+4. **Ciclo de vida em `porecatu-ui`.** `PinnedRegistry` no `App`, `SpawnOrigin::Pinned`, `open_pinned_tabs` nos quatro caminhos de arranque, escrita por gesto, `DialogAction::ClosePinnedTab`, a exceção do `Exit` no último painel, `tab.toggle_pin`, itens "Fixar aba"/"Desafixar aba", `tab.new` com fixada ativa, textos em todos os `locales/`.
+5. **Zona na barra.** `track_shift` com a contagem de fixadas, `pinned_rect`/`point_in_pinned`, ordem do hit-test, pintura dos estados, ponto sobreposto, tooltip sempre, nó de acessibilidade, `DragDrop::Pinned` com realce e vão, fantasma fora do recorte. Especificação visual (§2.2, §2.2.1, subseção "Aba fixada", §2.16, §2.17, §2.19, §2.20, §3, §4.4) no mesmo PR.
+6. **Ícone.** `pinned_icon.rs`: cadeia numa thread, resultado chaveado por `PinnedKey`, `PINNED_ICON_MAX_DIM`, cache de textura por caminho com contagem de uso; referência do arquivo de projeto com a seção `[icon]`.
+7. **Fechamento.** Verificação ao vivo no Windows, guia do usuário, arquitetura, CHANGELOG, CLAUDE.md (recurso implementado) e aval visual do dono.
+
+**Escopo:** RF-21.1 a RF-21.30.
+
+**Aparência:** zona nova à esquerda da trilha, com caixas de aba solta (40 px), `trilha_padding` nas pontas e `trilha_gap` entre caixas. **Zero valor visual novo, zero cor nova.** Cada fixada tira 46 px da trilha. Aval visual do dono **pendente**, com um ponto marcado no ADR-0087: uma fixada ativa sem ícone próprio fica igual ao botão do app.
+
+**Dependências:** nenhuma nova.
+
+**Critério de saída:** fixar uma aba a tira do grupo sem reiniciar o processo e a faz abrir em todo arranque seguinte, com a sessão ligada, desligada, inválida ou ignorada pelo modo posicional, e **nunca** duas vezes; o `.porecatu` da fixada roda sem `trusted_paths` e respeita `enabled = false`; `exit` e fechar a janela não a desafixam, e fechar a aba a desafixa com confirmação; o ícone segue a cadeia e um `[icon]` com caminho UNC nunca toca a rede; o arranque não espera ícone nenhum.
+
+**Dívida prevista:** macOS e Linux ao vivo (como em todo recurso fora de fase), leitor de tela real, e o arranque medido em A/B com muitas fixadas.

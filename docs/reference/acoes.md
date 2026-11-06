@@ -33,8 +33,18 @@ Esta é a enumeração. É o insumo direto do parser de `[keybindings]` na F4 e 
 | `tab.move_left` | Move a aba ativa uma posição à esquerda | RF-1.17 | F2 | |
 | `tab.move_right` | Move a aba ativa uma posição à direita | RF-1.17 | F2 | |
 | `tab.move_to_group` | Move a aba ativa para um grupo | [PRD-002](../prd/prd-002-grupos-de-abas.md) RF-2.20 | F3 | sim |
+| `tab.toggle_pin` | Fixa a aba ativa (vai para o fim da zona de fixadas, fora de todo grupo) ou, se já fixada, a desafixa (vira aba solta no início da trilha). **Sem default** — precedente de `group.new_tab` | [PRD-021](../prd/prd-021-abas-fixadas.md) RF-21.7, RF-21.10, [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §7 | fora de fase | |
 
 As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: o conjunto é fechado, e `tab.goto_12` precisa ser erro de config, não uma ação silenciosamente inerte. O índice é sobre a ordem visual da janela inteira, não por grupo (RF-1.12), e abas de grupo colapsado não contam (RF-2.15).
+
+> **Abas fixadas ([ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md)).**
+> `tab.next`, `tab.prev` e `tab.goto_N` contam as fixadas **primeiro**, na ordem da
+> zona (RF-21.4). `tab.move_left`/`tab.move_right` sobre uma fixada reordenam dentro
+> da zona e **param na borda** — atravessar é `tab.toggle_pin` (RF-21.11).
+> `tab.move_to_group` e `tab.rename` ficam indisponíveis numa fixada (RF-21.12).
+> `tab.close` numa fixada **sempre** confirma, fora de `confirm_close`, e a
+> **desafixa** (RF-21.22, RF-21.23); com fixadas na janela, fechar a última aba da
+> trilha não fecha a janela (RF-21.25).
 
 > **Estado.** Todas as ações de aba são vinculáveis desde o parser de
 > `[keybindings]` da F4, nas três plataformas — os defaults de
@@ -307,7 +317,7 @@ Ausências deliberadas, registradas para que ninguém as adicione achando que fo
 | Ação ausente | Por quê |
 |---|---|
 | `tab.duplicate` | Fora de escopo do PRD-001 (*"duplicar aba com o estado do processo"*) |
-| `tab.pin` | Fora de escopo do PRD-001 (*"fixar aba"*) |
+| `tab.pin` | Fora de escopo do PRD-001 (*"fixar aba"*). *Revisto pelo [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §7:* o [PRD-021](../prd/prd-021-abas-fixadas.md) aprovou abas fixadas, e o gesto existe como **`tab.toggle_pin`**, na seção `tab.*` acima — um só nome para fixar e desafixar, sobre a aba ativa. `tab.pin` e `tab.unpin` separados continuam não existindo |
 | `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000) |
 | `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho). *Revisto pelo [ADR-0070](../adr/0070-perfis-de-aba.md) §8:* o PRD-007 foi aprovado e a seção `profile.*` acima existe; continuam **não existindo** uma ação que troque o perfil de uma aba aberta e uma que abra um perfil por identificador (exigiria argumento) |
 | `terminal.clear` | Nenhum RF pede; o shell já tem `clear` |
@@ -319,7 +329,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Vinte e dois comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os nove últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Vinte e três comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os dez últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -343,6 +353,7 @@ Vinte e dois comportamentos têm requisito aprovado e **não recebem nome de aç
 | Excluir uma sessão nomeada, pelo `X` ou `Delete` na linha do popover | [RF-14.16](../prd/prd-014-sessoes-nomeadas.md), ADR-0054 §7 | idem, e sempre com o diálogo de confirmação por cima |
 | Conectar um painel SSH restaurado, por clique dentro dele ou `Enter` com ele focado | [RF-20.33](../prd/prd-020-conexoes-ssh.md), [ADR-0075](../adr/0075-superficies-de-ui-do-ssh.md) §5 | o alvo é o painel não iniciado sob o gesto; uma tecla global conectaria o painel que **por acaso** está focado, e o recurso existe justamente para a conexão nunca acontecer por acaso. `ssh.reconnect` cobre o painel SSH já encerrado |
 | Abrir o menu de perfis por clique direito num botão `+` | [RF-7.8](../prd/prd-007-perfis-de-aba.md), [ADR-0070](../adr/0070-perfis-de-aba.md) §6 | o alvo é o grupo do `+` clicado; `profile.open_menu` é o equivalente de teclado, sobre o grupo da aba ativa |
+| Arrastar aba para dentro ou para fora da zona de fixadas | [RF-21.7, RF-21.10](../prd/prd-021-abas-fixadas.md), [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §1 | a posição de queda — na zona, num grupo, num *run* novo — vem do pixel sob o cursor; `tab.toggle_pin` é o equivalente de teclado, com destinos fixos (fim da zona, início da trilha) |
 | Escolher um perfil numa linha do menu de perfis | RF-7.9, RF-7.10, ADR-0070 §6 | o alvo é o perfil da linha, e os detectados não têm posição estável; `profile.new_tab_N` cobre os declarados |
 | Navegar, salvar, descartar e capturar atalho dentro da janela de configurações | [RF-16.10](../prd/prd-016-tela-de-configuracoes.md), RF-16.29, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §3 | a janela é um modo de captura, como o diálogo: `Tab`, setas, `Espaço`, `Enter`, `Esc` e `Ctrl+S`/`Cmd+S` são consumidos por ela e o mapa de `[keybindings]` não é consultado ali |
 

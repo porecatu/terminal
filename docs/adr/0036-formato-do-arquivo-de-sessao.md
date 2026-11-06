@@ -120,6 +120,14 @@ Tema e zoom são **por janela**, não por processo. Restaurar duas janelas com t
 > passa a ser o `profile`, e a ausência dele significa o `[shell]` corrente, que é o
 > comportamento de antes.
 
+> **Revisto pelo [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §4.** Abas **fixadas** não são gravadas: a lista de
+> abas de cada janela sai de `track_order()`, e uma fixada nunca entra em
+> `WindowV1::tabs` nem em grupo — ela tem arquivo próprio, o `pinned.json`. Quando a
+> aba ativa da janela é uma fixada, `active_tab` é gravado ausente e um campo novo,
+> `active_pinned` (posição na lista de fixadas), diz qual era. Opcional e **sem subir
+> `schema_version`**, como os dois blocos acima; arquivo sem fixada ativa sai byte a
+> byte igual. A sessão nomeada grava sempre `active_pinned` ausente.
+
 ### 4. Identidade de monitor
 
 `MonitorIdV1` grava o nome do monitor quando a plataforma o dá, mais a posição da origem dele no espaço virtual. Na restauração, casa por nome; sem nome, ou sem casamento, casa por posição; sem nenhum dos dois, cai no monitor primário com o tamanho preservado dentro dos limites da tela (RF-3.11). Nome é estável e legível quando existe; a posição é o desempate que funciona quando o mesmo modelo aparece duas vezes.
