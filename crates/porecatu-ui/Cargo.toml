@@ -19,6 +19,11 @@ workspace = true
 accesskit = "0.25"
 accesskit_winit = "0.34"
 arboard = "3"
+# Relógio da barra de status em tela cheia: hora local do sistema. Já está na
+# árvore (via `russh-util`, com `iana-time-zone`), então o `Cargo.lock` não
+# ganha pacote; só `clock`, sem as features padrão. MIT OR Apache-2.0,
+# compatível com GPLv3.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7"
 # Decodifica a imagem de fundo do terminal (ADR-0061 §1): só PNG e JPEG, sem
 # as features padrão (GIF, WebP, TIFF... ficam de fora). Pinada na versão que

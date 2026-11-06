@@ -144,7 +144,7 @@ pub const ARROW_DOWN: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 14] = [
+pub const ALL: [(&str, Icon); 15] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -159,6 +159,7 @@ pub const ALL: [(&str, Icon); 14] = [
     ("bookmark", BOOKMARK),
     ("rotate-ccw", ROTATE_CCW),
     ("pencil", PENCIL),
+    ("app-window", APP_WINDOW),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
@@ -220,4 +221,13 @@ pub const PENCIL: Icon = Icon {
     glyph: "\u{e1f9}",
     ink_width_em: 0.925,
     ink_height_em: 0.92,
+};
+
+/// `app-window` -- ícone de uma aba fixada sem ícone próprio (ADR-0088 §4,
+/// no lugar do ícone do app). O codepoint vem do `cmap` do `Lucide.ttf`
+/// embutido (glifo `app-window`); o desenho é mais largo que alto.
+pub const APP_WINDOW: Icon = Icon {
+    glyph: "\u{e426}",
+    ink_width_em: 0.925,
+    ink_height_em: 0.755,
 };

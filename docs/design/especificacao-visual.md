@@ -516,7 +516,7 @@ fantasma do arraste de grupo.
 
 As duas linhas de baixo traduzem a §2.5 para uma caixa sem texto: **não iniciada** é modificador e só esmaece o que seria o rótulo — aqui o ícone —, com o alfa `.45` que a §2.5 já usa; **encerrada** mantém o fundo de inativa e troca o esmaecimento do rótulo (`#727a86`, uma cor de texto que não se aplica a uma imagem) pelo mesmo `.45`. Uma fixada dormente inativa e uma encerrada inativa ficam iguais na barra: a diferença está no grid (a nota de conexão, o código de saída) e no tooltip. **Seleção não se aplica** (RF-21.3): `Ctrl`/`Shift`+clique numa fixada é um clique simples, e o intervalo do `Shift` exclui as fixadas.
 
-**Ícone.** Por ora toda fixada desenha o **ícone do app**, o mesmo PNG do botão de menu; o ícone próprio de cada fixada (`[icon]` / `icon.png`, ADR-0088) é uma etapa seguinte. Uma fixada ativa usa o mesmo PNG do botão do app, mas não se confunde com ele: a fixada é uma caixa de aba ativa, e o botão não tem fundo nem borda em repouso (revisão de 2026-11-06 do ADR-0079).
+**Ícone.** O ícone próprio da fixada (`[icon]` / `icon.png`, ADR-0088) quando a cadeia o resolve; sem ele — e enquanto o resultado da thread não chega — a caixa desenha o ícone **`app-window`** do Lucide (face de ícones, em de `icon_em_size`, centrado na caixa), na cor de texto do estado da aba e com o mesmo alfa `.45` de não iniciada e encerrada. O ícone do app (o PNG do botão de menu) **não** é mais o fallback da fixada: ele fica só no botão de menu do app (ADR-0079), e a caixa da fixada não muda de tamanho nem de fundo por causa disso.
 
 **Ponto de atividade e campainha** (§2.17): o ponto de 6×6 é desenhado **sobre a caixa**, no canto superior direito, a `padding_right` (6px) das bordas de cima e da direita — a margem que a aba dá ao botão de fechar —, sem mudar o tamanho da caixa. Mesmas cores e mesma regra de "campainha vence"; nunca em caixa encerrada.
 
@@ -677,7 +677,7 @@ Faixa fixa no rodapé da janela, largura cheia, na camada `Chrome` ([ADR-0048](.
 
 Ela **encolhe a grade**, não a sobrepõe. O quadro do terminal (§2.7) **encosta nela**, sem `terminal_frame_margin` — como já encosta na barra de abas em cima, e pela mesma razão: um vão entre duas barras de chrome lê como uma linha a mais. O `margin` da base só volta a valer, contra a borda da janela, quando a barra está desligada (`[appearance.status_bar] enabled = false`) — e aí ela não desenha **nem ocupa altura**, com a grade voltando ao tamanho que teria sem ela.
 
-Até oito segmentos, seis à esquerda e dois à direita:
+Até nove segmentos, seis à esquerda e três à direita:
 
 | Zona | Segmento | Cor |
 |---|---|---|
@@ -689,6 +689,9 @@ Até oito segmentos, seis à esquerda e dois à direita:
 | Esquerda | contagem de painéis da aba ativa; **ausente com um painel só** | a de base |
 | Direita | `UTF-8` | a de base |
 | Direita | sistema | a de base |
+| Direita | relógio do sistema, `HH:MM` (24 h, hora local), **só em tela cheia** — fecha a zona, depois do sistema | a de base |
+
+**O relógio** existe porque, em tela cheia, a barra de título some e com ela o relógio do sistema. Fora da tela cheia o segmento não existe. Não é clicável nem tem ícone, e a barra repinta uma vez por minuto (`ControlFlow::WaitUntil` até a próxima virada, sem thread). Como os outros segmentos da direita, some por inteiro em vez de truncar quando não cabe.
 
 **Os cinco primeiros descrevem o painel focado** quando a aba está dividida (§2.7.1) — shell, diretório, branch, commits e grupo. Não é mudança de regra: a barra sempre descreveu o terminal em foco, e o terminal em foco passou a ser um painel.
 

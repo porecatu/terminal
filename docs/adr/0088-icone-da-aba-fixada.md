@@ -55,6 +55,8 @@ A função é separada de `resolve` — `porecatu_config::project_file::resolve_
 
 ### 4. Resolução e decodificação numa thread, com resultado chaveado
 
+> **Revisão de 2026-11-06 (pedido do dono do produto):** o último degrau da cadeia deixa de ser o ícone do app (o PNG do botão de menu) e passa a ser o ícone **`app-window`** do Lucide, desenhado como glifo da face de ícones (`icon::APP_WINDOW`, em de `icon_em_size`, na cor de texto do estado da aba, com o alfa `.45` de não iniciada e encerrada). Vale onde este ADR diz "ícone do app" como fallback da fixada — §4 a §6, RF-21.21 e as Consequências. A caixa não muda. `PinnedIconSource::App` segue sendo o nome do resultado "nenhuma imagem decodificada"; `app_icon_image` fica só no botão de menu do app (ADR-0079).
+
 Nada da cadeia roda na main thread: nem ler o `.porecatu`, nem testar se `icon.png` existe, nem decodificar. A main thread manda o pedido e recebe **dado chaveado**, nunca comando — a regra que o [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md) fixou para todo resultado de thread:
 
 ```rust

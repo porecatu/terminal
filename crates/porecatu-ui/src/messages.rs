@@ -1081,6 +1081,7 @@ registry! {
         segment_pane_count(),
         segment_encoding(),
         segment_system(),
+        segment_clock(),
         severity_error(),
         severity_warning(),
         severity_info(),

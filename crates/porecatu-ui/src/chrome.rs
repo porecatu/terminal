@@ -349,7 +349,6 @@ pub fn paint(
             hover == Some(tab_bar::TabBarHit::Tab(id)),
             active,
             pinned_icons.get(&id).copied(),
-            app_icon,
         ) else {
             continue;
         };
@@ -816,7 +815,6 @@ pub fn paint(
             true,
             active,
             pinned_icons.get(&ghost.tab).copied(),
-            app_icon,
         ) {
             paint_pinned_tab(&paint, style, pal, &mut out);
         }
@@ -1104,6 +1102,9 @@ pub(crate) struct PinnedTabPaint {
     /// Size in pixels of level 0 of `icon`, for the *contain* fit (ADR-0088
     /// §6). A square (`(1, 1)`) fills the whole square of `icon_em_size`.
     pub icon_size: (u32, u32),
+    /// No own texture: the box draws the Lucide `app-window` glyph in the tab's
+    /// text color instead (never together with `icon`).
+    pub app_window: bool,
 }
 
 /// The paint of pinned tab `id` in `rect`: its state from the workspace, the
@@ -1111,8 +1112,8 @@ pub(crate) struct PinnedTabPaint {
 /// gone from the workspace.
 ///
 /// The icon (ADR-0088 §4, RF-21.21): the tab's own texture once its result
-/// arrived, the app icon until then and whenever the chain ended there. The
-/// app icon is drawn as a square, as the menu button does.
+/// arrived; until then, and whenever the chain ended without one, the Lucide
+/// `app-window` glyph (`PinnedTabPaint::app_window`) in the same box.
 fn pinned_paint(
     workspace: &Workspace,
     id: TabId,
@@ -1120,12 +1121,11 @@ fn pinned_paint(
     hovered: bool,
     active: Option<TabId>,
     own_icon: Option<IconTexture>,
-    app_icon: Option<ImageId>,
 ) -> Option<PinnedTabPaint> {
     let tab = workspace.tab(id)?;
     let (icon, icon_size) = match own_icon {
         Some(texture) => (Some(texture.id), texture.size),
-        None => (app_icon, (1, 1)),
+        None => (None, (1, 1)),
     };
     Some(PinnedTabPaint {
         rect,
@@ -1136,6 +1136,7 @@ fn pinned_paint(
         indicator: tab_bar::tab_indicator(tab),
         icon,
         icon_size,
+        app_window: own_icon.is_none(),
     })
 }
 
@@ -1155,7 +1156,7 @@ pub(crate) fn paint_pinned_tab(
     out: &mut Vec<Primitive>,
 ) {
     let rect = tab.rect;
-    let (bg, border, border_width, _text) = tab_colors(pal, style, tab.exited, tab.active);
+    let (bg, border, border_width, text) = tab_colors(pal, style, tab.exited, tab.active);
     let bg = if tab.hovered {
         brighten(bg, style.tab_hover_brightness)
     } else {
@@ -1171,6 +1172,22 @@ pub(crate) fn paint_pinned_tab(
         border_color: border,
         border_width,
     }));
+    if tab.app_window {
+        // No own icon: the Lucide `app-window`, centered in the same box and
+        // dimmed like the image would be. Same `icon_em_size` em as the other
+        // chrome icons.
+        let color = if tab.exited || tab.not_started {
+            with_alpha(text, NOT_STARTED_LABEL_ALPHA)
+        } else {
+            text
+        };
+        out.push(centered_glyph(
+            icon::APP_WINDOW,
+            rect,
+            style.icon_em_size,
+            color,
+        ));
+    }
     if let Some(image) = tab.icon {
         // ADR-0088 §6: *contain* in the square of `icon_em_size`, centered in
         // the box; a non-square image leaves transparency on the two sides.
@@ -2588,6 +2605,7 @@ mod tests {
             indicator: None,
             icon: Some(ImageId::from_raw(1)),
             icon_size: (1, 1),
+            app_window: false,
         }
     }
 
@@ -2624,10 +2642,10 @@ mod tests {
         }
     }
 
-    /// RF-21.21: the own texture of a pinned tab wins; without one, the app
-    /// icon (drawn as a square).
+    /// RF-21.21: the own texture of a pinned tab wins; without one, the
+    /// Lucide `app-window` glyph in the same box.
     #[test]
-    fn a_pinned_tab_draws_its_own_texture_or_the_app_icon() {
+    fn a_pinned_tab_draws_its_own_texture_or_the_app_window_glyph() {
         let mut ws = Workspace::new();
         let a = ws.append_tab("a", None);
         ws.pin_tab(a, 0);
@@ -2641,18 +2659,32 @@ mod tests {
             id: ImageId::from_raw(7),
             size: (64, 32),
         };
-        let app = Some(ImageId::from_raw(1));
 
-        let with_own = pinned_paint(&ws, a, rect, false, None, Some(own), app).unwrap();
+        let with_own = pinned_paint(&ws, a, rect, false, None, Some(own)).unwrap();
         assert_eq!(with_own.icon, Some(ImageId::from_raw(7)));
         assert_eq!(with_own.icon_size, (64, 32));
+        assert!(!with_own.app_window);
 
-        let fallback = pinned_paint(&ws, a, rect, false, None, None, app).unwrap();
-        assert_eq!(fallback.icon, app);
-        assert_eq!(fallback.icon_size, (1, 1));
+        let fallback = pinned_paint(&ws, a, rect, false, None, None).unwrap();
+        assert_eq!(fallback.icon, None);
+        assert!(fallback.app_window);
 
-        let nothing = pinned_paint(&ws, a, rect, false, None, None, None).unwrap();
-        assert_eq!(nothing.icon, None);
+        // Same box as with an image: the quad on the rect, no extra geometry.
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut out = Vec::new();
+        paint_pinned_tab(&fallback, &style, &pal, &mut out);
+        let glyphs: Vec<_> = out
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text(run) if run.text == icon::APP_WINDOW.glyph => Some(run),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(glyphs.len(), 1, "one app-window glyph");
+        assert_eq!(glyphs[0].size_px, style.icon_em_size);
+        assert_eq!(glyphs[0].color, pal.tab_inactive_text);
+        assert!(!out.iter().any(|p| matches!(p, Primitive::Image { .. })));
     }
 
     /// ADR-0087 §2, the table of states: colors and border by state, hover
@@ -2847,7 +2879,14 @@ mod tests {
         ws.pin_tab(a, 0);
         ws.pin_tab(b, 1);
         let out = paint_bar(&ws, &style, None);
-        assert_eq!(icons(&out), 3, "botão do app e duas fixadas");
+        // Sem textura própria, a fixada desenha o glifo `app-window`, não
+        // uma imagem: só o botão do app continua sendo imagem.
+        assert_eq!(icons(&out), 1, "só o botão do app é imagem");
+        let app_windows = out
+            .iter()
+            .filter(|p| matches!(p, Primitive::Text(run) if run.text == icon::APP_WINDOW.glyph))
+            .count();
+        assert_eq!(app_windows, 2, "um glifo por fixada");
         let clip_at = out
             .iter()
             .position(|p| matches!(p, Primitive::PushClip(_)))

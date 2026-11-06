@@ -5840,6 +5840,12 @@ impl WindowState {
         }
     }
 
+    /// `true` quando a barra de status desta janela mostra o relógio -- em
+    /// tela cheia (ver `status_bar_clock`).
+    fn shows_clock(&self) -> bool {
+        self.window.fullscreen().is_some()
+    }
+
     /// `true` quando a janela ocupa a tela do jeito que maximizar ocuparia
     /// -- maximizada de verdade, **ou** em tela cheia (ADR-0050). As duas
     /// situações compartilham as mesmas duas consequências: o botão de
@@ -6325,6 +6331,7 @@ impl WindowState {
                     tab.map_or(0, |t| t.panes().leaves_in_order().len()),
                 ),
                 system: std::env::consts::OS.to_owned(),
+                clock: self.status_bar_clock(),
                 ..status_bar::ssh_content(target, runtime.and_then(|rt| rt.remote_cwd.as_deref()))
             };
         }
@@ -6402,7 +6409,18 @@ impl WindowState {
             // Sem a versão do app: pedido do dono do produto depois de
             // ver a barra em tela.
             system: std::env::consts::OS.to_owned(),
+            clock: self.status_bar_clock(),
         }
+    }
+
+    /// Relógio da barra de status: a hora local (`HH:MM`) **só em tela
+    /// cheia**, onde a barra de título -- e com ela o relógio do sistema --
+    /// não aparece; fora dela, `None` e o segmento não existe.
+    fn status_bar_clock(&self) -> Option<String> {
+        self.window
+            .fullscreen()
+            .is_some()
+            .then(status_bar::clock_label)
     }
 
     /// Acerto do indicador de commits atrás/à frente sob `logical_point`
@@ -9341,11 +9359,22 @@ impl App {
             .chain(self.project_command_deadline())
             .chain(self.git_next_deadline(now))
             .chain(self.reconnect_deadline())
+            .chain(self.clock_deadline(now))
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
+    }
+
+    /// Próxima virada de minuto, enquanto alguma janela mostra o relógio da
+    /// barra de status (tela cheia com a barra ligada). `WaitUntil`, nunca
+    /// thread nem loop de render; sem janela nessa condição, `None` e o event
+    /// loop dorme. `tick_all` repinta a janela quando o prazo vence.
+    fn clock_deadline(&self, now: Instant) -> Option<Instant> {
+        (status_bar::height(&self.style) > 0.0
+            && self.windows.values().any(WindowState::shows_clock))
+        .then(|| now + status_bar::until_next_minute())
     }
 
     /// PRD-013/ADR-0052 §1/§5: descobre o repositório da aba ativa de cada
@@ -9792,6 +9821,9 @@ impl App {
             let blinked = state.cursor_blink.tick(now);
             if was_animating
                 || blinked
+                // O relógio da barra muda a cada minuto: o prazo de
+                // `clock_deadline` acorda o loop e este é o repinte.
+                || (status_bar::height(&self.style) > 0.0 && state.shows_clock())
                 || had_warnings != !state.warnings.is_empty()
                 || had_tooltip != state.hover.visible().is_some()
             {

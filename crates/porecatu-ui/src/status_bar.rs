@@ -15,6 +15,9 @@
 //! [`layout_status_bar`], pintura em [`paint_status_bar`], e nada aqui
 //! chama `Instant::now` nem toca estado.
 
+use std::time::Duration;
+
+use chrono::{Local, Timelike};
 use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, SansWeight, TextMeasurer, TextRun, icon,
 };
@@ -83,6 +86,9 @@ pub enum SegmentRole {
     PaneCount,
     Encoding,
     System,
+    /// Relógio do sistema, `HH:MM`, só em tela cheia: fecha a zona direita,
+    /// depois do nome do sistema. Não é clicável e não tem ícone.
+    Clock,
 }
 
 /// O que a barra mostra, resolvido a partir do estado **antes** do
@@ -116,6 +122,25 @@ pub struct StatusBarContent {
     /// produto depois de ver a barra em tela -- ela não muda entre
     /// execuções e não é o que se consulta de relance.
     pub system: String,
+    /// Hora local já formatada (`HH:MM`), ou `None` fora de tela cheia --
+    /// e aí o segmento não existe. Quem chama decide **quando** há relógio
+    /// e lê a hora (`clock_label`); o layout só o posiciona.
+    pub clock: Option<String>,
+}
+
+/// Hora local do sistema como `HH:MM` (24 h, sem segundos: a barra só se
+/// repinta uma vez por minuto, ver [`until_next_minute`]).
+pub fn clock_label() -> String {
+    Local::now().format("%H:%M").to_string()
+}
+
+/// Quanto falta para a hora local virar o próximo minuto -- o prazo em que o
+/// relógio da barra muda. Nunca zero: no instante exato do minuto o próximo
+/// prazo é o minuto seguinte, não uma volta de event loop sem trabalho.
+pub fn until_next_minute() -> Duration {
+    let now = Local::now();
+    let into_minute = Duration::new(u64::from(now.second()), now.nanosecond() % 1_000_000_000);
+    Duration::from_secs(60).saturating_sub(into_minute)
 }
 
 /// O que a barra mostra de uma aba SSH (RF-20.21): `usuário@host` no lugar do
@@ -324,11 +349,12 @@ pub fn layout_status_bar(
     let padding = style.status_bar_padding_x;
     let mut segments = Vec::new();
 
-    // Direita, da borda para dentro: sistema e versão, depois a
-    // codificação. A ordem de desenho na tela fica `UTF-8` e então
-    // sistema, que é a do mockup.
+    // Direita, da borda para dentro: o relógio (só em tela cheia), o
+    // sistema e então a codificação. A ordem de desenho na tela fica
+    // `UTF-8`, sistema e relógio.
     let mut right_edge = logical_width - padding;
     for (text, role) in [
+        (content.clock.as_deref().unwrap_or(""), SegmentRole::Clock),
         (content.system.as_str(), SegmentRole::System),
         (ENCODING, SegmentRole::Encoding),
     ] {
@@ -656,6 +682,7 @@ mod tests {
             group: Some("producao".to_owned()),
             pane_count_label: None,
             system: "windows".to_owned(),
+            clock: None,
         }
     }
 
@@ -715,7 +742,10 @@ mod tests {
     }
 
     fn is_right(role: SegmentRole) -> bool {
-        matches!(role, SegmentRole::Encoding | SegmentRole::System)
+        matches!(
+            role,
+            SegmentRole::Encoding | SegmentRole::System | SegmentRole::Clock
+        )
     }
 
     fn primitive_count_of_quads(layout: &StatusBarLayout) -> usize {
@@ -842,6 +872,55 @@ mod tests {
             encoding.rect.x < system.rect.x,
             "a codificação vem antes do sistema, como no mockup"
         );
+    }
+
+    #[test]
+    fn the_clock_closes_the_right_zone_after_the_system() {
+        let mut c = content();
+        c.clock = Some("14:05".to_owned());
+        let style = TabBarStyle::DEFAULT;
+        let layout = layout_with(&c, &style, W);
+        let clock = role_of(&layout, SegmentRole::Clock).expect("segmento do relógio");
+        let system = role_of(&layout, SegmentRole::System).expect("segmento de sistema");
+        assert_eq!(clock.text, "14:05");
+        assert!(
+            ((clock.rect.x + clock.rect.width) - (W - style.status_bar_padding_x)).abs() < 0.01,
+            "o relógio encosta no padding da direita"
+        );
+        assert!(
+            system.rect.x + system.rect.width <= clock.rect.x,
+            "o sistema vem antes do relógio"
+        );
+        let order: Vec<_> = layout
+            .segments
+            .iter()
+            .filter(|s| is_right(s.role))
+            .map(|s| s.role)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                SegmentRole::Encoding,
+                SegmentRole::System,
+                SegmentRole::Clock
+            ]
+        );
+    }
+
+    #[test]
+    fn without_a_clock_the_segment_does_not_exist() {
+        let layout = layout_with(&content(), &TabBarStyle::DEFAULT, W);
+        assert!(role_of(&layout, SegmentRole::Clock).is_none());
+    }
+
+    #[test]
+    fn the_clock_label_is_hours_and_minutes() {
+        let label = clock_label();
+        let bytes = label.as_bytes();
+        assert_eq!(bytes.len(), 5, "{label}");
+        assert_eq!(bytes[2], b':', "{label}");
+        assert!(until_next_minute() <= Duration::from_secs(60));
+        assert!(until_next_minute() > Duration::ZERO);
     }
 
     #[test]
@@ -1298,6 +1377,7 @@ mod tests {
             SegmentRole::PaneCount,
             SegmentRole::Encoding,
             SegmentRole::System,
+            SegmentRole::Clock,
         ] {
             // Contra `bar_background`: é o `clear` da janela, e portanto
             // o que de fato fica atrás da faixa agora que ela não pinta
@@ -1330,6 +1410,7 @@ mod tests {
             SegmentRole::PaneCount,
             SegmentRole::Encoding,
             SegmentRole::System,
+            SegmentRole::Clock,
         ] {
             assert_eq!(segment_color(role, &pal), pal.status_bar_text);
         }

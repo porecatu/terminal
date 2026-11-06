@@ -580,6 +580,7 @@ fn segment_label(catalog: &Catalog, role: SegmentRole) -> String {
         SegmentRole::PaneCount => msg::access::segment_pane_count(catalog),
         SegmentRole::Encoding => msg::access::segment_encoding(catalog),
         SegmentRole::System => msg::access::segment_system(catalog),
+        SegmentRole::Clock => msg::access::segment_clock(catalog),
     }
 }
 
@@ -1835,6 +1836,7 @@ mod tests {
             group: None,
             pane_count_label: None,
             system: "windows - 0.7.0".to_owned(),
+            clock: None,
         };
         let layout = crate::status_bar::layout_status_bar(
             &content,

@@ -174,12 +174,12 @@ npm run dev
 
 1. o arquivo declarado em `[icon]`;
 2. um arquivo chamado exatamente `icon.png` no diretório;
-3. o ícone do app.
+3. o ícone `app-window` do Lucide (um glifo, não uma imagem).
 
 Qualquer passo que falhe — caminho recusado, arquivo ausente, formato não
 suportado, imagem corrompida — **segue para o próximo, sem aviso nenhum**: o
-ícone do app no lugar já é o sinal visível. Uma aba SSH, ou cujo diretório não
-existe mais, fica no ícone do app, sem procurar nada.
+ícone padrão no lugar já é o sinal visível. Uma aba SSH, ou cujo diretório não
+existe mais, fica no ícone padrão, sem procurar nada.
 
 O `[icon]` é lido **com ou sem `trusted_paths`** (quem lê é uma aba fixada, e
 fixar já autorizou o diretório). Com `[project_file] enabled = false` o
@@ -191,7 +191,7 @@ O ícone é resolvido **no arranque** e **no momento de fixar** — e em nenhum
 outro. Ele não segue o `cd`, não observa o arquivo e não muda com a recarga da
 configuração: trocar o ícone exige **reiniciar o app** (ou desafixar e fixar de
 novo). Enquanto o resultado não chega, e sempre que nenhum passo achou imagem, a
-caixa mostra o ícone do app.
+caixa mostra o ícone `app-window` do Lucide.
 
 ## Exemplos
 

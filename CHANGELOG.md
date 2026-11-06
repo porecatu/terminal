@@ -16,8 +16,19 @@ primeiro release.
 
 ## [Não publicado]
 
+## [0.9.9] - 2026-11-06
+
+Abas fixadas (apps que abrem junto com o Porecatu), relógio do sistema na barra de status em tela cheia e botão de menu do app sem fundo nem borda.
+
 ### Adicionado
 
+- **Relógio na barra de status em tela cheia**
+  ([especificação §2.8](docs/design/especificacao-visual.md)): a hora local
+  (`HH:MM`, 24 h) aparece à direita do nome do sistema, no fim da barra, só
+  enquanto a janela está em tela cheia — onde a barra de título, e com ela o
+  relógio do sistema, some. Repinta uma vez por minuto
+  (`ControlFlow::WaitUntil`, sem thread). `chrono` (feature `clock`) entra como
+  dependência direta de `porecatu-ui`; já estava na árvore via `russh-util`.
 - **Abas fixadas** ([PRD-021](docs/prd/prd-021-abas-fixadas.md),
   [ADR-0086](docs/adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md),
   [ADR-0087](docs/adr/0087-zona-de-abas-fixadas-na-barra.md),
@@ -33,12 +44,18 @@ primeiro release.
   roda sem exigir `trusted_paths` (a fixada SSH volta não iniciada). Fechar a
   fixada a desafixa, sempre com confirmação; `exit` e fechar a janela não. O
   ícone sai da seção nova `[icon]` do `.porecatu`, senão de um `icon.png` no
-  diretório, senão é o do app, decodificado numa thread. Tooltip com o
+  diretório, senão é o `app-window` do Lucide, decodificado numa thread. Tooltip com o
   título, ponto de atividade na caixa e nó de acessibilidade. Quem não fixa
   nada não vê nenhum pixel novo. Aval visual do dono pendente.
 
 ### Alterado
 
+- **Ícone da aba fixada sem ícone próprio**: no lugar do ícone do app, a caixa
+  desenha o ícone `app-window` do Lucide, na cor de texto do estado da aba. O
+  formato do botão não muda.
+- **Botão de menu do app sem fundo e sem borda**
+  ([ADR-0079](docs/adr/0079-botao-de-menu-do-app.md)): em repouso só o ícone
+  aparece; hover e pressionado revelam o fundo, como no botão de configurações.
 - **Atividade no ponto da aba do grupo colapsado**
   ([ADR-0085](docs/adr/0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md)):
   o ponto da aba com atividade (ou campainha) ganha a cor do indicador, e o
