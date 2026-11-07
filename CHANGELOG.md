@@ -16,6 +16,35 @@ primeiro release.
 
 ## [Não publicado]
 
+### Adicionado
+
+- **Abas e grupos entre janelas**
+  ([PRD-022](docs/prd/prd-022-abas-e-grupos-entre-janelas.md),
+  [ADR-0090](docs/adr/0090-transferencia-de-abas-entre-janelas.md),
+  [ADR-0091](docs/adr/0091-arraste-entre-janelas.md)): uma aba, uma seleção de
+  abas, um grupo inteiro ou uma aba fixada mudam de janela **com o processo
+  vivo** — nada é reiniciado, a saída e o scrollback vêm junto, e uma aba SSH
+  continua na mesma conexão, sem reautenticar. Arrasta-se para a barra de
+  outra janela, onde o fantasma, o vão e o realce aparecem como na de origem
+  (a de origem mostra o buraco), ou **para fora de toda janela**, o que cria
+  uma janela nova com o ponto agarrado sob o cursor. Soltar no corpo de uma
+  janela cancela, `Esc` e perder o foco cancelam, e a janela que fica vazia
+  fecha sem diálogo. Arrastar uma aba selecionada leva **toda a seleção**,
+  também dentro da mesma janela. Sem mouse, o item **Mover para janela…** dos
+  menus de aba e de grupo e do editor de grupo abre um popover com as outras
+  janelas (inclusive as minimizadas) e "Nova janela"; as ações
+  `tab.move_to_window` e `group.move_to_window` o abrem por tecla e **não têm
+  atalho padrão**. No Wayland o arraste não atravessa janelas, e o popover é
+  o caminho. Nenhum valor visual novo; aval visual do dono pendente.
+
+### Alterado
+
+- **Clique numa aba já selecionada**: a seleção passa a ser limpa ao
+  **soltar** o botão, e não ao apertá-lo, para o arraste da seleção poder
+  começar (RF-22.18). O resultado de um clique sem arraste é o mesmo.
+- **Editor de grupo** com uma linha a mais, **Mover para janela…**, depois de
+  "Fechar grupo": o popover fica uma linha mais alto.
+
 ## [0.9.9] - 2026-11-06
 
 Abas fixadas (apps que abrem junto com o Porecatu), relógio do sistema na barra de status em tela cheia e botão de menu do app sem fundo nem borda.

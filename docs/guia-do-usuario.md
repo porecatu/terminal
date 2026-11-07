@@ -1,7 +1,7 @@
 # Guia do usuário
 
 RF-11.22, escrito no fechamento da F6. Cobre instalação, arquivo de
-configuração, tela de configurações, idioma da interface, atalhos, painéis divididos, imagem de fundo, efeito acrílico, integração de shell e a
+configuração, tela de configurações, idioma da interface, atalhos, painéis divididos, mover abas entre janelas, imagem de fundo, efeito acrílico, integração de shell e a
 convenção do `Shift` para selecionar texto dentro de um programa que pede o mouse. Para decisões de
 arquitetura e o "porquê" de cada coisa, veja os ADRs linkados; este guia é
 só o "como usar".
@@ -1126,6 +1126,113 @@ Support/porecatu/pinned.json`). Ele é gravado a cada fixar, desafixar e
 reordenar, e só nesses momentos. Arquivo inválido é preservado com
 `.corrupt` e o app abre sem fixadas, avisando; arquivo de uma versão mais
 nova do app nunca é sobrescrito — nesse caso, fixar avisa em vez de gravar.
+
+## Mover abas entre janelas
+
+Quando uma aba está na janela errada, ou um grupo merece uma janela só
+dele, **leve-o**. Uma aba, uma seleção de abas, um grupo inteiro ou uma
+aba fixada mudam de janela com o processo **vivo**: nada é reiniciado, a
+saída e o scrollback vêm junto, e uma aba SSH continua no mesmo canal da
+mesma conexão, sem pedir senha de novo. O programa só recebe o novo
+tamanho da grade, como num redimensionamento de janela.
+
+**Arrastando.** Pegue a aba e leve o cursor até a **barra de abas de
+outra janela do Porecatu**: o fantasma da aba aparece lá, com o vão e o
+realce de sempre mostrando onde ela cai, e a barra de onde ela saiu
+mostra o buraco. Solte, e a aba passa para a outra janela, fica ativa, e
+a janela vem para a frente e recebe o foco. Todas as regras de destino da
+barra valem na outra janela: entre abas, dentro de um grupo, fora de todos,
+sobre um grupo colapsado.
+
+- **Para o desktop.** Soltar **fora de toda janela do Porecatu** (sobre o
+  desktop, a barra de tarefas ou outro programa) cria uma **janela nova**
+  só com o que você arrastou. Ela tem o tamanho da janela de origem (o
+  último tamanho normal, se a origem está maximizada ou em tela cheia) e
+  abre de modo que o ponto da aba por onde você segurava fique sob o
+  cursor. Uma aba ou seleção chega como aba solta; um grupo chega como
+  grupo; uma fixada chega fixada. A janela nova não abre aba de shell nem
+  as fixadas da lista.
+- **Soltar no corpo cancela.** Soltar sobre o terminal, a barra de status
+  ou a tela de configurações — de qualquer janela do Porecatu, inclusive a
+  de origem — não muda nada: a aba volta ao lugar. Janelas **minimizadas**
+  não são destino do arraste; elas aparecem no popover (abaixo).
+- **`Esc` cancela**, com o fantasma em qualquer janela, e perder o foco da
+  janela de origem (`Alt+Tab` com o botão apertado) também.
+- **Janelas sobrepostas.** O destino é a que você usou por último.
+- **Outra instância** do Porecatu é, para este gesto, "fora de toda
+  janela": soltar sobre ela destaca. O arraste só atravessa janelas do
+  mesmo processo.
+
+**Seleção múltipla.** Selecione as abas com `Ctrl`+clique ou `Shift`+clique
+e arraste **uma delas**: todas vão, e chegam juntas e na ordem em que
+estavam na barra, no ponto da soltura. O fantasma é a aba que você
+segurou, as outras viram buraco na barra de origem e o vão, no destino,
+abre para o bloco inteiro. Funciona também dentro da mesma janela. Soltas na
+zona de fixadas, todas são fixadas, na ordem. O clique **sem** arrastar
+numa aba selecionada continua fazendo o que sempre fez — limpa a seleção e
+ativa a aba — só que agora ao **soltar** o botão, e não ao apertá-lo, para
+dar tempo de começar a arrastar. Arrastar uma aba que **não** está
+selecionada leva só ela e limpa a seleção.
+
+**Grupo.** Arraste o **rótulo** do grupo. O grupo vem inteiro, com nome,
+cor, estado de colapso e as abas na ordem, e só cai numa fronteira entre
+grupos, nunca dentro de outro. Se a janela de destino já tem um grupo com
+o mesmo nome, os dois **não se fundem**: grupos são por janela.
+
+**Fixada.** Arrastada até a **zona de fixadas** de outra janela, ela chega
+fixada. Arrastada até a **trilha**, chega desafixada, como ao arrastá-la
+para fora da zona na mesma janela. Mudar uma fixada de janela não muda o
+retrato dela no `pinned.json`, e ela continua abrindo, no próximo arranque,
+na primeira janela, como toda fixada.
+
+**A janela que fica vazia fecha.** Quando a última aba de uma janela sai
+dela, a janela fecha **sem pedir confirmação** — nada foi encerrado. Uma
+janela que ainda tem aba fixada não fica vazia e não fecha. Destacar a
+única aba de uma janela é permitido, e o efeito é o mesmo.
+
+**Pelo menu, sem mouse.** O item **Mover para janela…** está no menu de
+contexto da aba (depois de "Mover para grupo"), no menu de contexto do
+grupo (por último, depois de "Desagrupar") e no editor de grupo (por
+último, depois de "Fechar grupo"). No menu da aba, se a aba clicada faz
+parte da seleção, a **seleção inteira** é movida; senão, só a clicada — e
+numa fixada o item vale e a leva fixada. O item abre um popover como o de
+"Mover para grupo": uma linha por **outra** janela — pelo título da aba
+ativa dela e a contagem de abas —, na ordem de uso mais recente, **inclusive
+as minimizadas** (a escolhida é restaurada e vem para a frente), e
+**Nova janela** sempre por último; com uma janela só aberta, ela é a única
+linha. Escolher uma janela põe o que foi movido **no fim da trilha** dela
+(a aba como aba solta, o grupo como grupo, a fixada no fim da zona), e a
+janela vem para a frente. "Nova janela" abre na posição em cascata de uma
+janela nova comum, não onde está o cursor.
+
+**As ações** `tab.move_to_window` (a seleção, ou a aba ativa) e
+`group.move_to_window` (o grupo da aba ativa; não faz nada fora de grupo
+explícito) abrem o mesmo popover. **Nenhuma das duas tem atalho por
+padrão** — associe um em `[keybindings]`:
+
+```toml
+[keybindings]
+"ctrl+shift+i" = "tab.move_to_window"
+"ctrl+shift+b" = "group.move_to_window"
+```
+
+Prefira `Ctrl+Shift` a `Ctrl+Alt`: em layouts com `AltGr` (o PT-BR
+internacional, por exemplo), `Ctrl+Alt+<letra>` é o próprio `AltGr` e
+digita um caractere no terminal em vez de disparar o atalho.
+
+**No Wayland o arraste não atravessa janelas**: o protocolo não informa ao
+programa a posição das janelas nem a do cursor fora delas. Lá, soltar fora
+da barra de origem cancela, e o popover **Mover para janela…** é o caminho
+para mover entre janelas e para destacar numa janela nova. Dentro de uma
+janela, o arraste da seleção funciona normalmente.
+
+**O que viaja e o que fica.** Vão junto o título que você deu à aba, o
+perfil, a árvore de painéis e as proporções, o scrollback, os indicadores
+de atividade e de campainha, uma pergunta pendente (de senha ou de chave de
+host) e a marca de que o `.porecatu` já rodou — ele **não** roda de novo.
+Um rename em curso da aba que sai é confirmado antes, para o título ir
+junto. Ficam na janela de origem a busca aberta, menus e popovers. A sessão automática grava o arranjo novo como qualquer mudança.
+Painel não se move sozinho: ele vai sempre com a aba dele.
 
 ## Sessões nomeadas
 

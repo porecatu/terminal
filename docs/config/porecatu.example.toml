@@ -336,6 +336,8 @@ min_rows = 5
 # "ctrl+shift+m"      = "profile.open_menu"
 # "ctrl+shift+j"      = "ssh.reconnect"       # reconecta o painel SSH focado, se ele caiu ou espera
 # "ctrl+alt+1"        = "profile.new_tab_1"   # até profile.new_tab_9: o N-ésimo perfil declarado
+# "ctrl+shift+i"      = "tab.move_to_window"    # abre "Mover para janela…" para a seleção ou a aba ativa
+# "ctrl+shift+b"      = "group.move_to_window"  # idem, para o grupo da aba ativa
 
 # Atalhos do macOS.
 [keybindings.macos]

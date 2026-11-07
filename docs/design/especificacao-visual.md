@@ -738,7 +738,7 @@ contexto ([ADR-0023](../adr/0023-editor-de-grupo.md)).
 1. **Rótulo do grupo** — seção 10px uppercase `#5c646f` + input largura total, fundo `#0f1216`, borda `#333a45` (foco `#5ed3bc`), raio 5, 13px `#e4e8ee`, `padding: 7px 9px`, foco automático. Edição ao vivo: o nome muda na barra enquanto se digita. **Desde o [ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md)**, cursor navegável (setas, `Home`/`End`) e seleção por clique/arraste/`Ctrl+A`, com o trecho selecionado pintado em `[terminal.colors] selection_background` por baixo do texto; o caret some enquanto há seleção.
 2. **Cor** — seis swatches 28×28, raio 6, `gap: 8`, borda `2px`. O selecionado ganha anel `#eef2f4`; os demais, `transparent`.
 3. **Divisor** `1px #2a2f38`.
-4. **Ações** — "Colapsar/Expandir grupo" com chip de tecla à direita; "Desagrupar abas"; "Fechar grupo (N abas)" em `#e08585`, hover `#2e2224`.
+4. **Ações** — "Colapsar/Expandir grupo" com chip de tecla à direita; "Desagrupar abas"; "Fechar grupo (N abas)" em `#e08585`, hover `#2e2224`; e, por último, **"Mover para janela…"** ([PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.20, [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6), item comum (sem tom destrutivo), que fecha o editor e abre o popover da §2.23. A lista é a mesma do menu de contexto do grupo (§2.16), e com o quarto item o popover fica **uma linha mais alto**, sem nenhum valor novo (a altura é a das linhas da lista).
 
 O rótulo do botão alterna entre "Colapsar grupo" e "Expandir grupo" conforme o estado.
 
@@ -876,7 +876,9 @@ Largura máxima **320**, a do aviso; rótulo mais longo trunca com reticências.
 
 Camada **popover** do [ADR-0018](../adr/0018-composicao-de-frame.md), compartilhada com o tooltip da seção 2.20.
 
-**Itens do menu da aba**, na ordem: **Nova aba**, **Fixar aba** (ou **Desafixar aba**, no menu de uma fixada), **Fechar aba**, **Mover para grupo** e, numa aba SSH, **Reconectar** por último ([PRD-021](../prd/prd-021-abas-fixadas.md) RF-21.12, [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md) §6). Numa **fixada**, "Mover para grupo" fica **esmaecido, nunca ausente** — ela não pertence a grupo —, e "Fechar aba" mantém o rótulo: o diálogo da §2.15 é quem diz que fechar desafixa. A ordem é a do binário; o ADR-0087 §6 listava "Mover para grupo" antes de "Fechar aba".
+**Itens do menu da aba**, na ordem: **Nova aba**, **Fixar aba** (ou **Desafixar aba**, no menu de uma fixada), **Fechar aba**, **Mover para grupo**, **Mover para janela…** e, numa aba SSH, **Reconectar** por último ([PRD-021](../prd/prd-021-abas-fixadas.md) RF-21.12, [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md) §6, [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.20, [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6). Numa **fixada**, "Mover para grupo" fica **esmaecido, nunca ausente** — ela não pertence a grupo —, e "Fechar aba" mantém o rótulo: o diálogo da §2.15 é quem diz que fechar desafixa. **"Mover para janela…" fica habilitado também na fixada**, que chega fixada ao destino. Se a aba clicada faz parte da seleção múltipla, o item move **a seleção inteira**; senão, só a clicada. O item abre o popover da §2.23. A ordem é a do binário; o ADR-0087 §6 listava "Mover para grupo" antes de "Fechar aba".
+
+**Itens do menu do grupo**, na ordem: **Renomear**, **Mudar cor**, **Colapsar grupo** (ou **Expandir grupo**), **Nova aba no grupo**, **Fechar grupo (N abas)**, **Desagrupar** e, por último, **Mover para janela…** (RF-22.20). O item novo vai no **fim**, depois de "Desagrupar", por decisão do dono do produto: os seis de antes não mudam de lugar. Ele move o grupo inteiro e abre o popover da §2.23.
 
 Três menus — aba (RF-1.1, RF-1.2, RF-2.20), grupo (RF-2.22) e terminal ([PRD-011](../prd/prd-011-polimento.md) RF-11.14, F6: copiar, colar, selecionar tudo, buscar, mais os itens de link quando o clique cai sobre um hyperlink). O menu do grupo e o editor de grupo (2.10) leem a **mesma** lista de ações, catalogada em [`docs/reference/acoes.md`](../reference/acoes.md). Um quarto, o menu de perfis (§2.9), é este mesmo menu **ancorado num botão**: nasce do `+` em vez do cursor, abre abaixo dele e vira nos dois eixos, com a coluna de badge como única diferença de anatomia.
 
@@ -937,13 +939,13 @@ na ponta é o único sinal** de que há mais abas. Registro na seção 4.4.
 
 ### 2.19 Arraste de aba `[v1]`
 
-Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15 e, desde a F3, o RF-1.16 (arraste entre grupos) e o RF-2.19 (arraste do grupo inteiro).
+Sem representação no canvas — estava na seção 4.2. Cobre RF-1.15 e, desde a F3, o RF-1.16 (arraste entre grupos) e o RF-2.19 (arraste do grupo inteiro). Fora de fase, o [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) soma o arraste da seleção e o arraste entre janelas (subseções abaixo).
 
 - **Limiar de 4 px** de movimento com o botão apertado — o `gap` entre abas. Abaixo disso o gesto é clique, e ativa a aba (RF-1.13). Sem limiar, todo clique com micro-tremor vira arraste.
-- **Aba fantasma:** a aba arrastada continua desenhada, seguindo o cursor no eixo X e presa ao Y da barra. Não sai da barra: arrastar aba entre janelas não é gesto do v1 (RF-10.24). Desde a F4 etapa 6, o fantasma leva `filter: brightness(1.18)` (sempre ligado, não condicionado a hover) e a sombra em camadas que a separam da trilha (§1.7, §1.10).
+- **Aba fantasma:** a aba arrastada continua desenhada, seguindo o cursor no eixo X e presa ao Y da barra. **Fora de qualquer barra o fantasma fica preso à barra de origem**; sobre a barra de **outra janela do Porecatu** ele salta para lá (subseção "Arraste entre janelas", abaixo). Não existe janela flutuante. Desde a F4 etapa 6, o fantasma leva `filter: brightness(1.18)` (sempre ligado, não condicionado a hover) e a sombra em camadas que a separam da trilha (§1.7, §1.10).
 - **O buraco é o marcador.** A posição de origem fica vazia, mostrando o fundo da barra `#1b1f26`, e as vizinhas deslizam com a transição `.15s` da seção 1.10. Não há caret de inserção separado: ele diria a mesma coisa que o buraco.
 - **Auto-scroll:** cursor a menos de 30 px de uma ponta da trilha rola naquela direção, uma aba a cada `.15s`. **Só dentro da trilha:** com o cursor sobre a zona de fixadas (à esquerda do recorte) a trilha não rola.
-- `Esc` cancela e a aba volta à origem; soltar fora da trilha cancela também.
+- `Esc` cancela e a aba volta à origem, com o fantasma em qualquer janela. Perder o foco da janela de origem também cancela. **Soltar dentro de uma janela do Porecatu, fora da barra** (sobre o terminal, a barra de status), cancela; **soltar fora de toda janela destaca** (subseção "Arraste entre janelas").
 - Cursor `Grabbing` durante o arraste. É o único elemento do gesto que vem do sistema, e não há alternativa desenhável — o ponteiro não é superfície nossa.
 
 **Realce da fronteira do grupo (RF-1.16).** O wrapper que receberia a aba é tingido na
@@ -973,6 +975,28 @@ início do grupo. Soltar sobre grupo **colapsado** realça a pílula, não um wr
 - **Auto-scroll** (acima): só dentro da trilha. Levar uma aba da trilha à zona passa pela ponta esquerda e pode rolar a trilha alguns passos no caminho.
 - **Aval visual do dono pendente.**
 
+**Arraste da seleção.** [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.17 e RF-22.18, [ADR-0091](../adr/0091-arraste-entre-janelas.md) §6. Arrastar uma aba **selecionada** leva todas as selecionadas, dentro da janela e entre janelas; nenhum valor novo entra.
+
+- **O fantasma é a aba que o usuário segurou.** As outras selecionadas viram **buraco** na barra de origem (o preview as retira e as vizinhas deslizam pela transição `.15s` da §1.10), e o **vão** do destino, local ou em outra janela, abre para o **bloco inteiro**, com o realce de sempre. O bloco chega contíguo e na ordem visual em que estava.
+- **Fixadas não entram em seleção**, então nunca vão no bloco. Solto na zona de fixadas, o bloco todo é fixado, na ordem, na posição do vão.
+- **O press numa aba selecionada não limpa a seleção**: arma o arraste. Soltar sem passar do limiar de 4 px limpa a seleção e ativa a aba, como o clique sempre fez; só o momento mudou, do press para o release. O press numa aba **não** selecionada limpa no press e arrasta só ela.
+- Depois da soltura a seleção é limpa nas duas janelas, e a aba segurada fica ativa onde caiu.
+
+**Arraste entre janelas.** [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.7 a RF-22.16, [ADR-0091](../adr/0091-arraste-entre-janelas.md) §2 a §5. Nenhuma anatomia nova e nenhum valor novo: fantasma, buraco, vão, realce, auto-scroll e cursor são os acima, agora desenhados também na janela de destino. O ponto do cursor é convertido em coordenada de tela e testado contra a **faixa da barra** das outras janelas de terminal, na ordem de foco mais recente; janelas minimizadas e a tela de configurações não são destino.
+
+| Onde o cursor está | Barra de origem | Barra de destino |
+|---|---|---|
+| Sobre a barra de origem | fantasma, vão e realce, como acima | nada |
+| Sobre a barra de **outra janela** | **buraco** onde a aba estava, sem fantasma e sem vão | **fantasma, vão e realce**, com as regras de destino da barra de origem (entre abas, dentro de um grupo, fora de todos, sobre a pílula, sobre um grupo colapsado, na zona de fixadas), mais o auto-scroll da trilha **dela** |
+| Fora de toda barra | fantasma preso à barra, seguindo o X | nada |
+
+- **O fantasma mantém a forma de origem** ao saltar de barra, como na zona de fixadas: aba de trilha continua aba, caixa de fixada continua caixa, rótulo de grupo continua o rótulo.
+- **Soltar** na barra de outra janela passa a aba para lá: ela fica **ativa**, e a janela de destino vem para a frente e recebe o foco. **Soltar fora de toda janela do Porecatu** (desktop, barra de tarefas, outro programa) **destaca**: uma janela nova abre com o tamanho da origem (o último tamanho normal, se a origem está maximizada ou em tela cheia), de modo que o **ponto agarrado fique sob o cursor**, com a faixa da barra inteira dentro do monitor; uma aba ou seleção chega como aba solta, um grupo como grupo, uma fixada fixada. Soltar dentro de uma janela, **fora da barra**, cancela.
+- **A janela que fica vazia** fecha sem diálogo.
+- **Limitações do fantasma no destino.** A borda de seleção não aparece (a seleção é da origem) e a cor do crachá de grupo segue o grupo do preview no destino.
+- **Wayland:** o arraste não atravessa janelas (o protocolo não informa posições); soltar fora da barra de origem cancela, e o caminho é o popover da §2.23.
+- **Aval visual do dono pendente.**
+
 ### 2.19.1 Arraste do rótulo do grupo `[v1]`
 
 Sem representação no canvas. Cobre RF-2.19: arrastar a pílula move o grupo
@@ -990,6 +1014,7 @@ inteiro, com suas abas.
 - **Nenhum wrapper é realçado.** Realce significa "a aba entra aqui", e um grupo
   nunca entra em outro; o vão que se abre é o feedback.
 - Auto-scroll, `Esc` e soltar fora da trilha: idênticos ao arraste de aba.
+- **Entre janelas** (§2.19, "Arraste entre janelas"): o rótulo salta para a barra de outra janela e cai só numa **fronteira entre grupos** dela, nunca na zona de fixadas nem dentro de outro grupo. O grupo chega inteiro, com nome, cor, colapso e abas, e **não se funde** com um grupo de mesmo nome do destino. Fora de toda janela, o grupo é destacado numa janela nova, como grupo.
 
 ### 2.20 Tooltip `[v1]`
 
@@ -1055,6 +1080,19 @@ Da esquerda para a direita, de cima para baixo:
 
 **Teclado e ciclo de vida.** Abre pelo clique no botão (fecha se já aberto), por `session.open_list` (primeira linha realçada) e por `session.save_named` (campo em edição). `Up`/`Down` movem o realce entre o item de salvar e as linhas; `Enter` aciona o realçado; `Delete` exclui a linha realçada. Hover e realce de teclado são o mesmo estado visual e mutuamente exclusivos, como na §2.16. No campo, `Enter` confirma e `Esc` sai da edição voltando ao popover com o item de salvar realçado — não fecha tudo; um segundo `Esc` fecha. Captura de teclado **total** enquanto aberto, como o editor de grupo. Fecha em clique fora, `Esc`, perda de foco da janela, depois de restaurar (a janela nova ganha o foco) e depois de salvar com sucesso. Confirmações (sobrescrever, excluir) abrem o diálogo da §2.15 **por cima** do popover, que permanece atrás; cancelar volta a ele, com o estado de antes — a regra que o editor de grupo já usa para "Fechar grupo". **Sem animação**, como todo popover do v1.
 
+### 2.23 Popover de janelas de destino `[v1]`
+
+Sem representação no canvas. É o caminho sem mouse do [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) (RF-22.20 a RF-22.24, [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6), aberto pelo item **Mover para janela…** dos menus de aba e de grupo (§2.16) e do editor de grupo (§2.10), e pelas ações `tab.move_to_window` e `group.move_to_window`. **Nenhum widget novo e nenhum valor novo**: é o popover de grupo de destino de "Mover para grupo" (RF-2.20, [ADR-0023](../adr/0023-editor-de-grupo.md) §4) sobre a mesma geometria (`layout_target_list`/`paint_target_list`), com outro tipo de linha.
+
+- **Superfície, linhas e rolagem** — as do popover de grupo de destino, de `[appearance.move_to_group]` e `[appearance.context_menu]`: largura `width` (200), `padding` do menu de contexto, linhas de `row_height` (28) e `row_padding_x` (8), teto de `max_visible_rows` (6) com rolagem pelo realce de teclado e pela roda. Fundo, borda, raio, sombra em camadas e hover são os da §2.16.
+- **Linha de janela** — **sem swatch**. À esquerda, o **título da aba ativa** daquela janela, 12.5px `#d7dce3`, truncado com reticências pelo mesmo `TextMeasurer::truncate` das outras listas e sem invadir a contagem; à direita, a **contagem de abas** ("1 aba", "3 abas"; plural no catálogo de textos), no estilo do contador da pílula (`pill_count_text`, 10px). Cada linha é uma **outra** janela de terminal; a de origem não aparece, e a tela de configurações e o editor de perfil não são janelas de terminal.
+- **Ordem** — a do uso mais recente, a mesma ordem de foco que o arraste usa para decidir qual janela está por cima. **Janelas minimizadas aparecem**; a escolhida é restaurada e vem para a frente.
+- **Última linha, fixa: "Nova janela"** — só o rótulo, sem contagem. Com uma janela só aberta, é a única linha. O realce de abertura cai na primeira linha.
+- **Onde abre** — ancorado onde o gesto nasceu, e nunca coexiste com o menu de contexto, o editor de grupo nem o popover de sessões (`close_all_popovers`): abaixo da aba ou do rótulo do grupo (o canto inferior esquerdo da aba ativa, por tecla; o ponto onde o editor pendia, quando vem do editor), com flip nos dois eixos como o menu de contexto.
+- **Teclado** — `Up`/`Down` movem o realce, circulando; `Enter` escolhe; `Esc` fecha. Hover e realce são o mesmo estado, mutuamente exclusivos (§2.16). Fecha em clique fora ou perda de foco da janela.
+- **O que escolher faz** — a janela escolhida recebe o que foi movido **no fim da trilha** (a aba como aba solta, o grupo como grupo; a fixada, no fim da zona de fixadas) e vem para a frente; "Nova janela" abre uma janela nova na posição em cascata de `window.new`, e não onde está o cursor.
+- **Aval visual do dono pendente.**
+
 ---
 
 ## 3. Tabela de fases
@@ -1091,6 +1129,8 @@ Todo elemento do design, classificado. **Nada aqui fica sem etiqueta.**
 | Realce da fronteira do grupo no arraste | `[v1]` | PRD-001 RF-1.16, PRD-002 RF-2.18 — sem representação no canvas |
 | Arraste do rótulo do grupo | `[v1]` | PRD-002 RF-2.19 — sem representação no canvas |
 | Popover de grupo de destino | `[v1]` | PRD-002 RF-2.20; ADR-0023 — sem representação no canvas |
+| Popover de janelas de destino | `[v1]` | [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.21, RF-22.22; [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6 — sem representação no canvas |
+| Arraste de aba, grupo e seleção entre janelas; destacar | `[v1]` | PRD-022 RF-22.7 a RF-22.19; [ADR-0091](../adr/0091-arraste-entre-janelas.md) — sem representação no canvas |
 | Reordenação animada ao formar grupo | `[v1]` | PRD-002 RF-2.5; [ADR-0022](../adr/0022-animacao-de-interface.md) — sem representação no canvas |
 | Controles de janela e resize sem decoração nativa | `[v1]` | [ADR-0027](../adr/0027-controles-de-janela-e-resize-proprios.md) — sem PRD, sem representação no canvas |
 | Botão de configurações da zona fixa (abre o arquivo de config desde a F6) | `[v1]` | PRD-004 — ver §2.2; [PRD-011](../prd/prd-011-polimento.md) RF-11.27 |
@@ -1267,6 +1307,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | Clique direito sobre um botão da zona fixa da direita abria o menu de uma aba rolada para fora de vista, por baixo dele | **Clique e hover da barra só dentro do recorte da trilha** (`tab_bar::point_in_track`); fora dele o clique direito não faz nada e o esquerdo, entre botões, arrasta a janela | correção de defeito (ADR-0084 §7) |
 | Botão de menu do app com a caixa de uma aba solta ativa: fundo e borda de aba ativa, sombra, hover pelo brilho da aba (§2.2, item 0) | **Sem fundo, sem borda e sem sombra** em repouso; hover e pressionado revelam o fundo dos botões de janela, como no botão de configurações. Uma fixada ativa deixa de ficar igual a ele. Zero valor novo; aval visual do dono dado, só no Windows | pedido do dono do produto ([ADR-0079](../adr/0079-botao-de-menu-do-app.md), revisão de 2026-11-06) |
 | Barra de abas com o botão de menu do app como única caixa da zona fixa à esquerda (§2.2, item 0) | **Zona de abas fixadas à direita do botão**: uma caixa de aba solta de 40×40 por fixada, sem rótulo, com `trilha_gap` entre as caixas; cada uma custa 46px de trilha, e sem fixadas a barra é a de antes, pixel por pixel. Os estados são os da aba solta, com o ícone no lugar do rótulo (não iniciada e encerrada a `.45`), o ponto de atividade/campainha vai sobre o canto da caixa e o tooltip é sempre mostrado. Por ora toda fixada desenha o ícone do app; a fixada ativa deixou de ficar igual ao botão do app quando ele perdeu fundo e borda (revisão de 2026-11-06 do ADR-0079), sem valor novo na fixada. **Aval visual do dono pendente.** Zero valor novo | [ADR-0087](../adr/0087-zona-de-abas-fixadas-na-barra.md), fora de fase |
+| O arraste de aba não sai da barra: soltar fora da trilha cancela, e o fantasma é só da barra de origem (§2.19, RF-10.24); o press numa aba limpa a seleção e o arraste leva uma aba só | **O fantasma salta para a barra de outra janela do Porecatu** (buraco na origem, fantasma, vão e realce no destino); **soltar fora de toda janela destaca** numa janela nova com o ponto agarrado sob o cursor, e soltar no corpo de uma janela cancela; **arrastar uma aba selecionada leva toda a seleção**, e o press nela só limpa a seleção no release; o editor de grupo e o menu de grupo ganham **"Mover para janela…"** no fim da lista, o menu de aba ganha o mesmo item depois de "Mover para grupo", e o popover de janelas de destino é o de grupo sem o swatch (§2.23). **Zero valor novo**; aval visual do dono pendente | pedido do dono do produto ([PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md), [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md), [ADR-0091](../adr/0091-arraste-entre-janelas.md)), fora de fase |
 
 **Nada nesta seção é pendência.** Ela era, até o [ADR-0028](../adr/0028-o-binario-como-referencia-visual.md), uma lista de dívida a cobrar no critério de saída da F4 — *"o binário com a config padrão bate com o mockup"*. Esse critério inverteu: **a configuração padrão reproduz o binário**, e as seções 1 e 2 já foram reescritas para descrever o que ele desenha.
 

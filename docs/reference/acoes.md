@@ -34,6 +34,7 @@ Esta é a enumeração. É o insumo direto do parser de `[keybindings]` na F4 e 
 | `tab.move_right` | Move a aba ativa uma posição à direita | RF-1.17 | F2 | |
 | `tab.move_to_group` | Move a aba ativa para um grupo | [PRD-002](../prd/prd-002-grupos-de-abas.md) RF-2.20 | F3 | sim |
 | `tab.toggle_pin` | Fixa a aba ativa (vai para o fim da zona de fixadas, fora de todo grupo) ou, se já fixada, a desafixa (vira aba solta no início da trilha). **Sem default** — precedente de `group.new_tab` | [PRD-021](../prd/prd-021-abas-fixadas.md) RF-21.7, RF-21.10, [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §7 | fora de fase | |
+| `tab.move_to_window` | Abre o popover "Mover para janela…" para a **seleção**, quando houver uma, ou para a aba ativa. **Sem default** — precedente de `group.new_tab` | [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.24, [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6 | fora de fase | |
 
 As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: o conjunto é fechado, e `tab.goto_12` precisa ser erro de config, não uma ação silenciosamente inerte. O índice é sobre a ordem visual da janela inteira, não por grupo (RF-1.12), e abas de grupo colapsado não contam (RF-2.15).
 
@@ -41,7 +42,8 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 > `tab.next`, `tab.prev` e `tab.goto_N` contam as fixadas **primeiro**, na ordem da
 > zona (RF-21.4). `tab.move_left`/`tab.move_right` sobre uma fixada reordenam dentro
 > da zona e **param na borda** — atravessar é `tab.toggle_pin` (RF-21.11).
-> `tab.move_to_group` e `tab.rename` ficam indisponíveis numa fixada (RF-21.12).
+> `tab.move_to_group` e `tab.rename` ficam indisponíveis numa fixada (RF-21.12);
+> `tab.move_to_window` **vale** nela e a leva fixada (RF-22.23).
 > `tab.close` numa fixada **sempre** confirma, fora de `[general] confirm_close_with_process`, e a
 > **desafixa** (RF-21.22, RF-21.23); com fixadas na janela, fechar a última aba da
 > trilha não fecha a janela (RF-21.25).
@@ -122,6 +124,7 @@ As nove entradas de `tab.goto_N` são explícitas, não um padrão com curinga: 
 | `group.prev` | Grupo anterior, ativando sua última aba visitada | RF-2.21 | F3 | |
 | `group.new_tab` | Cria aba dentro do grupo, herdando o `cwd` da **última aba daquele grupo** | RF-2.8, RF-2.22 | F3 | |
 | `group.close_all` | Fecha todas as abas do grupo; confirmação com contagem, **sempre** | RF-2.22, RF-2.23 | F3 | |
+| `group.move_to_window` | Abre o popover "Mover para janela…" para o grupo da aba ativa, com nome, cor, colapso e abas. **Sem default** — precedente de `group.new_tab` | [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.24, [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6 | fora de fase | |
 
 `group.close_all` é a única ação cuja confirmação não é configurável — o RF-2.23 chama isso de *"a ação mais destrutiva da interface"*.
 
@@ -156,6 +159,10 @@ Sobre um grupo implícito, `group.rename`, `group.set_color`, `group.dissolve` e
 `group.toggle_collapse` ficam **indisponíveis** — esmaecidas no menu, nunca
 ausentes (RF-10.20). Grupo implícito não tem nome, cor nem colapso
 (ADR-0006, ADR-0020).
+
+`group.move_to_window` (fora de fase, [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.24) segue a mesma regra de alvo — o grupo da aba ativa por tecla, o clicado por menu — e é **vinculável sem default**, como `group.new_tab`. Sobre um run implícito é **inerte**: grupo implícito não tem pílula nem identidade estável (RF-22.24, [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §3), e `group_menu::keyboard_target` devolve `None` ali, como nas quatro acima. O menu de grupo só abre em grupo explícito, então o item nunca nasce esmaecido; ele é o último da lista única, que o menu e o editor de grupo compartilham.
+
+`tab.move_to_window` também é vinculável sem default. Com seleção, move **a seleção inteira**; sem ela, a aba ativa. No menu de contexto, o alvo é a aba clicada, e a **seleção inteira** quando a clicada faz parte dela. Diferente de `tab.move_to_group`, **vale numa fixada**: ela chega fixada, no fim da zona de fixadas da janela de destino (RF-22.23). Nas duas ações, o popover lista as **outras** janelas, inclusive as minimizadas, e "Nova janela" por último; com uma janela só aberta, "Nova janela" é a única linha.
 
 > **Na implementação (F3).** O menu de grupo só abre a partir da pílula, e
 > pílula só existe para grupo explícito: nenhum item nasce esmaecido ali, porque
@@ -318,7 +325,7 @@ Ausências deliberadas, registradas para que ninguém as adicione achando que fo
 |---|---|
 | `tab.duplicate` | Fora de escopo do PRD-001 (*"duplicar aba com o estado do processo"*) |
 | `tab.pin` | Fora de escopo do PRD-001 (*"fixar aba"*). *Revisto pelo [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §7:* o [PRD-021](../prd/prd-021-abas-fixadas.md) aprovou abas fixadas, e o gesto existe como **`tab.toggle_pin`**, na seção `tab.*` acima — um só nome para fixar e desafixar, sobre a aba ativa. `tab.pin` e `tab.unpin` separados continuam não existindo |
-| `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000). *Revisto pelo [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6:* o [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) aprovou o recurso, e `tab.move_to_window` e `group.move_to_window` (popover de destino, sem atalho) entram nas seções `tab.*` e `group.*` junto com o binário que as implementa. Até lá, continuam não existindo |
+| `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000). *Revisto pelo [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6:* o [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) aprovou o recurso, e `tab.move_to_window` e `group.move_to_window` (popover de destino, sem atalho) **existem** nas seções `tab.*` e `group.*` acima, desde o binário que as implementa. Continuam não existindo uma ação que mova para uma janela **específica** (exigiria argumento) e uma que destaque sem o popover: "Nova janela" é a última linha dele |
 | `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho). *Revisto pelo [ADR-0070](../adr/0070-perfis-de-aba.md) §8:* o PRD-007 foi aprovado e a seção `profile.*` acima existe; continuam **não existindo** uma ação que troque o perfil de uma aba aberta e uma que abra um perfil por identificador (exigiria argumento) |
 | `terminal.clear` | Nenhum RF pede; o shell já tem `clear` |
 | `terminal.reset` | Idem; `reset` existe no shell |
@@ -329,7 +336,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Vinte e três comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os dez últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Vinte e quatro comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os onze últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -356,5 +363,6 @@ Vinte e três comportamentos têm requisito aprovado e **não recebem nome de a�
 | Arrastar aba para dentro ou para fora da zona de fixadas | [RF-21.7, RF-21.10](../prd/prd-021-abas-fixadas.md), [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §1 | a posição de queda — na zona, num grupo, num *run* novo — vem do pixel sob o cursor; `tab.toggle_pin` é o equivalente de teclado, com destinos fixos (fim da zona, início da trilha) |
 | Escolher um perfil numa linha do menu de perfis | RF-7.9, RF-7.10, ADR-0070 §6 | o alvo é o perfil da linha, e os detectados não têm posição estável; `profile.new_tab_N` cobre os declarados |
 | Navegar, salvar, descartar e capturar atalho dentro da janela de configurações | [RF-16.10](../prd/prd-016-tela-de-configuracoes.md), RF-16.29, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §3 | a janela é um modo de captura, como o diálogo: `Tab`, setas, `Espaço`, `Enter`, `Esc` e `Ctrl+S`/`Cmd+S` são consumidos por ela e o mapa de `[keybindings]` não é consultado ali |
+| Arrastar aba, seleção, grupo ou fixada para a barra de outra janela, ou para fora de todas (destacar) | [RF-22.7 a RF-22.16](../prd/prd-022-abas-e-grupos-entre-janelas.md), [ADR-0091](../adr/0091-arraste-entre-janelas.md) §2 a §5 | o destino vem do ponto global sob o cursor; `tab.move_to_window` e `group.move_to_window` são o equivalente sem mouse, com destinos fixos (fim da trilha ou da zona, janela nova em cascata) |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.
