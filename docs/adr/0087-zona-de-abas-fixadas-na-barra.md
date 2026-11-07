@@ -104,6 +104,8 @@ Uma fixada atingida devolve a mesma `TabId` que um acerto na trilha, e todo gest
 
 ### 5. Arraste
 
+> **Revisão parcial ([ADR-0089](0089-ranhura-de-soltura-com-o-botao-do-app-oculto.md)):** uma fileira sem nenhuma caixa (botão do app oculto e nada fixado) passa a ter uma **ranhura virtual de soltura** durante o arraste, para a primeira aba ainda poder ser fixada arrastando.
+
 O arraste continua sendo o da §2.19 — limiar de 4 px, fantasma preso ao Y da barra seguindo o X, "o buraco é o marcador", `Esc` cancela, soltar fora da barra cancela — com três extensões.
 
 **O alvo ganha a zona.** `DragDrop` ganha uma variante, revendo o ADR-0021 §4:

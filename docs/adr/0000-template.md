@@ -88,8 +88,9 @@
 | [0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) | Fonte do sistema no chrome e ajustes da barra de abas: sem botões de overflow, rótulo de grupo sem fundo e com pontos no colapso, aba de grupo sem borda, aba de 209px, hover no "x", centragem pela altura de versal, clique só dentro da trilha | Aceito — aval visual do dono (Windows) · ponto agregado do grupo colapsado revisto por ADR-0085 |
 | [0085](0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md) | Atividade no ponto da aba do grupo colapsado (sem ponto agregado) e margem direita do "x" igual à vertical: 8px na aba solta, 5px na de grupo | Aceito — aval visual do dono (Windows) |
 | [0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) | Abas fixadas: lista própria no `Workspace`, arquivo `pinned.json` ao lado da sessão, abertura uma vez por execução e fixar como gesto de confiança | Aceito |
-| [0087](0087-zona-de-abas-fixadas-na-barra.md) | Zona de abas fixadas: caixas de aba solta à direita do botão do app, fora do recorte da trilha | Aceito — aval visual do dono pendente |
+| [0087](0087-zona-de-abas-fixadas-na-barra.md) | Zona de abas fixadas: caixas de aba solta à direita do botão do app, fora do recorte da trilha | Aceito — aval visual do dono pendente · §5 revista por ADR-0089 (**parcial**: fileira vazia tem ranhura de soltura no arraste) |
 | [0088](0088-icone-da-aba-fixada.md) | Ícone da aba fixada: seção reservada `[icon]` no `.porecatu`, `icon.png`, ícone do app; resolução e decodificação fora da main thread | Aceito |
+| [0089](0089-ranhura-de-soltura-com-o-botao-do-app-oculto.md) | Ranhura virtual de soltura da zona de fixadas com o botão do app oculto | Aceito |
 
 ## Convenção
 

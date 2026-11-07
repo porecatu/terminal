@@ -1544,12 +1544,27 @@ pub fn pinned_drop_pos(
     others
 }
 
+/// Right edge of the drop zone of a tab drag, in screen coordinates: where
+/// [`track_shift`] sits, except for a row with no box at all (no app button
+/// and nothing pinned), which has a **virtual slot** -- the box the button
+/// would occupy -- so the first tab can still be pinned by dragging (the
+/// slot exists only for the drag: at rest the track keeps `track_shift`
+/// and the space stays reclaimed). Built from [`left_row_box`], never from a
+/// second formula.
+pub fn drop_zone_edge(style: &TabBarStyle, is_macos: bool, pinned: usize) -> f32 {
+    if left_row_len(style, pinned) > 0 {
+        return track_shift(style, is_macos, pinned);
+    }
+    let slot = left_row_box(style, is_macos, 0);
+    slot.x + slot.width + style.trilha_padding
+}
+
 /// The target of a tab drag, whatever the origin (ADR-0087 §5): with the
-/// ghost center (screen coordinates) **left of [`track_shift`]** -- over the
-/// row, the app menu button included -- the zone ([`DragDrop::Pinned`]);
-/// right of it, [`drag_target`] on the content coordinates. A row with no box
-/// at all (no app button and nothing pinned) is no zone: there is nowhere to
-/// drop, and the track decides.
+/// ghost center (screen coordinates) **left of [`drop_zone_edge`]** -- over
+/// the row, the app menu button included, or over the virtual slot of an
+/// empty row -- the zone ([`DragDrop::Pinned`]); right of it,
+/// [`drag_target`] on the content coordinates, whose origin is the real
+/// [`track_shift`].
 pub fn tab_drag_target(
     layout: &TabBarLayout,
     style: &TabBarStyle,
@@ -1560,7 +1575,7 @@ pub fn tab_drag_target(
     scroll_offset: f32,
 ) -> DragDrop {
     let track_left = track_shift(style, is_macos, pinned.len());
-    if left_row_len(style, pinned.len()) > 0 && ghost_center_x < track_left {
+    if ghost_center_x < drop_zone_edge(style, is_macos, pinned.len()) {
         return DragDrop::Pinned {
             pos: pinned_drop_pos(style, is_macos, pinned, dragged, ghost_center_x),
         };
@@ -3314,18 +3329,67 @@ mod tests {
         assert_eq!(drop_op(false, target), DropOp::Pin { pos: 0 });
     }
 
-    /// No box in the row at all (button hidden, nothing pinned): no zone.
+    /// No box in the row at all (button hidden, nothing pinned): the drag
+    /// still has a virtual slot at the left edge, so the first tab can be
+    /// pinned; right of the slot the track decides as usual.
     #[test]
-    fn a_row_without_boxes_is_not_a_drop_zone() {
+    fn a_row_without_boxes_still_has_a_virtual_drop_slot() {
         let style = TabBarStyle {
             show_app_menu_button: false,
             ..TabBarStyle::DEFAULT
         };
-        let (ws, _, track) = workspace_with_pinned(0);
-        let mut m = measurer();
-        let layout = layout(&ws, &style, &mut m);
-        let target = tab_drag_target(&layout, &style, true, ws.pinned(), track, 1.0, 0.0);
-        assert!(!matches!(target, DragDrop::Pinned { .. }));
+        for is_macos in [false, true] {
+            let (ws, _, track) = workspace_with_pinned(0);
+            let mut m = measurer();
+            let layout = layout(&ws, &style, &mut m);
+            let edge = drop_zone_edge(&style, is_macos, 0);
+            // The slot sits past the inset and is exactly one box wide plus
+            // the paddings -- what `track_shift` would be with the button.
+            assert_eq!(
+                edge,
+                left_inset(&style, is_macos)
+                    + style.trilha_padding * 2.0
+                    + app_menu_button_size(&style)
+            );
+            let target =
+                |x: f32| tab_drag_target(&layout, &style, is_macos, ws.pinned(), track, x, 0.0);
+
+            let inside = target(edge - 1.0);
+            assert_eq!(inside, DragDrop::Pinned { pos: 0 });
+            assert_eq!(drop_op(false, inside), DropOp::Pin { pos: 0 });
+
+            // Right of the slot: the track, with the real `track_shift`.
+            let shift = track_shift(&style, is_macos, 0);
+            assert_eq!(
+                target(edge + 1.0),
+                drag_target(&layout, track, edge + 1.0 - shift)
+            );
+            assert!(!matches!(target(edge + 1.0), DragDrop::Pinned { .. }));
+        }
+    }
+
+    /// `drop_zone_edge` is `track_shift` whenever the row has a box, so the
+    /// two cannot diverge (button shown, or hidden with something pinned).
+    #[test]
+    fn drop_zone_edge_is_track_shift_when_the_row_has_boxes() {
+        let hidden = TabBarStyle {
+            show_app_menu_button: false,
+            ..TabBarStyle::DEFAULT
+        };
+        for is_macos in [false, true] {
+            for pinned in 0..4 {
+                assert_eq!(
+                    drop_zone_edge(&TabBarStyle::DEFAULT, is_macos, pinned),
+                    track_shift(&TabBarStyle::DEFAULT, is_macos, pinned)
+                );
+            }
+            for pinned in 1..4 {
+                assert_eq!(
+                    drop_zone_edge(&hidden, is_macos, pinned),
+                    track_shift(&hidden, is_macos, pinned)
+                );
+            }
+        }
     }
 
     /// The whole table of ADR-0087 §5.
