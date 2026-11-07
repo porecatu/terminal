@@ -26,6 +26,7 @@
 new = "Nova aba"
 close = "Fechar aba"
 move_to_group = "Mover para grupo"
+move_to_window = "Mover para janela…"
 reconnect = "Reconectar"
 pin = "Fixar aba"
 unpin = "Desafixar aba"
@@ -46,6 +47,7 @@ expand = "Expandir grupo"
 new_tab = "Nova aba no grupo"
 close = { one = "Fechar grupo ({count} aba)", other = "Fechar grupo ({count} abas)" }
 dissolve = "Desagrupar"
+move_to_window = "Mover para janela…"
 
 [group_editor]
 section_group = "GRUPO"
@@ -56,6 +58,10 @@ default_name = "Novo grupo"
 
 [move_to_group]
 new_group = "Novo grupo"
+
+[move_to_window]
+new_window = "Nova janela"
+tab_count = { one = "{count} aba", other = "{count} abas" }
 
 [session_picker]
 save_item = "Salvar esta janela…"
@@ -350,6 +356,7 @@ tab_rename = "Renomear aba"
 tab_move_left = "Mover aba para a esquerda"
 tab_move_right = "Mover aba para a direita"
 tab_toggle_pin = "Fixar ou desafixar a aba"
+tab_move_to_window = "Mover aba ou seleção para outra janela"
 group_create = "Criar grupo"
 group_dissolve = "Desagrupar"
 group_rename = "Renomear grupo"
@@ -358,6 +365,7 @@ group_next = "Próximo grupo"
 group_prev = "Grupo anterior"
 group_new_tab = "Nova aba no grupo"
 group_close_all = "Fechar todas as abas do grupo"
+group_move_to_window = "Mover grupo para outra janela"
 window_new = "Nova janela"
 window_close = "Fechar janela"
 window_toggle_fullscreen = "Alternar tela cheia"

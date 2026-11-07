@@ -10,6 +10,7 @@
 new = "Neuer Tab"
 close = "Tab schließen"
 move_to_group = "In Gruppe verschieben"
+move_to_window = "In Fenster verschieben…"
 reconnect = "Neu verbinden"
 pin = "Tab anheften"
 unpin = "Tab lösen"
@@ -30,6 +31,7 @@ expand = "Gruppe ausklappen"
 new_tab = "Neuer Tab in der Gruppe"
 close = { one = "Gruppe schließen ({count} Tab)", other = "Gruppe schließen ({count} Tabs)" }
 dissolve = "Gruppierung aufheben"
+move_to_window = "In Fenster verschieben…"
 
 [group_editor]
 section_group = "GRUPPE"
@@ -38,6 +40,10 @@ default_name = "Neue Gruppe"
 
 [move_to_group]
 new_group = "Neue Gruppe"
+
+[move_to_window]
+new_window = "Neues Fenster"
+tab_count = { one = "{count} Tab", other = "{count} Tabs" }
 
 [session_picker]
 save_item = "Dieses Fenster speichern…"
@@ -332,6 +338,7 @@ tab_rename = "Tab umbenennen"
 tab_move_left = "Tab nach links verschieben"
 tab_move_right = "Tab nach rechts verschieben"
 tab_toggle_pin = "Tab anheften oder lösen"
+tab_move_to_window = "Tab oder Auswahl in ein anderes Fenster verschieben"
 group_create = "Gruppe erstellen"
 group_dissolve = "Gruppierung aufheben"
 group_rename = "Gruppe umbenennen"
@@ -340,6 +347,7 @@ group_next = "Nächste Gruppe"
 group_prev = "Vorherige Gruppe"
 group_new_tab = "Neuer Tab in der Gruppe"
 group_close_all = "Alle Tabs der Gruppe schließen"
+group_move_to_window = "Gruppe in ein anderes Fenster verschieben"
 window_new = "Neues Fenster"
 window_close = "Fenster schließen"
 window_toggle_fullscreen = "Vollbild umschalten"

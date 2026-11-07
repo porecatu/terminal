@@ -30,6 +30,22 @@ impl Selection {
         self.tabs.contains(&id)
     }
 
+    /// The **other** selected tabs a press on `pressed` drags along
+    /// (RF-22.18, ADR-0091 §6), in the order of `order` (the visual order of
+    /// the track). Non-empty only when `pressed` is selected **and** at least
+    /// one other tab is: that press arms the drag of the selection and clears
+    /// nothing. Otherwise empty -- the press is the plain click of RF-2.3
+    /// (clear, activate, arm the drag of the one tab).
+    pub fn drag_block(&self, order: impl IntoIterator<Item = TabId>, pressed: TabId) -> Vec<TabId> {
+        if !self.is_selected(pressed) {
+            return Vec::new();
+        }
+        order
+            .into_iter()
+            .filter(|&id| id != pressed && self.is_selected(id))
+            .collect()
+    }
+
     /// RF-2.3 (literal): clique sem modificador limpa seleção e âncora.
     /// Também usado por `Esc` (ADR-0021 §2, mesma tecla que dispensa aviso e
     /// cancela rename) e por `group.create` (ADR-0021 §2: "criar o grupo
@@ -123,6 +139,31 @@ mod tests {
 
     fn t(n: u32) -> TabId {
         TabId::new(n)
+    }
+
+    /// RF-22.18: pressing a selected tab, with others selected, arms the
+    /// drag of the block (the others, in visual order) and clears nothing;
+    /// any other press is the plain click (empty block).
+    #[test]
+    fn drag_block_is_the_other_selected_tabs_in_visual_order() {
+        let order = [t(1), t(2), t(3), t(4), t(5)];
+        let mut sel = Selection::default();
+        sel.toggle(t(4));
+        sel.toggle(t(2));
+        sel.toggle(t(5));
+        // Selected tab, others selected: the rest, in the order of `order`.
+        assert_eq!(sel.drag_block(order, t(4)), [t(2), t(5)]);
+        assert_eq!(sel.drag_block(order, t(2)), [t(4), t(5)]);
+        // Not selected: plain click.
+        assert!(sel.drag_block(order, t(3)).is_empty());
+        // The call clears nothing.
+        assert!(sel.is_selected(t(2)) && sel.is_selected(t(4)) && sel.is_selected(t(5)));
+        // Only the pressed tab selected: plain click.
+        let mut one = Selection::default();
+        one.toggle(t(3));
+        assert!(one.drag_block(order, t(3)).is_empty());
+        // Nothing selected.
+        assert!(Selection::default().drag_block(order, t(3)).is_empty());
     }
 
     #[test]

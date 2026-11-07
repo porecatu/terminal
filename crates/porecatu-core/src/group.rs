@@ -124,6 +124,18 @@ impl Group {
         }
     }
 
+    /// ADR-0090 §1: an empty explicit group carrying `meta` (name, colour
+    /// and collapse state) as is -- what a workspace builds when a detached
+    /// group arrives.
+    pub(crate) const fn from_meta(id: GroupId, meta: GroupMeta) -> Self {
+        Self {
+            id,
+            kind: GroupKind::Explicit(meta),
+            tabs: Vec::new(),
+            last_active: None,
+        }
+    }
+
     pub const fn id(&self) -> GroupId {
         self.id
     }

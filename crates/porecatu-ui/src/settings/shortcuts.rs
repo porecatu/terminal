@@ -410,6 +410,15 @@ mod tests {
         assert_eq!(s.chords(Action::SearchOpen), [chord("ctrl+shift+f")]);
         // `group.new_tab` não tem padrão em nenhuma plataforma.
         assert!(s.chords(Action::GroupNewTab).is_empty());
+        // Nem as duas de mover para janela (PRD-022 RF-22.24).
+        for platform in [Platform::Windows, Platform::Linux, Platform::Macos] {
+            let s = example(platform);
+            assert!(s.chords(Action::TabMoveToWindow).is_empty(), "{platform:?}");
+            assert!(
+                s.chords(Action::GroupMoveToWindow).is_empty(),
+                "{platform:?}"
+            );
+        }
         // A tabela da plataforma é a de maior precedência.
         let s = shortcuts_for(
             "[keybindings.windows]\n\"ctrl+shift+t\" = \"none\"\n\"ctrl+shift+j\" = \"tab.new\"\n",

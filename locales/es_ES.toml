@@ -10,6 +10,7 @@
 new = "Nueva pestaña"
 close = "Cerrar pestaña"
 move_to_group = "Mover al grupo"
+move_to_window = "Mover a ventana…"
 reconnect = "Reconectar"
 pin = "Fijar pestaña"
 unpin = "Desfijar pestaña"
@@ -30,6 +31,7 @@ expand = "Expandir grupo"
 new_tab = "Nueva pestaña en el grupo"
 close = { one = "Cerrar grupo ({count} pestaña)", other = "Cerrar grupo ({count} pestañas)" }
 dissolve = "Desagrupar"
+move_to_window = "Mover a ventana…"
 
 [group_editor]
 section_group = "GRUPO"
@@ -38,6 +40,10 @@ default_name = "Nuevo grupo"
 
 [move_to_group]
 new_group = "Nuevo grupo"
+
+[move_to_window]
+new_window = "Nueva ventana"
+tab_count = { one = "{count} pestaña", other = "{count} pestañas" }
 
 [session_picker]
 save_item = "Guardar esta ventana…"
@@ -332,6 +338,7 @@ tab_rename = "Renombrar pestaña"
 tab_move_left = "Mover pestaña a la izquierda"
 tab_move_right = "Mover pestaña a la derecha"
 tab_toggle_pin = "Fijar o desfijar la pestaña"
+tab_move_to_window = "Mover pestaña o selección a otra ventana"
 group_create = "Crear grupo"
 group_dissolve = "Desagrupar"
 group_rename = "Renombrar grupo"
@@ -340,6 +347,7 @@ group_next = "Grupo siguiente"
 group_prev = "Grupo anterior"
 group_new_tab = "Nueva pestaña en el grupo"
 group_close_all = "Cerrar todas las pestañas del grupo"
+group_move_to_window = "Mover grupo a otra ventana"
 window_new = "Nueva ventana"
 window_close = "Cerrar ventana"
 window_toggle_fullscreen = "Alternar pantalla completa"

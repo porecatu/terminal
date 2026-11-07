@@ -157,6 +157,25 @@ pub struct DragGhost {
     /// The zone highlight (ADR-0087 §5), in screen coordinates: `Some` only
     /// while the target is the zone.
     pub zone_highlight: Option<Rect>,
+    /// The **other** tabs of a dragged selection (ADR-0091 §6): not painted,
+    /// in the track or in the zone, exactly as `tab` is -- the gap that opens
+    /// for the block holds a hole per tab. Empty for a lone tab.
+    pub hidden: Vec<TabId>,
+    /// The number of pinned boxes the track shift is read from, when the
+    /// `workspace` handed to [`paint`] is a **preview** whose zone differs from
+    /// the one on screen -- the bar of a drag that arrives from another window
+    /// (ADR-0091 §3): the zone never resizes during a drag (ADR-0087 §5), so
+    /// the track must not move with the preview. `None`: the workspace is the
+    /// real one.
+    pub base_pinned: Option<usize>,
+}
+
+impl DragGhost {
+    /// `true` for the tabs the painter leaves as a hole: the grabbed one
+    /// (drawn as the ghost instead) and the rest of the block.
+    fn is_hole(&self, id: TabId) -> bool {
+        self.tab == id || self.hidden.contains(&id)
+    }
 }
 
 /// O fantasma mantém a forma de **origem** durante todo o gesto (ADR-0087
@@ -173,6 +192,10 @@ pub enum GhostSource {
     /// Arrastada da zona de fixadas: a caixa quadrada, pintada como a
     /// fixada, mesmo sobre a trilha.
     Pinned,
+    /// No ghost at all: the drag is over the bar of another window (ADR-0091
+    /// §3), and this bar -- the origin -- shows only the hole of what left.
+    /// `DragGhost::tab` (and `hidden`) are still holes of the zone.
+    Hole,
 }
 
 /// O grupo sendo arrastado pelo rótulo (espec §2.19.1): o fantasma é só a
@@ -337,7 +360,7 @@ pub fn paint(
         .as_ref()
         .map_or(workspace.pinned(), |ghost| &ghost.pinned_order);
     for (i, &id) in zone_order.iter().enumerate() {
-        if drag.as_ref().is_some_and(|ghost| ghost.tab == id) {
+        if drag.as_ref().is_some_and(|ghost| ghost.is_hole(id)) {
             continue;
         }
         let mut slot = tab_bar::pinned_rect(style, is_macos, i);
@@ -362,7 +385,10 @@ pub fn paint(
     // espec., mesmo raciocínio do §2.6 aplicado ao botão por grupo). Vai de
     // `track_shift` (depois do botão de menu) até `trilha_width` -- as zonas
     // fixas das duas pontas ficam de fora do recorte e do scroll.
-    let pinned_count = workspace.pinned().len();
+    let pinned_count = drag
+        .as_ref()
+        .and_then(|ghost| ghost.base_pinned)
+        .unwrap_or_else(|| workspace.pinned().len());
     let track_left = tab_bar::track_shift(style, is_macos, pinned_count);
     out.push(Primitive::PushClip(Rect {
         x: track_left,
@@ -482,7 +508,7 @@ pub fn paint(
         }
 
         for tab in &group.tabs {
-            let is_ghost = drag.as_ref().is_some_and(|g| g.tab == tab.id);
+            let is_ghost = drag.as_ref().is_some_and(|g| g.is_hole(tab.id));
             let tab_rect = shift(tab.rect, dx);
 
             if is_ghost {
@@ -3009,6 +3035,8 @@ mod tests {
             source: GhostSource::Pinned,
             pinned_order: ws.pinned().to_vec(),
             zone_highlight: None,
+            hidden: Vec::new(),
+            base_pinned: None,
         };
         let out = paint_bar_dragging(
             &ws,
@@ -3067,6 +3095,8 @@ mod tests {
             source: GhostSource::Track(track_rect_of(&ws, &style, c)),
             pinned_order: order,
             zone_highlight: Some(highlight),
+            hidden: Vec::new(),
+            base_pinned: None,
         };
         let out = paint_bar_dragging(
             &ws,
@@ -3099,6 +3129,52 @@ mod tests {
         let _ = (a, b);
     }
 
+    /// ADR-0091 §6: the rest of a dragged selection is a hole like the grabbed
+    /// tab -- in the zone, one empty slot per tab of the gap, and in the
+    /// track, nothing painted for it.
+    #[test]
+    fn the_rest_of_a_dragged_selection_is_a_hole_in_the_zone_and_on_the_track() {
+        let style = TabBarStyle::DEFAULT;
+        let (mut ws, a, b, c) = pinned_pair_and_a_track_tab();
+        let d = ws.append_tab("d", None);
+        let order = tab_bar::pinned_preview_order_block(
+            ws.pinned(),
+            &[c, d],
+            tab_bar::DragDrop::Pinned { pos: 1 },
+        );
+        assert_eq!(order, [a, c, d, b]);
+        let ghost = |hidden: Vec<TabId>| DragGhost {
+            tab: c,
+            screen_x: 90.0,
+            source: GhostSource::Track(track_rect_of(&ws, &style, c)),
+            pinned_order: order.clone(),
+            zone_highlight: None,
+            hidden,
+            base_pinned: None,
+        };
+        let paint_with = |hidden| {
+            paint_bar_dragging(
+                &ws,
+                &style,
+                ghost(hidden),
+                &AnimationClock::default(),
+                Instant::now(),
+            )
+        };
+        let out = paint_with(vec![d]);
+        let slot = |i| tab_bar::pinned_rect(&style, false, i);
+        assert!(box_quad_at(&out, slot(0)).is_some());
+        assert!(box_quad_at(&out, slot(1)).is_none(), "the grabbed one");
+        assert!(
+            box_quad_at(&out, slot(2)).is_none(),
+            "the rest of the block"
+        );
+        assert!(box_quad_at(&out, slot(3)).is_some());
+        // On the track `d` is not painted: with it hidden the bar has fewer
+        // primitives than with it shown.
+        assert!(out.len() < paint_with(Vec::new()).len());
+    }
+
     /// Without a zone target the frame has no highlight, and the zone is the
     /// real one.
     #[test]
@@ -3111,6 +3187,8 @@ mod tests {
             source: GhostSource::Track(track_rect_of(&ws, &style, c)),
             pinned_order: ws.pinned().to_vec(),
             zone_highlight: None,
+            hidden: Vec::new(),
+            base_pinned: None,
         };
         let out = paint_bar_dragging(
             &ws,
@@ -3153,6 +3231,8 @@ mod tests {
             source: GhostSource::Track(track_rect_of(&ws, &style, c)),
             pinned_order: order,
             zone_highlight: None,
+            hidden: Vec::new(),
+            base_pinned: None,
         };
         let out = paint_bar_dragging(
             &ws,

@@ -28,6 +28,7 @@ use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use porecatu_core::{GroupColor, GroupId, PaneId, TabId, Workspace};
 use porecatu_locale::Catalog;
 use porecatu_render::TextMeasurer;
+use winit::window::WindowId;
 
 use crate::context_menu::ContextMenu;
 use crate::dialog::{ConfirmDialog, DialogButton, SecretFocus};
@@ -36,6 +37,7 @@ use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
 use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
+use crate::move_to_window::MoveToWindowPopover;
 use crate::profile_menu::ProfileMenu;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
@@ -207,6 +209,7 @@ pub(crate) fn build_tree(
     terminal_context_menu: &Option<TerminalContextMenu>,
     group_editor: &Option<GroupEditor>,
     move_to_group: &Option<MoveToGroupPopover>,
+    move_to_window: Option<&MoveToWindowPopover<WindowId>>,
     session_picker: &Option<SessionPicker>,
     search: &Option<SearchBarState>,
     status_bar: Option<&StatusBarLayout>,
@@ -312,6 +315,8 @@ pub(crate) fn build_tree(
         focus = build_group_editor(e, workspace, catalog, &mut nodes, &mut root_children);
     } else if let Some(p) = move_to_group {
         focus = build_move_to_group(p, workspace, catalog, &mut nodes, &mut root_children);
+    } else if let Some(p) = move_to_window {
+        focus = build_move_to_window(p, catalog, &mut nodes, &mut root_children);
     } else if let Some(p) = session_picker {
         focus = build_session_picker(p, catalog, &mut nodes, &mut root_children);
     }
@@ -910,6 +915,46 @@ fn build_move_to_group(
     ));
     children.push(id);
     if popover.highlighted() == new_group_index {
+        focus = id;
+    }
+    nodes.push((MENU_ID, container(Role::Menu, children)));
+    root_children.push(MENU_ID);
+    focus
+}
+
+/// PRD-022 RF-22.21: the "Move to window..." popover, one `MenuItem` per row
+/// (the title of the window's active tab and its tab count, as the row reads
+/// on screen) and "New window" last -- the same shape as
+/// [`build_move_to_group`].
+fn build_move_to_window<W: Copy>(
+    popover: &MoveToWindowPopover<W>,
+    catalog: &Catalog,
+    nodes: &mut Vec<(NodeId, Node)>,
+    root_children: &mut Vec<NodeId>,
+) -> NodeId {
+    let mut children = Vec::new();
+    let mut focus = MENU_ID;
+    for (index, row) in popover.rows().iter().enumerate() {
+        let label = format!(
+            "{}, {}",
+            row.title,
+            msg::move_to_window::tab_count(catalog, row.tab_count)
+        );
+        let id = move_target_id(index);
+        nodes.push((id, leaf(Role::MenuItem, label)));
+        children.push(id);
+        if index == popover.highlighted() {
+            focus = id;
+        }
+    }
+    let new_window_index = popover.rows().len();
+    let id = move_target_id(new_window_index);
+    nodes.push((
+        id,
+        leaf(Role::MenuItem, msg::move_to_window::new_window(catalog)),
+    ));
+    children.push(id);
+    if popover.highlighted() == new_window_index {
         focus = id;
     }
     nodes.push((MENU_ID, container(Role::Menu, children)));
@@ -1518,6 +1563,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -1703,6 +1749,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -1752,6 +1799,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -1804,6 +1852,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -1855,6 +1904,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             Some(&layout),
@@ -1922,6 +1972,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             Some(&layout),
@@ -1970,6 +2021,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             Some(&layout),
@@ -2011,6 +2063,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -2060,6 +2113,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -2130,6 +2184,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -2210,6 +2265,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -2248,6 +2304,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &None,
             &None,
             None,
@@ -2316,6 +2373,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &picker,
             &None,
             None,
@@ -2351,6 +2409,7 @@ mod tests {
             &None,
             &None,
             &None,
+            None,
             &picker,
             &None,
             None,
@@ -3299,5 +3358,43 @@ mod profile_editor_tree_tests {
                 assert!(known.contains(child), "filho {child:?} fora da árvore");
             }
         }
+    }
+
+    /// PRD-022 RF-22.21: the popover of destinations is a menu with one item
+    /// per window (title and count) and "Nova janela" last, focus on the
+    /// highlighted one.
+    #[test]
+    fn the_move_to_window_popover_is_a_menu_of_windows_and_new_window() {
+        use crate::move_to_window::WindowRow;
+        let mut popover = MoveToWindowPopover::new(
+            (0.0, 0.0),
+            vec![
+                WindowRow {
+                    window: 1u8,
+                    title: "vim".to_owned(),
+                    tab_count: 2,
+                },
+                WindowRow {
+                    window: 2u8,
+                    title: "zsh".to_owned(),
+                    tab_count: 1,
+                },
+            ],
+        );
+        popover.set_highlight(1);
+        let catalog = crate::messages::test_support::pt_br();
+        let mut nodes = Vec::new();
+        let mut root_children = Vec::new();
+        let focus = build_move_to_window(&popover, &catalog, &mut nodes, &mut root_children);
+
+        let find = |id: NodeId| &nodes.iter().find(|(n, _)| *n == id).unwrap().1;
+        assert_eq!(find(MENU_ID).role(), Role::Menu);
+        assert_eq!(find(MENU_ID).children().len(), 3);
+        assert_eq!(find(move_target_id(0)).role(), Role::MenuItem);
+        assert_eq!(find(move_target_id(0)).label(), Some("vim, 2 abas"));
+        assert_eq!(find(move_target_id(1)).label(), Some("zsh, 1 aba"));
+        assert_eq!(find(move_target_id(2)).label(), Some("Nova janela"));
+        assert_eq!(focus, move_target_id(1));
+        assert_eq!(root_children, [MENU_ID]);
     }
 }

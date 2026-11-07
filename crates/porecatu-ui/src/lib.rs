@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use porecatu_core::{
@@ -35,14 +35,18 @@ use winit::window::{CursorIcon, Fullscreen, Window, WindowAttributes, WindowId};
 mod access;
 mod acrylic;
 mod animation;
+mod app_cross_drag;
 mod app_icon;
+mod app_move_to_window;
 mod app_reconnect;
+mod app_transfer;
 mod background_image;
 mod box_glyphs;
 mod chrome;
 mod clipboard;
 mod context_menu;
 mod crash_log;
+mod cross_window;
 mod cursor_blink;
 mod dialog;
 mod git;
@@ -55,6 +59,7 @@ mod language;
 mod masked_field;
 mod messages;
 mod move_to_group;
+mod move_to_window;
 mod notice_queue;
 mod overlay;
 mod paint;
@@ -87,6 +92,9 @@ mod trace;
 mod warning;
 
 use animation::AnimationClock;
+use app_cross_drag::{CrossDrag, IncomingDrag};
+use app_move_to_window::{GroupActionOutcome, MoveToWindowState};
+use app_transfer::TransferPayload;
 use chrome::{DragGhost, GhostSource, GroupDragGhost};
 use context_menu::{ContextMenu, MenuAction};
 use dialog::{ConfirmDialog, DialogAction, DialogButton, HostKeyFacts};
@@ -95,6 +103,7 @@ use group_menu::{GroupAction, GroupContextMenu};
 use input::ClickTracker;
 use keymap::Chord;
 use move_to_group::{MoveTarget, MoveToGroupPopover};
+use move_to_window::MoveToWindowPopover;
 use paint::CellMetrics;
 use porecatu_core::GroupColor;
 use profile_menu::{ProfileMenu, ProfileMenuTarget, ProfileRowKind};
@@ -574,6 +583,30 @@ const PROJECT_COMMAND_QUIET: Duration = Duration::from_millis(300);
 /// Teto a partir do spawn. Sem ele, um shell que nunca cala nunca recebe.
 const PROJECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The `(window, tab, pane)` a pane's wakeup is delivered to (ADR-0090 §2).
+/// Three integers, copied under the lock by the reader thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PaneAddress {
+    window: WindowId,
+    tab: TabId,
+    pane: PaneId,
+}
+
+/// Builds the wakeup closure for `Terminal::spawn`: on every call it reads the
+/// **current** address from `cell` and hands it to `send` (ADR-0090 §2). The
+/// address is never captured by value, so a pane that changes window keeps
+/// waking the right one. Shared by both `spawn_*` so the closure is not
+/// duplicated.
+fn wakeup_closure(
+    cell: Arc<Mutex<PaneAddress>>,
+    send: impl Fn(PaneAddress) + Send + Sync + 'static,
+) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        let address = *cell.lock().unwrap_or_else(PoisonError::into_inner);
+        send(address);
+    }
+}
+
 /// Estado de execução de um painel (ADR-0053 §6, desceu de aba para cá): o
 /// `Terminal` (motor+PTY+threads) e o snapshot reusado entre frames. Vive
 /// fora de `porecatu_core::Pane`, que é domínio puro sem I/O
@@ -582,6 +615,10 @@ const PROJECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 /// por aba -- a troca é de chave do mapa (`WindowState::panes`), não de
 /// forma.
 struct PaneRuntime {
+    /// Where the reader thread's wakeup is addressed (ADR-0090 §2). Shared
+    /// with the closure handed to `Terminal::spawn`; the main thread rewrites
+    /// it when the pane moves to another window or tab id.
+    address: Arc<Mutex<PaneAddress>>,
     terminal: Terminal,
     snapshot: GridSnapshot,
     /// `cwd` já resolvido (RF-3.10) que foi de fato usado no `SpawnConfig`
@@ -641,6 +678,12 @@ struct PaneRuntime {
 }
 
 impl PaneRuntime {
+    /// Rewrites the wakeup address (ADR-0090 §2): the next wakeup from the
+    /// reader thread goes to the new window/tab/pane.
+    fn set_address(&self, address: PaneAddress) {
+        *self.address.lock().unwrap_or_else(PoisonError::into_inner) = address;
+    }
+
     /// A atividade do painel para a confirmação de fechar. Num ciclo de
     /// reconexão a conexão conta como aberta (ADR-0076 §4).
     fn liveness(&self) -> Liveness {
@@ -707,8 +750,13 @@ mod pane_runtime_map_key_tests {
         .expect("spawn falhou")
     }
 
-    fn pane_runtime(spawn_cwd: Option<PathBuf>) -> PaneRuntime {
+    pub(crate) fn pane_runtime(spawn_cwd: Option<PathBuf>) -> PaneRuntime {
         PaneRuntime {
+            address: Arc::new(Mutex::new(PaneAddress {
+                window: WindowId::dummy(),
+                tab: TabId::new(0),
+                pane: PaneId::new(0),
+            })),
             terminal: spawn_trivial_terminal(),
             snapshot: GridSnapshot::default(),
             spawn_cwd,
@@ -724,6 +772,41 @@ mod pane_runtime_map_key_tests {
             ssh_spawn: None,
             reconnecting: false,
         }
+    }
+
+    /// ADR-0090 §2: the wakeup closure reads the address from the shared cell
+    /// on every call, so rewriting the cell redirects the next wakeup; the
+    /// `PaneRuntime::set_address` writes the very same cell.
+    #[test]
+    fn wakeup_closure_follows_the_address_cell() {
+        use std::sync::mpsc;
+
+        let first = PaneAddress {
+            window: WindowId::dummy(),
+            tab: TabId::new(1),
+            pane: PaneId::new(0),
+        };
+        let moved = PaneAddress {
+            window: WindowId::dummy(),
+            tab: TabId::new(7),
+            pane: PaneId::new(0),
+        };
+        let runtime = pane_runtime(None);
+        runtime.set_address(first);
+
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let wakeup = wakeup_closure(Arc::clone(&runtime.address), move |a| {
+            let _ = tx.lock().unwrap().send(a);
+        });
+
+        wakeup();
+        assert_eq!(rx.try_recv(), Ok(first));
+
+        runtime.set_address(moved);
+        wakeup();
+        assert_eq!(rx.try_recv(), Ok(moved));
+        assert_ne!(first, moved);
     }
 
     /// Regressão do bug relatado ao vivo: duas abas diferentes têm cada
@@ -796,9 +879,63 @@ pub(crate) fn window_size_is_usable(width: u32, height: u32, minimized: Option<b
     width > 0 && height > 0 && minimized != Some(true)
 }
 
+/// The size worth remembering as the window's "normal" one (PRD-022
+/// decision 4): only a window that is not minimized, not maximized and not
+/// fullscreen, with a usable size.
+fn normal_size_to_remember(
+    size: winit::dpi::PhysicalSize<u32>,
+    minimized: Option<bool>,
+    occupies_whole_screen: bool,
+) -> Option<winit::dpi::PhysicalSize<u32>> {
+    (!occupies_whole_screen && window_size_is_usable(size.width, size.height, minimized))
+        .then_some(size)
+}
+
+/// The size a window detached from this one opens with (ADR-0091 §5): the
+/// current inner size when the window is normal, the last normal one
+/// otherwise; `None` when there is none (the platform default applies).
+fn detach_size_for(
+    occupies_whole_screen: bool,
+    inner_size: winit::dpi::PhysicalSize<u32>,
+    last_normal_size: Option<winit::dpi::PhysicalSize<u32>>,
+) -> Option<winit::dpi::PhysicalSize<u32>> {
+    if occupies_whole_screen {
+        last_normal_size
+    } else {
+        Some(inner_size)
+    }
+}
+
 #[cfg(test)]
 mod window_size_tests {
-    use super::window_size_is_usable;
+    use super::{detach_size_for, normal_size_to_remember, window_size_is_usable};
+    use winit::dpi::PhysicalSize;
+
+    #[test]
+    fn only_a_normal_window_remembers_its_size() {
+        let size = PhysicalSize::new(800, 600);
+        assert_eq!(
+            normal_size_to_remember(size, Some(false), false),
+            Some(size)
+        );
+        assert_eq!(normal_size_to_remember(size, None, false), Some(size));
+        assert_eq!(normal_size_to_remember(size, Some(false), true), None);
+        assert_eq!(normal_size_to_remember(size, Some(true), false), None);
+        assert_eq!(
+            normal_size_to_remember(PhysicalSize::new(0, 600), Some(false), false),
+            None
+        );
+    }
+
+    #[test]
+    fn detach_size_uses_the_last_normal_size_when_maximized() {
+        let inner = PhysicalSize::new(1920, 1080);
+        let normal = PhysicalSize::new(900, 700);
+        assert_eq!(detach_size_for(false, inner, Some(normal)), Some(inner));
+        assert_eq!(detach_size_for(false, inner, None), Some(inner));
+        assert_eq!(detach_size_for(true, inner, Some(normal)), Some(normal));
+        assert_eq!(detach_size_for(true, inner, None), None);
+    }
 
     #[test]
     fn minimized_or_zero_size_is_not_usable() {
@@ -1213,6 +1350,11 @@ enum ActionOutcome {
     /// da zona: a lista do processo precisa seguir e ser gravada (RF-21.11,
     /// ADR-0086 §3).
     PinnedReordered,
+    /// `tab.move_to_window`/`group.move_to_window` (PRD-022 RF-22.24): the
+    /// rows of the popover are the other windows, which only `App` sees.
+    OpenMoveToWindow {
+        group: bool,
+    },
     Unhandled,
 }
 
@@ -1293,6 +1435,8 @@ enum OverlayTarget {
     /// Um swatch ou uma ação do editor de grupo (nunca o campo de nome).
     GroupEditor(overlay::GroupEditorHit),
     MoveToGroup(usize),
+    /// A row of the "Move to window..." popover (PRD-022 RF-22.21).
+    MoveToWindow(usize),
     /// Item de salvar (navegando), linha ou `X` do popover de sessões.
     Session(overlay::SessionPickerHit),
     WarningClose(usize),
@@ -1356,6 +1500,20 @@ struct WindowState {
     scroll_offset: f32,
     /// Arraste de reordenação em andamento (espec §2.19), se algum.
     drag: Drag,
+    /// The **other** selected tabs a tab drag carries along (RF-22.17,
+    /// ADR-0091 §6), in the visual order of the track, the grabbed tab (the
+    /// one in `drag`) not included. Empty is the drag of one tab alone. Set
+    /// whenever `Drag::TabPressed` is armed, and emptied whenever `drag` goes
+    /// back to `Idle` (`finish_drag`, `Esc`).
+    drag_block: Vec<TabId>,
+    /// A drag from **another** window has the cursor over the bar of this one
+    /// (ADR-0091 §3): what it carries, the cursor in this window's logical
+    /// coordinates, and the target the last redraw resolved. Written and
+    /// cleared only by `App` (`cross_drag_moved`, `cancel_cross_drag`).
+    incoming: Option<IncomingDrag>,
+    /// On the **origin**: the ghost is over the bar of another window, so this
+    /// bar draws only the hole of what is being dragged (ADR-0091 §3).
+    drag_elsewhere: bool,
     /// Relógio de animação (ADR-0022) -- reflui da trilha ao colapsar/
     /// expandir (`.15s`, `toggle_group_collapse`) e ao formar grupo
     /// (RF-2.5, `.18s`, `action_group_create`).
@@ -1398,6 +1556,10 @@ struct WindowState {
     group_editor: Option<GroupEditor>,
     /// Popover de destino do `tab.move_to_group` (RF-2.20, ADR-0023 §4).
     move_to_group: Option<MoveToGroupPopover>,
+    /// Popover "Mover para janela..." (PRD-022 RF-22.21, ADR-0090 §6) with
+    /// what it moves, decided when it opened. Same mutual exclusion of
+    /// `close_all_popovers`.
+    move_to_window: Option<MoveToWindowState>,
     /// Popover de sessões nomeadas (PRD-014, ADR-0054, ADR-0055), sétimo
     /// widget de chrome -- mesma exclusão mútua de `close_all_popovers`.
     session_picker: Option<SessionPicker>,
@@ -1435,6 +1597,10 @@ struct WindowState {
     /// [`session_writer::session_placement`]. Atualizada em `Moved`/
     /// `Resized`, só fora do estado minimizado.
     last_shown_placement: Option<session_writer::Placement>,
+    /// Last size seen with the window neither minimized, maximized nor
+    /// fullscreen (PRD-022 decision 4): what a window detached from a
+    /// maximized one opens with. `None` until a normal size is seen.
+    last_normal_size: Option<winit::dpi::PhysicalSize<u32>>,
     /// Quadros extras a desenhar depois de reconfigurar a surface. No
     /// Windows o primeiro present depois de `configure` pode não chegar à
     /// tela (mesma causa do `settle_frames` da janela de configurações):
@@ -2616,6 +2782,7 @@ impl WindowState {
             || self.terminal_context_menu.is_some()
             || self.group_editor.is_some()
             || self.move_to_group.is_some()
+            || self.move_to_window.is_some()
             || self.session_picker.is_some()
     }
 
@@ -2633,6 +2800,11 @@ impl WindowState {
         catalog: Arc<Catalog>,
     ) -> Self {
         let size = window.inner_size();
+        let last_normal_size = normal_size_to_remember(
+            size,
+            window.is_minimized(),
+            window.is_maximized() || window.fullscreen().is_some(),
+        );
         Self {
             window,
             window_surface,
@@ -2655,6 +2827,9 @@ impl WindowState {
             rename: RenameState::Idle,
             scroll_offset: 0.0,
             drag: Drag::Idle,
+            drag_block: Vec::new(),
+            incoming: None,
+            drag_elsewhere: false,
             animations: AnimationClock::default(),
             hover: Hover::default(),
             warnings: WarningStack::default(),
@@ -2670,12 +2845,14 @@ impl WindowState {
             terminal_context_menu: None,
             group_editor: None,
             move_to_group: None,
+            move_to_window: None,
             session_picker: None,
             last_pill_click: None,
             selection: Selection::default(),
             last_titlebar_click: None,
             session_dirty: false,
             last_shown_placement: None,
+            last_normal_size,
             settle_frames: 1,
             search: None,
             git: std::cell::RefCell::new(git::GitInfo::default()),
@@ -2735,6 +2912,7 @@ impl WindowState {
         let terminal_context_menu = &self.terminal_context_menu;
         let group_editor = &self.group_editor;
         let move_to_group = &self.move_to_group;
+        let move_to_window = self.move_to_window.as_ref().map(|(_, popover)| popover);
         let session_picker = &self.session_picker;
         let search = &self.search;
         self.access_adapter.update_if_active(move || {
@@ -2748,6 +2926,7 @@ impl WindowState {
                 terminal_context_menu,
                 group_editor,
                 move_to_group,
+                move_to_window,
                 session_picker,
                 search,
                 status_bar_layout.as_ref(),
@@ -2792,6 +2971,27 @@ impl WindowState {
         }
     }
 
+    /// `Resized`: remembers `size` as the "normal" one when the window is
+    /// neither minimized, maximized nor fullscreen (PRD-022 decision 4).
+    fn remember_normal_size(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        if let Some(size) = normal_size_to_remember(
+            size,
+            self.window.is_minimized(),
+            self.occupies_the_whole_screen(),
+        ) {
+            self.last_normal_size = Some(size);
+        }
+    }
+
+    /// The size a window detached from this one opens with (ADR-0091 §5).
+    fn detach_size(&self) -> Option<winit::dpi::PhysicalSize<u32>> {
+        detach_size_for(
+            self.occupies_the_whole_screen(),
+            self.window.inner_size(),
+            self.last_normal_size,
+        )
+    }
+
     /// Geometria e monitor que a sessão grava desta janela.
     fn session_placement(&self) -> session_writer::Placement {
         session_writer::session_placement(
@@ -2806,6 +3006,21 @@ impl WindowState {
         )
     }
 
+    /// The `pinned.json` snapshot of `tab` (RF-21.9), with the same `cwd`
+    /// fallback the session uses. Built **before** the tab moves into the zone
+    /// by the pin gesture, and **after** the runtimes arrived by a transfer
+    /// that pins (ADR-0090 §5).
+    fn pinned_snapshot(&self, tab: TabId) -> Option<porecatu_session::TabV1> {
+        let panes = &self.panes;
+        self.workspace.tab(tab).map(|t| {
+            session_writer::pinned_tab_v1(t, |tab_id, pane_id| {
+                panes
+                    .get(&(tab_id, pane_id))
+                    .and_then(PaneRuntime::session_cwd_fallback)
+            })
+        })
+    }
+
     /// Fecha os cinco widgets da camada popover (ADR-0023: "abrir
     /// qualquer um dos dois fecha o outro, num ponto só do código" --
     /// estendido ao popover de sessões pelo ADR-0055 §2) -- chamado antes
@@ -2817,6 +3032,7 @@ impl WindowState {
         self.terminal_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
+        self.move_to_window = None;
         self.session_picker = None;
     }
 
@@ -3212,13 +3428,19 @@ impl WindowState {
             Some(spawn) => BackendSpec::Ssh(spawn.clone()),
             None => BackendSpec::Local(pty_config),
         };
-        match Terminal::spawn(spec, term_params.clone(), move || {
+        let address = Arc::new(Mutex::new(PaneAddress {
+            window: window_id,
+            tab,
+            pane,
+        }));
+        let wakeup = wakeup_closure(Arc::clone(&address), move |a| {
             let _ = proxy.send_event(Wakeup::TabDirty {
-                window: window_id,
-                tab,
-                pane,
+                window: a.window,
+                tab: a.tab,
+                pane: a.pane,
             });
-        }) {
+        });
+        match Terminal::spawn(spec, term_params.clone(), wakeup) {
             Ok(terminal) => {
                 // O `cwd` local não vale para um servidor remoto.
                 if ssh_host.is_none()
@@ -3280,6 +3502,7 @@ impl WindowState {
                 self.panes.insert(
                     (tab_id, pane_id),
                     PaneRuntime {
+                        address,
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
@@ -3399,13 +3622,19 @@ impl WindowState {
             }
             None => BackendSpec::Local(pty_config),
         };
-        match Terminal::spawn(spec, term_params.clone(), move || {
+        let address = Arc::new(Mutex::new(PaneAddress {
+            window: window_id,
+            tab: tab_id,
+            pane: pane_id,
+        }));
+        let wakeup = wakeup_closure(Arc::clone(&address), move |a| {
             let _ = proxy.send_event(Wakeup::TabDirty {
-                window: window_id,
-                tab: tab_id,
-                pane: pane_id,
+                window: a.window,
+                tab: a.tab,
+                pane: a.pane,
             });
-        }) {
+        });
+        match Terminal::spawn(spec, term_params.clone(), wakeup) {
             Ok(terminal) => {
                 if ssh_host.is_none()
                     && let Some(missing) = &missing_cwd_note
@@ -3431,6 +3660,7 @@ impl WindowState {
                 self.panes.insert(
                     (tab_id, pane_id),
                     PaneRuntime {
+                        address,
                         terminal,
                         snapshot: GridSnapshot::default(),
                         spawn_cwd: cwd,
@@ -5127,7 +5357,9 @@ impl WindowState {
         };
         if let Some(group_action) = group_action {
             if let Some(group) = group_menu::keyboard_target(&self.workspace) {
-                self.run_group_action(
+                // None of the five maps to "Move to window...", which is
+                // `group.move_to_window` and handled below.
+                let _ = self.run_group_action(
                     group,
                     group_action,
                     gpu,
@@ -5205,6 +5437,16 @@ impl WindowState {
             // ADR-0086 §7: o registro de fixadas é do processo -- bubble pra
             // `App`, mesmo caminho de `ssh.reconnect`.
             Action::TabTogglePin => ActionOutcome::TogglePin,
+            // PRD-022 RF-22.24: the popover lists the other windows -- bubble
+            // to `App`. The group action is inert outside an explicit group.
+            Action::TabMoveToWindow => ActionOutcome::OpenMoveToWindow { group: false },
+            Action::GroupMoveToWindow => {
+                if move_to_window::group_move_payload(&self.workspace).is_some() {
+                    ActionOutcome::OpenMoveToWindow { group: true }
+                } else {
+                    ActionOutcome::Handled
+                }
+            }
             Action::GroupCreate => {
                 self.action_group_create(gpu, style, catalog);
                 ActionOutcome::Handled
@@ -5720,11 +5962,19 @@ impl WindowState {
                 } else if select_modifier && selectable {
                     self.selection.toggle(id);
                 } else {
-                    // RF-2.3: clique sem modificador limpa a seleção e ativa.
-                    self.selection.clear();
-                    self.touch_workspace(|ws| ws.activate_tab(id));
-                    self.sync_window_title();
-                    self.ensure_active_tab_visible(gpu, style);
+                    // RF-22.18, ADR-0091 §6: a press on a selected tab, with
+                    // others selected, arms the drag of the selection and
+                    // clears and activates nothing -- the release does,
+                    // when it turns out the press was a click.
+                    let block = self.selection.drag_block(self.workspace.track_order(), id);
+                    if block.is_empty() {
+                        // RF-2.3: clique sem modificador limpa a seleção e ativa.
+                        self.selection.clear();
+                        self.touch_workspace(|ws| ws.activate_tab(id));
+                        self.sync_window_title();
+                        self.ensure_active_tab_visible(gpu, style);
+                    }
+                    self.drag_block = Vec::new();
                     if let Some(rect) = tab_bar::tab_rect(&layout, id) {
                         let screen_x = rect.x + track_left - self.scroll_offset;
                         self.drag = Drag::TabPressed {
@@ -5732,6 +5982,7 @@ impl WindowState {
                             start: logical_point,
                             grab_offset: logical_point.0 - screen_x,
                         };
+                        self.drag_block = block;
                     }
                 }
                 NewTabRequest::None
@@ -5814,6 +6065,7 @@ impl WindowState {
         self.touch_workspace(|ws| ws.activate_tab(id));
         self.sync_window_title();
         let rect = tab_bar::pinned_rect(style, is_macos(), index);
+        self.drag_block.clear();
         self.drag = Drag::TabPressed {
             tab: id,
             start: logical_point,
@@ -6088,7 +6340,7 @@ impl WindowState {
         config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         catalog: &Catalog,
-    ) {
+    ) -> GroupActionOutcome {
         match action {
             GroupAction::Rename => self.open_group_editor(group, EditorRegion::Name),
             GroupAction::SetColor => self.open_group_editor(group, EditorRegion::Swatches),
@@ -6120,7 +6372,10 @@ impl WindowState {
                     self.group_editor = None;
                 }
             }
+            // The popover lists the other windows: `App` opens it (RF-22.20).
+            GroupAction::MoveToWindow => return GroupActionOutcome::OpenMoveToWindow,
         }
+        GroupActionOutcome::Done
     }
 
     /// Conveniência de `group.new_tab` (RF-2.8/RF-2.22): sempre no fim de
@@ -6229,20 +6484,51 @@ impl WindowState {
     /// `App`. Volta como `(aba, operação)` para quem chamou aplicar com os
     /// gestos de `App` (`App::apply_zone_drop`); a tradução (origem, alvo) →
     /// operação é uma só, `tab_bar::drop_op`.
+    ///
+    /// The tabs of the returned pair are the ones the operation applies to:
+    /// the dragged tab alone, or -- for a dragged selection (ADR-0091 §6) --
+    /// the whole block in visual order, which only a `DropOp::Pin` carries.
+    ///
+    /// A selection drag (`drag_block` not empty) takes the same exits with
+    /// the block as the unit: the drop on the track is one
+    /// `Workspace::move_tabs`; a press that never passed the threshold is the
+    /// click RF-22.18 postponed to the release (clear the selection and
+    /// activate the tab); and after a drop the selection is cleared and the
+    /// grabbed tab is the active one (ADR-0091 §6, last item). A cancel (`Esc`
+    /// is not here, a drop outside the bar is) leaves the selection alone.
+    ///
+    /// `in_bar` is decided by the caller from the global point of the cursor
+    /// (ADR-0091 §4, `App::release_drag`): `true` only for a drop on the bar
+    /// of **this** window. Anywhere else the drag cancels here -- a drop on
+    /// another window never reaches this function.
     fn finish_drag(
         &mut self,
         gpu: &mut GpuContext,
         style: &TabBarStyle,
-    ) -> Option<(TabId, DropOp)> {
+        in_bar: bool,
+    ) -> Option<(Vec<TabId>, DropOp)> {
         let drag = std::mem::replace(&mut self.drag, Drag::Idle);
+        let block = std::mem::take(&mut self.drag_block);
         // A slide of the pinned zone in progress dies with the drag: the zone
         // settles at once on the drop, or goes back on a cancel.
         if matches!(drag, Drag::TabDragging { .. }) {
             self.animations.clear();
         }
+        self.drag_elsewhere = false;
         let mut zone_op = None;
         match drag {
-            Drag::TabDragging { tab, target, .. } if self.in_bar(self.cursor_position.1, style) => {
+            Drag::TabDragging { tab, target, .. } if !block.is_empty() && in_bar => {
+                zone_op = self.drop_block(tab, block, target);
+            }
+            // RF-22.18: the press that armed a selection drag never got past
+            // the threshold, so it was a click.
+            Drag::TabPressed { tab, .. } if !block.is_empty() => {
+                self.selection.clear();
+                self.touch_workspace(|ws| ws.activate_tab(tab));
+                self.sync_window_title();
+                self.ensure_active_tab_visible(gpu, style);
+            }
+            Drag::TabDragging { tab, target, .. } if in_bar => {
                 match tab_bar::drop_op(self.workspace.is_pinned(tab), target) {
                     DropOp::IntoGroup { group, pos } => {
                         self.touch_workspace(|ws| ws.move_tab_to_group_at(tab, group, pos));
@@ -6251,7 +6537,7 @@ impl WindowState {
                         self.touch_workspace(|ws| ws.move_tab_to_new_run(tab, group_index));
                     }
                     op @ (DropOp::Pin { .. } | DropOp::ReorderPinned { .. } | DropOp::Unpin(_)) => {
-                        zone_op = Some((tab, op));
+                        zone_op = Some((vec![tab], op));
                     }
                 }
             }
@@ -6259,7 +6545,7 @@ impl WindowState {
                 group,
                 preview_index,
                 ..
-            } if self.in_bar(self.cursor_position.1, style) => {
+            } if in_bar => {
                 self.touch_workspace(|ws| ws.move_group(group, preview_index));
             }
             Drag::GroupPressed { group, .. } => {
@@ -6275,6 +6561,60 @@ impl WindowState {
         }
         self.window.set_cursor(CursorIcon::Default);
         zone_op
+    }
+
+    /// Drops the dragged selection on `target` (ADR-0091 §6): `grabbed` plus
+    /// the rest of the block, as one unit. The selection is cleared and
+    /// `grabbed` becomes the active tab -- before the move, so a block that
+    /// lands in a collapsed group expands it (`Workspace::move_tabs`).
+    ///
+    /// A drop on the track is applied here, by `Workspace::move_tabs`, which
+    /// puts the block contiguously in its visual order. A drop on the zone
+    /// is returned for `App` (it owns the pinned list), with the block in
+    /// visual order: it pins them one by one from `pos`.
+    fn drop_block(
+        &mut self,
+        grabbed: TabId,
+        rest: Vec<TabId>,
+        target: DragDrop,
+    ) -> Option<(Vec<TabId>, DropOp)> {
+        let all: Vec<TabId> = self
+            .workspace
+            .track_order()
+            .filter(|&id| id == grabbed || rest.contains(&id))
+            .collect();
+        self.selection.clear();
+        self.touch_workspace(|ws| ws.activate_tab(grabbed));
+        let op = tab_bar::drop_op(false, target);
+        let zone_op = match tab_bar::block_insert_at(op) {
+            Some(porecatu_core::InsertAt::Pinned { .. }) => Some((all, op)),
+            Some(at) => {
+                self.touch_workspace(|ws| ws.move_tabs(&all, at));
+                None
+            }
+            None => None,
+        };
+        self.sync_window_title();
+        zone_op
+    }
+
+    /// The auto-scroll of the track during a tab or group drag (espec §2.19):
+    /// with `logical_x` less than `DRAG_EDGE_ZONE_PX` from an edge of the track
+    /// of **this** window, it scrolls one step. ADR-0087 §5: only inside the
+    /// track -- over the pinned zone (left of `track_left`) it does not scroll,
+    /// which is where a drop on the zone is aimed. One rule for the two bars
+    /// that can show the ghost: the origin's and the destination's (ADR-0091
+    /// §3, where `logical_x` is the cursor in this window's coordinates).
+    fn drag_autoscroll(&mut self, logical_x: f32, style: &TabBarStyle) {
+        let pinned_count = self.workspace.pinned().len();
+        let track_left = tab_bar::track_shift(style, is_macos(), pinned_count);
+        let track_right =
+            track_left + tab_bar::trilha_width(style, self.logical_width, is_macos(), pinned_count);
+        if logical_x >= track_left && logical_x < track_left + DRAG_EDGE_ZONE_PX {
+            self.scroll_offset = (self.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
+        } else if logical_x > track_right - DRAG_EDGE_ZONE_PX {
+            self.scroll_offset += DRAG_AUTOSCROLL_STEP_PX;
+        }
     }
 
     /// `y` físico está dentro da faixa da barra de abas (topo da janela).
@@ -6745,6 +7085,7 @@ impl WindowState {
             && self.group_context_menu.is_none()
             && self.group_editor.is_none()
             && self.move_to_group.is_none()
+            && self.move_to_window.is_none()
             && matches!(self.drag, Drag::Idle)
         {
             let layout = tab_bar::fit_width(
@@ -6983,6 +7324,14 @@ struct App {
     /// árvore de comparação.
     keymap: HashMap<Chord, Action>,
     windows: HashMap<WindowId, WindowState>,
+    /// Terminal windows, most recently focused first (ADR-0091 §2). Only the
+    /// windows of `windows`: the settings window and the profile editor never
+    /// enter it.
+    focus_order: cross_window::FocusOrder<WindowId>,
+    /// The drag of tabs or a group that can cross windows (ADR-0091 §3):
+    /// `Some` from the moment the press is promoted to a drag until the drop
+    /// or the cancel.
+    cross_drag: Option<CrossDrag>,
     /// Os ciclos de reconexão, **por conexão** (a que caiu): estado do
     /// processo chaveado pelo que descreve, nunca pela janela (ADR-0076 §3).
     reconnects: app_reconnect::Cycles,
@@ -7441,6 +7790,8 @@ impl App {
             term_params,
             keymap,
             windows: HashMap::new(),
+            focus_order: cross_window::FocusOrder::new(),
+            cross_drag: None,
             reconnects: HashMap::new(),
             settings: None,
             settings_last_group: settings::Group::General,
@@ -7804,9 +8155,32 @@ impl App {
     /// `winit`) -- a cascata prende à tela inteira, não à área útil que o
     /// roadmap descreve.
     fn open_window(&mut self, event_loop: &ActiveEventLoop, origin: Option<WindowId>) {
+        let attributes = self.cascade_attributes(origin);
+        // ADR-0015: "a janela nova abre com uma aba no cwd da aba ativa no
+        // momento da criação" -- da janela de ORIGEM, já que a nova ainda
+        // não tem nenhuma aba. Resolvido **antes** de criar a janela: o
+        // empréstimo de `origin_state` (que aponta para dentro de
+        // `self.windows`) precisa terminar antes do empréstimo mutável de
+        // `self` que `create_window_with_attributes` toma abaixo.
         let origin_state = origin.and_then(|id| self.windows.get(&id));
+        let cwd = origin_state
+            .and_then(|s| s.resolve_new_tab_cwd(&self.startup_directory))
+            .or_else(|| self.startup_directory.clone());
+        // RF-21.13: `window.new` nunca abre fixadas.
+        self.open_window_with(event_loop, attributes, cwd, false);
+    }
+
+    /// The attributes of a window that cascades from `origin` (ADR-0015, see
+    /// [`Self::open_window`]): the size of the origin, shifted by
+    /// [`NEW_WINDOW_CASCADE_PX`] and clamped to its monitor. Without an origin
+    /// (or one whose position is unknown) it is the platform default. One
+    /// formula for `window.new` and for the new window a transfer creates
+    /// (ADR-0090 §3 step 2, `NewWindowPlacement::Cascade`).
+    fn cascade_attributes(&self, origin: Option<WindowId>) -> WindowAttributes {
         let mut attributes = base_window_attributes(wants_transparent(&self.config));
-        if let Some(origin_window) = origin_state.map(|s| &s.window)
+        if let Some(origin_window) = origin
+            .and_then(|id| self.windows.get(&id))
+            .map(|state| &state.window)
             && let Ok(origin_position) = origin_window.outer_position()
         {
             let size = origin_window.inner_size();
@@ -7824,17 +8198,7 @@ impl App {
                 .with_inner_size(size)
                 .with_position(winit::dpi::PhysicalPosition::new(x, y));
         }
-        // ADR-0015: "a janela nova abre com uma aba no cwd da aba ativa no
-        // momento da criação" -- da janela de ORIGEM, já que a nova ainda
-        // não tem nenhuma aba. Resolvido **antes** de criar a janela: o
-        // empréstimo de `origin_state` (que aponta para dentro de
-        // `self.windows`) precisa terminar antes do empréstimo mutável de
-        // `self` que `create_window_with_attributes` toma abaixo.
-        let cwd = origin_state
-            .and_then(|s| s.resolve_new_tab_cwd(&self.startup_directory))
-            .or_else(|| self.startup_directory.clone());
-        // RF-21.13: `window.new` nunca abre fixadas.
-        self.open_window_with(event_loop, attributes, cwd, false);
+        attributes
     }
 
     /// Núcleo comum a [`Self::open_window`] e ao arranque em modo
@@ -7875,6 +8239,7 @@ impl App {
             self.open_pinned_tabs_into(&mut state, None);
         }
         self.windows.insert(window_id, state);
+        self.focus_order.touch(window_id);
     }
 
     /// ADR-0086 §5 (RF-21.13, RF-21.14, RF-21.15): abre as abas fixadas do
@@ -8071,16 +8436,7 @@ impl App {
         if state.rename.editing_tab() == Some(tab) {
             state.commit_rename();
         }
-        let saved = {
-            let panes = &state.panes;
-            state.workspace.tab(tab).map(|t| {
-                session_writer::pinned_tab_v1(t, |tab_id, pane_id| {
-                    panes
-                        .get(&(tab_id, pane_id))
-                        .and_then(PaneRuntime::session_cwd_fallback)
-                })
-            })
-        };
+        let saved = state.pinned_snapshot(tab);
         let Some(saved) = saved else {
             return false;
         };
@@ -8166,10 +8522,24 @@ impl App {
     /// the keyboard use, so the list is written on the spot and a failure is
     /// the warning of RF-21.28. `op` comes from `tab_bar::drop_op`; the two
     /// track operations are applied by `WindowState::finish_drag` itself.
-    fn apply_zone_drop(&mut self, window_id: WindowId, tab: TabId, op: DropOp) {
+    ///
+    /// `tabs` is the dragged tab alone, or the dragged selection in visual
+    /// order (ADR-0091 §6, RF-22.17): only a `Pin` carries more than one, and
+    /// it pins them one by one from `pos`, so they stay in order.
+    fn apply_zone_drop(&mut self, window_id: WindowId, tabs: &[TabId], op: DropOp) {
+        let Some(&tab) = tabs.first() else {
+            return;
+        };
         match op {
             DropOp::Pin { pos } => {
-                self.pin_tab_gesture(window_id, tab, Some(pos));
+                // `pos` moves on only for the tabs that got pinned, so a
+                // refusal does not leave a gap.
+                let mut next = pos;
+                for &id in tabs {
+                    if self.pin_tab_gesture(window_id, id, Some(next)) {
+                        next += 1;
+                    }
+                }
             }
             DropOp::ReorderPinned { pos } => {
                 let Some(state) = self.windows.get_mut(&window_id) else {
@@ -8418,6 +8788,7 @@ impl App {
         }
         state.sync_window_title();
         self.windows.insert(window_id, state);
+        self.focus_order.touch(window_id);
         Some(window_id)
     }
 
@@ -8779,6 +9150,17 @@ impl App {
         Some(state)
     }
 
+    /// The terminal windows that still exist, most recently focused first
+    /// (ADR-0091 §2). Filtered against `windows` as a safety net.
+    fn windows_by_recent_focus(&self) -> Vec<WindowId> {
+        self.focus_order
+            .as_slice()
+            .iter()
+            .copied()
+            .filter(|id| self.windows.contains_key(id))
+            .collect()
+    }
+
     /// Fecha uma janela sem perguntar: sinaliza todas as abas primeiro,
     /// espera depois -- custo de uma volta de sinalização, não N × timeout
     /// (ADR-0017 item 4). Remove a janela do mapa; se não sobrou nenhuma,
@@ -8805,6 +9187,7 @@ impl App {
         let Some(state) = self.windows.remove(&window_id) else {
             return;
         };
+        self.focus_order.remove(window_id);
         if self.windows.is_empty() {
             // `app.quit`/RF-3.4: gravação síncrona da sessão, antes de
             // sair -- fecha o no-op documentado desde a F2 (ADR-0017 §7).
@@ -9106,6 +9489,17 @@ impl App {
                     state.close_all_popovers();
                     state.move_to_group = Some(MoveToGroupPopover::new(tab, menu.anchor, targets));
                     state.window.request_redraw();
+                }
+            }
+            // PRD-022 RF-22.20, decision 2: the whole selection when the clicked
+            // tab is part of it, else only the clicked tab (as pinned when it
+            // is). Hangs from the point of the menu that opened it.
+            MenuAction::MoveToWindow => {
+                let payload = self.windows.get(&window_id).and_then(|state| {
+                    move_to_window::tab_move_payload(&state.workspace, &state.selection, Some(tab))
+                });
+                if let Some(payload) = payload {
+                    self.open_move_to_window(window_id, payload, menu.anchor);
                 }
             }
             // ADR-0075 §8: o painel focado da aba do menu.
@@ -11405,6 +11799,7 @@ impl ApplicationHandler<Wakeup> for App {
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.mark_session_dirty(); // RF-3.2: redimensionar a janela
                     state.remember_shown_placement();
+                    state.remember_normal_size(size);
                 }
                 if let (Some(state), Some(gpu)) = (self.windows.get_mut(&window_id), &self.gpu) {
                     state.resize_to(size.width, size.height, gpu, self.cell_metrics, &self.style);
@@ -11468,6 +11863,7 @@ impl ApplicationHandler<Wakeup> for App {
                 // ADR-0019: tooltip some ao perder foco a janela. Menus,
                 // editor de grupo e popover de destino: mesma regra do
                 // ADR-0014/ADR-0023 ("perda de foco fecha").
+                let mut drag_cancelled = false;
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.focused = false;
                     state.hover.dismiss();
@@ -11481,10 +11877,31 @@ impl ApplicationHandler<Wakeup> for App {
                     state.pressed_bar_button = None;
                     state.armed_overlay = None;
                     state.overlay_press_consumed = false;
+                    // ADR-0091 §7, RF-22.16: the origin losing the focus cancels
+                    // the drag of a tab or group -- the release may never come,
+                    // and a drag alive with no button down is stuck state.
+                    if matches!(
+                        state.drag,
+                        Drag::TabPressed { .. }
+                            | Drag::TabDragging { .. }
+                            | Drag::GroupPressed { .. }
+                            | Drag::GroupDragging { .. }
+                    ) {
+                        state.drag = Drag::Idle;
+                        state.drag_block.clear();
+                        state.window.set_cursor(CursorIcon::Default);
+                        drag_cancelled = true;
+                    }
                     state.window.request_redraw();
+                }
+                if drag_cancelled {
+                    self.cancel_cross_drag();
                 }
             }
             WindowEvent::Focused(true) => {
+                if self.windows.contains_key(&window_id) {
+                    self.focus_order.touch(window_id);
+                }
                 // RF-5.24: cursor volta de vazado para cheio ao ganhar foco.
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.focused = true;
@@ -11698,13 +12115,14 @@ impl App {
             return;
         }
         if state.group_context_menu.is_some() {
-            let group = state.group_context_menu.map(|m| m.group);
+            let menu = state.group_context_menu;
+            let mut open_move = None;
             if let Some(action) = state.handle_group_menu_key(&key)
-                && let Some(group) = group
+                && let Some(menu) = menu
                 && let Some(gpu) = &mut self.gpu
             {
-                state.run_group_action(
-                    group,
+                let outcome = state.run_group_action(
+                    menu.group,
                     action,
                     gpu,
                     self.cell_metrics,
@@ -11717,6 +12135,12 @@ impl App {
                     &self.config.project_file,
                     &self.catalog,
                 );
+                if outcome == GroupActionOutcome::OpenMoveToWindow {
+                    open_move = Some((TransferPayload::Group(menu.group), menu.anchor));
+                }
+            }
+            if let Some((payload, anchor)) = open_move {
+                self.open_move_to_window(window_id, payload, anchor);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -11762,10 +12186,16 @@ impl App {
         }
         if state.group_editor.is_some() {
             let outcome = state.handle_group_editor_key(&key);
+            let mut open_move = None;
             if let GroupEditorOutcome::Action(group, action) = outcome
                 && let Some(gpu) = &mut self.gpu
             {
-                state.run_group_action(
+                let anchor = app_move_to_window::group_editor_anchor(
+                    state.group_pill_screen_x(group, gpu, &self.style),
+                    &self.style,
+                    &self.config,
+                );
+                let outcome = state.run_group_action(
                     group,
                     action,
                     gpu,
@@ -11779,6 +12209,12 @@ impl App {
                     &self.config.project_file,
                     &self.catalog,
                 );
+                if outcome == GroupActionOutcome::OpenMoveToWindow {
+                    open_move = Some((TransferPayload::Group(group), anchor));
+                }
+            }
+            if let Some((payload, anchor)) = open_move {
+                self.open_move_to_window(window_id, payload, anchor);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -11791,6 +12227,16 @@ impl App {
                 && let Some(tab) = tab
             {
                 state.run_move_target(tab, target, &self.catalog);
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+        if state.move_to_window.is_some() {
+            let chosen = state.handle_move_to_window_key(&key);
+            if let Some((payload, target)) = chosen {
+                self.run_move_to_window_choice(event_loop, window_id, payload, target);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -11813,8 +12259,11 @@ impl App {
             && matches!(key.logical_key, Key::Named(NamedKey::Escape))
         {
             state.drag = Drag::Idle;
+            state.drag_block.clear();
             state.window.set_cursor(CursorIcon::Default);
             state.window.request_redraw();
+            // RF-22.16: the ghost may be on another window; take it from there.
+            self.cancel_cross_drag();
             return;
         }
         if state.rename.editing_tab().is_some() {
@@ -11905,6 +12354,14 @@ impl App {
                 }
             }
             ActionOutcome::PinnedReordered => self.sync_pinned_order(window_id),
+            // PRD-022 RF-22.24: the popover hangs just under the active tab.
+            ActionOutcome::OpenMoveToWindow { group } => {
+                if let Some((payload, anchor)) =
+                    state.move_to_window_by_key(group, gpu, &self.style)
+                {
+                    self.open_move_to_window(window_id, payload, anchor);
+                }
+            }
             ActionOutcome::Zoom(delta) => self.apply_zoom(delta),
             ActionOutcome::CycleTheme => self.cycle_theme(),
             // ADR-0055 §3: `session.save_named` abre em edição (campo em
@@ -12150,7 +12607,7 @@ impl App {
                     editor.set_action_highlight(index);
                 }
                 let action = group_menu::EDITOR_ACTION_ORDER[index];
-                state.run_group_action(
+                let outcome = state.run_group_action(
                     group,
                     action,
                     gpu,
@@ -12164,6 +12621,14 @@ impl App {
                     &self.config.project_file,
                     &self.catalog,
                 );
+                if outcome == GroupActionOutcome::OpenMoveToWindow {
+                    let anchor = app_move_to_window::group_editor_anchor(
+                        anchor_x,
+                        &self.style,
+                        &self.config,
+                    );
+                    self.open_move_to_window(window_id, TransferPayload::Group(group), anchor);
+                }
             }
             None => {
                 state.group_editor = None;
@@ -12191,6 +12656,19 @@ impl App {
         // só mover o realce -- mesmo efeito de `ArrowUp`/`ArrowDown`
         // (`handle_move_to_group_key`).
         if let Some(popover) = &mut state.move_to_group {
+            let notches = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if notches != 0.0 {
+                popover.move_highlight(-notches.signum() as isize);
+                state.window.request_redraw();
+            }
+            return;
+        }
+        // "Move to window..." has the anatomy of the popover above, and so
+        // the wheel moves its highlight the same way.
+        if let Some((_, popover)) = &mut state.move_to_window {
             let notches = match delta {
                 MouseScrollDelta::LineDelta(_, y) => y,
                 MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
@@ -12453,6 +12931,26 @@ impl App {
             return;
         }
 
+        // "Move to window...": hover moves the highlight between the visible
+        // rows, as in the popover above.
+        if let Some((_, popover)) = &mut state.move_to_window {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            let layout = overlay::layout_move_to_window(
+                popover,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            if let Some(index) = overlay::move_to_group_hit(&layout, logical_point) {
+                popover.set_highlight(index);
+            }
+            state.window.request_redraw();
+            return;
+        }
+
         // Popover de sessões: hover move o realce entre item de salvar e
         // linhas -- mesmo estado do teclado (ADR-0055 §3) -- e arrasta
         // dentro do campo em modo de edição, mesmo padrão do editor de
@@ -12625,6 +13123,10 @@ impl App {
             return;
         }
 
+        // The logical point of the press, set on the move that promotes a press
+        // to a tab or group drag: that is when the content the other windows
+        // draw is built (ADR-0091 §3).
+        let mut promoted_press: Option<(f32, f32)> = None;
         let handled_by_drag = match &mut state.drag {
             Drag::TabPressed {
                 tab,
@@ -12648,33 +13150,16 @@ impl App {
                         grab_offset: *grab_offset,
                         target: DragDrop::NewRun { group_index: 0 },
                     };
+                    promoted_press = Some(*start);
                     state.drag = dragging;
                     state.window.set_cursor(CursorIcon::Grabbing);
                     state.hover.dismiss();
                 }
                 true
             }
-            Drag::TabDragging { .. } | Drag::GroupDragging { .. } => {
-                let logical_x = position.x as f32 / state.scale;
-                let pinned_count = state.workspace.pinned().len();
-                let track_left = tab_bar::track_shift(&self.style, is_macos(), pinned_count);
-                let track_right = track_left
-                    + tab_bar::trilha_width(
-                        &self.style,
-                        state.logical_width,
-                        is_macos(),
-                        pinned_count,
-                    );
-                // ADR-0087 §5: only inside the track. Over the pinned zone (left
-                // of `track_left`) the track does not scroll, which is where a
-                // drop on the zone is aimed.
-                if logical_x >= track_left && logical_x < track_left + DRAG_EDGE_ZONE_PX {
-                    state.scroll_offset = (state.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
-                } else if logical_x > track_right - DRAG_EDGE_ZONE_PX {
-                    state.scroll_offset += DRAG_AUTOSCROLL_STEP_PX;
-                }
-                true
-            }
+            // The auto-scroll of the track is in `App::cross_drag_moved`: which
+            // bar scrolls depends on which window the ghost is over.
+            Drag::TabDragging { .. } | Drag::GroupDragging { .. } => true,
             Drag::GroupPressed {
                 group,
                 start,
@@ -12687,6 +13172,7 @@ impl App {
                 let past_threshold = (logical.0 - start.0).abs() > DRAG_THRESHOLD_PX
                     || (logical.1 - start.1).abs() > DRAG_THRESHOLD_PX;
                 if past_threshold {
+                    promoted_press = Some(*start);
                     state.drag = Drag::GroupDragging {
                         group: *group,
                         grab_offset: *grab_offset,
@@ -12780,6 +13266,14 @@ impl App {
 
         if handled_by_drag {
             state.window.request_redraw();
+            // ADR-0091 §1/§2: with a tab or group drag alive, this move may
+            // hand the ghost to the bar of another window, or take it back.
+            if matches!(
+                state.drag,
+                Drag::TabDragging { .. } | Drag::GroupDragging { .. }
+            ) {
+                self.cross_drag_moved(window_id, promoted_press);
+            }
             return;
         }
 
@@ -12792,6 +13286,7 @@ impl App {
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
+            || state.move_to_window.is_some()
             || state.session_picker.is_some()
             || state.rename.editing_tab().is_some();
         let logical_point = (
@@ -13049,6 +13544,10 @@ impl App {
             let layout = overlay::layout_move_to_group(popover, &self.config, width, height);
             return overlay::move_to_group_hit(&layout, point).map(OverlayTarget::MoveToGroup);
         }
+        if let Some((_, popover)) = state.move_to_window.as_ref() {
+            let layout = overlay::layout_move_to_window(popover, &self.config, width, height);
+            return overlay::move_to_group_hit(&layout, point).map(OverlayTarget::MoveToWindow);
+        }
         if let Some(picker) = state.session_picker.as_ref() {
             let layout = overlay::layout_session_picker(
                 picker,
@@ -13266,14 +13765,16 @@ impl App {
                 state.window.request_redraw();
                 return;
             }
-            // ADR-0087 §5: a drop that touches the pinned zone is applied by
-            // `App` below, once `state` is out of use (it owns the list).
-            let mut zone_drop = None;
+            // ADR-0091 §4: a drop decides by the global point -- the bar of
+            // this window, the bar of another, a cancel or a new window --
+            // and ADR-0087 §5: one that touches the pinned zone is applied by
+            // `App` once `state` is out of use (it owns the list). All of it
+            // is `App::release_drag`.
             if button == MouseButton::Left && !matches!(state.drag, Drag::Idle) {
-                if let Some(gpu) = &mut self.gpu {
-                    zone_drop = state.finish_drag(gpu, &self.style);
-                }
-            } else if !state.in_bar(state.cursor_position.1, &self.style)
+                self.release_drag(window_id, event_loop);
+                return;
+            }
+            if !state.in_bar(state.cursor_position.1, &self.style)
                 && !state.in_status_bar(state.cursor_position.1, &self.style)
             {
                 // Solta o botão sobre o terminal: repassa ao programa (SGR/X10
@@ -13306,9 +13807,6 @@ impl App {
                 }
             }
             state.window.request_redraw();
-            if let Some((tab, op)) = zone_drop {
-                self.apply_zone_drop(window_id, tab, op);
-            }
             return;
         }
 
@@ -13450,11 +13948,12 @@ impl App {
             );
             let hit = overlay::group_menu_hit(&layout, logical_point);
             state.group_context_menu = None;
+            let mut open_move = None;
             if button == MouseButton::Left
                 && let Some(index) = hit
                 && let Some(gpu) = &mut self.gpu
             {
-                state.run_group_action(
+                let outcome = state.run_group_action(
                     menu.group,
                     items[index].action,
                     gpu,
@@ -13468,6 +13967,12 @@ impl App {
                     &self.config.project_file,
                     &self.catalog,
                 );
+                if outcome == GroupActionOutcome::OpenMoveToWindow {
+                    open_move = Some((TransferPayload::Group(menu.group), menu.anchor));
+                }
+            }
+            if let Some((payload, anchor)) = open_move {
+                self.open_move_to_window(window_id, payload, anchor);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -13577,6 +14082,32 @@ impl App {
                 state.run_move_target(tab, target, &self.catalog);
             } else {
                 state.move_to_group = None;
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
+        // "Move to window...": a click on a row moves, any other closes.
+        if let Some((_, popover)) = &state.move_to_window {
+            let layout = overlay::layout_move_to_window(
+                popover,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            let hit = overlay::move_to_group_hit(&layout, logical_point);
+            let chosen = match (button, hit, state.move_to_window.take()) {
+                (MouseButton::Left, Some(index), Some((payload, mut popover))) => {
+                    popover.set_highlight(index);
+                    Some((payload, popover.selected()))
+                }
+                _ => None,
+            };
+            state.move_to_window = None;
+            if let Some((payload, target)) = chosen {
+                self.run_move_to_window_choice(event_loop, window_id, payload, target);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -14024,6 +14555,7 @@ impl App {
         // arraste: o alvo já tem o fantasma como feedback próprio, e a
         // pílula/aba de origem não deveria brilhar por baixo dele.
         let bar_hover = if matches!(state.drag, Drag::Idle)
+            && state.incoming.is_none()
             && state.in_bar(state.cursor_position.1, style)
         {
             let cursor_logical = (
@@ -14065,135 +14597,276 @@ impl App {
         let mut group_drag_ghost = None;
         let mut drag_highlight = None;
         let now = Instant::now();
-        let paint_layout = match state.drag {
-            Drag::TabDragging {
-                tab,
-                grab_offset,
-                target: previous_target,
-            } => {
-                let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
-                let ghost_screen_x = cursor_logical_x - grab_offset;
-                let pinned: Vec<TabId> = state.workspace.pinned().to_vec();
-                let from_zone = state.workspace.is_pinned(tab);
-                // O fantasma mantém a forma de **origem** (ADR-0087 §5): a
-                // caixa quadrada para quem vem da zona, a aba de sempre para
-                // quem vem da trilha. `base_layout` (não o preview): a fonte
-                // do conteúdo do fantasma tem que existir sempre, mesmo
-                // quando o alvo corrente é um grupo colapsado -- lá o preview
-                // não gera `TabRect` nenhum pra esta aba (nota de
-                // `chrome::DragGhost`).
-                let source = if from_zone {
-                    Some(GhostSource::Pinned)
-                } else {
-                    base_layout
-                        .groups
-                        .iter()
-                        .flat_map(|g| &g.tabs)
-                        .find(|t| t.id == tab)
-                        .cloned()
-                        .map(GhostSource::Track)
-                };
-                let width = match &source {
-                    Some(GhostSource::Pinned) => tab_bar::app_menu_button_size(style),
-                    Some(GhostSource::Track(t)) => t.rect.width,
-                    None => 0.0,
-                };
-                // O centro do fantasma, em coordenadas de **tela**: à esquerda
-                // de `track_shift` é a zona de fixadas, à direita o alvo de
-                // trilha de sempre (`tab_bar::tab_drag_target`).
-                let ghost_center = ghost_screen_x + width / 2.0;
-                let target = tab_bar::tab_drag_target(
-                    &base_layout,
-                    style,
-                    is_mac,
-                    &pinned,
-                    tab,
-                    ghost_center,
-                    state.scroll_offset,
-                );
-                // A zona como o arraste a mostra: o vão para a aba que chega,
-                // o buraco da caixa que sai. Quando muda, as caixas deslizam da
-                // posição em que estão agora para a nova (`.15s`).
-                let zone_before = tab_bar::pinned_preview_order(&pinned, tab, previous_target);
-                let zone_after = tab_bar::pinned_preview_order(&pinned, tab, target);
-                if zone_before != zone_after {
-                    let from = zone_before
-                        .iter()
-                        .enumerate()
-                        .map(|(slot, &id)| {
-                            let slot_x = tab_bar::pinned_rect(style, is_mac, slot).x;
-                            (id, state.animations.pinned_x(id, slot_x, now))
-                        })
-                        .collect();
-                    state
-                        .animations
-                        .start_pinned_slide(from, PINNED_SLIDE_DURATION, now);
-                }
-                state.drag = Drag::TabDragging {
+        // ADR-0091 §3: what this window paints when the drag is **not its own**.
+        // A drag from another window that has the cursor over this bar is
+        // painted from a preview of *this* workspace with the arrivals in it
+        // (`preview_workspace`, which is also what the chrome reads the ghost's
+        // state from); the origin, while the ghost is elsewhere, paints only
+        // the hole of what left.
+        let mut preview_workspace: Option<Workspace> = None;
+        let mut incoming_icon: Option<(TabId, pinned::PinnedKey)> = None;
+        let incoming_now = state.incoming.as_ref().map(|incoming| {
+            (
+                std::rc::Rc::clone(&incoming.content),
+                incoming.logical,
+                incoming.target,
+            )
+        });
+        let hole_payload = if state.drag_elsewhere {
+            self.cross_drag
+                .as_ref()
+                .map(|cross| cross.ghost.payload.clone())
+        } else {
+            None
+        };
+        let paint_layout = if let Some((content, logical, previous)) = incoming_now {
+            let pinned: Vec<TabId> = state.workspace.pinned().to_vec();
+            // `resolve_incoming_target` is the one place the target of an
+            // incoming drag is read (stage 08 calls it on the drop too).
+            let target = app_cross_drag::resolve_incoming_target(
+                &content,
+                logical.0,
+                &base_layout,
+                &pinned,
+                state.scroll_offset,
+                style,
+                is_mac,
+            );
+            let env = app_cross_drag::ViewEnv {
+                style,
+                is_mac,
+                bar_width,
+                now,
+            };
+            let view = app_cross_drag::incoming_view(
+                &content,
+                logical.0,
+                target,
+                previous,
+                &state.workspace,
+                &mut state.animations,
+                &env,
+                gpu.text_measurer(),
+            );
+            if let Some(incoming) = &mut state.incoming {
+                incoming.target = Some(target);
+            }
+            if let (Some(ghost), Some(key)) = (&view.ghost, content.icon_key) {
+                incoming_icon = Some((ghost.tab, key));
+            }
+            drag_ghost = view.ghost;
+            group_drag_ghost = view.group_ghost;
+            drag_highlight = view.highlight;
+            preview_workspace = Some(view.workspace);
+            view.layout
+        } else if let Some(payload) = hole_payload {
+            let env = app_cross_drag::ViewEnv {
+                style,
+                is_mac,
+                bar_width,
+                now,
+            };
+            let hole = app_cross_drag::hole_view(
+                &payload,
+                &state.workspace,
+                &base_layout,
+                &env,
+                gpu.text_measurer(),
+            );
+            drag_ghost = hole.ghost;
+            hole.layout
+        } else {
+            match state.drag {
+                Drag::TabDragging {
                     tab,
                     grab_offset,
-                    target,
-                };
-                if let Some(source) = source {
-                    let zone_highlight = matches!(target, DragDrop::Pinned { .. })
-                        .then(|| tab_bar::pinned_zone_rect(style, is_mac, zone_after.len()));
-                    drag_ghost = Some(DragGhost {
+                    target: previous_target,
+                } => {
+                    let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
+                    let ghost_screen_x = cursor_logical_x - grab_offset;
+                    let pinned: Vec<TabId> = state.workspace.pinned().to_vec();
+                    let from_zone = state.workspace.is_pinned(tab);
+                    // O fantasma mantém a forma de **origem** (ADR-0087 §5): a
+                    // caixa quadrada para quem vem da zona, a aba de sempre para
+                    // quem vem da trilha. `base_layout` (não o preview): a fonte
+                    // do conteúdo do fantasma tem que existir sempre, mesmo
+                    // quando o alvo corrente é um grupo colapsado -- lá o preview
+                    // não gera `TabRect` nenhum pra esta aba (nota de
+                    // `chrome::DragGhost`).
+                    let source = if from_zone {
+                        Some(GhostSource::Pinned)
+                    } else {
+                        base_layout
+                            .groups
+                            .iter()
+                            .flat_map(|g| &g.tabs)
+                            .find(|t| t.id == tab)
+                            .cloned()
+                            .map(GhostSource::Track)
+                    };
+                    let width = match &source {
+                        Some(GhostSource::Pinned) => tab_bar::app_menu_button_size(style),
+                        Some(GhostSource::Track(t)) => t.rect.width,
+                        // `Hole` is only the origin's while the ghost is over
+                        // another window; never produced here.
+                        Some(GhostSource::Hole) | None => 0.0,
+                    };
+                    // O centro do fantasma, em coordenadas de **tela**: à esquerda
+                    // de `track_shift` é a zona de fixadas, à direita o alvo de
+                    // trilha de sempre (`tab_bar::tab_drag_target`).
+                    let ghost_center = ghost_screen_x + width / 2.0;
+                    // ADR-0091 §6: a dragged selection is the grabbed tab plus
+                    // `drag_block`, in visual order. Its target is read against
+                    // the layout of the workspace **without** any of them, the
+                    // convention `Workspace::move_tabs` reads `at` in; a lone tab
+                    // keeps `base_layout`, where it still sits.
+                    let block_all: Vec<TabId> = if state.drag_block.is_empty() {
+                        Vec::new()
+                    } else {
+                        state
+                            .workspace
+                            .track_order()
+                            .filter(|&id| id == tab || state.drag_block.contains(&id))
+                            .collect()
+                    };
+                    let target = if block_all.is_empty() {
+                        tab_bar::tab_drag_target(
+                            &base_layout,
+                            style,
+                            is_mac,
+                            &pinned,
+                            tab,
+                            ghost_center,
+                            state.scroll_offset,
+                        )
+                    } else {
+                        let mut without_block = state.workspace.clone();
+                        without_block.take_tabs(&block_all);
+                        let target_layout = tab_bar::fit_width(
+                            &without_block,
+                            style,
+                            bar_width,
+                            gpu.text_measurer(),
+                            is_mac,
+                        );
+                        tab_bar::tab_drag_target(
+                            &target_layout,
+                            style,
+                            is_mac,
+                            &pinned,
+                            tab,
+                            ghost_center,
+                            state.scroll_offset,
+                        )
+                    };
+                    // A zona como o arraste a mostra: o vão para a aba que chega,
+                    // o buraco da caixa que sai. Quando muda, as caixas deslizam da
+                    // posição em que estão agora para a nova (`.15s`). The same
+                    // preview of the zone the bar of another window draws for a
+                    // drag that arrives (`app_cross_drag::preview_zone`).
+                    let dragged_all: Vec<TabId> = if block_all.is_empty() {
+                        vec![tab]
+                    } else {
+                        block_all.clone()
+                    };
+                    let zone_after = app_cross_drag::preview_zone(
+                        &mut state.animations,
+                        now,
+                        style,
+                        is_mac,
+                        &pinned,
+                        &dragged_all,
+                        previous_target,
+                        target,
+                    );
+                    state.drag = Drag::TabDragging {
                         tab,
+                        grab_offset,
+                        target,
+                    };
+                    if let Some(source) = source {
+                        let zone_highlight =
+                            app_cross_drag::zone_highlight(style, is_mac, target, zone_after.len());
+                        drag_ghost = Some(DragGhost {
+                            tab,
+                            screen_x: ghost_screen_x,
+                            source,
+                            pinned_order: zone_after,
+                            zone_highlight,
+                            hidden: block_all.iter().copied().filter(|&id| id != tab).collect(),
+                            base_pinned: None,
+                        });
+                    }
+                    drag_highlight = tab_bar::drag_highlight_rect(&base_layout, target);
+
+                    if !block_all.is_empty() {
+                        // The block lands as one unit (`Workspace::move_tabs`);
+                        // the highlight is of the wrapper as the preview shapes it.
+                        let preview = app_cross_drag::preview_tabs(
+                            &state.workspace,
+                            app_cross_drag::TabsArrival::LocalBlock {
+                                grabbed: tab,
+                                all: &block_all,
+                            },
+                            false,
+                            target,
+                        );
+                        let preview_layout = tab_bar::fit_width(
+                            &preview.workspace,
+                            style,
+                            bar_width,
+                            gpu.text_measurer(),
+                            is_mac,
+                        );
+                        drag_highlight = tab_bar::drag_highlight_rect(&preview_layout, target);
+                        preview_layout
+                    } else {
+                        let preview = app_cross_drag::preview_tabs(
+                            &state.workspace,
+                            app_cross_drag::TabsArrival::Local { tab },
+                            from_zone,
+                            target,
+                        );
+                        tab_bar::fit_width(
+                            &preview.workspace,
+                            style,
+                            bar_width,
+                            gpu.text_measurer(),
+                            is_mac,
+                        )
+                    }
+                }
+                Drag::GroupDragging {
+                    group, grab_offset, ..
+                } => {
+                    let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
+                    let ghost_screen_x = cursor_logical_x - grab_offset;
+                    let ghost_content_x = ghost_screen_x - track_left + state.scroll_offset;
+                    let width = tab_bar::pill_rect(&base_layout, group)
+                        .map(|r| r.width)
+                        .unwrap_or(0.0);
+                    let ghost_center = ghost_content_x + width / 2.0;
+                    let preview_index =
+                        tab_bar::group_drag_target_index(&base_layout, group, ghost_center);
+                    state.drag = Drag::GroupDragging {
+                        group,
+                        grab_offset,
+                        preview_index,
+                    };
+                    group_drag_ghost = Some(GroupDragGhost {
+                        group,
                         screen_x: ghost_screen_x,
-                        source,
-                        pinned_order: zone_after,
-                        zone_highlight,
                     });
-                }
-                drag_highlight = tab_bar::drag_highlight_rect(&base_layout, target);
 
-                let mut preview = state.workspace.clone();
-                match tab_bar::drop_op(from_zone, target) {
-                    DropOp::IntoGroup { group, pos } => {
-                        preview.move_tab_to_group_at(tab, group, pos);
-                    }
-                    DropOp::NewRun { group_index } => {
-                        preview.move_tab_to_new_run(tab, group_index);
-                    }
-                    DropOp::Pin { pos } => {
-                        preview.pin_tab(tab, pos);
-                    }
-                    DropOp::ReorderPinned { pos } => {
-                        preview.move_pinned(tab, pos);
-                    }
-                    DropOp::Unpin(unpin_target) => {
-                        preview.unpin_tab(tab, unpin_target);
-                    }
+                    let (preview, _) = app_cross_drag::preview_group(
+                        &state.workspace,
+                        app_cross_drag::GroupArrival::Local(group),
+                        preview_index,
+                    );
+                    tab_bar::fit_width(&preview, style, bar_width, gpu.text_measurer(), is_mac)
                 }
-                tab_bar::fit_width(&preview, style, bar_width, gpu.text_measurer(), is_mac)
+                _ => base_layout,
             }
-            Drag::GroupDragging {
-                group, grab_offset, ..
-            } => {
-                let cursor_logical_x = state.cursor_position.0 as f32 / state.scale;
-                let ghost_screen_x = cursor_logical_x - grab_offset;
-                let ghost_content_x = ghost_screen_x - track_left + state.scroll_offset;
-                let width = tab_bar::pill_rect(&base_layout, group)
-                    .map(|r| r.width)
-                    .unwrap_or(0.0);
-                let ghost_center = ghost_content_x + width / 2.0;
-                let preview_index =
-                    tab_bar::group_drag_target_index(&base_layout, group, ghost_center);
-                state.drag = Drag::GroupDragging {
-                    group,
-                    grab_offset,
-                    preview_index,
-                };
-                group_drag_ghost = Some(GroupDragGhost {
-                    group,
-                    screen_x: ghost_screen_x,
-                });
-
-                let mut preview = state.workspace.clone();
-                preview.move_group(group, preview_index);
-                tab_bar::fit_width(&preview, style, bar_width, gpu.text_measurer(), is_mac)
-            }
-            _ => base_layout,
         };
 
         // PRD-018/ADR-0062 §2: a imagem da janela, ou `None`. Montada antes do
@@ -14225,15 +14898,23 @@ impl App {
         state.window_surface.set_blur_source(blur_source);
         // ADR-0088 §5/§6: the own textures of this window's pinned tabs; the
         // others draw the app icon.
-        let pinned_icons = pinned_icon::textures_for(
+        let mut pinned_icons = pinned_icon::textures_for(
             &self.pinned,
             &self.pinned_icons,
             state.window.id(),
             state.workspace.pinned(),
         );
+        // ADR-0091 §3: the ghost of a pinned box that arrives from another
+        // window draws the icon it had there (the arrival has no entry of its
+        // own in this window's list until the drop).
+        if let Some((tab, key)) = incoming_icon
+            && let Some(texture) = self.pinned_icons.texture_of(key)
+        {
+            pinned_icons.insert(tab, texture);
+        }
         let chrome_primitives = chrome::paint(
             &paint_layout,
-            &state.workspace,
+            preview_workspace.as_ref().unwrap_or(&state.workspace),
             state.workspace.active_tab(),
             &state.rename,
             &state.selection,
@@ -14295,6 +14976,7 @@ impl App {
             || state.terminal_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
+            || state.move_to_window.is_some()
             || state.session_picker.is_some()
             || state.rename.editing_tab().is_some();
         let hovering_grid = !state.in_bar(state.cursor_position.1, style)
@@ -14677,6 +15359,22 @@ impl App {
                 &layout,
                 mv,
                 &state.workspace,
+                config,
+                pal,
+                &self.catalog,
+                gpu.text_measurer(),
+            ));
+        }
+        if let Some((_, mv)) = &state.move_to_window {
+            let layout = overlay::layout_move_to_window(
+                mv,
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            popover.extend(overlay::paint_move_to_window(
+                &layout,
+                mv,
                 config,
                 pal,
                 &self.catalog,

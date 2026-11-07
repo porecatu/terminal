@@ -10,6 +10,7 @@
 new = "Nouvel onglet"
 close = "Fermer l'onglet"
 move_to_group = "Déplacer vers le groupe"
+move_to_window = "Déplacer vers une fenêtre…"
 reconnect = "Reconnecter"
 pin = "Épingler l'onglet"
 unpin = "Désépingler l'onglet"
@@ -30,6 +31,7 @@ expand = "Développer le groupe"
 new_tab = "Nouvel onglet dans le groupe"
 close = { one = "Fermer le groupe ({count} onglet)", other = "Fermer le groupe ({count} onglets)" }
 dissolve = "Dissocier"
+move_to_window = "Déplacer vers une fenêtre…"
 
 [group_editor]
 section_group = "GROUPE"
@@ -38,6 +40,10 @@ default_name = "Nouveau groupe"
 
 [move_to_group]
 new_group = "Nouveau groupe"
+
+[move_to_window]
+new_window = "Nouvelle fenêtre"
+tab_count = { one = "{count} onglet", other = "{count} onglets" }
 
 [session_picker]
 save_item = "Enregistrer cette fenêtre…"
@@ -332,6 +338,7 @@ tab_rename = "Renommer l'onglet"
 tab_move_left = "Déplacer l'onglet vers la gauche"
 tab_move_right = "Déplacer l'onglet vers la droite"
 tab_toggle_pin = "Épingler ou désépingler l'onglet"
+tab_move_to_window = "Déplacer l'onglet ou la sélection vers une autre fenêtre"
 group_create = "Créer un groupe"
 group_dissolve = "Dissocier"
 group_rename = "Renommer le groupe"
@@ -340,6 +347,7 @@ group_next = "Groupe suivant"
 group_prev = "Groupe précédent"
 group_new_tab = "Nouvel onglet dans le groupe"
 group_close_all = "Fermer tous les onglets du groupe"
+group_move_to_window = "Déplacer le groupe vers une autre fenêtre"
 window_new = "Nouvelle fenêtre"
 window_close = "Fermer la fenêtre"
 window_toggle_fullscreen = "Basculer le plein écran"

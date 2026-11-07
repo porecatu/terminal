@@ -25,27 +25,34 @@ pub enum GroupAction {
     NewTab,
     CloseAll,
     Dissolve,
+    /// PRD-022 RF-22.20: opens the destination popover of the other windows
+    /// (`move_to_window.rs`) for the whole group.
+    MoveToWindow,
 }
 
 /// Ordem do RF-2.22 e do catálogo: renomear, mudar cor, colapsar/expandir,
-/// nova aba no grupo, fechar grupo, desagrupar.
-pub const GROUP_ACTION_ORDER: [GroupAction; 6] = [
+/// nova aba no grupo, fechar grupo, desagrupar e, por último, mover para
+/// janela (PRD-022, decisão do dono: no fim da lista).
+pub const GROUP_ACTION_ORDER: [GroupAction; 7] = [
     GroupAction::Rename,
     GroupAction::SetColor,
     GroupAction::ToggleCollapse,
     GroupAction::NewTab,
     GroupAction::CloseAll,
     GroupAction::Dissolve,
+    GroupAction::MoveToWindow,
 ];
 
-/// Editor de grupo (espec. §2.10, item 4): só três das seis -- renomear e
+/// Editor de grupo (espec. §2.10, item 4): só quatro das sete -- renomear e
 /// mudar cor já são o campo de nome e a faixa de swatches, não itens de
 /// lista lá dentro (ADR-0023 §4). Ordem própria da espec.: colapsar/
-/// expandir, desagrupar, fechar grupo.
-pub const EDITOR_ACTION_ORDER: [GroupAction; 3] = [
+/// expandir, desagrupar, fechar grupo e, por último, mover para janela
+/// (PRD-022).
+pub const EDITOR_ACTION_ORDER: [GroupAction; 4] = [
     GroupAction::ToggleCollapse,
     GroupAction::Dissolve,
     GroupAction::CloseAll,
+    GroupAction::MoveToWindow,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,7 +72,7 @@ pub fn group_action_items(
     catalog: &Catalog,
     is_collapsed: bool,
     tab_count: usize,
-) -> [GroupActionItem; 6] {
+) -> [GroupActionItem; 7] {
     let collapse_label = if is_collapsed {
         msg::group_menu::expand(catalog)
     } else {
@@ -100,6 +107,11 @@ pub fn group_action_items(
         GroupActionItem {
             action: GroupAction::Dissolve,
             label: msg::group_menu::dissolve(catalog),
+            destructive: false,
+        },
+        GroupActionItem {
+            action: GroupAction::MoveToWindow,
+            label: msg::group_menu::move_to_window(catalog),
             destructive: false,
         },
     ]
@@ -271,8 +283,54 @@ mod tests {
                 GroupAction::ToggleCollapse,
                 GroupAction::Dissolve,
                 GroupAction::CloseAll,
+                GroupAction::MoveToWindow,
             ]
         );
+    }
+
+    /// PRD-022, decision of the owner: "Move to window..." is the **last**
+    /// item of both lists, so no existing item changes place.
+    #[test]
+    fn move_to_window_is_last_in_the_group_menu_and_in_the_editor() {
+        assert_eq!(GROUP_ACTION_ORDER.last(), Some(&GroupAction::MoveToWindow));
+        assert_eq!(EDITOR_ACTION_ORDER.last(), Some(&GroupAction::MoveToWindow));
+        assert_eq!(
+            GROUP_ACTION_ORDER[..6],
+            [
+                GroupAction::Rename,
+                GroupAction::SetColor,
+                GroupAction::ToggleCollapse,
+                GroupAction::NewTab,
+                GroupAction::CloseAll,
+                GroupAction::Dissolve,
+            ]
+        );
+        assert_eq!(
+            EDITOR_ACTION_ORDER[..3],
+            [
+                GroupAction::ToggleCollapse,
+                GroupAction::Dissolve,
+                GroupAction::CloseAll,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_move_to_window_item_is_labelled_and_not_destructive() {
+        for (catalog, label) in [
+            (test_support::pt_br(), "Mover para janela…"),
+            (test_support::en_us(), "Move to window…"),
+        ] {
+            let items = group_action_items(&catalog, false, 2);
+            let item = items.last().unwrap();
+            assert_eq!(item.action, GroupAction::MoveToWindow);
+            assert_eq!(item.label, label);
+            assert!(!item.destructive);
+        }
+        for catalog in test_support::all_catalogs() {
+            let label = group_action_items(&catalog, false, 2)[6].label.clone();
+            assert!(!label.is_empty() && !label.starts_with("group_menu."));
+        }
     }
 
     #[test]
@@ -286,7 +344,7 @@ mod tests {
     fn group_context_menu_move_highlight_wraps() {
         let mut menu = GroupContextMenu::new(g(1), (0.0, 0.0));
         menu.move_highlight(-1);
-        assert_eq!(menu.selected(), GroupAction::Dissolve);
+        assert_eq!(menu.selected(), GroupAction::MoveToWindow);
         menu.move_highlight(1);
         assert_eq!(menu.selected(), GroupAction::Rename);
     }

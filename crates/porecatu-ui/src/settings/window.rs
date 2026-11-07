@@ -337,6 +337,14 @@ impl SettingsWindow {
             .map(|editor| editor.window_id())
     }
 
+    /// A janela do editor, se ele existe, só para ler a geometria dela (o
+    /// arraste entre janelas, ADR-0091 §4).
+    pub(crate) fn profile_editor_window(&self) -> Option<&Window> {
+        self.profile_editor
+            .as_ref()
+            .map(ProfileEditorWindow::window)
+    }
+
     /// Dá a `f` a janela do editor e o rascunho de perfis **só para leitura**:
     /// o editor edita a cópia, e do rascunho lê os `id` que ela não pode repetir
     /// e a validação de OK. É um empréstimo dividido de dois campos da tela, que

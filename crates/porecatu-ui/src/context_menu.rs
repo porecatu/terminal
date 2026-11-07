@@ -28,6 +28,10 @@ pub enum MenuAction {
     /// **fixada** o item vem esmaecido, nunca ausente (RF-21.12): ela não
     /// pertence a grupo.
     MoveToGroup,
+    /// PRD-022 RF-22.20: opens the destination popover of the other windows
+    /// (`move_to_window.rs`). Always enabled, a pinned tab included (it moves
+    /// as a pinned one, RF-22.23).
+    MoveToWindow,
     /// ADR-0075 §8, RF-20.31: reconecta o painel SSH focado da aba. Só existe
     /// no menu de uma aba SSH ([`SSH_TAB_MENU_ITEMS`]).
     Reconnect,
@@ -43,6 +47,7 @@ impl MenuAction {
             MenuAction::Unpin => msg::tab_menu::unpin(catalog),
             MenuAction::CloseTab => msg::tab_menu::close(catalog),
             MenuAction::MoveToGroup => msg::tab_menu::move_to_group(catalog),
+            MenuAction::MoveToWindow => msg::tab_menu::move_to_window(catalog),
             MenuAction::Reconnect => msg::tab_menu::reconnect(catalog),
         }
     }
@@ -62,38 +67,42 @@ const fn item(action: MenuAction, enabled: bool) -> MenuItem {
 /// -- RF-1.1 (nova aba), RF-1.2 (fechar aba), RF-2.20 (mover pra grupo) e,
 /// em segundo lugar, "Fixar aba" (ADR-0087 §6): o item novo entra sem mudar
 /// a ordem relativa dos que já existiam.
-pub const TAB_MENU_ITEMS: [MenuItem; 4] = [
+pub const TAB_MENU_ITEMS: [MenuItem; 5] = [
     item(MenuAction::NewTab, true),
     item(MenuAction::Pin, true),
     item(MenuAction::CloseTab, true),
     item(MenuAction::MoveToGroup, true),
+    item(MenuAction::MoveToWindow, true),
 ];
 
 /// Os itens do menu de uma aba SSH: os de sempre e "Reconectar" por último
 /// (ADR-0075 §8).
-pub const SSH_TAB_MENU_ITEMS: [MenuItem; 5] = [
+pub const SSH_TAB_MENU_ITEMS: [MenuItem; 6] = [
     TAB_MENU_ITEMS[0],
     TAB_MENU_ITEMS[1],
     TAB_MENU_ITEMS[2],
     TAB_MENU_ITEMS[3],
+    TAB_MENU_ITEMS[4],
     item(MenuAction::Reconnect, true),
 ];
 
 /// Os itens do menu de uma aba **fixada** (ADR-0087 §6): "Desafixar aba" no
 /// lugar de "Fixar aba", e "Mover para grupo" esmaecido (RF-21.12).
-pub const PINNED_TAB_MENU_ITEMS: [MenuItem; 4] = [
+pub const PINNED_TAB_MENU_ITEMS: [MenuItem; 5] = [
     item(MenuAction::NewTab, true),
     item(MenuAction::Unpin, true),
     item(MenuAction::CloseTab, true),
     item(MenuAction::MoveToGroup, false),
+    item(MenuAction::MoveToWindow, true),
 ];
 
 /// Uma fixada SSH: os da fixada e "Reconectar" por último.
-pub const PINNED_SSH_TAB_MENU_ITEMS: [MenuItem; 5] = [
+pub const PINNED_SSH_TAB_MENU_ITEMS: [MenuItem; 6] = [
     PINNED_TAB_MENU_ITEMS[0],
     PINNED_TAB_MENU_ITEMS[1],
     PINNED_TAB_MENU_ITEMS[2],
     PINNED_TAB_MENU_ITEMS[3],
+    PINNED_TAB_MENU_ITEMS[4],
     item(MenuAction::Reconnect, true),
 ];
 
@@ -196,6 +205,8 @@ mod tests {
         menu.move_highlight(1);
         assert_eq!(menu.selected(), MenuAction::MoveToGroup);
         menu.move_highlight(1);
+        assert_eq!(menu.selected(), MenuAction::MoveToWindow);
+        menu.move_highlight(1);
         assert_eq!(menu.selected(), MenuAction::NewTab);
     }
 
@@ -203,7 +214,7 @@ mod tests {
     fn move_highlight_backwards_wraps_to_last() {
         let mut menu = ContextMenu::new(TabId::new(0), (0.0, 0.0));
         menu.move_highlight(-1);
-        assert_eq!(menu.selected(), MenuAction::MoveToGroup);
+        assert_eq!(menu.selected(), MenuAction::MoveToWindow);
     }
 
     #[test]
@@ -224,7 +235,8 @@ mod tests {
                 MenuAction::NewTab,
                 MenuAction::Pin,
                 MenuAction::CloseTab,
-                MenuAction::MoveToGroup
+                MenuAction::MoveToGroup,
+                MenuAction::MoveToWindow
             ]
         );
         assert!(menu.items().iter().all(|item| item.enabled));
@@ -243,7 +255,8 @@ mod tests {
             [
                 MenuAction::NewTab,
                 MenuAction::CloseTab,
-                MenuAction::MoveToGroup
+                MenuAction::MoveToGroup,
+                MenuAction::MoveToWindow
             ]
         );
     }
@@ -257,7 +270,8 @@ mod tests {
                 MenuAction::NewTab,
                 MenuAction::Unpin,
                 MenuAction::CloseTab,
-                MenuAction::MoveToGroup
+                MenuAction::MoveToGroup,
+                MenuAction::MoveToWindow
             ]
         );
         let move_item = menu
@@ -270,8 +284,33 @@ mod tests {
             menu.items()
                 .iter()
                 .filter(|item| item.action != MenuAction::MoveToGroup)
-                .all(|item| item.enabled)
+                .all(|item| item.enabled),
+            "Move to window stays enabled on a pinned tab"
         );
+    }
+
+    #[test]
+    fn move_to_window_comes_after_move_to_group_and_before_reconnect() {
+        for (ssh, pinned) in [(false, false), (true, false), (false, true), (true, true)] {
+            let menu = ContextMenu::for_tab(TabId::new(0), (0.0, 0.0), ssh, pinned);
+            let list = actions(&menu);
+            let group = list
+                .iter()
+                .position(|a| *a == MenuAction::MoveToGroup)
+                .unwrap();
+            let window = list
+                .iter()
+                .position(|a| *a == MenuAction::MoveToWindow)
+                .unwrap();
+            assert_eq!(window, group + 1, "ssh={ssh} pinned={pinned}");
+            assert!(menu.items()[window].enabled, "ssh={ssh} pinned={pinned}");
+            if ssh {
+                assert_eq!(list.last(), Some(&MenuAction::Reconnect));
+                assert_eq!(window + 1, list.len() - 1);
+            } else {
+                assert_eq!(window + 1, list.len());
+            }
+        }
     }
 
     #[test]
@@ -284,11 +323,13 @@ mod tests {
                 MenuAction::Unpin,
                 MenuAction::CloseTab,
                 MenuAction::MoveToGroup,
+                MenuAction::MoveToWindow,
                 MenuAction::Reconnect
             ]
         );
         assert!(!menu.items()[3].enabled);
         assert!(menu.items()[4].enabled);
+        assert!(menu.items()[5].enabled);
     }
 
     #[test]
@@ -298,15 +339,18 @@ mod tests {
         assert_eq!(menu.selected(), MenuAction::Unpin);
         menu.move_highlight(1);
         assert_eq!(menu.selected(), MenuAction::CloseTab);
-        // The next one is dimmed: wraps to the first.
+        // The next one is dimmed: skipped, lands on the window item.
         menu.move_highlight(1);
-        assert_eq!(menu.selected(), MenuAction::NewTab);
-        // Backwards from the first, the dimmed last one is skipped too.
+        assert_eq!(menu.selected(), MenuAction::MoveToWindow);
+        // Backwards, the dimmed item is skipped too.
         menu.move_highlight(-1);
         assert_eq!(menu.selected(), MenuAction::CloseTab);
         // A dimmed item cannot be highlighted by the mouse either.
         menu.set_highlight(3);
         assert_eq!(menu.selected(), MenuAction::CloseTab);
+        // ... but the window item right after it can.
+        menu.set_highlight(4);
+        assert_eq!(menu.selected(), MenuAction::MoveToWindow);
     }
 
     #[test]
@@ -323,7 +367,7 @@ mod tests {
         assert_eq!(ssh.items().len(), plain.items().len() + 1);
         assert_eq!(ssh.items().last().unwrap().action, MenuAction::Reconnect);
         // The usual items keep their order.
-        assert_eq!(&ssh.items()[..4], plain.items());
+        assert_eq!(&ssh.items()[..5], plain.items());
     }
 
     #[test]
@@ -333,12 +377,12 @@ mod tests {
         assert_eq!(menu.selected(), MenuAction::Reconnect);
         menu.move_highlight(1);
         assert_eq!(menu.selected(), MenuAction::NewTab);
-        menu.set_highlight(4);
+        menu.set_highlight(5);
         assert_eq!(menu.selected(), MenuAction::Reconnect);
 
-        // A plain menu has nothing at index 4.
+        // A plain menu has nothing at index 5.
         let mut plain = ContextMenu::for_tab(TabId::new(0), (0.0, 0.0), false, false);
-        plain.set_highlight(4);
+        plain.set_highlight(5);
         assert_eq!(plain.selected(), MenuAction::NewTab);
     }
 

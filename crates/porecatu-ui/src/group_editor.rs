@@ -260,11 +260,15 @@ mod tests {
     }
 
     #[test]
-    fn move_highlight_in_actions_wraps_at_three() {
+    fn move_highlight_in_actions_wraps_at_four() {
         let mut editor = GroupEditor::new(g(), "", 0, EditorRegion::Actions);
         editor.move_highlight(-1);
-        assert_eq!(editor.action_highlight(), 2);
+        assert_eq!(editor.action_highlight(), 3);
+        assert_eq!(editor.selected_action(), GroupAction::MoveToWindow);
+        editor.move_highlight(-1);
         assert_eq!(editor.selected_action(), GroupAction::CloseAll);
+        editor.move_highlight(2);
+        assert_eq!(editor.selected_action(), GroupAction::ToggleCollapse);
     }
 
     #[test]

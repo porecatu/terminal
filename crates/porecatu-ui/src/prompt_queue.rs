@@ -64,6 +64,25 @@ impl PendingPrompts {
         self.queue.is_empty()
     }
 
+    /// Tira e devolve as perguntas pendentes de `tab`, na ordem em que
+    /// chegaram: a aba vai para outra janela (ADR-0090 §3 passo 5).
+    pub(crate) fn take_tab(&mut self, tab: TabId) -> Vec<Pending> {
+        let (taken, kept) = std::mem::take(&mut self.queue)
+            .into_iter()
+            .partition(|pending| pending.tab == tab);
+        self.queue = kept;
+        taken
+    }
+
+    /// Recebe, no fim da fila, as perguntas que `take_tab` tirou de outra
+    /// janela, agora com o `TabId` `new_tab` desta.
+    pub(crate) fn adopt(&mut self, items: Vec<Pending>, new_tab: TabId) {
+        self.queue.extend(items.into_iter().map(|pending| Pending {
+            tab: new_tab,
+            ..pending
+        }));
+    }
+
     /// Tira a primeira pergunta cujo painel a janela mostra agora. O que ficou
     /// sem painel (`alive` falso) é esquecido no caminho -- a pergunta dele já
     /// foi cancelada pela queda do `Terminal`.
@@ -214,6 +233,47 @@ mod tests {
                 .id,
             second_id
         );
+    }
+
+    #[test]
+    fn take_tab_removes_only_that_tabs_prompts_in_arrival_order() {
+        let mut queue = PendingPrompts::default();
+        queue.push(tab(1), pane(1), prompt(0));
+        queue.push(tab(2), pane(1), prompt(1));
+        queue.push(tab(1), pane(2), prompt(2));
+
+        let taken = queue.take_tab(tab(1));
+
+        let ids: Vec<_> = taken.iter().map(|p| (p.pane, p.prompt.id)).collect();
+        assert_eq!(
+            ids,
+            [(pane(1), PromptId::new(0)), (pane(2), PromptId::new(2))]
+        );
+        assert!(queue.take_tab(tab(1)).is_empty());
+        // The other tab's prompt is untouched.
+        let left = queue.take_ready(&view(2, 1), |_, _| true).unwrap();
+        assert_eq!(left.tab, tab(2));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn adopt_appends_with_the_new_tab_and_the_prompt_opens_there() {
+        let mut origin = PendingPrompts::default();
+        origin.push(tab(1), pane(3), prompt(0));
+        let mut dest = PendingPrompts::default();
+        dest.push(tab(5), pane(1), prompt(9));
+
+        dest.adopt(origin.take_tab(tab(1)), tab(8));
+
+        assert!(origin.is_empty());
+        // The old key no longer opens anything; the new one does, and the
+        // destination's own prompt is still first in line.
+        assert!(dest.take_ready(&view(1, 3), |_, _| true).is_none());
+        let own = dest.take_ready(&view(5, 1), |_, _| true).unwrap();
+        assert_eq!(own.prompt.id, PromptId::new(9));
+        let adopted = dest.take_ready(&view(8, 3), |_, _| true).unwrap();
+        assert_eq!((adopted.tab, adopted.pane), (tab(8), pane(3)));
+        assert_eq!(adopted.prompt.id, PromptId::new(0));
     }
 
     #[test]

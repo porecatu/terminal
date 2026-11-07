@@ -24,6 +24,10 @@ use crate::group::{Group, GroupColor};
 use crate::id::{GroupId, TabId};
 use crate::tab::Tab;
 
+mod transfer;
+
+pub use transfer::{DetachedGroup, DetachedTab, InsertAt};
+
 /// Destino de [`Workspace::unpin_tab`] (ADR-0086 §1): onde a aba
 /// desafixada entra na trilha.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,10 +408,21 @@ impl Workspace {
     /// se ela não achar nada, cai na **última** fixada -- o que impede
     /// `None` com fixadas vivas (RF-21.25).
     pub fn close_tab(&mut self, id: TabId) -> Option<TabId> {
+        self.remove_tab(id)?;
+        self.active_tab
+    }
+
+    /// Common core of [`Self::close_tab`] and the `take_*` operations of
+    /// `transfer` (ADR-0090 §1): removes the tab from the workspace with
+    /// every rule of `close_tab` (RF-2.7, `normalize_groups`, the focus
+    /// ladder of ADR-0020 §3 revised by ADR-0086 §1) and hands the `Tab`
+    /// back instead of dropping it. `None` when the tab is unknown, with
+    /// nothing changed.
+    fn remove_tab(&mut self, id: TabId) -> Option<Tab> {
         let tab_index = self.tabs.iter().position(|t| t.id() == id)?;
         if let Some(pin_pos) = self.pinned.iter().position(|&t| t == id) {
             self.pinned.remove(pin_pos);
-            self.tabs.remove(tab_index);
+            let tab = self.tabs.remove(tab_index);
             if self.active_tab == Some(id) {
                 let next = self
                     .pinned
@@ -426,17 +441,9 @@ impl Workspace {
                     None => self.active_tab = None,
                 }
             }
-            return self.active_tab;
+            return Some(tab);
         }
-        let group_index = self
-            .groups
-            .iter()
-            .position(|g| g.position_of(id).is_some())?;
-
-        let removed_pos = self.groups[group_index]
-            .remove(id)
-            .expect("posição verificada acima");
-        self.tabs.remove(tab_index);
+        let (tab, group_index, removed_pos) = self.strip_track_tab(id)?;
 
         if self.active_tab == Some(id) {
             let group = &self.groups[group_index];
@@ -466,7 +473,26 @@ impl Workspace {
         }
 
         self.normalize_groups();
-        self.active_tab
+        Some(tab)
+    }
+
+    /// Takes a **track** tab out of its group and out of `tabs`, touching
+    /// nothing else: no focus change, no `normalize_groups` (the group may
+    /// be left empty). Returns the tab, the index of the group it was in
+    /// and its position there. `None` -- nothing changed -- for an unknown
+    /// or pinned tab. Shared by [`Self::remove_tab`] and `move_tabs`
+    /// (ADR-0091 §6), which must not move focus.
+    fn strip_track_tab(&mut self, id: TabId) -> Option<(Tab, usize, usize)> {
+        let tab_index = self.tabs.iter().position(|t| t.id() == id)?;
+        let group_index = self
+            .groups
+            .iter()
+            .position(|g| g.position_of(id).is_some())?;
+        let removed_pos = self.groups[group_index]
+            .remove(id)
+            .expect("posição verificada acima");
+        let tab = self.tabs.remove(tab_index);
+        Some((tab, group_index, removed_pos))
     }
 
     /// RF-1.15 (arraste) e RF-1.17 (teclado): reordena dentro do próprio
@@ -874,9 +900,23 @@ impl Workspace {
     /// sozinha num run implícito novo no índice `group_index` (saturando
     /// no fim), e `normalize_groups` funde o que ficar adjacente.
     fn insert_in_new_run(&mut self, tab: TabId, group_index: usize) {
+        self.insert_run(&[tab], group_index);
+    }
+
+    /// Block version of [`Self::insert_in_new_run`] (ADR-0090 §1,
+    /// `InsertAt::NewRun`/`TrackEnd`): `tabs` (already outside any place),
+    /// in the given order, enter one new implicit run at `group_index`
+    /// (saturating at the end); `normalize_groups` merges what ends up
+    /// adjacent. An empty `tabs` changes nothing.
+    fn insert_run(&mut self, tabs: &[TabId], group_index: usize) {
+        if tabs.is_empty() {
+            return;
+        }
         let fresh_id = self.fresh_group_id();
         let mut new_group = Group::new_implicit(fresh_id);
-        new_group.insert(0, tab);
+        for (offset, &tab) in tabs.iter().enumerate() {
+            new_group.insert(offset, tab);
+        }
         let insert_at = group_index.min(self.groups.len());
         self.groups.insert(insert_at, new_group);
         self.normalize_groups();
@@ -1999,7 +2039,7 @@ mod tests {
 
     /// ADR-0086 §1: toda `TabId` de `tabs` está em exatamente um lugar --
     /// `pinned` ou um `Group` --, e nenhum lugar guarda id que não existe.
-    fn assert_single_place(ws: &Workspace) {
+    pub(super) fn assert_single_place(ws: &Workspace) {
         let mut places: Vec<TabId> = ws.pinned.clone();
         for group in ws.groups() {
             places.extend_from_slice(group.tabs());
@@ -2024,7 +2064,7 @@ mod tests {
         );
     }
 
-    fn assert_invariants(ws: &Workspace) {
+    pub(super) fn assert_invariants(ws: &Workspace) {
         assert_single_place(ws);
         assert!(
             ws.groups().iter().all(|g| !g.is_empty()),

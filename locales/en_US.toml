@@ -24,6 +24,7 @@
 new = "New tab"
 close = "Close tab"
 move_to_group = "Move to group"
+move_to_window = "Move to window…"
 reconnect = "Reconnect"
 pin = "Pin tab"
 unpin = "Unpin tab"
@@ -44,6 +45,7 @@ expand = "Expand group"
 new_tab = "New tab in group"
 close = { one = "Close group ({count} tab)", other = "Close group ({count} tabs)" }
 dissolve = "Ungroup"
+move_to_window = "Move to window…"
 
 [group_editor]
 section_group = "GROUP"
@@ -54,6 +56,10 @@ default_name = "New group"
 
 [move_to_group]
 new_group = "New group"
+
+[move_to_window]
+new_window = "New window"
+tab_count = { one = "{count} tab", other = "{count} tabs" }
 
 [session_picker]
 save_item = "Save this window…"
@@ -348,6 +354,7 @@ tab_rename = "Rename tab"
 tab_move_left = "Move tab left"
 tab_move_right = "Move tab right"
 tab_toggle_pin = "Pin or unpin the tab"
+tab_move_to_window = "Move tab or selection to another window"
 group_create = "Create group"
 group_dissolve = "Ungroup"
 group_rename = "Rename group"
@@ -356,6 +363,7 @@ group_next = "Next group"
 group_prev = "Previous group"
 group_new_tab = "New tab in group"
 group_close_all = "Close all tabs in group"
+group_move_to_window = "Move group to another window"
 window_new = "New window"
 window_close = "Close window"
 window_toggle_fullscreen = "Toggle full screen"

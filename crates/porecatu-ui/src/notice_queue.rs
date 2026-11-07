@@ -49,6 +49,28 @@ impl PendingNotices {
         self.queue.is_empty()
     }
 
+    /// Tira e devolve os avisos pendentes de `tab`, na ordem em que chegaram:
+    /// a aba vai para outra janela (ADR-0090 §3 passo 5).
+    pub(crate) fn take_tab(&mut self, tab: TabId) -> Vec<Pending> {
+        let (taken, kept) = std::mem::take(&mut self.queue)
+            .into_iter()
+            .partition(|pending| pending.tab == tab);
+        self.queue = kept;
+        taken
+    }
+
+    /// Recebe, no fim da fila, os avisos que `take_tab` tirou de outra janela,
+    /// com o `TabId` `new_tab` desta -- na pendência **e** dentro do diálogo
+    /// (ação e `slot`), para que `forget` e a resposta do botão achem o painel
+    /// no lugar novo.
+    pub(crate) fn adopt(&mut self, items: Vec<Pending>, new_tab: TabId) {
+        for mut pending in items {
+            pending.dialog.retarget_tab(pending.tab, new_tab);
+            pending.tab = new_tab;
+            self.queue.push(pending);
+        }
+    }
+
     /// Esquece o aviso pendente que ocupa `slot` (a reconexão deu certo e o
     /// aviso de espera perdeu o sentido).
     pub(crate) fn forget(&mut self, slot: crate::dialog::NoticeSlot) {
@@ -102,6 +124,11 @@ mod tests {
 
     fn reconnect(state: &str) -> ConfirmDialog {
         ConfirmDialog::reconnect(&test_support::pt_br(), tab(1), pane(1), state)
+    }
+
+    /// A live reconnect notice of `tab(1)` and the given pane.
+    fn reconnect_of(pane: PaneId) -> ConfirmDialog {
+        ConfirmDialog::reconnect(&test_support::pt_br(), tab(1), pane, "waiting")
     }
 
     #[test]
@@ -184,6 +211,62 @@ mod tests {
         let left = queue.take_ready(&view(1, 1), |_, _| true).unwrap();
         assert_eq!(left.dialog.body, "keep");
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn take_tab_removes_only_that_tabs_notices_in_arrival_order() {
+        let mut queue = PendingNotices::default();
+        queue.push(tab(1), pane(1), info("a"));
+        queue.push(tab(2), pane(1), info("b"));
+        queue.push(tab(1), pane(2), info("c"));
+
+        let taken = queue.take_tab(tab(1));
+
+        let bodies: Vec<&str> = taken.iter().map(|p| p.dialog.body.as_str()).collect();
+        assert_eq!(bodies, ["a", "c"]);
+        assert!(queue.take_tab(tab(1)).is_empty());
+        let left = queue.take_ready(&view(2, 1), |_, _| true).unwrap();
+        assert_eq!(left.dialog.body, "b");
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn adopt_rewrites_the_tab_inside_the_dialog_and_its_slot() {
+        let mut origin = PendingNotices::default();
+        origin.push(tab(1), pane(3), reconnect_of(pane(3)));
+        let mut dest = PendingNotices::default();
+        dest.push(tab(5), pane(1), info("own"));
+
+        dest.adopt(origin.take_tab(tab(1)), tab(8));
+
+        assert!(origin.is_empty());
+        // The old slot finds nothing; the new one finds the notice.
+        dest.forget(NoticeSlot::Reconnect(tab(1), pane(3)));
+        assert!(!dest.is_empty());
+        let own = dest.take_ready(&view(5, 1), |_, _| true).unwrap();
+        assert_eq!(own.dialog.body, "own");
+        let adopted = dest.take_ready(&view(8, 3), |_, _| true).unwrap();
+        assert_eq!((adopted.tab, adopted.pane), (tab(8), pane(3)));
+        assert_eq!(
+            adopted.dialog.action,
+            crate::dialog::DialogAction::ReconnectNow(tab(8), pane(3))
+        );
+        assert_eq!(
+            adopted.dialog.slot,
+            Some(NoticeSlot::Reconnect(tab(8), pane(3)))
+        );
+    }
+
+    #[test]
+    fn an_adopted_live_notice_is_forgotten_by_its_new_slot() {
+        let mut dest = PendingNotices::default();
+        let mut origin = PendingNotices::default();
+        origin.push(tab(1), pane(3), reconnect_of(pane(3)));
+        dest.adopt(origin.take_tab(tab(1)), tab(8));
+
+        dest.forget(NoticeSlot::Reconnect(tab(8), pane(3)));
+
+        assert!(dest.is_empty());
     }
 
     #[test]

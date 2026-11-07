@@ -217,9 +217,36 @@ impl<K: Ord + Copy> Cycle<K> {
     }
 
     /// Mais um painel da conexão recebeu a queda. Já estar no ciclo não repete.
+    /// Entra antes do primeiro membro maior; os membros só deixam de estar
+    /// ordenados depois de um [`Self::replace_member`] (a chave nova de um
+    /// painel que mudou de janela), e nesse caso a busca é linear.
     pub(crate) fn add(&mut self, member: K) {
-        if let Err(at) = self.members.binary_search(&member) {
-            self.members.insert(at, member);
+        if self.contains(member) {
+            return;
+        }
+        let at = self
+            .members
+            .iter()
+            .position(|existing| *existing > member)
+            .unwrap_or(self.members.len());
+        self.members.insert(at, member);
+    }
+
+    /// O painel `old` mudou de endereço (a aba foi para outra janela, ADR-0090
+    /// §3 passo 5): a chave é trocada **mantendo a posição**, então o dono
+    /// continua dono mesmo que `new` ordene depois. `false`, sem efeito, se
+    /// `old` não está no ciclo ou se `new` já está (duas posições para a mesma
+    /// chave).
+    pub(crate) fn replace_member(&mut self, old: K, new: K) -> bool {
+        if old != new && self.contains(new) {
+            return false;
+        }
+        match self.members.iter_mut().find(|member| **member == old) {
+            Some(member) => {
+                *member = new;
+                true
+            }
+            None => false,
         }
     }
 
@@ -238,13 +265,13 @@ impl<K: Ord + Copy> Cycle<K> {
     }
 
     pub(crate) fn contains(&self, member: K) -> bool {
-        self.members.binary_search(&member).is_ok()
+        self.members.contains(&member)
     }
 
     /// Um painel fechou (ou saiu do ciclo). O próximo assume o lugar do que
     /// tentava.
     pub(crate) fn remove(&mut self, member: K) -> Departure<K> {
-        let Ok(at) = self.members.binary_search(&member) else {
+        let Some(at) = self.members.iter().position(|existing| *existing == member) else {
             return Departure::Unknown;
         };
         self.members.remove(at);
@@ -573,6 +600,68 @@ mod tests {
         // One state, read by all three.
         assert_eq!(cycle.state, Reconnect::GaveUp);
         assert_eq!(cycle.members().len(), 3);
+    }
+
+    #[test]
+    fn replacing_the_owner_with_a_greater_key_keeps_the_owner() {
+        let mut cycle = Cycle::new(t0(), 3u32);
+        cycle.add(7);
+        cycle.add(9);
+
+        // The owner's tab moved to another window and got the key 20.
+        assert!(cycle.replace_member(3, 20));
+
+        assert_eq!(cycle.owner(), Some(20), "same position, still the owner");
+        assert_eq!(cycle.members(), [20, 7, 9], "not re-sorted");
+        assert_eq!(cycle.followers().collect::<Vec<_>>(), [7, 9]);
+    }
+
+    #[test]
+    fn after_a_replacement_the_old_key_is_gone_and_the_new_one_is_a_member() {
+        let mut cycle = Cycle::new(t0(), 3u32);
+        cycle.add(7);
+
+        assert!(cycle.replace_member(7, 1));
+
+        assert!(!cycle.contains(7));
+        assert!(cycle.contains(1));
+        assert_eq!(cycle.members(), [3, 1], "a follower keeps its place too");
+        assert_eq!(cycle.owner(), Some(3));
+    }
+
+    #[test]
+    fn replacing_a_stranger_or_onto_a_member_changes_nothing() {
+        let mut cycle = Cycle::new(t0(), 3u32);
+        cycle.add(7);
+        assert!(!cycle.replace_member(5, 6), "5 is not a member");
+        assert!(!cycle.replace_member(3, 7), "7 is already a member");
+        assert_eq!(cycle.members(), [3, 7]);
+        assert!(cycle.replace_member(3, 3), "the identity swap is harmless");
+        assert_eq!(cycle.members(), [3, 7]);
+    }
+
+    #[test]
+    fn removing_the_replaced_owner_hands_the_attempt_to_the_next() {
+        let mut cycle = Cycle::new(t0(), 3u32);
+        cycle.add(7);
+        cycle.add(9);
+        cycle.replace_member(3, 20);
+
+        assert_eq!(cycle.remove(20), Departure::NewOwner(7));
+        assert_eq!(cycle.owner(), Some(7));
+        assert_eq!(cycle.remove(3), Departure::Unknown, "the old key is gone");
+    }
+
+    #[test]
+    fn adding_after_a_replacement_still_finds_members_and_places_in_order() {
+        let mut cycle = Cycle::new(t0(), 3u32);
+        cycle.add(7);
+        cycle.replace_member(3, 20); // members: [20, 7]
+
+        cycle.add(20); // already there: no repeat
+        cycle.add(5); // before the first greater member (20)
+        assert_eq!(cycle.members(), [5, 20, 7]);
+        assert!(cycle.contains(7));
     }
 
     #[test]

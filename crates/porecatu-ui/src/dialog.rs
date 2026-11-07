@@ -91,6 +91,38 @@ pub enum DialogAction {
     ConnectDormant(TabId, PaneId),
 }
 
+impl DialogAction {
+    /// A aba `old` passou a ser `new` (foi para outra janela, ADR-0090 §3
+    /// passo 5): reescreve **toda** variante que carrega esse `TabId`. O
+    /// `match` é exaustivo, sem `_`, para que quem acrescentar uma variante
+    /// tenha de decidir se ela carrega uma aba.
+    pub(crate) fn retarget_tab(&mut self, old: TabId, new: TabId) {
+        let retarget = |tab: &mut TabId| {
+            if *tab == old {
+                *tab = new;
+            }
+        };
+        match self {
+            Self::CloseTab(tab)
+            | Self::ClosePinnedTab(tab)
+            | Self::ClosePane(tab, _)
+            | Self::HostKey(tab, _, _)
+            | Self::Secret(tab, _, _)
+            | Self::ReconnectNow(tab, _)
+            | Self::ConnectDormant(tab, _) => retarget(tab),
+            Self::CloseWindow
+            | Self::CloseGroup(_)
+            | Self::OverwriteNamedSession(_)
+            | Self::DeleteNamedSession(_)
+            | Self::SettingsPending
+            | Self::DeleteProfile(_)
+            | Self::Notice
+            | Self::ShellInviteCopy(_)
+            | Self::ShellInviteDismiss => {}
+        }
+    }
+}
+
 /// Qual aviso um diálogo é, quando um aviso novo do mesmo tipo o **substitui**
 /// em vez de empilhar: o aviso vivo da reconexão de um painel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +132,20 @@ pub enum NoticeSlot {
     Connecting(TabId, PaneId),
     /// "Enter para conectar a {nome}": vive até o painel conectar.
     Dormant(TabId, PaneId),
+}
+
+impl NoticeSlot {
+    /// Como [`DialogAction::retarget_tab`]: toda variante carrega um `TabId`, e o
+    /// `match` é exaustivo pela mesma razão.
+    pub(crate) fn retarget_tab(&mut self, old: TabId, new: TabId) {
+        match self {
+            Self::Reconnect(tab, _) | Self::Connecting(tab, _) | Self::Dormant(tab, _) => {
+                if *tab == old {
+                    *tab = new;
+                }
+            }
+        }
+    }
 }
 
 /// Onde as teclas vão no diálogo de segredo. Aqui o foco inicial é o **campo**,
@@ -233,6 +279,20 @@ impl ConfirmDialog {
 
     pub const fn focused(&self) -> DialogButton {
         self.focused
+    }
+
+    /// A aba `old` passou a ser `new` (ADR-0090 §3 passo 5): reescreve o
+    /// `TabId` da ação, da ação do botão do meio e do `slot`. É o que mantém
+    /// um aviso pendente de um painel que mudou de janela respondendo ao
+    /// painel certo.
+    pub(crate) fn retarget_tab(&mut self, old: TabId, new: TabId) {
+        self.action.retarget_tab(old, new);
+        if let Some(discard) = self.discard_action.as_deref_mut() {
+            discard.retarget_tab(old, new);
+        }
+        if let Some(slot) = self.slot.as_mut() {
+            slot.retarget_tab(old, new);
+        }
     }
 
     /// RF-1.6 (ADR-0017): fechar aba com processo ativo. `title` é o título
@@ -866,6 +926,125 @@ mod tests {
         assert_eq!(dialog.cancel_label, "Close");
         assert_eq!(dialog.action, DialogAction::ConnectDormant(tab, pane));
         assert_eq!(dialog.slot, Some(NoticeSlot::Dormant(tab, pane)));
+    }
+
+    /// Every `DialogAction` variant that carries a `TabId` (the match in
+    /// `retarget_tab` is exhaustive, so a new variant breaks the build there;
+    /// this list is what proves each one is rewritten).
+    fn actions_with_a_tab(tab: TabId) -> Vec<(DialogAction, DialogAction)> {
+        let (pane, prompt) = (PaneId::new(4), PromptId::new(7));
+        let to = |new: TabId| {
+            vec![
+                DialogAction::CloseTab(new),
+                DialogAction::ClosePinnedTab(new),
+                DialogAction::ClosePane(new, pane),
+                DialogAction::HostKey(new, pane, prompt),
+                DialogAction::Secret(new, pane, prompt),
+                DialogAction::ReconnectNow(new, pane),
+                DialogAction::ConnectDormant(new, pane),
+            ]
+        };
+        let new = TabId::new(90);
+        to(tab).into_iter().zip(to(new)).collect()
+    }
+
+    #[test]
+    fn retarget_tab_rewrites_every_action_that_carries_the_tab() {
+        let (old, new) = (TabId::new(3), TabId::new(90));
+        for (mut action, expected) in actions_with_a_tab(old) {
+            action.retarget_tab(old, new);
+            assert_eq!(action, expected);
+        }
+    }
+
+    #[test]
+    fn retarget_tab_leaves_another_tab_and_tabless_actions_alone() {
+        let (old, new) = (TabId::new(3), TabId::new(90));
+        for (mut action, _) in actions_with_a_tab(TabId::new(5)) {
+            let before = action.clone();
+            action.retarget_tab(old, new);
+            assert_eq!(action, before, "another tab's id is not ours to rewrite");
+        }
+        let tabless = [
+            DialogAction::CloseWindow,
+            DialogAction::CloseGroup(GroupId::new(3)),
+            DialogAction::OverwriteNamedSession("s".to_owned()),
+            DialogAction::DeleteNamedSession(PathBuf::from("s.json")),
+            DialogAction::SettingsPending,
+            DialogAction::DeleteProfile(3),
+            DialogAction::Notice,
+            DialogAction::ShellInviteCopy("x".to_owned()),
+            DialogAction::ShellInviteDismiss,
+        ];
+        for mut action in tabless {
+            let before = action.clone();
+            action.retarget_tab(old, new);
+            assert_eq!(action, before);
+        }
+    }
+
+    #[test]
+    fn retarget_tab_rewrites_every_notice_slot() {
+        let (old, new, pane) = (TabId::new(3), TabId::new(90), PaneId::new(4));
+        for (mut slot, expected) in [
+            (
+                NoticeSlot::Reconnect(old, pane),
+                NoticeSlot::Reconnect(new, pane),
+            ),
+            (
+                NoticeSlot::Connecting(old, pane),
+                NoticeSlot::Connecting(new, pane),
+            ),
+            (
+                NoticeSlot::Dormant(old, pane),
+                NoticeSlot::Dormant(new, pane),
+            ),
+        ] {
+            slot.retarget_tab(old, new);
+            assert_eq!(slot, expected);
+            // A second call with the stale id is a no-op.
+            slot.retarget_tab(old, TabId::new(7));
+            assert_eq!(slot, expected);
+        }
+    }
+
+    #[test]
+    fn a_dialog_retargets_its_action_its_discard_action_and_its_slot() {
+        let en = test_support::en_us();
+        let (old, new, pane) = (TabId::new(3), TabId::new(90), PaneId::new(4));
+
+        let mut dormant = ConfirmDialog::ssh_dormant(&en, old, pane, "Enter to connect");
+        dormant.retarget_tab(old, new);
+        assert_eq!(dormant.action, DialogAction::ConnectDormant(new, pane));
+        assert_eq!(dormant.slot, Some(NoticeSlot::Dormant(new, pane)));
+
+        let mut reconnect = ConfirmDialog::reconnect(&en, old, pane, "waiting");
+        reconnect.retarget_tab(old, new);
+        assert_eq!(reconnect.action, DialogAction::ReconnectNow(new, pane));
+        assert_eq!(reconnect.slot, Some(NoticeSlot::Reconnect(new, pane)));
+
+        let mut connecting = ConfirmDialog::ssh_connecting(&en, old, pane, "connecting");
+        connecting.retarget_tab(old, new);
+        assert_eq!(connecting.slot, Some(NoticeSlot::Connecting(new, pane)));
+
+        let mut close = ConfirmDialog::close_tab(&en, "vim", old);
+        close.retarget_tab(old, new);
+        assert_eq!(close.action, DialogAction::CloseTab(new));
+        assert_eq!(close.slot, None);
+
+        // The middle button's action is rewritten too.
+        let mut with_discard = ConfirmDialog::reconnect(&en, TabId::new(1), pane, "x");
+        with_discard.discard_label = Some("d".to_owned());
+        with_discard.discard_action = Some(Box::new(DialogAction::ClosePane(old, pane)));
+        with_discard.retarget_tab(old, new);
+        assert_eq!(
+            with_discard.discard_action(),
+            Some(DialogAction::ClosePane(new, pane))
+        );
+        assert_eq!(
+            with_discard.action,
+            DialogAction::ReconnectNow(TabId::new(1), pane)
+        );
     }
 
     #[test]

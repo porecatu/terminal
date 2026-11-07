@@ -388,6 +388,12 @@ impl ProfileEditorWindow {
         self.window.id()
     }
 
+    /// The window itself, for its geometry (the drag across windows counts it
+    /// as "inside a Porecatu window", ADR-0091 §4).
+    pub(crate) fn window(&self) -> &Window {
+        &self.window
+    }
+
     pub(crate) fn editor(&self) -> &ProfileEditor {
         &self.editor
     }

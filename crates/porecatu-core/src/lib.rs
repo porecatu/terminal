@@ -27,4 +27,4 @@ pub use pane::{
     Side, SplitAxis,
 };
 pub use tab::Tab;
-pub use workspace::{UnpinTarget, Workspace};
+pub use workspace::{DetachedGroup, DetachedTab, InsertAt, UnpinTarget, Workspace};

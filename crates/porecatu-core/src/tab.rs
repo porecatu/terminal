@@ -73,6 +73,14 @@ impl Tab {
         self.id
     }
 
+    /// ADR-0090 §1: the same tab under another `TabId` -- what a workspace
+    /// does when a detached tab arrives. The pane tree is untouched (the
+    /// `PaneId`s are per tab and travel intact).
+    pub(crate) const fn with_id(mut self, id: TabId) -> Self {
+        self.id = id;
+        self
+    }
+
     /// A árvore de painéis desta aba (ADR-0053 §1) -- layout (etapa 3),
     /// input (etapa 4) e sessão (etapa 5) leem daqui.
     pub const fn panes(&self) -> &PaneTree {

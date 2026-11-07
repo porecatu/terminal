@@ -530,6 +530,7 @@ registry! {
         new(),
         close(),
         move_to_group(),
+        move_to_window(),
         reconnect(),
         pin(),
         unpin(),
@@ -550,6 +551,7 @@ registry! {
         new_tab(),
         close(plural),
         dissolve(),
+        move_to_window(),
     }
     group_editor {
         section_group(),
@@ -558,6 +560,10 @@ registry! {
     }
     move_to_group {
         new_group(),
+    }
+    move_to_window {
+        new_window(),
+        tab_count(plural),
     }
     session_picker {
         save_item(),
@@ -851,6 +857,7 @@ registry! {
         tab_rename(),
         tab_move_left(),
         tab_move_right(),
+        tab_move_to_window(),
         group_create(),
         group_dissolve(),
         group_rename(),
@@ -859,6 +866,7 @@ registry! {
         group_prev(),
         group_new_tab(),
         group_close_all(),
+        group_move_to_window(),
         window_new(),
         window_close(),
         window_toggle_fullscreen(),
@@ -1868,6 +1876,36 @@ mod tests {
             assert_eq!(msg::group_menu::close(&catalog, 1), one);
             assert_eq!(msg::group_menu::close(&catalog, 2), other);
             assert!(msg::group_menu::close(&catalog, 0).contains("(0 "));
+        }
+    }
+
+    /// PRD-022 RF-22.21: the count shown in each row of "Move to window...".
+    #[test]
+    fn the_tab_count_of_a_window_row_pluralizes_in_every_language() {
+        for (catalog, one, other) in [
+            (test_support::pt_br(), "1 aba", "3 abas"),
+            (test_support::en_us(), "1 tab", "3 tabs"),
+        ] {
+            assert_eq!(msg::move_to_window::tab_count(&catalog, 1), one);
+            assert_eq!(msg::move_to_window::tab_count(&catalog, 3), other);
+        }
+        assert_eq!(
+            msg::move_to_window::new_window(&test_support::pt_br()),
+            "Nova janela"
+        );
+        assert_eq!(
+            msg::move_to_window::new_window(&test_support::en_us()),
+            "New window"
+        );
+        for catalog in test_support::all_catalogs() {
+            let one = msg::move_to_window::tab_count(&catalog, 1);
+            let other = msg::move_to_window::tab_count(&catalog, 5);
+            assert!(one.starts_with("1 "), "{one}");
+            assert!(other.starts_with("5 "), "{other}");
+            assert_ne!(one, other);
+            assert!(!msg::move_to_window::new_window(&catalog).is_empty());
+            assert!(!msg::tab_menu::move_to_window(&catalog).starts_with("tab_menu."));
+            assert!(!msg::group_menu::move_to_window(&catalog).starts_with("group_menu."));
         }
     }
 

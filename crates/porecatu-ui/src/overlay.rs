@@ -58,6 +58,7 @@ use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
 use crate::messages::msg;
 use crate::move_to_group::MoveToGroupPopover;
+use crate::move_to_window::MoveToWindowPopover;
 use crate::palette::{self, ResolvedPalette};
 use crate::profile_menu::ProfileMenu;
 use crate::session_picker::{Highlight, Mode, SessionPicker};
@@ -2201,6 +2202,9 @@ pub fn group_editor_hit(layout: &GroupEditorLayout, point: (f32, f32)) -> Option
 /// trabalho já existente antes desta etapa.
 const MOVE_SWATCH_RADIUS: f32 = 2.0;
 
+/// Layout of a destination popover: the one of `tab.move_to_group` and the
+/// one of "Move to window..." (PRD-022 RF-22.21, "the same anatomy"), which
+/// share every geometric value and differ only in what a row says.
 pub struct MoveToGroupLayout {
     pub popover_rect: Rect,
     /// Só as linhas visíveis na janela de rolagem atual -- alinhadas por
@@ -2219,23 +2223,56 @@ pub fn layout_move_to_group(
     window_width: f32,
     window_height: f32,
 ) -> MoveToGroupLayout {
+    layout_target_list(
+        popover.anchor,
+        popover.row_count(),
+        popover.highlighted(),
+        config,
+        window_width,
+        window_height,
+    )
+}
+
+/// The same geometry for the "Move to window..." popover (ADR-0090 §6).
+pub fn layout_move_to_window<W: Copy>(
+    popover: &MoveToWindowPopover<W>,
+    config: &porecatu_config::Config,
+    window_width: f32,
+    window_height: f32,
+) -> MoveToGroupLayout {
+    layout_target_list(
+        popover.anchor,
+        popover.row_count(),
+        popover.highlighted(),
+        config,
+        window_width,
+        window_height,
+    )
+}
+
+fn layout_target_list(
+    anchor: (f32, f32),
+    total_rows: usize,
+    highlighted: usize,
+    config: &porecatu_config::Config,
+    window_width: f32,
+    window_height: f32,
+) -> MoveToGroupLayout {
     let cfg = &config.appearance.move_to_group;
     let width = cfg.width as f32;
     let row_height = cfg.row_height as f32;
     let max_visible_rows = cfg.max_visible_rows as usize;
     let padding = config.appearance.context_menu.padding as f32;
 
-    let total_rows = popover.row_count();
     let visible_rows = total_rows.min(max_visible_rows);
     let max_first = total_rows.saturating_sub(visible_rows);
-    let highlighted = popover.highlighted();
     let first_visible_index = highlighted
         .saturating_sub(visible_rows.saturating_sub(1))
         .min(max_first);
 
     let height = padding * 2.0 + row_height * visible_rows as f32;
-    let mut x = popover.anchor.0;
-    let mut y = popover.anchor.1;
+    let mut x = anchor.0;
+    let mut y = anchor.1;
     if x + width > window_width {
         x = (window_width - width).max(0.0);
     }
@@ -2265,23 +2302,18 @@ pub fn layout_move_to_group(
     }
 }
 
-pub fn paint_move_to_group(
+/// The surface and the highlight of a destination popover; `content` adds
+/// what one row says, given the absolute index of the row and its rect.
+fn paint_target_list(
     layout: &MoveToGroupLayout,
-    popover: &MoveToGroupPopover,
-    workspace: &Workspace,
+    highlighted: usize,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
-    catalog: &Catalog,
-    measurer: &mut TextMeasurer,
+    mut content: impl FnMut(usize, Rect, &mut Vec<Primitive>),
 ) -> Vec<Primitive> {
-    let move_cfg = &config.appearance.move_to_group;
     let menu_cfg = &config.appearance.context_menu;
     let corner_radius = menu_cfg.corner_radius as f32;
     let item_radius = menu_cfg.item_corner_radius as f32;
-    let row_padding_x = move_cfg.row_padding_x as f32;
-    let swatch_size = move_cfg.swatch_size as f32;
-    let swatch_gap = move_cfg.swatch_gap as f32;
-    let item_text_size = menu_cfg.font_size as f32;
 
     let mut out = Vec::new();
     out.push(Primitive::RoundedQuad(RoundedQuad {
@@ -2293,7 +2325,7 @@ pub fn paint_move_to_group(
     }));
     for (visible_i, &rect) in layout.visible_row_rects.iter().enumerate() {
         let row_index = layout.first_visible_index + visible_i;
-        if row_index == popover.highlighted() {
+        if row_index == highlighted {
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect,
                 radius: item_radius,
@@ -2302,82 +2334,191 @@ pub fn paint_move_to_group(
                 border_width: 0.0,
             }));
         }
-        if row_index < popover.targets().len() {
-            let group_id = popover.targets()[row_index];
-            let Some(group) = workspace.group(group_id) else {
-                continue;
-            };
-            let color = group
-                .color()
-                .map(|c| pal.group_color(c))
-                .unwrap_or_else(|| pal.ungrouped_group_color());
-            let swatch_rect = Rect {
-                x: rect.x,
-                y: rect.y + (rect.height - swatch_size) / 2.0,
-                width: swatch_size,
-                height: swatch_size,
-            };
-            out.push(Primitive::RoundedQuad(RoundedQuad {
-                rect: swatch_rect,
-                radius: MOVE_SWATCH_RADIUS,
-                color,
-                border_color: palette::TRANSPARENT,
-                border_width: 0.0,
-            }));
-            let count_text = group.tabs().len().to_string();
-            let count_width = measurer.measure_width(
-                &count_text,
-                tab_bar::PILL_COUNT_FONT,
-                tab_bar::PILL_COUNT_FONT_SIZE,
-            );
-            let name_max_width =
-                (rect.width - swatch_size - swatch_gap - row_padding_x - count_width - swatch_gap)
-                    .max(0.0);
-            let (name, _) = measurer.truncate(
-                group.name().unwrap_or_default(),
-                BODY_FONT,
-                item_text_size,
-                name_max_width,
-            );
-            out.push(Primitive::Text(TextRun {
-                origin: (
-                    swatch_rect.x + swatch_size + swatch_gap,
-                    rect.y + (rect.height - item_text_size) / 2.0,
-                ),
-                text: name,
-                font: BODY_FONT,
-                size_px: item_text_size,
-                color: pal.menu_item_text,
-            }));
-            out.push(Primitive::Text(TextRun {
-                origin: (
-                    rect.x + rect.width - row_padding_x - count_width,
-                    rect.y + (rect.height - tab_bar::PILL_COUNT_FONT_SIZE) / 2.0,
-                ),
-                text: count_text,
-                font: tab_bar::PILL_COUNT_FONT,
-                size_px: tab_bar::PILL_COUNT_FONT_SIZE,
-                color: pal.pill_count_text,
-            }));
-        } else {
-            out.push(Primitive::Text(TextRun {
-                origin: (
-                    rect.x + row_padding_x,
-                    rect.y + (rect.height - item_text_size) / 2.0,
-                ),
-                text: fit_label(
-                    msg::move_to_group::new_group(catalog),
-                    (rect.width - row_padding_x * 2.0).max(0.0),
-                    item_text_size,
-                    measurer,
-                ),
-                font: BODY_FONT,
-                size_px: item_text_size,
-                color: pal.menu_item_text,
-            }));
-        }
+        content(row_index, rect, &mut out);
     }
     out
+}
+
+/// A row that names something (a group, a window) and counts something at
+/// the right: `label` starts `left_offset` from the row's left edge and is
+/// truncated to leave room for `count_text`.
+#[allow(clippy::too_many_arguments)]
+fn push_named_row(
+    out: &mut Vec<Primitive>,
+    rect: Rect,
+    left_offset: f32,
+    label: &str,
+    count_text: String,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    measurer: &mut TextMeasurer,
+) {
+    let move_cfg = &config.appearance.move_to_group;
+    let row_padding_x = move_cfg.row_padding_x as f32;
+    let swatch_gap = move_cfg.swatch_gap as f32;
+    let item_text_size = config.appearance.context_menu.font_size as f32;
+
+    let count_width = measurer.measure_width(
+        &count_text,
+        tab_bar::PILL_COUNT_FONT,
+        tab_bar::PILL_COUNT_FONT_SIZE,
+    );
+    let name_max_width =
+        (rect.width - left_offset - row_padding_x - count_width - swatch_gap).max(0.0);
+    let (name, _) = measurer.truncate(label, BODY_FONT, item_text_size, name_max_width);
+    out.push(Primitive::Text(TextRun {
+        origin: (
+            rect.x + left_offset,
+            rect.y + (rect.height - item_text_size) / 2.0,
+        ),
+        text: name,
+        font: BODY_FONT,
+        size_px: item_text_size,
+        color: pal.menu_item_text,
+    }));
+    out.push(Primitive::Text(TextRun {
+        origin: (
+            rect.x + rect.width - row_padding_x - count_width,
+            rect.y + (rect.height - tab_bar::PILL_COUNT_FONT_SIZE) / 2.0,
+        ),
+        text: count_text,
+        font: tab_bar::PILL_COUNT_FONT,
+        size_px: tab_bar::PILL_COUNT_FONT_SIZE,
+        color: pal.pill_count_text,
+    }));
+}
+
+/// The fixed last row ("New group", "New window"): just a label.
+fn push_new_row(
+    out: &mut Vec<Primitive>,
+    rect: Rect,
+    label: String,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    measurer: &mut TextMeasurer,
+) {
+    let row_padding_x = config.appearance.move_to_group.row_padding_x as f32;
+    let item_text_size = config.appearance.context_menu.font_size as f32;
+    out.push(Primitive::Text(TextRun {
+        origin: (
+            rect.x + row_padding_x,
+            rect.y + (rect.height - item_text_size) / 2.0,
+        ),
+        text: fit_label(
+            label,
+            (rect.width - row_padding_x * 2.0).max(0.0),
+            item_text_size,
+            measurer,
+        ),
+        font: BODY_FONT,
+        size_px: item_text_size,
+        color: pal.menu_item_text,
+    }));
+}
+
+pub fn paint_move_to_group(
+    layout: &MoveToGroupLayout,
+    popover: &MoveToGroupPopover,
+    workspace: &Workspace,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    catalog: &Catalog,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
+    let move_cfg = &config.appearance.move_to_group;
+    let swatch_size = move_cfg.swatch_size as f32;
+    let swatch_gap = move_cfg.swatch_gap as f32;
+
+    paint_target_list(
+        layout,
+        popover.highlighted(),
+        config,
+        pal,
+        |row_index, rect, out| {
+            if row_index < popover.targets().len() {
+                let group_id = popover.targets()[row_index];
+                let Some(group) = workspace.group(group_id) else {
+                    return;
+                };
+                let color = group
+                    .color()
+                    .map(|c| pal.group_color(c))
+                    .unwrap_or_else(|| pal.ungrouped_group_color());
+                let swatch_rect = Rect {
+                    x: rect.x,
+                    y: rect.y + (rect.height - swatch_size) / 2.0,
+                    width: swatch_size,
+                    height: swatch_size,
+                };
+                out.push(Primitive::RoundedQuad(RoundedQuad {
+                    rect: swatch_rect,
+                    radius: MOVE_SWATCH_RADIUS,
+                    color,
+                    border_color: palette::TRANSPARENT,
+                    border_width: 0.0,
+                }));
+                push_named_row(
+                    out,
+                    rect,
+                    swatch_size + swatch_gap,
+                    group.name().unwrap_or_default(),
+                    group.tabs().len().to_string(),
+                    config,
+                    pal,
+                    measurer,
+                );
+            } else {
+                push_new_row(
+                    out,
+                    rect,
+                    msg::move_to_group::new_group(catalog),
+                    config,
+                    pal,
+                    measurer,
+                );
+            }
+        },
+    )
+}
+
+/// Paints the "Move to window..." popover: no swatch, the title of the
+/// window's active tab where a group row has its name and the tab count
+/// where it has its own, and "New window" as the last row (RF-22.21).
+pub fn paint_move_to_window<W: Copy>(
+    layout: &MoveToGroupLayout,
+    popover: &MoveToWindowPopover<W>,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    catalog: &Catalog,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
+    let row_padding_x = config.appearance.move_to_group.row_padding_x as f32;
+    paint_target_list(
+        layout,
+        popover.highlighted(),
+        config,
+        pal,
+        |row_index, rect, out| match popover.rows().get(row_index) {
+            Some(row) => push_named_row(
+                out,
+                rect,
+                row_padding_x,
+                &row.title,
+                msg::move_to_window::tab_count(catalog, row.tab_count),
+                config,
+                pal,
+                measurer,
+            ),
+            None => push_new_row(
+                out,
+                rect,
+                msg::move_to_window::new_window(catalog),
+                config,
+                pal,
+                measurer,
+            ),
+        },
+    )
 }
 
 /// Índice absoluto (não relativo à janela visível) da linha sob `point`,
@@ -4217,5 +4358,131 @@ mod tests {
             pal.dialog_confirm_background
         );
         assert_eq!(colors_of(&plain), colors_of(&hovered));
+    }
+
+    // ---- "Move to window..." popover (PRD-022 RF-22.21)
+
+    use crate::move_to_window::WindowRow;
+
+    fn window_popover(windows: usize) -> MoveToWindowPopover<u8> {
+        MoveToWindowPopover::new(
+            (100.0, 40.0),
+            (0..windows)
+                .map(|i| WindowRow {
+                    window: i as u8,
+                    title: format!("shell {i}"),
+                    tab_count: i + 1,
+                })
+                .collect(),
+        )
+    }
+
+    /// "The same anatomy" (RF-22.21): for the same number of rows and the same
+    /// highlight, the window popover is laid out exactly as the group one --
+    /// no value of its own.
+    #[test]
+    fn the_window_popover_has_the_geometry_of_the_group_popover() {
+        use porecatu_core::{GroupId, TabId};
+        let config = porecatu_config::Config::default();
+        for windows in [0usize, 2, 12] {
+            let mut window = window_popover(windows);
+            let mut group = MoveToGroupPopover::new(
+                TabId::new(0),
+                (100.0, 40.0),
+                (0..windows as u32).map(GroupId::new).collect(),
+            );
+            // Also with the highlight on the last row, where the visible
+            // window scrolls.
+            for step in [0, windows + 1] {
+                window.set_highlight(step);
+                group.set_highlight(step);
+                let a = layout_move_to_window(&window, &config, 1000.0, 700.0);
+                let b = layout_move_to_group(&group, &config, 1000.0, 700.0);
+                assert_eq!(a.popover_rect, b.popover_rect);
+                assert_eq!(a.visible_row_rects, b.visible_row_rects);
+                assert_eq!(a.first_visible_index, b.first_visible_index);
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_row_has_the_title_where_a_group_has_its_name_and_the_count_after_it() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let catalog = test_support::pt_br();
+        let mut measurer = TextMeasurer::new();
+        let popover = window_popover(2);
+        let layout = layout_move_to_window(&popover, &config, 1000.0, 700.0);
+        let primitives =
+            paint_move_to_window(&layout, &popover, &config, &pal, &catalog, &mut measurer);
+
+        let texts: Vec<String> = text_colors(&primitives)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert_eq!(
+            texts,
+            ["shell 0", "1 aba", "shell 1", "2 abas", "Nova janela"]
+        );
+        // The surface and the highlight of the first row, and no swatch: a
+        // window row is text only.
+        let rounded = primitives
+            .iter()
+            .filter(|p| matches!(p, Primitive::RoundedQuad(_)))
+            .count();
+        assert_eq!(rounded, 2);
+    }
+
+    /// The count of a row is right-aligned in the pill-count font and a long
+    /// title is cut to leave room for it, never reaching it.
+    #[test]
+    fn a_long_window_title_is_truncated_before_the_count() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let catalog = test_support::en_us();
+        let mut measurer = TextMeasurer::new();
+        let popover = MoveToWindowPopover::new(
+            (0.0, 0.0),
+            vec![WindowRow {
+                window: 1u8,
+                title: "a very long title ".repeat(20),
+                tab_count: 12,
+            }],
+        );
+        let layout = layout_move_to_window(&popover, &config, 1000.0, 700.0);
+        let primitives =
+            paint_move_to_window(&layout, &popover, &config, &pal, &catalog, &mut measurer);
+        let runs: Vec<&TextRun> = primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+        let (title, count) = (runs[0], runs[1]);
+        assert_eq!(count.text, "12 tabs");
+        assert!(title.text.chars().count() < "a very long title ".repeat(20).chars().count());
+        let title_end = title.origin.0 + width_of(&title.text, title.size_px, &mut measurer);
+        assert!(
+            title_end <= count.origin.0,
+            "{title_end} > {}",
+            count.origin.0
+        );
+        let row = layout.visible_row_rects[0];
+        assert!(count.origin.0 + 1.0 < row.x + row.width);
+    }
+
+    /// With the popover open to a single window ("New window" alone) the layout
+    /// still has the one row.
+    #[test]
+    fn the_window_popover_with_no_other_window_has_only_new_window() {
+        let config = porecatu_config::Config::default();
+        let popover = window_popover(0);
+        let layout = layout_move_to_window(&popover, &config, 1000.0, 700.0);
+        assert_eq!(layout.visible_row_rects.len(), 1);
+        assert_eq!(
+            move_to_group_hit(&layout, center(layout.visible_row_rects[0])),
+            Some(0)
+        );
     }
 }

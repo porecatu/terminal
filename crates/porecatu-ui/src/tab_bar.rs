@@ -26,7 +26,7 @@
 //! `palette.rs` (F1). Valor sem chave é geometria fixa da espec. visual,
 //! citada por seção.
 
-use porecatu_core::{GroupId, TabId, UnpinTarget, Workspace};
+use porecatu_core::{GroupId, InsertAt, TabId, UnpinTarget, Workspace};
 use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer};
 
 /// Fonte de rótulo de aba (espec. §1.1: "12.5px, rótulo da aba").
@@ -1517,6 +1517,43 @@ pub fn drop_op(from_zone: bool, target: DragDrop) -> DropOp {
     }
 }
 
+/// The `Workspace::move_tabs` destination of a drop of a **block** of track
+/// tabs (the selection, ADR-0091 §6): the same three destinations `drop_op`
+/// gives a lone track tab, in the convention of `move_tabs` (positions read
+/// after the block left). `None` for the operations only a pinned box can
+/// produce (`ReorderPinned`, `Unpin`) -- a block never comes from the zone.
+pub fn block_insert_at(op: DropOp) -> Option<InsertAt> {
+    match op {
+        DropOp::IntoGroup { group, pos } => Some(InsertAt::IntoGroup { group, pos }),
+        DropOp::NewRun { group_index } => Some(InsertAt::NewRun { group_index }),
+        DropOp::Pin { pos } => Some(InsertAt::Pinned { pos }),
+        DropOp::ReorderPinned { .. } | DropOp::Unpin(_) => None,
+    }
+}
+
+/// The `Workspace::insert_detached_tabs` destination of a tab -- or a pinned
+/// tab -- that arrives from **another window** (ADR-0091 §3, RF-22.7): total,
+/// unlike [`block_insert_at`], because here the origin of the tab is the other
+/// window and every operation `drop_op` knows has a landing. A pinned tab
+/// dropped on the zone arrives pinned (`ReorderPinned`), dropped on the track
+/// it arrives loose, in the group or run the target names (`Unpin`); a track
+/// tab dropped on the zone arrives pinned (`Pin`). Positions are read against
+/// the destination as it is, which has none of the arrivals -- the convention
+/// of [`DragDrop`] with the dragged tab absent.
+pub fn incoming_insert_at(op: DropOp) -> InsertAt {
+    match op {
+        DropOp::IntoGroup { group, pos } | DropOp::Unpin(UnpinTarget::IntoGroup { group, pos }) => {
+            InsertAt::IntoGroup { group, pos }
+        }
+        DropOp::NewRun { group_index } | DropOp::Unpin(UnpinTarget::NewRun { group_index }) => {
+            InsertAt::NewRun { group_index }
+        }
+        // The menu's target (RF-21.10), never a drag's: a new run at the front.
+        DropOp::Unpin(UnpinTarget::TrackStart) => InsertAt::NewRun { group_index: 0 },
+        DropOp::Pin { pos } | DropOp::ReorderPinned { pos } => InsertAt::Pinned { pos },
+    }
+}
+
 /// Where a drop on the pinned zone lands (ADR-0087 §5): `pos` among the pinned
 /// boxes **other than `dragged`**, by comparing `ghost_center_x` (screen
 /// coordinates) against the center of each of those boxes at its real place --
@@ -1589,11 +1626,30 @@ pub fn tab_drag_target(
 /// the box comes from the zone -- and with any other target the zone is the
 /// real one (a pinned `dragged` keeps its slot as a hole; the zone closes
 /// only on the drop). The painter skips `dragged`.
+///
+/// The one-tab case of [`pinned_preview_order_block`], which the paint of both
+/// the local and the incoming drag call through `app_cross_drag::preview_zone`;
+/// kept for the tests that pin the contract.
+#[cfg(test)]
 pub fn pinned_preview_order(pinned: &[TabId], dragged: TabId, target: DragDrop) -> Vec<TabId> {
+    pinned_preview_order_block(pinned, &[dragged], target)
+}
+
+/// [`pinned_preview_order`] for a block of dragged tabs (the selection,
+/// ADR-0091 §6): with a [`DragDrop::Pinned`] target the whole `dragged` run
+/// sits contiguously from `pos`, in the order given -- one slot for each, so
+/// the gap has a box per tab. `pos` is read among the pinned boxes **other
+/// than `dragged`**, like the lone case, which is this function with one id.
+pub fn pinned_preview_order_block(
+    pinned: &[TabId],
+    dragged: &[TabId],
+    target: DragDrop,
+) -> Vec<TabId> {
     let mut order = pinned.to_vec();
     if let DragDrop::Pinned { pos } = target {
-        order.retain(|&id| id != dragged);
-        order.insert(pos.min(order.len()), dragged);
+        order.retain(|id| !dragged.contains(id));
+        let at = pos.min(order.len());
+        order.splice(at..at, dragged.iter().copied());
     }
     order
 }
@@ -3467,6 +3523,209 @@ mod tests {
         let run = DragDrop::NewRun { group_index: 0 };
         assert_eq!(pinned_preview_order(zone, ids[1], run), zone);
         assert_eq!(pinned_preview_order(zone, track, run), zone);
+    }
+
+    /// ADR-0091 §6: the gap of a dragged selection has one slot per tab, from
+    /// `pos` among the boxes that stay, in the order given; any other target is
+    /// the real zone, and one id is exactly `pinned_preview_order`.
+    #[test]
+    fn pinned_preview_order_block_opens_one_slot_per_tab() {
+        let (ws, ids, track) = workspace_with_pinned(3);
+        let zone = ws.pinned();
+        let (x, y) = (TabId::new(900), TabId::new(901));
+        let block = [track, x, y];
+        let gap = |pos| pinned_preview_order_block(zone, &block, DragDrop::Pinned { pos });
+        assert_eq!(gap(0), [track, x, y, ids[0], ids[1], ids[2]]);
+        assert_eq!(gap(2), [ids[0], ids[1], track, x, y, ids[2]]);
+        assert_eq!(gap(3), [ids[0], ids[1], ids[2], track, x, y]);
+        // Past the end saturates.
+        assert_eq!(gap(9), [ids[0], ids[1], ids[2], track, x, y]);
+        // Another target: the real zone.
+        let run = DragDrop::NewRun { group_index: 0 };
+        assert_eq!(pinned_preview_order_block(zone, &block, run), zone);
+        // One id is the lone case, target by target.
+        for target in [DragDrop::Pinned { pos: 1 }, run] {
+            for dragged in [track, ids[1]] {
+                assert_eq!(
+                    pinned_preview_order_block(zone, &[dragged], target),
+                    pinned_preview_order(zone, dragged, target)
+                );
+            }
+        }
+    }
+
+    /// The translation of the drop of a block (ADR-0091 §6) into the
+    /// destination of `move_tabs`: the three destinations of a track tab, and
+    /// nothing for what only a pinned box produces.
+    #[test]
+    fn block_insert_at_translates_the_drop_of_a_track_tab() {
+        let group = GroupId::new(7);
+        assert_eq!(
+            block_insert_at(drop_op(false, DragDrop::IntoGroup { group, pos: 2 })),
+            Some(InsertAt::IntoGroup { group, pos: 2 })
+        );
+        assert_eq!(
+            block_insert_at(drop_op(false, DragDrop::NewRun { group_index: 1 })),
+            Some(InsertAt::NewRun { group_index: 1 })
+        );
+        assert_eq!(
+            block_insert_at(drop_op(false, DragDrop::Pinned { pos: 3 })),
+            Some(InsertAt::Pinned { pos: 3 })
+        );
+        assert_eq!(block_insert_at(DropOp::ReorderPinned { pos: 0 }), None);
+        assert_eq!(
+            block_insert_at(DropOp::Unpin(UnpinTarget::NewRun { group_index: 0 })),
+            None
+        );
+    }
+
+    /// ADR-0091 §3: what arrives from another window lands somewhere for
+    /// every operation `drop_op` can give -- the pinned tab included
+    /// (`block_insert_at` has nothing for it).
+    #[test]
+    fn incoming_insert_at_translates_every_drop_of_a_tab_from_another_window() {
+        let group = GroupId::new(7);
+        for from_zone in [false, true] {
+            assert_eq!(
+                incoming_insert_at(drop_op(from_zone, DragDrop::IntoGroup { group, pos: 2 })),
+                InsertAt::IntoGroup { group, pos: 2 },
+                "into a group, pinned or not (from_zone = {from_zone})"
+            );
+            assert_eq!(
+                incoming_insert_at(drop_op(from_zone, DragDrop::NewRun { group_index: 1 })),
+                InsertAt::NewRun { group_index: 1 },
+                "a new run, pinned or not (from_zone = {from_zone})"
+            );
+            assert_eq!(
+                incoming_insert_at(drop_op(from_zone, DragDrop::Pinned { pos: 3 })),
+                InsertAt::Pinned { pos: 3 },
+                "on the zone: `Pin` or `ReorderPinned` (from_zone = {from_zone})"
+            );
+        }
+        // And the operations by name.
+        assert_eq!(
+            incoming_insert_at(DropOp::ReorderPinned { pos: 0 }),
+            InsertAt::Pinned { pos: 0 }
+        );
+        assert_eq!(
+            incoming_insert_at(DropOp::Unpin(UnpinTarget::IntoGroup { group, pos: 4 })),
+            InsertAt::IntoGroup { group, pos: 4 }
+        );
+        assert_eq!(
+            incoming_insert_at(DropOp::Unpin(UnpinTarget::NewRun { group_index: 5 })),
+            InsertAt::NewRun { group_index: 5 }
+        );
+        assert_eq!(
+            incoming_insert_at(DropOp::Unpin(UnpinTarget::TrackStart)),
+            InsertAt::NewRun { group_index: 0 }
+        );
+        // For a track tab it is exactly what the block translation gives.
+        for target in [
+            DragDrop::IntoGroup { group, pos: 0 },
+            DragDrop::NewRun { group_index: 2 },
+            DragDrop::Pinned { pos: 1 },
+        ] {
+            let op = drop_op(false, target);
+            assert_eq!(Some(incoming_insert_at(op)), block_insert_at(op));
+        }
+    }
+
+    /// ADR-0091 §6, the order that results: three groups of two tabs, three
+    /// scattered tabs selected, the target read against the layout of the
+    /// workspace **without** the block (the convention of `move_tabs`) and
+    /// applied by `move_tabs`. Also: the target functions work with the
+    /// grabbed tab absent from the layout, and agree with the lone case.
+    #[test]
+    fn a_dragged_selection_lands_contiguous_where_the_target_says() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        let t: Vec<TabId> = (0..6)
+            .map(|_| ws.append_ungrouped_tab("zsh", None))
+            .collect();
+        let a = ws.group_tabs(&t[0..2], "a", GroupColor::Cyan).unwrap();
+        let b = ws.group_tabs(&t[2..4], "b", GroupColor::Green).unwrap();
+        let c = ws.group_tabs(&t[4..6], "c", GroupColor::Red).unwrap();
+        assert_eq!(ws.track_order().collect::<Vec<_>>(), t);
+        let tabs_of = |ws: &Workspace, g: GroupId| ws.group(g).unwrap().tabs().to_vec();
+
+        // The selection: one tab of each group; the grabbed one is `t[3]`.
+        let (grabbed, block) = (t[3], [t[5], t[0]]);
+        let all = [t[5], t[3], t[0]];
+        let mut without = ws.clone();
+        without.take_tabs(&all);
+        let mut m = measurer();
+        let layout = layout(&without, &style, &mut m);
+        assert_eq!(layout.groups.len(), 3);
+        let shift = track_shift(&style, false, 0);
+
+        // Over the left half of the only tab left in `b` (`t[2]`): the front
+        // of `b`. The absent grabbed tab changes nothing in the count.
+        let t2 = layout.groups[1].tabs[0].rect;
+        let target = tab_drag_target(
+            &layout,
+            &style,
+            false,
+            &[],
+            grabbed,
+            shift + t2.x + 1.0,
+            0.0,
+        );
+        assert_eq!(target, DragDrop::IntoGroup { group: b, pos: 0 });
+        assert_eq!(
+            target,
+            tab_drag_target(&layout, &style, false, &[], t[1], shift + t2.x + 1.0, 0.0),
+            "any id absent from the layout reads the same target"
+        );
+        let mut front = ws.clone();
+        let at = block_insert_at(drop_op(false, target)).unwrap();
+        assert!(front.move_tabs(&[grabbed, block[0], block[1]], at));
+        // The block in its visual order, in front of `t[2]`; `a` and `c` keep
+        // what stayed.
+        assert_eq!(
+            front.track_order().collect::<Vec<_>>(),
+            [t[1], t[0], t[3], t[5], t[2], t[4]]
+        );
+        assert_eq!(tabs_of(&front, a), [t[1]]);
+        assert_eq!(tabs_of(&front, b), [t[0], t[3], t[5], t[2]]);
+        assert_eq!(tabs_of(&front, c), [t[4]]);
+
+        // Right half of `t[2]`: after it.
+        let target = tab_drag_target(
+            &layout,
+            &style,
+            false,
+            &[],
+            grabbed,
+            shift + t2.x + t2.width - 1.0,
+            0.0,
+        );
+        assert_eq!(target, DragDrop::IntoGroup { group: b, pos: 1 });
+        let mut back = ws.clone();
+        assert!(back.move_tabs(&all, block_insert_at(drop_op(false, target)).unwrap()));
+        assert_eq!(tabs_of(&back, b), [t[2], t[0], t[3], t[5]]);
+
+        // Past the last group: a new run at the end, the block in order.
+        let end = layout
+            .groups
+            .last()
+            .map_or(0.0, |g| g.rect.x + g.rect.width);
+        let target = tab_drag_target(
+            &layout,
+            &style,
+            false,
+            &[],
+            grabbed,
+            shift + end + 50.0,
+            0.0,
+        );
+        assert_eq!(target, DragDrop::NewRun { group_index: 3 });
+        let mut run = ws.clone();
+        assert!(run.move_tabs(&all, block_insert_at(drop_op(false, target)).unwrap()));
+        assert_eq!(
+            run.track_order().collect::<Vec<_>>(),
+            [t[1], t[2], t[4], t[0], t[3], t[5]]
+        );
+        assert_eq!(run.groups().len(), 4);
     }
 
     #[test]

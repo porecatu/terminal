@@ -215,20 +215,53 @@ impl<W: Copy + Eq + Hash> PinnedRegistry<W> {
         saved: TabV1,
         left_neighbor: Option<PinnedKey>,
     ) -> PinnedKey {
+        let index = self.insertion_index(window, left_neighbor);
+        let key = self.fresh_key();
+        self.entries.insert(index, PinnedEntry { key, saved });
+        self.bind_live(key, window, tab);
+        key
+    }
+
+    /// The ADR-0086 §2 rule, shared by the pin gesture and by a pinned tab
+    /// that changes window ([`Self::relocate`]): right after the left
+    /// neighbour; with none, right before the first entry live in `window`;
+    /// with none, at the end.
+    fn insertion_index(&self, window: W, left_neighbor: Option<PinnedKey>) -> usize {
         let after_neighbor = left_neighbor
             .and_then(|key| self.index_of(key))
             .map(|i| i + 1);
-        let index = after_neighbor
+        after_neighbor
             .or_else(|| {
                 self.entries
                     .iter()
                     .position(|e| self.is_live_in(e.key, window))
             })
-            .unwrap_or(self.entries.len());
-        let key = self.fresh_key();
-        self.entries.insert(index, PinnedEntry { key, saved });
-        self.bind_live(key, window, tab);
-        key
+            .unwrap_or(self.entries.len())
+    }
+
+    /// A pinned tab arrived in the zone of another window (ADR-0090 §5,
+    /// RF-22.26): the entry leaves its position and is reinserted by the same
+    /// rule as [`Self::insert_for_pin`], keeping its key and snapshot, and
+    /// `live[key]` becomes `(to_window, new_tab)`. Returns `true` when the
+    /// **order** of the list changed -- only then does the caller write
+    /// `pinned.json`. `false` also when `key` is not in the list.
+    pub(crate) fn relocate(
+        &mut self,
+        key: PinnedKey,
+        to_window: W,
+        new_tab: TabId,
+        left_neighbor: Option<PinnedKey>,
+    ) -> bool {
+        let Some(old_index) = self.index_of(key) else {
+            return false;
+        };
+        let entry = self.entries.remove(old_index);
+        // The entry is out of the list while the index is computed, so it is
+        // neither its own neighbour nor "the first entry of the window".
+        let index = self.insertion_index(to_window, left_neighbor);
+        self.entries.insert(index, entry);
+        self.bind_live(key, to_window, new_tab);
+        index != old_index
     }
 
     /// Reorder gesture in the zone of `window` (ADR-0086 §2): `zone_order`
@@ -584,6 +617,94 @@ mod tests {
         registry.insert_for_pin(1, tab(9), saved("x"), Some(before[0]));
         let after: Vec<PinnedKey> = registry.entries().iter().map(|e| e.key).collect();
         assert_eq!([after[0], after[2], after[3], after[4]], before[..]);
+    }
+
+    // --- relocate (ADR-0090 §5) ---
+
+    #[test]
+    fn relocating_without_changing_position_reports_no_change() {
+        let mut registry = two_windows(); // a(W1) b(W2) c(W1) d(W2)
+        let (kc, kd) = (key(&registry, 2), key(&registry, 3));
+        // `d` goes to W1, right after `c`: where it already is.
+        assert!(!registry.relocate(kd, 1, tab(7), Some(kc)));
+        assert_eq!(tags(&registry), ["a", "b", "c", "d"]);
+        assert_eq!(registry.live_of(kd), Some((1, tab(7))));
+
+        // `a` goes to W2 with no neighbour: before W2's first entry (`b`),
+        // which is right after the position it leaves.
+        let mut registry = two_windows();
+        let ka = key(&registry, 0);
+        assert!(!registry.relocate(ka, 2, tab(8), None));
+        assert_eq!(tags(&registry), ["a", "b", "c", "d"]);
+        assert_eq!(registry.live_of(ka), Some((2, tab(8))));
+    }
+
+    #[test]
+    fn relocating_before_another_entry_changes_the_order_and_keeps_identity() {
+        let mut registry = two_windows();
+        let keys: Vec<PinnedKey> = registry.entries().iter().map(|e| e.key).collect();
+        // `b` (W2) arrives in W1 right after `c`.
+        assert!(registry.relocate(keys[1], 1, tab(9), Some(keys[2])));
+        assert_eq!(tags(&registry), ["a", "c", "b", "d"]);
+        assert_eq!(registry.live_of(keys[1]), Some((1, tab(9))));
+        assert_eq!(registry.key_of(1, tab(9)), Some(keys[1]));
+        assert_eq!(registry.key_of(2, tab(1)), None, "the old binding is gone");
+        let after: Vec<PinnedKey> = registry.entries().iter().map(|e| e.key).collect();
+        assert_eq!(after, [keys[0], keys[2], keys[1], keys[3]]);
+
+        // With no neighbour, before the first entry live in W1 (`a`).
+        let mut registry = two_windows();
+        let kb = key(&registry, 1);
+        assert!(registry.relocate(kb, 1, tab(9), None));
+        assert_eq!(tags(&registry), ["b", "a", "c", "d"]);
+    }
+
+    #[test]
+    fn relocating_keeps_the_snapshot() {
+        let mut registry = two_windows();
+        let kb = key(&registry, 1);
+        let before = registry.entries()[1].saved.clone();
+        registry.relocate(kb, 1, tab(9), Some(key(&registry, 2)));
+        let at = registry.index_of(kb).unwrap();
+        assert_eq!(registry.entries()[at].saved, before);
+    }
+
+    #[test]
+    fn relocating_to_a_window_with_no_entries_goes_to_the_end() {
+        let mut registry = two_windows();
+        let ka = key(&registry, 0);
+        assert!(registry.relocate(ka, 3, tab(1), None));
+        assert_eq!(tags(&registry), ["b", "c", "d", "a"]);
+        assert_eq!(registry.live_of(ka), Some((3, tab(1))));
+    }
+
+    #[test]
+    fn relocating_the_last_entry_to_an_empty_window_changes_nothing() {
+        let mut registry = two_windows();
+        let kd = key(&registry, 3);
+        assert!(!registry.relocate(kd, 3, tab(1), None));
+        assert_eq!(tags(&registry), ["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn relocating_an_entry_that_left_the_list_does_nothing() {
+        let mut registry = two_windows();
+        let gone = key(&registry, 0);
+        registry.remove(gone);
+        assert!(!registry.relocate(gone, 2, tab(5), None));
+        assert_eq!(tags(&registry), ["b", "c", "d"]);
+        assert_eq!(registry.live_of(gone), None);
+    }
+
+    #[test]
+    fn a_neighbour_that_left_the_list_counts_as_none_when_relocating() {
+        let mut registry = two_windows();
+        let (ka, kd) = (key(&registry, 0), key(&registry, 3));
+        registry.remove(ka);
+        // List: b(W2) c(W1) d(W2); `d` goes to W1 with a stale neighbour:
+        // right before W1's first live entry (`c`).
+        assert!(registry.relocate(kd, 1, tab(9), Some(ka)));
+        assert_eq!(tags(&registry), ["b", "d", "c"]);
     }
 
     // --- reorder_window ---

@@ -54,6 +54,11 @@ pub enum Action {
     /// fixada, a desafixa (início da trilha). Vinculável e **sem default**
     /// em nenhuma plataforma -- mesmo precedente de `group.new_tab`.
     TabTogglePin,
+    /// PRD-022 RF-22.24, ADR-0090 §6. Abre o popover "Mover para janela..."
+    /// para a seleção ou, sem seleção, para a aba ativa. Vinculável e **sem
+    /// default** em nenhuma plataforma -- mesmo precedente de
+    /// `group.new_tab`.
+    TabMoveToWindow,
 
     GroupCreate,
     GroupDissolve,
@@ -65,6 +70,11 @@ pub enum Action {
     GroupPrev,
     GroupNewTab,
     GroupCloseAll,
+    /// PRD-022 RF-22.24, ADR-0090 §6. Abre o popover "Mover para janela..."
+    /// para o grupo da aba ativa; inerte fora de grupo explícito. Vinculável
+    /// e **sem default** em nenhuma plataforma -- mesmo precedente de
+    /// `group.new_tab`.
+    GroupMoveToWindow,
 
     WindowNew,
     WindowClose,
@@ -159,6 +169,7 @@ pub const CATALOG: &[&str] = &[
     "tab.move_right",
     "tab.move_to_group",
     "tab.toggle_pin",
+    "tab.move_to_window",
     "group.create",
     "group.dissolve",
     "group.rename",
@@ -168,6 +179,7 @@ pub const CATALOG: &[&str] = &[
     "group.prev",
     "group.new_tab",
     "group.close_all",
+    "group.move_to_window",
     "window.new",
     "window.close",
     "window.toggle_fullscreen",
@@ -274,6 +286,7 @@ impl FromStr for Action {
             "tab.move_left" => Action::TabMoveLeft,
             "tab.move_right" => Action::TabMoveRight,
             "tab.toggle_pin" => Action::TabTogglePin,
+            "tab.move_to_window" => Action::TabMoveToWindow,
             "group.create" => Action::GroupCreate,
             "group.dissolve" => Action::GroupDissolve,
             "group.rename" => Action::GroupRename,
@@ -282,6 +295,7 @@ impl FromStr for Action {
             "group.prev" => Action::GroupPrev,
             "group.new_tab" => Action::GroupNewTab,
             "group.close_all" => Action::GroupCloseAll,
+            "group.move_to_window" => Action::GroupMoveToWindow,
             "window.new" => Action::WindowNew,
             "window.close" => Action::WindowClose,
             "window.toggle_fullscreen" => Action::WindowToggleFullscreen,
@@ -339,6 +353,7 @@ impl fmt::Display for Action {
             Action::TabMoveRight => "tab.move_right",
             Action::TabMoveToGroup(_) => "tab.move_to_group",
             Action::TabTogglePin => "tab.toggle_pin",
+            Action::TabMoveToWindow => "tab.move_to_window",
             Action::GroupCreate => "group.create",
             Action::GroupDissolve => "group.dissolve",
             Action::GroupRename => "group.rename",
@@ -348,6 +363,7 @@ impl fmt::Display for Action {
             Action::GroupPrev => "group.prev",
             Action::GroupNewTab => "group.new_tab",
             Action::GroupCloseAll => "group.close_all",
+            Action::GroupMoveToWindow => "group.move_to_window",
             Action::WindowNew => "window.new",
             Action::WindowClose => "window.close",
             Action::WindowToggleFullscreen => "window.toggle_fullscreen",
@@ -457,6 +473,7 @@ mod tests {
             Action::TabMoveLeft,
             Action::TabMoveRight,
             Action::TabTogglePin,
+            Action::TabMoveToWindow,
             Action::GroupCreate,
             Action::GroupDissolve,
             Action::GroupRename,
@@ -465,6 +482,7 @@ mod tests {
             Action::GroupPrev,
             Action::GroupNewTab,
             Action::GroupCloseAll,
+            Action::GroupMoveToWindow,
             Action::WindowNew,
             Action::WindowClose,
             Action::WindowToggleFullscreen,
@@ -519,6 +537,27 @@ mod tests {
         assert!(CATALOG.contains(&"tab.toggle_pin"));
         assert!("tab.pin".parse::<Action>().is_err());
         assert!("tab.unpin".parse::<Action>().is_err());
+    }
+
+    /// PRD-022 RF-22.24: the two window-move actions are plain, bindable
+    /// names (no argument) and round-trip through `FromStr`/`Display`.
+    #[test]
+    fn move_to_window_actions_round_trip_and_are_in_the_catalog() {
+        assert_eq!(
+            "tab.move_to_window".parse::<Action>(),
+            Ok(Action::TabMoveToWindow)
+        );
+        assert_eq!(Action::TabMoveToWindow.to_string(), "tab.move_to_window");
+        assert_eq!(
+            "group.move_to_window".parse::<Action>(),
+            Ok(Action::GroupMoveToWindow)
+        );
+        assert_eq!(
+            Action::GroupMoveToWindow.to_string(),
+            "group.move_to_window"
+        );
+        assert!(CATALOG.contains(&"tab.move_to_window"));
+        assert!(CATALOG.contains(&"group.move_to_window"));
     }
 
     #[test]
