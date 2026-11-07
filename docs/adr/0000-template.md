@@ -33,7 +33,7 @@
 | [0027](0027-controles-de-janela-e-resize-proprios.md) | Controles de janela e resize próprios (Windows/Linux) | Aceito · botões revistos por ADR-0066 (estado pressionado) |
 | [0028](0028-o-binario-como-referencia-visual.md) | O binário como referência visual | Aceito |
 | [0029](0029-enum-de-acao-e-gramatica-de-tecla.md) | Enum de ação e gramática de tecla | Aceito |
-| [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito |
+| [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito · classe A acrescida por ADR-0092 (**parcial**: `[session] restore_named_in_current_window`, a primeira classe A de `[session]`) |
 | [0031](0031-temas-nomeados.md) | Temas nomeados: escopo, merge e ciclo | Superseded by ADR-0067 (**parcial**: onde o tema mora, precedência, ordem do ciclo; "tema é só cor" e ciclar sem escrever continuam) |
 | [0032](0032-interface-do-v1-fechada.md) | A interface do v1 está fechada | Aceito |
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
@@ -55,7 +55,7 @@
 | [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito · §6 Superseded by ADR-0053 (**parcial**: qual terminal recebe o comando) · §1 e §4 revistos por ADR-0086 (**parcial**: fixada aberta no arranque dispara sem `trusted_paths`) · §2, §3 e §8 revistos por ADR-0088 (**parcial**: nome de seção reservado `[icon]`) |
 | [0052](0052-sincronizacao-com-o-remoto-do-git.md) | Sincronização com o remoto do Git: poll em thread, contagem por `rev-list`, integração só por clique | Aceito |
 | [0053](0053-paineis-divididos.md) | Painéis divididos: árvore binária no core, divisor que é ausência de pixel, foco pelo cursor | Aceito |
-| [0054](0054-sessoes-nomeadas.md) | Sessões nomeadas: um arquivo por sessão ao lado do `session.json`, mesmo schema, restauração pelo caminho do arranque | Aceito |
+| [0054](0054-sessoes-nomeadas.md) | Sessões nomeadas: um arquivo por sessão ao lado do `session.json`, mesmo schema, restauração pelo caminho do arranque | Aceito · §6 e §8 revistos por ADR-0092 (**parcial**: uma chave de `[session]` escolhe restaurar na janela atual, acrescentando) |
 | [0055](0055-botao-e-popover-de-sessoes.md) | Botão e popover de sessões: segundo botão da zona fixa, sétimo widget de chrome | Aceito |
 | [0056](0056-catalogo-de-textos-da-interface.md) | Catálogo de textos da interface: arquivos TOML por idioma em disco, crate `porecatu-locale`, prosa só em `porecatu-ui` | Aceito |
 | [0057](0057-idiomas-nos-artefatos.md) | Idiomas nos artefatos de release: `locales/` dentro de todo instalador, e o binário cru deixa de ser publicado | Aceito |
@@ -93,6 +93,7 @@
 | [0089](0089-ranhura-de-soltura-com-o-botao-do-app-oculto.md) | Ranhura virtual de soltura da zona de fixadas com o botão do app oculto | Aceito |
 | [0090](0090-transferencia-de-abas-entre-janelas.md) | Transferência de abas e grupos entre janelas: extrair e inserir no core, endereço do wakeup numa célula do painel, `TabId` novo no destino | Aceito |
 | [0091](0091-arraste-entre-janelas.md) | Arraste entre janelas: ponto global pela captura implícita, alvo pela ordem de foco, fantasma que salta de barra, destacar numa janela nova e arraste da seleção | Aceito — aval visual do dono pendente |
+| [0092](0092-restauracao-nomeada-na-janela-atual.md) | Restauração nomeada na janela atual: chave `[session] restore_named_in_current_window`, acréscimo pelo `insert_detached_*` do core, mesmo arranque de runtimes | Aceito |
 
 ## Convenção
 

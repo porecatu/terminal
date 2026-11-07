@@ -78,6 +78,8 @@ Clicar numa linha abre **uma janela nova** com a disposição salva. O `✕` da 
 
 **RF-14.10** — Clicar numa sessão (ou realçá-la pelas setas e dar `Enter`) **abre uma janela nova** com aquela disposição e fecha o popover. A janela de onde o gesto partiu **não muda** — nem abas, nem foco de aba, nem geometria.
 
+> **Emenda (2026-11-07, [PRD-023](prd-023-restaurar-sessao-nomeada-na-janela-atual.md)).** O RF-14.10 e o RF-14.12 valem com `[session] restore_named_in_current_window = false`, que é o padrão. Com a opção ligada, restaurar **acrescenta** os grupos e as abas da sessão ao fim da trilha da janela de onde o gesto partiu, sem abrir janela nova e sem mudar nada do que ela já tinha, nem a geometria (RF-23.5 a RF-23.11). O RF-14.11 vale nos dois destinos.
+
 **RF-14.11** — A janela restaurada se comporta **exatamente como uma janela restaurada no arranque**:
 - cada aba (cada painel) sobe no `cwd` salvo; `cwd` que não existe mais cai no diretório inicial com uma nota na aba (RF-3.10);
 - a árvore de painéis volta com as proporções salvas (RF-6.22, RF-6.23);
@@ -174,6 +176,8 @@ Cada item é decisão, não esquecimento.
 - **Salvar todas as janelas de uma vez.** O gesto é sobre "esta disposição", e a restauração é "uma janela nova"; um retrato de N janelas pediria restaurar N janelas, com N geometrias, e a pergunta "em cima de quais?" que o RF-14.12 existe para não ter.
 - **Renomear uma sessão salva.** Salvar de novo com outro nome e excluir a antiga cobre o caso com os gestos que já existem.
 - **Restaurar dentro da janela atual**, substituindo ou acrescentando abas. Substituir descartaria processos vivos; acrescentar misturaria dois contextos numa barra, que é o que o recurso existe para separar.
+
+  > **Emenda (2026-11-07).** A metade "acrescentando" saiu desta lista: o [PRD-023](prd-023-restaurar-sessao-nomeada-na-janela-atual.md) foi aprovado fora da ordem de fases, como uma **opção** desligada por padrão (`[session] restore_named_in_current_window`). Para quem separa projetos por grupo numa janela só, misturar contextos numa barra é o jeito de trabalhar. Substituir continua fora, pela razão acima.
 - **Abrir uma sessão nomeada pela linha de comando** (`porecatu --session <nome>`). Ideia plausível, registrada; a superfície de CLI do [ADR-0040](../adr/0040-superficie-de-linha-de-comando.md) é pequena de propósito, e entrar nela pede requisito próprio.
 - **Sessão nomeada como sessão de arranque**, no lugar da automática. Idem.
 - **Atualizar a sessão salva sozinho** enquanto a janela restaurada muda (RF-14.15).
@@ -199,3 +203,5 @@ A proibição do [PRD-003](prd-003-persistencia-de-sessao.md) de reexecutar proc
 | Dependências novas no workspace | **zero** |
 
 A terceira é a que mantém o recurso honesto: se a restauração nomeada ganhar um caminho próprio, cedo ou tarde ela diverge da automática, e o usuário descobre qual das duas tem o bug na hora em que mais precisa dela.
+
+> **Emenda (2026-11-07, [PRD-023](prd-023-restaurar-sessao-nomeada-na-janela-atual.md)).** "Janelas já abertas alteradas por restaurar uma sessão nomeada: zero" vale com a opção `restore_named_in_current_window` desligada. Ligada, a janela de origem ganha grupos e abas a pedido do usuário, e a métrica passa a ser a do PRD-023: **zero** abas, grupos ou processos já abertos alterados. A terceira métrica vale também para o destino novo, pelo mesmo caminho de código.

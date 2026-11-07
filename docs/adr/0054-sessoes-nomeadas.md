@@ -129,6 +129,8 @@ As duas diferenças entram como **parâmetro**, nunca como caminho paralelo:
 
 A leitura do arquivo e a construção da janela acontecem **na main thread**, no tratamento do clique. Um `WindowV1` é alguns kilobytes de JSON; ler e converter custa menos que o frame que a janela nova vai desenhar. O que é caro — os shells subindo — já é assíncrono por `porecatu-term`.
 
+> **Revisto pelo [ADR-0092](0092-restauracao-nomeada-na-janela-atual.md) (2026-11-07).** O destino da restauração deixa de ser sempre uma janela nova. Com `[session] restore_named_in_current_window = true` ([PRD-023](../prd/prd-023-restaurar-sessao-nomeada-na-janela-atual.md)), `restore_named_session` acrescenta os grupos e as abas da sessão ao fim da trilha da janela de origem: monta o `Workspace` pelo mesmo `workspace_from_window` e o insere por `insert_detached_group`/`insert_detached_tabs` ([ADR-0090](0090-transferencia-de-abas-entre-janelas.md)). O princípio desta seção continua: as diferenças são parâmetro, não caminho paralelo. O arranque dos runtimes sai de `open_window_from_session` para uma função que os dois destinos chamam (ADR-0092 §5). Com a chave em `false`, o padrão, tudo acima vale como escrito. Tema, zoom e fixadas continuam não aplicados nos dois destinos.
+
 ### 7. Ações novas no catálogo
 
 | Ação | O que faz | Default |
@@ -151,6 +153,8 @@ O mesmo vale para o modo posicional do [ADR-0040](0040-superficie-de-linha-de-co
 Com `enabled = true`, a janela aberta por uma sessão nomeada **é uma janela como outra qualquer** a partir do momento em que existe: entra no `session.json` na próxima gravação, e reaparece no próximo arranque pela sessão automática. Nenhum vínculo com o arquivo nomeado sobrevive (RF-14.15) — `WindowState` não guarda de qual sessão nasceu, e é isso que impede o recurso de virar "sincronizar janela com arquivo" por acidente.
 
 **Sem chave nova em `[session]`** e sem classe de recarga nova: nada do recurso é configurável além do atalho, que é `[keybindings]` e já tem classe A ([ADR-0030](0030-escopo-do-hot-reload.md)).
+
+> **Revisto pelo [ADR-0092](0092-restauracao-nomeada-na-janela-atual.md) (2026-11-07).** `[session]` ganha uma chave do recurso: `restore_named_in_current_window`, booleana, default `false`, que escolhe entre a janela nova (este ADR) e a janela atual ([PRD-023](../prd/prd-023-restaurar-sessao-nomeada-na-janela-atual.md)). É **classe A**, lida no clique, e `reload::diff` a exclui da comparação de `[session]`, que continua classe C para as outras chaves. O resto desta seção não muda: `enabled = false` e o modo posicional continuam sem alcançar as nomeadas, nos dois destinos.
 
 ### 9. Onde o código mora
 

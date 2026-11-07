@@ -30,6 +30,8 @@ O layout da barra é função pura de `(Workspace, Config, largura)` desde a F2 
 
 > **Acrescentado pelo [ADR-0068](0068-efeito-acrilico-no-fundo-do-terminal.md) §9.** `[terminal.acrylic] enabled` e `blur` são classe A, e também a passagem do acrílico entre ativo e bloqueado quando `[appearance.window] opacity` ou a imagem da janela mudam por recarga. O desfoque é refeito no frame seguinte, sem PTY, sem grade e sem janela recriada. A transparência da surface continua classe C, e o acrílico não entra nela.
 
+> **Acrescentado pelo [ADR-0092](0092-restauracao-nomeada-na-janela-atual.md) §2.** `[session] restore_named_in_current_window` é classe A, a primeira de `[session]`. É lida no clique que restaura uma sessão nomeada, e não há estado a migrar. `reload::diff` a exclui da comparação de `[session]`: mudar só ela não gera aviso, e as outras chaves da seção continuam classe C, com o aviso de sempre.
+
 ### Classe B — aplica a quente, com recálculo de grade e resize de PTY
 
 `terminal.font.*` (família, tamanho, `line_height`, `letter_spacing`), `[appearance.tabs] height`/`tab_height`/`trilha_padding` (mudam a altura da barra, logo a área do terminal) e `[appearance.terminal_frame]` (mudam a área útil dentro do quadro). Depois da troca do `Arc`, recalcula a métrica de célula, deriva colunas e linhas e **redimensiona todos os PTYs da janela** — o mesmo caminho de um resize de janela, que já existe.
