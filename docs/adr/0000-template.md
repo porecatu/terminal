@@ -18,13 +18,13 @@
 | [0012](0012-identificacao-do-terminal.md) | Identificação do terminal: `TERM` e capacidades anunciadas | Aceito |
 | [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito · menu de contexto revisto por ADR-0070 (**parcial**: o menu de perfis, ancorado num botão) · diálogo e canais revistos por ADR-0075 (**parcial**: campo, caixa de marcar e linhas de dado; consumidores do SSH) |
-| [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito · "Escopo" Superseded by ADR-0059 (**parcial**: uma janela sem abas, a de configurações) |
+| [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito · "Escopo" Superseded by ADR-0059 (**parcial**: uma janela sem abas, a de configurações) · "Escopo" e "Refino do ADR-0007" revistos por ADR-0090 (**parcial**: abas e grupos mudam de janela; o endereço do wakeup deixa de ser fixo no spawn) |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 · "embutidas" revisto por ADR-0084 (**parcial**: a fonte de interface é a do sistema) |
 | [0017](0017-ciclo-de-vida-da-aba.md) | Ciclo de vida e identidade da aba | Superseded by ADR-0034, ADR-0037 e ADR-0053 (os três **parcialmente**) · cobertura do RF-1.6 revista por ADR-0071 (**parcial**: aba SSH do cliente embutido confirma) · §6 revisto por ADR-0086 (**parcial**: último painel de aba fixada não fecha a aba) |
 | [0018](0018-composicao-de-frame.md) | Composição de frame: camadas, recorte e medição de texto | Aceito |
 | [0019](0019-tooltip.md) | Tooltip, o quarto widget de chrome | Aceito · gatilho revisto por ADR-0087 (**parcial**: aba fixada sempre tem tooltip) |
 | [0020](0020-grupos-explicitos.md) | Grupos explícitos: multiplicidade do implícito, colapso e foco | Aceito · §2 e §3 revistos por ADR-0086 (**parcial**: fixadas na frente da ordem visual, `track_order()`, escada de foco com a zona) |
-| [0021](0021-selecao-multipla-e-gestos-da-barra.md) | Seleção múltipla e gestos da barra de abas | Aceito · §4 revisto por ADR-0087 (**parcial**: o alvo do arraste ganha a zona de fixadas) |
+| [0021](0021-selecao-multipla-e-gestos-da-barra.md) | Seleção múltipla e gestos da barra de abas | Aceito · §4 revisto por ADR-0087 (**parcial**: o alvo do arraste ganha a zona de fixadas) · §1 e §4 revistos por ADR-0091 (**parcial**: press em aba selecionada arma o arraste da seleção; barra de outra janela é alvo) |
 | [0022](0022-animacao-de-interface.md) | Animação de interface sob render damage-driven | Aceito |
 | [0023](0023-editor-de-grupo.md) | Editor de grupo, o quinto widget de chrome | Superseded by ADR-0035 (parcial) |
 | [0024](0024-face-de-icones.md) | Face de ícones embutida (Lucide) | Superseded by ADR-0025 |
@@ -87,10 +87,12 @@
 | [0083](0083-gap-entre-os-botoes-da-zona-fixa.md) | Gap entre os botões da zona fixa: `window_controls.gap` de 6 para 3px, entre sessões, configurações e botões de janela; zona fixa de 98 para 92px | Aceito — aval visual pendente |
 | [0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) | Fonte do sistema no chrome e ajustes da barra de abas: sem botões de overflow, rótulo de grupo sem fundo e com pontos no colapso, aba de grupo sem borda, aba de 209px, hover no "x", centragem pela altura de versal, clique só dentro da trilha | Aceito — aval visual do dono (Windows) · ponto agregado do grupo colapsado revisto por ADR-0085 |
 | [0085](0085-ponto-por-aba-no-grupo-colapsado-e-margem-do-x.md) | Atividade no ponto da aba do grupo colapsado (sem ponto agregado) e margem direita do "x" igual à vertical: 8px na aba solta, 5px na de grupo | Aceito — aval visual do dono (Windows) |
-| [0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) | Abas fixadas: lista própria no `Workspace`, arquivo `pinned.json` ao lado da sessão, abertura uma vez por execução e fixar como gesto de confiança | Aceito |
-| [0087](0087-zona-de-abas-fixadas-na-barra.md) | Zona de abas fixadas: caixas de aba solta à direita do botão do app, fora do recorte da trilha | Aceito — aval visual do dono pendente · §5 revista por ADR-0089 (**parcial**: fileira vazia tem ranhura de soltura no arraste) |
+| [0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) | Abas fixadas: lista própria no `Workspace`, arquivo `pinned.json` ao lado da sessão, abertura uma vez por execução e fixar como gesto de confiança | Aceito · §2 revisto por ADR-0090 (**parcial**: ordem da lista quando uma fixada muda de janela) |
+| [0087](0087-zona-de-abas-fixadas-na-barra.md) | Zona de abas fixadas: caixas de aba solta à direita do botão do app, fora do recorte da trilha | Aceito — aval visual do dono pendente · §5 revista por ADR-0089 (**parcial**: fileira vazia tem ranhura de soltura no arraste) · §5 revista por ADR-0091 (**parcial**: zona de outra janela é alvo) |
 | [0088](0088-icone-da-aba-fixada.md) | Ícone da aba fixada: seção reservada `[icon]` no `.porecatu`, `icon.png`, ícone do app; resolução e decodificação fora da main thread | Aceito |
 | [0089](0089-ranhura-de-soltura-com-o-botao-do-app-oculto.md) | Ranhura virtual de soltura da zona de fixadas com o botão do app oculto | Aceito |
+| [0090](0090-transferencia-de-abas-entre-janelas.md) | Transferência de abas e grupos entre janelas: extrair e inserir no core, endereço do wakeup numa célula do painel, `TabId` novo no destino | Aceito |
+| [0091](0091-arraste-entre-janelas.md) | Arraste entre janelas: ponto global pela captura implícita, alvo pela ordem de foco, fantasma que salta de barra, destacar numa janela nova e arraste da seleção | Aceito — aval visual do dono pendente |
 
 ## Convenção
 

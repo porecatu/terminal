@@ -154,6 +154,8 @@ Cenário: confirmação ao fechar com processo ativo
 - Miniatura de preview no hover
 - Perfis de aba (aba que abre WSL, SSH, container)
 
+> **Emenda (2026-11-07).** "Mover abas entre janelas por drag" saiu desta lista: o [PRD-022](prd-022-abas-e-grupos-entre-janelas.md) foi aprovado fora da ordem de fases. A aba muda de janela com o processo vivo, por arraste ou pelo popover "Mover para janela…". Soltar fora de toda janela a destaca numa janela nova. O RF-1.4 ganha uma precisão: a janela que fica sem abas porque a última **mudou de janela** fecha sem confirmação, e, como não é a última janela, não encerra o app (RF-22.19).
+
 > **Emenda (2026-11-06).** "Fixar aba" saiu desta lista: o [PRD-021](prd-021-abas-fixadas.md) foi aprovado fora da ordem de fases. A aba fixada é uma exceção a dois requisitos deste documento, só para ela: o RF-1.3 (o último painel que sai com código zero **não** fecha a fixada, RF-21.24) e o RF-1.4 (com fixadas na janela, fechar a última aba da trilha não fecha a janela, RF-21.25). Fechar uma fixada a desafixa (RF-21.22).
 
 > **Emenda (2026-10-27).** Perfis de aba saíram desta lista: o [PRD-007](prd-007-perfis-de-aba.md) foi aprovado fora da ordem de fases. O clique esquerdo no `+` e `tab.new` continuam como descritos aqui, com o perfil padrão — que, sem nada declarado, é o `[shell]` de sempre. Perfis de container continuam fora.

@@ -86,6 +86,8 @@ Vários deles **já estão desenhados** no design canvas ([`docs/design/`](../de
 - **Sistema de plugins.** Sem lógica programável na config no v1 ([ADR-0003](../adr/0003-formato-de-configuracao.md)).
 - **Protocolo de imagens** (sixel, kitty graphics). Fora do que o motor escolhido oferece.
 - **Mover abas entre janelas** por drag. O modelo permite; a UI fica para depois.
+
+  > **Emenda (2026-11-07).** Deixou de ser não-objetivo: o [PRD-022](prd-022-abas-e-grupos-entre-janelas.md) aprovou, fora da ordem de fases, mover abas, seleções, grupos e fixadas entre janelas, por arraste e por menu, e destacar numa janela nova.
 - **Persistir scrollback.** Só estrutura e diretórios ([PRD-003](prd-003-persistencia-de-sessao.md)).
 
 ## Métricas de sucesso

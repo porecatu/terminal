@@ -207,7 +207,7 @@ Descobertas por fase (F1 a F6, pós-F6 e cada recurso fora de fase) vivem em [do
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, tabela de fases, histórico. Descreve o binário ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
 - [docs/adr/](docs/adr/) — decisões arquiteturais
-- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–021 aprovados; 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
+- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–022 aprovados (022, abas e grupos entre janelas, só documentado); 008 rascunho (v2). PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
 - [docs/roadmap.md](docs/roadmap.md) — fases e etapas, com a dívida de verificação de cada uma
 - [docs/descobertas.md](docs/descobertas.md) — descobertas e armadilhas, texto completo
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo **fechado** de ações; ação fora dele é erro de config

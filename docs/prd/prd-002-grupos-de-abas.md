@@ -64,6 +64,8 @@ Definido em [ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md), resumido aqui po
 
 **RF-2.3** — Clique numa aba sem modificador limpa a seleção e ativa aquela aba.
 
+> **Emenda (2026-11-07, [PRD-022](prd-022-abas-e-grupos-entre-janelas.md) RF-22.17 e RF-22.18).** Arrastar uma aba selecionada leva a seleção inteira, na mesma janela ou para outra. Por isso, numa aba **já selecionada**, a limpeza acontece no release do clique, não no press, e só se o cursor não arrastou. O efeito do clique não muda.
+
 ### Criação e dissolução
 
 **RF-2.4** — Com uma ou mais abas selecionadas, o usuário cria um grupo por atalho ou menu de contexto. O grupo nasce com nome vazio, em modo de edição inline, e uma cor atribuída automaticamente da paleta de grupos — a próxima cor ainda não usada na janela.
@@ -174,7 +176,7 @@ Cenário: fechar grupo pede confirmação
 - Grupos aninhados ([ADR-0006](../adr/0006-modelo-de-abas-e-grupos.md))
 - Uma aba em mais de um grupo
 - Grupos não-contíguos
-- Mover grupo entre janelas
+- Mover grupo entre janelas *(saiu desta lista em 2026-11-07: o [PRD-022](prd-022-abas-e-grupos-entre-janelas.md) move o grupo inteiro, com nome, cor, colapso e abas, por arraste do rótulo ou pelo popover "Mover para janela…")*
 - Agrupamento automático por diretório ou projeto (ideia para v2; o v1 é manual e explícito)
 - Ícone customizado por grupo além da cor
 

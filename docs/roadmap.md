@@ -1191,7 +1191,7 @@ A coluna **Desenhado** marca o que já tem alvo visual aprovado no canvas. Estar
 | Multiplexação remota | [PRD-000](prd/prd-000-visao-de-produto.md) | não |
 | Plugins e config programável | [ADR-0003](adr/0003-formato-de-configuracao.md) | não |
 | Persistir scrollback | [PRD-003](prd/prd-003-persistencia-de-sessao.md) | não |
-| Mover aba entre janelas | [PRD-001](prd/prd-001-abas.md) | não |
+| ~~Mover aba entre janelas~~ — saiu desta tabela: ver "abas e grupos entre janelas" abaixo | [PRD-001](prd/prd-001-abas.md), [PRD-022](prd/prd-022-abas-e-grupos-entre-janelas.md) | não |
 | Temas como arquivo importável | [PRD-004](prd/prd-004-aparencia-do-chrome.md), [PRD-005](prd/prd-005-aparencia-do-terminal.md) | não |
 | Tema claro/escuro seguindo o sistema | [PRD-004](prd/prd-004-aparencia-do-chrome.md) | não |
 | Agrupamento automático por projeto | [PRD-002](prd/prd-002-grupos-de-abas.md) | não |
@@ -1251,3 +1251,27 @@ Fora da ordem de fases, a pedido do dono do produto, e a promoção de um item q
 **Critério de saída:** fixar uma aba a tira do grupo sem reiniciar o processo e a faz abrir em todo arranque seguinte, com a sessão ligada, desligada, inválida ou ignorada pelo modo posicional, e **nunca** duas vezes; o `.porecatu` da fixada roda sem `trusted_paths` e respeita `enabled = false`; `exit` e fechar a janela não a desafixam, e fechar a aba a desafixa com confirmação; o ícone segue a cadeia e um `[icon]` com caminho UNC nunca toca a rede; o arranque não espera ícone nenhum.
 
 **Dívida prevista:** macOS e Linux ao vivo (como em todo recurso fora de fase), leitor de tela real, e o arranque medido em A/B com muitas fixadas.
+
+## Depois do v1 — abas e grupos entre janelas — planejada
+
+Fora da ordem de fases, a pedido do dono do produto, e a promoção de um item que PRD-000, PRD-001, PRD-002 e o RF-10.24 deixavam fora (*"Mover abas entre janelas por drag. O modelo permite; a UI fica para depois."*). Abas, seleções, grupos e fixadas mudam de janela **com o processo vivo**, por arraste ou pelo popover "Mover para janela…". Soltar fora de toda janela destaca numa janela nova. Requisito no [PRD-022](prd/prd-022-abas-e-grupos-entre-janelas.md); modelo e transferência no [ADR-0090](adr/0090-transferencia-de-abas-entre-janelas.md); gesto no [ADR-0091](adr/0091-arraste-entre-janelas.md).
+
+**Etapas:**
+
+1. **Documentação e decisão — feita.** PRD-022; ADR-0090 e 0091, aceitos; blockquotes de revisão nos ADR-0015 ("Escopo" e "Refino do ADR-0007"), 0021 §1 e §4, 0086 §2 e 0087 §5; emendas ao PRD-000 (não-objetivos), PRD-001 ("Fora de escopo", RF-1.4), PRD-002 (RF-2.3, "Fora de escopo"), PRD-006 (RF-6.25) e PRD-010 (RF-10.24, RF-10.23, "Fora de escopo"); nota de revisão em `tab.move_to_window` no catálogo de [ações](reference/acoes.md); tabela de ADRs. **A especificação visual (§2.19, "não sai da barra"), as seções `tab.*`/`group.*` do catálogo, os `locales/`, o guia do usuário, a arquitetura e a lista de recursos do CLAUDE.md ficam para as etapas que mudam o binário** ([ADR-0028](adr/0028-o-binario-como-referencia-visual.md)).
+2. **`porecatu-core`.** `DetachedTab`, `DetachedGroup`, `InsertAt`; `take_tabs`, `take_group`, `take_pinned`, `insert_detached_tabs`, `insert_detached_group`, `move_tabs`; `Action::TabMoveToWindow`, `Action::GroupMoveToWindow`. Testes que fixam a **ordem resultante** na origem e no destino, e o invariante de lugar único nos dois workspaces. Sem comportamento observável.
+3. **Transferência em `porecatu-ui`.** `PaneAddress` na célula do `PaneRuntime`, lida pelo closure de wakeup; `App::transfer` com os dez passos do ADR-0090 §3; teste de órfãos (nenhuma chave com o `TabId` antigo sobra em `App` nem na origem, com reconexão em curso, pergunta pendente, aviso, fixada e nota de integração); `focus_order` no `App`; popover "Mover para janela…" sobre o de `move_to_group.rs`, itens nos menus de aba e de grupo e no editor, ações no catálogo, textos em todo `locales/`. Aqui o recurso já existe por menu, nas quatro plataformas.
+4. **Arraste da seleção dentro da janela.** `DragPayload`, press que arma sem limpar e limpa no release (ADR-0091 §6), buraco das selecionadas no preview, `move_tabs` na soltura. Especificação §2.19 no mesmo PR.
+5. **Ponto global e alvo entre janelas.** **Começa pela verificação ao vivo da captura implícita no Windows** (`CursorMoved` fora da janela com o botão apertado). Sem ela, a etapa para e o ADR-0091 é revisto. Depois: `drag_global_point`, conversão por escala de cada janela, `CrossDrag` no `App`, `incoming` no destino, fantasma, vão, realce e auto-scroll no destino, os quatro casos de soltura (com a correção do `in_bar` sem limite inferior), `Focused(false)` cancelando o arraste, Wayland devolvendo `None`.
+6. **Destacar.** Janela nova pelo caminho de `open_window_with` sem `open_tab`, colocação com o ponto agarrado sob o cursor e a faixa da barra presa ao monitor (função pura, testada), origem vazia fechando sem diálogo.
+7. **Fechamento.** Guia do usuário, arquitetura, CHANGELOG, CLAUDE.md (recurso implementado); verificação ao vivo no Windows; aval visual do dono.
+
+**Escopo:** RF-22.1 a RF-22.29.
+
+**Aparência:** nenhuma anatomia nova e **zero valor visual novo**. Fantasma, buraco, vão, realce, auto-scroll e cursor são os da especificação §2.19, agora desenhados também na janela de destino, e o popover é o de "Mover para grupo". Aval visual do dono **pendente**.
+
+**Dependências:** nenhuma nova. Nenhuma chamada de plataforma nova, nenhum `unsafe`.
+
+**Critério de saída:** mover uma aba, uma seleção, um grupo e uma fixada entre duas janelas, por arraste e pelo popover, sem reiniciar processo nem perder saída, e com a aba SSH na mesma conexão; soltar no desktop cria uma janela com o ponto agarrado sob o cursor; soltar no corpo de qualquer janela cancela; a origem vazia fecha sem diálogo; `Esc` e perda de foco cancelam com o fantasma em qualquer janela; nenhuma chave órfã depois da transferência; duas janelas em monitores de escala diferente resolvem o alvo certo; no Wayland, o popover cobre tudo e o arraste não atravessa janelas.
+
+**Dívida prevista:** captura implícita verificada ao vivo no macOS e no X11; Wayland real; DPI misto ao vivo; janela de outro app sobre uma janela do Porecatu (caso residual aceito no ADR-0091 §2); leitor de tela com a árvore das duas janelas mudando juntas.

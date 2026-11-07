@@ -152,6 +152,8 @@ A ambiguidade de "horizontal" entre emuladores é conhecida e está resolvida aq
 
 **RF-6.25** — Painel **não se move** entre abas nem entre janelas. É a mesma fronteira que o [PRD-001](prd-001-abas.md) já mantém para abas entre janelas, pela mesma razão: o modelo permite, a UI é que fica para depois.
 
+> **Emenda (2026-11-07).** A regra continua valendo para painéis, mas a fronteira citada como paralela deixou de existir: o [PRD-022](prd-022-abas-e-grupos-entre-janelas.md) fez as abas mudarem de janela. Um painel muda de janela só junto com a aba dele, inteira (RF-22.27).
+
 **RF-6.26** — Não há **zoom** nem maximização temporária de painel nesta entrega.
 
 **RF-6.27** — Não há **cabeçalho de painel**: nem título, nem ponto de foco, nem botão de dividir, nem botão de fechar. O desenho do canvas previa um, e ele foi recusado — ver o [ADR-0053](../adr/0053-paineis-divididos.md) §4 e as alternativas.

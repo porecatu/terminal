@@ -45,6 +45,8 @@ Isso precisa ser resolvido **antes** da F1, porque o tipo do evento atravessa a 
 
 > **Revisto pelo [ADR-0059](0059-janela-de-configuracoes.md) (2026-10-02).** "Janela sem abas" deixa a coluna da direita para **uma** janela: a de configurações ([PRD-016](../prd/prd-016-tela-de-configuracoes.md)), no máximo uma por processo, guardada fora do mapa de janelas de terminal, fora da sessão, e que não mantém o processo vivo. Toda janela de **terminal** continua sendo um `Workspace`, e o resto da tabela não muda.
 
+> **Revisto pelo [ADR-0090](0090-transferencia-de-abas-entre-janelas.md) e pelo [ADR-0091](0091-arraste-entre-janelas.md) (2026-11-07).** "Arrastar aba entre janelas" e "Mover grupo entre janelas" saem da coluna da direita: o [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) os aprovou, e este é o "ADR novo" que a tabela de riscos abaixo exigia. Cada janela continua com um `Workspace` independente, e uma aba vive em um só por vez. Ao mudar de janela, ela sai de um e entra no outro, com `TabId` novo. "Menu de janelas" continua fora. O popover "Mover para janela…" é o destino de uma ação de aba e de grupo, não um menu de janelas.
+
 Arrastar aba entre janelas continua **fora** — é não-objetivo explícito do PRD-000 e do PRD-001, e nada aqui o reabre. O [ADR-0006](0006-modelo-de-abas-e-grupos.md) já observa que o modelo não impede (*"é `move_tab` com destino em outro `Workspace`"*); continua sendo verdade e continua sendo v2.
 
 ### Ações e defaults
@@ -81,6 +83,8 @@ O que **não** muda:
 - `Workspace` continua sendo mutado exclusivamente pela main thread, sem lock — agora são N `Workspace`, todos com o mesmo dono.
 
 `WindowId` é o identificador da janela do `winit`, propagado à thread de leitura no spawn do terminal.
+
+> **Revisto pelo [ADR-0090](0090-transferencia-de-abas-entre-janelas.md) §2 (2026-11-07).** O endereço `(WindowId, TabId, PaneId)` deixa de ser fixado no spawn. A thread de leitura passa a lê-lo, a cada wakeup, de uma célula compartilhada com o runtime do painel, e a main thread a reescreve quando a aba muda de janela. O payload do evento, os contadores por workspace e a decisão de threading continuam como descritos aqui.
 
 Consequência para a marcação de sujeira: ela passa a ser por janela. Saída numa aba não visível da janela B não redesenha a janela A, o que preserva a propriedade central do ADR-0007 — janela sem mudança não gera frame.
 

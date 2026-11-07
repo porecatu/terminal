@@ -91,6 +91,12 @@ sobre a aba **ativa** — é o caminho que dispensa o mouse e o que torna o atal
 - **Criar o grupo** — limpa a seleção. O grupo recém-criado é o novo alvo, e o
   RF-2.4 já manda entrar em edição de nome.
 - **Clique sem modificador** — limpa (RF-2.3, literal).
+
+  > **Revisto pelo [ADR-0091](0091-arraste-entre-janelas.md) §6 (2026-11-07).** Numa aba
+  > **já selecionada**, com mais de uma selecionada, o press arma o arraste da seleção e
+  > **não** limpa. A limpeza acontece no release, se o cursor não passou do limiar de 4 px.
+  > O resultado de um clique é o mesmo, e só o momento muda. Numa aba não selecionada,
+  > continua limpando no press.
 - **`Esc`** — limpa. É a mesma tecla que dispensa aviso e cancela rename; a
   seleção entra na cadeia de captura do
   [ADR-0008](0008-teclas-e-roteamento-de-input.md) **depois** do rename e do
@@ -150,6 +156,13 @@ dentro do grupo da aba arrastada; passa a devolver `(GroupId, usize)`.
 > para a trilha a desafixa no destino que estas regras dão; dentro da zona, reordena.
 > As regras desta seção continuam valendo, sem mudança, para todo alvo na trilha. O
 > arraste do rótulo do grupo não alcança a zona.
+
+> **Revisto pelo [ADR-0091](0091-arraste-entre-janelas.md) §2, §4 e §6 (2026-11-07).** As
+> regras desta seção passam a valer também para a barra de **outra janela**, resolvidas
+> contra o layout dela. Arrastar uma aba **selecionada** leva a seleção inteira, que chega
+> contígua, na ordem visual, pela operação única `Workspace::move_tabs` (ou pela
+> transferência do [ADR-0090](0090-transferencia-de-abas-entre-janelas.md), entre janelas).
+> Soltar fora de toda janela do Porecatu destaca numa janela nova.
 
 ## Alternativas consideradas
 

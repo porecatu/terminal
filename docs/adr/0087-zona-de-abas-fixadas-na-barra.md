@@ -106,6 +106,8 @@ Uma fixada atingida devolve a mesma `TabId` que um acerto na trilha, e todo gest
 
 > **Revisão parcial ([ADR-0089](0089-ranhura-de-soltura-com-o-botao-do-app-oculto.md)):** uma fileira sem nenhuma caixa (botão do app oculto e nada fixado) passa a ter uma **ranhura virtual de soltura** durante o arraste, para a primeira aba ainda poder ser fixada arrastando.
 
+> **Revisão parcial ([ADR-0091](0091-arraste-entre-janelas.md) §2 a §4, 2026-11-07):** a zona de fixadas de **outra janela** passa a ser alvo, resolvida pelas regras desta seção contra o layout daquela janela. Uma fixada arrastada para a zona de outra janela continua fixada, e uma seleção solta na zona fixa todas as abas dela. "Soltar fora da barra cancela" passa a valer só **dentro** de uma janela do Porecatu. Fora de todas, a soltura destaca numa janela nova ([PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) RF-22.12).
+
 O arraste continua sendo o da §2.19 — limiar de 4 px, fantasma preso ao Y da barra seguindo o X, "o buraco é o marcador", `Esc` cancela, soltar fora da barra cancela — com três extensões.
 
 **O alvo ganha a zona.** `DragDrop` ganha uma variante, revendo o ADR-0021 §4:

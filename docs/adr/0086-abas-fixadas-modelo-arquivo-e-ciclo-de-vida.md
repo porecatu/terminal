@@ -88,6 +88,8 @@ O que muda na aba viva depois de fixada — `cd`, painel novo — **não** toca 
 
 No arranque seguinte todas abrem na primeira janela, na ordem da lista, e a regra acima garante que essa ordem é a que o usuário via em cada zona.
 
+> **Revisto pelo [ADR-0090](0090-transferencia-de-abas-entre-janelas.md) §5 (2026-11-07).** Uma fixada pode mudar de janela, por arraste ou pelo popover "Mover para janela…". `live` passa a apontar para a janela e o `TabId` novos, e o retrato não muda. Para a **ordem** da lista, chegar à zona de outra janela conta como "fixar" naquela zona: a regra acima dá a posição, e o arquivo só é gravado se ela mudou. Chegar à trilha do destino é desafixar (§7).
+
 ### 3. Arquivo: `pinned.json`, escrito só por gesto
 
 ```

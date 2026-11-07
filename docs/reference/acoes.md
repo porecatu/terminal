@@ -318,7 +318,7 @@ Ausências deliberadas, registradas para que ninguém as adicione achando que fo
 |---|---|
 | `tab.duplicate` | Fora de escopo do PRD-001 (*"duplicar aba com o estado do processo"*) |
 | `tab.pin` | Fora de escopo do PRD-001 (*"fixar aba"*). *Revisto pelo [ADR-0086](../adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §7:* o [PRD-021](../prd/prd-021-abas-fixadas.md) aprovou abas fixadas, e o gesto existe como **`tab.toggle_pin`**, na seção `tab.*` acima — um só nome para fixar e desafixar, sobre a aba ativa. `tab.pin` e `tab.unpin` separados continuam não existindo |
-| `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000) |
+| `tab.move_to_window` | Arrastar ou mover aba entre janelas é v2 ([ADR-0015](../adr/0015-multiplas-janelas.md), PRD-000). *Revisto pelo [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md) §6:* o [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md) aprovou o recurso, e `tab.move_to_window` e `group.move_to_window` (popover de destino, sem atalho) entram nas seções `tab.*` e `group.*` junto com o binário que as implementa. Até lá, continuam não existindo |
 | `profile.*` | Perfis de aba são v2 ([PRD-007](../prd/prd-007-perfis-de-aba.md), rascunho). *Revisto pelo [ADR-0070](../adr/0070-perfis-de-aba.md) §8:* o PRD-007 foi aprovado e a seção `profile.*` acima existe; continuam **não existindo** uma ação que troque o perfil de uma aba aberta e uma que abra um perfil por identificador (exigiria argumento) |
 | `terminal.clear` | Nenhum RF pede; o shell já tem `clear` |
 | `terminal.reset` | Idem; `reset` existe no shell |

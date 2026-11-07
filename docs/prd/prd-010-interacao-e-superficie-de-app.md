@@ -98,6 +98,8 @@ Os diálogos existentes são os de RF-1.6 (aba com programa de tela cheia, confo
 
 **RF-10.24** — Arrastar aba entre janelas **não** existe no v1, como já registram [PRD-000](prd-000-visao-de-produto.md) e PRD-001. Fechar a última janela encerra o app gravando a sessão de forma síncrona (RF-1.4).
 
+> **Emenda (2026-11-07).** A primeira frase deixou de valer: o [PRD-022](prd-022-abas-e-grupos-entre-janelas.md) aprovou arrastar abas, seleções, grupos e fixadas entre janelas, e destacar numa janela nova. A segunda continua valendo. O RF-10.23 ganha uma exceção: a janela que fica sem abas porque a última mudou de janela fecha **sem** confirmação, já que nada foi encerrado (RF-22.19).
+
 ### Aparência padrão
 
 **RF-10.25** — A aparência padrão do app **não depende de fonte instalada no sistema**: as faces que o design especifica acompanham o app. É o que torna verificável a afirmação de que o binário com a config padrão confere com o mockup ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md)).
@@ -184,7 +186,7 @@ Cenário: aparência padrão sem fonte instalada
 
 - Seleção PRIMARY do X11/Wayland e colar com botão do meio (RF-10.9)
 - Leitura de clipboard pelo programa, ligada por default (RF-10.11)
-- Arrastar aba entre janelas (RF-10.24)
+- Arrastar aba entre janelas (RF-10.24) *(saiu desta lista em 2026-11-07, pelo [PRD-022](prd-022-abas-e-grupos-entre-janelas.md))*
 - Notificação de desktop do sistema operacional na campainha — está na F6 do [roadmap](../roadmap.md), não aqui
 - Menu de contexto do terminal com busca e hyperlink, que dependem da F6
 - Protocolo de mouse por pixel (modo 1016)
