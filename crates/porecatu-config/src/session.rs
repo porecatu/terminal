@@ -18,6 +18,11 @@ pub struct Session {
     /// as abas restauradas sobem juntas no arranque.
     pub lazy_restore: bool,
     pub restore_window_geometry: bool,
+    /// `true`: choosing a saved session in the sessions button appends its
+    /// groups and tabs to the window it was chosen from, closing nothing.
+    /// `false` (default): opens a new window (RF-14.10). RF-23.1. Class A:
+    /// read at click time, outside the `[session]` diff (ADR-0092 §2).
+    pub restore_named_in_current_window: bool,
     /// Oferece uma vez o trecho de integração de shell quando OSC 7 não é
     /// detectado. RF-3.1.
     pub suggest_shell_integration: bool,
@@ -30,6 +35,7 @@ impl Default for Session {
             save_debounce_ms: 2000,
             lazy_restore: false,
             restore_window_geometry: true,
+            restore_named_in_current_window: false,
             suggest_shell_integration: true,
         }
     }
@@ -45,5 +51,6 @@ mod tests {
         assert!(session.enabled);
         assert_eq!(session.save_debounce_ms, 2000);
         assert!(!session.lazy_restore);
+        assert!(!session.restore_named_in_current_window);
     }
 }

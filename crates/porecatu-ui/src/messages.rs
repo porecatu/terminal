@@ -714,6 +714,8 @@ registry! {
             lazy_restore_description(),
             restore_window_geometry_label(),
             restore_window_geometry_description(),
+            restore_named_in_current_window_label(),
+            restore_named_in_current_window_description(),
             suggest_shell_integration_label(),
             suggest_shell_integration_description(),
             project_file_enabled_label(),

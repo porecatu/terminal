@@ -239,6 +239,10 @@ save_debounce_ms = 2000
 lazy_restore = false
 # Reabre a janela no mesmo tamanho e lugar.
 restore_window_geometry = true
+# true = escolher uma sessão salva no botão de sessões acrescenta os grupos
+# e as abas dela a esta janela, em vez de abrir uma janela nova. Nada do
+# que já está aberto é fechado. Vale na hora, sem reiniciar.
+restore_named_in_current_window = false
 # Sugere uma vez como fazer o shell informar a pasta atual, para que ela
 # volte junto com a sessão.
 suggest_shell_integration = true

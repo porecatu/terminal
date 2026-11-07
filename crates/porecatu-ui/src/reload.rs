@@ -557,7 +557,13 @@ pub fn diff(old: &Config, new: &Config) -> ReloadEffects {
             scope: DeferredScope::NewTab,
         });
     }
-    if old.session != new.session {
+    // `restore_named_in_current_window` is class A (ADR-0092 §2): read at
+    // click time, so it is ignored by the `[session]` comparison.
+    let session_without_class_a = |session: &porecatu_config::Session| porecatu_config::Session {
+        restore_named_in_current_window: false,
+        ..session.clone()
+    };
+    if session_without_class_a(&old.session) != session_without_class_a(&new.session) {
         deferred.push(Deferred {
             key: "[session]",
             scope: DeferredScope::Restart,
@@ -788,6 +794,27 @@ mod tests {
         let effects = diff(&base(), &new);
         assert_eq!(
             effects.deferred,
+            vec![Deferred {
+                key: "[session]",
+                scope: DeferredScope::Restart
+            }]
+        );
+    }
+
+    #[test]
+    fn restore_named_in_current_window_alone_is_class_a() {
+        let mut new = base();
+        new.session.restore_named_in_current_window = !new.session.restore_named_in_current_window;
+        assert_eq!(diff(&base(), &new), ReloadEffects::default());
+    }
+
+    #[test]
+    fn restore_named_in_current_window_with_another_session_key_warns_once() {
+        let mut new = base();
+        new.session.restore_named_in_current_window = !new.session.restore_named_in_current_window;
+        new.session.enabled = !new.session.enabled;
+        assert_eq!(
+            diff(&base(), &new).deferred,
             vec![Deferred {
                 key: "[session]",
                 scope: DeferredScope::Restart

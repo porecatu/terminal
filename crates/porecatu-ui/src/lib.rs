@@ -38,6 +38,7 @@ mod animation;
 mod app_cross_drag;
 mod app_icon;
 mod app_move_to_window;
+mod app_named_append;
 mod app_reconnect;
 mod app_transfer;
 mod background_image;
@@ -3694,6 +3695,61 @@ impl WindowState {
             }
         }
         self.sync_window_title();
+    }
+
+    /// ADR-0092 §5: starts the runtimes of restored tabs -- `SpawnOrigin::Restored`,
+    /// saved profile of the focused pane, `cwd` with fallback (RF-3.10), `.porecatu`
+    /// once in the focused pane, sibling panes (RF-6.23). The one place for it:
+    /// session restore at startup, a named session in a new window and a named
+    /// session appended to the current window (PRD-023) all call this. Which
+    /// tabs start (eager vs `lazy_restore`) is the caller's decision.
+    #[allow(clippy::too_many_arguments)]
+    fn start_restored_tabs(
+        &mut self,
+        ids: &[TabId],
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        config: &porecatu_config::Config,
+        startup_directory: &Option<PathBuf>,
+        now: Instant,
+    ) {
+        for &tab_id in ids {
+            let cwd = self.workspace.tab(tab_id).and_then(|t| t.cwd().cloned());
+            let saved_profile = self
+                .workspace
+                .tab(tab_id)
+                .and_then(|t| t.panes().focused().profile().map(str::to_owned));
+            let spawn_profile = profile_spawn::restored_profile(config, saved_profile.as_deref());
+            self.spawn_tab_runtime(
+                tab_id,
+                cwd,
+                cell_metrics,
+                proxy,
+                now,
+                style,
+                term_params,
+                &spawn_profile,
+                SpawnOrigin::Restored,
+                &config.project_file,
+                startup_directory,
+            );
+            // RF-6.23: sobe todos os painéis da árvore de uma vez, não só
+            // o focado -- mesma razão de `Self::ensure_active_tab_started`.
+            // Os irmãos primeiro: `start_live_panes` pula os SSH dormentes
+            // (RF-20.33), e só os conhece depois de subirem.
+            self.spawn_restored_sibling_panes(
+                tab_id,
+                cell_metrics,
+                proxy,
+                style,
+                term_params,
+                config,
+                now,
+                startup_directory,
+            );
+        }
     }
 
     /// RF-6.23: sobe os painéis da árvore de `tab_id` que ainda não têm
@@ -8603,6 +8659,21 @@ impl App {
         }
     }
 
+    /// The `Workspace` a saved window turns into (RF-3.8, ADR-0092 §4): the
+    /// one conversion both restore destinations use -- a window of its own
+    /// ([`Self::open_window_from_session`]) and the current window
+    /// ([`Self::append_named_window`]).
+    fn workspace_from_window_v1(&self, window_v1: &porecatu_session::WindowV1) -> Workspace {
+        porecatu_session::convert::workspace_from_window(
+            &window_v1.groups,
+            &window_v1.tabs,
+            window_v1.active_tab,
+            self.config.session.lazy_restore,
+            // RF-20.33: an SSH pane is born `NotStarted` whatever else is set.
+            &|id| profile_spawn::restores_as_ssh(&self.config, id),
+        )
+    }
+
     /// RF-3.7/RF-3.17 (metade de restauração, F5 etapa 4): recria uma
     /// janela a partir de um `WindowV1` gravado -- geometria e monitor
     /// (RF-3.11) quando `restore_window_geometry` estiver ligado, grupos e
@@ -8702,14 +8773,7 @@ impl App {
         let window_id = state.window.id();
 
         let lazy_restore = self.config.session.lazy_restore;
-        state.workspace = porecatu_session::convert::workspace_from_window(
-            &window_v1.groups,
-            &window_v1.tabs,
-            window_v1.active_tab,
-            lazy_restore,
-            // RF-20.33: an SSH pane is born `NotStarted` whatever else is set.
-            &|id| profile_spawn::restores_as_ssh(&self.config, id),
-        );
+        state.workspace = self.workspace_from_window_v1(window_v1);
 
         // RF-3.8: só a aba ativa sobe agora; com `lazy_restore = false`,
         // `workspace_from_window` já não produziu nenhuma `NotStarted`, e
@@ -8722,42 +8786,16 @@ impl App {
             state.workspace.track_order().collect()
         };
         let now = Instant::now();
-        for tab_id in to_start {
-            let cwd = state.workspace.tab(tab_id).and_then(|t| t.cwd().cloned());
-            let saved_profile = state
-                .workspace
-                .tab(tab_id)
-                .and_then(|t| t.panes().focused().profile().map(str::to_owned));
-            let spawn_profile =
-                profile_spawn::restored_profile(&self.config, saved_profile.as_deref());
-            state.spawn_tab_runtime(
-                tab_id,
-                cwd,
-                self.cell_metrics,
-                &self.proxy,
-                now,
-                &self.style,
-                &self.term_params,
-                &spawn_profile,
-                SpawnOrigin::Restored,
-                &self.config.project_file,
-                &self.startup_directory,
-            );
-            // RF-6.23: sobe todos os painéis da árvore de uma vez, não só
-            // o focado -- mesma razão de `Self::ensure_active_tab_started`.
-            // Os irmãos primeiro: `start_live_panes` pula os SSH dormentes
-            // (RF-20.33), e só os conhece depois de subirem.
-            state.spawn_restored_sibling_panes(
-                tab_id,
-                self.cell_metrics,
-                &self.proxy,
-                &self.style,
-                &self.term_params,
-                &self.config,
-                now,
-                &self.startup_directory,
-            );
-        }
+        state.start_restored_tabs(
+            &to_start,
+            self.cell_metrics,
+            &self.proxy,
+            &self.style,
+            &self.term_params,
+            &self.config,
+            &self.startup_directory,
+            now,
+        );
         // ADR-0086 §5: as fixadas entram **antes** da garantia abaixo, na
         // janela que as recebe (a primeira do arranque) -- senão toda janela
         // que só tinha fixadas ganharia uma aba extra a cada arranque.
@@ -8792,14 +8830,18 @@ impl App {
         Some(window_id)
     }
 
-    /// RF-14.10/RF-14.11 (ADR-0054 §6): restaura uma sessão nomeada numa
-    /// janela nova em cascata a partir de `origin` -- a janela de onde o
-    /// gesto partiu não muda (RF-14.10). Sessão com uma janela só chama
-    /// [`Self::open_window_from_session`], o mesmo caminho do arranque;
-    /// qualquer outra saída (arquivo ilegível, corrompido, schema mais
-    /// nova, ou -- não deveria acontecer, `save_named_in` só grava uma
+    /// RF-14.10/RF-14.11 (ADR-0054 §6): restaura uma sessão nomeada. Com
+    /// `[session] restore_named_in_current_window = false` (default,
+    /// RF-14.10/RF-23.4) abre uma janela nova em cascata a partir de
+    /// `origin` -- a janela de onde o gesto partiu não muda; sessão com uma
+    /// janela só chama [`Self::open_window_from_session`], o mesmo caminho
+    /// do arranque. Com a chave ligada (RF-23.5, ADR-0092 §4) **acrescenta**
+    /// os grupos e as abas da sessão ao fim da trilha de `origin`, por
+    /// [`Self::append_named_window`]; a chave é lida aqui, no clique, nunca
+    /// guardada. Qualquer outra saída (arquivo ilegível, corrompido, schema
+    /// mais nova, ou -- não deveria acontecer, `save_named_in` só grava uma
     /// janela -- mais de uma) empurra um aviso na janela de origem (canal
-    /// 1, ADR-0014) e não abre nada. Chamada por
+    /// 1, ADR-0014) e não abre nem acrescenta nada (RF-23.13). Chamada por
     /// [`Self::resolve_session_picker_outcome`].
     pub(crate) fn restore_named_session(
         &mut self,
@@ -8811,13 +8853,17 @@ impl App {
         if let Some(session) = &outcome.session
             && let [window_v1] = session.windows.as_slice()
         {
-            self.open_window_from_session(
-                event_loop,
-                window_v1,
-                WindowPlacement::CascadeFrom(origin),
-                // RF-21.13: a restauração nomeada nunca abre fixadas.
-                false,
-            );
+            if self.config.session.restore_named_in_current_window {
+                self.append_named_window(origin, window_v1);
+            } else {
+                self.open_window_from_session(
+                    event_loop,
+                    window_v1,
+                    WindowPlacement::CascadeFrom(origin),
+                    // RF-21.13: a restauração nomeada nunca abre fixadas.
+                    false,
+                );
+            }
             return;
         }
         let Some(state) = self.windows.get_mut(&origin) else {

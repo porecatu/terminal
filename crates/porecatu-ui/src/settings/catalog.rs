@@ -525,6 +525,7 @@ label_modules! {
     session_enabled => (session_enabled_label, session_enabled_description),
     lazy_restore => (lazy_restore_label, lazy_restore_description),
     restore_window_geometry => (restore_window_geometry_label, restore_window_geometry_description),
+    restore_named_in_current_window => (restore_named_in_current_window_label, restore_named_in_current_window_description),
     suggest_shell_integration => (suggest_shell_integration_label, suggest_shell_integration_description),
     project_file_enabled => (project_file_enabled_label, project_file_enabled_description),
     trusted_paths => (trusted_paths_label, trusted_paths_description),
@@ -1076,6 +1077,14 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         |c| EditValue::Bool(c.session.restore_window_geometry)
     ),
     option!(
+        restore_named_in_current_window,
+        Session,
+        Restore,
+        "session.restore_named_in_current_window",
+        TOGGLE,
+        |c| EditValue::Bool(c.session.restore_named_in_current_window)
+    ),
+    option!(
         suggest_shell_integration,
         Session,
         Restore,
@@ -1148,13 +1157,13 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        // As 54 do RF-16.11 (o número da aba saiu), as duas do topo do grupo "Perfis" (ADR-0075 §6) e a do botão de menu do app (ADR-0079).
-        assert_eq!(OPTIONS.len(), 57);
+        // As 54 do RF-16.11 (o número da aba saiu), as duas do topo do grupo "Perfis" (ADR-0075 §6), a do botão de menu do app (ADR-0079) e a da restauração nomeada na janela atual (ADR-0092).
+        assert_eq!(OPTIONS.len(), 58);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 2, 24, 15, 4, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 2, 24, 15, 5, 2, 1, 2, 0]);
     }
 
     /// RF-19.18: as duas opções do acrílico ficam no grupo Aparência, logo
@@ -1682,6 +1691,7 @@ mod tests {
         assert_eq!(scope("min_columns"), ReloadScope::Live);
         assert_eq!(scope("status_bar_enabled"), ReloadScope::Live);
         assert_eq!(scope("language"), ReloadScope::Live);
+        assert_eq!(scope("restore_named_in_current_window"), ReloadScope::Live);
         // E o cache devolve o mesmo que a sondagem direta, para toda opção.
         for option in OPTIONS {
             assert_eq!(option.reload_scope(), probe_scope(option), "{}", option.id);
