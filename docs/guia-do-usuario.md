@@ -1256,6 +1256,20 @@ mesmos grupos, abas e painéis, cada aba no `cwd` gravado (ou no diretório
 inicial, com uma nota, se aquele diretório não existe mais). A janela de
 onde você restaurou **não muda em nada**.
 
+**Restaurar na janela atual.** Se você trabalha com uma janela só e um
+grupo por projeto, ligue **Restaurar sessões salvas na janela atual** no
+grupo Sessão da tela de configurações (`[session]
+restore_named_in_current_window = true`). Aí restaurar não abre janela:
+os grupos e as abas da sessão são **acrescentados** ao fim da trilha da
+janela onde você clicou, e a aba que era ativa na sessão fica ativa.
+Acrescentar não é substituir: nada do que já estava aberto é fechado,
+movido ou reiniciado, as abas fixadas ficam como estão e a janela não muda
+de tamanho. Um grupo da sessão com o mesmo nome de um que já existe não se
+funde com ele, e restaurar a mesma sessão duas vezes acrescenta duas vezes.
+A opção vale na hora, sem reiniciar o app; o resto (`cwd`, painéis,
+`lazy_restore`, `.porecatu`, SSH sem conectar) é igual ao de uma janela
+nova.
+
 **Sobrescrever e excluir.** Salvar com um nome que já existe (sem
 diferenciar maiúsculas) pede confirmação antes de substituir o arquivo; o
 `✕` de cada linha exclui, também com confirmação. Nenhum dos dois

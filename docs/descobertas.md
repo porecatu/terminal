@@ -208,6 +208,10 @@ Verificado só no Windows, em 2026-11-07, numa instância de debug isolada (`POR
 - **Press numa aba de trilha rolada: o clique rola a trilha antes de medir o `grab_offset`.** O press ativa a aba, `ensure_active_tab_visible` rola a trilha, e só então o ponto agarrado é medido; a janela destacada nasce deslocada por essa rolagem, coerente com o fantasma depois do press. É comportamento anterior ao PRD-022, só registrado. **Lição:** para o ponto agarrado cair **exatamente** sob o cursor numa verificação, parta de uma trilha sem rolagem.
 - **Orquestração: etapa que compila `porecatu-ui` em paralelo com outra que edita `porecatu-core` precisa de worktree isolada.** O build da UI compila o core que a outra está editando e falha ou testa um estado pela metade. **Lição:** etapas paralelas que se tocam por dependência vão cada uma na sua worktree, ou rodam em série.
 
+## Descobertas na restauração de sessão nomeada na janela atual (PRD-023, fora de fase) — uma armadilha do core
+
+- **Extrair de um `Workspace` a aba ativa expande grupos colapsados que ainda estão nele.** `take_group`/`take_tabs`, quando levam a aba **ativa**, rodam a escada de foco sobre o que sobrou, e `Workspace::activate_tab` expande o grupo da aba escolhida (RF-2.17). Esvaziando um workspace item a item na ordem da trilha — o que `append_session_workspace` (`crates/porecatu-ui/src/app_named_append.rs`) faz com o workspace temporário da sessão —, um grupo colapsado **depois** do item da ativa sairia com `collapsed = false`, e a restauração perderia o colapso salvo (RF-23.6) sem erro nenhum. Achado na leitura do core, antes de escrever o código; o teste `a_collapsed_group_stays_collapsed_whichever_item_holds_the_active_tab` reprova com a extração ingênua. **Lição:** quem esvazia um workspace inteiro planeja os itens antes, extrai **por último** o que contém a ativa (quando ela sai, não sobra nada para a escada ativar) e insere na ordem do plano. Vale para qualquer uso futuro de `take_*` em lote.
+
 ## Apêndice A — Armadilhas conhecidas (texto completo)
 
 Anotadas aqui porque custam horas quando descobertas na marra:

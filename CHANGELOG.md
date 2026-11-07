@@ -36,6 +36,18 @@ primeiro release.
   `tab.move_to_window` e `group.move_to_window` o abrem por tecla e **não têm
   atalho padrão**. No Wayland o arraste não atravessa janelas, e o popover é
   o caminho. Nenhum valor visual novo; aval visual do dono pendente.
+- **Restaurar sessão nomeada na janela atual**
+  ([PRD-023](docs/prd/prd-023-restaurar-sessao-nomeada-na-janela-atual.md),
+  [ADR-0092](docs/adr/0092-restauracao-nomeada-na-janela-atual.md)): opção
+  `[session] restore_named_in_current_window`, **desligada por padrão** (com
+  ela desligada nada muda: restaurar abre uma janela nova). Ligada, escolher
+  uma sessão no popover de sessões **acrescenta** os grupos e as abas dela ao
+  fim da trilha da janela atual e ativa a aba que era ativa na sessão, sem
+  fechar, mover ou reiniciar nada do que já estava aberto, sem mexer nas
+  fixadas nem na geometria da janela. Grupos de mesmo nome não se fundem. A
+  opção aparece no grupo Sessão da tela de configurações e vale na hora, sem
+  o aviso de "reinicie" — é a primeira chave de `[session]` que dispensa
+  reinício.
 
 ### Alterado
 
