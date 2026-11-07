@@ -16,6 +16,10 @@ primeiro release.
 
 ## [Não publicado]
 
+## [0.9.10] - 2026-11-07
+
+Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popover "Mover para janela…") e restauração de sessão nomeada na janela atual. Substitui a 0.9.9, retirada.
+
 ### Adicionado
 
 - **Abas e grupos entre janelas**
@@ -57,7 +61,18 @@ primeiro release.
 - **Editor de grupo** com uma linha a mais, **Mover para janela…**, depois de
   "Fechar grupo": o popover fica uma linha mais alto.
 
-## [0.9.9] - 2026-11-06
+### Corrigido
+
+- **Fixar aba arrastando com o botão do app oculto**
+  ([ADR-0089](docs/adr/0089-ranhura-de-soltura-com-o-botao-do-app-oculto.md)):
+  com `show_app_menu_button = false` e nada fixado, não havia onde soltar a
+  aba. Durante o arraste, a fileira vazia ganha uma ranhura de soltura com as
+  medidas da caixa do botão; em repouso a barra não muda.
+
+## [0.9.9] - 2026-11-06 [YANKED]
+
+> Tag e release retiradas em 2026-11-07; todo o conteúdo abaixo segue
+> publicado na [0.9.10](#0910---2026-11-07).
 
 Abas fixadas (apps que abrem junto com o Porecatu), relógio do sistema na barra de status em tela cheia e botão de menu do app sem fundo nem borda.
 
