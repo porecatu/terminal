@@ -161,3 +161,11 @@ panel_background = "#171b21"
 row_background = "#1c2028"
 chip_background = "#1e232b"
 footer_separator = "#23272f"
+
+# Gráficos do gerenciador de tarefas.
+[task_manager]
+cpu = "#6fa8f5"             # azul da paleta de grupos
+memory = "#a68cf0"          # roxo da paleta de grupos
+disk = "#86c56a"            # verde da paleta de grupos
+grid = "#1c2027"            # separador de painéis
+chart_border = "#262b34"    # borda de controle

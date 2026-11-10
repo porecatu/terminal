@@ -68,6 +68,35 @@ save_item = "Salvar esta janela…"
 empty_list = "nenhuma sessão salva"
 name_placeholder = "nome da sessão"
 
+# Gerenciador de tarefas (PRD-024). `unit_*` são os símbolos de base 1024;
+# `decimal_separator` e o formato de `percent`/`per_second` são do idioma
+# (`1,4 GB` aqui, `1.4 GB` em en_US). `no_value` é o traço da CPU antes da
+# primeira medição.
+[task_manager]
+chart_cpu = "CPU"
+chart_memory = "Memória"
+chart_disk = "Disco"
+column_name = "Nome"
+column_pid = "PID"
+column_cpu = "CPU"
+column_memory = "Memória"
+column_disk = "Disco"
+note_not_started = "A aba inicia no primeiro foco."
+note_ssh = "Os processos remotos não são listados."
+note_exited = "O processo do painel terminou."
+note_waiting = "Aguardando a primeira medição…"
+menu_go_to_tab = "Ir para a aba"
+menu_end_process = "Encerrar processo"
+unit_b = "B"
+unit_kb = "KB"
+unit_mb = "MB"
+unit_gb = "GB"
+per_second = "{value}/s"
+percent = "{value}%"
+decimal_separator = ","
+no_value = "—"
+background_monitoring = "Monitorar em segundo plano"
+
 [settings]
 window_title = "Configurações"
 
@@ -81,6 +110,7 @@ session = "Sessão"
 project = "Projeto"
 git = "Git"
 panes = "Painéis"
+task_manager = "Gerenciador de tarefas"
 shortcuts = "Atalhos"
 
 [settings.section]
@@ -105,6 +135,7 @@ restore = "RESTAURAÇÃO"
 project_file = "ARQUIVO DE PROJETO"
 git_remote = "REMOTO"
 panes_size = "TAMANHO MÍNIMO"
+task_manager_charts = "GRÁFICOS"
 
 [settings.option]
 language_label = "Idioma"
@@ -228,6 +259,10 @@ min_columns_label = "Mínimo de colunas"
 min_columns_description = "Menor largura, em colunas, a que um painel pode chegar."
 min_rows_label = "Mínimo de linhas"
 min_rows_description = "Menor altura, em linhas, a que um painel pode chegar."
+history_seconds_label = "Período dos gráficos"
+history_seconds_description = "Quantos segundos os gráficos do gerenciador de tarefas mostram. De 30 a 600."
+background_monitoring_label = "Monitorar em segundo plano"
+background_monitoring_description = "Os gráficos do gerenciador de tarefas guardam o histórico com ele fechado, ao custo de uma varredura de processos por segundo."
 
 [settings.button]
 open_file = "Abrir arquivo no editor"
@@ -402,6 +437,7 @@ session_open_list = "Abrir lista de sessões"
 profile_open_menu = "Abrir menu de perfis"
 profile_new_tab = "Nova aba com o perfil {n}"
 ssh_reconnect = "Reconectar o painel SSH"
+task_manager_toggle = "Alternar o gerenciador de tarefas"
 
 [profile_menu]
 new_group = "Novo grupo de abas"
@@ -423,6 +459,7 @@ config = "Configuração"
 settings = "Configurações"
 search = "Busca"
 app = "Aplicativo"
+task_manager = "Gerenciador de tarefas"
 
 [search_bar]
 invalid_pattern = "padrão inválido"
@@ -474,6 +511,14 @@ confirm = "Fechar janela"
 title = "Fechar grupo?"
 body = { one = "Isso fecha {count} aba.", other = "Isso fecha {count} abas." }
 confirm = { one = "Fechar grupo ({count} aba)", other = "Fechar grupo ({count} abas)" }
+
+# Gerenciador de tarefas: "Encerrar processo" (PRD-024 RF-24.21). `body_alone`
+# é o processo sem filhos; `body` conta os filhos da última medição.
+[dialog.end_process]
+title = "Encerrar processo?"
+body_alone = "{name} (PID {pid}) será encerrado."
+body = { one = "{name} (PID {pid}) e {count} processo filho serão encerrados.", other = "{name} (PID {pid}) e {count} processos filhos serão encerrados." }
+confirm = "Encerrar"
 
 [dialog.delete_session]
 title = "Excluir sessão salva?"
@@ -531,7 +576,12 @@ body_generic = "Shell não reconhecido para sugerir um trecho pronto. OSC 7 é a
 # (grupo, aba) têm uma frase por combinação ou peças com identificador próprio,
 # para a ordem das palavras ficar livre para o tradutor.
 [access]
-app_menu_button = "Menu do aplicativo"
+task_manager_button = "Gerenciador de tarefas"
+task_manager = "Gerenciador de tarefas"
+task_manager_list = "Lista de processos"
+task_manager_meter = "{name}, {value}"
+task_manager_tab_row = "{title}, CPU {cpu}, memória {memory}, disco {disk}"
+task_manager_row = "{name}, PID {pid}, CPU {cpu}, memória {memory}, disco {disk}"
 new_tab_ungrouped = "Nova aba fora de grupo"
 new_tab_in_group = "Nova aba neste grupo"
 sessions_button = "Sessões salvas"
@@ -727,6 +777,13 @@ body = "\"{family}\" não está instalada; usando uma monoespaçada do sistema."
 [notice.git_interval_adjusted]
 title = "Intervalo de sincronização ajustado"
 body = "\"{key}\" é menor que o piso de {floor}s; usando {floor}s."
+
+[notice.task_manager_history_adjusted]
+title = "Período do gerenciador de tarefas ajustado"
+body = "\"history_seconds = {value}\" está fora da faixa de 30 a 600; usando {used} segundos."
+
+[notice.task_manager_background_save_failed]
+title = "Não foi possível gravar o monitoramento em segundo plano"
 
 [notice.git_missing]
 title = "Git não encontrado"

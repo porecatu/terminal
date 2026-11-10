@@ -68,8 +68,13 @@ pub use terminal::{ShutdownWait, Terminal, TerminalSpawnError};
 // mesmo nome de shell que `porecatu_pty::spawn` vai de fato spawnar
 // (`SpawnConfig.program = None` cai nessa mesma resolução), pra popular o
 // `shell_name` do `Tab` -- último nível da precedência de título do RF-1.7.
+//
+// ADR-0093: o módulo de medição (`Sampler` e seus pedidos/resultados) segue o
+// mesmo caminho. Nenhum tipo do `sysinfo` aparece neles.
 pub use porecatu_pty::{
-    ProcessGroup, PtyError, PtyErrorKind, PtySize, SpawnConfig, resolve_default_shell, search_path,
+    KillRequest, ProcessGroup, ProcessStat, PtyError, PtyErrorKind, PtySize, SampleRequest,
+    SampleResult, Sampler, SamplerGone, SamplerRequest, SpawnConfig, kill_detached,
+    resolve_default_shell, search_path,
 };
 // Mesma regra para o SSH (ADR-0071 §2): `porecatu-ui` não depende de
 // `porecatu-ssh`, e nenhum tipo do `russh` atravessa a fronteira.

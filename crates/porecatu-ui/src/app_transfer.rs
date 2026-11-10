@@ -323,6 +323,12 @@ impl WindowState {
         self.animations.clear();
         self.drag = Drag::Idle;
         self.last_pill_click = None;
+        // PRD-024, ADR-0095 §4: the task manager keeps its last sample keyed
+        // by `TabId`; what points at a tab that left is an orphan (ADR-0090).
+        // The chart history is the window's and does not change (RF-24.25).
+        if let Some(view) = self.task_manager.as_mut() {
+            view.remove_tabs(moved);
+        }
     }
 }
 
@@ -493,6 +499,15 @@ impl App {
 
         // Step 6: the gesture state of the origin.
         origin.discard_gesture_state_of(&olds);
+        // PRD-024, ADR-0095 §4: the arrivals have **new** ids here (counters
+        // are per workspace and never reused), so the destination's sample
+        // cannot hold them yet and this removes nothing -- it is the same
+        // rule applied to both windows, and it costs nothing if a counter
+        // ever did hand an old id back. Their processes show up in the next
+        // sample, under the new keys.
+        if let Some(view) = dest.task_manager.as_mut() {
+            view.remove_tabs(&news);
+        }
 
         // Step 7: activate and focus at the destination; the selection goes
         // in both windows (RF-22.10).

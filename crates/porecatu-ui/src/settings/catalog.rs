@@ -33,8 +33,9 @@ use porecatu_locale::Catalog;
 use crate::messages::msg;
 use crate::reload::{self, DeferredScope};
 
-/// Os dez grupos da guia lateral, na ordem do RF-16.7 mais o "Perfis" do
-/// ADR-0075 §6, logo depois de "Shell".
+/// Os onze grupos da guia lateral, na ordem do RF-16.7 mais o "Perfis" do
+/// ADR-0075 §6, logo depois de "Shell", e o "Gerenciador de tarefas" do
+/// ADR-0095 §9, entre "Painéis" e "Atalhos".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Group {
     General,
@@ -48,13 +49,15 @@ pub(crate) enum Group {
     Project,
     Git,
     Panes,
+    /// ADR-0095 §9: o período dos gráficos do gerenciador de tarefas.
+    TaskManager,
     /// Sem opções nesta tabela: a lista de atalhos tem estado próprio
     /// (RF-16.28 a RF-16.31).
     Shortcuts,
 }
 
 impl Group {
-    pub(crate) const ALL: [Group; 10] = [
+    pub(crate) const ALL: [Group; 11] = [
         Group::General,
         Group::Shell,
         Group::Profiles,
@@ -64,6 +67,7 @@ impl Group {
         Group::Project,
         Group::Git,
         Group::Panes,
+        Group::TaskManager,
         Group::Shortcuts,
     ];
 
@@ -78,6 +82,7 @@ impl Group {
             Group::Project => msg::settings::group::project(catalog),
             Group::Git => msg::settings::group::git(catalog),
             Group::Panes => msg::settings::group::panes(catalog),
+            Group::TaskManager => msg::settings::group::task_manager(catalog),
             Group::Shortcuts => msg::settings::group::shortcuts(catalog),
         }
     }
@@ -109,6 +114,8 @@ pub(crate) enum Section {
     ProjectFile,
     GitRemote,
     PanesSize,
+    /// ADR-0095 §9: o único campo do grupo "Gerenciador de tarefas".
+    TaskManagerCharts,
 }
 
 impl Section {
@@ -135,6 +142,7 @@ impl Section {
             Section::ProjectFile => msg::settings::section::project_file(catalog),
             Section::GitRemote => msg::settings::section::git_remote(catalog),
             Section::PanesSize => msg::settings::section::panes_size(catalog),
+            Section::TaskManagerCharts => msg::settings::section::task_manager_charts(catalog),
         }
     }
 }
@@ -532,6 +540,8 @@ label_modules! {
     git_remote_poll => (git_remote_poll_label, git_remote_poll_description),
     min_columns => (min_columns_label, min_columns_description),
     min_rows => (min_rows_label, min_rows_description),
+    history_seconds => (history_seconds_label, history_seconds_description),
+    background_monitoring => (background_monitoring_label, background_monitoring_description),
 }
 
 /// Os valores nomeados de cada enum, na grafia do arquivo.
@@ -1135,6 +1145,24 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         integer(1.0, 100.0, 1.0),
         |c| EditValue::Integer(i64::from(c.panes.min_rows))
     ),
+    // ---- Gerenciador de tarefas
+    // ADR-0098 §7: antes do período, a mesma chave da alternância do rodapé.
+    option!(
+        background_monitoring,
+        TaskManager,
+        TaskManagerCharts,
+        "task_manager.background_monitoring",
+        TOGGLE,
+        |c| EditValue::Bool(c.task_manager.background_monitoring)
+    ),
+    option!(
+        history_seconds,
+        TaskManager,
+        TaskManagerCharts,
+        "task_manager.history_seconds",
+        integer(30.0, 600.0, 1.0),
+        |c| EditValue::Integer(i64::from(c.task_manager.history_seconds))
+    ),
 ];
 
 /// As opções de um grupo, na ordem da tabela.
@@ -1157,13 +1185,13 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        // As 54 do RF-16.11 (o número da aba saiu), as duas do topo do grupo "Perfis" (ADR-0075 §6), a do botão de menu do app (ADR-0079) e a da restauração nomeada na janela atual (ADR-0092).
-        assert_eq!(OPTIONS.len(), 58);
+        // As 54 do RF-16.11 (o número da aba saiu), as duas do topo do grupo "Perfis" (ADR-0075 §6), a do botão de menu do app (ADR-0079), a da restauração nomeada na janela atual (ADR-0092), a do período dos gráficos do gerenciador de tarefas (ADR-0095 §9) e a do monitoramento em segundo plano (ADR-0098 §7).
+        assert_eq!(OPTIONS.len(), 60);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 2, 24, 15, 5, 2, 1, 2, 0]);
+        assert_eq!(per_group, [4, 3, 2, 24, 15, 5, 2, 1, 2, 2, 0]);
     }
 
     /// RF-19.18: as duas opções do acrílico ficam no grupo Aparência, logo
@@ -1613,6 +1641,49 @@ mod tests {
         assert_eq!(
             option("shell_program").unwrap().reload_scope(),
             ReloadScope::NewTab
+        );
+    }
+
+    /// ADR-0095 §9: the task manager group sits between "Painéis" and
+    /// "Atalhos", with the one numeric field of the chart period, applied on
+    /// the spot (a class A key, no code of its own in `reload::diff`).
+    #[test]
+    fn the_task_manager_group_has_the_chart_period_between_panes_and_shortcuts() {
+        let at = |group: Group| Group::ALL.iter().position(|g| *g == group).unwrap();
+        assert_eq!(at(Group::TaskManager), at(Group::Panes) + 1);
+        assert_eq!(at(Group::Shortcuts), at(Group::TaskManager) + 1);
+
+        let ids: Vec<&str> = options_in(Group::TaskManager).map(|o| o.id).collect();
+        assert_eq!(ids, ["background_monitoring", "history_seconds"]);
+        let option = option("history_seconds").unwrap();
+        assert_eq!(option.path, "task_manager.history_seconds");
+        assert_eq!(option.section, Section::TaskManagerCharts);
+        assert_eq!(
+            option.control,
+            Control::Number {
+                min: 30.0,
+                max: 600.0,
+                step: 1.0,
+                float: false
+            }
+        );
+        assert_eq!(option.reload_scope(), ReloadScope::Live);
+
+        // Reads the default (60) and what was written, through the same
+        // `Set` the screen's save applies.
+        assert_eq!(option.read(&Config::default()), EditValue::Integer(60));
+        for written in [30, 125, 600] {
+            let config = config_with(option, &EditValue::Integer(written)).expect("valor na faixa");
+            assert_eq!(option.read(&config), EditValue::Integer(written));
+            assert_eq!(i64::from(config.task_manager.history_seconds), written);
+        }
+
+        let catalog = crate::messages::test_support::pt_br();
+        assert_eq!(Group::TaskManager.label(&catalog), "Gerenciador de tarefas");
+        assert_eq!((option.label)(&catalog), "Período dos gráficos");
+        assert_eq!(
+            (option.description)(&catalog),
+            "Quantos segundos os gráficos do gerenciador de tarefas mostram. De 30 a 600."
         );
     }
 

@@ -40,6 +40,7 @@ mod app_icon;
 mod app_move_to_window;
 mod app_named_append;
 mod app_reconnect;
+mod app_task_manager;
 mod app_transfer;
 mod background_image;
 mod box_glyphs;
@@ -84,6 +85,7 @@ mod settings;
 mod shell_integration;
 mod status_bar;
 mod tab_bar;
+mod task_manager;
 mod terminal_menu;
 mod text_field;
 mod titlebar;
@@ -525,6 +527,14 @@ enum Wakeup {
     /// anymore. `Box` for the same reason as the variant above (the decoded
     /// bytes plus a `PathBuf`).
     PinnedIconResolved(Box<pinned_icon::PinnedIconResult>),
+    /// The sampler thread answered a request (PRD-024, ADR-0093 §5/§6): data
+    /// keyed by `(WindowId, TabId, PaneId)`, never a command --
+    /// `App::apply_process_sample` drops the answer whose `seq` is not the
+    /// last one sent and, per window, the keys whose window or tab is gone.
+    /// `Box` for the same reason as the two variants above: the vectors of
+    /// `ProcessStat` plus the `Instant` pass the 80 bytes `AccessKit` already
+    /// reserves; `the_image_result_does_not_widen_wakeup` covers it.
+    ProcessSample(Box<porecatu_term::SampleResult<app_reconnect::PaneKey>>),
 }
 
 impl From<accesskit_winit::Event> for Wakeup {
@@ -1356,6 +1366,10 @@ enum ActionOutcome {
     OpenMoveToWindow {
         group: bool,
     },
+    /// `task_manager.toggle` (PRD-024 RF-24.1, ADR-0095 §8): the task manager
+    /// and the process sampler belong to the process/`App` (ADR-0093 §4,
+    /// ADR-0095 §2), not to the window state that resolves the key.
+    ToggleTaskManager,
     Unhandled,
 }
 
@@ -1433,6 +1447,8 @@ enum OverlayTarget {
     GroupMenu(usize),
     ProfileMenu(usize),
     TerminalMenu(usize),
+    /// An item of the row menu of the task manager (PRD-024).
+    TaskMenu(usize),
     /// Um swatch ou uma ação do editor de grupo (nunca o campo de nome).
     GroupEditor(overlay::GroupEditorHit),
     MoveToGroup(usize),
@@ -1613,6 +1629,19 @@ struct WindowState {
     /// classificação de `selection`, ADR-0041 §8). `redraw` fecha sozinha
     /// se a aba ativa mudar.
     search: Option<search_bar::SearchBarState>,
+    /// ADR-0095 §1: `Some` = the content area shows the task manager instead
+    /// of the active tab's panes. A window mode: never saved (RF-24.6), so
+    /// every constructor starts it `None` (startup, new window, named-session
+    /// window and detached window all open on the terminal).
+    task_manager: Option<task_manager::TaskManagerView>,
+    /// ADR-0095 §1: the chart history of this window. Survives closing the
+    /// mode (RF-24.12) and goes away with the window.
+    task_manager_history: task_manager::TaskManagerHistory,
+    /// ADR-0095 §2: set by a click that activates a tab of the bar or a
+    /// pinned box -- even one that is already active, the one case the
+    /// "active tab changed" check cannot see. Taken (cleared) at the end of
+    /// every window event by `App::task_manager_guard_end`.
+    task_manager_tab_click: bool,
     /// Cache da branch do repositório da aba ativa (ADR-0049). `RefCell`
     /// porque `status_bar_content` toma `&self` -- a alternativa seria
     /// `&mut self` num caminho que só lê estado, e propagá-lo até o
@@ -2785,6 +2814,12 @@ impl WindowState {
             || self.move_to_group.is_some()
             || self.move_to_window.is_some()
             || self.session_picker.is_some()
+            // PRD-024: o menu da linha do gerenciador de tarefas é um menu
+            // de contexto como os outros.
+            || self
+                .task_manager
+                .as_ref()
+                .is_some_and(|view| view.menu.is_some())
     }
 
     /// O release que fecha um press de overlay: consome a marca, e o chamador
@@ -2856,6 +2891,9 @@ impl WindowState {
             last_normal_size,
             settle_frames: 1,
             search: None,
+            task_manager: None,
+            task_manager_history: task_manager::TaskManagerHistory::default(),
+            task_manager_tab_click: false,
             git: std::cell::RefCell::new(git::GitInfo::default()),
             access_adapter,
             key_trace_pending: None,
@@ -2873,6 +2911,7 @@ impl WindowState {
     /// emprestados aqui, nunca `self` inteiro -- é o que permite
     /// `self.access_adapter` (mutável) e o resto de `self` (imutável)
     /// coexistirem no mesmo `match`/closure.
+    #[allow(clippy::too_many_arguments)]
     fn refresh_access_tree(
         &mut self,
         style: &TabBarStyle,
@@ -2881,6 +2920,7 @@ impl WindowState {
         git_remotes: &HashMap<PathBuf, git::RemoteEntry>,
         catalog: &Catalog,
         language: &str,
+        background_monitoring: bool,
     ) {
         // ADR-0048 §11: a árvore é projeção do mesmo layout que o pintor
         // consome. Montado aqui fora do `update_if_active` porque o
@@ -2916,6 +2956,29 @@ impl WindowState {
         let move_to_window = self.move_to_window.as_ref().map(|(_, popover)| popover);
         let session_picker = &self.session_picker;
         let search = &self.search;
+        // ADR-0095 §10: with the task manager open the tree carries the list
+        // (every row, in view or not) instead of the panes. Built outside the
+        // closure like the status bar layout: the closure only runs with a
+        // client connected, and this only with the mode on.
+        let task_rows = self.task_manager_rows();
+        let task_menu = self
+            .task_manager
+            .as_ref()
+            .and_then(|view| view.menu)
+            .and_then(|menu| {
+                self.open_task_menu_items()
+                    .map(|items| (menu.highlighted(), items))
+            });
+        let task_manager_access =
+            self.task_manager
+                .as_ref()
+                .map(|view| access::TaskManagerAccess {
+                    rows: &task_rows,
+                    selection: view.selection,
+                    latest: self.task_manager_history.latest(),
+                    menu: task_menu,
+                    background_monitoring,
+                });
         self.access_adapter.update_if_active(move || {
             access::build_tree(
                 workspace,
@@ -2932,6 +2995,7 @@ impl WindowState {
                 search,
                 status_bar_layout.as_ref(),
                 active_pane_order.as_deref(),
+                task_manager_access.as_ref(),
                 style,
                 catalog,
                 language,
@@ -3035,6 +3099,10 @@ impl WindowState {
         self.move_to_group = None;
         self.move_to_window = None;
         self.session_picker = None;
+        // PRD-024: exclusão mútua com o menu da linha do gerenciador.
+        if let Some(view) = self.task_manager.as_mut() {
+            view.menu = None;
+        }
     }
 
     /// Informa o resultado de agir sobre um hyperlink (RF-11.12/RF-11.13)
@@ -5668,6 +5736,8 @@ impl WindowState {
             Action::SessionSaveNamed => ActionOutcome::OpenSessionPicker { edit_name: true },
             Action::SessionOpenList => ActionOutcome::OpenSessionPicker { edit_name: false },
             Action::SshReconnect => ActionOutcome::SshReconnect,
+            // PRD-024 RF-24.1, ADR-0095 §8: targets the window, not the pane.
+            Action::TaskManagerToggle => ActionOutcome::ToggleTaskManager,
             // ADR-0070 §8: no default key; the menu hangs from the `+` of the
             // active tab's group.
             Action::ProfileOpenMenu => {
@@ -6027,6 +6097,7 @@ impl WindowState {
                         // RF-2.3: clique sem modificador limpa a seleção e ativa.
                         self.selection.clear();
                         self.touch_workspace(|ws| ws.activate_tab(id));
+                        self.task_manager_tab_click = true;
                         self.sync_window_title();
                         self.ensure_active_tab_visible(gpu, style);
                     }
@@ -6119,6 +6190,7 @@ impl WindowState {
         }
         self.selection.clear();
         self.touch_workspace(|ws| ws.activate_tab(id));
+        self.task_manager_tab_click = true;
         self.sync_window_title();
         let rect = tab_bar::pinned_rect(style, is_macos(), index);
         self.drag_block.clear();
@@ -6581,6 +6653,7 @@ impl WindowState {
             Drag::TabPressed { tab, .. } if !block.is_empty() => {
                 self.selection.clear();
                 self.touch_workspace(|ws| ws.activate_tab(tab));
+                self.task_manager_tab_click = true;
                 self.sync_window_title();
                 self.ensure_active_tab_visible(gpu, style);
             }
@@ -6985,6 +7058,11 @@ impl WindowState {
         style: &TabBarStyle,
         point: (f32, f32),
     ) -> Option<panes::PaneDivider> {
+        // ADR-0095 §4: with the task manager open the dividers are not on
+        // screen, so neither the cursor nor a press may find one.
+        if self.task_manager.is_some() {
+            return None;
+        }
         let id = self.workspace.active_tab()?;
         let tab = self.workspace.tab(id)?;
         let box_rect = self.active_tab_box_rect(style);
@@ -7182,6 +7260,19 @@ impl WindowState {
                         Some((HoverKey::Tab(t.id), screen_rect, title))
                     })
             })
+        } else if self.task_manager.is_some()
+            && !self.in_bar(self.cursor_position.1, style)
+            && self.dialog.is_none()
+            && self.context_menu.is_none()
+            && self.group_context_menu.is_none()
+            && self.group_editor.is_none()
+            && self.move_to_group.is_none()
+            && self.move_to_window.is_none()
+            && matches!(self.drag, Drag::Idle)
+        {
+            // PRD-024 RF-24.16: a row whose name was cut has the whole name
+            // in a tooltip, by the same `Hover` as a cut tab label.
+            self.task_manager_tooltip_at(bar_point, style, config)
         } else {
             None
         };
@@ -7512,6 +7603,20 @@ struct App {
     /// RF-13.3: `true` depois do primeiro aviso de intervalo elevado ao
     /// piso -- uma vez por execução, mesmo padrão do campo acima.
     git_poll_interval_warned: bool,
+    /// PRD-024/ADR-0093 §4: the sampler thread, `Some` only while at least one
+    /// window has the task manager open. Dropping it closes the channel and
+    /// the thread ends by itself (never joined on the main thread).
+    task_manager_sampler: Option<porecatu_term::Sampler<app_reconnect::PaneKey>>,
+    /// Next sampling deadline, in `schedule_next_wake`'s `min()`; `None` while
+    /// no window has the task manager open.
+    task_manager_next_sample: Option<Instant>,
+    /// The `seq` of the last request and whether its answer is still pending.
+    task_manager_ticket: app_task_manager::SampleTicket,
+    /// RF-24.26: the loaded `history_seconds` the "adjusted" notice was
+    /// already given for (`None` = none yet), so it appears once per loaded
+    /// value. Unlike `git_poll_interval_warned` it is a value, not a flag: a
+    /// hot reload to another out-of-range value is a new fact to tell.
+    task_manager_history_warned: Option<u32>,
     /// ADR-0070 §5: shells found by the detection thread, kept for the whole
     /// process. Empty until the result arrives (and forever when it fails or
     /// `[profiles] detect = false`).
@@ -7872,6 +7977,10 @@ impl App {
             pinned_opened: false,
             git_disabled: false,
             git_poll_interval_warned: false,
+            task_manager_sampler: None,
+            task_manager_next_sample: None,
+            task_manager_ticket: app_task_manager::SampleTicket::default(),
+            task_manager_history_warned: None,
             detected_profiles: Vec::new(),
             profile_detection_started: false,
             background_image: background_image::BackgroundImageStore::default(),
@@ -9234,6 +9343,10 @@ impl App {
             return;
         };
         self.focus_order.remove(window_id);
+        // ADR-0093 §4: the window's task manager state went with the
+        // `WindowState` just removed; the sampler goes too if it was the last
+        // window that had one open.
+        self.stop_task_manager_sampler_if_unused();
         if self.windows.is_empty() {
             // `app.quit`/RF-3.4: gravação síncrona da sessão, antes de
             // sair -- fecha o no-op documentado desde a F2 (ADR-0017 §7).
@@ -9404,6 +9517,15 @@ impl App {
                     state.window.request_redraw();
                 }
             }
+            // RF-24.21 (ADR-0095 §7): "Encerrar" do gerenciador de tarefas.
+            // O pedido vai à thread de medição, que confere a identidade do
+            // processo; nada a mostrar se ele já tinha morrido (RF-24.23).
+            DialogAction::EndProcess {
+                tab,
+                pane,
+                pid,
+                start_time,
+            } => self.end_process_confirmed(window_id, tab, pane, pid, start_time),
             // "Copiar trecho" do convite de integração de shell.
             DialogAction::ShellInviteCopy(snippet) => clipboard::copy(&snippet),
             // "Não mostrar mais" (RF-3.1, ADR-0039 §4): a dispensa definitiva.
@@ -9784,6 +9906,13 @@ impl App {
         // ainda vazio no início da execução, nenhum outro prazo garante
         // que `tick_all` rode a tempo de descobrir o primeiro repositório.
         self.check_git_remote_queries(now);
+        // RF-24.26: the adjusted-period notice, like the Git interval one,
+        // does not wait for the manager to be opened.
+        self.check_task_manager_history_notice(now);
+        // ADR-0098 §2: `background_monitoring` keeps the sampling clock
+        // running with every manager closed, from the startup and from the
+        // reload that turns it on.
+        self.sync_task_manager_sampler(now);
         self.check_profile_detection();
         self.open_ready_prompts();
         // ADR-0076 §2: as tentativas de reconexão cujo prazo venceu começam
@@ -9800,6 +9929,8 @@ impl App {
             .chain(self.git_next_deadline(now))
             .chain(self.reconnect_deadline())
             .chain(self.clock_deadline(now))
+            // ADR-0093 §4: the sampling clock is the UI's, a `WaitUntil`.
+            .chain(self.task_manager_next_sample)
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
@@ -10175,8 +10306,17 @@ impl App {
         let git_remotes = &self.git_remotes;
         let catalog = &self.catalog;
         let language = &self.language_tag;
+        let background = self.config.task_manager.background_monitoring;
         for state in self.windows.values_mut() {
-            state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
+            state.refresh_access_tree(
+                style,
+                home,
+                measurer,
+                git_remotes,
+                catalog,
+                language,
+                background,
+            );
         }
         self.refresh_settings_access_tree();
     }
@@ -10275,6 +10415,8 @@ impl App {
         }
         self.check_shell_integration_invite_timeout(now);
         self.check_project_commands(now);
+        // ADR-0093 §4: the sampling deadline, like the other deadlines.
+        self.task_manager_tick(now);
         if self.session.ready(now) {
             // RF-3.1 (ADR-0038 §5, ADR-0039 §2): fora do Windows, o
             // gatilho do convite é o mesmo sinal que decide consultar o
@@ -10673,6 +10815,13 @@ impl App {
             // Classe A (ADR-0022): `animations = false` desligada/ligada
             // na hora, sem esperar a próxima animação.
             state.animations.set_enabled(animations_enabled);
+            // PRD-024: a font change makes every width the task manager
+            // measured stale (ADR-0096 §5).
+            if effects.grid_changed
+                && let Some(view) = state.task_manager.as_mut()
+            {
+                view.measure.clear();
+            }
             // Classe B: colunas/linhas dependem da métrica nova e do
             // tamanho (por janela) -- resize de todos os PTYs da janela,
             // um por recarga (o debounce já coalesceu a rajada).
@@ -11541,6 +11690,10 @@ impl ApplicationHandler<Wakeup> for App {
                 self.apply_pinned_icon_result(*result);
                 return;
             }
+            Wakeup::ProcessSample(result) => {
+                self.apply_process_sample(*result);
+                return;
+            }
         };
         let Some(state) = self.windows.get_mut(&window) else {
             return;
@@ -11837,6 +11990,9 @@ impl ApplicationHandler<Wakeup> for App {
         if let Some(state) = self.windows.get_mut(&window_id) {
             state.access_adapter.process_event(&state.window, &event);
         }
+        // ADR-0095 §2: the one place that notices a tab being activated or
+        // created, whatever gesture did it (see `task_manager_guard_end`).
+        let task_manager_guard = self.task_manager_guard_begin();
         match event {
             WindowEvent::CloseRequested => {
                 self.request_close_window(window_id, event_loop);
@@ -11872,6 +12028,11 @@ impl ApplicationHandler<Wakeup> for App {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.scale = scale_factor as f32;
+                    // PRD-024: the widths the task manager measured belong to
+                    // the old scale (ADR-0096 §5).
+                    if let Some(view) = state.task_manager.as_mut() {
+                        view.measure.clear();
+                    }
                 }
                 // `cell_metrics` é global (ADR-0015/ADR-0030 -- uma
                 // medição serve todas as janelas), então uma mudança de
@@ -11967,7 +12128,10 @@ impl ApplicationHandler<Wakeup> for App {
             // (ABNT2) -- passam direto pro terminal, sem consultar
             // keybind nenhum (ADR-0008).
             WindowEvent::Ime(Ime::Commit(text)) => {
+                // PRD-024 RF-24.5, ADR-0095 §3: with the task manager open no
+                // text reaches the pane (it would be typed blind).
                 if let Some(state) = self.windows.get(&window_id)
+                    && state.task_manager.is_none()
                     && let Some(runtime) = state.active_runtime()
                 {
                     runtime.terminal.write(text.into_bytes());
@@ -11996,6 +12160,9 @@ impl ApplicationHandler<Wakeup> for App {
         // (clique na aba, `Ctrl+Tab`, `Ctrl+PageDown`, índice, passo de
         // grupo, expansão de grupo colapsado) e antes do próximo evento --
         // sem-op quando a aba ativa já está `Running`, o caso comum.
+        //
+        // ADR-0095 §2: antes disso, a checagem única de "ativou ou criou aba".
+        self.task_manager_guard_end(window_id, task_manager_guard);
         if let Some(state) = self.windows.get_mut(&window_id) {
             state.ensure_active_tab_started(
                 self.cell_metrics,
@@ -12044,19 +12211,26 @@ impl App {
     /// conectar) monta e entrega a árvore inteira -- `Adapter::update_if_
     /// active` só chama a função se ele seguir ativo no instante da
     /// chamada, então não há corrida com uma desativação que chegou entre
-    /// os dois eventos. `ActionRequested` não é despachado nesta etapa
-    /// (RF-11.17/18 pedem exposição, não interação via leitor de tela --
-    /// dívida registrada no roadmap), e `AccessibilityDeactivated` não
+    /// os dois eventos. `ActionRequested` é despachado só para o gerenciador
+    /// de tarefas (ADR-0095 §10: o botão do app e as linhas da lista; o resto
+    /// da árvore expõe, não interage -- RF-11.17/18, dívida no roadmap), e
+    /// `AccessibilityDeactivated` não
     /// precisa de nada do lado de `App`: o adaptador já sabe que ficou
     /// inativo, e a próxima `update_if_active` vira no-op sozinha.
     fn handle_accesskit_event(&mut self, event: accesskit_winit::Event) {
-        if !matches!(
-            event.window_event,
-            accesskit_winit::WindowEvent::InitialTreeRequested
-        ) {
-            return;
+        match event.window_event {
+            accesskit_winit::WindowEvent::InitialTreeRequested => {
+                self.refresh_access_tree(event.window_id);
+            }
+            accesskit_winit::WindowEvent::ActionRequested(request) => {
+                self.run_task_manager_access_action(
+                    event.window_id,
+                    request.target_node,
+                    request.action,
+                );
+            }
+            _ => {}
         }
-        self.refresh_access_tree(event.window_id);
     }
 
     /// Ponto único de atualização da árvore (ADR-0043 §3): chamado daqui
@@ -12090,10 +12264,19 @@ impl App {
         let git_remotes = &self.git_remotes;
         let catalog = &self.catalog;
         let language = &self.language_tag;
+        let background = self.config.task_manager.background_monitoring;
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
+        state.refresh_access_tree(
+            style,
+            home,
+            measurer,
+            git_remotes,
+            catalog,
+            language,
+            background,
+        );
     }
 
     /// PRD-000/etapa 6 da F6: primeiro `Wakeup::TabDirty` do processo é a
@@ -12298,6 +12481,17 @@ impl App {
             }
             return;
         }
+        // ADR-0095 §3 item 1: the task manager's row menu consumes the key
+        // like the other context menus -- so, with a warning on screen, `Esc`
+        // closes the menu first, not the warning.
+        if state
+            .task_manager
+            .as_ref()
+            .is_some_and(|view| view.menu.is_some())
+        {
+            self.task_manager_menu_key(window_id, &key);
+            return;
+        }
         if matches!(
             state.drag,
             Drag::TabDragging { .. } | Drag::GroupDragging { .. }
@@ -12338,6 +12532,31 @@ impl App {
             state.selection.clear();
             state.window.request_redraw();
             return;
+        }
+
+        // Gerenciador de tarefas (PRD-024, ADR-0095 §3): depois do diálogo,
+        // dos menus, dos popovers, do rename e do `Esc` de aviso, e antes da
+        // busca. Fechado, nada muda. Aberto, o teclado nunca chega ao
+        // painel: navegação, "Ir para a aba" e `Esc` são do gerenciador, as
+        // ações que não miram o painel seguem para `handle_tab_action_key`
+        // logo abaixo, e **todo o resto é engolido**.
+        //
+        // The row menu that is open is not here: it consumes the key with the
+        // other menus, above (ADR-0095 §3 item 1). Opening it from the
+        // keyboard is `TaskKeyRoute::OpenMenu`.
+        if state.task_manager.is_some() {
+            let action = Chord::from_key(&key.logical_key, state.modifiers)
+                .and_then(|chord| self.keymap.get(&chord).copied());
+            let route = app_task_manager::task_manager_key_route(
+                key.state == ElementState::Pressed,
+                &key.logical_key,
+                state.modifiers,
+                action,
+            );
+            if !matches!(route, app_task_manager::TaskKeyRoute::Dispatch(_)) {
+                self.run_task_manager_route(window_id, route);
+                return;
+            }
         }
 
         // Barra de busca (ADR-0041 §3): captura **parcial**, a única não
@@ -12427,6 +12646,14 @@ impl App {
                 if let Some((tab, pane)) = target {
                     self.ssh_reconnect_pane((window_id, tab, pane), Instant::now());
                 }
+            }
+            // PRD-024 RF-24.1, ADR-0095 §8: the window's mode, not the pane's.
+            ActionOutcome::ToggleTaskManager => self.toggle_task_manager(window_id),
+            // ADR-0095 §3 item 4: with the task manager open nothing that was
+            // not claimed above goes on -- not to the pane, and not to the
+            // dormant SSH pane that `Enter` would connect.
+            ActionOutcome::Unhandled if state.task_manager.is_some() => {
+                state.window.request_redraw();
             }
             ActionOutcome::Unhandled if state.dormant_focused_pane().is_some() => {
                 // RF-20.33: o painel SSH restaurado só entende `Enter`. Nenhuma
@@ -12753,6 +12980,24 @@ impl App {
                 state.scroll_offset = state.scroll_offset.max(0.0);
                 state.window.request_redraw();
             }
+        } else if state.task_manager.is_some() {
+            // PRD-024 RF-24.5, ADR-0095 §4: the content area belongs to the
+            // task manager; the wheel never reaches a pane (no scrollback, no
+            // mouse report). It scrolls the list when over it.
+            let notches = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            let point = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            if state.task_manager_wheel(point, notches, &self.style, &self.config) {
+                // The rows moved under the cursor: a tooltip of the old row
+                // would be of another one now.
+                state.hover.dismiss();
+                state.window.request_redraw();
+            }
         } else if let Some((pane, cell)) = state.cell_at_cursor(self.cell_metrics, &self.style)
             && let Some(tab) = state.workspace.active_tab()
             && let Some(runtime) = state.panes.get(&(tab, pane))
@@ -12883,6 +13128,33 @@ impl App {
                 && let Some(menu) = state.terminal_context_menu.as_mut()
             {
                 menu.set_highlight(index, &items);
+            }
+            state.window.request_redraw();
+            return;
+        }
+        // Menu da linha do gerenciador de tarefas (PRD-024): mesmo
+        // tratamento, com os itens recomputados da linha viva.
+        if let Some(menu) = state.task_manager.as_ref().and_then(|view| view.menu) {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            if let Some(items) = state.open_task_menu_items() {
+                let layout = overlay::layout_anchored_menu(
+                    menu.anchor,
+                    items.len(),
+                    &self.config,
+                    state.logical_width,
+                    state.logical_height,
+                );
+                if let Some(index) = overlay::terminal_menu_hit(&layout, logical_point)
+                    && let Some(open) = state
+                        .task_manager
+                        .as_mut()
+                        .and_then(|view| view.menu.as_mut())
+                {
+                    open.set_highlight(index, &items);
+                }
             }
             state.window.request_redraw();
             return;
@@ -13409,6 +13681,8 @@ impl App {
             && link_modifier
             && resize_direction.is_none()
             && !overlay_open
+            // ADR-0095 §4: the panes under the task manager are not there.
+            && state.task_manager.is_none()
             && !state.in_bar(position.y, &self.style)
             && !state.in_status_bar(position.y, &self.style)
             && {
@@ -13463,6 +13737,22 @@ impl App {
         }
 
         if state.dialog.is_some() || state.context_menu.is_some() {
+            return;
+        }
+
+        // PRD-024, ADR-0095 §4: the movement over the content area is the
+        // task manager's (hover of a row), never the pane's (no mouse report,
+        // no selection drag). Redraw only when the hover changed -- or, over
+        // the bar, as always, for the bar's own hover.
+        if state.task_manager.is_some() {
+            let hover_changed =
+                state.task_manager_hover_at(logical_point, &self.style, &self.config);
+            if hover_changed
+                || state.in_bar(position.y, &self.style)
+                || state.in_status_bar(position.y, &self.style)
+            {
+                state.window.request_redraw();
+            }
             return;
         }
 
@@ -13570,6 +13860,19 @@ impl App {
             return overlay::terminal_menu_hit(&layout, point)
                 .filter(|&index| items[index].enabled)
                 .map(OverlayTarget::TerminalMenu);
+        }
+        if let Some(menu) = state.task_manager.as_ref().and_then(|view| view.menu) {
+            let items = state.open_task_menu_items().unwrap_or_default();
+            let layout = overlay::layout_anchored_menu(
+                menu.anchor,
+                items.len(),
+                &self.config,
+                width,
+                height,
+            );
+            return overlay::terminal_menu_hit(&layout, point)
+                .filter(|&index| items[index].enabled)
+                .map(OverlayTarget::TaskMenu);
         }
         if let Some(group) = state.group_editor.as_ref().map(|editor| editor.group) {
             let gpu = self.gpu.as_mut()?;
@@ -13703,6 +14006,22 @@ impl App {
                 // -- nunca chega ao terminal.
                 let armed = state.armed_overlay.take();
                 state.window.request_redraw();
+                // ADR-0098 §5: the press on the task manager's footer toggle
+                // is consumed like an overlay's; its release flips the key.
+                if armed.is_none()
+                    && button == MouseButton::Left
+                    && state
+                        .task_manager
+                        .as_ref()
+                        .is_some_and(|view| view.footer_pressed)
+                {
+                    let point = (
+                        state.cursor_position.0 as f32 / state.scale,
+                        state.cursor_position.1 as f32 / state.scale,
+                    );
+                    self.task_manager_release(window_id, point);
+                    return;
+                }
                 if let Some(armed) = armed
                     && button == MouseButton::Left
                     && input::release_on_armed(Some(armed), self.overlay_target(window_id))
@@ -13743,9 +14062,12 @@ impl App {
                         state.open_session_picker(false);
                         state.window.request_redraw();
                     }
-                    // ADR-0079: the app menu button has no action yet; the
-                    // release only clears the pressed look.
-                    Some(tab_bar::ZoneButtonHit::AppMenu) | None => {
+                    // ADR-0095 §2 (supersedes ADR-0079 decision 5 in part):
+                    // the app button toggles the task manager.
+                    Some(tab_bar::ZoneButtonHit::AppMenu) => {
+                        self.toggle_task_manager(window_id);
+                    }
+                    None => {
                         state.window.request_redraw();
                     }
                 }
@@ -13820,7 +14142,12 @@ impl App {
                 self.release_drag(window_id, event_loop);
                 return;
             }
-            if !state.in_bar(state.cursor_position.1, &self.style)
+            // ADR-0095 §4: with the task manager open the release changes
+            // nothing in the pane (the state of the button was zeroed above,
+            // and a press of the manager marks its release as consumed, so
+            // it never gets here after one).
+            if state.task_manager.is_none()
+                && !state.in_bar(state.cursor_position.1, &self.style)
                 && !state.in_status_bar(state.cursor_position.1, &self.style)
             {
                 // Solta o botão sobre o terminal: repassa ao programa (SGR/X10
@@ -14092,6 +14419,33 @@ impl App {
                 && items[index].enabled
             {
                 self.run_terminal_menu_action(window_id, menu, items[index].action);
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
+        // Menu da linha do gerenciador de tarefas (PRD-024): clique esquerdo
+        // num item habilitado aciona, qualquer outro clique fecha.
+        if let Some(menu) = state.task_manager.as_ref().and_then(|view| view.menu) {
+            let items = state.open_task_menu_items().unwrap_or_default();
+            let layout = overlay::layout_anchored_menu(
+                menu.anchor,
+                items.len(),
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            let hit = overlay::terminal_menu_hit(&layout, logical_point);
+            if let Some(view) = state.task_manager.as_mut() {
+                view.menu = None;
+            }
+            if button == MouseButton::Left
+                && let Some(index) = hit
+                && items[index].enabled
+            {
+                self.run_task_menu_action(window_id, menu.row, items[index].action);
             }
             if let Some(state) = self.windows.get(&window_id) {
                 state.window.request_redraw();
@@ -14386,6 +14740,25 @@ impl App {
                 NewTabRequest::None | NewTabRequest::OpenProfileMenu { .. } => {
                     state.window.request_redraw();
                 }
+            }
+            return;
+        }
+
+        // PRD-024, ADR-0095 §4: a press on the content area with the task
+        // manager open is the manager's -- row, header and charts -- and
+        // never the terminal's (no selection, no hyperlink, no mouse report,
+        // no terminal menu, no dormant SSH connect). Its release is marked as
+        // consumed, like an overlay's, so it reaches no pane either. A press
+        // on the bar and on the status bar kept the paths above.
+        if state.task_manager.is_some() {
+            let in_content = !state.in_bar(state.cursor_position.1, &self.style)
+                && !state.in_status_bar(state.cursor_position.1, &self.style);
+            if in_content {
+                state.overlay_press_consumed = true;
+                self.task_manager_press(window_id, logical_point, button);
+            }
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
             }
             return;
         }
@@ -14987,6 +15360,8 @@ impl App {
             window_image.is_some(),
             self.app_icon_image,
             &pinned_icons,
+            // ADR-0096 §6: the app button is "on" while the mode is open.
+            state.task_manager.is_some(),
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
@@ -14996,6 +15371,9 @@ impl App {
         // painel focado dentro da mesma aba fecha a que estava aberta, em
         // vez de continuar mostrando o realce/estado de um painel que não
         // é mais o focado.
+        // ADR-0095 §4: with the task manager open the panes' loop, the search
+        // and the blink clock do not run for the active tab.
+        let task_manager_open = state.task_manager.is_some();
         if let Some(search) = &state.search {
             let still_focused = state.workspace.active_tab() == Some(search.tab())
                 && state.focused_pane_of(search.tab()) == Some(search.pane());
@@ -15046,7 +15424,14 @@ impl App {
             // painéis da aba -- com um painel só, `pane_layout` tem uma
             // entrada, e ela é o `box_rect` inteiro (nenhum vão tirado).
             let focused_pane = tab.panes().focused_id();
-            let pane_layout = panes::layout(tab.panes(), box_rect, style);
+            // ADR-0095 §4: no layout of panes while the task manager is
+            // open; the loop below then has nothing to draw. The `box_rect`
+            // is the same, so no PTY is resized by toggling the mode.
+            let pane_layout = if task_manager_open {
+                Vec::new()
+            } else {
+                panes::layout(tab.panes(), box_rect, style)
+            };
             // RF-6.21: a affordance de hyperlink é gesto de mouse -- mira o
             // painel sob o cursor, não necessariamente o focado.
             let hover_pane = panes::pane_at(&pane_layout, logical_hover_cursor);
@@ -15170,6 +15555,24 @@ impl App {
                     background_image,
                 ));
             }
+            // ADR-0095 §4, ADR-0096 §1: the task manager takes the panes' place
+            // in the same box and layer. The background of the frame goes
+            // through the path of the panes' (color, opacity, image,
+            // acrylic); the painting never draws it.
+            if task_manager_open {
+                app_task_manager::paint_task_manager(
+                    &mut grid_primitives,
+                    state,
+                    box_rect,
+                    style,
+                    config,
+                    pal,
+                    &window_term_pal,
+                    background_image,
+                    &self.catalog,
+                    gpu.text_measurer(),
+                );
+            }
             frame.set_layer(Layer::Grid, grid_primitives);
             // Liga/desliga o relógio do piscar conforme o que acabou de ser
             // desenhado; o prazo entra em `next_wake`, então cursor fixo
@@ -15181,7 +15584,7 @@ impl App {
                 .cursor_blink
                 .set_interval(blink_interval, Instant::now());
 
-            if let Some(search) = &state.search {
+            if !task_manager_open && let Some(search) = &state.search {
                 let search_layout = search_bar::layout_search_bar(box_rect, style);
                 let cursor_logical = (
                     state.cursor_position.0 as f32 / state.scale,
@@ -15354,6 +15757,31 @@ impl App {
                 config,
                 pal,
                 &self.catalog,
+                gpu.text_measurer(),
+            ));
+        }
+        // PRD-024: row menu of the task manager, the same painting as the
+        // terminal menu (a disabled item is dimmed, never absent).
+        if let Some(menu) = state.task_manager.as_ref().and_then(|view| view.menu)
+            && let Some(items) = state.open_task_menu_items()
+        {
+            let layout = overlay::layout_anchored_menu(
+                menu.anchor,
+                items.len(),
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            let entries: Vec<(String, bool)> = items
+                .iter()
+                .map(|item| (item.action.label(&self.catalog), item.enabled))
+                .collect();
+            popover.extend(overlay::paint_menu_entries(
+                &layout,
+                &entries,
+                menu.highlighted(),
+                config,
+                pal,
                 gpu.text_measurer(),
             ));
         }
@@ -15677,6 +16105,12 @@ mod wakeup_size_tests {
         .into_iter()
         .max()
         .unwrap();
+        // PRD-024: the sampler's answer travels boxed (ADR-0093 §5), a pointer
+        // whatever the result holds.
+        assert_eq!(
+            size_of::<Box<porecatu_term::SampleResult<crate::app_reconnect::PaneKey>>>(),
+            size_of::<usize>()
+        );
         assert!(
             size_of::<Wakeup>() <= widest_other + size_of::<usize>(),
             "o `Wakeup` ({} bytes) passou da maior variante que já existia ({widest_other}): o resultado da imagem precisa ir em `Box`",

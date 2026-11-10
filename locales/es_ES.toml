@@ -50,6 +50,31 @@ save_item = "Guardar esta ventana…"
 empty_list = "no hay sesiones guardadas"
 name_placeholder = "nombre de la sesión"
 
+[task_manager]
+chart_cpu = "CPU"
+chart_memory = "Memoria"
+chart_disk = "Disco"
+column_name = "Nombre"
+column_pid = "PID"
+column_cpu = "CPU"
+column_memory = "Memoria"
+column_disk = "Disco"
+note_not_started = "La pestaña se inicia al recibir el foco por primera vez."
+note_ssh = "Los procesos remotos no se muestran."
+note_exited = "El proceso del panel ha terminado."
+note_waiting = "Esperando la primera medición…"
+menu_go_to_tab = "Ir a la pestaña"
+menu_end_process = "Finalizar proceso"
+unit_b = "B"
+unit_kb = "KB"
+unit_mb = "MB"
+unit_gb = "GB"
+per_second = "{value}/s"
+percent = "{value}%"
+decimal_separator = ","
+no_value = "—"
+background_monitoring = "Supervisar en segundo plano"
+
 [settings]
 window_title = "Configuración"
 
@@ -63,6 +88,7 @@ session = "Sesión"
 project = "Proyecto"
 git = "Git"
 panes = "Paneles"
+task_manager = "Administrador de tareas"
 shortcuts = "Atajos"
 
 [settings.section]
@@ -87,6 +113,7 @@ restore = "RESTAURACIÓN"
 project_file = "ARCHIVO DE PROYECTO"
 git_remote = "REMOTO"
 panes_size = "TAMAÑO MÍNIMO"
+task_manager_charts = "GRÁFICOS"
 
 [settings.option]
 language_label = "Idioma"
@@ -210,6 +237,10 @@ min_columns_label = "Mínimo de columnas"
 min_columns_description = "Menor ancho, en columnas, al que puede llegar un panel."
 min_rows_label = "Mínimo de filas"
 min_rows_description = "Menor altura, en filas, a la que puede llegar un panel."
+history_seconds_label = "Período de los gráficos"
+history_seconds_description = "Cuántos segundos muestran los gráficos del administrador de tareas. De 30 a 600."
+background_monitoring_label = "Supervisar en segundo plano"
+background_monitoring_description = "Los gráficos del administrador de tareas guardan el historial con él cerrado, a costa de un escaneo de procesos por segundo."
 
 [settings.button]
 open_file = "Abrir archivo en el editor"
@@ -384,6 +415,7 @@ session_open_list = "Abrir lista de sesiones"
 profile_open_menu = "Abrir menú de perfiles"
 profile_new_tab = "Nueva pestaña con el perfil {n}"
 ssh_reconnect = "Reconectar el panel SSH"
+task_manager_toggle = "Alternar el administrador de tareas"
 
 [profile_menu]
 new_group = "Nuevo grupo de pestañas"
@@ -405,6 +437,7 @@ config = "Configuración"
 settings = "Configuración"
 search = "Búsqueda"
 app = "Aplicación"
+task_manager = "Administrador de tareas"
 
 [search_bar]
 invalid_pattern = "patrón no válido"
@@ -454,6 +487,12 @@ title = "¿Cerrar el grupo?"
 body = { one = "Esto cierra {count} pestaña.", other = "Esto cierra {count} pestañas." }
 confirm = { one = "Cerrar grupo ({count} pestaña)", other = "Cerrar grupo ({count} pestañas)" }
 
+[dialog.end_process]
+title = "¿Finalizar el proceso?"
+body_alone = "Se finalizará {name} (PID {pid})."
+body = { one = "Se finalizarán {name} (PID {pid}) y {count} proceso secundario.", other = "Se finalizarán {name} (PID {pid}) y {count} procesos secundarios." }
+confirm = "Finalizar"
+
 [dialog.delete_session]
 title = "¿Eliminar la sesión guardada?"
 body = "Esto elimina de forma permanente «{name}»."
@@ -500,7 +539,12 @@ body_cmd = "cmd.exe no tiene una forma fiable de emitir esta señal -- usa Power
 body_generic = "Shell no reconocido, así que no hay un fragmento listo que sugerir. OSC 7 es la secuencia que el shell emite en cada cambio de directorio -- consulta docs/reference/integracao-de-shell.md en el repositorio de Porecatu para configurar el tuyo."
 
 [access]
-app_menu_button = "Menú de la aplicación"
+task_manager_button = "Administrador de tareas"
+task_manager = "Administrador de tareas"
+task_manager_list = "Lista de procesos"
+task_manager_meter = "{name}, {value}"
+task_manager_tab_row = "{title}, CPU {cpu}, memoria {memory}, disco {disk}"
+task_manager_row = "{name}, PID {pid}, CPU {cpu}, memoria {memory}, disco {disk}"
 new_tab_ungrouped = "Nueva pestaña fuera de un grupo"
 new_tab_in_group = "Nueva pestaña en este grupo"
 sessions_button = "Sesiones guardadas"
@@ -688,6 +732,13 @@ body = "\"{family}\" no está instalada; se usa una fuente monoespaciada del sis
 [notice.git_interval_adjusted]
 title = "Intervalo de sincronización ajustado"
 body = "\"{key}\" está por debajo del mínimo de {floor}s; se usan {floor}s."
+
+[notice.task_manager_history_adjusted]
+title = "Período del administrador de tareas ajustado"
+body = "\"history_seconds = {value}\" está fuera del rango de 30 a 600; se usan {used} segundos."
+
+[notice.task_manager_background_save_failed]
+title = "No se pudo guardar la supervisión en segundo plano"
 
 [notice.git_missing]
 title = "Git no encontrado"

@@ -570,6 +570,31 @@ registry! {
         empty_list(),
         name_placeholder(),
     }
+    task_manager {
+        chart_cpu(),
+        chart_memory(),
+        chart_disk(),
+        column_name(),
+        column_pid(),
+        column_cpu(),
+        column_memory(),
+        column_disk(),
+        note_not_started(),
+        note_ssh(),
+        note_exited(),
+        note_waiting(),
+        menu_go_to_tab(),
+        menu_end_process(),
+        unit_b(),
+        unit_kb(),
+        unit_mb(),
+        unit_gb(),
+        per_second(value),
+        percent(value),
+        decimal_separator(),
+        no_value(),
+        background_monitoring(),
+    }
     settings {
         window_title(),
         group {
@@ -582,6 +607,7 @@ registry! {
             project(),
             git(),
             panes(),
+            task_manager(),
             shortcuts(),
         },
         section {
@@ -606,6 +632,7 @@ registry! {
             project_file(),
             git_remote(),
             panes_size(),
+            task_manager_charts(),
         },
         option {
             language_label(),
@@ -729,6 +756,10 @@ registry! {
             min_columns_description(),
             min_rows_label(),
             min_rows_description(),
+            history_seconds_label(),
+            history_seconds_description(),
+            background_monitoring_label(),
+            background_monitoring_description(),
         },
         button {
             open_file(),
@@ -904,6 +935,7 @@ registry! {
         profile_new_tab(n),
         ssh_reconnect(),
         tab_toggle_pin(),
+        task_manager_toggle(),
     }
     profile_menu {
         new_group(),
@@ -925,6 +957,7 @@ registry! {
         settings(),
         search(),
         app(),
+        task_manager(),
     }
     search_bar {
         invalid_pattern(),
@@ -972,6 +1005,12 @@ registry! {
             title(),
             body(plural),
             confirm(plural),
+        },
+        end_process {
+            title(),
+            body_alone(name, pid),
+            body(plural, name, pid),
+            confirm(),
         },
         host_key {
             title(host),
@@ -1057,7 +1096,12 @@ registry! {
         },
     }
     access {
-        app_menu_button(),
+        task_manager_button(),
+        task_manager(),
+        task_manager_list(),
+        task_manager_meter(name, value),
+        task_manager_tab_row(title, cpu, memory, disk),
+        task_manager_row(name, pid, cpu, memory, disk),
         new_tab_ungrouped(),
         new_tab_in_group(),
         sessions_button(),
@@ -1275,6 +1319,13 @@ registry! {
         git_interval_adjusted {
             title(),
             body(key, floor),
+        },
+        task_manager_history_adjusted {
+            title(),
+            body(value, used),
+        },
+        task_manager_background_save_failed {
+            title(),
         },
         git_missing {
             title(),

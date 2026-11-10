@@ -307,6 +307,16 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 
 ---
 
+## `task_manager.*` — gerenciador de tarefas
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `task_manager.toggle` | Alterna a janela entre o terminal e o gerenciador de tarefas ([PRD-024](../prd/prd-024-gerenciador-de-tarefas.md)). **Sem atalho padrão** (`—`) — precedente de `group.new_tab`. Com o botão do app oculto, é o único caminho | [PRD-024](../prd/prd-024-gerenciador-de-tarefas.md) RF-24.1, [ADR-0095](../adr/0095-gerenciador-de-tarefas-modo-da-janela.md) §8 | fora de fase | |
+
+> **Estado.** Existe no catálogo e no despacho, **sem efeito por enquanto**: a abertura do modo vem numa etapa seguinte da implementação do PRD-024. Mira a janela, não o painel (`targets_pane() == false`). As famílias `search.*`, `pane.*`, `scrollback.*`, `clipboard.*`, `selection.*`, `font.*` e `ssh.reconnect` **miram o painel** (`Action::targets_pane`) e não fazem nada com o gerenciador aberto ([RF-24.5](../prd/prd-024-gerenciador-de-tarefas.md)).
+
+---
+
 ## `[v2]` — reservadas, não implementar
 
 | Ação | O que faz | Origem |

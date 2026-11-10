@@ -139,3 +139,10 @@ panel_background = "#eff1f5"
 row_background = "#dce0e8"
 chip_background = "#eff1f5"
 footer_separator = "#ccd0da"
+
+[task_manager]
+cpu = "#1e66f5"             # azul do terminal claro
+memory = "#ea76cb"          # magenta do terminal claro
+disk = "#40a02b"            # verde do terminal claro
+grid = "#dce0e8"            # borda da barra de abas
+chart_border = "#ccd0da"    # borda de grupos

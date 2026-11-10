@@ -27,13 +27,14 @@ mod project_file;
 mod session;
 mod shell;
 mod ssh_import;
+mod task_manager;
 mod terminal;
 mod theme;
 
 pub use appearance::{
     Appearance, CloseButtonVisibility, ContextMenu, Dialog, GroupEditor, GroupPaletteEntry, Groups,
-    MoveToGroup, Notices, StatusBar, Tabs, TabsColors, TabsOverflow, TabsRename, TerminalFrame,
-    Tooltip, Window, WindowControls,
+    MoveToGroup, Notices, StatusBar, Tabs, TabsColors, TabsOverflow, TabsRename,
+    TaskManagerAppearance, TerminalFrame, Tooltip, Window, WindowControls,
 };
 pub use color::{Color, ColorParseError};
 pub use edit::{ConfigDocument, Edit, EditError, EditValue, KeyPath, SaveOutcome};
@@ -60,6 +61,7 @@ pub use ssh_import::{
     SshImportInvalid, SshImportStatus, SshImportUnsupported, default_ssh_config_path,
     local_user_name, read_ssh_config,
 };
+pub use task_manager::TaskManager;
 pub use terminal::{
     Acrylic, AcrylicBlock, AcrylicState, AnsiPalette, BackgroundImage, BackgroundImageMode,
     Clipboard, Colors as TerminalColors, Cursor, CursorShape, DEFAULT_BLUR, Font, MAX_BLUR,
@@ -69,9 +71,9 @@ pub use terminal::{
 pub use theme::{
     BUILT_IN_THEME_FILES, DEFAULT_LIGHT_THEME, DEFAULT_THEME, THEME_FILE_PREFIX, Theme,
     ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeFileProblem, ThemeGroupEditor,
-    ThemeGroups, ThemeNotices, ThemeSettings, ThemeStatusBar, ThemeTabs, ThemeTerminal,
-    ThemeTooltip, ThemeWindow, ThemeWindowControls, apply as apply_theme, is_color_key,
-    load_theme_files, parse_theme, theme_name_from_file,
+    ThemeGroups, ThemeNotices, ThemeSettings, ThemeStatusBar, ThemeTabs, ThemeTaskManager,
+    ThemeTerminal, ThemeTooltip, ThemeWindow, ThemeWindowControls, apply as apply_theme,
+    is_color_key, load_theme_files, parse_theme, theme_name_from_file,
 };
 
 use std::path::Path;
@@ -96,6 +98,7 @@ pub struct Config {
     pub project_file: ProjectFile,
     pub git: Git,
     pub panes: Panes,
+    pub task_manager: TaskManager,
 }
 
 impl Default for Config {
@@ -112,6 +115,7 @@ impl Default for Config {
             project_file: ProjectFile::default(),
             git: Git::default(),
             panes: Panes::default(),
+            task_manager: TaskManager::default(),
         }
     }
 }

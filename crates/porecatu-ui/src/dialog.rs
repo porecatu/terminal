@@ -89,6 +89,17 @@ pub enum DialogAction {
     /// "Conectar" do aviso de um painel SSH restaurado que espera o gesto
     /// (RF-20.33): o mesmo que o `Enter` ou o clique no painel.
     ConnectDormant(TabId, PaneId),
+    /// RF-24.21 (ADR-0095 §7): "Encerrar processo" do menu da lista do
+    /// gerenciador de tarefas. Carrega a identidade do processo -- o PID e o
+    /// `start_time` da linha escolhida, não só o PID --, para a thread de
+    /// medição recusar um PID reaproveitado entre a amostra e a confirmação
+    /// (ADR-0093 §7).
+    EndProcess {
+        tab: TabId,
+        pane: PaneId,
+        pid: u32,
+        start_time: u64,
+    },
 }
 
 impl DialogAction {
@@ -109,7 +120,8 @@ impl DialogAction {
             | Self::HostKey(tab, _, _)
             | Self::Secret(tab, _, _)
             | Self::ReconnectNow(tab, _)
-            | Self::ConnectDormant(tab, _) => retarget(tab),
+            | Self::ConnectDormant(tab, _)
+            | Self::EndProcess { tab, .. } => retarget(tab),
             Self::CloseWindow
             | Self::CloseGroup(_)
             | Self::OverwriteNamedSession(_)
@@ -214,6 +226,16 @@ pub struct HostKeyFacts {
     pub known_types: Vec<String>,
     /// Linhas do `known_hosts` que o leitor não entendeu (ADR-0074 §2).
     pub skipped_lines: usize,
+}
+
+/// Which process the "End process" dialog is about: the pane it lives in and
+/// the identity of the row the user picked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EndProcessTarget {
+    pub tab: TabId,
+    pub pane: PaneId,
+    pub pid: u32,
+    pub start_time: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -332,6 +354,36 @@ impl ConfirmDialog {
             });
         }
         dialog
+    }
+
+    /// RF-24.21 (ADR-0095 §7): encerrar um processo da lista do gerenciador.
+    /// `name` é o nome do processo, que vem do sistema e entra na frase como
+    /// chegou; `descendants` é a contagem da última amostra (zero escolhe a
+    /// frase sem filhos). O confirmar é o destrutivo de sempre, com o foco
+    /// inicial no cancelar.
+    pub(crate) fn end_process(
+        catalog: &Catalog,
+        name: &str,
+        descendants: usize,
+        target: EndProcessTarget,
+    ) -> Self {
+        let body = if descendants == 0 {
+            msg::dialog::end_process::body_alone(catalog, name, target.pid)
+        } else {
+            msg::dialog::end_process::body(catalog, descendants, name, target.pid)
+        };
+        Self::new(
+            msg::dialog::end_process::title(catalog),
+            body,
+            msg::dialog::end_process::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            DialogAction::EndProcess {
+                tab: target.tab,
+                pane: target.pane,
+                pid: target.pid,
+                start_time: target.start_time,
+            },
+        )
     }
 
     /// RF-6.10: fechar um painel (não o último da aba) com processo ativo.
@@ -942,6 +994,12 @@ mod tests {
                 DialogAction::Secret(new, pane, prompt),
                 DialogAction::ReconnectNow(new, pane),
                 DialogAction::ConnectDormant(new, pane),
+                DialogAction::EndProcess {
+                    tab: new,
+                    pane,
+                    pid: 7,
+                    start_time: 11,
+                },
             ]
         };
         let new = TabId::new(90);
@@ -1045,6 +1103,51 @@ mod tests {
             with_discard.action,
             DialogAction::ReconnectNow(TabId::new(1), pane)
         );
+    }
+
+    #[test]
+    fn end_process_dialog_carries_the_identity_and_counts_the_children() {
+        let target = EndProcessTarget {
+            tab: TabId::new(2),
+            pane: PaneId::new(1),
+            pid: 4242,
+            start_time: 99,
+        };
+        let en = test_support::en_us();
+        let alone = ConfirmDialog::end_process(&en, "node.exe", 0, target);
+        assert_eq!(alone.title, "End process?");
+        assert_eq!(alone.body, "node.exe (PID 4242) will be ended.");
+        assert_eq!(alone.confirm_label, "End process");
+        assert_eq!(alone.cancel_label, "Cancel");
+        assert_eq!(
+            alone.action,
+            DialogAction::EndProcess {
+                tab: TabId::new(2),
+                pane: PaneId::new(1),
+                pid: 4242,
+                start_time: 99,
+            }
+        );
+        assert_eq!(alone.focused(), DialogButton::Cancel, "never on the kill");
+
+        let one = ConfirmDialog::end_process(&en, "node.exe", 1, target);
+        assert_eq!(
+            one.body,
+            "node.exe (PID 4242) and 1 child process will be ended."
+        );
+        let many = ConfirmDialog::end_process(&en, "node.exe", 3, target);
+        assert_eq!(
+            many.body,
+            "node.exe (PID 4242) and 3 child processes will be ended."
+        );
+
+        let pt = test_support::pt_br();
+        let many = ConfirmDialog::end_process(&pt, "node.exe", 3, target);
+        assert_eq!(
+            many.body,
+            "node.exe (PID 4242) e 3 processos filhos serão encerrados."
+        );
+        assert_eq!(many.title, "Encerrar processo?");
     }
 
     #[test]

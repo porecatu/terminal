@@ -21,7 +21,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use std::{fmt, io};
 
-use porecatu_pty::PtyError;
+use porecatu_pty::{ProcessGroup, PtyError};
 
 use crate::backend::{Backend, BackendSpec, DormantBackend, Finish, Inspect, Liveness, PtyBackend};
 use crate::engine::{TermEngine, TermSize};
@@ -406,6 +406,15 @@ impl Terminal {
     /// Muda a cada `reattach`.
     pub fn connection_id(&self) -> Option<porecatu_ssh::ConnectionId> {
         self.session.inspect.connection()
+    }
+
+    /// O grupo de processos locais desta sessão, para o gerenciador de
+    /// tarefas medir e encerrar processos (ADR-0093 §3). `None` num backend
+    /// sem processo local (SSH, aba dormente) e quando o PTY não conseguiu
+    /// criar o grupo. Uma cópia barata: o Job é um `Arc` por dentro, e a
+    /// cópia não decide o destino da árvore (quem decide é o backend).
+    pub fn process_group(&self) -> Option<ProcessGroup> {
+        self.session.inspect.process_group()
     }
 
     /// RF-3.10/ADR-0038, segundo degrau da precedência de `cwd` na

@@ -1,6 +1,6 @@
 # ADR-0033 — Encerramento robusto de árvore de processo (Windows)
 
-**Status:** Aceito
+**Status:** Aceito · §3 revisto por [ADR-0093](0093-medicao-de-processos-do-gerenciador.md) (**parcial**: a varredura ganha uma terceira origem, a amostragem do gerenciador de tarefas; `descendants_of` nas três plataformas)
 **Data:** 2026-09-03
 **Relacionados:** [ADR-0004](0004-pty-cross-platform.md), [ADR-0007](0007-modelo-de-threading.md), [ADR-0017](0017-ciclo-de-vida-da-aba.md), [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md)
 
@@ -162,6 +162,8 @@ primeiro plano" (isso continua sendo `TermModes`, ADR-0017 seção 3). Alvo
 varredura que o ADR-0005/ADR-0008/ADR-0017 rejeitaram** para fins de
 *detecção* de processo em primeiro plano — é limpeza e contagem
 determinísticas, disparadas por evento, sobre uma raiz já conhecida.
+
+> **Revisto pelo [ADR-0093](0093-medicao-de-processos-do-gerenciador.md) §2 — medição do gerenciador de tarefas.** A varredura deixa de ser "nunca contínua": com o gerenciador de tarefas aberto ([PRD-024](../prd/prd-024-gerenciador-de-tarefas.md)), uma thread a repete uma vez por segundo. A união das duas fontes vira uma função só, `ProcessGroup::members(&System)`, usada pela contagem, pelo fechamento e pelo gerenciador, de modo que o critério de pertença continua um só. `descendants_of` passa a compilar nas três plataformas. `process_count` e `kill_tree` fora do Windows **não mudam** (a dívida Unix continua aberta), e a rejeição feita pelo ADR-0005/ADR-0008/ADR-0017, de varrer para *detectar o primeiro plano*, continua valendo: o gerenciador mostra a árvore, mas não decide quem está em primeiro plano.
 
 Dependência nova: `sysinfo` (crate, licença MIT, feature mínima `system`,
 sem os padrões de rede/disco/usuário que o crate também oferece),

@@ -47,6 +47,10 @@ use crate::settings::{
 };
 use crate::status_bar::{SegmentRole, StatusBarLayout};
 use crate::tab_bar::{self, Indicator, TabBarStyle};
+use crate::task_manager::chart::Metric;
+use crate::task_manager::menu::TaskMenuItem;
+use crate::task_manager::rows::{Row, RowKind};
+use crate::task_manager::{HistoryPoint, RowKey, format as tm_format};
 use crate::terminal_menu::{TerminalContextMenu, terminal_menu_items};
 use crate::warning::{Severity, WarningStack};
 
@@ -95,8 +99,23 @@ const DIALOG_DISCARD_ID: NodeId = NodeId(104);
 /// O campo de senha e a caixa "Lembrar" do diálogo de segredo (RF-20.35).
 const DIALOG_SECRET_FIELD_ID: NodeId = NodeId(105);
 const DIALOG_SECRET_REMEMBER_ID: NodeId = NodeId(106);
-/// ADR-0079: botão de menu do app, à esquerda da trilha.
-const APP_MENU_BUTTON_ID: NodeId = NodeId(107);
+/// ADR-0079/ADR-0095 §10: o botão do app, à esquerda da trilha, que alterna o
+/// gerenciador de tarefas.
+const TASK_MANAGER_BUTTON_ID: NodeId = NodeId(107);
+/// ADR-0095 §10: o grupo do gerenciador aberto, a lista dele e os três
+/// medidores (um id por gráfico, em sequência).
+const TASK_MANAGER_ID: NodeId = NodeId(108);
+const TASK_MANAGER_LIST_ID: NodeId = NodeId(109);
+const TASK_MANAGER_METER_BASE: u64 = 110;
+/// ADR-0098 §6: a alternância do rodapé da lista (monitoramento em segundo
+/// plano), logo depois dos três medidores (110 a 112).
+const TASK_MANAGER_BACKGROUND_ID: NodeId = NodeId(113);
+/// Linhas da lista do gerenciador: uma faixa de 2^40 ids, acima de tudo o que
+/// as outras faixas usam. `PID` e instante de início não cabem num múltiplo
+/// fixo como `TAB_STRIDE`, então o id sai de um hash da `RowKey` (ver
+/// [`task_row_ids`]).
+const TASK_ROW_BASE: u64 = 1 << 40;
+const TASK_ROW_MASK: u64 = TASK_ROW_BASE - 1;
 
 const FIRST_DYNAMIC_ID: u64 = 1_000;
 const TAB_STRIDE: u64 = 10;
@@ -181,6 +200,241 @@ fn color_name(catalog: &Catalog, color: GroupColor) -> String {
     }
 }
 
+/// O que a árvore sabe do gerenciador de tarefas aberto (ADR-0095 §10): a
+/// lista **inteira**, a seleção, o último ponto dos gráficos e o menu da linha,
+/// se aberto. Montado por quem tem a janela; aqui só se projeta.
+pub(crate) struct TaskManagerAccess<'a> {
+    pub rows: &'a [Row],
+    pub selection: Option<RowKey>,
+    pub latest: Option<&'a HistoryPoint>,
+    /// A linha em destaque do menu e os itens dele, quando aberto.
+    pub menu: Option<(usize, Vec<TaskMenuItem>)>,
+    /// `[task_manager] background_monitoring` do `Config` corrente: o estado
+    /// da alternância do rodapé (ADR-0098 §6).
+    pub background_monitoring: bool,
+}
+
+/// O id de nó de cada linha, na ordem de `rows`: estável por `RowKey` (o mesmo
+/// processo tem o mesmo id a cada árvore, e o leitor de tela não perde o lugar
+/// quando a lista é refeita). Uma colisão do hash -- praticamente impossível
+/// em 2^40 -- anda para o id seguinte, de forma determinística para a mesma
+/// lista.
+pub(crate) fn task_row_ids(rows: &[Row]) -> Vec<NodeId> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let mut taken = std::collections::HashSet::with_capacity(rows.len());
+    rows.iter()
+        .map(|row| {
+            let mut hasher = DefaultHasher::new();
+            row.key.hash(&mut hasher);
+            let mut slot = hasher.finish() & TASK_ROW_MASK;
+            while !taken.insert(slot) {
+                slot = (slot + 1) & TASK_ROW_MASK;
+            }
+            NodeId(TASK_ROW_BASE + slot)
+        })
+        .collect()
+}
+
+/// O que um pedido de ação do leitor de tela pede ao gerenciador de tarefas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskAccessAction {
+    /// `Click` no botão do app: alterna o gerenciador, como o clique.
+    Toggle,
+    /// `Focus` numa linha: seleciona-a, como o teclado.
+    SelectRow(RowKey),
+    /// `ShowContextMenu` numa linha: seleciona-a e abre o menu dela, pelo mesmo
+    /// caminho da tecla de menu.
+    OpenRowMenu(RowKey),
+    /// `Click` na alternância do rodapé: grava o `background_monitoring`
+    /// invertido, pelo caminho do clique (ADR-0098 §4, §6).
+    ToggleBackground,
+}
+
+/// ADR-0095 §10: traduz uma ação de acessibilidade (`target`, `action`) no que
+/// o gerenciador faz. Pura: `rows` é a lista de agora (vazia com o gerenciador
+/// fechado, e então nenhuma linha casa). Qualquer outra combinação é `None`.
+pub(crate) fn task_manager_access_route(
+    target: NodeId,
+    action: accesskit::Action,
+    rows: &[Row],
+) -> Option<TaskAccessAction> {
+    if target == TASK_MANAGER_BUTTON_ID {
+        return (action == accesskit::Action::Click).then_some(TaskAccessAction::Toggle);
+    }
+    if target == TASK_MANAGER_BACKGROUND_ID {
+        return (action == accesskit::Action::Click).then_some(TaskAccessAction::ToggleBackground);
+    }
+    let wants_menu = match action {
+        accesskit::Action::Focus => false,
+        accesskit::Action::ShowContextMenu => true,
+        _ => return None,
+    };
+    let index = task_row_ids(rows).iter().position(|id| *id == target)?;
+    let key = rows[index].key;
+    Some(if wants_menu {
+        TaskAccessAction::OpenRowMenu(key)
+    } else {
+        TaskAccessAction::SelectRow(key)
+    })
+}
+
+/// The three charts' current values as the screen reader reads them
+/// ("CPU, 12%"): the same formatting as the chart headers. No point yet (the
+/// first sample has not arrived): the catalog's "no value" dash.
+fn task_manager_meters(catalog: &Catalog, latest: Option<&HistoryPoint>) -> [(Metric, String); 3] {
+    let dash = || msg::task_manager::no_value(catalog);
+    [
+        (
+            Metric::Cpu,
+            latest.map_or_else(dash, |p| tm_format::percent(catalog, p.cpu)),
+        ),
+        (
+            Metric::Memory,
+            latest.map_or_else(dash, |p| tm_format::bytes(catalog, p.memory)),
+        ),
+        (
+            Metric::Disk,
+            latest.map_or_else(dash, |p| tm_format::rate(catalog, p.disk_per_sec)),
+        ),
+    ]
+}
+
+/// The spoken text of a list row (ADR-0095 §10): "name, PID, CPU, memory,
+/// disk" for a process, the title and the sum for a tab, the sentence for a
+/// note. Also its level: ARIA's `aria-level` is 1-based, so the tab row is 1
+/// and a process or note is `depth + 1`.
+fn task_row_text_and_level(catalog: &Catalog, row: &Row) -> (String, usize) {
+    match &row.kind {
+        RowKind::Tab { title, totals, .. } => (
+            msg::access::task_manager_tab_row(
+                catalog,
+                title,
+                tm_format::percent(catalog, totals.cpu),
+                tm_format::bytes(catalog, totals.memory),
+                tm_format::rate(catalog, totals.disk_per_sec),
+            ),
+            1,
+        ),
+        RowKind::Process { stat, depth, .. } => (
+            msg::access::task_manager_row(
+                catalog,
+                &stat.name,
+                stat.pid,
+                tm_format::percent(catalog, stat.cpu),
+                tm_format::bytes(catalog, stat.memory),
+                tm_format::rate(catalog, stat.disk_per_sec),
+            ),
+            depth + 1,
+        ),
+        RowKind::Note { kind, depth } => (tm_format::note_text(catalog, *kind), depth + 1),
+    }
+}
+
+/// ADR-0095 §10: the task manager group that takes the panes' place in the
+/// tree: the three meters and the list with **every** row (not only the ones
+/// in view), each with its level, expanded, selected and the text that reads
+/// the columns. Returns the node a screen reader should focus: the selected
+/// row, if any.
+fn build_task_manager(
+    access: &TaskManagerAccess<'_>,
+    catalog: &Catalog,
+    nodes: &mut Vec<(NodeId, Node)>,
+    root_children: &mut Vec<NodeId>,
+) -> Option<NodeId> {
+    let mut children = Vec::new();
+    for (index, (metric, value)) in task_manager_meters(catalog, access.latest)
+        .into_iter()
+        .enumerate()
+    {
+        let id = NodeId(TASK_MANAGER_METER_BASE + index as u64);
+        nodes.push((
+            id,
+            leaf(
+                Role::Meter,
+                msg::access::task_manager_meter(
+                    catalog,
+                    tm_format::chart_title(catalog, metric),
+                    value,
+                ),
+            ),
+        ));
+        children.push(id);
+    }
+
+    let ids = task_row_ids(access.rows);
+    let mut focus = None;
+    for (row, id) in access.rows.iter().zip(&ids) {
+        let (text, level) = task_row_text_and_level(catalog, row);
+        let mut node = leaf(Role::Row, text);
+        node.set_level(level);
+        node.set_expanded(true);
+        let selected = access.selection == Some(row.key);
+        node.set_selected(selected);
+        node.add_action(accesskit::Action::Focus);
+        node.add_action(accesskit::Action::ShowContextMenu);
+        if selected {
+            focus = Some(*id);
+        }
+        nodes.push((*id, node));
+    }
+    let mut list = container(Role::TreeGrid, ids);
+    list.set_label(msg::access::task_manager_list(catalog));
+    nodes.push((TASK_MANAGER_LIST_ID, list));
+    children.push(TASK_MANAGER_LIST_ID);
+
+    // ADR-0098 §6: a alternância do rodapé, irmã dos gráficos e da lista, com
+    // o nome do rótulo e o estado do `Config`.
+    let mut background = leaf(
+        Role::Switch,
+        msg::task_manager::background_monitoring(catalog),
+    );
+    background.set_toggled(if access.background_monitoring {
+        accesskit::Toggled::True
+    } else {
+        accesskit::Toggled::False
+    });
+    background.add_action(accesskit::Action::Click);
+    nodes.push((TASK_MANAGER_BACKGROUND_ID, background));
+    children.push(TASK_MANAGER_BACKGROUND_ID);
+
+    let mut group = container(Role::Group, children);
+    group.set_label(msg::access::task_manager(catalog));
+    nodes.push((TASK_MANAGER_ID, group));
+    root_children.push(TASK_MANAGER_ID);
+    focus
+}
+
+/// The row menu of the task manager, like the other context menus: one
+/// `MenuItem` per item (a disabled one stays, announced as disabled) and the
+/// highlighted item as the focus.
+fn build_task_menu(
+    highlighted: usize,
+    items: &[TaskMenuItem],
+    catalog: &Catalog,
+    nodes: &mut Vec<(NodeId, Node)>,
+    root_children: &mut Vec<NodeId>,
+) -> NodeId {
+    let mut children = Vec::new();
+    let mut focus = MENU_ID;
+    for (index, item) in items.iter().enumerate() {
+        let id = menu_item_id(index);
+        let mut node = Node::new(Role::MenuItem);
+        node.set_label(item.action.label(catalog));
+        if !item.enabled {
+            node.set_disabled();
+        }
+        nodes.push((id, node));
+        children.push(id);
+        if index == highlighted {
+            focus = id;
+        }
+    }
+    nodes.push((MENU_ID, container(Role::Menu, children)));
+    root_children.push(MENU_ID);
+    focus
+}
+
 fn leaf(role: Role, label: impl Into<String>) -> Node {
     let mut node = Node::new(role);
     node.set_label(label.into());
@@ -214,6 +468,7 @@ pub(crate) fn build_tree(
     search: &Option<SearchBarState>,
     status_bar: Option<&StatusBarLayout>,
     active_pane_order: Option<&[PaneId]>,
+    task_manager: Option<&TaskManagerAccess<'_>>,
     style: &TabBarStyle,
     catalog: &Catalog,
     language: &str,
@@ -228,17 +483,26 @@ pub(crate) fn build_tree(
     // Primeiro na ordem de leitura, como é o primeiro da barra na tela.
     // Oculto (`show_app_menu_button = false`): sem nó.
     if style.show_app_menu_button {
-        nodes.push((
-            APP_MENU_BUTTON_ID,
-            leaf(Role::Button, msg::access::app_menu_button(catalog)),
-        ));
-        root_children.push(APP_MENU_BUTTON_ID);
+        // ADR-0095 §10: the button toggles the task manager, so it is a
+        // toggle button: pressed while this window shows the manager.
+        let mut button = leaf(Role::Button, msg::access::task_manager_button(catalog));
+        button.set_toggled(task_manager.is_some().into());
+        button.add_action(accesskit::Action::Click);
+        nodes.push((TASK_MANAGER_BUTTON_ID, button));
+        root_children.push(TASK_MANAGER_BUTTON_ID);
     }
 
+    // With the manager open the panes are not on screen, so they leave the
+    // tree (ADR-0095 §10).
+    let pane_order = if task_manager.is_some() {
+        None
+    } else {
+        active_pane_order
+    };
     build_tab_list(
         workspace,
         &layout,
-        active_pane_order,
+        pane_order,
         catalog,
         &mut nodes,
         &mut root_children,
@@ -286,6 +550,12 @@ pub(crate) fn build_tree(
 
     let mut focus = ROOT_ID;
 
+    if let Some(access) = task_manager
+        && let Some(row) = build_task_manager(access, catalog, &mut nodes, &mut root_children)
+    {
+        focus = row;
+    }
+
     if let Some(state) = search {
         build_search_bar(state, catalog, &mut nodes, &mut root_children);
     }
@@ -319,6 +589,8 @@ pub(crate) fn build_tree(
         focus = build_move_to_window(p, catalog, &mut nodes, &mut root_children);
     } else if let Some(p) = session_picker {
         focus = build_session_picker(p, catalog, &mut nodes, &mut root_children);
+    } else if let Some((highlighted, items)) = task_manager.and_then(|tm| tm.menu.as_ref()) {
+        focus = build_task_menu(*highlighted, items, catalog, &mut nodes, &mut root_children);
     }
 
     let mut root = Node::new(Role::Window);
@@ -1568,11 +1840,401 @@ mod tests {
             &None,
             None,
             None,
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             language,
             &mut measurer(),
         )
+    }
+
+    // ---- ADR-0095 §10: gerenciador de tarefas
+
+    fn proc_row(tab: TabId, pid: u32, depth: usize, is_root: bool) -> Row {
+        Row {
+            key: RowKey::Process {
+                tab,
+                pane: PaneId::new(0),
+                pid,
+                start_time: 7,
+            },
+            kind: RowKind::Process {
+                stat: porecatu_term::ProcessStat {
+                    pid,
+                    parent: None,
+                    start_time: 7,
+                    name: format!("proc{pid}"),
+                    cpu: Some(0.25),
+                    memory: 2048,
+                    disk_per_sec: 0.0,
+                },
+                depth,
+                is_root,
+                descendants: 0,
+            },
+        }
+    }
+
+    /// A tab row, a root, a child (depth 2) and a note: the shapes of the list.
+    fn task_rows(tab: TabId) -> Vec<Row> {
+        vec![
+            Row {
+                key: RowKey::Tab(tab),
+                kind: RowKind::Tab {
+                    tab,
+                    title: "zsh".to_owned(),
+                    group_color: None,
+                    totals: crate::task_manager::Totals {
+                        cpu: Some(0.5),
+                        memory: 4096,
+                        disk_per_sec: 0.0,
+                    },
+                },
+            },
+            proc_row(tab, 10, 1, true),
+            proc_row(tab, 11, 2, false),
+            Row {
+                key: RowKey::Note(tab, PaneId::new(1)),
+                kind: RowKind::Note {
+                    kind: crate::task_manager::rows::NoteKind::Ssh,
+                    depth: 1,
+                },
+            },
+        ]
+    }
+
+    fn build_with_manager(
+        ws: &Workspace,
+        order: Option<&[PaneId]>,
+        access: Option<&TaskManagerAccess<'_>>,
+    ) -> TreeUpdate {
+        build_tree(
+            ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            &None,
+            &None,
+            None,
+            order,
+            access,
+            &TabBarStyle::DEFAULT,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
+            &mut measurer(),
+        )
+    }
+
+    fn nodes_with_role(update: &TreeUpdate, role: Role) -> Vec<NodeId> {
+        update
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.role() == role)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    #[test]
+    fn the_app_button_is_the_task_manager_toggle_in_both_states() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+
+        let closed = build(&ws);
+        let button = node(&closed, TASK_MANAGER_BUTTON_ID);
+        assert_eq!(button.role(), Role::Button);
+        assert_eq!(button.label(), Some("Gerenciador de tarefas"));
+        assert_eq!(button.toggled(), Some(accesskit::Toggled::False));
+        assert!(button.supports_action(accesskit::Action::Click));
+
+        let access = TaskManagerAccess {
+            rows: &[],
+            selection: None,
+            latest: None,
+            menu: None,
+            background_monitoring: false,
+        };
+        let open = build_with_manager(&ws, None, Some(&access));
+        let button = node(&open, TASK_MANAGER_BUTTON_ID);
+        assert_eq!(button.label(), Some("Gerenciador de tarefas"));
+        assert_eq!(button.toggled(), Some(accesskit::Toggled::True));
+    }
+
+    #[test]
+    fn a_hidden_app_button_has_no_task_manager_node() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let style = TabBarStyle {
+            show_app_menu_button: false,
+            ..TabBarStyle::DEFAULT
+        };
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            &None,
+            &None,
+            None,
+            None,
+            None,
+            &style,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
+            &mut measurer(),
+        );
+        assert!(
+            !update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == TASK_MANAGER_BUTTON_ID)
+        );
+    }
+
+    #[test]
+    fn with_the_manager_open_the_panes_leave_and_the_meters_and_the_list_enter() {
+        use porecatu_core::SplitAxis;
+
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let left = ws.tab(tab_id).unwrap().panes().focused_id();
+        let right = ws
+            .tab_mut(tab_id)
+            .unwrap()
+            .panes_mut()
+            .split(left, SplitAxis::Vertical, "bash", None)
+            .unwrap();
+        let order = [left, right];
+
+        // Closed: the panes are children of the tab node, no manager group.
+        let closed = build_with_manager(&ws, Some(&order), None);
+        assert!(
+            closed
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == pane_node_id(tab_id, left))
+        );
+        assert!(!closed.nodes.iter().any(|(id, _)| *id == TASK_MANAGER_ID));
+
+        let rows = task_rows(tab_id);
+        let point = HistoryPoint {
+            at: Instant::now(),
+            cpu: Some(0.12),
+            memory: 1_048_576,
+            disk_per_sec: 2048.0,
+        };
+        let access = TaskManagerAccess {
+            rows: &rows,
+            selection: Some(rows[2].key),
+            latest: Some(&point),
+            menu: None,
+            background_monitoring: false,
+        };
+        let open = build_with_manager(&ws, Some(&order), Some(&access));
+
+        for pane in order {
+            assert!(
+                !open
+                    .nodes
+                    .iter()
+                    .any(|(id, _)| *id == pane_node_id(tab_id, pane)),
+                "no pane node with the manager open"
+            );
+        }
+        assert!(node(&open, ROOT_ID).children().contains(&TASK_MANAGER_ID));
+        let group = node(&open, TASK_MANAGER_ID);
+        assert_eq!(group.label(), Some("Gerenciador de tarefas"));
+
+        // Three meters, with the name and the current value as text.
+        let meters = nodes_with_role(&open, Role::Meter);
+        assert_eq!(meters.len(), 3);
+        let labels: Vec<&str> = meters
+            .iter()
+            .map(|id| node(&open, *id).label().unwrap())
+            .collect();
+        assert_eq!(labels[0], "CPU, 12%");
+        assert!(labels[1].starts_with("Memória, 1"), "{}", labels[1]);
+        assert!(labels[2].starts_with("Disco, "), "{}", labels[2]);
+
+        // The list: one row per list row, in order, with the level.
+        let grid = node(&open, TASK_MANAGER_LIST_ID);
+        assert_eq!(grid.role(), Role::TreeGrid);
+        assert_eq!(grid.children().len(), rows.len());
+        let row_nodes: Vec<&Node> = grid.children().iter().map(|id| node(&open, *id)).collect();
+        assert!(row_nodes.iter().all(|n| n.role() == Role::Row));
+        let levels: Vec<Option<usize>> = row_nodes.iter().map(|n| n.level()).collect();
+        assert_eq!(levels, [Some(1), Some(2), Some(3), Some(2)]);
+        assert!(row_nodes.iter().all(|n| n.is_expanded() == Some(true)));
+        let selected: Vec<bool> = row_nodes
+            .iter()
+            .map(|n| n.is_selected() == Some(true))
+            .collect();
+        assert_eq!(selected, [false, false, true, false]);
+        assert_eq!(
+            row_nodes[0].label(),
+            Some("zsh, CPU 50%, memória 4,0 KB, disco 0 B/s")
+        );
+        assert_eq!(
+            row_nodes[1].label(),
+            Some("proc10, PID 10, CPU 25%, memória 2,0 KB, disco 0 B/s")
+        );
+        assert!(row_nodes[3].label().unwrap().contains("remotos"));
+        // The selected row is the focus.
+        assert_eq!(open.focus, grid.children()[2]);
+    }
+
+    #[test]
+    fn the_list_holds_every_row_not_only_the_ones_in_view() {
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let mut rows = vec![task_rows(tab_id)[0].clone()];
+        for pid in 100..400 {
+            rows.push(proc_row(tab_id, pid, 1, false));
+        }
+        let access = TaskManagerAccess {
+            rows: &rows,
+            selection: None,
+            latest: None,
+            menu: None,
+            background_monitoring: false,
+        };
+        let update = build_with_manager(&ws, None, Some(&access));
+        assert_eq!(nodes_with_role(&update, Role::Row).len(), rows.len());
+        // Ids are unique: a duplicated one would silently drop a row.
+        let ids = task_row_ids(&rows);
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), rows.len());
+        // And stable: the same list gives the same ids, and a row keeps its id
+        // when others come and go around it.
+        assert_eq!(ids, task_row_ids(&rows));
+        let kept = rows[7].key;
+        let fewer: Vec<Row> = rows.iter().skip(5).cloned().collect();
+        let position = fewer.iter().position(|row| row.key == kept).unwrap();
+        assert_eq!(task_row_ids(&fewer)[position], ids[7]);
+    }
+
+    #[test]
+    fn a_meter_without_a_point_reads_the_no_value_dash() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let access = TaskManagerAccess {
+            rows: &[],
+            selection: None,
+            latest: None,
+            menu: None,
+            background_monitoring: false,
+        };
+        let update = build_with_manager(&ws, None, Some(&access));
+        let labels: Vec<String> = nodes_with_role(&update, Role::Meter)
+            .iter()
+            .map(|id| node(&update, *id).label().unwrap().to_owned())
+            .collect();
+        assert_eq!(labels, ["CPU, —", "Memória, —", "Disco, —"]);
+    }
+
+    #[test]
+    fn the_row_menu_enters_the_tree_like_the_other_menus() {
+        use crate::task_manager::menu::{TaskMenuAction, task_menu_items};
+
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let rows = task_rows(tab_id);
+        let items = task_menu_items(&rows[1]); // the root: "End process" disabled
+        let access = TaskManagerAccess {
+            rows: &rows,
+            selection: Some(rows[1].key),
+            latest: None,
+            menu: Some((0, items.clone())),
+            background_monitoring: false,
+        };
+        let update = build_with_manager(&ws, None, Some(&access));
+        let menu = node(&update, MENU_ID);
+        assert_eq!(menu.role(), Role::Menu);
+        assert_eq!(menu.children().len(), 2);
+        let end = node(&update, menu.children()[1]);
+        assert_eq!(items[1].action, TaskMenuAction::EndProcess);
+        assert_eq!(end.label(), Some("Encerrar processo"));
+        assert!(end.is_disabled());
+        assert_eq!(update.focus, menu.children()[0]);
+    }
+
+    #[test]
+    fn access_actions_reach_the_manager_by_route() {
+        let mut ws = Workspace::new();
+        let tab_id = ws.append_tab("zsh", None);
+        let rows = task_rows(tab_id);
+        let ids = task_row_ids(&rows);
+
+        assert_eq!(
+            task_manager_access_route(TASK_MANAGER_BUTTON_ID, accesskit::Action::Click, &[]),
+            Some(TaskAccessAction::Toggle)
+        );
+        assert_eq!(
+            task_manager_access_route(TASK_MANAGER_BUTTON_ID, accesskit::Action::Focus, &[]),
+            None
+        );
+        // ADR-0098 §6: the footer's switch flips the key on `Click`.
+        assert_eq!(
+            task_manager_access_route(TASK_MANAGER_BACKGROUND_ID, accesskit::Action::Click, &[]),
+            Some(TaskAccessAction::ToggleBackground)
+        );
+        assert_eq!(
+            task_manager_access_route(TASK_MANAGER_BACKGROUND_ID, accesskit::Action::Focus, &[]),
+            None
+        );
+        assert_eq!(
+            task_manager_access_route(ids[2], accesskit::Action::Focus, &rows),
+            Some(TaskAccessAction::SelectRow(rows[2].key))
+        );
+        assert_eq!(
+            task_manager_access_route(ids[3], accesskit::Action::ShowContextMenu, &rows),
+            Some(TaskAccessAction::OpenRowMenu(rows[3].key))
+        );
+        // Any other action, and a node that is not a row (or a list that is
+        // not on screen: closed manager, no rows), do nothing.
+        assert_eq!(
+            task_manager_access_route(ids[2], accesskit::Action::Click, &rows),
+            None
+        );
+        assert_eq!(
+            task_manager_access_route(ids[2], accesskit::Action::Focus, &[]),
+            None
+        );
+        assert_eq!(
+            task_manager_access_route(TAB_LIST_ID, accesskit::Action::Focus, &rows),
+            None
+        );
+    }
+
+    /// ADR-0095 §10: the old identifier is gone from every catalog.
+    #[test]
+    fn the_app_menu_button_phrase_is_in_no_locale_file() {
+        for (name, text) in [
+            ("pt_BR", include_str!("../../../locales/pt_BR.toml")),
+            ("en_US", include_str!("../../../locales/en_US.toml")),
+            ("es_ES", include_str!("../../../locales/es_ES.toml")),
+            ("fr_FR", include_str!("../../../locales/fr_FR.toml")),
+            ("de_DE", include_str!("../../../locales/de_DE.toml")),
+        ] {
+            assert!(
+                !text
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("app_menu_button")),
+                "{name}"
+            );
+            assert!(text.contains("task_manager_button = "), "{name}");
+        }
     }
 
     /// A afirmação central do ADR-0043 §3: montar a árvore é uma função
@@ -1714,7 +2376,7 @@ mod tests {
         let root = node(&update, ROOT_ID).children().to_vec();
         let app = root
             .iter()
-            .position(|id| *id == APP_MENU_BUTTON_ID)
+            .position(|id| *id == TASK_MANAGER_BUTTON_ID)
             .unwrap();
         let list = root.iter().position(|id| *id == TAB_LIST_ID).unwrap();
         assert!(app < list);
@@ -1754,6 +2416,7 @@ mod tests {
             &None,
             None,
             Some(&order),
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -1804,6 +2467,7 @@ mod tests {
             &None,
             None,
             Some(&order),
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -1857,6 +2521,7 @@ mod tests {
             &None,
             None,
             None,
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -1908,6 +2573,7 @@ mod tests {
             &None,
             &None,
             Some(&layout),
+            None,
             None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
@@ -1977,6 +2643,7 @@ mod tests {
             &None,
             Some(&layout),
             None,
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2026,6 +2693,7 @@ mod tests {
             &None,
             Some(&layout),
             None,
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2066,6 +2734,7 @@ mod tests {
             None,
             &None,
             &None,
+            None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -2116,6 +2785,7 @@ mod tests {
             None,
             &None,
             &None,
+            None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -2187,6 +2857,7 @@ mod tests {
             None,
             &None,
             &None,
+            None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -2270,6 +2941,7 @@ mod tests {
             &None,
             None,
             None,
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2307,6 +2979,7 @@ mod tests {
             None,
             &None,
             &None,
+            None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -2378,6 +3051,7 @@ mod tests {
             &None,
             None,
             None,
+            None,
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2412,6 +3086,7 @@ mod tests {
             None,
             &picker,
             &None,
+            None,
             None,
             None,
             &TabBarStyle::DEFAULT,
@@ -2483,7 +3158,7 @@ mod settings_tree_tests {
     }
 
     #[test]
-    fn the_sidebar_is_a_list_with_the_ten_groups_and_one_selected() {
+    fn the_sidebar_is_a_list_with_the_eleven_groups_and_one_selected() {
         let update = tree(Group::Terminal, false, true, "pt-BR");
         let list = node(&update, SETTINGS_GROUP_LIST_ID);
         assert_eq!(list.role(), Role::ListBox);
@@ -2505,6 +3180,7 @@ mod settings_tree_tests {
                 "Projeto",
                 "Git",
                 "Painéis",
+                "Gerenciador de tarefas",
                 "Atalhos"
             ]
         );

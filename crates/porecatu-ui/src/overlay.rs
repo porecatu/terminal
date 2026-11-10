@@ -1732,14 +1732,27 @@ pub fn layout_terminal_menu(
     window_width: f32,
     window_height: f32,
 ) -> TerminalMenuLayout {
+    layout_anchored_menu(menu.anchor, item_count, config, window_width, window_height)
+}
+
+/// The anatomy of the terminal menu for any menu that only has an anchor and
+/// a count of items: the row menu of the task manager (ADR-0095 §7) reuses it
+/// instead of growing a fourth copy.
+pub(crate) fn layout_anchored_menu(
+    anchor: (f32, f32),
+    item_count: usize,
+    config: &porecatu_config::Config,
+    window_width: f32,
+    window_height: f32,
+) -> TerminalMenuLayout {
     let cfg = &config.appearance.context_menu;
     let width = cfg.width as f32;
     let padding = cfg.padding as f32;
     let item_height = cfg.item_height as f32;
 
     let height = padding * 2.0 + item_height * item_count as f32;
-    let mut x = menu.anchor.0;
-    let mut y = menu.anchor.1;
+    let mut x = anchor.0;
+    let mut y = anchor.1;
     if x + width > window_width {
         x = (window_width - width).max(0.0);
     }
@@ -1775,6 +1788,24 @@ pub fn paint_terminal_menu(
     catalog: &Catalog,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
+    let entries: Vec<(String, bool)> = items
+        .iter()
+        .map(|item| (item.action.label(catalog), item.enabled))
+        .collect();
+    paint_menu_entries(layout, &entries, highlighted, config, pal, measurer)
+}
+
+/// The painting of the terminal menu over already-labelled `(label, enabled)`
+/// entries; a disabled entry is dimmed, never absent. Shared with the row
+/// menu of the task manager.
+pub(crate) fn paint_menu_entries(
+    layout: &TerminalMenuLayout,
+    entries: &[(String, bool)],
+    highlighted: usize,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
     let cfg = &config.appearance.context_menu;
     let corner_radius = cfg.corner_radius as f32;
     let item_radius = cfg.item_corner_radius as f32;
@@ -1790,7 +1821,7 @@ pub fn paint_terminal_menu(
         border_color: pal.context_menu_border,
         border_width: 1.0,
     }));
-    for (index, item) in items.iter().enumerate() {
+    for (index, (label, enabled)) in entries.iter().enumerate() {
         let rect = layout.item_rects[index];
         if index == highlighted {
             out.push(Primitive::RoundedQuad(RoundedQuad {
@@ -1801,7 +1832,7 @@ pub fn paint_terminal_menu(
                 border_width: 0.0,
             }));
         }
-        let color = if item.enabled {
+        let color = if *enabled {
             pal.menu_item_text
         } else {
             pal.menu_item_disabled_text
@@ -1812,7 +1843,7 @@ pub fn paint_terminal_menu(
                 rect.y + (rect.height - font_size) / 2.0,
             ),
             text: fit_label(
-                item.action.label(catalog),
+                label.clone(),
                 menu_label_budget(rect, item_padding_x),
                 font_size,
                 measurer,

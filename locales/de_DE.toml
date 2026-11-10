@@ -50,6 +50,31 @@ save_item = "Dieses Fenster speichern…"
 empty_list = "keine gespeicherten Sitzungen"
 name_placeholder = "Sitzungsname"
 
+[task_manager]
+chart_cpu = "CPU"
+chart_memory = "Arbeitsspeicher"
+chart_disk = "Datenträger"
+column_name = "Name"
+column_pid = "PID"
+column_cpu = "CPU"
+column_memory = "Speicher"
+column_disk = "Datenträger"
+note_not_started = "Der Tab startet beim ersten Fokus."
+note_ssh = "Remote-Prozesse werden nicht aufgelistet."
+note_exited = "Der Prozess des Bereichs wurde beendet."
+note_waiting = "Warte auf die erste Messung…"
+menu_go_to_tab = "Zum Tab wechseln"
+menu_end_process = "Prozess beenden"
+unit_b = "B"
+unit_kb = "KB"
+unit_mb = "MB"
+unit_gb = "GB"
+per_second = "{value}/s"
+percent = "{value} %"
+decimal_separator = ","
+no_value = "—"
+background_monitoring = "Im Hintergrund überwachen"
+
 [settings]
 window_title = "Einstellungen"
 
@@ -63,6 +88,7 @@ session = "Sitzung"
 project = "Projekt"
 git = "Git"
 panes = "Bereiche"
+task_manager = "Task-Manager"
 shortcuts = "Tastenkürzel"
 
 [settings.section]
@@ -87,6 +113,7 @@ restore = "WIEDERHERSTELLUNG"
 project_file = "PROJEKTDATEI"
 git_remote = "REMOTE"
 panes_size = "MINDESTGRÖSSE"
+task_manager_charts = "DIAGRAMME"
 
 [settings.option]
 language_label = "Sprache"
@@ -210,6 +237,10 @@ min_columns_label = "Mindestspalten"
 min_columns_description = "Kleinste Breite in Spalten, die ein Bereich erreichen kann."
 min_rows_label = "Mindestzeilen"
 min_rows_description = "Kleinste Höhe in Zeilen, die ein Bereich erreichen kann."
+history_seconds_label = "Zeitraum der Diagramme"
+history_seconds_description = "Wie viele Sekunden die Diagramme des Task-Managers zeigen. Von 30 bis 600."
+background_monitoring_label = "Im Hintergrund überwachen"
+background_monitoring_description = "Die Diagramme des Task-Managers behalten den Verlauf, auch wenn er geschlossen ist, auf Kosten eines Prozess-Scans pro Sekunde."
 
 [settings.button]
 open_file = "Datei im Editor öffnen"
@@ -384,6 +415,7 @@ session_open_list = "Sitzungsliste öffnen"
 profile_open_menu = "Profilmenü öffnen"
 profile_new_tab = "Neuer Tab mit Profil {n}"
 ssh_reconnect = "SSH-Bereich neu verbinden"
+task_manager_toggle = "Task-Manager umschalten"
 
 [profile_menu]
 new_group = "Neue Tab-Gruppe"
@@ -405,6 +437,7 @@ config = "Konfiguration"
 settings = "Einstellungen"
 search = "Suche"
 app = "Anwendung"
+task_manager = "Task-Manager"
 
 [search_bar]
 invalid_pattern = "ungültiges Muster"
@@ -454,6 +487,12 @@ title = "Gruppe schließen?"
 body = { one = "Dadurch wird {count} Tab geschlossen.", other = "Dadurch werden {count} Tabs geschlossen." }
 confirm = { one = "Gruppe schließen ({count} Tab)", other = "Gruppe schließen ({count} Tabs)" }
 
+[dialog.end_process]
+title = "Prozess beenden?"
+body_alone = "{name} (PID {pid}) wird beendet."
+body = { one = "{name} (PID {pid}) und {count} untergeordneter Prozess werden beendet.", other = "{name} (PID {pid}) und {count} untergeordnete Prozesse werden beendet." }
+confirm = "Beenden"
+
 [dialog.delete_session]
 title = "Gespeicherte Sitzung löschen?"
 body = "Dadurch wird «{name}» endgültig entfernt."
@@ -500,7 +539,12 @@ body_cmd = "cmd.exe kann dieses Signal nicht zuverlässig senden -- verwende Pow
 body_generic = "Shell nicht erkannt, daher gibt es kein fertiges Snippet. OSC 7 ist die Sequenz, die die Shell bei jedem Verzeichniswechsel sendet -- siehe docs/reference/integracao-de-shell.md im Porecatu-Repository, um deine einzurichten."
 
 [access]
-app_menu_button = "Anwendungsmenü"
+task_manager_button = "Task-Manager"
+task_manager = "Task-Manager"
+task_manager_list = "Prozessliste"
+task_manager_meter = "{name}, {value}"
+task_manager_tab_row = "{title}, CPU {cpu}, Arbeitsspeicher {memory}, Datenträger {disk}"
+task_manager_row = "{name}, PID {pid}, CPU {cpu}, Arbeitsspeicher {memory}, Datenträger {disk}"
 new_tab_ungrouped = "Neuer Tab außerhalb einer Gruppe"
 new_tab_in_group = "Neuer Tab in dieser Gruppe"
 sessions_button = "Gespeicherte Sitzungen"
@@ -688,6 +732,13 @@ body = "\"{family}\" ist nicht installiert; eine Monospace-Schrift des Systems w
 [notice.git_interval_adjusted]
 title = "Synchronisierungsintervall angepasst"
 body = "\"{key}\" liegt unter dem Minimum von {floor}s; {floor}s werden verwendet."
+
+[notice.task_manager_history_adjusted]
+title = "Zeitraum des Task-Managers angepasst"
+body = "\"history_seconds = {value}\" liegt außerhalb des Bereichs von 30 bis 600; {used} Sekunden werden verwendet."
+
+[notice.task_manager_background_save_failed]
+title = "Überwachung im Hintergrund konnte nicht gespeichert werden"
 
 [notice.git_missing]
 title = "Git nicht gefunden"

@@ -275,6 +275,9 @@ pub fn paint(
     // `TabId`, of this window). A pinned tab without an entry -- not yet
     // resolved, or resolved to the app icon -- draws `app_icon`.
     pinned_icons: &HashMap<TabId, IconTexture>,
+    // PRD-024, ADR-0096 §6: the task manager is open **in this window**; the
+    // app menu button is painted "on" (pressed background, inset shadow).
+    app_menu_on: bool,
 ) -> Vec<Primitive> {
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
@@ -330,6 +333,7 @@ pub fn paint(
                 pressed_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu)
                     && hover_zone_button == Some(tab_bar::ZoneButtonHit::AppMenu),
             ),
+            app_menu_on,
             app_icon,
             style,
             pal,
@@ -1033,7 +1037,7 @@ fn paint_zone_icon_button(
     pal: &ResolvedPalette,
     out: &mut Vec<Primitive>,
 ) {
-    let bg = zone_button_background((hovered, pressed), pal);
+    let bg = zone_button_background((hovered, pressed), false, pal);
     // O retângulo do botão é mais largo que alto (respiro lateral,
     // `icon_button_padding_x`); o fundo revelado é o quadrado de lado
     // `height` centrado nele.
@@ -1056,11 +1060,104 @@ fn paint_zone_icon_button(
 /// Fundo revelado de um botão da zona fixa (ADR-0069): transparente em
 /// repouso, o dos botões de janela no hover e no pressed. Um só lugar para
 /// os botões de ícone e o botão de menu do app nunca divergirem.
-fn zone_button_background((hovered, pressed): (bool, bool), pal: &ResolvedPalette) -> Color {
+///
+/// `on` (ADR-0096 §6): the button of a mode that is on -- the task manager
+/// open in this window. It has the **pressed** background fixed, and hover
+/// and click change nothing (the button is already "pressed").
+fn zone_button_background(
+    (hovered, pressed): (bool, bool),
+    on: bool,
+    pal: &ResolvedPalette,
+) -> Color {
+    if on {
+        return pal.window_button_pressed_bg;
+    }
     match (hovered, pressed) {
         (_, true) => pal.window_button_pressed_bg,
         (true, false) => pal.window_button_hover_bg,
         (false, false) => palette::TRANSPARENT,
+    }
+}
+
+/// Layers of the inner shadow of the "on" app menu button (ADR-0097, which
+/// revises ADR-0096 §6 after the owner's visual review): `(depth, alpha)`.
+/// The depths are the `offset_y` of [`SHADOW_LAYERS`] (1, 2, 3 px), so both
+/// shadows of the chrome keep one light; the alphas are **twice** those of
+/// [`SHADOW_LAYERS`], because the owner asked for a more opaque shadow (the
+/// top row goes from about 0.29 to about 0.52 of black). Documented in the
+/// visual specification (§1.7 and §2.2 item 0); no TOML key, like
+/// [`SHADOW_LAYERS`].
+pub(crate) const INSET_SHADOW_LAYERS: [(f32, f64); 3] = [(1.0, 0.32), (2.0, 0.20), (3.0, 0.12)];
+
+/// Inner shadow of the "on" app menu button (ADR-0096 §6, revised by
+/// ADR-0097): the sibling of [`push_shadow`]. Each layer `(depth, alpha)` of
+/// [`INSET_SHADOW_LAYERS`] is a black band `depth` px deep along the **top**
+/// edge, the **top-left arc** and the **left** edge, drawn as three
+/// non-overlapping clipped pieces:
+///
+/// 1. the corner square (`radius` × `radius` at the top left): the button's
+///    `RoundedQuad` with a transparent fill and a black **border** of
+///    `depth`, which `quad.wgsl` paints as the ring inside the outline -- so
+///    the band follows the curvature of the corner;
+/// 2. the top strip to the right of that square (`depth` tall): the button's
+///    `RoundedQuad` filled black, which also follows the top of the top-right
+///    corner;
+/// 3. the left strip below that square (`depth` wide), likewise.
+///
+/// At the edges of the corner square the ring is exactly a straight band of
+/// `depth`, so the three pieces meet without a seam or a doubled pixel. The
+/// layers overlap from the edge inward, so the outermost pixels get the three
+/// layers, the next two and the third one: a 3 px gradient toward the top and
+/// left edges, as a button lit from the top left.
+pub(crate) fn push_inset_shadow(out: &mut Vec<Primitive>, rect: Rect, radius: f32) {
+    // A corner wider than the button would make the strips negative.
+    let corner = radius.clamp(0.0, rect.width.min(rect.height));
+    for (depth, alpha) in INSET_SHADOW_LAYERS {
+        let black = Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: alpha,
+        };
+        if corner > 0.0 {
+            out.push(Primitive::PushClip(Rect {
+                x: rect.x,
+                y: rect.y,
+                width: corner,
+                height: corner,
+            }));
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect,
+                radius,
+                color: palette::TRANSPARENT,
+                border_color: black,
+                border_width: depth,
+            }));
+            out.push(Primitive::PopClip);
+        }
+        let top = Rect {
+            x: rect.x + corner,
+            y: rect.y,
+            width: rect.width - corner,
+            height: depth,
+        };
+        let left = Rect {
+            x: rect.x,
+            y: rect.y + corner,
+            width: depth,
+            height: rect.height - corner,
+        };
+        for strip in [top, left] {
+            out.push(Primitive::PushClip(strip));
+            out.push(Primitive::RoundedQuad(RoundedQuad {
+                rect,
+                radius,
+                color: black,
+                border_color: palette::TRANSPARENT,
+                border_width: 0.0,
+            }));
+            out.push(Primitive::PopClip);
+        }
     }
 }
 
@@ -1070,9 +1167,16 @@ fn zone_button_background((hovered, pressed): (bool, bool), pal: &ResolvedPalett
 /// de janela atrás do ícone ([`zone_button_background`]). O botão é
 /// quadrado (`app_menu_button_size`), então o fundo revelado é ele inteiro.
 /// `app_icon` ausente: só o fundo revelado.
+///
+/// `on` (PRD-024, ADR-0096 §6): the task manager is open in this window. The
+/// background is the pressed one, fixed ([`zone_button_background`]); then
+/// [`push_inset_shadow`]; then the icon on top, with no offset. Hover and
+/// click do not change the drawing. With `on == false` it is the drawing of
+/// the 2026-11-06 revision of ADR-0079, unchanged.
 fn paint_app_menu_button(
     rect: Rect,
     (hovered, pressed): (bool, bool),
+    on: bool,
     app_icon: Option<ImageId>,
     style: &TabBarStyle,
     pal: &ResolvedPalette,
@@ -1081,10 +1185,13 @@ fn paint_app_menu_button(
     out.push(Primitive::RoundedQuad(RoundedQuad {
         rect,
         radius: style.tab_corner_radius,
-        color: zone_button_background((hovered, pressed), pal),
+        color: zone_button_background((hovered, pressed), on, pal),
         border_color: palette::TRANSPARENT,
         border_width: 0.0,
     }));
+    if on {
+        push_inset_shadow(out, rect, style.tab_corner_radius);
+    }
     if let Some(image) = app_icon {
         let side = style.icon_em_size;
         let icon_rect = Rect {
@@ -1980,6 +2087,7 @@ mod tests {
                 false,
                 None,
                 &HashMap::new(),
+                false,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -2043,6 +2151,7 @@ mod tests {
             false,
             None,
             &HashMap::new(),
+            false,
         );
         (layout, out)
     }
@@ -2243,6 +2352,7 @@ mod tests {
                 window_image_shown,
                 None,
                 &HashMap::new(),
+                false,
             )
         };
         let whole_bar_quads = |out: &[Primitive]| {
@@ -2320,6 +2430,7 @@ mod tests {
             false,
             None,
             &HashMap::new(),
+            false,
         );
 
         let expected = bar_height(&style);
@@ -2350,13 +2461,24 @@ mod tests {
         );
     }
 
-    /// The `RoundedQuad` the app menu button paints for a (hover, pressed).
+    /// The `RoundedQuad` the app menu button paints for a (hover, pressed):
+    /// the background, i.e. the **first** quad (the "on" state adds inset
+    /// shadow quads after it).
     fn app_menu_quad(hovered: bool, pressed: bool) -> (RoundedQuad, Vec<Primitive>) {
+        app_menu_quad_state(hovered, pressed, false)
+    }
+
+    fn app_menu_quad_state(
+        hovered: bool,
+        pressed: bool,
+        on: bool,
+    ) -> (RoundedQuad, Vec<Primitive>) {
         let style = TabBarStyle::DEFAULT;
         let mut out = Vec::new();
         paint_app_menu_button(
             tab_bar::app_menu_button_rect(&style, false),
             (hovered, pressed),
+            on,
             Some(ImageId::from_raw(1)),
             &style,
             &default_palette(),
@@ -2364,13 +2486,164 @@ mod tests {
         );
         let quad = out
             .iter()
-            .rev()
             .find_map(|p| match p {
                 Primitive::RoundedQuad(q) => Some(*q),
                 _ => None,
             })
             .expect("o botão pinta um quad arredondado");
         (quad, out)
+    }
+
+    #[test]
+    fn the_inset_shadow_is_three_layers_on_the_top_and_left_edges() {
+        let rect = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
+        let mut out = Vec::new();
+        let radius = 9.0;
+        push_inset_shadow(&mut out, rect, radius);
+        // Per layer: corner ring, top strip, left strip, each
+        // (PushClip, quad, PopClip).
+        assert_eq!(out.len(), INSET_SHADOW_LAYERS.len() * 9);
+        for (layer, (depth, alpha)) in INSET_SHADOW_LAYERS.iter().enumerate() {
+            let clips = [
+                Rect {
+                    x: rect.x,
+                    y: rect.y,
+                    width: radius,
+                    height: radius,
+                },
+                Rect {
+                    x: rect.x + radius,
+                    y: rect.y,
+                    width: rect.width - radius,
+                    height: *depth,
+                },
+                Rect {
+                    x: rect.x,
+                    y: rect.y + radius,
+                    width: *depth,
+                    height: rect.height - radius,
+                },
+            ];
+            for (piece, want) in clips.iter().enumerate() {
+                let start = layer * 9 + piece * 3;
+                let chunk = &out[start..start + 3];
+                let Primitive::PushClip(clip) = &chunk[0] else {
+                    panic!("each piece opens with its clip");
+                };
+                assert_eq!(clip, want, "layer {layer}, piece {piece}");
+                let Primitive::RoundedQuad(quad) = &chunk[1] else {
+                    panic!("then the quad with the size and radius of the button");
+                };
+                assert_eq!(quad.rect, rect);
+                assert_eq!(quad.radius, radius);
+                let shadow = if piece == 0 {
+                    // The corner is the ring inside the outline: transparent
+                    // fill, black border of `depth`, so it follows the arc.
+                    assert_eq!(quad.color.a, 0.0, "corner fill is transparent");
+                    assert_eq!(quad.border_width, *depth);
+                    quad.border_color
+                } else {
+                    assert_eq!(quad.border_width, 0.0);
+                    quad.color
+                };
+                assert_eq!(shadow.a, *alpha);
+                assert_eq!((shadow.r, shadow.g, shadow.b), (0.0, 0.0, 0.0), "black");
+                assert!(matches!(chunk[2], Primitive::PopClip));
+            }
+        }
+    }
+
+    /// The three pieces tile the top-left band without overlapping: the
+    /// corner square ends where the strips begin.
+    #[test]
+    fn the_inset_shadow_pieces_do_not_overlap() {
+        let rect = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
+        let mut out = Vec::new();
+        push_inset_shadow(&mut out, rect, 6.0);
+        let clips: Vec<Rect> = out[..9]
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::PushClip(r) => Some(*r),
+                _ => None,
+            })
+            .collect();
+        let overlaps = |a: &Rect, b: &Rect| {
+            a.x < b.x + b.width
+                && b.x < a.x + a.width
+                && a.y < b.y + b.height
+                && b.y < a.y + a.height
+        };
+        assert!(!overlaps(&clips[0], &clips[1]));
+        assert!(!overlaps(&clips[0], &clips[2]));
+        assert!(!overlaps(&clips[1], &clips[2]));
+    }
+
+    /// A square button (radius 0) has no corner ring, only the two strips.
+    #[test]
+    fn the_inset_shadow_of_a_square_button_has_no_corner_piece() {
+        let rect = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
+        let mut out = Vec::new();
+        push_inset_shadow(&mut out, rect, 0.0);
+        assert_eq!(out.len(), INSET_SHADOW_LAYERS.len() * 6);
+    }
+
+    /// ADR-0097: same light as the outer shadow (depths = `offset_y` of
+    /// `SHADOW_LAYERS`), twice as opaque.
+    #[test]
+    fn the_inset_shadow_keeps_the_depths_and_doubles_the_alphas_of_the_outer_one() {
+        for ((depth, alpha), (_spread, offset_y, outer_alpha)) in
+            INSET_SHADOW_LAYERS.iter().zip(SHADOW_LAYERS.iter())
+        {
+            assert_eq!(depth, offset_y);
+            assert!((alpha - 2.0 * outer_alpha).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn the_app_menu_button_on_is_pressed_background_inset_shadow_and_icon_on_top() {
+        let pal = default_palette();
+        let style = TabBarStyle::DEFAULT;
+        let rect = tab_bar::app_menu_button_rect(&style, false);
+        let (background, out) = app_menu_quad_state(false, false, true);
+        assert_eq!(background.color, pal.window_button_pressed_bg);
+        assert_eq!(background.rect, rect);
+        assert_eq!(background.radius, style.tab_corner_radius);
+        assert_eq!(background.border_width, 0.0);
+
+        // Background, then 3 layers x 3 pieces (corner, top, left) x
+        // (PushClip, RoundedQuad, PopClip), then the icon -- no offset.
+        assert_eq!(out.len(), 1 + INSET_SHADOW_LAYERS.len() * 9 + 1);
+        let mut shadow = Vec::new();
+        push_inset_shadow(&mut shadow, rect, style.tab_corner_radius);
+        for (got, want) in out[1..out.len() - 1].iter().zip(&shadow) {
+            assert_eq!(format!("{got:?}"), format!("{want:?}"));
+        }
+        let Some(Primitive::Image { rect: icon, .. }) = out.last() else {
+            panic!("o ícone vem por último, sobre a sombra");
+        };
+        assert_eq!(icon.x + icon.width / 2.0, rect.x + rect.width / 2.0);
+        assert_eq!(icon.y + icon.height / 2.0, rect.y + rect.height / 2.0);
+    }
+
+    #[test]
+    fn hover_and_click_do_not_change_the_button_when_on() {
+        let (_, rest) = app_menu_quad_state(false, false, true);
+        for state in [(true, false), (true, true), (false, true)] {
+            let (_, other) = app_menu_quad_state(state.0, state.1, true);
+            assert_eq!(format!("{rest:?}"), format!("{other:?}"), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn the_app_menu_button_off_has_no_shadow_primitives() {
+        for state in [(false, false), (true, false), (true, true)] {
+            let (_, out) = app_menu_quad_state(state.0, state.1, false);
+            assert!(
+                !out.iter()
+                    .any(|p| matches!(p, Primitive::PushClip(_) | Primitive::PopClip)),
+                "{state:?}"
+            );
+        }
     }
 
     #[test]
@@ -2452,6 +2725,7 @@ mod tests {
         paint_app_menu_button(
             button,
             (false, false),
+            false,
             None,
             &style,
             &default_palette(),
@@ -2505,6 +2779,7 @@ mod tests {
             false,
             None,
             &HashMap::new(),
+            false,
         );
         let clip = out
             .iter()
@@ -2584,6 +2859,7 @@ mod tests {
             false,
             Some(ImageId::from_raw(1)),
             &HashMap::new(),
+            false,
         )
     }
 
@@ -3002,6 +3278,7 @@ mod tests {
             false,
             Some(ImageId::from_raw(1)),
             &HashMap::new(),
+            false,
         )
     }
 
@@ -3311,6 +3588,7 @@ mod tests {
             false,
             None,
             &HashMap::new(),
+            false,
         );
         let button = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
         assert!(

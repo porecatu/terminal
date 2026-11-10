@@ -20,6 +20,7 @@ pub mod icon;
 mod image;
 mod primitives;
 mod quad;
+mod segment;
 mod text;
 mod text_measurer;
 mod window_surface;
@@ -28,7 +29,8 @@ pub use blur::BlurSource;
 pub use frame::{Frame, Layer};
 pub use gpu::{GpuContext, SurfaceError};
 pub use primitives::{
-    Color, FontFace, ImageId, Primitive, Quad, Rect, RoundedQuad, SansWeight, TextRun,
+    Area, Color, FontFace, ImageId, Point, Polyline, Primitive, Quad, Rect, RoundedQuad,
+    SansWeight, TextRun,
 };
 pub use text_measurer::{FontFamilies, TextMeasurer};
 pub use window_surface::WindowSurface;

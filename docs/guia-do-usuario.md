@@ -311,6 +311,7 @@ for_window [title="^Configurações$"] floating enable
 | **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |
 | **Git** | consultar o remoto e o intervalo |
 | **Painéis** | mínimo de colunas e de linhas de um painel |
+| **Gerenciador de tarefas** | monitorar em segundo plano (`background_monitoring`), período dos gráficos (`history_seconds`) |
 | **Atalhos** | todas as ações vinculáveis, com o atalho em vigor |
 
 Cada opção mostra nome, descrição curta e o controle que o tipo pede:
@@ -1418,6 +1419,82 @@ A única coisa clicável na barra é o número de commits atrás do remoto
 (acima). Em todo o resto dela, a borda inferior da janela continua sendo
 a área de redimensionar, mesmo em cima da barra — inclusive nos cantos,
 que o número nunca alcança.
+
+## Gerenciador de tarefas
+
+Qual das suas abas está pesando? Clique no **botão do app** (o ícone à
+esquerda da barra de abas): a área do terminal dá lugar ao gerenciador de
+tarefas, e a barra de abas, os controles da janela e a barra de status
+continuam no lugar. Clique de novo, aperte `Esc` ou clique numa aba para
+voltar ao terminal, que volta como estava — nada é redimensionado nem
+reiniciado. A ação `task_manager.toggle` faz o mesmo; ela não tem atalho
+padrão, e com o botão oculto (`show_app_menu_button = false`) é o único
+caminho:
+
+```toml
+[keybindings]
+"ctrl+shift+period" = "task_manager.toggle"
+```
+
+À esquerda ficam três gráficos de linha — **CPU**, **Memória** e
+**Disco** (bytes lidos e escritos por segundo) — com a **soma dos
+processos desta janela**, nunca o total da máquina. A amostra nova entra
+pela borda direita e a linha desliza para a esquerda, uma vez por segundo.
+A CPU vai de 0 a 100% da máquina inteira (todos os núcleos); memória e
+disco ajustam a escala sozinhos. O período dos gráficos é configurável,
+de 30 a 600 segundos, e vale na hora:
+
+```toml
+[task_manager]
+history_seconds = 120
+```
+
+Um valor fora da faixa é ajustado ao limite mais próximo, com um aviso.
+
+À direita fica a lista dos processos da janela, **agrupada por aba**, na
+ordem da barra (fixadas primeiro, inclusive as abas de grupos
+colapsados), com o shell de cada painel e, recuados, os filhos dele. Cada
+linha mostra nome, PID, CPU, memória e disco; a linha da aba mostra a
+soma. As setas, `Home`, `End`, `PageUp` e `PageDown` andam pela lista.
+
+- **Ir para a aba:** duplo clique ou `Enter` numa linha volta ao terminal,
+  ativa a aba e foca o painel daquele processo.
+- **Encerrar processo:** clique direito (ou a tecla de menu, ou
+  `Shift+F10`) e "Encerrar processo". Um diálogo pede confirmação, com o
+  nome, o PID e quantos filhos vão junto; confirmado, o processo e a
+  árvore dele terminam, e o shell continua vivo. O shell raiz do painel
+  não pode ser encerrado por aqui — para isso existem fechar aba e fechar
+  painel.
+
+Com o gerenciador aberto, **nada do que você digita chega ao terminal**,
+e as ações que mexem no painel (busca, dividir, copiar, colar, rolagem,
+zoom de fonte) não fazem nada. As ações de aba, grupo, janela e sessão
+continuam valendo — e as que ativam ou criam uma aba voltam ao terminal.
+
+O que **não** aparece: processos de outras janelas ou de fora do
+Porecatu; processos remotos de uma aba SSH (a linha mostra uma nota); uma
+aba ainda não iniciada (`lazy_restore`), que o gerenciador não inicia. Rede
+e GPU também ficam fora. Cada janela tem o seu gerenciador, e por padrão
+a medição só acontece enquanto algum está aberto: fechado, o custo é
+zero. Sair e voltar em poucos segundos mantém o histórico, com um vão na
+linha no tempo em que ele esteve fechado.
+
+Para não perder esse trecho, ligue **Monitorar em segundo plano**, a
+alternância no canto inferior direito, abaixo da lista. Ligada, o
+Porecatu mede o tempo todo, desde o arranque e para todas as janelas: os
+gráficos guardam o histórico enquanto você usa as abas, e o gerenciador
+já abre com eles cheios. O custo é uma varredura de processos por
+segundo enquanto o app está aberto. A alternância grava a chave no
+arquivo de configuração (a mesma opção está na tela de configurações) e
+vale para o app inteiro:
+
+```toml
+[task_manager]
+background_monitoring = true
+```
+
+No Linux e no macOS, um processo cujo pai intermediário já terminou pode
+não aparecer na lista.
 
 ## Quando o app fecha sozinho
 

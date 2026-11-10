@@ -274,6 +274,17 @@ min_columns = 20
 min_rows = 5
 
 
+# --- Gerenciador de tarefas -------------------------------------------------
+[task_manager]
+# Continua medindo os processos com o gerenciador fechado, para os gráficos
+# guardarem o histórico enquanto você usa as abas. Custa uma varredura de
+# processos por segundo enquanto o app está aberto. Vale na hora.
+background_monitoring = false
+# Quantos segundos os gráficos do gerenciador de tarefas mostram. De 30 a 600.
+# Vale na hora.
+history_seconds = 60
+
+
 # --- Atalhos de teclado -----------------------------------------------------
 # Formato: "teclas" = "ação". Teclas em minúsculas, unidas por "+":
 # ctrl, shift, alt, cmd e a tecla. Nomes de teclas especiais: equals, minus,
@@ -559,3 +570,19 @@ text_field_width = 240
 number_field_width = 88
 row_gap = 8
 theme_swatch_size = 12
+
+# Gerenciador de tarefas: gráficos de CPU, memória e disco e a lista de
+# processos de cada aba. As cores ficam no tema, na seção [task_manager].
+[appearance.task_manager]
+# Ajuste fino; não precisa mexer.
+padding = 18
+column_gap = 18
+chart_gap = 8
+row_height = 28
+row_padding_x = 8
+# Recuo por nível da árvore de processos. Aval visual do dono pendente.
+tree_indent = 16
+# Espessura da linha dos gráficos. Aval visual do dono pendente.
+line_width = 1.5
+# Opacidade da área sob a linha, de 0.0 a 1.0. Aval visual do dono pendente.
+fill_opacity = 0.15

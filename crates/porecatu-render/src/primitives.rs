@@ -17,6 +17,50 @@ pub struct Rect {
     pub height: f32,
 }
 
+/// Ponto em pixels lógicos, origem no canto superior esquerdo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Linha poligonal aberta (ADR-0094 §1): segmentos entre pontos consecutivos,
+/// com espessura e pontas e junções redondas. Pixels lógicos.
+///
+/// Contrato:
+/// - **menos de 2 pontos** não desenha nada; uma lacuna no dado é assunto de
+///   quem chama, que emite uma `Polyline` por trecho contínuo;
+/// - **cor opaca** (`color.a == 1.0`, vigiado por `debug_assert!`): as junções
+///   são a sobreposição de duas cápsulas, e com cor translúcida a junção
+///   receberia cobertura duas vezes e ficaria mais escura;
+/// - os pontos **não** são arredondados ao pixel físico, ao contrário do
+///   [`Quad`]: o antisserrilhado cuida da borda de uma linha inclinada.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Polyline {
+    pub points: Vec<Point>,
+    /// Espessura em pixels lógicos.
+    pub width: f32,
+    pub color: Color,
+}
+
+/// Região entre uma linha poligonal monotônica em `x` e uma reta horizontal
+/// (`baseline_y`) (ADR-0094 §1, §3): para cada `x` entre o primeiro e o último
+/// ponto, pinta de `y(x)` até a base. Pixels lógicos.
+///
+/// Contrato:
+/// - os pontos têm **`x` crescente**; um par fora de ordem é descartado, com
+///   `debug_assert!` em debug e silenciosamente em release;
+/// - a base fica **abaixo** da linha na tela (`baseline_y >= y` de todo ponto):
+///   o que passa da base não é pintado;
+/// - a cor pode ser translúcida: cada pixel pertence a uma faixa só, então a
+///   cor sai uniforme, sem costura entre faixas vizinhas.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Area {
+    pub points: Vec<Point>,
+    pub baseline_y: f32,
+    pub color: Color,
+}
+
 /// Retângulo sólido, sem cantos arredondados nem borda -- o caso comum
 /// (fundo de célula do terminal).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -138,6 +182,13 @@ pub enum Primitive {
     /// Só faz sentido em surface transparente (`WindowSurface::is_transparent`);
     /// numa opaca o canal alfa é ignorado e o resultado sairia escurecido.
     Backdrop(RoundedQuad),
+    /// Linha poligonal (ADR-0094): geometria, na ordem da lista e no recorte
+    /// vigente, um segmento por par de pontos. Pipeline próprio, mesmo blend
+    /// premultiplicado.
+    Polyline(Polyline),
+    /// Área sob uma linha poligonal monotônica em `x` (ADR-0094): faixas
+    /// verticais, antisserrilhadas só na borda de cima.
+    Area(Area),
     Text(TextRun),
     PushClip(Rect),
     PopClip,

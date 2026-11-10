@@ -36,7 +36,7 @@
 | [0030](0030-escopo-do-hot-reload.md) | Escopo do hot reload | Aceito · classe A acrescida por ADR-0092 (**parcial**: `[session] restore_named_in_current_window`, a primeira classe A de `[session]`) |
 | [0031](0031-temas-nomeados.md) | Temas nomeados: escopo, merge e ciclo | Superseded by ADR-0067 (**parcial**: onde o tema mora, precedência, ordem do ciclo; "tema é só cor" e ciclar sem escrever continuam) |
 | [0032](0032-interface-do-v1-fechada.md) | A interface do v1 está fechada | Aceito |
-| [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito |
+| [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito · §3 revisto por ADR-0093 (**parcial**: a varredura ganha a amostragem do gerenciador de tarefas; `descendants_of` nas três plataformas) |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito · "Decisão" revista por ADR-0071 (**parcial**: conexão SSH aberta também confirma) |
 | [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
 | [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) · §1 e §6 Superseded by ADR-0054 (**parcial**: dois campos opcionais e o diretório `sessions/`) · §3 revisto por ADR-0070 (**parcial**: `profile` por painel, sem subir a versão) · §3 revisto por ADR-0086 (**parcial**: fixadas fora da sessão, `active_pinned` opcional) |
@@ -80,7 +80,7 @@
 | [0076](0076-reconexao-automatica.md) | Reconexão automática: keepalive de 15 s, cinco tentativas em 1-2-4-8-16 s decididas por estado puro em `porecatu-ui`, uma reconexão por conexão | Aceito |
 | [0077](0077-avisos-do-app-em-dialogo-modal.md) | Avisos do app em diálogo modal, no lugar de nota escrita no grid | Aceito |
 | [0078](0078-largura-e-quebra-de-texto-do-dialogo.md) | Largura e quebra de texto do diálogo: piso 360, teto 720, nunca reticências | Aceito |
-| [0079](0079-botao-de-menu-do-app.md) | Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app; hover e pressionado, sem ação | Aceito · decisões 2 e 6 revistas por ADR-0087 (**parcial**: `track_shift` soma a zona de fixadas); decisão 3 revista: sem fundo e sem borda, hover e pressionado do botão de configurações |
+| [0079](0079-botao-de-menu-do-app.md) | Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app; hover e pressionado, sem ação | Aceito · decisões 2 e 6 revistas por ADR-0087 (**parcial**: `track_shift` soma a zona de fixadas); decisão 3 revista: sem fundo e sem borda, hover e pressionado do botão de configurações · decisão 5 revista por ADR-0095 (**parcial**: o botão alterna o gerenciador de tarefas) · aparência revista por ADR-0096 (**parcial**: estado ligado, com sombra interna) |
 | [0080](0080-editor-de-perfil-em-janela-propria.md) | Editor de perfil em janela própria: formulário em coluna, modal sobre a tela de configurações, OK que só leva às pendências | Aceito — aval visual pendente |
 | [0081](0081-disparo-no-release-para-botoes-e-itens.md) | Disparo no release para botões e itens: o press arma, o release sobre o mesmo alvo age; clique fora, texto e gestos de terminal seguem no press | Aceito — aval visual do estado pressionado pendente |
 | [0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md) | Botões da barra com o tamanho do botão de menu do app: sessões, configurações e "+" avulso em 40×40; "+" de grupo fica 30×30; zona fixa de 94 para 98px | Aceito — aval visual pendente |
@@ -94,6 +94,12 @@
 | [0090](0090-transferencia-de-abas-entre-janelas.md) | Transferência de abas e grupos entre janelas: extrair e inserir no core, endereço do wakeup numa célula do painel, `TabId` novo no destino | Aceito |
 | [0091](0091-arraste-entre-janelas.md) | Arraste entre janelas: ponto global pela captura implícita, alvo pela ordem de foco, fantasma que salta de barra, destacar numa janela nova e arraste da seleção | Aceito — aval visual do dono pendente |
 | [0092](0092-restauracao-nomeada-na-janela-atual.md) | Restauração nomeada na janela atual: chave `[session] restore_named_in_current_window`, acréscimo pelo `insert_detached_*` do core, mesmo arranque de runtimes | Aceito |
+| [0093](0093-medicao-de-processos-do-gerenciador.md) | Medição de processos do gerenciador de tarefas: amostrador em `porecatu-pty`, pedido pelo relógio da UI, uma thread só enquanto houver gerenciador aberto | Aceito · §4 e §6 revistos por ADR-0098 (**parcial**: o amostrador também vive com `background_monitoring` ligada e alimenta o histórico de toda janela) |
+| [0094](0094-polilinha-e-area-no-render.md) | Polilinha e área no render: segmentos instanciados com SDF de segmento, área por faixas verticais | Aceito |
+| [0095](0095-gerenciador-de-tarefas-modo-da-janela.md) | Gerenciador de tarefas como modo da janela: estado em `WindowState`, ação `task_manager.toggle`, captura de entrada, lista derivada da amostra e chave `[task_manager] history_seconds` | Aceito · §2 e §9 revistos por ADR-0098 (**parcial**: fechar não derruba o amostrador com a chave ligada; segunda chave e segunda opção) |
+| [0096](0096-anatomia-do-gerenciador-de-tarefas.md) | Anatomia do gerenciador de tarefas e do botão do app ligado | Aceito — aval visual do dono dado · §6 item 2 revisto por ADR-0097 (**parcial**: a sombra interna) · §4 revisto por ADR-0098 (**parcial**: rodapé da lista com a alternância, aval pendente) |
+| [0097](0097-sombra-interna-do-botao-do-app-ligado.md) | Sombra interna do botão do app ligado: mais opaca, nas bordas de cima e esquerda | Aceito |
+| [0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md) | Monitoramento em segundo plano do gerenciador de tarefas: chave `[task_manager] background_monitoring` e alternância no rodapé da lista | Aceito — aval visual do dono pendente |
 
 ## Convenção
 

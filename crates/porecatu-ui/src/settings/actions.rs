@@ -86,6 +86,7 @@ pub(crate) fn label(catalog: &Catalog, action: Action) -> Option<String> {
         Action::ProfileOpenMenu => a::profile_open_menu(catalog),
         Action::SshReconnect => a::ssh_reconnect(catalog),
         Action::ProfileNewTab(n) => a::profile_new_tab(catalog, n),
+        Action::TaskManagerToggle => a::task_manager_toggle(catalog),
     })
 }
 
@@ -109,10 +110,11 @@ pub(crate) enum Domain {
     Settings,
     Search,
     App,
+    TaskManager,
 }
 
 impl Domain {
-    pub(crate) const ALL: [Domain; 16] = [
+    pub(crate) const ALL: [Domain; 17] = [
         Domain::Tab,
         Domain::Group,
         Domain::Window,
@@ -129,6 +131,7 @@ impl Domain {
         Domain::Settings,
         Domain::Search,
         Domain::App,
+        Domain::TaskManager,
     ];
 
     /// O domínio de `action`, pelo prefixo do nome. Toda ação do catálogo tem
@@ -153,6 +156,7 @@ impl Domain {
             "settings" => Domain::Settings,
             "search" => Domain::Search,
             "app" => Domain::App,
+            "task_manager" => Domain::TaskManager,
             _ => return None,
         })
     }
@@ -176,6 +180,7 @@ impl Domain {
             Domain::Settings => d::settings(catalog),
             Domain::Search => d::search(catalog),
             Domain::App => d::app(catalog),
+            Domain::TaskManager => d::task_manager(catalog),
         }
     }
 }

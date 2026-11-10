@@ -245,63 +245,7 @@ pub fn build_primitives_with_image(
     let cols = snapshot.cols;
     let mut primitives = Vec::new();
 
-    if style.terminal_frame_shadow_enabled {
-        push_shadow(
-            &mut primitives,
-            box_rect,
-            style.terminal_frame_corner_radius,
-        );
-    }
-    // PRD-019/ADR-0068 §6: com o acrílico ativo, a imagem da janela desfocada
-    // entra entre a sombra e o fundo do quadro, recortada pelo quadro e pelo
-    // raio dele. O fundo, com `background_opacity`, faz o papel de tingimento.
-    // A amostra é por coordenada de tela (`porecatu-render`), então a máscara
-    // é só a deste quadro -- dois painéis vizinhos mostram pedaços contínuos
-    // da mesma imagem desfocada.
-    if term_pal.acrylic {
-        primitives.push(Primitive::BlurredBackdrop {
-            mask: box_rect,
-            mask_radius: style.terminal_frame_corner_radius,
-        });
-    }
-    let frame_fill = RoundedQuad {
-        rect: box_rect,
-        radius: style.terminal_frame_corner_radius,
-        color: term_pal.background,
-        border_color: TRANSPARENT,
-        border_width: 0.0,
-    };
-    // Com imagem da janela, `backdrop_punch` chega `false` (revisão do
-    // ADR-0062 §4): o fundo translúcido e o de cada célula se misturam sobre
-    // a imagem, que abre `Layer::Grid` -- o mesmo pixel numa surface opaca ou
-    // transparente.
-    primitives.push(backdrop_fill(term_pal, frame_fill));
-    // PRD-017/ADR-0061 §4: a imagem fica **acima** do fundo do quadro e
-    // **abaixo** de tudo que a grade desenha (fundo de célula, texto,
-    // seleção, busca, hyperlink, cursor) -- por isso é empurrada aqui, entre o
-    // `backdrop_fill` e o primeiro `paint_row_backgrounds`. O retângulo é o
-    // quadro inteiro do painel, padding incluído (RF-17.8), e a máscara é o
-    // mesmo quadro com o raio dele.
-    if let Some(paint) = background_image {
-        let alpha = term_pal.background_image_alpha();
-        if alpha > 0.0 {
-            let placement = background_image::placement(
-                term_pal.background_image_mode,
-                box_rect,
-                paint.size_px,
-                paint.scale,
-            );
-            primitives.push(Primitive::Image {
-                rect: placement.rect,
-                uv: placement.uv,
-                repeat: placement.repeat,
-                mask: box_rect,
-                mask_radius: style.terminal_frame_corner_radius,
-                alpha,
-                image: paint.image,
-            });
-        }
-    }
+    push_frame_background(&mut primitives, box_rect, style, term_pal, background_image);
 
     let x_offset = box_rect.x + style.terminal_frame_padding;
     let y_offset = box_rect.y + style.terminal_frame_padding;
@@ -374,6 +318,73 @@ pub fn build_primitives_with_image(
     }
 
     primitives
+}
+
+/// The background of a pane's frame, with no cells: shadow, the blurred
+/// backdrop of the acrylic, the `[terminal] background` fill with its
+/// `background_opacity` and the terminal's background image. The one path
+/// both [`build_primitives_with_image`] and the task manager (PRD-024,
+/// ADR-0095 §4) go through, so the two frames look the same.
+pub(crate) fn push_frame_background(
+    primitives: &mut Vec<Primitive>,
+    box_rect: Rect,
+    style: &TabBarStyle,
+    term_pal: &ResolvedTermPalette,
+    background_image: Option<BackgroundImagePaint>,
+) {
+    if style.terminal_frame_shadow_enabled {
+        push_shadow(primitives, box_rect, style.terminal_frame_corner_radius);
+    }
+    // PRD-019/ADR-0068 §6: com o acrílico ativo, a imagem da janela desfocada
+    // entra entre a sombra e o fundo do quadro, recortada pelo quadro e pelo
+    // raio dele. O fundo, com `background_opacity`, faz o papel de tingimento.
+    // A amostra é por coordenada de tela (`porecatu-render`), então a máscara
+    // é só a deste quadro -- dois painéis vizinhos mostram pedaços contínuos
+    // da mesma imagem desfocada.
+    if term_pal.acrylic {
+        primitives.push(Primitive::BlurredBackdrop {
+            mask: box_rect,
+            mask_radius: style.terminal_frame_corner_radius,
+        });
+    }
+    let frame_fill = RoundedQuad {
+        rect: box_rect,
+        radius: style.terminal_frame_corner_radius,
+        color: term_pal.background,
+        border_color: TRANSPARENT,
+        border_width: 0.0,
+    };
+    // Com imagem da janela, `backdrop_punch` chega `false` (revisão do
+    // ADR-0062 §4): o fundo translúcido e o de cada célula se misturam sobre
+    // a imagem, que abre `Layer::Grid` -- o mesmo pixel numa surface opaca ou
+    // transparente.
+    primitives.push(backdrop_fill(term_pal, frame_fill));
+    // PRD-017/ADR-0061 §4: a imagem fica **acima** do fundo do quadro e
+    // **abaixo** de tudo que a grade desenha (fundo de célula, texto,
+    // seleção, busca, hyperlink, cursor) -- por isso é empurrada aqui, entre o
+    // `backdrop_fill` e o primeiro `paint_row_backgrounds`. O retângulo é o
+    // quadro inteiro do painel, padding incluído (RF-17.8), e a máscara é o
+    // mesmo quadro com o raio dele.
+    if let Some(paint) = background_image {
+        let alpha = term_pal.background_image_alpha();
+        if alpha > 0.0 {
+            let placement = background_image::placement(
+                term_pal.background_image_mode,
+                box_rect,
+                paint.size_px,
+                paint.scale,
+            );
+            primitives.push(Primitive::Image {
+                rect: placement.rect,
+                uv: placement.uv,
+                repeat: placement.repeat,
+                mask: box_rect,
+                mask_radius: style.terminal_frame_corner_radius,
+                alpha,
+                image: paint.image,
+            });
+        }
+    }
 }
 
 /// Formato do cursor (`snapshot.cursor.shape`, RF-5.22/RF-5.25 -- DECSCUSR

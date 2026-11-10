@@ -158,6 +158,12 @@ pub(crate) trait Inspect: Send + Sync {
     fn connection(&self) -> Option<porecatu_ssh::ConnectionId> {
         None
     }
+    /// O grupo de processos locais do painel, para o gerenciador de tarefas
+    /// medir (ADR-0093 §3). `None` sem processo local: SSH, painel dormente,
+    /// ou PTY sem `ProcessGroup`.
+    fn process_group(&self) -> Option<ProcessGroup> {
+        None
+    }
 }
 
 /// O que alimenta o motor com bytes e recebe os que ele escreve (ADR-0071 §1).
@@ -251,6 +257,11 @@ impl Inspect for PtyInspect {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn cwd_fallback(&self) -> Option<PathBuf> {
         None
+    }
+
+    /// Uma cópia do grupo (o Job é um `Arc` por dentro), ADR-0093 §3.
+    fn process_group(&self) -> Option<ProcessGroup> {
+        self.group.clone()
     }
 }
 

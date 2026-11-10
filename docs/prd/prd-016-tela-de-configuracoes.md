@@ -105,6 +105,10 @@ Mudar este catálogo — acrescentar ou tirar uma opção — é mudança deste 
 
 > **Emenda ([PRD-023](prd-023-restaurar-sessao-nomeada-na-janela-atual.md) RF-23.2, [ADR-0092](../adr/0092-restauracao-nomeada-na-janela-atual.md) §3).** O grupo **Sessão** ganha, logo depois de restaurar tamanho e posição das janelas, a opção restaurar sessões salvas na janela atual (`session.restore_named_in_current_window`, alternância). Ela vale na hora: é a única opção do grupo que o RF-16.13 não marca com "após reiniciar".
 
+> **Emenda ([PRD-024](prd-024-gerenciador-de-tarefas.md) RF-24.28, [ADR-0095](../adr/0095-gerenciador-de-tarefas-modo-da-janela.md) §9).** Um grupo novo, **Gerenciador de tarefas**, entra depois de **Painéis** e antes de **Atalhos**, com uma opção: o período dos gráficos (`task_manager.history_seconds`, campo numérico de 30 a 600). Ela vale na hora.
+
+> **Emenda ([PRD-024](prd-024-gerenciador-de-tarefas.md) RF-24.36, [ADR-0098](../adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md) §7).** O grupo **Gerenciador de tarefas** ganha, antes do período, a opção monitorar em segundo plano (`task_manager.background_monitoring`, alternância, default desligada). Ela vale na hora. A mesma chave é gravada pela alternância do rodapé do gerenciador.
+
 **RF-16.12** — Cada opção usa o controle que o tipo dela pede ([ADR-0060](../adr/0060-anatomia-da-tela-de-configuracoes.md) §3): **alternância** para booleano; **escolha** entre valores nomeados para enum (`shape`, `tab_bar_position`, `show_close_button`) e para idioma; **campo numérico** com faixa para número; **campo de texto** para texto livre; **lista editável** para lista de textos; **lista de nome e valor** para `shell.env`. Nenhum seletor nativo de arquivo, pasta ou fonte: caminho e família de fonte são texto.
 
 **RF-16.13** — Opção cuja mudança **não vale na hora** (classe C do [ADR-0030](../adr/0030-escopo-do-hot-reload.md)) diz o escopo real ao lado do nome, antes de o usuário mudá-la: "vale em aba nova", "vale na próxima janela", "após reiniciar". O aviso que a recarga já mostra depois de gravar continua.
