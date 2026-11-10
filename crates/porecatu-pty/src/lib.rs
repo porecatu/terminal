@@ -10,13 +10,24 @@
 //!
 //! [`ProcessGroup`] (ADR-0033) acompanha o `PtyHandle` que `spawn` devolve,
 //! separado dele de propósito — ver a nota do módulo `job`.
+//!
+//! O crate ganhou um módulo de **medição** (`stats`, ADR-0093 "Negativas"):
+//! [`Sampler`], a thread que amostra CPU, memória e disco das árvores de
+//! processo e encerra um processo escolhido, para o gerenciador de tarefas
+//! (PRD-024). Mora aqui porque o critério de pertença e o Job Object moram
+//! aqui; o nome do crate fica um pouco mais estreito que o conteúdo.
 
 mod error;
 mod job;
 mod shell;
 mod spawn;
+mod stats;
 
 pub use error::{PtyError, PtyErrorKind};
 pub use job::ProcessGroup;
 pub use shell::{resolve_default_shell, search_path};
 pub use spawn::{PtyExitStatus, PtyHandle, PtySize, SpawnConfig, spawn};
+pub use stats::{
+    KillRequest, ProcessStat, SampleRequest, SampleResult, Sampler, SamplerGone, SamplerRequest,
+    kill_detached,
+};

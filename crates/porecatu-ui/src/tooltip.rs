@@ -19,6 +19,7 @@ use porecatu_core::{TabId, Workspace};
 use porecatu_render::Rect;
 
 use crate::tab_bar::{self, TabBarStyle};
+use crate::task_manager::RowKey;
 
 /// Espec. §2.20: "após 600ms de hover parado".
 pub const HOVER_DELAY: Duration = Duration::from_millis(600);
@@ -38,6 +39,10 @@ pub enum HoverKey {
     /// (ADR-0060 §2: "Restaurar padrão", espec. §2.20); o índice é o do bloco
     /// no painel. Ícone sem texto: o tooltip diz o que ele faz.
     SettingsRestore(usize),
+    /// The name of a row of the task manager list, cut by the column
+    /// (PRD-024 RF-24.16, ADR-0095 §7). By the row's identity, not its index:
+    /// a new sample does not make the tooltip jump to another row.
+    TaskRow(RowKey),
 }
 
 /// The tooltip target of a pinned box under `point` (screen coordinates), or
@@ -256,6 +261,27 @@ mod tests {
         );
         hover.tick(t(699)); // 599ms desde a troca -- ainda não mostrou
         assert_eq!(hover.visible(), None);
+        hover.tick(t(700));
+        assert_eq!(hover.visible(), Some((rect(), "igual")));
+    }
+
+    /// A task manager row is a different target from a tab with the same
+    /// text, and the same row keeps its delay across samples.
+    #[test]
+    fn a_task_row_is_its_own_target_by_identity() {
+        let row = RowKey::Tab(TabId::new(0));
+        let mut hover = Hover::default();
+        hover.update(Some((tab(0), rect(), "igual".into())), t(0));
+        hover.update(
+            Some((HoverKey::TaskRow(row), rect(), "igual".into())),
+            t(100),
+        );
+        hover.tick(t(699));
+        assert_eq!(hover.visible(), None, "a new target restarts the delay");
+        hover.update(
+            Some((HoverKey::TaskRow(row), rect(), "igual".into())),
+            t(650),
+        );
         hover.tick(t(700));
         assert_eq!(hover.visible(), Some((rect(), "igual")));
     }

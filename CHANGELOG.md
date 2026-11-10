@@ -16,6 +16,37 @@ primeiro release.
 
 ## [Não publicado]
 
+### Adicionado
+
+- **Gerenciador de tarefas**
+  ([PRD-024](docs/prd/prd-024-gerenciador-de-tarefas.md),
+  [ADR-0093](docs/adr/0093-medicao-de-processos-do-gerenciador.md) a
+  [ADR-0096](docs/adr/0096-anatomia-do-gerenciador-de-tarefas.md)): o botão do
+  app, que não tinha ação, passa a alternar a janela entre o terminal e um
+  gerenciador de tarefas que ocupa a área de conteúdo. À esquerda, três
+  gráficos de linha (CPU, memória e disco, com a soma dos processos **desta
+  janela**), desenhados da direita para a esquerda; à direita, a lista dos
+  processos da janela, agrupada por aba e em árvore. Duplo clique ou `Enter`
+  vai para a aba do processo; o menu da linha encerra um processo e a árvore
+  dele, com confirmação (o shell raiz do painel não pode ser encerrado por
+  ali). A medição é de 1 Hz numa thread e só acontece com algum gerenciador
+  aberto. Ação nova `task_manager.toggle`, sem atalho padrão; chave nova
+  `[task_manager] history_seconds` (default 60, de 30 a 600, vale na hora),
+  também no grupo novo "Gerenciador de tarefas" da tela de configurações.
+  Rede e GPU ficam fora.
+- **Polilinha e área no render**
+  ([ADR-0094](docs/adr/0094-polilinha-e-area-no-render.md)): duas primitivas
+  genéricas novas, `Polyline` e `Area`, com antisserrilhado por SDF de
+  segmento e área sem costura entre faixas.
+
+### Alterado
+
+- O nó de acessibilidade do botão do app passa de "Menu do aplicativo" a
+  "Gerenciador de tarefas", alternável.
+- Em Linux e macOS, a varredura da árvore de processos de um painel
+  (`descendants_of`) passa a existir também, usada só pelo gerenciador; o
+  fechamento de aba nessas plataformas não muda.
+
 ## [0.9.10] - 2026-11-07
 
 Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popover "Mover para janela…") e restauração de sessão nomeada na janela atual. Substitui a 0.9.9, retirada.

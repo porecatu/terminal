@@ -42,8 +42,9 @@ pub struct BlurSource {
     /// Cor sobre a qual `primitives` desenham. Cor reta, como `clear_color`.
     pub background: Color,
     /// Desenhadas, na ordem, sobre `background`. Só geometria e imagens
-    /// contam: texto, e um `BlurredBackdrop` dentro da própria fonte, não
-    /// desenham.
+    /// contam (`Quad`, `RoundedQuad`, `Backdrop`, `Image` e as `Polyline` e
+    /// `Area` do ADR-0094, que passam pelo mesmo `resolve_layer`): texto, e um
+    /// `BlurredBackdrop` dentro da própria fonte, não desenham.
     pub primitives: Vec<Primitive>,
     /// Raio do desfoque em pixels lógicos; o físico é `radius_logical * scale`
     /// (RF-19.9).

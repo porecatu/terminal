@@ -210,6 +210,18 @@ pub struct ThemeSettings {
     pub footer_separator: Option<Color>,
 }
 
+/// `[task_manager]` do tema -- cores dos gráficos do gerenciador de tarefas
+/// (ADR-0096 §7).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default)]
+pub struct ThemeTaskManager {
+    pub cpu: Option<Color>,
+    pub memory: Option<Color>,
+    pub disk: Option<Color>,
+    pub grid: Option<Color>,
+    pub chart_border: Option<Color>,
+}
+
 /// Um arquivo `thm_<nome>.toml`. O nome vem do arquivo, não do conteúdo.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default)]
@@ -228,6 +240,7 @@ pub struct Theme {
     pub group_editor: ThemeGroupEditor,
     pub status_bar: ThemeStatusBar,
     pub settings: ThemeSettings,
+    pub task_manager: ThemeTaskManager,
 }
 
 /// Parseia o texto de um arquivo de tema. Devolve o tema mais as chaves
@@ -470,6 +483,11 @@ fn mergeable_fields(theme: &Theme) -> Vec<MergeField> {
         "appearance.settings.row_background" => appearance.settings.row_background <= settings.row_background;
         "appearance.settings.chip_background" => appearance.settings.chip_background <= settings.chip_background;
         "appearance.settings.footer_separator" => appearance.settings.footer_separator <= settings.footer_separator;
+        "appearance.task_manager.cpu" => appearance.task_manager.cpu <= task_manager.cpu;
+        "appearance.task_manager.memory" => appearance.task_manager.memory <= task_manager.memory;
+        "appearance.task_manager.disk" => appearance.task_manager.disk <= task_manager.disk;
+        "appearance.task_manager.grid" => appearance.task_manager.grid <= task_manager.grid;
+        "appearance.task_manager.chart_border" => appearance.task_manager.chart_border <= task_manager.chart_border;
     }
 }
 

@@ -19,6 +19,7 @@ use wgpu::util::DeviceExt;
 use crate::frame::{GeometryBatch, GeometryPrimitive, Layer};
 use crate::image::{GpuImage, ImageInstance, ImageRegistry, ImageShared};
 use crate::primitives::{ImageId, Quad, Rect, RoundedQuad, scale_rect};
+use crate::segment::{SegmentInstance, SegmentLayerBuffer, SegmentShared};
 
 const SHADER: &str = concat!(include_str!("sdf.wgsl"), include_str!("quad.wgsl"));
 const INITIAL_INSTANCE_CAPACITY: u64 = 64;
@@ -28,7 +29,7 @@ const INITIAL_IMAGE_CAPACITY: u64 = 4;
 /// instância -- a instância escala e posiciona via `Instance`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
+pub(crate) struct Vertex {
     corner: [f32; 2],
 }
 
@@ -137,6 +138,9 @@ pub(crate) struct QuadShared {
     /// mesmo layout, e portanto o mesmo bind group de cada janela.
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) vertex_buffer: wgpu::Buffer,
+    /// Pipeline de `Polyline` e `Area` (ADR-0094): mesmo layout de grupo 0 e
+    /// mesmo vértice estático, outro shader e outro layout de instância.
+    segment: SegmentShared,
 }
 
 impl QuadShared {
@@ -282,6 +286,8 @@ impl QuadShared {
             },
         );
 
+        let segment = SegmentShared::new(device, format, &bind_group_layout);
+
         Self {
             pipeline,
             backdrop_pipeline,
@@ -289,6 +295,7 @@ impl QuadShared {
             add_pipeline,
             bind_group_layout,
             vertex_buffer,
+            segment,
         }
     }
 }
@@ -347,7 +354,9 @@ struct QuadLayerBuffer {
     /// buffer (ADR-0061 §2).
     image_buffer: wgpu::Buffer,
     image_capacity: u64,
-    /// Na ordem do stream: quads e imagens se intercalam.
+    /// Instâncias dos segmentos de polilinha e área da camada (ADR-0094 §4).
+    segments: SegmentLayerBuffer,
+    /// Na ordem do stream: quads, imagens e segmentos se intercalam.
     draws: Vec<Draw>,
 }
 
@@ -397,6 +406,164 @@ enum Draw {
     /// `image_buffer` (o mesmo layout de instância da imagem); a textura vem
     /// da fonte de desfoque da janela, não do registro.
     Blurred { scissor: ScissorRect, index: u32 },
+    /// Execução contígua de segmentos de `Polyline`/`Area`: `range` indexa o
+    /// buffer de segmentos da camada (ADR-0094 §4).
+    Segments {
+        scissor: ScissorRect,
+        range: Range<u32>,
+    },
+}
+
+/// Uma execução contígua de geometria que um único `draw` cobre: quads no
+/// mesmo modo de blend, ou segmentos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Quads(QuadMode),
+    Segments,
+}
+
+impl Run {
+    fn of(g: &GeometryPrimitive) -> Self {
+        match g {
+            GeometryPrimitive::Segment(_) => Self::Segments,
+            other => Self::Quads(QuadMode::of(other)),
+        }
+    }
+}
+
+/// O que `prepare_layer` calcula de uma camada, sem tocar a GPU: os `draws`
+/// na ordem do stream e as instâncias de cada pipeline. Separado do upload
+/// para que ordem, lote e recorte sejam testáveis sem dispositivo.
+#[derive(Debug, Default)]
+struct LayerPlan {
+    draws: Vec<Draw>,
+    instances: Vec<Instance>,
+    image_instances: Vec<ImageInstance>,
+    segments: Vec<SegmentInstance>,
+}
+
+/// Fecha uma execução em `plan.draws`, se o scissor deixar algo à vista. As
+/// instâncias já estão no plano de qualquer jeito.
+fn close_run(plan: &mut LayerPlan, scissor: ScissorRect, run: Run, start: u32) {
+    if scissor.is_empty() {
+        return;
+    }
+    match run {
+        Run::Quads(mode) => plan.draws.push(Draw::Quads {
+            scissor,
+            range: start..plan.instances.len() as u32,
+            mode,
+        }),
+        Run::Segments => plan.draws.push(Draw::Segments {
+            scissor,
+            range: start..plan.segments.len() as u32,
+        }),
+    }
+}
+
+/// Monta o plano de uma camada a partir dos batches resolvidos. `has_image`
+/// diz se o registro ainda tem o id (imagem removida não desenha) e
+/// `blur_available` se a janela tem fonte de desfoque (ADR-0068 §5).
+fn plan_layer(
+    batches: &[GeometryBatch],
+    has_image: impl Fn(ImageId) -> bool,
+    blur_available: bool,
+    scale: f32,
+    surface_width: u32,
+    surface_height: u32,
+) -> LayerPlan {
+    let mut plan = LayerPlan::default();
+
+    for batch in batches {
+        if batch.geometry.is_empty() {
+            continue;
+        }
+        let scissor = match batch.clip {
+            Some(rect) => {
+                ScissorRect::clamped(scale_rect(rect, scale), surface_width, surface_height)
+            }
+            None => ScissorRect::full(surface_width, surface_height),
+        };
+        // `resolve_layer` põe cada imagem sozinha num batch (troca de
+        // pipeline e de bind group): aqui ela vira um `draw` próprio, na
+        // ordem do stream. Id de imagem já removida não desenha nada.
+        if let [GeometryPrimitive::Image(image)] = batch.geometry.as_slice() {
+            if !scissor.is_empty() && has_image(image.image) {
+                plan.draws.push(Draw::Image {
+                    scissor,
+                    index: plan.image_instances.len() as u32,
+                    image: image.image,
+                    repeat: image.repeat,
+                });
+                plan.image_instances
+                    .push(ImageInstance::from_primitive(image, scale));
+            }
+            continue;
+        }
+        // O desfoque também fica sozinho no batch, com a instância no mesmo
+        // buffer das imagens.
+        if let [GeometryPrimitive::Blurred(blurred)] = batch.geometry.as_slice() {
+            if !scissor.is_empty() && blur_available {
+                plan.draws.push(Draw::Blurred {
+                    scissor,
+                    index: plan.image_instances.len() as u32,
+                });
+                plan.image_instances.push(ImageInstance::screen_space(
+                    blurred.mask,
+                    blurred.mask_radius,
+                    scale,
+                ));
+            }
+            continue;
+        }
+        // Na ordem de chegada -- não por tipo. Separar quad e arredondado em
+        // dois `extend` desenhava todo arredondado por cima de todo quad do
+        // batch, não importa quem foi pushado primeiro (era o que escondia o
+        // cursor atrás do quadro do terminal). Uma execução por pipeline e
+        // por tipo de blend: `Backdrop` e segmentos trocam de pipeline, e a
+        // ordem do stream continua valendo.
+        let mut current: Option<(Run, u32)> = None;
+        for g in &batch.geometry {
+            let run = Run::of(g);
+            if current.map(|(r, _)| r) != Some(run) {
+                if let Some((open, start)) = current {
+                    close_run(&mut plan, scissor, open, start);
+                }
+                let start = match run {
+                    Run::Quads(_) => plan.instances.len(),
+                    Run::Segments => plan.segments.len(),
+                };
+                current = Some((run, start as u32));
+            }
+            match g {
+                GeometryPrimitive::Quad(q) => plan.instances.push(Instance::from_quad(q, scale)),
+                GeometryPrimitive::Rounded(q) | GeometryPrimitive::Backdrop(q) => {
+                    plan.instances.push(Instance::from_rounded_quad(q, scale));
+                }
+                GeometryPrimitive::Segment(s) => {
+                    plan.segments.push(SegmentInstance::from_segment(s, scale));
+                }
+                // Nunca num batch com quads (ver acima); se algum dia
+                // chegar, desenhar como quad seria errado, e calar também.
+                GeometryPrimitive::Image(_) | GeometryPrimitive::Blurred(_) => {
+                    unreachable!("imagem e desfoque sempre sozinhos no batch (resolve_layer)")
+                }
+            }
+        }
+        if let Some((open, start)) = current {
+            close_run(&mut plan, scissor, open, start);
+        }
+    }
+
+    plan
+}
+
+/// Qual buffer de instâncias está no slot 1 de vértice: cada pipeline lê o seu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstanceSlot {
+    Quads,
+    Images,
+    Segments,
 }
 
 impl QuadLayerBuffer {
@@ -420,6 +587,7 @@ impl QuadLayerBuffer {
             instance_capacity,
             image_buffer,
             image_capacity,
+            segments: SegmentLayerBuffer::new(device),
             draws: Vec::new(),
         }
     }
@@ -497,115 +665,38 @@ impl QuadWindowState {
         surface_width: u32,
         surface_height: u32,
     ) {
+        let plan = plan_layer(
+            batches,
+            |id| images.contains(id),
+            blur_available,
+            scale,
+            surface_width,
+            surface_height,
+        );
         let state = &mut self.layers[layer.index()];
-        state.draws.clear();
-        let mut instances: Vec<Instance> = Vec::new();
-        let mut image_instances: Vec<ImageInstance> = Vec::new();
+        state.draws = plan.draws;
 
-        for batch in batches {
-            if batch.geometry.is_empty() {
-                continue;
-            }
-            let scissor = match batch.clip {
-                Some(rect) => {
-                    ScissorRect::clamped(scale_rect(rect, scale), surface_width, surface_height)
-                }
-                None => ScissorRect::full(surface_width, surface_height),
-            };
-            // `resolve_layer` põe cada imagem sozinha num batch (troca de
-            // pipeline e de bind group): aqui ela vira um `draw` próprio, na
-            // ordem do stream. Id de imagem já removida não desenha nada.
-            if let [GeometryPrimitive::Image(image)] = batch.geometry.as_slice() {
-                if !scissor.is_empty() && images.contains(image.image) {
-                    state.draws.push(Draw::Image {
-                        scissor,
-                        index: image_instances.len() as u32,
-                        image: image.image,
-                        repeat: image.repeat,
-                    });
-                    image_instances.push(ImageInstance::from_primitive(image, scale));
-                }
-                continue;
-            }
-            // O desfoque também fica sozinho no batch, com a instância no mesmo
-            // buffer das imagens.
-            if let [GeometryPrimitive::Blurred(blurred)] = batch.geometry.as_slice() {
-                if !scissor.is_empty() && blur_available {
-                    state.draws.push(Draw::Blurred {
-                        scissor,
-                        index: image_instances.len() as u32,
-                    });
-                    image_instances.push(ImageInstance::screen_space(
-                        blurred.mask,
-                        blurred.mask_radius,
-                        scale,
-                    ));
-                }
-                continue;
-            }
-            let start = instances.len() as u32;
-            // Na ordem de chegada -- não por tipo. Separar quad e
-            // arredondado em dois `extend` desenhava todo arredondado por
-            // cima de todo quad do batch, não importa quem foi pushado
-            // primeiro (era o que escondia o cursor atrás do quadro do
-            // terminal).
-            // Uma execução por tipo de blend: `Backdrop` troca de pipeline, e
-            // a ordem do stream continua valendo.
-            let mut run_start = start;
-            let mut run_mode = QuadMode::of(&batch.geometry[0]);
-            for g in &batch.geometry {
-                let mode = QuadMode::of(g);
-                if mode != run_mode {
-                    let at = instances.len() as u32;
-                    if !scissor.is_empty() {
-                        state.draws.push(Draw::Quads {
-                            scissor,
-                            range: run_start..at,
-                            mode: run_mode,
-                        });
-                    }
-                    run_start = at;
-                    run_mode = mode;
-                }
-                instances.push(match g {
-                    GeometryPrimitive::Quad(q) => Instance::from_quad(q, scale),
-                    GeometryPrimitive::Rounded(q) | GeometryPrimitive::Backdrop(q) => {
-                        Instance::from_rounded_quad(q, scale)
-                    }
-                    // Nunca num batch com quads (ver acima); se algum dia
-                    // chegar, desenhar como quad seria errado, e calar também.
-                    GeometryPrimitive::Image(_) | GeometryPrimitive::Blurred(_) => {
-                        unreachable!("imagem e desfoque sempre sozinhos no batch (resolve_layer)")
-                    }
-                });
-            }
-            let end = instances.len() as u32;
-            if !scissor.is_empty() {
-                state.draws.push(Draw::Quads {
-                    scissor,
-                    range: run_start..end,
-                    mode: run_mode,
-                });
-            }
-        }
-
-        let needed = instances.len() as u64;
+        let needed = plan.instances.len() as u64;
         if needed > state.instance_capacity {
             state.instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("porecatu-render/quad-instances"),
-                contents: bytemuck::cast_slice(&instances),
+                contents: bytemuck::cast_slice(&plan.instances),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
             state.instance_capacity = needed;
         } else if needed > 0 {
-            queue.write_buffer(&state.instance_buffer, 0, bytemuck::cast_slice(&instances));
+            queue.write_buffer(
+                &state.instance_buffer,
+                0,
+                bytemuck::cast_slice(&plan.instances),
+            );
         }
 
-        let needed = image_instances.len() as u64;
+        let needed = plan.image_instances.len() as u64;
         if needed > state.image_capacity {
             state.image_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("porecatu-render/image-instances"),
-                contents: bytemuck::cast_slice(&image_instances),
+                contents: bytemuck::cast_slice(&plan.image_instances),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
             state.image_capacity = needed;
@@ -613,9 +704,11 @@ impl QuadWindowState {
             queue.write_buffer(
                 &state.image_buffer,
                 0,
-                bytemuck::cast_slice(&image_instances),
+                bytemuck::cast_slice(&plan.image_instances),
             );
         }
+
+        state.segments.upload(device, queue, &plan.segments);
     }
 
     /// Desenha o que `prepare_layer` montou para `layer`: um `draw` por
@@ -640,8 +733,9 @@ impl QuadWindowState {
         pass.set_vertex_buffer(0, shared.vertex_buffer.slice(..));
         pass.set_vertex_buffer(1, state.instance_buffer.slice(..));
         // O slot 1 de vértice é o buffer de instâncias do último pipeline: uma
-        // imagem o troca, e o quad que vem depois precisa do seu de volta.
-        let mut slot_holds_images = false;
+        // imagem ou uma corrida de segmentos o troca, e o quad que vem depois
+        // precisa do seu de volta.
+        let mut slot = InstanceSlot::Quads;
         for draw in &state.draws {
             match draw {
                 Draw::Quads {
@@ -649,9 +743,9 @@ impl QuadWindowState {
                     range,
                     mode,
                 } => {
-                    if slot_holds_images {
+                    if slot != InstanceSlot::Quads {
                         pass.set_vertex_buffer(1, state.instance_buffer.slice(..));
-                        slot_holds_images = false;
+                        slot = InstanceSlot::Quads;
                     }
                     pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
                     match mode {
@@ -689,7 +783,7 @@ impl QuadWindowState {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_bind_group(1, gpu_image.bind_group(*repeat), &[]);
                     pass.set_vertex_buffer(1, state.image_buffer.slice(..));
-                    slot_holds_images = true;
+                    slot = InstanceSlot::Images;
                     pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
                     pass.draw(0..4, *index..*index + 1);
                 }
@@ -701,9 +795,18 @@ impl QuadWindowState {
                     pass.set_bind_group(0, &self.bind_group, &[]);
                     pass.set_bind_group(1, blur_group, &[]);
                     pass.set_vertex_buffer(1, state.image_buffer.slice(..));
-                    slot_holds_images = true;
+                    slot = InstanceSlot::Images;
                     pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
                     pass.draw(0..4, *index..*index + 1);
+                }
+                Draw::Segments { scissor, range } => {
+                    pass.set_pipeline(&shared.segment.pipeline);
+                    if slot != InstanceSlot::Segments {
+                        pass.set_vertex_buffer(1, state.segments.buffer.slice(..));
+                        slot = InstanceSlot::Segments;
+                    }
+                    pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+                    pass.draw(0..4, range.clone());
                 }
             }
         }
@@ -713,6 +816,8 @@ impl QuadWindowState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::resolve_layer;
+    use crate::primitives::{Area, Color, Point, Polyline, Primitive};
 
     #[test]
     fn scale_rect_multiplies_every_field() {
@@ -808,5 +913,178 @@ mod tests {
         };
         let clamped = ScissorRect::clamped(rect, 30, 30);
         assert!(clamped.is_empty());
+    }
+
+    fn pt(x: f32, y: f32) -> Point {
+        Point { x, y }
+    }
+
+    fn quad(x: f32) -> Primitive {
+        Primitive::Quad(Quad {
+            rect: Rect {
+                x,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            color: Color::BLACK,
+        })
+    }
+
+    /// Uma polilinha opaca de `n` pontos (`n - 1` segmentos).
+    fn polyline(n: usize) -> Primitive {
+        Primitive::Polyline(Polyline {
+            points: (0..n).map(|i| pt(i as f32, i as f32)).collect(),
+            width: 2.0,
+            color: Color::WHITE,
+        })
+    }
+
+    fn plan(primitives: &[Primitive], scale: f32) -> LayerPlan {
+        let resolved = resolve_layer(primitives);
+        plan_layer(&resolved.batches, |_| true, false, scale, 100, 100)
+    }
+
+    fn kinds(plan: &LayerPlan) -> Vec<&'static str> {
+        plan.draws
+            .iter()
+            .map(|d| match d {
+                Draw::Quads { .. } => "quads",
+                Draw::Image { .. } => "image",
+                Draw::Blurred { .. } => "blurred",
+                Draw::Segments { .. } => "segments",
+            })
+            .collect()
+    }
+
+    /// `n` pontos viram `n - 1` instâncias, e o draw as cobre todas.
+    #[test]
+    fn a_polyline_of_n_points_is_n_minus_1_instances_in_one_draw() {
+        let plan = plan(&[polyline(5)], 1.0);
+        assert_eq!(plan.segments.len(), 4);
+        assert!(plan.instances.is_empty());
+        assert_eq!(kinds(&plan), vec!["segments"]);
+        let Draw::Segments { range, .. } = &plan.draws[0] else {
+            unreachable!();
+        };
+        assert_eq!(*range, 0..4);
+    }
+
+    #[test]
+    fn a_polyline_with_fewer_than_two_points_draws_nothing() {
+        for n in 0..2 {
+            let plan = plan(&[polyline(n)], 1.0);
+            assert!(plan.segments.is_empty());
+            assert!(plan.draws.is_empty());
+        }
+    }
+
+    /// Quad, polilinha, quad: três draws, na ordem do stream, cada um no seu
+    /// pipeline e no seu intervalo.
+    #[test]
+    fn a_polyline_between_two_quads_keeps_the_stream_order() {
+        let plan = plan(&[quad(0.0), polyline(3), quad(1.0)], 1.0);
+        assert_eq!(kinds(&plan), vec!["quads", "segments", "quads"]);
+        let ranges: Vec<_> = plan
+            .draws
+            .iter()
+            .map(|d| match d {
+                Draw::Quads { range, .. } | Draw::Segments { range, .. } => range.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(ranges, vec![0..1, 0..2, 1..2]);
+        assert_eq!(plan.instances.len(), 2);
+        assert_eq!(plan.segments.len(), 2);
+    }
+
+    /// Uma área e polilinhas seguidas (a ordem do ADR-0096 §3: áreas, depois
+    /// linhas) são uma corrida só: um `Draw::Segments`.
+    #[test]
+    fn contiguous_polylines_and_areas_are_one_segments_draw() {
+        let area = Primitive::Area(Area {
+            points: vec![pt(0.0, 1.0), pt(1.0, 1.0), pt(2.0, 1.0)],
+            baseline_y: 9.0,
+            color: Color::WHITE,
+        });
+        let plan = plan(&[area, polyline(3), polyline(4)], 1.0);
+        assert_eq!(kinds(&plan), vec!["segments"]);
+        let Draw::Segments { range, .. } = &plan.draws[0] else {
+            unreachable!();
+        };
+        assert_eq!(*range, 0..(2 + 2 + 3));
+        // Área primeiro (kind 1), linhas depois (kind 0), na ordem.
+        let order: Vec<u32> = plan.segments.iter().map(|s| s.kind).collect();
+        assert_eq!(order, vec![1, 1, 0, 0, 0, 0, 0]);
+    }
+
+    /// O recorte vira o scissor do `Draw::Segments`, em pixels físicos.
+    #[test]
+    fn the_clip_stack_applies_to_segments() {
+        let clip = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let plan = plan(
+            &[
+                Primitive::PushClip(clip),
+                polyline(3),
+                Primitive::PopClip,
+                polyline(3),
+            ],
+            2.0,
+        );
+        assert_eq!(kinds(&plan), vec!["segments", "segments"]);
+        let scissors: Vec<_> = plan
+            .draws
+            .iter()
+            .map(|d| match d {
+                Draw::Segments { scissor, .. } => *scissor,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(
+            scissors[0],
+            ScissorRect {
+                x: 20,
+                y: 40,
+                width: 60,
+                height: 60
+            }
+        );
+        assert_eq!(scissors[1], ScissorRect::full(100, 100));
+    }
+
+    #[test]
+    fn a_clip_outside_the_surface_leaves_no_segments_draw() {
+        let clip = Rect {
+            x: 1000.0,
+            y: 1000.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let plan = plan(
+            &[Primitive::PushClip(clip), polyline(3), Primitive::PopClip],
+            1.0,
+        );
+        assert!(plan.draws.is_empty());
+    }
+
+    #[test]
+    fn scale_2_doubles_segment_coordinates_and_half_width() {
+        let line = Primitive::Polyline(Polyline {
+            points: vec![pt(1.0, 2.0), pt(3.0, 4.0)],
+            width: 3.0,
+            color: Color::WHITE,
+        });
+        let one = plan(std::slice::from_ref(&line), 1.0);
+        let two = plan(std::slice::from_ref(&line), 2.0);
+        assert_eq!(one.segments[0].p0, [1.0, 2.0]);
+        assert_eq!(one.segments[0].half_width, 1.5);
+        assert_eq!(two.segments[0].p0, [2.0, 4.0]);
+        assert_eq!(two.segments[0].p1, [6.0, 8.0]);
+        assert_eq!(two.segments[0].half_width, 3.0);
     }
 }

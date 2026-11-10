@@ -97,7 +97,8 @@
 | [0093](0093-medicao-de-processos-do-gerenciador.md) | Medição de processos do gerenciador de tarefas: amostrador em `porecatu-pty`, pedido pelo relógio da UI, uma thread só enquanto houver gerenciador aberto | Aceito |
 | [0094](0094-polilinha-e-area-no-render.md) | Polilinha e área no render: segmentos instanciados com SDF de segmento, área por faixas verticais | Aceito |
 | [0095](0095-gerenciador-de-tarefas-modo-da-janela.md) | Gerenciador de tarefas como modo da janela: estado em `WindowState`, ação `task_manager.toggle`, captura de entrada, lista derivada da amostra e chave `[task_manager] history_seconds` | Aceito |
-| [0096](0096-anatomia-do-gerenciador-de-tarefas.md) | Anatomia do gerenciador de tarefas e do botão do app ligado | Aceito — aval visual do dono pendente |
+| [0096](0096-anatomia-do-gerenciador-de-tarefas.md) | Anatomia do gerenciador de tarefas e do botão do app ligado | Aceito — aval visual do dono dado · §6 item 2 revisto por ADR-0097 (**parcial**: a sombra interna) |
+| [0097](0097-sombra-interna-do-botao-do-app-ligado.md) | Sombra interna do botão do app ligado: mais opaca, nas bordas de cima e esquerda | Aceito |
 
 ## Convenção
 

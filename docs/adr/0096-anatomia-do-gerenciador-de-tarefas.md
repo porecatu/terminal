@@ -1,6 +1,6 @@
 # ADR-0096 — Anatomia do gerenciador de tarefas e do botão do app ligado
 
-**Status:** Aceito — aval visual do dono pendente
+**Status:** Aceito — aval visual do dono dado em 2026-11-10, com a sombra interna revista pelo [ADR-0097](0097-sombra-interna-do-botao-do-app-ligado.md)
 **Data:** 2026-11-10
 **Relacionados:** [ADR-0024](0024-face-de-icones.md), [ADR-0028](0028-o-binario-como-referencia-visual.md), [ADR-0032](0032-interface-do-v1-fechada.md), [ADR-0053](0053-paineis-divididos.md), [ADR-0060](0060-anatomia-da-tela-de-configuracoes.md), [ADR-0067](0067-temas-em-arquivos-proprios.md), [ADR-0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md), [ADR-0079](0079-botao-de-menu-do-app.md), [ADR-0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md), [ADR-0087](0087-zona-de-abas-fixadas-na-barra.md), [ADR-0094](0094-polilinha-e-area-no-render.md), [ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md), [PRD-024](../prd/prd-024-gerenciador-de-tarefas.md)
 **Supersedes:** ADR-0079 revisão de 2026-11-06 (**parcial**: acrescenta um estado "ligado" ao botão, com sombra interna; repouso, hover e pressionado com o modo desligado não mudam)
@@ -83,6 +83,8 @@ Com o gerenciador aberto **nesta janela**, o botão do app é desenhado assim, n
 
 1. **Fundo**: o quadrado de raio `tab_corner_radius` com `pressed_background`, que hoje só aparece no clique ([ADR-0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md)). Ele fica fixo enquanto o modo durar. A regra continua em `chrome::zone_button_background`, que ganha a entrada "ligado".
 2. **Sombra interna**: uma função nova, `chrome::push_inset_shadow(out, rect, radius)`, irmã de `push_shadow`, com os **mesmos** `SHADOW_LAYERS` e **zero valor novo**. Para cada camada `(spread, offset_y, alpha)`, ela empilha um `PushClip` com a faixa de cima do botão (`rect.y` até `rect.y + offset_y`), um `RoundedQuad` do tamanho e do raio do botão, preto com o alfa da camada, e um `PopClip`. As faixas se sobrepõem a partir do topo, então o primeiro pixel recebe as três camadas, o segundo duas e o terceiro uma: um degradê de 3 px que escurece para a borda de cima e acompanha os cantos arredondados do botão, porque o recorte é reto e a forma é a do botão. É o "afundado" de um botão iluminado de cima, a mesma luz da sombra externa das abas (`offset_y` positivo). `spread` não é usado: a sombra interna só tem a borda de cima.
+
+   > **Revisto pelo [ADR-0097](0097-sombra-interna-do-botao-do-app-ligado.md)** (2026-11-10, aval visual do dono): a sombra interna tem tabela própria, `chrome::INSET_SHADOW_LAYERS`, com as mesmas profundidades (1 / 2 / 3 px) e o **dobro** dos alfas de `SHADOW_LAYERS` (`.32` / `.20` / `.12`), e é pintada ao longo da borda **de cima**, do **arco do canto superior esquerdo** (o anel de borda do retângulo arredondado, recortado ao quadrado do canto) e da borda **esquerda**. `SHADOW_LAYERS` não muda.
 3. **Ícone**: o ícone do app, como sempre, **depois** da sombra, sem deslocamento.
 4. **Hover e clique com o modo ligado** não mudam o desenho: o botão já está "apertado". O clique desliga o modo ([ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md) §2) e o botão volta ao repouso.
 

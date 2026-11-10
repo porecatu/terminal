@@ -23,12 +23,18 @@
 //!    sub-conta e sub-mata nesse shell -- que é o **default preferido**
 //!    do Porecatu quando instalado (`resolve_default_shell`).
 //!
-//! A varredura roda **uma vez**, disparada só pelo fechamento pedido pelo
-//! usuário ou pela consulta de contagem (ADR-0034) -- nunca continuamente,
-//! e nunca para decidir "qual processo é o de primeiro plano" (isso
-//! continua sendo `TermModes`, ADR-0017). Alvo (`root_pid`) e gatilho já
-//! são conhecidos sem ambiguidade; isto não é a varredura que o
+//! A varredura roda **uma vez** por chamada, disparada pelo fechamento
+//! pedido pelo usuário, pela consulta de contagem (ADR-0034) ou -- terceira
+//! origem, ADR-0093 -- pela amostragem a 1 Hz do gerenciador de tarefas
+//! (`stats.rs`), que só existe enquanto algum gerenciador está aberto. Nunca
+//! roda para decidir "qual processo é o de primeiro plano" (isso continua
+//! sendo `TermModes`, ADR-0017). Alvo (`root_pid`) e gatilho já são
+//! conhecidos sem ambiguidade; isto não é a varredura que o
 //! ADR-0005/ADR-0008/ADR-0017 rejeitaram para fins de *detecção*.
+//!
+//! O critério de pertença ("este processo é desta aba") é uma função só,
+//! [`ProcessGroup::members`], usada pela contagem, pelo fechamento e pelo
+//! gerenciador (ADR-0093 §2).
 //!
 //! Fora do Windows, `for_child` guarda só o `root_pid` -- sem Job Object,
 //! `process_count`/`kill_tree` continuam degradados (`1`/no-op, dívida
@@ -50,6 +56,7 @@
 //! algo & exit`).
 
 use portable_pty::Child;
+use std::collections::HashSet;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
 #[cfg(windows)]
@@ -159,31 +166,54 @@ impl ProcessGroup {
     /// do `npm-cli.js` e o `node` do servidor ficam vivos juntos).
     #[cfg(windows)]
     pub fn process_count(&self) -> usize {
-        self.live_pids().len()
-    }
-
-    #[cfg(windows)]
-    fn live_pids(&self) -> std::collections::HashSet<u32> {
-        let mut pids = std::collections::HashSet::new();
-        pids.insert(self.root_pid);
-        if let Some(job) = &self.job
-            && let Ok(list) = job.query_process_id_list()
-        {
-            pids.extend(list.into_iter().map(|pid| pid as u32));
+        match refreshed_system() {
+            Some(system) => self.members(&system).len(),
+            // Sem a varredura do SO (`System::new` falhou) ficam só o raiz e
+            // a lista do Job -- degradação, não erro.
+            None => self.base_members().len(),
         }
-        // Sem a varredura do SO (`System::new` falhou) ficam só o raiz e a
-        // lista do Job -- degradação, não erro.
-        if let Some(system) = refreshed_system() {
-            for pid in descendants_of(&system, sysinfo::Pid::from_u32(self.root_pid)) {
-                pids.insert(pid.as_u32());
-            }
-        }
-        pids
     }
 
     #[cfg(not(windows))]
     pub fn process_count(&self) -> usize {
         1
+    }
+
+    /// O PID do processo raiz do painel (o shell). O gerenciador de tarefas
+    /// o usa para recusar o encerramento do shell (ADR-0093 §7).
+    pub fn root_pid(&self) -> u32 {
+        self.root_pid
+    }
+
+    /// Critério único de pertença (ADR-0093 §2): os PIDs vivos desta árvore,
+    /// **raiz incluída**. No Windows é a união da raiz, da lista do Job e da
+    /// varredura (`descendants_of`) -- ver [`Self::process_count`] para o
+    /// porquê de cada fonte. Fora do Windows, sem Job, é a raiz e a
+    /// varredura. O chamador entrega o `System` já atualizado (a lista de
+    /// processos, ao menos); esta função não varre nada por conta própria.
+    ///
+    /// `pub(crate)` de propósito: o tipo do `sysinfo` não atravessa a
+    /// fronteira do crate (CLAUDE.md).
+    pub(crate) fn members(&self, system: &sysinfo::System) -> HashSet<u32> {
+        let mut pids = self.base_members();
+        for pid in descendants_of(system, sysinfo::Pid::from_u32(self.root_pid)) {
+            pids.insert(pid.as_u32());
+        }
+        pids
+    }
+
+    /// A parte do critério que não precisa de varredura: a raiz e, no
+    /// Windows, a lista do Job.
+    fn base_members(&self) -> HashSet<u32> {
+        let mut pids = HashSet::new();
+        pids.insert(self.root_pid);
+        #[cfg(windows)]
+        if let Some(job) = &self.job
+            && let Ok(list) = job.query_process_id_list()
+        {
+            pids.extend(list.into_iter().map(|pid| pid as u32));
+        }
+        pids
     }
 
     /// Mata a árvore inteira: fecha o handle do Job primeiro (mata na
@@ -193,13 +223,18 @@ impl ProcessGroup {
     /// encontrar (cobre pwsh, cuja cadeia costuma estar inteira viva no
     /// momento do fechamento -- ver `process_count`).
     #[cfg(windows)]
-    pub fn kill_tree(self) {
-        drop(self.job);
+    pub fn kill_tree(mut self) {
+        drop(self.job.take());
         let Some(system) = refreshed_system() else {
             return;
         };
-        for pid in descendants_of(&system, sysinfo::Pid::from_u32(self.root_pid)) {
-            if let Some(process) = system.process(pid) {
+        // Com o Job já fechado, `members` é a raiz mais a varredura. A raiz
+        // fica de fora: quem a mata é o `kill` do próprio PTY (ADR-0033 §2).
+        for pid in self.members(&system) {
+            if pid == self.root_pid {
+                continue;
+            }
+            if let Some(process) = system.process(sysinfo::Pid::from_u32(pid)) {
                 let _ = process.kill();
             }
         }
@@ -220,9 +255,12 @@ fn refreshed_system() -> Option<sysinfo::System> {
 /// Todos os descendentes de `root` (não inclui `root`), varrendo a lista
 /// de processos do SO **uma vez** (`system` já veio atualizado) --
 /// `O(processos do sistema)`, aceitável porque só roda no fechamento de
-/// aba ou na consulta de contagem, nunca em loop.
-#[cfg(windows)]
-fn descendants_of(system: &sysinfo::System, root: sysinfo::Pid) -> Vec<sysinfo::Pid> {
+/// aba, na consulta de contagem ou na amostragem a 1 Hz do gerenciador de
+/// tarefas (ADR-0093), nunca em laço apertado.
+///
+/// A ordem devolvida tem todo pai **antes** dos próprios filhos; percorrida
+/// ao contrário, dá as folhas primeiro (usado ao encerrar, ADR-0093 §7).
+pub(crate) fn descendants_of(system: &sysinfo::System, root: sysinfo::Pid) -> Vec<sysinfo::Pid> {
     let mut children_of: std::collections::HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> =
         std::collections::HashMap::new();
     for (pid, process) in system.processes() {
@@ -243,9 +281,11 @@ fn descendants_of(system: &sysinfo::System, root: sysinfo::Pid) -> Vec<sysinfo::
     result
 }
 
+/// Suporte de teste compartilhado com `stats.rs` (ADR-0093 §8): sobe um shell
+/// interativo real sob ConPTY.
 #[cfg(all(test, windows))]
-mod tests {
-    use super::*;
+pub(crate) mod test_support {
+    use super::ProcessGroup;
     use crate::spawn::{PtySize, SpawnConfig};
 
     fn size() -> PtySize {
@@ -264,7 +304,7 @@ mod tests {
     /// escreve `command` assim que `prompt_marker` aparecer na saída --
     /// reage dentro do mesmo ciclo de leitura, sem precisar de um segundo
     /// `writer` (só dá pra tomar um, `take_writer` é de uso único).
-    fn spawn_interactive_and_run(
+    pub(crate) fn spawn_interactive_and_run(
         program: &str,
         cwd: Option<std::path::PathBuf>,
         prompt_marker: &'static str,
@@ -315,6 +355,12 @@ mod tests {
 
         (handle, group)
     }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::test_support::spawn_interactive_and_run;
+    use super::*;
 
     /// Sobe um shell interativo real (sem UI/janela/foco -- só processo)
     /// e roda um comando em primeiro plano (`ping`, no lugar de um `npm

@@ -50,6 +50,30 @@ save_item = "Enregistrer cette fenêtre…"
 empty_list = "aucune session enregistrée"
 name_placeholder = "nom de la session"
 
+[task_manager]
+chart_cpu = "CPU"
+chart_memory = "Mémoire"
+chart_disk = "Disque"
+column_name = "Nom"
+column_pid = "PID"
+column_cpu = "CPU"
+column_memory = "Mémoire"
+column_disk = "Disque"
+note_not_started = "L'onglet démarre au premier focus."
+note_ssh = "Les processus distants ne sont pas listés."
+note_exited = "Le processus du panneau s'est terminé."
+note_waiting = "En attente de la première mesure…"
+menu_go_to_tab = "Aller à l'onglet"
+menu_end_process = "Terminer le processus"
+unit_b = "o"
+unit_kb = "Ko"
+unit_mb = "Mo"
+unit_gb = "Go"
+per_second = "{value}/s"
+percent = "{value} %"
+decimal_separator = ","
+no_value = "—"
+
 [settings]
 window_title = "Paramètres"
 
@@ -63,6 +87,7 @@ session = "Session"
 project = "Projet"
 git = "Git"
 panes = "Panneaux"
+task_manager = "Gestionnaire des tâches"
 shortcuts = "Raccourcis"
 
 [settings.section]
@@ -87,6 +112,7 @@ restore = "RESTAURATION"
 project_file = "FICHIER DE PROJET"
 git_remote = "DÉPÔT DISTANT"
 panes_size = "TAILLE MINIMALE"
+task_manager_charts = "GRAPHIQUES"
 
 [settings.option]
 language_label = "Langue"
@@ -210,6 +236,8 @@ min_columns_label = "Colonnes minimales"
 min_columns_description = "Plus petite largeur, en colonnes, qu'un panneau peut atteindre."
 min_rows_label = "Lignes minimales"
 min_rows_description = "Plus petite hauteur, en lignes, qu'un panneau peut atteindre."
+history_seconds_label = "Période des graphiques"
+history_seconds_description = "Combien de secondes les graphiques du gestionnaire des tâches affichent. De 30 à 600."
 
 [settings.button]
 open_file = "Ouvrir le fichier dans l'éditeur"
@@ -384,6 +412,7 @@ session_open_list = "Ouvrir la liste des sessions"
 profile_open_menu = "Ouvrir le menu des profils"
 profile_new_tab = "Nouvel onglet avec le profil {n}"
 ssh_reconnect = "Reconnecter le volet SSH"
+task_manager_toggle = "Basculer le gestionnaire des tâches"
 
 [profile_menu]
 new_group = "Nouveau groupe d'onglets"
@@ -405,6 +434,7 @@ config = "Configuration"
 settings = "Paramètres"
 search = "Recherche"
 app = "Application"
+task_manager = "Gestionnaire des tâches"
 
 [search_bar]
 invalid_pattern = "motif invalide"
@@ -454,6 +484,12 @@ title = "Fermer le groupe ?"
 body = { one = "Cela ferme {count} onglet.", other = "Cela ferme {count} onglets." }
 confirm = { one = "Fermer le groupe ({count} onglet)", other = "Fermer le groupe ({count} onglets)" }
 
+[dialog.end_process]
+title = "Terminer le processus ?"
+body_alone = "{name} (PID {pid}) sera terminé."
+body = { one = "{name} (PID {pid}) et {count} processus enfant seront terminés.", other = "{name} (PID {pid}) et {count} processus enfants seront terminés." }
+confirm = "Terminer"
+
 [dialog.delete_session]
 title = "Supprimer la session enregistrée ?"
 body = "Cela supprime définitivement «{name}»."
@@ -500,7 +536,12 @@ body_cmd = "cmd.exe n'a aucun moyen fiable d'émettre ce signal -- utilisez Powe
 body_generic = "Shell non reconnu, donc aucun extrait prêt à proposer. OSC 7 est la séquence que le shell émet à chaque changement de répertoire -- consultez docs/reference/integracao-de-shell.md dans le dépôt de Porecatu pour configurer le vôtre."
 
 [access]
-app_menu_button = "Menu de l'application"
+task_manager_button = "Gestionnaire des tâches"
+task_manager = "Gestionnaire des tâches"
+task_manager_list = "Liste des processus"
+task_manager_meter = "{name}, {value}"
+task_manager_tab_row = "{title}, CPU {cpu}, mémoire {memory}, disque {disk}"
+task_manager_row = "{name}, PID {pid}, CPU {cpu}, mémoire {memory}, disque {disk}"
 new_tab_ungrouped = "Nouvel onglet hors d'un groupe"
 new_tab_in_group = "Nouvel onglet dans ce groupe"
 sessions_button = "Sessions enregistrées"
@@ -688,6 +729,10 @@ body = "\"{family}\" n'est pas installée ; police à chasse fixe du système ut
 [notice.git_interval_adjusted]
 title = "Intervalle de synchronisation ajusté"
 body = "\"{key}\" est inférieur au plancher de {floor}s ; {floor}s utilisées."
+
+[notice.task_manager_history_adjusted]
+title = "Période du gestionnaire de tâches ajustée"
+body = "\"history_seconds = {value}\" est hors de la plage de 30 à 600 ; {used} secondes utilisées."
 
 [notice.git_missing]
 title = "Git introuvable"

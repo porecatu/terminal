@@ -13,6 +13,7 @@ mod session_picker;
 mod settings;
 mod status_bar;
 mod tabs;
+mod task_manager;
 mod terminal_frame;
 mod tooltip;
 mod window;
@@ -28,6 +29,7 @@ pub use session_picker::SessionPicker;
 pub use settings::Settings;
 pub use status_bar::StatusBar;
 pub use tabs::{CloseButtonVisibility, Tabs, TabsColors, TabsOverflow, TabsRename};
+pub use task_manager::TaskManagerAppearance;
 pub use terminal_frame::TerminalFrame;
 pub use tooltip::Tooltip;
 pub use window::Window;
@@ -52,4 +54,5 @@ pub struct Appearance {
     pub settings: Settings,
     pub terminal_frame: TerminalFrame,
     pub status_bar: StatusBar,
+    pub task_manager: TaskManagerAppearance,
 }

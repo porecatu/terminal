@@ -66,6 +66,33 @@ save_item = "Save this window…"
 empty_list = "no saved sessions"
 name_placeholder = "session name"
 
+# Task manager (PRD-024). `unit_*` are the base-1024 symbols; the decimal
+# separator and the shape of `percent`/`per_second` belong to the language.
+# `no_value` is the dash shown for CPU before the first measurement.
+[task_manager]
+chart_cpu = "CPU"
+chart_memory = "Memory"
+chart_disk = "Disk"
+column_name = "Name"
+column_pid = "PID"
+column_cpu = "CPU"
+column_memory = "Memory"
+column_disk = "Disk"
+note_not_started = "The tab starts on first focus."
+note_ssh = "Remote processes are not listed."
+note_exited = "The pane's process has ended."
+note_waiting = "Waiting for the first measurement…"
+menu_go_to_tab = "Go to tab"
+menu_end_process = "End process"
+unit_b = "B"
+unit_kb = "KB"
+unit_mb = "MB"
+unit_gb = "GB"
+per_second = "{value}/s"
+percent = "{value}%"
+decimal_separator = "."
+no_value = "—"
+
 [settings]
 window_title = "Settings"
 
@@ -79,6 +106,7 @@ session = "Session"
 project = "Project"
 git = "Git"
 panes = "Panes"
+task_manager = "Task manager"
 shortcuts = "Shortcuts"
 
 [settings.section]
@@ -103,6 +131,7 @@ restore = "RESTORE"
 project_file = "PROJECT FILE"
 git_remote = "REMOTE"
 panes_size = "MINIMUM SIZE"
+task_manager_charts = "CHARTS"
 
 [settings.option]
 language_label = "Language"
@@ -226,6 +255,8 @@ min_columns_label = "Minimum columns"
 min_columns_description = "Smallest width, in columns, a pane can reach."
 min_rows_label = "Minimum rows"
 min_rows_description = "Smallest height, in rows, a pane can reach."
+history_seconds_label = "Chart period"
+history_seconds_description = "How many seconds the task manager charts show. From 30 to 600."
 
 [settings.button]
 open_file = "Open file in editor"
@@ -400,6 +431,7 @@ session_open_list = "Open session list"
 profile_open_menu = "Open profile menu"
 profile_new_tab = "New tab with profile {n}"
 ssh_reconnect = "Reconnect the SSH pane"
+task_manager_toggle = "Toggle task manager"
 
 [profile_menu]
 new_group = "New tab group"
@@ -421,6 +453,7 @@ config = "Configuration"
 settings = "Settings"
 search = "Search"
 app = "Application"
+task_manager = "Task manager"
 
 [search_bar]
 invalid_pattern = "invalid pattern"
@@ -472,6 +505,12 @@ confirm = "Close window"
 title = "Close group?"
 body = { one = "This closes {count} tab.", other = "This closes {count} tabs." }
 confirm = { one = "Close group ({count} tab)", other = "Close group ({count} tabs)" }
+
+[dialog.end_process]
+title = "End process?"
+body_alone = "{name} (PID {pid}) will be ended."
+body = { one = "{name} (PID {pid}) and {count} child process will be ended.", other = "{name} (PID {pid}) and {count} child processes will be ended." }
+confirm = "End process"
 
 [dialog.delete_session]
 title = "Delete saved session?"
@@ -529,7 +568,12 @@ body_generic = "Shell not recognized, so there is no ready-made snippet to sugge
 # (grupo, aba) têm uma frase por combinação ou peças com identificador próprio,
 # para a ordem das palavras ficar livre para o tradutor.
 [access]
-app_menu_button = "Application menu"
+task_manager_button = "Task manager"
+task_manager = "Task manager"
+task_manager_list = "Process list"
+task_manager_meter = "{name}, {value}"
+task_manager_tab_row = "{title}, CPU {cpu}, memory {memory}, disk {disk}"
+task_manager_row = "{name}, PID {pid}, CPU {cpu}, memory {memory}, disk {disk}"
 new_tab_ungrouped = "New tab outside a group"
 new_tab_in_group = "New tab in this group"
 sessions_button = "Saved sessions"
@@ -725,6 +769,10 @@ body = "\"{family}\" is not installed; using a system monospace font."
 [notice.git_interval_adjusted]
 title = "Sync interval adjusted"
 body = "\"{key}\" is below the floor of {floor}s; using {floor}s."
+
+[notice.task_manager_history_adjusted]
+title = "Task manager period adjusted"
+body = "\"history_seconds = {value}\" is outside the range of 30 to 600; using {used} seconds."
 
 [notice.git_missing]
 title = "Git not found"

@@ -138,9 +138,85 @@ pub enum Action {
     /// recomeçando a contagem. Em qualquer outro painel, não faz nada.
     /// Vinculável e **sem default**.
     SshReconnect,
+
+    /// PRD-024 RF-24.1, ADR-0095 §8. Alterna a janela entre o terminal e o
+    /// gerenciador de tarefas. Vinculável e **sem default** em nenhuma
+    /// plataforma -- mesmo precedente de `group.new_tab`. Mira a janela, não
+    /// o painel ([`Action::targets_pane`] é `false`).
+    TaskManagerToggle,
 }
 
-/// As 68 linhas do catálogo fechado, na grafia exata que `FromStr`/
+impl Action {
+    /// `true` para as ações que miram o **painel** focado (PRD-024 RF-24.5,
+    /// ADR-0095 §3 item 3): com o gerenciador de tarefas aberto elas não
+    /// fazem nada. São as famílias `search.*`, `pane.*`, `scrollback.*`,
+    /// `clipboard.*`, `selection.*`, `font.*` e `ssh.reconnect`.
+    ///
+    /// O `match` é exaustivo de propósito (sem `_ =>`): uma ação nova só
+    /// compila depois de ser classificada.
+    pub fn targets_pane(&self) -> bool {
+        match self {
+            Action::SearchOpen
+            | Action::SearchNext
+            | Action::SearchPrev
+            | Action::PaneSplitHorizontal
+            | Action::PaneSplitVertical
+            | Action::PaneClose
+            | Action::PaneFocusLeft
+            | Action::PaneFocusRight
+            | Action::PaneFocusUp
+            | Action::PaneFocusDown
+            | Action::ScrollbackLineUp
+            | Action::ScrollbackLineDown
+            | Action::ScrollbackPageUp
+            | Action::ScrollbackPageDown
+            | Action::ScrollbackToTop
+            | Action::ScrollbackToBottom
+            | Action::ClipboardCopy
+            | Action::ClipboardPaste
+            | Action::SelectionSelectAll
+            | Action::FontIncrease
+            | Action::FontDecrease
+            | Action::FontReset
+            | Action::SshReconnect => true,
+            Action::TabNew
+            | Action::TabClose
+            | Action::TabNext
+            | Action::TabPrev
+            | Action::TabGoto(_)
+            | Action::TabRename
+            | Action::TabMoveLeft
+            | Action::TabMoveRight
+            | Action::TabMoveToGroup(_)
+            | Action::TabTogglePin
+            | Action::TabMoveToWindow
+            | Action::GroupCreate
+            | Action::GroupDissolve
+            | Action::GroupRename
+            | Action::GroupSetColor(_)
+            | Action::GroupToggleCollapse
+            | Action::GroupNext
+            | Action::GroupPrev
+            | Action::GroupNewTab
+            | Action::GroupCloseAll
+            | Action::GroupMoveToWindow
+            | Action::WindowNew
+            | Action::WindowClose
+            | Action::WindowToggleFullscreen
+            | Action::ThemeCycle
+            | Action::ConfigReload
+            | Action::AppQuit
+            | Action::SessionSaveNamed
+            | Action::SessionOpenList
+            | Action::SettingsOpen
+            | Action::ProfileOpenMenu
+            | Action::ProfileNewTab(_)
+            | Action::TaskManagerToggle => false,
+        }
+    }
+}
+
+/// As 72 linhas do catálogo fechado, na grafia exata que `FromStr`/
 /// `Display` usam. Único array-fonte: o teste bidirecional
 /// (`tests::every_catalog_name_round_trips`) e a sugestão de erro
 /// (`closest_name`) partem dele, então as duas checagens não podem
@@ -222,6 +298,7 @@ pub const CATALOG: &[&str] = &[
     "profile.new_tab_8",
     "profile.new_tab_9",
     "ssh.reconnect",
+    "task_manager.toggle",
 ];
 
 /// Erro de parse de uma ação (ADR-0029 §4). Dois casos distintos, cada um com
@@ -329,6 +406,7 @@ impl FromStr for Action {
             "settings.open" => Action::SettingsOpen,
             "profile.open_menu" => Action::ProfileOpenMenu,
             "ssh.reconnect" => Action::SshReconnect,
+            "task_manager.toggle" => Action::TaskManagerToggle,
             _ => {
                 return Err(ActionParseError::Unknown {
                     input: s.to_owned(),
@@ -397,6 +475,7 @@ impl fmt::Display for Action {
             Action::SettingsOpen => "settings.open",
             Action::ProfileOpenMenu => "profile.open_menu",
             Action::SshReconnect => "ssh.reconnect",
+            Action::TaskManagerToggle => "task_manager.toggle",
             Action::ProfileNewTab(n) => return write!(f, "profile.new_tab_{n}"),
         };
         f.write_str(name)
@@ -516,6 +595,7 @@ mod tests {
             Action::SettingsOpen,
             Action::ProfileOpenMenu,
             Action::SshReconnect,
+            Action::TaskManagerToggle,
             Action::ProfileNewTab(1),
             Action::ProfileNewTab(9),
         ];
@@ -526,6 +606,118 @@ mod tests {
                 "{name} não está em CATALOG"
             );
         }
+    }
+
+    /// ADR-0095 §3 item 3: toda string do `CATALOG` tem classificação
+    /// explícita na tabela abaixo. Uma ação nova no catálogo sem linha na
+    /// tabela reprova aqui; uma linha da tabela fora do catálogo também.
+    #[test]
+    fn targets_pane_classifies_every_catalog_entry() {
+        let expected: &[(&str, bool)] = &[
+            ("tab.new", false),
+            ("tab.close", false),
+            ("tab.next", false),
+            ("tab.prev", false),
+            ("tab.goto_1", false),
+            ("tab.goto_2", false),
+            ("tab.goto_3", false),
+            ("tab.goto_4", false),
+            ("tab.goto_5", false),
+            ("tab.goto_6", false),
+            ("tab.goto_7", false),
+            ("tab.goto_8", false),
+            ("tab.goto_9", false),
+            ("tab.rename", false),
+            ("tab.move_left", false),
+            ("tab.move_right", false),
+            ("tab.move_to_group", false),
+            ("tab.toggle_pin", false),
+            ("tab.move_to_window", false),
+            ("group.create", false),
+            ("group.dissolve", false),
+            ("group.rename", false),
+            ("group.set_color", false),
+            ("group.toggle_collapse", false),
+            ("group.next", false),
+            ("group.prev", false),
+            ("group.new_tab", false),
+            ("group.close_all", false),
+            ("group.move_to_window", false),
+            ("window.new", false),
+            ("window.close", false),
+            ("window.toggle_fullscreen", false),
+            ("scrollback.line_up", true),
+            ("scrollback.line_down", true),
+            ("scrollback.page_up", true),
+            ("scrollback.page_down", true),
+            ("scrollback.to_top", true),
+            ("scrollback.to_bottom", true),
+            ("clipboard.copy", true),
+            ("clipboard.paste", true),
+            ("selection.select_all", true),
+            ("font.increase", true),
+            ("font.decrease", true),
+            ("font.reset", true),
+            ("theme.cycle", false),
+            ("config.reload", false),
+            ("search.open", true),
+            ("search.next", true),
+            ("search.prev", true),
+            ("app.quit", false),
+            ("pane.split_horizontal", true),
+            ("pane.split_vertical", true),
+            ("pane.close", true),
+            ("pane.focus_left", true),
+            ("pane.focus_right", true),
+            ("pane.focus_up", true),
+            ("pane.focus_down", true),
+            ("session.save_named", false),
+            ("session.open_list", false),
+            ("settings.open", false),
+            ("profile.open_menu", false),
+            ("profile.new_tab_1", false),
+            ("profile.new_tab_2", false),
+            ("profile.new_tab_3", false),
+            ("profile.new_tab_4", false),
+            ("profile.new_tab_5", false),
+            ("profile.new_tab_6", false),
+            ("profile.new_tab_7", false),
+            ("profile.new_tab_8", false),
+            ("profile.new_tab_9", false),
+            ("ssh.reconnect", true),
+            ("task_manager.toggle", false),
+        ];
+        for &name in CATALOG {
+            let Some(&(_, want)) = expected.iter().find(|(n, _)| *n == name) else {
+                panic!("\"{name}\" está no CATALOG mas não na tabela de targets_pane");
+            };
+            let action = match name {
+                // As duas `Arg` não passam pelo `FromStr`.
+                "group.set_color" => Action::GroupSetColor(GroupColor::Red),
+                "tab.move_to_group" => Action::TabMoveToGroup(MoveDestination::NewGroup),
+                _ => name.parse().expect("nome do catálogo faz parse"),
+            };
+            assert_eq!(action.targets_pane(), want, "targets_pane de \"{name}\"");
+        }
+        for (name, _) in expected {
+            assert!(
+                CATALOG.contains(name),
+                "\"{name}\" está na tabela mas não no CATALOG"
+            );
+        }
+    }
+
+    /// ADR-0095 §8: `task_manager.toggle` é nome simples, vinculável, mira a
+    /// janela e não o painel.
+    #[test]
+    fn task_manager_toggle_round_trips_and_targets_the_window() {
+        assert_eq!(
+            "task_manager.toggle".parse::<Action>(),
+            Ok(Action::TaskManagerToggle)
+        );
+        assert_eq!(Action::TaskManagerToggle.to_string(), "task_manager.toggle");
+        assert!(CATALOG.contains(&"task_manager.toggle"));
+        assert!(!Action::TaskManagerToggle.targets_pane());
     }
 
     /// ADR-0086 §7: um nome só para fixar e desafixar; `tab.pin`/`tab.unpin`

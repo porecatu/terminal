@@ -42,6 +42,20 @@ fn box_coverage(local_pos: vec2<f32>, half_size: vec2<f32>) -> f32 {
     return cov.x * cov.y;
 }
 
+// Distância (sem sinal) de `p` ao segmento `a`-`b`. Subtraindo a meia
+// espessura dá a SDF de uma cápsula (ADR-0094 §2): negativa dentro, com as
+// pontas e as junções redondas. Segmento degenerado (`a == b`) vira um ponto.
+fn sdf_segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let len2 = dot(ba, ba);
+    var h = 0.0;
+    if len2 > 0.0 {
+        h = clamp(dot(pa, ba) / len2, 0.0, 1.0);
+    }
+    return length(pa - ba * h);
+}
+
 // Meia largura da faixa de antialiasing de um contorno arredondado: a
 // derivada da distância, que é ~1 pixel.
 fn edge_aa(dist: f32) -> f32 {

@@ -8,6 +8,7 @@
 //! único ponto que o ADR exige.
 
 use crate::primitives::{ImageId, Primitive, Quad, Rect, RoundedQuad, TextRun};
+use crate::segment::{Segment, area_segments, polyline_segments};
 
 /// As cinco camadas do frame, na ordem em que desenham (ADR-0018): cada
 /// uma inteira cobre a anterior inteira. Camada vazia não custa nada --
@@ -110,6 +111,12 @@ pub(crate) enum GeometryPrimitive {
     /// [`Primitive::BlurredBackdrop`]: o mesmo pipeline de imagem com outro
     /// fragmento e outro bind group, então também fica **sozinho** num batch.
     Blurred(BlurredPrimitive),
+    /// Um segmento de [`Primitive::Polyline`] ou uma faixa de
+    /// [`Primitive::Area`] (ADR-0094): `resolve_layer` expande cada primitiva
+    /// nos seus segmentos, e uma corrida contígua deles vira **um** draw do
+    /// pipeline de segmentos. Não quebra o batch: troca de pipeline, mas não de
+    /// bind group nem de recorte.
+    Segment(Segment),
 }
 
 /// Os campos de [`Primitive::BlurredBackdrop`], como valor próprio.
@@ -202,6 +209,28 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
                     .geometry
                     .push(GeometryPrimitive::Backdrop(*quad));
             }
+            Primitive::Polyline(line) => {
+                debug_assert!(
+                    line.color.a == 1.0,
+                    "Polyline exige cor opaca: a junção de duas cápsulas escureceria"
+                );
+                push_segments(
+                    &mut resolved.batches,
+                    clip_stack.last().copied(),
+                    polyline_segments(line),
+                );
+            }
+            Primitive::Area(area) => {
+                debug_assert!(
+                    area.points.windows(2).all(|pair| pair[1].x >= pair[0].x),
+                    "Area exige x crescente nos pontos"
+                );
+                push_segments(
+                    &mut resolved.batches,
+                    clip_stack.last().copied(),
+                    area_segments(area),
+                );
+            }
             Primitive::Image {
                 rect,
                 uv,
@@ -246,6 +275,23 @@ pub(crate) fn resolve_layer(primitives: &[Primitive]) -> ResolvedLayer {
     }
 
     resolved
+}
+
+/// Põe os segmentos de uma primitiva no batch do clip vigente. Sem segmento
+/// nenhum (polilinha de menos de dois pontos), não abre batch: um batch vazio
+/// quebraria a corrida do vizinho sem desenhar nada.
+fn push_segments(
+    batches: &mut Vec<GeometryBatch>,
+    clip: Option<Rect>,
+    segments: impl Iterator<Item = Segment>,
+) {
+    let mut segments = segments.peekable();
+    if segments.peek().is_none() {
+        return;
+    }
+    batch_for(batches, clip)
+        .geometry
+        .extend(segments.map(GeometryPrimitive::Segment));
 }
 
 fn batch_for(batches: &mut Vec<GeometryBatch>, clip: Option<Rect>) -> &mut GeometryBatch {
@@ -674,5 +720,150 @@ mod tests {
         assert_eq!(frame.primitives(Layer::Grid).len(), 1);
         assert_eq!(frame.primitives(Layer::Modal).len(), 1);
         assert_eq!(frame.primitives(Layer::Chrome).len(), 0);
+    }
+
+    fn pt(x: f32, y: f32) -> crate::primitives::Point {
+        crate::primitives::Point { x, y }
+    }
+
+    fn polyline(n: usize) -> Primitive {
+        Primitive::Polyline(crate::primitives::Polyline {
+            points: (0..n).map(|i| pt(i as f32, 0.0)).collect(),
+            width: 2.0,
+            color: Color::WHITE,
+        })
+    }
+
+    fn segment_count(batch: &GeometryBatch) -> usize {
+        batch
+            .geometry
+            .iter()
+            .filter(|g| matches!(g, GeometryPrimitive::Segment(_)))
+            .count()
+    }
+
+    #[test]
+    fn a_polyline_of_n_points_resolves_to_n_minus_1_segments() {
+        let resolved = resolve_layer(&[polyline(6)]);
+        assert_eq!(resolved.batches.len(), 1);
+        assert_eq!(segment_count(&resolved.batches[0]), 5);
+    }
+
+    /// Menos de dois pontos não abre batch, e portanto não quebra a corrida de
+    /// quads de um lado e do outro.
+    #[test]
+    fn a_polyline_with_fewer_than_two_points_resolves_to_nothing() {
+        let resolved = resolve_layer(&[polyline(0), polyline(1)]);
+        assert!(resolved.batches.is_empty());
+        let resolved = resolve_layer(&[quad(0.0), polyline(1), quad(1.0)]);
+        assert_eq!(resolved.batches.len(), 1);
+        assert_eq!(resolved.batches[0].geometry.len(), 2);
+    }
+
+    /// Quad, polilinha e quad no mesmo clip: um batch só (nada troca de bind
+    /// group ou de recorte), com a ordem do stream.
+    #[test]
+    fn segments_keep_stream_order_among_quads_in_one_batch() {
+        let resolved = resolve_layer(&[quad(0.0), polyline(3), quad(1.0)]);
+        assert_eq!(resolved.batches.len(), 1);
+        let order: Vec<_> = resolved.batches[0]
+            .geometry
+            .iter()
+            .map(|g| match g {
+                GeometryPrimitive::Quad(_) => 'q',
+                GeometryPrimitive::Segment(_) => 's',
+                _ => '?',
+            })
+            .collect();
+        assert_eq!(order, vec!['q', 's', 's', 'q']);
+    }
+
+    #[test]
+    fn text_between_geometry_does_not_split_the_segment_run() {
+        let run = TextRun {
+            origin: (0.0, 0.0),
+            text: "a".to_string(),
+            font: crate::primitives::FontFace::Sans {
+                weight: crate::primitives::SansWeight::Regular,
+            },
+            size_px: 12.0,
+            color: Color::BLACK,
+        };
+        let resolved = resolve_layer(&[quad(0.0), Primitive::Text(run), polyline(3), polyline(3)]);
+        assert_eq!(resolved.batches.len(), 1);
+        assert_eq!(resolved.text.len(), 1);
+        assert_eq!(segment_count(&resolved.batches[0]), 4);
+    }
+
+    #[test]
+    fn a_polyline_respects_the_clip_stack() {
+        let clip = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 5.0,
+            height: 5.0,
+        };
+        let resolved = resolve_layer(&[
+            Primitive::PushClip(clip),
+            polyline(3),
+            Primitive::PopClip,
+            polyline(3),
+        ]);
+        let clips: Vec<_> = resolved.batches.iter().map(|b| b.clip).collect();
+        assert_eq!(clips, vec![Some(clip), None]);
+    }
+
+    /// Uma imagem entre duas polilinhas quebra o batch, como entre quads.
+    #[test]
+    fn an_image_splits_segment_runs() {
+        let resolved = resolve_layer(&[polyline(3), image(0.0), polyline(3)]);
+        assert_eq!(resolved.batches.len(), 3);
+        assert_eq!(segment_count(&resolved.batches[0]), 2);
+        assert!(is_image(&resolved.batches[1]));
+        assert_eq!(segment_count(&resolved.batches[2]), 2);
+    }
+
+    /// A função pura de geração descarta o par fora de ordem sem `debug_assert!`
+    /// (roda em debug); `resolve_layer` só o descarta sem panicar em release.
+    #[test]
+    fn an_area_with_x_out_of_order_loses_the_bad_pair() {
+        let area = crate::primitives::Area {
+            points: vec![pt(0.0, 0.0), pt(2.0, 0.0), pt(1.0, 0.0), pt(3.0, 0.0)],
+            baseline_y: 5.0,
+            color: Color::WHITE,
+        };
+        assert_eq!(crate::segment::area_segments(&area).count(), 2);
+        if !cfg!(debug_assertions) {
+            let resolved = resolve_layer(&[Primitive::Area(area)]);
+            assert_eq!(segment_count(&resolved.batches[0]), 2);
+        }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Area exige x crescente")]
+    fn an_area_with_x_out_of_order_panics_in_debug() {
+        let area = crate::primitives::Area {
+            points: vec![pt(2.0, 0.0), pt(1.0, 0.0)],
+            baseline_y: 5.0,
+            color: Color::WHITE,
+        };
+        resolve_layer(&[Primitive::Area(area)]);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Polyline exige cor opaca")]
+    fn a_translucent_polyline_panics_in_debug() {
+        resolve_layer(&[Primitive::Polyline(crate::primitives::Polyline {
+            points: vec![pt(0.0, 0.0), pt(1.0, 0.0)],
+            width: 1.0,
+            color: Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 0.5,
+            },
+        })]);
     }
 }

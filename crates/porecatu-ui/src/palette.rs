@@ -338,6 +338,15 @@ pub struct ResolvedPalette {
     pub settings_row_background: Color,
     pub settings_chip_background: Color,
     pub settings_footer_separator: Color,
+
+    // [appearance.task_manager] -- the five theme colors of the task manager
+    // (PRD-024, ADR-0096 §7): the three series, the chart grid and the chart
+    // frame border.
+    pub task_manager_cpu: Color,
+    pub task_manager_memory: Color,
+    pub task_manager_disk: Color,
+    pub task_manager_grid: Color,
+    pub task_manager_chart_border: Color,
 }
 
 impl ResolvedPalette {
@@ -352,6 +361,7 @@ impl ResolvedPalette {
         let status_bar = &config.appearance.status_bar;
         let editor = &config.appearance.group_editor;
         let settings = &config.appearance.settings;
+        let task_manager = &config.appearance.task_manager;
 
         let mut group_colors = [TRANSPARENT; 6];
         for (slot, entry) in group_colors.iter_mut().zip(groups.palette.iter()) {
@@ -460,6 +470,12 @@ impl ResolvedPalette {
             settings_row_background: cvt(settings.row_background),
             settings_chip_background: cvt(settings.chip_background),
             settings_footer_separator: cvt(settings.footer_separator),
+
+            task_manager_cpu: cvt(task_manager.cpu),
+            task_manager_memory: cvt(task_manager.memory),
+            task_manager_disk: cvt(task_manager.disk),
+            task_manager_grid: cvt(task_manager.grid),
+            task_manager_chart_border: cvt(task_manager.chart_border),
         }
     }
 
@@ -592,6 +608,13 @@ mod tests {
         assert_eq!(pal.tooltip_background, hex(0x1a, 0x1e, 0x25));
         assert_eq!(pal.tooltip_border, hex(0x2e, 0x34, 0x3e));
         assert_eq!(pal.tooltip_text, hex(0xd7, 0xdc, 0xe3));
+
+        // ADR-0096 §7: the task manager's five theme colors.
+        assert_eq!(pal.task_manager_cpu, hex(0x6f, 0xa8, 0xf5));
+        assert_eq!(pal.task_manager_memory, hex(0xa6, 0x8c, 0xf0));
+        assert_eq!(pal.task_manager_disk, hex(0x86, 0xc5, 0x6a));
+        assert_eq!(pal.task_manager_grid, hex(0x1c, 0x20, 0x27));
+        assert_eq!(pal.task_manager_chart_border, hex(0x26, 0x2b, 0x34));
 
         assert_eq!(pal.editor_background, hex(0x1a, 0x1e, 0x25));
         assert_eq!(pal.editor_border, hex(0x2e, 0x34, 0x3e));
