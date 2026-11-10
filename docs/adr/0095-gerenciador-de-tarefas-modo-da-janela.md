@@ -42,6 +42,8 @@ O módulo novo `crates/porecatu-ui/src/task_manager.rs` reúne os tipos, as fun�
 
 - **Abrir** (`App::enter_task_manager(window)`): cria a `TaskManagerView`, fecha os popovers e o menu do terminal (`close_all_popovers`), fecha a busca da janela (o quadro em que ela flutuava não está à vista), e cria o amostrador se ainda não houver ([ADR-0093](0093-medicao-de-processos-do-gerenciador.md) §4). A seleção começa na linha da aba ativa.
 - **Fechar** (`App::leave_task_manager(window)`): `task_manager = None`, mantém o histórico e derruba o amostrador se nenhuma outra janela tiver o gerenciador aberto.
+
+  > **Revisto pelo [ADR-0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md)** (2026-11-10): com `[task_manager] background_monitoring = true`, fechar não derruba o amostrador, e o histórico da janela continua recebendo pontos com o gerenciador fechado.
 - **Alternar** (`App::toggle_task_manager(window)`) chama uma das duas.
 
 Quem chama, e qual das duas:
@@ -149,6 +151,8 @@ registrada em `Config`, com `default_matches_example_toml`.
   ```
 
 - **Tela de configurações** ([PRD-016](../prd/prd-016-tela-de-configuracoes.md) RF-16.11, emendado no mesmo PR deste ADR): um `Group::TaskManager` novo, **depois de Painéis e antes de Atalhos**, com uma seção e um `option!`, controle `integer(30.0, 600.0, 1.0)`, caminho `"task_manager.history_seconds"`, lido por `|c| EditValue::Integer(i64::from(c.task_manager.history_seconds))`. A anatomia é a do [ADR-0060](0060-anatomia-da-tela-de-configuracoes.md) §3 (campo numérico de `number_field_width`). O teste `the_catalog_has_exactly_the_options_of_rf_16_11` passa de 58 para 59 opções, com um grupo a mais na contagem por grupo, e `probe_scope` devolve `Live` sem código próprio.
+
+> **Revisto pelo [ADR-0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md)** (2026-11-10): a seção `[task_manager]` ganha a chave booleana `background_monitoring` (default `false`, classe A), e o grupo da tela de configurações, uma segunda opção, com alternância, antes do período (59 → 60 opções). A alternância também fica no rodapé da lista do gerenciador e grava a chave pelo `porecatu-config::edit`.
 
 ### 10. Acessibilidade
 

@@ -70,6 +70,8 @@ A thread é **uma por processo**, não uma por janela: uma varredura do sistema 
 
 Isso respeita o ADR-0007: o temporizador é o `WaitUntil` (nenhuma thread dorme para marcar o ritmo), e a I/O pesada sai da main thread.
 
+> **Revisto pelo [ADR-0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md)** (2026-11-10, a pedido do dono): o amostrador existe enquanto alguma janela tem o gerenciador aberto **ou** enquanto `[task_manager] background_monitoring = true` (default `false`). Com a chave ligada, ele nasce no arranque e não cai ao fechar o último gerenciador; desligá-la com tudo fechado o derruba no tick seguinte. O ritmo, o pedido que não acumula e o relógio do `WaitUntil` não mudam.
+
 ### 5. O pedido e a resposta
 
 ```rust
@@ -123,6 +125,8 @@ Um processo membro de **dois** painéis (impossível pela árvore, mas possível
 - separa os `panes` por `WindowId`, e cada janela que **ainda existe e ainda tem o gerenciador aberto** recebe a parte dela no `TaskManagerHistory`/`TaskManagerView` ([ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md) §4). Uma chave de janela que fechou é ignorada;
 - **numa janela, uma chave cuja aba não existe mais ou mudou de janela é ignorada.** Nenhum `TabId` velho é procurado nem corrigido: o próximo pedido já sai com as chaves novas (RF-24.25). Por isso a transferência do [ADR-0090](0090-transferencia-de-abas-entre-janelas.md) não precisa re-chavear nada da medição. O estado que o gerenciador guarda por `TabId` é só o último retrato da lista, e `App::transfer` o limpa nas duas janelas ([ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md) §4), para não deixar órfãos;
 - soma os totais da janela (CPU, memória, disco) e acrescenta um ponto ao histórico com o `taken_at` da amostra.
+
+> **Revisto pelo [ADR-0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md)** (2026-11-10): com `background_monitoring` ligada, o pedido leva os painéis de **todas** as janelas, e a resposta acrescenta o ponto ao histórico de toda janela que ainda existe, aberta ou não. A `TaskManagerView` continua só nas janelas com o gerenciador aberto.
 
 ### 7. Encerrar um processo
 
@@ -181,6 +185,8 @@ Recusada no §4: a CPU é diferença entre duas atualizações do mesmo `System`
 ### Medir sempre, desde o arranque
 
 Os gráficos abririam cheios. Recusada pelo dono do produto no PRD-024: custaria uma varredura por segundo durante toda a execução, para quem talvez nunca abra o gerenciador.
+
+> **Revisto pelo [ADR-0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md)** (2026-11-10): medir desde o arranque passa a ser **opção**, `[task_manager] background_monitoring`, desligada por padrão. A recusa continua valendo para o padrão: quem não liga a opção não paga a varredura.
 
 ### Matar só pelo PID, sem conferir o início
 

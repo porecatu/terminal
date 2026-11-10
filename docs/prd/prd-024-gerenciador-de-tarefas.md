@@ -22,6 +22,8 @@
 > - a primitiva de linha e área do render: [ADR-0094](../adr/0094-polilinha-e-area-no-render.md);
 > - o modo da janela, a entrada, a lista, as ações e a chave: [ADR-0095](../adr/0095-gerenciador-de-tarefas-modo-da-janela.md);
 > - a anatomia e o botão ligado, com o aval visual do dono pendente: [ADR-0096](../adr/0096-anatomia-do-gerenciador-de-tarefas.md).
+>
+> **Emendado em 2026-11-10**, a pedido do dono, pelo [ADR-0098](../adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md): uma **alternância no canto inferior direito**, abaixo da lista de processos, escolhe entre medir só com o gerenciador visível (o padrão, como acima) e **medir o tempo todo**, para alternar entre as abas e o gerenciador sem perder o histórico. A escolha é uma chave do `porecatu.toml`, vale para o app inteiro e, ligada, a medição começa no arranque. Os requisitos novos são os RF-24.31 a RF-24.37; os que mudam têm a emenda no próprio texto.
 
 ## Problema
 
@@ -61,11 +63,11 @@ O botão do app alterna a janela entre o terminal e o gerenciador. A barra de ab
   ╭───────────────────────────╮ │      processos remotos não são listados
   │                       ╱╲_ │ │
   │ _____________________╱    │ │
-  ╰───────────────────────────╯ │
-                     agora ◀──  │
+  ╰───────────────────────────╯ │  ─────────────────────────────────────────────
+                     agora ◀──  │               Monitorar em segundo plano  (○━)
 ```
 
-A linha mais nova entra pela borda direita de cada gráfico e desliza para a esquerda.
+A linha mais nova entra pela borda direita de cada gráfico e desliza para a esquerda. No rodapé da lista, a alternância do monitoramento em segundo plano (RF-24.31).
 
 ## Requisitos funcionais
 
@@ -95,11 +97,15 @@ A linha mais nova entra pela borda direita de cada gráfico e desliza para a esq
 
 **RF-24.9** — **CPU**: a porcentagem da máquina inteira, em que **100%** é todos os núcleos ocupados. A escala vai de 0 a 100%, fixa. Como a CPU é a diferença entre duas medições, a primeira amostra só aparece no segundo tick depois de o gerenciador abrir.
 
+> **Emendado pelo [ADR-0098](../adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md) (2026-11-10).** Com o monitoramento em segundo plano ligado (RF-24.31), o segundo tick é contado do arranque, não da abertura do gerenciador.
+
 **RF-24.10** — **Memória**: a soma da memória residente dos processos (o *working set* no Windows), em bytes, com unidade legível (MB, GB). A escala é **automática**: o topo é o maior valor visível no período, arredondado para cima a um número redondo.
 
 **RF-24.11** — **Disco**: a soma de bytes **lidos e escritos** por segundo, com unidade legível (B/s, KB/s, MB/s) e escala automática, como a da memória. Não é o espaço ocupado em disco.
 
 **RF-24.12** — O eixo do tempo é o **relógio**. Os segundos em que a janela não mediu nada (o gerenciador estava fechado, RF-24.21) ficam como **lacuna**: a linha se interrompe e **nunca liga as duas pontas** por cima do buraco. Assim, sair e voltar em poucos segundos mantém o histórico, com o vão visível; depois de um período maior que `history_seconds`, o gráfico reabre vazio. O histórico é da janela, vive enquanto ela existe e **nunca é gravado**.
+
+> **Emendado pelo [ADR-0098](../adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md) (2026-11-10).** A lacuna é a falta de medição, não o gerenciador fechado. Com o monitoramento em segundo plano ligado (RF-24.31), a janela continua medindo com o gerenciador fechado, e sair e voltar **não deixa vão**.
 
 ### Lista de processos
 
@@ -139,6 +145,8 @@ Numa aba com painéis de tipos diferentes, a nota vale por painel.
 
 **RF-24.24** — A medição acontece **uma vez por segundo**, numa thread, **nunca na main thread** ([ADR-0007](../adr/0007-modelo-de-threading.md)), e **só enquanto ao menos uma janela está com o gerenciador aberto**. Com todos os gerenciadores fechados, o app não mede nada, e o custo é zero. O resultado chega à janela como **dado chaveado por janela**, como os resultados do Git ([ADR-0052](../adr/0052-sincronizacao-com-o-remoto-do-git.md)), nunca como comando.
 
+> **Emendado pelo [ADR-0098](../adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md) (2026-11-10).** "Só enquanto ao menos uma janela está com o gerenciador aberto" vale **com o monitoramento em segundo plano desligado**, o padrão. Ligado (RF-24.31 a RF-24.34), a medição acontece durante toda a execução, para todas as janelas. O ritmo, a thread e o dado chaveado não mudam.
+
 **RF-24.25** — Uma aba que muda de janela ([PRD-022](prd-022-abas-e-grupos-entre-janelas.md)) leva os processos dela para a lista e para os gráficos da janela de destino **a partir da próxima amostra**. O histórico já registrado das duas janelas não é recalculado.
 
 ### Configuração
@@ -154,6 +162,24 @@ Numa aba com painéis de tipos diferentes, a nota vale por painel.
 ### Plataforma
 
 **RF-24.30** — No **Windows**, a árvore de cada painel é a do [ADR-0033](../adr/0033-job-object-encerramento-de-processo.md), com Job Object e varredura. No **Linux** e no **macOS**, onde não há Job, ela é só a varredura a partir do PID raiz, e um processo cujo pai intermediário já morreu pode não aparecer, com o mesmo ponto cego que o ADR-0033 já registra. A verificação nessas duas plataformas é dívida, como em todo recurso fora de fase.
+
+### Monitoramento em segundo plano
+
+Acrescentado pela emenda de 2026-11-10 ([ADR-0098](../adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md)).
+
+**RF-24.31** — O gerenciador tem, no **canto inferior direito**, logo **abaixo da lista de processos**, uma **alternância** com o rótulo "Monitorar em segundo plano". **Desligada** (o padrão), a medição segue o RF-24.24: só com o gerenciador aberto. **Ligada**, o app mede **o tempo todo**, com o gerenciador aberto ou fechado, e os gráficos guardam o histórico enquanto o usuário usa as abas. A aparência é decisão do ADR, sem valor novo, com o aval visual do dono pendente.
+
+**RF-24.32** — A escolha é a chave **`[task_manager] background_monitoring`**, booleana, com default **`false`**. Clicar na alternância **grava a chave** no `porecatu.toml`, pela mesma escrita por chave da tela de configurações ([ADR-0058](../adr/0058-escrita-do-arquivo-de-configuracao.md)), sem mexer no resto do arquivo. A alternância mostra sempre o valor em vigor: uma edição à mão no arquivo aparece nela, e uma gravação que falha a deixa como estava.
+
+**RF-24.33** — A chave vale para o **app inteiro**: o estado da alternância é o mesmo em todas as janelas, e, ligada, **toda janela** acumula o próprio histórico (RF-24.8, RF-24.12), aberta ou não.
+
+**RF-24.34** — Com a chave ligada, a medição começa **no arranque**, e o gerenciador já abre com o gráfico do período inteiro. Ela **vale na hora** ([ADR-0030](../adr/0030-escopo-do-hot-reload.md)): ligar com o app aberto começa a medir no segundo seguinte; desligar com todos os gerenciadores fechados para a medição no segundo seguinte, e o histórico registrado fica, com a lacuna do RF-24.12 dali em diante.
+
+**RF-24.35** — Uma gravação que falha (arquivo só de leitura, config inválida em disco) mostra um **aviso** com o texto do catálogo, e nada mais muda.
+
+**RF-24.36** — Na tela de configurações ([PRD-016](prd-016-tela-de-configuracoes.md)), o grupo **Gerenciador de tarefas** (RF-24.28) ganha a mesma opção, como **alternância**, antes do período, com rótulo e descrição no catálogo. A descrição diz o custo: uma varredura de processos por segundo enquanto o app está aberto. É também o caminho pelo teclado: a alternância do gerenciador não tem atalho, e as teclas do gerenciador continuam só na lista (RF-24.19).
+
+**RF-24.37** — A alternância tem um **nó de acessibilidade** de interruptor, com o rótulo, o estado ligado ou desligado e a ação de clicar, para o leitor de tela alterná-la sem o mouse.
 
 ## Cenários
 
@@ -253,8 +279,38 @@ Cenário: aba que muda de janela leva os processos
   E entram na lista de B
 
 Cenário: gerenciador fechado não mede
-  Dado nenhuma janela com o gerenciador aberto
+  Dado background_monitoring = false
+  E nenhuma janela com o gerenciador aberto
   Então o app não faz nenhuma varredura de processos por causa do gerenciador
+
+Cenário: monitoramento em segundo plano mantém o histórico
+  Dado o gerenciador aberto com a alternância "Monitorar em segundo plano" desligada
+  Quando o usuário liga a alternância
+  Então o porecatu.toml passa a ter background_monitoring = true
+  Quando o usuário volta ao terminal por 10 segundos e reabre o gerenciador
+  Então o gráfico mostra os 10 segundos sem nenhum vão
+
+Cenário: arranque com o monitoramento ligado
+  Dado background_monitoring = true e history_seconds = 60
+  Quando o app abre e o usuário só abre o gerenciador 90 segundos depois
+  Então os gráficos já cobrem os 60 segundos inteiros
+
+Cenário: desligar com o gerenciador fechado para de medir
+  Dado background_monitoring = true e nenhuma janela com o gerenciador aberto
+  Quando o usuário desliga a opção na tela de configurações e salva
+  Então, a partir do segundo seguinte, o app não faz nenhuma varredura de processos
+
+Cenário: a alternância vale para todas as janelas
+  Dado as janelas A e B
+  Quando o usuário liga a alternância no gerenciador da janela A
+  Então o gerenciador da janela B mostra a alternância ligada
+  E o histórico da janela B passa a ser registrado com o gerenciador dela fechado
+
+Cenário: gravação que falha
+  Dado o porecatu.toml só de leitura
+  Quando o usuário clica na alternância
+  Então um aviso informa que a configuração não foi gravada
+  E a alternância continua desligada
 ```
 
 ## Fora de escopo
@@ -272,6 +328,8 @@ Cada item é decisão, não esquecimento.
 - **O gerenciador como aba ou janela própria.** O dono escolheu um modo da janela (RF-24.1, RF-24.6).
 - **O "menu do app"** que o [ADR-0079](../adr/0079-botao-de-menu-do-app.md) previa para o botão. O botão passa a ser do gerenciador, e um menu do app, se vier, precisa de requisito próprio.
 - **Medir em segundo plano**, com o gerenciador fechado, para os gráficos já abrirem cheios. Custaria uma varredura de processos por segundo o tempo todo (RF-24.24).
+
+  > **Emendado pelo [ADR-0098](../adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md) (2026-11-10).** Saiu do fora de escopo: medir em segundo plano é **opção**, desligada por padrão (RF-24.31 a RF-24.37). Continuam fora a escolha por janela e um atalho para a alternância.
 - **Encerrar o shell raiz pela lista** (RF-24.22).
 - **Intervalo de amostragem configurável.** O período é configurável, e a amostra é de um segundo.
 
@@ -288,7 +346,8 @@ Cada item é decisão, não esquecimento.
 | Métrica | Alvo |
 |---|---|
 | Gestos para ver o consumo das abas da janela | **um** (o botão do app) |
-| Varreduras de processo com todos os gerenciadores fechados | **zero** |
+| Varreduras de processo com todos os gerenciadores fechados e `background_monitoring = false` (o padrão) | **zero** |
+| Vãos no gráfico por sair e voltar ao gerenciador com `background_monitoring = true` | **zero** |
 | Varreduras de processo na main thread | **zero** |
 | Processos de outra janela, ou de fora do Porecatu, na lista | **zero** |
 | Critérios diferentes para "processo desta aba" entre o gerenciador e o fechamento de aba | **zero**, com a mesma árvore do ADR-0033 |

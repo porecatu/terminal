@@ -1335,3 +1335,16 @@ Fora da ordem de fases, a pedido do dono do produto. O botão do app ([ADR-0079]
 
 
 **Dívida:** a verificação ao vivo no Windows, numa instância isolada (os cenários do PRD-024: botão, gráficos andando, lacuna, teclado que não vaza para o PTY, "Ir para a aba" em grupo colapsado, encerrar um filho, arraste entre janelas com os dois gerenciadores abertos); leitor de tela (NVDA, Narrator) com a árvore do gerenciador; macOS e Linux ao vivo, onde `members` é só a varredura; o custo da amostra em build release. Teclas repetidas: segurar `Enter` ou `Esc` depois de sair do gerenciador deixa as repetições seguintes chegarem ao terminal.
+
+## Depois do v1 — monitoramento em segundo plano do gerenciador de tarefas — documentado, a implementar
+
+Fora da ordem de fases, a pedido do dono do produto, como emenda do PRD-024. Uma alternância no rodapé da lista de processos, no canto inferior direito do gerenciador, liga a chave `[task_manager] background_monitoring` (default `false`, do app inteiro): ligada, o amostrador vive desde o arranque e alimenta o histórico de toda janela, aberta ou não, e alternar entre as abas e o gerenciador não deixa vão no gráfico. A alternância grava a chave pela escrita por chave da tela de configurações, que ganha a mesma opção. Requisito nos RF-24.31 a RF-24.37 do [PRD-024](prd/prd-024-gerenciador-de-tarefas.md); decisão no [ADR-0098](adr/0098-monitoramento-em-segundo-plano-do-gerenciador.md).
+
+**Etapas:**
+
+1. **Documentação e decisão — feita.** ADR-0098; blockquotes de revisão nos ADR-0093 §4/§6, ADR-0095 §2/§9 e ADR-0096 §4; emendas no PRD-024 e no RF-16.11 do PRD-016; a tabela de ADRs. A chave no [arquivo de exemplo](config/porecatu.example.toml) e a linha do rodapé na especificação visual entram no PR de implementação, porque os testes reprovariam antes do código.
+2. **Implementação — a fazer.** A chave em `porecatu-config`; `sampler_needed`, `sample_roots` e `apply_process_sample` com a chave; o rodapé em `task_manager::paint::layout`, a pintura com `push_toggle`, o hit-test e a gravação; o nó `Switch`; o `option!` da tela de configurações (60 opções); os textos em todos os `locales/`; os testes do ADR-0098 §9.
+
+**Escopo:** RF-24.31 a RF-24.37.
+
+**Dívida:** o aval visual do dono para o rodapé; a verificação ao vivo no Windows (ligar, sair e voltar sem vão; arranque com a chave ligada; desligar com tudo fechado para a medição); leitor de tela com o interruptor; macOS e Linux ao vivo.

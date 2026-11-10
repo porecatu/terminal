@@ -68,6 +68,8 @@ A posição de cada ponto no eixo x é a do [ADR-0095](0095-gerenciador-de-taref
 - **Rolagem**: a lista rola sob o cabeçalho, recortada por `PushClip`, sem barra de rolagem desenhada, como as listas dos popovers.
 - Os tamanhos 12.5, 11 e 10 são os da tabela de tipografia da especificação e escalam com `[terminal.font] size`, como o resto do chrome.
 
+> **Revisto pelo [ADR-0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md)** (2026-11-10, aval visual **pendente**): a coluna da lista ganha um **rodapé fixo** de `row_height`, com separador de 1 px `chart_border` em cima e, alinhados à direita com `row_padding_x` de recuo, o rótulo "Monitorar em segundo plano" (fonte do sistema, 12.5, texto Secundário) e a alternância da especificação (trilho 34×19, `push_toggle`). A lista rola entre o cabeçalho e o rodapé. Nenhum valor novo.
+
 ### 5. Texto: medir sem pagar por quadro
 
 O CLAUDE.md registra que medir texto no caminho quente sem cache é a armadilha de performance do projeto. Por isso:
