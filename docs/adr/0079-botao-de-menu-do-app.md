@@ -1,6 +1,6 @@
 # ADR-0079 — Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app
 
-**Status:** Aceito
+**Status:** Aceito · decisão 5 revista por [ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md) (**parcial**: alterna o gerenciador de tarefas) · aparência revista por [ADR-0096](0096-anatomia-do-gerenciador-de-tarefas.md) (**parcial**: estado ligado com sombra interna)
 **Data:** 2026-10-29
 **Relacionados:** [ADR-0027](0027-controles-de-janela-e-resize-proprios.md), [ADR-0032](0032-interface-do-v1-fechada.md), [ADR-0055](0055-botao-e-popover-de-sessoes.md), [ADR-0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md)
 
@@ -39,6 +39,8 @@ O dono do produto pediu um botão quadrado no chrome, **antes** da barra de grup
 > conversão; o conteúdo nasce em `x = 0` sempre que `k > 0`.
 
 > **Revisão (pedido do dono, 2026-11-06) — sem fundo e sem borda, como o botão de configurações.** Substitui a decisão 3 e a revisão "aparência da aba ativa" acima. O botão deixa de ser a caixa de uma aba: em repouso só o ícone do app aparece, sem fundo, sem borda e sem sombra. **Hover** e **pressed** são os do botão de configurações ([ADR-0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md)): revelam atrás do ícone um quadrado de raio `tab_corner_radius` com o fundo dos botões de janela (`hover_background` / `pressed_background`), o botão inteiro (ele já é quadrado, `app_menu_button_size`); pressed só com o cursor sobre o botão armado. A regra do fundo é uma função só (`chrome::zone_button_background`), usada pelos botões de ícone da zona fixa e por este, para nunca divergirem. Dimensões, posição, ícone, `track_shift` e demais decisões não mudam. Efeito colateral: uma aba fixada ativa (caixa de aba ativa com o ícone do app) deixa de ficar igual ao botão, o que fecha o ponto marcado no [ADR-0087](0087-zona-de-abas-fixadas-na-barra.md). Zero valor novo. **Aval visual do dono dado**, só no Windows.
+
+> **Revisto pelo [ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md) e pelo [ADR-0096](0096-anatomia-do-gerenciador-de-tarefas.md) (2026-11-10) — o botão ganha ação e um estado ligado.** Altera a decisão 5 e a decisão 7. O release sobre o botão armado **alterna o gerenciador de tarefas** da janela ([PRD-024](../prd/prd-024-gerenciador-de-tarefas.md)), e a ação `task_manager.toggle` faz o mesmo. O nó de acessibilidade passa a "Gerenciador de tarefas" (`access.task_manager_button`), com estado de alternância. Com o modo ligado, o botão tem o fundo `pressed_background` fixo e uma sombra interna nas camadas de `SHADOW_LAYERS` (`chrome::push_inset_shadow`), e o hover e o clique não mudam o desenho. Com o modo desligado, vale a revisão de 2026-11-06 acima, sem mudança. Geometria, posição, ícone, `track_shift` e `show_app_menu_button` não mudam. O "menu do app" que a primeira consequência abaixo reservava não existe mais neste botão. Aval visual do estado ligado **pendente**.
 
 ## Consequências
 

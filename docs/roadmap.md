@@ -1309,3 +1309,28 @@ Fora da ordem de fases, a pedido do dono do produto, e a revisão de metade de u
 **Critério de saída:** com a opção desligada, restaurar abre uma janela nova exatamente como antes; com ela ligada, restaurar acrescenta os grupos e as abas da sessão ao fim da trilha da janela atual, na ordem salva e sem fundir grupos homônimos, ativa a aba que era ativa na sessão, e não muda nenhuma aba, grupo, processo, fixada ou a geometria da janela; `lazy_restore`, `.porecatu` e SSH dormente se comportam como numa restauração numa janela nova; ligar ou desligar a opção vale na próxima restauração, sem reiniciar e sem aviso.
 
 **Dívida:** a verificação ao vivo no Windows (os cenários do PRD-023, numa instância isolada); macOS e Linux ao vivo (como em todo recurso fora de fase); leitor de tela com a árvore da barra crescendo de uma vez.
+
+## Depois do v1 — gerenciador de tarefas — PRD aprovado (ADRs e implementação pendentes)
+
+Fora da ordem de fases, a pedido do dono do produto. O botão do app ([ADR-0079](adr/0079-botao-de-menu-do-app.md)), que hoje não tem ação, alterna a janela entre o terminal e um **gerenciador de tarefas** que ocupa a área de conteúdo. À esquerda ficam três gráficos de linha (CPU, memória e disco, com a soma dos processos da janela), desenhados da direita para a esquerda. À direita fica a lista dos processos da janela, agrupada por aba, em árvore, com "Ir para a aba" e "Encerrar processo" (nunca o shell raiz). A medição é de 1 Hz numa thread, só com o gerenciador aberto; o período é `[task_manager] history_seconds`, default 60. Rede e GPU ficam fora. Requisito no [PRD-024](prd/prd-024-gerenciador-de-tarefas.md).
+
+**Etapas:**
+
+1. **Documentação e decisão — feita.** Entregues:
+   - o PRD-024;
+   - quatro ADRs: [ADR-0093](adr/0093-medicao-de-processos-do-gerenciador.md) (medição), [ADR-0094](adr/0094-polilinha-e-area-no-render.md) (polilinha e área no render), [ADR-0095](adr/0095-gerenciador-de-tarefas-modo-da-janela.md) (modo da janela) e [ADR-0096](adr/0096-anatomia-do-gerenciador-de-tarefas.md) (anatomia);
+   - blockquotes de revisão no ADR-0033 §3 e no ADR-0079;
+   - a emenda do RF-16.11 no PRD-016;
+   - a tabela de ADRs.
+
+   **Ficam para as etapas que mudam o binário**, porque os testes reprovam o que ainda não existe: a ação `task_manager.toggle` em [acoes.md](reference/acoes.md); as seções `[task_manager]` e `[appearance.task_manager]` no [arquivo de exemplo](config/porecatu.example.toml); as cores nos `thm_*.toml` e no `Config`; a seção da especificação visual com os `VALORES` do `verify-docs.py`; o guia do usuário e o CHANGELOG.
+2. **Medição** (ADR-0093): `members` e `descendants_of` nas três plataformas, `root_pid()`, `stats.rs`, `Inspect::process_group`, e os testes de integração no Windows. Sem UI.
+3. **Polilinha e área** (ADR-0094): as primitivas, o `segment-pipeline`, e os testes de CPU e de GPU (costura).
+4. **Modo e lista** (ADR-0095): o estado, a ação, o elo de teclado, o mouse, a checagem de "ativou ou criou aba", `build_rows`, os gráficos a partir do histórico, a chave e a tela de configurações, a acessibilidade e os textos.
+5. **Aparência** (ADR-0096): a pintura do gerenciador, o botão ligado com `push_inset_shadow`, as cores e as dimensões nos três lados, e a especificação visual. **Aval visual do dono.**
+6. **Encerrar processo** (ADR-0093 §7, ADR-0095 §7): o menu da linha, o diálogo e o `KillRequest` com a identidade conferida.
+7. **Fechamento**: o guia do usuário, o CHANGELOG, `descobertas.md` (o tempo medido de uma amostra no Windows), o CLAUDE.md, e a verificação ao vivo no Windows numa instância isolada.
+
+**Escopo:** RF-24.1 a RF-24.30.
+
+**Dívida:** tudo depois da etapa 1.
