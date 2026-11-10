@@ -107,6 +107,9 @@ const TASK_MANAGER_BUTTON_ID: NodeId = NodeId(107);
 const TASK_MANAGER_ID: NodeId = NodeId(108);
 const TASK_MANAGER_LIST_ID: NodeId = NodeId(109);
 const TASK_MANAGER_METER_BASE: u64 = 110;
+/// ADR-0098 §6: a alternância do rodapé da lista (monitoramento em segundo
+/// plano), logo depois dos três medidores (110 a 112).
+const TASK_MANAGER_BACKGROUND_ID: NodeId = NodeId(113);
 /// Linhas da lista do gerenciador: uma faixa de 2^40 ids, acima de tudo o que
 /// as outras faixas usam. `PID` e instante de início não cabem num múltiplo
 /// fixo como `TAB_STRIDE`, então o id sai de um hash da `RowKey` (ver
@@ -206,6 +209,9 @@ pub(crate) struct TaskManagerAccess<'a> {
     pub latest: Option<&'a HistoryPoint>,
     /// A linha em destaque do menu e os itens dele, quando aberto.
     pub menu: Option<(usize, Vec<TaskMenuItem>)>,
+    /// `[task_manager] background_monitoring` do `Config` corrente: o estado
+    /// da alternância do rodapé (ADR-0098 §6).
+    pub background_monitoring: bool,
 }
 
 /// O id de nó de cada linha, na ordem de `rows`: estável por `RowKey` (o mesmo
@@ -240,6 +246,9 @@ pub(crate) enum TaskAccessAction {
     /// `ShowContextMenu` numa linha: seleciona-a e abre o menu dela, pelo mesmo
     /// caminho da tecla de menu.
     OpenRowMenu(RowKey),
+    /// `Click` na alternância do rodapé: grava o `background_monitoring`
+    /// invertido, pelo caminho do clique (ADR-0098 §4, §6).
+    ToggleBackground,
 }
 
 /// ADR-0095 §10: traduz uma ação de acessibilidade (`target`, `action`) no que
@@ -252,6 +261,9 @@ pub(crate) fn task_manager_access_route(
 ) -> Option<TaskAccessAction> {
     if target == TASK_MANAGER_BUTTON_ID {
         return (action == accesskit::Action::Click).then_some(TaskAccessAction::Toggle);
+    }
+    if target == TASK_MANAGER_BACKGROUND_ID {
+        return (action == accesskit::Action::Click).then_some(TaskAccessAction::ToggleBackground);
     }
     let wants_menu = match action {
         accesskit::Action::Focus => false,
@@ -370,6 +382,21 @@ fn build_task_manager(
     list.set_label(msg::access::task_manager_list(catalog));
     nodes.push((TASK_MANAGER_LIST_ID, list));
     children.push(TASK_MANAGER_LIST_ID);
+
+    // ADR-0098 §6: a alternância do rodapé, irmã dos gráficos e da lista, com
+    // o nome do rótulo e o estado do `Config`.
+    let mut background = leaf(
+        Role::Switch,
+        msg::task_manager::background_monitoring(catalog),
+    );
+    background.set_toggled(if access.background_monitoring {
+        accesskit::Toggled::True
+    } else {
+        accesskit::Toggled::False
+    });
+    background.add_action(accesskit::Action::Click);
+    nodes.push((TASK_MANAGER_BACKGROUND_ID, background));
+    children.push(TASK_MANAGER_BACKGROUND_ID);
 
     let mut group = container(Role::Group, children);
     group.set_label(msg::access::task_manager(catalog));
@@ -1930,6 +1957,7 @@ mod tests {
             selection: None,
             latest: None,
             menu: None,
+            background_monitoring: false,
         };
         let open = build_with_manager(&ws, None, Some(&access));
         let button = node(&open, TASK_MANAGER_BUTTON_ID);
@@ -2011,6 +2039,7 @@ mod tests {
             selection: Some(rows[2].key),
             latest: Some(&point),
             menu: None,
+            background_monitoring: false,
         };
         let open = build_with_manager(&ws, Some(&order), Some(&access));
 
@@ -2078,6 +2107,7 @@ mod tests {
             selection: None,
             latest: None,
             menu: None,
+            background_monitoring: false,
         };
         let update = build_with_manager(&ws, None, Some(&access));
         assert_eq!(nodes_with_role(&update, Role::Row).len(), rows.len());
@@ -2103,6 +2133,7 @@ mod tests {
             selection: None,
             latest: None,
             menu: None,
+            background_monitoring: false,
         };
         let update = build_with_manager(&ws, None, Some(&access));
         let labels: Vec<String> = nodes_with_role(&update, Role::Meter)
@@ -2125,6 +2156,7 @@ mod tests {
             selection: Some(rows[1].key),
             latest: None,
             menu: Some((0, items.clone())),
+            background_monitoring: false,
         };
         let update = build_with_manager(&ws, None, Some(&access));
         let menu = node(&update, MENU_ID);
@@ -2150,6 +2182,15 @@ mod tests {
         );
         assert_eq!(
             task_manager_access_route(TASK_MANAGER_BUTTON_ID, accesskit::Action::Focus, &[]),
+            None
+        );
+        // ADR-0098 §6: the footer's switch flips the key on `Click`.
+        assert_eq!(
+            task_manager_access_route(TASK_MANAGER_BACKGROUND_ID, accesskit::Action::Click, &[]),
+            Some(TaskAccessAction::ToggleBackground)
+        );
+        assert_eq!(
+            task_manager_access_route(TASK_MANAGER_BACKGROUND_ID, accesskit::Action::Focus, &[]),
             None
         );
         assert_eq!(

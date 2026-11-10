@@ -311,7 +311,7 @@ for_window [title="^Configurações$"] floating enable
 | **Projeto** | arquivo `.porecatu` ligado e os diretórios autorizados |
 | **Git** | consultar o remoto e o intervalo |
 | **Painéis** | mínimo de colunas e de linhas de um painel |
-| **Gerenciador de tarefas** | período dos gráficos (`history_seconds`) |
+| **Gerenciador de tarefas** | monitorar em segundo plano (`background_monitoring`), período dos gráficos (`history_seconds`) |
 | **Atalhos** | todas as ações vinculáveis, com o atalho em vigor |
 
 Cada opção mostra nome, descrição curta e o controle que o tipo pede:
@@ -1474,10 +1474,24 @@ continuam valendo — e as que ativam ou criam uma aba voltam ao terminal.
 O que **não** aparece: processos de outras janelas ou de fora do
 Porecatu; processos remotos de uma aba SSH (a linha mostra uma nota); uma
 aba ainda não iniciada (`lazy_restore`), que o gerenciador não inicia. Rede
-e GPU também ficam fora. Cada janela tem o seu gerenciador, e a medição
-só acontece enquanto algum está aberto: fechado, o custo é zero. Sair e
-voltar em poucos segundos mantém o histórico, com um vão na linha no
-tempo em que ele esteve fechado.
+e GPU também ficam fora. Cada janela tem o seu gerenciador, e por padrão
+a medição só acontece enquanto algum está aberto: fechado, o custo é
+zero. Sair e voltar em poucos segundos mantém o histórico, com um vão na
+linha no tempo em que ele esteve fechado.
+
+Para não perder esse trecho, ligue **Monitorar em segundo plano**, a
+alternância no canto inferior direito, abaixo da lista. Ligada, o
+Porecatu mede o tempo todo, desde o arranque e para todas as janelas: os
+gráficos guardam o histórico enquanto você usa as abas, e o gerenciador
+já abre com eles cheios. O custo é uma varredura de processos por
+segundo enquanto o app está aberto. A alternância grava a chave no
+arquivo de configuração (a mesma opção está na tela de configurações) e
+vale para o app inteiro:
+
+```toml
+[task_manager]
+background_monitoring = true
+```
 
 No Linux e no macOS, um processo cujo pai intermediário já terminou pode
 não aparecer na lista.

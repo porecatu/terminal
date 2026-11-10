@@ -276,6 +276,10 @@ min_rows = 5
 
 # --- Gerenciador de tarefas -------------------------------------------------
 [task_manager]
+# Continua medindo os processos com o gerenciador fechado, para os gráficos
+# guardarem o histórico enquanto você usa as abas. Custa uma varredura de
+# processos por segundo enquanto o app está aberto. Vale na hora.
+background_monitoring = false
 # Quantos segundos os gráficos do gerenciador de tarefas mostram. De 30 a 600.
 # Vale na hora.
 history_seconds = 60

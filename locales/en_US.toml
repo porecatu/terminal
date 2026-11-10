@@ -92,6 +92,7 @@ per_second = "{value}/s"
 percent = "{value}%"
 decimal_separator = "."
 no_value = "—"
+background_monitoring = "Monitor in the background"
 
 [settings]
 window_title = "Settings"
@@ -257,6 +258,8 @@ min_rows_label = "Minimum rows"
 min_rows_description = "Smallest height, in rows, a pane can reach."
 history_seconds_label = "Chart period"
 history_seconds_description = "How many seconds the task manager charts show. From 30 to 600."
+background_monitoring_label = "Monitor in the background"
+background_monitoring_description = "The task manager charts keep their history while it is closed, at the cost of one process scan per second."
 
 [settings.button]
 open_file = "Open file in editor"
@@ -773,6 +776,9 @@ body = "\"{key}\" is below the floor of {floor}s; using {floor}s."
 [notice.task_manager_history_adjusted]
 title = "Task manager period adjusted"
 body = "\"history_seconds = {value}\" is outside the range of 30 to 600; using {used} seconds."
+
+[notice.task_manager_background_save_failed]
+title = "Could not save background monitoring"
 
 [notice.git_missing]
 title = "Git not found"

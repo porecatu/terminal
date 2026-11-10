@@ -2911,6 +2911,7 @@ impl WindowState {
     /// emprestados aqui, nunca `self` inteiro -- é o que permite
     /// `self.access_adapter` (mutável) e o resto de `self` (imutável)
     /// coexistirem no mesmo `match`/closure.
+    #[allow(clippy::too_many_arguments)]
     fn refresh_access_tree(
         &mut self,
         style: &TabBarStyle,
@@ -2919,6 +2920,7 @@ impl WindowState {
         git_remotes: &HashMap<PathBuf, git::RemoteEntry>,
         catalog: &Catalog,
         language: &str,
+        background_monitoring: bool,
     ) {
         // ADR-0048 §11: a árvore é projeção do mesmo layout que o pintor
         // consome. Montado aqui fora do `update_if_active` porque o
@@ -2975,6 +2977,7 @@ impl WindowState {
                     selection: view.selection,
                     latest: self.task_manager_history.latest(),
                     menu: task_menu,
+                    background_monitoring,
                 });
         self.access_adapter.update_if_active(move || {
             access::build_tree(
@@ -9906,6 +9909,10 @@ impl App {
         // RF-24.26: the adjusted-period notice, like the Git interval one,
         // does not wait for the manager to be opened.
         self.check_task_manager_history_notice(now);
+        // ADR-0098 §2: `background_monitoring` keeps the sampling clock
+        // running with every manager closed, from the startup and from the
+        // reload that turns it on.
+        self.sync_task_manager_sampler(now);
         self.check_profile_detection();
         self.open_ready_prompts();
         // ADR-0076 §2: as tentativas de reconexão cujo prazo venceu começam
@@ -10299,8 +10306,17 @@ impl App {
         let git_remotes = &self.git_remotes;
         let catalog = &self.catalog;
         let language = &self.language_tag;
+        let background = self.config.task_manager.background_monitoring;
         for state in self.windows.values_mut() {
-            state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
+            state.refresh_access_tree(
+                style,
+                home,
+                measurer,
+                git_remotes,
+                catalog,
+                language,
+                background,
+            );
         }
         self.refresh_settings_access_tree();
     }
@@ -12248,10 +12264,19 @@ impl App {
         let git_remotes = &self.git_remotes;
         let catalog = &self.catalog;
         let language = &self.language_tag;
+        let background = self.config.task_manager.background_monitoring;
         let Some(state) = self.windows.get_mut(&window_id) else {
             return;
         };
-        state.refresh_access_tree(style, home, measurer, git_remotes, catalog, language);
+        state.refresh_access_tree(
+            style,
+            home,
+            measurer,
+            git_remotes,
+            catalog,
+            language,
+            background,
+        );
     }
 
     /// PRD-000/etapa 6 da F6: primeiro `Wakeup::TabDirty` do processo é a
@@ -13981,6 +14006,22 @@ impl App {
                 // -- nunca chega ao terminal.
                 let armed = state.armed_overlay.take();
                 state.window.request_redraw();
+                // ADR-0098 §5: the press on the task manager's footer toggle
+                // is consumed like an overlay's; its release flips the key.
+                if armed.is_none()
+                    && button == MouseButton::Left
+                    && state
+                        .task_manager
+                        .as_ref()
+                        .is_some_and(|view| view.footer_pressed)
+                {
+                    let point = (
+                        state.cursor_position.0 as f32 / state.scale,
+                        state.cursor_position.1 as f32 / state.scale,
+                    );
+                    self.task_manager_release(window_id, point);
+                    return;
+                }
                 if let Some(armed) = armed
                     && button == MouseButton::Left
                     && input::release_on_armed(Some(armed), self.overlay_target(window_id))

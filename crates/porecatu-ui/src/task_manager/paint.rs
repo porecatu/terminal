@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Painting of the task manager (PRD-024, ADR-0096 §1 to §5): the layout of
-//! the frame, the three charts and the process list, as primitives. Pure with
+//! Painting of the task manager (PRD-024, ADR-0096 §1 to §5, ADR-0098 §5):
+//! the layout of the frame, the three charts, the process list and its
+//! footer with the background monitoring toggle, as primitives. Pure with
 //! respect to the window: it takes data and a [`TextMeasurer`] and pushes
 //! primitives, so it is testable without a GPU.
 //!
@@ -27,6 +28,7 @@ use crate::messages::msg;
 use crate::overlay::{BODY_FONT, TITLE_FONT};
 use crate::palette::{self, ResolvedPalette};
 use crate::tab_bar::TabBarStyle;
+use crate::toggle::{TOGGLE_TRACK_HEIGHT, TOGGLE_TRACK_WIDTH, push_toggle};
 
 use super::chart::{self, Metric};
 use super::format::{self, ColumnHeaders, ColumnModels};
@@ -165,12 +167,27 @@ pub(crate) struct ListLayout {
     pub header: Rect,
     /// The 1 px rule under the header.
     pub rule: Rect,
-    /// Where the rows scroll (the clip of the rows).
+    /// Where the rows scroll (the clip of the rows), between the header's
+    /// rule and the footer's.
     pub body: Rect,
     pub row_height: f32,
     /// How many **whole** rows fit in the body: the page of the keyboard
     /// navigation and the number of rows painted.
     pub visible_rows: usize,
+    /// ADR-0098 §5: the 1 px rule on top of the footer, the mirror of the
+    /// one under the header.
+    pub footer_rule: Rect,
+    /// The fixed footer at the end of the column: `row_height` tall, does
+    /// not scroll.
+    pub footer: Rect,
+    /// Where the footer's label may go: from `row_padding_x` past the
+    /// footer's left edge to `row_padding_x` before the toggle. The label is
+    /// right-aligned in it and cut with an ellipsis when it does not fit.
+    pub footer_label: Rect,
+    /// The toggle's track (34×19), `row_padding_x` from the column's right
+    /// edge, centered on the footer's vertical. Never cut: in a column too
+    /// narrow for it, it sticks to the column's left edge.
+    pub toggle: Rect,
 }
 
 impl ListLayout {
@@ -195,6 +212,38 @@ impl ListLayout {
             return None;
         }
         Some((((y - self.body.y) / self.row_height) as usize).min(self.visible_rows - 1))
+    }
+
+    /// ADR-0098 §5: the clickable part of the footer -- the label as it was
+    /// painted (`label_width`, the last frame's, see
+    /// [`MeasureCache::footer_label_width`]) plus the track, the footer's
+    /// height. Without a label (none painted yet, or no room) only the track.
+    pub(crate) fn footer_hit(&self, label_width: f32) -> Rect {
+        let label = label_width.clamp(0.0, self.footer_label.width);
+        let left = if label > 0.0 {
+            self.footer_label.x + self.footer_label.width - label
+        } else {
+            self.toggle.x
+        };
+        let right = self.toggle.x + self.toggle.width;
+        Rect {
+            x: left,
+            y: self.footer.y,
+            width: (right - left).max(0.0),
+            height: self.footer.height,
+        }
+    }
+
+    /// Whether `point` is on [`Self::footer_hit`].
+    pub(crate) fn footer_contains(&self, point: (f32, f32), label_width: f32) -> bool {
+        let hit = self.footer_hit(label_width);
+        let (x, y) = point;
+        hit.width > 0.0
+            && hit.height > 0.0
+            && x >= hit.x
+            && x < hit.x + hit.width
+            && y >= hit.y
+            && y < hit.y + hit.height
     }
 }
 
@@ -269,11 +318,38 @@ pub(crate) fn layout(rect: Rect, style: &TaskManagerStyle) -> TaskManagerLayout 
     let header_height = style.row_height.min(inner_height);
     let rule_height = HAIRLINE.min(inner_height - header_height);
     let body_top = inner_y + header_height + rule_height;
-    let body_height = (inner_y + inner_height - body_top).max(0.0);
+    // ADR-0098 §5: the footer and its rule take the end of the column; the
+    // rows scroll between the two rules.
+    let below_header = (inner_y + inner_height - body_top).max(0.0);
+    let footer_height = style.row_height.min(below_header);
+    let footer_rule_height = HAIRLINE.min(below_header - footer_height);
+    let footer_top = inner_y + inner_height - footer_height;
+    let footer_rule_top = footer_top - footer_rule_height;
+    let body_height = (footer_rule_top - body_top).max(0.0);
     let visible_rows = if style.row_height > 0.0 {
         (body_height / style.row_height).floor() as usize
     } else {
         0
+    };
+    let footer = Rect {
+        x: right_x,
+        y: footer_top,
+        width: column_width,
+        height: footer_height,
+    };
+    let toggle_x = (right_x + column_width - style.row_padding_x - TOGGLE_TRACK_WIDTH).max(right_x);
+    let toggle = Rect {
+        x: toggle_x,
+        y: footer_top + (footer_height - TOGGLE_TRACK_HEIGHT) / 2.0,
+        width: TOGGLE_TRACK_WIDTH,
+        height: TOGGLE_TRACK_HEIGHT,
+    };
+    let label_x = right_x + style.row_padding_x;
+    let footer_label = Rect {
+        x: label_x,
+        y: footer_top,
+        width: (toggle_x - style.row_padding_x - label_x).max(0.0),
+        height: footer_height,
     };
 
     TaskManagerLayout {
@@ -300,6 +376,15 @@ pub(crate) fn layout(rect: Rect, style: &TaskManagerStyle) -> TaskManagerLayout 
             },
             row_height: style.row_height,
             visible_rows,
+            footer_rule: Rect {
+                x: right_x,
+                y: footer_rule_top,
+                width: column_width,
+                height: footer_rule_height,
+            },
+            footer,
+            footer_label,
+            toggle,
         },
     }
 }
@@ -398,6 +483,11 @@ struct NameCache {
 }
 
 impl NameCache {
+    /// The measured width of `text`, if it was ever fitted.
+    fn width_of(&self, text: &str) -> Option<f32> {
+        self.entries.get(text).map(|entry| entry.width)
+    }
+
     /// `text` fitted to `budget` pixels: the text itself, or cut with an
     /// ellipsis, and whether it was cut. A string is **measured once** (one
     /// shaping), and **cut once per budget** (one more, by
@@ -455,6 +545,11 @@ pub(crate) struct MeasureCache {
     tab_titles: NameCache,
     process_names: NameCache,
     notes: NameCache,
+    /// The footer's label (ADR-0098 §5): one string per language.
+    footer: NameCache,
+    /// Width of the footer's label as the **last** frame painted it: the
+    /// hit-test of the footer reads it ([`ListLayout::footer_hit`]).
+    footer_label_width: f32,
     /// The rows whose name was cut with an ellipsis in the **last** painted
     /// frame, among the visible ones.
     truncated: HashSet<RowKey>,
@@ -464,6 +559,12 @@ pub(crate) struct MeasureCache {
 }
 
 impl MeasureCache {
+    /// Width of the footer's label in the last painted frame (0 before the
+    /// first one): the hit-test of the footer uses it.
+    pub(crate) fn footer_label_width(&self) -> f32 {
+        self.footer_label_width
+    }
+
     /// Forgets everything measured (font or scale changed).
     pub(crate) fn clear(&mut self) {
         let measurements = self.column_measurements;
@@ -491,6 +592,7 @@ impl MeasureCache {
             self.tab_titles = NameCache::default();
             self.process_names = NameCache::default();
             self.notes = NameCache::default();
+            self.footer = NameCache::default();
             self.column_measurements += 1;
             self.columns = Some(measure_columns(key, style, measurer));
         }
@@ -608,6 +710,8 @@ fn number_run(
 ///   painted. Clamping `first_visible` is the caller's.
 /// - `history` / `history_seconds`: the chart history and the effective
 ///   period (already clamped, `effective_history`).
+/// - `background`: `[task_manager] background_monitoring` of the current
+///   `Config`, the state the footer's toggle draws (ADR-0098 §4).
 /// - `pal`: the theme colors and the group palette (tab rows' dots).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint(
@@ -617,6 +721,7 @@ pub(crate) fn paint(
     rows: &[Row],
     history: &TaskManagerHistory,
     history_seconds: u32,
+    background: bool,
     style: &TaskManagerStyle,
     pal: &ResolvedPalette,
     catalog: &Catalog,
@@ -665,6 +770,76 @@ pub(crate) fn paint(
         catalog,
         mono_advance,
         measurer,
+    );
+    paint_footer(
+        out,
+        &geometry.list,
+        &mut view.measure,
+        background,
+        style,
+        pal,
+        catalog,
+        measurer,
+    );
+}
+
+/// ADR-0098 §5: the rule, then the label right-aligned before the toggle
+/// (system font, `text_size`, Secondary text; cut with an ellipsis when the
+/// column is narrow), then the toggle in the settings screen's colors,
+/// showing `on`. No hover of its own, like the settings screen's toggles.
+#[allow(clippy::too_many_arguments)]
+fn paint_footer(
+    out: &mut Vec<Primitive>,
+    list: &ListLayout,
+    measure: &mut MeasureCache,
+    on: bool,
+    style: &TaskManagerStyle,
+    pal: &ResolvedPalette,
+    catalog: &Catalog,
+    measurer: &mut TextMeasurer,
+) {
+    if list.footer.height <= 0.0 || list.footer.width <= 0.0 {
+        measure.footer_label_width = 0.0;
+        return;
+    }
+    quad(out, list.footer_rule, pal.task_manager_chart_border);
+    let label = msg::task_manager::background_monitoring(catalog);
+    let budget = list.footer_label.width;
+    measure.footer_label_width = 0.0;
+    if budget > 0.0 {
+        let (text, cut) = measure
+            .footer
+            .fit(&label, BODY_FONT, style.text_size, budget, measurer);
+        if !text.is_empty() {
+            let width = if cut {
+                budget
+            } else {
+                measure
+                    .footer
+                    .width_of(&label)
+                    .unwrap_or(budget)
+                    .min(budget)
+            };
+            let x = list.footer_label.x + budget - width;
+            out.push(Primitive::PushClip(list.footer_label));
+            out.push(text_run(
+                text,
+                x,
+                list.footer,
+                BODY_FONT,
+                style.text_size,
+                pal.status_bar_text,
+            ));
+            out.push(Primitive::PopClip);
+            measure.footer_label_width = width;
+        }
+    }
+    push_toggle(
+        list.toggle,
+        on,
+        crate::settings::TOGGLE_ON,
+        crate::settings::TOGGLE_OFF,
+        out,
     );
 }
 
@@ -1119,6 +1294,7 @@ mod tests {
             rows,
             history,
             60,
+            false,
             &style(),
             &pal(),
             &en_us(),
@@ -1193,18 +1369,139 @@ mod tests {
         assert_eq!(l.rule.y, l.header.y + l.header.height);
         assert_eq!(l.rule.height, 1.0);
         assert_eq!(l.body.y, l.rule.y + 1.0);
-        // 600 - 2 * 18 = 564 of column; minus 28 and 1 = 535 of body; 19 rows.
-        assert_eq!(l.body.height, 535.0);
-        assert_eq!(l.visible_rows, 19);
+        // 600 - 2 * 18 = 564 of column; minus 28 and 1 of header, 1 and 28
+        // of footer (ADR-0098 §5) = 506 of body; 18 rows.
+        assert_eq!(l.body.height, 506.0);
+        assert_eq!(l.visible_rows, 18);
         assert_eq!(l.row_rect(0).y, l.body.y);
         assert_eq!(l.row_rect(1).y, l.body.y + 28.0);
         // Hit-test: the first row, the last whole row, and below it.
         let x = l.body.x + 5.0;
         assert_eq!(l.row_at((x, l.body.y + 1.0)), Some(0));
-        assert_eq!(l.row_at((x, l.body.y + 28.0 * 19.0 - 1.0)), Some(18));
-        assert_eq!(l.row_at((x, l.body.y + 28.0 * 19.0 + 1.0)), None);
+        assert_eq!(l.row_at((x, l.body.y + 28.0 * 18.0 - 1.0)), Some(17));
+        assert_eq!(l.row_at((x, l.body.y + 28.0 * 18.0 + 1.0)), None);
         assert_eq!(l.row_at((l.body.x - 1.0, l.body.y + 1.0)), None);
         assert_eq!(l.row_at((x, l.header.y + 1.0)), None);
+    }
+
+    #[test]
+    fn the_footer_ends_the_column_with_a_rule_and_the_toggle_on_the_right() {
+        // ADR-0098 §5: the list shrinks by one row; the footer is
+        // `row_height` tall under a 1 px rule; the toggle sits
+        // `row_padding_x` from the right edge, centered; the label's room
+        // ends `row_padding_x` before it.
+        let s = style();
+        let l = layout(rect(), &s).list;
+        let column_bottom = l.column.y + l.column.height;
+        assert_eq!(l.footer.height, s.row_height);
+        assert_eq!(l.footer.y + l.footer.height, column_bottom);
+        assert_eq!((l.footer.x, l.footer.width), (l.column.x, l.column.width));
+        assert_eq!(l.footer_rule.height, 1.0);
+        assert_eq!(l.footer_rule.y + 1.0, l.footer.y);
+        assert_eq!(l.body.y + l.body.height, l.footer_rule.y);
+        assert_eq!(
+            (l.toggle.width, l.toggle.height),
+            (TOGGLE_TRACK_WIDTH, TOGGLE_TRACK_HEIGHT)
+        );
+        assert_eq!(
+            l.toggle.x + l.toggle.width,
+            l.column.x + l.column.width - s.row_padding_x
+        );
+        assert_eq!(
+            l.toggle.y - l.footer.y,
+            l.footer.y + l.footer.height - (l.toggle.y + l.toggle.height)
+        );
+        assert_eq!(l.footer_label.x, l.column.x + s.row_padding_x);
+        assert_eq!(
+            l.footer_label.x + l.footer_label.width,
+            l.toggle.x - s.row_padding_x
+        );
+        // A row slot never reaches the footer.
+        let x = l.body.x + 5.0;
+        assert_eq!(l.row_at((x, l.footer.y + 1.0)), None);
+    }
+
+    #[test]
+    fn the_footer_hit_is_the_painted_label_plus_the_track() {
+        let l = layout(rect(), &style()).list;
+        let y = l.footer.y + l.footer.height / 2.0;
+        let label_right = l.footer_label.x + l.footer_label.width;
+        // No label painted yet: only the track.
+        assert!(l.footer_contains((l.toggle.x + 1.0, y), 0.0));
+        assert!(!l.footer_contains((l.toggle.x - 1.0, y), 0.0));
+        // A 100 px label: from its start to the track's right edge.
+        assert!(l.footer_contains((label_right - 99.0, y), 100.0));
+        assert!(!l.footer_contains((label_right - 101.0, y), 100.0));
+        assert!(!l.footer_contains((l.toggle.x + l.toggle.width + 1.0, y), 100.0));
+        // Above the footer (the last row), nothing.
+        assert!(!l.footer_contains((l.toggle.x + 1.0, l.footer.y - 1.0), 100.0));
+    }
+
+    #[test]
+    fn in_a_narrow_column_the_toggle_is_never_cut_and_the_label_has_no_room() {
+        let narrow = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 2.0 * 18.0 + 18.0 + 2.0 * 40.0,
+            height: 300.0,
+        };
+        let l = layout(narrow, &style()).list;
+        assert_eq!(l.column.width, 40.0);
+        assert_eq!(l.toggle.width, TOGGLE_TRACK_WIDTH);
+        assert!(l.toggle.x >= l.column.x);
+        assert_eq!(l.footer_label.width, 0.0);
+    }
+
+    #[test]
+    fn the_footer_paints_the_rule_the_label_and_the_toggle_in_its_state() {
+        let mut measurer = TextMeasurer::new();
+        let history = TaskManagerHistory::default();
+        let l = layout(rect(), &style()).list;
+        for on in [false, true] {
+            let mut view = TaskManagerView::new(None);
+            let mut out = Vec::new();
+            paint(
+                &mut out,
+                rect(),
+                &mut view,
+                &[],
+                &history,
+                60,
+                on,
+                &style(),
+                &pal(),
+                &en_us(),
+                &mut measurer,
+            );
+            assert!(out.iter().any(|p| matches!(
+                p,
+                Primitive::Quad(q) if q.rect == l.footer_rule
+            )));
+            let label = texts(&out)
+                .into_iter()
+                .find(|run| run.text == "Monitor in the background")
+                .expect("the footer label");
+            assert_eq!(label.font, BODY_FONT);
+            assert_eq!(label.color, pal().status_bar_text);
+            let track = out
+                .iter()
+                .find_map(|p| match p {
+                    Primitive::RoundedQuad(q) if q.rect == l.toggle => Some(*q),
+                    _ => None,
+                })
+                .expect("the toggle track");
+            let expected = if on {
+                crate::settings::TOGGLE_ON
+            } else {
+                crate::settings::TOGGLE_OFF
+            };
+            assert_eq!(track.color, expected);
+            // The painted width is what the hit-test reads.
+            let width = view.measure.footer_label_width();
+            assert!(width > 0.0);
+            let label_right = l.footer_label.x + l.footer_label.width;
+            assert!((label.origin.0 - (label_right - width)).abs() < 1e-3);
+        }
     }
 
     #[test]
@@ -1459,10 +1756,28 @@ mod tests {
         // The ring of 1 px: no overlap, no gap.
         let ring = frame.width * frame.height - (frame.width - 2.0) * (frame.height - 2.0);
         assert!((covered - ring).abs() < 0.05, "{covered} vs {ring}");
-        assert!(!out.iter().any(|p| matches!(p, Primitive::RoundedQuad(_))));
+        // The charts have no rounded corner (the footer's toggle is the
+        // list's, ADR-0098 §5).
+        let footer = layout(rect(), &style()).list.footer;
+        assert!(!out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.rect.y < footer.y
+        )));
     }
 
     // ---- list
+
+    /// The rounded quads above the footer: the rows' (and the dots'), without
+    /// the footer's toggle (ADR-0098 §5).
+    fn rows_rounded(out: &[Primitive]) -> Vec<RoundedQuad> {
+        let footer = layout(rect(), &style()).list.footer;
+        out.iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.rect.y < footer.y => Some(*q),
+                _ => None,
+            })
+            .collect()
+    }
 
     fn many_tabs(count: u32) -> Vec<Row> {
         (0..count)
@@ -1482,7 +1797,7 @@ mod tests {
             .map(|r| r.text.as_str())
             .filter(|t| t.starts_with("tab-"))
             .collect();
-        let expected: Vec<String> = (10..10 + 19).map(|n| format!("tab-{n}")).collect();
+        let expected: Vec<String> = (10..10 + 18).map(|n| format!("tab-{n}")).collect();
         assert_eq!(
             titles,
             expected.iter().map(String::as_str).collect::<Vec<_>>()
@@ -1598,13 +1913,7 @@ mod tests {
         ];
         let mut view = TaskManagerView::new(None);
         let out = paint_all(&mut view, &rows, &TaskManagerHistory::default(), &mut m);
-        let dots: Vec<&RoundedQuad> = out
-            .iter()
-            .filter_map(|p| match p {
-                Primitive::RoundedQuad(q) => Some(q),
-                _ => None,
-            })
-            .collect();
+        let dots = rows_rounded(&out);
         assert_eq!(dots.len(), 1);
         let dot = dots[0];
         assert_eq!((dot.rect.width, dot.rect.height), (6.0, 6.0));
@@ -1623,12 +1932,7 @@ mod tests {
     }
 
     fn background_quads(out: &[Primitive]) -> Vec<RoundedQuad> {
-        out.iter()
-            .filter_map(|p| match p {
-                Primitive::RoundedQuad(q) => Some(*q),
-                _ => None,
-            })
-            .collect()
+        rows_rounded(out)
     }
 
     #[test]
@@ -1710,6 +2014,7 @@ mod tests {
                 &rows,
                 &history,
                 60,
+                false,
                 &bigger,
                 &pal(),
                 &en_us(),
@@ -1728,6 +2033,7 @@ mod tests {
             &rows,
             &history,
             60,
+            false,
             &bigger,
             &pal(),
             &pt,
@@ -1849,6 +2155,7 @@ mod tests {
             &rows,
             &TaskManagerHistory::default(),
             60,
+            false,
             &style(),
             &pal(),
             &en_us(),

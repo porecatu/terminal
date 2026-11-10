@@ -95,6 +95,7 @@ per_second = "{value}/s"
 percent = "{value}%"
 decimal_separator = ","
 no_value = "—"
+background_monitoring = "Monitorar em segundo plano"
 
 [settings]
 window_title = "Configurações"
@@ -260,6 +261,8 @@ min_rows_label = "Mínimo de linhas"
 min_rows_description = "Menor altura, em linhas, a que um painel pode chegar."
 history_seconds_label = "Período dos gráficos"
 history_seconds_description = "Quantos segundos os gráficos do gerenciador de tarefas mostram. De 30 a 600."
+background_monitoring_label = "Monitorar em segundo plano"
+background_monitoring_description = "Os gráficos do gerenciador de tarefas guardam o histórico com ele fechado, ao custo de uma varredura de processos por segundo."
 
 [settings.button]
 open_file = "Abrir arquivo no editor"
@@ -778,6 +781,9 @@ body = "\"{key}\" é menor que o piso de {floor}s; usando {floor}s."
 [notice.task_manager_history_adjusted]
 title = "Período do gerenciador de tarefas ajustado"
 body = "\"history_seconds = {value}\" está fora da faixa de 30 a 600; usando {used} segundos."
+
+[notice.task_manager_background_save_failed]
+title = "Não foi possível gravar o monitoramento em segundo plano"
 
 [notice.git_missing]
 title = "Git não encontrado"

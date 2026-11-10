@@ -73,6 +73,7 @@ per_second = "{value}/s"
 percent = "{value} %"
 decimal_separator = ","
 no_value = "—"
+background_monitoring = "Im Hintergrund überwachen"
 
 [settings]
 window_title = "Einstellungen"
@@ -238,6 +239,8 @@ min_rows_label = "Mindestzeilen"
 min_rows_description = "Kleinste Höhe in Zeilen, die ein Bereich erreichen kann."
 history_seconds_label = "Zeitraum der Diagramme"
 history_seconds_description = "Wie viele Sekunden die Diagramme des Task-Managers zeigen. Von 30 bis 600."
+background_monitoring_label = "Im Hintergrund überwachen"
+background_monitoring_description = "Die Diagramme des Task-Managers behalten den Verlauf, auch wenn er geschlossen ist, auf Kosten eines Prozess-Scans pro Sekunde."
 
 [settings.button]
 open_file = "Datei im Editor öffnen"
@@ -733,6 +736,9 @@ body = "\"{key}\" liegt unter dem Minimum von {floor}s; {floor}s werden verwende
 [notice.task_manager_history_adjusted]
 title = "Zeitraum des Task-Managers angepasst"
 body = "\"history_seconds = {value}\" liegt außerhalb des Bereichs von 30 bis 600; {used} Sekunden werden verwendet."
+
+[notice.task_manager_background_save_failed]
+title = "Überwachung im Hintergrund konnte nicht gespeichert werden"
 
 [notice.git_missing]
 title = "Git nicht gefunden"

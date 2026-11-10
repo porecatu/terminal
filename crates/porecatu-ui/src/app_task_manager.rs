@@ -25,10 +25,17 @@
 //! Step 08, also here: the actions a screen reader asks for on the manager's
 //! nodes (`App::run_task_manager_access_action`). The tree itself is
 //! [`crate::access`]; the settings screen group is `settings/catalog.rs`.
+//!
+//! ADR-0098, also here: `background_monitoring` in the sampler's life
+//! ([`sampler_needed`], [`window_measured`], [`apply_to_history`]) and the
+//! footer's toggle, which writes the key through `porecatu-config::edit`
+//! ([`save_background_monitoring`]) and lets the hot reload apply it.
 
 use std::time::{Duration, Instant};
 
-use porecatu_config::Config;
+use std::path::Path;
+
+use porecatu_config::{Config, ConfigDocument, Edit, EditError, EditValue, KeyPath};
 use porecatu_locale::Catalog;
 use porecatu_render::{Primitive, Rect, TextMeasurer};
 use porecatu_term::{
@@ -125,22 +132,31 @@ impl SampleTicket {
     }
 }
 
-/// Whether the sampler must exist: some window has the manager open.
-pub(crate) fn sampler_needed(open: impl IntoIterator<Item = bool>) -> bool {
-    open.into_iter().any(|is_open| is_open)
+/// Whether the sampler must exist (ADR-0098 §2): `[task_manager]
+/// background_monitoring` is on, or some window has the manager open.
+pub(crate) fn sampler_needed(background: bool, open: impl IntoIterator<Item = bool>) -> bool {
+    background || open.into_iter().any(|is_open| is_open)
 }
 
-/// The roots of a sample request (ADR-0093 §5): for **every window with the
-/// manager open**, one item per pane that has a runtime **and** a process
-/// group. `windows` yields `(window, manager open, panes)`, the panes being
-/// the window's runtimes (a `NotStarted` tab has none, ADR-0037) with the
-/// group `Terminal::process_group` gave (`None` for SSH).
+/// Whether a window is measured (ADR-0098 §3): with the manager open, or in
+/// any case with `background_monitoring` on. Its panes go in the request and
+/// its history gets the answer's point.
+pub(crate) fn window_measured(open: bool, background: bool) -> bool {
+    open || background
+}
+
+/// The roots of a sample request (ADR-0093 §5, ADR-0098 §3): for **every
+/// measured window** ([`window_measured`]), one item per pane that has a
+/// runtime **and** a process group. `windows` yields `(window, measured,
+/// panes)`, the panes being the window's runtimes (a `NotStarted` tab has
+/// none, ADR-0037) with the group `Terminal::process_group` gave (`None` for
+/// SSH).
 pub(crate) fn sample_roots<G>(
     windows: impl IntoIterator<Item = (WindowId, bool, Vec<(WindowPaneKey, Option<G>)>)>,
 ) -> Vec<(PaneKey, G)> {
     windows
         .into_iter()
-        .filter(|(_, open, _)| *open)
+        .filter(|(_, measured, _)| *measured)
         .flat_map(|(window, _, panes)| {
             panes.into_iter().filter_map(move |((tab, pane), group)| {
                 group.map(|group| ((window, tab, pane), group))
@@ -150,8 +166,9 @@ pub(crate) fn sample_roots<G>(
 }
 
 /// Splits an answer by window (ADR-0093 §6), keeping only the keys `keep`
-/// accepts: the caller says a key is good when its window still exists with
-/// the manager open and its pane still exists in that window. A key of a
+/// accepts: the caller says a key is good when its window still exists and
+/// is measured ([`window_measured`]) and its pane still exists in that
+/// window. A key of a
 /// closed window or of a tab that left or closed is dropped -- no old `TabId`
 /// is looked up or fixed, the next request already carries the new keys.
 pub(crate) fn partition_sample(
@@ -191,6 +208,25 @@ pub(crate) fn apply_to_window(
     };
     history.push(
         HistoryPoint::from_totals(taken_at, view.sample.totals()),
+        history_seconds,
+    );
+}
+
+/// ADR-0098 §3: the part of a window **without** the manager open, with
+/// `background_monitoring` on. Only the chart point is kept -- the totals of
+/// the part, like [`apply_to_window`]'s -- and no `TaskManagerView` is made:
+/// the list is built from the first answer after the manager opens.
+pub(crate) fn apply_to_history(
+    history: &mut TaskManagerHistory,
+    taken_at: Instant,
+    panes: &HashMap<WindowPaneKey, Vec<ProcessStat>>,
+    history_seconds: u32,
+) {
+    history.push(
+        HistoryPoint::from_totals(
+            taken_at,
+            crate::task_manager::totals(panes.values().flatten()),
+        ),
         history_seconds,
     );
 }
@@ -261,6 +297,47 @@ pub(crate) fn history_notice_step(raw: u32, warned: Option<u32>) -> (bool, Optio
         return (false, warned);
     }
     (true, Some(raw))
+}
+
+// --- the footer's toggle (ADR-0098 §4) ---------------------------------------
+
+/// The key the footer's toggle writes.
+pub(crate) const BACKGROUND_MONITORING_KEY: &str = "task_manager.background_monitoring";
+
+/// The one edit of the toggle: the key set to the opposite of `current`, the
+/// value of the `Config` in use (the toggle never keeps a state of its own).
+pub(crate) fn background_monitoring_edit(current: bool) -> Edit {
+    Edit::Set(
+        KeyPath::parse(BACKGROUND_MONITORING_KEY).expect("a valid key path"),
+        EditValue::Bool(!current),
+    )
+}
+
+/// Writes `edit` to `path` (ADR-0098 §4): over `base`, the file's text as
+/// just read, or -- `None`, no file yet -- over `template`, the embedded
+/// example (RF-16.21). A file that changed between the read and the write
+/// (`EditError::Changed`) is rebased on its new text and the edit is applied
+/// **once** more: an edit by key lands on whatever the file now holds. A
+/// second `Changed`, like any other error, is returned and nothing was
+/// written. Who applies the value is the hot reload, never this function.
+pub(crate) fn save_background_monitoring(
+    path: &Path,
+    base: Option<&str>,
+    template: &str,
+    edit: &Edit,
+) -> Result<(), EditError> {
+    let mut document = match base {
+        Some(text) => ConfigDocument::parse(text),
+        None => ConfigDocument::from_template(template),
+    }?;
+    let edits = std::slice::from_ref(edit);
+    match document.save(path, edits) {
+        Err(EditError::Changed { current }) => {
+            document.rebase(&current)?;
+            document.save(path, edits).map(|_| ())
+        }
+        other => other.map(|_| ()),
+    }
 }
 
 // --- keyboard (ADR-0095 §3) -------------------------------------------------
@@ -762,6 +839,7 @@ pub(crate) fn paint_task_manager(
         &rows,
         task_manager_history,
         history_seconds,
+        config.task_manager.background_monitoring,
         &tm_style,
         pal,
         catalog,
@@ -835,13 +913,39 @@ impl App {
     /// ends by itself and releases its `System`; it is **not** joined here, the
     /// main thread never waits for it. Idempotent.
     pub(crate) fn stop_task_manager_sampler_if_unused(&mut self) {
-        let needed = sampler_needed(self.windows.values().map(|w| w.task_manager.is_some()));
-        if needed {
+        if self.task_manager_sampler_needed() {
             return;
         }
         self.task_manager_sampler = None;
         self.task_manager_next_sample = None;
         self.task_manager_ticket.forget_pending();
+    }
+
+    /// [`sampler_needed`] for the app as it is now.
+    fn task_manager_sampler_needed(&self) -> bool {
+        sampler_needed(
+            self.config.task_manager.background_monitoring,
+            self.windows.values().map(|w| w.task_manager.is_some()),
+        )
+    }
+
+    /// ADR-0098 §2, from `schedule_next_wake`: with `background_monitoring`
+    /// on, the sampling clock runs from the startup on -- and from the reload
+    /// that turned it on -- without waiting for a manager to open; turned off
+    /// with every manager closed, the sampler goes now rather than at the
+    /// next deadline. Only the deadline is set here: the thread is created by
+    /// [`Self::task_manager_tick`], as when the first manager opens.
+    pub(crate) fn sync_task_manager_sampler(&mut self, now: Instant) {
+        if self.windows.is_empty() {
+            return;
+        }
+        if self.task_manager_sampler_needed() {
+            if self.task_manager_next_sample.is_none() {
+                self.task_manager_next_sample = Some(now);
+            }
+        } else if self.task_manager_next_sample.is_some() || self.task_manager_sampler.is_some() {
+            self.stop_task_manager_sampler_if_unused();
+        }
     }
 
     /// Starts the sampler thread if there is none. The callback runs **on the
@@ -863,8 +967,9 @@ impl App {
     ///
     /// - A previous answer still on its way: nothing is sent, only the next
     ///   deadline is set (no queue forms, a slow machine samples less often).
-    /// - Otherwise one request with the roots of **every** window that has
-    ///   the manager open.
+    /// - Otherwise one request with the roots of **every** measured window
+    ///   ([`window_measured`]: the manager open, or `background_monitoring`
+    ///   on, ADR-0098 §3).
     /// - A `send` that fails (the thread is gone) drops the sampler; it is
     ///   recreated at the next deadline, one second later. A thread that
     ///   cannot be created at all would retry once a second, which costs
@@ -876,7 +981,7 @@ impl App {
         if now < due {
             return;
         }
-        if !sampler_needed(self.windows.values().map(|w| w.task_manager.is_some())) {
+        if !self.task_manager_sampler_needed() {
             self.stop_task_manager_sampler_if_unused();
             return;
         }
@@ -889,9 +994,10 @@ impl App {
             return;
         }
         self.ensure_task_manager_sampler();
+        let background = self.config.task_manager.background_monitoring;
         let roots = sample_roots(self.windows.iter().map(|(&id, state)| {
-            let open = state.task_manager.is_some();
-            let panes = if open {
+            let measured = window_measured(state.task_manager.is_some(), background);
+            let panes = if measured {
                 state
                     .panes
                     .iter()
@@ -900,7 +1006,7 @@ impl App {
             } else {
                 Vec::new()
             };
-            (id, open, panes)
+            (id, measured, panes)
         }));
         let seq = self.task_manager_ticket.next_seq();
         let delivered = self.task_manager_sampler.as_ref().is_some_and(|sampler| {
@@ -916,22 +1022,25 @@ impl App {
         }
     }
 
-    /// ADR-0093 §6: applies the sampler's answer. Dropped when its `seq` is
-    /// not the one waited for. Each window that still exists and still has
-    /// the manager open gets its part (`partition_sample`, `apply_to_window`),
-    /// re-resolves its selection and scroll, and repaints; a window without
-    /// the manager, a closed window and a key whose pane is gone are ignored.
+    /// ADR-0093 §6, ADR-0098 §3: applies the sampler's answer. Dropped when
+    /// its `seq` is not the one waited for. Each window that still exists and
+    /// still has the manager open gets its part (`partition_sample`,
+    /// `apply_to_window`), re-resolves its selection and scroll, and
+    /// repaints. With `background_monitoring` on, a window with the manager
+    /// closed gets only the chart point (`apply_to_history`), no view and no
+    /// frame. A closed window and a key whose pane is gone are ignored.
     pub(crate) fn apply_process_sample(&mut self, result: SampleResult<PaneKey>) {
         if !self.task_manager_ticket.accept(result.seq) {
             return;
         }
         let history_seconds = effective_history(self.config.task_manager.history_seconds).seconds;
+        let background = self.config.task_manager.background_monitoring;
         let SampleResult {
             taken_at, panes, ..
         } = result;
         let mut parts = partition_sample(panes, |&(window, tab, pane)| {
             self.windows.get(&window).is_some_and(|state| {
-                state.task_manager.is_some()
+                window_measured(state.task_manager.is_some(), background)
                     && state
                         .workspace
                         .tab(tab)
@@ -945,10 +1054,13 @@ impl App {
                 task_manager_history,
                 ..
             } = state;
+            let part = parts.remove(id).unwrap_or_default();
             let Some(view) = task_manager.as_mut() else {
+                if background {
+                    apply_to_history(task_manager_history, taken_at, &part, history_seconds);
+                }
                 continue;
             };
-            let part = parts.remove(id).unwrap_or_default();
             apply_to_window(view, task_manager_history, taken_at, part, history_seconds);
             state.refresh_task_manager_view(style, config, false);
             state.window.request_redraw();
@@ -1110,6 +1222,16 @@ impl App {
         let Some(view) = state.task_manager.as_mut() else {
             return;
         };
+        // ADR-0098 §5: the footer's toggle arms on the press; the release
+        // over it flips the key ([`Self::task_manager_release`]).
+        view.footer_pressed = button == MouseButton::Left
+            && layout
+                .list
+                .footer_contains(point, view.measure.footer_label_width());
+        if view.footer_pressed {
+            view.last_click = None;
+            return;
+        }
         let Some(index) = row_index_at(&layout.list, point, view.first_visible, rows.len()) else {
             if button == MouseButton::Left {
                 view.last_click = None;
@@ -1134,6 +1256,85 @@ impl App {
         }
     }
 
+    /// The left release of a press the manager consumed (ADR-0098 §5): over
+    /// the footer's toggle that was armed by the press, it flips
+    /// `background_monitoring`. Anywhere else nothing happens.
+    pub(crate) fn task_manager_release(&mut self, window_id: WindowId, point: (f32, f32)) {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let layout = state.task_manager_layout(&self.style, &self.config);
+        let Some(view) = state.task_manager.as_mut() else {
+            return;
+        };
+        let armed = std::mem::take(&mut view.footer_pressed);
+        if armed
+            && layout
+                .list
+                .footer_contains(point, view.measure.footer_label_width())
+        {
+            self.toggle_background_monitoring(window_id);
+        }
+    }
+
+    /// ADR-0098 §4: writes the opposite of the `Config`'s
+    /// `background_monitoring` to the config file in use, by key. Nothing
+    /// changes in memory: the watcher sees the file and the hot reload brings
+    /// the value, which the toggle then draws. A failure is a warning in
+    /// `window_id`, and the toggle stays as it was.
+    pub(crate) fn toggle_background_monitoring(&mut self, window_id: WindowId) {
+        let now = Instant::now();
+        let edit = background_monitoring_edit(self.config.task_manager.background_monitoring);
+        let result = match self.config_path.clone() {
+            None => Err(None),
+            Some(path) => {
+                let base = match std::fs::read_to_string(&path) {
+                    Ok(text) => Ok(Some(text)),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                    Err(err) => Err(EditError::Io {
+                        path: path.clone(),
+                        kind: err.kind(),
+                        cause: err.to_string(),
+                    }),
+                };
+                let created = matches!(base, Ok(None));
+                base.and_then(|base| {
+                    save_background_monitoring(&path, base.as_deref(), EXAMPLE_CONFIG_TOML, &edit)
+                })
+                .map(|()| {
+                    // A file born from the example gets the theme files next
+                    // to it, as the settings screen's first save does
+                    // (ADR-0067). Failing here does not undo the save.
+                    if created && let Some(dir) = path.parent() {
+                        let _ = write_missing_theme_files(dir);
+                    }
+                })
+                .map_err(Some)
+            }
+        };
+        let Err(error) = result else {
+            return;
+        };
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        let (title, body) = match error {
+            None => (
+                msg::notice::config_path_unresolved::title(&self.catalog),
+                msg::notice::config_path_unresolved::body(&self.catalog),
+            ),
+            Some(error) => (
+                msg::notice::task_manager_background_save_failed::title(&self.catalog),
+                messages::settings_save_error(
+                    &self.catalog,
+                    &crate::settings::save::SaveError::Edit(error),
+                ),
+            ),
+        };
+        state.warnings.push(Severity::Warning, title, body, now);
+        state.window.request_redraw();
+    }
+
     /// ADR-0095 §10: an action a screen reader asked for on a node of the
     /// task manager (the app button's `Click`, a row's `Focus` and
     /// `ShowContextMenu`), taken to the same paths as the click and the
@@ -1152,6 +1353,9 @@ impl App {
         let rows = state.task_manager_rows();
         match task_manager_access_route(target, action, &rows) {
             Some(TaskAccessAction::Toggle) => self.toggle_task_manager(window_id),
+            Some(TaskAccessAction::ToggleBackground) => {
+                self.toggle_background_monitoring(window_id);
+            }
             Some(TaskAccessAction::SelectRow(key)) => {
                 self.select_task_manager_row(window_id, key);
             }
@@ -1422,12 +1626,24 @@ mod tests {
 
     #[test]
     fn the_sampler_is_needed_while_any_window_has_the_manager_open() {
-        assert!(!sampler_needed([]));
-        assert!(!sampler_needed([false, false]));
-        assert!(sampler_needed([false, true]));
+        assert!(!sampler_needed(false, []));
+        assert!(!sampler_needed(false, [false, false]));
+        assert!(sampler_needed(false, [false, true]));
         // Leaving the last open window is what makes it unneeded.
-        assert!(sampler_needed([true, false]));
-        assert!(!sampler_needed([false, false]));
+        assert!(sampler_needed(false, [true, false]));
+        assert!(!sampler_needed(false, [false, false]));
+    }
+
+    #[test]
+    fn with_background_monitoring_the_sampler_is_needed_with_every_manager_closed() {
+        // ADR-0098 §2: on, the sampler lives from the startup on.
+        assert!(sampler_needed(true, []));
+        assert!(sampler_needed(true, [false, false]));
+        assert!(sampler_needed(true, [true]));
+        // A window is measured with the manager open or with the key on.
+        assert!(window_measured(true, false));
+        assert!(window_measured(false, true));
+        assert!(!window_measured(false, false));
     }
 
     // --- roots of a request -----------------------------------------------
@@ -1457,7 +1673,160 @@ mod tests {
         );
     }
 
+    #[test]
+    fn with_background_monitoring_the_roots_include_windows_with_the_manager_closed() {
+        let windows = |background: bool| {
+            [
+                (
+                    window(1),
+                    window_measured(true, background),
+                    vec![((tab(1), pane(0)), Some("a"))],
+                ),
+                (
+                    window(2),
+                    window_measured(false, background),
+                    vec![((tab(7), pane(0)), Some("b"))],
+                ),
+            ]
+        };
+        assert_eq!(
+            sample_roots(windows(false)),
+            vec![((window(1), tab(1), pane(0)), "a")]
+        );
+        assert_eq!(
+            sample_roots(windows(true)),
+            vec![
+                ((window(1), tab(1), pane(0)), "a"),
+                ((window(2), tab(7), pane(0)), "b"),
+            ]
+        );
+    }
+
+    // --- the footer's toggle (ADR-0098 §4) ---------------------------------
+
+    const EXAMPLE: &str = EXAMPLE_CONFIG_TOML;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "porecatu-tm-background-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn the_toggle_edit_sets_the_key_to_the_opposite_value() {
+        let key = KeyPath::parse("task_manager.background_monitoring").unwrap();
+        assert_eq!(
+            background_monitoring_edit(false),
+            Edit::Set(key.clone(), EditValue::Bool(true))
+        );
+        assert_eq!(
+            background_monitoring_edit(true),
+            Edit::Set(key, EditValue::Bool(false))
+        );
+    }
+
+    #[test]
+    fn saving_writes_only_the_key_and_loads_back_with_it() {
+        let original = "# meu arquivo\n[task_manager]\nhistory_seconds = 120   # meu\n";
+        let path = scratch("only-key.toml");
+        std::fs::write(&path, original).unwrap();
+        save_background_monitoring(
+            &path,
+            Some(original),
+            EXAMPLE,
+            &background_monitoring_edit(false),
+        )
+        .unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.starts_with("# meu arquivo\n[task_manager]\nhistory_seconds = 120   # meu\n")
+        );
+        let (config, _) = porecatu_config::parse(&written).unwrap();
+        assert!(config.task_manager.background_monitoring);
+        assert_eq!(config.task_manager.history_seconds, 120);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_changed_since_the_read_is_rebased_once_and_keeps_both_changes() {
+        // The base is stale: someone wrote another key in the meantime. The
+        // edit by key lands on the new text, which keeps its own change.
+        let stale = "[task_manager]\nhistory_seconds = 60\n";
+        let now_on_disk = "[task_manager]\nhistory_seconds = 300\n";
+        let path = scratch("rebased.toml");
+        std::fs::write(&path, now_on_disk).unwrap();
+        save_background_monitoring(
+            &path,
+            Some(stale),
+            EXAMPLE,
+            &background_monitoring_edit(false),
+        )
+        .unwrap();
+        let (config, _) = porecatu_config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(config.task_manager.background_monitoring);
+        assert_eq!(config.task_manager.history_seconds, 300);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_missing_file_is_born_from_the_example_with_the_key() {
+        let path = scratch("born.toml");
+        save_background_monitoring(&path, None, EXAMPLE, &background_monitoring_edit(false))
+            .unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        let (config, _) = porecatu_config::parse(&written).unwrap();
+        assert!(config.task_manager.background_monitoring);
+        // The example's documentation came along.
+        assert!(written.contains("# Continua medindo os processos"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn an_invalid_file_on_disk_is_an_error_and_is_left_alone() {
+        let broken = "[task_manager\n";
+        let path = scratch("broken.toml");
+        std::fs::write(&path, broken).unwrap();
+        assert!(
+            save_background_monitoring(
+                &path,
+                Some(broken),
+                EXAMPLE,
+                &background_monitoring_edit(false)
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        std::fs::remove_file(&path).unwrap();
+    }
+
     // --- partition and apply ----------------------------------------------
+
+    #[test]
+    fn a_closed_manager_gets_only_the_chart_point() {
+        // ADR-0098 §3: the history grows, no view is made (the caller has
+        // none to give), and an empty part is a zero point, not a gap.
+        let base = Instant::now();
+        let mut history = TaskManagerHistory::default();
+        let mut part = HashMap::new();
+        part.insert(
+            (tab(1), pane(0)),
+            vec![stat(1, Some(0.25), 100), stat(2, Some(0.5), 50)],
+        );
+        apply_to_history(&mut history, base, &part, 60);
+        let point = history.latest().unwrap();
+        assert_eq!((point.at, point.memory, point.cpu), (base, 150, Some(0.75)));
+
+        let later = base + Duration::from_secs(1);
+        apply_to_history(&mut history, later, &HashMap::new(), 60);
+        assert_eq!(history.points().len(), 2);
+        let point = history.latest().unwrap();
+        assert_eq!((point.at, point.memory, point.cpu), (later, 0, None));
+    }
 
     #[test]
     fn the_answer_is_split_by_window_and_drops_keys_that_are_not_good() {

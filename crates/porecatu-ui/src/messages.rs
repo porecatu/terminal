@@ -593,6 +593,7 @@ registry! {
         percent(value),
         decimal_separator(),
         no_value(),
+        background_monitoring(),
     }
     settings {
         window_title(),
@@ -757,6 +758,8 @@ registry! {
             min_rows_description(),
             history_seconds_label(),
             history_seconds_description(),
+            background_monitoring_label(),
+            background_monitoring_description(),
         },
         button {
             open_file(),
@@ -1320,6 +1323,9 @@ registry! {
         task_manager_history_adjusted {
             title(),
             body(value, used),
+        },
+        task_manager_background_save_failed {
+            title(),
         },
         git_missing {
             title(),

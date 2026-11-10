@@ -191,6 +191,9 @@ pub(crate) struct TaskManagerView {
     /// The last left click on a row, for the double click ("Go to tab",
     /// RF-24.20). Lives and dies with the mode, like everything else here.
     pub last_click: Option<(RowKey, Instant)>,
+    /// A left press on the footer's toggle (ADR-0098 §5): the release over
+    /// it flips `background_monitoring`, like the settings screen's toggles.
+    pub footer_pressed: bool,
     /// Measurement caches of [`paint::paint`]; dropped by
     /// [`MeasureCache::clear`] when the font or the scale change.
     pub measure: MeasureCache,
@@ -207,6 +210,7 @@ impl TaskManagerView {
             hover: None,
             menu: None,
             last_click: None,
+            footer_pressed: false,
             measure: MeasureCache::default(),
         }
     }

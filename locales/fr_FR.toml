@@ -73,6 +73,7 @@ per_second = "{value}/s"
 percent = "{value} %"
 decimal_separator = ","
 no_value = "—"
+background_monitoring = "Surveiller en arrière-plan"
 
 [settings]
 window_title = "Paramètres"
@@ -238,6 +239,8 @@ min_rows_label = "Lignes minimales"
 min_rows_description = "Plus petite hauteur, en lignes, qu'un panneau peut atteindre."
 history_seconds_label = "Période des graphiques"
 history_seconds_description = "Combien de secondes les graphiques du gestionnaire des tâches affichent. De 30 à 600."
+background_monitoring_label = "Surveiller en arrière-plan"
+background_monitoring_description = "Les graphiques du gestionnaire des tâches gardent l'historique quand il est fermé, au prix d'une analyse des processus par seconde."
 
 [settings.button]
 open_file = "Ouvrir le fichier dans l'éditeur"
@@ -733,6 +736,9 @@ body = "\"{key}\" est inférieur au plancher de {floor}s ; {floor}s utilisées."
 [notice.task_manager_history_adjusted]
 title = "Période du gestionnaire de tâches ajustée"
 body = "\"history_seconds = {value}\" est hors de la plage de 30 à 600 ; {used} secondes utilisées."
+
+[notice.task_manager_background_save_failed]
+title = "Impossible d'enregistrer la surveillance en arrière-plan"
 
 [notice.git_missing]
 title = "Git introuvable"
