@@ -1897,7 +1897,7 @@ mod tests {
         let base = Instant::now();
         let mut view = TaskManagerView::new(None);
         let mut history = TaskManagerHistory::default();
-        for secs in [0_u64, 20, 40] {
+        for secs in [0_u64, 20, 40, 75] {
             let mut part = HashMap::new();
             part.insert((tab(1), pane(0)), vec![stat(1, Some(0.1), secs)]);
             apply_to_window(
@@ -1908,9 +1908,12 @@ mod tests {
                 30,
             );
         }
-        // The point at 0 s is 40 s before the last one: older than 30 s.
+        // 0 s and 20 s are 75 s and 55 s before the last one: older than
+        // 30 s and gone. 40 s (35 s back) is the single point kept past the
+        // period (the chart's left edge) and 75 s is the last.
         assert_eq!(history.points().len(), 2);
-        assert_eq!(view.sample.panes[&(tab(1), pane(0))][0].memory, 40);
+        assert_eq!(history.points().front().unwrap().memory, 40);
+        assert_eq!(view.sample.panes[&(tab(1), pane(0))][0].memory, 75);
     }
 
     // --- pane facts -------------------------------------------------------

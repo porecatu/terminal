@@ -170,9 +170,13 @@ pub(crate) struct ListLayout {
     /// Where the rows scroll (the clip of the rows), between the header's
     /// rule and the footer's.
     pub body: Rect,
+    /// Where the rows sit: the body minus a vertical padding on top and at
+    /// the bottom (ADR-0099), so the first and the last row do not touch the
+    /// rules. Slot 0 starts at its top; the body stays the clip.
+    pub rows: Rect,
     pub row_height: f32,
-    /// How many **whole** rows fit in the body: the page of the keyboard
-    /// navigation and the number of rows painted.
+    /// How many **whole** rows fit in [`Self::rows`]: the page of the
+    /// keyboard navigation and the number of rows painted.
     pub visible_rows: usize,
     /// ADR-0098 §5: the 1 px rule on top of the footer, the mirror of the
     /// one under the header.
@@ -196,7 +200,7 @@ impl ListLayout {
     pub(crate) fn row_rect(&self, slot: usize) -> Rect {
         Rect {
             x: self.column.x,
-            y: self.body.y + slot as f32 * self.row_height,
+            y: self.rows.y + slot as f32 * self.row_height,
             width: self.column.width,
             height: self.row_height,
         }
@@ -206,12 +210,12 @@ impl ListLayout {
     /// outside the rows. Whole rows only, like [`Self::visible_rows`].
     pub(crate) fn row_at(&self, point: (f32, f32)) -> Option<usize> {
         let (x, y) = point;
-        let inside_x = x >= self.body.x && x < self.body.x + self.body.width;
-        let rows_bottom = self.body.y + self.visible_rows as f32 * self.row_height;
-        if !inside_x || y < self.body.y || y >= rows_bottom || self.row_height <= 0.0 {
+        let inside_x = x >= self.rows.x && x < self.rows.x + self.rows.width;
+        let rows_bottom = self.rows.y + self.visible_rows as f32 * self.row_height;
+        if !inside_x || y < self.rows.y || y >= rows_bottom || self.row_height <= 0.0 {
             return None;
         }
-        Some((((y - self.body.y) / self.row_height) as usize).min(self.visible_rows - 1))
+        Some((((y - self.rows.y) / self.row_height) as usize).min(self.visible_rows - 1))
     }
 
     /// ADR-0098 §5: the clickable part of the footer -- the label as it was
@@ -326,8 +330,14 @@ pub(crate) fn layout(rect: Rect, style: &TaskManagerStyle) -> TaskManagerLayout 
     let footer_top = inner_y + inner_height - footer_height;
     let footer_rule_top = footer_top - footer_rule_height;
     let body_height = (footer_rule_top - body_top).max(0.0);
+    // ADR-0099: the rows keep `row_padding_x` of air under the header's rule
+    // and over the footer's (the same 8 as the horizontal inset, no new
+    // value), never more than a third of the body each so a short list still
+    // shows rows.
+    let rows_padding = style.row_padding_x.min(body_height / 3.0);
+    let rows_height = (body_height - rows_padding * 2.0).max(0.0);
     let visible_rows = if style.row_height > 0.0 {
-        (body_height / style.row_height).floor() as usize
+        (rows_height / style.row_height).floor() as usize
     } else {
         0
     };
@@ -373,6 +383,12 @@ pub(crate) fn layout(rect: Rect, style: &TaskManagerStyle) -> TaskManagerLayout 
                 y: body_top,
                 width: column_width,
                 height: body_height,
+            },
+            rows: Rect {
+                x: right_x,
+                y: body_top + rows_padding,
+                width: column_width,
+                height: rows_height,
             },
             row_height: style.row_height,
             visible_rows,
@@ -1370,18 +1386,52 @@ mod tests {
         assert_eq!(l.rule.height, 1.0);
         assert_eq!(l.body.y, l.rule.y + 1.0);
         // 600 - 2 * 18 = 564 of column; minus 28 and 1 of header, 1 and 28
-        // of footer (ADR-0098 §5) = 506 of body; 18 rows.
+        // of footer (ADR-0098 §5) = 506 of body; minus 8 of padding (ADR-0099)
+        // above and below = 490 of rows; 17 whole rows.
         assert_eq!(l.body.height, 506.0);
-        assert_eq!(l.visible_rows, 18);
-        assert_eq!(l.row_rect(0).y, l.body.y);
-        assert_eq!(l.row_rect(1).y, l.body.y + 28.0);
+        assert_eq!(l.rows.y, l.body.y + 8.0);
+        assert_eq!(l.rows.height, 490.0);
+        assert_eq!(l.visible_rows, 17);
+        assert_eq!(l.row_rect(0).y, l.rows.y);
+        assert_eq!(l.row_rect(1).y, l.rows.y + 28.0);
         // Hit-test: the first row, the last whole row, and below it.
         let x = l.body.x + 5.0;
-        assert_eq!(l.row_at((x, l.body.y + 1.0)), Some(0));
-        assert_eq!(l.row_at((x, l.body.y + 28.0 * 18.0 - 1.0)), Some(17));
-        assert_eq!(l.row_at((x, l.body.y + 28.0 * 18.0 + 1.0)), None);
-        assert_eq!(l.row_at((l.body.x - 1.0, l.body.y + 1.0)), None);
+        assert_eq!(l.row_at((x, l.rows.y + 1.0)), Some(0));
+        assert_eq!(l.row_at((x, l.rows.y + 28.0 * 17.0 - 1.0)), Some(16));
+        assert_eq!(l.row_at((x, l.rows.y + 28.0 * 17.0 + 1.0)), None);
+        assert_eq!(l.row_at((l.body.x - 1.0, l.rows.y + 1.0)), None);
         assert_eq!(l.row_at((x, l.header.y + 1.0)), None);
+    }
+
+    #[test]
+    fn the_rows_keep_air_from_both_rules() {
+        // ADR-0099: the padding sits between the rules and the rows, and the
+        // rows never leave the body (the clip).
+        let s = style();
+        let l = layout(rect(), &s).list;
+        let gap_above = l.row_rect(0).y - (l.rule.y + l.rule.height);
+        assert_eq!(gap_above, s.row_padding_x);
+        let last = l.row_rect(l.visible_rows - 1);
+        let gap_below = l.footer_rule.y - (last.y + last.height);
+        assert!(gap_below >= s.row_padding_x, "gap below {gap_below}");
+        assert!(last.y + last.height <= l.body.y + l.body.height);
+        // A point in the padding is on no row.
+        let x = l.body.x + 5.0;
+        assert_eq!(l.row_at((x, l.body.y + 1.0)), None);
+        assert_eq!(l.row_at((x, l.footer_rule.y - 1.0)), None);
+        // A body too short for the padding still lays out sanely: the padding
+        // shrinks to a third of it on each side.
+        let tiny = layout(
+            Rect {
+                height: 36.0 + 28.0 * 2.0 + 2.0 + 30.0,
+                ..rect()
+            },
+            &s,
+        )
+        .list;
+        assert!(tiny.rows.height >= 0.0);
+        assert!(tiny.rows.y >= tiny.body.y);
+        assert!(tiny.rows.y + tiny.rows.height <= tiny.body.y + tiny.body.height);
     }
 
     #[test]
@@ -1698,10 +1748,11 @@ mod tests {
         let all = texts(&out);
         let has = |text: &str| all.iter().any(|run| run.text == text);
         // Titles, the latest values (40% CPU, 5.0 MB, 1.0 KB/s) and the tops
-        // of the scales (100%, 5 MB, 1 KB/s).
+        // of the scales (100%, and 5 MB and 1 KB/s plus the headroom of
+        // ADR-0099: 6 MB and 1.2 KB/s round up to 10 MB and 2 KB/s).
         assert!(has("CPU") && has("Memory") && has("Disk"));
         assert!(has("40%") && has("5.0 MB") && has("1.0 KB/s"));
-        assert!(has("100%") && has("5 MB") && has("1 KB/s"));
+        assert!(has("100%") && has("10 MB") && has("2 KB/s"));
         let title = all.iter().find(|r| r.text == "CPU").unwrap();
         assert_eq!(
             title.font,
@@ -1797,7 +1848,8 @@ mod tests {
             .map(|r| r.text.as_str())
             .filter(|t| t.starts_with("tab-"))
             .collect();
-        let expected: Vec<String> = (10..10 + 18).map(|n| format!("tab-{n}")).collect();
+        // 17 whole rows once the vertical padding of ADR-0099 is taken out.
+        let expected: Vec<String> = (10..10 + 17).map(|n| format!("tab-{n}")).collect();
         assert_eq!(
             titles,
             expected.iter().map(String::as_str).collect::<Vec<_>>()

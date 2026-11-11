@@ -26,6 +26,13 @@ pub(crate) const CPU_TOP: f64 = 1.0;
 /// instead of the middle (ADR-0095 §6).
 pub(crate) const MIN_TOP: f64 = 1024.0;
 
+/// Room above the largest visible value of an automatic scale (memory and
+/// disk), as a multiplier: the peak never goes past 1/1.2 (about 83%) of the
+/// chart's height, so the line and the area do not cover the scale label in
+/// the upper-left corner (owner's request; ADR-0099). Dimensionless, so it has
+/// no `[appearance.task_manager]` key.
+pub(crate) const HEADROOM: f64 = 1.2;
+
 /// A point further left than the rectangle by less than this still counts as
 /// on the edge (float noise of `right - width`).
 const EDGE_EPSILON: f32 = 0.01;
@@ -165,11 +172,14 @@ pub(crate) fn visible_max(
 }
 
 /// The top of the scale of one chart: fixed for CPU, [`nice_top`] of the
-/// visible maximum for memory and disk (ADR-0095 §6).
+/// visible maximum **plus [`HEADROOM`]** for memory and disk (ADR-0095 §6,
+/// ADR-0099).
 pub(crate) fn scale_top(history: &TaskManagerHistory, metric: Metric, history_seconds: u32) -> f64 {
     match metric {
         Metric::Cpu => CPU_TOP,
-        Metric::Memory | Metric::Disk => nice_top(visible_max(history, metric, history_seconds)),
+        Metric::Memory | Metric::Disk => {
+            nice_top(visible_max(history, metric, history_seconds) * HEADROOM)
+        }
     }
 }
 
@@ -490,6 +500,46 @@ mod tests {
         assert_eq!(scale_top(&h, Metric::Cpu, 60), 1.0);
         assert_eq!(scale_top(&h, Metric::Memory, 60), 1000.0 * MB);
         assert_eq!(scale_top(&h, Metric::Disk, 60), 5.0 * MB);
+    }
+
+    #[test]
+    fn an_automatic_scale_leaves_headroom_above_the_peak() {
+        let base = Instant::now();
+        // A peak exactly on a step (1 GB) used to put the line on the top
+        // edge, over the scale label; now the scale goes to the next step.
+        let h = history(base, &[(0.0, Some(0.1), GB as u64, MB)], 60);
+        assert_eq!(scale_top(&h, Metric::Memory, 60), 2.0 * GB);
+        assert_eq!(scale_top(&h, Metric::Disk, 60), 2.0 * MB);
+        assert_eq!(scale_top(&h, Metric::Cpu, 60), CPU_TOP);
+        // Whatever the peak, it stays under 1/HEADROOM of the height.
+        for memory in [3 * KB as u64, 700 * MB as u64, GB as u64, 1_300 * MB as u64] {
+            let h = history(base, &[(0.0, Some(0.1), memory, 0.0)], 60);
+            let top = scale_top(&h, Metric::Memory, 60);
+            assert!(memory as f64 <= top / HEADROOM + 1e-6, "{memory} vs {top}");
+        }
+    }
+
+    #[test]
+    fn a_steady_sampler_with_jitter_fills_the_chart_to_the_left_edge() {
+        let base = Instant::now();
+        let mut h = TaskManagerHistory::default();
+        // Beats of 1.1 s over far more than the 60 s period: the oldest
+        // kept point must be at or past the left edge, not a beat short.
+        for beat in 0..=200_u64 {
+            h.push(
+                HistoryPoint {
+                    at: base + Duration::from_millis(beat * 1100),
+                    cpu: Some(0.5),
+                    memory: 0,
+                    disk_per_sec: 0.0,
+                },
+                60,
+            );
+        }
+        let runs = series(&h, Metric::Cpu, rect(), 1.0, 60);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0][0].0 <= rect().x, "starts at {}", runs[0][0].0);
+        assert!((runs[0].last().unwrap().0 - 700.0).abs() < 1e-3);
     }
 
     #[test]

@@ -146,7 +146,12 @@ impl TaskManagerHistory {
         self.trim(history_seconds);
     }
 
-    /// Drops the points older than `history_seconds` before the last one.
+    /// Drops the points older than `history_seconds` before the last one,
+    /// **except the newest of them**: that one stays just past the period so
+    /// the chart's line enters from the left edge instead of starting one
+    /// sample late (the sampler's jitter would otherwise leave a blank strip
+    /// proportional to the chart's width). `chart::series` trims the excess
+    /// at the edge and `chart::visible_max` ignores it.
     /// Separate from [`Self::push`] so a smaller period cuts the history at
     /// the next sample (RF-24.27) even when the sample adds nothing.
     pub(crate) fn trim(&mut self, history_seconds: u32) {
@@ -154,11 +159,9 @@ impl TaskManagerHistory {
             return;
         };
         let period = Duration::from_secs(u64::from(history_seconds));
-        while self
-            .points
-            .front()
-            .is_some_and(|first| last.saturating_duration_since(first.at) > period)
-        {
+        let too_old = |at: Instant| last.saturating_duration_since(at) > period;
+        // Drop the front while the **second** point is also past the period.
+        while self.points.get(1).is_some_and(|second| too_old(second.at)) {
             self.points.pop_front();
         }
     }
@@ -379,28 +382,67 @@ mod tests {
     }
 
     #[test]
-    fn push_drops_the_points_older_than_the_period_before_the_last() {
+    fn push_drops_the_points_older_than_the_period_but_keeps_the_newest_of_them() {
         let base = Instant::now();
         let mut history = TaskManagerHistory::default();
         for secs in 0..=40 {
             history.push(point(base, secs, secs), 30);
         }
-        // Last is at 40 s; the oldest kept is exactly 30 s before it.
+        // Last is at 40 s; the one exactly 30 s before it (10 s) is the
+        // oldest inside the period and the 9 s one stays as the single point
+        // past it, so the chart's line reaches the left edge.
         let first = history.points().front().unwrap();
-        assert_eq!(first.memory, 10);
-        assert_eq!(history.points().len(), 31);
+        assert_eq!(first.memory, 9);
+        assert_eq!(history.points().len(), 32);
         assert_eq!(history.latest().unwrap().memory, 40);
     }
 
     #[test]
-    fn a_point_exactly_at_the_period_is_kept_and_one_second_older_is_not() {
+    fn only_one_point_past_the_period_survives_a_jittery_sampler() {
+        let base = Instant::now();
+        let mut history = TaskManagerHistory::default();
+        // Beats of 1.1 s: the oldest point inside 60 s is never exactly 60 s
+        // back, which is what used to leave a blank strip on the left.
+        for beat in 0..=100_u64 {
+            history.push(
+                HistoryPoint {
+                    at: base + Duration::from_millis(beat * 1100),
+                    cpu: Some(0.1),
+                    memory: beat,
+                    disk_per_sec: 0.0,
+                },
+                60,
+            );
+        }
+        let last = history.latest().unwrap().at;
+        let ages: Vec<Duration> = history
+            .points()
+            .iter()
+            .map(|point| last.saturating_duration_since(point.at))
+            .collect();
+        let past: Vec<_> = ages
+            .iter()
+            .filter(|age| **age > Duration::from_secs(60))
+            .collect();
+        assert_eq!(past.len(), 1, "one point past the period: {ages:?}");
+        assert_eq!(ages[0], *past[0], "and it is the oldest");
+    }
+
+    #[test]
+    fn a_point_just_past_the_period_stays_as_the_extra_until_the_next_one_is_past_too() {
         let base = Instant::now();
         let mut history = TaskManagerHistory::default();
         history.push(point(base, 0, 0), 30);
         history.push(point(base, 30, 1), 30);
         assert_eq!(history.points().len(), 2);
+        // The 0 s point is now 31 s back (past the period) but it is the
+        // newest such point, so it stays as the extra.
         history.push(point(base, 31, 2), 30);
-        assert_eq!(history.points().len(), 2);
+        assert_eq!(history.points().len(), 3);
+        // At 61 s the 30 s point is 31 s back too: the 0 s one goes, the 30 s
+        // one becomes the extra.
+        history.push(point(base, 61, 3), 30);
+        assert_eq!(history.points().len(), 3);
         assert_eq!(history.points().front().unwrap().memory, 1);
     }
 
@@ -413,11 +455,12 @@ mod tests {
         }
         assert_eq!(history.points().len(), 101);
         history.trim(60);
-        assert_eq!(history.points().len(), 61);
-        assert_eq!(history.points().front().unwrap().memory, 40);
+        // 40..=100 inside the period plus the 39 s point past it.
+        assert_eq!(history.points().len(), 62);
+        assert_eq!(history.points().front().unwrap().memory, 39);
         // Growing back does not resurrect anything.
         history.trim(600);
-        assert_eq!(history.points().len(), 61);
+        assert_eq!(history.points().len(), 62);
     }
 
     #[test]
