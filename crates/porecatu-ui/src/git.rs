@@ -270,14 +270,15 @@ pub(crate) mod remote_sync {
         /// intervalo se cumprir.
         #[default]
         Idle,
-        /// Processo `git` lançado, resultado ainda não chegou -- não
-        /// redispara (RF-13.11). Reaproveitado pela **integração** (etapa
-        /// 4, `pull --ff-only`): enquanto ela roda, a `App` marca a mesma
-        /// entrada como `InFlight`, o que barra tanto o segundo clique
-        /// quanto uma consulta periódica concorrente no mesmo `.git` --
-        /// não há um estado próprio de "pull em andamento" porque a regra
-        /// dos dois é idêntica (RF-13.11: "consulta ou pull").
+        /// Processo `git` de **consulta** lançado, resultado ainda não
+        /// chegou -- não redispara (RF-13.11).
         InFlight,
+        /// `pull --ff-only` em andamento (ADR-0101). A regra de bloqueio é a
+        /// de `InFlight` -- nem segundo clique nem consulta periódica
+        /// concorrente no mesmo `.git` --, mas é um estado próprio porque
+        /// só o pull mostra "Atualizando repositório" e o indicador girando
+        /// na barra de status; a consulta periódica continua invisível.
+        Integrating,
         /// A branch não segue upstream nenhum -- nunca consultada
         /// (RF-13.18, ADR-0052 §7).
         NoUpstream,
@@ -316,7 +317,10 @@ pub(crate) mod remote_sync {
         interval: Duration,
     ) -> bool {
         let effective_interval = match state {
-            QueryState::InFlight | QueryState::NoUpstream | QueryState::Shallow => return false,
+            QueryState::InFlight
+            | QueryState::Integrating
+            | QueryState::NoUpstream
+            | QueryState::Shallow => return false,
             QueryState::Idle => interval,
             QueryState::Failed { attempt } => backoff_interval(interval, attempt),
         };
@@ -341,7 +345,10 @@ pub(crate) mod remote_sync {
         let interval = effective_interval?;
         entries
             .filter_map(|entry| match entry.state {
-                QueryState::InFlight | QueryState::NoUpstream | QueryState::Shallow => None,
+                QueryState::InFlight
+                | QueryState::Integrating
+                | QueryState::NoUpstream
+                | QueryState::Shallow => None,
                 QueryState::Idle => Some(entry.last_queried_at.map_or(now, |last| last + interval)),
                 QueryState::Failed { attempt } => Some(
                     entry
@@ -1241,6 +1248,17 @@ mod tests {
     }
 
     #[test]
+    fn a_running_integration_never_redispatches_a_query() {
+        let now = Instant::now();
+        assert!(!is_time_to_query(
+            QueryState::Integrating,
+            Some(now - Duration::from_secs(10_000)),
+            now,
+            Duration::from_secs(30)
+        ));
+    }
+
+    #[test]
     fn no_upstream_never_dispatches() {
         let now = Instant::now();
         assert!(!is_time_to_query(
@@ -1386,11 +1404,12 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_no_upstream_and_shallow_never_contribute_a_deadline() {
+    fn in_flight_integrating_no_upstream_and_shallow_never_contribute_a_deadline() {
         let now = Instant::now();
         let interval = Duration::from_secs(30);
         for state in [
             QueryState::InFlight,
+            QueryState::Integrating,
             QueryState::NoUpstream,
             QueryState::Shallow,
         ] {

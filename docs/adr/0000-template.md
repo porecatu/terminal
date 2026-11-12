@@ -53,7 +53,7 @@
 | [0049](0049-branch-git-na-barra-de-status.md) | Branch do Git na barra de status: `.git/HEAD` por `mtime`, sem estado da árvore | Aceito · §7 Superseded by ADR-0052 (**parcial**: só ahead/behind) |
 | [0050](0050-tela-cheia.md) | Tela cheia por `F11`: janela `Borderless`, sem estado novo em `Config` | Aceito |
 | [0051](0051-arquivo-de-projeto-porecatu.md) | Arquivo `.porecatu`: seções cruas, confiança por allowlist e escrita no PTY | Aceito · §6 Superseded by ADR-0053 (**parcial**: qual terminal recebe o comando) · §1 e §4 revistos por ADR-0086 (**parcial**: fixada aberta no arranque dispara sem `trusted_paths`) · §2, §3 e §8 revistos por ADR-0088 (**parcial**: nome de seção reservado `[icon]`) |
-| [0052](0052-sincronizacao-com-o-remoto-do-git.md) | Sincronização com o remoto do Git: poll em thread, contagem por `rev-list`, integração só por clique | Aceito |
+| [0052](0052-sincronizacao-com-o-remoto-do-git.md) | Sincronização com o remoto do Git: poll em thread, contagem por `rev-list`, integração só por clique | Aceito · §3 e §8 revistos por ADR-0101 (**parcial**: estado `Integrating` e o indicador "atualizando") |
 | [0053](0053-paineis-divididos.md) | Painéis divididos: árvore binária no core, divisor que é ausência de pixel, foco pelo cursor | Aceito |
 | [0054](0054-sessoes-nomeadas.md) | Sessões nomeadas: um arquivo por sessão ao lado do `session.json`, mesmo schema, restauração pelo caminho do arranque | Aceito · §6 e §8 revistos por ADR-0092 (**parcial**: uma chave de `[session]` escolhe restaurar na janela atual, acrescentando) |
 | [0055](0055-botao-e-popover-de-sessoes.md) | Botão e popover de sessões: segundo botão da zona fixa, sétimo widget de chrome | Aceito |
@@ -93,7 +93,7 @@
 | [0089](0089-ranhura-de-soltura-com-o-botao-do-app-oculto.md) | Ranhura virtual de soltura da zona de fixadas com o botão do app oculto | Aceito |
 | [0090](0090-transferencia-de-abas-entre-janelas.md) | Transferência de abas e grupos entre janelas: extrair e inserir no core, endereço do wakeup numa célula do painel, `TabId` novo no destino | Aceito |
 | [0091](0091-arraste-entre-janelas.md) | Arraste entre janelas: ponto global pela captura implícita, alvo pela ordem de foco, fantasma que salta de barra, destacar numa janela nova e arraste da seleção | Aceito — aval visual do dono pendente |
-| [0092](0092-restauracao-nomeada-na-janela-atual.md) | Restauração nomeada na janela atual: chave `[session] restore_named_in_current_window`, acréscimo pelo `insert_detached_*` do core, mesmo arranque de runtimes | Aceito |
+| [0092](0092-restauracao-nomeada-na-janela-atual.md) | Restauração nomeada na janela atual: chave `[session] restore_named_in_current_window`, acréscimo pelo `insert_detached_*` do core, mesmo arranque de runtimes | Aceito · §4 e §6 revistos por ADR-0102 (**parcial**: o terminal parado, sozinho na janela, é fechado) |
 | [0093](0093-medicao-de-processos-do-gerenciador.md) | Medição de processos do gerenciador de tarefas: amostrador em `porecatu-pty`, pedido pelo relógio da UI, uma thread só enquanto houver gerenciador aberto | Aceito · §4 e §6 revistos por ADR-0098 (**parcial**: o amostrador também vive com `background_monitoring` ligada e alimenta o histórico de toda janela) · §4 e §5 revistos por ADR-0100 (**parcial**: relógio ancorado, amostrador lento esperado, varredura em duas passadas e CPU por tempo acumulado) |
 | [0094](0094-polilinha-e-area-no-render.md) | Polilinha e área no render: segmentos instanciados com SDF de segmento, área por faixas verticais | Aceito |
 | [0095](0095-gerenciador-de-tarefas-modo-da-janela.md) | Gerenciador de tarefas como modo da janela: estado em `WindowState`, ação `task_manager.toggle`, captura de entrada, lista derivada da amostra e chave `[task_manager] history_seconds` | Aceito · §2 e §9 revistos por ADR-0098 (**parcial**: fechar não derruba o amostrador com a chave ligada; segunda chave e segunda opção) · §1 e §6 revistos por ADR-0099 (**parcial**: ponto além do período no histórico e folga no topo da escala) · §6 revisto por ADR-0100 (**parcial**: limiar da lacuna de 1,5 s para 3,5 s) |
@@ -102,6 +102,8 @@
 | [0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md) | Monitoramento em segundo plano do gerenciador de tarefas: chave `[task_manager] background_monitoring` e alternância no rodapé da lista | Aceito — aval visual do dono pendente |
 | [0099](0099-ajustes-de-escala-e-lista-do-gerenciador.md) | Ajustes dos gráficos e da lista do gerenciador de tarefas: ponto além da borda, folga no topo da escala e respiro vertical da lista | Aceito — aval visual do dono pendente |
 | [0100](0100-amostragem-do-gerenciador-sob-carga.md) | Amostragem do gerenciador de tarefas sob carga: CPU por tempo acumulado, varredura em duas passadas, relógio ancorado e lacuna tolerante (3,5 s) | Aceito — verificado só por teste automatizado |
+| [0101](0101-indicador-de-atualizacao-do-pull-na-barra-de-status.md) | Indicador de atualização do `pull` na barra de status: estado `Integrating`, arco girando e a exceção ao RF-9.8 | Aceito — verificado só por teste automatizado; aval visual do dono pendente |
+| [0102](0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md) | Fechar o terminal parado ao restaurar uma sessão na janela atual | Aceito — verificado só por teste automatizado |
 
 ## Convenção
 

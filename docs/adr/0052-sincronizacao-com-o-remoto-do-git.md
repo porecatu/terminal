@@ -63,6 +63,8 @@ A contagem de commits não tem nenhum dos três: o `rev-list` percorre um interv
 
 ### 3. Estado por repositório, num mapa do processo
 
+> **Revisto pelo [ADR-0101](0101-indicador-de-atualizacao-do-pull-na-barra-de-status.md) (2026-11-12).** A integração (`pull`) deixa de reaproveitar `InFlight`: ganha o estado próprio `Integrating`, com a mesma regra de bloqueio, para que só ela mostre o indicador "atualizando". Onde esta seção diz que `InFlight` cobre as duas, leia `InFlight` e `Integrating`.
+
 O `GitInfo` do ADR-0049 vive em `WindowState` — uma instância por janela, sempre a do `cwd` que aquela barra exibe. **O estado remoto não pode morar lá**, e a razão não é estética:
 
 - **`git fetch` escreve no repositório** (`FETCH_HEAD`, `refs/remotes/*`). Duas janelas com a aba ativa no mesmo projeto fariam dois `fetch` concorrentes no mesmo `.git`, com chance real de um falhar por lock. É a única das alternativas que está errada por mais do que gosto.
@@ -168,6 +170,8 @@ O ADR-0014 lista nominalmente quem usa o canal 1, e esta decisão acrescenta tr�
 | `git` ausente, ou intervalo elevado ao piso | **informação**, uma vez por execução | é sobre a configuração, não sobre uma ação que acabou de falhar |
 
 ### 8. Anatomia: o segundo item colorido da barra
+
+> **Revisto pelo [ADR-0101](0101-indicador-de-atualizacao-do-pull-na-barra-de-status.md) (2026-11-12).** Com um `pull` em andamento, o segmento é substituído por "Atualizando repositório" com um arco girando no lugar da seta, sem alvo de clique e sem sublinhado. É a única animação da barra, e só dura enquanto o `pull` roda.
 
 Entra na zona esquerda, **depois da branch e antes do grupo**: a contagem é propriedade da branch, como a branch é propriedade do diretório.
 

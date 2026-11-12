@@ -71,6 +71,8 @@ depois   [ infra · 2 ] [ shell ] [ api · 3 ] [ front · 2 ]
 
 **RF-23.7**: Nada do que já estava na janela muda: nenhuma aba é fechada, movida, renomeada ou reiniciada, nenhum grupo muda de nome, cor ou colapso, e nenhum processo é encerrado. Por isso não há diálogo de confirmação.
 
+> **Emenda (2026-11-12, [ADR-0102](../adr/0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md)).** Há uma exceção: o terminal parado que é a única aba da janela (RF-23.16) é fechado.
+
 **RF-23.8**: Um grupo da sessão com o **mesmo nome** de um grupo que já está na janela **não se funde** com ele. Os dois coexistem, como coexistem quando um grupo chega de outra janela (RF-22.5). Juntar dois grupos é gesto do usuário, não efeito colateral de restaurar.
 
 **RF-23.9**: Depois de acrescentar, a **aba que era ativa na sessão** passa a ser a aba ativa da janela, e a trilha rola até ela, como quando o usuário clica numa aba. O popover fecha. A janela continua com o foco do sistema.
@@ -93,6 +95,8 @@ depois   [ infra · 2 ] [ shell ] [ api · 3 ] [ front · 2 ]
 **RF-23.14**: As abas acrescentadas passam a ser **abas da janela como quaisquer outras**. Com `[session] enabled = true`, entram no `session.json` na próxima gravação e voltam no próximo arranque pela sessão automática. Nenhum vínculo com o arquivo nomeado sobrevive (RF-14.15): mudar, fechar ou mover essas abas não altera a sessão salva.
 
 **RF-23.15**: Restaurar a **mesma** sessão duas vezes na mesma janela acrescenta a disposição **duas vezes**. A restauração é um gesto, não uma sincronização; o app não procura abas "iguais" já abertas para pular.
+
+**RF-23.16**: Se a janela de origem tem **uma única aba** e ela é um **terminal parado**, essa aba é fechada ao restaurar, e o foco fica na aba que era ativa na sessão. "Terminal parado" é: um painel só, shell vivo, nenhum processo rodando (nem processo filho, nem tela alternativa, nem relato de mouse), nenhuma aba fixada na janela, e nada de SSH. Não são parados, e portanto ficam: aba com o shell já encerrado (a saída pode ser lida), aba restaurada ainda não aberta, aba com painéis divididos e aba fixada. Vale com `[general] confirm_close_with_process` desligado também: o app nunca encerra um processo em segundo plano sem perguntar. Uma sessão sem nenhuma aba não fecha nada (RF-23.13).
 
 ## Cenários
 
@@ -131,6 +135,19 @@ Cenário: o .porecatu roda como na restauração do arranque
   E a sessão com uma aba em ~/Projetos/api, que tem um .porecatu e está em trusted_paths
   Quando o usuário restaura a sessão na janela atual
   Então o comando do .porecatu é escrito no prompt daquela aba, uma vez
+
+Cenário: o terminal parado, sozinho na janela, sai
+  Dado a opção ligada
+  E uma janela recém-aberta com uma única aba, um shell sem nenhum processo rodando
+  Quando o usuário restaura a sessão "api + front" na janela atual
+  Então a trilha fica só com "api" e "front"
+  E a aba ativa da janela é a que era ativa em "api + front"
+
+Cenário: um terminal com processo rodando não sai
+  Dado a opção ligada
+  E uma janela com uma única aba, com um servidor rodando nela
+  Quando o usuário restaura a sessão "api + front" na janela atual
+  Então a aba do servidor continua no começo da trilha, com o processo vivo
 
 Cenário: diretório não autorizado continua não autorizado
   Dado a opção ligada

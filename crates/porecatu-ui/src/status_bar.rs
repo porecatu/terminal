@@ -19,7 +19,8 @@ use std::time::Duration;
 
 use chrono::{Local, Timelike};
 use porecatu_render::{
-    Color, FontFace, Primitive, Quad, Rect, SansWeight, TextMeasurer, TextRun, icon,
+    Color, FontFace, Point, Polyline, Primitive, Quad, Rect, SansWeight, TextMeasurer, TextRun,
+    icon,
 };
 
 use crate::chrome::ICON_FONT;
@@ -78,6 +79,12 @@ pub enum SegmentRole {
     AheadBehind {
         clickable: bool,
     },
+    /// `pull --ff-only` em andamento (ADR-0101): ocupa o lugar do
+    /// [`SegmentRole::AheadBehind`] com o texto "Atualizando repositório" e
+    /// um arco girando no lugar do ícone. Não é alvo de clique -- o segundo
+    /// clique já seria recusado (RF-13.11), e a barra não oferece um alvo
+    /// morto.
+    Updating,
     Group,
     /// RF-6.20/ADR-0053 §14: contagem de painéis da aba ativa, só com dois
     /// ou mais -- com um painel só, o segmento não existe (nem "1 painel",
@@ -111,6 +118,11 @@ pub struct StatusBarContent {
     /// ADR-0052 §8), ou `None` sem commits novos -- e aí o segmento
     /// inteiro some, nem apagado nem "0 atrás" (RF-13.8).
     pub ahead_behind: Option<AheadBehindContent>,
+    /// Texto do `pull` em andamento ("Atualizando repositório", ADR-0101), ou
+    /// `None` sem integração rodando. Com `Some`, o segmento de commits
+    /// atrás/à frente é **substituído** por este, com o arco girando no lugar
+    /// do ícone.
+    pub updating: Option<String>,
     /// Nome do grupo da aba ativa. `None` em grupo implícito.
     pub group: Option<String>,
     /// RF-6.20: rótulo da contagem de painéis da aba ativa, já com o plural
@@ -414,12 +426,20 @@ pub fn layout_status_bar(
     let branch_width = branch
         .map(|b| icon_em(style) + text_width(measurer, b, size) + gap)
         .unwrap_or(0.0);
-    let ahead_behind = content
-        .ahead_behind
-        .as_ref()
-        .filter(|ab| !ab.label.is_empty());
+    // O pull em andamento toma o lugar do indicador de commits (ADR-0101).
+    let ahead_behind: Option<(&str, SegmentRole)> = match (&content.updating, &content.ahead_behind)
+    {
+        (Some(label), _) if !label.is_empty() => Some((label.as_str(), SegmentRole::Updating)),
+        (_, Some(ab)) if !ab.label.is_empty() => Some((
+            ab.label.as_str(),
+            SegmentRole::AheadBehind {
+                clickable: ab.clickable,
+            },
+        )),
+        _ => None,
+    };
     let ahead_behind_width = ahead_behind
-        .map(|ab| icon_em(style) + text_width(measurer, &ab.label, size) + gap)
+        .map(|(label, _)| icon_em(style) + text_width(measurer, label, size) + gap)
         .unwrap_or(0.0);
     let cwd_limit = (left_limit - group_width - branch_width - ahead_behind_width).max(x);
     push_left(
@@ -462,9 +482,9 @@ pub fn layout_status_bar(
     // (ADR-0052 §8). Mesmo tratamento de "nunca truncado" da branch:
     // some por inteiro se não couber, em vez de mostrar metade de um
     // número.
-    if let Some(ab) = ahead_behind {
+    if let Some((label, role)) = ahead_behind {
         let em = icon_em(style);
-        let width = em + text_width(measurer, &ab.label, size);
+        let width = em + text_width(measurer, label, size);
         if x + width <= left_limit {
             segments.push(PlacedSegment {
                 rect: Rect {
@@ -473,10 +493,8 @@ pub fn layout_status_bar(
                     width,
                     height: bar_height,
                 },
-                text: ab.label.clone(),
-                role: SegmentRole::AheadBehind {
-                    clickable: ab.clickable,
-                },
+                text: label.to_owned(),
+                role,
             });
             x += width + gap;
         }
@@ -564,10 +582,15 @@ pub fn hit_test(layout: &StatusBarLayout, point: (f32, f32)) -> Option<StatusBar
 /// hyperlink OSC 8). Quem faz o hit-test é o chamador, com o layout já
 /// pronto; esta etapa não mexe em cursor de mouse nem em precedência de
 /// resize -- isso é a etapa 4, junto do clique em si.
+///
+/// `spin_phase` (`0.0..1.0`, uma volta) é o ângulo do arco do segmento
+/// [`SegmentRole::Updating`] (ADR-0101); vem de fora, porque esta função não
+/// lê relógio. Sem segmento `Updating`, não é usado.
 pub fn paint_status_bar(
     layout: &StatusBarLayout,
     pal: &ResolvedPalette,
     ahead_behind_hovered: bool,
+    spin_phase: f32,
 ) -> Vec<Primitive> {
     if layout.bar_rect.height <= 0.0 {
         return Vec::new();
@@ -592,6 +615,32 @@ pub fn paint_status_bar(
     let text_y = layout.bar_rect.y + (layout.bar_rect.height - layout.font_size) / 2.0;
     for segment in &layout.segments {
         let color = segment_color(segment.role, pal);
+        // ADR-0101: o pull em andamento troca o ícone por um arco girando
+        // (sem primitiva de rotação de glifo, o `loader-circle` do Lucide é
+        // redesenhado como `Polyline`, na mesma em e na mesma cor).
+        if segment.role == SegmentRole::Updating {
+            let em = layout.icon_em;
+            out.push(Primitive::Polyline(Polyline {
+                points: spinner_arc_points(
+                    Point {
+                        x: segment.rect.x + em / 2.0,
+                        y: segment.rect.y + segment.rect.height / 2.0,
+                    },
+                    em * SPINNER_RADIUS_EM,
+                    spin_phase,
+                ),
+                width: (em * SPINNER_STROKE_EM).max(1.0),
+                color,
+            }));
+            out.push(Primitive::Text(TextRun {
+                origin: (segment.rect.x + em, text_y),
+                text: segment.text.clone(),
+                font: FONT,
+                size_px: layout.font_size,
+                color,
+            }));
+            continue;
+        }
         // O ícone é centrado pela própria em (`centered_origin`, não a
         // mesma conta do texto: a face de ícones declara ascent = em e
         // descent = 0, e centrar como texto desenha o ícone baixo
@@ -650,6 +699,48 @@ pub fn paint_status_bar(
     out
 }
 
+/// Raio do arco do indicador de atualização, em múltiplos da em do ícone
+/// (o `loader-circle` do Lucide tem raio 9 numa grade de 24, mas a em do
+/// chrome é o corpo da fonte, não a grade: o desenho dos outros ícones
+/// ocupa ~0.6 da em).
+const SPINNER_RADIUS_EM: f32 = 0.3;
+/// Espessura do traço do arco, em múltiplos da em (o Lucide usa 2/24).
+const SPINNER_STROKE_EM: f32 = 1.0 / 12.0;
+/// Quanto do círculo o arco cobre: três quartos, como o `loader-circle`.
+const SPINNER_SWEEP: f32 = 0.75;
+/// Segmentos da poligonal que aproxima o arco.
+const SPINNER_STEPS: usize = 18;
+/// Tempo de uma volta do arco.
+pub const SPINNER_PERIOD: Duration = Duration::from_millis(900);
+/// Intervalo entre quadros enquanto o arco gira (~30 fps: um indicador de
+/// 12px não ganha nada com 60).
+pub const SPINNER_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+
+/// Fase do arco (`0.0..1.0`) para um tempo decorrido desde uma origem
+/// qualquer. Pura: quem chama traz o `Duration` (a regra de "estado com
+/// temporizador recebe o tempo de fora").
+pub fn spinner_phase(elapsed: Duration) -> f32 {
+    let period = SPINNER_PERIOD.as_millis();
+    (elapsed.as_millis() % period) as f32 / period as f32
+}
+
+/// Pontos do arco de `SPINNER_SWEEP` de volta que começa em `phase` volta,
+/// girando no sentido horário na tela. Com `phase` fora de `0..1` só dá
+/// mais voltas.
+pub fn spinner_arc_points(center: Point, radius: f32, phase: f32) -> Vec<Point> {
+    let start = phase * std::f32::consts::TAU;
+    let sweep = SPINNER_SWEEP * std::f32::consts::TAU;
+    (0..=SPINNER_STEPS)
+        .map(|i| {
+            let angle = start + sweep * (i as f32 / SPINNER_STEPS as f32);
+            Point {
+                x: center.x + radius * angle.cos(),
+                y: center.y + radius * angle.sin(),
+            }
+        })
+        .collect()
+}
+
 fn segment_color(role: SegmentRole, pal: &ResolvedPalette) -> Color {
     match role {
         SegmentRole::Shell => pal.status_bar_shell,
@@ -660,7 +751,7 @@ fn segment_color(role: SegmentRole, pal: &ResolvedPalette) -> Color {
         // ADR-0052 §8: o segundo item colorido da barra -- clicável ou
         // não, o par de números é sempre acento; o que muda com
         // `clickable` é só a affordance de hover (sublinhado).
-        SegmentRole::AheadBehind { .. } => pal.status_bar_ahead_behind,
+        SegmentRole::AheadBehind { .. } | SegmentRole::Updating => pal.status_bar_ahead_behind,
         _ => pal.status_bar_text,
     }
 }
@@ -679,6 +770,7 @@ mod tests {
             cwd_is_stale: false,
             git_branch: None,
             ahead_behind: None,
+            updating: None,
             group: Some("producao".to_owned()),
             pane_count_label: None,
             system: "windows".to_owned(),
@@ -749,14 +841,14 @@ mod tests {
     }
 
     fn primitive_count_of_quads(layout: &StatusBarLayout) -> usize {
-        paint_status_bar(layout, &pal(), false)
+        paint_status_bar(layout, &pal(), false, 0.0)
             .iter()
             .filter(|p| matches!(p, Primitive::Quad(_)))
             .count()
     }
 
     fn text_count(layout: &StatusBarLayout) -> usize {
-        paint_status_bar(layout, &pal(), false)
+        paint_status_bar(layout, &pal(), false, 0.0)
             .iter()
             .filter(|p| matches!(p, Primitive::Text(_)))
             .count()
@@ -798,7 +890,7 @@ mod tests {
         // o topo da faixa -- foi o que se viu em tela depois de o quadro
         // passar a encostar nela.
         let layout = layout_with(&content(), &TabBarStyle::DEFAULT, W);
-        let primitives = paint_status_bar(&layout, &pal(), false);
+        let primitives = paint_status_bar(&layout, &pal(), false, 0.0);
         assert!(
             !primitives.iter().any(|p| matches!(p, Primitive::Quad(_))),
             "nenhuma geometria opaca: só os runs de texto"
@@ -831,7 +923,7 @@ mod tests {
         let mut style = TabBarStyle::DEFAULT;
         style.status_bar_enabled = false;
         let layout = layout_with(&content(), &style, W);
-        assert!(paint_status_bar(&layout, &pal(), false).is_empty());
+        assert!(paint_status_bar(&layout, &pal(), false, 0.0).is_empty());
     }
 
     #[test]
@@ -1023,7 +1115,7 @@ mod tests {
         c.git_branch = None;
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
         assert!(role_of(&layout, SegmentRole::GitBranch).is_none());
-        let primitives = paint_status_bar(&layout, &pal(), false);
+        let primitives = paint_status_bar(&layout, &pal(), false, 0.0);
         assert!(
             !primitives.iter().any(|p| matches!(
                 p,
@@ -1038,7 +1130,7 @@ mod tests {
         let mut c = content();
         c.git_branch = Some("main".to_owned());
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
-        let primitives = paint_status_bar(&layout, &pal(), false);
+        let primitives = paint_status_bar(&layout, &pal(), false, 0.0);
         let icon_run = primitives
             .iter()
             .find_map(|p| match p {
@@ -1132,13 +1224,143 @@ mod tests {
         let c = content();
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
         assert!(role_of(&layout, SegmentRole::AheadBehind { clickable: true }).is_none());
-        let primitives = paint_status_bar(&layout, &pal(), false);
+        let primitives = paint_status_bar(&layout, &pal(), false, 0.0);
         assert!(
             !primitives.iter().any(|p| matches!(
                 p,
                 Primitive::Text(run) if run.text == icon::ARROW_DOWN.glyph
             )),
             "sem commits novos, nem o ícone é desenhado"
+        );
+    }
+
+    /// ADR-0101: with a `pull` running, the "updating" segment takes the
+    /// place of the commit indicator, in the same slot.
+    #[test]
+    fn updating_replaces_the_commit_indicator_in_the_same_slot() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.ahead_behind = Some(AheadBehindContent {
+            label: "3 commits atrás".to_owned(),
+            clickable: true,
+        });
+        c.updating = Some("Atualizando repositório".to_owned());
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        assert!(role_of(&layout, SegmentRole::AheadBehind { clickable: true }).is_none());
+        let order: Vec<_> = layout
+            .segments
+            .iter()
+            .filter(|s| !is_right(s.role))
+            .map(|s| s.role)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                SegmentRole::Shell,
+                SegmentRole::Cwd { stale: false },
+                SegmentRole::GitBranch,
+                SegmentRole::Updating,
+                SegmentRole::Group,
+            ]
+        );
+        let segment = role_of(&layout, SegmentRole::Updating).expect("segmento de atualização");
+        assert_eq!(segment.text, "Atualizando repositório");
+    }
+
+    #[test]
+    fn updating_is_not_a_click_target_and_has_no_underline() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.updating = Some("Atualizando repositório".to_owned());
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let segment = role_of(&layout, SegmentRole::Updating).expect("segmento de atualização");
+        let inside = (
+            segment.rect.x + segment.rect.width / 2.0,
+            segment.rect.y + segment.rect.height / 2.0,
+        );
+        assert_eq!(hit_test(&layout, inside), None);
+        let primitives = paint_status_bar(&layout, &pal(), true, 0.0);
+        assert!(
+            !primitives.iter().any(|p| matches!(p, Primitive::Quad(_))),
+            "sem sublinhado mesmo sob o cursor"
+        );
+    }
+
+    #[test]
+    fn updating_draws_a_spinning_arc_instead_of_the_arrow_icon() {
+        let mut c = content();
+        c.git_branch = Some("main".to_owned());
+        c.updating = Some("Atualizando repositório".to_owned());
+        let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
+        let at = |phase: f32| paint_status_bar(&layout, &pal(), false, phase);
+
+        let arcs = |prims: &[Primitive]| -> Vec<Vec<Point>> {
+            prims
+                .iter()
+                .filter_map(|p| match p {
+                    Primitive::Polyline(line) => Some(line.points.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let first = at(0.0);
+        let later = at(0.25);
+        assert_eq!(arcs(&first).len(), 1, "um arco");
+        assert_ne!(arcs(&first), arcs(&later), "a fase move o arco");
+        assert!(
+            !first.iter().any(|p| matches!(
+                p,
+                Primitive::Text(run) if run.text == icon::ARROW_DOWN.glyph
+            )),
+            "o arco substitui a seta"
+        );
+        assert!(
+            first.iter().any(|p| matches!(
+                p,
+                Primitive::Text(run) if run.text == "Atualizando repositório"
+            )),
+            "e o texto continua"
+        );
+    }
+
+    #[test]
+    fn updating_is_accent_coloured() {
+        let pal = pal();
+        assert_eq!(
+            segment_color(SegmentRole::Updating, &pal),
+            pal.status_bar_ahead_behind
+        );
+    }
+
+    #[test]
+    fn the_arc_covers_three_quarters_of_a_circle_around_the_centre() {
+        let centre = Point { x: 10.0, y: 20.0 };
+        let radius = 4.0;
+        let points = spinner_arc_points(centre, radius, 0.0);
+        assert_eq!(points.len(), SPINNER_STEPS + 1);
+        for p in &points {
+            let distance = ((p.x - centre.x).powi(2) + (p.y - centre.y).powi(2)).sqrt();
+            assert!((distance - radius).abs() < 1e-4, "todo ponto no círculo");
+        }
+        // Começa à direita do centro e termina três quartos de volta depois
+        // (em cima, com o eixo y da tela para baixo).
+        let first = points.first().expect("ponto inicial");
+        let last = points.last().expect("ponto final");
+        assert!((first.x - (centre.x + radius)).abs() < 1e-4);
+        assert!((first.y - centre.y).abs() < 1e-4);
+        assert!((last.x - centre.x).abs() < 1e-3);
+        assert!((last.y - (centre.y - radius)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_phase_wraps_every_period() {
+        assert_eq!(spinner_phase(Duration::ZERO), 0.0);
+        let half = spinner_phase(SPINNER_PERIOD / 2);
+        assert!((half - 0.5).abs() < 0.01);
+        assert_eq!(spinner_phase(SPINNER_PERIOD), 0.0);
+        assert_eq!(
+            spinner_phase(SPINNER_PERIOD * 3 + SPINNER_PERIOD / 4),
+            spinner_phase(SPINNER_PERIOD / 4)
         );
     }
 
@@ -1180,13 +1402,13 @@ mod tests {
         });
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
 
-        let not_hovered = paint_status_bar(&layout, &pal(), false);
+        let not_hovered = paint_status_bar(&layout, &pal(), false, 0.0);
         assert!(
             !not_hovered.iter().any(|p| matches!(p, Primitive::Quad(_))),
             "sem hover, sem sublinhado"
         );
 
-        let hovered = paint_status_bar(&layout, &pal(), true);
+        let hovered = paint_status_bar(&layout, &pal(), true, 0.0);
         assert!(
             hovered.iter().any(|p| matches!(p, Primitive::Quad(_))),
             "sob o cursor, o sublinhado aparece"
@@ -1205,7 +1427,7 @@ mod tests {
             clickable: false,
         });
         let layout = layout_with(&c, &TabBarStyle::DEFAULT, W);
-        let primitives = paint_status_bar(&layout, &pal(), true);
+        let primitives = paint_status_bar(&layout, &pal(), true, 0.0);
         assert!(
             !primitives.iter().any(|p| matches!(p, Primitive::Quad(_))),
             "não clicável, sem sublinhado mesmo sob o cursor"

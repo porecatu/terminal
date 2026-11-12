@@ -1265,7 +1265,11 @@ os grupos e as abas da sessão são **acrescentados** ao fim da trilha da
 janela onde você clicou, e a aba que era ativa na sessão fica ativa.
 Acrescentar não é substituir: nada do que já estava aberto é fechado,
 movido ou reiniciado, as abas fixadas ficam como estão e a janela não muda
-de tamanho. Um grupo da sessão com o mesmo nome de um que já existe não se
+de tamanho. A única exceção é o **terminal parado**: se a janela tem uma
+única aba e ela é um terminal sem nenhum processo rodando (o caso de abrir o
+Porecatu e logo restaurar uma sessão), essa aba é fechada depois de a
+sessão entrar. Aba com programa rodando, com o shell já encerrado, dividida
+em painéis, fixada ou de SSH fica onde está. Um grupo da sessão com o mesmo nome de um que já existe não se
 funde com ele, e restaurar a mesma sessão duas vezes acrescenta duas vezes.
 A opção vale na hora, sem reiniciar o app; o resto (`cwd`, painéis,
 `lazy_restore`, `.porecatu`, SSH sem conectar) é igual ao de uma janela
@@ -1361,6 +1365,12 @@ lado da branch:
 **Esse número é clicável.** Clicar traz os commits — em segundo plano, sem
 travar nada e sem você sair do que estava fazendo. Nada é trazido sem esse
 clique: o Porecatu nunca mexe nos seus arquivos sozinho.
+
+**Enquanto os commits são trazidos**, o número dá lugar a um arco girando e
+à mensagem "Atualizando repositório", e o indicador deixa de aceitar clique
+até o fim (no máximo 20 segundos, o tempo limite do `git`). Com
+`appearance.window.animations = false`, o arco aparece parado. Terminado, o
+indicador some e o app avisa o resultado.
 
 Sem commits novos, o número não existe. Não há "0 atrás" nem versão
 apagada — como o ícone de branch, a ausência já é a resposta.

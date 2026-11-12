@@ -6831,18 +6831,25 @@ impl WindowState {
         // indicador -- só uma branch de verdade tem upstream a seguir.
         // O mapa é consultado pela mesma chave de repositório que o
         // agendador usa (`GitInfo::repo_root`), nunca pelo `cwd`.
+        let mut updating = None;
         let ahead_behind = head_branch_name.and_then(|name| {
             let repo = git.repo_root(cwd_path.as_deref())?.to_path_buf();
             let entry = git_remotes.get(&repo)?;
             if entry.branch.as_deref() != Some(name.as_str()) {
                 return None;
             }
+            // ADR-0101: com o `pull` rodando, o indicador vira "Atualizando
+            // repositório" com o arco girando, e deixa de ser alvo de clique.
+            if entry.state == git::QueryState::Integrating {
+                updating = Some(msg::status_bar::updating_repository(&self.catalog));
+            }
             let (behind, ahead) = entry.counts?;
             let label = git::ahead_behind_label(&self.catalog, behind, ahead)?;
             // RF-13.11: nem consulta nem integração em andamento aceitam
-            // um segundo clique -- `InFlight` cobre as duas (comentário do
-            // variante em `git.rs`). RF-13.9: `can_integrate` é a mesma
-            // decisão pura da etapa 2, não reimplementada aqui.
+            // um segundo clique -- só `Idle` é clicável (`InFlight` e
+            // `Integrating`, comentários das variantes em `git.rs`).
+            // RF-13.9: `can_integrate` é a mesma decisão pura da etapa 2,
+            // não reimplementada aqui.
             let clickable = entry.state == git::QueryState::Idle && git::can_integrate(ahead);
             Some(status_bar::AheadBehindContent { label, clickable })
         });
@@ -6861,6 +6868,7 @@ impl WindowState {
             shell: tab.map(|t| t.shell_name().to_owned()).unwrap_or_default(),
             git_branch,
             ahead_behind,
+            updating,
             cwd_is_stale: !cwd.is_empty() && !received_osc7,
             cwd,
             group: self
@@ -7584,6 +7592,10 @@ struct App {
     /// (dispatch) e `apply_git_query_result` (resultado); lido em
     /// `status_bar_content` a cada quadro.
     git_remotes: HashMap<PathBuf, git::RemoteEntry>,
+    /// ADR-0101: origem da fase do arco "Atualizando repositório" -- a fase
+    /// é o tempo desde cá (`status_bar::spinner_phase`). Reescrita quando o
+    /// primeiro `pull` começa, para o arco partir sempre da mesma posição.
+    git_spinner_epoch: Instant,
     /// PRD-021/ADR-0086 §2: a lista de abas fixadas do **processo** (as
     /// entradas, na ordem de `pinned.json`, e onde cada uma está viva).
     /// Carregada em `App::new` sempre, independente de `[session] enabled`
@@ -7973,6 +7985,7 @@ impl App {
             pending_first_frame_since: None,
             pending_resumed_metric: None,
             git_remotes: HashMap::new(),
+            git_spinner_epoch: Instant::now(),
             pinned,
             pinned_opened: false,
             git_disabled: false,
@@ -9929,6 +9942,7 @@ impl App {
             .chain(self.git_next_deadline(now))
             .chain(self.reconnect_deadline())
             .chain(self.clock_deadline(now))
+            .chain(self.git_spinner_deadline(now))
             // ADR-0093 §4: the sampling clock is the UI's, a `WaitUntil`.
             .chain(self.task_manager_next_sample)
             .min();
@@ -9946,6 +9960,25 @@ impl App {
         (status_bar::height(&self.style) > 0.0
             && self.windows.values().any(WindowState::shows_clock))
         .then(|| now + status_bar::until_next_minute())
+    }
+
+    /// Algum `pull` está rodando (ADR-0101).
+    fn git_integrating(&self) -> bool {
+        self.git_remotes
+            .values()
+            .any(|entry| entry.state == git::QueryState::Integrating)
+    }
+
+    /// Próximo quadro do arco "Atualizando repositório" (ADR-0101): só
+    /// enquanto um `pull` roda, a barra de status existe e as animações
+    /// estão ligadas -- limitado pelo timeout de 20 s do `pull`. `WaitUntil`,
+    /// nunca thread nem loop de render. Com `animations = false` o arco
+    /// aparece parado.
+    fn git_spinner_deadline(&self, now: Instant) -> Option<Instant> {
+        (self.config.appearance.window.animations
+            && status_bar::height(&self.style) > 0.0
+            && self.git_integrating())
+        .then(|| now + status_bar::SPINNER_FRAME_INTERVAL)
     }
 
     /// PRD-013/ADR-0052 §1/§5: descobre o repositório da aba ativa de cada
@@ -10225,11 +10258,21 @@ impl App {
         if !clickable {
             return;
         }
-        // Reaproveita `InFlight` (ver o comentário do variante em `git.rs`):
-        // barra tanto o segundo clique (RF-13.11) quanto uma consulta
-        // periódica concorrente no mesmo repositório enquanto o `pull`
-        // roda.
-        entry.state = git::QueryState::InFlight;
+        // `Integrating` (ADR-0101) barra o segundo clique (RF-13.11) e uma
+        // consulta periódica concorrente no mesmo repositório enquanto o
+        // `pull` roda, e é o que a barra de status lê para mostrar
+        // "Atualizando repositório".
+        entry.state = git::QueryState::Integrating;
+        // O arco começa na fase 0 quando é o primeiro pull em andamento.
+        if self
+            .git_remotes
+            .values()
+            .filter(|e| e.state == git::QueryState::Integrating)
+            .nth(1)
+            .is_none()
+        {
+            self.git_spinner_epoch = Instant::now();
+        }
         let proxy = self.proxy.clone();
         git::spawn_integration(repo, move |result| {
             let _ = proxy.send_event(Wakeup::GitIntegrationResult(result));
@@ -10393,6 +10436,9 @@ impl App {
     /// sessão debounçada (RF-3.3), se o período de silêncio terminou.
     fn tick_all(&mut self) {
         let now = Instant::now();
+        // ADR-0101: o prazo de `git_spinner_deadline` acorda o loop e este é
+        // o repinte do arco.
+        let spinning = self.git_spinner_deadline(now).is_some();
         for state in self.windows.values_mut() {
             let had_warnings = !state.warnings.is_empty();
             let had_tooltip = state.hover.visible().is_some();
@@ -10404,6 +10450,7 @@ impl App {
                 // O relógio da barra muda a cada minuto: o prazo de
                 // `clock_deadline` acorda o loop e este é o repinte.
                 || (status_bar::height(&self.style) > 0.0 && state.shows_clock())
+                || spinning
                 || had_warnings != !state.warnings.is_empty()
                 || had_tooltip != state.hover.visible().is_some()
             {
@@ -15630,7 +15677,17 @@ impl App {
             );
             let ahead_behind_hovered =
                 status_bar::hit_test(&status_layout, cursor_logical).is_some();
-            for primitive in status_bar::paint_status_bar(&status_layout, pal, ahead_behind_hovered)
+            // Campos direto, não um método: `gpu` empresta `self.gpu` por
+            // todo este trecho. Parado em `0.0` com as animações desligadas.
+            let spin_phase = if self.config.appearance.window.animations {
+                status_bar::spinner_phase(
+                    Instant::now().saturating_duration_since(self.git_spinner_epoch),
+                )
+            } else {
+                0.0
+            };
+            for primitive in
+                status_bar::paint_status_bar(&status_layout, pal, ahead_behind_hovered, spin_phase)
             {
                 frame.push(Layer::Chrome, primitive);
             }

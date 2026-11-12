@@ -223,7 +223,7 @@ lazy_restore_description = "Las pestañas restauradas solo inician el shell al r
 restore_window_geometry_label = "Restaurar tamaño y posición de las ventanas"
 restore_window_geometry_description = "Reabre cada ventana donde estaba y con su tamaño."
 restore_named_in_current_window_label = "Restaurar sesiones guardadas en la ventana actual"
-restore_named_in_current_window_description = "Añade los grupos y las pestañas de la sesión elegida a esta ventana, sin cerrar lo que ya está abierto."
+restore_named_in_current_window_description = "Añade los grupos y las pestañas de la sesión elegida a esta ventana, sin cerrar lo que ya está abierto. La única excepción es un terminal inactivo que esté solo en la ventana: se cierra."
 suggest_shell_integration_label = "Ofrecer integración de shell"
 suggest_shell_integration_description = "Sugiere instalar la integración que informa del directorio actual al terminal."
 project_file_enabled_label = "Archivo .porecatu"
@@ -448,6 +448,7 @@ alt_screen_counter = "{counter} (pantalla alternativa)"
 pane_count = { one = "{count} panel", other = "{count} paneles" }
 commits_behind = { one = "{count} commit por detrás", other = "{count} commits por detrás" }
 behind_ahead = "{behind} por detrás, {ahead} por delante"
+updating_repository = "Actualizando repositorio"
 
 [color]
 red = "Rojo"

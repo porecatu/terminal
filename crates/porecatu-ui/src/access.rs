@@ -852,7 +852,11 @@ fn segment_label(catalog: &Catalog, role: SegmentRole) -> String {
         SegmentRole::Shell => msg::access::segment_shell(catalog),
         SegmentRole::Cwd { .. } => msg::access::segment_cwd(catalog),
         SegmentRole::GitBranch => msg::access::segment_branch(catalog),
-        SegmentRole::AheadBehind { .. } => msg::access::segment_ahead_behind(catalog),
+        // ADR-0101: o pull em andamento é o mesmo indicador, só que sem ação --
+        // `Label` (não `Button`), com o texto "Atualizando repositório" no valor.
+        SegmentRole::AheadBehind { .. } | SegmentRole::Updating => {
+            msg::access::segment_ahead_behind(catalog)
+        }
         SegmentRole::Group => msg::access::segment_group(catalog),
         SegmentRole::PaneCount => msg::access::segment_pane_count(catalog),
         SegmentRole::Encoding => msg::access::segment_encoding(catalog),
@@ -2547,6 +2551,7 @@ mod tests {
             cwd_is_stale: true,
             git_branch: None,
             ahead_behind: None,
+            updating: None,
             group: None,
             pane_count_label: None,
             system: "windows - 0.7.0".to_owned(),
@@ -2661,6 +2666,54 @@ mod tests {
             node.description()
                 .is_some_and(|d| d.contains("fast-forward"))
         );
+    }
+
+    #[test]
+    fn a_running_pull_projects_as_a_plain_label_not_a_button() {
+        // ADR-0101: com o pull rodando o indicador não tem ação -- o leitor de
+        // tela não pode anunciá-lo como botão.
+        let ws = Workspace::new();
+        let content = crate::status_bar::StatusBarContent {
+            git_branch: Some("main".to_owned()),
+            updating: Some("Atualizando repositório".to_owned()),
+            ..Default::default()
+        };
+        let layout = crate::status_bar::layout_status_bar(
+            &content,
+            &TabBarStyle::DEFAULT,
+            800.0,
+            600.0,
+            &mut measurer(),
+        );
+        let update = build_tree(
+            &ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            &None,
+            &None,
+            Some(&layout),
+            None,
+            None,
+            &TabBarStyle::DEFAULT,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
+            &mut measurer(),
+        );
+        let index = layout
+            .segments
+            .iter()
+            .position(|s| s.role == SegmentRole::Updating)
+            .expect("o indicador está no layout");
+        let node = node(&update, NodeId(STATUS_BAR_FIRST_SEGMENT_ID + index as u64));
+        assert_eq!(node.role(), Role::Label);
+        assert_eq!(node.value(), Some("Atualizando repositório"));
     }
 
     #[test]

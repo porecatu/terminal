@@ -968,6 +968,7 @@ registry! {
         pane_count(plural),
         commits_behind(plural),
         behind_ahead(behind, ahead),
+        updating_repository(),
     }
     color {
         red(),

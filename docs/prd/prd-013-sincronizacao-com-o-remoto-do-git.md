@@ -89,6 +89,8 @@ remote_poll_interval_secs = 300
 
 **RF-13.11** — Enquanto uma consulta ou um `pull` está em andamento para aquele repositório, o indicador não aceita um segundo clique. Nada pisca e nada se move: o app é damage-driven, e um indicador animado contrariaria o RF-9.8 por um motivo muito pior que o deste documento.
 
+> **Emenda (2026-11-12, [ADR-0101](../adr/0101-indicador-de-atualizacao-do-pull-na-barra-de-status.md)).** A metade "nada pisca e nada se move" vale para a **consulta periódica**, que continua invisível. Com um `pull` em andamento (iniciado pelo clique, no máximo 20 s), o indicador é substituído por "Atualizando repositório" com um arco girando, e continua sem aceitar clique. É a única exceção ao RF-9.8: o redraw periódico dura só o `pull`, e em repouso o custo continua zero.
+
 ### A integração
 
 **RF-13.12** — Clicar no indicador integra os commits do remoto **por fast-forward apenas**, em segundo plano. É a única forma de o app tocar a árvore de trabalho, e ela nunca acontece sozinha.

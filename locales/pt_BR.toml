@@ -245,7 +245,7 @@ lazy_restore_description = "Abas restauradas só iniciam o shell quando recebem 
 restore_window_geometry_label = "Restaurar tamanho e posição das janelas"
 restore_window_geometry_description = "Reabre cada janela onde e do tamanho que estava."
 restore_named_in_current_window_label = "Restaurar sessões salvas na janela atual"
-restore_named_in_current_window_description = "Acrescenta os grupos e as abas da sessão escolhida a esta janela, sem fechar o que está aberto."
+restore_named_in_current_window_description = "Acrescenta os grupos e as abas da sessão escolhida a esta janela, sem fechar o que está aberto. A única exceção é um terminal parado, sozinho na janela: ele sai."
 suggest_shell_integration_label = "Oferecer integração de shell"
 suggest_shell_integration_description = "Sugere instalar a integração que informa o diretório atual ao terminal."
 project_file_enabled_label = "Arquivo .porecatu"
@@ -472,6 +472,7 @@ alt_screen_counter = "{counter} (tela alternativa)"
 pane_count = { one = "{count} painel", other = "{count} painéis" }
 commits_behind = { one = "{count} commit atrás", other = "{count} commits atrás" }
 behind_ahead = "{behind} atrás, {ahead} à frente"
+updating_repository = "Atualizando repositório"
 
 # Nomes das cores da paleta de grupo (só o leitor de tela os lê).
 [color]

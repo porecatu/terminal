@@ -241,7 +241,9 @@ lazy_restore = false
 restore_window_geometry = true
 # true = escolher uma sessão salva no botão de sessões acrescenta os grupos
 # e as abas dela a esta janela, em vez de abrir uma janela nova. Nada do
-# que já está aberto é fechado. Vale na hora, sem reiniciar.
+# que já está aberto é fechado, salvo um terminal parado (sem nenhum
+# processo rodando) que seja a única aba da janela. Vale na hora, sem
+# reiniciar.
 restore_named_in_current_window = false
 # Sugere uma vez como fazer o shell informar a pasta atual, para que ela
 # volte junto com a sessão.

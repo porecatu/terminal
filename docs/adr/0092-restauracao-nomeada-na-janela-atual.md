@@ -72,6 +72,8 @@ Gravar passa por `porecatu-config::edit`, por edição de chave ([ADR-0058](0058
 
 ### 4. Restaurar na janela atual
 
+> **Revisto pelo [ADR-0102](0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md) (2026-11-12).** Há uma exceção a "nada é fechado": se a janela tem uma única aba e ela é um terminal parado (um painel, shell vivo, nenhum processo rodando, nenhuma aba fixada), essa aba é fechada **depois** de a sessão ser acrescentada e de a aba ativa dela ser ativada.
+
 `restore_named_session(event_loop, origin, file)` continua sendo o único ponto de entrada, chamado pelo popover. A leitura e o tratamento de falha (aviso na janela de origem, canal 1) **não mudam**. Muda o que acontece com um `WindowV1` válido:
 
 ```text
@@ -103,6 +105,8 @@ O laço de `open_window_from_session` que hoje vai de `let to_start` até o fim 
 A decisão eager × lazy fica **fora** da função, nos dois chamadores, porque o conjunto de partida é diferente: a janela inteira num caso, só o que foi acrescentado no outro. O que é da aba restaurada, como `cwd` com fallback (RF-3.10), `.porecatu` uma vez no painel focado, perfil salvo e painéis irmãos, fica **dentro**, e não pode divergir sem alguém escrever um `if`.
 
 ### 6. O que não é tocado
+
+> **Revisto pelo [ADR-0102](0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md) (2026-11-12).** A única coisa que já estava na janela e pode sair é o terminal parado descrito na revisão do §4.
 
 - **Geometria da janela.** `append_named_window` não lê `window_v1.geometry` nem `monitor`. A janela fica com o tamanho, a posição, a maximização e a tela cheia que tem (RF-23.11).
 - **Tema e zoom.** `apply_restored_session_state` não é chamada, como já não é na restauração nomeada (ADR-0054 §6 item 2).

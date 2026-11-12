@@ -11,7 +11,8 @@
 //! the window's workspace through `insert_detached_*` (ADR-0090 §1) -- the
 //! one path the core has for inserting tabs that come from elsewhere, so ids,
 //! same-name groups, adjacent implicit runs and `last_active` are already
-//! settled. Nothing here is taken from the window's own workspace.
+//! settled. Nothing here is taken from the window's own workspace, with one
+//! exception: a lone parked terminal is closed afterwards (ADR-0102).
 //!
 //! What is pure (the append, the set of tabs to start) is a free function
 //! with a test; what needs a window stays in the `impl App` below.
@@ -147,6 +148,57 @@ pub(crate) fn tabs_to_start(appended: &Appended, lazy_restore: bool) -> Vec<TabI
     }
 }
 
+/// ADR-0102 (RF-23.16): the one tab of a window that is a **parked
+/// terminal** -- the window was just opened, holds nothing else, and its
+/// shell has nothing running -- or `None`.
+///
+/// What is decided here is the shape of the window and of the tab, from the
+/// model alone; "nothing running" needs the runtime of the pane and comes in
+/// as `is_idle`:
+/// - no pinned tab, and exactly **one** tab in the track (loose or alone in
+///   an explicit group); a pinned tab is a deliberate one and a second tab is
+///   somebody's work;
+/// - one pane only (a split is a deliberate layout);
+/// - not `NotStarted` (a saved tab, not an empty terminal) and not exited (an
+///   exited shell stays open so its last output can be read).
+pub(crate) fn lone_idle_tab(ws: &Workspace, is_idle: impl Fn(TabId) -> bool) -> Option<TabId> {
+    if !ws.pinned().is_empty() {
+        return None;
+    }
+    let mut track = ws.track_order();
+    let only = track.next()?;
+    if track.next().is_some() {
+        return None;
+    }
+    let tab = ws.tab(only)?;
+    let single_pane = tab.panes().leaves_in_order().len() == 1;
+    (single_pane && !tab.is_not_started() && !tab.is_exited() && is_idle(only)).then_some(only)
+}
+
+impl WindowState {
+    /// The runtime half of [`lone_idle_tab`]: a live local shell with no
+    /// extra process, no alternate screen and no mouse reporting. Asks
+    /// [`any_pane_needs_confirmation`] with `confirm_close_with_process`
+    /// **forced on**: closing a tab on its own must never kill a process
+    /// silently, whatever the user set for the close dialog. SSH (live,
+    /// dormant or reconnecting) is never idle.
+    fn tab_is_idle_terminal(&self, id: TabId) -> bool {
+        let Some(tab) = self.workspace.tab(id) else {
+            return false;
+        };
+        let panes = tab.panes().leaves_in_order();
+        let [pane] = panes.as_slice() else {
+            return false;
+        };
+        let Some(runtime) = self.panes.get(&(id, *pane)) else {
+            return false;
+        };
+        !runtime.dormant
+            && runtime.ssh_host.is_none()
+            && !any_pane_needs_confirmation(true, [(runtime.terminal.modes(), runtime.liveness())])
+    }
+}
+
 impl App {
     /// ADR-0092 §4: appends the groups and tabs of a named session to the
     /// track of `origin`. Geometry, maximization, full screen, theme, zoom
@@ -167,6 +219,10 @@ impl App {
         let Some(state) = self.windows.get_mut(&origin) else {
             return;
         };
+
+        // ADR-0102: decided **before** the append -- afterwards the window
+        // holds more than one tab and the question has no answer.
+        let parked = lone_idle_tab(&state.workspace, |id| state.tab_is_idle_terminal(id));
 
         let appended = append_session_workspace(&mut state.workspace, source);
         if appended.tabs.is_empty() {
@@ -192,6 +248,14 @@ impl App {
             }
             // RF-23.14: the automatic session has to write the new tabs.
             None => state.mark_session_dirty(),
+        }
+        // ADR-0102: the parked terminal goes **last**, once a restored tab is
+        // the active one -- closing the active tab would run the focus ladder,
+        // and `activate_tab` expands a collapsed group (RF-23.6). Without a
+        // translated active tab (a session that saved none) it stays: there
+        // is nothing safe to hand the focus to.
+        if let (Some(parked), Some(_)) = (parked, appended.active) {
+            state.close_tab_unconditionally(parked);
         }
         state.profile_badges_dirty = true;
         state.sync_window_title();
@@ -334,6 +398,120 @@ mod tests {
                 tabs: g.tabs().to_vec(),
             })
             .collect()
+    }
+
+    /// A window like a freshly opened one: a single loose tab.
+    fn one_tab() -> (Workspace, TabId) {
+        let mut ws = Workspace::new();
+        let id = ws.new_tab(None, "zsh", None, 0);
+        (ws, id)
+    }
+
+    #[test]
+    fn a_lone_parked_terminal_is_found() {
+        let (ws, id) = one_tab();
+        assert_eq!(lone_idle_tab(&ws, |_| true), Some(id));
+    }
+
+    #[test]
+    fn a_lone_terminal_with_something_running_is_kept() {
+        let (ws, _) = one_tab();
+        assert_eq!(lone_idle_tab(&ws, |_| false), None);
+    }
+
+    #[test]
+    fn two_tabs_are_somebodys_work() {
+        let (mut ws, _) = one_tab();
+        ws.new_tab(None, "zsh", None, 1);
+        assert_eq!(lone_idle_tab(&ws, |_| true), None);
+    }
+
+    #[test]
+    fn a_window_with_a_pinned_tab_is_never_parked() {
+        // The lone tab of the track is fine, but a pinned one is deliberate.
+        let (mut ws, _) = one_tab();
+        let pinned = ws.new_tab(None, "zsh", None, 1);
+        assert!(ws.pin_tab(pinned, 0));
+        assert_eq!(ws.track_order().count(), 1);
+        assert_eq!(lone_idle_tab(&ws, |_| true), None);
+    }
+
+    #[test]
+    fn a_split_tab_is_a_deliberate_layout() {
+        let (mut ws, id) = one_tab();
+        let tab = ws.tab_mut(id).expect("the tab");
+        let first = tab.panes().focused_id();
+        assert!(
+            tab.panes_mut()
+                .split(first, porecatu_core::SplitAxis::Vertical, "zsh", None)
+                .is_some()
+        );
+        assert_eq!(lone_idle_tab(&ws, |_| true), None);
+    }
+
+    #[test]
+    fn a_saved_tab_that_never_started_is_not_an_empty_terminal() {
+        let mut ws = Workspace::new();
+        ws.new_tab_not_started(None, "zsh", None, 0);
+        assert_eq!(lone_idle_tab(&ws, |_| true), None);
+    }
+
+    #[test]
+    fn an_exited_shell_stays_open_so_its_output_can_be_read() {
+        let (mut ws, id) = one_tab();
+        ws.tab_mut(id).expect("the tab").mark_exited(1);
+        assert_eq!(lone_idle_tab(&ws, |_| true), None);
+    }
+
+    #[test]
+    fn a_lone_tab_inside_an_explicit_group_still_counts() {
+        let ws = build(
+            &window(
+                vec![explicit(0, "infra", false, &[0])],
+                vec![tab_v1(0, "i1")],
+                Some(0),
+            ),
+            false,
+        );
+        let only = ws.track_order().next().expect("one tab");
+        assert_eq!(lone_idle_tab(&ws, |_| true), Some(only));
+    }
+
+    #[test]
+    fn an_empty_workspace_has_no_parked_terminal() {
+        assert_eq!(lone_idle_tab(&Workspace::new(), |_| true), None);
+    }
+
+    /// The order `append_named_window` uses: append, activate the translated
+    /// active tab, only then close the parked one. A collapsed group of the
+    /// session must come out still collapsed, and the active tab must be a
+    /// restored one.
+    #[test]
+    fn closing_the_parked_tab_last_keeps_the_session_as_saved() {
+        let (mut dest, parked) = one_tab();
+        let lone = lone_idle_tab(&dest, |_| true);
+        assert_eq!(lone, Some(parked));
+
+        let appended = append_session_workspace(&mut dest, build(&session(), false));
+        let active = appended.active.expect("the session had an active tab");
+        assert!(dest.activate_tab(active));
+        assert_eq!(dest.close_tab(parked), Some(active));
+
+        assert_eq!(
+            layout(&dest),
+            [
+                entry(Some("api"), &["a1", "a2"]),
+                entry(None, &["l1"]),
+                entry(Some("front"), &["f1", "f2"]),
+            ]
+        );
+        assert_eq!(dest.active_tab(), Some(active));
+        assert!(
+            shapes(&dest)
+                .iter()
+                .any(|s| s.name.as_deref() == Some("front") && s.collapsed),
+            "the collapsed group stays collapsed"
+        );
     }
 
     #[test]
