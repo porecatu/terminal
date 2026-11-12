@@ -21,7 +21,7 @@
 //! this thread only serves requests and ends when the channel closes.
 
 use crate::job::{ProcessGroup, descendants_of};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -53,8 +53,9 @@ pub struct ProcessStat {
     /// identifies the process (a reused PID has a different start time).
     pub start_time: u64,
     pub name: String,
-    /// `0.0..=1.0` of the whole machine; `None` on the first sample of a
-    /// `System` (CPU is the difference between two updates, RF-24.9).
+    /// `0.0..=1.0` of the whole machine; `None` the first time the sampler
+    /// sees this process (CPU is the difference between two readings of its
+    /// accumulated CPU time, RF-24.9, ADR-0100).
     pub cpu: Option<f32>,
     /// Resident bytes (working set on Windows).
     pub memory: u64,
@@ -125,6 +126,14 @@ impl<K: Send + 'static> Sampler<K> {
         self.tx.send(request).map_err(|_| SamplerGone)
     }
 
+    /// Whether the thread has ended (it panicked, or the `System` could not
+    /// be created). A thread that is only slow is **not** finished: the UI
+    /// waits for it instead of recreating the `System`, which would restart
+    /// the CPU baseline (ADR-0100).
+    pub fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+
     /// Drops the channel (the thread ends once it drains it) and returns the
     /// thread handle. Tests `join` it; the UI just drops the `Sampler`.
     pub fn close(self) -> JoinHandle<()> {
@@ -148,13 +157,22 @@ pub fn kill_detached(request: KillRequest) {
     drop(spawned);
 }
 
+/// What the sampler remembers of a process between two samples: the
+/// accumulated CPU time (ms) and the instant of that reading.
+#[derive(Debug, Clone, Copy)]
+struct Reading {
+    cpu_ms: u64,
+    at: Instant,
+}
+
 /// The `System` that survives between requests, plus what the math needs.
 struct SamplerState {
     system: System,
     logical_cpus: usize,
-    /// Instant of the last **sample** refresh (CPU and disk). `None` until
-    /// the first one.
-    last_refresh: Option<Instant>,
+    /// The previous reading of each process, by `(pid, start_time)` so a
+    /// reused PID is a different process (ADR-0100). Only the processes of
+    /// the last sample are kept.
+    previous: HashMap<(u32, u64), Reading>,
 }
 
 impl SamplerState {
@@ -168,61 +186,100 @@ impl SamplerState {
         Some(Self {
             system,
             logical_cpus,
-            last_refresh: None,
+            previous: HashMap::new(),
         })
     }
 
-    /// ADR-0093 §5.
+    /// ADR-0093 §5, ADR-0100.
+    ///
+    /// Two passes. The first reads only the process list (parent and start
+    /// time), which is all the membership criterion needs. The second reads
+    /// CPU, memory and disk **only for the members**: on Windows each of those
+    /// is a system call per process, and doing it for every process of the
+    /// machine under load is what made a scan take longer than the period.
+    ///
+    /// CPU is computed here from `Process::accumulated_cpu_time`, not taken
+    /// from `Process::cpu_usage`: the latter is wrong for the first two
+    /// readings of a process on Windows (its baseline starts at zero).
     fn sample<K>(&mut self, request: SampleRequest<K>) -> SampleResult<K> {
-        let first = self.last_refresh.is_none();
+        let started = Instant::now();
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
-            ProcessRefreshKind::nothing()
-                .with_cpu()
-                .with_memory()
-                .with_disk_usage(),
+            ProcessRefreshKind::nothing(),
         );
-        let taken_at = Instant::now();
-        let elapsed = self
-            .last_refresh
-            .map_or(Duration::ZERO, |previous| taken_at.duration_since(previous));
-        self.last_refresh = Some(taken_at);
 
         let mut seen: HashSet<u32> = HashSet::new();
-        let mut panes = Vec::with_capacity(request.roots.len());
+        let mut member_pids: Vec<(K, Vec<u32>)> = Vec::with_capacity(request.roots.len());
         for (key, group) in request.roots {
             let mut pids: Vec<u32> = group.members(&self.system).into_iter().collect();
             // Stable order across samples; the UI builds the tree from `parent`.
             pids.sort_unstable();
+            // A PID already seen in another pane stays only in the first one.
+            pids.retain(|pid| seen.insert(*pid));
+            member_pids.push((key, pids));
+        }
+
+        let all: Vec<Pid> = member_pids
+            .iter()
+            .flat_map(|(_, pids)| pids.iter().map(|pid| Pid::from_u32(*pid)))
+            .collect();
+        if !all.is_empty() {
+            self.system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&all),
+                true,
+                ProcessRefreshKind::nothing()
+                    .with_cpu()
+                    .with_memory()
+                    .with_disk_usage(),
+            );
+        }
+        // The middle of the scan: the readings are spread over it, and the
+        // time axis and the rates use this one instant (ADR-0100).
+        let taken_at = started + started.elapsed() / 2;
+
+        let mut current: HashMap<(u32, u64), Reading> = HashMap::with_capacity(all.len());
+        let mut panes = Vec::with_capacity(member_pids.len());
+        for (key, pids) in member_pids {
             let mut stats = Vec::with_capacity(pids.len());
             for pid in pids {
-                if !seen.insert(pid) {
-                    continue;
-                }
                 let Some(process) = self.system.process(Pid::from_u32(pid)) else {
                     continue;
                 };
+                let start_time = process.start_time();
+                let cpu_ms = process.accumulated_cpu_time();
+                let before = self.previous.get(&(pid, start_time));
+                let elapsed = before.map(|reading| taken_at.saturating_duration_since(reading.at));
                 let usage = process.disk_usage();
                 stats.push(ProcessStat {
                     pid,
                     parent: process.parent().map(Pid::as_u32),
-                    start_time: process.start_time(),
+                    start_time,
                     name: process.name().to_string_lossy().into_owned(),
-                    cpu: if first {
-                        None
-                    } else {
-                        Some(normalize_cpu(process.cpu_usage(), self.logical_cpus))
-                    },
+                    cpu: before.zip(elapsed).and_then(|(reading, elapsed)| {
+                        cpu_fraction(reading.cpu_ms, cpu_ms, elapsed, self.logical_cpus)
+                    }),
                     memory: process.memory(),
-                    disk_per_sec: disk_rate(
-                        usage.read_bytes.saturating_add(usage.written_bytes),
-                        elapsed,
-                    ),
+                    // The first reading of a process is its whole life, not a
+                    // rate: it counts as zero, as its CPU is `None`.
+                    disk_per_sec: elapsed.map_or(0.0, |elapsed| {
+                        disk_rate(
+                            usage.read_bytes.saturating_add(usage.written_bytes),
+                            elapsed,
+                        )
+                    }),
                 });
+                current.insert(
+                    (pid, start_time),
+                    Reading {
+                        cpu_ms,
+                        at: taken_at,
+                    },
+                );
             }
             panes.push((key, stats));
         }
+        self.previous = current;
         SampleResult {
             seq: request.seq,
             taken_at,
@@ -263,14 +320,23 @@ impl SamplerState {
     }
 }
 
-/// `sysinfo`'s `cpu_usage()` is in % of **one** core; the output is the
-/// fraction of the whole machine (`0.0..=1.0`). Zero CPUs counts as one, to
-/// avoid dividing by zero.
-fn normalize_cpu(raw_percent_of_one_core: f32, logical_cpus: usize) -> f32 {
-    if !raw_percent_of_one_core.is_finite() {
-        return 0.0;
+/// CPU as a fraction of the whole machine (`0.0..=1.0`) from two readings of
+/// a process's accumulated CPU time (ms) taken `elapsed` apart. `None` when no
+/// time has passed. A counter that went backwards counts as no CPU. Zero CPUs
+/// counts as one, to avoid dividing by zero (ADR-0100).
+fn cpu_fraction(
+    previous_ms: u64,
+    current_ms: u64,
+    elapsed: Duration,
+    logical_cpus: usize,
+) -> Option<f32> {
+    let seconds = elapsed.as_secs_f64();
+    if seconds <= 0.0 {
+        return None;
     }
-    (raw_percent_of_one_core / 100.0 / logical_cpus.max(1) as f32).clamp(0.0, 1.0)
+    let busy_seconds = current_ms.saturating_sub(previous_ms) as f64 / 1000.0;
+    let fraction = busy_seconds / seconds / logical_cpus.max(1) as f64;
+    Some(fraction.clamp(0.0, 1.0) as f32)
 }
 
 /// Bytes per second, dividing by the **real** time between the two updates.
@@ -303,23 +369,37 @@ mod tests {
 
     #[test]
     fn cpu_is_a_fraction_of_the_whole_machine() {
-        // 200% of one core on 8 logical CPUs.
-        assert!((normalize_cpu(200.0, 8) - 0.25).abs() < 1e-6);
-        assert_eq!(normalize_cpu(0.0, 8), 0.0);
+        // 2 s of CPU in 1 s of wall time on 8 logical CPUs.
+        let cpu = cpu_fraction(1000, 3000, Duration::from_secs(1), 8).unwrap();
+        assert!((cpu - 0.25).abs() < 1e-6);
+        assert_eq!(cpu_fraction(500, 500, Duration::from_secs(1), 8), Some(0.0));
     }
 
     #[test]
-    fn cpu_is_clamped_to_one() {
-        assert_eq!(normalize_cpu(1600.0, 8), 1.0);
-        assert_eq!(normalize_cpu(100.0, 1), 1.0);
-        assert_eq!(normalize_cpu(-5.0, 4), 0.0);
+    fn cpu_uses_the_real_elapsed_time_not_the_period() {
+        // A slow scan, 2 s apart: 1 s of CPU on 4 CPUs is 12.5%.
+        let cpu = cpu_fraction(0, 1000, Duration::from_secs(2), 4).unwrap();
+        assert!((cpu - 0.125).abs() < 1e-6);
     }
 
     #[test]
-    fn cpu_survives_zero_cpus_and_non_finite_input() {
-        assert_eq!(normalize_cpu(50.0, 0), 0.5);
-        assert_eq!(normalize_cpu(f32::NAN, 4), 0.0);
-        assert_eq!(normalize_cpu(f32::INFINITY, 4), 0.0);
+    fn cpu_is_clamped_to_one_and_survives_a_counter_that_went_back() {
+        assert_eq!(
+            cpu_fraction(0, 16_000, Duration::from_secs(1), 8),
+            Some(1.0)
+        );
+        assert_eq!(cpu_fraction(0, 5000, Duration::from_secs(1), 1), Some(1.0));
+        assert_eq!(
+            cpu_fraction(9000, 1000, Duration::from_secs(1), 4),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn cpu_needs_elapsed_time_and_survives_zero_cpus() {
+        assert_eq!(cpu_fraction(0, 100, Duration::ZERO, 4), None);
+        let cpu = cpu_fraction(0, 500, Duration::from_secs(1), 0).unwrap();
+        assert!((cpu - 0.5).abs() < 1e-6);
     }
 
     #[test]

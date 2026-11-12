@@ -105,7 +105,7 @@ pub fn build_rows(workspace: &Workspace, panes: &PaneFacts, sample: &WindowSampl
 Também puras, em `task_manager.rs`:
 
 - **Eixo do tempo**: o ponto mais recente fica na borda direita. Cada ponto fica a `(último.at − ponto.at) / history_seconds × largura` da direita. O tempo de referência é o **instante da última amostra**, não o relógio do quadro: o gráfico só anda quando chega dado, sem redesenho contínuo (§4).
-- **Lacuna**: dois pontos consecutivos com `at` a mais de 1,5 s um do outro quebram a série. Cada trecho contínuo vira uma `Polyline` e uma `Area` próprias ([ADR-0094](0094-polilinha-e-area-no-render.md) §1), e um trecho de um ponto só não desenha linha. É a lacuna do RF-24.12.
+- **Lacuna** (limiar revisto pelo [ADR-0100](0100-amostragem-do-gerenciador-sob-carga.md): **3,5 s**, não 1,5 s): dois pontos consecutivos com `at` a mais de 3,5 s um do outro quebram a série. Cada trecho contínuo vira uma `Polyline` e uma `Area` próprias ([ADR-0094](0094-polilinha-e-area-no-render.md) §1), e um trecho de um ponto só não desenha linha. É a lacuna do RF-24.12.
 - **Escalas**: a CPU é fixa em 0–1. Memória e disco usam o maior valor do período visível, arredondado para cima ao próximo `1, 2 ou 5 × 10ⁿ` na unidade de exibição. Com tudo em zero, o topo é o menor degrau da unidade (1 KB, 1 KB/s), para a linha ficar no chão e não no meio.
 > **Revisto pelo [ADR-0099](0099-ajustes-de-escala-e-lista-do-gerenciador.md)** (2026-11-11, aval visual do dono dado): o topo da escala de memória e disco é o arredondamento de **1,2 × o maior valor visível** (folga para o rótulo do topo não ficar sob a linha), e o histórico (§1) guarda **um** ponto além de `history_seconds`, para a linha entrar pela borda esquerda em vez de começar uma amostra depois dela.
 

@@ -71,12 +71,6 @@ impl WindowSample {
     pub(crate) fn remove_tabs(&mut self, tabs: &[TabId]) {
         self.panes.retain(|(tab, _), _| !tabs.contains(tab));
     }
-
-    /// Sum of every process of the sample: the point the window's charts get
-    /// (RF-24.8).
-    pub(crate) fn totals(&self) -> Totals {
-        totals(self.panes.values().flatten())
-    }
 }
 
 /// Sum of a set of processes (CPU, memory, disk), RF-24.15 and RF-24.8.
@@ -344,7 +338,7 @@ mod tests {
         sample
             .panes
             .insert((tab(2), pane(0)), vec![stat(2, Some(0.2), 20, 0.0)]);
-        let sum = sample.totals();
+        let sum = crate::app_task_manager::chart_totals(sample.panes.values());
         assert_eq!(sum.memory, 30);
         assert!((sum.cpu.unwrap() - 0.3).abs() < 1e-6);
     }

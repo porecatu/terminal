@@ -66,12 +66,32 @@ use super::*;
 /// The sampling clock (ADR-0093 §4, RF-24.24): once a second.
 pub(crate) const SAMPLE_PERIOD: Duration = Duration::from_secs(1);
 
-/// An answer that has not come back after this long is taken as lost (the
-/// thread died with a request in hand): the sampler is dropped and recreated
-/// at the next deadline. Without it a panicked thread would leave "the
-/// previous answer has not arrived" true forever and the manager would stop
-/// being fed. Far above the time of any real scan.
+/// An answer that has not come back after this long **and** whose thread has
+/// ended is taken as lost (the thread died with a request in hand): the
+/// sampler is dropped and recreated at the next deadline. Without it a
+/// panicked thread would leave "the previous answer has not arrived" true
+/// forever and the manager would stop being fed.
 const ANSWER_LOST_AFTER: Duration = Duration::from_secs(10);
+
+/// An answer that has not come back after this long is taken as lost even
+/// with the thread alive (a thread stuck in a system call). A scan that is
+/// only slow, on a machine under load, is waited for: recreating the sampler
+/// restarts its CPU baseline, so every process would read as `None` again
+/// (ADR-0100).
+const ANSWER_STUCK_AFTER: Duration = Duration::from_secs(60);
+
+/// The next sampling deadline (ADR-0100): anchored to the one that just
+/// fired, so a late tick does not push every later sample back (the clock does
+/// not drift). A tick later than a whole period -- the machine was stalled --
+/// restarts the grid from `now`, with no burst of catch-up samples.
+pub(crate) fn next_deadline(due: Instant, now: Instant) -> Instant {
+    let anchored = due + SAMPLE_PERIOD;
+    if anchored > now {
+        anchored
+    } else {
+        now + SAMPLE_PERIOD
+    }
+}
 
 /// The window's key of a pane inside a sample: the sampler's key without the
 /// window, since one sample belongs to one window.
@@ -119,10 +139,14 @@ impl SampleTicket {
         }
     }
 
-    /// Whether the pending answer is older than [`ANSWER_LOST_AFTER`].
-    pub(crate) fn is_lost(&self, now: Instant) -> bool {
-        self.pending_since
-            .is_some_and(|since| now.saturating_duration_since(since) >= ANSWER_LOST_AFTER)
+    /// Whether the pending answer is lost: older than [`ANSWER_LOST_AFTER`]
+    /// with the sampler thread ended, or older than [`ANSWER_STUCK_AFTER`]
+    /// whatever the thread does. A slow thread is waited for.
+    pub(crate) fn is_lost(&self, now: Instant, thread_finished: bool) -> bool {
+        self.pending_since.is_some_and(|since| {
+            let waited = now.saturating_duration_since(since);
+            (thread_finished && waited >= ANSWER_LOST_AFTER) || waited >= ANSWER_STUCK_AFTER
+        })
     }
 
     /// The sampler went away (dropped, or found dead): nothing is pending
@@ -207,9 +231,30 @@ pub(crate) fn apply_to_window(
         panes,
     };
     history.push(
-        HistoryPoint::from_totals(taken_at, view.sample.totals()),
+        HistoryPoint::from_totals(taken_at, chart_totals(view.sample.panes.values())),
         history_seconds,
     );
+}
+
+/// The totals of a measured window's part, for its chart point. A part with
+/// **no process at all** (every pane is a note: SSH, exited) is zero CPU, not
+/// a missing reading -- otherwise the CPU chart alone would open a gap while
+/// memory and disk go on (ADR-0100). A part with processes that have no CPU
+/// reading yet (the sampler's first sample) stays `None`: that is a real gap.
+pub(crate) fn chart_totals<'a>(
+    panes: impl IntoIterator<Item = &'a Vec<ProcessStat>>,
+) -> crate::task_manager::Totals {
+    let mut any = false;
+    let mut sum = crate::task_manager::totals(
+        panes
+            .into_iter()
+            .inspect(|stats| any |= !stats.is_empty())
+            .flatten(),
+    );
+    if !any && sum.cpu.is_none() {
+        sum.cpu = Some(0.0);
+    }
+    sum
 }
 
 /// ADR-0098 §3: the part of a window **without** the manager open, with
@@ -223,10 +268,7 @@ pub(crate) fn apply_to_history(
     history_seconds: u32,
 ) {
     history.push(
-        HistoryPoint::from_totals(
-            taken_at,
-            crate::task_manager::totals(panes.values().flatten()),
-        ),
+        HistoryPoint::from_totals(taken_at, chart_totals(panes.values())),
         history_seconds,
     );
 }
@@ -985,11 +1027,15 @@ impl App {
             self.stop_task_manager_sampler_if_unused();
             return;
         }
-        if self.task_manager_ticket.is_lost(now) {
+        let thread_finished = self
+            .task_manager_sampler
+            .as_ref()
+            .is_none_or(Sampler::is_finished);
+        if self.task_manager_ticket.is_lost(now, thread_finished) {
             self.task_manager_sampler = None;
             self.task_manager_ticket.forget_pending();
         }
-        self.task_manager_next_sample = Some(now + SAMPLE_PERIOD);
+        self.task_manager_next_sample = Some(next_deadline(due, now));
         if self.task_manager_ticket.is_pending() {
             return;
         }
@@ -1614,12 +1660,42 @@ mod tests {
     fn a_pending_answer_is_lost_only_after_the_limit() {
         let now = Instant::now();
         let mut ticket = SampleTicket::default();
-        assert!(!ticket.is_lost(now));
+        assert!(!ticket.is_lost(now, true));
         ticket.sent(1, now);
-        assert!(!ticket.is_lost(now + Duration::from_secs(9)));
-        assert!(ticket.is_lost(now + ANSWER_LOST_AFTER));
+        assert!(!ticket.is_lost(now + Duration::from_secs(9), true));
+        assert!(ticket.is_lost(now + ANSWER_LOST_AFTER, true));
         ticket.forget_pending();
-        assert!(!ticket.is_lost(now + Duration::from_secs(60)));
+        assert!(!ticket.is_lost(now + Duration::from_secs(120), true));
+    }
+
+    #[test]
+    fn a_slow_thread_is_waited_for_and_only_a_stuck_one_is_dropped() {
+        let now = Instant::now();
+        let mut ticket = SampleTicket::default();
+        ticket.sent(1, now);
+        // Alive but slow (a scan under load): not lost, however long past 10 s.
+        assert!(!ticket.is_lost(now + ANSWER_LOST_AFTER, false));
+        assert!(!ticket.is_lost(now + Duration::from_secs(59), false));
+        // Alive and silent for a minute: stuck, dropped.
+        assert!(ticket.is_lost(now + ANSWER_STUCK_AFTER, false));
+    }
+
+    #[test]
+    fn the_deadline_is_anchored_and_a_big_delay_restarts_the_grid() {
+        let due = Instant::now();
+        let ms = Duration::from_millis;
+        // A tick 300 ms late: the next one is still on the 1 s grid.
+        assert_eq!(next_deadline(due, due + ms(300)), due + SAMPLE_PERIOD);
+        // On time.
+        assert_eq!(next_deadline(due, due), due + SAMPLE_PERIOD);
+        // Late by more than a period: from `now`, no burst of catch-up.
+        let late = due + ms(2500);
+        assert_eq!(next_deadline(due, late), late + SAMPLE_PERIOD);
+        // Exactly one period late: the anchored deadline is `now`, not ahead.
+        assert_eq!(
+            next_deadline(due, due + SAMPLE_PERIOD),
+            due + SAMPLE_PERIOD * 2
+        );
     }
 
     // --- sampler needed ---------------------------------------------------
@@ -1825,7 +1901,7 @@ mod tests {
         apply_to_history(&mut history, later, &HashMap::new(), 60);
         assert_eq!(history.points().len(), 2);
         let point = history.latest().unwrap();
-        assert_eq!((point.at, point.memory, point.cpu), (later, 0, None));
+        assert_eq!((point.at, point.memory, point.cpu), (later, 0, Some(0.0)));
     }
 
     #[test]
@@ -1888,8 +1964,25 @@ mod tests {
         apply_to_window(&mut view, &mut history, at, HashMap::new(), 60);
         assert_eq!(view.sample.taken_at, Some(at));
         let point = history.latest().unwrap();
-        assert_eq!((point.memory, point.cpu), (0, None));
+        // No process at all is zero CPU, not a gap in the CPU chart only.
+        assert_eq!((point.memory, point.cpu), (0, Some(0.0)));
         assert_eq!(point.disk_per_sec, 0.0);
+    }
+
+    #[test]
+    fn processes_without_a_cpu_reading_yet_stay_a_gap() {
+        let at = Instant::now();
+        let mut view = TaskManagerView::new(None);
+        let mut history = TaskManagerHistory::default();
+        let mut part = HashMap::new();
+        part.insert((tab(1), pane(0)), vec![stat(1, None, 100)]);
+        apply_to_window(&mut view, &mut history, at, part, 60);
+        assert_eq!(history.latest().unwrap().cpu, None);
+        // Panes that are all notes (empty lists) are zero.
+        let mut part = HashMap::new();
+        part.insert((tab(2), pane(0)), Vec::new());
+        apply_to_history(&mut history, at + Duration::from_secs(1), &part, 60);
+        assert_eq!(history.latest().unwrap().cpu, Some(0.0));
     }
 
     #[test]

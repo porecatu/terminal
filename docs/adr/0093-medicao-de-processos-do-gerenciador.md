@@ -72,6 +72,8 @@ Isso respeita o ADR-0007: o temporizador é o `WaitUntil` (nenhuma thread dorme 
 
 > **Revisto pelo [ADR-0098](0098-monitoramento-em-segundo-plano-do-gerenciador.md)** (2026-11-10, a pedido do dono): o amostrador existe enquanto alguma janela tem o gerenciador aberto **ou** enquanto `[task_manager] background_monitoring = true` (default `false`). Com a chave ligada, ele nasce no arranque e não cai ao fechar o último gerenciador; desligá-la com tudo fechado o derruba no tick seguinte. O ritmo, o pedido que não acumula e o relógio do `WaitUntil` não mudam.
 
+> **Revisto pelo [ADR-0100](0100-amostragem-do-gerenciador-sob-carga.md)** (2026-11-12): o prazo seguinte é ancorado no que acabou de vencer (`due + 1 s`, não `now + 1 s`), e o amostrador só é dado por perdido com a thread encerrada (ou presa por 60 s): uma varredura lenta é esperada, porque recriar o `System` reinicia a linha de base da CPU.
+
 ### 5. O pedido e a resposta
 
 ```rust
@@ -104,6 +106,8 @@ pub struct SampleResult {
     pub panes: Vec<(K, Vec<ProcessStat>)>,
 }
 ```
+
+> **Revisto pelo [ADR-0100](0100-amostragem-do-gerenciador-sob-carga.md)** (2026-11-12): os passos 1 a 4 acima mudam. A varredura é em duas passadas (a lista inteira só com pai e início; CPU, memória e disco só nos membros), a CPU é a diferença do `accumulated_cpu_time` entre duas amostras sobre o tempo real, por `(pid, start_time)` (o `cpu_usage()` do `sysinfo` erra a segunda leitura no Windows), e o disco de um processo visto pela primeira vez é zero. `taken_at` é o ponto médio da varredura.
 
 `K` é genérico no `porecatu-pty` e, na UI, é `(WindowId, TabId, PaneId)`. O crate não conhece janela nem aba.
 

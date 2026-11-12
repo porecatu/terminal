@@ -11,9 +11,10 @@ use porecatu_render::Rect;
 use super::{HistoryPoint, TaskManagerHistory};
 
 /// Two consecutive points further apart than this break the series
-/// (RF-24.12, ADR-0095 §6): the sampler beats at 1 s, so 1.5 s means a sample
-/// was missed or the task manager was closed.
-pub(crate) const GAP_SECONDS: f64 = 1.5;
+/// (RF-24.12, ADR-0100): the sampler beats at 1 s, so 3.5 s means more than
+/// two samples were missed, or the task manager was closed. A machine under
+/// load delays samples by a second or two; that is not a gap.
+pub(crate) const GAP_SECONDS: f64 = 3.5;
 
 /// Distance between the vertical grid lines (ADR-0096 §3).
 pub(crate) const GRID_STEP_SECONDS: u32 = 10;
@@ -306,18 +307,28 @@ mod tests {
     }
 
     #[test]
-    fn a_gap_over_one_and_a_half_seconds_breaks_the_series() {
+    fn a_gap_over_three_and_a_half_seconds_breaks_the_series() {
         let base = Instant::now();
         let h = history(base, &cpu_at(&[0.0, 1.0, 2.0, 12.0, 13.0], 0.2), 60);
         let runs = series(&h, Metric::Cpu, rect(), 1.0, 60);
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].len(), 3);
         assert_eq!(runs[1].len(), 2);
-        // Exactly 1.5 s is still contiguous; just above is not.
-        let h = history(base, &cpu_at(&[0.0, 1.5, 3.0], 0.2), 60);
+        // Exactly 3.5 s is still contiguous; just above is not.
+        let h = history(base, &cpu_at(&[0.0, 3.5, 7.0], 0.2), 60);
         assert_eq!(series(&h, Metric::Cpu, rect(), 1.0, 60).len(), 1);
-        let h = history(base, &cpu_at(&[0.0, 1.6], 0.2), 60);
+        let h = history(base, &cpu_at(&[0.0, 3.6], 0.2), 60);
         assert_eq!(series(&h, Metric::Cpu, rect(), 1.0, 60).len(), 2);
+    }
+
+    #[test]
+    fn samples_delayed_by_load_do_not_break_the_series() {
+        let base = Instant::now();
+        // A slow scan or a late tick: 1.2 s to 2.5 s between points.
+        let h = history(base, &cpu_at(&[0.0, 1.2, 3.7, 4.9, 6.0], 0.2), 60);
+        let runs = series(&h, Metric::Cpu, rect(), 1.0, 60);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].len(), 5);
     }
 
     #[test]

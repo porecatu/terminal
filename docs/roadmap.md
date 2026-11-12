@@ -1348,3 +1348,11 @@ Fora da ordem de fases, a pedido do dono do produto, como emenda do PRD-024. Uma
 **Escopo:** RF-24.31 a RF-24.37.
 
 **Dívida:** o aval visual do dono para o rodapé, inclusive a latência da recarga entre o clique e a alternância mudar; a verificação ao vivo no Windows (ligar, sair e voltar sem vão; arranque com a chave ligada; desligar com tudo fechado para a medição; falha de gravação com o arquivo só de leitura); leitor de tela com o interruptor; macOS e Linux ao vivo.
+
+## Depois do v1 — amostragem do gerenciador sob carga — implementado
+
+Correção a pedido do dono: com a máquina sob carga alta os gráficos abriam lacunas e mostravam pouca CPU, e um processo a ~100% de um shell do Porecatu quase não aparecia. Decisão no [ADR-0100](adr/0100-amostragem-do-gerenciador-sob-carga.md); achados em [descobertas](descobertas.md).
+
+**Feito, verificado só por teste automatizado:** CPU por `accumulated_cpu_time` por `(pid, start_time)` em `porecatu-pty/src/stats.rs` (`cpu_fraction`; o `cpu_usage()` do `sysinfo` erra a segunda leitura no Windows); varredura em duas passadas (lista inteira só com pai e início, medição só dos membros); `taken_at` no ponto médio; prazo ancorado (`next_deadline`); amostrador perdido só com a thread encerrada ou presa por 60 s (`Sampler::is_finished`, `SampleTicket::is_lost(now, thread_finished)`); `GAP_SECONDS` de 1,5 para 3,5; janela medida sem processo local grava CPU `0.0` (`chart_totals`). Revisões nos ADR-0093 §4/§5 e ADR-0095 §6.
+
+**Dívida:** a verificação ao vivo no Windows sob carga (laços em 2 ou 3 abas: o processo aparece com CPU alta em até 3 s, 2 minutos sem lacuna, fechar e reabrir o gerenciador por mais de 4 s ainda mostra a lacuna, CPU conferida com o Gerenciador de Tarefas do Windows); medir a duração da varredura sob carga (o ADR-0093 mediu 9,5 ms em repouso); se a causa observada pelo dono for o `OpenConsole.exe` ou o `porecatu.exe`, fora da árvore do shell, é ADR novo.
