@@ -14,7 +14,9 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
-## [Não publicado]
+## [0.9.11] - 2026-11-12
+
+Gerenciador de tarefas na janela (botão do app), com gráficos de CPU, memória e disco e a lista de processos. Substitui a 0.9.10, retirada.
 
 ### Adicionado
 
@@ -47,7 +49,29 @@ primeiro release.
   (`descendants_of`) passa a existir também, usada só pelo gerenciador; o
   fechamento de aba nessas plataformas não muda.
 
-## [0.9.10] - 2026-11-07
+### Corrigido
+
+- **Gerenciador de tarefas — gráficos e lista**
+  ([ADR-0099](docs/adr/0099-ajustes-de-escala-e-lista-do-gerenciador.md)): as
+  linhas entram pela borda esquerda do gráfico em vez de começar uma amostra
+  depois dela, a escala automática de memória e disco arredonda 1,2x o maior
+  valor visível (a linha não cobre mais o rótulo do topo) e as linhas da
+  lista ficam a `row_padding_x` das réguas do cabeçalho e do rodapé.
+- **Gerenciador de tarefas — amostragem sob carga**
+  ([ADR-0100](docs/adr/0100-amostragem-do-gerenciador-sob-carga.md)): a CPU
+  sai do tempo acumulado do processo, calculado pelo amostrador; a varredura
+  roda em duas passadas; o relógio do tick é ancorado no prazo vencido; um
+  amostrador lento deixa de ser dado por perdido e o limiar de lacuna do
+  gráfico sobe de 1,5 s para 3,5 s.
+
+### Dependências
+
+- `russh` 0.65.0 → 0.65.1 e `unicode-script` 0.5.8 → 0.5.9.
+
+## [0.9.10] - 2026-11-07 [YANKED]
+
+> Tag e release retiradas em 2026-11-12; todo o conteúdo abaixo segue
+> publicado na [0.9.11](#0911---2026-11-12).
 
 Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popover "Mover para janela…") e restauração de sessão nomeada na janela atual. Substitui a 0.9.9, retirada.
 
@@ -103,7 +127,8 @@ Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popov
 ## [0.9.9] - 2026-11-06 [YANKED]
 
 > Tag e release retiradas em 2026-11-07; todo o conteúdo abaixo segue
-> publicado na [0.9.10](#0910---2026-11-07).
+> publicado na [0.9.10](#0910---2026-11-07-yanked), por sua vez incluída na
+> [0.9.11](#0911---2026-11-12).
 
 Abas fixadas (apps que abrem junto com o Porecatu), relógio do sistema na barra de status em tela cheia e botão de menu do app sem fundo nem borda.
 
