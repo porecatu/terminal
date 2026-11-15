@@ -63,6 +63,12 @@ O [ADR-0018](adr/0018-composicao-de-frame.md) acrescenta duas coisas a esse crat
 >       └─────────── porecatu-ssh   (russh, keyring, tokio isolado)
 > ```
 
+> **Proposto pelo [ADR-0104](adr/0104-crate-porecatu-remote.md) ([PRD-025](prd/prd-025-acesso-remoto.md), acesso remoto) — não implementado.** Um crate folha novo, **`porecatu-remote`**, no andar de `porecatu-ssh` e sem dependência de nenhum crate do projeto: conexão com o Porecatu Relay, sessões Noise com os aparelhos, controle de fluxo da grade, cofre próprio (`keyring` no módulo `vault`) e `remote_devices.json`. Tem runtime `tokio` próprio, criado quando `[remote] enabled` liga e destruído quando desliga. Depende, por versão exata, do crate externo `porecatu-protocol` ([porecatu/protocol](https://github.com/porecatu/protocol)), cujos tipos re-exporta para `porecatu-ui`, que é quem traduz entre o domínio e o fio, como já traduz `Config` em `TermParams`.
+>
+> ```
+> porecatu-ui ──── porecatu-remote   (porecatu-protocol, tokio isolado, keyring)
+> ```
+
 ---
 
 ## 2. Modelo de threading
@@ -139,6 +145,8 @@ O mesmo vale para o chrome: mudança de hover, foco ou config marca a barra de a
 | Estado remoto do Git, por repositório | main thread | exclusivo, sem lock — **um por processo**, não por janela ([ADR-0052](adr/0052-sincronizacao-com-o-remoto-do-git.md) §3) |
 | Lista de abas fixadas (`PinnedRegistry`) e cache de texturas dos ícones | main thread | exclusivo, sem lock — **um por processo** ([ADR-0086](adr/0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md) §2, [ADR-0088](adr/0088-icone-da-aba-fixada.md) §5); a thread do ícone devolve resultado chaveado por `PinnedKey` |
 | Endereço do `Wakeup` de cada painel (`PaneAddress`) | main thread escreve, thread de leitura lê | `Arc<Mutex<PaneAddress>>` no `PaneRuntime`, um por painel; escrito só em `App::transfer` ([ADR-0090](adr/0090-transferencia-de-abas-entre-janelas.md) §2) |
+| *Proposto:* estado do acesso remoto — ids do protocolo, assinaturas, aparelhos conectados, confirmações pendentes | main thread | exclusivo, sem lock — **um por processo** ([ADR-0105](adr/0105-espelhamento-da-grade-e-input-remoto.md) §1, [ADR-0107](adr/0107-acoes-remotas-sobre-o-workspace.md) §3); o mapa de ids é re-chaveado em `App::transfer` |
+| *Proposto:* sessões Noise, última grade enviada por assinatura, lista de aparelhos | runtime de `porecatu-remote` | invisível à main thread; conversa por `Command`/`RemoteEvent` ([ADR-0104](adr/0104-crate-porecatu-remote.md) §3) |
 
 `Workspace` só é tocado pela main thread, então não precisa de lock. `Config` é imutável e trocado por inteiro no hot reload — nenhum lock, só uma troca de `Arc`.
 
@@ -185,6 +193,30 @@ PTY read (thread dedicada)
 ```
 
 O snapshot existe para que o `Mutex` seja liberado antes do trabalho de GPU. Renderizar segurando o lock faria a thread de leitura esperar a GPU.
+
+### Do PTY até o celular, e de volta — proposto
+
+Pelo [ADR-0105](adr/0105-espelhamento-da-grade-e-input-remoto.md), ainda não implementado:
+
+```
+Wakeup::TabDirty (painel assinado por algum aparelho)
+  |
+  +- main thread: marca "sujo para o remoto" (sem request_redraw)
+       |
+       +- prazo do espelhamento (<= 30/s, WaitUntil)
+            +- Terminal::snapshot_live_into  -> tela viva, independente da rolagem do desktop
+            +- porecatu-ui: GridSnapshot -> linhas do protocolo (função pura)
+            +- RemoteHost::send(Frame)       (try_send, nunca bloqueia)
+                 |
+                 +- porecatu-remote: último quadro vence; diff contra o último enviado;
+                    janela de 2 sem grid-ack; CBOR; Noise; relay
+
+celular: key / text / paste
+  |
+  +- porecatu-remote -> RemoteEvent -> Wakeup -> main thread
+       +- TermKey / texto -> encode_key / encode_text / wrap_paste (porecatu-term/keys.rs)
+            +- Terminal::write   (o mesmo caminho do passo 3 do ADR-0008, sem tabela de atalhos)
+```
 
 ---
 
@@ -361,6 +393,8 @@ Config inválida **nunca** derruba o app nem limpa a tela. O usuário está edit
 > Duas decisões vizinhas: o enum `Action` que o parser de `[keybindings]` produz nasce em `porecatu-core`, porque `config` não pode depender de `ui` ([ADR-0029](adr/0029-enum-de-acao-e-gramatica-de-tecla.md)); e um tema nomeado só declara **cor**, nunca fonte ou dimensão, o que mantém `theme.cycle` na classe A ([ADR-0031](adr/0031-temas-nomeados.md)). Desde o [ADR-0067](adr/0067-temas-em-arquivos-proprios.md) o tema é um arquivo `thm_<nome>.toml` ao lado do `porecatu.toml` e é o único lugar de cor; o watcher, que já assistia a pasta, recarrega os temas como a própria config.
 
 > **Acrescentado pelo [ADR-0056](adr/0056-catalogo-de-textos-da-interface.md) §9.** O mesmo desenho recarrega o **catálogo de idioma**: `[general] language` é classe A, e editar um arquivo em `locales/`, ao lado do `porecatu.toml`, também dispara recarga, por um segundo watch não recursivo. O catálogo é montado na thread do watcher e chega por `EventLoopProxy`; se falhar, o anterior continua.
+
+> **Proposto pelo [ADR-0104](adr/0104-crate-porecatu-remote.md) §7 — não implementado.** `[remote] enabled` e `relay_url` são classe A: a recarga cria, destrói ou reconecta o `RemoteHost`, sem tocar PTY nem grade. O token do relay **não** é chave de config: mora no cofre do sistema, gravado pela tela de configurações. A lista de aparelhos pareados também não é config: é `remote_devices.json`, ao lado do `session.json`, escrita só por gesto ([ADR-0106](adr/0106-pareamento-identidade-e-autorizacao.md) §5), pelo mesmo motivo que tirou as fixadas do arquivo de sessão.
 
 ### 6.1 O arquivo de projeto não é config do app
 
