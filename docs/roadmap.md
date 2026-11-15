@@ -1190,7 +1190,7 @@ A coluna **Desenhado** marca o que já tem alvo visual aprovado no canvas. Estar
 | Paleta de comandos | [PRD-008](prd/prd-008-paleta-de-comandos.md) *(rascunho)* | sim, `[v2]` |
 | Configuração por GUI | [ADR-0003](adr/0003-formato-de-configuracao.md), [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) | sim, `[v2]` |
 | Faixa de identidade da barra de título (logo, nome do app, título da aba ativa) | [ADR-0009](adr/0009-referencia-visual-e-reconciliacao.md) (parcial, ver [ADR-0027](adr/0027-controles-de-janela-e-resize-proprios.md)), [PRD-004](prd/prd-004-aparencia-do-chrome.md) | sim, `[v2]` |
-| Multiplexação remota | [PRD-000](prd/prd-000-visao-de-produto.md) | não |
+| Multiplexação remota — sessão vivendo num servidor; operar a sessão do desktop por um app mobile saiu daqui, ver "acesso remoto" abaixo | [PRD-000](prd/prd-000-visao-de-produto.md), [PRD-025](prd/prd-025-acesso-remoto.md) | não |
 | Plugins e config programável | [ADR-0003](adr/0003-formato-de-configuracao.md) | não |
 | Persistir scrollback | [PRD-003](prd/prd-003-persistencia-de-sessao.md) | não |
 | ~~Mover aba entre janelas~~ — saiu desta tabela: ver "abas e grupos entre janelas" abaixo | [PRD-001](prd/prd-001-abas.md), [PRD-022](prd/prd-022-abas-e-grupos-entre-janelas.md) | não |
@@ -1360,3 +1360,22 @@ Correção a pedido do dono: com a máquina sob carga alta os gráficos abriam l
 **Feito, verificado só por teste automatizado:** CPU por `accumulated_cpu_time` por `(pid, start_time)` em `porecatu-pty/src/stats.rs` (`cpu_fraction`; o `cpu_usage()` do `sysinfo` erra a segunda leitura no Windows); varredura em duas passadas (lista inteira só com pai e início, medição só dos membros); `taken_at` no ponto médio; prazo ancorado (`next_deadline`); amostrador perdido só com a thread encerrada ou presa por 60 s (`Sampler::is_finished`, `SampleTicket::is_lost(now, thread_finished)`); `GAP_SECONDS` de 1,5 para 3,5; janela medida sem processo local grava CPU `0.0` (`chart_totals`). Revisões nos ADR-0093 §4/§5 e ADR-0095 §6.
 
 **Dívida:** a verificação ao vivo no Windows sob carga (laços em 2 ou 3 abas: o processo aparece com CPU alta em até 3 s, 2 minutos sem lacuna, fechar e reabrir o gerenciador por mais de 4 s ainda mostra a lacuna, CPU conferida com o Gerenciador de Tarefas do Windows); medir a duração da varredura sob carga (o ADR-0093 mediu 9,5 ms em repouso); se a causa observada pelo dono for o `OpenConsole.exe` ou o `porecatu.exe`, fora da árvore do shell, é ADR novo.
+
+## Depois do v1 — acesso remoto — planejado
+
+Fora da ordem de fases, a pedido do dono do produto: operar a sessão viva do Porecatu a partir de um app mobile, por um servidor intermediário auto-hospedado e cego. Requisitos no [PRD-025](prd/prd-025-acesso-remoto.md) (rascunho); decisões nos [ADR-0103](adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a [ADR-0108](adr/0108-superficies-de-ui-do-acesso-remoto.md) (propostos). O recurso tem três projetos irmãos, cada um com roadmap próprio: o protocolo ([porecatu/protocol](https://github.com/porecatu/protocol)), o relay ([porecatu/relay](https://github.com/porecatu/relay)) e o app ([porecatu/remote](https://github.com/porecatu/remote)). Este roadmap cobre só o lado do host.
+
+**Dependência externa:** as etapas 2 em diante precisam do crate `porecatu-protocol` publicado (fase P1 do roadmap do protocolo); a verificação de ponta a ponta (etapa 6) precisa de um relay rodando (R1 do relay) e de um cliente que fale o protocolo (o cliente de teste do `porecatu-protocol` serve antes do app).
+
+**Etapas:**
+
+1. **Documentação e decisão — em revisão.** PRD-025; ADR-0103 a ADR-0108; emenda no PRD-000; blockquotes de revisão nos ADR-0007, ADR-0072 e ADR-0073; arquitetura, CLAUDE.md e a tabela de ADRs. A seção `[remote]` do [arquivo de exemplo](config/porecatu.example.toml), as ações `remote.*` do [catálogo](reference/acoes.md), as cores e a dimensão do QR e a especificação visual entram nos PRs de implementação, porque os testes reprovariam antes do código e porque a anatomia depende do aval.
+2. **Crate `porecatu-remote` ([ADR-0104](adr/0104-crate-porecatu-remote.md)).** Runtime sob demanda, conexão com o relay, registro do `host_id`, canais, handshakes `XX` e `IK`, registros, `vault`, `remote_devices.json`, reconexão. Testes contra um relay falso em memória e um cliente de teste; nada de GUI.
+3. **Espelhamento ([ADR-0105](adr/0105-espelhamento-da-grade-e-input-remoto.md)).** `snapshot_live_into` e `history_into` em `porecatu-term`; mapa de ids do protocolo em `App` (re-chaveado por `transfer`); árvore do workspace; conversão `GridSnapshot` → linhas do protocolo como função pura, conferida pelos vetores do protocolo; diff e controle de fluxo em `porecatu-remote`; input pelo codificador de `keys.rs`.
+4. **Ações ([ADR-0107](adr/0107-acoes-remotas-sobre-o-workspace.md)).** Funções com alvo explícito e "sem ativar" extraídas onde faltarem; confirmação no celular; `busy` por modo de captura; `last-tab`. Teste que fixa a **ordem resultante** de cada ação, como pede o CLAUDE.md quando o core anda à frente da UI.
+5. **Superfícies de UI ([ADR-0108](adr/0108-superficies-de-ui-do-acesso-remoto.md)), depois do aval visual.** Grupo "Acesso remoto", QR, diálogo de pareamento, botão de aparelhos conectados e popover, aviso de conexão, ações `remote.*`, textos nos cinco idiomas, árvore de acessibilidade; valores novos nos três lugares.
+6. **Verificação de ponta a ponta.** Desktop + relay local + cliente de teste: parear, conectar, assinar quatro painéis com `cargo build` rodando, digitar, fechar com confirmação, mover entre janelas, revogar com sessão viva, desligar com sessão viva, relay caindo e voltando.
+
+**Escopo:** RF-25.1 a RF-25.29, RNF-25.1 a RNF-25.6.
+
+**Dívida prevista** (a confirmar no fechamento de cada etapa): verificação ao vivo com o app real em Android e iOS; macOS e Linux (cofre do sistema em cada um, em especial Linux sem serviço de segredos); leitura do QR por câmeras reais em monitores de DPI diferentes; leitor de tela com o botão e o popover de aparelhos; medição do custo na main thread com quatro painéis assinados sob carga.

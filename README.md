@@ -68,6 +68,14 @@ O Windows é a plataforma mais testada no uso real. Linux e macOS passam pelos t
 
 Para quem quer contribuir: [CONTRIBUTING.md](CONTRIBUTING.md), [arquitetura](docs/arquitetura.md) e as [decisões técnicas](docs/adr/).
 
+## Projetos relacionados
+
+Em planejamento: acessar a sessão do Porecatu pelo celular ([PRD-025](docs/prd/prd-025-acesso-remoto.md)). Ainda não há código.
+
+- [Porecatu Remote](https://github.com/porecatu/remote): o app para Android e iOS.
+- [Porecatu Relay](https://github.com/porecatu/relay): o servidor que você hospeda para o desktop e o celular se encontrarem. Ele não consegue ler o que passa por ele.
+- [porecatu-protocol](https://github.com/porecatu/protocol): a especificação do protocolo entre os três.
+
 ## O nome
 
 Porecatu é uma cidade do norte do Paraná. O nome vem do tupi e significa **"salto bonito"**.

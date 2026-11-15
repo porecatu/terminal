@@ -61,6 +61,8 @@ tokio = { version = "…", default-features = false, features = ["rt-multi-threa
 - **`dsa` desligado**: DSA está desabilitado no OpenSSH desde 2015.
 - **`tokio` não entra em `[workspace.dependencies]`**: declarado só em `porecatu-ssh`, para que nenhum outro crate o importe por conveniência. A versão é a que o `russh` 0.65.0 aceita, fixada no mesmo PR.
 
+> **Revisto pelo [ADR-0104](0104-crate-porecatu-remote.md) §2 (proposto).** `porecatu-remote`, outro crate de rede folha, também declara `tokio`, com runtime próprio. `tokio` continua fora de `[workspace.dependencies]`; a versão exata é a mesma nos dois crates e sobe junto, e `cargo tree -i tokio` passa a mostrar dois caminhos esperados. Nenhum dos dois crates conhece o runtime do outro.
+
 A verificação de licença do [ADR-0010](0010-licenciamento.md) roda sobre a **árvore inteira** que `porecatu-ssh` traz (`cargo tree -p porecatu-ssh -e normal`), não só sobre os dois nomes acima, e o resultado entra no PR.
 
 ### 3. Runtime: `tokio` isolado, criado sob demanda
