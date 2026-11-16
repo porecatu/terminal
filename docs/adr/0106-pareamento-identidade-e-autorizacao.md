@@ -8,7 +8,7 @@
 
 Quem controla uma sessão remota digita num terminal do desktop: é execução de código com o usuário dele. O dono decidiu que um aparelho pareado acessa **tudo**, sem permissão por aparelho; a segurança inteira está, portanto, em **quem consegue parear** e em **quão rápido dá para desfazer**.
 
-O protocolo já fixa a mecânica ([02 — Handshake e pareamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md)): chave estática X25519 e chave de roteamento Ed25519 do host; QR com relay, `host_id`, chave pública e um token de uso único de 5 minutos; handshake Noise `XX` para parear e `IK` depois; confirmação no host com nome e impressão digital do aparelho; `not-paired` e `revoked` como erros. Este ADR decide **como o Porecatu cumpre o lado do host**.
+O protocolo já fixa a mecânica ([02 — Handshake e pareamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md)): chave estática X25519 e chave de roteamento Ed25519 do host, pares distintos com o mesmo ciclo de vida; QR com a versão maior, o relay, o `host_id`, a chave pública estática, um token de uso único de 5 minutos e o nome do host; handshake Noise `XX` para parear e `IK` depois; confirmação no host com nome e impressão digital do aparelho, em até 120 s; `error { not-paired }` para aparelho fora da lista e `goodbye { revoked }` para a sessão viva de um aparelho revogado ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §2 e §9). Este ADR decide **como o Porecatu cumpre o lado do host**.
 
 ## Decisão
 
@@ -17,13 +17,14 @@ O protocolo já fixa a mecânica ([02 — Handshake e pareamento](https://github
 ### 1. Identidade do host
 
 - As duas chaves do host são geradas por `porecatu-remote` na primeira vez que o acesso é ligado, e guardadas no cofre do sistema pelo módulo `vault` do crate ([ADR-0104](0104-crate-porecatu-remote.md) §5). Nunca vão para arquivo nem para log.
-- **Recriar identidade** (RF-25.11) gera as duas de novo, num gesto só, e esvazia a lista de aparelhos — todos os pareamentos ficam inválidos de uma vez, porque os aparelhos guardaram a chave antiga e o `host_id` antigo.
+- **Recriar identidade** (RF-25.11) gera as duas de novo, num gesto só, e esvazia a lista de aparelhos — todos os pareamentos ficam inválidos de uma vez, porque os aparelhos guardaram a chave antiga e o `host_id` antigo. A especificação proíbe trocar uma sem a outra ([02 §1](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md)). Como o `host_id` é derivado da chave de roteamento ([01 §3](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md)), o host se registra de novo no relay com o endereço novo.
 - Cofre indisponível (Linux sem serviço de segredos): o acesso remoto **não liga**, com o motivo na tela de configurações. Não há fallback em arquivo: uma chave que dá acesso de digitação ao desktop não fica em texto no disco.
 
 ### 2. O QR
 
 - Só aparece por **gesto explícito** no grupo "Acesso remoto" da tela de configurações ([ADR-0108](0108-superficies-de-ui-do-acesso-remoto.md)), com o acesso ligado e a conexão com o relay de pé (sem relay, o QR não serviria e não é mostrado).
 - O token vive 5 minutos, é de uso único e há no máximo um vivo: mostrar de novo, fechar a tela de configurações ou trocar de grupo nela invalida o anterior. A contagem regressiva é visível.
+- O QR codifica a URI `porecatu://pair?v=…&relay=…&host=…&key=…&token=…&name=…`, na forma exata de [02 §3.1](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md), gerada pela função do crate de protocolo, nunca montada à mão. O **token do operador do relay não vai no QR**.
 - O QR é desenhado com `Quad`s ([ADR-0108](0108-superficies-de-ui-do-acesso-remoto.md) §2) a partir da matriz de módulos gerada pelo crate `qrcode` (MIT OR Apache-2.0), em `porecatu-ui`. Nenhuma primitiva nova no render.
 
 ### 3. Confirmação
@@ -31,12 +32,14 @@ O protocolo já fixa a mecânica ([02 — Handshake e pareamento](https://github
 - O pedido de pareamento (token válido) chega como `RemoteEvent` e abre um **diálogo modal** ([ADR-0014](0014-superficie-de-aviso-e-dialogo.md), largura e quebra do [ADR-0078](0078-largura-e-quebra-de-texto-do-dialogo.md)) **na janela de configurações**, que é onde o QR está — quem leu o QR está na frente dela. O diálogo mostra o nome do aparelho, a plataforma e a impressão digital em quatro grupos de quatro.
 - Botão padrão é **Recusar**; confirmar exige o botão "Parear". `Esc` recusa.
 - Sem resposta em 120 s, o diálogo fecha sozinho e o pedido é recusado (prazo no `WaitUntil`, como os outros temporizadores de UI).
-- Um segundo pedido chegando com um diálogo aberto é recusado (`busy` no host, `pair-rejected` no cliente): não há fila de confirmações.
+- Confirmado, o aparelho entra na lista e o host manda `pair-accepted`; a sessão segue no mesmo canal, a partir do `hello`, sem reconexão ([02 §3.2](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md)). Recusa, `Esc` ou prazo vencido mandam `pair-rejected { user-declined | timeout }` e fecham o canal.
+- Não há fila de confirmações. Um segundo pedido chegando com um diálogo aberto não tem token válido: o primeiro já o consumiu (a conferência consome o token mesmo quando o resto falha) e há no máximo um vivo. Recebe `pair-rejected { token-invalid }`, como qualquer token inválido; o protocolo não tem motivo `busy` para pareamento.
 
 ### 4. Conexão de aparelho pareado
 
 - O handshake `IK` traz a chave estática do aparelho; `porecatu-remote` confere contra a lista **na thread dele**, sem perguntar à main thread. Desconhecido: completa o handshake, manda `error { not-paired }` e fecha.
 - Conectado: `RemoteEvent::ClientConnected` com o aparelho; a main thread atualiza o indicador (RF-25.12) e empilha o aviso de informação (RF-25.14).
+- Handshake (`XX` ou `IK`) que falha ou não termina em 15 s desde o `channel-opened` fecha o canal com `close-channel { host-rejected }`, sem mensagem de aplicação ([02 §2](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md)). O prazo é regra da `HostChannel` do crate de protocolo, sobre o relógio de `porecatu-remote`.
 
 ### 5. `remote_devices.json`
 
@@ -58,6 +61,7 @@ Ao lado do `session.json`, no mesmo diretório de dados, com o padrão do `pinne
 ```
 
 - **Escrito só por gesto**: confirmar pareamento, revogar, recriar identidade. `last_seen` é a exceção: atualizado ao fim de cada sessão de um aparelho, na mesma thread.
+- Um aparelho cuja chave já está na lista e pareia de novo **substitui** a entrada (nome e data novos), sem duplicar ([02 §3.2](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md)).
 - Escrita atômica (arquivo temporário + renomear), na thread de `porecatu-remote`.
 - Só chaves **públicas**: o arquivo não dá acesso a nada se vazar. Mas quem consegue **escrever** nele acrescenta um aparelho; o mesmo vale para `porecatu.toml` e `session.json`, e o modelo de ameaça do protocolo deixa malware no desktop fora do escopo.
 - Arquivo ilegível: o acesso liga com a lista vazia e um aviso, e o arquivo ruim é renomeado com sufixo `.corrompido-<data>`, nunca sobrescrito — a regra "nunca perder trabalho" do PRD-000 aplicada a uma lista que o usuário construiu.
@@ -70,13 +74,13 @@ Ao lado do `session.json`, no mesmo diretório de dados, com o padrão do `pinne
 | Desconectar um aparelho (indicador) | `goodbye { normal }` e canal fechado; o aparelho pode reconectar | intacta |
 | Desconectar todos (`remote.disconnect_all`) | idem, para todos | intacta |
 | Revogar um aparelho | `goodbye { revoked }`, canal fechado, entrada removida | sem o aparelho |
-| Recriar identidade | todos desconectados, chaves novas | vazia |
+| Recriar identidade | todos desconectados, chaves novas, registro novo no relay com o `host_id` novo | vazia |
 
 Todos acontecem **antes** do próximo quadro: o comando vai a `porecatu-remote` por `try_send`, e a UI já reflete o estado pedido sem esperar a rede.
 
 ### 7. Token do operador
 
-Digitado pelo usuário na tela de configurações, guardado no cofre por `porecatu-remote`. Token recusado pelo relay (HTTP 401) para de tentar e mostra o motivo; não entra no ciclo de reconexão, que é para queda de rede.
+Digitado pelo usuário na tela de configurações, guardado no cofre por `porecatu-remote`. É a string opaca de 32 a 128 caracteres ASCII imprimíveis que o operador definiu em `[[tokens]]` do relay (gerada por `porecatu-relay token new`; ver o [`relay.example.toml`](https://github.com/porecatu/relay/blob/main/docs/reference/relay.example.toml)) e vai só no cabeçalho `Authorization: Bearer` da abertura de `/v0/host` ([01 §2](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md)); o cliente nunca o recebe. O token só autoriza o host a usar o relay; o endereço é provado depois, pelo desafio assinado com a chave de roteamento ([01 §3](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md), [ADR-0003 do Relay](https://github.com/porecatu/relay/blob/main/docs/adr/0003-registro-do-host-por-chave-e-token-do-operador.md)). Token recusado pelo relay (HTTP 401, antes do upgrade) para de tentar e mostra o motivo; não entra no ciclo de reconexão, que é para queda de rede.
 
 ## Alternativas consideradas
 

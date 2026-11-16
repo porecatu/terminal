@@ -37,7 +37,9 @@ porecatu (bin)
 
 | Crate | Pode depender de | Nunca depende de |
 |---|---|---|
-| `porecatu-remote` | nenhum crate do projeto; externos: `porecatu-protocol` (exato), `tokio`, `tokio-tungstenite` com `rustls`, `keyring` (exato), `ed25519-dalek` | todo crate do projeto; GUI; `core`, `config`, `term` |
+| `porecatu-remote` | nenhum crate do projeto; externos: `porecatu-protocol` (exato; por `git` + `rev` enquanto não publicado, [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) §5), `tokio`, `tokio-tungstenite` com `rustls`, `keyring` (exato), `ed25519-dalek` | todo crate do projeto; GUI; `core`, `config`, `term` |
+
+O `porecatu-protocol` é **sans-IO** ([arquitetura do protocolo §2](https://github.com/porecatu/protocol/blob/main/docs/arquitetura.md)): codifica e decodifica o envelope e as mensagens (CBOR escrito à mão, sem `ciborium`), conduz o handshake e os registros pela máquina de estado `HostChannel` (Noise sobre `snow`, features padrão `session` e `message`), gera a chave estática X25519 (`StaticKeypair`), calcula `host_id` e impressão digital, monta a URI do QR e confere o `PairingToken`, sempre sobre um `now` recebido de fora. Não abre socket, não cria thread, não lê relógio e não guarda chave: WebSocket, TLS, reconexão, relógio, cofre e o par de chaves Ed25519 de roteamento ficam em `porecatu-remote`. O crate de protocolo monta a mensagem a assinar (`register_message`) e o envelope `register`, mas **não assina**: a assinatura Ed25519 é do host (daí o `ed25519-dalek`, o mesmo crate com que o Relay a verifica), e o prazo de 120 s da confirmação de pareamento também é do host ([ADR-0106](0106-pareamento-identidade-e-autorizacao.md) §3).
 
 `porecatu-remote` não conhece `Workspace`, `Config`, `GridSnapshot` nem `winit`. Ele fala **tipos do protocolo**, re-exportados para `porecatu-ui` (`pub use porecatu_protocol::...`), e é `porecatu-ui` quem traduz entre o domínio e o fio — o mesmo papel que já tem entre `Config` e `TermParams`.
 

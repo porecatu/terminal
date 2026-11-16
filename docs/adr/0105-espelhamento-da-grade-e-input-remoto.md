@@ -24,7 +24,7 @@ Falta decidir **como o host produz isso** sem ferir o que o projeto já garante:
 `porecatu-ui` mantém, em `App`, um mapa **do processo** entre os ids do protocolo (`window-id`, `group-id`, `tab-id`, `pane-id`, inteiros de contadores monotônicos) e os ids internos (`WindowId`, `GroupId`/`TabId` por workspace, `PaneId` por aba).
 
 - O id do protocolo nasce quando o objeto aparece pela primeira vez numa árvore enviada, e **não muda** quando a aba ou o grupo mudam de janela: `App::transfer` ([ADR-0090](0090-transferencia-de-abas-entre-janelas.md)), que já re-chaveia tudo que é chaveado por `TabId` fora do runtime, re-chaveia também esse mapa. Estado novo chaveado por `TabId` que não entra em `transfer` vira órfão — é a regra que já está no CLAUDE.md.
-- Os ids nunca são reaproveitados. Fechar o acesso remoto não zera os contadores; reiniciar o app, sim.
+- Os ids nunca são reaproveitados. Fechar o acesso remoto não zera os contadores; reiniciar o app, sim. Por isso o host gera, ao iniciar o processo, o `host_instance` de 16 bytes aleatórios que vai no `welcome`: é o que diz ao celular que os ids guardados de uma sessão anterior não valem mais ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §2 e §3).
 
 ### 2. Árvore do workspace
 
@@ -48,7 +48,7 @@ thread de leitura do PTY
 ```
 
 - **Snapshot da tela viva, não da vista.** `Terminal::snapshot_into` devolve o que o desktop está mostrando, incluindo o deslocamento de scrollback em que o usuário do desktop parou e a seleção. O celular precisa do **fundo vivo**, independente da rolagem do desktop. `porecatu-term` ganha `snapshot_live_into` (a tela no fundo do scrollback, sem seleção, sem ocorrências de busca) e `history_into(offset, count, out)` para as páginas de scrollback (§5). As duas são acréscimos à API de `Terminal`, sem mudar `snapshot_into`.
-- **A conversão é de `porecatu-ui`.** Ela conhece `GridSnapshot` (de `porecatu-term`) e os tipos do protocolo (re-exportados por `porecatu-remote`), e é o único lugar que pode conhecer os dois. É uma função pura, testada com snapshots montados à mão, que aplica as regras do fio: spans de largura uniforme, grafema de vários code points sozinho num span, cores **não resolvidas** (o `TermColor` já é não resolvido — vira `null`/indexada/direta sem passar pela paleta).
+- **A conversão é de `porecatu-ui`.** Ela conhece `GridSnapshot` (de `porecatu-term`) e os tipos do protocolo (re-exportados por `porecatu-remote`), e é o único lugar que pode conhecer os dois. É uma função pura, testada com snapshots montados à mão, que aplica as regras do fio ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §5.2): spans de largura uniforme, grafema de vários code points sozinho num **span de grafema** (`text` como array de um elemento), cores **não resolvidas** (o `TermColor` já é não resolvido — vira `null`/indexada/direta sem passar pela paleta).
 - **O diff e o controle de fluxo são de `porecatu-remote`.** Ele guarda, por assinatura, a última grade **enviada** e o último quadro **recebido** da UI. Com a janela livre, manda snapshot ou diff; com a janela cheia, só substitui o último quadro recebido. Quando chega um `grid-ack`, o diff sai de "último enviado" para "último recebido". A main thread nunca espera por isso e nunca acumula fila.
 - **Custo zero quando ocioso.** Painel sem assinatura não é lido. Painel assinado sem `TabDirty` não é lido. O prazo do espelhamento só entra no `WaitUntil` enquanto há painel sujo para o remoto.
 - **Sem quadro no desktop.** Sujeira para o remoto **não** chama `request_redraw`. Um painel numa aba invisível no desktop e assinado pelo celular é lido pelo espelhamento e não gera frame de GPU.
@@ -59,7 +59,9 @@ O desktop dita o tamanho. Nenhuma mensagem do cliente chega a `Terminal::resize`
 
 ### 5. Scrollback
 
-`scrollback-request` chega como `RemoteEvent`; a main thread chama `Terminal::history_into` para até 500 linhas, converte e devolve como `scrollback-page`. É o único caminho em que a main thread lê o motor por pedido do cliente; o teto de 500 linhas mantém o lock no tamanho de um snapshot de tela grande. Pedidos chegando mais rápido que um por prazo do relógio são coalescidos (o último vence).
+`scrollback-request` chega como `RemoteEvent`; a main thread chama `Terminal::history_into` para até 500 linhas, converte e devolve como `scrollback-page`.
+
+`grid-snapshot`, `grid-diff` e `scrollback-page` levam, além das linhas, o tamanho do histórico (`history`) e o contador de linhas já descartadas do topo dele (`dropped`, monotônico por painel, zerado só quando o histórico é limpo, caso em que vai um `grid-snapshot`), que dão a cada linha de histórico um índice absoluto estável ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §5.3 e §5.5). Os dois números saem do motor junto com a tela e a página; como `porecatu-term` os obtém fica para a implementação. É o único caminho em que a main thread lê o motor por pedido do cliente; o teto de 500 linhas mantém o lock no tamanho de um snapshot de tela grande. Pedidos chegando mais rápido que um por prazo do relógio são coalescidos (o último vence).
 
 ### 6. Tema
 
@@ -67,10 +69,10 @@ O desktop dita o tamanho. Nenhuma mensagem do cliente chega a `Terminal::resize`
 
 ### 7. Input
 
-- `key` vira `TermKey` (as teclas nomeadas do protocolo são exatamente as variantes de `porecatu_term::TermKey`, F1–F12 como `Function(n)`) ou, com caractere, `encode_ctrl_char`/`encode_text` com `Modifiers`; `text` vira `encode_text`; `paste` vira `wrap_paste` com os `TermModes` atuais do painel. Os bytes vão por `Terminal::write`, como no teclado local.
+- `key` vira `TermKey` (as teclas nomeadas do protocolo são exatamente as variantes de `porecatu_term::TermKey`, F1–F12 como `Function(n)`; os bits de `mods` Ctrl, Alt, Shift e Meta viram `ctrl`, `alt`, `shift` e `super_` de `Modifiers`) ou, com caractere, `encode_ctrl_char`/`encode_text` com `Modifiers`; `text-input` vira `encode_text`; `paste` vira `wrap_paste` com os `TermModes` atuais do painel. Os bytes vão por `Terminal::write`, como no teclado local.
 - **Nenhum atalho do Porecatu** é consultado: o input remoto entra no passo 3 da cadeia do [ADR-0008](0008-teclas-e-roteamento-de-input.md) direto, sem passar pela tabela de ações nem pelos modos de captura da janela. Um diálogo aberto no desktop não engole tecla do celular, e vice-versa.
 - `scroll_on_input` vale: digitar no celular leva o desktop ao fundo daquele painel, como digitar no desktop.
-- Input para painel não assinado ou fora de `running` é recusado com o código do protocolo; o gerenciador de tarefas aberto no desktop **não** bloqueia input remoto (a regra dele é sobre o teclado da janela).
+- Input para painel não assinado ou fora de `running` é recusado com o código do protocolo (`error` com `not-subscribed` ou `pane-not-running` e o `pane`); o gerenciador de tarefas aberto no desktop **não** bloqueia input remoto (a regra dele é sobre o teclado da janela).
 - Mouse remoto não existe no v1.
 
 ### 8. Painéis especiais

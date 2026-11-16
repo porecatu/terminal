@@ -25,7 +25,7 @@ Um grupo novo na guia lateral, **depois de "Perfis"**, com o painel em três se�
 | Linha | Controle | Chave / destino |
 |---|---|---|
 | Acesso remoto | Alternância | `[remote] enabled` (pendente, gravado pelo Salvar, [ADR-0058](0058-escrita-do-arquivo-de-configuracao.md)) |
-| Endereço do relay | Campo de texto | `[remote] relay_url` (pendente; inválida se não for `wss://`, salvo `localhost`) |
+| Endereço do relay | Campo de texto | `[remote] relay_url` (pendente; inválida se não for `wss://`, salvo `ws://` em `localhost`, `127.0.0.1` e `[::1]`, como em [01 — Transporte e relay](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md) §1) |
 | Token do relay | Campo mascarado (`MaskedFieldState`) | Cofre do sistema, gravado pelo Salvar junto com o arquivo, **nunca** no `porecatu.toml` |
 | Estado | Texto, sem controle | Desligado · Conectando · Conectado · Falha: relay inacessível / token recusado / versão incompatível / cofre indisponível |
 
@@ -57,7 +57,7 @@ O diálogo de confirmação existente ([ADR-0014](0014-superficie-de-aviso-e-dia
 - título "Parear este aparelho?";
 - corpo: nome do aparelho e plataforma; abaixo, a impressão digital em **Iosevka** (como o campo de senha e os badges), quatro grupos de quatro; abaixo, 11px **Terciário**: "Confira se o celular mostra o mesmo código.";
 - botões: **Recusar** (padrão, foco inicial) e **Parear**;
-- fecha sozinho em 120 s como recusa.
+- fecha sozinho em 120 s. No fio, Recusar manda `pair-rejected { user-declined }` e o prazo vencido, `pair-rejected { timeout }` ([02 — Handshake e pareamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md) §3.2); para o usuário do desktop os dois são o mesmo fim: nada foi pareado.
 
 Nenhum valor novo.
 

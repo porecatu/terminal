@@ -59,7 +59,7 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 
 - **RF-25.5** — O usuário pareia um celular **a partir da tela de configurações**, com o acesso ligado e conectado ao relay: um gesto mostra um **QR code** com o endereço do relay, a identidade do desktop e um código de uso único.
 - **RF-25.6** — O código do QR **vale 5 minutos e uma única vez**. Mostrar o QR de novo, ou sair da tela, invalida o anterior.
-- **RF-25.7** — Quando um celular lê o QR, o desktop **pede confirmação** num diálogo com o **nome do aparelho** e a **impressão digital** da chave dele, a mesma que o celular mostra. Sem confirmação em 120 s, o pedido é recusado.
+- **RF-25.7** — Quando um celular lê o QR, o desktop **pede confirmação** num diálogo com o **nome do aparelho** e a **impressão digital** da chave dele, a mesma que o celular mostra. Sem confirmação em 120 s, o pedido é recusado. Código inválido, vencido ou já usado é recusado sem diálogo ([02 — Handshake e pareamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md) §3.2).
 - **RF-25.8** — Confirmado, o aparelho entra na **lista de aparelhos pareados** e a conexão já fica aberta, sem novo passo no celular.
 
 ### Aparelhos pareados
@@ -85,12 +85,12 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 
 ### O que o celular faz
 
-- **RF-25.21** — O celular **digita** no painel aberto: texto, teclas especiais (Enter, Tab, Esc, setas, Home/End, PgUp/PgDn, F1–F12) com modificadores, e **colar**. O desktop codifica as teclas com o **mesmo codificador do teclado local**, respeitando o modo do programa (cursor de aplicação, bracketed paste).
+- **RF-25.21** — O celular **digita** no painel aberto: texto, teclas especiais (Enter, Tab, Backspace, Esc, setas, Home/End, PgUp/PgDn, Insert, Delete, F1–F12) com modificadores (Ctrl, Alt, Shift, Meta), e **colar** ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §6). O desktop codifica as teclas com o **mesmo codificador do teclado local**, respeitando o modo do programa (cursor de aplicação, bracketed paste).
 - **RF-25.22** — Tecla vinda do celular **nunca dispara atalho do Porecatu**: vai sempre ao terminal.
 - **RF-25.23** — O celular **cria aba** numa janela escolhida, no grupo escolhido ou onde o `tab.new` a criaria, com o perfil escolhido ou o padrão.
-- **RF-25.24** — O celular **fecha aba** e **fecha painel**. Quando o fechamento no desktop pediria confirmação (processo em primeiro plano, conexão SSH aberta), a confirmação é feita **no celular que pediu**, não no desktop.
+- **RF-25.24** — O celular **fecha aba** e **fecha painel**. Quando o fechamento no desktop pediria confirmação (processo em primeiro plano, conexão SSH aberta), a confirmação é feita **no celular que pediu**, não no desktop. Fechar assim a última aba da última janela — por "fechar aba" ou pelo último painel dela — é recusado, porque encerraria o Porecatu e o próprio acesso ([ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md) §5).
 - **RF-25.25** — O celular **renomeia** aba, **move** aba entre grupos e entre janelas, **cria grupo** com abas escolhidas, **renomeia**, **muda a cor**, **colapsa/expande** e **desfaz** grupo, e **move grupo** entre janelas. Mover entre janelas leva o processo vivo, pelo mesmo caminho do arraste ([ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md)).
-- **RF-25.26** — O celular **inicia** um painel não iniciado e **conecta** uma aba SSH dormente. Perguntas da conexão (senha, passphrase, chave de servidor desconhecida) aparecem **só no desktop** no v1.
+- **RF-25.26** — O celular **inicia** um painel não iniciado e **conecta** uma aba SSH dormente. Perguntas da conexão (senha, passphrase, chave de servidor desconhecida) aparecem **só no desktop** no v1; enquanto esperam resposta, o celular vê o painel aguardando o desktop (estado `awaiting-desktop`, [ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md) §6).
 - **RF-25.27** — Nenhuma ação remota **muda o foco nem a aba ativa** do desktop. Aba criada pelo celular nasce sem roubar o foco de quem está no desktop.
 
 ### Limites
@@ -127,5 +127,5 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 | Recurso de rede num app que até aqui não escutava nada amplia a superfície de ataque | Desligado por padrão; relay cego; pareamento presencial; indicador obrigatório; revogação imediata ([ADR-0106](../adr/0106-pareamento-identidade-e-autorizacao.md)) |
 | Exigir servidor próprio limita a adoção | Aceito: o público-alvo é técnico. O relay é um binário único com imagem Docker |
 | Grade larga do desktop ilegível no celular | Zoom e rolagem horizontal no app; o desktop não cede o tamanho por decisão do dono |
-| Três repositórios novos e um protocolo para manter em sincronia | Especificação normativa com vetores de teste num repositório próprio; versão negociada no handshake |
+| Três repositórios novos e um protocolo para manter em sincronia | Especificação normativa com vetores de teste num repositório próprio; versão conferida no início da sessão (`hello`/`welcome`), com `minor` igual exigido enquanto o `major` é 0 ([04 — Versionamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/04-versionamento.md)) |
 | GPL na App Store | Risco aceito pelo dono; registrado no [Porecatu Remote](https://github.com/porecatu/remote) |
