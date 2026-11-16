@@ -53,11 +53,11 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 - **RF-25.1** — O acesso remoto é **desligado por padrão** (`[remote] enabled = false`). Desligado, o Porecatu não abre conexão de rede nenhuma por causa dele e não cria thread nem runtime.
 - **RF-25.2** — Ligar exige o **endereço do relay** (`[remote] relay_url`, `wss://`) e o **token do operador** do relay. O endereço fica no `porecatu.toml`; o token, **no cofre do sistema** ([ADR-0073](../adr/0073-credenciais-no-cofre-do-sistema.md)), nunca no arquivo.
 - **RF-25.3** — Ligar, desligar e trocar o relay **valem na hora**, sem reiniciar o app. Desligar derruba todas as conexões remotas imediatamente (RF-25.16).
-- **RF-25.4** — O estado da conexão com o relay é visível na tela de configurações: desligado, conectando, conectado, falha (com o motivo: relay inacessível, token recusado, versão incompatível). Queda de rede é refeita sozinha, com espera crescente, sem aviso a cada tentativa.
+- **RF-25.4** — O estado da conexão com o relay é visível na tela de configurações: desligado, conectando, conectado, falha, com o motivo: relay inacessível; token recusado (HTTP 401); relay cheio (`4003`, o operador limitou o número de desktops); excesso de conexões da mesma origem (HTTP 429); registro recusado (`4001` ou `4005`, mostrado como erro de protocolo). Os códigos são os de [01 — Transporte e relay](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md) §2, §4 e §5; a lista foi decidida pelo dono em 2026-11-16, e não há "versão incompatível" entre o desktop e o relay, que só versiona o caminho `/v0/`. Queda de rede é refeita sozinha, com espera crescente, sem aviso a cada tentativa.
 
 ### Parear
 
-- **RF-25.5** — O usuário pareia um celular **a partir da tela de configurações**, com o acesso ligado e conectado ao relay: um gesto mostra um **QR code** com o endereço do relay, a identidade do desktop e um código de uso único.
+- **RF-25.5** — O usuário pareia um celular **a partir da tela de configurações**, com o acesso ligado e conectado ao relay: um gesto mostra um **QR code** com o endereço do relay, a identidade do desktop e um código de uso único. O nome do desktop, que vai no QR e no início de cada sessão, é **sempre o nome da máquina** no v1, sem chave nem campo para mudá-lo (decidido pelo dono em 2026-11-16); o celular pode renomear o desktop só para si (RF-1.15 do [PRD-001 do Porecatu Remote](https://github.com/porecatu/remote/blob/main/docs/prd/prd-001-desktops-e-pareamento.md)).
 - **RF-25.6** — O código do QR **vale 5 minutos e uma única vez**. Mostrar o QR de novo, ou sair da tela, invalida o anterior.
 - **RF-25.7** — Quando um celular lê o QR, o desktop **pede confirmação** num diálogo com o **nome do aparelho** e a **impressão digital** da chave dele, a mesma que o celular mostra. Sem confirmação em 120 s, o pedido é recusado. Código inválido, vencido ou já usado é recusado sem diálogo ([02 — Handshake e pareamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/02-handshake-e-pareamento.md) §3.2).
 - **RF-25.8** — Confirmado, o aparelho entra na **lista de aparelhos pareados** e a conexão já fica aberta, sem novo passo no celular.
@@ -117,6 +117,7 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 | Conexão direta na rede local, sem relay | Segundo transporte; depois do v1 |
 | Cliente web | O protocolo permite; não é o pedido |
 | Permissão por aparelho (só leitura) | Decisão do dono: pareado acessa tudo |
+| Nome do desktop configurável | Decisão do dono (2026-11-16): sempre o nome da máquina; o app renomeia localmente (RF-25.5) |
 | Responder perguntas de SSH no celular | Segredo trafegando para outro aparelho; o v1 mantém no desktop |
 | Sessão vivendo no servidor (estilo `tmux -CC`) | Continua não-objetivo ([PRD-000](prd-000-visao-de-produto.md)): o host é sempre o desktop |
 

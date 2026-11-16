@@ -37,9 +37,11 @@ porecatu (bin)
 
 | Crate | Pode depender de | Nunca depende de |
 |---|---|---|
-| `porecatu-remote` | nenhum crate do projeto; externos: `porecatu-protocol` (exato; por `git` + `rev` enquanto não publicado, [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) §5), `tokio`, `tokio-tungstenite` com `rustls`, `keyring` (exato), `ed25519-dalek` | todo crate do projeto; GUI; `core`, `config`, `term` |
+| `porecatu-remote` | nenhum crate do projeto; externos: `porecatu-protocol` (exato; por `git` + `rev` enquanto não publicado, [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) §5), `tokio`, `tokio-tungstenite` com `rustls` (provedor `ring`), `keyring` (exato), `ed25519-dalek` (`=3.0.0`) | todo crate do projeto; GUI; `core`, `config`, `term` |
 
 O `porecatu-protocol` é **sans-IO** ([arquitetura do protocolo §2](https://github.com/porecatu/protocol/blob/main/docs/arquitetura.md)): codifica e decodifica o envelope e as mensagens (CBOR escrito à mão, sem `ciborium`), conduz o handshake e os registros pela máquina de estado `HostChannel` (Noise sobre `snow`, features padrão `session` e `message`), gera a chave estática X25519 (`StaticKeypair`), calcula `host_id` e impressão digital, monta a URI do QR e confere o `PairingToken`, sempre sobre um `now` recebido de fora. Não abre socket, não cria thread, não lê relógio e não guarda chave: WebSocket, TLS, reconexão, relógio, cofre e o par de chaves Ed25519 de roteamento ficam em `porecatu-remote`. O crate de protocolo monta a mensagem a assinar (`register_message`) e o envelope `register`, mas **não assina**: a assinatura Ed25519 é do host (daí o `ed25519-dalek`, o mesmo crate com que o Relay a verifica), e o prazo de 120 s da confirmação de pareamento também é do host ([ADR-0106](0106-pareamento-identidade-e-autorizacao.md) §3).
+
+O `rustls` entra com o provedor de criptografia **`ring`**, o mesmo que o `russh` de `porecatu-ssh` já traz ([ADR-0072](0072-cliente-ssh-embutido.md)) e o mesmo do Relay: o binário não ganha um segundo provedor. O `ed25519-dalek` fica em **`=3.0.0`**, a versão com que o Relay verifica a assinatura do registro; subir um dos dois lados é tarefa própria, conferida contra o outro. Decidido pelo dono em 2026-11-16.
 
 `porecatu-remote` não conhece `Workspace`, `Config`, `GridSnapshot` nem `winit`. Ele fala **tipos do protocolo**, re-exportados para `porecatu-ui` (`pub use porecatu_protocol::...`), e é `porecatu-ui` quem traduz entre o domínio e o fio — o mesmo papel que já tem entre `Config` e `TermParams`.
 
@@ -62,7 +64,7 @@ impl RemoteHost {
 }
 ```
 
-- **`RemoteParams`** é struct do próprio crate (URL do relay, diretório de dados, nome do host), montada por `porecatu-ui` a partir de `Config` — a regra da seção 4.2 da arquitetura aplicada a mais um crate.
+- **`RemoteParams`** é struct do próprio crate (URL do relay, diretório de dados, nome do host, que é sempre o nome da máquina — RF-25.5 do [PRD-025](../prd/prd-025-acesso-remoto.md)), montada por `porecatu-ui` a partir de `Config` — a regra da seção 4.2 da arquitetura aplicada a mais um crate.
 - **`Command`** (main thread → rede): mensagens a mandar a um cliente, quadros de grade novos ([ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md)), respostas de ação, gerar QR, revogar, desconectar.
 - **`RemoteEvent`** (rede → main thread): estado da conexão com o relay, cliente conectado/desconectado, pedido de pareamento esperando confirmação, mensagem de aplicação recebida (input, ação, assinatura). Chega como uma variante nova de `Wakeup` (`porecatu-ui/src/lib.rs`) e é **dado chaveado por canal**, nunca um comando de UI — a regra do resultado de thread do [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md).
 - A main thread **não espera** a rede em nenhum momento: `send` é `try_send` numa fila limitada, e fila cheia descarta o comando de grade mais antigo daquele painel (o estado mais novo substitui o velho), nunca bloqueia.

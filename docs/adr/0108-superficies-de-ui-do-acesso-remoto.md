@@ -27,7 +27,7 @@ Um grupo novo na guia lateral, **depois de "Perfis"**, com o painel em três se�
 | Acesso remoto | Alternância | `[remote] enabled` (pendente, gravado pelo Salvar, [ADR-0058](0058-escrita-do-arquivo-de-configuracao.md)) |
 | Endereço do relay | Campo de texto | `[remote] relay_url` (pendente; inválida se não for `wss://`, salvo `ws://` em `localhost`, `127.0.0.1` e `[::1]`, como em [01 — Transporte e relay](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md) §1) |
 | Token do relay | Campo mascarado (`MaskedFieldState`) | Cofre do sistema, gravado pelo Salvar junto com o arquivo, **nunca** no `porecatu.toml` |
-| Estado | Texto, sem controle | Desligado · Conectando · Conectado · Falha: relay inacessível / token recusado / versão incompatível / cofre indisponível |
+| Estado | Texto, sem controle | Desligado · Conectando · Conectado · Falha: relay inacessível / token recusado / relay cheio / excesso de conexões / erro de protocolo / cofre indisponível (os motivos do relay e os códigos de cada um no RF-25.4 do [PRD-025](../prd/prd-025-acesso-remoto.md)) |
 
 **PAREAR UM APARELHO**
 
