@@ -31,7 +31,7 @@ Recursos entregues **fora da ordem de fases**, todos implementados (detalhe e d�
 
 **Planejado, só em documentação — nada implementado:**
 
-- **Acesso remoto** — [PRD-025](docs/prd/prd-025-acesso-remoto.md) (rascunho), [ADR-0103](docs/adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a [ADR-0108](docs/adr/0108-superficies-de-ui-do-acesso-remoto.md) (propostos; o 0108 com aval visual pendente). Operar a sessão viva por um app mobile, em três partes: este processo é o **host** e único dono do estado; o [Porecatu Relay](https://github.com/porecatu/relay), auto-hospedado e **cego**, só roteia; o [Porecatu Remote](https://github.com/porecatu/remote) (Expo) desenha a grade do desktop e pede ações. O protocolo é normativo no [porecatu-protocol](https://github.com/porecatu/protocol): **mudança no fio começa lá**, nunca aqui. Lá já existem a especificação 0.3 (fio `[0, 1]`, ainda não congelado) e o crate de referência `porecatu-protocol` 0.1.0, não publicado; o Relay e a camada de lógica do app também andaram — o que falta é este lado. Decisões que valem antes do código: crate folha `porecatu-remote` com `tokio` e `keyring` próprios, desligado = não existe; o celular **nunca** muda o foco do desktop nem o tamanho do PTY; tecla remota passa pelo codificador de `porecatu-term/src/keys.rs`, nunca por atalho; ação remota chama a mesma função do menu de contexto, com alvo explícito, e entre janelas só por `App::transfer`; ids do protocolo são do processo e estáveis entre janelas (o mapa entra em `transfer`); confirmação vai ao celular, nunca abre diálogo no desktop; indicador de aparelho conectado sem chave para esconder. `[remote]` no exemplo, ações `remote.*` no catálogo e valores do QR entram com o código.
+- **Acesso remoto** — [PRD-025](docs/prd/prd-025-acesso-remoto.md) (aprovado), [ADR-0103](docs/adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a [ADR-0108](docs/adr/0108-superficies-de-ui-do-acesso-remoto.md) (0103 a 0107 aceitos; o 0108 proposto, com aval visual pendente). Operar a sessão viva por um app mobile, em três partes: este processo é o **host** e único dono do estado; o [Porecatu Relay](https://github.com/porecatu/relay), auto-hospedado e **cego**, só roteia; o [Porecatu Remote](https://github.com/porecatu/remote) (Expo) desenha a grade do desktop e pede ações. O protocolo é normativo no [porecatu-protocol](https://github.com/porecatu/protocol): **mudança no fio começa lá**, nunca aqui. Lá já existem a especificação 0.3 (fio `[0, 1]`, ainda não congelado) e o crate de referência `porecatu-protocol` 0.1.0, não publicado; o Relay e a camada de lógica do app também andaram — o que falta é este lado. Decisões que valem antes do código: crate folha `porecatu-remote` com `tokio` e `keyring` próprios, desligado = não existe; o celular **nunca** muda o foco do desktop nem o tamanho do PTY; tecla remota passa pelo codificador de `porecatu-term/src/keys.rs`, nunca por atalho; ação remota chama a mesma função do menu de contexto, com alvo explícito, e entre janelas só por `App::transfer`; ids do protocolo são do processo e estáveis entre janelas (o mapa entra em `transfer`); confirmação vai ao celular, nunca abre diálogo no desktop; indicador de aparelho conectado sem chave para esconder. `[remote]` no exemplo, ações `remote.*` no catálogo e valores do QR entram com o código.
 
 Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da área — o código segue o que está escrito lá, incluindo os desvios anotados. Grupos, seleção, animação e popover: ADR-0020 a 0023. Sessão: ADR-0036 a 0040.
 
@@ -46,7 +46,7 @@ Antes de mexer, leia [docs/arquitetura.md](docs/arquitetura.md) e os ADRs da ár
 
 ## Stack travada
 
-`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `russh` com `ring` (cliente SSH, em `porecatu-ssh`, [ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) · `arboard` (clipboard) · TOML+`serde` (config). Decidido, a implementar: `keyring` (cofre do SO, [ADR-0073](docs/adr/0073-credenciais-no-cofre-do-sistema.md)). Proposto para o acesso remoto ([ADR-0104](docs/adr/0104-crate-porecatu-remote.md)): `porecatu-protocol` (crate externo sans-IO, versão exata — ainda não publicado: `git` + `rev` com `version = "=0.1.0"` ao lado, como o Relay faz; traz `snow` sem a feature `std`, e o CBOR é escrito à mão, sem `ciborium`), `tokio-tungstenite` com `rustls` (provedor `ring`, o mesmo do `russh`), `ed25519-dalek` `=3.0.0` (assinatura do registro no relay, que o crate de protocolo não faz; mesma versão com que o Relay verifica) e `qrcode` (este em `porecatu-ui`).
+`winit` (janela/eventos) · `wgpu` (GPU) · `glyphon`/`cosmic-text` (texto) · `alacritty_terminal` (motor VT) · `portable-pty` (PTY) · `russh` com `ring` (cliente SSH, em `porecatu-ssh`, [ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) · `arboard` (clipboard) · TOML+`serde` (config). Decidido, a implementar: `keyring` (cofre do SO, [ADR-0073](docs/adr/0073-credenciais-no-cofre-do-sistema.md)). Decidido para o acesso remoto, a implementar ([ADR-0104](docs/adr/0104-crate-porecatu-remote.md)): `porecatu-protocol` (crate externo sans-IO, versão exata — ainda não publicado: `git` + `rev` com `version = "=0.1.0"` ao lado, como o Relay faz; traz `snow` sem a feature `std`, e o CBOR é escrito à mão, sem `ciborium`), `tokio-tungstenite` com `rustls` (provedor `ring`, o mesmo do `russh`), `ed25519-dalek` `=3.0.0` (assinatura do registro no relay, que o crate de protocolo não faz; mesma versão com que o Relay verifica) e `qrcode` (este em `porecatu-ui`).
 
 Toolchain: stable **pinada** em `rust-toolchain.toml`, edition 2024, lints em `[workspace.lints]` ([ADR-0011](docs/adr/0011-toolchain-rust.md)).
 
@@ -60,7 +60,7 @@ porecatu (bin)
    │        │
    │        ├── porecatu-term ──── porecatu-pty
    │        │        └──────────── porecatu-ssh   (ADR-0072)
-   │        ├── porecatu-remote  (proposto, ADR-0104)
+   │        ├── porecatu-remote  (a implementar, ADR-0104)
    │        ├── porecatu-config
    │        ├── porecatu-locale
    │        └── porecatu-session ── porecatu-core
@@ -76,7 +76,7 @@ Dependências apontam **só para baixo**. Em particular:
 | `porecatu-pty` | — | GUI, `core` |
 | `porecatu-term` | `pty`, `ssh` | GUI, `config` |
 | `porecatu-ssh` | — | todo crate do projeto; único com `tokio` e `russh` ([ADR-0072](docs/adr/0072-cliente-ssh-embutido.md)) |
-| `porecatu-remote` *(proposto)* | — | todo crate do projeto; único com `porecatu-protocol`, segundo com `tokio` e `keyring` ([ADR-0104](docs/adr/0104-crate-porecatu-remote.md)) |
+| `porecatu-remote` *(a implementar)* | — | todo crate do projeto; único com `porecatu-protocol`, segundo com `tokio` e `keyring` ([ADR-0104](docs/adr/0104-crate-porecatu-remote.md)) |
 | `porecatu-render` | — | `core`, `config`, `term` |
 | `porecatu-ui` | `core`, `config`, `term`, `render` | — |
 | `porecatu-session` | `core` | GUI, PTY |
@@ -217,7 +217,7 @@ Descobertas por fase (F1 a F6, pós-F6 e cada recurso fora de fase) vivem em [do
 - [docs/arquitetura.md](docs/arquitetura.md) — camadas, threading, fluxo de dados
 - [docs/design/](docs/design/README.md) — registro visual: tokens, anatomia, tabela de fases, histórico. Descreve o binário ([ADR-0028](docs/adr/0028-o-binario-como-referencia-visual.md))
 - [docs/adr/](docs/adr/) — decisões arquiteturais
-- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–024 aprovados (022, abas e grupos entre janelas, implementado; 023, restaurar sessão nomeada na janela atual, implementado; 024, gerenciador de tarefas, implementado); 008 rascunho (v2); 025, acesso remoto, rascunho. PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
+- [docs/prd/](docs/prd/) — requisitos de produto: 000–007 e 009–024 aprovados (022, abas e grupos entre janelas, implementado; 023, restaurar sessão nomeada na janela atual, implementado; 024, gerenciador de tarefas, implementado); 008 rascunho (v2); 025, acesso remoto, aprovado e não implementado. PRD-010 é transversal (mouse, seleção, clipboard, avisos, diálogos, menus, janelas)
 - [docs/roadmap.md](docs/roadmap.md) — fases e etapas, com a dívida de verificação de cada uma
 - [docs/descobertas.md](docs/descobertas.md) — descobertas e armadilhas, texto completo
 - [docs/reference/acoes.md](docs/reference/acoes.md) — catálogo **fechado** de ações; ação fora dele é erro de config

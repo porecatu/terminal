@@ -1,6 +1,6 @@
 # ADR-0104 — Crate `porecatu-remote`: folha com `tokio` e `keyring` próprios, fronteira síncrona com `porecatu-ui`
 
-**Status:** Proposto
+**Status:** Aceito em 2026-11-16 — não implementado
 **Data:** 2026-11-15
 **Relacionados:** [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0007](0007-modelo-de-threading.md), [ADR-0030](0030-escopo-do-hot-reload.md), [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md), [ADR-0072](0072-cliente-ssh-embutido.md), [ADR-0073](0073-credenciais-no-cofre-do-sistema.md), [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md), [ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md), [ADR-0106](0106-pareamento-identidade-e-autorizacao.md)
 **Supersedes:** ADR-0072, a regra "único crate com `tokio`" (**parcial**: `tokio` passa a ser permitido em crate de rede folha, um runtime por crate); ADR-0073, o isolamento de `keyring` em `porecatu-ssh` (**parcial**: `porecatu-remote` também o usa, com módulo `vault` próprio); ADR-0007, "Runtime async" (**parcial**: a mesma exceção do ADR-0072, estendida)

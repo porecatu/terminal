@@ -1,6 +1,6 @@
 # PRD-025 — Acesso remoto
 
-**Status:** Rascunho — decisões de produto tomadas pelo dono em 2026-11-15; texto aguardando revisão
+**Status:** Aprovado pelo dono em 2026-11-16 — não implementado; a anatomia do [ADR-0108](../adr/0108-superficies-de-ui-do-acesso-remoto.md) segue com o aval visual pendente
 **Data:** 2026-11-15
 **Requisito de origem:** pedido direto do dono do produto: acessar uma sessão viva do Porecatu a partir de um app mobile (Android e iOS), pelo meio de um servidor intermediário, para acompanhar e operar as abas longe do desktop.
 **Relacionados:** [PRD-000](prd-000-visao-de-produto.md), [PRD-001](prd-001-abas.md), [PRD-002](prd-002-grupos-de-abas.md), [PRD-006](prd-006-paineis-divididos.md), [PRD-007](prd-007-perfis-de-aba.md), [PRD-009](prd-009-barra-de-status.md), [PRD-010](prd-010-interacao-e-superficie-de-app.md), [PRD-016](prd-016-tela-de-configuracoes.md), [PRD-020](prd-020-conexoes-ssh.md), [PRD-022](prd-022-abas-e-grupos-entre-janelas.md), [ADR-0007](../adr/0007-modelo-de-threading.md), [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), [ADR-0032](../adr/0032-interface-do-v1-fechada.md), [ADR-0056](../adr/0056-catalogo-de-textos-da-interface.md), [ADR-0072](../adr/0072-cliente-ssh-embutido.md), [ADR-0073](../adr/0073-credenciais-no-cofre-do-sistema.md), [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md), [ADR-0103](../adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a [ADR-0108](../adr/0108-superficies-de-ui-do-acesso-remoto.md)

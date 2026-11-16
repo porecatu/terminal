@@ -1,6 +1,6 @@
 # ADR-0107 — Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop
 
-**Status:** Proposto
+**Status:** Aceito em 2026-11-16 — não implementado
 **Data:** 2026-11-15
 **Relacionados:** [PRD-001](../prd/prd-001-abas.md), [PRD-002](../prd/prd-002-grupos-de-abas.md), [PRD-022](../prd/prd-022-abas-e-grupos-entre-janelas.md), [PRD-024](../prd/prd-024-gerenciador-de-tarefas.md), [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0008](0008-teclas-e-roteamento-de-input.md), [ADR-0017](0017-ciclo-de-vida-da-aba.md), [ADR-0029](0029-enum-de-acao-e-gramatica-de-tecla.md), [ADR-0034](0034-deteccao-de-processo-ativo-para-confirmacao.md), [ADR-0037](0037-aba-nao-iniciada.md), [ADR-0075](0075-superficies-de-ui-do-ssh.md), [ADR-0090](0090-transferencia-de-abas-entre-janelas.md), [ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md), [ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md)
 
