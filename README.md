@@ -70,11 +70,11 @@ Para quem quer contribuir: [CONTRIBUTING.md](CONTRIBUTING.md), [arquitetura](doc
 
 ## Projetos relacionados
 
-Em planejamento: acessar a sessão do Porecatu pelo celular ([PRD-025](docs/prd/prd-025-acesso-remoto.md)). Ainda não há código.
+Em planejamento: acessar a sessão do Porecatu pelo celular ([PRD-025](docs/prd/prd-025-acesso-remoto.md)). No Porecatu ainda não há código; o protocolo, o relay e o app estão em desenvolvimento nos repositórios deles, e nenhum foi publicado.
 
 - [Porecatu Remote](https://github.com/porecatu/remote): o app para Android e iOS.
 - [Porecatu Relay](https://github.com/porecatu/relay): o servidor que você hospeda para o desktop e o celular se encontrarem. Ele não consegue ler o que passa por ele.
-- [porecatu-protocol](https://github.com/porecatu/protocol): a especificação do protocolo entre os três.
+- [porecatu-protocol](https://github.com/porecatu/protocol): a especificação do protocolo entre os três, com as implementações de referência em Rust e TypeScript.
 
 ## O nome
 

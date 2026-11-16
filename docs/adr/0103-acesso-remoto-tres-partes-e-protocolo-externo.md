@@ -30,7 +30,7 @@ O host abre uma conexão de saída para o relay (`wss://`) e mantém essa conex�
 
 ### 3. O relay é cego
 
-Host e cliente estabelecem uma sessão **Noise** de ponta a ponta dentro do canal que o relay encaminha ([ADR-0106](0106-pareamento-identidade-e-autorizacao.md)). O relay vê endereços, horários, um `host_id` opaco e o tamanho dos quadros — o que o [modelo de ameaça](https://github.com/porecatu/protocol/blob/main/docs/especificacao/modelo-de-ameaca.md) do protocolo lista — e nada de conteúdo.
+Host e cliente estabelecem uma sessão **Noise** de ponta a ponta dentro do canal que o relay encaminha ([ADR-0106](0106-pareamento-identidade-e-autorizacao.md)). O relay vê endereços IP, horários, o `host_id` e a chave pública de roteamento do host, quantos canais cada host tem abertos e o tamanho e o momento de cada quadro — a lista fechada de [01 — Transporte e relay §7](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md), que o [modelo de ameaça](https://github.com/porecatu/protocol/blob/main/docs/especificacao/modelo-de-ameaca.md) do protocolo usa — e nada de conteúdo.
 
 ### 4. Quatro repositórios
 
@@ -45,11 +45,11 @@ A especificação mora fora deste repositório porque três projetos a seguem e 
 
 ### 5. O crate de protocolo é dependência externa pinada
 
-O Porecatu depende do crate `porecatu-protocol` por **versão exata**, como já faz com `alacritty_terminal`, `wgpu`, `toml_edit` e `russh`. Só `porecatu-remote` o declara ([ADR-0104](0104-crate-porecatu-remote.md)); `porecatu-ui` vê os tipos que precisa pelo re-export de `porecatu-remote`, o mesmo padrão de `porecatu-term` com `porecatu-pty`.
+O Porecatu depende do crate `porecatu-protocol` por **versão exata**, como já faz com `alacritty_terminal`, `wgpu`, `toml_edit` e `russh`. O crate ainda **não foi publicado** no crates.io (a publicação é a fase P3 do [roadmap do protocolo](https://github.com/porecatu/protocol/blob/main/docs/roadmap.md), junto com o congelamento do fio): até lá, a dependência é por `git` com `rev` de um commit e a versão exata ao lado (`version = "=0.1.0"`), a mesma forma que o [`Cargo.toml` do Porecatu Relay](https://github.com/porecatu/relay/blob/main/Cargo.toml) usa, e passa a só versão exata quando o crate sair. Só `porecatu-remote` o declara ([ADR-0104](0104-crate-porecatu-remote.md)); `porecatu-ui` vê os tipos que precisa pelo re-export de `porecatu-remote`, o mesmo padrão de `porecatu-term` com `porecatu-pty`.
 
 ### 6. Versão do protocolo
 
-A versão `[major, minor]` é negociada no início da sessão; enquanto `major = 0`, host e cliente exigem `minor` igual ([04 — Versionamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/04-versionamento.md)). O Porecatu declara, no `CHANGELOG`, a versão de protocolo de cada release a partir da que trouxer o recurso.
+A versão `[major, minor]` é negociada no início da sessão (`hello`/`welcome`; o `major` vai também no prólogo Noise e no `v` do QR); enquanto `major = 0`, host e cliente exigem `minor` igual ([04 — Versionamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/04-versionamento.md)). A versão de fio hoje é `[0, 1]`, ainda não congelada, e não se confunde com a versão do texto da especificação (0.3) nem com a do crate (0.1.0). O Porecatu declara, no `CHANGELOG`, a versão de protocolo de cada release a partir da que trouxer o recurso.
 
 ## Alternativas consideradas
 

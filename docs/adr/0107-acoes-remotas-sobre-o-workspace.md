@@ -30,6 +30,8 @@ Duas diferenças separam a ação remota do gesto local:
 | `new-group`, `rename-group`, `set-group-color`, `collapse-group`, `ungroup` | Operações de grupo do editor de grupo e do menu de grupo | `group.create`, `group.rename`, `group.set_color`, `group.toggle_collapse`, `group.dissolve` |
 | `start-pane` | Início de painel não iniciado / conexão de SSH dormente pelo mesmo gatilho do clique ([ADR-0037](0037-aba-nao-iniciada.md), [ADR-0075](0075-superficies-de-ui-do-ssh.md)) | Clique ou `Enter` no painel |
 
+As regras de cada ação no fio — `new-tab` sem `group` nasce onde o `tab.new` criaria, com `group` no fim dele; `new-group` exige abas da mesma janela e nenhuma fixada (senão `invalid-argument`); `close-pane` do último painel fecha a aba — estão na [§7 da especificação](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md), e o caminho local tem de produzi-las. Todo resultado, sucesso ou erro, volta em `action-result` com o `id` do pedido.
+
 Quando a implementação achar uma dessas operações escrita só "sobre a aba ativa", a correção é **extrair** a função com alvo explícito e fazer o caminho local chamá-la também — nunca uma cópia para o remoto.
 
 ### 2. Foco
@@ -40,8 +42,8 @@ Quando a implementação achar uma dessas operações escrita só "sobre a aba a
 
 ### 3. Confirmação
 
-- O host decide se a ação precisa de confirmação **pela mesma regra do gesto local** (processo em primeiro plano, conexão SSH aberta, `confirm_close_with_process`). Precisando, manda `confirm-request` **ao canal que pediu**, com os nomes dos processos, e **não abre diálogo no desktop**.
-- O pedido pendente é estado do `App`, chaveado por `(canal, request-id)`, com prazo de 60 s no `WaitUntil`. A aba alvo fechar ou mudar de janela enquanto espera não muda nada: o alvo é o id do protocolo, que é estável ([ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md) §1); se ele deixou de existir, a confirmação vira `unknown-tab`.
+- O host decide se a ação precisa de confirmação **pela mesma regra do gesto local** (processo em primeiro plano, conexão SSH aberta, `confirm_close_with_process`). Precisando, manda `confirm-request` **ao canal que pediu**, com o motivo (`running-process` ou `ssh-connection`) e os nomes dos processos, e **não abre diálogo no desktop**.
+- O pedido pendente é estado do `App`, chaveado por `(canal, request-id)`, com prazo de 60 s no `WaitUntil`. Sem resposta no prazo, a ação termina com `action-result { error: confirm-timeout }`; recusada, com `cancelled`. A aba alvo fechar ou mudar de janela enquanto espera não muda nada: o alvo é o id do protocolo, que é estável ([ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md) §1); se ele deixou de existir, a confirmação vira `unknown-tab` (`unknown-pane` no `close-pane`).
 - O canal cair com confirmação pendente cancela a ação.
 
 ### 4. Quando o desktop está ocupado
@@ -50,11 +52,11 @@ Ação sobre uma janela que está num modo de captura — diálogo modal aberto,
 
 ### 5. A última aba
 
-Fechar, pelo celular, a última aba da última janela encerraria o Porecatu e, com ele, o próprio acesso. O host recusa com `last-tab`. Mover a última aba de uma janela para outra continua permitido (a origem vazia fecha sem diálogo, como no arraste).
+Fechar, pelo celular, a última aba da última janela encerraria o Porecatu e, com ele, o próprio acesso. O host recusa com `last-tab`, venha o pedido por `close-tab` ou por `close-pane` no último painel dela ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §7 e §9; o app trata o código no RF-4.11 do [PRD-004 do Porecatu Remote](https://github.com/porecatu/remote/blob/main/docs/prd/prd-004-gestao-de-abas.md)). Mover a última aba de uma janela para outra continua permitido (a origem vazia fecha sem diálogo, como no arraste).
 
 ### 6. Perguntas do backend
 
-Senha, passphrase e chave de servidor desconhecida, que um `start-pane` de SSH pode provocar, abrem **no desktop**, pelas superfícies do [ADR-0075](0075-superficies-de-ui-do-ssh.md). Enquanto a pergunta espera resposta, o painel aparece ao celular no estado `awaiting-desktop`; depois, `connecting` e `running` como de costume. Segredo não trafega para outro aparelho no v1.
+Senha, passphrase e chave de servidor desconhecida, que um `start-pane` de SSH pode provocar, abrem **no desktop**, pelas superfícies do [ADR-0075](0075-superficies-de-ui-do-ssh.md). Enquanto a pergunta espera resposta, o painel aparece ao celular no estado `awaiting-desktop` ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §4.1); depois, `connecting` e `running` como de costume. Segredo não trafega para outro aparelho no v1.
 
 ### 7. Ações novas no catálogo
 
