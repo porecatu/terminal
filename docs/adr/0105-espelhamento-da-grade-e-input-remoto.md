@@ -1,6 +1,6 @@
 # ADR-0105 — Espelhamento da grade e input remoto: snapshot do motor no ritmo do relógio da UI, diff fora da main thread, teclas pelo codificador local
 
-**Status:** Proposto
+**Status:** Aceito em 2026-11-16 — não implementado
 **Data:** 2026-11-15
 **Relacionados:** [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0002](0002-motor-vte.md), [ADR-0007](0007-modelo-de-threading.md), [ADR-0008](0008-teclas-e-roteamento-de-input.md), [ADR-0013](0013-mouse-selecao-e-clipboard.md), [ADR-0037](0037-aba-nao-iniciada.md), [ADR-0053](0053-paineis-divididos.md), [ADR-0067](0067-temas-em-arquivos-proprios.md), [ADR-0090](0090-transferencia-de-abas-entre-janelas.md), [ADR-0104](0104-crate-porecatu-remote.md)
 

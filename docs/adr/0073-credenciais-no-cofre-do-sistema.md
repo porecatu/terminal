@@ -23,7 +23,7 @@ Levantamento de 2026-10-27: o crate `keyring` 4.2.0 (MIT OR Apache-2.0) cobre os
 
 **O cofre é o `keyring` 4.x com a feature `v1`, usado só dentro de um módulo `vault` de `porecatu-ssh`. Cada segredo é uma entrada indexada pelo destino — `usuário@host:porta` para senha, caminho canônico do arquivo para passphrase —, não pelo perfil. Quem lê, grava e apaga durante a conexão é a tarefa SSH; a UI só pergunta se o cofre existe e pede para esquecer.**
 
-> **Revisto pelo [ADR-0104](0104-crate-porecatu-remote.md) §5 (proposto).** "Só dentro de `porecatu-ssh`" passa a "só nos módulos `vault` de `porecatu-ssh` e de `porecatu-remote`": o acesso remoto guarda no cofre as chaves do host e o token do relay. Mesma versão exata nos dois crates, nomes de entrada com prefixo próprio (`porecatu-remote/…`), e nenhum dos dois lê entrada do outro. O que este ADR decide para as credenciais SSH não muda.
+> **Revisto pelo [ADR-0104](0104-crate-porecatu-remote.md) §5 (aceito em 2026-11-16).** "Só dentro de `porecatu-ssh`" passa a "só nos módulos `vault` de `porecatu-ssh` e de `porecatu-remote`": o acesso remoto guarda no cofre as chaves do host e o token do relay. Mesma versão exata nos dois crates, nomes de entrada com prefixo próprio (`porecatu-remote/…`), e nenhum dos dois lê entrada do outro. O que este ADR decide para as credenciais SSH não muda.
 
 ### 1. Dependência
 

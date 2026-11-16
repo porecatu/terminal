@@ -1,6 +1,6 @@
 # ADR-0103 — Acesso remoto: três partes, o desktop como host e o protocolo num repositório próprio
 
-**Status:** Proposto
+**Status:** Aceito em 2026-11-16 — não implementado
 **Data:** 2026-11-15
 **Relacionados:** [PRD-000](../prd/prd-000-visao-de-produto.md), [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0002](0002-motor-vte.md), [ADR-0007](0007-modelo-de-threading.md), [ADR-0071](0071-backend-de-terminal.md), [ADR-0104](0104-crate-porecatu-remote.md), [ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md), [ADR-0106](0106-pareamento-identidade-e-autorizacao.md)
 

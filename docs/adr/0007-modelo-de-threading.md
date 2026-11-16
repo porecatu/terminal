@@ -106,7 +106,7 @@ Idiomático em Rust moderno, e evita N threads do sistema. Descartada porque nã
 
 > **Revisto pelo [ADR-0072](0072-cliente-ssh-embutido.md) §3.** Um runtime `tokio` passa a existir, **só dentro de `porecatu-ssh`**, criado na primeira conexão SSH, com duas threads de trabalho para o processo inteiro: o cliente SSH escolhido é async, e uma conexão ociosa custa uma tarefa em vez de uma thread. A recusa acima continua valendo para o que ela descreve — o PTY local segue com threads bloqueantes, a main thread e o render seguem sem async, e a fronteira entre `porecatu-ssh` e `porecatu-term` é síncrona. O atrito com o `winit` que esta seção previa não aparece, porque o runtime nunca toca o event loop.
 
-> **Revisto pelo [ADR-0104](0104-crate-porecatu-remote.md) §2 (proposto).** Um segundo runtime `tokio`, **só dentro de `porecatu-remote`**, criado quando o acesso remoto liga e destruído quando desliga. A regra passa a ser "`tokio` só em crate de rede folha, um runtime por crate"; a main thread, o PTY local e o render continuam sem async, e a fronteira com `porecatu-ui` é síncrona.
+> **Revisto pelo [ADR-0104](0104-crate-porecatu-remote.md) §2 (aceito em 2026-11-16).** Um segundo runtime `tokio`, **só dentro de `porecatu-remote`**, criado quando o acesso remoto liga e destruído quando desliga. A regra passa a ser "`tokio` só em crate de rede folha, um runtime por crate"; a main thread, o PTY local e o render continuam sem async, e a fronteira com `porecatu-ui` é síncrona.
 
 ### Uma thread única multiplexando todos os PTYs (`epoll`/`kqueue`/IOCP)
 

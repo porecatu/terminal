@@ -1,6 +1,6 @@
 # ADR-0106 — Pareamento, identidade e autorização: QR na tela de configurações, confirmação no desktop, lista de aparelhos escrita só por gesto
 
-**Status:** Proposto
+**Status:** Aceito em 2026-11-16 — não implementado
 **Data:** 2026-11-15
 **Relacionados:** [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0014](0014-superficie-de-aviso-e-dialogo.md), [ADR-0073](0073-credenciais-no-cofre-do-sistema.md), [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md), [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md), [ADR-0104](0104-crate-porecatu-remote.md), [ADR-0108](0108-superficies-de-ui-do-acesso-remoto.md)
 

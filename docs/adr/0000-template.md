@@ -10,7 +10,7 @@
 | [0004](0004-pty-cross-platform.md) | PTY cross-platform via portable-pty | Aceito · "Decisão" revista por ADR-0071 (**parcial**: o PTY vira um de dois backends) |
 | [0005](0005-persistencia-de-sessao.md) | Persistência de sessão em JSON versionado | Superseded by ADR-0036 e ADR-0038 (os dois **parcialmente**) · "Quando gravar" revisto por ADR-0054 (**parcial**: só a premissa de que toda gravação é automática) |
 | [0006](0006-modelo-de-abas-e-grupos.md) | Modelo de abas e grupos | Aceito · Alternativas Superseded by ADR-0053 (**parcial**: só o item "Splits/panes dentro da aba") |
-| [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito · uma linha das Consequências revista por ADR-0052 (**parcial**) · "Runtime async" revisto por ADR-0072 (**parcial**: `tokio` só dentro de `porecatu-ssh`) e por ADR-0104, proposto (**parcial**: `tokio` em crate de rede folha, um runtime por crate) |
+| [0007](0007-modelo-de-threading.md) | Modelo de threading e render damage-driven | Aceito · uma linha das Consequências revista por ADR-0052 (**parcial**) · "Runtime async" revisto por ADR-0072 (**parcial**: `tokio` só dentro de `porecatu-ssh`) e por ADR-0104 (**parcial**: `tokio` em crate de rede folha, um runtime por crate) |
 | [0008](0008-teclas-e-roteamento-de-input.md) | Keybindings e roteamento de input | Aceito |
 | [0009](0009-referencia-visual-e-reconciliacao.md) | Referência visual e reconciliação com o design canvas | Superseded by ADR-0027, ADR-0028 e ADR-0032 (parcial) · §6 Superseded by ADR-0059 (**parcial**: só a forma do painel, que vira janela própria; escrever no TOML sem segunda fonte de verdade continua) |
 | [0010](0010-licenciamento.md) | Licenciamento sob GPL-3.0-or-later | Aceito |
@@ -73,8 +73,8 @@
 | [0069](0069-hover-e-pressionado-dos-botoes-da-zona-fixa.md) | Hover e pressionado dos botões da zona fixa (sessões e configurações): quadrado arredondado revelado, disparo no release | Aceito |
 | [0070](0070-perfis-de-aba.md) | Perfis de aba: lista em `[profiles]`, `[shell]` como perfil padrão implícito, identificador no painel, menu no clique direito do `+` | Aceito — aval visual pendente · §1 revisto por ADR-0072 (**parcial**: `type = "ssh"` aceito, com campos próprios) |
 | [0071](0071-backend-de-terminal.md) | Backend de terminal: o PTY local passa a ser uma de duas implementações de um trait interno de `porecatu-term`, e o motor sobrevive à troca de backend | Aceito |
-| [0072](0072-cliente-ssh-embutido.md) | Cliente SSH embutido: `russh` com `ring` num crate novo `porecatu-ssh`, runtime `tokio` isolado dentro dele, perfil `ssh` em `[[profiles.list]]` | Aceito · regra "único crate com `tokio`" revista por ADR-0104, proposto (**parcial**: `porecatu-remote` também, com runtime próprio) |
-| [0073](0073-credenciais-no-cofre-do-sistema.md) | Credenciais SSH no cofre do sistema: `keyring` dentro de `porecatu-ssh`, entrada por destino, gravada só depois de aceita | Aceito · isolamento do `keyring` revisto por ADR-0104, proposto (**parcial**: módulo `vault` próprio em `porecatu-remote`) |
+| [0072](0072-cliente-ssh-embutido.md) | Cliente SSH embutido: `russh` com `ring` num crate novo `porecatu-ssh`, runtime `tokio` isolado dentro dele, perfil `ssh` em `[[profiles.list]]` | Aceito · regra "único crate com `tokio`" revista por ADR-0104 (**parcial**: `porecatu-remote` também, com runtime próprio) |
+| [0073](0073-credenciais-no-cofre-do-sistema.md) | Credenciais SSH no cofre do sistema: `keyring` dentro de `porecatu-ssh`, entrada por destino, gravada só depois de aceita | Aceito · isolamento do `keyring` revisto por ADR-0104 (**parcial**: módulo `vault` próprio em `porecatu-remote`) |
 | [0074](0074-verificacao-da-chave-do-host.md) | Verificação da chave do host: `~/.ssh/known_hosts` do OpenSSH, leitura pelo `ssh-key`, casamento próprio, só acréscimo | Aceito |
 | [0075](0075-superficies-de-ui-do-ssh.md) | Superfícies de UI do SSH: diálogo com campo mascarado e linhas de dado, pergunta que espera o foco da aba, grupo "Perfis" na tela de configurações | Aceito — aval visual pendente · §6 revisto por ADR-0080 (**parcial**: formulário em janela própria, lápis na linha) |
 | [0076](0076-reconexao-automatica.md) | Reconexão automática: keepalive de 15 s, cinco tentativas em 1-2-4-8-16 s decididas por estado puro em `porecatu-ui`, uma reconexão por conexão | Aceito |
@@ -104,11 +104,11 @@
 | [0100](0100-amostragem-do-gerenciador-sob-carga.md) | Amostragem do gerenciador de tarefas sob carga: CPU por tempo acumulado, varredura em duas passadas, relógio ancorado e lacuna tolerante (3,5 s) | Aceito — verificado só por teste automatizado |
 | [0101](0101-indicador-de-atualizacao-do-pull-na-barra-de-status.md) | Indicador de atualização do `pull` na barra de status: estado `Integrating`, arco girando e a exceção ao RF-9.8 | Aceito — verificado só por teste automatizado; aval visual do dono pendente |
 | [0102](0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md) | Fechar o terminal parado ao restaurar uma sessão na janela atual | Aceito — verificado só por teste automatizado |
-| [0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) | Acesso remoto: três partes, o desktop como host e o protocolo num repositório próprio | Proposto |
-| [0104](0104-crate-porecatu-remote.md) | Crate `porecatu-remote`: folha com `tokio` e `keyring` próprios, fronteira síncrona com `porecatu-ui` | Proposto |
-| [0105](0105-espelhamento-da-grade-e-input-remoto.md) | Espelhamento da grade e input remoto: snapshot do motor no ritmo do relógio da UI, diff fora da main thread, teclas pelo codificador local | Proposto |
-| [0106](0106-pareamento-identidade-e-autorizacao.md) | Pareamento, identidade e autorização: QR na tela de configurações, confirmação no desktop, lista de aparelhos escrita só por gesto | Proposto |
-| [0107](0107-acoes-remotas-sobre-o-workspace.md) | Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop | Proposto |
+| [0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) | Acesso remoto: três partes, o desktop como host e o protocolo num repositório próprio | Aceito |
+| [0104](0104-crate-porecatu-remote.md) | Crate `porecatu-remote`: folha com `tokio` e `keyring` próprios, fronteira síncrona com `porecatu-ui` | Aceito |
+| [0105](0105-espelhamento-da-grade-e-input-remoto.md) | Espelhamento da grade e input remoto: snapshot do motor no ritmo do relógio da UI, diff fora da main thread, teclas pelo codificador local | Aceito |
+| [0106](0106-pareamento-identidade-e-autorizacao.md) | Pareamento, identidade e autorização: QR na tela de configurações, confirmação no desktop, lista de aparelhos escrita só por gesto | Aceito |
+| [0107](0107-acoes-remotas-sobre-o-workspace.md) | Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop | Aceito |
 | [0108](0108-superficies-de-ui-do-acesso-remoto.md) | Superfícies de UI do acesso remoto: grupo nas configurações, QR em `Quad`s, diálogo de pareamento e botão de aparelhos conectados na zona fixa | Proposto — aval visual do dono pendente |
 
 ## Convenção
