@@ -61,9 +61,8 @@ Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado p
 - **Protocolo**: este release fala a **especificação 0.4** do
   [porecatu-protocol](https://github.com/porecatu/protocol), versão de fio
   `[0, 1]` (ainda não congelada), com o crate `porecatu-protocol` 0.1.0 por
-  `git` + `rev` (`d8618ef`, branch `spec-0-4-aba-ativa`, ainda não mesclada na
-  `main` do protocolo). O app Remote ainda precisa implementar a ação nova
-  `activate-tab` e a 0.4.
+  `git` + `rev` (`0909e7c`, o merge da 0.4 na `main` do protocolo, o mesmo
+  commit que o Relay usa). O app Remote já fala a 0.4 e manda `activate-tab`.
 
 ### Alterado
 
