@@ -104,12 +104,13 @@
 | [0100](0100-amostragem-do-gerenciador-sob-carga.md) | Amostragem do gerenciador de tarefas sob carga: CPU por tempo acumulado, varredura em duas passadas, relógio ancorado e lacuna tolerante (3,5 s) | Aceito — verificado só por teste automatizado |
 | [0101](0101-indicador-de-atualizacao-do-pull-na-barra-de-status.md) | Indicador de atualização do `pull` na barra de status: estado `Integrating`, arco girando e a exceção ao RF-9.8 | Aceito — verificado só por teste automatizado; aval visual do dono pendente |
 | [0102](0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md) | Fechar o terminal parado ao restaurar uma sessão na janela atual | Aceito — verificado só por teste automatizado |
-| [0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) | Acesso remoto: três partes, o desktop como host e o protocolo num repositório próprio | Aceito |
-| [0104](0104-crate-porecatu-remote.md) | Crate `porecatu-remote`: folha com `tokio` e `keyring` próprios, fronteira síncrona com `porecatu-ui` | Aceito |
-| [0105](0105-espelhamento-da-grade-e-input-remoto.md) | Espelhamento da grade e input remoto: snapshot do motor no ritmo do relógio da UI, diff fora da main thread, teclas pelo codificador local | Aceito |
-| [0106](0106-pareamento-identidade-e-autorizacao.md) | Pareamento, identidade e autorização: QR na tela de configurações, confirmação no desktop, lista de aparelhos escrita só por gesto | Aceito |
-| [0107](0107-acoes-remotas-sobre-o-workspace.md) | Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop | Aceito |
-| [0108](0108-superficies-de-ui-do-acesso-remoto.md) | Superfícies de UI do acesso remoto: grupo nas configurações, QR em `Quad`s, diálogo de pareamento e botão de aparelhos conectados na zona fixa | Proposto — aval visual do dono pendente |
+| [0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) | Acesso remoto: três partes, o desktop como host e o protocolo num repositório próprio | Aceito — implementado; verificado só por teste automatizado |
+| [0104](0104-crate-porecatu-remote.md) | Crate `porecatu-remote`: folha com `tokio` e `keyring` próprios, fronteira síncrona com `porecatu-ui` | Aceito — implementado; verificado só por teste automatizado |
+| [0105](0105-espelhamento-da-grade-e-input-remoto.md) | Espelhamento da grade e input remoto: snapshot do motor no ritmo do relógio da UI, diff fora da main thread, teclas pelo codificador local | Aceito — implementado; verificado só por teste automatizado |
+| [0106](0106-pareamento-identidade-e-autorizacao.md) | Pareamento, identidade e autorização: QR na tela de configurações, confirmação no desktop, lista de aparelhos escrita só por gesto | Aceito — implementado; verificado só por teste automatizado |
+| [0107](0107-acoes-remotas-sobre-o-workspace.md) | Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop | Aceito — implementado; verificado só por teste automatizado · §2 revisto pelo 0109 |
+| [0108](0108-superficies-de-ui-do-acesso-remoto.md) | Superfícies de UI do acesso remoto: grupo nas configurações, QR em `Quad`s, diálogo de pareamento e botão de aparelhos conectados na zona fixa | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
+| [0109](0109-o-celular-muda-a-aba-ativa-do-desktop.md) | O celular muda a aba ativa do desktop: ações com a ativação do gesto local e `activate-tab` | Aceito — implementado; verificado só por teste automatizado |
 
 ## Convenção
 

@@ -6,11 +6,13 @@ use std::sync::{Arc, Mutex};
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::Selection as AlacSelection;
-use alacritty_terminal::term::cell::{Flags as AlacFlags, Hyperlink as AlacHyperlink};
+use alacritty_terminal::term::cell::{
+    Cell as AlacCell, Flags as AlacFlags, Hyperlink as AlacHyperlink,
+};
 use alacritty_terminal::term::{
-    ClipboardType, Config as AlacConfig, Osc52, point_to_viewport, viewport_to_point,
+    ClipboardType, Config as AlacConfig, Osc52, TermMode, point_to_viewport, viewport_to_point,
 };
 use alacritty_terminal::vte::ansi::{
     CursorShape as AnsiCursorShape, CursorStyle as AnsiCursorStyle, Processor, Rgb as AnsiRgb,
@@ -25,8 +27,58 @@ use crate::search::{InvalidPattern, SearchJob, SearchMode, SearchStep};
 use crate::selection::{SelectionKind, SelectionSide};
 use crate::snapshot::{
     Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, HyperlinkSpan, MouseReporting,
-    SelectionSpan, TermModes,
+    ScrollbackInfo, SelectionSpan, TermModes,
 };
+
+/// Folga do teto **interno** do histórico da grade primária, acima de
+/// `scrollback.lines`.
+///
+/// O `alacritty_terminal` descarta as linhas mais antigas em silêncio quando o
+/// histórico enche e não diz quantas. Para contar `dropped` com exatidão o
+/// motor roda com o teto em `scrollback.lines + HISTORY_SLACK` e, depois de
+/// cada lote, corta o excesso por conta própria (`trim_history`), somando-o a
+/// `dropped`. O usuário nunca vê o excesso: o corte acontece sob o mesmo lock
+/// do `advance`, antes de qualquer leitura.
+///
+/// O valor cobre um lote de 4096 bytes (o buffer de `read_loop`) em que cada
+/// byte rola uma linha (`\n`, `ESC D`, quebra automática): nenhum outro byte
+/// empurra mais de uma linha ao histórico, salvo `CSI n S`, que rola até
+/// `rows` linhas em 3 bytes ou mais. Um lote com mais de `HISTORY_SLACK`
+/// linhas empurradas ao histórico transborda o teto interno e o motor perde
+/// as excedentes sem contá-las -- só subconta, nunca sobreconta. A folga custa
+/// memória só enquanto o lote roda: as linhas existem de fato apenas depois de
+/// escritas e o corte as solta no fim do lote.
+const HISTORY_SLACK: usize = 4096;
+
+/// Reconhecedor, por byte, dos dois jeitos de limpar o histórico: `ESC [ 3 J`
+/// (CSI 3 J) e `ESC c` (RIS). Estado preservado entre lotes, porque a sequência
+/// pode chegar partida em duas leituras do PTY. Só serve para **partir o lote**
+/// logo depois da sequência (ver `TermEngine::feed`); quem decide se o histórico
+/// foi limpo é a comparação com `history_seen`. Falso positivo (um `ESC c`
+/// dentro de outra sequência) só parte o lote sem efeito.
+#[derive(Debug, Clone, Copy, Default)]
+enum ClearScan {
+    #[default]
+    Ground,
+    Esc,
+    Csi,
+    Csi3,
+}
+
+impl ClearScan {
+    /// Consome um byte. `true` quando ele fecha uma sequência de limpeza.
+    fn step(&mut self, byte: u8) -> bool {
+        let (next, hit) = match (*self, byte) {
+            (Self::Esc, b'c') | (Self::Csi3, b'J') => (Self::Ground, true),
+            (_, 0x1b) => (Self::Esc, false),
+            (Self::Esc, b'[') => (Self::Csi, false),
+            (Self::Csi, b'3') => (Self::Csi3, false),
+            _ => (Self::Ground, false),
+        };
+        *self = next;
+        hit
+    }
+}
 
 /// Dimensões do terminal em células. Tipo próprio -- `Dimensions` do
 /// `alacritty_terminal` é implementado aqui, não exposto.
@@ -151,6 +203,22 @@ pub struct TermEngine {
     /// Config atual do motor, guardada para `set_default_cursor_style`:
     /// `Term::set_options` troca a config inteira, não um campo.
     config: AlacConfig,
+    /// `scrollback.lines`: o teto **visível** do histórico. O teto interno da
+    /// grade é este valor mais [`HISTORY_SLACK`].
+    scrollback_lines: usize,
+    /// Linhas que saíram do topo do histórico da grade primária, desde que o
+    /// painel existe (zera só quando o histórico é limpo). Ver
+    /// [`ScrollbackInfo`].
+    dropped: u64,
+    /// Tamanho do histórico da primária no último ponto de contagem na tela
+    /// normal. Um histórico menor que isto, sem o motor ter cortado e sem
+    /// resize nem volta da tela alternativa no meio, é histórico limpo.
+    history_seen: usize,
+    /// A contagem anterior ocorreu na tela alternativa (o histórico da
+    /// primária ficou fora de alcance e pode ter mudado por resize), então a
+    /// primeira contagem na normal só ressincroniza.
+    was_alt: bool,
+    clear_scan: ClearScan,
 }
 
 /// O que `TermEngine::soft_reset` manda ao parser: desliga o que uma sessão
@@ -186,7 +254,8 @@ impl TermEngine {
         pty_writer: mpsc::Sender<Vec<u8>>,
     ) -> Self {
         let config = AlacConfig {
-            scrolling_history: params.scrollback_lines,
+            // Teto interno: ver `HISTORY_SLACK`.
+            scrolling_history: params.scrollback_lines.saturating_add(HISTORY_SLACK),
             semantic_escape_chars: params.word_separators,
             default_cursor_style: AnsiCursorStyle {
                 shape: ansi_cursor_shape(params.default_cursor_shape),
@@ -211,6 +280,11 @@ impl TermEngine {
             events,
             pty_writer,
             config,
+            scrollback_lines: params.scrollback_lines,
+            dropped: 0,
+            history_seen: 0,
+            was_alt: false,
+            clear_scan: ClearScan::default(),
         }
     }
 
@@ -235,7 +309,7 @@ impl TermEngine {
     /// um `vim` aberto na hora de uma queda prenderia a aba nova na tela
     /// alternativa (ADR-0071 §4).
     pub fn soft_reset(&mut self) {
-        self.parser.advance(&mut self.term, SOFT_RESET.as_bytes());
+        self.feed(SOFT_RESET.as_bytes());
     }
 
     /// Troca o cursor de **default** do motor (hot reload de
@@ -255,7 +329,7 @@ impl TermEngine {
     /// (`crate::osc7`) e o marcador de dispensa do convite de integração
     /// de shell (`crate::dismiss`).
     pub fn advance(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.term, bytes);
+        self.feed(bytes);
         if let Some(cwd) = self.osc7.advance(bytes) {
             let _ = self.events.send(TermEvent::Cwd {
                 path: cwd.path,
@@ -279,7 +353,111 @@ impl TermEngine {
         let (r, g, b) = rgb;
         let text = text.replace("\r\n", "\n").replace('\n', "\r\n");
         let styled = format!("\r\n\x1b[38;2;{r};{g};{b}m{text}\x1b[0m\r\n");
-        self.parser.advance(&mut self.term, styled.as_bytes());
+        self.feed(styled.as_bytes());
+    }
+
+    /// Único ponto em que bytes entram no parser: alimenta o motor e mantém a
+    /// contagem de `dropped`.
+    ///
+    /// O lote é partido logo depois de cada sequência que limpa o histórico
+    /// (`ClearScan`), e a contagem roda ao fim de cada pedaço. Sem a partida,
+    /// um `CSI 3 J` seguido de saída que reenche o histórico no mesmo lote
+    /// passaria despercebido (o tamanho não teria diminuído). O caso comum, sem
+    /// limpeza, é um pedaço só e custa uma leitura de `history_size`.
+    fn feed(&mut self, bytes: &[u8]) {
+        let mut start = 0;
+        for (index, &byte) in bytes.iter().enumerate() {
+            if self.clear_scan.step(byte) {
+                self.parser.advance(&mut self.term, &bytes[start..=index]);
+                self.account_history(true);
+                start = index + 1;
+            }
+        }
+        if start < bytes.len() {
+            self.parser.advance(&mut self.term, &bytes[start..]);
+            self.account_history(false);
+        }
+    }
+
+    /// Contagem de `dropped` depois de um pedaço de bytes (ver
+    /// [`TermEngine::feed`]). `ends_with_clear`: o pedaço termina numa
+    /// sequência que limpa o histórico.
+    ///
+    /// - Tela alternativa: não conta. A alternativa não tem histórico e o da
+    ///   primária fica fora de alcance (`history_size()` lê a grade ativa); só
+    ///   anota que esteve lá.
+    /// - Histórico **menor** que o da última contagem: foi limpo (CSI 3 J,
+    ///   RIS), `dropped` volta a zero. Exceção: logo depois de voltar da tela
+    ///   alternativa o histórico pode ter mudado por resize feito lá dentro, e
+    ///   só uma limpeza reconhecida pelo `ClearScan` conta como limpeza.
+    /// - Histórico **maior** que `scrollback.lines`: o excesso saiu do topo,
+    ///   soma a `dropped` e é cortado (`trim_history`).
+    fn account_history(&mut self, ends_with_clear: bool) {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            self.was_alt = true;
+            return;
+        }
+        let was_alt = std::mem::replace(&mut self.was_alt, false);
+        if self.term.history_size() < self.history_seen && (ends_with_clear || !was_alt) {
+            self.dropped = 0;
+        }
+        self.trim_history();
+    }
+
+    /// Corta o histórico da grade ativa (a primária, na tela normal) em
+    /// `scrollback.lines`, contando o excesso em `dropped`, e anota o tamanho
+    /// resultante. `update_history` descarta as linhas **mais antigas**
+    /// (`Storage::shrink_lines` encurta pelo topo) e mantém o
+    /// `display_offset` dentro do novo teto; a segunda chamada devolve o teto
+    /// interno à folga. Nenhuma das duas move a vista do usuário, que nunca
+    /// passa de `scrollback.lines`.
+    fn trim_history(&mut self) {
+        let lines = self.scrollback_lines;
+        let history = self.term.history_size();
+        if history > lines {
+            self.dropped += (history - lines) as u64;
+            let grid = self.term.grid_mut();
+            grid.update_history(lines);
+            grid.update_history(lines.saturating_add(HISTORY_SLACK));
+        }
+        self.history_seen = self.term.history_size();
+    }
+
+    /// Troca o `scrollback.lines` (recarga da configuração). Mantém a folga do
+    /// teto interno e conta como descartado o que o encolhimento cortar.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        self.scrollback_lines = lines;
+        let internal = lines.saturating_add(HISTORY_SLACK);
+        self.config.scrolling_history = internal;
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            // O histórico da primária não é legível daqui; `history_seen` é o
+            // último tamanho conhecido e ninguém o altera na alternativa.
+            // `set_options` corta a primária no teto interno, e o resto do
+            // excesso é cortado e contado na volta (`was_alt`).
+            let cut = self.history_seen.saturating_sub(internal);
+            self.dropped += cut as u64;
+            self.history_seen -= cut;
+            self.term.set_options(self.config.clone());
+        } else {
+            // Corta antes, para o excesso passar por `dropped`; só então o
+            // `set_options` fixa o teto interno novo.
+            self.trim_history();
+            self.term.set_options(self.config.clone());
+            self.history_seen = self.term.history_size();
+        }
+    }
+
+    /// Ressincroniza a contagem depois de um resize. Reflow e crescimento da
+    /// tela puxam linhas do histórico (ou o enchem) sem ser limpeza, então o
+    /// tamanho menor não pode ser lido como histórico limpo; os índices
+    /// absolutos das linhas que ficam não mudam (só as mais novas se movem).
+    fn resync_history(&mut self) {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            self.was_alt = true;
+            return;
+        }
+        self.was_alt = false;
+        self.trim_history();
     }
 
     /// Redimensiona a grade. Devolve `false` sem tocar nada quando o
@@ -291,6 +469,7 @@ impl TermEngine {
             return false;
         }
         self.term.resize(TermSize { rows, cols });
+        self.resync_history();
         true
     }
 
@@ -402,72 +581,178 @@ impl TermEngine {
         let rows = self.term.screen_lines();
         let display_offset = content.display_offset;
 
-        out.cols = cols;
-        out.rows = rows;
-        out.clusters.clear();
-        out.cells.clear();
-        out.cells.resize(rows * cols, Cell::default());
-        // `porecatu-ui` repopula a cada frame com busca ativa (ADR-0041 §4)
-        // -- sem realocar aqui evita que um frame sem busca herde as
-        // ocorrências do anterior.
-        out.occurrences.clear();
-        out.hyperlinks.clear();
-        out.hyperlink_spans.clear();
+        fill_cells(
+            out,
+            rows,
+            cols,
+            content.display_iter.map(|indexed| indexed.cell),
+        );
 
-        // Span de hyperlink em aberto (ADR-0042 §1): nunca atravessa
-        // quebra de linha -- por isso é fechado à força a cada `col == 0`,
-        // mesmo que o link continue na célula seguinte (é justamente o
-        // caso que o `id` existe para amarrar de volta).
-        let mut open_link: Option<(usize, usize, AlacHyperlink)> = None;
-
-        for (index, indexed) in content.display_iter.enumerate() {
-            let row = index / cols;
-            let col = index % cols;
-
-            if col == 0
-                && let Some((link_row, link_start, link)) = open_link.take()
-            {
-                push_hyperlink_span(out, link_row, link_start, cols.saturating_sub(1), &link);
-            }
-
-            let link = indexed.cell.hyperlink();
-            let continues =
-                matches!((&open_link, &link), (Some((_, _, cur)), Some(new)) if cur == new);
-            if !continues {
-                if let Some((link_row, link_start, cur)) = open_link.take() {
-                    push_hyperlink_span(out, link_row, link_start, col.saturating_sub(1), &cur);
-                }
-                if let Some(new) = link {
-                    open_link = Some((row, col, new));
-                }
-            }
-
-            if let Some(slot) = out.cells.get_mut(index) {
-                *slot = convert_cell(indexed.cell, &mut out.clusters);
-            }
-        }
-        if let Some((link_row, link_start, link)) = open_link.take() {
-            push_hyperlink_span(out, link_row, link_start, cols.saturating_sub(1), &link);
-        }
-
-        let shape = convert_cursor_shape(content.cursor.shape);
-        out.cursor = Cursor {
-            // `point_to_viewport` só recusa linha acima da vista: com o
-            // scrollback rolado, o cursor da última linha vira `line >=
-            // rows` e era desenhado abaixo da grade, por cima da barra de
-            // status. Cursor fora da vista não tem posição.
-            position: point_to_viewport(display_offset, content.cursor.point)
-                .filter(|p| p.line < rows)
-                .map(|p| (p.line, p.column.0)),
-            shape,
-            visible: shape != CursorShape::Hidden,
-            blinking: self.term.cursor_style().blinking,
-        };
+        out.cursor = self.snapshot_cursor(
+            content.cursor.point,
+            content.cursor.shape,
+            display_offset,
+            rows,
+        );
         out.scroll_offset = display_offset;
         out.selection = content
             .selection
             .map(|range| convert_selection(range, display_offset, rows, cols));
         out.modes = convert_modes(content.mode);
+    }
+
+    /// A tela viva: as `rows` linhas do fundo da grade ativa
+    /// (`Line(0)..Line(rows)`), **sem** aplicar o `display_offset` -- o que o
+    /// desktop rolou não muda o que o espelhamento remoto vê (ADR-0105 §3).
+    /// Mesmo formato de [`TermEngine::snapshot_into`] (a conversão de célula,
+    /// de grafema e de hyperlink é a mesma função), com o cursor na posição
+    /// real, `scroll_offset = 0`, sem seleção e sem ocorrências de busca. Não
+    /// mexe no `display_offset`. Na tela alternativa lê a grade alternativa e
+    /// `history` é 0.
+    pub fn snapshot_live_into(&self, out: &mut GridSnapshot) -> ScrollbackInfo {
+        let content = self.term.renderable_content();
+        let grid = self.term.grid();
+        let cols = self.term.columns();
+        let rows = self.term.screen_lines();
+
+        fill_cells(
+            out,
+            rows,
+            cols,
+            (0..rows).flat_map(move |row| {
+                (0..cols).map(move |col| &grid[Point::new(Line(row as i32), Column(col))])
+            }),
+        );
+
+        out.cursor = self.snapshot_cursor(content.cursor.point, content.cursor.shape, 0, rows);
+        out.scroll_offset = 0;
+        out.selection = None;
+        out.modes = convert_modes(content.mode);
+        self.scrollback_info()
+    }
+
+    /// Uma página de histórico: até `count` linhas, **de cima para baixo**, em
+    /// que a última é a de `offset` (0 = a linha logo acima do topo da tela),
+    /// limitadas ao que existe -- `out.rows` é quantas vieram e `out.cols` as
+    /// colunas da grade. Cursor oculto, sem seleção nem ocorrências, `modes`
+    /// de agora. Na tela alternativa devolve 0 linhas e `history = 0`.
+    ///
+    /// Não limita `count`: quem chama (o protocolo remoto) o limita a 500.
+    pub fn history_into(
+        &self,
+        offset: usize,
+        count: usize,
+        out: &mut GridSnapshot,
+    ) -> ScrollbackInfo {
+        let grid = self.term.grid();
+        let cols = self.term.columns();
+        let history = self.term.history_size();
+        let returned = count.min(history.saturating_sub(offset));
+        // A linha de histórico de deslocamento `k` é `Line(-1 - k)`; a mais
+        // alta da página tem deslocamento `offset + returned - 1`.
+        let top = -1 - (offset + returned).saturating_sub(1) as i32;
+
+        fill_cells(
+            out,
+            returned,
+            cols,
+            (0..returned).flat_map(move |row| {
+                (0..cols).map(move |col| &grid[Point::new(Line(top + row as i32), Column(col))])
+            }),
+        );
+
+        out.cursor = Cursor::default();
+        out.scroll_offset = 0;
+        out.selection = None;
+        out.modes = convert_modes(*self.term.mode());
+        self.scrollback_info()
+    }
+
+    fn scrollback_info(&self) -> ScrollbackInfo {
+        ScrollbackInfo {
+            history: self.term.history_size(),
+            dropped: self.dropped,
+        }
+    }
+
+    fn snapshot_cursor(
+        &self,
+        point: Point,
+        shape: AnsiCursorShape,
+        display_offset: usize,
+        rows: usize,
+    ) -> Cursor {
+        let shape = convert_cursor_shape(shape);
+        Cursor {
+            // `point_to_viewport` só recusa linha acima da vista: com o
+            // scrollback rolado, o cursor da última linha vira `line >=
+            // rows` e era desenhado abaixo da grade, por cima da barra de
+            // status. Cursor fora da vista não tem posição.
+            position: point_to_viewport(display_offset, point)
+                .filter(|p| p.line < rows)
+                .map(|p| (p.line, p.column.0)),
+            shape,
+            visible: shape != CursorShape::Hidden,
+            blinking: self.term.cursor_style().blinking,
+        }
+    }
+}
+
+/// Esvazia os buffers reusados de `out` e os preenche com `rows * cols`
+/// células de `cells` (row-major): conversão de célula, arena de grafemas e
+/// spans de hyperlink. Comum a `snapshot_into`, `snapshot_live_into` e
+/// `history_into` -- o que muda entre elas é só de onde vêm as células.
+fn fill_cells<'a>(
+    out: &mut GridSnapshot,
+    rows: usize,
+    cols: usize,
+    cells: impl Iterator<Item = &'a AlacCell>,
+) {
+    out.cols = cols;
+    out.rows = rows;
+    out.clusters.clear();
+    out.cells.clear();
+    out.cells.resize(rows * cols, Cell::default());
+    // `porecatu-ui` repopula a cada frame com busca ativa (ADR-0041 §4)
+    // -- sem realocar aqui evita que um frame sem busca herde as
+    // ocorrências do anterior.
+    out.occurrences.clear();
+    out.hyperlinks.clear();
+    out.hyperlink_spans.clear();
+
+    // Span de hyperlink em aberto (ADR-0042 §1): nunca atravessa
+    // quebra de linha -- por isso é fechado à força a cada `col == 0`,
+    // mesmo que o link continue na célula seguinte (é justamente o
+    // caso que o `id` existe para amarrar de volta).
+    let mut open_link: Option<(usize, usize, AlacHyperlink)> = None;
+
+    for (index, cell) in cells.enumerate() {
+        let row = index / cols;
+        let col = index % cols;
+
+        if col == 0
+            && let Some((link_row, link_start, link)) = open_link.take()
+        {
+            push_hyperlink_span(out, link_row, link_start, cols.saturating_sub(1), &link);
+        }
+
+        let link = cell.hyperlink();
+        let continues = matches!((&open_link, &link), (Some((_, _, cur)), Some(new)) if cur == new);
+        if !continues {
+            if let Some((link_row, link_start, cur)) = open_link.take() {
+                push_hyperlink_span(out, link_row, link_start, col.saturating_sub(1), &cur);
+            }
+            if let Some(new) = link {
+                open_link = Some((row, col, new));
+            }
+        }
+
+        if let Some(slot) = out.cells.get_mut(index) {
+            *slot = convert_cell(cell, &mut out.clusters);
+        }
+    }
+    if let Some((link_row, link_start, link)) = open_link.take() {
+        push_hyperlink_span(out, link_row, link_start, cols.saturating_sub(1), &link);
     }
 }
 

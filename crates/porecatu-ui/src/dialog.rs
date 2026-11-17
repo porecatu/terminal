@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use porecatu_core::{GroupId, PaneId, TabId};
 use porecatu_locale::Catalog;
+use porecatu_remote::PairingId;
 use porecatu_term::{PromptId, SecretLabel};
 
 use crate::messages::msg;
@@ -100,6 +101,16 @@ pub enum DialogAction {
         pid: u32,
         start_time: u64,
     },
+    /// RF-25.10 (ADR-0108 §1): revogar o aparelho pareado de chave `key`.
+    /// Quem responde é a janela de configurações, dona da lista.
+    RevokeDevice([u8; 32]),
+    /// RF-25.11 (ADR-0108 §1): recriar a identidade do desktop. Quem responde
+    /// é a janela de configurações.
+    RecreateIdentity,
+    /// RF-25.7 (ADR-0106 §3, ADR-0108 §3): o pedido de pareamento `id`. Parear
+    /// o aceita; recusar, `Esc` e o prazo, não. Quem responde é a janela de
+    /// configurações, que guarda o pedido.
+    PairDevice(PairingId),
 }
 
 impl DialogAction {
@@ -130,7 +141,10 @@ impl DialogAction {
             | Self::DeleteProfile(_)
             | Self::Notice
             | Self::ShellInviteCopy(_)
-            | Self::ShellInviteDismiss => {}
+            | Self::ShellInviteDismiss
+            | Self::RevokeDevice(_)
+            | Self::RecreateIdentity
+            | Self::PairDevice(_) => {}
         }
     }
 }
@@ -200,6 +214,12 @@ pub struct SecretFacts {
 pub enum LineTone {
     /// Dado, em mono: cor "Secundário" (`#a8b0bb`, §1.4). Nunca truncado.
     Data,
+    /// Dado em **mono** (Iosevka, como o campo de senha), cor "Secundário":
+    /// a impressão digital do pedido de pareamento (ADR-0108 §3). Nunca
+    /// truncado.
+    Mono,
+    /// Dica em 11px no tom Terciário (ADR-0108 §3).
+    Hint,
     /// Aviso, na cor de aviso da §2.14.
     Warning,
     /// Continuação do corpo de um aviso do app: cor do corpo, cortado ao
@@ -267,6 +287,10 @@ pub struct ConfirmDialog {
     pub checkbox: Option<Box<CheckboxFacts>>,
     /// O corpo é a linha de erro (segredo recusado): pintado na cor de erro.
     pub body_is_error: bool,
+    /// O botão de confirmar é o **primário** (o verde do rodapé da tela de
+    /// configurações), não o destrutivo de sempre: o "Parear" do pareamento
+    /// remoto (ADR-0108 §3). Falso em todos os outros diálogos.
+    pub primary_confirm: bool,
     focused: DialogButton,
     /// O botão sob o cursor, só no diálogo de três saídas: os de dois botões
     /// não têm realce de hover.
@@ -294,6 +318,7 @@ impl ConfirmDialog {
             secret: None,
             checkbox: None,
             body_is_error: false,
+            primary_confirm: false,
             focused: DialogButton::Cancel,
             hovered: None,
         }
@@ -488,6 +513,64 @@ impl ConfirmDialog {
                 checked: true,
             }));
         }
+        dialog
+    }
+
+    /// RF-25.10 (ADR-0108 §1): revogar o aparelho `name`, de chave `key`. O
+    /// confirmar é o destrutivo de sempre, e o foco inicial é o cancelar.
+    /// `name` vem do celular e entra na frase como chegou.
+    pub fn revoke_device(catalog: &Catalog, name: &str, key: [u8; 32]) -> Self {
+        Self::new(
+            msg::dialog::revoke_device::title(catalog, name),
+            msg::dialog::revoke_device::body(catalog),
+            msg::dialog::revoke_device::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            DialogAction::RevokeDevice(key),
+        )
+    }
+
+    /// RF-25.11 (ADR-0108 §1): recriar a identidade do desktop. Diz que **todos**
+    /// os aparelhos terão de parear de novo.
+    pub fn recreate_identity(catalog: &Catalog) -> Self {
+        Self::new(
+            msg::dialog::recreate_identity::title(catalog),
+            msg::dialog::recreate_identity::body(catalog),
+            msg::dialog::recreate_identity::confirm(catalog),
+            msg::dialog::cancel(catalog),
+            DialogAction::RecreateIdentity,
+        )
+    }
+
+    /// RF-25.7 (ADR-0106 §3, ADR-0108 §3): um aparelho leu o QR e pede para
+    /// parear. O corpo diz o nome e a plataforma; abaixo vêm a impressão digital
+    /// em mono, como chegou, e a dica de conferi-la no celular. O foco inicial
+    /// é o **Recusar** (o cancelar de sempre: um `Enter` distraído não pareia),
+    /// e o **Parear** é o confirmar primário, não o destrutivo.
+    pub fn pair_device(
+        catalog: &Catalog,
+        id: PairingId,
+        name: &str,
+        platform: &str,
+        fingerprint: &str,
+    ) -> Self {
+        let mut dialog = Self::new(
+            msg::dialog::pair_device::title(catalog),
+            msg::dialog::pair_device::body(catalog, name, platform),
+            msg::dialog::pair_device::confirm(catalog),
+            msg::dialog::pair_device::decline(catalog),
+            DialogAction::PairDevice(id),
+        );
+        dialog.primary_confirm = true;
+        dialog.lines = vec![
+            DialogLine {
+                text: fingerprint.to_owned(),
+                tone: LineTone::Mono,
+            },
+            DialogLine {
+                text: msg::dialog::pair_device::hint(catalog),
+                tone: LineTone::Hint,
+            },
+        ];
         dialog
     }
 
@@ -1352,5 +1435,99 @@ mod tests {
         assert_eq!(dialog.focused(), DialogButton::Confirm);
         dialog.step_focus(1);
         assert_eq!(dialog.focused(), DialogButton::Cancel);
+    }
+
+    // ---- the remote access dialogs (ADR-0108 sections 1 and 3)
+
+    #[test]
+    fn the_pairing_dialog_starts_on_decline_and_confirms_with_a_primary_pair() {
+        let pt = test_support::pt_br();
+        let dialog = ConfirmDialog::pair_device(
+            &pt,
+            PairingId(4),
+            "Pixel",
+            "Android",
+            "ABCD EFGH IJKL MNOP",
+        );
+        assert_eq!(dialog.title, "Parear este aparelho?");
+        assert_eq!(
+            dialog.body,
+            "Pixel (Android) quer parear com este computador."
+        );
+        assert_eq!(dialog.confirm_label, "Parear");
+        assert_eq!(dialog.cancel_label, "Recusar");
+        assert_eq!(dialog.action, DialogAction::PairDevice(PairingId(4)));
+        // Recusar has the focus: an `Enter` out of habit does not pair.
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+        assert!(dialog.primary_confirm);
+        // The fingerprint in mono, as it came; below it, the tertiary hint.
+        assert_eq!(
+            dialog.lines,
+            [
+                DialogLine {
+                    text: "ABCD EFGH IJKL MNOP".to_owned(),
+                    tone: LineTone::Mono
+                },
+                DialogLine {
+                    text: "Confira se o celular mostra o mesmo código.".to_owned(),
+                    tone: LineTone::Hint
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn only_the_pairing_dialog_has_a_primary_confirm() {
+        for catalog in test_support::all_catalogs() {
+            let others = [
+                ConfirmDialog::close_tab(&catalog, "vim", TabId::new(1)),
+                ConfirmDialog::close_window(&catalog, 2),
+                ConfirmDialog::delete_profile(&catalog, "web", 0, true),
+                ConfirmDialog::settings_pending(&catalog, 1),
+                ConfirmDialog::revoke_device(&catalog, "Pixel", [3; 32]),
+                ConfirmDialog::recreate_identity(&catalog),
+            ];
+            for dialog in others {
+                assert!(!dialog.primary_confirm, "{:?}", dialog.action);
+                assert_eq!(dialog.focused(), DialogButton::Cancel);
+            }
+            let pair =
+                ConfirmDialog::pair_device(&catalog, PairingId(1), "p", "Android", "AAAA BBBB");
+            assert!(pair.primary_confirm);
+            assert_eq!(pair.focused(), DialogButton::Cancel);
+            assert!(!pair.confirm_label.is_empty() && !pair.cancel_label.is_empty());
+        }
+    }
+
+    #[test]
+    fn revoking_names_the_device_and_recreating_says_everyone_pairs_again() {
+        let pt = test_support::pt_br();
+        let revoke = ConfirmDialog::revoke_device(&pt, "Pixel", [9; 32]);
+        assert_eq!(revoke.title, "Revogar Pixel?");
+        assert_eq!(revoke.confirm_label, "Revogar");
+        assert!(revoke.body.contains("não conecta mais"), "{}", revoke.body);
+        assert_eq!(revoke.action, DialogAction::RevokeDevice([9; 32]));
+
+        let recreate = ConfirmDialog::recreate_identity(&pt);
+        assert!(recreate.body.contains("Todos"), "{}", recreate.body);
+        assert!(
+            recreate.body.contains("parear de novo"),
+            "{}",
+            recreate.body
+        );
+        assert_eq!(recreate.action, DialogAction::RecreateIdentity);
+        for catalog in test_support::all_catalogs() {
+            assert!(!ConfirmDialog::recreate_identity(&catalog).body.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_remote_dialogs_carry_no_tab_to_retarget() {
+        let mut action = DialogAction::RevokeDevice([1; 32]);
+        action.retarget_tab(TabId::new(1), TabId::new(2));
+        assert_eq!(action, DialogAction::RevokeDevice([1; 32]));
+        let mut action = DialogAction::PairDevice(PairingId(2));
+        action.retarget_tab(TabId::new(1), TabId::new(2));
+        assert_eq!(action, DialogAction::PairDevice(PairingId(2)));
     }
 }

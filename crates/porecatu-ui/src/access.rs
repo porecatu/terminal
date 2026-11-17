@@ -31,6 +31,7 @@ use porecatu_render::TextMeasurer;
 use winit::window::WindowId;
 
 use crate::context_menu::ContextMenu;
+use crate::devices_popover::{self, DeviceEntry};
 use crate::dialog::{ConfirmDialog, DialogButton, SecretFocus};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
@@ -110,6 +111,9 @@ const TASK_MANAGER_METER_BASE: u64 = 110;
 /// ADR-0098 §6: a alternância do rodapé da lista (monitoramento em segundo
 /// plano), logo depois dos três medidores (110 a 112).
 const TASK_MANAGER_BACKGROUND_ID: NodeId = NodeId(113);
+/// PRD-025 RF-25.12, ADR-0108 section 4: the connected-devices button, right
+/// after the fixed ids above. Present only while a phone is connected.
+const DEVICES_BUTTON_ID: NodeId = NodeId(114);
 /// Linhas da lista do gerenciador: uma faixa de 2^40 ids, acima de tudo o que
 /// as outras faixas usam. `PID` e instante de início não cabem num múltiplo
 /// fixo como `TAB_STRIDE`, então o id sai de um hash da `RowKey` (ver
@@ -469,6 +473,7 @@ pub(crate) fn build_tree(
     status_bar: Option<&StatusBarLayout>,
     active_pane_order: Option<&[PaneId]>,
     task_manager: Option<&TaskManagerAccess<'_>>,
+    devices: &[DeviceEntry],
     style: &TabBarStyle,
     catalog: &Catalog,
     language: &str,
@@ -514,6 +519,21 @@ pub(crate) fn build_tree(
             leaf(Role::Button, msg::access::new_tab_ungrouped(catalog)),
         ));
         root_children.push(UNGROUPED_NEW_TAB_ID);
+    }
+
+    // PRD-025 RF-25.12, ADR-0108 section 4: the connected-devices button,
+    // left of the sessions one on the screen, so before it in the tree. It is
+    // there while a phone is connected and gone with the last one, like the
+    // button on the screen; its label is the text of its tooltip.
+    if !devices.is_empty() {
+        nodes.push((
+            DEVICES_BUTTON_ID,
+            leaf(
+                Role::Button,
+                devices_popover::summary_text(catalog, devices),
+            ),
+        ));
+        root_children.push(DEVICES_BUTTON_ID);
     }
 
     // ADR-0054/ADR-0055: à esquerda da engrenagem na tela -- ordem do nó
@@ -1777,6 +1797,80 @@ fn row_control_node(
             describe(&mut node);
             nodes.push((id, node));
         }
+        // O token do relay (ADR-0108 §1): um campo de senha. O conteúdo nunca é
+        // exposto -- só se está preenchido, na descrição.
+        ControlView::Secret { filled, .. } => {
+            let mut node = leaf(Role::PasswordInput, row.name.clone());
+            let state = if *filled > 0 {
+                msg::settings::remote::access_secret_filled(catalog)
+            } else {
+                msg::settings::remote::access_secret_empty(catalog)
+            };
+            let description = if description.is_empty() {
+                state
+            } else {
+                format!("{description} {state}")
+            };
+            node.set_description(description);
+            if row.unavailable.is_some() {
+                node.set_disabled();
+            }
+            if row.invalid.is_some() {
+                node.set_invalid(accesskit::Invalid::True);
+            }
+            if read_only {
+                node.set_read_only();
+            }
+            nodes.push((id, node));
+        }
+        // A linha de estado: só texto, lida como `Estado: Conectado`.
+        ControlView::Text { text, .. } => {
+            nodes.push((id, leaf(Role::Label, format!("{}: {text}", row.name))));
+        }
+        // O QR de pareamento (ADR-0108 §2) não é uma imagem na árvore: o nó é
+        // um botão "Copiar link de pareamento", e a descrição diz quando o
+        // código vence. Nada do link, que carrega o token, aparece aqui.
+        ControlView::Qr { .. } => {
+            let mut node = leaf(Role::Button, msg::settings::remote::qr_copy(catalog));
+            describe(&mut node);
+            nodes.push((id, node));
+        }
+        // Um aparelho pareado: um item de lista, com o botão de revogar dentro
+        // dele; a descrição diz plataforma e datas, e se está conectado agora.
+        ControlView::Device { connected } => {
+            let revoke_id = NodeId(id.0 + 1);
+            let mut revoke = leaf(
+                Role::Button,
+                msg::settings::remote::device_revoke(catalog, &row.value_text),
+            );
+            if read_only {
+                revoke.set_read_only();
+            }
+            nodes.push((revoke_id, revoke));
+            let mut node = container(Role::ListItem, vec![revoke_id]);
+            node.set_label(row.value_text.clone());
+            let state = if *connected {
+                msg::settings::remote::device_connected(catalog)
+            } else {
+                String::new()
+            };
+            let detail = match (description.is_empty(), state.is_empty()) {
+                (_, true) => description.to_owned(),
+                (true, false) => state,
+                (false, false) => format!("{description} {state}"),
+            };
+            if !detail.is_empty() {
+                node.set_description(detail);
+            }
+            nodes.push((id, node));
+        }
+        // O botão destrutivo ("Recriar identidade"): um botão, desabilitado
+        // quando a linha está indisponível.
+        ControlView::Danger { label, .. } => {
+            let mut node = leaf(Role::Button, label.clone());
+            describe(&mut node);
+            nodes.push((id, node));
+        }
         ControlView::GitPoll { on, seconds, .. } => {
             let switch_id = NodeId(id.0 + 1);
             let mut switch = leaf(Role::Switch, row.name.clone());
@@ -1845,11 +1939,133 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             language,
             &mut measurer(),
         )
+    }
+
+    // ---- ADR-0108 §4: botão de aparelhos conectados
+
+    fn connected(names: &[&str]) -> Vec<DeviceEntry> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| DeviceEntry {
+                client: porecatu_remote::ClientId(i as u64 + 1),
+                name: (*name).to_owned(),
+                platform: porecatu_remote::DevicePlatform::Android,
+                connected_at: std::time::Instant::now(),
+            })
+            .collect()
+    }
+
+    fn build_with_devices(ws: &Workspace, devices: &[DeviceEntry]) -> TreeUpdate {
+        build_tree(
+            ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            &None,
+            &None,
+            None,
+            None,
+            None,
+            devices,
+            &TabBarStyle::DEFAULT,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
+            &mut measurer(),
+        )
+    }
+
+    /// The button of the connected devices is in the tree while a phone is
+    /// connected -- with the text of its tooltip, left of the sessions button
+    /// in reading order -- and gone with the last one, like on the screen.
+    #[test]
+    fn the_connected_devices_button_is_present_and_absent_with_the_button() {
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+
+        let none = build_with_devices(&ws, &[]);
+        assert!(
+            !none.nodes.iter().any(|(id, _)| *id == DEVICES_BUTTON_ID),
+            "no phone, no node"
+        );
+
+        let one = build_with_devices(&ws, &connected(&["Pixel"]));
+        let button = node(&one, DEVICES_BUTTON_ID);
+        assert_eq!(button.role(), Role::Button);
+        assert_eq!(button.label(), Some("1 aparelho conectado: Pixel"));
+
+        let three = build_with_devices(&ws, &connected(&["Pixel", "iPad", "Galaxy"]));
+        assert_eq!(
+            node(&three, DEVICES_BUTTON_ID).label(),
+            Some("3 aparelhos conectados: Pixel, iPad, Galaxy")
+        );
+
+        // Reading order: before the sessions button, like the screen.
+        let root = node(&one, ROOT_ID);
+        let children = root.children();
+        let at = |id| children.iter().position(|c| *c == id).unwrap();
+        assert!(at(DEVICES_BUTTON_ID) < at(SESSIONS_BUTTON_ID));
+        assert!(at(SESSIONS_BUTTON_ID) < at(SETTINGS_BUTTON_ID));
+    }
+
+    /// The id is free: none of the fixed or ranged ids of the module takes it.
+    #[test]
+    fn the_connected_devices_button_id_collides_with_no_other_fixed_id() {
+        let fixed = [
+            ROOT_ID,
+            TAB_LIST_ID,
+            UNGROUPED_NEW_TAB_ID,
+            SETTINGS_BUTTON_ID,
+            WINDOW_MINIMIZE_ID,
+            WINDOW_MAXIMIZE_ID,
+            WINDOW_CLOSE_ID,
+            SEARCH_BAR_ID,
+            SEARCH_FIELD_ID,
+            SEARCH_REGEX_TOGGLE_ID,
+            WARNINGS_CONTAINER_ID,
+            DIALOG_ID,
+            DIALOG_CANCEL_ID,
+            DIALOG_CONFIRM_ID,
+            MENU_ID,
+            GROUP_EDITOR_ID,
+            GROUP_EDITOR_FIELD_ID,
+            GROUP_EDITOR_SWATCHES_ID,
+            GROUP_EDITOR_ACTIONS_ID,
+            STATUS_BAR_ID,
+            SESSIONS_BUTTON_ID,
+            SESSION_PICKER_ID,
+            SESSION_PICKER_FIELD_ID,
+            SESSION_PICKER_SAVE_ITEM_ID,
+            DIALOG_DISCARD_ID,
+            DIALOG_SECRET_FIELD_ID,
+            DIALOG_SECRET_REMEMBER_ID,
+            TASK_MANAGER_BUTTON_ID,
+            TASK_MANAGER_ID,
+            TASK_MANAGER_LIST_ID,
+            TASK_MANAGER_BACKGROUND_ID,
+        ];
+        assert!(!fixed.contains(&DEVICES_BUTTON_ID));
+        let meters = TASK_MANAGER_METER_BASE..TASK_MANAGER_METER_BASE + 3;
+        assert!(!meters.contains(&DEVICES_BUTTON_ID.0));
+        const {
+            assert!(DEVICES_BUTTON_ID.0 < FIRST_DYNAMIC_ID);
+            assert!(
+                DEVICES_BUTTON_ID.0 > STATUS_BAR_FIRST_SEGMENT_ID,
+                "away from the dynamic range of the status bar segments"
+            );
+        }
     }
 
     // ---- ADR-0095 §10: gerenciador de tarefas
@@ -1928,6 +2144,7 @@ mod tests {
             None,
             order,
             access,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -1993,6 +2210,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &style,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2421,6 +2639,7 @@ mod tests {
             None,
             Some(&order),
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2472,6 +2691,7 @@ mod tests {
             None,
             Some(&order),
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2526,6 +2746,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2580,6 +2801,7 @@ mod tests {
             Some(&layout),
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2649,6 +2871,7 @@ mod tests {
             Some(&layout),
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2701,6 +2924,7 @@ mod tests {
             Some(&layout),
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2747,6 +2971,7 @@ mod tests {
             Some(&layout),
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2790,6 +3015,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2841,6 +3067,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &pt,
             "pt-BR",
@@ -2913,6 +3140,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &pt,
             "pt-BR",
@@ -2995,6 +3223,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -3035,6 +3264,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &catalog,
             "pt-BR",
@@ -3105,6 +3335,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -3142,6 +3373,7 @@ mod tests {
             None,
             None,
             None,
+            &[],
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -3211,7 +3443,7 @@ mod settings_tree_tests {
     }
 
     #[test]
-    fn the_sidebar_is_a_list_with_the_eleven_groups_and_one_selected() {
+    fn the_sidebar_is_a_list_with_the_twelve_groups_and_one_selected() {
         let update = tree(Group::Terminal, false, true, "pt-BR");
         let list = node(&update, SETTINGS_GROUP_LIST_ID);
         assert_eq!(list.role(), Role::ListBox);
@@ -3227,6 +3459,7 @@ mod settings_tree_tests {
                 "Geral",
                 "Shell",
                 "Perfis",
+                "Acesso remoto",
                 "Terminal",
                 "Aparência",
                 "Sessão",
@@ -3382,6 +3615,64 @@ mod settings_tree_tests {
             .map(|option| node(&update, option.children()[0]).label().unwrap())
             .collect();
         assert_eq!(labels, ["Edit WSL Ubuntu", "Edit prod-web-01"]);
+    }
+
+    // ---- o pareamento e os aparelhos (ADR-0108 §1, §2)
+
+    #[test]
+    fn the_qr_is_a_copy_link_button_and_never_an_image() {
+        let rows = crate::settings::remote_pairing_rows_for_test();
+        let update = tree_with_rows(Group::RemoteAccess, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let copy = labelled(&nodes, "Copiar link de pareamento");
+        assert_eq!(copy.role(), Role::Button);
+        // The countdown is its description; no node reads like the link.
+        assert_eq!(copy.description(), Some("Expira em 4:32"));
+        assert!(
+            update
+                .nodes
+                .iter()
+                .all(|(_, node)| node.role() != Role::Image)
+        );
+        assert!(update.nodes.iter().all(|(_, node)| {
+            [node.label(), node.description(), node.value()]
+                .into_iter()
+                .flatten()
+                .all(|text| !text.contains("porecatu://"))
+        }));
+    }
+
+    #[test]
+    fn a_device_is_a_list_item_with_a_revoke_button_and_says_when_it_is_connected() {
+        let rows = crate::settings::remote_pairing_rows_for_test();
+        let update = tree_with_rows(Group::RemoteAccess, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let pixel = labelled(&nodes, "Pixel");
+        assert_eq!(pixel.role(), Role::ListItem);
+        assert!(
+            pixel
+                .description()
+                .unwrap()
+                .starts_with("Android · pareado em ")
+        );
+        assert!(pixel.description().unwrap().ends_with("conectado agora"));
+        let revoke = node(&update, pixel.children()[0]);
+        assert_eq!(revoke.role(), Role::Button);
+        assert_eq!(revoke.label(), Some("Revogar Pixel"));
+
+        // The other one is not connected: nothing says so.
+        let ipad = labelled(&nodes, "iPad");
+        assert!(!ipad.description().unwrap().contains("conectado agora"));
+    }
+
+    #[test]
+    fn the_recreate_button_is_a_button_and_is_enabled_with_a_host() {
+        let rows = crate::settings::remote_pairing_rows_for_test();
+        let update = tree_with_rows(Group::RemoteAccess, false, true, "pt-BR", &rows);
+        let nodes = row_nodes(&update);
+        let recreate = labelled(&nodes, "Recriar identidade");
+        assert_eq!(recreate.role(), Role::Button);
+        assert!(!recreate.is_disabled());
     }
 
     #[test]

@@ -37,9 +37,11 @@ mod acrylic;
 mod animation;
 mod app_cross_drag;
 mod app_icon;
+mod app_key_edit;
 mod app_move_to_window;
 mod app_named_append;
 mod app_reconnect;
+mod app_remote;
 mod app_task_manager;
 mod app_transfer;
 mod background_image;
@@ -50,6 +52,7 @@ mod context_menu;
 mod crash_log;
 mod cross_window;
 mod cursor_blink;
+mod devices_popover;
 mod dialog;
 mod git;
 mod group_editor;
@@ -75,6 +78,7 @@ mod profile_spawn;
 mod prompt_queue;
 mod reconnect;
 mod reload;
+mod remote;
 mod rename;
 mod search_bar;
 mod secret_dialog;
@@ -100,6 +104,7 @@ use app_move_to_window::{GroupActionOutcome, MoveToWindowState};
 use app_transfer::TransferPayload;
 use chrome::{DragGhost, GhostSource, GroupDragGhost};
 use context_menu::{ContextMenu, MenuAction};
+use devices_popover::{DeviceEntry, DevicesOutcome, DevicesPopover};
 use dialog::{ConfirmDialog, DialogAction, DialogButton, HostKeyFacts};
 use group_editor::{EditorRegion, GroupEditor};
 use group_menu::{GroupAction, GroupContextMenu};
@@ -535,6 +540,18 @@ enum Wakeup {
     /// `ProcessStat` plus the `Instant` pass the 80 bytes `AccessKit` already
     /// reserves; `the_image_result_does_not_widen_wakeup` covers it.
     ProcessSample(Box<porecatu_term::SampleResult<app_reconnect::PaneKey>>),
+    /// The remote access host (the network side, ADR-0104 section 3) told the
+    /// main thread something: data, never a command -- `App::apply_remote_event`
+    /// keeps it in `App::remote` or answers it. `Box` like the variants above:
+    /// `RemoteEvent` carries strings, vectors and protocol messages;
+    /// `the_image_result_does_not_widen_wakeup` covers it.
+    Remote(Box<porecatu_remote::RemoteEvent>),
+    /// What a short thread that talked to the OS vault found or did for the
+    /// remote access group of the settings screen (ADR-0108 section 1): data,
+    /// never a command -- `App::apply_remote_vault` keeps it in the screen.
+    /// `Box` like the variants above; `the_image_result_does_not_widen_wakeup`
+    /// covers it.
+    RemoteVault(Box<app_remote::VaultReport>),
 }
 
 impl From<accesskit_winit::Event> for Wakeup {
@@ -686,6 +703,15 @@ struct PaneRuntime {
     /// O painel está num ciclo de reconexão (ADR-0076 §4): a conexão conta como
     /// **aberta** para o RF-20.25, mesmo com o backend que caiu já encerrado.
     reconnecting: bool,
+    /// The SSH shell opened (`TermEvent::Connected`); cleared when the
+    /// connection is started again (`reattach`). Only the remote access reads
+    /// it, to tell `Connecting` from `Running` (PRD-025 RF-25.17).
+    connected: bool,
+    /// The backend ended because the **link** was lost or never opened
+    /// (`remote::tree::link_dropped`), not because the remote shell ended.
+    /// Written where the pane becomes `Exited`; read by the remote access to
+    /// say `Disconnected`.
+    link_dropped: bool,
 }
 
 impl PaneRuntime {
@@ -782,6 +808,8 @@ mod pane_runtime_map_key_tests {
             dormant: false,
             ssh_spawn: None,
             reconnecting: false,
+            connected: false,
+            link_dropped: false,
         }
     }
 
@@ -1370,7 +1398,18 @@ enum ActionOutcome {
     /// and the process sampler belong to the process/`App` (ADR-0093 §4,
     /// ADR-0095 §2), not to the window state that resolves the key.
     ToggleTaskManager,
+    /// `remote.*` (PRD-025 RF-25.15, ADR-0107 §7): remote access belongs to
+    /// the process/`App`, not to the window state that resolves the key.
+    Remote(RemoteAction),
     Unhandled,
+}
+
+/// The three `remote.*` actions (ADR-0107 §7), all aimed at the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteAction {
+    Toggle,
+    Pair,
+    DisconnectAll,
 }
 
 /// As três ações de zoom (RF-5.9) -- `font.increase`/`decrease`/`reset`.
@@ -1456,6 +1495,9 @@ enum OverlayTarget {
     MoveToWindow(usize),
     /// Item de salvar (navegando), linha ou `X` do popover de sessões.
     Session(overlay::SessionPickerHit),
+    /// A "Disconnect" or one of the two items of the popover of the connected
+    /// devices (PRD-025 RF-25.13).
+    Devices(devices_popover::DevicesTarget),
     WarningClose(usize),
     /// Fechar, regex, anterior ou próximo da barra de busca.
     Search(SearchBarHit),
@@ -1497,7 +1539,8 @@ struct WindowState {
     /// o release sobre o mesmo botão é que dispara
     /// (`tab_bar::window_button_release`).
     pressed_window_button: Option<tab_bar::WindowButtonHit>,
-    /// Botão de sessões/configurações armado pelo press; dispara no release.
+    /// Botão de aparelhos/sessões/configurações armado pelo press; dispara no
+    /// release.
     pressed_zone_button: Option<tab_bar::ZoneButtonHit>,
     // "+" (de grupo ou de aba solta) ou botão de fechar de aba armado pelo
     // press: a ação só dispara no release sobre o mesmo botão, como nos
@@ -1580,6 +1623,16 @@ struct WindowState {
     /// Popover de sessões nomeadas (PRD-014, ADR-0054, ADR-0055), sétimo
     /// widget de chrome -- mesma exclusão mútua de `close_all_popovers`.
     session_picker: Option<SessionPicker>,
+    /// The phones with an open session (PRD-025 RF-25.12): a copy of
+    /// `RemoteState::clients` that `App` keeps current (`sync_connected_devices`),
+    /// because the window does not know the remote access. Non-empty is "the
+    /// button of the connected devices exists" -- the **one** answer every
+    /// geometry call of the bar takes ([`WindowState::devices_button`]).
+    connected_devices: Vec<DeviceEntry>,
+    /// The popover of the connected-devices button (ADR-0108 section 4); the
+    /// same mutual exclusion of `close_all_popovers`. Closes by itself when
+    /// the last device goes (`set_connected_devices`).
+    devices_popover: Option<DevicesPopover>,
     /// Último clique numa pílula, pra detectar o duplo clique do RF-2.22 --
     /// mesmo padrão de `input::ClickTracker`, mas escopado à pílula (que
     /// não passa pelo roteamento de mouse do terminal).
@@ -1624,6 +1677,12 @@ struct WindowState {
     /// restaurar uma janela minimizada a deixava preta até o mouse passar
     /// por cima. O render é damage-driven, então nada pede o segundo sozinho.
     settle_frames: u8,
+    /// PRD-025 (ADR-0105 section 3): the panes whose grid size was just
+    /// handed to `Terminal::resize`. A size change is a change of the screen
+    /// the phone mirrors, but `WindowState` does not know the remote access:
+    /// `App` drains this on every turn of the event loop
+    /// (`App::drain_remote_resizes`) and marks the subscribed ones dirty.
+    remote_resized: Vec<(TabId, PaneId)>,
     /// Barra de busca (ADR-0041), o sexto widget de chrome -- estado
     /// efêmero de janela, amarrado à aba em que foi aberta (mesma
     /// classificação de `selection`, ADR-0041 §8). `redraw` fecha sozinha
@@ -1699,6 +1758,14 @@ fn exit_outcome(reason: &EndReason) -> (bool, u32) {
         // devolve o painel a este caminho ao desistir.
         EndReason::Lost { .. } | EndReason::Failed { .. } => (false, 1),
     }
+}
+
+/// RF-1.9: the text typed as a tab title, trimmed; blank clears the custom
+/// title (`None`, back to the automatic one). The inline rename and the remote
+/// `rename-tab` share it.
+fn normalized_title(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// O `cwd` local de um painel: o dele, a menos que seja SSH -- o diretório de
@@ -2814,6 +2881,7 @@ impl WindowState {
             || self.move_to_group.is_some()
             || self.move_to_window.is_some()
             || self.session_picker.is_some()
+            || self.devices_popover.is_some()
             // PRD-024: o menu da linha do gerenciador de tarefas é um menu
             // de contexto como os outros.
             || self
@@ -2883,6 +2951,8 @@ impl WindowState {
             move_to_group: None,
             move_to_window: None,
             session_picker: None,
+            connected_devices: Vec::new(),
+            devices_popover: None,
             last_pill_click: None,
             selection: Selection::default(),
             last_titlebar_click: None,
@@ -2890,6 +2960,7 @@ impl WindowState {
             last_shown_placement: None,
             last_normal_size,
             settle_frames: 1,
+            remote_resized: Vec::new(),
             search: None,
             task_manager: None,
             task_manager_history: task_manager::TaskManagerHistory::default(),
@@ -2955,6 +3026,7 @@ impl WindowState {
         let move_to_group = &self.move_to_group;
         let move_to_window = self.move_to_window.as_ref().map(|(_, popover)| popover);
         let session_picker = &self.session_picker;
+        let devices = &self.connected_devices;
         let search = &self.search;
         // ADR-0095 §10: with the task manager open the tree carries the list
         // (every row, in view or not) instead of the panes. Built outside the
@@ -2996,6 +3068,7 @@ impl WindowState {
                 status_bar_layout.as_ref(),
                 active_pane_order.as_deref(),
                 task_manager_access.as_ref(),
+                devices,
                 style,
                 catalog,
                 language,
@@ -3099,6 +3172,7 @@ impl WindowState {
         self.move_to_group = None;
         self.move_to_window = None;
         self.session_picker = None;
+        self.devices_popover = None;
         // PRD-024: exclusão mútua com o menu da linha do gerenciador.
         if let Some(view) = self.task_manager.as_mut() {
             view.menu = None;
@@ -3187,6 +3261,22 @@ impl WindowState {
             .or_else(|| self.resolve_new_tab_cwd(startup_directory))
     }
 
+    /// The `cwd` a tab created at `target` inherits: one decision for every
+    /// gesture that creates a tab (`tab.new`, the `+` buttons, the profile
+    /// menu) and for the remote access (PRD-025, ADR-0107 section 1).
+    fn new_tab_cwd(
+        &self,
+        target: NewTabTarget,
+        startup_directory: &Option<PathBuf>,
+    ) -> Option<PathBuf> {
+        match target {
+            NewTabTarget::Group(group) => self.resolve_group_new_tab_cwd(group, startup_directory),
+            NewTabTarget::ActiveGroup | NewTabTarget::Ungrouped => {
+                self.resolve_new_tab_cwd(startup_directory)
+            }
+        }
+    }
+
     /// Linhas/colunas do quadro inteiro da aba (sem subdividir por
     /// painel) -- usado por quem ainda não precisa da árvore de uma aba
     /// específica (ex.: `spawn_tab_runtime`, sempre chamado para a
@@ -3228,6 +3318,7 @@ impl WindowState {
             self.logical_width,
             is_macos(),
             self.workspace.pinned().len(),
+            self.devices_button(),
         );
         let window_start = self.scroll_offset;
         let window_end = self.scroll_offset + trilha_width;
@@ -3327,6 +3418,11 @@ impl WindowState {
     /// `Terminal` dela via [`Self::spawn_tab_runtime`]. Aba nova nasce
     /// sempre `Running` (ADR-0037 §1) -- `spawn_tab_runtime` não muda
     /// estado nenhum, só cria o `PaneRuntime`.
+    ///
+    /// `activate`: todo gesto local ativa a aba nova (`true`), e o acesso
+    /// remoto também (ADR-0109 §1, que revê o ADR-0107 §2); o parâmetro fica
+    /// porque criar sem ativar é uma capacidade do modelo
+    /// (`Workspace::new_tab_with`), mas hoje nenhum chamador pede `false`.
     #[allow(clippy::too_many_arguments)]
     fn open_tab(
         &mut self,
@@ -3340,8 +3436,9 @@ impl WindowState {
         config: &porecatu_config::Config,
         project_file: &porecatu_config::ProjectFile,
         startup_directory: &Option<PathBuf>,
+        activate: bool,
         profile: Option<&str>,
-    ) {
+    ) -> Option<TabId> {
         // ADR-0070 §2: a new tab launches the default profile, unless the
         // user chose one (profile menu, `profile.new_tab_N`).
         let spawn_profile = match profile {
@@ -3355,18 +3452,22 @@ impl WindowState {
             NewTabTarget::Group(id) => match self.workspace.group(id) {
                 Some(g) => {
                     let pos = g.tabs().len();
-                    self.touch_workspace(|ws| ws.new_tab(Some(id), shell_name, cwd.clone(), pos))
+                    self.touch_workspace(|ws| {
+                        ws.new_tab_with(Some(id), shell_name, cwd.clone(), pos, activate)
+                    })
                 }
                 // Grupo que sumiu entre o clique e aqui: cai no caminho
                 // de `tab.new`, não num run implícito novo no fim.
-                None => self.touch_workspace(|ws| ws.append_tab(shell_name, cwd.clone())),
+                None => {
+                    self.touch_workspace(|ws| ws.append_tab_with(shell_name, cwd.clone(), activate))
+                }
             },
             NewTabTarget::ActiveGroup => {
-                self.touch_workspace(|ws| ws.append_tab(shell_name, cwd.clone()))
+                self.touch_workspace(|ws| ws.append_tab_with(shell_name, cwd.clone(), activate))
             }
-            NewTabTarget::Ungrouped => {
-                self.touch_workspace(|ws| ws.append_ungrouped_tab(shell_name, cwd.clone()))
-            }
+            NewTabTarget::Ungrouped => self.touch_workspace(|ws| {
+                ws.append_ungrouped_tab_with(shell_name, cwd.clone(), activate)
+            }),
         };
         self.spawn_tab_runtime(
             tab_id,
@@ -3381,6 +3482,8 @@ impl WindowState {
             project_file,
             startup_directory,
         );
+        // A spawn that failed took the tab back out of the workspace.
+        self.workspace.tab(tab_id).map(|_| tab_id)
     }
 
     /// Spawna o `Terminal` de uma aba que já existe no `Workspace` --
@@ -3589,6 +3692,8 @@ impl WindowState {
                         dormant,
                         ssh_spawn,
                         reconnecting: false,
+                        connected: false,
+                        link_dropped: false,
                     },
                 );
             }
@@ -3744,6 +3849,8 @@ impl WindowState {
                         dormant,
                         ssh_spawn,
                         reconnecting: false,
+                        connected: false,
+                        link_dropped: false,
                     },
                 );
             }
@@ -4034,16 +4141,48 @@ impl WindowState {
         let Some(id) = self.workspace.active_tab() else {
             return;
         };
+        self.start_tab(
+            id,
+            cell_metrics,
+            proxy,
+            now,
+            style,
+            term_params,
+            config,
+            project_file,
+            startup_directory,
+        );
+    }
+
+    /// Starts the tab `id` if it is a `NotStarted` one that has nothing yet:
+    /// the body of [`Self::ensure_active_tab_started`] (the tab that became
+    /// active, by any path) and of the remote `start-pane` (a tab the phone
+    /// asks to start, which **stays** inactive: PRD-025, ADR-0107 section 1).
+    /// `true` when it spawned something. Everything it does is on the tab
+    /// `id`, never on the active one.
+    #[allow(clippy::too_many_arguments)]
+    fn start_tab(
+        &mut self,
+        id: TabId,
+        cell_metrics: CellMetrics,
+        proxy: &EventLoopProxy<Wakeup>,
+        now: Instant,
+        style: &TabBarStyle,
+        term_params: &TermParams,
+        config: &porecatu_config::Config,
+        project_file: &porecatu_config::ProjectFile,
+        startup_directory: &Option<PathBuf>,
+    ) -> bool {
         let Some(tab) = self.workspace.tab(id) else {
-            return;
+            return false;
         };
         if !tab.is_not_started() {
-            return;
+            return false;
         }
         // RF-20.33: a focused SSH pane stays `NotStarted` in the model after
         // its dormant runtime exists -- the tab has been dealt with already.
         if self.panes.contains_key(&(id, tab.panes().focused_id())) {
-            return;
+            return false;
         }
         let cwd = tab.cwd().cloned();
         // ADR-0070 §4: o perfil é resolvido agora, no primeiro foco -- ele
@@ -4086,10 +4225,13 @@ impl WindowState {
         // (`Ctrl+Tab`, `tab.goto_N`, the tab the restore picked). Gaining
         // focus is not a gesture on the pane, and the one decision says so.
         if profile_spawn::gesture_connects(profile_spawn::PaneGesture::Focus)
-            && let Some((tab, pane)) = self.dormant_focused_pane()
+            && let Some(pane) = self
+                .focused_pane_of(id)
+                .filter(|pane| self.is_dormant(id, *pane))
         {
-            self.connect_dormant_pane(tab, pane, config, startup_directory, now);
+            self.connect_dormant_pane(id, pane, config, startup_directory, now);
         }
+        true
     }
 
     /// Formaliza `NotStarted -> Running` em todo painel da aba que ganhou um
@@ -4293,13 +4435,31 @@ impl WindowState {
     /// o resultado: nova aba, fechar, ativar, título vindo do processo,
     /// renomear.
     fn sync_window_title(&self) {
-        let title = self
-            .workspace
+        self.window.set_title(self.window_title());
+    }
+
+    /// The title the title bar shows: the active tab's, or the app's name.
+    /// The remote access sends the same text (PRD-025 RF-25.17).
+    fn window_title(&self) -> &str {
+        self.workspace
             .active_tab()
             .and_then(|id| self.workspace.tab(id))
             .map(|tab| tab.title())
-            .unwrap_or("Porecatu");
-        self.window.set_title(title);
+            .unwrap_or("Porecatu")
+    }
+
+    /// A backend question (password, passphrase, host key) of the pane waits
+    /// for an answer: queued until the user gets to the pane, or already in
+    /// the dialog (ADR-0107 section 6, PRD-025 `AwaitingDesktop`).
+    fn prompt_pending(&self, tab: TabId, pane: PaneId) -> bool {
+        self.pending_prompts.has_pane(tab, pane)
+            || self.dialog.as_ref().is_some_and(|dialog| {
+                matches!(
+                    dialog.action,
+                    DialogAction::HostKey(t, p, _) | DialogAction::Secret(t, p, _)
+                        if t == tab && p == pane
+                )
+            })
     }
 
     /// Confirma o rename em andamento, se algum (RF-1.8/RF-1.9): buffer
@@ -4311,13 +4471,14 @@ impl WindowState {
         let RenameState::Editing { tab, field } = std::mem::take(&mut self.rename) else {
             return;
         };
-        let trimmed = field.text().trim();
-        let title = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        };
-        if let Some(t) = self.workspace.tab_mut(tab) {
+        self.set_tab_title(tab, normalized_title(field.text()));
+    }
+
+    /// Sets (`Some`) or clears (`None`) the custom title of the tab `id`, and
+    /// makes the session and the window title follow. The one place for the
+    /// inline rename (`commit_rename`) and the remote `rename-tab`.
+    fn set_tab_title(&mut self, id: TabId, title: Option<String>) {
+        if let Some(t) = self.workspace.tab_mut(id) {
             t.set_custom_title(title);
             self.mark_session_dirty();
         }
@@ -4339,7 +4500,7 @@ impl WindowState {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
-        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        let cwd = self.new_tab_cwd(NewTabTarget::ActiveGroup, startup_directory);
         self.open_tab(
             cell_metrics,
             proxy,
@@ -4351,6 +4512,7 @@ impl WindowState {
             config,
             project_file,
             startup_directory,
+            true,
             None,
         );
     }
@@ -4423,25 +4585,7 @@ impl WindowState {
         confirm_close_with_process: bool,
         catalog: &Catalog,
     ) -> Option<TabCloseOutcome> {
-        let pinned = self.workspace.is_pinned(id);
-        // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
-        // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup`.
-        let process_would_confirm = !self.tab_has_nothing_running(id)
-            // ADR-0053 §10: fechar a aba pergunta se **qualquer** painel dela
-            // tem processo ativo -- não só o focado. Diferente de
-            // `action_close_pane`, que fecha um painel só e por isso olha
-            // apenas o runtime dele.
-            && any_pane_needs_confirmation(
-                confirm_close_with_process,
-                self.workspace
-                    .tab(id)?
-                    .panes()
-                    .leaves_in_order()
-                    .iter()
-                    .filter_map(|pane| self.panes.get(&(id, *pane)))
-                    .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
-            );
-        match pinned::close_ask(pinned, process_would_confirm) {
+        match self.tab_close_ask(id, confirm_close_with_process)? {
             pinned::CloseAsk::Direct => {
                 let window_empty = self.close_tab_unconditionally(id);
                 Some(TabCloseOutcome::Closed { window_empty })
@@ -4460,6 +4604,55 @@ impl WindowState {
                 }))
             }
         }
+    }
+
+    /// What closing the tab `id` asks first, with no side effect: the one
+    /// decision of the three gestures (`tab.close`, the menu item, the close
+    /// button) and of the remote `close-tab` (PRD-025, ADR-0107 section 3),
+    /// which answers it with a `confirm-request` to the phone instead of a
+    /// dialog. `None` for an unknown tab.
+    fn tab_close_ask(
+        &self,
+        id: TabId,
+        confirm_close_with_process: bool,
+    ) -> Option<pinned::CloseAsk> {
+        let pinned = self.workspace.is_pinned(id);
+        // ADR-0037 §3: checagem antes da detecção do ADR-0034, não uma
+        // exceção dentro dela. Aba `NotStarted` não tem `ProcessGroup`.
+        let process_would_confirm = !self.tab_has_nothing_running(id)
+            // ADR-0053 §10: fechar a aba pergunta se **qualquer** painel dela
+            // tem processo ativo -- não só o focado. Diferente de
+            // `action_close_pane`, que fecha um painel só e por isso olha
+            // apenas o runtime dele.
+            && any_pane_needs_confirmation(
+                confirm_close_with_process,
+                self.workspace
+                    .tab(id)?
+                    .panes()
+                    .leaves_in_order()
+                    .iter()
+                    .filter_map(|pane| self.panes.get(&(id, *pane)))
+                    .map(|runtime| (runtime.terminal.modes(), runtime.liveness())),
+            );
+        Some(pinned::close_ask(pinned, process_would_confirm))
+    }
+
+    /// Whether closing the pane (not the last of its tab) asks first: RF-1.6
+    /// over **that pane's** runtime. A pane with no runtime has nothing to
+    /// lose. Shared by `pane.close` and the remote `close-pane`.
+    fn pane_close_needs_confirmation(
+        &self,
+        tab_id: TabId,
+        pane_id: PaneId,
+        confirm_close_with_process: bool,
+    ) -> bool {
+        self.panes.get(&(tab_id, pane_id)).is_some_and(|runtime| {
+            should_confirm_tab_close(
+                confirm_close_with_process,
+                runtime.terminal.modes(),
+                liveness_needs_confirmation(runtime.liveness()),
+            )
+        })
     }
 
     /// RF-6.10: fecha o painel **focado**. Fechar o último painel de uma
@@ -4481,12 +4674,8 @@ impl WindowState {
         if tab.panes().leaves_in_order().len() <= 1 {
             return self.action_close_tab(confirm_close_with_process, catalog);
         }
-        let runtime = self.panes.get(&(tab_id, pane_id))?;
-        if should_confirm_tab_close(
-            confirm_close_with_process,
-            runtime.terminal.modes(),
-            liveness_needs_confirmation(runtime.liveness()),
-        ) {
+        self.panes.get(&(tab_id, pane_id))?;
+        if self.pane_close_needs_confirmation(tab_id, pane_id, confirm_close_with_process) {
             let title = tab.title().to_string();
             return Some(TabCloseOutcome::Dialog(ConfirmDialog::close_pane(
                 catalog, &title, tab_id, pane_id,
@@ -5084,6 +5273,7 @@ impl WindowState {
             self.logical_width,
             is_macos(),
             self.workspace.pinned().len(),
+            self.devices_button(),
         );
         let track_left = tab_bar::track_shift(style, is_macos(), self.workspace.pinned().len());
         let anchor = Rect {
@@ -5157,16 +5347,11 @@ impl WindowState {
                 if self.rename.editing_tab().is_some() {
                     self.commit_rename();
                 }
-                let (new_tab_target, cwd) = match target {
-                    ProfileMenuTarget::Group(group) => (
-                        NewTabTarget::Group(group),
-                        self.resolve_group_new_tab_cwd(group, startup_directory),
-                    ),
-                    ProfileMenuTarget::Ungrouped => (
-                        NewTabTarget::Ungrouped,
-                        self.resolve_new_tab_cwd(startup_directory),
-                    ),
+                let new_tab_target = match target {
+                    ProfileMenuTarget::Group(group) => NewTabTarget::Group(group),
+                    ProfileMenuTarget::Ungrouped => NewTabTarget::Ungrouped,
                 };
+                let cwd = self.new_tab_cwd(new_tab_target, startup_directory);
                 self.open_tab(
                     cell_metrics,
                     proxy,
@@ -5178,6 +5363,7 @@ impl WindowState {
                     config,
                     project_file,
                     startup_directory,
+                    true,
                     Some(&id),
                 );
             }
@@ -5218,6 +5404,7 @@ impl WindowState {
             config,
             project_file,
             startup_directory,
+            true,
             Some(id),
         );
     }
@@ -5315,14 +5502,14 @@ impl WindowState {
                 EditorRegion::Name => {
                     let group = editor.group;
                     let name = editor.name_buffer().to_string();
-                    self.touch_workspace(|ws| ws.rename_group(group, name));
+                    self.rename_group_now(group, name);
                     self.group_editor = None;
                     GroupEditorOutcome::None
                 }
                 EditorRegion::Swatches => {
                     let group = editor.group;
                     let color = GroupColor::ALL[editor.swatch_highlight()];
-                    self.touch_workspace(|ws| ws.set_group_color(group, color));
+                    self.set_group_color_now(group, color);
                     GroupEditorOutcome::None
                 }
                 EditorRegion::Actions => {
@@ -5399,6 +5586,20 @@ impl WindowState {
             modifiers,
             max_visible_rows,
         )
+    }
+
+    /// The keyboard of the connected-devices popover: it captures every key
+    /// (`Up`/`Down` move the highlight, `Enter` acts, `Esc` closes). Returns
+    /// the pure outcome; the effects on the host and the settings screen are
+    /// `App::resolve_devices_outcome`, the one point the click uses too.
+    fn handle_devices_key(&mut self, event: &KeyEvent) -> DevicesOutcome {
+        if event.state != ElementState::Pressed {
+            return DevicesOutcome::None;
+        }
+        let Some(popover) = &mut self.devices_popover else {
+            return DevicesOutcome::None;
+        };
+        popover.handle_key(&event.logical_key, &self.connected_devices)
     }
 
     /// Executa o destino escolhido no popover do RF-2.20.
@@ -5738,6 +5939,11 @@ impl WindowState {
             Action::SshReconnect => ActionOutcome::SshReconnect,
             // PRD-024 RF-24.1, ADR-0095 §8: targets the window, not the pane.
             Action::TaskManagerToggle => ActionOutcome::ToggleTaskManager,
+            // PRD-025 RF-25.15, ADR-0107 §7: target the app, not the pane, so
+            // they stay dispatched with the task manager open.
+            Action::RemoteToggle => ActionOutcome::Remote(RemoteAction::Toggle),
+            Action::RemotePair => ActionOutcome::Remote(RemoteAction::Pair),
+            Action::RemoteDisconnectAll => ActionOutcome::Remote(RemoteAction::DisconnectAll),
             // ADR-0070 §8: no default key; the menu hangs from the `+` of the
             // active tab's group.
             Action::ProfileOpenMenu => {
@@ -5811,6 +6017,7 @@ impl WindowState {
             self.logical_width,
             bar_height(style),
             is_macos(),
+            self.devices_button(),
             logical_point,
         );
         tab_bar::zone_button_release(self.pressed_zone_button.take(), released_over)
@@ -5830,6 +6037,7 @@ impl WindowState {
                 self.logical_width,
                 is_macos(),
                 self.workspace.pinned().len(),
+                self.devices_button(),
                 logical_point.0,
             )
         {
@@ -5840,6 +6048,7 @@ impl WindowState {
             self.logical_width,
             is_macos(),
             self.workspace.pinned().len(),
+            self.devices_button(),
         );
         let layout = tab_bar::fit_width(
             &self.workspace,
@@ -5892,8 +6101,14 @@ impl WindowState {
         style: &TabBarStyle,
     ) -> NewTabRequest {
         let bar_width = self.logical_width;
-        let trilha_width =
-            tab_bar::trilha_width(style, bar_width, is_macos(), self.workspace.pinned().len());
+        let devices = self.devices_button();
+        let trilha_width = tab_bar::trilha_width(
+            style,
+            bar_width,
+            is_macos(),
+            self.workspace.pinned().len(),
+            devices,
+        );
         let track_left = tab_bar::track_shift(style, is_macos(), self.workspace.pinned().len());
         let h = bar_height(style);
         let layout = tab_bar::fit_width(
@@ -5925,9 +6140,14 @@ impl WindowState {
             // hit-test de conteúdo. Como os botões de janela, o press só
             // arma; quem dispara (`settings.open`, ADR-0059 §6, ou o popover
             // de sessões) é o release (`release_zone_button`).
-            if let Some(hit) =
-                tab_bar::point_in_zone_button(style, bar_width, h, is_macos(), logical_point)
-            {
+            if let Some(hit) = tab_bar::point_in_zone_button(
+                style,
+                bar_width,
+                h,
+                is_macos(),
+                devices,
+                logical_point,
+            ) {
                 self.pressed_zone_button = Some(hit);
                 return NewTabRequest::None;
             }
@@ -5957,6 +6177,7 @@ impl WindowState {
             bar_width,
             is_macos(),
             self.workspace.pinned().len(),
+            devices,
             logical_point.0,
         ) {
             if !right_click {
@@ -6095,11 +6316,8 @@ impl WindowState {
                     let block = self.selection.drag_block(self.workspace.track_order(), id);
                     if block.is_empty() {
                         // RF-2.3: clique sem modificador limpa a seleção e ativa.
-                        self.selection.clear();
-                        self.touch_workspace(|ws| ws.activate_tab(id));
+                        self.activate_tab_by_click(id, Some(gpu), style);
                         self.task_manager_tab_click = true;
-                        self.sync_window_title();
-                        self.ensure_active_tab_visible(gpu, style);
                     }
                     self.drag_block = Vec::new();
                     if let Some(rect) = tab_bar::tab_rect(&layout, id) {
@@ -6137,6 +6355,33 @@ impl WindowState {
             }
             TabBarHit::GroupNewTab(id) => NewTabRequest::InGroup(id),
             TabBarHit::UngroupedNewTab => NewTabRequest::Ungrouped,
+        }
+    }
+
+    /// What the click on a tab of the bar does to the window (RF-2.3): the
+    /// selection goes, the model activates `id` -- which expands the collapsed
+    /// group of the tab (RF-2.17) --, the title of the window follows and the
+    /// track scrolls the least needed to show it (RF-1.18). A tab that was
+    /// never started (`NotStarted`) is started by the check at the end of the
+    /// window event (ADR-0037 §2), not here; a dormant SSH pane stays dormant.
+    ///
+    /// The clicks on a track tab (the press, and the release of a press that
+    /// was a selection drag, RF-22.18), on a pinned box (no `gpu`: the zone
+    /// never scrolls the track) and the remote `activate-tab` (ADR-0109 §2)
+    /// call it, with the target spelled out. The flag
+    /// `task_manager_tab_click` is the click's, so it stays with the callers
+    /// that are clicks. Without `gpu` the track is not scrolled.
+    fn activate_tab_by_click(
+        &mut self,
+        id: TabId,
+        gpu: Option<&mut GpuContext>,
+        style: &TabBarStyle,
+    ) {
+        self.selection.clear();
+        self.touch_workspace(|ws| ws.activate_tab(id));
+        self.sync_window_title();
+        if let Some(gpu) = gpu {
+            self.ensure_active_tab_visible(gpu, style);
         }
     }
 
@@ -6188,10 +6433,8 @@ impl WindowState {
         {
             self.commit_rename();
         }
-        self.selection.clear();
-        self.touch_workspace(|ws| ws.activate_tab(id));
+        self.activate_tab_by_click(id, None, style);
         self.task_manager_tab_click = true;
-        self.sync_window_title();
         let rect = tab_bar::pinned_rect(style, is_macos(), index);
         self.drag_block.clear();
         self.drag = Drag::TabPressed {
@@ -6358,26 +6601,74 @@ impl WindowState {
             return;
         }
 
-        let old_layout = tab_bar::fit_width(
-            &self.workspace,
-            style,
-            self.logical_width,
-            gpu.text_measurer(),
-            is_macos(),
-        );
         let color = self.workspace.next_auto_color();
         // RF-15.16: o nome padrão é resolvido no idioma corrente **agora**,
         // na criação, e daí em diante é dado do usuário -- gravado na
         // sessão, nunca retraduzido.
         let name = msg::group_editor::default_name(catalog);
-        let Some(group) = self.touch_workspace(|ws| ws.group_tabs(&ids, &name, color)) else {
+        let Some(group) = self.create_group(&ids, &name, color, Some(gpu), style) else {
             return;
         };
-        self.animations
-            .start_reflow(&old_layout, GROUP_CREATE_REFLOW_DURATION, Instant::now());
         self.selection.clear();
         self.open_group_editor(group, EditorRegion::Name);
+    }
+
+    /// Cria o grupo explícito de `ids` (a decisão do `group.create` depois de
+    /// escolhido o alvo; a ação remota `new-group` chama o mesmo, ADR-0107
+    /// §1): `group_tabs` mais a animação de reordenação das abas que ficam
+    /// contíguas (ADR-0022, `.18s`) e o título. Não toca a seleção nem abre o
+    /// editor -- isso é do gesto local. Sem `gpu` não há como medir o layout
+    /// de antes e a animação é omitida.
+    fn create_group(
+        &mut self,
+        ids: &[TabId],
+        name: &str,
+        color: GroupColor,
+        gpu: Option<&mut GpuContext>,
+        style: &TabBarStyle,
+    ) -> Option<GroupId> {
+        let width = self.logical_width;
+        let old_layout = gpu.map(|gpu| {
+            tab_bar::fit_width(
+                &self.workspace,
+                style,
+                width,
+                gpu.text_measurer(),
+                is_macos(),
+            )
+        });
+        let group = self.touch_workspace(|ws| ws.group_tabs(ids, name, color))?;
+        if let Some(old_layout) = old_layout {
+            self.animations
+                .start_reflow(&old_layout, GROUP_CREATE_REFLOW_DURATION, Instant::now());
+        }
         self.sync_window_title();
+        Some(group)
+    }
+
+    /// `group.rename` depois do editor (Enter no nome); a ação remota
+    /// `rename-group` chama o mesmo. `false` sobre grupo implícito ou
+    /// inexistente.
+    fn rename_group_now(&mut self, group: GroupId, name: String) -> bool {
+        self.touch_workspace(|ws| ws.rename_group(group, name))
+    }
+
+    /// `group.set_color` depois do editor (Enter ou clique numa cor); a ação
+    /// remota `set-group-color` chama o mesmo.
+    fn set_group_color_now(&mut self, group: GroupId, color: GroupColor) -> bool {
+        self.touch_workspace(|ws| ws.set_group_color(group, color))
+    }
+
+    /// `group.dissolve`; a ação remota `ungroup` chama o mesmo.
+    fn dissolve_group(&mut self, group: GroupId) -> bool {
+        self.touch_workspace(|ws| ws.ungroup(group))
+    }
+
+    /// Tira `tab` do grupo dela e a põe sozinha num run implícito na posição
+    /// `group_index` da lista de grupos (RF-1.16, soltar entre grupos); a
+    /// ação remota `move-tab-to-group` com `group: null` chama o mesmo.
+    fn move_tab_to_run(&mut self, tab: TabId, group_index: usize) -> bool {
+        self.touch_workspace(|ws| ws.move_tab_to_new_run(tab, group_index))
     }
 
     fn toggle_group_collapse(&mut self, id: GroupId, gpu: &mut GpuContext, style: &TabBarStyle) {
@@ -6385,6 +6676,26 @@ impl WindowState {
             return;
         };
         let collapsing = !group.is_collapsed();
+        self.set_group_collapsed(id, collapsing, Some(gpu), style);
+    }
+
+    /// Colapsa ou expande `id` (RF-2.13/RF-2.14): a seleção das abas que
+    /// somem sai, o layout de antes alimenta a animação e o modelo faz o
+    /// resto, inclusive a aba ativa (expandir ativa a primeira do grupo,
+    /// colapsar o da ativa a move pela escada de foco). É o que o clique na
+    /// pílula e `group.toggle_collapse` rodam; a ação remota `collapse-group`
+    /// chama o mesmo, sem desvio (ADR-0109 §1).
+    /// Sem `gpu` não há animação nem rolagem até a ativa.
+    fn set_group_collapsed(
+        &mut self,
+        id: GroupId,
+        collapsing: bool,
+        gpu: Option<&mut GpuContext>,
+        style: &TabBarStyle,
+    ) {
+        let Some(group) = self.workspace.group(id) else {
+            return;
+        };
         if collapsing {
             let order: Vec<TabId> = self.workspace.visual_order().collect();
             let group_tabs: Vec<TabId> = group.tabs().to_vec();
@@ -6395,18 +6706,26 @@ impl WindowState {
         // depois deste (ou antes, se expandindo) deslizam em vez de
         // saltar; o sublinhado/caret não têm equivalente animado (nota do
         // módulo `animation.rs`).
-        let old_layout = tab_bar::fit_width(
-            &self.workspace,
-            style,
-            self.logical_width,
-            gpu.text_measurer(),
-            is_macos(),
-        );
+        let width = self.logical_width;
+        let mut gpu = gpu;
+        let old_layout = gpu.as_mut().map(|gpu| {
+            tab_bar::fit_width(
+                &self.workspace,
+                style,
+                width,
+                gpu.text_measurer(),
+                is_macos(),
+            )
+        });
         self.touch_workspace(|ws| ws.collapse_group(id, collapsing));
-        self.animations
-            .start_reflow(&old_layout, COLLAPSE_REFLOW_DURATION, Instant::now());
+        if let Some(old_layout) = old_layout {
+            self.animations
+                .start_reflow(&old_layout, COLLAPSE_REFLOW_DURATION, Instant::now());
+        }
         self.sync_window_title();
-        self.ensure_active_tab_visible(gpu, style);
+        if let Some(gpu) = gpu {
+            self.ensure_active_tab_visible(gpu, style);
+        }
     }
 
     /// RF-2.9/RF-2.10/RF-2.22: abre o editor de grupo (ADR-0023) com o
@@ -6442,6 +6761,46 @@ impl WindowState {
         } else {
             SessionPicker::open_browsing(entries)
         });
+    }
+
+    /// The button of the connected devices exists in this window (ADR-0108
+    /// section 4): there is a phone with an open session. The answer every
+    /// geometry call of the bar takes -- `tab_bar::trilha_width`,
+    /// `right_zone_width`, `point_in_zone_button`, `point_in_track` -- so the
+    /// track, the hit tests and the painting never disagree about whether the
+    /// third button is there.
+    fn devices_button(&self) -> bool {
+        !self.connected_devices.is_empty()
+    }
+
+    /// The list `App` keeps current from `RemoteState::clients`. Returns
+    /// whether anything changed, so the caller asks for a frame only then.
+    /// The popover goes with the last device (RF-25.13); a button armed by a
+    /// press that the layout change took away is dropped too, so a release
+    /// never fires on whatever now sits in its place.
+    fn set_connected_devices(&mut self, devices: Vec<DeviceEntry>) -> bool {
+        if self.connected_devices == devices {
+            return false;
+        }
+        self.connected_devices = devices;
+        if self.connected_devices.is_empty() {
+            self.devices_popover = None;
+            if self.pressed_zone_button == Some(tab_bar::ZoneButtonHit::Devices) {
+                self.pressed_zone_button = None;
+            }
+        }
+        true
+    }
+
+    /// Opens the popover of the connected devices, or closes it when it is
+    /// already open (a click on the button with it open). Closes every other
+    /// popover first (ADR-0023). With no device there is nothing to show.
+    fn toggle_devices_popover(&mut self) {
+        let was_open = self.devices_popover.is_some();
+        self.close_all_popovers();
+        if !was_open && self.devices_button() {
+            self.devices_popover = Some(DevicesPopover::new());
+        }
     }
 
     /// Executa uma ação da lista única de grupo (RF-10.21,
@@ -6495,7 +6854,7 @@ impl WindowState {
                 self.dialog = Some(ConfirmDialog::close_group(catalog, count, group));
             }
             GroupAction::Dissolve => {
-                self.touch_workspace(|ws| ws.ungroup(group));
+                self.dissolve_group(group);
                 if self.group_editor.as_ref().is_some_and(|e| e.group == group) {
                     self.group_editor = None;
                 }
@@ -6528,7 +6887,7 @@ impl WindowState {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
-        let cwd = self.resolve_new_tab_cwd(startup_directory);
+        let cwd = self.new_tab_cwd(NewTabTarget::Ungrouped, startup_directory);
         self.open_tab(
             cell_metrics,
             proxy,
@@ -6540,6 +6899,7 @@ impl WindowState {
             config,
             project_file,
             startup_directory,
+            true,
             None,
         );
     }
@@ -6560,7 +6920,7 @@ impl WindowState {
         if self.rename.editing_tab().is_some() {
             self.commit_rename();
         }
-        let cwd = self.resolve_group_new_tab_cwd(group, startup_directory);
+        let cwd = self.new_tab_cwd(NewTabTarget::Group(group), startup_directory);
         self.open_tab(
             cell_metrics,
             proxy,
@@ -6572,6 +6932,7 @@ impl WindowState {
             config,
             project_file,
             startup_directory,
+            true,
             None,
         );
     }
@@ -6651,11 +7012,8 @@ impl WindowState {
             // RF-22.18: the press that armed a selection drag never got past
             // the threshold, so it was a click.
             Drag::TabPressed { tab, .. } if !block.is_empty() => {
-                self.selection.clear();
-                self.touch_workspace(|ws| ws.activate_tab(tab));
+                self.activate_tab_by_click(tab, Some(gpu), style);
                 self.task_manager_tab_click = true;
-                self.sync_window_title();
-                self.ensure_active_tab_visible(gpu, style);
             }
             Drag::TabDragging { tab, target, .. } if in_bar => {
                 match tab_bar::drop_op(self.workspace.is_pinned(tab), target) {
@@ -6663,7 +7021,7 @@ impl WindowState {
                         self.touch_workspace(|ws| ws.move_tab_to_group_at(tab, group, pos));
                     }
                     DropOp::NewRun { group_index } => {
-                        self.touch_workspace(|ws| ws.move_tab_to_new_run(tab, group_index));
+                        self.move_tab_to_run(tab, group_index);
                     }
                     op @ (DropOp::Pin { .. } | DropOp::ReorderPinned { .. } | DropOp::Unpin(_)) => {
                         zone_op = Some((vec![tab], op));
@@ -6737,8 +7095,14 @@ impl WindowState {
     fn drag_autoscroll(&mut self, logical_x: f32, style: &TabBarStyle) {
         let pinned_count = self.workspace.pinned().len();
         let track_left = tab_bar::track_shift(style, is_macos(), pinned_count);
-        let track_right =
-            track_left + tab_bar::trilha_width(style, self.logical_width, is_macos(), pinned_count);
+        let track_right = track_left
+            + tab_bar::trilha_width(
+                style,
+                self.logical_width,
+                is_macos(),
+                pinned_count,
+                self.devices_button(),
+            );
         if logical_x >= track_left && logical_x < track_left + DRAG_EDGE_ZONE_PX {
             self.scroll_offset = (self.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
         } else if logical_x > track_right - DRAG_EDGE_ZONE_PX {
@@ -6988,6 +7352,7 @@ impl WindowState {
                 let (rows, cols) = grid_size_for_rect(content, cell_metrics);
                 if let Some(runtime) = self.panes.get(&(tab_id, pane_id)) {
                     runtime.terminal.resize(rows, cols);
+                    self.remote_resized.push((tab_id, pane_id));
                 }
             }
         }
@@ -7010,6 +7375,7 @@ impl WindowState {
             let (rows, cols) = grid_size_for_rect(content, cell_metrics);
             if let Some(runtime) = self.panes.get(&(tab_id, pane_id)) {
                 runtime.terminal.resize(rows, cols);
+                self.remote_resized.push((tab_id, pane_id));
             }
         }
     }
@@ -7228,6 +7594,7 @@ impl WindowState {
             && self.group_editor.is_none()
             && self.move_to_group.is_none()
             && self.move_to_window.is_none()
+            && self.devices_popover.is_none()
             && matches!(self.drag, Drag::Idle)
         {
             let layout = tab_bar::fit_width(
@@ -7244,30 +7611,45 @@ impl WindowState {
             // zero -- so it **always** has the tooltip, with the tab title
             // (the same `Tab::title` the bar's labels come from). The track's
             // tabs only when their label was cut (ADR-0019).
-            tooltip::pinned_target(&self.workspace, style, is_macos(), bar_point).or_else(|| {
-                if !tab_bar::point_in_track(
-                    style,
-                    self.logical_width,
-                    is_macos(),
-                    pinned_count,
-                    bar_point.0,
-                ) {
-                    return None;
-                }
-                layout
-                    .groups
-                    .into_iter()
-                    .flat_map(|g| g.tabs)
-                    .find(|t| t.label_truncated && tab_bar_rect_contains(t.rect, content_point))
-                    .and_then(|t| {
-                        let title = self.workspace.tab(t.id)?.title().to_string();
-                        let screen_rect = Rect {
-                            x: t.rect.x + track_left - self.scroll_offset,
-                            ..t.rect
-                        };
-                        Some((HoverKey::Tab(t.id), screen_rect, title))
-                    })
-            })
+            tooltip::pinned_target(&self.workspace, style, is_macos(), bar_point)
+                // ADR-0108 section 4: the connected-devices button is an icon
+                // with no text: it always has the tooltip.
+                .or_else(|| {
+                    tooltip::devices_target(
+                        &self.connected_devices,
+                        &self.catalog,
+                        style,
+                        self.logical_width,
+                        bar_height(style),
+                        is_macos(),
+                        bar_point,
+                    )
+                })
+                .or_else(|| {
+                    if !tab_bar::point_in_track(
+                        style,
+                        self.logical_width,
+                        is_macos(),
+                        pinned_count,
+                        self.devices_button(),
+                        bar_point.0,
+                    ) {
+                        return None;
+                    }
+                    layout
+                        .groups
+                        .into_iter()
+                        .flat_map(|g| g.tabs)
+                        .find(|t| t.label_truncated && tab_bar_rect_contains(t.rect, content_point))
+                        .and_then(|t| {
+                            let title = self.workspace.tab(t.id)?.title().to_string();
+                            let screen_rect = Rect {
+                                x: t.rect.x + track_left - self.scroll_offset,
+                                ..t.rect
+                            };
+                            Some((HoverKey::Tab(t.id), screen_rect, title))
+                        })
+                })
         } else if self.task_manager.is_some()
             && !self.in_bar(self.cursor_position.1, style)
             && self.dialog.is_none()
@@ -7309,6 +7691,11 @@ impl WindowState {
             self.hover.next_deadline(),
             self.animations.next_deadline(now),
             self.cursor_blink.next_deadline(),
+            // The rows of the connected-devices popover say "connected X ago".
+            self.devices_popover.and(devices_popover::next_age_change(
+                &self.connected_devices,
+                now,
+            )),
         ]
         .into_iter()
         .flatten()
@@ -7662,6 +8049,10 @@ struct App {
     /// load -- never before the first frame -- and sent as **one** thread
     /// (`dispatch_pinned_icon_requests`).
     deferred_pinned_icons: Vec<(pinned::PinnedKey, PathBuf)>,
+    /// PRD-025/ADR-0104 section 4: the remote access of the **process** (the
+    /// host handle, the connected phones, the protocol ids), never of a
+    /// window. Written by `app_remote.rs` and by `App::transfer` (ids).
+    remote: remote::RemoteState,
 }
 
 /// Separa das chaves desconhecidas do `porecatu.toml` as de cor (ADR-0067):
@@ -7788,6 +8179,9 @@ impl App {
         let themed = porecatu_config::apply_theme(&self.config, &name);
         self.pal = palette::ResolvedPalette::from_config(&themed);
         self.term_pal = palette::ResolvedTermPalette::from_config(&themed);
+        // PRD-025 RF-25.16: the phone paints with this theme; it is resent if
+        // it differs from the last one sent.
+        self.remote.mark_appearance_dirty();
     }
 
     /// `theme.cycle` (RF-5.21): anda na ordem de `config.themes`
@@ -8002,6 +8396,7 @@ impl App {
             deferred_background_loads: Vec::new(),
             pinned_icons: pinned_icon::PinnedIconCache::default(),
             deferred_pinned_icons: Vec::new(),
+            remote: remote::RemoteState::new(),
         };
         // RF-17.17: o arranque não espera pela imagem -- só um `metadata` aqui,
         // e a decodificação numa thread.
@@ -8411,6 +8806,7 @@ impl App {
             &self.config,
             &self.config.project_file,
             &self.startup_directory,
+            true,
             None,
         );
         if open_pinned {
@@ -8943,6 +9339,7 @@ impl App {
                 &self.config,
                 &self.config.project_file,
                 &self.startup_directory,
+                true,
                 None,
             );
         }
@@ -9049,6 +9446,37 @@ impl App {
         porecatu_session::named::save_named(name, window)
             .map(|_| ())
             .map_err(SaveNamedFailure::Save)
+    }
+
+    /// Resolves what the connected-devices popover asked for (PRD-025
+    /// RF-25.13, ADR-0108 section 4) -- one point for the keyboard and the
+    /// click. "Disconnect" and "Disconnect all" are commands to the host and
+    /// do not revoke; the popover stays open and follows the list, which
+    /// changes when the host reports the sessions gone (and closes with the
+    /// last one). "Open settings" closes it and opens the screen on "Acesso
+    /// remoto".
+    fn resolve_devices_outcome(
+        &mut self,
+        window_id: WindowId,
+        event_loop: &ActiveEventLoop,
+        outcome: DevicesOutcome,
+    ) {
+        match outcome {
+            DevicesOutcome::None => {}
+            DevicesOutcome::Close => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.devices_popover = None;
+                }
+            }
+            DevicesOutcome::Disconnect(client) => self.remote_disconnect(client),
+            DevicesOutcome::DisconnectAll => self.remote_disconnect_all(),
+            DevicesOutcome::OpenSettings => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.devices_popover = None;
+                }
+                self.open_settings_at(event_loop, window_id, settings::Group::RemoteAccess);
+            }
+        }
     }
 
     /// Resolve o `PickerOutcome` do popover de sessões nomeadas
@@ -9360,6 +9788,9 @@ impl App {
         // `WindowState` just removed; the sampler goes too if it was the last
         // window that had one open.
         self.stop_task_manager_sampler_if_unused();
+        // ADR-0105 section 1: the protocol ids of the window go with it.
+        self.remote.ids.forget_window(window_id);
+        self.remote.mark_tree_dirty();
         if self.windows.is_empty() {
             // `app.quit`/RF-3.4: gravação síncrona da sessão, antes de
             // sair -- fecha o no-op documentado desde a F2 (ADR-0017 §7).
@@ -9396,6 +9827,9 @@ impl App {
             // respondida).
             self.settings = None;
             self.session.clear();
+            // PRD-025 RF-25.3: the one exit of the process. The phones are
+            // told (`host-quitting`) before the loop ends.
+            self.stop_remote(porecatu_remote::StopReason::Quitting);
             event_loop.exit();
         }
     }
@@ -9453,6 +9887,20 @@ impl App {
         self.close_window_unconditionally(window_id, event_loop);
     }
 
+    /// Closes the tab `id` of a window with no question (the dialog was
+    /// answered, or none was needed) and closes the window when that left it
+    /// with no tab. The dialog `CloseTab` and the remote `close-tab` end here.
+    fn close_tab_now(&mut self, window_id: WindowId, id: TabId, event_loop: &ActiveEventLoop) {
+        let Some(state) = self.windows.get_mut(&window_id) else {
+            return;
+        };
+        if state.close_tab_unconditionally(id) {
+            self.close_window_unconditionally(window_id, event_loop);
+        } else {
+            state.window.request_redraw();
+        }
+    }
+
     /// Executa a ação de um diálogo confirmado (`Enter` no botão de
     /// confirmar, ou clique nele) -- resolvido aqui, não em `WindowState`,
     /// porque `CloseWindow` precisa remover a janela do mapa de `App`.
@@ -9463,16 +9911,7 @@ impl App {
         event_loop: &ActiveEventLoop,
     ) {
         match action {
-            DialogAction::CloseTab(id) => {
-                if let Some(state) = self.windows.get_mut(&window_id) {
-                    let empty = state.close_tab_unconditionally(id);
-                    if empty {
-                        self.close_window_unconditionally(window_id, event_loop);
-                    } else {
-                        state.window.request_redraw();
-                    }
-                }
-            }
+            DialogAction::CloseTab(id) => self.close_tab_now(window_id, id, event_loop),
             // RF-21.22: fechar uma fixada a desafixa -- o encerramento de
             // sempre, mais a entrada fora da lista e a gravação.
             DialogAction::ClosePinnedTab(id) => {
@@ -9510,7 +9949,11 @@ impl App {
             }
             // Vive na janela de configurações, que a resolve sozinha: um
             // diálogo de `WindowState` nunca o carrega.
-            DialogAction::SettingsPending | DialogAction::DeleteProfile(_) => {}
+            DialogAction::SettingsPending
+            | DialogAction::DeleteProfile(_)
+            | DialogAction::RevokeDevice(_)
+            | DialogAction::RecreateIdentity
+            | DialogAction::PairDevice(_) => {}
             // Aviso que só informa: fechar é tudo.
             DialogAction::Notice => {}
             // "Reconectar agora" do aviso de reconexão (ADR-0076 §5).
@@ -9883,6 +10326,10 @@ impl App {
     /// quando não há nada pendente em nenhuma janela, o event loop dorme
     /// de verdade (`ControlFlow::Wait`).
     fn schedule_next_wake(&mut self, event_loop: &ActiveEventLoop) {
+        // PRD-025 RF-25.12: the connected-devices button of every window
+        // follows `RemoteState::clients`. Before the access trees, which carry
+        // its node. A no-op when nothing changed.
+        self.sync_connected_devices();
         // ADR-0043 §3: "a atualização acontece na volta do event loop que
         // mudou o estado -- no mesmo ponto único onde `schedule_next_wake`
         // já drena o que sujou". Nunca dentro do caminho de render, nunca
@@ -9931,6 +10378,19 @@ impl App {
         // ADR-0076 §2: as tentativas de reconexão cujo prazo venceu começam
         // aqui, e o próximo prazo entra no `WaitUntil` logo abaixo.
         self.poll_reconnects(now);
+        if !self.reconnects.is_empty() {
+            // A reconnection cycle changes the state of its panes
+            // (`Reconnecting`, `Disconnected`) with no window or user event.
+            self.remote.mark_tree_dirty();
+        }
+        // PRD-025 (ADR-0104 section 4, ADR-0105 sections 2 and 6): turns the
+        // host on and off by `[remote]`, and sends the theme, the profiles and
+        // the tree when due. Nothing of `porecatu-remote` runs with the
+        // feature off (RNF-25.1).
+        self.sync_remote(now);
+        // The gestures of the settings screen (show or cancel the QR, revoke,
+        // answer a pairing request, a request that timed out) go to the host.
+        self.service_remote_requests();
         let next = self
             .windows
             .values()
@@ -9945,6 +10405,14 @@ impl App {
             .chain(self.git_spinner_deadline(now))
             // ADR-0093 §4: the sampling clock is the UI's, a `WaitUntil`.
             .chain(self.task_manager_next_sample)
+            // ADR-0105 section 2: the 4-per-second ceiling of the tree.
+            .chain(self.remote.tree_deadline(now))
+            // ADR-0105 section 3: the 30-per-second ceiling of the grid
+            // mirror, only while a subscribed pane is dirty or a scrollback
+            // request waits.
+            .chain(self.remote.mirror_deadline(now))
+            // ADR-0107 section 3: the 60 s of a `confirm-request`.
+            .chain(self.remote.confirmations.deadline())
             .min();
         match next {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
@@ -10115,6 +10583,8 @@ impl App {
     /// open menu, which keeps its highlight on the same profile.
     fn apply_detected_profiles(&mut self, found: Vec<profile_detect::DetectedProfile>) {
         self.detected_profiles = found;
+        // PRD-025: the profile list of the phone follows the menu's.
+        self.remote.mark_appearance_dirty();
         for state in self.windows.values_mut() {
             let Some(menu) = state.profile_menu.as_mut() else {
                 continue;
@@ -10451,6 +10921,8 @@ impl App {
                 // `clock_deadline` acorda o loop e este é o repinte.
                 || (status_bar::height(&self.style) > 0.0 && state.shows_clock())
                 || spinning
+                // The age in the rows of the connected-devices popover.
+                || state.devices_popover.is_some()
                 || had_warnings != !state.warnings.is_empty()
                 || had_tooltip != state.hover.visible().is_some()
             {
@@ -10774,6 +11246,9 @@ impl App {
         // motivo), então a decisão compara a config que vale com a que chega.
         let acrylic_notices = acrylic::notices(&self.config, &new_config);
         self.config = Arc::new(*new_config);
+        // PRD-025 RF-25.16: `[profiles]` may have changed (the theme is
+        // marked by `recompute_palettes` below).
+        self.remote.mark_appearance_dirty();
         self.warn_acrylic(acrylic_notices);
         self.style = TabBarStyle::from_config(&self.config);
         // ADR-0070 §7: a new default or a new `[[profiles.list]]` changes
@@ -11002,6 +11477,31 @@ impl App {
             settings.bring_to_front();
             return;
         }
+        self.create_settings(event_loop, origin);
+    }
+
+    /// Opens the settings screen **on a group** (PRD-025: `remote.pair` and the
+    /// connected-devices popover land on "Acesso remoto"). Already open: the
+    /// group is selected and the window comes to the front; closed: it opens
+    /// already there, as the last group chosen would be.
+    pub(crate) fn open_settings_at(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        origin: WindowId,
+        group: settings::Group,
+    ) {
+        if let Some(settings) = &mut self.settings {
+            settings.select_group(group);
+            settings.bring_to_front();
+        } else {
+            self.settings_last_group = group;
+            self.create_settings(event_loop, origin);
+        }
+        self.service_settings_requests(event_loop);
+    }
+
+    /// The creation of the screen (what `open_settings` does when there is none).
+    fn create_settings(&mut self, event_loop: &ActiveEventLoop, origin: WindowId) {
         let origin_window = self.windows.get(&origin).map(|state| &state.window);
         let scale = origin_window.map_or(1.0, |w| w.scale_factor() as f32);
         let size = (
@@ -11019,6 +11519,10 @@ impl App {
         self.settings = self.create_settings_window(event_loop, attributes);
         if self.settings.is_some() {
             self.set_terminal_windows_enabled(false);
+            // The paired devices are the host's list, kept by the process.
+            self.push_remote_to_settings();
+            // The screen may open on "Acesso remoto": the vault is asked now.
+            self.service_settings_requests(event_loop);
         }
     }
 
@@ -11091,6 +11595,7 @@ impl App {
                 .config_path
                 .as_deref()
                 .map_or(settings::Disk::Missing, settings::Disk::observe),
+            self.remote.status,
         );
         // O render é damage-driven: nada garante um `RedrawRequested` do SO
         // para uma janela recém-criada, e sem este pedido ela fica preta até
@@ -11252,7 +11757,11 @@ impl App {
         // janela dele ser destruída (ADR-0080 §2, §6).
         if let Some(settings) = &mut self.settings {
             settings.close_profile_editor();
+            // RF-25.6: closing the screen invalidates the QR; a pairing request
+            // still waiting is declined.
+            settings.close_remote();
         }
+        self.service_remote_requests();
         // Reabilitar **antes** de destruir a janela: o Windows ativa a dona
         // quando a janela possuída some, e uma dona ainda desabilitada
         // passaria o foco para outro programa.
@@ -11295,6 +11804,14 @@ impl App {
         let Some(plan) = settings.prepare_save() else {
             return;
         };
+        // Only the relay token is pending (ADR-0108 section 1): there is no
+        // file to write, and the vault is the whole Save.
+        if plan.edits.is_empty() {
+            if let Some(write) = settings.take_token_write() {
+                self.start_token_write(write);
+            }
+            return;
+        }
         let now = Instant::now();
         let Some(path) = self.config_path.clone() else {
             if let Some(state) = self.windows.values_mut().next() {
@@ -11321,7 +11838,13 @@ impl App {
                 if let Some(dir) = path.parent() {
                     let _ = write_missing_theme_files(dir);
                 }
+                // The token goes to the vault only after the file was saved
+                // (ADR-0108 section 1): a refused file keeps both pending.
+                let write = settings.take_token_write();
                 settings.save_succeeded(&saved);
+                if let Some(write) = write {
+                    self.start_token_write(write);
+                }
             }
             // O arquivo mudou por fora desde o que a tela viu: nada foi
             // gravado, e a faixa de conflito sobe (RF-16.23).
@@ -11447,14 +11970,27 @@ impl App {
             settings::Press::Save => self.save_settings(),
             settings::Press::Minimize => self.minimize_settings(),
         }
-        // O que a tela pediu durante o evento e só `App` sabe atender: abrir o
-        // editor de perfil (ADR-0080 §1).
+        self.service_settings_requests(event_loop);
+    }
+
+    /// What the screen asked for during an event and only `App` can do: open
+    /// the profile editor (ADR-0080 section 1) and ask the OS vault what it
+    /// keeps for the relay token (ADR-0108 section 1; a thread, never the
+    /// main thread).
+    pub(crate) fn service_settings_requests(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(editor) = self
             .settings
             .as_mut()
             .and_then(SettingsWindow::take_editor_request)
         {
             self.open_profile_editor(event_loop, editor);
+        }
+        if self
+            .settings
+            .as_mut()
+            .is_some_and(SettingsWindow::take_vault_probe_request)
+        {
+            self.start_vault_probe();
         }
     }
 
@@ -11703,10 +12239,32 @@ impl ApplicationHandler<Wakeup> for App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Wakeup) {
+        // ADR-0105 section 2: the tree is rebuilt after anything that may have
+        // changed the workspace -- a flag, the work waits for a client and the
+        // ceiling. The remote events and the answers of other threads (they
+        // change no workspace) do not mark it.
+        if !matches!(
+            event,
+            Wakeup::Remote(_)
+                | Wakeup::RemoteVault(_)
+                | Wakeup::ProcessSample(_)
+                | Wakeup::GitQueryResult(_)
+                | Wakeup::GitIntegrationResult(_)
+                | Wakeup::BackgroundImageLoaded(_)
+                | Wakeup::PinnedIconResolved(_)
+                | Wakeup::AccessKit(_)
+        ) {
+            self.remote.mark_tree_dirty();
+        }
         let (window, tab_id, pane_id) = match event {
             Wakeup::TabDirty { window, tab, pane } => {
                 self.mark_first_pty_output();
                 self.release_deferred_background_load();
+                // ADR-0105 section 3: a subscribed pane that produced output
+                // is read by the mirror pass, not by a redraw -- this marks a
+                // set and asks for nothing (an idle or unsubscribed pane costs
+                // one lookup).
+                self.remote.mark_pane_dirty_at(window, tab, pane);
                 (window, tab, pane)
             }
             Wakeup::ConfigReloaded(reload) => {
@@ -11739,6 +12297,14 @@ impl ApplicationHandler<Wakeup> for App {
             }
             Wakeup::ProcessSample(result) => {
                 self.apply_process_sample(*result);
+                return;
+            }
+            Wakeup::Remote(event) => {
+                self.apply_remote_event(*event, event_loop, Instant::now());
+                return;
+            }
+            Wakeup::RemoteVault(report) => {
+                self.apply_remote_vault(*report, Instant::now());
                 return;
             }
         };
@@ -11799,7 +12365,15 @@ impl ApplicationHandler<Wakeup> for App {
         let mut ssh_events: Vec<app_reconnect::SshEvent> = Vec::new();
         for term_event in pending {
             match term_event {
-                TermEvent::Connected => ssh_events.push(app_reconnect::SshEvent::Connected),
+                TermEvent::Connected => {
+                    // PRD-025: the remote access tells `Connecting` from
+                    // `Running` by this.
+                    if let Some(runtime) = state.panes.get_mut(&(tab_id, pane_id)) {
+                        runtime.connected = true;
+                        runtime.link_dropped = false;
+                    }
+                    ssh_events.push(app_reconnect::SshEvent::Connected);
+                }
                 // Uma conexão que caiu sozinha, ou o resultado de uma
                 // tentativa, é do ciclo (ADR-0076 §1); o resto segue o
                 // caminho de sempre.
@@ -11825,6 +12399,9 @@ impl ApplicationHandler<Wakeup> for App {
                 // plano -- em primeiro plano o usuário já está vendo. No
                 // painel `pane_id`, mesma razão do `Title` acima.
                 TermEvent::Bell => {
+                    // PRD-025 RF-25.20: the phones hear it too; the local
+                    // behavior below does not change.
+                    self.remote.send_bell(window, tab_id, pane_id);
                     if state.workspace.active_tab() != Some(tab_id)
                         && let Some(tab) = state.workspace.tab_mut(tab_id)
                     {
@@ -11940,6 +12517,11 @@ impl ApplicationHandler<Wakeup> for App {
                         pinned::ExitDisposition::KeepExited => {
                             // A conexão que não abriu deixa de estar "conectando".
                             state.forget_notice(dialog::NoticeSlot::Connecting(tab_id, pane_id));
+                            // PRD-025: `Disconnected`, not `Exited`, when the
+                            // link (and not the remote shell) ended.
+                            if let Some(runtime) = state.panes.get_mut(&(tab_id, pane_id)) {
+                                runtime.link_dropped = remote::tree::link_dropped(&reason);
+                            }
                             if let Some(runtime) = state.panes.get(&(tab_id, pane_id)) {
                                 // Um painel SSH diz por que acabou (ADR-0075 §5); o
                                 // local e o `exit` de sempre seguem com a frase do
@@ -12037,6 +12619,10 @@ impl ApplicationHandler<Wakeup> for App {
         if let Some(state) = self.windows.get_mut(&window_id) {
             state.access_adapter.process_event(&state.window, &event);
         }
+        // ADR-0105 section 2: any window event may have changed the workspace
+        // (a tab, a group, a split, a title); the tree is rebuilt later, only
+        // with a phone connected, and only if it really changed.
+        self.remote.mark_tree_dirty();
         // ADR-0095 §2: the one place that notices a tab being activated or
         // created, whatever gesture did it (see `task_manager_guard_end`).
         let task_manager_guard = self.task_manager_guard_begin();
@@ -12227,6 +12813,12 @@ impl ApplicationHandler<Wakeup> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.schedule_next_wake(event_loop);
+    }
+
+    /// Safety net: the normal path already stopped the remote access in
+    /// `close_window_unconditionally`; this is a no-op then.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.stop_remote(porecatu_remote::StopReason::Quitting);
     }
 }
 
@@ -12528,6 +13120,16 @@ impl App {
             }
             return;
         }
+        // PRD-025 RF-25.13: the connected-devices popover captures the whole
+        // keyboard, like the sessions one.
+        if state.devices_popover.is_some() {
+            let outcome = state.handle_devices_key(&key);
+            self.resolve_devices_outcome(window_id, event_loop, outcome);
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
         // ADR-0095 §3 item 1: the task manager's row menu consumes the key
         // like the other context menus -- so, with a warning on screen, `Esc`
         // closes the menu first, not the warning.
@@ -12696,6 +13298,17 @@ impl App {
             }
             // PRD-024 RF-24.1, ADR-0095 §8: the window's mode, not the pane's.
             ActionOutcome::ToggleTaskManager => self.toggle_task_manager(window_id),
+            // PRD-025 RF-25.15. `toggle` writes `[remote] enabled` by key (ADR-0107
+            // section 7) and lets the hot reload apply it. `pair` opens the
+            // settings screen on "Acesso remoto" and asks for the QR when the
+            // relay is connected (ADR-0107 section 7). `disconnect_all` ends
+            // every session with `goodbye{normal}` and keeps the devices
+            // paired (RF-25.13); with no host there is nothing to do.
+            ActionOutcome::Remote(request) => match request {
+                RemoteAction::Toggle => self.toggle_remote_enabled(window_id),
+                RemoteAction::Pair => self.remote_pair_gesture(event_loop, window_id),
+                RemoteAction::DisconnectAll => self.remote_disconnect_all(),
+            },
             // ADR-0095 §3 item 4: with the task manager open nothing that was
             // not claimed above goes on -- not to the pane, and not to the
             // dormant SSH pane that `Enter` would connect.
@@ -12847,6 +13460,51 @@ impl App {
         self.resolve_session_picker_outcome(window_id, event_loop, outcome);
     }
 
+    /// A click with the popover of the connected devices open (PRD-025
+    /// RF-25.13): the "Disconnect" of a row and the two items act -- by the
+    /// same `DevicesOutcome` the keyboard produces, resolved by the same point
+    /// (`App::resolve_devices_outcome`); the body of a row and the padding
+    /// are the popover, and consume the click; outside it, or any button that
+    /// is not the left one, closes.
+    fn dispatch_devices_click(
+        &mut self,
+        window_id: WindowId,
+        logical_point: (f32, f32),
+        button: MouseButton,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let Some(gpu) = &mut self.gpu else {
+            return;
+        };
+        let Some(state) = self.windows.get(&window_id) else {
+            return;
+        };
+        let layout = overlay::layout_devices_popover(
+            state.connected_devices.len(),
+            &self.catalog,
+            &self.config,
+            &self.style,
+            state.logical_width,
+            bar_height(&self.style),
+            is_macos(),
+            state.logical_width,
+            state.logical_height,
+            gpu.text_measurer(),
+        );
+        let outcome = if button != MouseButton::Left {
+            DevicesOutcome::Close
+        } else {
+            match overlay::devices_popover_hit(&layout, &state.connected_devices, logical_point) {
+                Some(target) => DevicesOutcome::from(target),
+                None if tab_bar::rect_contains(layout.popover_rect, logical_point) => {
+                    DevicesOutcome::None
+                }
+                None => DevicesOutcome::Close,
+            }
+        };
+        self.resolve_devices_outcome(window_id, event_loop, outcome);
+    }
+
     /// Clique com o editor de grupo aberto: campo foca, swatch foca e
     /// **aplica** a cor (clique não segue a semântica "realça, `Enter`
     /// aciona" do teclado -- um clique num color picker já é a escolha,
@@ -12917,9 +13575,7 @@ impl App {
                     editor.set_focus(EditorRegion::Swatches);
                     editor.set_swatch_highlight(index);
                 }
-                state
-                    .workspace
-                    .set_group_color(group, GroupColor::ALL[index]);
+                state.set_group_color_now(group, GroupColor::ALL[index]);
             }
             Some(overlay::GroupEditorHit::Action(index)) => {
                 if let Some(editor) = &mut state.group_editor {
@@ -13013,6 +13669,12 @@ impl App {
                 picker.scroll_by(-notches.signum() as isize, max_visible_rows);
                 state.window.request_redraw();
             }
+            return;
+        }
+        // Popover de aparelhos conectados: a lista não rola (uma linha por
+        // aparelho), e a roda não passa por baixo dele, nem para a trilha nem
+        // para o painel.
+        if state.devices_popover.is_some() {
             return;
         }
         if state.in_bar(state.cursor_position.1, &self.style) {
@@ -13386,6 +14048,37 @@ impl App {
             return;
         }
 
+        // Popover de aparelhos conectados: o hover move o realce, o mesmo
+        // estado do teclado.
+        if state.devices_popover.is_some() {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            if let Some(gpu) = &mut self.gpu {
+                let layout = overlay::layout_devices_popover(
+                    state.connected_devices.len(),
+                    &self.catalog,
+                    &self.config,
+                    &self.style,
+                    state.logical_width,
+                    bar_height(&self.style),
+                    is_macos(),
+                    state.logical_width,
+                    state.logical_height,
+                    gpu.text_measurer(),
+                );
+                if let Some(target) =
+                    overlay::devices_popover_hit(&layout, &state.connected_devices, logical_point)
+                    && let Some(popover) = &mut state.devices_popover
+                {
+                    popover.set_highlight(target, &state.connected_devices);
+                }
+            }
+            state.window.request_redraw();
+            return;
+        }
+
         // Arraste dentro do campo da busca (ADR-0035/ADR-0041 §3): mesmo
         // padrão do editor de grupo -- só entra aqui com o botão esquerdo
         // já pressionado a partir de um clique no próprio campo (o único
@@ -13447,7 +14140,13 @@ impl App {
             let style = &self.style;
             let bar_width = state.logical_width;
             let pinned_count = state.workspace.pinned().len();
-            let trilha_width = tab_bar::trilha_width(style, bar_width, is_macos(), pinned_count);
+            let trilha_width = tab_bar::trilha_width(
+                style,
+                bar_width,
+                is_macos(),
+                pinned_count,
+                state.devices_button(),
+            );
             let layout = tab_bar::fit_width(
                 &state.workspace,
                 style,
@@ -13653,6 +14352,7 @@ impl App {
             || state.move_to_group.is_some()
             || state.move_to_window.is_some()
             || state.session_picker.is_some()
+            || state.devices_popover.is_some()
             || state.rename.editing_tab().is_some();
         let logical_point = (
             position.x as f32 / state.scale,
@@ -13966,6 +14666,23 @@ impl App {
                 None => None,
             };
         }
+        if state.devices_popover.is_some() {
+            let gpu = self.gpu.as_mut()?;
+            let layout = overlay::layout_devices_popover(
+                state.connected_devices.len(),
+                &self.catalog,
+                &self.config,
+                &self.style,
+                width,
+                bar_height(&self.style),
+                is_macos(),
+                width,
+                height,
+                gpu.text_measurer(),
+            );
+            return overlay::devices_popover_hit(&layout, &state.connected_devices, point)
+                .map(OverlayTarget::Devices);
+        }
         let gpu = self.gpu.as_mut()?;
         let warning_layout = overlay::layout_warnings(
             &state.warnings,
@@ -14107,6 +14824,14 @@ impl App {
                     }
                     Some(tab_bar::ZoneButtonHit::Sessions) => {
                         state.open_session_picker(false);
+                        state.window.request_redraw();
+                    }
+                    // PRD-025 RF-25.13: the popover of the connected devices;
+                    // like the sessions one, a click with it open closes it
+                    // (`dispatch_devices_click` takes the press).
+                    Some(tab_bar::ZoneButtonHit::Devices) => {
+                        state.toggle_devices_popover();
+                        state.hover.dismiss();
                         state.window.request_redraw();
                     }
                     // ADR-0095 §2 (supersedes ADR-0079 decision 5 in part):
@@ -14571,6 +15296,15 @@ impl App {
             return;
         }
 
+        // Popover de aparelhos conectados: ver `dispatch_devices_click`.
+        if state.devices_popover.is_some() {
+            self.dispatch_devices_click(window_id, logical_point, button, event_loop);
+            if let Some(state) = self.windows.get(&window_id) {
+                state.window.request_redraw();
+            }
+            return;
+        }
+
         // Aviso: botão de fechar dispensa; corpo não faz nada além de
         // consumir o clique (não deixa passar pro que está atrás).
         if let Some(gpu) = self.gpu.as_mut() {
@@ -14962,7 +15696,9 @@ impl App {
         let bar_width = state.logical_width;
         let is_mac = is_macos();
         let pinned_count = state.workspace.pinned().len();
-        let trilha_width = tab_bar::trilha_width(style, bar_width, is_mac, pinned_count);
+        let devices_button = state.devices_button();
+        let trilha_width =
+            tab_bar::trilha_width(style, bar_width, is_mac, pinned_count, devices_button);
         // Tela -> conteúdo é `x - track_left + scroll_offset`.
         let track_left = tab_bar::track_shift(style, is_mac, pinned_count);
         let base_layout = tab_bar::fit_width(
@@ -15009,6 +15745,7 @@ impl App {
                 bar_width,
                 bar_height(style),
                 is_mac,
+                devices_button,
                 cursor_logical,
             )
         } else {
@@ -15045,6 +15782,7 @@ impl App {
                 bar_width,
                 is_mac,
                 pinned_count,
+                devices_button,
                 cursor_logical.0,
             ) {
                 tab_bar::hit_test(&base_layout, content_point)
@@ -15409,6 +16147,9 @@ impl App {
             &pinned_icons,
             // ADR-0096 §6: the app button is "on" while the mode is open.
             state.task_manager.is_some(),
+            // ADR-0108 section 4: how many phones are connected; `0` has no
+            // third button.
+            state.connected_devices.len(),
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 
@@ -15449,6 +16190,7 @@ impl App {
             || state.move_to_group.is_some()
             || state.move_to_window.is_some()
             || state.session_picker.is_some()
+            || state.devices_popover.is_some()
             || state.rename.editing_tab().is_some();
         let hovering_grid = !state.in_bar(state.cursor_position.1, style)
             && !state.in_status_bar(state.cursor_position.1, style);
@@ -15960,6 +16702,34 @@ impl App {
                 gpu.text_measurer(),
             ));
         }
+        if state.devices_popover.is_some() {
+            let layout = overlay::layout_devices_popover(
+                state.connected_devices.len(),
+                &self.catalog,
+                config,
+                style,
+                bar_width,
+                h,
+                is_mac,
+                state.logical_width,
+                state.logical_height,
+                gpu.text_measurer(),
+            );
+            let highlighted = state
+                .devices_popover
+                .as_ref()
+                .and_then(|popover| popover.highlighted(&state.connected_devices));
+            popover.extend(overlay::paint_devices_popover(
+                &layout,
+                &state.connected_devices,
+                highlighted,
+                now,
+                config,
+                pal,
+                &self.catalog,
+                gpu.text_measurer(),
+            ));
+        }
         if !popover.is_empty() {
             frame.set_layer(Layer::Popover, popover);
         }
@@ -16175,5 +16945,15 @@ mod wakeup_size_tests {
         );
         // E o `Box` é um ponteiro, qualquer que seja o resultado.
         assert_eq!(size_of::<Box<BackgroundImageResult>>(), size_of::<usize>());
+        // PRD-025: the remote event travels boxed too, whatever the host sends.
+        assert_eq!(
+            size_of::<Box<porecatu_remote::RemoteEvent>>(),
+            size_of::<usize>()
+        );
+        // ADR-0108: so does the answer of the vault thread of the settings.
+        assert_eq!(
+            size_of::<Box<crate::app_remote::VaultReport>>(),
+            size_of::<usize>()
+        );
     }
 }

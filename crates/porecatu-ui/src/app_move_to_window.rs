@@ -140,8 +140,13 @@ impl WindowState {
             // A box scrolled out of the track still anchors at the track's
             // edge, never over the fixed buttons on the right.
             let track_left = tab_bar::track_shift(style, is_macos(), pinned.len());
-            let track_width =
-                tab_bar::trilha_width(style, self.logical_width, is_macos(), pinned.len());
+            let track_width = tab_bar::trilha_width(
+                style,
+                self.logical_width,
+                is_macos(),
+                pinned.len(),
+                self.devices_button(),
+            );
             let x = track_left
                 + (rect.x - self.scroll_offset).clamp(0.0, (track_width - rect.width).max(0.0));
             Some(Rect { x, ..rect })

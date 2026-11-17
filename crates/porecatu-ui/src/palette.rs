@@ -347,6 +347,11 @@ pub struct ResolvedPalette {
     pub task_manager_disk: Color,
     pub task_manager_grid: Color,
     pub task_manager_chart_border: Color,
+
+    // [remote] -- the pairing QR code (PRD-025, ADR-0108 section 2): always
+    // dark on light, in both themes.
+    pub qr_dark: Color,
+    pub qr_light: Color,
 }
 
 impl ResolvedPalette {
@@ -362,6 +367,7 @@ impl ResolvedPalette {
         let editor = &config.appearance.group_editor;
         let settings = &config.appearance.settings;
         let task_manager = &config.appearance.task_manager;
+        let remote = &config.appearance.remote;
 
         let mut group_colors = [TRANSPARENT; 6];
         for (slot, entry) in group_colors.iter_mut().zip(groups.palette.iter()) {
@@ -476,6 +482,9 @@ impl ResolvedPalette {
             task_manager_disk: cvt(task_manager.disk),
             task_manager_grid: cvt(task_manager.grid),
             task_manager_chart_border: cvt(task_manager.chart_border),
+
+            qr_dark: cvt(remote.qr_dark),
+            qr_light: cvt(remote.qr_light),
         }
     }
 
@@ -785,5 +794,18 @@ mod tests {
             pal.settings_panel_background,
             ResolvedPalette::from_config(&base).settings_panel_background
         );
+    }
+
+    #[test]
+    fn the_pairing_qr_is_dark_on_light_in_both_themes() {
+        let base = porecatu_config::Config::default();
+        for theme in [
+            porecatu_config::DEFAULT_THEME,
+            porecatu_config::DEFAULT_LIGHT_THEME,
+        ] {
+            let pal = ResolvedPalette::from_config(&porecatu_config::apply_theme(&base, theme));
+            assert_eq!(pal.qr_dark, hex(0x00, 0x00, 0x00), "{theme}");
+            assert_eq!(pal.qr_light, hex(0xff, 0xff, 0xff), "{theme}");
+        }
     }
 }

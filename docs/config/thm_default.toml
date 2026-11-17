@@ -169,3 +169,9 @@ memory = "#a68cf0"          # roxo da paleta de grupos
 disk = "#86c56a"            # verde da paleta de grupos
 grid = "#1c2027"            # separador de painéis
 chart_border = "#262b34"    # borda de controle
+
+# QR de pareamento do acesso remoto (ADR-0108 §2). Escuro sobre claro nos dois
+# temas: leitor de QR comum não lê o invertido.
+[remote]
+qr_dark = "#000000"         # módulos escuros
+qr_light = "#ffffff"        # módulos claros e zona de silêncio

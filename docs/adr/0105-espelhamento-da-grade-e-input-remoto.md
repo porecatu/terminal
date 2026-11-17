@@ -1,6 +1,6 @@
 # ADR-0105 — Espelhamento da grade e input remoto: snapshot do motor no ritmo do relógio da UI, diff fora da main thread, teclas pelo codificador local
 
-**Status:** Aceito em 2026-11-16 — não implementado
+**Status:** Aceito em 2026-11-16 — implementado em 2026-11-17 (notas de implementação nas seções 3, 5 e 7; verificação ao vivo é dívida, no [roadmap](../roadmap.md))
 **Data:** 2026-11-15
 **Relacionados:** [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0002](0002-motor-vte.md), [ADR-0007](0007-modelo-de-threading.md), [ADR-0008](0008-teclas-e-roteamento-de-input.md), [ADR-0013](0013-mouse-selecao-e-clipboard.md), [ADR-0037](0037-aba-nao-iniciada.md), [ADR-0053](0053-paineis-divididos.md), [ADR-0067](0067-temas-em-arquivos-proprios.md), [ADR-0090](0090-transferencia-de-abas-entre-janelas.md), [ADR-0104](0104-crate-porecatu-remote.md)
 
@@ -53,6 +53,8 @@ thread de leitura do PTY
 - **Custo zero quando ocioso.** Painel sem assinatura não é lido. Painel assinado sem `TabDirty` não é lido. O prazo do espelhamento só entra no `WaitUntil` enquanto há painel sujo para o remoto.
 - **Sem quadro no desktop.** Sujeira para o remoto **não** chama `request_redraw`. Um painel numa aba invisível no desktop e assinado pelo celular é lido pelo espelhamento e não gera frame de GPU.
 
+> **Nota de implementação (2026-11-17).** O código mora em `porecatu-ui/src/remote/` (`ids`, `tree`, `grid`, `theme`, `input`, `actions`, estado puro) e `porecatu-ui/src/app_remote.rs` (`impl App`); `porecatu-remote` tem `grid_flow.rs` (a última grade enviada, o último quadro recebido e a janela de 2) e `session.rs`/`host.rs` (o ator e as sessões). `Terminal::snapshot_live_into` e `history_into` existem como previsto. Duas escolhas que o texto deixava em aberto: o **tamanho do painel** que vai na árvore e na assinatura vem de `Terminal::grid_size()` (o tamanho do **motor**), não do snapshot de render, porque o snapshot só é refeito quando a aba é pintada e uma aba invisível ficaria com o tamanho velho (registrado em [descobertas](../descobertas.md)); e **frame de painel que não está na árvore** enviada ao cliente é descartado. Um `grid-ack` inválido vira `error{protocol}` e o canal fecha.
+
 ### 4. Tamanho
 
 O desktop dita o tamanho. Nenhuma mensagem do cliente chega a `Terminal::resize`. Resize no desktop (janela, divisão, zoom de fonte) muda `cols`/`rows` do snapshot, e `porecatu-remote` manda `grid-snapshot` em vez de diff. Entrar ou sair da tela alternativa também.
@@ -62,6 +64,8 @@ O desktop dita o tamanho. Nenhuma mensagem do cliente chega a `Terminal::resize`
 `scrollback-request` chega como `RemoteEvent`; a main thread chama `Terminal::history_into` para até 500 linhas, converte e devolve como `scrollback-page`.
 
 `grid-snapshot`, `grid-diff` e `scrollback-page` levam, além das linhas, o tamanho do histórico (`history`) e o contador de linhas já descartadas do topo dele (`dropped`, monotônico por painel, zerado só quando o histórico é limpo, caso em que vai um `grid-snapshot`), que dão a cada linha de histórico um índice absoluto estável ([03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md) §5.3 e §5.5). Os dois números saem do motor junto com a tela e a página; como `porecatu-term` os obtém fica para a implementação. É o único caminho em que a main thread lê o motor por pedido do cliente; o teto de 500 linhas mantém o lock no tamanho de um snapshot de tela grande. **Todo pedido recebe resposta**: os que chegam mais rápido que um por prazo do relógio esperam numa fila e são atendidos um por prazo, na ordem de chegada (decidido pelo dono em 2026-11-16; a especificação não prevê pedido sem resposta). O app de referência mantém no máximo dois pedidos em voo, o que segura o tamanho da fila.
+
+> **Nota de implementação (2026-11-17).** A fila de pedidos de scrollback **não tem teto** (todo pedido recebe resposta; quem limita o ritmo é o host: **um pedido atendido por passe de 33 ms**, no máximo **500 linhas** por página, `MAX_SCROLLBACK_COUNT` do protocolo). Os dois números do §5 saem do motor por `ScrollbackInfo { history, dropped }` (em `porecatu-term`): o `alacritty_terminal` descarta as linhas antigas em silêncio, então o motor roda com o teto interno em `scrollback.lines + HISTORY_SLACK` (4096) e corta o excesso por conta própria depois de cada lote, somando-o a `dropped`. `dropped` é **exato** enquanto um lote de leitura do PTY empurra até 4096 linhas ao histórico; `CSI n S` (rolar `n` linhas) pode contar **a menos** num lote maior que isso, nunca a mais. A limpeza do histórico (`CSI 3 J`, RIS) é detectada por um reconhecedor por byte (`ClearScan`) que parte o lote logo depois da sequência, e o próximo quadro vai como `grid-snapshot`. `Terminal::set_scrollback_lines` existe (mantém o teto interno em `lines + HISTORY_SLACK` se o limite mudar), mas **ainda não tem chamador na UI**.
 
 ### 6. Tema
 
@@ -73,6 +77,8 @@ O desktop dita o tamanho. Nenhuma mensagem do cliente chega a `Terminal::resize`
 - **Nenhum atalho do Porecatu** é consultado: o input remoto entra no passo 3 da cadeia do [ADR-0008](0008-teclas-e-roteamento-de-input.md) direto, sem passar pela tabela de ações nem pelos modos de captura da janela. Um diálogo aberto no desktop não engole tecla do celular, e vice-versa.
 - `scroll_on_input` vale: digitar no celular leva o desktop ao fundo daquele painel, como digitar no desktop.
 - Input para painel não assinado ou fora de `running` é recusado com o código do protocolo (`error` com `not-subscribed` ou `pane-not-running` e o `pane`); o gerenciador de tarefas aberto no desktop **não** bloqueia input remoto (a regra dele é sobre o teclado da janela).
+
+> **Nota de implementação (2026-11-17).** Pedido de scrollback e input exigem que o painel esteja **assinado** por aquele cliente; senão a resposta é `error{not-subscribed}` com o `pane`.
 - Mouse remoto não existe no v1.
 
 ### 8. Painéis especiais

@@ -1060,24 +1060,34 @@ pub fn overflow_state(layout: &TabBarLayout, available_width: f32, scroll_offset
     }
 }
 
-/// Largura combinada dos dois botões de ícone da zona fixa (sessões +
-/// configurações) e dos respiros em volta: `trilha_gap` antes do botão de
-/// sessões (o que separa a trilha dele, o mesmo respiro que separa grupos),
-/// `window_controls_gap` entre os dois botões e `window_controls_gap` entre a
-/// engrenagem e os botões de janela (ADR-0083). No macOS não há botões de
-/// janela, e depois da engrenagem fica o `trilha_gap` da borda da barra.
+/// Largura combinada dos botões de ícone da zona fixa (sessões +
+/// configurações, mais o de aparelhos conectados quando `devices` --
+/// ADR-0108 §4) e dos respiros em volta: `trilha_gap` antes do primeiro
+/// botão (o que separa a trilha dele, o mesmo respiro que separa grupos),
+/// `window_controls_gap` entre sessões e configurações e
+/// `window_controls_gap` entre a engrenagem e os botões de janela
+/// (ADR-0083). No macOS não há botões de janela, e depois da engrenagem fica
+/// o `trilha_gap` da borda da barra. O botão de aparelhos soma o seu lado e
+/// mais um `trilha_gap` (o separa de sessões).
 /// Com os tamanhos do ADR-0082: 6 + 40 + 3 + 40 + 3 = 92px antes dos botões
-/// de janela fora do macOS; 6 + 40 + 3 + 40 + 6 = 95px no macOS.
-fn icon_buttons_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
+/// de janela fora do macOS; 6 + 40 + 3 + 40 + 6 = 95px no macOS; com o botão
+/// de aparelhos, 6 + 40 mais.
+fn icon_buttons_zone_width(style: &TabBarStyle, is_macos: bool, devices: bool) -> f32 {
     let after_settings = if is_macos {
         style.trilha_gap
     } else {
         style.window_controls_gap
     };
+    let devices_extra = if devices {
+        app_menu_button_size(style) + style.trilha_gap
+    } else {
+        0.0
+    };
     style.trilha_gap
         + app_menu_button_size(style) * 2.0
         + style.window_controls_gap
         + after_settings
+        + devices_extra
 }
 
 /// Largura da zona fixa à direita da barra (pedido do usuário, fora da
@@ -1090,8 +1100,11 @@ fn icon_buttons_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
 /// Desde o ADR-0027, soma a zona dos 3 botões de janela quando
 /// `is_macos` é falso -- no macOS eles não existem aqui (semáforo nativo,
 /// ver [`left_inset`]).
-pub fn right_zone_width(style: &TabBarStyle, is_macos: bool) -> f32 {
-    let buttons_zone = icon_buttons_zone_width(style, is_macos);
+///
+/// `devices`: há ao menos um aparelho conectado, então a zona carrega o
+/// botão de aparelhos (ADR-0108 §4); sem ele a zona é a de sempre.
+pub fn right_zone_width(style: &TabBarStyle, is_macos: bool, devices: bool) -> f32 {
+    let buttons_zone = icon_buttons_zone_width(style, is_macos, devices);
     if is_macos {
         buttons_zone
     } else {
@@ -1188,8 +1201,15 @@ pub fn point_in_pinned(
 /// botão de menu e as `pinned` fixadas à esquerda ([`track_shift`]) e a da
 /// direita -- é o `available_width` que [`overflow_state`] e o cálculo de
 /// arraste na borda devem usar, não a largura total da janela.
-pub fn trilha_width(style: &TabBarStyle, bar_width: f32, is_macos: bool, pinned: usize) -> f32 {
-    (bar_width - track_shift(style, is_macos, pinned) - right_zone_width(style, is_macos)).max(0.0)
+pub fn trilha_width(
+    style: &TabBarStyle,
+    bar_width: f32,
+    is_macos: bool,
+    pinned: usize,
+    devices: bool,
+) -> f32 {
+    (bar_width - track_shift(style, is_macos, pinned) - right_zone_width(style, is_macos, devices))
+        .max(0.0)
 }
 
 /// `x` (tela, lógico) está dentro da janela visível da trilha -- o recorte
@@ -1202,10 +1222,11 @@ pub fn point_in_track(
     bar_width: f32,
     is_macos: bool,
     pinned: usize,
+    devices: bool,
     x: f32,
 ) -> bool {
     let left = track_shift(style, is_macos, pinned);
-    x >= left && x < left + trilha_width(style, bar_width, is_macos, pinned)
+    x >= left && x < left + trilha_width(style, bar_width, is_macos, pinned, devices)
 }
 
 /// Retângulo do botão de configurações, em coordenadas de tela da barra
@@ -1283,28 +1304,61 @@ pub fn point_in_sessions_button(
     )
 }
 
-/// Qual botão fixo da barra (menu do app, sessões ou configurações) um
-/// ponto atinge.
+/// Retângulo do botão de aparelhos conectados (PRD-025 RF-25.12, ADR-0108
+/// §4), imediatamente à esquerda do de sessões, separado dele por
+/// `trilha_gap` -- o respiro entre a trilha e a zona, e não o
+/// `window_controls_gap` de sessões e configurações. Ancorado em
+/// [`sessions_button_rect`], como este o é na engrenagem, para os três nunca
+/// divergirem. O retângulo existe sempre; só é alvo e só é pintado quando há
+/// aparelho conectado (`devices` em [`point_in_zone_button`]).
+pub fn devices_button_rect(
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+) -> Rect {
+    let sessions = sessions_button_rect(style, bar_width, bar_height, is_macos);
+    Rect {
+        x: sessions.x - style.trilha_gap - sessions.width,
+        y: sessions.y,
+        width: sessions.width,
+        height: sessions.height,
+    }
+}
+
+/// Qual botão fixo da barra (menu do app, aparelhos, sessões ou
+/// configurações) um ponto atinge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneButtonHit {
     /// Botão de menu do app, à esquerda da trilha.
     AppMenu,
+    /// Aparelhos conectados (PRD-025); só existe com ao menos um conectado.
+    Devices,
     Sessions,
     Settings,
 }
 
 /// Testa um ponto contra os botões fixos. Mesma geometria de
-/// `app_menu_button_rect`/`sessions_button_rect`/`settings_button_rect`,
-/// nunca recalculada.
+/// `app_menu_button_rect`/`devices_button_rect`/`sessions_button_rect`/
+/// `settings_button_rect`, nunca recalculada. `devices`: o botão de
+/// aparelhos existe agora; sem ele o ponto onde estaria é a trilha.
 pub fn point_in_zone_button(
     style: &TabBarStyle,
     bar_width: f32,
     bar_height: f32,
     is_macos: bool,
+    devices: bool,
     point: (f32, f32),
 ) -> Option<ZoneButtonHit> {
     if point_in_app_menu_button(style, is_macos, point) {
         Some(ZoneButtonHit::AppMenu)
+    } else if devices
+        && rect_contains(
+            devices_button_rect(style, bar_width, bar_height, is_macos),
+            point,
+        )
+    {
+        Some(ZoneButtonHit::Devices)
     } else if point_in_sessions_button(style, bar_width, bar_height, is_macos, point) {
         Some(ZoneButtonHit::Sessions)
     } else if point_in_settings_button(style, bar_width, bar_height, is_macos, point) {
@@ -2104,8 +2158,8 @@ mod tests {
             "quadrado, do tamanho do botão de menu do app (ADR-0082)"
         );
         assert_eq!(
-            trilha_width(&style, bar_width, false, 0),
-            bar_width - track_shift(&style, false, 0) - right_zone_width(&style, false),
+            trilha_width(&style, bar_width, false, 0, false),
+            bar_width - track_shift(&style, false, 0) - right_zone_width(&style, false, false),
             "a trilha é o que sobra entre a zona do botão de menu e a da direita"
         );
 
@@ -2114,8 +2168,8 @@ mod tests {
             ..style
         };
         assert_eq!(
-            right_zone_width(&sem_botao_de_aba, false),
-            right_zone_width(&style, false),
+            right_zone_width(&sem_botao_de_aba, false, false),
+            right_zone_width(&style, false, false),
             "a zona da direita não é do botão de nova aba"
         );
 
@@ -2148,7 +2202,7 @@ mod tests {
                 "distância entre os dois botões é window_controls_gap, nem mais nem menos"
             );
             assert!(
-                sessions.x >= bar_width - right_zone_width(&style, is_macos),
+                sessions.x >= bar_width - right_zone_width(&style, is_macos, false),
                 "botão de sessões não vaza pra fora da zona fixa"
             );
             assert!(
@@ -2167,19 +2221,19 @@ mod tests {
         assert_eq!(side, 40.0, "ADR-0082: o tamanho do botão de menu do app");
         assert_eq!(style.window_controls_gap, 3.0, "ADR-0083");
         assert_eq!(
-            right_zone_width(&style, false),
+            right_zone_width(&style, false, false),
             92.0 + window_controls_width(&style, false),
             "ADR-0083: 6 + 40 + 3 + 40 + 3, mais os botões de janela"
         );
         assert_eq!(
-            right_zone_width(&style, true),
+            right_zone_width(&style, true, false),
             95.0,
             "macOS: 6 + 40 + 3 + 40 + 6"
         );
         // Com um botão só (antes do ADR-0055) seriam o respiro da trilha, um
         // botão e o da borda; o de sessões custa um botão e um respiro.
         assert_eq!(
-            trilha_width(&style, bar_width, false, 0) + style.window_controls_gap + side,
+            trilha_width(&style, bar_width, false, 0, false) + style.window_controls_gap + side,
             bar_width
                 - track_shift(&style, false, 0)
                 - (style.trilha_gap
@@ -2281,13 +2335,13 @@ mod tests {
             button.y + button.height / 2.0,
         );
         assert_eq!(
-            point_in_zone_button(&style, 800.0, bar_height, false, center),
+            point_in_zone_button(&style, 800.0, bar_height, false, false, center),
             Some(ZoneButtonHit::AppMenu)
         );
         // Just past the button: the track, not the button.
         let past = (button.x + button.width + 1.0, center.1);
         assert_eq!(
-            point_in_zone_button(&style, 800.0, bar_height, false, past),
+            point_in_zone_button(&style, 800.0, bar_height, false, false, past),
             None
         );
         // Press and release on the same button fires; elsewhere does not.
@@ -2319,7 +2373,8 @@ mod tests {
             "no macOS o semáforo continua reservado"
         );
         assert_eq!(
-            trilha_width(&hidden, 800.0, false, 0) - trilha_width(&shown, 800.0, false, 0),
+            trilha_width(&hidden, 800.0, false, 0, false)
+                - trilha_width(&shown, 800.0, false, 0, false),
             track_shift(&shown, false, 0),
         );
 
@@ -2330,7 +2385,7 @@ mod tests {
         );
         assert!(!point_in_app_menu_button(&hidden, false, center));
         assert_eq!(
-            point_in_zone_button(&hidden, 800.0, bar_height, false, center),
+            point_in_zone_button(&hidden, 800.0, bar_height, false, false, center),
             None
         );
     }
@@ -2375,11 +2430,12 @@ mod tests {
         assert_eq!(track_shift(&shown, true, 3), inset + 52.0 + 3.0 * step);
         // The track narrows by the same amount.
         assert_eq!(
-            trilha_width(&shown, 800.0, false, 0) - trilha_width(&shown, 800.0, false, 3),
+            trilha_width(&shown, 800.0, false, 0, false)
+                - trilha_width(&shown, 800.0, false, 3, false),
             3.0 * step
         );
         // Never negative, however many are pinned.
-        assert_eq!(trilha_width(&shown, 800.0, false, 40), 0.0);
+        assert_eq!(trilha_width(&shown, 800.0, false, 40, false), 0.0);
     }
 
     /// The pinned boxes continue the row of the app button: the same top, the
@@ -2539,11 +2595,18 @@ mod tests {
         );
         assert_eq!(point_in_pinned(&style, false, 2, screen), Some(0));
         assert!(
-            !point_in_track(&style, bar_width, false, 2, screen.0),
+            !point_in_track(&style, bar_width, false, 2, false, screen.0),
             "e a trilha só atende dentro do recorte"
         );
-        assert!(point_in_track(&style, bar_width, false, 2, shift));
-        assert!(!point_in_track(&style, bar_width, false, 2, shift - 0.5));
+        assert!(point_in_track(&style, bar_width, false, 2, false, shift));
+        assert!(!point_in_track(
+            &style,
+            bar_width,
+            false,
+            2,
+            false,
+            shift - 0.5
+        ));
     }
 
     #[test]
@@ -3875,19 +3938,34 @@ mod tests {
         let style = TabBarStyle::DEFAULT;
         let bar_width = 800.0;
         let left = track_shift(&style, false, 0);
-        let width = trilha_width(&style, bar_width, false, 0);
+        let width = trilha_width(&style, bar_width, false, 0, false);
         assert!(width > 0.0);
 
-        assert!(point_in_track(&style, bar_width, false, 0, left));
+        assert!(point_in_track(&style, bar_width, false, 0, false, left));
         assert!(point_in_track(
             &style,
             bar_width,
             false,
             0,
+            false,
             left + width - 0.5
         ));
-        assert!(!point_in_track(&style, bar_width, false, 0, left - 0.5));
-        assert!(!point_in_track(&style, bar_width, false, 0, left + width));
+        assert!(!point_in_track(
+            &style,
+            bar_width,
+            false,
+            0,
+            false,
+            left - 0.5
+        ));
+        assert!(!point_in_track(
+            &style,
+            bar_width,
+            false,
+            0,
+            false,
+            left + width
+        ));
         // Sobre os botões da direita.
         let settings = settings_button_rect(&style, bar_width, 52.0, false);
         assert!(!point_in_track(
@@ -3895,7 +3973,123 @@ mod tests {
             bar_width,
             false,
             0,
+            false,
             settings.x + settings.width / 2.0
+        ));
+    }
+
+    /// ADR-0108 §4: com aparelho conectado a zona fixa ganha um terceiro
+    /// botão, à esquerda de sessões e separado dele por `trilha_gap`; a
+    /// trilha encolhe exatamente a largura de um botão mais esse respiro, e
+    /// o ponto sobre o botão novo deixa de ser trilha.
+    #[test]
+    fn devices_button_sits_left_of_sessions_and_the_track_shrinks_by_one_button() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_width = 800.0;
+        let bar_height = crate::chrome::bar_height(&style);
+        let side = app_menu_button_size(&style);
+
+        for is_macos in [false, true] {
+            let devices = devices_button_rect(&style, bar_width, bar_height, is_macos);
+            let sessions = sessions_button_rect(&style, bar_width, bar_height, is_macos);
+            assert_eq!(
+                (devices.width, devices.height, devices.y),
+                (sessions.width, sessions.height, sessions.y),
+                "mesma anatomia dos outros botões da zona"
+            );
+            assert_eq!(
+                sessions.x - (devices.x + devices.width),
+                style.trilha_gap,
+                "separado de sessões por `trilha_gap`"
+            );
+            assert!(
+                devices.x >= bar_width - right_zone_width(&style, is_macos, true),
+                "o botão novo cabe na zona fixa de 3 botões"
+            );
+            assert!(
+                devices.x < bar_width - right_zone_width(&style, is_macos, false),
+                "e vaza da zona de 2 botões: é a zona que cresce"
+            );
+            // A zona cresce exatamente um botão e um respiro; a trilha
+            // encolhe o mesmo.
+            assert_eq!(
+                right_zone_width(&style, is_macos, true)
+                    - right_zone_width(&style, is_macos, false),
+                side + style.trilha_gap
+            );
+            assert_eq!(
+                trilha_width(&style, bar_width, is_macos, 0, false)
+                    - trilha_width(&style, bar_width, is_macos, 0, true),
+                side + style.trilha_gap
+            );
+            // A borda esquerda da zona é o `trilha_gap` antes do botão novo.
+            assert_eq!(
+                bar_width - right_zone_width(&style, is_macos, true) + style.trilha_gap,
+                devices.x
+            );
+        }
+    }
+
+    /// O botão de aparelhos só é alvo enquanto existe, e o hit de sessões e
+    /// configurações não muda com ele.
+    #[test]
+    fn devices_button_is_a_zone_target_only_while_it_exists() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_width = 800.0;
+        let bar_height = crate::chrome::bar_height(&style);
+        let center = |r: Rect| (r.x + r.width / 2.0, r.y + r.height / 2.0);
+        let devices = center(devices_button_rect(&style, bar_width, bar_height, false));
+        let sessions = center(sessions_button_rect(&style, bar_width, bar_height, false));
+        let settings = center(settings_button_rect(&style, bar_width, bar_height, false));
+
+        assert_eq!(
+            point_in_zone_button(&style, bar_width, bar_height, false, true, devices),
+            Some(ZoneButtonHit::Devices)
+        );
+        assert_eq!(
+            point_in_zone_button(&style, bar_width, bar_height, false, false, devices),
+            None,
+            "sem aparelho ali é a trilha"
+        );
+        for devices_present in [false, true] {
+            assert_eq!(
+                point_in_zone_button(
+                    &style,
+                    bar_width,
+                    bar_height,
+                    false,
+                    devices_present,
+                    sessions
+                ),
+                Some(ZoneButtonHit::Sessions)
+            );
+            assert_eq!(
+                point_in_zone_button(
+                    &style,
+                    bar_width,
+                    bar_height,
+                    false,
+                    devices_present,
+                    settings
+                ),
+                Some(ZoneButtonHit::Settings)
+            );
+        }
+        // O respiro entre aparelhos e sessões não é botão.
+        let gap = (
+            sessions_button_rect(&style, bar_width, bar_height, false).x - style.trilha_gap / 2.0,
+            devices.1,
+        );
+        assert_eq!(
+            point_in_zone_button(&style, bar_width, bar_height, false, true, gap),
+            None
+        );
+        // O recorte da trilha acompanha: o botão novo não é trilha.
+        assert!(point_in_track(
+            &style, bar_width, false, 0, false, devices.0
+        ));
+        assert!(!point_in_track(
+            &style, bar_width, false, 0, true, devices.0
         ));
     }
 

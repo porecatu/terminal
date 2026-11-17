@@ -34,6 +34,8 @@ mod profile_window;
 // dado puro e é testado por inteiro aqui.
 #[allow(dead_code)]
 mod profiles_draft;
+mod remote_access;
+mod remote_pairing;
 pub(crate) mod save;
 mod shortcuts;
 mod window;
@@ -57,6 +59,9 @@ pub(crate) use profile_window::layout_for_test as profile_editor_layout_for_test
 pub(crate) use profile_window::{
     EDITOR_BUTTONS, EditorButton, EditorFocus, EditorPress, ProfileEditorWindow,
 };
+pub(crate) use remote_access::{TokenWrite, token_change_restarts_host};
+pub(crate) use remote_pairing::platform_text;
+pub(crate) use remote_pairing::{RemoteRequest, device_rows};
 pub(crate) use window::{DialogAnswer, Env, Press, SettingsWindow};
 
 use crate::palette;
@@ -342,6 +347,64 @@ pub(crate) fn profile_list_rows_for_test() -> Vec<RowView> {
         content::Block::Section(_)
         | content::Block::Note { .. }
         | content::Block::Filter { .. } => None,
+    })
+    .collect()
+}
+
+/// As linhas do grupo "Acesso remoto" com o relay conectado, o QR à vista e dois
+/// aparelhos pareados -- o primeiro conectado agora --, no catálogo pt_BR, para os
+/// testes da árvore de acessibilidade.
+#[cfg(test)]
+pub(crate) fn remote_pairing_rows_for_test() -> Vec<RowView> {
+    use porecatu_render::TextMeasurer;
+
+    let config = porecatu_config::Config::default();
+    let metrics = layout::Metrics::from_config(&config, 52.0);
+    let key = content::ContentKey {
+        group: Group::RemoteAccess,
+        panel_width_bits: (config.appearance.settings.window_width as f32 - metrics.sidebar_width)
+            .to_bits(),
+        generation: 0,
+    };
+    let matrix = crate::remote::qr::qr_matrix("porecatu://pair?v=0").expect("fits");
+    let devices: Vec<remote_pairing::DeviceRow> = [("Pixel", true), ("iPad", false)]
+        .into_iter()
+        .map(|(name, connected)| remote_pairing::DeviceRow {
+            key: [name.len() as u8; 32],
+            name: name.to_owned(),
+            platform: porecatu_remote::DevicePlatform::Android,
+            paired_at: "2026-11-15T14:03:00Z".to_owned(),
+            last_seen: None,
+            connected,
+        })
+        .collect();
+    let mut token = remote_access::RemoteToken::new();
+    token.set_presence(Ok(true));
+    let view = remote_access::RemoteAccessView {
+        status: crate::remote::RemoteStatus::Connected,
+        token: token.view(),
+        qr: Some(remote_access::QrView {
+            matrix: &matrix,
+            secs: 272,
+        }),
+        devices: &devices,
+    };
+    content::build(
+        key,
+        &draft::Draft::new(&config),
+        &content::ViewExtras {
+            remote: Some(&view),
+            ..content::ViewExtras::default()
+        },
+        &crate::messages::test_support::pt_br(),
+        &metrics,
+        &mut TextMeasurer::new(),
+    )
+    .blocks
+    .into_iter()
+    .filter_map(|block| match block {
+        content::Block::Row(row) => Some(*row),
+        _ => None,
     })
     .collect()
 }

@@ -1,9 +1,9 @@
 # PRD-025 — Acesso remoto
 
-**Status:** Aprovado pelo dono em 2026-11-16 — não implementado; a anatomia do [ADR-0108](../adr/0108-superficies-de-ui-do-acesso-remoto.md) segue com o aval visual pendente
+**Status:** Aprovado pelo dono em 2026-11-16 — **implementado** (2026-11-17), verificado só por teste automatizado; a anatomia do [ADR-0108](../adr/0108-superficies-de-ui-do-acesso-remoto.md) segue com o aval visual pendente e a verificação ao vivo (app real, relay real, macOS e Linux) é dívida, no [roadmap](../roadmap.md)
 **Data:** 2026-11-15
 **Requisito de origem:** pedido direto do dono do produto: acessar uma sessão viva do Porecatu a partir de um app mobile (Android e iOS), pelo meio de um servidor intermediário, para acompanhar e operar as abas longe do desktop.
-**Relacionados:** [PRD-000](prd-000-visao-de-produto.md), [PRD-001](prd-001-abas.md), [PRD-002](prd-002-grupos-de-abas.md), [PRD-006](prd-006-paineis-divididos.md), [PRD-007](prd-007-perfis-de-aba.md), [PRD-009](prd-009-barra-de-status.md), [PRD-010](prd-010-interacao-e-superficie-de-app.md), [PRD-016](prd-016-tela-de-configuracoes.md), [PRD-020](prd-020-conexoes-ssh.md), [PRD-022](prd-022-abas-e-grupos-entre-janelas.md), [ADR-0007](../adr/0007-modelo-de-threading.md), [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), [ADR-0032](../adr/0032-interface-do-v1-fechada.md), [ADR-0056](../adr/0056-catalogo-de-textos-da-interface.md), [ADR-0072](../adr/0072-cliente-ssh-embutido.md), [ADR-0073](../adr/0073-credenciais-no-cofre-do-sistema.md), [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md), [ADR-0103](../adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a [ADR-0108](../adr/0108-superficies-de-ui-do-acesso-remoto.md)
+**Relacionados:** [PRD-000](prd-000-visao-de-produto.md), [PRD-001](prd-001-abas.md), [PRD-002](prd-002-grupos-de-abas.md), [PRD-006](prd-006-paineis-divididos.md), [PRD-007](prd-007-perfis-de-aba.md), [PRD-009](prd-009-barra-de-status.md), [PRD-010](prd-010-interacao-e-superficie-de-app.md), [PRD-016](prd-016-tela-de-configuracoes.md), [PRD-020](prd-020-conexoes-ssh.md), [PRD-022](prd-022-abas-e-grupos-entre-janelas.md), [ADR-0007](../adr/0007-modelo-de-threading.md), [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), [ADR-0032](../adr/0032-interface-do-v1-fechada.md), [ADR-0056](../adr/0056-catalogo-de-textos-da-interface.md), [ADR-0072](../adr/0072-cliente-ssh-embutido.md), [ADR-0073](../adr/0073-credenciais-no-cofre-do-sistema.md), [ADR-0090](../adr/0090-transferencia-de-abas-entre-janelas.md), [ADR-0103](../adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a [ADR-0109](../adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md)
 
 > O dono decidiu, antes da escrita:
 >
@@ -93,9 +93,13 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 - **RF-25.26** — O celular **inicia** um painel não iniciado e **conecta** uma aba SSH dormente. Perguntas da conexão (senha, passphrase, chave de servidor desconhecida) aparecem **só no desktop** no v1; enquanto esperam resposta, o celular vê o painel aguardando o desktop (estado `awaiting-desktop`, [ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md) §6).
 - **RF-25.27** — Nenhuma ação remota **muda o foco nem a aba ativa** do desktop. Aba criada pelo celular nasce sem roubar o foco de quem está no desktop.
 
+  > **Emenda (2026-11-17).** Substituído, por decisão do dono ([ADR-0109](../adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md)). A ação remota faz a **mesma ativação de aba que o gesto local**: aba criada pelo celular fica ativa na janela dela, expandir grupo e mover para outra janela ativam o que o desktop ativa. O celular também **ativa uma aba** escolhida (`activate-tab`). Ele **nunca** levanta, desminimiza nem dá foco a janela do sistema, e não muda o painel focado.
+
 ### Limites
 
 - **RF-25.28** — Ficam **fora do alcance do celular** no v1: fixar e desafixar, sessões nomeadas, configurações, o gerenciador de tarefas, abrir janela nova, destacar aba numa janela nova, e qualquer coisa que mude o foco do desktop.
+
+  > **Emenda (2026-11-17).** A última cláusula passa a ser "e qualquer coisa que mude o foco da **janela do sistema** ou o painel focado". Trocar a aba ativa deixou de estar fora do alcance ([ADR-0109](../adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md), RF-25.27).
 - **RF-25.29** — Com o Porecatu fechado, o celular mostra o desktop como **offline**. Não há modo em segundo plano.
 
 ## Requisitos não funcionais

@@ -144,6 +144,17 @@ pub enum Action {
     /// plataforma -- mesmo precedente de `group.new_tab`. Mira a janela, não
     /// o painel ([`Action::targets_pane`] é `false`).
     TaskManagerToggle,
+
+    /// PRD-025 RF-25.15, ADR-0107 §7. Liga ou desliga o acesso remoto do app
+    /// inteiro. Vinculável e **sem atalho padrão** em nenhuma plataforma.
+    /// Mira o app, não o painel ([`Action::targets_pane`] é `false`).
+    RemoteToggle,
+    /// PRD-025 RF-25.15, ADR-0107 §7. Inicia o pareamento de um aparelho
+    /// (mostra o QR). Vinculável e **sem atalho padrão**. Mira o app.
+    RemotePair,
+    /// PRD-025 RF-25.15, ADR-0107 §7. Desconecta todos os aparelhos
+    /// conectados. Vinculável e **sem atalho padrão**. Mira o app.
+    RemoteDisconnectAll,
 }
 
 impl Action {
@@ -211,12 +222,15 @@ impl Action {
             | Action::SettingsOpen
             | Action::ProfileOpenMenu
             | Action::ProfileNewTab(_)
-            | Action::TaskManagerToggle => false,
+            | Action::TaskManagerToggle
+            | Action::RemoteToggle
+            | Action::RemotePair
+            | Action::RemoteDisconnectAll => false,
         }
     }
 }
 
-/// As 72 linhas do catálogo fechado, na grafia exata que `FromStr`/
+/// As 75 linhas do catálogo fechado, na grafia exata que `FromStr`/
 /// `Display` usam. Único array-fonte: o teste bidirecional
 /// (`tests::every_catalog_name_round_trips`) e a sugestão de erro
 /// (`closest_name`) partem dele, então as duas checagens não podem
@@ -299,6 +313,9 @@ pub const CATALOG: &[&str] = &[
     "profile.new_tab_9",
     "ssh.reconnect",
     "task_manager.toggle",
+    "remote.toggle",
+    "remote.pair",
+    "remote.disconnect_all",
 ];
 
 /// Erro de parse de uma ação (ADR-0029 §4). Dois casos distintos, cada um com
@@ -407,6 +424,9 @@ impl FromStr for Action {
             "profile.open_menu" => Action::ProfileOpenMenu,
             "ssh.reconnect" => Action::SshReconnect,
             "task_manager.toggle" => Action::TaskManagerToggle,
+            "remote.toggle" => Action::RemoteToggle,
+            "remote.pair" => Action::RemotePair,
+            "remote.disconnect_all" => Action::RemoteDisconnectAll,
             _ => {
                 return Err(ActionParseError::Unknown {
                     input: s.to_owned(),
@@ -476,6 +496,9 @@ impl fmt::Display for Action {
             Action::ProfileOpenMenu => "profile.open_menu",
             Action::SshReconnect => "ssh.reconnect",
             Action::TaskManagerToggle => "task_manager.toggle",
+            Action::RemoteToggle => "remote.toggle",
+            Action::RemotePair => "remote.pair",
+            Action::RemoteDisconnectAll => "remote.disconnect_all",
             Action::ProfileNewTab(n) => return write!(f, "profile.new_tab_{n}"),
         };
         f.write_str(name)
@@ -596,6 +619,9 @@ mod tests {
             Action::ProfileOpenMenu,
             Action::SshReconnect,
             Action::TaskManagerToggle,
+            Action::RemoteToggle,
+            Action::RemotePair,
+            Action::RemoteDisconnectAll,
             Action::ProfileNewTab(1),
             Action::ProfileNewTab(9),
         ];
@@ -686,6 +712,9 @@ mod tests {
             ("profile.new_tab_9", false),
             ("ssh.reconnect", true),
             ("task_manager.toggle", false),
+            ("remote.toggle", false),
+            ("remote.pair", false),
+            ("remote.disconnect_all", false),
         ];
         for &name in CATALOG {
             let Some(&(_, want)) = expected.iter().find(|(n, _)| *n == name) else {
@@ -718,6 +747,22 @@ mod tests {
         assert_eq!(Action::TaskManagerToggle.to_string(), "task_manager.toggle");
         assert!(CATALOG.contains(&"task_manager.toggle"));
         assert!(!Action::TaskManagerToggle.targets_pane());
+    }
+
+    /// ADR-0107 §7: as três ações `remote.*` são nomes simples, vinculáveis, e
+    /// miram o app, não o painel.
+    #[test]
+    fn remote_actions_round_trip_and_target_the_app() {
+        for (name, action) in [
+            ("remote.toggle", Action::RemoteToggle),
+            ("remote.pair", Action::RemotePair),
+            ("remote.disconnect_all", Action::RemoteDisconnectAll),
+        ] {
+            assert_eq!(name.parse::<Action>(), Ok(action));
+            assert_eq!(action.to_string(), name);
+            assert!(CATALOG.contains(&name));
+            assert!(!action.targets_pane());
+        }
     }
 
     /// ADR-0086 §7: um nome só para fixar e desafixar; `tab.pin`/`tab.unpin`

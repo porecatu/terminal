@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "porecatu-remote"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# ADR-0103 §5: o protocolo e normativo e vive em repositorio proprio. Enquanto
+# nao sai no crates.io, `git` + `rev` com `version` exata ao lado (mesma forma
+# e mesmo commit do `Cargo.toml` do Relay; o `version` impede curinga no
+# cargo-deny). Features padrao (`session`, `message`); `test-vectors` nunca.
+# Subir acompanha a versao de fio que o Relay e o Remote falam.
+porecatu-protocol = { version = "=0.1.0", git = "https://github.com/porecatu/protocol", rev = "d8618efa65f619b62e6a877159a7ad5658ca1c19" }
+# ADR-0104 §2: `tokio` so em crate de rede folha, com runtime proprio; a mesma
+# versao exata em `porecatu-ssh` e aqui, subidas juntas (`cargo tree -d`).
+# Nunca em `[workspace.dependencies]`.
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "net", "sync", "time", "io-util"] }
+# ADR-0104 §1: WebSocket para o relay, TLS por `rustls` com raizes do sistema
+# (decisao do dono, 2026-11-16). Exato, a versao do Relay. Sem as features
+# padrao e sem `rustls-tls-webpki-roots` (a licenca CDLA dos dados do
+# `webpki-roots` nao esta na lista aceita).
+tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+# ADR-0104 §1: provedor de criptografia `ring`, o mesmo do `russh` e do Relay.
+# Sem `aws-lc-rs` (exige NASM no Windows): `cargo tree -i aws-lc-rs` tem de
+# nao achar o pacote.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+# ADR-0104 §1: confiar nos certificados do sistema operacional (decisao do dono).
+rustls-native-certs = "=0.8.5"
+# ADR-0104 §1: assinatura do registro no relay, que o crate de protocolo nao
+# faz. Mesma versao exata com que o Relay verifica.
+ed25519-dalek = "=3.0.0"
+# ADR-0104 §5: o token de operador vive no cofre do SO. Mesma versao exata de
+# `porecatu-ssh`; so o modulo `vault` o usa.
+keyring = { version = "=4.2.0", default-features = false, features = ["v1"] }
+# Sorteio dos bytes da identidade e do token (`ring::rand::SystemRandom`); o
+# mesmo backend que o `russh` usa.
+ring = "0.17"
+# Segredos (chave de assinatura, token) zerados ao cair; a versao que a pilha
+# RustCrypto ja traz.
+zeroize = "1.9"
+# O mesmo `bytes` do crate de protocolo e do Relay.
+bytes = "=1.12.1"
+# Divide o WebSocket em leitura e escrita; so `sink` e `std`.
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# `remote_devices.json`, ao lado do `session.json`.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Nome da maquina (RF-25.5). Apache-2.0, compativel com GPLv3; ja estava no
+# lock (dependencia de outro crate), entao nao ganha pacote.
+gethostname = "=1.1.0"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "=1.54.1", default-features = false, features = ["rt", "macros"] }

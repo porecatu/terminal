@@ -1,6 +1,6 @@
 # ADR-0108 — Superfícies de UI do acesso remoto: grupo nas configurações, QR em `Quad`s, diálogo de pareamento e botão de aparelhos conectados na zona fixa
 
-**Status:** Proposto — aval visual do dono **pendente** (anatomia inteira)
+**Status:** Aceito em 2026-11-16 — implementado em 2026-11-17 (verificado só por teste automatizado; notas de implementação nas seções 1 a 4); aval visual do dono **pendente** sobre o binário ([ADR-0028](0028-o-binario-como-referencia-visual.md))
 **Data:** 2026-11-15
 **Relacionados:** [PRD-016](../prd/prd-016-tela-de-configuracoes.md), [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0014](0014-superficie-de-aviso-e-dialogo.md), [ADR-0019](0019-tooltip.md), [ADR-0024](0024-face-de-icones.md), [ADR-0028](0028-o-binario-como-referencia-visual.md), [ADR-0032](0032-interface-do-v1-fechada.md), [ADR-0043](0043-arvore-de-acessibilidade.md), [ADR-0055](0055-botao-e-popover-de-sessoes.md), [ADR-0058](0058-escrita-do-arquivo-de-configuracao.md), [ADR-0060](0060-anatomia-da-tela-de-configuracoes.md), [ADR-0075](0075-superficies-de-ui-do-ssh.md), [ADR-0078](0078-largura-e-quebra-de-texto-do-dialogo.md), [ADR-0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md), [ADR-0106](0106-pareamento-identidade-e-autorizacao.md)
 
@@ -43,6 +43,8 @@ Um grupo novo na guia lateral, **depois de "Perfis"**, com o painel em três se�
 
 Revogar e recriar são imediatos, não pendentes: mexem em `remote_devices.json` e no cofre, não no `porecatu.toml`.
 
+> **Nota de implementação (2026-11-17).** O grupo é `settings/remote_access.rs` (conexão, token, estado) e `settings/remote_pairing.rs` (QR, pedido de pareamento, lista de aparelhos), estado puro, com o `Group::RemoteAccess` registrado depois de "Perfis". Onde o binário difere do texto acima: (1) a **contagem regressiva do QR** fica **ao lado** do QR, na descrição da linha, e não abaixo dele; (2) as datas da lista são `AAAA-MM-DD` no fuso local; (3) **sem host** (acesso desligado ou parado), a lista de aparelhos não aparece (uma linha explica) e "Revogar" e "Recriar identidade" ficam esmaecidos com a razão; (4) a conexão ganha uma linha **"Token guardado" com o botão Apagar** (apaga o token do cofre ao salvar) e o estado tem mais um motivo, "Falha: token ausente"; (5) os pontos do campo do token usam Iosevka (`overlay::MASK_FONT`); (6) a árvore de acessibilidade do QR é um botão "Copiar link de pareamento" que só **descreve** — a cópia acontece por clique ou `Enter`. O diálogo ganhou `ConfirmDialog.primary_confirm` (o botão de confirmar em verde, para o que não é destrutivo: "Parear") e dois tons de linha, `LineTone::Mono` (a impressão digital em Iosevka) e `LineTone::Hint` (11px Terciário). O código do QR em `Quad`s é `remote/qr.rs`.
+
 ### 2. O QR
 
 - Matriz gerada pelo crate `qrcode` (MIT OR Apache-2.0, compatível com GPLv3), nível de correção **M**, em `porecatu-ui`. Desenho: **um `Quad` por série horizontal de módulos escuros** contíguos (não um por módulo), sobre um `Quad` claro que inclui a zona de silêncio de 4 módulos.
@@ -70,6 +72,8 @@ Nenhum valor novo.
 - **Tooltip** ([ADR-0019](0019-tooltip.md)): "N aparelho(s) conectado(s): nome, nome".
 - **Clique:** abre um popover com a anatomia do popover de sessões, sem campo de texto: uma linha por aparelho conectado (nome; abaixo, plataforma · conectado há X), com "Desconectar" à direita; abaixo da lista, "Desconectar todos" e "Abrir configurações de acesso remoto". Desconectar não revoga (RF-25.13).
 - **Acessibilidade** ([ADR-0043](0043-arvore-de-acessibilidade.md)): nó de botão com o mesmo texto do tooltip, presente e ausente junto com o botão.
+
+> **Nota de implementação (2026-11-17).** `devices_popover.rs` e a largura da zona em `tab_bar.rs` (`right_zone_width`, com o parâmetro `devices`). O botão fica **à esquerda de sessões**, separado por `trilha_gap`, e o ícone é `icon::SMARTPHONE` (U+E163) em `porecatu-render`. O **badge** com a contagem aparece a partir de **2** aparelhos; a posição dele, a altura da linha do popover (**41** = item 28 + vão 2 + segunda linha de 11px) e a pílula "Desconectar" são escolhas **sem aval** — o ADR descrevia só a anatomia geral. O popover **não cria nós próprios na árvore de acessibilidade**, não rola e não tem teto de linhas. Descrição completa e medidas na §2.25 da [especificação visual](../design/especificacao-visual.md).
 
 ### 5. Aviso a cada conexão
 
@@ -117,6 +121,8 @@ Rasterizar a matriz numa imagem e desenhá-la como textura. Funciona, mas cria c
 | Botão aparecendo e sumindo deslocar a trilha durante um arraste | Baixa | Baixo | Mudança de layout entra no fim do evento, como qualquer outro recálculo da barra; o arraste já tolera a trilha mudando |
 | Aval visual mudar a anatomia | Alta | Baixo | Status "Proposto"; implementação só depois do aval |
 
+> **Nota (2026-11-17).** O dono aceitou o ADR para implementação sem ver o binário; a mitigação acima virou "o aval vem depois, sobre o binário", e a anatomia pode mudar então (por blockquote de revisão ou ADR novo, conforme o caso).
+
 ## Registro do aval visual
 
-Pendente.
+Pendente. O ADR está implementado; o aval é sobre o **binário** ([ADR-0028](0028-o-binario-como-referencia-visual.md)) e ainda não foi dado.

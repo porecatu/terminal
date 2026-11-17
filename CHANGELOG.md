@@ -14,6 +14,67 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [Não publicado]
+
+Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado por padrão.
+
+### Adicionado
+
+- **Acesso remoto**
+  ([PRD-025](docs/prd/prd-025-acesso-remoto.md),
+  [ADR-0103](docs/adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a
+  [ADR-0109](docs/adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md),
+  [guia](docs/guia-do-usuario.md#acesso-remoto)): este processo passa a ser o
+  **host** de uma sessão que o app [Porecatu Remote](https://github.com/porecatu/remote)
+  alcança por um [Porecatu Relay](https://github.com/porecatu/relay) que você
+  hospeda. O relay é cego: o conteúdo viaja cifrado de ponta a ponta. O celular
+  vê todas as janelas, abas, grupos e painéis, acompanha a grade ao vivo com o
+  tema do desktop e o histórico sob demanda, digita (pelo mesmo codificador do
+  teclado local, nunca por atalho), cria, fecha, renomeia, ativa e organiza
+  abas e grupos, e move abas e grupos entre janelas. O tamanho do terminal é
+  sempre o do desktop. Fechar com processo rodando pede a confirmação **no
+  celular**, nunca num diálogo do desktop, e a última aba da última janela não
+  fecha pelo celular. **Nada disto foi visto rodando** com o app real nem com um
+  relay real; só testes automatizados (ver o [roadmap](docs/roadmap.md)).
+- **Configuração**: seção `[remote]` com `enabled` (default `false`) e
+  `relay_url`, as duas vigentes na hora, e `[appearance.remote] qr_size`
+  (208). Cores novas dos temas, `qr_dark` e `qr_light` (o QR é sempre escuro
+  sobre claro). O **token do relay** nunca vai para o arquivo: fica no cofre do
+  sistema.
+- **Grupo "Acesso remoto" na tela de configurações**: alternância, endereço do
+  relay, token mascarado (com "Apagar"), estado da conexão, **QR de
+  pareamento** (uso único, 5 minutos), diálogo de pareamento com a impressão
+  digital do aparelho (120 s), lista de aparelhos pareados, revogar e recriar
+  a identidade.
+- **Botão de aparelhos conectados** na zona fixa da barra de abas, em toda
+  janela, enquanto houver celular conectado, com selo de contagem, tooltip e
+  popover (Desconectar, Desconectar todos, abrir as configurações). **Não há
+  chave para escondê-lo.** Cada nova conexão gera um aviso. Ícone Lucide
+  `smartphone`.
+- **Ações** `remote.toggle`, `remote.pair` e `remote.disconnect_all`, sem
+  atalho padrão.
+- **Crate `porecatu-remote`**: folha, com `tokio` e `keyring` próprios e um
+  runtime criado só com o recurso ligado. A conexão ao relay confia nos
+  certificados do **sistema operacional**.
+- **`porecatu-term`**: `Terminal::snapshot_live_into`, `history_into`,
+  `grid_size()` e o contador `ScrollbackInfo { history, dropped }`.
+- **Protocolo**: este release fala a **especificação 0.4** do
+  [porecatu-protocol](https://github.com/porecatu/protocol), versão de fio
+  `[0, 1]` (ainda não congelada), com o crate `porecatu-protocol` 0.1.0 por
+  `git` + `rev` (`d8618ef`, branch `spec-0-4-aba-ativa`, ainda não mesclada na
+  `main` do protocolo). O app Remote ainda precisa implementar a ação nova
+  `activate-tab` e a 0.4.
+
+### Alterado
+
+- `tokio` fica pinado em `=1.54.1` em `porecatu-ssh` e `porecatu-remote`
+  (dois caminhos em `cargo tree -i tokio`, uma versão); `keyring` `=4.2.0`
+  nos dois módulos `vault`. O [ADR-0104](docs/adr/0104-crate-porecatu-remote.md)
+  revê, em parte, o ADR-0007, o ADR-0072 e o ADR-0073.
+- O gerenciador de tarefas aberto numa janela volta ao terminal também quando
+  o celular ativa ou cria uma aba nela
+  ([ADR-0109](docs/adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md)).
+
 ## [0.9.11] - 2026-11-12
 
 Gerenciador de tarefas na janela (botão do app), com gráficos de CPU, memória e disco e a lista de processos. Substitui a 0.9.10, retirada.

@@ -257,6 +257,13 @@ pub(crate) struct Metrics {
     pub banner_padding_x: f32,
     pub banner_bar_width: f32,
     pub banner_radius: f32,
+    /// O lado do QR do pareamento, em px lógicos, zona de silêncio incluída
+    /// (`[appearance.remote] qr_size`, ADR-0108 §2).
+    pub qr_size: f32,
+    /// O fator de escala da janela: o QR alinha os módulos ao pixel físico.
+    /// `1.0` fora da tela (testes, conteúdo medido); a janela o põe em
+    /// `SettingsWindow::metrics`.
+    pub scale: f64,
 }
 
 /// Espaço entre o nome e a descrição dentro da linha. O ADR-0060 §2 posiciona
@@ -314,6 +321,8 @@ impl Metrics {
             banner_padding_x: 12.0,
             banner_bar_width: 2.0,
             banner_radius: 8.0,
+            qr_size: config.appearance.remote.qr_size as f32,
+            scale: 1.0,
         }
     }
 
@@ -466,6 +475,18 @@ pub(crate) fn profile_item_buttons(control: Rect, m: &Metrics) -> (Rect, Rect) {
     let remove = button(control.x + control.width - m.restore_width);
     let edit = button(remove.x - m.list_gap - m.restore_width);
     (edit, remove)
+}
+
+/// O botão `X` de revogar de um aparelho pareado, dentro do retângulo `control`
+/// dele: o mesmo botão do `X` de um perfil (a anatomia do excluir do popover de
+/// sessões), encostado na direita. Uma conta só para a pintura e o clique.
+pub(crate) fn device_remove_button(control: Rect, m: &Metrics) -> Rect {
+    Rect {
+        x: control.x + control.width - m.restore_width,
+        y: control.y + (control.height - m.restore_height) / 2.0,
+        width: m.restore_width,
+        height: m.restore_height,
+    }
 }
 
 /// Largura do controle de um perfil: o lápis, o vão e o `X`.
@@ -1499,8 +1520,8 @@ mod tests {
         );
         let hit = |point| hit_test(&l, &items, &footer, &geometry, 0.0, point);
 
-        // Geral, Shell, Perfis, Terminal: o quarto.
-        let terminal = items[3].1;
+        // Geral, Shell, Perfis, Acesso remoto, Terminal: o quinto.
+        let terminal = items[4].1;
         assert_eq!(
             hit((terminal.x + 5.0, terminal.y + 5.0)),
             Some(Hit::Group(Group::Terminal))

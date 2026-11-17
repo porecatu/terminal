@@ -26,10 +26,13 @@ use super::file_state::Banner;
 use super::import_list::ImportList;
 use super::layout::{self, BannerButton, BlockSpec, ControlPart, Metrics, PanelGeometry};
 use super::profiles_draft::ProfilesDraft;
+use super::remote_access::{RemoteAccessView, status_is_failure, status_text, token_error_text};
+use super::remote_pairing::{countdown_text, device_detail, host_present, pairing_available};
 use super::shortcuts::{Capturing, Shortcuts};
 use crate::keymap::Chord;
 use crate::messages::msg;
 use crate::palette::ResolvedTermPalette;
+use crate::remote::qr::QrMatrix;
 use crate::tab_bar::rect_contains;
 
 /// Quantos quadrados tem a amostra de um tema: fundo, texto e as oito ANSI
@@ -89,6 +92,9 @@ pub(crate) struct ViewExtras<'a> {
     /// "Importar do ~/.ssh/config" está aberto: a lista de marcar vem abaixo
     /// da lista de perfis (ADR-0075 §7).
     pub import: Option<&'a ImportList>,
+    /// O que o grupo "Acesso remoto" mostra além das opções: o estado do relay
+    /// e o token (ADR-0108 §1). `None` fora dele.
+    pub remote: Option<&'a RemoteAccessView<'a>>,
 }
 
 /// Um botão da faixa, com a largura já medida.
@@ -193,6 +199,74 @@ pub(crate) enum ControlView {
         badge_width: f32,
         selected: bool,
     },
+    /// O campo mascarado do token do relay (ADR-0108 §1): um ponto por escalar
+    /// digitado, **nunca o texto** -- o conteúdo mora num `MaskedFieldState`
+    /// que a pintura e a árvore de acessibilidade não leem.
+    Secret {
+        filled: usize,
+        width: f32,
+        /// A dica cinza do campo vazio.
+        placeholder: String,
+    },
+    /// Um texto sem controle (a linha de estado do acesso remoto), alinhado à
+    /// direita; em Erro quando é uma falha.
+    Text {
+        text: String,
+        width: f32,
+        failed: bool,
+    },
+    /// O QR de pareamento (ADR-0108 §2): só a matriz -- o link, que carrega o
+    /// token, não passa por aqui. O lado é `Metrics::qr_size`; a pintura o
+    /// desenha com `Quad`s sobre a luz do tema (`qr_dark` sobre `qr_light`).
+    Qr {
+        matrix: QrMatrix,
+    },
+    /// Um aparelho pareado da lista (ADR-0108 §1): o `X` de revogar à direita e,
+    /// antes dele, o ponto em Acento quando o aparelho está conectado agora.
+    Device {
+        connected: bool,
+    },
+    /// Um botão de tom destrutivo ("Recriar identidade"): o confirmar do
+    /// diálogo destrutivo, em linha.
+    Danger {
+        label: String,
+        width: f32,
+    },
+}
+
+/// A que o grupo "Acesso remoto" pertence uma linha que não é de opção.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteTarget {
+    /// O campo mascarado do token.
+    Token,
+    /// O botão "Apagar" o token guardado.
+    DeleteToken,
+    /// A linha de estado: só texto.
+    Status,
+    /// O botão "Mostrar QR code" (com o QR à vista, o "Cancelar").
+    Pair,
+    /// O QR à vista: o clique copia o link de pareamento.
+    Qr,
+    /// O aparelho `n` da lista de pareados.
+    Device(usize),
+    /// O botão "Recriar identidade".
+    Recreate,
+}
+
+impl RemoteTarget {
+    /// É um gesto **imediato** sobre o host (parear, copiar o link, revogar,
+    /// recriar), e não uma edição do arquivo: ele vale com o arquivo inválido, que
+    /// deixa a tela em somente leitura (RF-16.22) -- revogar um aparelho não pode
+    /// esperar que o `porecatu.toml` volte a ser válido (RF-25.10).
+    pub(crate) fn is_immediate(self) -> bool {
+        matches!(
+            self,
+            RemoteTarget::Pair
+                | RemoteTarget::Qr
+                | RemoteTarget::Device(_)
+                | RemoteTarget::Recreate
+        )
+    }
 }
 
 /// A que o grupo "Perfis" pertence uma linha que não é de opção.
@@ -248,6 +322,12 @@ impl ControlView {
                 layout::profile_control_width(m),
                 m.restore_height.max(m.chip_height),
             ),
+            ControlView::Secret { width, .. } | ControlView::Text { width, .. } => {
+                (*width, m.field_height)
+            }
+            ControlView::Qr { .. } => (m.qr_size, m.qr_size),
+            ControlView::Device { .. } => (m.restore_width, m.restore_height),
+            ControlView::Danger { width, .. } => (*width, m.button_height),
         }
     }
 
@@ -263,9 +343,12 @@ impl ControlView {
             return None;
         }
         match self {
-            ControlView::Toggle { .. } | ControlView::Field { .. } | ControlView::Choice { .. } => {
-                Some(ControlPart::Whole)
-            }
+            ControlView::Toggle { .. }
+            | ControlView::Field { .. }
+            | ControlView::Choice { .. }
+            | ControlView::Secret { .. }
+            | ControlView::Qr { .. }
+            | ControlView::Danger { .. } => Some(ControlPart::Whole),
             ControlView::Segmented { widths, .. } => {
                 let mut x = rect.x;
                 for (index, width) in widths.iter().enumerate() {
@@ -310,7 +393,12 @@ impl ControlView {
                     }
                 })
             }
-            ControlView::Themes { .. } => None,
+            ControlView::Themes { .. } | ControlView::Text { .. } => None,
+            // O `X` de revogar é a única parte; o resto é a linha inteira.
+            ControlView::Device { .. } => {
+                rect_contains(layout::device_remove_button(rect, m), point)
+                    .then_some(ControlPart::ListRemove(0))
+            }
             // O lápis e o `X` são partes; o resto é a linha inteira.
             ControlView::ProfileItem { .. } => {
                 let (edit, remove) = layout::profile_item_buttons(rect, m);
@@ -371,6 +459,9 @@ pub(crate) struct RowView {
     /// A linha do grupo "Perfis" que não é de opção: os botões de acrescentar
     /// ou um perfil da lista. `None` nas linhas de opção e de atalho.
     pub profile: Option<ProfileTarget>,
+    /// A linha do grupo "Acesso remoto" que não é de opção: o token, o botão de
+    /// apagá-lo ou o estado. `None` nas outras.
+    pub remote: Option<RemoteTarget>,
     /// Uma linha de aviso em 11px na cor de Aviso, abaixo do nome: o conflito
     /// de atalho (RF-16.30) e a combinação que o terminal perde (RF-16.29).
     /// Cortada ao orçamento da linha, como a razão de um valor recusado.
@@ -549,6 +640,10 @@ pub(crate) fn build(
         }
     }
 
+    if let (Group::RemoteAccess, Some(remote)) = (key.group, extras.remote) {
+        push_remote_blocks(&mut blocks, remote, catalog, m, panel_width, measurer);
+    }
+
     if let (Group::Profiles, Some(profiles)) = (key.group, extras.profiles) {
         push_profile_blocks(
             &mut blocks,
@@ -573,6 +668,9 @@ pub(crate) fn build(
                 reason: row.invalid.is_some() || row.notice.is_some() || row.unavailable.is_some(),
                 profile_badge: match &row.control {
                     ControlView::ProfileItem { badge_width, .. } => Some(*badge_width),
+                    // Um aparelho pareado tem a anatomia da linha de perfil: o
+                    // ponto e o `X` à direita, sem restaurar padrão, e sem badge.
+                    ControlView::Device { .. } => Some(0.0),
                     _ => None,
                 },
             },
@@ -1480,6 +1578,7 @@ fn option_row(
     });
 
     RowView {
+        remote: None,
         option: Some(option.id),
         name,
         description,
@@ -1511,6 +1610,7 @@ fn validation_text(catalog: &Catalog, error: &ValueError) -> String {
         ValueError::NotAChoice | ValueError::WrongType => v::not_a_choice(catalog),
         ValueError::EmptyName => v::empty_name(catalog),
         ValueError::DuplicateName(name) => v::duplicate_name(catalog, name),
+        ValueError::InvalidRelayUrl => v::invalid_relay_url(catalog),
     }
 }
 
@@ -1800,6 +1900,7 @@ fn push_shortcut_blocks(
                     .join(", ")
             };
             blocks.push(Block::Row(Box::new(RowView {
+                remote: None,
                 option: None,
                 name,
                 description: String::new(),
@@ -1969,6 +2070,7 @@ fn form_row(
             .0
     });
     Block::Row(Box::new(RowView {
+        remote: None,
         option: None,
         name,
         description: String::new(),
@@ -2123,6 +2225,321 @@ fn profile_summary(form: &super::profiles_draft::Form) -> String {
     }
 }
 
+/// ADR-0108 §1: as três linhas que o grupo "Acesso remoto" tem além das duas
+/// opções -- o campo mascarado do token (que mora no cofre, não no arquivo), o
+/// botão de apagar o guardado e o estado do relay --, na mesma seção CONEXÃO.
+fn push_remote_blocks(
+    blocks: &mut Vec<Block>,
+    remote: &RemoteAccessView,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    use msg::settings::remote as r;
+    let token = &remote.token;
+
+    // O token.
+    let control = ControlView::Secret {
+        filled: token.filled,
+        width: m.text_field_width,
+        placeholder: r::token_placeholder(catalog),
+    };
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    let name = r::token_label(catalog);
+    // Sem cofre a linha é esmaecida e o motivo vai na nota de indisponível,
+    // não repetido na descrição.
+    let note = token.note.text(catalog);
+    let (description_full, unavailable) = if token.unavailable {
+        (
+            String::new(),
+            Some(
+                measurer
+                    .truncate(&note, BODY_FONT, m.description_size, budget)
+                    .0,
+            ),
+        )
+    } else {
+        (note, None)
+    };
+    let (description, description_truncated) =
+        measurer.truncate(&description_full, BODY_FONT, m.description_size, budget);
+    let invalid = token.error.map(|error| {
+        measurer
+            .truncate(
+                &token_error_text(catalog, error),
+                BODY_FONT,
+                m.description_size,
+                budget,
+            )
+            .0
+    });
+    blocks.push(Block::Row(Box::new(RowView {
+        remote: Some(RemoteTarget::Token),
+        option: None,
+        name: name.clone(),
+        description,
+        description_full,
+        description_truncated,
+        scope: None,
+        control,
+        value_text: name,
+        pending: token.pending,
+        invalid,
+        can_reset: false,
+        action: None,
+        profile: None,
+        notice: None,
+        unavailable,
+    })));
+
+    // Apagar o guardado: um botão, escolhido enquanto a exclusão está pendente.
+    if token.can_delete {
+        let label = r::delete_button(catalog);
+        let widths = vec![
+            measurer.measure_width(&label, BODY_FONT, m.button_font_size)
+                + m.button_padding_x * 2.0,
+        ];
+        let control = ControlView::Segmented {
+            labels: vec![label],
+            widths,
+            selected: if token.deleting { 0 } else { usize::MAX },
+        };
+        let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+        let name = r::delete_label(catalog);
+        let description_full = r::delete_description(catalog);
+        let (description, description_truncated) =
+            measurer.truncate(&description_full, BODY_FONT, m.description_size, budget);
+        blocks.push(Block::Row(Box::new(RowView {
+            remote: Some(RemoteTarget::DeleteToken),
+            option: None,
+            name: name.clone(),
+            description,
+            description_full,
+            description_truncated,
+            scope: None,
+            control,
+            value_text: name,
+            pending: false,
+            invalid: None,
+            can_reset: false,
+            action: None,
+            profile: None,
+            notice: None,
+            unavailable: None,
+        })));
+    }
+
+    // O estado: só texto, sem controle.
+    let text = status_text(catalog, remote.status);
+    let name = r::status_label(catalog);
+    blocks.push(Block::Row(Box::new(RowView {
+        remote: Some(RemoteTarget::Status),
+        option: None,
+        name,
+        description: String::new(),
+        description_full: String::new(),
+        description_truncated: false,
+        scope: None,
+        control: ControlView::Text {
+            width: measurer.measure_width(&text, BODY_FONT, m.field_font_size),
+            failed: status_is_failure(remote.status),
+            text: text.clone(),
+        },
+        value_text: text,
+        pending: false,
+        invalid: None,
+        can_reset: false,
+        action: None,
+        profile: None,
+        notice: None,
+        unavailable: None,
+    })));
+    push_pairing_blocks(blocks, remote, catalog, m, panel_width, measurer);
+}
+
+/// A linha do grupo "Acesso remoto" que não é de opção, com o texto já cortado ao
+/// orçamento do controle (`budget`): o nome, a descrição (que o tooltip e a
+/// árvore leem inteira) e, se a linha está indisponível, a nota do motivo.
+struct RemoteRow {
+    target: RemoteTarget,
+    name: String,
+    description: String,
+    control: ControlView,
+    /// Por que a linha está indisponível (esmaecida, sem ação), se está.
+    unavailable: Option<String>,
+    /// Quanto sobra à esquerda para o nome e a descrição.
+    budget: f32,
+}
+
+impl RemoteRow {
+    fn into_block(self, m: &Metrics, measurer: &mut TextMeasurer) -> Block {
+        let (description, description_truncated) = measurer.truncate(
+            &self.description,
+            BODY_FONT,
+            m.description_size,
+            self.budget,
+        );
+        let unavailable = self.unavailable.map(|note| {
+            measurer
+                .truncate(&note, BODY_FONT, m.description_size, self.budget)
+                .0
+        });
+        Block::Row(Box::new(RowView {
+            remote: Some(self.target),
+            option: None,
+            name: self.name.clone(),
+            description,
+            description_full: self.description,
+            description_truncated,
+            scope: None,
+            control: self.control,
+            value_text: self.name,
+            pending: false,
+            invalid: None,
+            can_reset: false,
+            action: None,
+            profile: None,
+            notice: None,
+            unavailable,
+        }))
+    }
+}
+
+/// Um botão com a anatomia do botão do diálogo: um segmentado de um segmento em
+/// que nada está escolhido, como os "+ Perfil local" e o "Apagar".
+fn button_control(label: String, m: &Metrics, measurer: &mut TextMeasurer) -> ControlView {
+    let width =
+        measurer.measure_width(&label, BODY_FONT, m.button_font_size) + m.button_padding_x * 2.0;
+    ControlView::Segmented {
+        labels: vec![label],
+        widths: vec![width],
+        selected: usize::MAX,
+    }
+}
+
+/// ADR-0108 §1: as seções PAREAR UM APARELHO e APARELHOS PAREADOS, abaixo da
+/// CONEXÃO.
+///
+/// - **Parear**: o botão "Mostrar QR code" -- esmaecido, nunca ausente, e com a
+///   razão, enquanto o relay não está conectado --, que com o QR à vista vira o
+///   "Cancelar" e traz, na linha de baixo, o QR e a contagem regressiva.
+/// - **Aparelhos**: uma linha por aparelho (nome; plataforma, datas), ou a nota de
+///   lista vazia; com o acesso desligado não há host nem lista, e a nota diz
+///   isso. Abaixo, "Recriar identidade", que precisa do host.
+fn push_pairing_blocks(
+    blocks: &mut Vec<Block>,
+    remote: &RemoteAccessView<'_>,
+    catalog: &Catalog,
+    m: &Metrics,
+    panel_width: f32,
+    measurer: &mut TextMeasurer,
+) {
+    use msg::settings::remote as r;
+    let width = (panel_width - m.panel_padding * 2.0).max(0.0);
+
+    // PAREAR UM APARELHO.
+    blocks.push(Block::Section(r::section_pair(catalog)));
+    let showing = remote.qr.is_some();
+    let control = button_control(
+        if showing {
+            r::pair_cancel(catalog)
+        } else {
+            r::pair_button(catalog)
+        },
+        m,
+        measurer,
+    );
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    blocks.push(
+        RemoteRow {
+            target: RemoteTarget::Pair,
+            name: r::pair_label(catalog),
+            description: r::pair_description(catalog),
+            control,
+            // Com o QR à vista o botão é o "Cancelar", sempre disponível.
+            unavailable: (!showing && !pairing_available(remote.status))
+                .then(|| r::pair_unavailable(catalog)),
+            budget,
+        }
+        .into_block(m, measurer),
+    );
+    if let Some(qr) = remote.qr {
+        let control = ControlView::Qr {
+            matrix: qr.matrix.clone(),
+        };
+        let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+        blocks.push(
+            RemoteRow {
+                target: RemoteTarget::Qr,
+                name: r::qr_label(catalog),
+                description: r::qr_expires(catalog, countdown_text(qr.secs)),
+                control,
+                unavailable: None,
+                budget,
+            }
+            .into_block(m, measurer),
+        );
+    }
+
+    // APARELHOS PAREADOS.
+    blocks.push(Block::Section(r::section_devices(catalog)));
+    let listing = host_present(remote.status);
+    if !listing || remote.devices.is_empty() {
+        let text = if listing {
+            r::devices_empty(catalog)
+        } else {
+            r::devices_off(catalog)
+        };
+        blocks.push(Block::Note {
+            lines: wrap(&text, m.description_size, width, measurer),
+            tone: NoteTone::Muted,
+        });
+    } else {
+        for (index, device) in remote.devices.iter().enumerate() {
+            let control = ControlView::Device {
+                connected: device.connected,
+            };
+            let budget = layout::profile_left_width(m, panel_width, 0.0, control.size(m).0);
+            let (name, _) = measurer.truncate(&device.name, BODY_FONT, m.name_size, budget);
+            let mut block = RemoteRow {
+                target: RemoteTarget::Device(index),
+                name,
+                description: device_detail(catalog, device),
+                control,
+                unavailable: None,
+                budget,
+            }
+            .into_block(m, measurer);
+            // O nome inteiro, para a árvore de acessibilidade e o diálogo.
+            if let Block::Row(row) = &mut block {
+                row.value_text = device.name.clone();
+            }
+            blocks.push(block);
+        }
+    }
+
+    // Recriar identidade: abaixo da lista.
+    let label = r::recreate_button(catalog);
+    let control = ControlView::Danger {
+        width: measurer.measure_width(&label, BODY_FONT, m.button_font_size)
+            + m.button_padding_x * 2.0,
+        label,
+    };
+    let budget = layout::row_left_width(m, panel_width, control.size(m).0);
+    blocks.push(
+        RemoteRow {
+            target: RemoteTarget::Recreate,
+            name: r::recreate_label(catalog),
+            description: r::recreate_description(catalog),
+            control,
+            unavailable: (!listing).then(|| r::recreate_unavailable(catalog)),
+            budget,
+        }
+        .into_block(m, measurer),
+    );
+}
+
 /// ADR-0075 §6: a lista de perfis e a linha dos botões, abaixo das duas opções
 /// do topo -- blocos empilhados na mesma coluna, com os controles que a tela já
 /// tem. O formulário do perfil não está aqui: abre na janela do editor
@@ -2163,6 +2580,7 @@ fn push_profile_blocks(
     let (description, description_truncated) =
         measurer.truncate(&description_full, BODY_FONT, m.description_size, budget);
     blocks.push(Block::Row(Box::new(RowView {
+        remote: None,
         option: None,
         name: name.clone(),
         description,
@@ -2275,6 +2693,7 @@ fn push_import_blocks(
                 .0
         });
         blocks.push(Block::Row(Box::new(RowView {
+            remote: None,
             option: None,
             name,
             description,
@@ -2308,6 +2727,7 @@ fn push_import_blocks(
     let name = p::import(catalog);
     let (name_text, _) = measurer.truncate(&name, BODY_FONT, m.name_size, budget);
     blocks.push(Block::Row(Box::new(RowView {
+        remote: None,
         option: None,
         name: name_text,
         description: String::new(),
@@ -2356,6 +2776,7 @@ fn push_profile_items(
         let (description, description_truncated) =
             measurer.truncate(&summary, BODY_FONT, m.description_size, budget);
         blocks.push(Block::Row(Box::new(RowView {
+            remote: None,
             option: None,
             name,
             description,
@@ -2418,6 +2839,7 @@ fn push_theme_rows(
         let budget = layout::row_left_width(m, panel_width, control.size(m).0);
         let (name_text, _) = measurer.truncate(&label, BODY_FONT, m.name_size, budget);
         blocks.push(Block::Row(Box::new(RowView {
+            remote: None,
             option: Some(option.id),
             name: name_text,
             description: String::new(),
@@ -4074,5 +4496,579 @@ mod tests {
         );
         let banner = c.banner.unwrap();
         assert!(banner.title.ends_with('…'), "{}", banner.title);
+    }
+}
+
+/// ADR-0108 §1: o grupo "Acesso remoto" -- as duas opções da seção CONEXÃO, e
+/// depois o token (campo mascarado), o botão de apagar o guardado e o estado.
+#[cfg(test)]
+mod remote_group_tests {
+    use porecatu_config::Config;
+    use porecatu_remote::RelayFailure;
+
+    use super::*;
+    use crate::messages::test_support;
+    use crate::remote::RemoteStatus;
+    use crate::settings::remote_access::{RemoteToken, TokenNote};
+
+    fn build_remote(draft: &Draft, status: RemoteStatus, token: &RemoteToken) -> Content {
+        build_remote_with(draft, status, token, None, &[])
+    }
+
+    fn build_remote_with(
+        draft: &Draft,
+        status: RemoteStatus,
+        token: &RemoteToken,
+        qr: Option<crate::settings::remote_access::QrView<'_>>,
+        devices: &[crate::settings::remote_pairing::DeviceRow],
+    ) -> Content {
+        let view = RemoteAccessView {
+            status,
+            token: token.view(),
+            qr,
+            devices,
+        };
+        build(
+            ContentKey {
+                group: Group::RemoteAccess,
+                panel_width_bits: 700.0_f32.to_bits(),
+                generation: 0,
+            },
+            draft,
+            &ViewExtras {
+                remote: Some(&view),
+                ..ViewExtras::default()
+            },
+            &test_support::pt_br(),
+            &Metrics::from_config(&Config::default(), 52.0),
+            &mut TextMeasurer::new(),
+        )
+    }
+
+    fn rows_of(content: &Content) -> Vec<&RowView> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Row(row) => Some(&**row),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn row_of(content: &Content, target: RemoteTarget) -> &RowView {
+        rows_of(content)
+            .into_iter()
+            .find(|row| row.remote == Some(target))
+            .expect("the row is in the group")
+    }
+
+    fn token_with_vault(present: Result<bool, porecatu_remote::VaultError>) -> RemoteToken {
+        let mut token = RemoteToken::new();
+        token.set_presence(present);
+        token
+    }
+
+    #[test]
+    fn the_group_lists_the_two_options_then_the_token_and_the_status() {
+        let content = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Off,
+            &token_with_vault(Ok(false)),
+        );
+        // The title of the group, and CONEXÃO first (the sections that follow it
+        // are PAREAR and APARELHOS, tested below).
+        assert_eq!(content.title, "Acesso remoto");
+        let sections: Vec<_> = content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Section(label) => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sections.first(), Some(&"CONEXÃO"));
+        let rows = rows_of(&content);
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).take(4).collect();
+        assert_eq!(
+            names,
+            [
+                "Acesso remoto",
+                "Endereço do relay",
+                "Token do relay",
+                "Estado"
+            ]
+        );
+        assert_eq!(rows[0].option, Some("remote_enabled"));
+        assert_eq!(rows[1].option, Some("relay_url"));
+        assert_eq!(rows[2].remote, Some(RemoteTarget::Token));
+        assert_eq!(rows[3].remote, Some(RemoteTarget::Status));
+        assert!(matches!(rows[0].control, ControlView::Toggle { on: false }));
+        assert!(matches!(rows[1].control, ControlView::Field { .. }));
+        assert!(matches!(
+            rows[2].control,
+            ControlView::Secret { filled: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn the_status_row_is_text_and_a_failure_is_marked() {
+        for (status, text, failed) in [
+            (RemoteStatus::Off, "Desligado", false),
+            (RemoteStatus::Connecting, "Conectando", false),
+            (RemoteStatus::Connected, "Conectado", false),
+            (
+                RemoteStatus::Failed(RelayFailure::TokenRejected),
+                "Falha: token recusado",
+                true,
+            ),
+        ] {
+            let content = build_remote(
+                &Draft::new(&Config::default()),
+                status,
+                &token_with_vault(Ok(false)),
+            );
+            let row = row_of(&content, RemoteTarget::Status);
+            assert_eq!(row.remote, Some(RemoteTarget::Status));
+            let ControlView::Text {
+                text: shown,
+                failed: marked,
+                ..
+            } = &row.control
+            else {
+                panic!("the status is a text");
+            };
+            assert_eq!((shown.as_str(), *marked), (text, failed));
+            assert_eq!(row.value_text, text);
+        }
+    }
+
+    #[test]
+    fn the_token_row_shows_what_the_vault_keeps_and_its_dots_never_its_text() {
+        let content = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Off,
+            &token_with_vault(Ok(true)),
+        );
+        let rows = rows_of(&content);
+        // A stored token: the note says so, and "Apagar" appears.
+        assert_eq!(
+            rows[2].description_full,
+            TokenNote::Stored.text(&test_support::pt_br())
+        );
+        assert_eq!(rows[3].remote, Some(RemoteTarget::DeleteToken));
+        assert!(matches!(
+            &rows[3].control,
+            ControlView::Segmented { labels, selected, .. }
+                if labels == &["Apagar".to_owned()] && *selected == usize::MAX
+        ));
+        assert!(!rows[2].pending);
+
+        // Typed (too short): dots, a reason, a pending dot, nothing of the text.
+        let mut token = token_with_vault(Ok(true));
+        token.paste("segredo-curto");
+        let content = build_remote(&Draft::new(&Config::default()), RemoteStatus::Off, &token);
+        let rows = rows_of(&content);
+        assert!(matches!(
+            rows[2].control,
+            ControlView::Secret { filled: 13, .. }
+        ));
+        assert!(rows[2].pending);
+        assert_eq!(
+            rows[2].invalid.as_deref(),
+            Some("O token tem de ter ao menos 32 caracteres.")
+        );
+        assert!(!format!("{:?}", rows[2]).contains("segredo-curto"));
+    }
+
+    #[test]
+    fn asking_to_delete_selects_the_button_and_pends_the_row() {
+        let mut token = token_with_vault(Ok(true));
+        assert!(token.toggle_delete());
+        let content = build_remote(&Draft::new(&Config::default()), RemoteStatus::Off, &token);
+        let rows = rows_of(&content);
+        assert_eq!(rows[3].remote, Some(RemoteTarget::DeleteToken));
+        assert!(matches!(
+            &rows[3].control,
+            ControlView::Segmented { selected: 0, .. }
+        ));
+        assert!(rows[2].pending);
+        assert_eq!(
+            rows[2].description_full,
+            TokenNote::WillDelete.text(&test_support::pt_br())
+        );
+    }
+
+    #[test]
+    fn without_a_vault_the_token_row_is_dimmed_with_the_reason_and_has_no_delete() {
+        let content = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Off,
+            &token_with_vault(Err(porecatu_remote::VaultError::Unavailable)),
+        );
+        let rows = rows_of(&content);
+        // The connection rows only: no "Apagar" without a stored token.
+        let connection: Vec<_> = rows.iter().take(4).map(|row| row.remote).collect();
+        assert_eq!(
+            connection,
+            [
+                None,
+                None,
+                Some(RemoteTarget::Token),
+                Some(RemoteTarget::Status)
+            ]
+        );
+        assert_eq!(rows[2].remote, Some(RemoteTarget::Token));
+        assert_eq!(
+            rows[2].unavailable.as_deref(),
+            Some("Cofre do sistema indisponível: o acesso remoto não liga sem ele.")
+        );
+        assert!(rows[2].description_full.is_empty());
+    }
+
+    #[test]
+    fn a_relay_address_that_is_not_wss_is_refused_with_its_reason_and_empty_is_fine() {
+        let mut draft = Draft::new(&Config::default());
+        let option = crate::settings::catalog::option("relay_url").unwrap();
+        let token = token_with_vault(Ok(false));
+
+        assert!(draft.set_raw(option, "ws://relay.example.com").is_err());
+        let content = build_remote(&draft, RemoteStatus::Off, &token);
+        let rows = rows_of(&content);
+        assert_eq!(
+            rows[1].invalid.as_deref(),
+            Some("Use um endereço wss:// (ws:// só em localhost).")
+        );
+        assert!(draft.has_invalid());
+
+        draft.set_raw(option, "wss://relay.example.com").unwrap();
+        assert!(!draft.has_invalid());
+        assert!(draft.set_raw(option, "ws://localhost:8080").is_ok());
+        // Empty is "not configured": valid, and it is the default.
+        assert!(draft.set_raw(option, "").is_ok());
+        assert!(!draft.has_invalid());
+    }
+
+    #[test]
+    fn the_toggle_and_the_address_are_pending_options_written_by_the_save() {
+        let mut draft = Draft::new(&Config::default());
+        let enabled = crate::settings::catalog::option("remote_enabled").unwrap();
+        let url = crate::settings::catalog::option("relay_url").unwrap();
+        draft.set(enabled, EditValue::Bool(true)).unwrap();
+        draft.set_raw(url, "wss://relay.example.com").unwrap();
+        assert_eq!(draft.pending_in_group(Group::RemoteAccess), 2);
+        let edits = draft.edits();
+        assert_eq!(edits.len(), 2);
+        let content = build_remote(&draft, RemoteStatus::Off, &token_with_vault(Ok(false)));
+        let rows = rows_of(&content);
+        assert!(rows[0].pending && rows[1].pending);
+        assert!(matches!(rows[0].control, ControlView::Toggle { on: true }));
+    }
+
+    // ---- PAREAR UM APARELHO e APARELHOS PAREADOS (ADR-0108 §1, §2)
+
+    use crate::settings::layout::BlockGeometry;
+    use crate::settings::remote_access::QrView;
+    use crate::settings::remote_pairing::DeviceRow;
+
+    fn device(name: &str, connected: bool) -> DeviceRow {
+        DeviceRow {
+            key: [name.len() as u8; 32],
+            name: name.to_owned(),
+            platform: porecatu_remote::DevicePlatform::Android,
+            paired_at: "2026-11-15T14:03:00Z".to_owned(),
+            last_seen: None,
+            connected,
+        }
+    }
+
+    fn sections(content: &Content) -> Vec<&str> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Section(label) => Some(label.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn row_with(content: &Content, target: RemoteTarget) -> Option<&RowView> {
+        rows_of(content)
+            .into_iter()
+            .find(|row| row.remote == Some(target))
+    }
+
+    fn notes(content: &Content) -> Vec<String> {
+        content
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Note { lines, .. } => Some(lines.join(" ")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_group_has_the_three_sections_in_order() {
+        let content = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Off,
+            &token_with_vault(Ok(false)),
+        );
+        assert_eq!(
+            sections(&content),
+            ["CONEXÃO", "PAREAR UM APARELHO", "APARELHOS PAREADOS"]
+        );
+    }
+
+    #[test]
+    fn the_qr_button_is_faded_with_its_reason_until_the_relay_is_connected() {
+        for status in [
+            RemoteStatus::Off,
+            RemoteStatus::Connecting,
+            RemoteStatus::Failed(RelayFailure::Unreachable),
+        ] {
+            let content = build_remote(
+                &Draft::new(&Config::default()),
+                status,
+                &token_with_vault(Ok(true)),
+            );
+            let row = row_with(&content, RemoteTarget::Pair).expect("never absent");
+            assert!(
+                row.unavailable
+                    .as_deref()
+                    .is_some_and(|note| note.contains("relay")),
+                "{status:?}: {:?}",
+                row.unavailable
+            );
+            let ControlView::Segmented { labels, .. } = &row.control else {
+                panic!("a button");
+            };
+            assert_eq!(labels, &["Mostrar QR code"]);
+        }
+        let content = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Connected,
+            &token_with_vault(Ok(true)),
+        );
+        let row = row_with(&content, RemoteTarget::Pair).unwrap();
+        assert_eq!(row.unavailable, None);
+        assert!(row_with(&content, RemoteTarget::Qr).is_none());
+    }
+
+    #[test]
+    fn with_the_qr_in_view_the_button_becomes_cancel_and_the_qr_row_follows() {
+        let matrix = crate::remote::qr::qr_matrix("porecatu://pair?x=1").unwrap();
+        let content = build_remote_with(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Connected,
+            &token_with_vault(Ok(true)),
+            Some(QrView {
+                matrix: &matrix,
+                secs: 272,
+            }),
+            &[],
+        );
+        let pair = row_with(&content, RemoteTarget::Pair).unwrap();
+        let ControlView::Segmented { labels, .. } = &pair.control else {
+            panic!("a button");
+        };
+        assert_eq!(labels, &["Cancelar"]);
+        assert_eq!(pair.unavailable, None);
+
+        let qr = row_with(&content, RemoteTarget::Qr).expect("the qr row");
+        assert_eq!(qr.description, "Expira em 4:32");
+        let ControlView::Qr { matrix: shown } = &qr.control else {
+            panic!("the qr");
+        };
+        assert_eq!(shown, &matrix);
+        // The side is `[appearance.remote] qr_size`, never a number of its own.
+        let m = Metrics::from_config(&Config::default(), 52.0);
+        assert_eq!(qr.control.size(&m), (m.qr_size, m.qr_size));
+        assert_eq!(m.qr_size, 208.0);
+        // Below the button row.
+        let order: Vec<_> = rows_of(&content).iter().filter_map(|r| r.remote).collect();
+        let at = |target| order.iter().position(|t| *t == target).unwrap();
+        assert!(at(RemoteTarget::Qr) == at(RemoteTarget::Pair) + 1);
+        // The link, which carries the token, is nowhere in the content.
+        assert!(
+            !format!("{content_blocks:?}", content_blocks = content.blocks).contains("porecatu://")
+        );
+    }
+
+    #[test]
+    fn the_qr_row_is_as_tall_as_the_qr() {
+        let matrix = crate::remote::qr::qr_matrix("porecatu://pair?x=1").unwrap();
+        let content = build_remote_with(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Connected,
+            &token_with_vault(Ok(true)),
+            Some(QrView {
+                matrix: &matrix,
+                secs: 10,
+            }),
+            &[],
+        );
+        let m = Metrics::from_config(&Config::default(), 52.0);
+        let index = content
+            .blocks
+            .iter()
+            .position(
+                |block| matches!(block, Block::Row(row) if row.remote == Some(RemoteTarget::Qr)),
+            )
+            .unwrap();
+        let BlockGeometry::Row(geometry) = &content.geometry.blocks[index] else {
+            panic!("a row");
+        };
+        assert_eq!(geometry.control.width, m.qr_size);
+        assert_eq!(geometry.control.height, m.qr_size);
+        assert!(geometry.rect.height >= m.qr_size);
+    }
+
+    #[test]
+    fn the_device_list_says_so_when_empty_and_when_the_host_is_off() {
+        let off = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Off,
+            &token_with_vault(Ok(true)),
+        );
+        assert!(
+            notes(&off)
+                .iter()
+                .any(|note| note.contains("Ligue o acesso remoto")),
+            "{:?}",
+            notes(&off)
+        );
+        assert!(
+            !notes(&off)
+                .iter()
+                .any(|note| note.contains("Nenhum aparelho"))
+        );
+
+        let empty = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Connected,
+            &token_with_vault(Ok(true)),
+        );
+        assert!(
+            notes(&empty)
+                .iter()
+                .any(|note| note == "Nenhum aparelho pareado.")
+        );
+    }
+
+    #[test]
+    fn each_device_is_a_row_with_the_x_and_the_dot_of_the_connected_one() {
+        let devices = [device("Pixel", true), device("iPad", false)];
+        let content = build_remote_with(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Connected,
+            &token_with_vault(Ok(true)),
+            None,
+            &devices,
+        );
+        let rows: Vec<&RowView> = rows_of(&content)
+            .into_iter()
+            .filter(|row| matches!(row.remote, Some(RemoteTarget::Device(_))))
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].remote, Some(RemoteTarget::Device(0)));
+        assert_eq!(rows[0].name, "Pixel");
+        assert!(matches!(
+            rows[0].control,
+            ControlView::Device { connected: true }
+        ));
+        assert!(matches!(
+            rows[1].control,
+            ControlView::Device { connected: false }
+        ));
+        // Platform, paired on, last access: the line under the name.
+        assert!(
+            rows[0].description.starts_with("Android · pareado em "),
+            "{}",
+            rows[0].description
+        );
+        assert!(rows[0].description.ends_with("último acesso nunca"));
+        // Not a pending edit: the dot is the connected one.
+        assert!(!rows[0].pending);
+        // No empty-list note beside real rows.
+        assert!(
+            !notes(&content)
+                .iter()
+                .any(|note| note.contains("Nenhum aparelho"))
+        );
+    }
+
+    #[test]
+    fn only_the_x_of_a_device_is_a_part_and_it_revokes() {
+        let m = Metrics::from_config(&Config::default(), 52.0);
+        let control = ControlView::Device { connected: false };
+        let (width, height) = control.size(&m);
+        let rect = Rect {
+            x: 400.0,
+            y: 100.0,
+            width,
+            height,
+        };
+        let remove = layout::device_remove_button(rect, &m);
+        let center = (
+            remove.x + remove.width / 2.0,
+            remove.y + remove.height / 2.0,
+        );
+        assert_eq!(
+            control.part_at(rect, &m, center),
+            Some(ControlPart::ListRemove(0))
+        );
+        assert_eq!(control.part_at(rect, &m, (rect.x - 10.0, center.1)), None);
+    }
+
+    #[test]
+    fn the_gestures_on_the_host_are_immediate_and_the_token_rows_are_not() {
+        for target in [
+            RemoteTarget::Pair,
+            RemoteTarget::Qr,
+            RemoteTarget::Device(0),
+            RemoteTarget::Recreate,
+        ] {
+            assert!(target.is_immediate(), "{target:?}");
+        }
+        // The token is a pending edit saved with the file; the status is text.
+        for target in [
+            RemoteTarget::Token,
+            RemoteTarget::DeleteToken,
+            RemoteTarget::Status,
+        ] {
+            assert!(!target.is_immediate(), "{target:?}");
+        }
+    }
+
+    #[test]
+    fn recreating_the_identity_needs_a_host_and_comes_after_the_list() {
+        let off = build_remote(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Off,
+            &token_with_vault(Ok(true)),
+        );
+        let row = row_with(&off, RemoteTarget::Recreate).expect("never absent");
+        assert!(row.unavailable.is_some());
+
+        let devices = [device("Pixel", false)];
+        let on = build_remote_with(
+            &Draft::new(&Config::default()),
+            RemoteStatus::Connecting,
+            &token_with_vault(Ok(true)),
+            None,
+            &devices,
+        );
+        let row = row_with(&on, RemoteTarget::Recreate).unwrap();
+        assert_eq!(row.unavailable, None);
+        assert!(matches!(
+            &row.control,
+            ControlView::Danger { label, .. } if label == "Recriar identidade"
+        ));
+        let order: Vec<_> = rows_of(&on).iter().filter_map(|r| r.remote).collect();
+        assert_eq!(order.last(), Some(&RemoteTarget::Recreate));
     }
 }

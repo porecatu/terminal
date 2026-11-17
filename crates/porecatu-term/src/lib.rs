@@ -55,7 +55,7 @@ pub use search::{
 pub use selection::{SelectionKind, SelectionSide};
 pub use snapshot::{
     Cell, CellFlags, CellText, Cursor, CursorShape, GridSnapshot, HyperlinkSpan, MouseReporting,
-    OccurrenceSpan, SelectionSpan, TermModes,
+    OccurrenceSpan, ScrollbackInfo, SelectionSpan, TermModes,
 };
 pub use terminal::{ShutdownWait, Terminal, TerminalSpawnError};
 

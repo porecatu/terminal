@@ -42,8 +42,8 @@ use winit::window::{CursorIcon, Window, WindowId};
 use super::catalog::{self, Control, OptionDef};
 use super::choice_list::{self, ChoiceItem, ChoiceLayout, ChoiceList};
 use super::content::{
-    self, Block, ChipTone, Content, ContentKey, ControlView, ProfileTarget, RowView, ShortcutsView,
-    ViewExtras, choice_label,
+    self, Block, ChipTone, Content, ContentKey, ControlView, ProfileTarget, RemoteTarget, RowView,
+    ShortcutsView, ViewExtras, choice_label,
 };
 use super::draft::Draft;
 use super::editor_modal;
@@ -59,6 +59,10 @@ use super::paint;
 use super::profile_editor::ProfileEditor;
 use super::profile_window::ProfileEditorWindow;
 use super::profiles_draft::{Forget, ProfilesDraft};
+use super::remote_access::{QrView, RemoteAccessView, RemoteToken, TokenWrite};
+use super::remote_pairing::{
+    DeviceRow, PairingPanel, RemoteRequest, dialog_request, host_present, platform_text,
+};
 use super::save::Saved;
 use super::shortcuts::{Capturing, Conflict, Shortcuts};
 use super::{Group, HEADER_GAP_PX, TITLE_SIZE_PX};
@@ -87,8 +91,10 @@ use super::content::BODY_FONT;
 use crate::dialog::{ConfirmDialog, DialogAction, DialogButton};
 use crate::input::modifiers_from;
 use crate::keymap::{Capture, Chord, Platform};
+use crate::masked_field::MaskedKey;
 use crate::messages::msg;
 use crate::palette::{ResolvedPalette, ResolvedTermPalette};
+use crate::remote::RemoteStatus;
 use crate::tab_bar::{self, TabBarStyle, WindowButtonHit};
 use crate::text_field::apply_text_field_key;
 use crate::tooltip::{Hover, HoverKey};
@@ -264,6 +270,16 @@ pub(crate) struct SettingsWindow {
     /// O último clique simples numa linha de perfil, para o duplo clique que abre
     /// o editor: a linha (o índice na lista) e o instante.
     last_profile_click: Option<(usize, Instant)>,
+    /// O token do relay (ADR-0108 §1): o campo mascarado, a pendência e o que o
+    /// cofre guarda. Fora do rascunho de opções -- ele não vai para o arquivo.
+    token: RemoteToken,
+    /// O estado do relay, como `App` o lê (a linha "Estado" do grupo "Acesso
+    /// remoto"): `App` o repassa a cada mudança.
+    remote_status: RemoteStatus,
+    /// O pareamento e a lista de aparelhos (ADR-0108 §1 a §3): o QR, o pedido que
+    /// espera a resposta e o que a tela pede ao host. `App` repassa o que o host
+    /// diz e atende o que a tela pede.
+    pairing: PairingPanel,
 }
 
 impl SettingsWindow {
@@ -279,6 +295,7 @@ impl SettingsWindow {
         locale_dirs: Vec<PathBuf>,
         config_path: Option<PathBuf>,
         disk: &Disk,
+        remote_status: RemoteStatus,
     ) -> Self {
         let size = window.inner_size();
         Self {
@@ -320,6 +337,15 @@ impl SettingsWindow {
             profile_editor: None,
             editor_request: None,
             last_profile_click: None,
+            token: {
+                let mut token = RemoteToken::new();
+                if initial_group == Group::RemoteAccess {
+                    token.want_probe();
+                }
+                token
+            },
+            remote_status,
+            pairing: PairingPanel::new(),
         }
     }
 
@@ -486,6 +512,7 @@ impl SettingsWindow {
         self.draft.is_dirty()
             || self.shortcuts.is_dirty()
             || self.profiles.is_dirty()
+            || self.token.is_dirty()
             || self
                 .editing
                 .as_ref()
@@ -495,15 +522,22 @@ impl SettingsWindow {
     /// Há alteração no rascunho ou nos atalhos, com nenhum campo em edição por
     /// confirmar: o que o diálogo de pendências conta.
     fn has_unsaved(&self) -> bool {
-        self.draft.is_dirty() || self.shortcuts.is_dirty() || self.profiles.is_dirty()
+        self.draft.is_dirty()
+            || self.shortcuts.is_dirty()
+            || self.profiles.is_dirty()
+            || self.token.is_dirty()
     }
 
     /// O Salvar tem o que gravar e nada que o bloqueie: há pendência, e
     /// nenhuma foi recusada (RF-16.18).
     pub(crate) fn can_save(&self) -> bool {
-        self.file.allows_edit()
-            && (self.draft.is_dirty() || self.shortcuts.is_dirty() || self.profiles.is_dirty())
-            && !self.draft.has_invalid()
+        self.file.allows_edit() && self.has_unsaved() && !self.has_invalid()
+    }
+
+    /// Algum valor pendente foi recusado -- uma opção, ou o token do relay: o
+    /// Salvar fica indisponível (RF-16.18).
+    fn has_invalid(&self) -> bool {
+        self.draft.has_invalid() || self.token.has_invalid()
     }
 
     /// A linha `index` não aceita gesto: a tela está em somente leitura
@@ -513,12 +547,11 @@ impl SettingsWindow {
     /// (`Draft::set`/`reset`); esta guarda poupa abrir um campo ou uma lista
     /// que não poderia ser confirmado.
     fn row_blocked(&self, index: usize) -> bool {
-        !self.file.allows_edit()
-            || self
-                .content
-                .as_ref()
-                .and_then(|content| content.row(index))
-                .is_some_and(|row| row.unavailable.is_some())
+        let row = self.content.as_ref().and_then(|content| content.row(index));
+        // Os gestos imediatos do acesso remoto não editam o arquivo: o arquivo
+        // inválido não os bloqueia.
+        let immediate = row.is_some_and(|row| row.remote.is_some_and(RemoteTarget::is_immediate));
+        (!self.file.allows_edit() && !immediate) || row.is_some_and(|row| row.unavailable.is_some())
     }
 
     /// As edições do rascunho, na ordem do catálogo: o que o Salvar grava.
@@ -533,6 +566,150 @@ impl SettingsWindow {
 
     /// O Salvar gravou: o arquivo agora diz `saved`, e nenhuma pendência
     /// sobra. A tela mostra isso na hora, sem esperar a recarga a quente.
+    /// O que o Salvar manda ao cofre, **movido** para fora do campo (ADR-0108
+    /// §1, ADR-0106 §7): `App` o chama no Salvar, depois de o arquivo ter sido
+    /// gravado (ou sem arquivo a gravar), e faz a gravação numa thread curta.
+    /// Sem pendência do token, `None`.
+    pub(crate) fn take_token_write(&mut self) -> Option<TokenWrite> {
+        let write = self.token.take_write();
+        if write.is_some() {
+            self.invalidate();
+        }
+        write
+    }
+
+    /// A gravação no cofre terminou (`ok`, ou não): a tela passa a mostrar o que
+    /// o cofre guarda.
+    pub(crate) fn token_written(&mut self, deleted: bool, ok: bool) {
+        self.token.written(deleted, ok);
+        self.invalidate();
+    }
+
+    /// `App` atende a consulta ao cofre que a tela pediu (ao abrir o grupo): se
+    /// há uma a fazer, devolve `true` e a marca em voo.
+    pub(crate) fn take_vault_probe_request(&mut self) -> bool {
+        let wanted = self.token.take_probe_request();
+        if wanted {
+            self.invalidate();
+        }
+        wanted
+    }
+
+    /// A resposta de `operator_token_present`.
+    pub(crate) fn set_token_presence(&mut self, result: Result<bool, porecatu_remote::VaultError>) {
+        self.token.set_presence(result);
+        self.invalidate();
+    }
+
+    /// O estado do relay mudou: a linha "Estado" acompanha. Sem mudança, nada é
+    /// refeito.
+    pub(crate) fn set_remote_status(&mut self, status: RemoteStatus) {
+        if self.remote_status != status {
+            self.remote_status = status;
+            // Sem o relay conectado o QR não serve a ninguém: ele sai, e o token
+            // do host é descartado.
+            if status != RemoteStatus::Connected {
+                self.pairing.drop_qr(true);
+            }
+            self.invalidate();
+        }
+    }
+
+    // ---- o pareamento e os aparelhos (ADR-0108 §1 a §3)
+
+    /// A lista de aparelhos pareados mudou (o host a manda inteira): a tela a
+    /// refaz. Sem mudança, nada é refeito.
+    pub(crate) fn set_remote_devices(&mut self, rows: Vec<DeviceRow>) {
+        if self.pairing.set_devices(rows) {
+            self.invalidate();
+        }
+    }
+
+    /// O host mandou o QR: ele ocupa o lugar do botão, com a contagem. O que havia
+    /// foi invalidado pelo host. A URI carrega o token e nunca é impressa.
+    pub(crate) fn show_pairing_qr(&mut self, uri: String, expires_at: Instant, now: Instant) {
+        // O QR chegou depois de o grupo ter saído de vista: ninguém o veria, e sair
+        // do grupo invalida o token (RF-25.6).
+        if self.selected_group != Group::RemoteAccess {
+            self.pairing.request(RemoteRequest::CancelPairing);
+            return;
+        }
+        self.pairing.show_qr(uri, expires_at, now);
+        self.invalidate();
+    }
+
+    /// Um aparelho leu o QR e pede para parear: o diálogo modal abre aqui (ou, se
+    /// outro diálogo está aberto, assim que ele fechar) e o token já foi consumido,
+    /// então o QR sai.
+    pub(crate) fn pairing_requested(
+        &mut self,
+        pending: crate::remote::PendingPairing,
+        now: Instant,
+    ) {
+        self.pairing.prompt_arrived(pending, now);
+        self.invalidate();
+        self.ensure_pairing_dialog();
+        self.window.request_redraw();
+    }
+
+    /// O canal do pedido morreu antes da resposta: o diálogo fecha, sem resposta a
+    /// dar.
+    pub(crate) fn pairing_closed(&mut self, id: porecatu_remote::PairingId) {
+        if self.pairing.prompt_closed(id) {
+            self.close_pairing_dialog();
+            self.window.request_redraw();
+        }
+    }
+
+    /// O que a tela pediu ao host desde a última vez, na ordem; `App` atende.
+    pub(crate) fn take_remote_requests(&mut self) -> Vec<RemoteRequest> {
+        self.pairing.take_requests()
+    }
+
+    /// A tela vai fechar: o pedido de pareamento em espera é recusado e o QR, se
+    /// há um, cancelado. `App` atende os pedidos que isso deixa.
+    pub(crate) fn close_remote(&mut self) {
+        self.pairing.close();
+    }
+
+    /// O QR à vista, e o link dele (para a área de transferência).
+    fn pairing_link(&self) -> Option<&str> {
+        self.pairing.qr().map(|qr| qr.uri())
+    }
+
+    /// O diálogo do pedido de pareamento, se há pedido e nenhum outro diálogo
+    /// aberto: não há fila (ADR-0106 §3), e o pedido espera o diálogo da frente.
+    fn ensure_pairing_dialog(&mut self) {
+        if self.dialog.is_some() {
+            return;
+        }
+        let Some(prompt) = self.pairing.prompt() else {
+            return;
+        };
+        self.choice = None;
+        self.editing = None;
+        self.token.blur();
+        self.dialog = Some(ConfirmDialog::pair_device(
+            &self.catalog,
+            prompt.id,
+            &prompt.device_name,
+            &platform_text(&self.catalog, prompt.platform),
+            &prompt.fingerprint,
+        ));
+        self.hover.dismiss();
+    }
+
+    /// Fecha o diálogo do pedido de pareamento, se é ele que está aberto.
+    fn close_pairing_dialog(&mut self) {
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|dialog| matches!(dialog.action, DialogAction::PairDevice(_)))
+        {
+            self.dialog = None;
+        }
+    }
+
     pub(crate) fn save_succeeded(&mut self, saved: &Saved) {
         self.editing = None;
         self.choice = None;
@@ -560,7 +737,9 @@ impl SettingsWindow {
         }
         self.keep_my_changes();
         let edits = self.edits();
-        if edits.is_empty() {
+        // Só o token do relay pendente: não há o que gravar no arquivo, mas há
+        // o que gravar no cofre (`App` trata a lista vazia).
+        if edits.is_empty() && !self.token.is_dirty() {
             return None;
         }
         Some(SavePlan {
@@ -590,6 +769,7 @@ impl SettingsWindow {
                 self.choice = None;
                 self.capturing = None;
                 self.dragging_field = false;
+                self.token.blur();
             }
         }
         self.invalidate();
@@ -616,6 +796,7 @@ impl SettingsWindow {
             self.draft.discard();
             self.shortcuts.discard();
             self.profiles.discard();
+            self.token.discard();
             self.draft.rebase(&config);
             self.shortcuts.rebase(&config);
             self.profiles.rebase(&config.profiles.list);
@@ -640,6 +821,18 @@ impl SettingsWindow {
     /// com o diálogo já aberto o pedido conta como Cancelar.
     pub(crate) fn request_close(&mut self) -> Press {
         self.close_editor_before(editor_modal::CloseReason::Request);
+        if self.dialog.as_ref().is_some_and(|dialog| {
+            matches!(
+                dialog.action,
+                DialogAction::RevokeDevice(_)
+                    | DialogAction::RecreateIdentity
+                    | DialogAction::PairDevice(_)
+            )
+        }) {
+            // Fechar com um pedido de pareamento em espera o recusa (nada de
+            // pedido sem resposta); revogar e recriar não acontecem.
+            return self.answer_action_dialog(false);
+        }
         if self.dialog.is_some() {
             return self.answer(DialogAnswer::Cancel);
         }
@@ -676,7 +869,8 @@ impl SettingsWindow {
             &self.catalog,
             self.draft.pending_count()
                 + self.shortcuts.pending_actions().len()
-                + self.profiles.pending_count(),
+                + self.profiles.pending_count()
+                + self.token.pending_count(),
         ));
         self.hover.dismiss();
         self.window.request_redraw();
@@ -687,6 +881,7 @@ impl SettingsWindow {
     /// tela como Cancelar (nada a gravar enquanto houver recusa).
     fn answer(&mut self, answer: DialogAnswer) -> Press {
         self.dialog = None;
+        self.ensure_pairing_dialog();
         self.window.request_redraw();
         match answer {
             DialogAnswer::Discard => {
@@ -747,16 +942,17 @@ impl SettingsWindow {
     /// botão focado -- o Cancelar, de início --, e `Tab`/setas andam entre os
     /// três.
     fn dialog_key(&mut self, key: &Key) -> Press {
+        let action = self.is_action_dialog();
         let delete = self.is_delete_dialog();
         let Some(dialog) = &mut self.dialog else {
             return Press::Nothing;
         };
         match key {
-            Key::Named(NamedKey::Escape) if delete => return self.answer_delete(false),
+            Key::Named(NamedKey::Escape) if action => return self.answer_action_dialog(false),
             Key::Named(NamedKey::Escape) => return self.answer(DialogAnswer::Cancel),
-            Key::Named(NamedKey::Enter) if delete => {
+            Key::Named(NamedKey::Enter) if action => {
                 let confirm = dialog.focused() == DialogButton::Confirm;
-                return self.answer_delete(confirm);
+                return self.answer_action_dialog(confirm);
             }
             Key::Named(NamedKey::Enter) => {
                 let answer = Self::button_answer(dialog.focused());
@@ -863,7 +1059,11 @@ impl SettingsWindow {
     // ---- geometria
 
     fn metrics(&self, env: Env<'_>) -> Metrics {
-        Metrics::from_config(env.config, header_height(env.style))
+        Metrics {
+            // O QR alinha os módulos ao pixel físico (ADR-0108 §2).
+            scale: f64::from(self.scale),
+            ..Metrics::from_config(env.config, header_height(env.style))
+        }
     }
 
     fn layout(&self, env: Env<'_>) -> Layout {
@@ -944,6 +1144,15 @@ impl SettingsWindow {
                 capturing: self.capturing.as_ref(),
             };
             let banner = self.file.banner();
+            let remote_view = RemoteAccessView {
+                status: self.remote_status,
+                token: self.token.view(),
+                qr: self.pairing.qr().map(|qr| QrView {
+                    matrix: qr.matrix(),
+                    secs: qr.shown_secs(),
+                }),
+                devices: self.pairing.devices(),
+            };
             let extras = ViewExtras {
                 session_theme: self.session_theme.as_deref(),
                 shortcuts: Some(&view),
@@ -951,8 +1160,7 @@ impl SettingsWindow {
                 config_path: self.config_path.as_deref(),
                 profiles: Some(&self.profiles),
                 import: self.import.as_ref(),
-                // Não bloqueia: a primeira chamada só inicia a sondagem e
-                // responde `false`; a montagem seguinte já vê a resposta.
+                remote: Some(&remote_view),
             };
             self.content = Some(content::build(
                 key,
@@ -989,7 +1197,7 @@ impl SettingsWindow {
     /// Salvar com pendência e nenhuma recusada (RF-16.14, RF-16.18).
     fn available_footer(&self) -> [bool; 3] {
         let pending = self.has_pending_changes() && self.file.allows_edit();
-        [true, pending, pending && !self.draft.has_invalid()]
+        [true, pending, pending && !self.has_invalid()]
     }
 
     fn available_buttons(&self) -> Vec<FooterButton> {
@@ -1245,12 +1453,16 @@ impl SettingsWindow {
             }
             Some(Hit::Control(index, part)) => {
                 match self.content().row(index).map(|row| &row.control) {
-                    Some(ControlView::Field { .. }) => CursorIcon::Text,
+                    Some(ControlView::Field { .. } | ControlView::Secret { .. }) => {
+                        CursorIcon::Text
+                    }
                     Some(ControlView::List { .. }) => match part {
                         ControlPart::ListField { .. } => CursorIcon::Text,
                         _ => CursorIcon::Pointer,
                     },
-                    Some(ControlView::Themes { .. }) | None => CursorIcon::Default,
+                    Some(ControlView::Themes { .. } | ControlView::Text { .. }) | None => {
+                        CursorIcon::Default
+                    }
                     Some(_) => CursorIcon::Pointer,
                 }
             }
@@ -1600,8 +1812,8 @@ impl SettingsWindow {
         match crate::input::release_on_armed(Some(armed), over) {
             Some(Armed::Hit(hit)) => self.activate_hit(env, measurer, Some(hit), point),
             Some(Armed::DialogButton(button)) if self.dialog.is_some() => {
-                if self.is_delete_dialog() {
-                    self.answer_delete(button == DialogButton::Confirm)
+                if self.is_action_dialog() {
+                    self.answer_action_dialog(button == DialogButton::Confirm)
                 } else {
                     self.answer(Self::button_answer(button))
                 }
@@ -1642,7 +1854,7 @@ impl SettingsWindow {
         let Some(row) = self.content().row(index) else {
             return false;
         };
-        if row.action.is_some() || row.profile.is_some() {
+        if row.action.is_some() || row.profile.is_some() || row.remote.is_some() {
             return false;
         }
         matches!(
@@ -1719,6 +1931,7 @@ impl SettingsWindow {
         self.draft.discard();
         self.shortcuts.discard();
         self.profiles.discard();
+        self.token.discard();
         self.import = None;
         self.invalidate();
     }
@@ -1749,6 +1962,13 @@ impl SettingsWindow {
         if let Some(target) = self.content().row(index).and_then(|row| row.profile) {
             self.commit_edit();
             self.click_profile(index, target, part);
+            self.window.request_redraw();
+            return;
+        }
+        // Uma linha do grupo "Acesso remoto": o campo do token, ou o botão que
+        // apaga o guardado.
+        if let Some(target) = self.content().row(index).and_then(|row| row.remote) {
+            self.click_remote(target, part);
             self.window.request_redraw();
             return;
         }
@@ -1801,6 +2021,115 @@ impl SettingsWindow {
             _ => self.commit_edit(),
         }
         self.window.request_redraw();
+    }
+
+    /// Clique numa linha do grupo "Acesso remoto" (ADR-0108 §1). O campo do
+    /// token recebe o foco (a edição confirma o que estava em outro campo
+    /// antes); o botão alterna o "apagar o guardado" pendente; o estado é só
+    /// texto.
+    fn click_remote(&mut self, target: RemoteTarget, part: ControlPart) {
+        self.commit_edit();
+        match (target, part) {
+            (RemoteTarget::Token, _) => self.token.focus(),
+            (RemoteTarget::DeleteToken, ControlPart::Segment(0)) => self.toggle_token_delete(),
+            (RemoteTarget::Pair, ControlPart::Segment(0)) => self.toggle_pairing(),
+            (RemoteTarget::Qr, _) => self.copy_pairing_link(),
+            (RemoteTarget::Device(item), ControlPart::ListRemove(_)) => self.revoke_device(item),
+            (RemoteTarget::Recreate, _) => self.recreate_identity(),
+            (RemoteTarget::DeleteToken | RemoteTarget::Pair | RemoteTarget::Device(_), _)
+            | (RemoteTarget::Status, _) => {}
+        }
+    }
+
+    /// "Mostrar QR code" pede o QR ao host (um gesto imediato, não uma pendência);
+    /// com o QR à vista o mesmo botão é o "Cancelar" e o descarta.
+    fn toggle_pairing(&mut self) {
+        if self.pairing.qr().is_some() {
+            self.pairing.drop_qr(true);
+            self.invalidate();
+        } else {
+            self.pairing.request_show(self.remote_status);
+        }
+    }
+
+    /// O clique no QR (e `Enter` na linha dele) põe o link de pareamento na área de
+    /// transferência: o caminho de quem não pode apontar a câmera (ADR-0108 §2).
+    fn copy_pairing_link(&self) {
+        if let Some(link) = self.pairing_link() {
+            crate::clipboard::copy(link);
+        }
+    }
+
+    /// O `X` de um aparelho: o diálogo de revogar (destrutivo), com o aparelho que a
+    /// linha mostra agora.
+    fn revoke_device(&mut self, item: usize) {
+        if !host_present(self.remote_status) {
+            return;
+        }
+        let Some(device) = self.pairing.devices().get(item) else {
+            return;
+        };
+        let dialog = ConfirmDialog::revoke_device(&self.catalog, &device.name, device.key);
+        self.open_action_dialog(dialog);
+    }
+
+    /// "Recriar identidade": o diálogo que diz que todos terão de parear de novo.
+    fn recreate_identity(&mut self) {
+        if !host_present(self.remote_status) {
+            return;
+        }
+        let dialog = ConfirmDialog::recreate_identity(&self.catalog);
+        self.open_action_dialog(dialog);
+    }
+
+    fn open_action_dialog(&mut self, dialog: ConfirmDialog) {
+        // Um pedido de pareamento em espera já tem o diálogo da frente.
+        if self.dialog.is_some() {
+            return;
+        }
+        self.choice = None;
+        self.editing = None;
+        self.dialog = Some(dialog);
+        self.hover.dismiss();
+        self.window.request_redraw();
+    }
+
+    /// Alterna o "apagar o token guardado" pendente: o rascunho do token muda,
+    /// e a tela refaz as linhas.
+    fn toggle_token_delete(&mut self) {
+        if self.token.toggle_delete() {
+            self.invalidate();
+        }
+    }
+
+    /// Teclas com o campo do token em foco: `Enter`, `Esc` e `Tab` saem do
+    /// campo (o que está digitado fica pendente, para o Salvar; só Descartar o
+    /// tira), o resto edita o texto mascarado -- colar traz a área de
+    /// transferência, que é zerada assim que entra.
+    fn key_token(&mut self, event: &KeyEvent, env: Env<'_>) {
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape | NamedKey::Enter) => self.token.blur(),
+            Key::Named(NamedKey::Tab) => {
+                self.token.blur();
+                self.move_focus(env, self.modifiers.shift);
+            }
+            key => {
+                if self.token.key(key, event.text.as_deref(), self.modifiers) == MaskedKey::Paste
+                    && let Some(pasted) = crate::clipboard::paste().map(zeroize::Zeroizing::new)
+                {
+                    self.token.paste(&pasted);
+                }
+            }
+        }
+        // O número de pontos e a validação saem do conteúdo.
+        self.invalidate();
+    }
+
+    /// O índice do bloco da linha do token, se o grupo em vista a tem.
+    fn token_block(&self) -> Option<usize> {
+        self.content.as_ref()?.blocks.iter().position(
+            |block| matches!(block, Block::Row(row) if row.remote == Some(RemoteTarget::Token)),
+        )
     }
 
     /// Acrescenta um item vazio ao fim da lista da linha `index` e põe o
@@ -1973,22 +2302,50 @@ impl SettingsWindow {
         self.window.request_redraw();
     }
 
-    /// Resposta do diálogo de excluir. Excluir tira o perfil da lista -- uma
-    /// alteração pendente: o arquivo só muda no Salvar, e o cofre só esquece o
-    /// que a caixa pediu **nesse** Salvar --; Cancelar não faz nada.
-    fn answer_delete(&mut self, confirm: bool) -> Press {
+    /// Resposta de um diálogo de ação -- o de excluir perfil, o de revogar, o de
+    /// recriar a identidade e o de pareamento. Excluir tira o perfil da lista --
+    /// uma alteração pendente: o arquivo só muda no Salvar, e o cofre só esquece o
+    /// que a caixa pediu **nesse** Salvar. Revogar e recriar são gestos imediatos:
+    /// o pedido sai para o host (`RemoteRequest`). Parear aceita o pedido de
+    /// pareamento; recusar e `Esc` o recusam. Cancelar não faz nada.
+    fn answer_action_dialog(&mut self, confirm: bool) -> Press {
         let Some(dialog) = self.dialog.take() else {
             return Press::Nothing;
         };
-        if confirm && let DialogAction::DeleteProfile(item) = dialog.action {
-            self.profiles.delete(item, dialog.checkbox_checked());
-            self.invalidate();
+        match dialog.action {
+            DialogAction::DeleteProfile(item) if confirm => {
+                self.profiles.delete(item, dialog.checkbox_checked());
+                self.invalidate();
+            }
+            DialogAction::RevokeDevice(_) | DialogAction::RecreateIdentity => {
+                if let Some(request) = dialog_request(&dialog.action, confirm) {
+                    self.pairing.request(request);
+                }
+            }
+            DialogAction::PairDevice(_) => self.pairing.answer_prompt(confirm),
+            _ => {}
         }
+        // Um pedido de pareamento que esperava este diálogo passa à frente.
+        self.ensure_pairing_dialog();
         self.window.request_redraw();
         Press::Nothing
     }
 
-    /// O diálogo aberto é o de excluir perfil (e não o de pendências)?
+    /// O diálogo aberto é um de ação (e não o de pendências)?
+    fn is_action_dialog(&self) -> bool {
+        self.dialog.as_ref().is_some_and(|dialog| {
+            matches!(
+                dialog.action,
+                DialogAction::DeleteProfile(_)
+                    | DialogAction::RevokeDevice(_)
+                    | DialogAction::RecreateIdentity
+                    | DialogAction::PairDevice(_)
+            )
+        })
+    }
+
+    /// O diálogo aberto tem a caixa de marcar do excluir perfil? `Espaço` só a
+    /// alterna nele.
     fn is_delete_dialog(&self) -> bool {
         self.dialog
             .as_ref()
@@ -2093,6 +2450,9 @@ impl SettingsWindow {
     /// rascunho. Texto que não mudou desde o começo não cria nada.
     fn commit_edit(&mut self) {
         self.dragging_field = false;
+        // O campo do token também é um campo em edição: clicar em outro lugar,
+        // `Tab` ou Salvar o confirma -- o que está digitado já é pendência.
+        self.token.blur();
         let Some(editing) = self.editing.take() else {
             return;
         };
@@ -2351,6 +2711,10 @@ impl SettingsWindow {
             self.key_editing(event, env);
             return Press::Nothing;
         }
+        if self.token.is_focused() {
+            self.key_token(event, env);
+            return Press::Nothing;
+        }
 
         match &event.logical_key {
             Key::Named(NamedKey::Escape) => self.request_close(),
@@ -2448,6 +2812,21 @@ impl SettingsWindow {
             self.window.request_redraw();
             return;
         }
+        // Uma linha do grupo "Acesso remoto": `Enter` entra no campo do token
+        // ou alterna o "apagar o guardado".
+        if let Some(target) = self.content().row(index).and_then(|row| row.remote) {
+            match target {
+                RemoteTarget::Token => self.token.focus(),
+                RemoteTarget::DeleteToken => self.toggle_token_delete(),
+                RemoteTarget::Pair => self.toggle_pairing(),
+                RemoteTarget::Qr => self.copy_pairing_link(),
+                RemoteTarget::Device(item) => self.revoke_device(item),
+                RemoteTarget::Recreate => self.recreate_identity(),
+                RemoteTarget::Status => {}
+            }
+            self.window.request_redraw();
+            return;
+        }
         let Some(option) = self.option_at(index) else {
             return;
         };
@@ -2480,7 +2859,13 @@ impl SettingsWindow {
             ControlView::ProfileItem { .. } => {
                 self.choose_profile(index);
             }
-            ControlView::Segmented { .. } | ControlView::Chips { .. } => {}
+            ControlView::Segmented { .. }
+            | ControlView::Chips { .. }
+            | ControlView::Secret { .. }
+            | ControlView::Qr { .. }
+            | ControlView::Device { .. }
+            | ControlView::Danger { .. }
+            | ControlView::Text { .. } => {}
         }
         self.window.request_redraw();
     }
@@ -2782,15 +3167,25 @@ impl SettingsWindow {
     }
 
     /// Escolhe o grupo: o painel volta ao topo (RF-16.9). O campo em edição
-    /// é confirmado antes -- ele é do grupo que se deixa.
-    fn select_group(&mut self, group: Group) {
+    /// é confirmado antes -- ele é do grupo que se deixa. É também o que `App`
+    /// chama para abrir a tela já num grupo (`open_settings_at`).
+    pub(crate) fn select_group(&mut self, group: Group) {
         if group != self.selected_group {
             self.commit_edit();
             self.choice = None;
             self.capturing = None;
+            // RF-25.6: sair do grupo invalida o QR.
+            if self.selected_group == Group::RemoteAccess && self.pairing.leave_group() {
+                self.invalidate();
+            }
             self.selected_group = group;
             self.scroll = 0.0;
             self.hover.dismiss();
+        }
+        // O que o cofre guarda é perguntado a cada vez que o grupo vem à vista
+        // (ADR-0108 §1), não em segundo plano.
+        if group == Group::RemoteAccess {
+            self.token.want_probe();
         }
         if matches!(self.focus, Focus::Row(_)) {
             self.focus = Focus::Sidebar;
@@ -2800,14 +3195,28 @@ impl SettingsWindow {
 
     // ---- tooltip no relógio do processo
 
+    /// O próximo prazo da tela: o do tooltip, a próxima virada da contagem do QR
+    /// (no máximo 1 s, e só enquanto ele está à vista) e os 120 s do pedido de
+    /// pareamento. Sem nada disso, nenhum.
     pub(crate) fn next_wake(&self) -> Option<Instant> {
-        self.hover.next_deadline()
+        [self.hover.next_deadline(), self.pairing.next_wake()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     pub(crate) fn tick(&mut self, now: Instant) {
         let was_visible = self.hover.visible().is_some();
         self.hover.tick(now);
         if was_visible != self.hover.visible().is_some() {
+            self.window.request_redraw();
+        }
+        let tick = self.pairing.tick(now);
+        if tick.prompt_expired {
+            self.close_pairing_dialog();
+        }
+        if tick.redraw {
+            self.invalidate();
             self.window.request_redraw();
         }
     }
@@ -2897,6 +3306,23 @@ impl SettingsWindow {
         if self.profiles.is_dirty() && !pending_groups.contains(&Group::Profiles) {
             pending_groups.push(Group::Profiles);
         }
+        // O token do relay pendente marca o grupo dele, sem repetir o ponto das
+        // opções do grupo.
+        if self.token.is_dirty() && !pending_groups.contains(&Group::RemoteAccess) {
+            pending_groups.push(Group::RemoteAccess);
+        }
+        // O campo do token em foco se pinta como um campo em edição: os pontos,
+        // o cursor e a seleção do `MaskedFieldState` -- nunca o texto.
+        let token_editing = if self.token.is_focused() {
+            self.token_block().map(|block| Editing {
+                block,
+                part: EditPart::Field,
+                state: self.token.display().clone(),
+                initial: String::new(),
+            })
+        } else {
+            None
+        };
 
         let mut out = vec![
             quad(layout.panel, pal.settings_panel_background),
@@ -2919,7 +3345,7 @@ impl SettingsWindow {
                 },
                 scroll: self.scroll,
                 pending_groups: &pending_groups,
-                editing: self.editing.as_ref(),
+                editing: self.editing.as_ref().or(token_editing.as_ref()),
                 selection_color: term_pal.selection_background,
                 footer_available: self.available_footer(),
                 read_only: !self.file.allows_edit(),

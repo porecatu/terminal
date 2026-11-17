@@ -38,6 +38,7 @@ Versão atual: **0.9.11**. Funciona em Windows, Linux e macOS.
 - Gerenciador de tarefas na própria janela: CPU, memória e disco de cada aba, e os processos dela em árvore.
 - Busca no histórico do terminal, links clicáveis, copiar e colar, mouse funcionando dentro de programas como `htop`.
 - Mais de uma janela, tela cheia e suporte a leitores de tela.
+- Acesso remoto, desligado por padrão: ver e operar as suas abas pelo celular, com um relay seu e pareamento por QR code (ainda sem app publicado).
 
 Rápido por usar a placa de vídeo para desenhar, e sem gastar processador quando nada está acontecendo.
 
@@ -70,7 +71,7 @@ Para quem quer contribuir: [CONTRIBUTING.md](CONTRIBUTING.md), [arquitetura](doc
 
 ## Projetos relacionados
 
-Em planejamento: acessar a sessão do Porecatu pelo celular ([PRD-025](docs/prd/prd-025-acesso-remoto.md)). No Porecatu ainda não há código; o protocolo, o relay e o app estão em desenvolvimento nos repositórios deles, e nenhum foi publicado.
+Acesso remoto: operar a sessão do Porecatu pelo celular, passando por um relay que você mesmo hospeda ([PRD-025](docs/prd/prd-025-acesso-remoto.md), [como usar](docs/guia-do-usuario.md#acesso-remoto)). O lado do desktop está **implementado e desligado por padrão**, mas ainda não foi visto rodando com o app real nem com um relay real; o protocolo, o relay e o app estão em desenvolvimento nos repositórios deles, e nenhum foi publicado.
 
 - [Porecatu Remote](https://github.com/porecatu/remote): o app para Android e iOS.
 - [Porecatu Relay](https://github.com/porecatu/relay): o servidor que você hospeda para o desktop e o celular se encontrarem. Ele não consegue ler o que passa por ele.

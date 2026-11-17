@@ -326,6 +326,8 @@ VALORES = [
      "appearance.task_manager.line_width", "| `line_width` | **1.5** |"),
     ("opacidade da área do gráfico", "config:task_manager.rs", "fill_opacity",
      "appearance.task_manager.fill_opacity", "| `fill_opacity` | **0.15** |"),
+    ("lado do QR do acesso remoto", "config:remote.rs", "qr_size",
+     "appearance.remote.qr_size", "| `qr_size` | **208** |"),
     ("largura da janela de configurações", "config:settings.rs", "window_width",
      "appearance.settings.window_width", "`window_width` 900"),
     ("altura da janela de configurações", "config:settings.rs", "window_height",

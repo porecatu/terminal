@@ -31,8 +31,8 @@ use std::collections::{BTreeMap, HashSet};
 use porecatu_config::{Config, Edit, EditValue};
 
 use super::catalog::{
-    APPLIED_VALUES, Control, GIT_POLL_MAX, GIT_POLL_MIN, Group, OPTIONS, OptionDef, Unavailable,
-    apply_value, number_of,
+    APPLIED_VALUES, Control, GIT_POLL_MAX, GIT_POLL_MIN, Group, OPTIONS, OptionDef, RELAY_URL_PATH,
+    Unavailable, apply_value, number_of,
 };
 
 /// Por que um valor foi recusado.
@@ -53,6 +53,9 @@ pub(crate) enum ValueError {
     EmptyName,
     /// Nome de variável de ambiente repetido (RF-16.26).
     DuplicateName(String),
+    /// O endereço do relay não é `wss://` (nem `ws://` para `localhost`,
+    /// `127.0.0.1` ou `[::1]`) -- ADR-0108 §1.
+    InvalidRelayUrl,
 }
 
 /// A pendência de uma opção.
@@ -481,6 +484,9 @@ fn parse_integer(raw: &str) -> Result<EditValue, ValueError> {
 pub(crate) fn validate(option: &OptionDef, value: &EditValue) -> Result<EditValue, ValueError> {
     match (option.control, value) {
         (Control::Toggle, EditValue::Bool(_)) => Ok(value.clone()),
+        (Control::Text, EditValue::String(url)) if option.path == RELAY_URL_PATH => {
+            super::remote_access::check_relay_url(url).map(|()| value.clone())
+        }
         (
             Control::Text | Control::Language | Control::Theme | Control::ProfileChoice,
             EditValue::String(_),

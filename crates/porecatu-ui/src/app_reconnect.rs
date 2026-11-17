@@ -262,6 +262,10 @@ impl App {
             }
             if let Some(runtime) = self.runtime_mut(member) {
                 runtime.reconnecting = false;
+                // PRD-025: the cycle began with a lost link, so every pane of
+                // the connection is `Disconnected` for the remote access, even
+                // when the last attempt ended in a server-side close.
+                runtime.link_dropped = crate::remote::tree::link_dropped(reason) || exhausted;
             }
             if let Some(state) = self.windows.get_mut(&member.0) {
                 if let Some(pane) = state
@@ -346,6 +350,9 @@ impl App {
                 runtime.dormant = false;
                 runtime.remote_cwd = None;
                 runtime.reconnecting = false;
+                // PRD-025: a new connection, the shell is not open yet.
+                runtime.connected = false;
+                runtime.link_dropped = false;
                 true
             }
             Err(err) => {

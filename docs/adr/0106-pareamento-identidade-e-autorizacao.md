@@ -1,6 +1,6 @@
 # ADR-0106 — Pareamento, identidade e autorização: QR na tela de configurações, confirmação no desktop, lista de aparelhos escrita só por gesto
 
-**Status:** Aceito em 2026-11-16 — não implementado
+**Status:** Aceito em 2026-11-16 — implementado em 2026-11-17 (notas de implementação nas seções 5 e 7; verificação ao vivo é dívida, no [roadmap](../roadmap.md))
 **Data:** 2026-11-15
 **Relacionados:** [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0014](0014-superficie-de-aviso-e-dialogo.md), [ADR-0073](0073-credenciais-no-cofre-do-sistema.md), [ADR-0086](0086-abas-fixadas-modelo-arquivo-e-ciclo-de-vida.md), [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md), [ADR-0104](0104-crate-porecatu-remote.md), [ADR-0108](0108-superficies-de-ui-do-acesso-remoto.md)
 
@@ -66,6 +66,8 @@ Ao lado do `session.json`, no mesmo diretório de dados, com o padrão do `pinne
 - Só chaves **públicas**: o arquivo não dá acesso a nada se vazar. Mas quem consegue **escrever** nele acrescenta um aparelho; o mesmo vale para `porecatu.toml` e `session.json`, e o modelo de ameaça do protocolo deixa malware no desktop fora do escopo.
 - Arquivo ilegível: o acesso liga com a lista vazia e um aviso, e o arquivo ruim é renomeado com sufixo `.corrompido-<data>`, nunca sobrescrito — a regra "nunca perder trabalho" do PRD-000 aplicada a uma lista que o usuário construiu.
 
+> **Nota de implementação (2026-11-17).** O arquivo é `remote_devices.json` em `porecatu-remote/src/devices.rs`. O ilegível vira `remote_devices.json.corrompido-<carimbo>` (com `.1`, `.2`… se o nome já existir), e o host avisa por `RemoteEvent::DevicesQuarantined { path }` — a UI mostra o aviso "Lista de aparelhos ilegível" com o caminho. Um `schema_version` **mais novo** que o conhecido deixa a lista **somente leitura** e intacta (um Porecatu mais antigo não reescreve o arquivo de um mais novo). O cofre usa o serviço `porecatu-remote` (distinto do de `porecatu-ssh`), com três entradas — `identity:static-x25519`, `identity:routing-ed25519` e `relay:operator-token` —, e as duas chaves de identidade nascem e são refeitas juntas, nunca uma sem a outra.
+
 ### 6. Desfazer
 
 | Gesto | Efeito | Lista |
@@ -81,6 +83,8 @@ Todos acontecem **antes** do próximo quadro: o comando vai a `porecatu-remote` 
 ### 7. Token do operador
 
 Digitado pelo usuário na tela de configurações, guardado no cofre por `porecatu-remote`. É a string opaca de 32 a 128 caracteres ASCII imprimíveis que o operador definiu em `[[tokens]]` do relay (gerada por `porecatu-relay token new`; ver o [`relay.example.toml`](https://github.com/porecatu/relay/blob/main/docs/reference/relay.example.toml)) e vai só no cabeçalho `Authorization: Bearer` da abertura de `/v0/host` ([01 §2](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md)); o cliente nunca o recebe. O token só autoriza o host a usar o relay; o endereço é provado depois, pelo desafio assinado com a chave de roteamento ([01 §3](https://github.com/porecatu/protocol/blob/main/docs/especificacao/01-transporte-e-relay.md), [ADR-0003 do Relay](https://github.com/porecatu/relay/blob/main/docs/adr/0003-registro-do-host-por-chave-e-token-do-operador.md)). Token recusado pelo relay (HTTP 401, antes do upgrade) para de tentar e mostra o motivo; não entra no ciclo de reconexão, que é para queda de rede.
+
+> **Nota de implementação (2026-11-17).** A validação do token (32 a 128 caracteres ASCII imprimíveis, sem espaço nas pontas) e o campo mascarado são de `porecatu-ui/src/settings/remote_access.rs`; o cofre bloqueia (D-Bus, Keychain, Credential Manager), então só é consultado por uma **thread curta** (`Wakeup::RemoteVault`), nunca pela main thread. A tela mostra "Guardado no cofre do sistema" sem ler o valor e oferece **Apagar** o token guardado. O token é gravado pelo **Salvar**, e o host o lê só ao iniciar: gravar o token reinicia o host quando ele está parado por falha de token **ou** em "Conectando" (o caso de ligar o acesso e gravar o token no mesmo Salvar). Com `[remote] enabled = false`, **abrir** o grupo "Acesso remoto" dispara uma thread curta que consulta o cofre — é gesto do usuário, não custo em repouso (RNF-25.1).
 
 ## Alternativas consideradas
 

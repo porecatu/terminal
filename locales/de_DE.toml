@@ -50,6 +50,16 @@ save_item = "Dieses Fenster speichern…"
 empty_list = "keine gespeicherten Sitzungen"
 name_placeholder = "Sitzungsname"
 
+[devices]
+summary = { one = "{count} Gerät verbunden: {names}", other = "{count} Geräte verbunden: {names}" }
+row_detail = "{platform} · verbunden {since}"
+since_now = "gerade eben"
+since_minutes = { one = "vor {count} Minute", other = "vor {count} Minuten" }
+since_hours = { one = "vor {count} Stunde", other = "vor {count} Stunden" }
+disconnect = "Trennen"
+disconnect_all = "Alle trennen"
+open_settings = "Einstellungen für den Fernzugriff öffnen"
+
 [task_manager]
 chart_cpu = "CPU"
 chart_memory = "Arbeitsspeicher"
@@ -82,6 +92,7 @@ window_title = "Einstellungen"
 general = "Allgemein"
 shell = "Shell"
 profiles = "Profile"
+remote_access = "Fernzugriff"
 terminal = "Terminal"
 appearance = "Darstellung"
 session = "Sitzung"
@@ -114,6 +125,7 @@ project_file = "PROJEKTDATEI"
 git_remote = "REMOTE"
 panes_size = "MINDESTGRÖSSE"
 task_manager_charts = "DIAGRAMME"
+remote_connection = "VERBINDUNG"
 
 [settings.option]
 language_label = "Sprache"
@@ -241,6 +253,10 @@ history_seconds_label = "Zeitraum der Diagramme"
 history_seconds_description = "Wie viele Sekunden die Diagramme des Task-Managers zeigen. Von 30 bis 600."
 background_monitoring_label = "Im Hintergrund überwachen"
 background_monitoring_description = "Die Diagramme des Task-Managers behalten den Verlauf, auch wenn er geschlossen ist, auf Kosten eines Prozess-Scans pro Sekunde."
+remote_enabled_label = "Fernzugriff"
+remote_enabled_description = "Erlaubt einem gekoppelten Gerät, die Sitzung über Ihr Relay zu bedienen. Gilt sofort."
+relay_url_label = "Relay-Adresse"
+relay_url_description = "Adresse Ihres Porecatu Relay als wss:// (ws:// nur für localhost). Gilt sofort."
 
 [settings.button]
 open_file = "Datei im Editor öffnen"
@@ -349,6 +365,59 @@ not_an_integer = "Verwenden Sie eine ganze Zahl."
 not_a_choice = "Wert nicht erlaubt."
 empty_name = "Der Name darf nicht leer sein."
 duplicate_name = "Der Name {name} existiert bereits."
+invalid_relay_url = "Verwenden Sie eine wss://-Adresse (ws:// nur für localhost)."
+
+[settings.remote]
+token_label = "Relay-Token"
+token_stored = "Im Schlüsselbund des Systems gespeichert. Tippen Sie, um es zu ersetzen."
+token_absent = "Kein Token gespeichert. Fügen Sie das Token des Relay-Betreibers ein; es liegt im Schlüsselbund des Systems, nie in der Datei."
+token_unknown = "Schlüsselbund des Systems wird abgefragt…"
+token_unavailable = "Schlüsselbund des Systems nicht verfügbar: Ohne ihn schaltet sich der Fernzugriff nicht ein."
+token_will_store = "Wird beim Speichern im Schlüsselbund des Systems abgelegt."
+token_will_delete = "Das gespeicherte Token wird beim Speichern gelöscht."
+token_placeholder = "Token des Relay-Betreibers"
+token_too_short = "Das Token braucht mindestens {min} Zeichen."
+token_too_long = "Das Token darf höchstens {max} Zeichen haben."
+token_bad_characters = "Nur druckbare ASCII-Zeichen verwenden, ohne Leerzeichen am Anfang oder Ende."
+delete_label = "Gespeichertes Token"
+delete_description = "Löscht das Token beim Speichern aus dem Schlüsselbund des Systems."
+delete_button = "Löschen"
+status_label = "Status"
+status_off = "Aus"
+status_connecting = "Verbindet"
+status_connected = "Verbunden"
+status_unreachable = "Fehler: Relay nicht erreichbar"
+status_token_missing = "Fehler: Token fehlt"
+status_token_rejected = "Fehler: Token abgelehnt"
+status_relay_full = "Fehler: Relay voll"
+status_too_many_connections = "Fehler: zu viele Verbindungen"
+status_protocol = "Fehler: Protokollfehler"
+status_vault_unavailable = "Fehler: Schlüsselbund nicht verfügbar"
+access_secret_filled = "ausgefüllt"
+access_secret_empty = "leer"
+section_pair = "GERÄT KOPPELN"
+pair_label = "Gerät koppeln"
+pair_description = "Zeigt einen QR-Code, den die App Porecatu Remote liest. Gilt 5 Minuten und nur einmal."
+pair_button = "QR-Code anzeigen"
+pair_cancel = "Abbrechen"
+pair_unavailable = "Nur verfügbar, solange die Verbindung zum Relay besteht."
+qr_label = "QR-Code zum Koppeln"
+qr_expires = "Läuft ab in {time}"
+qr_copy = "Kopplungslink kopieren"
+section_devices = "GEKOPPELTE GERÄTE"
+devices_empty = "Keine gekoppelten Geräte."
+devices_off = "Schalten Sie den Fernzugriff ein, um die gekoppelten Geräte zu sehen und zu verwalten."
+device_detail = "{platform} · gekoppelt am {paired} · letzter Zugriff {seen}"
+device_never = "nie"
+device_connected = "jetzt verbunden"
+device_revoke = "{name} widerrufen"
+platform_android = "Android"
+platform_ios = "iOS"
+platform_other = "Andere"
+recreate_label = "Identität des Rechners"
+recreate_description = "Trennt alle Geräte und hebt ihre Kopplung auf. Sie müssen sich erneut koppeln."
+recreate_button = "Identität neu erstellen"
+recreate_unavailable = "Schalten Sie den Fernzugriff ein, um die Identität neu zu erstellen."
 
 [settings.theme]
 session_using = "Diese Sitzung verwendet das Thema {name}."
@@ -416,6 +485,9 @@ profile_open_menu = "Profilmenü öffnen"
 profile_new_tab = "Neuer Tab mit Profil {n}"
 ssh_reconnect = "SSH-Bereich neu verbinden"
 task_manager_toggle = "Task-Manager umschalten"
+remote_toggle = "Fernzugriff ein- oder ausschalten"
+remote_pair = "Gerät koppeln"
+remote_disconnect_all = "Alle Geräte trennen"
 
 [profile_menu]
 new_group = "Neue Tab-Gruppe"
@@ -438,6 +510,7 @@ settings = "Einstellungen"
 search = "Suche"
 app = "Anwendung"
 task_manager = "Task-Manager"
+remote = "Fernzugriff"
 
 [search_bar]
 invalid_pattern = "ungültiges Muster"
@@ -498,6 +571,23 @@ confirm = "Beenden"
 title = "Gespeicherte Sitzung löschen?"
 body = "Dadurch wird «{name}» endgültig entfernt."
 confirm = "Löschen"
+
+[dialog.revoke_device]
+title = "{name} widerrufen?"
+body = "Das Gerät wird jetzt getrennt und kann sich erst wieder verbinden, wenn es erneut gekoppelt wird."
+confirm = "Widerrufen"
+
+[dialog.recreate_identity]
+title = "Identität neu erstellen?"
+body = "Alle gekoppelten Geräte werden getrennt und funktionieren nicht mehr. Alle müssen sich erneut koppeln."
+confirm = "Identität neu erstellen"
+
+[dialog.pair_device]
+title = "Dieses Gerät koppeln?"
+body = "{name} ({platform}) möchte sich mit diesem Rechner koppeln."
+hint = "Prüfen Sie, ob das Telefon denselben Code anzeigt."
+confirm = "Koppeln"
+decline = "Ablehnen"
 
 [dialog.overwrite_session]
 title = "Sitzung «{name}» überschreiben?"
@@ -740,6 +830,21 @@ body = "\"history_seconds = {value}\" liegt außerhalb des Bereichs von 30 bis 6
 
 [notice.task_manager_background_save_failed]
 title = "Überwachung im Hintergrund konnte nicht gespeichert werden"
+
+[notice.remote_toggle_save_failed]
+title = "Fernzugriff konnte nicht gespeichert werden"
+
+[notice.remote_token_save_failed]
+title = "Relay-Token konnte nicht gespeichert werden"
+body = "Der Schlüsselbund des Systems hat den Vorgang abgelehnt. Geben Sie das Token erneut ein und speichern Sie."
+
+[notice.remote_device_connected]
+title = "Gerät verbunden"
+body = "{name} hat sich mit dem Fernzugriff verbunden."
+
+[notice.remote_devices_quarantined]
+title = "Geräteliste nicht lesbar"
+body = "Die Datei wurde unter {path} aufbewahrt, und die Liste der gekoppelten Geräte beginnt leer."
 
 [notice.git_missing]
 title = "Git nicht gefunden"

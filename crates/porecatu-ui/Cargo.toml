@@ -40,12 +40,19 @@ notify = "8.2.0"
 # ADR proíbe.
 opener = { version = "0.9", features = ["reveal"] }
 png = "0.18"
+# QR do pareamento do acesso remoto (ADR-0106 §2, ADR-0108 §2): só a matriz de
+# módulos, desenhada com `Quad`s; sem a feature `image`. Versão exata, subir é
+# tarefa própria. MIT OR Apache-2.0, compatível com GPLv3.
+qrcode = { version = "=0.14.1", default-features = false }
 # Buffer do campo mascarado (ADR-0075 §1): a mesma versão que `porecatu-ssh`
 # declara e que a pilha RustCrypto do `russh` já traz. MIT OR Apache-2.0.
 zeroize = "1.9"
 porecatu-config = { path = "../porecatu-config" }
 porecatu-core = { path = "../porecatu-core" }
 porecatu-locale = { path = "../porecatu-locale" }
+# ADR-0104 §3: este é o único crate que depende de `porecatu-remote`; os tipos
+# do protocolo vêm pelo re-export dele, nunca por dependência direta.
+porecatu-remote = { path = "../porecatu-remote" }
 porecatu-render = { path = "../porecatu-render" }
 porecatu-session = { path = "../porecatu-session" }
 porecatu-term = { path = "../porecatu-term" }
