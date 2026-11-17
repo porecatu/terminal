@@ -66,6 +66,17 @@ save_item = "Save this window…"
 empty_list = "no saved sessions"
 name_placeholder = "session name"
 
+# Connected devices button and popover (PRD-025 RF-25.12, ADR-0108 section 4).
+[devices]
+summary = { one = "{count} device connected: {names}", other = "{count} devices connected: {names}" }
+row_detail = "{platform} · connected {since}"
+since_now = "just now"
+since_minutes = { one = "{count} minute ago", other = "{count} minutes ago" }
+since_hours = { one = "{count} hour ago", other = "{count} hours ago" }
+disconnect = "Disconnect"
+disconnect_all = "Disconnect all"
+open_settings = "Open remote access settings"
+
 # Task manager (PRD-024). `unit_*` are the base-1024 symbols; the decimal
 # separator and the shape of `percent`/`per_second` belong to the language.
 # `no_value` is the dash shown for CPU before the first measurement.
@@ -101,6 +112,7 @@ window_title = "Settings"
 general = "General"
 shell = "Shell"
 profiles = "Profiles"
+remote_access = "Remote access"
 terminal = "Terminal"
 appearance = "Appearance"
 session = "Session"
@@ -133,6 +145,7 @@ project_file = "PROJECT FILE"
 git_remote = "REMOTE"
 panes_size = "MINIMUM SIZE"
 task_manager_charts = "CHARTS"
+remote_connection = "CONNECTION"
 
 [settings.option]
 language_label = "Language"
@@ -260,6 +273,10 @@ history_seconds_label = "Chart period"
 history_seconds_description = "How many seconds the task manager charts show. From 30 to 600."
 background_monitoring_label = "Monitor in the background"
 background_monitoring_description = "The task manager charts keep their history while it is closed, at the cost of one process scan per second."
+remote_enabled_label = "Remote access"
+remote_enabled_description = "Lets a paired device operate the session through your relay. Takes effect immediately."
+relay_url_label = "Relay address"
+relay_url_description = "Address of your Porecatu Relay, as wss:// (ws:// only for localhost). Takes effect immediately."
 
 [settings.button]
 open_file = "Open file in editor"
@@ -368,6 +385,59 @@ not_an_integer = "Use a whole number."
 not_a_choice = "Value not allowed."
 empty_name = "The name cannot be empty."
 duplicate_name = "The name {name} already exists."
+invalid_relay_url = "Use a wss:// address (ws:// only for localhost)."
+
+[settings.remote]
+token_label = "Relay token"
+token_stored = "Kept in the system vault. Type to replace it."
+token_absent = "No token stored. Paste the relay operator's token; it is kept in the system vault, never in the file."
+token_unknown = "Checking the system vault…"
+token_unavailable = "System vault unavailable: remote access does not turn on without it."
+token_will_store = "Will be stored in the system vault when you save."
+token_will_delete = "The stored token will be deleted when you save."
+token_placeholder = "Relay operator token"
+token_too_short = "The token must have at least {min} characters."
+token_too_long = "The token must have at most {max} characters."
+token_bad_characters = "Use printable ASCII characters only, with no space at either end."
+delete_label = "Stored token"
+delete_description = "Deletes the token from the system vault when you save."
+delete_button = "Delete"
+status_label = "Status"
+status_off = "Off"
+status_connecting = "Connecting"
+status_connected = "Connected"
+status_unreachable = "Failed: relay unreachable"
+status_token_missing = "Failed: token missing"
+status_token_rejected = "Failed: token rejected"
+status_relay_full = "Failed: relay full"
+status_too_many_connections = "Failed: too many connections"
+status_protocol = "Failed: protocol error"
+status_vault_unavailable = "Failed: vault unavailable"
+access_secret_filled = "filled"
+access_secret_empty = "empty"
+section_pair = "PAIR A DEVICE"
+pair_label = "Pair a device"
+pair_description = "Shows a QR code for the Porecatu Remote app to read. It is valid for 5 minutes and works once."
+pair_button = "Show QR code"
+pair_cancel = "Cancel"
+pair_unavailable = "Available only while connected to the relay."
+qr_label = "Pairing QR code"
+qr_expires = "Expires in {time}"
+qr_copy = "Copy pairing link"
+section_devices = "PAIRED DEVICES"
+devices_empty = "No paired devices."
+devices_off = "Turn remote access on to see and manage the paired devices."
+device_detail = "{platform} · paired on {paired} · last access {seen}"
+device_never = "never"
+device_connected = "connected now"
+device_revoke = "Revoke {name}"
+platform_android = "Android"
+platform_ios = "iOS"
+platform_other = "Other"
+recreate_label = "Desktop identity"
+recreate_description = "Disconnects and unpairs every device. They will have to pair again."
+recreate_button = "Recreate identity"
+recreate_unavailable = "Turn remote access on to recreate the identity."
 
 [settings.theme]
 session_using = "This session is using the theme {name}."
@@ -435,6 +505,9 @@ profile_open_menu = "Open profile menu"
 profile_new_tab = "New tab with profile {n}"
 ssh_reconnect = "Reconnect the SSH pane"
 task_manager_toggle = "Toggle task manager"
+remote_toggle = "Turn remote access on or off"
+remote_pair = "Pair a device"
+remote_disconnect_all = "Disconnect all devices"
 
 [profile_menu]
 new_group = "New tab group"
@@ -457,6 +530,7 @@ settings = "Settings"
 search = "Search"
 app = "Application"
 task_manager = "Task manager"
+remote = "Remote access"
 
 [search_bar]
 invalid_pattern = "invalid pattern"
@@ -520,6 +594,23 @@ confirm = "End process"
 title = "Delete saved session?"
 body = "This permanently removes «{name}»."
 confirm = "Delete"
+
+[dialog.revoke_device]
+title = "Revoke {name}?"
+body = "The device is disconnected now and cannot connect again until it is paired again."
+confirm = "Revoke"
+
+[dialog.recreate_identity]
+title = "Recreate the identity?"
+body = "Every paired device is disconnected and stops working. All of them will have to pair again."
+confirm = "Recreate identity"
+
+[dialog.pair_device]
+title = "Pair this device?"
+body = "{name} ({platform}) wants to pair with this computer."
+hint = "Check that the phone shows the same code."
+confirm = "Pair"
+decline = "Decline"
 
 [dialog.overwrite_session]
 title = "Overwrite session «{name}»?"
@@ -780,6 +871,21 @@ body = "\"history_seconds = {value}\" is outside the range of 30 to 600; using {
 
 [notice.task_manager_background_save_failed]
 title = "Could not save background monitoring"
+
+[notice.remote_toggle_save_failed]
+title = "Could not write the remote access setting"
+
+[notice.remote_token_save_failed]
+title = "Could not store the relay token"
+body = "The system vault did not accept the operation. Type the token again and save."
+
+[notice.remote_device_connected]
+title = "Device connected"
+body = "{name} connected to remote access."
+
+[notice.remote_devices_quarantined]
+title = "Device list unreadable"
+body = "The file was kept at {path} and the list of paired devices started empty."
 
 [notice.git_missing]
 title = "Git not found"

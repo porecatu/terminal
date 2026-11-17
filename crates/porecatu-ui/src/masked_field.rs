@@ -76,6 +76,14 @@ impl MaskedFieldState {
         self.secret.is_empty()
     }
 
+    /// Deixa `check` **olhar** o texto, sem copiá-lo e sem que ele saia daqui: a
+    /// validação do token do relay (tamanho e caracteres) precisa do texto, e o
+    /// resultado dela -- um erro tipado -- não carrega nada dele. Quem passa
+    /// um `check` que guarda o `&str` não compila (o empréstimo termina aqui).
+    pub fn inspect<R>(&self, check: impl FnOnce(&str) -> R) -> R {
+        check(&self.secret)
+    }
+
     /// O que se desenha: pontos. Cursor e seleção estão aqui, em bytes **dos
     /// pontos** (`MASK_CHAR.len_utf8()` cada).
     pub fn display(&self) -> &TextFieldState {

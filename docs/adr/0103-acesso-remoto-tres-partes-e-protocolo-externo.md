@@ -1,6 +1,6 @@
 # ADR-0103 — Acesso remoto: três partes, o desktop como host e o protocolo num repositório próprio
 
-**Status:** Aceito em 2026-11-16 — não implementado
+**Status:** Aceito em 2026-11-16 — implementado em 2026-11-17 ([PRD-025](../prd/prd-025-acesso-remoto.md); verificação ao vivo é dívida, no [roadmap](../roadmap.md))
 **Data:** 2026-11-15
 **Relacionados:** [PRD-000](../prd/prd-000-visao-de-produto.md), [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0002](0002-motor-vte.md), [ADR-0007](0007-modelo-de-threading.md), [ADR-0071](0071-backend-de-terminal.md), [ADR-0104](0104-crate-porecatu-remote.md), [ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md), [ADR-0106](0106-pareamento-identidade-e-autorizacao.md)
 
@@ -50,6 +50,8 @@ O Porecatu depende do crate `porecatu-protocol` por **versão exata**, como já 
 ### 6. Versão do protocolo
 
 A versão `[major, minor]` é negociada no início da sessão (`hello`/`welcome`; o `major` vai também no prólogo Noise e no `v` do QR); enquanto `major = 0`, host e cliente exigem `minor` igual ([04 — Versionamento](https://github.com/porecatu/protocol/blob/main/docs/especificacao/04-versionamento.md)). A versão de fio hoje é `[0, 1]`, ainda não congelada, e não se confunde com a versão do texto da especificação (0.3) nem com a do crate (0.1.0). O Porecatu declara, no `CHANGELOG`, a versão de protocolo de cada release a partir da que trouxer o recurso.
+
+> **Nota de implementação (2026-11-17).** O host foi implementado contra a especificação **0.4** do protocolo, não a 0.3: a 0.4 acrescenta a ação `activate-tab` e corrige pontos do texto da 0.3 que a implementação expôs ([ADR-0109](0109-o-celular-muda-a-aba-ativa-do-desktop.md), ADR-0010 do `porecatu-protocol`). O fio continua `[0, 1]` e o crate continua `0.1.0`; o que mudou é o `rev` — `d8618efa65f619b62e6a877159a7ad5658ca1c19`, da branch `spec-0-4-aba-ativa` do `porecatu-protocol`, que **ainda não foi mesclada na `main`** de lá (o CI dele roda só em PR e na `main`). Se o merge mudar o SHA (squash ou rebase), o `rev` do `Cargo.toml` do workspace tem de acompanhar. O crate de protocolo continua não publicado. Ver o [roadmap](../roadmap.md).
 
 ## Alternativas consideradas
 

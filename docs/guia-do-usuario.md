@@ -1,7 +1,7 @@
 # Guia do usuário
 
 RF-11.22, escrito no fechamento da F6. Cobre instalação, arquivo de
-configuração, tela de configurações, idioma da interface, atalhos, painéis divididos, mover abas entre janelas, imagem de fundo, efeito acrílico, integração de shell e a
+configuração, tela de configurações, idioma da interface, atalhos, painéis divididos, mover abas entre janelas, o gerenciador de tarefas, o acesso remoto pelo celular, imagem de fundo, efeito acrílico, integração de shell e a
 convenção do `Shift` para selecionar texto dentro de um programa que pede o mouse. Para decisões de
 arquitetura e o "porquê" de cada coisa, veja os ADRs linkados; este guia é
 só o "como usar".
@@ -305,6 +305,7 @@ for_window [title="^Configurações$"] floating enable
 |---|---|
 | **Geral** | idioma, diretório inicial, confirmações ao fechar aba e janela |
 | **Shell** | programa, argumentos e variáveis de ambiente do shell |
+| **Acesso remoto** (depois de **Perfis**) | ligar o acesso (`[remote] enabled`), endereço e token do relay, estado da conexão, QR de pareamento e aparelhos pareados — veja [Acesso remoto](#acesso-remoto) |
 | **Terminal** | fonte (a família é a do terminal; o tamanho vale também para a barra de abas), cursor, histórico e rolagem, seleção, clipboard, hyperlinks, opacidade do fundo, imagem de fundo |
 | **Aparência** | tema, animações, opacidade e decoração da janela, imagem de fundo da janela, posição da barra de abas, o que a aba mostra, botão de menu do app (`show_app_menu_button`, o ícone do app à esquerda da barra de abas), barra de status |
 | **Sessão** | gravar e restaurar a sessão, restauração preguiçosa, geometria das janelas, convite de integração de shell |
@@ -1505,6 +1506,230 @@ background_monitoring = true
 
 No Linux e no macOS, um processo cujo pai intermediário já terminou pode
 não aparecer na lista.
+
+## Acesso remoto
+
+O build longo, o servidor que pode ter caído, o deploy que pede
+confirmação: para saber de qualquer um deles não precisa voltar à mesa.
+O acesso remoto deixa você **ver e operar as mesmas abas, nos mesmos
+grupos**, a partir do celular. Ele vem **desligado**, e desligado o
+Porecatu não abre conexão de rede por causa dele, nem cria thread.
+
+> **Estado.** Implementado e coberto por testes automatizados, mas ainda
+> **não visto rodando** com o app real nem com um relay real; macOS e
+> Linux também estão por verificar. O app mobile precisa da versão que
+> fale a especificação 0.4 do protocolo (a que tem `activate-tab`). Veja
+> a dívida no [roadmap](roadmap.md).
+
+### As três partes
+
+- **O Porecatu** (este programa) é o dono da sessão: os terminais, os
+  grupos e as janelas continuam vivos aqui. O celular **não roda
+  terminal**; ele desenha a grade que o desktop já resolveu.
+- **O [Porecatu Relay](https://github.com/porecatu/relay)** é um servidor
+  pequeno que **você mesmo hospeda** (uma VPS, um homelab, um servidor da
+  empresa) para o desktop e o celular se encontrarem. Não existe relay
+  público nem conta. Ele é **cego**: tudo que é de terminal viaja
+  cifrado de ponta a ponta entre o desktop e o celular, e o relay só
+  encaminha.
+- **O [Porecatu Remote](https://github.com/porecatu/remote)** é o app
+  para Android e iOS.
+
+O Porecatu só **sai** para o relay (`wss://`): não abre porta no seu
+computador, funciona atrás de NAT e de firewall que deixe passar HTTPS. A
+conexão com o relay confia nos **certificados do sistema operacional**: um
+relay com certificado de uma autoridade privada funciona se ela estiver
+instalada no sistema. O protocolo entre as três partes é especificado no
+[porecatu-protocol](https://github.com/porecatu/protocol).
+
+### Subir o seu relay
+
+Siga o README do [repositório do Relay](https://github.com/porecatu/relay):
+é um binário único (com imagem Docker), e é nele que se define o **token
+do operador**, uma sequência de **32 a 128 caracteres ASCII** que autoriza
+o seu desktop a usar aquele relay (o relay gera um por
+`porecatu-relay token new`). O relay precisa estar acessível em `wss://`;
+`ws://` só é aceito para `localhost`, `127.0.0.1` e `[::1]`, para testes.
+
+### Ligar
+
+Abra a [tela de configurações](#tela-de-configurações) e vá ao grupo
+**Acesso remoto**, que vem depois de **Perfis**:
+
+- **Acesso remoto**: a alternância. Vale na hora, sem reiniciar.
+- **Endereço do relay**: o `wss://` do seu relay. Equivale a
+  `[remote] relay_url`.
+- **Token do relay**: um campo mascarado. O token **nunca** vai para o
+  `porecatu.toml`: fica no **cofre do sistema** (Gerenciador de Credenciais
+  no Windows, Keychain no macOS, Secret Service no Linux), com o nome de
+  serviço `porecatu-remote`, gravado quando você salva. A linha "Token guardado" mostra se há um e tem o
+  botão **Apagar**. Num Linux sem serviço de segredos o recurso **não
+  liga** e a tela diz por quê: não existe arquivo de reserva, porque uma
+  chave que dá acesso de digitação ao seu computador não fica em texto no
+  disco.
+- **Estado**: *Desligado*, *Conectando*, *Conectado* ou uma falha com o
+  motivo (relay inacessível, token ausente, token recusado, relay cheio,
+  excesso de conexões, erro de protocolo, cofre indisponível). Queda de
+  rede é refeita sozinha, com espera crescente.
+
+As duas chaves do arquivo, se você preferir editá-lo à mão:
+
+```toml
+[remote]
+enabled = false
+relay_url = ""   # "wss://relay.exemplo.com"
+```
+
+As ações `remote.toggle` (liga e desliga, gravando `enabled`),
+`remote.pair` e `remote.disconnect_all` existem sem atalho padrão; para
+dar um a elas, `[keybindings]` como em qualquer outra ação:
+
+```toml
+[keybindings]
+"ctrl+shift+comma" = "remote.toggle"
+```
+
+### Parear um celular
+
+Com o estado **Conectado**, na mesma tela (ou pela ação `remote.pair`,
+que abre a tela já nesse grupo e mostra o QR):
+
+1. Clique em **Mostrar QR code**. O QR carrega o endereço do relay, a
+   identidade do seu computador e um código de **uso único** que vale
+   **5 minutos**, com a contagem ao lado. Mostrar de novo, sair do grupo
+   ou fechar a tela invalida o anterior. O QR é sempre escuro sobre
+   claro, nos dois temas, para a câmera ler.
+2. No app, aponte a câmera. (Quem não pode apontar a câmera copia o
+   link de pareamento: o QR, para leitor de tela, é o botão "Copiar link
+   de pareamento".)
+3. O Porecatu abre o diálogo **Parear este aparelho?**, com o **nome** e a
+   plataforma do celular e uma **impressão digital** em quatro grupos de
+   quatro. **Confira se o celular mostra o mesmo código** e só então
+   clique em **Parear**. **Recusar** (o botão que já vem com o foco, e
+   `Esc`) e deixar passar **120 segundos** dão no mesmo: nada é pareado.
+4. Pronto: o celular entra na lista e já fica conectado, sem outro passo.
+
+Código inválido, vencido ou já usado é recusado sem diálogo. O nome do
+seu computador no app é sempre o **nome da máquina**; o app pode
+renomeá-lo só para si.
+
+### O que o celular vê e faz
+
+O celular vê **todas as janelas**: abas fixadas, grupos (nome, cor,
+colapsado), abas na ordem da barra, o título, o perfil, o `usuário@host`
+das abas SSH, os indicadores de atividade e campainha, os painéis divididos
+e o estado de cada um. Acompanha a **grade ao vivo** do painel que abre,
+com as **cores do tema que você usa no desktop**, o cursor e o histórico
+(o scrollback, sob demanda; rolar no celular **não** rola o desktop).
+Mudanças no desktop aparecem lá em menos de um segundo, em rede comum.
+
+O **tamanho do terminal é sempre o do desktop**: abrir uma aba no celular
+nunca redimensiona o terminal nem muda o que o desktop mostra. Num painel
+largo, o app dá zoom e rolagem horizontal.
+
+O celular pode:
+
+- **digitar** no painel que abriu: texto, as teclas especiais (Enter,
+  Tab, setas, F1 a F12…) com Ctrl, Alt, Shift e Meta, e colar. As teclas
+  passam pelo **mesmo codificador do teclado do desktop** (respeitando o
+  modo do programa), e **nunca** disparam um atalho do Porecatu;
+- **criar abas** (numa janela e num grupo à escolha, com o perfil que
+  quiser), **fechar abas e painéis**, **renomear abas**, **ativar uma
+  aba**, **iniciar** um painel não iniciado e **conectar** uma aba SSH
+  dormente;
+- **organizar**: mover aba entre grupos, **criar**, renomear, mudar a cor,
+  colapsar e desfazer grupos, e mover aba ou grupo **entre janelas**, com
+  o processo vivo, como no arraste.
+
+Cada ação faz **o mesmo que o gesto equivalente no desktop** — inclusive
+a **ativação da aba**: a aba criada pelo celular fica ativa na janela
+dela, e quem volta para a mesa encontra ativa a aba em que estava
+trabalhando. O celular **nunca** dá foco, levanta nem desminimiza uma janela
+do sistema, nem muda o painel focado. Se o gerenciador de tarefas estava
+aberto numa janela e o celular ativa ou cria uma aba nela, a janela volta
+ao terminal, como num clique seu.
+
+Alguns limites:
+
+- Quando o fechamento no desktop pediria confirmação (processo em primeiro
+  plano, conexão SSH aberta), a **confirmação vai ao celular que pediu**.
+  Nenhum diálogo abre no desktop por causa dele.
+- Fechar a **última aba da última janela** é recusado: encerraria o
+  Porecatu e, com ele, o acesso.
+- Se a janela está no meio de um gesto seu (um diálogo ou menu aberto,
+  renomeando uma aba, arrastando, o popover de mover para janela ou o de
+  aparelhos), a ação do celular volta **ocupado** e ele tenta de novo.
+- As **perguntas da conexão SSH** (senha, passphrase, chave de servidor
+  desconhecida) aparecem **só no desktop**; o celular vê o painel
+  "aguardando o desktop". Segredo não viaja para o celular.
+- Ficam **fora do alcance** do celular: fixar e desafixar, sessões
+  nomeadas, configurações, o gerenciador de tarefas, abrir janela nova,
+  destacar aba numa janela nova e qualquer coisa que dê foco à janela do
+  sistema.
+- Com o Porecatu fechado, o celular mostra o computador como *offline*.
+  Não há modo em segundo plano nem notificação push.
+- **Fechar a última aba fixada** (`close-pane` no último painel de uma aba
+  fixada) fecha e desafixa a aba, como no desktop, com a confirmação no
+  celular.
+
+### Saber quem está conectado
+
+Enquanto **houver ao menos um celular conectado**, **toda janela** mostra
+um botão com o ícone de celular, na zona da direita da barra de abas, à
+esquerda do botão de sessões, com um selo de contagem a partir de dois
+aparelhos. **Ele não pode ser escondido**: quem está na frente do computador
+precisa saber que alguém está olhando. Passe o mouse para ver quantos e
+quais; clique para abrir a lista, com **Desconectar** em cada aparelho,
+**Desconectar todos** e **Abrir configurações de acesso remoto**.
+Desconectar derruba a conexão; o aparelho **continua pareado** e pode
+voltar. A cada nova conexão aparece também um aviso, "Aparelho
+conectado", com o nome. A ação `remote.disconnect_all` faz o mesmo que
+"Desconectar todos".
+
+Desligar o acesso (a alternância ou `remote.toggle`) derruba todas as
+conexões, avisando os celulares; a lista de pareados fica.
+
+### Revogar e recriar a identidade
+
+Na tela de configurações, o bloco **Aparelhos pareados** lista cada celular
+com a plataforma, a data do pareamento (`AAAA-MM-DD`), o último acesso e se
+está **conectado agora**.
+
+- O **✕** de um aparelho **revoga**: a conexão viva cai na hora e ele não
+  conecta mais até parear de novo (pede confirmação).
+- **Recriar identidade** (pede confirmação) gera uma identidade nova para o
+  seu computador e **desconecta e esquece todos** os aparelhos: é o caminho
+  de "perdi o celular e não sei qual era". Todos terão de parear de novo.
+
+A lista mora em `remote_devices.json`, ao lado do `session.json`, e só é
+escrita por gesto seu (parear, revogar, recriar). Se o arquivo estiver
+ilegível, o Porecatu o preserva como `remote_devices.json.corrompido-<data>`,
+avisa e começa com a lista vazia; um arquivo de uma versão mais nova do
+Porecatu fica intacto e só para leitura.
+
+### Segurança
+
+Um celular pareado acessa **tudo**: digitar num terminal seu é executar
+código como você. Não há permissão por aparelho. O que protege é:
+
+- o recurso vem **desligado**;
+- o **relay é cego** e o conteúdo é cifrado de ponta a ponta (sessão
+  Noise entre o desktop e o celular);
+- o QR só existe por um gesto seu, vale 5 minutos e uma vez, e o pareamento
+  só se conclui com **a sua confirmação no desktop**, conferindo a impressão
+  digital;
+- o **token** e as **chaves** do seu computador ficam no cofre do sistema;
+- o indicador de aparelho conectado **não pode ser escondido**, e revogar,
+  desconectar e desligar valem **na hora**;
+- **nenhum conteúdo de terminal, tecla, título, diretório, token ou chave
+  vai para log**.
+
+O que o relay enxerga (endereços IP, horários, o tamanho de cada quadro) e o
+que fica de fora do modelo de ameaça estão no
+[modelo de ameaça do protocolo](https://github.com/porecatu/protocol/blob/main/docs/especificacao/modelo-de-ameaca.md).
+Malware já rodando no seu computador está fora dele: quem consegue escrever
+em `remote_devices.json` acrescenta um aparelho, como quem consegue
+escrever no `porecatu.toml`.
 
 ## Quando o app fecha sozinho
 

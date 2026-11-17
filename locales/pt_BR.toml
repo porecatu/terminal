@@ -68,6 +68,17 @@ save_item = "Salvar esta janela…"
 empty_list = "nenhuma sessão salva"
 name_placeholder = "nome da sessão"
 
+# Botão e popover de aparelhos conectados (PRD-025 RF-25.12, ADR-0108 §4).
+[devices]
+summary = { one = "{count} aparelho conectado: {names}", other = "{count} aparelhos conectados: {names}" }
+row_detail = "{platform} · conectado {since}"
+since_now = "agora"
+since_minutes = { one = "há {count} minuto", other = "há {count} minutos" }
+since_hours = { one = "há {count} hora", other = "há {count} horas" }
+disconnect = "Desconectar"
+disconnect_all = "Desconectar todos"
+open_settings = "Abrir configurações de acesso remoto"
+
 # Gerenciador de tarefas (PRD-024). `unit_*` são os símbolos de base 1024;
 # `decimal_separator` e o formato de `percent`/`per_second` são do idioma
 # (`1,4 GB` aqui, `1.4 GB` em en_US). `no_value` é o traço da CPU antes da
@@ -104,6 +115,7 @@ window_title = "Configurações"
 general = "Geral"
 shell = "Shell"
 profiles = "Perfis"
+remote_access = "Acesso remoto"
 terminal = "Terminal"
 appearance = "Aparência"
 session = "Sessão"
@@ -136,6 +148,7 @@ project_file = "ARQUIVO DE PROJETO"
 git_remote = "REMOTO"
 panes_size = "TAMANHO MÍNIMO"
 task_manager_charts = "GRÁFICOS"
+remote_connection = "CONEXÃO"
 
 [settings.option]
 language_label = "Idioma"
@@ -263,6 +276,10 @@ history_seconds_label = "Período dos gráficos"
 history_seconds_description = "Quantos segundos os gráficos do gerenciador de tarefas mostram. De 30 a 600."
 background_monitoring_label = "Monitorar em segundo plano"
 background_monitoring_description = "Os gráficos do gerenciador de tarefas guardam o histórico com ele fechado, ao custo de uma varredura de processos por segundo."
+remote_enabled_label = "Acesso remoto"
+remote_enabled_description = "Permite operar a sessão por um aparelho pareado, através do seu relay. Vale na hora."
+relay_url_label = "Endereço do relay"
+relay_url_description = "Endereço do seu Porecatu Relay, em wss:// (ws:// só para localhost). Vale na hora."
 
 [settings.button]
 open_file = "Abrir arquivo no editor"
@@ -371,6 +388,59 @@ not_an_integer = "Use um número inteiro."
 not_a_choice = "Valor não permitido."
 empty_name = "O nome não pode ficar vazio."
 duplicate_name = "O nome {name} já existe."
+invalid_relay_url = "Use um endereço wss:// (ws:// só em localhost)."
+
+[settings.remote]
+token_label = "Token do relay"
+token_stored = "Guardado no cofre do sistema. Digite para substituir."
+token_absent = "Nenhum token guardado. Cole o token do operador do relay; ele fica no cofre do sistema, nunca no arquivo."
+token_unknown = "Consultando o cofre do sistema…"
+token_unavailable = "Cofre do sistema indisponível: o acesso remoto não liga sem ele."
+token_will_store = "Será guardado no cofre do sistema ao salvar."
+token_will_delete = "O token guardado será apagado ao salvar."
+token_placeholder = "Token do operador do relay"
+token_too_short = "O token tem de ter ao menos {min} caracteres."
+token_too_long = "O token tem de ter no máximo {max} caracteres."
+token_bad_characters = "Use só caracteres ASCII imprimíveis, sem espaço no começo nem no fim."
+delete_label = "Token guardado"
+delete_description = "Apaga o token do cofre do sistema ao salvar."
+delete_button = "Apagar"
+status_label = "Estado"
+status_off = "Desligado"
+status_connecting = "Conectando"
+status_connected = "Conectado"
+status_unreachable = "Falha: relay inacessível"
+status_token_missing = "Falha: token ausente"
+status_token_rejected = "Falha: token recusado"
+status_relay_full = "Falha: relay cheio"
+status_too_many_connections = "Falha: excesso de conexões"
+status_protocol = "Falha: erro de protocolo"
+status_vault_unavailable = "Falha: cofre indisponível"
+access_secret_filled = "preenchido"
+access_secret_empty = "vazio"
+section_pair = "PAREAR UM APARELHO"
+pair_label = "Parear um aparelho"
+pair_description = "Mostra um QR code para o app Porecatu Remote ler. Vale por 5 minutos e uma única vez."
+pair_button = "Mostrar QR code"
+pair_cancel = "Cancelar"
+pair_unavailable = "Disponível só com a conexão com o relay estabelecida."
+qr_label = "QR code de pareamento"
+qr_expires = "Expira em {time}"
+qr_copy = "Copiar link de pareamento"
+section_devices = "APARELHOS PAREADOS"
+devices_empty = "Nenhum aparelho pareado."
+devices_off = "Ligue o acesso remoto para ver e gerenciar os aparelhos pareados."
+device_detail = "{platform} · pareado em {paired} · último acesso {seen}"
+device_never = "nunca"
+device_connected = "conectado agora"
+device_revoke = "Revogar {name}"
+platform_android = "Android"
+platform_ios = "iOS"
+platform_other = "Outro"
+recreate_label = "Identidade do desktop"
+recreate_description = "Desconecta e desfaz o pareamento de todos os aparelhos. Eles terão de parear de novo."
+recreate_button = "Recriar identidade"
+recreate_unavailable = "Ligue o acesso remoto para recriar a identidade."
 
 [settings.theme]
 session_using = "Esta sessão está usando o tema {name}."
@@ -438,6 +508,9 @@ profile_open_menu = "Abrir menu de perfis"
 profile_new_tab = "Nova aba com o perfil {n}"
 ssh_reconnect = "Reconectar o painel SSH"
 task_manager_toggle = "Alternar o gerenciador de tarefas"
+remote_toggle = "Ligar ou desligar o acesso remoto"
+remote_pair = "Parear um aparelho"
+remote_disconnect_all = "Desconectar todos os aparelhos"
 
 [profile_menu]
 new_group = "Novo grupo de abas"
@@ -460,6 +533,7 @@ settings = "Configurações"
 search = "Busca"
 app = "Aplicativo"
 task_manager = "Gerenciador de tarefas"
+remote = "Acesso remoto"
 
 [search_bar]
 invalid_pattern = "padrão inválido"
@@ -525,6 +599,23 @@ confirm = "Encerrar"
 title = "Excluir sessão salva?"
 body = "Isso remove «{name}» permanentemente."
 confirm = "Excluir"
+
+[dialog.revoke_device]
+title = "Revogar {name}?"
+body = "O aparelho é desconectado agora e não conecta mais até parear de novo."
+confirm = "Revogar"
+
+[dialog.recreate_identity]
+title = "Recriar a identidade?"
+body = "Todos os aparelhos pareados são desconectados e deixam de funcionar. Todos terão de parear de novo."
+confirm = "Recriar identidade"
+
+[dialog.pair_device]
+title = "Parear este aparelho?"
+body = "{name} ({platform}) quer parear com este computador."
+hint = "Confira se o celular mostra o mesmo código."
+confirm = "Parear"
+decline = "Recusar"
 
 [dialog.overwrite_session]
 title = "Sobrescrever a sessão «{name}»?"
@@ -785,6 +876,21 @@ body = "\"history_seconds = {value}\" está fora da faixa de 30 a 600; usando {u
 
 [notice.task_manager_background_save_failed]
 title = "Não foi possível gravar o monitoramento em segundo plano"
+
+[notice.remote_toggle_save_failed]
+title = "Não foi possível gravar o acesso remoto"
+
+[notice.remote_token_save_failed]
+title = "Não foi possível guardar o token do relay"
+body = "O cofre do sistema não aceitou a operação. Digite o token de novo e salve."
+
+[notice.remote_device_connected]
+title = "Aparelho conectado"
+body = "{name} conectou-se ao acesso remoto."
+
+[notice.remote_devices_quarantined]
+title = "Lista de aparelhos ilegível"
+body = "O arquivo foi preservado em {path} e a lista de aparelhos pareados começou vazia."
 
 [notice.git_missing]
 title = "Git não encontrado"

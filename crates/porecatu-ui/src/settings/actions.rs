@@ -87,6 +87,9 @@ pub(crate) fn label(catalog: &Catalog, action: Action) -> Option<String> {
         Action::SshReconnect => a::ssh_reconnect(catalog),
         Action::ProfileNewTab(n) => a::profile_new_tab(catalog, n),
         Action::TaskManagerToggle => a::task_manager_toggle(catalog),
+        Action::RemoteToggle => a::remote_toggle(catalog),
+        Action::RemotePair => a::remote_pair(catalog),
+        Action::RemoteDisconnectAll => a::remote_disconnect_all(catalog),
     })
 }
 
@@ -111,10 +114,11 @@ pub(crate) enum Domain {
     Search,
     App,
     TaskManager,
+    Remote,
 }
 
 impl Domain {
-    pub(crate) const ALL: [Domain; 17] = [
+    pub(crate) const ALL: [Domain; 18] = [
         Domain::Tab,
         Domain::Group,
         Domain::Window,
@@ -132,6 +136,7 @@ impl Domain {
         Domain::Search,
         Domain::App,
         Domain::TaskManager,
+        Domain::Remote,
     ];
 
     /// O domínio de `action`, pelo prefixo do nome. Toda ação do catálogo tem
@@ -157,6 +162,7 @@ impl Domain {
             "search" => Domain::Search,
             "app" => Domain::App,
             "task_manager" => Domain::TaskManager,
+            "remote" => Domain::Remote,
             _ => return None,
         })
     }
@@ -181,6 +187,7 @@ impl Domain {
             Domain::Search => d::search(catalog),
             Domain::App => d::app(catalog),
             Domain::TaskManager => d::task_manager(catalog),
+            Domain::Remote => d::remote(catalog),
         }
     }
 }

@@ -9,6 +9,7 @@ mod group_editor;
 mod groups;
 mod move_to_group;
 mod notices;
+mod remote;
 mod session_picker;
 mod settings;
 mod status_bar;
@@ -25,6 +26,7 @@ pub use group_editor::GroupEditor;
 pub use groups::{GroupPaletteEntry, Groups};
 pub use move_to_group::MoveToGroup;
 pub use notices::Notices;
+pub use remote::RemoteAppearance;
 pub use session_picker::SessionPicker;
 pub use settings::Settings;
 pub use status_bar::StatusBar;
@@ -55,4 +57,5 @@ pub struct Appearance {
     pub terminal_frame: TerminalFrame,
     pub status_bar: StatusBar,
     pub task_manager: TaskManagerAppearance,
+    pub remote: RemoteAppearance,
 }

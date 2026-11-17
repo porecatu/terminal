@@ -171,19 +171,34 @@ pub fn handle_keyboard_input(
         return;
     }
 
+    let character = match &event.logical_key {
+        Key::Character(s) => s.chars().next(),
+        _ => None,
+    };
+    if let Some(bytes) = encode_character_key(character, event.text.as_deref(), modifiers) {
+        write(bytes);
+    }
+}
+
+/// Bytes of a character key, shared by the local keyboard and the remote input
+/// (ADR-0105 §7: one encoder only). `character` is the logical character of the
+/// key, when it has one; `text` is what the key typed. Ctrl without Alt and a
+/// character with a control byte gives that byte; otherwise the text goes
+/// through `encode_text` (Alt prefixes ESC). `None` when there is nothing to
+/// write.
+pub(crate) fn encode_character_key(
+    character: Option<char>,
+    text: Option<&str>,
+    modifiers: Modifiers,
+) -> Option<Vec<u8>> {
     if modifiers.ctrl
         && !modifiers.alt
-        && let Key::Character(s) = &event.logical_key
-        && let Some(c) = s.chars().next()
+        && let Some(c) = character
         && let Some(byte) = encode_ctrl_char(c)
     {
-        write(vec![byte]);
-        return;
+        return Some(vec![byte]);
     }
-
-    if let Some(text) = &event.text {
-        write(encode_text(text, modifiers));
-    }
+    text.map(|text| encode_text(text, modifiers))
 }
 
 /// Copia a seleção corrente, se houver -- fatorado para ser chamado tanto

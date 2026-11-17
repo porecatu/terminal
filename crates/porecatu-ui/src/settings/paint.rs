@@ -23,7 +23,7 @@ use super::content::{
 use super::field_edit::{EditPart, Editing};
 use super::layout::{
     BlockGeometry, ControlPart, FOOTER_BUTTONS, Focus, FooterButton, Hit, Layout, Metrics,
-    RowGeometry, banner_geometry, list_geometry, profile_item_buttons,
+    RowGeometry, banner_geometry, device_remove_button, list_geometry, profile_item_buttons,
 };
 use super::{
     Group, RESTORE_HOVER_BACKGROUND, RESTORE_HOVER_ICON, RESTORE_ICON, RESTORE_RADIUS, TOGGLE_OFF,
@@ -477,8 +477,16 @@ fn paint_row(
         read_only: true,
         ..*input
     };
+    // Um gesto imediato do acesso remoto não é edição do arquivo: a tela em
+    // somente leitura não o esmaece (só a falta do host, `unavailable`).
+    let live = Input {
+        read_only: false,
+        ..*input
+    };
     let input = if row.unavailable.is_some() {
         &dimmed
+    } else if input.read_only && row.remote.is_some_and(|target| target.is_immediate()) {
+        &live
     } else {
         input
     };
@@ -590,8 +598,10 @@ fn paint_row(
     );
 
     // O ponto de pendente 6×6, em Acento, entre o controle e o botão de
-    // restaurar (ADR-0060 §2).
-    if row.pending {
+    // restaurar (ADR-0060 §2). No aparelho pareado o mesmo ponto, no mesmo
+    // lugar, diz "conectado agora" (ADR-0108 §1): a anatomia do indicador da
+    // aba.
+    if row.pending || matches!(row.control, ControlView::Device { connected: true }) {
         out.push(rounded(
             shift(geometry.dot, dx, dy),
             m.dot_size / 2.0,
@@ -740,6 +750,78 @@ pub(super) fn paint_control(
         }
         ControlView::ProfileItem { .. } => paint_profile_item(input, index, rect, out),
         ControlView::Chips { chips } => paint_chips(input, chips, rect, measurer, out),
+        // O token do relay (ADR-0108 §1): com o foco é um campo em edição --
+        // os pontos, o cursor e a seleção do `MaskedFieldState`, lidos por
+        // `Editing` --; sem ele, a caixa com um ponto por escalar digitado ou a
+        // dica. Nunca o texto. Os pontos são da Iosevka, como no campo de
+        // senha do diálogo (`overlay::MASK_FONT`, ADR-0075 §1).
+        ControlView::Secret {
+            filled,
+            placeholder,
+            ..
+        } => {
+            if let Some(editing) = editing(EditPart::Field) {
+                paint_editing_field_in(
+                    input,
+                    rect,
+                    editing,
+                    invalid,
+                    measurer,
+                    out,
+                    crate::overlay::MASK_FONT,
+                );
+            } else {
+                paint_field_box(input, rect, invalid, out);
+                if *filled == 0 {
+                    out.push(text(
+                        (
+                            rect.x + m.field_padding_x,
+                            centered_y(rect, m.field_font_size),
+                        ),
+                        placeholder,
+                        BODY_FONT,
+                        m.field_font_size,
+                        input.pal.editor_section_text,
+                    ));
+                } else {
+                    let dots: String =
+                        std::iter::repeat_n(crate::masked_field::MASK_CHAR, *filled).collect();
+                    paint_field_text_in(
+                        input,
+                        &dots,
+                        rect.x + m.field_padding_x,
+                        rect,
+                        out,
+                        crate::overlay::MASK_FONT,
+                    );
+                }
+            }
+        }
+        // O QR de pareamento (ADR-0108 §2): sempre escuro sobre claro, nos dois
+        // temas -- leitor comum não lê o invertido --, mesmo na tela somente
+        // leitura.
+        ControlView::Qr { matrix } => paint_qr(input, matrix, rect, out),
+        ControlView::Device { .. } => paint_device(input, index, rect, out),
+        ControlView::Danger { label, .. } => paint_danger(input, index, label, rect, out),
+        // A linha de estado: texto à direita, em Erro quando é uma falha.
+        ControlView::Text {
+            text: value,
+            width,
+            failed,
+        } => out.push(text(
+            (
+                rect.x + rect.width - width,
+                centered_y(rect, m.field_font_size),
+            ),
+            value,
+            BODY_FONT,
+            m.field_font_size,
+            if *failed {
+                input.pal.warning_severity_error
+            } else {
+                input.ink(input.pal.menu_item_text)
+            },
+        )),
         ControlView::GitPoll {
             on,
             seconds,
@@ -787,12 +869,13 @@ fn paint_field_box(input: &ControlCtx<'_>, rect: Rect, invalid: bool, out: &mut 
     ));
 }
 
-fn paint_field_text(
+fn paint_field_text_in(
     input: &ControlCtx<'_>,
     value: &str,
     x: f32,
     rect: Rect,
     out: &mut Vec<Primitive>,
+    font: FontFace,
 ) {
     let m = input.metrics;
     let inner = Rect {
@@ -805,7 +888,7 @@ fn paint_field_text(
     out.push(text(
         (x, centered_y(rect, m.field_font_size)),
         value,
-        BODY_FONT,
+        font,
         m.field_font_size,
         input.ink(input.pal.editor_input_text),
     ));
@@ -825,13 +908,14 @@ pub(crate) fn editing_text_x(m: &Metrics, field: Rect, text_width: f32) -> f32 {
 /// continua), texto à esquerda, seleção e cursor do ADR-0035. Mede o texto
 /// deste campo por quadro -- um só, o que está recebendo teclas, como o campo
 /// de rename da barra de abas.
-fn paint_editing_field(
+fn paint_editing_field_in(
     input: &ControlCtx<'_>,
     rect: Rect,
     editing: &Editing,
     invalid: bool,
     measurer: &mut TextMeasurer,
     out: &mut Vec<Primitive>,
+    font: FontFace,
 ) {
     let m = input.metrics;
     let pal = input.pal;
@@ -848,7 +932,7 @@ fn paint_editing_field(
     ));
     let buffer = editing.state.text();
     let size = m.field_font_size;
-    let text_width = measurer.measure_width(buffer, BODY_FONT, size);
+    let text_width = measurer.measure_width(buffer, font, size);
     let text_x = editing_text_x(m, rect, text_width);
     let inner = Rect {
         x: rect.x + m.field_padding_x,
@@ -861,8 +945,8 @@ fn paint_editing_field(
     out.push(Primitive::PushClip(inner));
     let selection = editing.state.selection_range();
     if let Some((start, end)) = selection {
-        let x0 = text_x + measurer.measure_width(&buffer[..start], BODY_FONT, size);
-        let x1 = text_x + measurer.measure_width(&buffer[..end], BODY_FONT, size);
+        let x0 = text_x + measurer.measure_width(&buffer[..start], font, size);
+        let x1 = text_x + measurer.measure_width(&buffer[..end], font, size);
         out.push(quad(
             Rect {
                 x: x0,
@@ -876,12 +960,12 @@ fn paint_editing_field(
     out.push(text(
         (text_x, centered_y(rect, size)),
         buffer,
-        BODY_FONT,
+        font,
         size,
         pal.editor_input_text,
     ));
     if selection.is_none() {
-        let before = measurer.measure_width(&buffer[..editing.state.cursor()], BODY_FONT, size);
+        let before = measurer.measure_width(&buffer[..editing.state.cursor()], font, size);
         let caret_x = (text_x + before).min(inner.x + inner.width - 1.0);
         out.push(quad(
             Rect {
@@ -894,6 +978,27 @@ fn paint_editing_field(
         ));
     }
     out.push(Primitive::PopClip);
+}
+
+fn paint_field_text(
+    input: &ControlCtx<'_>,
+    value: &str,
+    x: f32,
+    rect: Rect,
+    out: &mut Vec<Primitive>,
+) {
+    paint_field_text_in(input, value, x, rect, out, BODY_FONT);
+}
+
+fn paint_editing_field(
+    input: &ControlCtx<'_>,
+    rect: Rect,
+    editing: &Editing,
+    invalid: bool,
+    measurer: &mut TextMeasurer,
+    out: &mut Vec<Primitive>,
+) {
+    paint_editing_field_in(input, rect, editing, invalid, measurer, out, BODY_FONT);
 }
 
 /// O caret do botão de escolha, à direita do campo (ADR-0060 §3).
@@ -1127,6 +1232,94 @@ fn paint_profile_item(input: &ControlCtx<'_>, index: usize, rect: Rect, out: &mu
         IconHover::IconOnly,
         out,
     );
+}
+
+/// O QR: um `Quad` claro (a zona de silêncio incluída) e um `Quad` escuro por
+/// série horizontal de módulos, com o módulo em pixels físicos inteiros
+/// (`remote::qr::qr_layout`, ADR-0108 §2). O retângulo do controle já traz a
+/// rolagem: o layout parte dele, e as bordas caem no pixel físico.
+fn paint_qr(
+    input: &ControlCtx<'_>,
+    matrix: &crate::remote::qr::QrMatrix,
+    rect: Rect,
+    out: &mut Vec<Primitive>,
+) {
+    let m = input.metrics;
+    let layout = crate::remote::qr::qr_layout(matrix, (rect.x, rect.y), m.qr_size, m.scale);
+    out.push(quad(layout.background, input.pal.qr_light));
+    for dark in layout.dark {
+        out.push(quad(dark, input.pal.qr_dark));
+    }
+}
+
+/// Um aparelho pareado: o `X` de revogar, com a anatomia do `X` de um perfil
+/// (só o ícone muda de cor no hover). O ponto de "conectado agora" é do ponto de
+/// pendente da linha.
+fn paint_device(input: &ControlCtx<'_>, index: usize, rect: Rect, out: &mut Vec<Primitive>) {
+    let hovered = matches!(
+        input.hovered,
+        Some(Hit::Control(hit_index, ControlPart::ListRemove(_))) if hit_index == index
+    );
+    paint_icon_button(
+        input,
+        device_remove_button(rect, input.metrics),
+        icon::X,
+        hovered,
+        IconHover::IconOnly,
+        out,
+    );
+}
+
+/// O botão destrutivo "Recriar identidade": o confirmar do diálogo destrutivo
+/// (`dialog_confirm_background` e `dialog_confirm_text`), com o hover por brilho
+/// do botão Salvar. Indisponível (a tela somente leitura, ou a linha sem host), é o
+/// botão de contorno esmaecido.
+fn paint_danger(
+    input: &ControlCtx<'_>,
+    index: usize,
+    label: &str,
+    rect: Rect,
+    out: &mut Vec<Primitive>,
+) {
+    let m = input.metrics;
+    let pal = input.pal;
+    let hovered = matches!(
+        input.hovered,
+        Some(Hit::Control(hit_index, _)) if hit_index == index
+    );
+    let (fill, border, color) = if input.read_only {
+        (
+            palette::TRANSPARENT,
+            pal.dialog_cancel_border,
+            pal.editor_section_text,
+        )
+    } else if hovered {
+        (
+            crate::chrome::brighten(
+                pal.dialog_confirm_background,
+                input.style.tab_hover_brightness,
+            ),
+            palette::TRANSPARENT,
+            pal.dialog_confirm_text,
+        )
+    } else {
+        (
+            pal.dialog_confirm_background,
+            palette::TRANSPARENT,
+            pal.dialog_confirm_text,
+        )
+    };
+    out.push(rounded(rect, m.button_radius, fill, border, 1.0));
+    out.push(text(
+        (
+            rect.x + m.button_padding_x,
+            centered_y(rect, m.button_font_size),
+        ),
+        label,
+        BODY_FONT,
+        m.button_font_size,
+        color,
+    ));
 }
 
 fn paint_chips(
@@ -2617,5 +2810,380 @@ mod tests {
         assert!(!muted.contains(&TOGGLE_ON), "o ligado escurece");
         // O desligado segue sendo o desligado: o estado continua legível.
         assert!(muted.contains(&TOGGLE_OFF));
+    }
+}
+
+/// A pintura do QR, da lista de aparelhos e do botão destrutivo do grupo "Acesso
+/// remoto" (ADR-0108 §1, §2).
+#[cfg(test)]
+mod remote_tests {
+    use porecatu_remote::DevicePlatform;
+    use porecatu_render::TextMeasurer;
+
+    use super::super::content::{self, ContentKey, ViewExtras};
+    use super::super::draft::Draft;
+    use super::super::layout::{self, footer_buttons, group_items};
+    use super::super::remote_access::{QrView, RemoteAccessView, RemoteToken};
+    use super::super::remote_pairing::DeviceRow;
+    use super::*;
+    use crate::messages::test_support;
+    use crate::remote::RemoteStatus;
+    use crate::remote::qr::{QrMatrix, qr_layout, qr_matrix};
+
+    struct Fixture {
+        config: Config,
+        pal: ResolvedPalette,
+        style: TabBarStyle,
+        catalog: Catalog,
+    }
+
+    fn fixture(config: Config) -> Fixture {
+        Fixture {
+            pal: ResolvedPalette::from_config(&config),
+            style: TabBarStyle::from_config(&config),
+            catalog: test_support::pt_br(),
+            config,
+        }
+    }
+
+    fn device(name: &str, connected: bool) -> DeviceRow {
+        DeviceRow {
+            key: [name.len() as u8; 32],
+            name: name.to_owned(),
+            platform: DevicePlatform::Android,
+            paired_at: "2026-11-15T14:03:00Z".to_owned(),
+            last_seen: None,
+            connected,
+        }
+    }
+
+    /// Pinta o grupo "Acesso remoto" na escala `scale`, sem rolagem.
+    fn paint_remote(
+        f: &Fixture,
+        status: RemoteStatus,
+        qr: Option<&QrMatrix>,
+        devices: &[DeviceRow],
+        scale: f64,
+        read_only: bool,
+        hovered: impl Fn(&content::Content) -> Option<Hit>,
+    ) -> (Vec<Primitive>, content::Content, Layout, Metrics) {
+        let m = Metrics {
+            scale,
+            ..Metrics::from_config(&f.config, 52.0)
+        };
+        let layout = layout::layout(900.0, 2400.0, 52.0, 200.0, m.footer_height());
+        let key = ContentKey {
+            group: Group::RemoteAccess,
+            panel_width_bits: layout.panel.width.to_bits(),
+            generation: 0,
+        };
+        let mut token = RemoteToken::new();
+        token.set_presence(Ok(true));
+        let view = RemoteAccessView {
+            status,
+            token: token.view(),
+            qr: qr.map(|matrix| QrView { matrix, secs: 200 }),
+            devices,
+        };
+        let mut measurer = TextMeasurer::new();
+        let content = content::build(
+            key,
+            &Draft::new(&f.config),
+            &ViewExtras {
+                remote: Some(&view),
+                ..ViewExtras::default()
+            },
+            &f.catalog,
+            &m,
+            &mut measurer,
+        );
+        let items = group_items(layout.sidebar, m.sidebar_padding, m.sidebar_item_height);
+        let footer = footer_buttons(&m, layout.footer, content.footer_widths);
+        let hovered = hovered(&content);
+        let out = paint_body(
+            &Input {
+                layout: &layout,
+                metrics: &m,
+                content: &content,
+                items: &items,
+                footer: &footer,
+                selected: Group::RemoteAccess,
+                focus: Focus::Sidebar,
+                hovered,
+                pressed: None,
+                scroll: 0.0,
+                pending_groups: &[],
+                editing: None,
+                selection_color: palette::hex(1, 2, 3),
+                footer_available: [true, false, false],
+                read_only,
+                style: &f.style,
+                pal: &f.pal,
+                config: &f.config,
+                catalog: &f.catalog,
+            },
+            &mut measurer,
+        );
+        (out, content, layout, m)
+    }
+
+    fn matrix() -> QrMatrix {
+        qr_matrix(
+            "porecatu://pair?v=0&relay=wss%3A%2F%2Frelay.example.com&token=AAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .expect("fits")
+    }
+
+    fn quads(out: &[Primitive], color: Color) -> Vec<Rect> {
+        out.iter()
+            .filter_map(|primitive| match primitive {
+                Primitive::Quad(quad) if quad.color == color => Some(quad.rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn qr_block(content: &content::Content) -> usize {
+        content
+            .blocks
+            .iter()
+            .position(|block| {
+                matches!(block, Block::Row(row) if matches!(row.control, ControlView::Qr { .. }))
+            })
+            .expect("the qr row")
+    }
+
+    #[test]
+    fn the_qr_is_drawn_dark_on_light_with_the_theme_colors_at_the_target_size() {
+        let f = fixture(Config::default());
+        let matrix = matrix();
+        let (out, content, layout, m) = paint_remote(
+            &f,
+            RemoteStatus::Connected,
+            Some(&matrix),
+            &[],
+            1.0,
+            false,
+            |_| None,
+        );
+        let light = quads(&out, f.pal.qr_light);
+        let dark = quads(&out, f.pal.qr_dark);
+        assert_eq!(light.len(), 1, "one light square, quiet zone included");
+        assert!(!dark.is_empty());
+        assert!(light[0].width <= m.qr_size && light[0].width == light[0].height);
+        // Dark modules sit inside the light square.
+        for rect in &dark {
+            assert!(rect.x >= light[0].x && rect.y >= light[0].y);
+            assert!(rect.x + rect.width <= light[0].x + light[0].width + 1e-3);
+            assert!(rect.y + rect.height <= light[0].y + light[0].height + 1e-3);
+        }
+        // Where it is: the control of the qr row, scrolled and offset like any row.
+        let BlockGeometry::Row(row) = &content.geometry.blocks[qr_block(&content)] else {
+            panic!("a row");
+        };
+        let origin = (
+            layout.panel_body.x + row.control.x,
+            layout.panel_body.y + row.control.y,
+        );
+        let expected = qr_layout(&matrix, origin, m.qr_size, 1.0);
+        assert_eq!(light[0], expected.background);
+        assert_eq!(dark, expected.dark);
+        // The quiet zone is light, the finder corner dark: a code a reader can read.
+        assert!(light[0].width > dark.iter().map(|r| r.width).fold(0.0, f32::max));
+    }
+
+    #[test]
+    fn the_qr_stays_dark_on_light_in_the_light_theme_and_in_read_only() {
+        let base = Config::default();
+        let themed = porecatu_config::apply_theme(&base, porecatu_config::DEFAULT_LIGHT_THEME);
+        for (config, read_only) in [(themed, false), (base, true)] {
+            let f = fixture(config);
+            let (out, ..) = paint_remote(
+                &f,
+                RemoteStatus::Connected,
+                Some(&matrix()),
+                &[],
+                1.0,
+                read_only,
+                |_| None,
+            );
+            assert_eq!(quads(&out, palette::hex(0xff, 0xff, 0xff)).len(), 1);
+            assert!(!quads(&out, palette::hex(0, 0, 0)).is_empty());
+        }
+    }
+
+    #[test]
+    fn the_qr_modules_land_on_whole_physical_pixels_at_every_scale() {
+        let f = fixture(Config::default());
+        for scale in [1.0, 1.25, 1.5, 2.0, 2.5] {
+            let (out, ..) = paint_remote(
+                &f,
+                RemoteStatus::Connected,
+                Some(&matrix()),
+                &[],
+                scale,
+                false,
+                |_| None,
+            );
+            let mut rects = quads(&out, f.pal.qr_light);
+            rects.extend(quads(&out, f.pal.qr_dark));
+            for rect in rects {
+                for value in [rect.x, rect.y, rect.width, rect.height] {
+                    let px = f64::from(value) * scale;
+                    assert!((px - px.round()).abs() < 1e-3, "{value} at {scale}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_qr_is_painted_without_the_qr_row() {
+        let f = fixture(Config::default());
+        let (out, ..) = paint_remote(&f, RemoteStatus::Connected, None, &[], 1.0, false, |_| None);
+        assert!(quads(&out, f.pal.qr_light).is_empty());
+        assert!(quads(&out, f.pal.qr_dark).is_empty());
+    }
+
+    #[test]
+    fn a_connected_device_has_the_accent_dot_and_every_device_the_x() {
+        let f = fixture(Config::default());
+        let devices = [
+            device("Pixel", true),
+            device("iPad", false),
+            device("Galaxy", true),
+        ];
+        let (out, _, _, m) = paint_remote(
+            &f,
+            RemoteStatus::Connected,
+            None,
+            &devices,
+            1.0,
+            false,
+            |_| None,
+        );
+        let dots = out
+            .iter()
+            .filter(|primitive| {
+                matches!(
+                    primitive,
+                    Primitive::RoundedQuad(quad)
+                        if quad.color == f.pal.dialog_focus_ring
+                            && quad.rect.width == m.dot_size
+                            && quad.rect.height == m.dot_size
+                )
+            })
+            .count();
+        assert_eq!(dots, 2, "only the connected ones");
+        let xs = out
+            .iter()
+            .filter(
+                |primitive| matches!(primitive, Primitive::Text(run) if run.text == icon::X.glyph),
+            )
+            .count();
+        assert_eq!(xs, 3);
+    }
+
+    #[test]
+    fn hovering_the_x_of_a_device_lights_the_icon_like_the_profile_x() {
+        let f = fixture(Config::default());
+        let devices = [device("Pixel", true)];
+        let (out, ..) = paint_remote(
+            &f,
+            RemoteStatus::Connected,
+            None,
+            &devices,
+            1.0,
+            false,
+            |content| {
+                let index = content
+                    .blocks
+                    .iter()
+                    .position(|block| {
+                        matches!(block, Block::Row(row) if matches!(row.control, ControlView::Device { .. }))
+                    })
+                    .unwrap();
+                Some(Hit::Control(index, ControlPart::ListRemove(0)))
+            },
+        );
+        assert!(out.iter().any(|primitive| matches!(
+            primitive,
+            Primitive::Text(run) if run.text == icon::X.glyph && run.color == RESTORE_HOVER_ICON
+        )));
+    }
+
+    #[test]
+    fn a_read_only_screen_does_not_fade_the_remote_gestures_only_the_options() {
+        // An invalid file puts the options in read-only (RF-16.22); revoking a
+        // device or recreating the identity is not an edit of the file.
+        let f = fixture(Config::default());
+        let devices = [device("Pixel", true)];
+        let (out, content, _, m) = paint_remote(
+            &f,
+            RemoteStatus::Connected,
+            None,
+            &devices,
+            1.0,
+            true,
+            |_| None,
+        );
+        // The destructive button keeps its fill.
+        let danger = content
+            .blocks
+            .iter()
+            .position(|block| {
+                matches!(block, Block::Row(row) if matches!(row.control, ControlView::Danger { .. }))
+            })
+            .unwrap();
+        let BlockGeometry::Row(geometry) = &content.geometry.blocks[danger] else {
+            panic!("a row");
+        };
+        assert!(out.iter().any(|primitive| matches!(
+            primitive,
+            Primitive::RoundedQuad(quad)
+                if quad.rect.width == geometry.control.width
+                    && quad.rect.height == m.button_height
+                    && quad.color == f.pal.dialog_confirm_background
+        )));
+        // The name of the device keeps the ink of a live row.
+        assert!(out.iter().any(|primitive| matches!(
+            primitive,
+            Primitive::Text(run) if run.text == "Pixel" && run.color == f.pal.menu_item_text
+        )));
+        // The toggle of the option above is faded (read-only), as before.
+        assert!(out.iter().any(|primitive| matches!(
+            primitive,
+            Primitive::Text(run) if run.text == "Acesso remoto" && run.color == f.pal.editor_section_text
+        )));
+    }
+
+    #[test]
+    fn recreate_identity_is_the_destructive_dialog_button_and_fades_without_a_host() {
+        let f = fixture(Config::default());
+        let (out, content, _, m) =
+            paint_remote(&f, RemoteStatus::Connected, None, &[], 1.0, false, |_| None);
+        let index = content
+            .blocks
+            .iter()
+            .position(|block| {
+                matches!(block, Block::Row(row) if matches!(row.control, ControlView::Danger { .. }))
+            })
+            .unwrap();
+        let BlockGeometry::Row(geometry) = &content.geometry.blocks[index] else {
+            panic!("a row");
+        };
+        let button = |out: &[Primitive]| {
+            out.iter().find_map(|primitive| match primitive {
+                Primitive::RoundedQuad(quad)
+                    if quad.rect.width == geometry.control.width
+                        && quad.rect.height == m.button_height =>
+                {
+                    Some(quad.color)
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(button(&out), Some(f.pal.dialog_confirm_background));
+        let (off, ..) = paint_remote(&f, RemoteStatus::Off, None, &[], 1.0, false, |_| None);
+        assert_eq!(button(&off), Some(palette::TRANSPARENT));
     }
 }

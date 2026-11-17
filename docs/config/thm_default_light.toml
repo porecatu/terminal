@@ -146,3 +146,7 @@ memory = "#ea76cb"          # magenta do terminal claro
 disk = "#40a02b"            # verde do terminal claro
 grid = "#dce0e8"            # borda da barra de abas
 chart_border = "#ccd0da"    # borda de grupos
+
+[remote]
+qr_dark = "#000000"         # escuro sobre claro, como no tema default
+qr_light = "#ffffff"        # leitor de QR comum não lê invertido

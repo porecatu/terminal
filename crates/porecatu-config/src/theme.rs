@@ -222,6 +222,14 @@ pub struct ThemeTaskManager {
     pub chart_border: Option<Color>,
 }
 
+/// `[remote]` do tema -- cores do QR de pareamento (ADR-0108 §2).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(default)]
+pub struct ThemeRemote {
+    pub qr_dark: Option<Color>,
+    pub qr_light: Option<Color>,
+}
+
 /// Um arquivo `thm_<nome>.toml`. O nome vem do arquivo, não do conteúdo.
 #[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 #[serde(default)]
@@ -241,6 +249,7 @@ pub struct Theme {
     pub status_bar: ThemeStatusBar,
     pub settings: ThemeSettings,
     pub task_manager: ThemeTaskManager,
+    pub remote: ThemeRemote,
 }
 
 /// Parseia o texto de um arquivo de tema. Devolve o tema mais as chaves
@@ -488,6 +497,8 @@ fn mergeable_fields(theme: &Theme) -> Vec<MergeField> {
         "appearance.task_manager.disk" => appearance.task_manager.disk <= task_manager.disk;
         "appearance.task_manager.grid" => appearance.task_manager.grid <= task_manager.grid;
         "appearance.task_manager.chart_border" => appearance.task_manager.chart_border <= task_manager.chart_border;
+        "appearance.remote.qr_dark" => appearance.remote.qr_dark <= remote.qr_dark;
+        "appearance.remote.qr_light" => appearance.remote.qr_light <= remote.qr_light;
     }
 }
 

@@ -29,13 +29,11 @@
 //! ADR-0098, also here: `background_monitoring` in the sampler's life
 //! ([`sampler_needed`], [`window_measured`], [`apply_to_history`]) and the
 //! footer's toggle, which writes the key through `porecatu-config::edit`
-//! ([`save_background_monitoring`]) and lets the hot reload apply it.
+//! (`App::save_key_gesture`, in `app_key_edit`) and lets the hot reload apply it.
 
 use std::time::{Duration, Instant};
 
-use std::path::Path;
-
-use porecatu_config::{Config, ConfigDocument, Edit, EditError, EditValue, KeyPath};
+use porecatu_config::{Config, Edit, EditValue, KeyPath};
 use porecatu_locale::Catalog;
 use porecatu_render::{Primitive, Rect, TextMeasurer};
 use porecatu_term::{
@@ -353,33 +351,6 @@ pub(crate) fn background_monitoring_edit(current: bool) -> Edit {
         KeyPath::parse(BACKGROUND_MONITORING_KEY).expect("a valid key path"),
         EditValue::Bool(!current),
     )
-}
-
-/// Writes `edit` to `path` (ADR-0098 §4): over `base`, the file's text as
-/// just read, or -- `None`, no file yet -- over `template`, the embedded
-/// example (RF-16.21). A file that changed between the read and the write
-/// (`EditError::Changed`) is rebased on its new text and the edit is applied
-/// **once** more: an edit by key lands on whatever the file now holds. A
-/// second `Changed`, like any other error, is returned and nothing was
-/// written. Who applies the value is the hot reload, never this function.
-pub(crate) fn save_background_monitoring(
-    path: &Path,
-    base: Option<&str>,
-    template: &str,
-    edit: &Edit,
-) -> Result<(), EditError> {
-    let mut document = match base {
-        Some(text) => ConfigDocument::parse(text),
-        None => ConfigDocument::from_template(template),
-    }?;
-    let edits = std::slice::from_ref(edit);
-    match document.save(path, edits) {
-        Err(EditError::Changed { current }) => {
-            document.rebase(&current)?;
-            document.save(path, edits).map(|_| ())
-        }
-        other => other.map(|_| ()),
-    }
 }
 
 // --- keyboard (ADR-0095 §3) -------------------------------------------------
@@ -1167,6 +1138,26 @@ impl App {
             .windows
             .get_mut(&event_window)
             .is_some_and(|state| std::mem::take(&mut state.task_manager_tab_click));
+        self.leave_task_manager_where_changed(clicked.then_some(event_window), guard);
+    }
+
+    /// The end of the one check for what is not a window event -- an action
+    /// from the phone (ADR-0109 section 4): no window had a click, so only the
+    /// count and the active tab decide.
+    pub(crate) fn task_manager_guard_end_remote(
+        &mut self,
+        guard: Vec<(WindowId, ActivationSnapshot)>,
+    ) {
+        self.leave_task_manager_where_changed(None, guard);
+    }
+
+    /// The loop of [`task_manager_guard_end`]: `clicked` is the window whose
+    /// tab was clicked during the event, if any.
+    fn leave_task_manager_where_changed(
+        &mut self,
+        clicked: Option<WindowId>,
+        guard: Vec<(WindowId, ActivationSnapshot)>,
+    ) {
         for (id, before) in guard {
             let Some(state) = self.windows.get(&id) else {
                 continue;
@@ -1175,7 +1166,7 @@ impl App {
                 continue;
             }
             let after = state.activation_snapshot();
-            let explicit = clicked && id == event_window;
+            let explicit = clicked == Some(id);
             if explicit || should_leave(before, after, is_closing(before, after)) {
                 self.leave_task_manager(id);
             }
@@ -1329,56 +1320,14 @@ impl App {
     /// the value, which the toggle then draws. A failure is a warning in
     /// `window_id`, and the toggle stays as it was.
     pub(crate) fn toggle_background_monitoring(&mut self, window_id: WindowId) {
-        let now = Instant::now();
         let edit = background_monitoring_edit(self.config.task_manager.background_monitoring);
-        let result = match self.config_path.clone() {
-            None => Err(None),
-            Some(path) => {
-                let base = match std::fs::read_to_string(&path) {
-                    Ok(text) => Ok(Some(text)),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(err) => Err(EditError::Io {
-                        path: path.clone(),
-                        kind: err.kind(),
-                        cause: err.to_string(),
-                    }),
-                };
-                let created = matches!(base, Ok(None));
-                base.and_then(|base| {
-                    save_background_monitoring(&path, base.as_deref(), EXAMPLE_CONFIG_TOML, &edit)
-                })
-                .map(|()| {
-                    // A file born from the example gets the theme files next
-                    // to it, as the settings screen's first save does
-                    // (ADR-0067). Failing here does not undo the save.
-                    if created && let Some(dir) = path.parent() {
-                        let _ = write_missing_theme_files(dir);
-                    }
-                })
-                .map_err(Some)
-            }
-        };
-        let Err(error) = result else {
-            return;
-        };
-        let Some(state) = self.windows.get_mut(&window_id) else {
-            return;
-        };
-        let (title, body) = match error {
-            None => (
-                msg::notice::config_path_unresolved::title(&self.catalog),
-                msg::notice::config_path_unresolved::body(&self.catalog),
-            ),
-            Some(error) => (
-                msg::notice::task_manager_background_save_failed::title(&self.catalog),
-                messages::settings_save_error(
-                    &self.catalog,
-                    &crate::settings::save::SaveError::Edit(error),
-                ),
-            ),
-        };
-        state.warnings.push(Severity::Warning, title, body, now);
-        state.window.request_redraw();
+        // The writing, the file that changed meanwhile and the warning are the
+        // one path of every single-key gesture (`app_key_edit`).
+        self.save_key_gesture(
+            window_id,
+            &edit,
+            msg::notice::task_manager_background_save_failed::title,
+        );
     }
 
     /// ADR-0095 §10: an action a screen reader asked for on a node of the
@@ -1780,19 +1729,6 @@ mod tests {
 
     // --- the footer's toggle (ADR-0098 §4) ---------------------------------
 
-    const EXAMPLE: &str = EXAMPLE_CONFIG_TOML;
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "porecatu-tm-background-{}-{}-{name}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
-    }
-
     #[test]
     fn the_toggle_edit_sets_the_key_to_the_opposite_value() {
         let key = KeyPath::parse("task_manager.background_monitoring").unwrap();
@@ -1804,80 +1740,6 @@ mod tests {
             background_monitoring_edit(true),
             Edit::Set(key, EditValue::Bool(false))
         );
-    }
-
-    #[test]
-    fn saving_writes_only_the_key_and_loads_back_with_it() {
-        let original = "# meu arquivo\n[task_manager]\nhistory_seconds = 120   # meu\n";
-        let path = scratch("only-key.toml");
-        std::fs::write(&path, original).unwrap();
-        save_background_monitoring(
-            &path,
-            Some(original),
-            EXAMPLE,
-            &background_monitoring_edit(false),
-        )
-        .unwrap();
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            written.starts_with("# meu arquivo\n[task_manager]\nhistory_seconds = 120   # meu\n")
-        );
-        let (config, _) = porecatu_config::parse(&written).unwrap();
-        assert!(config.task_manager.background_monitoring);
-        assert_eq!(config.task_manager.history_seconds, 120);
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn a_file_that_changed_since_the_read_is_rebased_once_and_keeps_both_changes() {
-        // The base is stale: someone wrote another key in the meantime. The
-        // edit by key lands on the new text, which keeps its own change.
-        let stale = "[task_manager]\nhistory_seconds = 60\n";
-        let now_on_disk = "[task_manager]\nhistory_seconds = 300\n";
-        let path = scratch("rebased.toml");
-        std::fs::write(&path, now_on_disk).unwrap();
-        save_background_monitoring(
-            &path,
-            Some(stale),
-            EXAMPLE,
-            &background_monitoring_edit(false),
-        )
-        .unwrap();
-        let (config, _) = porecatu_config::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(config.task_manager.background_monitoring);
-        assert_eq!(config.task_manager.history_seconds, 300);
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn a_missing_file_is_born_from_the_example_with_the_key() {
-        let path = scratch("born.toml");
-        save_background_monitoring(&path, None, EXAMPLE, &background_monitoring_edit(false))
-            .unwrap();
-        let written = std::fs::read_to_string(&path).unwrap();
-        let (config, _) = porecatu_config::parse(&written).unwrap();
-        assert!(config.task_manager.background_monitoring);
-        // The example's documentation came along.
-        assert!(written.contains("# Continua medindo os processos"));
-        std::fs::remove_file(&path).unwrap();
-    }
-
-    #[test]
-    fn an_invalid_file_on_disk_is_an_error_and_is_left_alone() {
-        let broken = "[task_manager\n";
-        let path = scratch("broken.toml");
-        std::fs::write(&path, broken).unwrap();
-        assert!(
-            save_background_monitoring(
-                &path,
-                Some(broken),
-                EXAMPLE,
-                &background_monitoring_edit(false)
-            )
-            .is_err()
-        );
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
-        std::fs::remove_file(&path).unwrap();
     }
 
     // --- partition and apply ----------------------------------------------

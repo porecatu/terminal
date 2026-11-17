@@ -16,8 +16,10 @@
 use std::time::{Duration, Instant};
 
 use porecatu_core::{TabId, Workspace};
+use porecatu_locale::Catalog;
 use porecatu_render::Rect;
 
+use crate::devices_popover::{self, DeviceEntry};
 use crate::tab_bar::{self, TabBarStyle};
 use crate::task_manager::RowKey;
 
@@ -43,6 +45,10 @@ pub enum HoverKey {
     /// (PRD-024 RF-24.16, ADR-0095 §7). By the row's identity, not its index:
     /// a new sample does not make the tooltip jump to another row.
     TaskRow(RowKey),
+    /// The connected-devices button of the bar's fixed zone (PRD-025
+    /// RF-25.12, ADR-0108 section 4): "N device(s) connected: name, name".
+    /// One per window, so it needs no identity.
+    DevicesButton,
 }
 
 /// The tooltip target of a pinned box under `point` (screen coordinates), or
@@ -67,6 +73,38 @@ pub fn pinned_target(
         HoverKey::Tab(id),
         tab_bar::pinned_rect(style, is_macos, i),
         title,
+    ))
+}
+
+/// The tooltip target of the connected-devices button under `point` (screen
+/// coordinates), or `None` when there is no such button (no device connected)
+/// or the point is elsewhere. The button is a plain icon, so it **always** has
+/// a tooltip: the count and the names (ADR-0108 section 4), the same text its
+/// accessibility node carries.
+pub fn devices_target(
+    devices: &[DeviceEntry],
+    catalog: &Catalog,
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+    point: (f32, f32),
+) -> Option<(HoverKey, Rect, String)> {
+    if tab_bar::point_in_zone_button(
+        style,
+        bar_width,
+        bar_height,
+        is_macos,
+        !devices.is_empty(),
+        point,
+    ) != Some(tab_bar::ZoneButtonHit::Devices)
+    {
+        return None;
+    }
+    Some((
+        HoverKey::DevicesButton,
+        tab_bar::devices_button_rect(style, bar_width, bar_height, is_macos),
+        devices_popover::summary_text(catalog, devices),
     ))
 }
 
@@ -203,6 +241,75 @@ mod tests {
 
     fn tab(n: u32) -> HoverKey {
         HoverKey::Tab(TabId::new(n))
+    }
+
+    fn devices(names: &[&str]) -> Vec<DeviceEntry> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| DeviceEntry {
+                client: porecatu_remote::ClientId(i as u64),
+                name: (*name).to_owned(),
+                platform: porecatu_remote::DevicePlatform::Android,
+                connected_at: Instant::now(),
+            })
+            .collect()
+    }
+
+    /// The tooltip of the connected-devices button (ADR-0108 section 4): the
+    /// count and the names, plural by the catalog, anchored by the button.
+    #[test]
+    fn the_devices_button_has_a_tooltip_with_the_count_and_the_names() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_height = crate::chrome::bar_height(&style);
+        let catalog = crate::messages::test_support::pt_br();
+        let button = tab_bar::devices_button_rect(&style, 800.0, bar_height, false);
+        let inside = (
+            button.x + button.width / 2.0,
+            button.y + button.height / 2.0,
+        );
+
+        let one = devices(&["Pixel"]);
+        let (key, anchor, text) =
+            devices_target(&one, &catalog, &style, 800.0, bar_height, false, inside).unwrap();
+        assert_eq!(key, HoverKey::DevicesButton);
+        assert_eq!(anchor, button);
+        assert_eq!(text, "1 aparelho conectado: Pixel");
+
+        let three = devices(&["Pixel", "iPad", "Galaxy"]);
+        let (_, _, text) =
+            devices_target(&three, &catalog, &style, 800.0, bar_height, false, inside).unwrap();
+        assert_eq!(text, "3 aparelhos conectados: Pixel, iPad, Galaxy");
+    }
+
+    /// Without a device the button is not there, so neither is its tooltip --
+    /// and the point where it would be is the track.
+    #[test]
+    fn there_is_no_devices_tooltip_without_the_button_or_away_from_it() {
+        let style = TabBarStyle::DEFAULT;
+        let bar_height = crate::chrome::bar_height(&style);
+        let catalog = crate::messages::test_support::pt_br();
+        let button = tab_bar::devices_button_rect(&style, 800.0, bar_height, false);
+        let inside = (
+            button.x + button.width / 2.0,
+            button.y + button.height / 2.0,
+        );
+        assert!(devices_target(&[], &catalog, &style, 800.0, bar_height, false, inside).is_none());
+        let one = devices(&["Pixel"]);
+        let sessions = tab_bar::sessions_button_rect(&style, 800.0, bar_height, false);
+        let over_sessions = (sessions.x + 1.0, sessions.y + 1.0);
+        assert!(
+            devices_target(
+                &one,
+                &catalog,
+                &style,
+                800.0,
+                bar_height,
+                false,
+                over_sessions
+            )
+            .is_none()
+        );
     }
 
     #[test]

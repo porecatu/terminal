@@ -144,7 +144,7 @@ pub const ARROW_DOWN: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 15] = [
+pub const ALL: [(&str, Icon); 16] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -160,6 +160,7 @@ pub const ALL: [(&str, Icon); 15] = [
     ("rotate-ccw", ROTATE_CCW),
     ("pencil", PENCIL),
     ("app-window", APP_WINDOW),
+    ("smartphone", SMARTPHONE),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
@@ -230,4 +231,14 @@ pub const APP_WINDOW: Icon = Icon {
     glyph: "\u{e426}",
     ink_width_em: 0.925,
     ink_height_em: 0.755,
+};
+
+/// `smartphone` -- botão de aparelhos conectados da zona fixa da barra
+/// (PRD-025 RF-25.12, ADR-0108 §4). O codepoint vem do `cmap` do
+/// `Lucide.ttf` embutido (glifo `smartphone`); o desenho é mais alto que
+/// largo.
+pub const SMARTPHONE: Icon = Icon {
+    glyph: "\u{e163}",
+    ink_width_em: 0.670,
+    ink_height_em: 0.920,
 };

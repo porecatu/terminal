@@ -278,7 +278,12 @@ pub fn paint(
     // PRD-024, ADR-0096 §6: the task manager is open **in this window**; the
     // app menu button is painted "on" (pressed background, inset shadow).
     app_menu_on: bool,
+    // PRD-025 RF-25.12, ADR-0108 §4: how many phones have an open session. `0`
+    // is the bar of before; from `1` the zone has the third button, and from
+    // `2` it carries the count in a badge.
+    connected_devices: usize,
 ) -> Vec<Primitive> {
+    let devices_button = connected_devices > 0;
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
     // que `lib.rs` usa para deslocar a grade e converter clique. Uma cópia
     // local dela ficou para trás quando `trilha_padding` entrou na conta,
@@ -397,7 +402,7 @@ pub fn paint(
     out.push(Primitive::PushClip(Rect {
         x: track_left,
         y: 0.0,
-        width: tab_bar::trilha_width(style, bar_width, is_macos, pinned_count),
+        width: tab_bar::trilha_width(style, bar_width, is_macos, pinned_count, devices_button),
         height: bar_height,
     }));
     // Conteúdo -> tela: a origem do conteúdo é o início da trilha.
@@ -777,11 +782,20 @@ pub fn paint(
     // Hover e pressed como os botões de janela, só que num quadrado
     // arredondado que não ocupa a altura da barra. Pressed só com o cursor
     // ainda sobre o botão armado -- a condição em que o release dispara.
-    for (hit, glyph) in [
+    //
+    // ADR-0108 §4: com aparelho conectado, o botão de aparelhos abre a fila,
+    // à esquerda de sessões -- o único da zona com o ícone em Acento, porque é
+    // o único que sinaliza estado.
+    let devices_entry =
+        devices_button.then_some((tab_bar::ZoneButtonHit::Devices, icon::SMARTPHONE));
+    for (hit, glyph) in devices_entry.into_iter().chain([
         (tab_bar::ZoneButtonHit::Sessions, icon::BOOKMARK),
         (tab_bar::ZoneButtonHit::Settings, icon::SETTINGS),
-    ] {
+    ]) {
         let rect = match hit {
+            tab_bar::ZoneButtonHit::Devices => {
+                tab_bar::devices_button_rect(style, bar_width, bar_height, is_macos)
+            }
             tab_bar::ZoneButtonHit::Sessions => {
                 tab_bar::sessions_button_rect(style, bar_width, bar_height, is_macos)
             }
@@ -793,16 +807,33 @@ pub fn paint(
         };
         let hovered = hover_zone_button == Some(hit);
         let pressed = hovered && pressed_zone_button == Some(hit);
+        let is_devices = hit == tab_bar::ZoneButtonHit::Devices;
         paint_zone_icon_button(
             rect,
             glyph,
             settings_icon_size,
             (hovered, pressed),
-            pal.chrome_icon,
+            // `dialog_focus_ring` is the Acento token (the one the dot of a
+            // pending option in the settings screen takes too).
+            if is_devices {
+                pal.dialog_focus_ring
+            } else {
+                pal.chrome_icon
+            },
             style,
             pal,
             &mut out,
         );
+        if is_devices && connected_devices >= 2 {
+            push_devices_count_badge(
+                &mut out,
+                rect,
+                connected_devices,
+                pal.dialog_focus_ring,
+                style,
+                measurer,
+            );
+        }
     }
 
     // Botões de janela (ADR-0027): minimizar/maximizar-restaurar/fechar,
@@ -1509,6 +1540,34 @@ pub(crate) fn push_badge(
     rect
 }
 
+/// The count of the connected-devices button (ADR-0108 section 4): a badge
+/// with the anatomy of the tab's profile badge ([`push_badge`]) in the Acento
+/// of the icon, tinted like the profile badge, with its bottom-right corner on
+/// the corner of the button (a square, ADR-0082), `BADGE_PADDING_Y` in.
+fn push_devices_count_badge(
+    out: &mut Vec<Primitive>,
+    rect: Rect,
+    count: usize,
+    color: Color,
+    style: &TabBarStyle,
+    measurer: &mut porecatu_render::TextMeasurer,
+) {
+    let text = count.to_string();
+    let (width, height) = badge_size(&text, measurer);
+    push_badge(
+        out,
+        (
+            rect.x + rect.width - width - BADGE_PADDING_Y,
+            rect.y + rect.height - height - BADGE_PADDING_Y,
+        ),
+        &text,
+        color,
+        // `[appearance.groups] badge_tint_strength`, like the tab's badge.
+        style.drag_highlight_tint_strength,
+        measurer,
+    );
+}
+
 /// Color of the group a tab belongs to (the ungrouped color for an implicit
 /// run), the one its badge takes.
 fn tab_group_color(workspace: &Workspace, pal: &ResolvedPalette, tab: TabId) -> Color {
@@ -2033,6 +2092,9 @@ mod tests {
             tab_bar::ZoneButtonHit::Settings => {
                 tab_bar::settings_button_rect(&style, 800.0, 52.0, false)
             }
+            tab_bar::ZoneButtonHit::Devices => {
+                tab_bar::devices_button_rect(&style, 800.0, 52.0, false)
+            }
             tab_bar::ZoneButtonHit::AppMenu => tab_bar::app_menu_button_rect(&style, false),
         };
         let sessions = rect_of(tab_bar::ZoneButtonHit::Sessions);
@@ -2041,6 +2103,11 @@ mod tests {
         assert!(
             sessions.x + sessions.width <= settings.x,
             "lado a lado, sem sobrepor"
+        );
+        let devices = rect_of(tab_bar::ZoneButtonHit::Devices);
+        assert!(
+            devices.x + devices.width <= sessions.x,
+            "aparelhos fica à esquerda de sessões, sem sobrepor"
         );
     }
 
@@ -2088,6 +2155,7 @@ mod tests {
                 None,
                 &HashMap::new(),
                 false,
+                0,
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -2118,6 +2186,16 @@ mod tests {
         ws: &Workspace,
         hover: Option<tab_bar::TabBarHit>,
         pressed_bar_button: Option<tab_bar::TabBarHit>,
+    ) -> (TabBarLayout, Vec<Primitive>) {
+        paint_workspace_with_devices(ws, hover, pressed_bar_button, 0)
+    }
+
+    /// [`paint_workspace`] with `connected_devices` phones connected.
+    fn paint_workspace_with_devices(
+        ws: &Workspace,
+        hover: Option<tab_bar::TabBarHit>,
+        pressed_bar_button: Option<tab_bar::TabBarHit>,
+        connected_devices: usize,
     ) -> (TabBarLayout, Vec<Primitive>) {
         let style = TabBarStyle::DEFAULT;
         let mut m = TextMeasurer::new();
@@ -2152,8 +2230,126 @@ mod tests {
             None,
             &HashMap::new(),
             false,
+            connected_devices,
         );
         (layout, out)
+    }
+
+    /// The glyph runs of the icon `glyph` in `out`.
+    fn glyph_runs<'a>(out: &'a [Primitive], glyph: &str) -> Vec<&'a TextRun> {
+        out.iter()
+            .filter_map(|p| match p {
+                Primitive::Text(run) if run.font == FontFace::Icon && run.text == glyph => {
+                    Some(run)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// ADR-0108 section 4: with no phone connected the bar is exactly what it
+    /// was -- not a pixel of the button; with one, the `smartphone` icon in
+    /// Acento, on the button left of sessions, and no count.
+    #[test]
+    fn the_devices_button_paints_only_with_a_phone_and_its_icon_is_acento() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+
+        let (_, none) = paint_workspace_with_devices(&ws, None, None, 0);
+        assert!(glyph_runs(&none, icon::SMARTPHONE.glyph).is_empty());
+
+        let (_, one) = paint_workspace_with_devices(&ws, None, None, 1);
+        let runs = glyph_runs(&one, icon::SMARTPHONE.glyph);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].color, pal.dialog_focus_ring,
+            "Acento, not chrome_icon"
+        );
+        let button = tab_bar::devices_button_rect(&style, 800.0, bar_height(&style), false);
+        assert!(runs[0].origin.0 >= button.x && runs[0].origin.0 <= button.x + button.width);
+        // The other two icons of the zone stay neutral.
+        for glyph in [icon::BOOKMARK.glyph, icon::SETTINGS.glyph] {
+            let neutral = glyph_runs(&one, glyph);
+            assert_eq!(neutral.len(), 1);
+            assert_eq!(neutral[0].color, pal.chrome_icon);
+        }
+        // One phone: no count.
+        let badge_digits = |out: &[Primitive]| {
+            out.iter()
+                .filter(|p| matches!(p, Primitive::Text(run) if run.font == BADGE_FONT && run.text == "1"))
+                .count()
+        };
+        assert_eq!(badge_digits(&one), 0);
+    }
+
+    /// From two phones on, the count is a badge with the anatomy of the
+    /// profile badge, in Acento, on the corner of the button.
+    #[test]
+    fn two_or_more_devices_show_their_count_in_a_badge() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let button = tab_bar::devices_button_rect(&style, 800.0, bar_height(&style), false);
+
+        for count in [2usize, 3, 12] {
+            let (_, out) = paint_workspace_with_devices(&ws, None, None, count);
+            // One run per character (the badge has letter spacing).
+            let digits: Vec<&TextRun> = out
+                .iter()
+                .filter_map(|p| match p {
+                    Primitive::Text(run) if run.font == BADGE_FONT => Some(run),
+                    _ => None,
+                })
+                .collect();
+            let text: String = digits.iter().map(|run| run.text.as_str()).collect();
+            assert_eq!(text, count.to_string());
+            for run in &digits {
+                assert_eq!(run.color, pal.dialog_focus_ring);
+                assert_eq!(run.size_px, BADGE_FONT_SIZE);
+                assert!(
+                    run.origin.0 >= button.x
+                        && run.origin.0 <= button.x + button.width
+                        && run.origin.1 >= button.y
+                        && run.origin.1 <= button.y + button.height,
+                    "inside the button: {:?}",
+                    run.origin
+                );
+            }
+            // The tint of the profile badge, with the radius of its anatomy.
+            let tint = with_alpha(pal.dialog_focus_ring, style.drag_highlight_tint_strength);
+            assert!(
+                rounded_quads(&out)
+                    .iter()
+                    .any(|q| q.radius == BADGE_RADIUS && q.color == tint),
+                "{count}: the badge background"
+            );
+        }
+    }
+
+    /// The track gives the room: it ends where the third button begins, so no
+    /// tab is ever painted under it.
+    #[test]
+    fn the_track_clip_ends_before_the_devices_button() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let clip_width = |devices: usize| {
+            let (_, out) = paint_workspace_with_devices(&ws, None, None, devices);
+            out.iter()
+                .find_map(|p| match p {
+                    Primitive::PushClip(rect) => Some(rect.width),
+                    _ => None,
+                })
+                .expect("the track is clipped")
+        };
+        assert_eq!(
+            clip_width(0) - clip_width(1),
+            tab_bar::app_menu_button_size(&style) + style.trilha_gap
+        );
+        assert_eq!(clip_width(1), clip_width(5), "the count does not take room");
     }
 
     fn rounded_quads(out: &[Primitive]) -> Vec<&RoundedQuad> {
@@ -2353,6 +2549,7 @@ mod tests {
                 None,
                 &HashMap::new(),
                 false,
+                0,
             )
         };
         let whole_bar_quads = |out: &[Primitive]| {
@@ -2431,6 +2628,7 @@ mod tests {
             None,
             &HashMap::new(),
             false,
+            0,
         );
 
         let expected = bar_height(&style);
@@ -2780,6 +2978,7 @@ mod tests {
             None,
             &HashMap::new(),
             false,
+            0,
         );
         let clip = out
             .iter()
@@ -2797,7 +2996,7 @@ mod tests {
         );
         assert_eq!(
             clip.width,
-            tab_bar::trilha_width(&style, bar_width, false, 0)
+            tab_bar::trilha_width(&style, bar_width, false, 0, false)
         );
 
         // First tab: on the clip edge, so at rest it sits a `trilha_padding`
@@ -2860,6 +3059,7 @@ mod tests {
             Some(ImageId::from_raw(1)),
             &HashMap::new(),
             false,
+            0,
         )
     }
 
@@ -3197,7 +3397,7 @@ mod tests {
         assert_eq!(clip.x, tab_bar::track_shift(&style, false, 2));
         assert_eq!(
             clip.width,
-            tab_bar::trilha_width(&style, 800.0, false, 2),
+            tab_bar::trilha_width(&style, 800.0, false, 2, false),
             "a trilha encolhe pelas fixadas"
         );
         for i in 0..2 {
@@ -3279,6 +3479,7 @@ mod tests {
             Some(ImageId::from_raw(1)),
             &HashMap::new(),
             false,
+            0,
         )
     }
 
@@ -3589,6 +3790,7 @@ mod tests {
             None,
             &HashMap::new(),
             false,
+            0,
         );
         let button = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
         assert!(
@@ -3610,7 +3812,7 @@ mod tests {
         assert_eq!(clip.x, 0.0);
         assert_eq!(
             clip.width,
-            tab_bar::trilha_width(&style, bar_width, false, 0)
+            tab_bar::trilha_width(&style, bar_width, false, 0, false)
         );
     }
 }

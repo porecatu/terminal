@@ -157,6 +157,21 @@ pub struct HyperlinkSpan {
     pub uri_end: u32,
 }
 
+/// Estado do scrollback devolvido junto de `snapshot_live_into` e
+/// `history_into` (ADR-0105 §3 e §5, spec do protocolo §5.5).
+///
+/// `history` é o número de linhas de histórico que existem agora (0 na tela
+/// alternativa). `dropped` é o contador monotônico de linhas que saíram do
+/// topo do histórico desde que o painel existe; só volta a zero quando o
+/// histórico é limpo (CSI 3 J, RIS). O índice absoluto de uma linha de
+/// histórico é `dropped + (history - 1 - offset)`, com `offset` como em
+/// `history_into`. Na tela alternativa `dropped` repete o da tela normal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScrollbackInfo {
+    pub history: usize,
+    pub dropped: u64,
+}
+
 /// Snapshot de grade de um frame -- tipo próprio de `porecatu-term`, seção
 /// 4.1 da arquitetura. Reusado entre frames: [`GridSnapshot::default`] uma
 /// vez, depois só `TermEngine::snapshot_into` sobre a mesma instância, sem

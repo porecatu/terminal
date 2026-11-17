@@ -50,6 +50,16 @@ save_item = "Enregistrer cette fenêtre…"
 empty_list = "aucune session enregistrée"
 name_placeholder = "nom de la session"
 
+[devices]
+summary = { one = "{count} appareil connecté : {names}", other = "{count} appareils connectés : {names}" }
+row_detail = "{platform} · connecté {since}"
+since_now = "à l'instant"
+since_minutes = { one = "il y a {count} minute", other = "il y a {count} minutes" }
+since_hours = { one = "il y a {count} heure", other = "il y a {count} heures" }
+disconnect = "Déconnecter"
+disconnect_all = "Tout déconnecter"
+open_settings = "Ouvrir les réglages de l'accès à distance"
+
 [task_manager]
 chart_cpu = "CPU"
 chart_memory = "Mémoire"
@@ -82,6 +92,7 @@ window_title = "Paramètres"
 general = "Général"
 shell = "Shell"
 profiles = "Profils"
+remote_access = "Accès à distance"
 terminal = "Terminal"
 appearance = "Apparence"
 session = "Session"
@@ -114,6 +125,7 @@ project_file = "FICHIER DE PROJET"
 git_remote = "DÉPÔT DISTANT"
 panes_size = "TAILLE MINIMALE"
 task_manager_charts = "GRAPHIQUES"
+remote_connection = "CONNEXION"
 
 [settings.option]
 language_label = "Langue"
@@ -241,6 +253,10 @@ history_seconds_label = "Période des graphiques"
 history_seconds_description = "Combien de secondes les graphiques du gestionnaire des tâches affichent. De 30 à 600."
 background_monitoring_label = "Surveiller en arrière-plan"
 background_monitoring_description = "Les graphiques du gestionnaire des tâches gardent l'historique quand il est fermé, au prix d'une analyse des processus par seconde."
+remote_enabled_label = "Accès à distance"
+remote_enabled_description = "Permet à un appareil associé d'opérer la session via votre relay. Prend effet immédiatement."
+relay_url_label = "Adresse du relay"
+relay_url_description = "Adresse de votre Porecatu Relay, en wss:// (ws:// seulement pour localhost). Prend effet immédiatement."
 
 [settings.button]
 open_file = "Ouvrir le fichier dans l'éditeur"
@@ -349,6 +365,59 @@ not_an_integer = "Utilisez un nombre entier."
 not_a_choice = "Valeur non autorisée."
 empty_name = "Le nom ne peut pas être vide."
 duplicate_name = "Le nom {name} existe déjà."
+invalid_relay_url = "Utilisez une adresse wss:// (ws:// seulement pour localhost)."
+
+[settings.remote]
+token_label = "Jeton du relay"
+token_stored = "Conservé dans le coffre du système. Saisissez pour le remplacer."
+token_absent = "Aucun jeton conservé. Collez le jeton de l'opérateur du relay ; il reste dans le coffre du système, jamais dans le fichier."
+token_unknown = "Consultation du coffre du système…"
+token_unavailable = "Coffre du système indisponible : l'accès à distance ne s'active pas sans lui."
+token_will_store = "Sera conservé dans le coffre du système à l'enregistrement."
+token_will_delete = "Le jeton conservé sera supprimé à l'enregistrement."
+token_placeholder = "Jeton de l'opérateur du relay"
+token_too_short = "Le jeton doit avoir au moins {min} caractères."
+token_too_long = "Le jeton doit avoir au plus {max} caractères."
+token_bad_characters = "Utilisez uniquement des caractères ASCII imprimables, sans espace au début ni à la fin."
+delete_label = "Jeton conservé"
+delete_description = "Supprime le jeton du coffre du système à l'enregistrement."
+delete_button = "Supprimer"
+status_label = "État"
+status_off = "Désactivé"
+status_connecting = "Connexion en cours"
+status_connected = "Connecté"
+status_unreachable = "Échec : relay inaccessible"
+status_token_missing = "Échec : jeton absent"
+status_token_rejected = "Échec : jeton refusé"
+status_relay_full = "Échec : relay complet"
+status_too_many_connections = "Échec : trop de connexions"
+status_protocol = "Échec : erreur de protocole"
+status_vault_unavailable = "Échec : coffre indisponible"
+access_secret_filled = "renseigné"
+access_secret_empty = "vide"
+section_pair = "ASSOCIER UN APPAREIL"
+pair_label = "Associer un appareil"
+pair_description = "Affiche un code QR que l'app Porecatu Remote doit lire. Valable 5 minutes, une seule fois."
+pair_button = "Afficher le code QR"
+pair_cancel = "Annuler"
+pair_unavailable = "Disponible uniquement une fois connecté au relay."
+qr_label = "Code QR d'association"
+qr_expires = "Expire dans {time}"
+qr_copy = "Copier le lien d'association"
+section_devices = "APPAREILS ASSOCIÉS"
+devices_empty = "Aucun appareil associé."
+devices_off = "Activez l'accès à distance pour voir et gérer les appareils associés."
+device_detail = "{platform} · associé le {paired} · dernier accès {seen}"
+device_never = "jamais"
+device_connected = "connecté maintenant"
+device_revoke = "Révoquer {name}"
+platform_android = "Android"
+platform_ios = "iOS"
+platform_other = "Autre"
+recreate_label = "Identité du poste"
+recreate_description = "Déconnecte et dissocie tous les appareils. Ils devront s'associer à nouveau."
+recreate_button = "Recréer l'identité"
+recreate_unavailable = "Activez l'accès à distance pour recréer l'identité."
 
 [settings.theme]
 session_using = "Cette session utilise le thème {name}."
@@ -416,6 +485,9 @@ profile_open_menu = "Ouvrir le menu des profils"
 profile_new_tab = "Nouvel onglet avec le profil {n}"
 ssh_reconnect = "Reconnecter le volet SSH"
 task_manager_toggle = "Basculer le gestionnaire des tâches"
+remote_toggle = "Activer ou désactiver l'accès à distance"
+remote_pair = "Associer un appareil"
+remote_disconnect_all = "Déconnecter tous les appareils"
 
 [profile_menu]
 new_group = "Nouveau groupe d'onglets"
@@ -438,6 +510,7 @@ settings = "Paramètres"
 search = "Recherche"
 app = "Application"
 task_manager = "Gestionnaire des tâches"
+remote = "Accès à distance"
 
 [search_bar]
 invalid_pattern = "motif invalide"
@@ -498,6 +571,23 @@ confirm = "Terminer"
 title = "Supprimer la session enregistrée ?"
 body = "Cela supprime définitivement «{name}»."
 confirm = "Supprimer"
+
+[dialog.revoke_device]
+title = "Révoquer {name} ?"
+body = "L'appareil est déconnecté maintenant et ne peut plus se connecter avant d'être associé à nouveau."
+confirm = "Révoquer"
+
+[dialog.recreate_identity]
+title = "Recréer l'identité ?"
+body = "Tous les appareils associés sont déconnectés et cessent de fonctionner. Tous devront s'associer à nouveau."
+confirm = "Recréer l'identité"
+
+[dialog.pair_device]
+title = "Associer cet appareil ?"
+body = "{name} ({platform}) souhaite s'associer à cet ordinateur."
+hint = "Vérifiez que le téléphone affiche le même code."
+confirm = "Associer"
+decline = "Refuser"
 
 [dialog.overwrite_session]
 title = "Écraser la session «{name}» ?"
@@ -740,6 +830,21 @@ body = "\"history_seconds = {value}\" est hors de la plage de 30 à 600 ; {used}
 
 [notice.task_manager_background_save_failed]
 title = "Impossible d'enregistrer la surveillance en arrière-plan"
+
+[notice.remote_toggle_save_failed]
+title = "Impossible d'enregistrer l'accès à distance"
+
+[notice.remote_token_save_failed]
+title = "Impossible de conserver le jeton du relay"
+body = "Le coffre du système a refusé l'opération. Saisissez à nouveau le jeton et enregistrez."
+
+[notice.remote_device_connected]
+title = "Appareil connecté"
+body = "{name} s'est connecté à l'accès distant."
+
+[notice.remote_devices_quarantined]
+title = "Liste des appareils illisible"
+body = "Le fichier a été conservé dans {path} et la liste des appareils associés a démarré vide."
 
 [notice.git_missing]
 title = "Git introuvable"

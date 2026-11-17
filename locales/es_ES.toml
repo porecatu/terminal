@@ -50,6 +50,16 @@ save_item = "Guardar esta ventana…"
 empty_list = "no hay sesiones guardadas"
 name_placeholder = "nombre de la sesión"
 
+[devices]
+summary = { one = "{count} dispositivo conectado: {names}", other = "{count} dispositivos conectados: {names}" }
+row_detail = "{platform} · conectado {since}"
+since_now = "ahora"
+since_minutes = { one = "hace {count} minuto", other = "hace {count} minutos" }
+since_hours = { one = "hace {count} hora", other = "hace {count} horas" }
+disconnect = "Desconectar"
+disconnect_all = "Desconectar todos"
+open_settings = "Abrir los ajustes de acceso remoto"
+
 [task_manager]
 chart_cpu = "CPU"
 chart_memory = "Memoria"
@@ -82,6 +92,7 @@ window_title = "Configuración"
 general = "General"
 shell = "Shell"
 profiles = "Perfiles"
+remote_access = "Acceso remoto"
 terminal = "Terminal"
 appearance = "Apariencia"
 session = "Sesión"
@@ -114,6 +125,7 @@ project_file = "ARCHIVO DE PROYECTO"
 git_remote = "REMOTO"
 panes_size = "TAMAÑO MÍNIMO"
 task_manager_charts = "GRÁFICOS"
+remote_connection = "CONEXIÓN"
 
 [settings.option]
 language_label = "Idioma"
@@ -241,6 +253,10 @@ history_seconds_label = "Período de los gráficos"
 history_seconds_description = "Cuántos segundos muestran los gráficos del administrador de tareas. De 30 a 600."
 background_monitoring_label = "Supervisar en segundo plano"
 background_monitoring_description = "Los gráficos del administrador de tareas guardan el historial con él cerrado, a costa de un escaneo de procesos por segundo."
+remote_enabled_label = "Acceso remoto"
+remote_enabled_description = "Permite operar la sesión desde un dispositivo vinculado, a través de su relay. Surte efecto de inmediato."
+relay_url_label = "Dirección del relay"
+relay_url_description = "Dirección de su Porecatu Relay, en wss:// (ws:// solo para localhost). Surte efecto de inmediato."
 
 [settings.button]
 open_file = "Abrir archivo en el editor"
@@ -349,6 +365,59 @@ not_an_integer = "Use un número entero."
 not_a_choice = "Valor no permitido."
 empty_name = "El nombre no puede estar vacío."
 duplicate_name = "El nombre {name} ya existe."
+invalid_relay_url = "Use una dirección wss:// (ws:// solo en localhost)."
+
+[settings.remote]
+token_label = "Token del relay"
+token_stored = "Guardado en el almacén del sistema. Escriba para reemplazarlo."
+token_absent = "Ningún token guardado. Pegue el token del operador del relay; se guarda en el almacén del sistema, nunca en el archivo."
+token_unknown = "Consultando el almacén del sistema…"
+token_unavailable = "Almacén del sistema no disponible: el acceso remoto no se activa sin él."
+token_will_store = "Se guardará en el almacén del sistema al guardar."
+token_will_delete = "El token guardado se borrará al guardar."
+token_placeholder = "Token del operador del relay"
+token_too_short = "El token debe tener al menos {min} caracteres."
+token_too_long = "El token debe tener como máximo {max} caracteres."
+token_bad_characters = "Use solo caracteres ASCII imprimibles, sin espacios al principio ni al final."
+delete_label = "Token guardado"
+delete_description = "Borra el token del almacén del sistema al guardar."
+delete_button = "Borrar"
+status_label = "Estado"
+status_off = "Desactivado"
+status_connecting = "Conectando"
+status_connected = "Conectado"
+status_unreachable = "Fallo: relay inaccesible"
+status_token_missing = "Fallo: token ausente"
+status_token_rejected = "Fallo: token rechazado"
+status_relay_full = "Fallo: relay lleno"
+status_too_many_connections = "Fallo: demasiadas conexiones"
+status_protocol = "Fallo: error de protocolo"
+status_vault_unavailable = "Fallo: almacén no disponible"
+access_secret_filled = "rellenado"
+access_secret_empty = "vacío"
+section_pair = "VINCULAR UN DISPOSITIVO"
+pair_label = "Vincular un dispositivo"
+pair_description = "Muestra un código QR para que lo lea la app Porecatu Remote. Vale 5 minutos y una sola vez."
+pair_button = "Mostrar código QR"
+pair_cancel = "Cancelar"
+pair_unavailable = "Disponible solo con la conexión al relay establecida."
+qr_label = "Código QR de vinculación"
+qr_expires = "Caduca en {time}"
+qr_copy = "Copiar el enlace de vinculación"
+section_devices = "DISPOSITIVOS VINCULADOS"
+devices_empty = "Ningún dispositivo vinculado."
+devices_off = "Active el acceso remoto para ver y gestionar los dispositivos vinculados."
+device_detail = "{platform} · vinculado el {paired} · último acceso {seen}"
+device_never = "nunca"
+device_connected = "conectado ahora"
+device_revoke = "Revocar {name}"
+platform_android = "Android"
+platform_ios = "iOS"
+platform_other = "Otro"
+recreate_label = "Identidad del equipo"
+recreate_description = "Desconecta y desvincula todos los dispositivos. Tendrán que vincularse de nuevo."
+recreate_button = "Recrear la identidad"
+recreate_unavailable = "Active el acceso remoto para recrear la identidad."
 
 [settings.theme]
 session_using = "Esta sesión está usando el tema {name}."
@@ -416,6 +485,9 @@ profile_open_menu = "Abrir menú de perfiles"
 profile_new_tab = "Nueva pestaña con el perfil {n}"
 ssh_reconnect = "Reconectar el panel SSH"
 task_manager_toggle = "Alternar el administrador de tareas"
+remote_toggle = "Activar o desactivar el acceso remoto"
+remote_pair = "Vincular un dispositivo"
+remote_disconnect_all = "Desconectar todos los dispositivos"
 
 [profile_menu]
 new_group = "Nuevo grupo de pestañas"
@@ -438,6 +510,7 @@ settings = "Configuración"
 search = "Búsqueda"
 app = "Aplicación"
 task_manager = "Administrador de tareas"
+remote = "Acceso remoto"
 
 [search_bar]
 invalid_pattern = "patrón no válido"
@@ -498,6 +571,23 @@ confirm = "Finalizar"
 title = "¿Eliminar la sesión guardada?"
 body = "Esto elimina de forma permanente «{name}»."
 confirm = "Eliminar"
+
+[dialog.revoke_device]
+title = "¿Revocar {name}?"
+body = "El dispositivo se desconecta ahora y no puede volver a conectarse hasta que se vincule de nuevo."
+confirm = "Revocar"
+
+[dialog.recreate_identity]
+title = "¿Recrear la identidad?"
+body = "Todos los dispositivos vinculados se desconectan y dejan de funcionar. Todos tendrán que vincularse de nuevo."
+confirm = "Recrear la identidad"
+
+[dialog.pair_device]
+title = "¿Vincular este dispositivo?"
+body = "{name} ({platform}) quiere vincularse con este equipo."
+hint = "Compruebe que el teléfono muestra el mismo código."
+confirm = "Vincular"
+decline = "Rechazar"
 
 [dialog.overwrite_session]
 title = "¿Sobrescribir la sesión «{name}»?"
@@ -740,6 +830,21 @@ body = "\"history_seconds = {value}\" está fuera del rango de 30 a 600; se usan
 
 [notice.task_manager_background_save_failed]
 title = "No se pudo guardar la supervisión en segundo plano"
+
+[notice.remote_toggle_save_failed]
+title = "No se pudo guardar el acceso remoto"
+
+[notice.remote_token_save_failed]
+title = "No se pudo guardar el token del relay"
+body = "El almacén del sistema no aceptó la operación. Escriba el token de nuevo y guarde."
+
+[notice.remote_device_connected]
+title = "Dispositivo conectado"
+body = "{name} se conectó al acceso remoto."
+
+[notice.remote_devices_quarantined]
+title = "Lista de dispositivos ilegible"
+body = "El archivo se conservó en {path} y la lista de dispositivos emparejados empezó vacía."
 
 [notice.git_missing]
 title = "Git no encontrado"

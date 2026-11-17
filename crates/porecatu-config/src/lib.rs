@@ -24,6 +24,7 @@ mod panes;
 mod path;
 mod profiles;
 mod project_file;
+mod remote;
 mod session;
 mod shell;
 mod ssh_import;
@@ -33,7 +34,7 @@ mod theme;
 
 pub use appearance::{
     Appearance, CloseButtonVisibility, ContextMenu, Dialog, GroupEditor, GroupPaletteEntry, Groups,
-    MoveToGroup, Notices, StatusBar, Tabs, TabsColors, TabsOverflow, TabsRename,
+    MoveToGroup, Notices, RemoteAppearance, StatusBar, Tabs, TabsColors, TabsOverflow, TabsRename,
     TaskManagerAppearance, TerminalFrame, Tooltip, Window, WindowControls,
 };
 pub use color::{Color, ColorParseError};
@@ -54,6 +55,7 @@ pub use project_file::{
     RESERVED_SECTIONS, Trust, expand_tilde, is_trusted, is_unc_or_device_path,
     parse as parse_project_file, resolve as resolve_project_file, resolve_icon,
 };
+pub use remote::Remote;
 pub use session::Session;
 pub use shell::Shell;
 pub use ssh_import::{
@@ -71,9 +73,9 @@ pub use terminal::{
 pub use theme::{
     BUILT_IN_THEME_FILES, DEFAULT_LIGHT_THEME, DEFAULT_THEME, THEME_FILE_PREFIX, Theme,
     ThemeAnsiPalette, ThemeContextMenu, ThemeDialog, ThemeFileProblem, ThemeGroupEditor,
-    ThemeGroups, ThemeNotices, ThemeSettings, ThemeStatusBar, ThemeTabs, ThemeTaskManager,
-    ThemeTerminal, ThemeTooltip, ThemeWindow, ThemeWindowControls, apply as apply_theme,
-    is_color_key, load_theme_files, parse_theme, theme_name_from_file,
+    ThemeGroups, ThemeNotices, ThemeRemote, ThemeSettings, ThemeStatusBar, ThemeTabs,
+    ThemeTaskManager, ThemeTerminal, ThemeTooltip, ThemeWindow, ThemeWindowControls,
+    apply as apply_theme, is_color_key, load_theme_files, parse_theme, theme_name_from_file,
 };
 
 use std::path::Path;
@@ -99,6 +101,7 @@ pub struct Config {
     pub git: Git,
     pub panes: Panes,
     pub task_manager: TaskManager,
+    pub remote: Remote,
 }
 
 impl Default for Config {
@@ -116,6 +119,7 @@ impl Default for Config {
             git: Git::default(),
             panes: Panes::default(),
             task_manager: TaskManager::default(),
+            remote: Remote::default(),
         }
     }
 }

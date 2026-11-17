@@ -25,6 +25,7 @@ use crate::notice_queue::PendingNotices;
 use crate::pinned::PinnedRegistry;
 use crate::prompt_queue::PendingPrompts;
 use crate::reconnect::Cycle;
+use crate::remote::ids::ProtocolIds;
 
 /// What leaves the origin window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +61,32 @@ pub(crate) enum NewWindowPlacement {
 pub(crate) enum TransferDest {
     Window(WindowId, InsertAt),
     NewWindow(NewWindowPlacement),
+}
+
+/// What the destination does with the window of the OS when the payload
+/// lands (ADR-0109 sections 1 and 3, which revise ADR-0107 section 2). The
+/// arrival is **always** activated at the destination (RF-22.10) and the
+/// selections of both windows go, as in the drag and the popover; what differs
+/// is whether the window is brought forward. The user of the drag and of the
+/// popover is there, so the window is restored from the taskbar and gets the
+/// focus; a phone asking for the move never touches the window of the OS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransferArrival {
+    /// The local gesture: activate the arrival, clear the selections, restore
+    /// the destination window if it is minimized and give it the focus.
+    Take,
+    /// The remote action: the same activation and selection, and **no**
+    /// `set_minimized(false)`, no `focus_window`. The origin follows the focus
+    /// ladder if the active tab was among the ones that left, as always.
+    ActivateOnly,
+}
+
+impl TransferArrival {
+    /// Whether the destination window is restored and focused. The one
+    /// difference between the two arrivals.
+    const fn focuses_window(self) -> bool {
+        matches!(self, Self::Take)
+    }
 }
 
 /// What [`App::transfer`] hands back: the window the payload is in now and
@@ -231,6 +258,13 @@ pub(crate) struct ProcessTabKeyed<'a, C> {
     pub pinned: &'a mut PinnedRegistry<WindowId>,
     /// `App.pending_shell_integration_note`.
     pub shell_note: &'a mut Option<(WindowId, TabId)>,
+    /// `App.remote.ids`: the protocol ids of tabs, panes and groups survive a
+    /// transfer (PRD-025, ADR-0105 section 1) -- the phone keeps pointing at
+    /// the same objects.
+    pub ids: &'a mut ProtocolIds<WindowId>,
+    /// The `(old, new)` ids of a group that moved with its tabs (only for
+    /// `TransferPayload::Group`); `None` for loose tabs.
+    pub group: Option<(GroupId, GroupId)>,
 }
 
 /// The tab a dismissed-notice slot is about.
@@ -265,6 +299,14 @@ pub(crate) fn rekey_tab_state<C>(
     dest: TabKeyed<'_>,
     process: ProcessTabKeyed<'_, C>,
 ) {
+    // The protocol ids: tabs (and their panes) and the group keep their
+    // numbers under the new keys. One call for all the tabs, so overlapping
+    // old and new ids cannot clash.
+    let pairs: Vec<(TabId, TabId)> = moves.iter().map(|m| (m.old, m.new)).collect();
+    process.ids.rekey_tabs(from, to, &pairs);
+    if let Some((old, new)) = process.group {
+        process.ids.rekey_group(from, old, to, new);
+    }
     for &TabMove { old, new } in moves {
         dest.prompts.adopt(origin.prompts.take_tab(old), new);
         dest.notices.adopt(origin.notices.take_tab(old), new);
@@ -361,6 +403,22 @@ impl App {
         payload: TransferPayload,
         to: TransferDest,
     ) -> Option<TransferResult> {
+        self.transfer_with(event_loop, from, payload, to, TransferArrival::Take)
+    }
+
+    /// [`Self::transfer`] with the choice of what the destination does about
+    /// the window of the OS ([`TransferArrival`]). The remote actions
+    /// `move-tab-to-window` and `move-group-to-window` are the only caller
+    /// that asks for [`TransferArrival::ActivateOnly`]; every step is the same
+    /// one but the last bit of 7 (the window is not touched).
+    pub(crate) fn transfer_with(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        from: WindowId,
+        payload: TransferPayload,
+        to: TransferDest,
+        arrival: TransferArrival,
+    ) -> Option<TransferResult> {
         // Step 0: refuse, before anything is taken.
         let (existing, at) = match to {
             TransferDest::Window(id, at) => (Some(id), at),
@@ -445,6 +503,8 @@ impl App {
 
         // Step 3: insert at the destination, and learn the new ids.
         let mut group_last_active = None;
+        // The group's old and new ids, for the protocol ids (ADR-0105 §1).
+        let mut group_moved = None;
         let (olds, news): (Vec<TabId>, Vec<TabId>) = match extracted {
             Extracted::Tabs(pairs) => {
                 let (olds, tabs): (Vec<TabId>, Vec<DetachedTab>) = pairs.into_iter().unzip();
@@ -454,7 +514,10 @@ impl App {
             Extracted::Group(group, olds) => {
                 group_last_active = group.last_active();
                 let position = group_position(at).unwrap_or(usize::MAX);
-                let (_, news) = dest.workspace.insert_detached_group(group, position);
+                let (new_group, news) = dest.workspace.insert_detached_group(group, position);
+                if let TransferPayload::Group(old_group) = &payload {
+                    group_moved = Some((*old_group, new_group));
+                }
                 (olds, news)
             }
         };
@@ -494,6 +557,8 @@ impl App {
                 reconnects: &mut self.reconnects,
                 pinned: &mut self.pinned,
                 shell_note: &mut self.pending_shell_integration_note,
+                ids: &mut self.remote.ids,
+                group: group_moved,
             },
         );
 
@@ -509,17 +574,22 @@ impl App {
             view.remove_tabs(&news);
         }
 
-        // Step 7: activate and focus at the destination; the selection goes
-        // in both windows (RF-22.10).
+        // Step 7: activate at the destination; the selection goes in both
+        // windows (RF-22.10) -- for the phone too (ADR-0109 section 1: the
+        // move is the one of the drag). Only a local arrival also restores and
+        // focuses the destination window: the phone never touches the window
+        // of the OS (ADR-0109 section 3).
         if let Some(target) = activation_target(grabbed, group_last_active, &moves) {
             let _ = dest.touch_workspace(|ws| ws.activate_tab(target));
         }
         origin.selection.clear();
         dest.selection.clear();
-        if dest.window.is_minimized() == Some(true) {
-            dest.window.set_minimized(false);
+        if arrival.focuses_window() {
+            if dest.window.is_minimized() == Some(true) {
+                dest.window.set_minimized(false);
+            }
+            dest.window.focus_window();
         }
-        dest.window.focus_window();
 
         // Step 8: each tab that arrived to the frame of the destination. A
         // `NotStarted` tab has no runtime: it only changes place.
@@ -703,6 +773,87 @@ mod tests {
     }
 
     // --- the decisions ---------------------------------------------------
+
+    #[test]
+    fn only_a_local_arrival_focuses_the_window_and_both_activate_by_rf_22_10() {
+        // The window of the OS: the drag and the popover bring it forward, a
+        // phone never does (ADR-0109 section 3).
+        assert!(TransferArrival::Take.focuses_window());
+        assert!(!TransferArrival::ActivateOnly.focuses_window());
+
+        // What becomes active is the same for both (there is one decision,
+        // `activation_target`, and no arrival picks another): the one held,
+        // else the group's, else the first.
+        let moves = [mv(3, 0), mv(4, 1)];
+        assert_eq!(activation_target(Some(tab(4)), None, &moves), Some(tab(1)));
+        assert_eq!(activation_target(None, Some(1), &moves), Some(tab(1)));
+        assert_eq!(activation_target(None, None, &moves), Some(tab(0)));
+    }
+
+    /// The model side of a remote move (ADR-0109 sections 1 and 5): the
+    /// destination activates the arrival (the group's last active tab), the
+    /// origin's ladder picks the neighbour of the one that left, and the
+    /// protocol ids of the tab, its panes and the group do not change.
+    #[test]
+    fn a_remote_move_activates_the_arrival_and_keeps_the_protocol_ids() {
+        let mut origin = Workspace::new();
+        let a = origin.append_tab("zsh", None);
+        let b = origin.append_tab("zsh", None);
+        let c = origin.append_tab("zsh", None);
+        let group = origin
+            .group_tabs(&[b, c], "infra", GroupColor::Blue)
+            .expect("explicit group");
+        assert!(origin.activate_tab(c));
+        let mut dest = Workspace::new();
+        let x = dest.append_tab("zsh", None);
+        let y = dest.append_tab("zsh", None);
+        assert!(dest.activate_tab(x));
+
+        let mut ids = ProtocolIds::<WindowId>::new();
+        ids.window(win(FROM));
+        ids.window(win(TO));
+        let group_id = ids.group(win(FROM), group);
+        let b_id = ids.tab(win(FROM), b);
+        let b_pane = ids.pane(win(FROM), b, pane(0));
+        let c_id = ids.tab(win(FROM), c);
+        let a_id = ids.tab(win(FROM), a);
+
+        // What `transfer_with` does with a group payload, step by step.
+        let (detached, olds) = origin.take_group(group).expect("explicit group");
+        let group_last_active = detached.last_active();
+        let (new_group, news) = dest.insert_detached_group(detached, usize::MAX);
+        let moves: Vec<TabMove> = olds
+            .iter()
+            .zip(&news)
+            .map(|(&old, &new)| TabMove { old, new })
+            .collect();
+        let pairs: Vec<(TabId, TabId)> = moves.iter().map(|m| (m.old, m.new)).collect();
+        ids.rekey_tabs(win(FROM), win(TO), &pairs);
+        ids.rekey_group(win(FROM), group, win(TO), new_group);
+        // Step 7: the arrival is activated, as the popover does it.
+        let target =
+            activation_target(None, group_last_active, &moves).expect("the group has tabs");
+        assert!(dest.activate_tab(target));
+
+        // The destination: the arrival is the active tab (the one that was
+        // active in the group, `c`), and both arrivals are there.
+        assert_eq!(dest.active_tab(), Some(moves[1].new));
+        assert_ne!(dest.active_tab(), Some(x));
+        assert!(dest.group(new_group).is_some());
+        assert_eq!(dest.tab(y).map(porecatu_core::Tab::id), Some(y));
+        // The origin: the active tab left with the group, the ladder picked
+        // the neighbour that stays.
+        assert_eq!(origin.active_tab(), Some(a));
+        // The protocol ids follow the objects.
+        assert_eq!(ids.group_of(group_id), Some((win(TO), new_group)));
+        assert_eq!(ids.tab_of(b_id).map(|(w, _)| w), Some(win(TO)));
+        assert_eq!(ids.tab_of(c_id).map(|(w, _)| w), Some(win(TO)));
+        assert_eq!(
+            ids.pane_of(b_pane).map(|(w, t, _)| (w, t)),
+            ids.tab_of(b_id)
+        );
+        assert_eq!(ids.tab_of(a_id), Some((win(FROM), a)));
+    }
 
     /// `a b | [G: c d] | e`, with `p` pinned.
     fn workspace_with_a_group() -> (Workspace, [TabId; 5], TabId, GroupId) {
@@ -974,6 +1125,9 @@ mod tests {
         cycles: HashMap<u32, Cycle<PaneKey>>,
         registry: PinnedRegistry<WindowId>,
         shell_note: Option<(WindowId, TabId)>,
+        /// The protocol ids: tab 3 (panes 0 and 1) and its group 5 move, tab 4
+        /// (pane 0) is the control.
+        ids: ProtocolIds<WindowId>,
     }
 
     const FROM: u64 = 1;
@@ -1012,6 +1166,15 @@ mod tests {
         registry.bind_live(moved_key, win(FROM), tab(3));
         registry.bind_live(stays_key, win(FROM), tab(4));
 
+        let mut ids = ProtocolIds::new();
+        ids.window(win(FROM));
+        ids.group(win(FROM), GroupId::new(5));
+        ids.tab(win(FROM), tab(3));
+        ids.pane(win(FROM), tab(3), pane(0));
+        ids.pane(win(FROM), tab(3), pane(1));
+        ids.tab(win(FROM), tab(4));
+        ids.pane(win(FROM), tab(4), pane(0));
+
         World {
             origin_prompts,
             origin_notices,
@@ -1025,10 +1188,15 @@ mod tests {
             cycles,
             registry,
             shell_note: Some((win(FROM), tab(3))),
+            ids,
         }
     }
 
     fn run(world: &mut World, moves: &[TabMove]) {
+        run_with_group(world, moves, None);
+    }
+
+    fn run_with_group(world: &mut World, moves: &[TabMove], group: Option<(GroupId, GroupId)>) {
         rekey_tab_state(
             win(FROM),
             win(TO),
@@ -1047,6 +1215,8 @@ mod tests {
                 reconnects: &mut world.cycles,
                 pinned: &mut world.registry,
                 shell_note: &mut world.shell_note,
+                ids: &mut world.ids,
+                group,
             },
         );
     }
@@ -1074,6 +1244,46 @@ mod tests {
         }
         assert_eq!(w.registry.key_of(win(FROM), tab(3)), None);
         assert_ne!(w.shell_note, Some((win(FROM), tab(3))));
+        // Nor does the map of protocol ids: the old key is free again.
+        let (old_tab, old_pane) = (
+            w.ids.tab(win(FROM), tab(3)),
+            w.ids.pane(win(FROM), tab(3), pane(0)),
+        );
+        assert_eq!(w.ids.tab_of(old_tab), Some((win(FROM), tab(3))));
+        // ...which is a *new* number, not the one the moved tab keeps.
+        let moved_tab = w.ids.tab(win(TO), tab(0));
+        assert_ne!(old_tab, moved_tab);
+        assert_ne!(old_pane, w.ids.pane(win(TO), tab(0), pane(0)));
+    }
+
+    /// PRD-025, ADR-0105 section 1: the protocol id of the tab, of each of its
+    /// panes and of the group is the same before and after the transfer, and
+    /// the control tab keeps its own.
+    #[test]
+    fn the_protocol_ids_of_the_tab_its_panes_and_the_group_survive_the_transfer() {
+        let mut w = world();
+        let tab_id = w.ids.tab(win(FROM), tab(3));
+        let pane0 = w.ids.pane(win(FROM), tab(3), pane(0));
+        let pane1 = w.ids.pane(win(FROM), tab(3), pane(1));
+        let group_id = w.ids.group(win(FROM), GroupId::new(5));
+        let control_tab = w.ids.tab(win(FROM), tab(4));
+        let control_pane = w.ids.pane(win(FROM), tab(4), pane(0));
+
+        run_with_group(
+            &mut w,
+            &[mv(3, 0)],
+            Some((GroupId::new(5), GroupId::new(0))),
+        );
+
+        assert_eq!(w.ids.tab(win(TO), tab(0)), tab_id);
+        assert_eq!(w.ids.pane(win(TO), tab(0), pane(0)), pane0);
+        assert_eq!(w.ids.pane(win(TO), tab(0), pane(1)), pane1);
+        assert_eq!(w.ids.group(win(TO), GroupId::new(0)), group_id);
+        assert_eq!(w.ids.tab_of(tab_id), Some((win(TO), tab(0))));
+        assert_eq!(w.ids.group_of(group_id), Some((win(TO), GroupId::new(0))));
+        // The control tab did not move and kept its numbers.
+        assert_eq!(w.ids.tab(win(FROM), tab(4)), control_tab);
+        assert_eq!(w.ids.pane(win(FROM), tab(4), pane(0)), control_pane);
     }
 
     #[test]

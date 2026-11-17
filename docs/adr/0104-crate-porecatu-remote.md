@@ -1,6 +1,6 @@
 # ADR-0104 — Crate `porecatu-remote`: folha com `tokio` e `keyring` próprios, fronteira síncrona com `porecatu-ui`
 
-**Status:** Aceito em 2026-11-16 — não implementado
+**Status:** Aceito em 2026-11-16 — implementado em 2026-11-17 (notas de implementação nas seções 1, 2, 3 e 4; verificação ao vivo é dívida, no [roadmap](../roadmap.md))
 **Data:** 2026-11-15
 **Relacionados:** [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0007](0007-modelo-de-threading.md), [ADR-0030](0030-escopo-do-hot-reload.md), [ADR-0052](0052-sincronizacao-com-o-remoto-do-git.md), [ADR-0072](0072-cliente-ssh-embutido.md), [ADR-0073](0073-credenciais-no-cofre-do-sistema.md), [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md), [ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md), [ADR-0106](0106-pareamento-identidade-e-autorizacao.md)
 **Supersedes:** ADR-0072, a regra "único crate com `tokio`" (**parcial**: `tokio` passa a ser permitido em crate de rede folha, um runtime por crate); ADR-0073, o isolamento de `keyring` em `porecatu-ssh` (**parcial**: `porecatu-remote` também o usa, com módulo `vault` próprio); ADR-0007, "Runtime async" (**parcial**: a mesma exceção do ADR-0072, estendida)
@@ -45,11 +45,15 @@ O `rustls` entra com o provedor de criptografia **`ring`**, o mesmo que o `russh
 
 `porecatu-remote` não conhece `Workspace`, `Config`, `GridSnapshot` nem `winit`. Ele fala **tipos do protocolo**, re-exportados para `porecatu-ui` (`pub use porecatu_protocol::...`), e é `porecatu-ui` quem traduz entre o domínio e o fio — o mesmo papel que já tem entre `Config` e `TermParams`.
 
+> **Nota de implementação (2026-11-17) — dependências e TLS.** Versões exatas, todas em `crates/porecatu-remote/Cargo.toml`: `tokio =1.54.1` (a mesma de `porecatu-ssh`; `cargo tree -i tokio` mostra os dois caminhos, uma versão), `tokio-tungstenite =0.29.0` (sem as features padrão, só `connect` e `rustls-tls-native-roots`), `rustls =0.23.46` (provedor `ring`; `aws-lc-rs` fora do grafo), `ed25519-dalek =3.0.0`, `keyring =4.2.0` (a de `porecatu-ssh`), `gethostname =1.1.0` (nome da máquina, RF-25.5); `qrcode =0.14.1` fica em `porecatu-ui`. O `porecatu-protocol` entra por `git` + `rev = "d8618efa65f619b62e6a877159a7ad5658ca1c19"` com `version = "=0.1.0"` ao lado: o commit da especificação 0.4 (branch `spec-0-4-aba-ativa`, ainda não mesclada na `main` do protocolo; ver a nota do [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md) §6). **Decisão do dono em 2026-11-16: o TLS ao relay confia nos certificados do sistema operacional** (`rustls-native-certs =0.8.5`), não numa lista embutida; `webpki-roots` ficou de fora porque a licença dos dados dele (CDLA) não está na lista aceita. Um relay com certificado de uma CA privada funciona se a CA estiver instalada no sistema.
+
 ### 2. Runtime
 
 - O runtime é **`tokio` multi-thread com 2 workers**, criado na primeira vez que `[remote] enabled` fica `true` (no arranque ou por recarga) e **destruído** quando fica `false`. Com o recurso desligado, não existe ([RNF-25.1](../prd/prd-025-acesso-remoto.md)).
 - `porecatu-ssh` mantém o runtime dele. São dois runtimes no processo quando os dois recursos estão em uso: o custo é algumas threads ociosas, e a recompensa é que nenhum dos dois crates conhece o outro.
 - A regra do CLAUDE.md passa a ser: **`tokio` só em crate de rede folha (`porecatu-ssh`, `porecatu-remote`), cada um com runtime próprio, nunca em `[workspace.dependencies]`**. `cargo tree -i tokio` mostra **dois** caminhos esperados.
+
+> **Nota de implementação (2026-11-17).** O runtime de 2 workers nasce em `RemoteHost::start` e morre em `stop`, que espera `FLUSH_GRACE` (150 ms, `host.rs`) para o `goodbye` aos clientes sair antes de derrubar o runtime (`shutdown_timeout` de 500 ms). Depois de fechar a conexão com o código 1009 (quadro grande demais), o link **segura a leitura até o fim do `close_grace`**: no Windows, fechar o socket com dado não lido manda RST, e o relay perdia o close frame (descoberta registrada em [descobertas](../descobertas.md)). O estado "Desligado" fica depois de uma **falha ao iniciar** o host (ex.: cofre indisponível); a UI só tenta de novo quando `relay_url` muda ou a chave é desligada e religada. Gravar o token reinicia o host se ele estiver parado por falha de token **ou** em "Conectando", porque o host lê o token só ao iniciar ([ADR-0106](0106-pareamento-identidade-e-autorizacao.md) §7).
 
 ### 3. Fronteira com `porecatu-ui`
 

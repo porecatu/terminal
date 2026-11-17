@@ -174,13 +174,32 @@ impl Workspace {
         cwd: Option<PathBuf>,
         pos: usize,
     ) -> TabId {
+        self.new_tab_with(group, shell_name, cwd, pos, true)
+    }
+
+    /// [`Self::new_tab`] with the activation as a parameter (PRD-025,
+    /// ADR-0107 section 2): the remote access creates a tab **without**
+    /// taking the focus of whoever is at the desktop. `activate = false`
+    /// leaves the active tab alone -- except in a workspace that had none,
+    /// where the new tab becomes the active one (a workspace with tabs always
+    /// has an active tab).
+    pub fn new_tab_with(
+        &mut self,
+        group: Option<GroupId>,
+        shell_name: impl Into<String>,
+        cwd: Option<PathBuf>,
+        pos: usize,
+        activate: bool,
+    ) -> TabId {
         let id = self.insert_tab(
             Tab::new(TabId::new(self.next_tab_id), shell_name),
             group,
             cwd,
             pos,
         );
-        self.activate_tab(id);
+        if activate || self.active_tab.is_none() {
+            self.activate_tab(id);
+        }
         id
     }
 
@@ -289,14 +308,25 @@ impl Workspace {
     /// último run implícito se a trilha terminar em um, num run novo caso
     /// contrário -- nunca para dentro da zona.
     pub fn append_tab(&mut self, shell_name: impl Into<String>, cwd: Option<PathBuf>) -> TabId {
+        self.append_tab_with(shell_name, cwd, true)
+    }
+
+    /// [`Self::append_tab`] with the activation as a parameter (see
+    /// [`Self::new_tab_with`]): the same place, active or not.
+    pub fn append_tab_with(
+        &mut self,
+        shell_name: impl Into<String>,
+        cwd: Option<PathBuf>,
+        activate: bool,
+    ) -> TabId {
         if self.active_tab.is_some_and(|id| self.is_pinned(id)) {
-            return self.append_ungrouped_tab(shell_name, cwd);
+            return self.append_ungrouped_tab_with(shell_name, cwd, activate);
         }
         let group = self.active_tab().and_then(|id| self.group_of_tab(id));
         let pos = group
             .and_then(|g| self.group(g))
             .map_or(0, |g| g.tabs().len());
-        self.new_tab(group, shell_name, cwd, pos)
+        self.new_tab_with(group, shell_name, cwd, pos, activate)
     }
 
     /// Cria uma aba **sem grupo**, no fim da barra: no último run
@@ -313,6 +343,17 @@ impl Workspace {
         shell_name: impl Into<String>,
         cwd: Option<PathBuf>,
     ) -> TabId {
+        self.append_ungrouped_tab_with(shell_name, cwd, true)
+    }
+
+    /// [`Self::append_ungrouped_tab`] with the activation as a parameter
+    /// (see [`Self::new_tab_with`]).
+    pub fn append_ungrouped_tab_with(
+        &mut self,
+        shell_name: impl Into<String>,
+        cwd: Option<PathBuf>,
+        activate: bool,
+    ) -> TabId {
         let trailing_implicit = self
             .groups
             .last()
@@ -322,7 +363,7 @@ impl Workspace {
             Some((id, len)) => (Some(id), len),
             None => (None, 0),
         };
-        self.new_tab(group, shell_name, cwd, pos)
+        self.new_tab_with(group, shell_name, cwd, pos, activate)
     }
 
     /// Escada de foco do RF-1.5/RF-2.14 (ADR-0020 §3), numa função só,
@@ -1141,6 +1182,109 @@ mod tests {
 
     fn tab_ids(ws: &Workspace) -> Vec<TabId> {
         ws.tabs.iter().map(Tab::id).collect()
+    }
+
+    // ---------------------------------------------------------------
+    // PRD-025 (ADR-0107 section 2): criar aba sem ativar
+    // ---------------------------------------------------------------
+
+    /// `append_tab_with(false)` cria no mesmo lugar de `tab.new` -- o fim do
+    /// grupo da aba ativa -- e deixa a ativa onde estava; o `MRU` do grupo
+    /// também não anda.
+    #[test]
+    fn append_tab_without_activating_joins_the_group_of_the_active_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a, b], "g", GroupColor::Red).unwrap();
+        ws.activate_tab(a);
+
+        let n = ws.append_tab_with("zsh", None, false);
+
+        assert_invariants(&ws);
+        assert_eq!(ws.active_tab(), Some(a));
+        assert_eq!(track(&ws), [a, b, n, c]);
+        assert_eq!(ws.group_of_tab(n), Some(group));
+        assert_eq!(ws.group(group).unwrap().last_active(), Some(a));
+    }
+
+    /// The same tab, created active, is where the inactive one went: only
+    /// the activation differs.
+    #[test]
+    fn the_inactive_and_the_active_creation_place_the_tab_alike() {
+        let build = || {
+            let mut ws = Workspace::new();
+            let a = ws.append_tab("zsh", None);
+            let b = ws.append_tab("zsh", None);
+            ws.group_tabs(&[a], "g", GroupColor::Red).unwrap();
+            ws.activate_tab(b);
+            ws
+        };
+        let mut quiet = build();
+        let mut loud = build();
+        let q = quiet.append_tab_with("zsh", None, false);
+        let l = loud.append_tab("zsh", None);
+        assert_eq!(q, l);
+        assert_eq!(track(&quiet), track(&loud));
+        assert_eq!(quiet.groups().len(), loud.groups().len());
+        assert_eq!(loud.active_tab(), Some(l));
+        assert_ne!(quiet.active_tab(), Some(q));
+    }
+
+    /// With a group, the tab goes to the **end** of it, collapsed or not, and
+    /// a collapsed group stays collapsed (nothing activated it).
+    #[test]
+    fn new_tab_without_activating_goes_to_the_end_of_the_given_group() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a, b], "g", GroupColor::Red).unwrap();
+        ws.activate_tab(c);
+        ws.collapse_group(group, true);
+        assert!(ws.group(group).unwrap().is_collapsed());
+        let len = ws.group(group).unwrap().tabs().len();
+
+        let n = ws.new_tab_with(Some(group), "zsh", None, len, false);
+
+        assert_invariants(&ws);
+        assert_eq!(ws.active_tab(), Some(c));
+        assert_eq!(track(&ws), [a, b, n, c]);
+        assert_eq!(ws.group(group).unwrap().tabs(), [a, b, n]);
+        assert!(ws.group(group).unwrap().is_collapsed());
+    }
+
+    /// With a pinned active tab the tab goes to the end of the track, like
+    /// `tab.new`, and the pinned one stays active.
+    #[test]
+    fn append_tab_without_activating_from_a_pinned_tab_goes_to_the_track_end() {
+        let mut ws = Workspace::new();
+        let p = ws.append_tab("zsh", None);
+        let a = ws.append_tab("zsh", None);
+        ws.group_tabs(&[a], "g", GroupColor::Red).unwrap();
+        ws.pin_tab(p, 0);
+        ws.activate_tab(p);
+
+        let n = ws.append_tab_with("zsh", None, false);
+
+        assert_invariants(&ws);
+        assert_eq!(ws.active_tab(), Some(p));
+        assert_eq!(ws.pinned(), [p]);
+        assert_eq!(track(&ws), [a, n]);
+        assert_eq!(ws.groups().len(), 2);
+    }
+
+    /// An inactive creation in a workspace with no active tab still leaves it
+    /// with one.
+    #[test]
+    fn the_first_tab_is_active_even_when_created_inactive() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab_with("zsh", None, false);
+        assert_eq!(ws.active_tab(), Some(a));
+        let b = ws.append_ungrouped_tab_with("zsh", None, false);
+        assert_eq!(ws.active_tab(), Some(a));
+        assert_eq!(order(&ws), [a, b]);
     }
 
     // ---------------------------------------------------------------

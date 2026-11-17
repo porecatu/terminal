@@ -33,9 +33,10 @@ use porecatu_locale::Catalog;
 use crate::messages::msg;
 use crate::reload::{self, DeferredScope};
 
-/// Os onze grupos da guia lateral, na ordem do RF-16.7 mais o "Perfis" do
-/// ADR-0075 §6, logo depois de "Shell", e o "Gerenciador de tarefas" do
-/// ADR-0095 §9, entre "Painéis" e "Atalhos".
+/// Os doze grupos da guia lateral, na ordem do RF-16.7 mais o "Perfis" do
+/// ADR-0075 §6, logo depois de "Shell", o "Acesso remoto" do ADR-0108 §1, logo
+/// depois de "Perfis", e o "Gerenciador de tarefas" do ADR-0095 §9, entre
+/// "Painéis" e "Atalhos".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Group {
     General,
@@ -43,6 +44,10 @@ pub(crate) enum Group {
     /// ADR-0075 §6: `[profiles] default` e `detect` como opções comuns; a lista
     /// e o formulário têm estado próprio (`ProfilesDraft`).
     Profiles,
+    /// ADR-0108 §1: ligar o acesso remoto, o endereço do relay e a linha de
+    /// estado como opções comuns; o token do relay (que mora no cofre do
+    /// sistema, nunca no arquivo) tem estado próprio (`RemoteToken`).
+    RemoteAccess,
     Terminal,
     Appearance,
     Session,
@@ -57,10 +62,11 @@ pub(crate) enum Group {
 }
 
 impl Group {
-    pub(crate) const ALL: [Group; 11] = [
+    pub(crate) const ALL: [Group; 12] = [
         Group::General,
         Group::Shell,
         Group::Profiles,
+        Group::RemoteAccess,
         Group::Terminal,
         Group::Appearance,
         Group::Session,
@@ -76,6 +82,7 @@ impl Group {
             Group::General => msg::settings::group::general(catalog),
             Group::Shell => msg::settings::group::shell(catalog),
             Group::Profiles => msg::settings::group::profiles(catalog),
+            Group::RemoteAccess => msg::settings::group::remote_access(catalog),
             Group::Terminal => msg::settings::group::terminal(catalog),
             Group::Appearance => msg::settings::group::appearance(catalog),
             Group::Session => msg::settings::group::session(catalog),
@@ -116,6 +123,8 @@ pub(crate) enum Section {
     PanesSize,
     /// ADR-0095 §9: o único campo do grupo "Gerenciador de tarefas".
     TaskManagerCharts,
+    /// ADR-0108 §1: a seção CONEXÃO do grupo "Acesso remoto".
+    RemoteConnection,
 }
 
 impl Section {
@@ -143,6 +152,7 @@ impl Section {
             Section::GitRemote => msg::settings::section::git_remote(catalog),
             Section::PanesSize => msg::settings::section::panes_size(catalog),
             Section::TaskManagerCharts => msg::settings::section::task_manager_charts(catalog),
+            Section::RemoteConnection => msg::settings::section::remote_connection(catalog),
         }
     }
 }
@@ -182,6 +192,11 @@ pub(crate) enum Control {
     /// mais o número em segundos (`GIT_POLL_MIN..=GIT_POLL_MAX`).
     GitPoll,
 }
+
+/// A chave do endereço do relay (ADR-0108 §1): a única opção de texto com regra
+/// própria -- `wss://`, ou `ws://` só para `localhost` --, que `draft::validate`
+/// aplica.
+pub(crate) const RELAY_URL_PATH: &str = "remote.relay_url";
 
 /// Menor intervalo de consulta ao remoto que a tela aceita. O app eleva
 /// valores de 1 a 29 a 30 e avisa (RF-13.3); a tela simplesmente não os
@@ -373,6 +388,11 @@ pub(crate) fn probe_value(option: &OptionDef) -> EditValue {
                 .expect("uma escolha tem ao menos dois valores")
                 .to_string(),
         ),
+        // The one text option with a rule: the probe must pass it (and differ
+        // from the empty default).
+        (Control::Text, EditValue::String(_)) if option.path == RELAY_URL_PATH => {
+            EditValue::String("wss://relay.example".to_owned())
+        }
         (
             Control::Text | Control::Language | Control::Theme | Control::ProfileChoice,
             EditValue::String(current),
@@ -542,6 +562,8 @@ label_modules! {
     min_rows => (min_rows_label, min_rows_description),
     history_seconds => (history_seconds_label, history_seconds_description),
     background_monitoring => (background_monitoring_label, background_monitoring_description),
+    remote_enabled => (remote_enabled_label, remote_enabled_description),
+    relay_url => (relay_url_label, relay_url_description),
 }
 
 /// Os valores nomeados de cada enum, na grafia do arquivo.
@@ -737,6 +759,25 @@ pub(crate) static OPTIONS: &[OptionDef] = &[
         "profiles.detect",
         Control::Toggle,
         |c| EditValue::Bool(c.profiles.detect)
+    ),
+    // ---- Acesso remoto (ADR-0108 §1)
+    // O token e o estado do grupo não são opções: o token mora no cofre do
+    // sistema (`RemoteToken`) e o estado é só texto.
+    option!(
+        remote_enabled,
+        RemoteAccess,
+        RemoteConnection,
+        "remote.enabled",
+        TOGGLE,
+        |c| EditValue::Bool(c.remote.enabled)
+    ),
+    option!(
+        relay_url,
+        RemoteAccess,
+        RemoteConnection,
+        "remote.relay_url",
+        Control::Text,
+        |c| string(&c.remote.relay_url)
     ),
     // ---- Terminal
     option!(
@@ -1185,13 +1226,13 @@ mod tests {
 
     #[test]
     fn the_catalog_has_exactly_the_options_of_rf_16_11() {
-        // As 54 do RF-16.11 (o número da aba saiu), as duas do topo do grupo "Perfis" (ADR-0075 §6), a do botão de menu do app (ADR-0079), a da restauração nomeada na janela atual (ADR-0092), a do período dos gráficos do gerenciador de tarefas (ADR-0095 §9) e a do monitoramento em segundo plano (ADR-0098 §7).
-        assert_eq!(OPTIONS.len(), 60);
+        // As 54 do RF-16.11 (o número da aba saiu), as duas do topo do grupo "Perfis" (ADR-0075 §6), a do botão de menu do app (ADR-0079), a da restauração nomeada na janela atual (ADR-0092), a do período dos gráficos do gerenciador de tarefas (ADR-0095 §9), a do monitoramento em segundo plano (ADR-0098 §7) e as duas do grupo "Acesso remoto" (ADR-0108 §1).
+        assert_eq!(OPTIONS.len(), 62);
         let per_group: Vec<usize> = Group::ALL
             .iter()
             .map(|group| options_in(*group).count())
             .collect();
-        assert_eq!(per_group, [4, 3, 2, 24, 15, 5, 2, 1, 2, 2, 0]);
+        assert_eq!(per_group, [4, 3, 2, 2, 24, 15, 5, 2, 1, 2, 2, 0]);
     }
 
     /// RF-19.18: as duas opções do acrílico ficam no grupo Aparência, logo
@@ -1699,6 +1740,53 @@ mod tests {
         );
         assert_eq!(option("profiles_detect").unwrap().control, Control::Toggle);
         assert_eq!(option("profiles_default").unwrap().path, "profiles.default");
+    }
+
+    /// ADR-0108 §1: the remote access group comes right after "Perfis", with
+    /// the toggle and the relay address as ordinary options -- both class A,
+    /// so "Vale na hora" (the host reads the `Config` on every turn).
+    #[test]
+    fn the_remote_access_group_follows_the_profiles_with_the_toggle_and_the_relay_address() {
+        let at = |group: Group| Group::ALL.iter().position(|g| *g == group).unwrap();
+        assert_eq!(at(Group::RemoteAccess), at(Group::Profiles) + 1);
+        assert_eq!(at(Group::Terminal), at(Group::RemoteAccess) + 1);
+        let ids: Vec<&str> = options_in(Group::RemoteAccess).map(|o| o.id).collect();
+        assert_eq!(ids, ["remote_enabled", "relay_url"]);
+        let enabled = option("remote_enabled").unwrap();
+        let url = option("relay_url").unwrap();
+        assert_eq!(enabled.path, "remote.enabled");
+        assert_eq!(enabled.control, Control::Toggle);
+        assert_eq!(url.path, "remote.relay_url");
+        // The one text option with a rule of its own is found by this key.
+        assert_eq!(url.path, RELAY_URL_PATH);
+        assert_eq!(url.control, Control::Text);
+        for option in [enabled, url] {
+            assert_eq!(option.section, Section::RemoteConnection);
+            assert_eq!(option.reload_scope(), ReloadScope::Live, "{}", option.id);
+        }
+        // Off and empty by default; what was written reads back.
+        assert_eq!(enabled.default_value(), EditValue::Bool(false));
+        assert_eq!(url.default_value(), EditValue::String(String::new()));
+        let config = config_with(url, &EditValue::String("wss://relay.example".into())).unwrap();
+        assert_eq!(config.remote.relay_url, "wss://relay.example");
+        let config = config_with(enabled, &EditValue::Bool(true)).unwrap();
+        assert!(config.remote.enabled);
+    }
+
+    #[test]
+    fn the_remote_access_group_and_its_options_are_translated_in_every_language() {
+        for catalog in crate::messages::test_support::all_catalogs() {
+            assert!(!Group::RemoteAccess.label(&catalog).is_empty());
+            assert!(!Section::RemoteConnection.label(&catalog).is_empty());
+            for id in ["remote_enabled", "relay_url"] {
+                let option = option(id).unwrap();
+                assert!(!(option.label)(&catalog).is_empty());
+                assert!(!(option.description)(&catalog).is_empty());
+            }
+        }
+        let pt = crate::messages::test_support::pt_br();
+        assert_eq!(Group::RemoteAccess.label(&pt), "Acesso remoto");
+        assert_eq!(Section::RemoteConnection.label(&pt), "CONEXÃO");
     }
 
     #[test]

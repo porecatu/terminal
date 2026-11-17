@@ -287,6 +287,15 @@ background_monitoring = false
 history_seconds = 60
 
 
+# --- Acesso remoto ----------------------------------------------------------
+[remote]
+# Acesso remoto pelo Porecatu Remote. Desligado por padrão. Vale na hora.
+enabled = false
+# Endereço do seu Porecatu Relay (wss://). O token fica no cofre do sistema,
+# nunca aqui. Vale na hora.
+relay_url = ""
+
+
 # --- Atalhos de teclado -----------------------------------------------------
 # Formato: "teclas" = "ação". Teclas em minúsculas, unidas por "+":
 # ctrl, shift, alt, cmd e a tecla. Nomes de teclas especiais: equals, minus,
@@ -588,3 +597,9 @@ tree_indent = 16
 line_width = 1.5
 # Opacidade da área sob a linha, de 0.0 a 1.0. Aval visual do dono pendente.
 fill_opacity = 0.15
+
+# Acesso remoto: QR de pareamento. As cores ficam no tema, na seção [remote].
+[appearance.remote]
+# Lado do QR, em pixels lógicos, com a zona de silêncio. Aval visual do dono
+# pendente.
+qr_size = 208

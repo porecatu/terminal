@@ -313,7 +313,19 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 |---|---|---|---|---|
 | `task_manager.toggle` | Alterna a janela entre o terminal e o gerenciador de tarefas ([PRD-024](../prd/prd-024-gerenciador-de-tarefas.md)). **Sem atalho padrão** (`—`) — precedente de `group.new_tab`. Com o botão do app oculto, é o único caminho | [PRD-024](../prd/prd-024-gerenciador-de-tarefas.md) RF-24.1, [ADR-0095](../adr/0095-gerenciador-de-tarefas-modo-da-janela.md) §8 | fora de fase | |
 
-> **Estado.** Existe no catálogo e no despacho, **sem efeito por enquanto**: a abertura do modo vem numa etapa seguinte da implementação do PRD-024. Mira a janela, não o painel (`targets_pane() == false`). As famílias `search.*`, `pane.*`, `scrollback.*`, `clipboard.*`, `selection.*`, `font.*` e `ssh.reconnect` **miram o painel** (`Action::targets_pane`) e não fazem nada com o gerenciador aberto ([RF-24.5](../prd/prd-024-gerenciador-de-tarefas.md)).
+> **Estado.** Implementada: alterna a janela entre o terminal e o gerenciador de tarefas, como o botão do app. Mira a janela, não o painel (`targets_pane() == false`). As famílias `search.*`, `pane.*`, `scrollback.*`, `clipboard.*`, `selection.*`, `font.*` e `ssh.reconnect` **miram o painel** (`Action::targets_pane`) e não fazem nada com o gerenciador aberto ([RF-24.5](../prd/prd-024-gerenciador-de-tarefas.md)).
+
+---
+
+## `remote.*` — acesso remoto
+
+| Ação | O que faz | Origem | Fase | Arg |
+|---|---|---|---|---|
+| `remote.toggle` | Liga ou desliga o acesso remoto, gravando `[remote] enabled` pelo `porecatu-config::edit`. **Sem atalho padrão** (`—`) — precedente de `group.new_tab` | [PRD-025](../prd/prd-025-acesso-remoto.md) RF-25.15, [ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md) §7 | fora de fase | |
+| `remote.pair` | Abre a tela de configurações no grupo "Acesso remoto" e, com o relay conectado, já mostra o QR. **Sem atalho padrão** (`—`) | [PRD-025](../prd/prd-025-acesso-remoto.md) RF-25.15, [ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md) §7 | fora de fase | |
+| `remote.disconnect_all` | Desconecta todos os aparelhos, sem revogar. **Sem atalho padrão** (`—`) | [PRD-025](../prd/prd-025-acesso-remoto.md) RF-25.15, [ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md) §7 | fora de fase | |
+
+> **Estado.** Implementadas, com efeito ([PRD-025](../prd/prd-025-acesso-remoto.md)). `remote.toggle` grava `[remote] enabled` no `porecatu.toml` (por `porecatu-config::edit`) e quem liga ou desliga o acesso é o hot reload, não a ação; falha na gravação vira aviso. `remote.pair` abre a tela de configurações no grupo "Acesso remoto" (a janela de origem é a que a abriu) e pede o QR **só se o estado for "Conectado"**; sem conexão com o relay a tela abre com o botão "Mostrar QR code" esmaecido e a razão. `remote.disconnect_all` desconecta todos os aparelhos **sem revogar** (os pareamentos ficam); sem acesso ligado não faz nada. Miram o app, não o painel (`targets_pane() == false`), então continuam despachadas com o gerenciador de tarefas aberto.
 
 ---
 

@@ -44,6 +44,8 @@
 //! `icon_em_size` (`[appearance.tabs]`) -- o mesmo token de em de ícone que
 //! `chrome.rs` usa, não duplicado aqui.
 
+use std::time::Instant;
+
 use porecatu_core::{GroupColor, Workspace};
 use porecatu_locale::Catalog;
 use porecatu_render::{
@@ -53,6 +55,7 @@ use porecatu_session::named::EntryStatus;
 
 use crate::chrome::{badge_size, centered_glyph, push_badge, push_shadow};
 use crate::context_menu::ContextMenu;
+use crate::devices_popover::{self, DeviceEntry, DevicesTarget};
 use crate::dialog::{ConfirmDialog, DialogButton, LineTone, SecretFocus};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
@@ -428,6 +431,21 @@ fn dialog_block_height(rows: usize, size: f32, line_height: f32) -> f32 {
     size + rows.saturating_sub(1) as f32 * line_height
 }
 
+/// O tamanho da linha de dica de um diálogo: 11px, o da descrição e do escopo da
+/// tela de configurações (§2.12), no tom Terciário (ADR-0108 §3).
+const DIALOG_HINT_SIZE: f32 = 11.0;
+
+/// A face e o tamanho de uma linha entre o corpo e os botões, pelo tom: o dado em
+/// mono (a impressão digital do pareamento, em Iosevka, ADR-0108 §3) e a dica
+/// em 11px; as demais são do corpo.
+fn dialog_line_style(tone: LineTone, body_size: f32) -> (FontFace, f32) {
+    match tone {
+        LineTone::Mono => (MASK_FONT, body_size),
+        LineTone::Hint => (BODY_FONT, DIALOG_HINT_SIZE),
+        LineTone::Data | LineTone::Warning | LineTone::Text => (BODY_FONT, body_size),
+    }
+}
+
 /// Largura do parágrafo mais largo de `text`, sem quebrar.
 fn natural_width(text: &str, font: FontFace, size: f32, measurer: &mut TextMeasurer) -> f32 {
     text.lines()
@@ -486,7 +504,7 @@ pub struct SecretView<'a> {
 
 /// Fonte do campo mascarado: os pontos são texto da Iosevka Fixed, com o mesmo
 /// avanço de célula (ADR-0075 §1).
-const MASK_FONT: FontFace = FontFace::Mono { bold: false };
+pub(crate) const MASK_FONT: FontFace = FontFace::Mono { bold: false };
 
 pub fn layout_dialog(
     window_width: f32,
@@ -542,7 +560,10 @@ pub fn layout_dialog(
     let line_naturals: Vec<f32> = dialog
         .lines
         .iter()
-        .map(|line| natural_width(&line.text, BODY_FONT, body_size, measurer))
+        .map(|line| {
+            let (font, size) = dialog_line_style(line.tone, body_size);
+            natural_width(&line.text, font, size, measurer)
+        })
         .collect();
     // Sem cofre, a nota explica a caixa desabilitada.
     let note = dialog
@@ -601,9 +622,8 @@ pub fn layout_dialog(
         .iter()
         .zip(&line_naturals)
         .map(|(line, &natural)| {
-            dialog_rows(
-                &line.text, natural, BODY_FONT, body_size, width, padding, measurer,
-            )
+            let (font, size) = dialog_line_style(line.tone, body_size);
+            dialog_rows(&line.text, natural, font, size, width, padding, measurer)
         })
         .collect();
     let note_rows = note.map_or_else(Vec::new, |(text, natural)| {
@@ -616,9 +636,14 @@ pub fn layout_dialog(
     let body_height = dialog_block_height(body_rows.len(), body_size, line_height);
     // Cada linha extra custa o `gap` e a própria altura (uma entrelinha por
     // linha quebrada), como o corpo.
-    let lines_height: f32 = line_rows
+    let lines_height: f32 = dialog
+        .lines
         .iter()
-        .map(|rows| gap + dialog_block_height(rows.len(), body_size, line_height))
+        .zip(&line_rows)
+        .map(|(line, rows)| {
+            let (_, size) = dialog_line_style(line.tone, body_size);
+            gap + dialog_block_height(rows.len(), size, line_height)
+        })
         .sum();
     // O diálogo de segredo ganha o campo (a altura do campo do editor), a
     // linha da caixa e, sem cofre, a nota.
@@ -963,21 +988,15 @@ pub fn paint_dialog(
     for (line, rows) in dialog.lines.iter().zip(&layout.line_rows) {
         y += gap;
         let color = match line.tone {
-            LineTone::Data => pal.warning_body_text,
+            LineTone::Data | LineTone::Mono => pal.warning_body_text,
+            LineTone::Hint => pal.status_bar_stale_cwd,
             LineTone::Warning => pal.warning_severity_warning,
             LineTone::Text if dialog.body_is_error => pal.warning_severity_error,
             LineTone::Text => pal.dialog_body_text,
         };
-        push_rows(
-            &mut out,
-            rows,
-            (text_x, y),
-            line_height,
-            BODY_FONT,
-            body_size,
-            color,
-        );
-        y += dialog_block_height(rows.len(), body_size, line_height);
+        let (font, size) = dialog_line_style(line.tone, body_size);
+        push_rows(&mut out, rows, (text_x, y), line_height, font, size, color);
+        y += dialog_block_height(rows.len(), size, line_height);
     }
 
     // Campo mascarado e caixa "Lembrar" (ADR-0075 §2).
@@ -1142,13 +1161,14 @@ pub fn paint_dialog(
         layout.confirm_rect,
         &dialog.confirm_label,
         // Conectar é o primário do rodapé da tela de configurações, não o
-        // destrutivo (ADR-0075 §2).
-        if dialog.secret.is_some() {
+        // destrutivo (ADR-0075 §2); o Parear do pareamento remoto também
+        // (ADR-0108 §3, `primary_confirm`).
+        if dialog.secret.is_some() || dialog.primary_confirm {
             crate::settings::TOGGLE_ON
         } else {
             pal.dialog_confirm_background
         },
-        if dialog.secret.is_some() {
+        if dialog.secret.is_some() || dialog.primary_confirm {
             crate::toggle::TOGGLE_KNOB_COLOR
         } else {
             pal.dialog_confirm_text
@@ -3033,6 +3053,268 @@ pub fn session_picker_hit(
     None
 }
 
+// ---- popover de aparelhos conectados (PRD-025 RF-25.13, ADR-0108 §4) ----
+// Anatomia do popover de sessões (§2.22) sem o campo de texto, sobre os tokens
+// do menu de contexto (§2.16) e de `[appearance.session_picker]`: nenhum valor
+// novo. A linha de um aparelho tem duas linhas de texto -- o nome (12.5px) e,
+// abaixo, "plataforma · conectado há X" em 11px Terciário --, então a altura
+// dela sai dos mesmos tokens: a de um item (`item_height`) mais o vão e a
+// altura da segunda linha.
+
+/// Altura da segunda linha de uma linha de aparelho: o 11px do Terciário
+/// (§1.4; é o `description_size` da tela de configurações).
+const DEVICE_DETAIL_SIZE: f32 = 11.0;
+/// Vão entre o nome e a segunda linha: o `NAME_DESCRIPTION_GAP` da §2.12, que
+/// o mesmo par nome/descrição da tela de configurações usa.
+const DEVICE_DETAIL_GAP: f32 = 2.0;
+
+pub struct DevicesLayout {
+    pub popover_rect: Rect,
+    /// Uma por aparelho, na ordem da lista.
+    pub row_rects: Vec<Rect>,
+    /// O alvo "Desconectar" de cada linha, alinhado por índice com
+    /// `row_rects`.
+    pub disconnect_rects: Vec<Rect>,
+    pub divider_rect: Rect,
+    pub disconnect_all_rect: Rect,
+    pub open_settings_rect: Rect,
+}
+
+/// `bar_width`/`is_macos`: para achar `devices_button_rect`, de onde a borda
+/// direita do popover nasce (a regra do popover de sessões, ADR-0055 §2). A
+/// largura do alvo "Desconectar" vem do texto do catálogo, medido aqui: um
+/// shaping por chamada, e o popover só existe com o botão aberto.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_devices_popover(
+    device_count: usize,
+    catalog: &Catalog,
+    config: &porecatu_config::Config,
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_bottom_y: f32,
+    is_macos: bool,
+    window_width: f32,
+    window_height: f32,
+    measurer: &mut TextMeasurer,
+) -> DevicesLayout {
+    let menu_cfg = &config.appearance.context_menu;
+    let editor_cfg = &config.appearance.group_editor;
+    let width = config.appearance.session_picker.width as f32;
+    let padding = menu_cfg.padding as f32;
+    let item_height = menu_cfg.item_height as f32;
+    let item_padding_x = menu_cfg.item_padding_x as f32;
+    let font_size = menu_cfg.font_size as f32;
+    let row_height = item_height + DEVICE_DETAIL_GAP + DEVICE_DETAIL_SIZE;
+    let disconnect_width =
+        measurer.measure_width(&msg::devices::disconnect(catalog), BODY_FONT, font_size)
+            + item_padding_x * 2.0;
+
+    let rows_height = row_height * device_count as f32;
+    let divider_block = SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT;
+    let height = padding * 2.0 + rows_height + divider_block + item_height * 2.0;
+
+    let button_rect = tab_bar::devices_button_rect(style, bar_width, bar_bottom_y, is_macos);
+    let mut x = button_rect.x + button_rect.width - width;
+    if x < 0.0 {
+        x = 0.0;
+    }
+    if x + width > window_width {
+        x = (window_width - width).max(0.0);
+    }
+    let mut y = bar_bottom_y + editor_cfg.offset_y as f32;
+    if y + height > window_height {
+        y = (window_height - height).max(0.0);
+    }
+    let popover_rect = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    let inner_x = popover_rect.x + padding;
+    let inner_width = popover_rect.width - padding * 2.0;
+    let mut row_rects = Vec::with_capacity(device_count);
+    let mut disconnect_rects = Vec::with_capacity(device_count);
+    let mut cursor_y = popover_rect.y + padding;
+    for _ in 0..device_count {
+        let row = Rect {
+            x: inner_x,
+            y: cursor_y,
+            width: inner_width,
+            height: row_height,
+        };
+        disconnect_rects.push(Rect {
+            x: row.x + row.width - disconnect_width,
+            y: row.y + (row.height - item_height) / 2.0,
+            width: disconnect_width,
+            height: item_height,
+        });
+        row_rects.push(row);
+        cursor_y += row_height;
+    }
+    let divider_rect = Rect {
+        x: inner_x + SAVE_DIVIDER_MARGIN_X,
+        y: cursor_y + SAVE_DIVIDER_MARGIN_Y,
+        width: inner_width - SAVE_DIVIDER_MARGIN_X * 2.0,
+        height: SAVE_DIVIDER_HEIGHT,
+    };
+    let items_top = divider_rect.y + SAVE_DIVIDER_HEIGHT + SAVE_DIVIDER_MARGIN_Y;
+    let disconnect_all_rect = Rect {
+        x: inner_x,
+        y: items_top,
+        width: inner_width,
+        height: item_height,
+    };
+    let open_settings_rect = Rect {
+        y: items_top + item_height,
+        ..disconnect_all_rect
+    };
+
+    DevicesLayout {
+        popover_rect,
+        row_rects,
+        disconnect_rects,
+        divider_rect,
+        disconnect_all_rect,
+        open_settings_rect,
+    }
+}
+
+/// O que está sob `point`: o "Desconectar" de uma linha (identificado pela
+/// sessão, não pelo índice) ou um dos dois itens de baixo. O corpo da linha
+/// não é alvo.
+pub fn devices_popover_hit(
+    layout: &DevicesLayout,
+    devices: &[DeviceEntry],
+    point: (f32, f32),
+) -> Option<DevicesTarget> {
+    for (device, rect) in devices.iter().zip(&layout.disconnect_rects) {
+        if rect_contains(*rect, point) {
+            return Some(DevicesTarget::Disconnect(device.client));
+        }
+    }
+    if rect_contains(layout.disconnect_all_rect, point) {
+        return Some(DevicesTarget::DisconnectAll);
+    }
+    if rect_contains(layout.open_settings_rect, point) {
+        return Some(DevicesTarget::OpenSettings);
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn paint_devices_popover(
+    layout: &DevicesLayout,
+    devices: &[DeviceEntry],
+    highlighted: Option<DevicesTarget>,
+    now: Instant,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    catalog: &Catalog,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
+    let menu_cfg = &config.appearance.context_menu;
+    let item_padding_x = menu_cfg.item_padding_x as f32;
+    let item_text_size = menu_cfg.font_size as f32;
+    let item_radius = menu_cfg.item_corner_radius as f32;
+
+    let mut out = Vec::new();
+    push_shadow(&mut out, layout.popover_rect, menu_cfg.corner_radius as f32);
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect: layout.popover_rect,
+        radius: menu_cfg.corner_radius as f32,
+        color: pal.context_menu_background,
+        border_color: pal.context_menu_border,
+        border_width: 1.0,
+    }));
+
+    let highlight = |out: &mut Vec<Primitive>, rect: Rect| {
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect,
+            radius: item_radius,
+            color: pal.menu_item_hover,
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
+    };
+    let label = |out: &mut Vec<Primitive>, rect: Rect, text: String| {
+        out.push(Primitive::Text(TextRun {
+            origin: (
+                rect.x + item_padding_x,
+                rect.y + (rect.height - item_text_size) / 2.0,
+            ),
+            text,
+            font: BODY_FONT,
+            size_px: item_text_size,
+            color: pal.menu_item_text,
+        }));
+    };
+
+    let disconnect_text = msg::devices::disconnect(catalog);
+    for ((device, &row), &button) in devices
+        .iter()
+        .zip(&layout.row_rects)
+        .zip(&layout.disconnect_rects)
+    {
+        // O nome e a segunda linha dividem a largura que o alvo deixa.
+        let budget = (button.x - item_padding_x - (row.x + item_padding_x)).max(0.0);
+        let name_y = row.y + (menu_cfg.item_height as f32 - item_text_size) / 2.0;
+        out.push(Primitive::Text(TextRun {
+            origin: (row.x + item_padding_x, name_y),
+            text: fit_label(device.name.clone(), budget, item_text_size, measurer),
+            font: BODY_FONT,
+            size_px: item_text_size,
+            color: pal.menu_item_text,
+        }));
+        out.push(Primitive::Text(TextRun {
+            origin: (
+                row.x + item_padding_x,
+                name_y + item_text_size + DEVICE_DETAIL_GAP,
+            ),
+            text: fit_label(
+                devices_popover::detail_text(catalog, device, now),
+                budget,
+                DEVICE_DETAIL_SIZE,
+                measurer,
+            ),
+            font: BODY_FONT,
+            size_px: DEVICE_DETAIL_SIZE,
+            // Terciário (§1.4), o mesmo da segunda linha da tela de
+            // configurações.
+            color: pal.status_bar_stale_cwd,
+        }));
+        if highlighted == Some(DevicesTarget::Disconnect(device.client)) {
+            highlight(&mut out, button);
+        }
+        label(&mut out, button, disconnect_text.clone());
+    }
+
+    out.push(Primitive::Quad(Quad {
+        // O mesmo divisor do popover de sessões (`editor_divider`).
+        rect: layout.divider_rect,
+        color: pal.editor_divider,
+    }));
+    for (target, rect, text) in [
+        (
+            DevicesTarget::DisconnectAll,
+            layout.disconnect_all_rect,
+            msg::devices::disconnect_all(catalog),
+        ),
+        (
+            DevicesTarget::OpenSettings,
+            layout.open_settings_rect,
+            msg::devices::open_settings(catalog),
+        ),
+    ] {
+        if highlighted == Some(target) {
+            highlight(&mut out, rect);
+        }
+        label(&mut out, rect, text);
+    }
+    out
+}
+
 // ---- tooltip (espec §2.20, ADR-0019, `[appearance.tooltip]`) ----
 
 pub fn paint_tooltip(
@@ -3522,6 +3804,128 @@ mod tests {
             color_of("A autenticidade deste host não pode ser confirmada."),
             palette::hex(0xd7, 0xdc, 0xe3)
         );
+    }
+
+    fn pair_dialog(catalog: &porecatu_locale::Catalog) -> ConfirmDialog {
+        ConfirmDialog::pair_device(
+            catalog,
+            porecatu_remote::PairingId(7),
+            "Pixel de Leonardo",
+            "Android",
+            "ABCD EFGH IJKL MNOP",
+        )
+    }
+
+    #[test]
+    fn the_pairing_dialog_paints_pair_as_the_primary_button_and_the_old_ones_stay_destructive() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let catalog = test_support::pt_br();
+
+        let confirm_fill = |dialog: &ConfirmDialog, measurer: &mut TextMeasurer| {
+            let layout = layout_dialog(1000.0, 700.0, dialog, &config, measurer);
+            let primitives = paint_dialog(
+                &layout, dialog, &config, &pal, 1000.0, 700.0, None, measurer,
+            );
+            colors_of(&primitives)
+                .into_iter()
+                .find(|(rect, _)| *rect == layout.confirm_rect)
+                .map(|(_, color)| color)
+                .expect("the confirm button")
+        };
+
+        assert_eq!(
+            confirm_fill(&pair_dialog(&catalog), &mut measurer),
+            crate::settings::TOGGLE_ON
+        );
+        // Every other two-button dialog keeps the destructive confirm.
+        for dialog in [
+            two_button_dialog(),
+            ConfirmDialog::revoke_device(&catalog, "Pixel", [1; 32]),
+            ConfirmDialog::recreate_identity(&catalog),
+            ConfirmDialog::delete_profile(&catalog, "web", 0, false),
+            ConfirmDialog::close_tab(&catalog, "vim", porecatu_core::TabId::new(1)),
+        ] {
+            assert_eq!(
+                confirm_fill(&dialog, &mut measurer),
+                pal.dialog_confirm_background,
+                "{:?}",
+                dialog.action
+            );
+        }
+    }
+
+    #[test]
+    fn the_pairing_dialog_paints_the_fingerprint_in_mono_and_the_hint_small_and_tertiary() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let catalog = test_support::pt_br();
+        let dialog = pair_dialog(&catalog);
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+        let primitives = paint_dialog(
+            &layout,
+            &dialog,
+            &config,
+            &pal,
+            1000.0,
+            700.0,
+            None,
+            &mut measurer,
+        );
+        let run = |label: &str| {
+            primitives
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Primitive::Text(run) if run.text == label => Some(run.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no text {label:?}"))
+        };
+
+        // The fingerprint: Iosevka, the size of the body, the "Secundário" of data.
+        let fingerprint = run("ABCD EFGH IJKL MNOP");
+        assert_eq!(fingerprint.font, MASK_FONT);
+        assert_eq!(
+            fingerprint.size_px,
+            config.appearance.dialog.font_size as f32
+        );
+        assert_eq!(fingerprint.color, pal.warning_body_text);
+        // The hint: the system face, 11px, the tertiary of the screens.
+        let hint = run("Confira se o celular mostra o mesmo código.");
+        assert_eq!(hint.font, BODY_FONT);
+        assert_eq!(hint.size_px, 11.0);
+        assert_eq!(hint.color, pal.status_bar_stale_cwd);
+        // The body names the device and the platform; the buttons read "Recusar"
+        // and "Parear", the cancel being the first to have the focus.
+        run("Pixel de Leonardo (Android) quer parear com este computador.");
+        run("Recusar");
+        run("Parear");
+        assert_eq!(dialog.focused(), DialogButton::Cancel);
+    }
+
+    #[test]
+    fn the_pairing_dialog_never_cuts_the_fingerprint_or_the_hint_in_any_language() {
+        let config = porecatu_config::Config::default();
+        let cfg = &config.appearance.dialog;
+        let mut measurer = TextMeasurer::new();
+        for catalog in test_support::all_catalogs() {
+            let dialog = pair_dialog(&catalog);
+            let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+            let budget = layout.modal_rect.width - cfg.padding as f32 * 2.0;
+            // Each row of each line fits the content box; none is lost.
+            for (line, rows) in dialog.lines.iter().zip(&layout.line_rows) {
+                let (font, size) = dialog_line_style(line.tone, cfg.font_size as f32);
+                assert_eq!(
+                    rows.join(" ").split_whitespace().collect::<Vec<_>>(),
+                    line.text.split_whitespace().collect::<Vec<_>>()
+                );
+                for row in rows {
+                    assert!(measurer.measure_width(row, font, size) <= budget + 0.5);
+                }
+            }
+        }
     }
 
     #[test]
@@ -4515,5 +4919,250 @@ mod tests {
             move_to_group_hit(&layout, center(layout.visible_row_rects[0])),
             Some(0)
         );
+    }
+
+    // ---- popover de aparelhos conectados (ADR-0108 §4)
+
+    fn connected(names: &[&str]) -> Vec<DeviceEntry> {
+        let now = Instant::now();
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| DeviceEntry {
+                client: porecatu_remote::ClientId(i as u64 + 1),
+                name: (*name).to_owned(),
+                platform: porecatu_remote::DevicePlatform::Ios,
+                connected_at: now,
+            })
+            .collect()
+    }
+
+    fn devices_layout(
+        devices: &[DeviceEntry],
+        config: &porecatu_config::Config,
+        measurer: &mut TextMeasurer,
+    ) -> DevicesLayout {
+        let style = TabBarStyle::DEFAULT;
+        layout_devices_popover(
+            devices.len(),
+            &test_support::pt_br(),
+            config,
+            &style,
+            800.0,
+            crate::chrome::bar_height(&style),
+            false,
+            800.0,
+            600.0,
+            measurer,
+        )
+    }
+
+    /// The right edge of the popover is the right edge of its button (the
+    /// rule of the sessions popover), eight pixels under the bar, with the
+    /// width of `[appearance.session_picker]`.
+    #[test]
+    fn the_devices_popover_hangs_under_its_button_with_the_right_edges_aligned() {
+        let config = porecatu_config::Config::default();
+        let style = TabBarStyle::DEFAULT;
+        let bar = crate::chrome::bar_height(&style);
+        let mut measurer = TextMeasurer::new();
+        let layout = devices_layout(&connected(&["Pixel"]), &config, &mut measurer);
+        let button = tab_bar::devices_button_rect(&style, 800.0, bar, false);
+        let popover = layout.popover_rect;
+        assert_eq!(popover.x + popover.width, button.x + button.width);
+        assert_eq!(popover.width, config.appearance.session_picker.width as f32);
+        assert_eq!(
+            popover.y,
+            bar + config.appearance.group_editor.offset_y as f32
+        );
+    }
+
+    /// One row per device, each the height of an item plus the second line;
+    /// then the divider and the two items, all inside the popover with its
+    /// padding, and the height grows by exactly one row per device.
+    #[test]
+    fn the_devices_popover_has_a_row_per_device_then_the_divider_and_two_items() {
+        let config = porecatu_config::Config::default();
+        let menu = &config.appearance.context_menu;
+        let item = menu.item_height as f32;
+        let row = item + DEVICE_DETAIL_GAP + DEVICE_DETAIL_SIZE;
+        let mut measurer = TextMeasurer::new();
+        let one = devices_layout(&connected(&["Pixel"]), &config, &mut measurer);
+        let three = devices_layout(
+            &connected(&["Pixel", "iPad", "Galaxy"]),
+            &config,
+            &mut measurer,
+        );
+
+        assert_eq!(one.row_rects.len(), 1);
+        assert_eq!(three.row_rects.len(), 3);
+        assert_eq!(three.row_rects[0].height, row);
+        assert_eq!(
+            three.popover_rect.height - one.popover_rect.height,
+            2.0 * row,
+            "one row per device, nothing else grows"
+        );
+        // Top to bottom: rows, divider, "Disconnect all", "Open settings".
+        let last_row = three.row_rects[2];
+        assert!(three.divider_rect.y >= last_row.y + last_row.height);
+        assert!(three.disconnect_all_rect.y > three.divider_rect.y);
+        assert_eq!(
+            three.open_settings_rect.y,
+            three.disconnect_all_rect.y + item
+        );
+        let padding = menu.padding as f32;
+        assert_eq!(
+            three.open_settings_rect.y + three.open_settings_rect.height + padding,
+            three.popover_rect.y + three.popover_rect.height,
+            "the popover ends one padding under the last item"
+        );
+        // The "Disconnect" of each row sits on the right edge of the row, in
+        // the row, and the rows are stacked without overlap.
+        for (row_rect, button) in three.row_rects.iter().zip(&three.disconnect_rects) {
+            assert_eq!(button.x + button.width, row_rect.x + row_rect.width);
+            assert!(
+                button.y >= row_rect.y && button.y + button.height <= row_rect.y + row_rect.height
+            );
+        }
+        assert!(three.row_rects[1].y >= three.row_rects[0].y + three.row_rects[0].height);
+    }
+
+    /// A click is on the "Disconnect" of a row (by session, not by index), on
+    /// one of the two items, or on nothing -- the body of a row is not a
+    /// target.
+    #[test]
+    fn the_devices_popover_hit_test_names_the_session_not_the_row() {
+        let config = porecatu_config::Config::default();
+        let devices = connected(&["Pixel", "iPad"]);
+        let mut measurer = TextMeasurer::new();
+        let layout = devices_layout(&devices, &config, &mut measurer);
+        assert_eq!(
+            devices_popover_hit(&layout, &devices, center(layout.disconnect_rects[0])),
+            Some(DevicesTarget::Disconnect(porecatu_remote::ClientId(1)))
+        );
+        assert_eq!(
+            devices_popover_hit(&layout, &devices, center(layout.disconnect_rects[1])),
+            Some(DevicesTarget::Disconnect(porecatu_remote::ClientId(2)))
+        );
+        assert_eq!(
+            devices_popover_hit(&layout, &devices, center(layout.disconnect_all_rect)),
+            Some(DevicesTarget::DisconnectAll)
+        );
+        assert_eq!(
+            devices_popover_hit(&layout, &devices, center(layout.open_settings_rect)),
+            Some(DevicesTarget::OpenSettings)
+        );
+        // The name side of a row is the row, not a target.
+        let row = layout.row_rects[0];
+        assert_eq!(
+            devices_popover_hit(&layout, &devices, (row.x + 2.0, row.y + 2.0)),
+            None
+        );
+        // Outside the popover.
+        assert_eq!(devices_popover_hit(&layout, &devices, (0.0, 0.0)), None);
+    }
+
+    fn texts(primitives: &[Primitive]) -> Vec<String> {
+        primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text(run) => Some(run.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Each row says the name and, under it, "platform · connected X ago";
+    /// the button of the row and the two items carry the catalog's words.
+    #[test]
+    fn the_devices_popover_paints_names_details_and_the_actions() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let catalog = test_support::pt_br();
+        let devices = connected(&["Pixel", "iPad"]);
+        let mut measurer = TextMeasurer::new();
+        let layout = devices_layout(&devices, &config, &mut measurer);
+        let now = devices[0].connected_at + std::time::Duration::from_secs(3 * 60);
+        let primitives = paint_devices_popover(
+            &layout,
+            &devices,
+            None,
+            now,
+            &config,
+            &pal,
+            &catalog,
+            &mut measurer,
+        );
+        assert_eq!(
+            texts(&primitives),
+            [
+                "Pixel",
+                "iOS · conectado há 3 minutos",
+                "Desconectar",
+                "iPad",
+                "iOS · conectado há 3 minutos",
+                "Desconectar",
+                "Desconectar todos",
+                "Abrir configurações de acesso remoto",
+            ]
+        );
+        // Nothing highlighted: no `menu_item_hover` quad.
+        let hovers = |primitives: &[Primitive]| {
+            primitives
+                .iter()
+                .filter(
+                    |p| matches!(p, Primitive::RoundedQuad(q) if q.color == pal.menu_item_hover),
+                )
+                .count()
+        };
+        assert_eq!(hovers(&primitives), 0);
+        let lit = paint_devices_popover(
+            &layout,
+            &devices,
+            Some(DevicesTarget::DisconnectAll),
+            now,
+            &config,
+            &pal,
+            &catalog,
+            &mut measurer,
+        );
+        assert_eq!(hovers(&lit), 1, "the highlighted target, only it");
+    }
+
+    /// The second line is Terciário 11px, under the name -- never over the
+    /// "Disconnect" of the row -- and a name too long to fit is cut before it.
+    #[test]
+    fn the_devices_popover_cuts_a_long_name_before_the_disconnect_target() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let catalog = test_support::pt_br();
+        let long = "um aparelho com um nome extremamente comprido ".repeat(4);
+        let devices = connected(&[&long]);
+        let mut measurer = TextMeasurer::new();
+        let layout = devices_layout(&devices, &config, &mut measurer);
+        let primitives = paint_devices_popover(
+            &layout,
+            &devices,
+            None,
+            devices[0].connected_at,
+            &config,
+            &pal,
+            &catalog,
+            &mut measurer,
+        );
+        let runs: Vec<&TextRun> = primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+        let (name, detail) = (runs[0], runs[1]);
+        assert!(name.text.ends_with('…'), "{}", name.text);
+        let name_end = name.origin.0 + width_of(&name.text, name.size_px, &mut measurer);
+        assert!(name_end <= layout.disconnect_rects[0].x, "{name_end}");
+        assert_eq!(detail.size_px, DEVICE_DETAIL_SIZE);
+        assert_eq!(detail.color, pal.status_bar_stale_cwd);
+        assert!(detail.origin.1 > name.origin.1 + name.size_px);
     }
 }

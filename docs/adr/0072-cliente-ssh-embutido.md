@@ -55,6 +55,8 @@ russh = { version = "=0.65.0", default-features = false, features = ["ring", "rs
 tokio = { version = "…", default-features = false, features = ["rt-multi-thread", "net", "sync", "time", "io-util"] }
 ```
 
+> **Nota (2026-11-17).** A versão em uso é `=0.65.1`, subida pelo Dependabot (#103, `4a34fca`) dentro da mesma série; a decisão (versão exata, `ring`, sem DSA) não mudou.
+
 - **Versão exata**, como `alacritty_terminal`, `wgpu` e `toml_edit` (CLAUDE.md, "Dependências"). O `russh` fixa `ssh-key` e `rsa` em pré-lançamento com `=`, e subir um sem o outro é exatamente o tipo de resolução que quebra em silêncio.
 - **`ring`, não `aws-lc-rs`**: mesma compatibilidade de licença, um requisito de build a menos (NASM) nas máquinas de quem contribui e no CI de Windows.
 - **`rsa` ligado**: chave RSA de usuário ainda é a mais comum em servidor legado. O `rsa` em pré-lançamento tem histórico de canal lateral de tempo (RUSTSEC-2023-0071, *Marvin*); o estado dele na série 0.10 fica **a conferir no PR que adiciona a dependência**, registrado como risco abaixo.

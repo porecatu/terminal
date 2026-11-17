@@ -31,7 +31,7 @@ use crate::prompt::{Answer, PromptGuard, PromptId, PromptSink};
 use crate::scroll::TermScroll;
 use crate::search::{InvalidPattern, SearchJob, SearchMode, SearchStep};
 use crate::selection::{SelectionKind, SelectionSide};
-use crate::snapshot::{CursorShape, GridSnapshot, TermModes};
+use crate::snapshot::{CursorShape, GridSnapshot, ScrollbackInfo, TermModes};
 use crate::ssh_backend::SshBackend;
 
 /// Intervalo de checagem de `try_wait` na thread de observação do processo.
@@ -372,6 +372,32 @@ impl Terminal {
         engine.snapshot_into(out);
     }
 
+    /// A tela viva (o fundo da grade ativa), independente da rolagem do
+    /// desktop, sem seleção nem ocorrências de busca, junto do estado do
+    /// scrollback (ADR-0105 §3 e §5). Mesmo lock curto de `snapshot_into`; não
+    /// mexe no `display_offset`. Ver `TermEngine::snapshot_live_into`.
+    pub fn snapshot_live_into(&self, out: &mut GridSnapshot) -> ScrollbackInfo {
+        lock(&self.engine).snapshot_live_into(out)
+    }
+
+    /// Uma página do histórico, de cima para baixo, terminando na linha
+    /// `offset` (0 = a logo acima da tela). Quem chama limita `count` (500 no
+    /// protocolo remoto). Ver `TermEngine::history_into`.
+    pub fn history_into(
+        &self,
+        offset: usize,
+        count: usize,
+        out: &mut GridSnapshot,
+    ) -> ScrollbackInfo {
+        lock(&self.engine).history_into(offset, count, out)
+    }
+
+    /// Troca o `scrollback.lines` da grade viva (recarga da configuração),
+    /// contando como descartado o que o encolhimento cortar.
+    pub fn set_scrollback_lines(&self, lines: usize) {
+        lock(&self.engine).set_scrollback_lines(lines);
+    }
+
     /// Drena um evento pendente (título, bell, clipboard, fim de processo
     /// -- seção 4.3), se houver. Chamar em loop até `None` a cada wakeup.
     pub fn try_recv_event(&self) -> Option<TermEvent> {
@@ -389,6 +415,15 @@ impl Terminal {
     /// renderizado, que pode estar obsoleto.
     pub fn modes(&self) -> TermModes {
         lock(&self.engine).modes()
+    }
+
+    /// Tamanho atual da grade, `(cols, rows)`, lido do motor -- não do
+    /// snapshot do último frame, que só é refeito quando a aba é pintada
+    /// (ADR-0105 §2: a árvore mandada ao celular diz o tamanho de painéis
+    /// de abas invisíveis também).
+    pub fn grid_size(&self) -> (usize, usize) {
+        let (rows, cols) = lock(&self.engine).size();
+        (cols, rows)
     }
 
     /// O que o backend tem de vivo além do shell (ADR-0034, ADR-0071 §6):

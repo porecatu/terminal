@@ -64,6 +64,14 @@ impl PendingPrompts {
         self.queue.is_empty()
     }
 
+    /// O painel tem uma pergunta esperando o usuário chegar a ele? (PRD-025:
+    /// é o que faz o painel aparecer como "esperando o desktop".)
+    pub(crate) fn has_pane(&self, tab: TabId, pane: PaneId) -> bool {
+        self.queue
+            .iter()
+            .any(|pending| pending.tab == tab && pending.pane == pane)
+    }
+
     /// Tira e devolve as perguntas pendentes de `tab`, na ordem em que
     /// chegaram: a aba vai para outra janela (ADR-0090 §3 passo 5).
     pub(crate) fn take_tab(&mut self, tab: TabId) -> Vec<Pending> {
