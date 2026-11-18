@@ -1550,7 +1550,10 @@ fn a_remembered_passphrase_is_kept_only_after_the_server_accepts_the_key() {
     connected_and_echoing(&channel);
     let account = passphrase_account(&fixture.key_file);
     // The wrong one was never written: a single write, of the right one.
-    assert_eq!(*vault.written.lock().unwrap(), [account.clone()]);
+    assert_eq!(
+        *vault.written.lock().unwrap(),
+        std::slice::from_ref(&account)
+    );
     assert_eq!(vault.stored(&account).as_deref(), Some(PROOF));
 }
 
@@ -1608,7 +1611,10 @@ fn a_remembered_password_is_written_only_after_the_server_accepts() {
 
     connected_and_echoing(&channel);
     let account = fixture.password_account();
-    assert_eq!(*vault.written.lock().unwrap(), [account.clone()]);
+    assert_eq!(
+        *vault.written.lock().unwrap(),
+        std::slice::from_ref(&account)
+    );
     assert_eq!(vault.stored(&account).as_deref(), Some(PROOF));
     assert!(user.notices().is_empty());
 }
