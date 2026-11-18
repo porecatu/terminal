@@ -4719,10 +4719,17 @@ mod remote_group_tests {
             ]
         );
         assert_eq!(rows[2].remote, Some(RemoteTarget::Token));
-        assert_eq!(
-            rows[2].unavailable.as_deref(),
-            Some("Cofre do sistema indisponível: o acesso remoto não liga sem ele.")
-        );
+        // The note is fitted to the width left beside the text field, and with
+        // the system UI font (ADR-0084) that width depends on the platform: on
+        // Linux it is cut. What matters is the note being the reason, whole or
+        // as a prefix of it ending in "…".
+        let full = "Cofre do sistema indisponível: o acesso remoto não liga sem ele.";
+        let note = rows[2].unavailable.as_deref().expect("the reason note");
+        if note != full {
+            assert!(note.ends_with('…'), "{note:?}");
+            let kept = note.trim_end_matches('…').trim_end();
+            assert!(!kept.is_empty() && full.starts_with(kept), "{note:?}");
+        }
         assert!(rows[2].description_full.is_empty());
     }
 
