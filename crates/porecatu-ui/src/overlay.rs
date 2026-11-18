@@ -53,7 +53,7 @@ use porecatu_render::{
 };
 use porecatu_session::named::EntryStatus;
 
-use crate::chrome::{badge_size, centered_glyph, push_badge, push_shadow};
+use crate::chrome::{badge_size, centered_glyph, paint_zone_icon_button, push_badge, push_shadow};
 use crate::context_menu::ContextMenu;
 use crate::devices_popover::{self, DeviceEntry, DevicesTarget};
 use crate::dialog::{ConfirmDialog, DialogButton, LineTone, SecretFocus};
@@ -290,9 +290,12 @@ pub fn layout_warnings(
     }
 }
 
+/// `close_button`: the notice whose "X" is under the cursor, and whether it is
+/// pressed -- the same hover/pressed background as the tab's close button.
 pub fn paint_warnings(
     layout: &WarningLayout,
     stack: &WarningStack,
+    close_button: Option<(usize, bool)>,
     config: &porecatu_config::Config,
     style: &TabBarStyle,
     pal: &ResolvedPalette,
@@ -361,12 +364,20 @@ pub fn paint_warnings(
             }));
         }
 
-        out.push(centered_glyph(
-            icon::X,
+        let state = match close_button {
+            Some((index, pressed)) if index == entry.index => (true, pressed),
+            _ => (false, false),
+        };
+        paint_zone_icon_button(
             entry.close_button,
+            icon::X,
             close_icon_size,
+            state,
             pal.chrome_icon,
-        ));
+            style,
+            pal,
+            &mut out,
+        );
     }
     out
 }
@@ -2777,7 +2788,7 @@ pub fn paint_session_picker(
     layout: &SessionPickerLayout,
     picker: &SessionPicker,
     save_chip_label: Option<&str>,
-    hovered_delete: Option<usize>,
+    delete_button: Option<(usize, bool)>,
     config: &porecatu_config::Config,
     style: &TabBarStyle,
     pal: &ResolvedPalette,
@@ -2999,17 +3010,27 @@ pub fn paint_session_picker(
         // teclado -- com um `X` em toda linha, a lista viraria uma
         // coluna de botões destrutivos (ADR-0055 §2).
         if is_highlighted {
-            let icon_color = if hovered_delete == Some(row_index) {
+            // The tab close button's hover/pressed background; the
+            // destructive tint of the glyph stays on hover (ADR-0055 §2).
+            let state = match delete_button {
+                Some((index, pressed)) if index == row_index => (true, pressed),
+                _ => (false, false),
+            };
+            let icon_color = if state.0 {
                 pal.menu_item_destructive_text
             } else {
                 pal.menu_item_text
             };
-            out.push(centered_glyph(
-                icon::X,
+            paint_zone_icon_button(
                 delete_rect,
+                icon::X,
                 style.icon_em_size,
+                state,
                 icon_color,
-            ));
+                style,
+                pal,
+                &mut out,
+            );
         }
     }
 
@@ -3520,6 +3541,100 @@ mod tests {
             n.padding_y as f32 * 2.0
                 + (n.font_size as f32).max(line_height_of(&config))
                 + line_height_of(&config)
+        );
+    }
+
+    /// The "X" of a notice has the tab close button's background: none at
+    /// rest, the hover one under the cursor, the pressed one while armed.
+    #[test]
+    fn the_notice_close_button_reveals_hover_and_pressed_backgrounds() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let style = TabBarStyle::DEFAULT;
+        let mut measurer = TextMeasurer::new();
+        let stack = warning_stack(&["curto"]);
+        let layout = layout_warnings(&stack, &config, 30.0, 1000.0, &mut measurer);
+        let backgrounds = |close_button: Option<(usize, bool)>| {
+            paint_warnings(&layout, &stack, close_button, &config, &style, &pal)
+                .into_iter()
+                .filter_map(|p| match p {
+                    Primitive::RoundedQuad(q)
+                        if q.color == pal.window_button_hover_bg
+                            || q.color == pal.window_button_pressed_bg =>
+                    {
+                        Some(q.color)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(backgrounds(None).is_empty(), "no background at rest");
+        assert_eq!(
+            backgrounds(Some((0, false))),
+            [pal.window_button_hover_bg],
+            "hover"
+        );
+        assert_eq!(
+            backgrounds(Some((0, true))),
+            [pal.window_button_pressed_bg],
+            "pressed"
+        );
+        assert!(
+            backgrounds(Some((7, true))).is_empty(),
+            "another notice's button does not light this one"
+        );
+    }
+
+    /// The "X" of a session row: same background as the tab's close button,
+    /// only on the row it is over, and the glyph keeps the destructive tint.
+    #[test]
+    fn the_session_delete_button_reveals_hover_and_pressed_backgrounds() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let style = TabBarStyle::DEFAULT;
+        let catalog = test_support::pt_br();
+        let mut measurer = TextMeasurer::new();
+        let entry = |name: &str| porecatu_session::named::NamedSessionEntry {
+            name: name.to_string(),
+            file: std::path::PathBuf::from(format!("{name}.json")),
+            saved_at: Some(1),
+            status: EntryStatus::Ok,
+        };
+        let picker = SessionPicker::open_browsing(vec![entry("a"), entry("b")]);
+        let layout =
+            layout_session_picker(&picker, &config, &style, 1000.0, 30.0, false, 1000.0, 700.0);
+        // Row 0 is the highlighted one (the only one that shows the "X").
+        let mut backgrounds = |delete_button: Option<(usize, bool)>| {
+            paint_session_picker(
+                &layout,
+                &picker,
+                None,
+                delete_button,
+                &config,
+                &style,
+                &pal,
+                &palette::ResolvedTermPalette::from_config(&config),
+                &catalog,
+                &mut measurer,
+            )
+            .into_iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q)
+                    if q.color == pal.window_button_hover_bg
+                        || q.color == pal.window_button_pressed_bg =>
+                {
+                    Some(q.color)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+        };
+        assert!(backgrounds(None).is_empty(), "no background at rest");
+        assert_eq!(backgrounds(Some((0, false))), [pal.window_button_hover_bg]);
+        assert_eq!(backgrounds(Some((0, true))), [pal.window_button_pressed_bg]);
+        assert!(
+            backgrounds(Some((1, true))).is_empty(),
+            "the row that is not highlighted shows no X"
         );
     }
 

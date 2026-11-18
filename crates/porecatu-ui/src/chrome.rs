@@ -1058,7 +1058,7 @@ fn with_alpha(color: Color, alpha: f64) -> Color {
 /// sobre a cápsula de um grupo). Extraído aqui para
 /// os botões (sessões, engrenagem, "+") nunca divergirem entre si.
 #[allow(clippy::too_many_arguments)]
-fn paint_zone_icon_button(
+pub(crate) fn paint_zone_icon_button(
     rect: Rect,
     icon: icon::Icon,
     icon_size: f32,

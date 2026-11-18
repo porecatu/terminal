@@ -16443,8 +16443,29 @@ impl App {
                 bar_width,
                 gpu.text_measurer(),
             );
-            let primitives =
-                overlay::paint_warnings(&warning_layout, &state.warnings, config, style, pal);
+            let cursor_logical = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            // Hover and pressed of the "X" like the tab's close button: the
+            // press arms `armed_overlay` (ADR-0081), the release acts.
+            let close_button = warning_layout
+                .entries
+                .iter()
+                .find(|entry| tab_bar::rect_contains(entry.close_button, cursor_logical))
+                .map(|entry| {
+                    let pressed =
+                        state.armed_overlay == Some(OverlayTarget::WarningClose(entry.index));
+                    (entry.index, pressed)
+                });
+            let primitives = overlay::paint_warnings(
+                &warning_layout,
+                &state.warnings,
+                close_button,
+                config,
+                style,
+                pal,
+            );
             frame.set_layer(Layer::Warning, primitives);
         }
 
@@ -16674,11 +16695,20 @@ impl App {
                 state.cursor_position.0 as f32 / state.scale,
                 state.cursor_position.1 as f32 / state.scale,
             );
-            let hovered_delete = layout
+            // Pressed: the press armed this very "X" (ADR-0081) and the
+            // cursor is still over it, as the tab's close button.
+            let delete_button = layout
                 .delete_button_rects
                 .iter()
                 .position(|&rect| tab_bar::rect_contains(rect, cursor_logical))
-                .map(|i| layout.first_visible_index + i);
+                .map(|i| {
+                    let index = layout.first_visible_index + i;
+                    let pressed = state.armed_overlay
+                        == Some(OverlayTarget::Session(
+                            overlay::SessionPickerHit::DeleteRow(index),
+                        ));
+                    (index, pressed)
+                });
             // Chip do atalho (ADR-0055 §2): lido do mapa resolvido, some
             // se o usuário desvinculou `session.save_named`. Só faz
             // sentido em navegação -- em edição o item vira o campo.
@@ -16693,7 +16723,7 @@ impl App {
                 &layout,
                 picker,
                 save_chip_label.as_deref(),
-                hovered_delete,
+                delete_button,
                 config,
                 style,
                 pal,
