@@ -2729,6 +2729,12 @@ pub fn layout_session_picker(
         first_visible_index = picker.scroll_top().min(max_first);
         let row_padding_x = picker_cfg.row_padding_x as f32;
         let delete_target_width = style.icon_button_width(style.close_button_size);
+        // The height is the tab close button's hover/pressed square
+        // (`close_hover_size`), not the drawing (`close_button_size`): the
+        // revealed background gets the same padding around the "X" as the
+        // tab's, and the hit rect covers it. The glyph stays centered where
+        // it was.
+        let delete_side = style.close_hover_size();
         for i in 0..visible_rows {
             let rect = Rect {
                 x: inner_x,
@@ -2738,9 +2744,9 @@ pub fn layout_session_picker(
             };
             let delete_rect = Rect {
                 x: rect.x + rect.width - row_padding_x - delete_target_width,
-                y: rect.y + (rect.height - style.close_button_size) / 2.0,
+                y: rect.y + (rect.height - delete_side) / 2.0,
                 width: delete_target_width,
-                height: style.close_button_size,
+                height: delete_side,
             };
             visible_row_rects.push(rect);
             delete_button_rects.push(delete_rect);
@@ -3629,6 +3635,13 @@ mod tests {
             })
             .collect::<Vec<_>>()
         };
+        // The revealed square has the side of the tab's (`close_hover_size`),
+        // not the 17 of the drawing, and fits inside the row.
+        let delete = layout.delete_button_rects[0];
+        let row = layout.visible_row_rects[0];
+        assert_eq!(delete.height, style.close_hover_size());
+        assert!(delete.height > style.close_button_size);
+        assert!(delete.y >= row.y && delete.y + delete.height <= row.y + row.height);
         assert!(backgrounds(None).is_empty(), "no background at rest");
         assert_eq!(backgrounds(Some((0, false))), [pal.window_button_hover_bg]);
         assert_eq!(backgrounds(Some((0, true))), [pal.window_button_pressed_bg]);
