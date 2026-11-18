@@ -14,9 +14,9 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
-## [Não publicado]
+## [0.10.0] - 2026-11-18
 
-Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado por padrão.
+Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado por padrão. Substitui a 0.9.11, retirada.
 
 ### Adicionado
 
@@ -74,7 +74,10 @@ Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado p
   o celular ativa ou cria uma aba nela
   ([ADR-0109](docs/adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md)).
 
-## [0.9.11] - 2026-11-12
+## [0.9.11] - 2026-11-12 [YANKED]
+
+> Tag e release retiradas em 2026-11-18; todo o conteúdo abaixo segue
+> publicado na [0.10.0](#0100---2026-11-18).
 
 Gerenciador de tarefas na janela (botão do app), com gráficos de CPU, memória e disco e a lista de processos. Substitui a 0.9.10, retirada.
 
@@ -131,7 +134,8 @@ Gerenciador de tarefas na janela (botão do app), com gráficos de CPU, memória
 ## [0.9.10] - 2026-11-07 [YANKED]
 
 > Tag e release retiradas em 2026-11-12; todo o conteúdo abaixo segue
-> publicado na [0.9.11](#0911---2026-11-12).
+> publicado na [0.9.11](#0911---2026-11-12-yanked), por sua vez incluída na
+> [0.10.0](#0100---2026-11-18).
 
 Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popover "Mover para janela…") e restauração de sessão nomeada na janela atual. Substitui a 0.9.9, retirada.
 
@@ -188,7 +192,8 @@ Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popov
 
 > Tag e release retiradas em 2026-11-07; todo o conteúdo abaixo segue
 > publicado na [0.9.10](#0910---2026-11-07-yanked), por sua vez incluída na
-> [0.9.11](#0911---2026-11-12).
+> [0.9.11](#0911---2026-11-12-yanked) e, depois, na
+> [0.10.0](#0100---2026-11-18).
 
 Abas fixadas (apps que abrem junto com o Porecatu), relógio do sistema na barra de status em tela cheia e botão de menu do app sem fundo nem borda.
 
