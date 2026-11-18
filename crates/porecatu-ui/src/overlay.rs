@@ -236,6 +236,9 @@ pub fn layout_warnings(
     let title_size = notices.font_size as f32;
     let line_height = notices.line_height as f32;
     let close_size = notices.close_button_size as f32;
+    let close_side = TabBarStyle::from_config(config)
+        .close_hover_size()
+        .max(close_size);
 
     let x = content_width - margin_right - width;
     let mut y = bar_height + margin_top;
@@ -259,11 +262,22 @@ pub fn layout_warnings(
             width,
             height,
         };
-        let close_button = Rect {
+        // The "X" is drawn in the `close_size` box; the button grows around
+        // it, same center, to the tab close button's hover/pressed square
+        // (`close_hover_size`), so the revealed background has the tab's
+        // padding around the glyph and the hit rect covers it.
+        let drawing = Rect {
             x: rect.x + rect.width - padding_x - close_size + 4.0,
             y: rect.y + padding_y - 2.0,
             width: close_size,
             height: close_size,
+        };
+        let grow = (close_side - close_size) / 2.0;
+        let close_button = Rect {
+            x: drawing.x - grow,
+            y: drawing.y - grow,
+            width: close_side,
+            height: close_side,
         };
         entries.push(WarningEntry {
             index,
@@ -3560,6 +3574,12 @@ mod tests {
         let mut measurer = TextMeasurer::new();
         let stack = warning_stack(&["curto"]);
         let layout = layout_warnings(&stack, &config, 30.0, 1000.0, &mut measurer);
+        // The revealed square has the side of the tab's (`close_hover_size`),
+        // inside the card.
+        let close = layout.entries[0].close_button;
+        let card = layout.entries[0].rect;
+        assert_eq!(close.height, style.close_hover_size());
+        assert!(close.x + close.width <= card.x + card.width && close.y >= card.y);
         let backgrounds = |close_button: Option<(usize, bool)>| {
             paint_warnings(&layout, &stack, close_button, &config, &style, &pal)
                 .into_iter()
