@@ -1346,12 +1346,20 @@ fn the_question_carries_the_types_already_registered_and_the_skipped_lines() {
 
 #[test]
 fn time_spent_on_the_host_key_question_does_not_count_against_the_connect_timeout() {
+    // The budget also pays for the real work around the question (TCP, key
+    // exchange, the end of the handshake), which in a debug build on a loaded
+    // machine passed 1 s: at 400 ms the test failed now and then. The user only
+    // has to take longer than the budget, since counting the question alone
+    // would then end in a timeout, so a generous budget costs no extra time.
+    const BUDGET: Duration = Duration::from_millis(2000);
+    const DECIDING: Duration = Duration::from_millis(2500);
+
     /// A user who takes longer than the connect timeout to decide.
     struct SlowUser;
     impl Asker for SlowUser {
         fn ask(&self, _question: Question, on_reply: Box<dyn FnOnce(Reply) + Send>) {
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(900));
+                std::thread::sleep(DECIDING);
                 on_reply(Reply::Confirm);
             });
         }
@@ -1359,7 +1367,7 @@ fn time_spent_on_the_host_key_question_does_not_count_against_the_connect_timeou
 
     let fixture = Fixture::start_unregistered(Script::Echo, true);
     let mut spawn = fixture.spawn();
-    spawn.connect_timeout = Duration::from_millis(400);
+    spawn.connect_timeout = BUDGET;
     let channel = fixture.open_asking(spawn, Arc::new(SlowUser));
 
     channel.writer().write_all(b"patient\n").unwrap();
