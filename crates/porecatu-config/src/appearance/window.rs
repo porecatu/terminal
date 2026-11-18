@@ -31,7 +31,8 @@ pub struct Window {
     pub animations: bool,
     /// Formar/arrastar grupo (RF-2.5).
     pub animation_reflow_ms: u64,
-    /// Colapso e expansão de grupo (RF-2.13).
+    /// Colapso e expansão de grupo (RF-2.13); também o fade da máscara de
+    /// modal (ADR-0110).
     pub animation_collapse_ms: u64,
     /// `[appearance.window.background_image]` -- PRD-018, ADR-0062 §8. [A]
     /// Same type as `[terminal.background_image]`, reused rather than copied;

@@ -198,7 +198,8 @@ enabled = true
 # Transparência da janela inteira, de 0.0 a 1.0. Reinicie o app depois de
 # mudar.
 opacity = 1.0
-# Animações ao agrupar, arrastar e recolher abas.
+# Animações ao agrupar, arrastar e recolher abas, e o fade da máscara sobre a
+# janela bloqueada por uma janela modal (animation_collapse_ms).
 animations = true
 animation_reflow_ms = 180
 animation_collapse_ms = 150

@@ -264,6 +264,8 @@ pub(crate) struct SettingsWindow {
     /// O editor de perfil, janela filha e modal desta (ADR-0080 §1). Campo
     /// **daqui**, não de `App`: ele não tem sentido sem a tela e cai com ela.
     profile_editor: Option<ProfileEditorWindow>,
+    /// ADR-0110: the mask over this screen while the profile editor blocks it.
+    modal_mask: crate::modal_mask::ModalMask,
     /// Um editor que a tela pediu e `App` ainda não abriu: criar a janela do SO
     /// precisa do `event_loop` e do `GpuContext`, que a tela não tem.
     editor_request: Option<ProfileEditor>,
@@ -335,6 +337,7 @@ impl SettingsWindow {
             file: FileState::new(disk),
             config_path,
             profile_editor: None,
+            modal_mask: crate::modal_mask::ModalMask::default(),
             editor_request: None,
             last_profile_click: None,
             token: {
@@ -418,6 +421,18 @@ impl SettingsWindow {
         self.profile_editor = None;
         self.editor_request = None;
         self.window.request_redraw();
+    }
+
+    /// ADR-0110: moves the mask toward "blocked by the profile editor" before
+    /// the paint, which draws it.
+    pub(crate) fn advance_modal_mask(&mut self, now: Instant, fade: std::time::Duration) {
+        self.modal_mask
+            .advance(self.profile_editor.is_some(), now, fade);
+    }
+
+    /// The mask's fade is running: the screen chains the next frame.
+    pub(crate) fn modal_mask_fading(&self) -> bool {
+        self.modal_mask.is_fading()
     }
 
     /// OK (§6): valida a cópia contra o rascunho com ela no lugar. Sem problema,
@@ -3419,6 +3434,14 @@ impl SettingsWindow {
                     measurer,
                 ),
             );
+        }
+        // ADR-0110: the mask of the screen blocked by the profile editor,
+        // over everything and under the border.
+        if let Some(mask) =
+            self.modal_mask
+                .paint(self.logical_width, self.logical_height, pal.dialog_overlay)
+        {
+            frame.push(Layer::Modal, mask);
         }
         for primitive in border {
             frame.push(Layer::Modal, primitive);

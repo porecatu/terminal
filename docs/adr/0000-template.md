@@ -111,6 +111,7 @@
 | [0107](0107-acoes-remotas-sobre-o-workspace.md) | Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop | Aceito — implementado; verificado só por teste automatizado · §2 revisto pelo 0109 |
 | [0108](0108-superficies-de-ui-do-acesso-remoto.md) | Superfícies de UI do acesso remoto: grupo nas configurações, QR em `Quad`s, diálogo de pareamento e botão de aparelhos conectados na zona fixa | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
 | [0109](0109-o-celular-muda-a-aba-ativa-do-desktop.md) | O celular muda a aba ativa do desktop: ações com a ativação do gesto local e `activate-tab` | Aceito — implementado; verificado só por teste automatizado |
+| [0110](0110-mascara-de-modal-nas-janelas-bloqueadas.md) | Máscara de modal nas janelas bloqueadas: a cor do overlay do diálogo, com fade | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
 
 ## Convenção
 

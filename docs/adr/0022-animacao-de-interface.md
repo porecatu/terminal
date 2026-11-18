@@ -91,6 +91,8 @@ Animation {
 | Reordenação das abas ao formar grupo | RF-2.5 | `.18s` |
 | Rotação do caret da pílula ao colapsar/expandir | espec. §2.4 | `.15s` |
 
+> **Revisto pelo [ADR-0110](0110-mascara-de-modal-nas-janelas-bloqueadas.md).** A lista ganha o fade da máscara de modal sobre a janela bloqueada (pedido do dono), em `animation_collapse_ms`. Fica num estado próprio (`ModalMask`), não no `AnimationClock`, com o mesmo `Instant` de fora e o mesmo `WaitUntil`.
+
 **Animação nova exige requisito novo**, na mesma disciplina que o
 [ADR-0018](0018-composicao-de-frame.md) aplica a camadas (*"camada nova exige
 requisito novo, como ação nova exige entrada no catálogo"*) e que o

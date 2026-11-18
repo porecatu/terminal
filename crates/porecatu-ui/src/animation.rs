@@ -35,7 +35,7 @@ use crate::tab_bar::{TabBarLayout, TabRect};
 /// Cadência de redraw enquanto uma animação está ativa (~60fps) -- não é
 /// valor de design, é a mesma classe de constante de interação que
 /// `input::MULTI_CLICK_THRESHOLD`.
-const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+pub(crate) const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Clone)]
 struct Reflow {

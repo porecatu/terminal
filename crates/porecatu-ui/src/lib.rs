@@ -63,6 +63,7 @@ mod keymap;
 mod language;
 mod masked_field;
 mod messages;
+mod modal_mask;
 mod move_to_group;
 mod move_to_window;
 mod notice_queue;
@@ -1578,6 +1579,9 @@ struct WindowState {
     /// expandir (`.15s`, `toggle_group_collapse`) e ao formar grupo
     /// (RF-2.5, `.18s`, `action_group_create`).
     animations: AnimationClock,
+    /// ADR-0110: the mask over this window while the settings screen blocks
+    /// it (ADR-0064), synced at each redraw.
+    modal_mask: modal_mask::ModalMask,
     /// Hover/tooltip do ADR-0019 -- RF-1.10, título truncado da aba.
     hover: Hover,
     /// Aviso do app (ADR-0014 canal 1, RF-10.15/RF-10.16).
@@ -2935,6 +2939,7 @@ impl WindowState {
             incoming: None,
             drag_elsewhere: false,
             animations: AnimationClock::default(),
+            modal_mask: modal_mask::ModalMask::default(),
             hover: Hover::default(),
             warnings: WarningStack::default(),
             dialog: None,
@@ -7690,6 +7695,7 @@ impl WindowState {
             self.warnings.next_deadline(),
             self.hover.next_deadline(),
             self.animations.next_deadline(now),
+            self.modal_mask.next_deadline(now),
             self.cursor_blink.next_deadline(),
             // The rows of the connected-devices popover say "connected X ago".
             self.devices_popover.and(devices_popover::next_age_change(
@@ -11519,6 +11525,7 @@ impl App {
         self.settings = self.create_settings_window(event_loop, attributes);
         if self.settings.is_some() {
             self.set_terminal_windows_enabled(false);
+            self.request_redraw_terminal_windows();
             // The paired devices are the host's list, kept by the process.
             self.push_remote_to_settings();
             // The screen may open on "Acesso remoto": the vault is asked now.
@@ -11768,6 +11775,16 @@ impl App {
         self.set_terminal_windows_enabled(true);
         if let Some(settings) = self.settings.take() {
             self.settings_last_group = settings.selected_group();
+        }
+        self.request_redraw_terminal_windows();
+    }
+
+    /// ADR-0110: the modal mask of the terminal windows follows the settings
+    /// screen, and is synced at the redraw -- opening or closing the screen
+    /// asks every terminal window for one.
+    fn request_redraw_terminal_windows(&self) {
+        for state in self.windows.values() {
+            state.window.request_redraw();
         }
     }
 
@@ -12052,8 +12069,14 @@ impl App {
         };
         // O tema da sessão entra na linha abaixo da lista de temas (RF-16.25).
         settings.set_session_theme(self.session_theme.as_deref());
+        // ADR-0110: the profile editor blocks the screen; the mask is synced
+        // here and painted by `paint`, and its fade chains the frames.
+        settings.advance_modal_mask(Instant::now(), modal_mask::fade_duration(&self.config));
         let frame = settings.paint(env, &self.pal, &self.term_pal, gpu.text_measurer());
         settings.render(gpu, &self.pal, &frame);
+        if settings.modal_mask_fading() {
+            settings.request_redraw();
+        }
     }
 
     /// O ponto único de "para cada janela" que inclui a de configurações
@@ -15675,6 +15698,8 @@ impl App {
 
     fn redraw(&mut self, window_id: WindowId) {
         let font_size_px = self.effective_font_size_px();
+        // ADR-0110: the open settings screen blocks this window (ADR-0064).
+        let modal_blocked = modal_mask::terminal_windows_blocked(self.settings.is_some());
         let Some(gpu) = &mut self.gpu else {
             return;
         };
@@ -16792,6 +16817,21 @@ impl App {
             frame.set_layer(Layer::Modal, primitives);
         }
 
+        // ADR-0110: the modal mask, over everything in the window (its own
+        // dialog included, which is blocked too) and under the border.
+        state.modal_mask.advance(
+            modal_blocked,
+            Instant::now(),
+            modal_mask::fade_duration(config),
+        );
+        if let Some(mask) = state.modal_mask.paint(
+            state.logical_width,
+            state.logical_height,
+            pal.dialog_overlay,
+        ) {
+            frame.push(Layer::Modal, mask);
+        }
+
         // Borda de 1px da janela, por cima de tudo (um pouco mais escura que
         // o fundo da janela).
         for primitive in chrome::window_border(
@@ -16828,7 +16868,8 @@ impl App {
         // final. Sem animação pendente, nada é pedido (ADR-0007).
         let was_animating = !state.animations.is_empty();
         state.animations.tick(Instant::now());
-        if was_animating {
+        // ADR-0110: the mask's fade chains its frames the same way.
+        if was_animating || state.modal_mask.is_fading() {
             state.window.request_redraw();
         }
 
