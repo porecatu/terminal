@@ -1633,6 +1633,13 @@ struct WindowState {
     /// button of the connected devices exists" -- the **one** answer every
     /// geometry call of the bar takes ([`WindowState::devices_button`]).
     connected_devices: Vec<DeviceEntry>,
+    /// The names of the phones viewing each tab of this window, in the order
+    /// they arrived (PRD-025 RF-25.30, ADR-0112 §1): `App` projects it from
+    /// `RemoteState` the way it does `connected_devices`, because the window
+    /// does not know the remote access. Empty by default; a tab with no entry
+    /// (or an empty list) is viewed by nobody. Read by the painting, the
+    /// tooltip and the accessibility tree; never saved.
+    remote_viewers: HashMap<TabId, Vec<String>>,
     /// The popover of the connected-devices button (ADR-0108 section 4); the
     /// same mutual exclusion of `close_all_popovers`. Closes by itself when
     /// the last device goes (`set_connected_devices`).
@@ -2957,6 +2964,7 @@ impl WindowState {
             move_to_window: None,
             session_picker: None,
             connected_devices: Vec::new(),
+            remote_viewers: HashMap::new(),
             devices_popover: None,
             last_pill_click: None,
             selection: Selection::default(),
@@ -3032,6 +3040,7 @@ impl WindowState {
         let move_to_window = self.move_to_window.as_ref().map(|(_, popover)| popover);
         let session_picker = &self.session_picker;
         let devices = &self.connected_devices;
+        let remote_viewers = &self.remote_viewers;
         let search = &self.search;
         // ADR-0095 §10: with the task manager open the tree carries the list
         // (every row, in view or not) instead of the panes. Built outside the
@@ -3074,6 +3083,7 @@ impl WindowState {
                 active_pane_order.as_deref(),
                 task_manager_access.as_ref(),
                 devices,
+                remote_viewers,
                 style,
                 catalog,
                 language,
@@ -3424,10 +3434,9 @@ impl WindowState {
     /// sempre `Running` (ADR-0037 §1) -- `spawn_tab_runtime` não muda
     /// estado nenhum, só cria o `PaneRuntime`.
     ///
-    /// `activate`: todo gesto local ativa a aba nova (`true`), e o acesso
-    /// remoto também (ADR-0109 §1, que revê o ADR-0107 §2); o parâmetro fica
-    /// porque criar sem ativar é uma capacidade do modelo
-    /// (`Workspace::new_tab_with`), mas hoje nenhum chamador pede `false`.
+    /// `activate`: every local gesture activates the new tab (`true`); the
+    /// remote `new-tab` asks for `false` (ADR-0111 section 1), which the model
+    /// offers as `Workspace::new_tab_with`.
     #[allow(clippy::too_many_arguments)]
     fn open_tab(
         &mut self,
@@ -6372,8 +6381,8 @@ impl WindowState {
     ///
     /// The clicks on a track tab (the press, and the release of a press that
     /// was a selection drag, RF-22.18), on a pinned box (no `gpu`: the zone
-    /// never scrolls the track) and the remote `activate-tab` (ADR-0109 §2)
-    /// call it, with the target spelled out. The flag
+    /// never scrolls the track) call it, with the target spelled out. No
+    /// remote action calls it (ADR-0111 section 1). The flag
     /// `task_manager_tab_click` is the click's, so it stays with the callers
     /// that are clicks. Without `gpu` the track is not scrolled.
     fn activate_tab_by_click(
@@ -6681,20 +6690,27 @@ impl WindowState {
             return;
         };
         let collapsing = !group.is_collapsed();
-        self.set_group_collapsed(id, collapsing, Some(gpu), style);
+        self.set_group_collapsed(id, collapsing, true, Some(gpu), style);
     }
 
-    /// Colapsa ou expande `id` (RF-2.13/RF-2.14): a seleção das abas que
-    /// somem sai, o layout de antes alimenta a animação e o modelo faz o
-    /// resto, inclusive a aba ativa (expandir ativa a primeira do grupo,
-    /// colapsar o da ativa a move pela escada de foco). É o que o clique na
-    /// pílula e `group.toggle_collapse` rodam; a ação remota `collapse-group`
-    /// chama o mesmo, sem desvio (ADR-0109 §1).
-    /// Sem `gpu` não há animação nem rolagem até a ativa.
+    /// Collapses or expands `id` (RF-2.13/RF-2.14): the selection of the tabs
+    /// that disappear goes, the previous layout feeds the animation and the
+    /// model does the rest, including the active tab (collapsing the group of
+    /// the active one moves it by the focus ladder). It is what the click on
+    /// the pill and `group.toggle_collapse` run, with `visit` set: expanding
+    /// activates the first tab of the group and the bar scrolls to the active
+    /// tab. The remote `collapse-group` calls it with `visit` unset when
+    /// expanding (ADR-0111 section 1): the group expands in place
+    /// (`Workspace::expand_group_in_place`), no tab is activated, no indicator
+    /// is cleared, the MRU of the group stays, and the bar does not scroll,
+    /// but the reflow still animates. `visit` makes no difference when
+    /// collapsing.
+    /// Without `gpu` there is no animation and no scrolling to the active tab.
     fn set_group_collapsed(
         &mut self,
         id: GroupId,
         collapsing: bool,
+        visit: bool,
         gpu: Option<&mut GpuContext>,
         style: &TabBarStyle,
     ) {
@@ -6722,13 +6738,18 @@ impl WindowState {
                 is_macos(),
             )
         });
-        self.touch_workspace(|ws| ws.collapse_group(id, collapsing));
+        let passive = !collapsing && !visit;
+        if passive {
+            self.touch_workspace(|ws| ws.expand_group_in_place(id));
+        } else {
+            self.touch_workspace(|ws| ws.collapse_group(id, collapsing));
+        }
         if let Some(old_layout) = old_layout {
             self.animations
                 .start_reflow(&old_layout, COLLAPSE_REFLOW_DURATION, Instant::now());
         }
         self.sync_window_title();
-        if let Some(gpu) = gpu {
+        if !passive && let Some(gpu) = gpu {
             self.ensure_active_tab_visible(gpu, style);
         }
     }
@@ -6794,6 +6815,18 @@ impl WindowState {
                 self.pressed_zone_button = None;
             }
         }
+        true
+    }
+
+    /// The projection `App` keeps current of which phones view which tab of
+    /// this window (ADR-0112 §1). Returns whether anything changed, so the
+    /// caller asks for a frame only then -- the same contract as
+    /// [`WindowState::set_connected_devices`]. `App::sync_remote_viewers` fills it.
+    pub(crate) fn set_remote_viewers(&mut self, viewers: HashMap<TabId, Vec<String>>) -> bool {
+        if self.remote_viewers == viewers {
+            return false;
+        }
+        self.remote_viewers = viewers;
         true
     }
 
@@ -7602,12 +7635,11 @@ impl WindowState {
             && self.devices_popover.is_none()
             && matches!(self.drag, Drag::Idle)
         {
-            let layout = tab_bar::fit_width(
+            let layout = tab_bar::fit_width_viewed(
                 &self.workspace,
                 style,
-                self.logical_width,
                 gpu.text_measurer(),
-                is_macos(),
+                &tab_bar::viewed_tabs(&self.remote_viewers),
             );
             let pinned_count = self.workspace.pinned().len();
             let track_left = tab_bar::track_shift(style, is_macos(), pinned_count);
@@ -7616,45 +7648,66 @@ impl WindowState {
             // zero -- so it **always** has the tooltip, with the tab title
             // (the same `Tab::title` the bar's labels come from). The track's
             // tabs only when their label was cut (ADR-0019).
-            tooltip::pinned_target(&self.workspace, style, is_macos(), bar_point)
-                // ADR-0108 section 4: the connected-devices button is an icon
-                // with no text: it always has the tooltip.
-                .or_else(|| {
-                    tooltip::devices_target(
-                        &self.connected_devices,
-                        &self.catalog,
-                        style,
-                        self.logical_width,
-                        bar_height(style),
-                        is_macos(),
-                        bar_point,
-                    )
-                })
-                .or_else(|| {
-                    if !tab_bar::point_in_track(
-                        style,
-                        self.logical_width,
-                        is_macos(),
-                        pinned_count,
-                        self.devices_button(),
-                        bar_point.0,
-                    ) {
-                        return None;
-                    }
-                    layout
-                        .groups
-                        .into_iter()
-                        .flat_map(|g| g.tabs)
-                        .find(|t| t.label_truncated && tab_bar_rect_contains(t.rect, content_point))
-                        .and_then(|t| {
-                            let title = self.workspace.tab(t.id)?.title().to_string();
-                            let screen_rect = Rect {
-                                x: t.rect.x + track_left - self.scroll_offset,
-                                ..t.rect
-                            };
-                            Some((HoverKey::Tab(t.id), screen_rect, title))
-                        })
-                })
+            tooltip::pinned_target(
+                &self.workspace,
+                style,
+                is_macos(),
+                bar_point,
+                &self.catalog,
+                &self.remote_viewers,
+            )
+            // ADR-0108 section 4: the connected-devices button is an icon
+            // with no text: it always has the tooltip.
+            .or_else(|| {
+                tooltip::devices_target(
+                    &self.connected_devices,
+                    &self.catalog,
+                    style,
+                    self.logical_width,
+                    bar_height(style),
+                    is_macos(),
+                    bar_point,
+                )
+            })
+            .or_else(|| {
+                if !tab_bar::point_in_track(
+                    style,
+                    self.logical_width,
+                    is_macos(),
+                    pinned_count,
+                    self.devices_button(),
+                    bar_point.0,
+                ) {
+                    return None;
+                }
+                // ADR-0112 section 4: over the box of the viewed-on-a-phone
+                // indicator the target is the box and the text is "Viewed
+                // on: name, name", even when the label fits; anywhere else
+                // on the tab it is the tab's own tooltip.
+                if let Some(target) = tooltip::viewers_target(
+                    &layout,
+                    style,
+                    &self.catalog,
+                    &self.remote_viewers,
+                    content_point,
+                    track_left - self.scroll_offset,
+                ) {
+                    return Some(target);
+                }
+                layout
+                    .groups
+                    .into_iter()
+                    .flat_map(|g| g.tabs)
+                    .find(|t| t.label_truncated && tab_bar_rect_contains(t.rect, content_point))
+                    .and_then(|t| {
+                        let title = self.workspace.tab(t.id)?.title().to_string();
+                        let screen_rect = Rect {
+                            x: t.rect.x + track_left - self.scroll_offset,
+                            ..t.rect
+                        };
+                        Some((HoverKey::Tab(t.id), screen_rect, title))
+                    })
+            })
         } else if self.task_manager.is_some()
             && !self.in_bar(self.cursor_position.1, style)
             && self.dialog.is_none()
@@ -15726,13 +15779,11 @@ impl App {
             tab_bar::trilha_width(style, bar_width, is_mac, pinned_count, devices_button);
         // Tela -> conteúdo é `x - track_left + scroll_offset`.
         let track_left = tab_bar::track_shift(style, is_mac, pinned_count);
-        let base_layout = tab_bar::fit_width(
-            &state.workspace,
-            style,
-            bar_width,
-            gpu.text_measurer(),
-            is_mac,
-        );
+        // ADR-0112 §2: the tabs a phone is viewing shorten their label and carry
+        // the indicator, in the base layout and in every preview of a drag.
+        let viewed_tabs = tab_bar::viewed_tabs(&state.remote_viewers);
+        let base_layout =
+            tab_bar::fit_width_viewed(&state.workspace, style, gpu.text_measurer(), &viewed_tabs);
         let overflow = tab_bar::overflow_state(&base_layout, trilha_width, state.scroll_offset);
         state.scroll_offset = overflow.scroll_offset;
 
@@ -16040,12 +16091,11 @@ impl App {
                             false,
                             target,
                         );
-                        let preview_layout = tab_bar::fit_width(
+                        let preview_layout = tab_bar::fit_width_viewed(
                             &preview.workspace,
                             style,
-                            bar_width,
                             gpu.text_measurer(),
-                            is_mac,
+                            &viewed_tabs,
                         );
                         drag_highlight = tab_bar::drag_highlight_rect(&preview_layout, target);
                         preview_layout
@@ -16056,12 +16106,11 @@ impl App {
                             from_zone,
                             target,
                         );
-                        tab_bar::fit_width(
+                        tab_bar::fit_width_viewed(
                             &preview.workspace,
                             style,
-                            bar_width,
                             gpu.text_measurer(),
-                            is_mac,
+                            &viewed_tabs,
                         )
                     }
                 }
@@ -16092,7 +16141,7 @@ impl App {
                         app_cross_drag::GroupArrival::Local(group),
                         preview_index,
                     );
-                    tab_bar::fit_width(&preview, style, bar_width, gpu.text_measurer(), is_mac)
+                    tab_bar::fit_width_viewed(&preview, style, gpu.text_measurer(), &viewed_tabs)
                 }
                 _ => base_layout,
             }
@@ -16175,6 +16224,9 @@ impl App {
             // ADR-0108 section 4: how many phones are connected; `0` has no
             // third button.
             state.connected_devices.len(),
+            // ADR-0112: the phones viewing each tab (pinned boxes read it here;
+            // the track tabs carry it in `paint_layout`).
+            &state.remote_viewers,
         );
         frame.set_layer(Layer::Chrome, chrome_primitives);
 

@@ -63,27 +63,32 @@ pub(crate) enum TransferDest {
     NewWindow(NewWindowPlacement),
 }
 
-/// What the destination does with the window of the OS when the payload
-/// lands (ADR-0109 sections 1 and 3, which revise ADR-0107 section 2). The
-/// arrival is **always** activated at the destination (RF-22.10) and the
-/// selections of both windows go, as in the drag and the popover; what differs
-/// is whether the window is brought forward. The user of the drag and of the
-/// popover is there, so the window is restored from the taskbar and gets the
-/// focus; a phone asking for the move never touches the window of the OS.
+/// What the destination does with the arrival when the payload lands
+/// (ADR-0111 section 1, which restores ADR-0107 section 2). The local gesture
+/// is there to see it, so the arrival is activated (RF-22.10) and the window of
+/// the OS is brought forward; a phone asking for the move changes neither the
+/// active tab nor the window of the OS. The selections of both windows go in
+/// both cases, as in the drag and the popover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransferArrival {
     /// The local gesture: activate the arrival, clear the selections, restore
     /// the destination window if it is minimized and give it the focus.
     Take,
-    /// The remote action: the same activation and selection, and **no**
-    /// `set_minimized(false)`, no `focus_window`. The origin follows the focus
-    /// ladder if the active tab was among the ones that left, as always.
-    ActivateOnly,
+    /// The remote action: insert at the destination **without activating**
+    /// (the active tab of the destination stays, and what the model does when
+    /// it had none), and **no** `set_minimized(false)`, no `focus_window`. The
+    /// origin follows the focus ladder if the active tab was among the ones
+    /// that left, as always.
+    Passive,
 }
 
 impl TransferArrival {
-    /// Whether the destination window is restored and focused. The one
-    /// difference between the two arrivals.
+    /// Whether the arrival becomes the active tab of the destination.
+    const fn activates(self) -> bool {
+        matches!(self, Self::Take)
+    }
+
+    /// Whether the destination window is restored and focused.
     const fn focuses_window(self) -> bool {
         matches!(self, Self::Take)
     }
@@ -205,6 +210,22 @@ fn activation_target(
         .or_else(|| group_last_active.and_then(|index| moves.get(index)))
         .or_else(|| moves.first())
         .map(|m| m.new)
+}
+
+/// The tab the destination activates when the payload lands: the one of
+/// [`activation_target`] for a local arrival, none for a passive one (the
+/// destination keeps its active tab).
+fn arrival_target(
+    arrival: TransferArrival,
+    grabbed: Option<TabId>,
+    group_last_active: Option<usize>,
+    moves: &[TabMove],
+) -> Option<TabId> {
+    if arrival.activates() {
+        activation_target(grabbed, group_last_active, moves)
+    } else {
+        None
+    }
 }
 
 // --- the runtime move -----------------------------------------------------
@@ -409,8 +430,8 @@ impl App {
     /// [`Self::transfer`] with the choice of what the destination does about
     /// the window of the OS ([`TransferArrival`]). The remote actions
     /// `move-tab-to-window` and `move-group-to-window` are the only caller
-    /// that asks for [`TransferArrival::ActivateOnly`]; every step is the same
-    /// one but the last bit of 7 (the window is not touched).
+    /// that asks for [`TransferArrival::Passive`]; every step is the same one
+    /// but the last bit of 7 (nothing is activated, the window is not touched).
     pub(crate) fn transfer_with(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -575,11 +596,11 @@ impl App {
         }
 
         // Step 7: activate at the destination; the selection goes in both
-        // windows (RF-22.10) -- for the phone too (ADR-0109 section 1: the
-        // move is the one of the drag). Only a local arrival also restores and
-        // focuses the destination window: the phone never touches the window
-        // of the OS (ADR-0109 section 3).
-        if let Some(target) = activation_target(grabbed, group_last_active, &moves) {
+        // windows (RF-22.10). Only a local arrival activates the arrival,
+        // restores and focuses the destination window: the phone changes
+        // neither the active tab nor the window of the OS (ADR-0111 section
+        // 1).
+        if let Some(target) = arrival_target(arrival, grabbed, group_last_active, &moves) {
             let _ = dest.touch_workspace(|ws| ws.activate_tab(target));
         }
         origin.selection.clear();
@@ -775,27 +796,76 @@ mod tests {
     // --- the decisions ---------------------------------------------------
 
     #[test]
-    fn only_a_local_arrival_focuses_the_window_and_both_activate_by_rf_22_10() {
-        // The window of the OS: the drag and the popover bring it forward, a
-        // phone never does (ADR-0109 section 3).
+    fn only_a_local_arrival_activates_and_focuses_the_window() {
+        // The drag and the popover activate the arrival (RF-22.10) and bring
+        // the window forward; a phone does neither (ADR-0111 section 1).
+        assert!(TransferArrival::Take.activates());
         assert!(TransferArrival::Take.focuses_window());
-        assert!(!TransferArrival::ActivateOnly.focuses_window());
+        assert!(!TransferArrival::Passive.activates());
+        assert!(!TransferArrival::Passive.focuses_window());
 
-        // What becomes active is the same for both (there is one decision,
-        // `activation_target`, and no arrival picks another): the one held,
-        // else the group's, else the first.
+        // What a local arrival activates: the one held, else the group's,
+        // else the first.
         let moves = [mv(3, 0), mv(4, 1)];
-        assert_eq!(activation_target(Some(tab(4)), None, &moves), Some(tab(1)));
-        assert_eq!(activation_target(None, Some(1), &moves), Some(tab(1)));
-        assert_eq!(activation_target(None, None, &moves), Some(tab(0)));
+        let take = TransferArrival::Take;
+        assert_eq!(
+            arrival_target(take, Some(tab(4)), None, &moves),
+            Some(tab(1))
+        );
+        assert_eq!(arrival_target(take, None, Some(1), &moves), Some(tab(1)));
+        assert_eq!(arrival_target(take, None, None, &moves), Some(tab(0)));
+
+        // A passive one activates nothing, whatever the payload says.
+        let passive = TransferArrival::Passive;
+        assert_eq!(arrival_target(passive, Some(tab(4)), Some(1), &moves), None);
+        assert_eq!(arrival_target(passive, None, None, &moves), None);
     }
 
-    /// The model side of a remote move (ADR-0109 sections 1 and 5): the
-    /// destination activates the arrival (the group's last active tab), the
-    /// origin's ladder picks the neighbour of the one that left, and the
-    /// protocol ids of the tab, its panes and the group do not change.
+    /// The model side of a remote move of tabs (ADR-0111 section 1): the
+    /// destination keeps its active tab, and the origin's ladder picks the
+    /// neighbour of the one that left.
     #[test]
-    fn a_remote_move_activates_the_arrival_and_keeps_the_protocol_ids() {
+    fn a_remote_move_of_tabs_keeps_the_destination_active_and_the_origin_follows_the_ladder() {
+        let mut origin = Workspace::new();
+        let a = origin.append_tab("zsh", None);
+        let b = origin.append_tab("zsh", None);
+        let c = origin.append_tab("zsh", None);
+        assert!(origin.activate_tab(b));
+        let mut dest = Workspace::new();
+        let x = dest.append_tab("zsh", None);
+        let y = dest.append_tab("zsh", None);
+        assert!(dest.activate_tab(y));
+
+        // What `transfer_with` does with a tab payload, step by step.
+        let taken = origin.take_tabs(&[b]);
+        let (olds, detached): (Vec<TabId>, Vec<DetachedTab>) = taken.into_iter().unzip();
+        let news = dest.insert_detached_tabs(detached, InsertAt::TrackEnd);
+        let moves: Vec<TabMove> = olds
+            .iter()
+            .zip(&news)
+            .map(|(&old, &new)| TabMove { old, new })
+            .collect();
+        if let Some(target) = arrival_target(TransferArrival::Passive, None, None, &moves) {
+            assert!(dest.activate_tab(target));
+        }
+
+        // The destination: the arrival is there, and the active tab is the
+        // one it had.
+        assert_eq!(dest.active_tab(), Some(y));
+        assert!(dest.tab(news[0]).is_some());
+        assert_ne!(dest.active_tab(), Some(news[0]));
+        assert_eq!(dest.track_order().collect::<Vec<_>>(), [x, y, news[0]]);
+        // The origin: the active tab left, the ladder picked a neighbour.
+        assert!(matches!(origin.active_tab(), Some(t) if t == a || t == c));
+        assert_eq!(origin.track_order().collect::<Vec<_>>(), [a, c]);
+    }
+
+    /// The model side of a remote move of a group (ADR-0111 section 1): the
+    /// destination keeps its active tab, the origin's ladder picks the
+    /// neighbour of the one that left, and the protocol ids of the tab, its
+    /// panes and the group do not change.
+    #[test]
+    fn a_remote_move_of_a_group_keeps_the_destination_active_and_the_protocol_ids() {
         let mut origin = Workspace::new();
         let a = origin.append_tab("zsh", None);
         let b = origin.append_tab("zsh", None);
@@ -830,15 +900,19 @@ mod tests {
         let pairs: Vec<(TabId, TabId)> = moves.iter().map(|m| (m.old, m.new)).collect();
         ids.rekey_tabs(win(FROM), win(TO), &pairs);
         ids.rekey_group(win(FROM), group, win(TO), new_group);
-        // Step 7: the arrival is activated, as the popover does it.
-        let target =
-            activation_target(None, group_last_active, &moves).expect("the group has tabs");
-        assert!(dest.activate_tab(target));
+        // Step 7: a remote arrival activates nothing (a local one would
+        // activate the group's last active tab, `c`).
+        assert_eq!(
+            arrival_target(TransferArrival::Take, None, group_last_active, &moves),
+            Some(moves[1].new)
+        );
+        let target = arrival_target(TransferArrival::Passive, None, group_last_active, &moves);
+        assert_eq!(target, None);
 
-        // The destination: the arrival is the active tab (the one that was
-        // active in the group, `c`), and both arrivals are there.
-        assert_eq!(dest.active_tab(), Some(moves[1].new));
-        assert_ne!(dest.active_tab(), Some(x));
+        // The destination: the active tab is the one it had, and both
+        // arrivals are there.
+        assert_eq!(dest.active_tab(), Some(x));
+        assert_ne!(dest.active_tab(), Some(moves[1].new));
         assert!(dest.group(new_group).is_some());
         assert_eq!(dest.tab(y).map(porecatu_core::Tab::id), Some(y));
         // The origin: the active tab left with the group, the ladder picked

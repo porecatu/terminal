@@ -69,6 +69,8 @@ name_placeholder = "session name"
 # Connected devices button and popover (PRD-025 RF-25.12, ADR-0108 section 4).
 [devices]
 summary = { one = "{count} device connected: {names}", other = "{count} devices connected: {names}" }
+viewed_on = "Viewed on: {names}"
+viewed_on_pinned = "{title} · Viewed on: {names}"
 row_detail = "{platform} · connected {since}"
 since_now = "just now"
 since_minutes = { one = "{count} minute ago", other = "{count} minutes ago" }
@@ -691,6 +693,7 @@ group_collapsed_colored = "Group {name}, collapsed, color {color}"
 tab_state = " ({state})"
 state_active = "active"
 state_pinned = "pinned"
+state_remote_viewing = "viewed on a phone"
 state_not_started = "not started"
 state_bell = "bell"
 state_activity = "activity"

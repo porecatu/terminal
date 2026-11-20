@@ -493,6 +493,8 @@ pub(crate) struct Core {
     latest_frames: HashMap<u64, Frame>,
     /// The panes of the last tree the UI sent.
     tree_panes: HashSet<u64>,
+    /// The tabs of the last tree the UI sent.
+    tree_tabs: HashSet<u64>,
     /// The union of the panes subscribed, as the UI last heard it.
     reported_subscriptions: Vec<u64>,
     quarantine: Option<std::path::PathBuf>,
@@ -545,6 +547,7 @@ impl Core {
             next_pairing: 1,
             latest_frames: HashMap::new(),
             tree_panes: HashSet::new(),
+            tree_tabs: HashSet::new(),
             reported_subscriptions: Vec::new(),
             quarantine,
         }
@@ -742,6 +745,12 @@ impl Core {
         self.tree_panes.contains(&pane)
     }
 
+    /// Whether `tab` is in the last tree the UI sent (pinned, loose or in a
+    /// group, in any window).
+    pub(crate) fn has_tab(&self, tab: u64) -> bool {
+        self.tree_tabs.contains(&tab)
+    }
+
     /// The last screen of `pane`, if the UI sent one.
     pub(crate) fn latest_frame(&self, pane: u64) -> Option<&Frame> {
         self.latest_frames.get(&pane)
@@ -764,12 +773,14 @@ impl Core {
     /// A new tree: panes that left lose their frame and their subscriptions.
     fn set_workspace(&mut self, workspace: Workspace) {
         self.tree_panes = panes_of(&workspace);
+        self.tree_tabs = tabs_of(&workspace);
         let tree = &self.tree_panes;
         self.latest_frames.retain(|pane, _| tree.contains(pane));
         self.workspace = Some(workspace.clone());
         self.each_active(|session, core| {
             session.send_workspace(core, &workspace);
             session.end_gone_subscriptions(core);
+            session.end_gone_view(core);
         });
     }
 
@@ -949,6 +960,23 @@ fn panes_of(workspace: &Workspace) -> HashSet<u64> {
             match item {
                 Item::Tab(t) => tab(t, &mut out),
                 Item::Group(group) => group.tabs.iter().for_each(|t| tab(t, &mut out)),
+            }
+        }
+    }
+    out
+}
+
+/// Every tab id of the tree.
+fn tabs_of(workspace: &Workspace) -> HashSet<u64> {
+    let mut out = HashSet::new();
+    for window in &workspace.windows {
+        out.extend(window.pinned.iter().map(|tab| tab.id));
+        for item in &window.items {
+            match item {
+                Item::Tab(tab) => {
+                    out.insert(tab.id);
+                }
+                Item::Group(group) => out.extend(group.tabs.iter().map(|tab| tab.id)),
             }
         }
     }

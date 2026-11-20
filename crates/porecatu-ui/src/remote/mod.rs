@@ -10,7 +10,8 @@
 //! that needs a window (build the tree, show a notice) is `App::*` in
 //! `app_remote.rs`.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -102,6 +103,73 @@ pub(crate) struct ConnectedClient {
     pub(crate) connected_at: Instant,
 }
 
+/// What the phones view, per window (ADR-0112 section 1): for each tab, the
+/// names of the devices viewing it, in the order they connected
+/// (`connected_at`, then the client). A phone that is not connected, a tab
+/// the table does not know and a window that has no viewed tab leave no trace
+/// (a window with none is absent: the caller gives it the empty map).
+pub(crate) fn viewers_by_window<W: Copy + Eq + Hash>(
+    clients: &BTreeMap<ClientId, ConnectedClient>,
+    viewing: &BTreeMap<ClientId, u64>,
+    ids: &ProtocolIds<W>,
+) -> HashMap<W, HashMap<TabId, Vec<String>>> {
+    let mut seen: Vec<_> = viewing
+        .iter()
+        .filter_map(|(client, &tab)| {
+            let connected = clients.get(client)?;
+            let (window, tab) = ids.tab_of(tab)?;
+            Some((
+                connected.connected_at,
+                *client,
+                window,
+                tab,
+                &connected.name,
+            ))
+        })
+        .collect();
+    seen.sort_by_key(|&(at, client, ..)| (at, client));
+    let mut out: HashMap<W, HashMap<TabId, Vec<String>>> = HashMap::new();
+    for (_, _, window, tab, name) in seen {
+        out.entry(window)
+            .or_default()
+            .entry(tab)
+            .or_default()
+            .push(name.clone());
+    }
+    out
+}
+
+/// Whether `current` is what [`viewers_by_window`] would give `window`,
+/// answered without building it: the check that runs on every turn of the
+/// event loop must not allocate when nothing changed. (It walks the phones in
+/// client order, which is the order they connected in; if that ever differed
+/// from `connected_at` the answer would be a harmless `false`.)
+pub(crate) fn viewers_current<W: Copy + Eq + Hash>(
+    current: &HashMap<TabId, Vec<String>>,
+    window: W,
+    clients: &BTreeMap<ClientId, ConnectedClient>,
+    viewing: &BTreeMap<ClientId, u64>,
+    ids: &ProtocolIds<W>,
+) -> bool {
+    let expected = |only: Option<TabId>| {
+        viewing.iter().filter_map(move |(client, &tab)| {
+            let connected = clients.get(client)?;
+            let (of, tab) = ids.tab_of(tab)?;
+            (of == window && only.is_none_or(|wanted| wanted == tab))
+                .then_some((tab, connected.name.as_str()))
+        })
+    };
+    if current.values().map(Vec::len).sum::<usize>() != expected(None).count() {
+        return false;
+    }
+    current.iter().all(|(&tab, names)| {
+        !names.is_empty()
+            && expected(Some(tab))
+                .map(|(_, name)| name)
+                .eq(names.iter().map(String::as_str))
+    })
+}
+
 /// A pairing request waiting for the user's answer (RF-25.8). The settings
 /// screen takes it (`App::apply_remote_event`) and shows the dialog.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +240,9 @@ pub(crate) enum Effect {
         name: String,
     },
     ClientDisconnected,
+    /// A phone now views another tab, or none (`RemoteState::viewing`): the
+    /// windows' projection of it is due.
+    ViewingChanged,
     /// The list of paired devices changed.
     DevicesChanged,
     /// The QR URI arrived (`RemoteState::pairing_uri`; the app moves it to the
@@ -203,6 +274,11 @@ pub(crate) struct RemoteState {
     pub(crate) status: RemoteStatus,
     pub(crate) devices: Vec<DeviceInfo>,
     pub(crate) clients: BTreeMap<ClientId, ConnectedClient>,
+    /// The tab (protocol id) each connected phone says it views (`view-tab`,
+    /// ADR-0112 section 1): process state, as the host reports it. A phone
+    /// that views none has no entry. [`viewers_by_window`] projects it, per
+    /// window, for the tab bar.
+    pub(crate) viewing: BTreeMap<ClientId, u64>,
     /// Protocol ids of windows, groups, tabs and panes (ADR-0105 section 1).
     pub(crate) ids: ProtocolIds<WindowId>,
     /// The panes (protocol ids) some client is subscribed to.
@@ -248,6 +324,7 @@ impl RemoteState {
             status: RemoteStatus::Off,
             devices: Vec::new(),
             clients: BTreeMap::new(),
+            viewing: BTreeMap::new(),
             ids: ProtocolIds::new(),
             subscriptions: BTreeSet::new(),
             mirror_dirty: BTreeSet::new(),
@@ -283,6 +360,7 @@ impl RemoteState {
         self.started_url = None;
         self.status = RemoteStatus::Off;
         self.clients.clear();
+        self.viewing.clear();
         self.subscriptions.clear();
         self.mirror_dirty.clear();
         self.last_mirror = None;
@@ -527,12 +605,28 @@ impl RemoteState {
             }
             RemoteEvent::ClientDisconnected { client } => {
                 self.clients.remove(&client);
+                self.viewing.remove(&client);
                 // A client that left is owed no answer.
                 self.scrollback_queue.retain(|(from, _)| *from != client);
                 // Its pending confirmations cancel the action (ADR-0107
                 // section 3): dropped, with nobody to tell.
                 self.confirmations.drop_client(client);
                 Effect::ClientDisconnected
+            }
+            RemoteEvent::ClientViewing { client, tab } => {
+                // Only a phone in session views anything.
+                if !self.clients.contains_key(&client) {
+                    return Effect::None;
+                }
+                let before = match tab {
+                    Some(tab) => self.viewing.insert(client, tab),
+                    None => self.viewing.remove(&client),
+                };
+                if before == tab {
+                    Effect::None
+                } else {
+                    Effect::ViewingChanged
+                }
             }
             RemoteEvent::Subscriptions(panes) => {
                 let panes: BTreeSet<u64> = panes.into_iter().collect();
@@ -1063,5 +1157,186 @@ mod tests {
         assert_eq!(state.mirror_due(now()), MirrorDue::Now);
         state.forget_gone_panes();
         assert!(state.begin_mirror_pass(now()).is_empty());
+    }
+    // --- the tabs the phones view (ADR-0112 section 1) ---------------------
+
+    fn viewing(client: u64, tab: Option<u64>) -> RemoteEvent {
+        RemoteEvent::ClientViewing {
+            client: ClientId(client),
+            tab,
+        }
+    }
+
+    fn tid(n: u32) -> TabId {
+        TabId::new(n)
+    }
+
+    /// Windows 7 and 8; protocol ids 1 and 2 are tabs 0 and 1 of window 7, 3 is
+    /// tab 0 of window 8.
+    fn two_windows() -> ProtocolIds<u8> {
+        let mut ids = ProtocolIds::new();
+        ids.window(7);
+        ids.window(8);
+        ids.tab(7, tid(0));
+        ids.tab(7, tid(1));
+        ids.tab(8, tid(0));
+        ids
+    }
+
+    /// Phones 1, 2 and 3, connected in that order, a moment apart.
+    fn three_phones() -> (RemoteState, Instant) {
+        let mut state = RemoteState::new();
+        let t0 = now();
+        for (n, name) in [(1, "Pixel"), (2, "Galaxy"), (3, "iPhone")] {
+            let at = t0 + Duration::from_millis(n);
+            state.absorb(connected(n, name), at);
+        }
+        (state, t0)
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn view_tab_events_are_kept_per_phone_and_only_a_change_is_an_effect() {
+        let (mut state, t0) = with_client();
+        let effect = state.absorb(viewing(1, Some(5)), t0);
+        assert!(matches!(effect, Effect::ViewingChanged));
+        assert_eq!(state.viewing.get(&ClientId(1)), Some(&5));
+        // The same tab again: nothing.
+        assert!(matches!(
+            state.absorb(viewing(1, Some(5)), t0),
+            Effect::None
+        ));
+        let effect = state.absorb(viewing(1, Some(6)), t0);
+        assert!(matches!(effect, Effect::ViewingChanged));
+        assert_eq!(state.viewing.get(&ClientId(1)), Some(&6));
+        let effect = state.absorb(viewing(1, None), t0);
+        assert!(matches!(effect, Effect::ViewingChanged));
+        assert!(state.viewing.is_empty());
+        assert!(matches!(state.absorb(viewing(1, None), t0), Effect::None));
+        // A phone that is not in session views nothing.
+        assert!(matches!(
+            state.absorb(viewing(9, Some(5)), t0),
+            Effect::None
+        ));
+        assert!(state.viewing.is_empty());
+    }
+
+    #[test]
+    fn a_disconnection_or_a_stopped_host_clears_what_was_viewed() {
+        let (mut state, t0) = three_phones();
+        state.absorb(viewing(1, Some(1)), t0);
+        state.absorb(viewing(2, Some(2)), t0);
+        state.absorb(
+            RemoteEvent::ClientDisconnected {
+                client: ClientId(1),
+            },
+            t0,
+        );
+        assert_eq!(state.viewing, BTreeMap::from([(ClientId(2), 2)]));
+        state.host_stopped();
+        assert!(state.viewing.is_empty());
+    }
+
+    #[test]
+    fn two_phones_on_different_tabs_are_two_entries_in_their_windows() {
+        let (mut state, t0) = three_phones();
+        state.absorb(viewing(1, Some(1)), t0);
+        state.absorb(viewing(2, Some(3)), t0);
+        let ids = two_windows();
+        let by_window = viewers_by_window(&state.clients, &state.viewing, &ids);
+        assert_eq!(by_window.len(), 2);
+        assert_eq!(by_window[&7], HashMap::from([(tid(0), names(&["Pixel"]))]));
+        assert_eq!(by_window[&8], HashMap::from([(tid(0), names(&["Galaxy"]))]));
+    }
+
+    #[test]
+    fn two_phones_on_the_same_tab_are_one_entry_in_connection_order() {
+        let (mut state, t0) = three_phones();
+        // The later phone says it first: the list is still by connection.
+        state.absorb(viewing(3, Some(2)), t0);
+        state.absorb(viewing(1, Some(2)), t0);
+        let ids = two_windows();
+        let by_window = viewers_by_window(&state.clients, &state.viewing, &ids);
+        assert_eq!(
+            by_window[&7],
+            HashMap::from([(tid(1), names(&["Pixel", "iPhone"]))])
+        );
+        assert!(!by_window.contains_key(&8));
+    }
+
+    #[test]
+    fn a_phone_that_stopped_viewing_or_left_leaves_no_trace() {
+        let (mut state, t0) = three_phones();
+        let ids = two_windows();
+        state.absorb(viewing(1, Some(1)), t0);
+        state.absorb(viewing(2, Some(1)), t0);
+        state.absorb(viewing(1, None), t0);
+        let by_window = viewers_by_window(&state.clients, &state.viewing, &ids);
+        assert_eq!(by_window[&7], HashMap::from([(tid(0), names(&["Galaxy"]))]));
+        state.absorb(
+            RemoteEvent::ClientDisconnected {
+                client: ClientId(2),
+            },
+            t0,
+        );
+        assert!(viewers_by_window(&state.clients, &state.viewing, &ids).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_tab_id_is_ignored() {
+        let (mut state, t0) = three_phones();
+        let ids = two_windows();
+        state.absorb(viewing(1, Some(99)), t0);
+        state.absorb(viewing(2, Some(1)), t0);
+        let by_window = viewers_by_window(&state.clients, &state.viewing, &ids);
+        assert_eq!(by_window.len(), 1);
+        assert_eq!(by_window[&7], HashMap::from([(tid(0), names(&["Galaxy"]))]));
+    }
+
+    #[test]
+    fn a_tab_that_changed_window_shows_up_in_the_new_one() {
+        let (mut state, t0) = three_phones();
+        let mut ids = two_windows();
+        state.absorb(viewing(1, Some(2)), t0);
+        // Tab 1 of window 7 becomes tab 5 of window 8: same protocol id.
+        ids.rekey_tabs(7, 8, &[(tid(1), tid(5))]);
+        let by_window = viewers_by_window(&state.clients, &state.viewing, &ids);
+        assert!(!by_window.contains_key(&7));
+        assert_eq!(by_window[&8], HashMap::from([(tid(5), names(&["Pixel"]))]));
+    }
+
+    #[test]
+    fn the_check_without_allocation_agrees_with_the_projection() {
+        let (mut state, t0) = three_phones();
+        let ids = two_windows();
+        let check = |state: &RemoteState, window: u8, held: &HashMap<TabId, Vec<String>>| {
+            viewers_current(held, window, &state.clients, &state.viewing, &ids)
+        };
+        let empty = HashMap::new();
+        // Nobody views anything: the empty map is current.
+        assert!(check(&state, 7, &empty));
+        state.absorb(viewing(1, Some(1)), t0);
+        state.absorb(viewing(2, Some(1)), t0);
+        state.absorb(viewing(3, Some(3)), t0);
+        let by_window = viewers_by_window(&state.clients, &state.viewing, &ids);
+        assert!(check(&state, 7, &by_window[&7]));
+        assert!(check(&state, 8, &by_window[&8]));
+        // The empty map is stale, and so is the map of the other window.
+        assert!(!check(&state, 7, &empty));
+        assert!(!check(&state, 7, &by_window[&8]));
+        // Another order, another name, an empty entry.
+        let reversed = HashMap::from([(tid(0), names(&["Galaxy", "Pixel"]))]);
+        assert!(!check(&state, 7, &reversed));
+        let renamed = HashMap::from([(tid(0), names(&["Pixel", "Other"]))]);
+        assert!(!check(&state, 7, &renamed));
+        let empty_entry = HashMap::from([(tid(1), Vec::new())]);
+        assert!(!check(&state, 8, &empty_entry));
+        // Someone stops viewing: the old projection is stale.
+        state.absorb(viewing(3, None), t0);
+        assert!(!check(&state, 8, &by_window[&8]));
+        assert!(check(&state, 8, &empty));
     }
 }

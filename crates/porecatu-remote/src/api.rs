@@ -181,6 +181,15 @@ pub enum RemoteEvent {
         /// The client's channel.
         client: ClientId,
     },
+    /// The tab (protocol id) a client in session says it shows, or `None`
+    /// when it shows none. Sent on every change: after a `view-tab`, and when
+    /// the tab left the tree. The UI forgets it on [`ClientDisconnected`](Self::ClientDisconnected).
+    ClientViewing {
+        /// The client's channel.
+        client: ClientId,
+        /// The tab shown.
+        tab: Option<u64>,
+    },
     /// Sorted, deduplicated union of the panes (protocol ids) some client
     /// subscribes to. Sent on every change.
     Subscriptions(Vec<u64>),

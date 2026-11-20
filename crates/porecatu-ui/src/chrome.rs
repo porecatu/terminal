@@ -282,6 +282,10 @@ pub fn paint(
     // is the bar of before; from `1` the zone has the third button, and from
     // `2` it carries the count in a badge.
     connected_devices: usize,
+    // PRD-025 RF-25.30, ADR-0112: the names of the phones viewing each tab. A
+    // track tab carries the fact in `TabRect::viewed` (the layout shortened its
+    // label by it); a pinned box has no layout entry, so it is asked here.
+    remote_viewers: &HashMap<TabId, Vec<String>>,
 ) -> Vec<Primitive> {
     let devices_button = connected_devices > 0;
     // Nunca recalcular esta fórmula aqui: `bar_height` é a mesma altura
@@ -381,6 +385,7 @@ pub fn paint(
             hover == Some(tab_bar::TabBarHit::Tab(id)),
             active,
             pinned_icons.get(&id).copied(),
+            tab_bar::is_viewed(remote_viewers, id),
         ) else {
             continue;
         };
@@ -646,6 +651,20 @@ pub fn paint(
                     &mut out,
                 );
             }
+
+            // ADR-0112 §2: a phone is viewing this tab. Not a button: no
+            // hover, no background, no hit target (the click is the tab's).
+            // `dialog_focus_ring` is the Acento token, the devices button's
+            // own. The closing tab and the drag ghost are painted elsewhere
+            // and never get here.
+            if let Some(viewer_box) = tab.viewer_box(style) {
+                out.push(centered_glyph(
+                    icon::SMARTPHONE,
+                    shift(viewer_box, dx),
+                    close_icon_size,
+                    scale_alpha(pal.dialog_focus_ring, fade_in),
+                ));
+            }
         }
 
         // Botão "+" do próprio grupo (pedido do usuário, fora da espec.):
@@ -876,6 +895,7 @@ pub fn paint(
             true,
             active,
             pinned_icons.get(&ghost.tab).copied(),
+            tab_bar::is_viewed(remote_viewers, ghost.tab),
         ) {
             paint_pinned_tab(&paint, style, pal, &mut out);
         }
@@ -1269,6 +1289,35 @@ pub(crate) struct PinnedTabPaint {
     /// No own texture: the box draws the Lucide `app-window` glyph in the tab's
     /// text color instead (never together with `icon`).
     pub app_window: bool,
+    /// A phone is viewing the tab (ADR-0112 §3): the Acento dot of the bottom
+    /// right corner, in every state of the box.
+    pub viewed: bool,
+}
+
+/// Which corner of a pinned box a 6x6 dot sits in, `padding_right` from the
+/// two edges (spec 2.5.1): the activity/bell dot at the top right (spec 2.17),
+/// the viewed-on-a-phone dot at the bottom right (ADR-0112 §3) -- its mirror.
+#[derive(Clone, Copy)]
+enum PinnedDotCorner {
+    TopRight,
+    BottomRight,
+}
+
+/// The rectangle of a dot of `style.indicator_dot_size` in `corner` of the
+/// pinned box `rect`: the one formula of both dots, so the second is the exact
+/// mirror of the first.
+fn pinned_dot_rect(rect: Rect, style: &TabBarStyle, corner: PinnedDotCorner) -> Rect {
+    let size = style.indicator_dot_size;
+    let y = match corner {
+        PinnedDotCorner::TopRight => rect.y + style.padding_right,
+        PinnedDotCorner::BottomRight => rect.y + rect.height - style.padding_right - size,
+    };
+    Rect {
+        x: rect.x + rect.width - style.padding_right - size,
+        y,
+        width: size,
+        height: size,
+    }
 }
 
 /// The paint of pinned tab `id` in `rect`: its state from the workspace, the
@@ -1285,6 +1334,7 @@ fn pinned_paint(
     hovered: bool,
     active: Option<TabId>,
     own_icon: Option<IconTexture>,
+    viewed: bool,
 ) -> Option<PinnedTabPaint> {
     let tab = workspace.tab(id)?;
     let (icon, icon_size) = match own_icon {
@@ -1301,6 +1351,7 @@ fn pinned_paint(
         icon,
         icon_size,
         app_window: own_icon.is_none(),
+        viewed,
     })
 }
 
@@ -1388,14 +1439,22 @@ pub(crate) fn paint_pinned_tab(
             Indicator::Bell => pal.bell_indicator,
         };
         out.push(Primitive::RoundedQuad(RoundedQuad {
-            rect: Rect {
-                x: rect.x + rect.width - style.padding_right - style.indicator_dot_size,
-                y: rect.y + style.padding_right,
-                width: style.indicator_dot_size,
-                height: style.indicator_dot_size,
-            },
+            rect: pinned_dot_rect(rect, style, PinnedDotCorner::TopRight),
             radius: style.indicator_dot_size / 2.0,
             color,
+            border_color: palette::TRANSPARENT,
+            border_width: 0.0,
+        }));
+    }
+    // ADR-0112 §3: the mirror of the dot above, at the bottom right, in Acento.
+    // In every state of the box -- exited and not started included, since the
+    // phone may be looking at the exit code or the invitation to start -- and
+    // it lives with the activity dot, which is at the other corner.
+    if tab.viewed {
+        out.push(Primitive::RoundedQuad(RoundedQuad {
+            rect: pinned_dot_rect(rect, style, PinnedDotCorner::BottomRight),
+            radius: style.indicator_dot_size / 2.0,
+            color: pal.dialog_focus_ring,
             border_color: palette::TRANSPARENT,
             border_width: 0.0,
         }));
@@ -2156,6 +2215,7 @@ mod tests {
                 &HashMap::new(),
                 false,
                 0,
+                &HashMap::new(),
             );
             // `with_alpha` -- efeito de vidro (`style.capsule_alpha`) não
             // pinta mais a cor cheia do grupo, e sim ela com o alfa da
@@ -2231,6 +2291,7 @@ mod tests {
             &HashMap::new(),
             false,
             connected_devices,
+            &HashMap::new(),
         );
         (layout, out)
     }
@@ -2245,6 +2306,238 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Paints the bar of `ws` with the phones in `viewers` viewing tabs: the
+    /// layout is the viewed one (the label shortened, `TabRect::viewed` set),
+    /// the way `lib.rs` builds it. `hover` is the tab under the cursor.
+    fn paint_viewed(
+        ws: &Workspace,
+        style: &TabBarStyle,
+        viewers: &HashMap<TabId, Vec<String>>,
+        hover: Option<tab_bar::TabBarHit>,
+    ) -> (TabBarLayout, Vec<Primitive>) {
+        let mut m = TextMeasurer::new();
+        let layout = tab_bar::fit_width_viewed(ws, style, &mut m, &tab_bar::viewed_tabs(viewers));
+        let out = paint(
+            &layout,
+            ws,
+            ws.active_tab(),
+            &RenameState::Idle,
+            &Selection::default(),
+            None,
+            style,
+            &default_palette(),
+            &default_term_palette(),
+            800.0,
+            Overflow { scroll_offset: 0.0 },
+            None,
+            None,
+            None,
+            &AnimationClock::default(),
+            Instant::now(),
+            &mut m,
+            false,
+            false,
+            None,
+            None,
+            hover,
+            None,
+            None,
+            None,
+            false,
+            None,
+            &HashMap::new(),
+            false,
+            0,
+            viewers,
+        );
+        (layout, out)
+    }
+
+    /// ADR-0112 section 2: the `smartphone` glyph in Acento, at the em of the
+    /// "x", centered in the box `tab_bar` gives (the "x" rectangle moved left
+    /// by its width and the `gap`), on the viewed tabs only -- and one glyph
+    /// whatever the number of phones. Without any phone the bar has none.
+    #[test]
+    fn a_viewed_track_tab_paints_the_smartphone_in_acento_and_the_others_do_not() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        ws.append_tab("b", None);
+
+        let (_, none) = paint_viewed(&ws, &style, &HashMap::new(), None);
+        assert!(glyph_runs(&none, icon::SMARTPHONE.glyph).is_empty());
+
+        // Two phones on the same tab: still one glyph.
+        let viewers = HashMap::from([(a, vec!["Pixel".to_owned(), "iPad".to_owned()])]);
+        let (layout, out) = paint_viewed(&ws, &style, &viewers, None);
+        let runs = glyph_runs(&out, icon::SMARTPHONE.glyph);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].color, pal.dialog_focus_ring, "Acento");
+        assert_eq!(runs[0].size_px, style.icon_em_size, "the em of the x");
+
+        let tab = &layout.groups[0].tabs[0];
+        assert_eq!(tab.id, a);
+        let dx = tab_bar::track_shift(&style, false, 0);
+        let viewer_box = tab.viewer_box(&style).expect("the viewed tab has a box");
+        assert_eq!(
+            runs[0].origin,
+            icon::SMARTPHONE.centered_origin(shift(viewer_box, dx), style.icon_em_size)
+        );
+        assert!(
+            viewer_box.x + viewer_box.width + style.internal_gap <= tab.close_button.x,
+            "left of the x, the gap of the tab between them"
+        );
+        assert!(layout.groups[0].tabs[1].viewer_box(&style).is_none());
+
+        // An entry with an empty list is nobody.
+        let nobody = HashMap::from([(a, Vec::new())]);
+        let (_, out) = paint_viewed(&ws, &style, &nobody, None);
+        assert!(glyph_runs(&out, icon::SMARTPHONE.glyph).is_empty());
+    }
+
+    /// With the x hidden (`Never`) the glyph takes the place of the x; with it
+    /// only on hover (`Hover`) the glyph is where it is with `Always`, hover
+    /// or not (ADR-0112 section 2).
+    #[test]
+    fn the_smartphone_glyph_does_not_move_with_the_hover_and_takes_the_x_place_in_never() {
+        use porecatu_config::CloseButtonVisibility::{Always, Hover, Never};
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let viewers = HashMap::from([(a, vec!["Pixel".to_owned()])]);
+        let origin = |visibility, hovered: bool| {
+            let style = TabBarStyle {
+                show_close_button: visibility,
+                ..TabBarStyle::DEFAULT
+            };
+            let hover = hovered.then_some(tab_bar::TabBarHit::Tab(a));
+            let (_, out) = paint_viewed(&ws, &style, &viewers, hover);
+            let runs = glyph_runs(&out, icon::SMARTPHONE.glyph);
+            assert_eq!(runs.len(), 1);
+            runs[0].origin
+        };
+        assert_eq!(origin(Hover, false), origin(Hover, true));
+        assert_eq!(origin(Hover, false), origin(Always, false));
+        assert_ne!(origin(Never, false), origin(Always, false));
+
+        let style = TabBarStyle {
+            show_close_button: Never,
+            ..TabBarStyle::DEFAULT
+        };
+        let mut m = TextMeasurer::new();
+        let layout = tab_bar::layout(&ws, &style, &mut m);
+        assert_eq!(
+            origin(Never, false),
+            icon::SMARTPHONE.centered_origin(
+                shift(
+                    layout.groups[0].tabs[0].close_button,
+                    tab_bar::track_shift(&style, false, 0)
+                ),
+                style.icon_em_size
+            ),
+            "the box is the rectangle of the x"
+        );
+    }
+
+    /// ADR-0112 section 3: the dot of the pinned box is the exact mirror of
+    /// the activity dot -- 6x6, round, `padding_right` from the bottom and
+    /// right edges -- in Acento, in every state of the box, and it lives with
+    /// the activity dot at the other corner.
+    #[test]
+    fn a_viewed_pinned_box_has_the_acento_dot_at_the_bottom_right_in_every_state() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let rect = tab_bar::pinned_rect(&style, false, 0);
+        let dots = |tab: &PinnedTabPaint| -> Vec<RoundedQuad> {
+            let mut out = Vec::new();
+            paint_pinned_tab(tab, &style, &pal, &mut out);
+            out.iter()
+                .filter_map(|p| match p {
+                    Primitive::RoundedQuad(q) if q.rect.width == style.indicator_dot_size => {
+                        Some(*q)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+
+        assert!(dots(&pinned_state(rect)).is_empty(), "nobody viewing");
+
+        let mirror = Rect {
+            x: rect.x + rect.width - style.padding_right - style.indicator_dot_size,
+            y: rect.y + rect.height - style.padding_right - style.indicator_dot_size,
+            width: style.indicator_dot_size,
+            height: style.indicator_dot_size,
+        };
+        for (exited, not_started) in [(false, false), (true, false), (false, true)] {
+            let viewed = dots(&PinnedTabPaint {
+                viewed: true,
+                exited,
+                not_started,
+                ..pinned_state(rect)
+            });
+            assert_eq!(
+                viewed.len(),
+                1,
+                "exited {exited}, not started {not_started}"
+            );
+            assert_eq!(viewed[0].rect, mirror);
+            assert_eq!(viewed[0].radius, style.indicator_dot_size / 2.0);
+            assert_eq!(viewed[0].color, pal.dialog_focus_ring);
+        }
+
+        // With the activity dot (top right, same edge distance) both show.
+        let both = dots(&PinnedTabPaint {
+            viewed: true,
+            indicator: Some(Indicator::Activity),
+            ..pinned_state(rect)
+        });
+        assert_eq!(both.len(), 2);
+        let activity = both
+            .iter()
+            .find(|q| q.color == pal.activity_indicator)
+            .expect("the activity dot");
+        assert_eq!(activity.rect.x, mirror.x, "same column");
+        assert_eq!(activity.rect.y, rect.y + style.padding_right);
+        assert!(both.iter().any(|q| q.rect == mirror));
+    }
+
+    /// The painting of the zone asks the map: only the pinned tab with phones
+    /// in it gets the dot.
+    #[test]
+    fn the_zone_paints_the_dot_only_on_the_viewed_pinned_tab() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let b = ws.append_tab("b", None);
+        ws.append_tab("track", None);
+        ws.pin_tab(a, 0);
+        ws.pin_tab(b, 1);
+        let viewers = HashMap::from([(b, vec!["Pixel".to_owned()])]);
+        let (_, out) = paint_viewed(&ws, &style, &viewers, None);
+        let dots: Vec<&RoundedQuad> = out
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q)
+                    if q.color == pal.dialog_focus_ring
+                        && q.rect.width == style.indicator_dot_size =>
+                {
+                    Some(q)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dots.len(), 1);
+        let second = tab_bar::pinned_rect(&style, false, 1);
+        assert!(
+            dots[0].rect.x > second.x
+                && dots[0].rect.x + dots[0].rect.width <= second.x + second.width
+                && dots[0].rect.y > second.y + second.height / 2.0,
+            "inside the second box, in its lower half"
+        );
     }
 
     /// ADR-0108 section 4: with no phone connected the bar is exactly what it
@@ -2550,6 +2843,7 @@ mod tests {
                 &HashMap::new(),
                 false,
                 0,
+                &HashMap::new(),
             )
         };
         let whole_bar_quads = |out: &[Primitive]| {
@@ -2629,6 +2923,7 @@ mod tests {
             &HashMap::new(),
             false,
             0,
+            &HashMap::new(),
         );
 
         let expected = bar_height(&style);
@@ -2979,6 +3274,7 @@ mod tests {
             &HashMap::new(),
             false,
             0,
+            &HashMap::new(),
         );
         let clip = out
             .iter()
@@ -3060,6 +3356,7 @@ mod tests {
             &HashMap::new(),
             false,
             0,
+            &HashMap::new(),
         )
     }
 
@@ -3108,6 +3405,7 @@ mod tests {
             icon: Some(ImageId::from_raw(1)),
             icon_size: (1, 1),
             app_window: false,
+            viewed: false,
         }
     }
 
@@ -3162,12 +3460,12 @@ mod tests {
             size: (64, 32),
         };
 
-        let with_own = pinned_paint(&ws, a, rect, false, None, Some(own)).unwrap();
+        let with_own = pinned_paint(&ws, a, rect, false, None, Some(own), false).unwrap();
         assert_eq!(with_own.icon, Some(ImageId::from_raw(7)));
         assert_eq!(with_own.icon_size, (64, 32));
         assert!(!with_own.app_window);
 
-        let fallback = pinned_paint(&ws, a, rect, false, None, None).unwrap();
+        let fallback = pinned_paint(&ws, a, rect, false, None, None, false).unwrap();
         assert_eq!(fallback.icon, None);
         assert!(fallback.app_window);
 
@@ -3480,6 +3778,7 @@ mod tests {
             &HashMap::new(),
             false,
             0,
+            &HashMap::new(),
         )
     }
 
@@ -3791,6 +4090,7 @@ mod tests {
             &HashMap::new(),
             false,
             0,
+            &HashMap::new(),
         );
         let button = tab_bar::app_menu_button_rect(&TabBarStyle::DEFAULT, false);
         assert!(

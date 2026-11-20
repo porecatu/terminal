@@ -13,7 +13,7 @@ use crate::api::{DeviceInfo, DevicePlatform};
 use crate::protocol::fingerprint::fingerprint;
 use crate::protocol::message::{
     Action, ActionBody, Confirm, ErrorCode, GoodbyeReason, Message, PairRejectReason, Profile,
-    ProfileKind, Subscribe, Window,
+    ProfileKind, Subscribe, ViewTab, Window,
 };
 use crate::test_support::{FakeRelay, MemoryVault, PhoneClient, Seen, wait_until};
 
@@ -1339,4 +1339,141 @@ async fn the_union_of_subscriptions_follows_every_client_including_one_that_drop
     assert_eq!(rig.subscriptions().await, [2, 3]);
     b.close().await;
     assert!(rig.subscriptions().await.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// view-tab (spec 03 §4.4)
+// ---------------------------------------------------------------------------
+
+impl Rig {
+    /// The next change of what some client shows.
+    async fn viewing(&mut self) -> (ClientId, Option<u64>) {
+        self.wait(|e| match e {
+            RemoteEvent::ClientViewing { client, tab } => Some((client, tab)),
+            _ => None,
+        })
+        .await
+    }
+}
+
+async fn view_tab(phone: &mut PhoneClient, tab: Option<u64>) {
+    phone.send(&Message::ViewTab(ViewTab { tab })).await;
+}
+
+#[tokio::test]
+async fn view_tab_tells_the_ui_and_repeating_it_says_nothing() {
+    let mut rig = Rig::up().await;
+    // The tabs of this tree are 101 and 102.
+    let (mut phone, client) = rig.session_on(&[1, 2]).await;
+
+    view_tab(&mut phone, Some(101)).await;
+    assert_eq!(rig.viewing().await, (client, Some(101)));
+    // The same tab again: nothing. The next event is the one for 102.
+    view_tab(&mut phone, Some(101)).await;
+    view_tab(&mut phone, Some(102)).await;
+    assert_eq!(rig.viewing().await, (client, Some(102)));
+    view_tab(&mut phone, None).await;
+    assert_eq!(rig.viewing().await, (client, None));
+    // None again: nothing; the session is alive and silent.
+    view_tab(&mut phone, None).await;
+    phone.quiet(QUIET).await;
+    while let Ok(event) = rig.events.try_recv() {
+        assert!(!matches!(event, RemoteEvent::ClientViewing { .. }));
+    }
+}
+
+#[tokio::test]
+async fn view_tab_finds_tabs_pinned_loose_and_in_groups_of_any_window() {
+    use crate::protocol::message::Group;
+    let mut rig = Rig::up().await;
+    let mut workspace = workspace_with(&[1, 2, 3]);
+    let tabs = |workspace: &mut Workspace, window: usize| -> Vec<Tab> {
+        workspace.windows[window]
+            .items
+            .drain(..)
+            .map(|item| match item {
+                Item::Tab(tab) => tab,
+                Item::Group(_) => unreachable!(),
+            })
+            .collect()
+    };
+    let mut all = tabs(&mut workspace, 0);
+    let third = all.pop().expect("three tabs");
+    let second = all.pop().expect("three tabs");
+    let first = all.pop().expect("three tabs");
+    let mut other = workspace.windows[0].clone();
+    other.id = 2;
+    other.pinned = vec![];
+    other.items = vec![Item::Tab(third)];
+    workspace.windows[0].pinned = vec![first];
+    workspace.windows[0].items = vec![Item::Group(Group {
+        id: 9,
+        name: "g".to_owned(),
+        color: 0,
+        collapsed: false,
+        tabs: vec![second],
+    })];
+    workspace.windows.push(other);
+    rig.host.send(Command::SetWorkspace(workspace));
+    let (mut phone, _invite, client) = rig.session(&device()).await;
+    assert!(matches!(phone.message().await, Message::Workspace(_)));
+
+    for tab in [101, 102, 103] {
+        view_tab(&mut phone, Some(tab)).await;
+        assert_eq!(rig.viewing().await, (client, Some(tab)));
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_tab_is_refused_and_clears_what_the_client_showed() {
+    let mut rig = Rig::up().await;
+    let (mut phone, client) = rig.session_on(&[1]).await;
+
+    // Nothing was shown: the error, and no event (the state did not change).
+    view_tab(&mut phone, Some(999)).await;
+    expect_error(&mut phone, ErrorCode::UnknownTab, None).await;
+    view_tab(&mut phone, Some(101)).await;
+    assert_eq!(rig.viewing().await, (client, Some(101)));
+
+    view_tab(&mut phone, Some(999)).await;
+    expect_error(&mut phone, ErrorCode::UnknownTab, None).await;
+    assert_eq!(rig.viewing().await, (client, None));
+    // The session goes on.
+    view_tab(&mut phone, Some(101)).await;
+    assert_eq!(rig.viewing().await, (client, Some(101)));
+}
+
+#[tokio::test]
+async fn a_tab_that_leaves_the_tree_is_forgotten() {
+    let mut rig = Rig::up().await;
+    let (mut phone, client) = rig.session_on(&[1, 2]).await;
+    view_tab(&mut phone, Some(102)).await;
+    assert_eq!(rig.viewing().await, (client, Some(102)));
+
+    // Another tab leaves: nothing changes for this client.
+    rig.host.send(Command::SetWorkspace(workspace_with(&[2])));
+    assert!(matches!(phone.message().await, Message::Workspace(_)));
+    // The tab it shows leaves.
+    rig.host.send(Command::SetWorkspace(workspace_with(&[1])));
+    assert!(matches!(phone.message().await, Message::Workspace(_)));
+    assert_eq!(rig.viewing().await, (client, None));
+
+    // And it can say it again later: it is a change from none.
+    rig.host
+        .send(Command::SetWorkspace(workspace_with(&[1, 2])));
+    assert!(matches!(phone.message().await, Message::Workspace(_)));
+    view_tab(&mut phone, Some(102)).await;
+    assert_eq!(rig.viewing().await, (client, Some(102)));
+}
+
+#[tokio::test]
+async fn view_tab_before_the_hello_is_a_protocol_error() {
+    let mut rig = Rig::up().await;
+    let (mut phone, _invite) = rig.pair(&device(), "Pixel 9").await;
+    view_tab(&mut phone, Some(1)).await;
+    expect_error(&mut phone, ErrorCode::Protocol, None).await;
+    assert!(matches!(phone.until_closed().await, Seen::Closed(_)));
+    while let Ok(event) = rig.events.try_recv() {
+        assert!(!matches!(event, RemoteEvent::ClientViewing { .. }));
+    }
 }

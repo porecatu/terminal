@@ -572,6 +572,8 @@ registry! {
     }
     devices {
         summary(plural, names),
+        viewed_on(names),
+        viewed_on_pinned(title, names),
         row_detail(platform, since),
         since_now(),
         since_minutes(plural),
@@ -1211,6 +1213,7 @@ registry! {
         tab_state(state),
         state_active(),
         state_pinned(),
+        state_remote_viewing(),
         state_not_started(),
         state_bell(),
         state_activity(),

@@ -75,6 +75,7 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 - **RF-25.14** — Cada **nova conexão** de aparelho gera um aviso de informação no desktop ([ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md)) com o nome do aparelho.
 - **RF-25.15** — Há ações para ligar e desligar o acesso e para desconectar todos os aparelhos, **sem atalho padrão** (catálogo de ações, [ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md)).
 - **RF-25.16** — Desligar o acesso remoto encerra todas as conexões, com aviso ao celular; a lista de pareados fica.
+- **RF-25.30** — *(acrescentado e implementado em 2026-11-20, [ADR-0112](../adr/0112-indicador-de-aba-vista-pelo-celular.md); aval visual pendente)* Toda aba que um celular conectado está **vendo** é indicada na barra de abas do desktop, em toda janela, sem que a aba ativa mude: o ícone de aparelho à esquerda do botão de fechar (no lugar dele quando o botão nunca aparece) e, na aba fixada, uma marca no canto. Com vários aparelhos, a marca é uma só, e o tooltip diz quais aparelhos veem a aba. Como o RF-25.12, o indicador não pode ser desligado.
 
 ### O que o celular vê
 
@@ -95,11 +96,15 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 
   > **Emenda (2026-11-17).** Substituído, por decisão do dono ([ADR-0109](../adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md)). A ação remota faz a **mesma ativação de aba que o gesto local**: aba criada pelo celular fica ativa na janela dela, expandir grupo e mover para outra janela ativam o que o desktop ativa. O celular também **ativa uma aba** escolhida (`activate-tab`). Ele **nunca** levanta, desminimiza nem dá foco a janela do sistema, e não muda o painel focado.
 
+  > **Emenda (2026-11-20).** A emenda acima foi desfeita pelo dono ([ADR-0111](../adr/0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md)): **vale de novo o texto original** do RF-25.27. Nenhuma ação remota muda a aba ativa do desktop, e `activate-tab` deixou de existir (especificação 0.5 do protocolo). Só a remoção da aba ativa por uma ação (fechar, mover, colapsar o grupo dela) a move, pela escada de foco. A aba que o celular vê é indicada na barra (RF-25.30).
+
 ### Limites
 
 - **RF-25.28** — Ficam **fora do alcance do celular** no v1: fixar e desafixar, sessões nomeadas, configurações, o gerenciador de tarefas, abrir janela nova, destacar aba numa janela nova, e qualquer coisa que mude o foco do desktop.
 
   > **Emenda (2026-11-17).** A última cláusula passa a ser "e qualquer coisa que mude o foco da **janela do sistema** ou o painel focado". Trocar a aba ativa deixou de estar fora do alcance ([ADR-0109](../adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md), RF-25.27).
+
+  > **Emenda (2026-11-20).** Desfeita ([ADR-0111](../adr/0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md)): vale de novo o texto original, e trocar a aba ativa do desktop volta a estar fora do alcance do celular.
 - **RF-25.29** — Com o Porecatu fechado, o celular mostra o desktop como **offline**. Não há modo em segundo plano.
 
 ## Requisitos não funcionais

@@ -13,6 +13,7 @@
 //! `Instant::now()` não aparece aqui, pelo mesmo motivo de `warning.rs`:
 //! quem chama passa `now`, o que torna o atraso testável sem dormir.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use porecatu_core::{TabId, Workspace};
@@ -20,6 +21,7 @@ use porecatu_locale::Catalog;
 use porecatu_render::Rect;
 
 use crate::devices_popover::{self, DeviceEntry};
+use crate::messages::msg;
 use crate::tab_bar::{self, TabBarStyle};
 use crate::task_manager::RowKey;
 
@@ -49,6 +51,63 @@ pub enum HoverKey {
     /// RF-25.12, ADR-0108 section 4): "N device(s) connected: name, name".
     /// One per window, so it needs no identity.
     DevicesButton,
+    /// The box of the viewed-on-a-phone indicator of a track tab (ADR-0112
+    /// section 4). Not `Tab`: moving from the box to the rest of the tab is a
+    /// change of target, with the delay restarted, like any other.
+    TabViewers(TabId),
+}
+
+/// The "Viewed on: name, name" of a tab a phone is viewing (ADR-0112 section
+/// 4), in the order the phones arrived. `None` for a tab nobody is viewing.
+fn viewers_text(
+    catalog: &Catalog,
+    viewers: &HashMap<TabId, Vec<String>>,
+    id: TabId,
+) -> Option<String> {
+    let names = viewer_names(viewers, id)?;
+    Some(msg::devices::viewed_on(
+        catalog,
+        devices_popover::join_names(names.iter().map(String::as_str)),
+    ))
+}
+
+/// The names of the phones viewing `id`, `None` when it is nobody (no entry,
+/// or an empty list).
+fn viewer_names(viewers: &HashMap<TabId, Vec<String>>, id: TabId) -> Option<&[String]> {
+    viewers
+        .get(&id)
+        .map(Vec::as_slice)
+        .filter(|names| !names.is_empty())
+}
+
+/// The tooltip target of the viewed-on-a-phone indicator of a track tab under
+/// `content_point` (content coordinates, the track's), or `None` away from the
+/// box -- there the tab's own tooltip decides. The box is the one
+/// [`tab_bar::TabRect::viewer_box`] gives; the anchor is it in screen
+/// coordinates (`screen_dx` = the track's shift minus the scroll). The tooltip
+/// is not part of the hit test: the click is still the tab's.
+pub fn viewers_target(
+    layout: &tab_bar::TabBarLayout,
+    style: &TabBarStyle,
+    catalog: &Catalog,
+    viewers: &HashMap<TabId, Vec<String>>,
+    content_point: (f32, f32),
+    screen_dx: f32,
+) -> Option<(HoverKey, Rect, String)> {
+    let (id, rect) = layout
+        .groups
+        .iter()
+        .flat_map(|group| &group.tabs)
+        .find_map(|tab| {
+            let rect = tab.viewer_box(style)?;
+            tab_bar::rect_contains(rect, content_point).then_some((tab.id, rect))
+        })?;
+    let text = viewers_text(catalog, viewers, id)?;
+    let anchor = Rect {
+        x: rect.x + screen_dx,
+        ..rect
+    };
+    Some((HoverKey::TabViewers(id), anchor, text))
 }
 
 /// The tooltip target of a pinned box under `point` (screen coordinates), or
@@ -65,10 +124,22 @@ pub fn pinned_target(
     style: &TabBarStyle,
     is_macos: bool,
     point: (f32, f32),
+    catalog: &Catalog,
+    viewers: &HashMap<TabId, Vec<String>>,
 ) -> Option<(HoverKey, Rect, String)> {
     let i = tab_bar::point_in_pinned(style, is_macos, workspace.pinned().len(), point)?;
     let id = *workspace.pinned().get(i)?;
     let title = workspace.tab(id)?.title().to_owned();
+    // ADR-0112 section 4: the dot is too small to be a target, so the phrase
+    // goes after the title, in the same line.
+    let title = match viewer_names(viewers, id) {
+        Some(names) => msg::devices::viewed_on_pinned(
+            catalog,
+            title,
+            devices_popover::join_names(names.iter().map(String::as_str)),
+        ),
+        None => title,
+    };
     Some((
         HoverKey::Tab(id),
         tab_bar::pinned_rect(style, is_macos, i),
@@ -409,26 +480,160 @@ mod tests {
         let second = tab_bar::pinned_rect(&style, false, 1);
         let over = (second.x + 3.0, second.y + 3.0);
         assert_eq!(
-            pinned_target(&ws, &style, false, over),
+            pinned_target(
+                &ws,
+                &style,
+                false,
+                over,
+                &crate::messages::test_support::pt_br(),
+                &HashMap::new()
+            ),
             Some((HoverKey::Tab(b), second, "b".to_owned()))
         );
         let first = tab_bar::pinned_rect(&style, false, 0);
         let gap = (first.x + first.width + 1.0, first.y + 3.0);
         assert!(gap.0 < second.x);
-        assert_eq!(pinned_target(&ws, &style, false, gap), None);
+        assert_eq!(
+            pinned_target(
+                &ws,
+                &style,
+                false,
+                gap,
+                &crate::messages::test_support::pt_br(),
+                &HashMap::new()
+            ),
+            None
+        );
         // Past the zone, the track answers: no pinned target there.
         let past = tab_bar::track_shift(&style, false, 2) + 10.0;
-        assert_eq!(pinned_target(&ws, &style, false, (past, 10.0)), None);
+        assert_eq!(
+            pinned_target(
+                &ws,
+                &style,
+                false,
+                (past, 10.0),
+                &crate::messages::test_support::pt_br(),
+                &HashMap::new()
+            ),
+            None
+        );
 
         // The state machine shows it after the usual 600 ms, and drops it
         // when the cursor leaves.
         let mut hover = Hover::default();
-        hover.update(pinned_target(&ws, &style, false, over), t(0));
+        hover.update(
+            pinned_target(
+                &ws,
+                &style,
+                false,
+                over,
+                &crate::messages::test_support::pt_br(),
+                &HashMap::new(),
+            ),
+            t(0),
+        );
         hover.tick(t(599));
         assert_eq!(hover.visible(), None);
         hover.tick(t(600));
         assert_eq!(hover.visible(), Some((second, "b")));
-        hover.update(pinned_target(&ws, &style, false, gap), t(700));
+        hover.update(
+            pinned_target(
+                &ws,
+                &style,
+                false,
+                gap,
+                &crate::messages::test_support::pt_br(),
+                &HashMap::new(),
+            ),
+            t(700),
+        );
         assert_eq!(hover, Hover::None);
+    }
+
+    /// ADR-0112 section 4: over the box of the indicator the tooltip is the box
+    /// with "Vista em: nome, nome" (names in the order they arrived, even when
+    /// the label fits); anywhere else on the tab -- and on a tab nobody views --
+    /// it is not this one's, and the box and the tab are different targets.
+    #[test]
+    fn the_viewer_box_of_a_track_tab_has_the_viewed_on_tooltip() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let b = ws.append_tab("b", None);
+        let style = TabBarStyle::DEFAULT;
+        let catalog = crate::messages::test_support::pt_br();
+        let viewers = HashMap::from([(a, vec!["Pixel".to_owned(), "iPad".to_owned()])]);
+        let mut m = porecatu_render::TextMeasurer::new();
+        let layout =
+            tab_bar::fit_width_viewed(&ws, &style, &mut m, &tab_bar::viewed_tabs(&viewers));
+        let tabs = &layout.groups[0].tabs;
+        let viewer_box = tabs[0].viewer_box(&style).unwrap();
+        let center = (
+            viewer_box.x + viewer_box.width / 2.0,
+            viewer_box.y + viewer_box.height / 2.0,
+        );
+        let scroll_shift = -37.0;
+        let (key, anchor, text) =
+            viewers_target(&layout, &style, &catalog, &viewers, center, scroll_shift).unwrap();
+        assert_eq!(key, HoverKey::TabViewers(a));
+        assert_ne!(key, HoverKey::Tab(a));
+        assert_eq!(
+            anchor,
+            Rect {
+                x: viewer_box.x + scroll_shift,
+                ..viewer_box
+            }
+        );
+        assert_eq!(text, "Vista em: Pixel, iPad");
+
+        // The tab's body, and the other tab's whole area, are not the box.
+        let body = (tabs[0].rect.x + 2.0, tabs[0].rect.y + 2.0);
+        assert!(viewers_target(&layout, &style, &catalog, &viewers, body, 0.0).is_none());
+        let other = (tabs[1].rect.x + 2.0, tabs[1].rect.y + 2.0);
+        assert!(viewers_target(&layout, &style, &catalog, &viewers, other, 0.0).is_none());
+        let _ = b;
+
+        // The state machine: moving from the tab to the box restarts the delay.
+        let mut hover = Hover::default();
+        hover.update(Some((HoverKey::Tab(a), rect(), "a".into())), t(0));
+        hover.update(Some((key, anchor, text.clone())), t(500));
+        hover.tick(t(600));
+        assert_eq!(hover.visible(), None);
+        hover.tick(t(1100));
+        assert_eq!(hover.visible(), Some((anchor, text.as_str())));
+    }
+
+    /// ADR-0112 section 4: the title tooltip a pinned box always has gets the
+    /// phrase after the title, in the same line, joined by the " · " of the
+    /// catalog's composed phrases; without phones it is the title alone.
+    #[test]
+    fn the_tooltip_of_a_viewed_pinned_box_has_the_phrase_after_the_title() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("a", None);
+        let b = ws.append_tab("b", None);
+        ws.pin_tab(a, 0);
+        ws.pin_tab(b, 1);
+        let style = TabBarStyle::DEFAULT;
+        let catalog = crate::messages::test_support::pt_br();
+        let second = tab_bar::pinned_rect(&style, false, 1);
+        let over = (second.x + 3.0, second.y + 3.0);
+
+        let viewers = HashMap::from([(b, vec!["Pixel 8".to_owned()])]);
+        let (key, anchor, text) =
+            pinned_target(&ws, &style, false, over, &catalog, &viewers).unwrap();
+        assert_eq!((key, anchor), (HoverKey::Tab(b), second));
+        assert_eq!(text, "b · Vista em: Pixel 8");
+        assert!(!text.contains('\n'), "one line");
+
+        let two = HashMap::from([(b, vec!["Pixel 8".to_owned(), "iPad".to_owned()])]);
+        let (_, _, text) = pinned_target(&ws, &style, false, over, &catalog, &two).unwrap();
+        assert_eq!(text, "b · Vista em: Pixel 8, iPad");
+
+        // Another pinned tab's phones do not leak into this one's.
+        let elsewhere = HashMap::from([(a, vec!["Pixel 8".to_owned()])]);
+        let (_, _, text) = pinned_target(&ws, &style, false, over, &catalog, &elsewhere).unwrap();
+        assert_eq!(text, "b");
+        let (_, _, text) =
+            pinned_target(&ws, &style, false, over, &catalog, &HashMap::new()).unwrap();
+        assert_eq!(text, "b");
     }
 }

@@ -26,6 +26,8 @@
 //! `palette.rs` (F1). Valor sem chave é geometria fixa da espec. visual,
 //! citada por seção.
 
+use std::collections::{HashMap, HashSet};
+
 use porecatu_core::{GroupId, InsertAt, TabId, UnpinTarget, Workspace};
 use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer};
 
@@ -64,6 +66,42 @@ const COLLAPSED_DOTS_GAP: f32 = 8.0;
 pub enum Indicator {
     Activity,
     Bell,
+}
+
+/// Whether some phone is viewing tab `id` (ADR-0112): an entry with an empty
+/// list of device names is nobody.
+pub(crate) fn is_viewed(viewers: &HashMap<TabId, Vec<String>>, id: TabId) -> bool {
+    viewers.get(&id).is_some_and(|names| !names.is_empty())
+}
+
+/// The tabs a phone is viewing (ADR-0112): what [`layout_viewed`] takes. Empty
+/// (and so without allocation) when no phone is viewing anything.
+pub(crate) fn viewed_tabs(viewers: &HashMap<TabId, Vec<String>>) -> HashSet<TabId> {
+    viewers
+        .keys()
+        .copied()
+        .filter(|&id| is_viewed(viewers, id))
+        .collect()
+}
+
+/// The box of the "viewed on a phone" indicator of a track tab (ADR-0112 §2),
+/// from the tab's `close_button` rectangle and `style.show_close_button` -- the
+/// **one** formula for it, never a computation of its own at the call site:
+///
+/// - `Always` and `Hover`: a box the size of the "x" rectangle, right at its
+///   **left**, `internal_gap` (the tab's `gap: 8`) away. In `Hover` the place
+///   of the "x" is reserved (the layout computes its rectangle in every mode),
+///   so the box does not depend on the hover.
+/// - `Never`: the box **is** the "x" rectangle (the "x" is not there).
+pub fn viewer_indicator_rect(close_button: Rect, style: &TabBarStyle) -> Rect {
+    match style.show_close_button {
+        porecatu_config::CloseButtonVisibility::Never => close_button,
+        porecatu_config::CloseButtonVisibility::Always
+        | porecatu_config::CloseButtonVisibility::Hover => Rect {
+            x: close_button.x - style.internal_gap - close_button.width,
+            ..close_button
+        },
+    }
 }
 
 /// Valores geométricos da barra, hoje fixos no código (ver módulo).
@@ -489,6 +527,13 @@ impl TabRect {
     pub fn dot_offset(&self, style: &TabBarStyle) -> f32 {
         style.padding_left + self.badge_reserve(style)
     }
+
+    /// The box of the viewed-on-a-phone indicator, `None` on a tab no phone
+    /// is viewing (ADR-0112 §2). Content coordinates, like `rect`.
+    pub fn viewer_box(&self, style: &TabBarStyle) -> Option<Rect> {
+        self.viewed
+            .then(|| viewer_indicator_rect(self.close_button, style))
+    }
 }
 
 /// Geometria de uma aba dentro da trilha, em coordenadas relativas ao
@@ -501,6 +546,11 @@ pub struct TabRect {
     pub rect: Rect,
     /// Retângulo do botão de fechar, sem a folga de acerto.
     pub close_button: Rect,
+    /// Some phone is viewing this tab (ADR-0112): the indicator is drawn in
+    /// [`TabRect::viewer_box`] and the label lost the box and the `gap` to
+    /// it (in `Always`/`Hover`). Always `false` from [`layout`]/[`fit_width`],
+    /// which know nothing of the phones.
+    pub viewed: bool,
     /// Rótulo já truncado (RF-1.10), com reticências se `label_truncated`.
     pub label: String,
     /// Decide o tooltip do ADR-0019 -- calculado aqui porque o
@@ -637,6 +687,20 @@ pub fn layout(
     workspace: &Workspace,
     style: &TabBarStyle,
     measurer: &mut TextMeasurer,
+) -> TabBarLayout {
+    layout_viewed(workspace, style, measurer, &HashSet::new())
+}
+
+/// [`layout`] for a window some phone is viewing tabs of (ADR-0112 §2): the
+/// tabs in `viewed` carry `TabRect::viewed` and, in `Always`/`Hover`, a label
+/// shortened by the box of the indicator plus the `gap: 8` to it -- the same
+/// way the activity dot (§2.17) takes width from the label, so the tab keeps
+/// its width. Everything else is [`layout`]'s, to the pixel.
+pub fn layout_viewed(
+    workspace: &Workspace,
+    style: &TabBarStyle,
+    measurer: &mut TextMeasurer,
+    viewed: &HashSet<TabId>,
 ) -> TabBarLayout {
     let mut groups = Vec::new();
     // Sem nenhuma caixa na zona da esquerda (sem o botão de menu do app e
@@ -802,10 +866,6 @@ pub fn layout(
                     width: crate::chrome::badge_size(&profile.badge, measurer).0,
                 });
             let badge_reserve = badge.as_ref().map_or(0.0, |b| b.width + style.internal_gap);
-            let label_cap = style.label_cap(dot_reserve + badge_reserve);
-
-            let (label, label_truncated) =
-                measurer.truncate(tab.title(), LABEL_FONT, style.font_size, label_cap);
             // Largura fixa: o título já não entra na conta (ver
             // `TabBarStyle::tab_width`). O `label` acima só decide o que
             // cabe *dentro* dela.
@@ -846,6 +906,21 @@ pub fn layout(
                     expand(close_button, style.close_button_hit_slop)
                 };
 
+            // ADR-0112 §2: the indicator of a tab a phone is viewing takes its
+            // box and the `gap` to it from the label (`Always`/`Hover`); in
+            // `Never` the box is the "x" rectangle and takes nothing. Taken
+            // from the same function that places the box, so the two never
+            // disagree.
+            let is_viewed = viewed.contains(&tab_id);
+            let viewer_reserve = if is_viewed {
+                close_button.x - viewer_indicator_rect(close_button, style).x
+            } else {
+                0.0
+            };
+            let label_cap = style.label_cap(dot_reserve + badge_reserve + viewer_reserve);
+            let (label, label_truncated) =
+                measurer.truncate(tab.title(), LABEL_FONT, style.font_size, label_cap);
+
             let hit_left = if index == 0 {
                 rect.x
             } else {
@@ -868,6 +943,7 @@ pub fn layout(
                 id: tab_id,
                 rect,
                 close_button,
+                viewed: is_viewed,
                 label,
                 label_truncated,
                 indicator,
@@ -1041,6 +1117,19 @@ pub fn fit_width(
     // menu do app, na zona fixa à esquerda (`track_shift`), e a trilha toda
     // junto -- o layout é o mesmo em toda plataforma.
     layout(workspace, style, measurer)
+}
+
+/// [`fit_width`] with the tabs a phone is viewing (ADR-0112): [`layout_viewed`].
+/// The callers that only hit-test or anchor keep [`fit_width`] -- the geometry
+/// is the same; this one is for what shows the label or the indicator (the
+/// painting and the tooltip).
+pub fn fit_width_viewed(
+    workspace: &Workspace,
+    style: &TabBarStyle,
+    measurer: &mut TextMeasurer,
+    viewed: &HashSet<TabId>,
+) -> TabBarLayout {
+    layout_viewed(workspace, style, measurer, viewed)
 }
 
 /// Estado de rolagem da trilha (espec. §2.18) para um `content_width` e uma
@@ -2949,6 +3038,120 @@ mod tests {
             hit_test(&layout, just_outside),
             Some(TabBarHit::CloseButton(id))
         );
+    }
+
+    /// ADR-0112 section 2: the box of the viewed-on-a-phone indicator derives
+    /// from the `close_button` of the tab in every mode: `Always` and `Hover`
+    /// put it at the left of the x, the `gap` of the tab away, the size of the
+    /// x rectangle (and `Hover` does not move it: the layout knows no hover);
+    /// `Never` makes the box the x rectangle itself.
+    #[test]
+    fn the_viewer_box_derives_from_the_close_button_in_the_three_modes() {
+        use porecatu_config::CloseButtonVisibility::{Always, Hover, Never};
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let mut m = measurer();
+        let viewed = HashSet::from([a]);
+        let mut box_in = |visibility| {
+            let style = TabBarStyle {
+                show_close_button: visibility,
+                ..TabBarStyle::DEFAULT
+            };
+            let layout = layout_viewed(&ws, &style, &mut m, &viewed);
+            let tab = &layout.groups[0].tabs[0];
+            assert_eq!(tab.id, a);
+            assert!(layout.groups[0].tabs[1].viewer_box(&style).is_none());
+            assert!(!layout.groups[0].tabs[1].viewed);
+            (tab.viewer_box(&style).unwrap(), tab.close_button, style)
+        };
+
+        let (always, close, style) = box_in(Always);
+        assert_eq!((always.width, always.height), (close.width, close.height));
+        assert_eq!(always.y, close.y);
+        assert_eq!(always.x + always.width + style.internal_gap, close.x);
+        assert_eq!(style.internal_gap, 8.0, "the gap: 8 of the tab");
+
+        let (hover, hover_close, _) = box_in(Hover);
+        assert_eq!(hover_close, close, "the place of the x is reserved");
+        assert_eq!(hover, always, "the same box, hovered or not");
+
+        let (never, never_close, _) = box_in(Never);
+        assert_eq!(never, never_close, "the box is the x rectangle");
+        assert_eq!(
+            never_close, close,
+            "the x rectangle is the same in every mode"
+        );
+
+        // The free function is the one formula the layout uses.
+        assert_eq!(viewer_indicator_rect(close, &style), always);
+        let _ = b;
+    }
+
+    /// ADR-0112 section 2: in `Always`/`Hover` the viewed tab's label loses the
+    /// box and the `gap` (the title is cut earlier) and the tab keeps its
+    /// width; in `Never` the label loses nothing; a tab nobody views is the
+    /// layout of before, to the pixel.
+    #[test]
+    fn the_label_of_a_viewed_tab_is_shorter_only_in_always_and_hover() {
+        use porecatu_config::CloseButtonVisibility::{Always, Hover, Never};
+        let title = "a-very-long-title-that-fills-the-whole-label-of-the-tab-and-more";
+        let mut ws = Workspace::new();
+        let a = ws.append_tab(title, None);
+        let b = ws.append_tab(title, None);
+        let mut m = measurer();
+        for visibility in [Always, Hover, Never] {
+            let style = TabBarStyle {
+                show_close_button: visibility,
+                ..TabBarStyle::DEFAULT
+            };
+            let plain = layout(&ws, &style, &mut m);
+            let viewed = layout_viewed(&ws, &style, &mut m, &HashSet::from([a]));
+            let (plain_a, viewed_a) = (&plain.groups[0].tabs[0], &viewed.groups[0].tabs[0]);
+            assert_eq!(viewed_a.rect, plain_a.rect, "the tab keeps its width");
+            assert_eq!(viewed.groups[0].tabs[1], plain.groups[0].tabs[1]);
+            assert_eq!(viewed.groups[0].rect, plain.groups[0].rect);
+            let reserve = if visibility == Never {
+                0.0
+            } else {
+                viewed_a.close_button.x - viewer_indicator_rect(viewed_a.close_button, &style).x
+            };
+            if visibility == Never {
+                assert_eq!(viewed_a.label, plain_a.label, "{visibility:?}");
+            } else {
+                assert_eq!(
+                    reserve,
+                    style.icon_button_width(style.close_button_size) + style.internal_gap
+                );
+                assert!(viewed_a.label.len() < plain_a.label.len(), "{visibility:?}");
+                let width = m.measure_width(&viewed_a.label, LABEL_FONT, style.font_size);
+                assert!(width <= style.label_cap(reserve), "{visibility:?}");
+            }
+            assert!(viewed_a.label_truncated && plain_a.label_truncated);
+            let _ = b;
+        }
+    }
+
+    /// The indicator is not a button (ADR-0112 section 2): the click on its box
+    /// is the tab's, and with nobody viewing `layout_viewed` is `layout`.
+    #[test]
+    fn the_viewer_box_is_not_a_hit_target_and_no_viewers_is_the_plain_layout() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let mut m = measurer();
+        let style = TabBarStyle::DEFAULT;
+        let viewed = layout_viewed(&ws, &style, &mut m, &HashSet::from([a]));
+        let tab = &viewed.groups[0].tabs[0];
+        let b = tab.viewer_box(&style).unwrap();
+        let center = (b.x + b.width / 2.0, b.y + b.height / 2.0);
+        assert_eq!(hit_test(&viewed, center), Some(TabBarHit::Tab(a)));
+        assert_eq!(
+            layout_viewed(&ws, &style, &mut m, &HashSet::new()),
+            layout(&ws, &style, &mut m)
+        );
+        let viewers = HashMap::from([(a, vec!["Pixel".to_owned()]), (TabId::new(99), Vec::new())]);
+        assert_eq!(viewed_tabs(&viewers), HashSet::from([a]), "empty is nobody");
+        assert!(is_viewed(&viewers, a) && !is_viewed(&viewers, TabId::new(99)));
     }
 
     #[test]

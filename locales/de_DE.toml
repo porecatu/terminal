@@ -52,6 +52,8 @@ name_placeholder = "Sitzungsname"
 
 [devices]
 summary = { one = "{count} Gerät verbunden: {names}", other = "{count} Geräte verbunden: {names}" }
+viewed_on = "Angezeigt auf: {names}"
+viewed_on_pinned = "{title} · Angezeigt auf: {names}"
 row_detail = "{platform} · verbunden {since}"
 since_now = "gerade eben"
 since_minutes = { one = "vor {count} Minute", other = "vor {count} Minuten" }
@@ -656,6 +658,7 @@ group_collapsed_colored = "Gruppe {name}, eingeklappt, Farbe {color}"
 tab_state = " ({state})"
 state_active = "aktiv"
 state_pinned = "angeheftet"
+state_remote_viewing = "auf einem Telefon angezeigt"
 state_not_started = "nicht gestartet"
 state_bell = "Glocke"
 state_activity = "Aktivität"

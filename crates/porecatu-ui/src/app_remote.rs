@@ -11,15 +11,18 @@
 //! main thread never waits for the network: `RemoteHost::send` does not block,
 //! and every answer comes back as data through the proxy.
 //!
-//! The actions of a phone on tabs and panes (`new-tab`, `activate-tab`,
+//! The actions of a phone on tabs and panes (`new-tab`,
 //! `close-tab`, `close-pane`, `rename-tab`, `start-pane`), on groups
 //! (`move-tab-to-group`, `new-group`, `rename-group`, `set-group-color`,
 //! `collapse-group`, `ungroup`) and between windows (`move-tab-to-window`,
 //! `move-group-to-window`, only through `App::transfer_with`), and the
-//! confirmations they ask of it, end here too (ADR-0107, ADR-0109): the same
-//! functions the local gestures call, with an explicit target, the activation
-//! of a tab the gesture does included, and never a touch on the window of the
-//! OS (no focus, no raise, no restore).
+//! confirmations they ask of it, end here too (ADR-0107, ADR-0111): the same
+//! functions the local gestures call, with an explicit target, no activation
+//! of a tab (only the removal of the active one moves it, by the focus
+//! ladder), and never a touch on the window of the OS (no focus, no raise, no
+//! restore). Which tab a phone is *viewing* (`view-tab`) is information only:
+//! the host keeps it per phone and projects it, per window, for the indicator
+//! of the tab bar (ADR-0112 section 1); it never changes the workspace.
 //!
 //! What needs no window lives in `remote/` (the state, the ids, the tree, the
 //! decisions of `remote/actions.rs`).
@@ -41,10 +44,10 @@ use crate::app_transfer::{TransferArrival, TransferDest, TransferPayload};
 use crate::devices_popover::DeviceEntry;
 use crate::move_to_window::destination_insert_at;
 use crate::remote::actions::{
-    ActivateStep, CaptureModes, CloseStep, ConfirmTarget, GroupMove, LivePane, PaneStep,
-    close_tab_step, confirm_summary, leave_group_slot, pane_step, parse_group_color,
-    plan_activate_tab, plan_group_edit, plan_group_to_window, plan_move_tab_to_group,
-    plan_new_group, plan_new_tab, plan_tab_to_window, start_step,
+    CaptureModes, CloseStep, ConfirmTarget, GroupMove, LivePane, PaneStep, close_tab_step,
+    confirm_summary, leave_group_slot, pane_step, parse_group_color, plan_group_edit,
+    plan_group_to_window, plan_move_tab_to_group, plan_new_group, plan_new_tab, plan_tab_to_window,
+    start_step,
 };
 use crate::remote::grid::{empty_frame, live_frame, scrollback_lines};
 use crate::remote::ids::{ProtocolIds, SeenIds};
@@ -53,7 +56,10 @@ use crate::remote::theme::{protocol_profiles, protocol_theme};
 use crate::remote::tree::{
     PaneFacts, PaneSignals, TabFacts, WindowInput, build_workspace, pane_state,
 };
-use crate::remote::{Effect, HostPlan, MirrorDue, TreeDue, host_plan, remote_wanted};
+use crate::remote::{
+    Effect, HostPlan, MirrorDue, TreeDue, host_plan, remote_wanted, viewers_by_window,
+    viewers_current,
+};
 use crate::settings::{RemoteRequest, TokenWrite, device_rows, token_change_restarts_host};
 
 /// What a short vault thread found or did (ADR-0108 section 1); the payload of
@@ -447,6 +453,7 @@ impl App {
     /// the event loop -- which is what makes a window born while a phone is
     /// connected, and a host that went away without an event, both right.
     pub(crate) fn sync_connected_devices(&mut self) {
+        self.sync_remote_viewers();
         // Runs on every turn of the loop: compare first, without allocating,
         // and build the list only when some window holds another one.
         let clients = &self.remote.clients;
@@ -482,6 +489,37 @@ impl App {
             .collect();
         for state in self.windows.values_mut() {
             if state.set_connected_devices(devices.clone()) {
+                state.window.request_redraw();
+            }
+        }
+    }
+
+    /// Hands every window the names of the phones viewing each of its tabs, from
+    /// `RemoteState::viewing` and `clients` through the protocol ids (ADR-0112
+    /// section 1): what the indicator of the tab bar, its tooltip and its
+    /// accessibility node are made of. A window with no viewed tab gets the
+    /// empty map. Runs with [`Self::sync_connected_devices`], so on every turn
+    /// of the event loop: it compares first, without allocating, and builds
+    /// the projection only when some window holds another one. A tab that
+    /// moved to another window by `App::transfer` shows up in the new one,
+    /// because the protocol id does not change and the projection is redone.
+    fn sync_remote_viewers(&mut self) {
+        let remote = &self.remote;
+        if self.windows.iter().all(|(window, state)| {
+            viewers_current(
+                &state.remote_viewers,
+                *window,
+                &remote.clients,
+                &remote.viewing,
+                &remote.ids,
+            )
+        }) {
+            return;
+        }
+        let mut by_window = viewers_by_window(&remote.clients, &remote.viewing, &remote.ids);
+        for (window, state) in &mut self.windows {
+            let viewers = by_window.remove(window).unwrap_or_default();
+            if state.set_remote_viewers(viewers) {
                 state.window.request_redraw();
             }
         }
@@ -882,6 +920,7 @@ impl App {
             Effect::ClientDisconnected | Effect::DevicesChanged => {
                 self.redraw_settings_and_windows();
             }
+            Effect::ViewingChanged => self.sync_remote_viewers(),
             Effect::PairingUri => self.show_pairing_qr(now),
             Effect::PairingRequested { id } => self.show_pairing_request(id, now),
             Effect::PairingClosed { id } => {
@@ -949,22 +988,15 @@ impl App {
     ) {
         match event {
             RemoteEvent::Input { client, input } => self.apply_remote_input(client, input),
-            // ADR-0109 section 4: an action (or the answer that runs one) may
-            // activate or create a tab, and with the task manager open on that
-            // window it goes back to the terminal, as for any local gesture.
-            // The one check of ADR-0095 wraps it here, once, and not each
-            // action: the snapshot of every window that has the manager open
-            // before, the comparison after (the origin and the destination of
-            // a move are both in it).
+            // ADR-0111 section 3: no one check of ADR-0095 around these. A
+            // remote action never activates a tab, so a task manager open on
+            // a window stays open (the focus ladder of a removed active tab
+            // runs underneath it).
             RemoteEvent::Action { client, action } => {
-                let guard = self.task_manager_guard_begin();
                 self.apply_remote_action(client, action, event_loop, now);
-                self.task_manager_guard_end_remote(guard);
             }
             RemoteEvent::Confirm { client, confirm } => {
-                let guard = self.task_manager_guard_begin();
                 self.apply_remote_confirm(client, confirm, event_loop, now);
-                self.task_manager_guard_end_remote(guard);
             }
             // `absorb` handles the rest; they never come back as unhandled.
             _ => {}
@@ -973,16 +1005,15 @@ impl App {
 
     // --- actions on tabs and panes (PRD-025 RF-25.23 to RF-25.27) ----------
     //
-    // ADR-0107 section 1, revised by ADR-0109: each action calls the **same
-    // function** the local gesture calls, with the target spelled out, and the
-    // activation of a tab the gesture does is done too (`new-tab`,
-    // `activate-tab`, `collapse-group`, `move-*-to-window`). What never
-    // happens is a touch on the window of the OS -- no focus, no raise, no
-    // restore from the taskbar -- nor a change of the focused pane. The task
-    // manager of a window goes back to the terminal when a tab is activated or
-    // created there, by the one check of ADR-0095 around the action
-    // (`apply_remote_request`). What the desktop is in the middle of is
-    // `busy`.
+    // ADR-0107 section 1, with the rule of ADR-0111:
+    // each action calls the **same function** the local gesture calls, with
+    // the target spelled out, and **no remote action activates a tab**
+    // (`new-tab`, `collapse-group`, `move-*-to-window` and `start-pane` ask
+    // for "do not activate"). Only the removal of the active tab moves the
+    // active one, by the focus ladder. What never happens is a touch on the
+    // window of the OS -- no focus, no raise, no restore from the taskbar --
+    // nor a change of the focused pane, nor the task manager of a window going
+    // back to the terminal. What the desktop is in the middle of is `busy`.
 
     /// Sends a message to one phone.
     fn remote_send(&self, client: ClientId, message: Message) {
@@ -1086,7 +1117,6 @@ impl App {
             ActionBody::MoveGroupToWindow { group, window } => {
                 self.remote_move_group_to_window(group, window, event_loop, now)
             }
-            ActionBody::ActivateTab { tab } => self.remote_activate_tab(tab, now),
         };
         self.finish_remote_action(client, id, flow);
     }
@@ -1131,9 +1161,11 @@ impl App {
     /// `new-tab`: the creation of `tab.new` (no group) or `group.new_tab`
     /// (with one, at its end), the profile of the menu of profiles (none is
     /// the default; `Some("")` is the `[shell]`), the `cwd` they inherit. The
-    /// tab is **activated** in its window, as `tab.new` does (ADR-0109 section
-    /// 1): `open_tab(.., activate = true)`, the title of the window follows
-    /// and the track scrolls to it. The window of the OS is not touched.
+    /// tab is born **without being activated** (ADR-0111 section 1):
+    /// `open_tab(.., activate = false)` still spawns its process, the active
+    /// tab stays the same, and so do the title of the window and the scroll of
+    /// the track (nothing scrolls to the new tab). The window of the OS is not
+    /// touched.
     fn remote_new_tab(
         &mut self,
         window: u64,
@@ -1179,16 +1211,11 @@ impl App {
             &self.config,
             &self.config.project_file,
             &self.startup_directory,
-            true,
+            false,
             plan.profile.as_deref(),
         );
-        // What the local `tab.new` does around the creation: the title of the
-        // window is the new tab's, and the track shows it (the new tab may be
-        // at the end of a group, out of view).
-        state.sync_window_title();
-        if let Some(gpu) = self.gpu.as_mut() {
-            state.ensure_active_tab_visible(gpu, &self.style);
-        }
+        // Unlike the local `tab.new`, the title of the window and the scroll
+        // of the track follow the active tab, which did not change.
         state.window.request_redraw();
         match tab {
             Some(tab) => ActionFlow::Done(Ok(Some(self.remote.ids.tab(plan.window, tab)))),
@@ -1386,16 +1413,12 @@ impl App {
         if let Err(code) = start_step(wire_state) {
             return ActionFlow::Done(Err(code));
         }
-        // Starting a pane from the phone activates its tab (owner's decision,
-        // 2026-11-17, ADR-0109): on the desktop a tab that is not started
-        // comes up when it is activated, and that is the gesture this mirrors.
-        // The tab is activated by the same function as the click on it, and
-        // then started by the same rule (ADR-0037); the window of the OS is
-        // never touched.
-        if state.workspace.active_tab() != Some(tab) {
-            state.activate_tab_by_click(tab, self.gpu.as_mut(), &self.style);
-        }
-        state.ensure_active_tab_started(
+        // Starting a pane from the phone does not activate its tab (ADR-0111
+        // section 1): the tab is started by id, by the rule of ADR-0037, and
+        // the active tab, the selection and the title of the window stay as
+        // they are. The window of the OS is never touched.
+        state.start_tab(
+            tab,
             self.cell_metrics,
             &self.proxy,
             now,
@@ -1427,9 +1450,10 @@ impl App {
     //
     // The plans (`remote/actions.rs`) resolve the ids and say `busy` for every
     // window involved; what follows calls the function the local gesture
-    // calls, on the explicit target, and so does the active tab the gesture
-    // leaves (a collapse, an expand, a move: ADR-0109 section 1). The window
-    // of the OS and the focused pane are never touched.
+    // calls, on the explicit target, but the activation the gesture does is
+    // left out (an expand, a move: ADR-0111 section 1); collapsing the group
+    // of the active tab still moves it, by the focus ladder. The window of the
+    // OS and the focused pane are never touched.
 
     /// The group exists in that window and is explicit (the implicit runs
     /// have no protocol id).
@@ -1446,8 +1470,7 @@ impl App {
     /// (`run_move_target`, the end of the group); `group: null` is the drop
     /// between groups (`move_tab_to_run`) in the slot right after the group
     /// the tab leaves, and a tab already outside any group is a success with
-    /// nothing to do. The active tab is whatever those local paths leave
-    /// (ADR-0109 section 1: the same as the gesture).
+    /// nothing to do. Nothing changes in the active tab (ADR-0111 section 1).
     fn remote_move_tab_to_group(&mut self, tab: u64, group: Option<u64>) -> ActionFlow {
         let plan = match plan_move_tab_to_group(
             &self.remote.ids,
@@ -1573,11 +1596,13 @@ impl App {
     }
 
     /// `collapse-group`: what the click on the pill does
-    /// (`set_group_collapsed`), both ways (ADR-0109 section 1). Expanding
-    /// activates what the model activates (the first tab of the group);
-    /// collapsing the group of the active tab moves the focus by the ladder.
-    /// The tab the active one lands on starts if it never did, like any
-    /// activation.
+    /// (`set_group_collapsed`), both ways, but expanding does **not** change
+    /// the active tab (ADR-0111 section 1): the group expands in place
+    /// (`Workspace::expand_group_in_place`), with the reflow animation and no
+    /// scroll of the track, and no tab is activated, no indicator cleared, no
+    /// group MRU changed. Collapsing the group of the active tab moves the
+    /// focus by the ladder (RF-2.14), and the tab it lands on starts if it
+    /// never did, like any activation.
     fn remote_collapse_group(&mut self, group: u64, collapsed: bool, now: Instant) -> ActionFlow {
         let (window, group) = match self.plan_remote_group(group) {
             Ok(target) => target,
@@ -1587,7 +1612,10 @@ impl App {
             return ActionFlow::Done(Err(ErrorCode::UnknownGroup));
         };
         let before = state.workspace.active_tab();
-        state.set_group_collapsed(group, collapsed, self.gpu.as_mut(), &self.style);
+        // Expanding is not a visit: `visit` is off, so the model expands in
+        // place and the bar keeps its scroll; collapsing is the click on the
+        // pill.
+        state.set_group_collapsed(group, collapsed, false, self.gpu.as_mut(), &self.style);
         if state.workspace.active_tab() != before {
             state.ensure_active_tab_started(
                 self.cell_metrics,
@@ -1618,8 +1646,8 @@ impl App {
     }
 
     /// `move-tab-to-window`: **only** `App::transfer_with`, with the arrival
-    /// that activates and leaves the window of the OS alone
-    /// (`TransferArrival::ActivateOnly`). A pinned tab goes as a pinned one
+    /// that activates nothing and leaves the window of the OS alone
+    /// (`TransferArrival::Passive`). A pinned tab goes as a pinned one
     /// (RF-22.23); the last tab of
     /// a window may go, and the empty origin closes with no dialog
     /// (ADR-0107 section 5).
@@ -1691,15 +1719,15 @@ impl App {
     }
 
     /// The transfer of a remote move: where the popover would put the payload
-    /// (`destination_insert_at`), the arrival activated at the destination as
-    /// the popover does it, but the window of the OS not touched
-    /// (`TransferArrival::ActivateOnly`, ADR-0109 sections 1 and 3). The ids of
-    /// the protocol follow the objects (`rekey_tab_state`). A refusal of
-    /// `transfer_with` (nothing it could move) is `invalid-argument`. The tab
-    /// that became active at either end starts if it never did, like any
-    /// activation: at the destination the arrival, at the origin (when its
-    /// active tab left) the one the ladder landed on. The origin may be gone
-    /// (a window left with no tab closes), which the lookup tolerates.
+    /// (`destination_insert_at`), the arrival **not** activated (the active
+    /// tab of the destination stays) and the window of the OS not touched
+    /// (`TransferArrival::Passive`, ADR-0111 section 1). The ids of the
+    /// protocol follow the objects (`rekey_tab_state`). A refusal of
+    /// `transfer_with` (nothing it could move) is `invalid-argument`. The
+    /// active tab of each end starts if it never did: at the origin, when its
+    /// active tab left, the one the focus ladder landed on; at the destination
+    /// the lookup is a no-op unless it had no active tab. The origin may be
+    /// gone (a window left with no tab closes), which the lookup tolerates.
     fn remote_transfer(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -1714,7 +1742,7 @@ impl App {
             from,
             payload,
             TransferDest::Window(to, at),
-            TransferArrival::ActivateOnly,
+            TransferArrival::Passive,
         );
         let Some(moved) = moved else {
             return ActionFlow::Done(Err(ErrorCode::InvalidArgument));
@@ -1734,55 +1762,6 @@ impl App {
                 state.window.request_redraw();
             }
         }
-        ActionFlow::Done(Ok(None))
-    }
-
-    /// `activate-tab`: the function of the click on a tab of the bar
-    /// (`activate_tab_by_click`, ADR-0109 section 2) on the explicit tab -- the
-    /// selection goes, the model activates it (expanding the collapsed group
-    /// it is in, RF-2.17), the title of the window follows and the track
-    /// scrolls to it. A tab that was never started starts, as on any
-    /// activation (ADR-0037 section 2); a dormant SSH pane stays dormant (only
-    /// `start-pane` or a gesture on the pane connects it). The tab already
-    /// active is a success that changes nothing. The window of the OS and the
-    /// focused pane are not touched.
-    fn remote_activate_tab(&mut self, tab: u64, now: Instant) -> ActionFlow {
-        let step = match plan_activate_tab(
-            &self.remote.ids,
-            tab,
-            |window, tab| {
-                self.windows
-                    .get(&window)
-                    .is_some_and(|state| state.workspace.tab(tab).is_some())
-            },
-            |window, tab| {
-                self.windows
-                    .get(&window)
-                    .is_some_and(|state| state.workspace.active_tab() == Some(tab))
-            },
-            |window| self.remote_window_busy(window),
-        ) {
-            Ok(step) => step,
-            Err(code) => return ActionFlow::Done(Err(code)),
-        };
-        let ActivateStep::Activate { window, tab } = step else {
-            return ActionFlow::Done(Ok(None));
-        };
-        let Some(state) = self.windows.get_mut(&window) else {
-            return ActionFlow::Done(Err(ErrorCode::UnknownTab));
-        };
-        state.activate_tab_by_click(tab, self.gpu.as_mut(), &self.style);
-        state.ensure_active_tab_started(
-            self.cell_metrics,
-            &self.proxy,
-            now,
-            &self.style,
-            &self.term_params,
-            &self.config,
-            &self.config.project_file,
-            &self.startup_directory,
-        );
-        state.window.request_redraw();
         ActionFlow::Done(Ok(None))
     }
 

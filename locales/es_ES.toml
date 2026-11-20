@@ -52,6 +52,8 @@ name_placeholder = "nombre de la sesión"
 
 [devices]
 summary = { one = "{count} dispositivo conectado: {names}", other = "{count} dispositivos conectados: {names}" }
+viewed_on = "Vista en: {names}"
+viewed_on_pinned = "{title} · Vista en: {names}"
 row_detail = "{platform} · conectado {since}"
 since_now = "ahora"
 since_minutes = { one = "hace {count} minuto", other = "hace {count} minutos" }
@@ -656,6 +658,7 @@ group_collapsed_colored = "Grupo {name}, contraído, color {color}"
 tab_state = " ({state})"
 state_active = "activa"
 state_pinned = "fijada"
+state_remote_viewing = "vista en un móvil"
 state_not_started = "sin iniciar"
 state_bell = "campana"
 state_activity = "actividad"

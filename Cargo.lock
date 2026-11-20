@@ -3520,7 +3520,7 @@ dependencies = [
 [[package]]
 name = "porecatu-protocol"
 version = "0.1.0"
-source = "git+https://github.com/porecatu/protocol?rev=0909e7ca88e3c180198e8ce7246445c4b0d9fbd1#0909e7ca88e3c180198e8ce7246445c4b0d9fbd1"
+source = "git+https://github.com/porecatu/protocol?rev=4ce7e4fea324a85a2e99aedccf5b8335755d183e#4ce7e4fea324a85a2e99aedccf5b8335755d183e"
 dependencies = [
  "blake2 0.10.6",
  "bytes",

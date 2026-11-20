@@ -17,7 +17,7 @@ workspace = true
 # e mesmo commit do `Cargo.toml` do Relay; o `version` impede curinga no
 # cargo-deny). Features padrao (`session`, `message`); `test-vectors` nunca.
 # Subir acompanha a versao de fio que o Relay e o Remote falam.
-porecatu-protocol = { version = "=0.1.0", git = "https://github.com/porecatu/protocol", rev = "0909e7ca88e3c180198e8ce7246445c4b0d9fbd1" }
+porecatu-protocol = { version = "=0.1.0", git = "https://github.com/porecatu/protocol", rev = "4ce7e4fea324a85a2e99aedccf5b8335755d183e" }
 # ADR-0104 §2: `tokio` so em crate de rede folha, com runtime proprio; a mesma
 # versao exata em `porecatu-ssh` e aqui, subidas juntas (`cargo tree -d`).
 # Nunca em `[workspace.dependencies]`.

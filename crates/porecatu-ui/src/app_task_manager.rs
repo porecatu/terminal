@@ -1141,18 +1141,10 @@ impl App {
         self.leave_task_manager_where_changed(clicked.then_some(event_window), guard);
     }
 
-    /// The end of the one check for what is not a window event -- an action
-    /// from the phone (ADR-0109 section 4): no window had a click, so only the
-    /// count and the active tab decide.
-    pub(crate) fn task_manager_guard_end_remote(
-        &mut self,
-        guard: Vec<(WindowId, ActivationSnapshot)>,
-    ) {
-        self.leave_task_manager_where_changed(None, guard);
-    }
-
     /// The loop of [`task_manager_guard_end`]: `clicked` is the window whose
-    /// tab was clicked during the event, if any.
+    /// tab was clicked during the event, if any. Only window events go through
+    /// it: an action from the phone never closes the manager (ADR-0111
+    /// section 3).
     fn leave_task_manager_where_changed(
         &mut self,
         clicked: Option<WindowId>,

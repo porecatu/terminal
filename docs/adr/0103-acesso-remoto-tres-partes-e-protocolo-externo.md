@@ -53,6 +53,8 @@ A versão `[major, minor]` é negociada no início da sessão (`hello`/`welcome`
 
 > **Nota de implementação (2026-11-17).** O host foi implementado contra a especificação **0.4** do protocolo, não a 0.3: a 0.4 acrescenta a ação `activate-tab` e corrige pontos do texto da 0.3 que a implementação expôs ([ADR-0109](0109-o-celular-muda-a-aba-ativa-do-desktop.md), ADR-0010 do `porecatu-protocol`). O fio continua `[0, 1]` e o crate continua `0.1.0`; o que mudou é o `rev` — `0909e7ca88e3c180198e8ce7246445c4b0d9fbd1`, o commit de merge da 0.4 na `main` do `porecatu-protocol` (PR #2 de lá, mesclado em 2026-11-17 com o CI verde nas três plataformas), o mesmo que o Relay usa. O crate de protocolo continua não publicado. Ver o [roadmap](../roadmap.md).
 
+> **Nota de implementação (2026-11-20).** O host passa à especificação **0.5** ([ADR-0111](0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md), [ADR-0112](0112-indicador-de-aba-vista-pelo-celular.md); ADR-0011 do `porecatu-protocol`): sai `activate-tab`, entra `view-tab`. O fio continua `[0, 1]` e não distingue a 0.4 da 0.5, então o host, o Relay e o Remote sobem juntos para o mesmo `rev`, `4ce7e4fea324a85a2e99aedccf5b8335755d183e`, um commit direto na `main` do protocolo.
+
 ## Alternativas consideradas
 
 ### Sessão no servidor (estilo `tmux -CC` ou servidor de multiplexação)

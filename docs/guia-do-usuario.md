@@ -1518,8 +1518,9 @@ Porecatu não abre conexão de rede por causa dele, nem cria thread.
 > **Estado.** Implementado e coberto por testes automatizados, mas ainda
 > **não visto rodando** com o app real nem com um relay real; macOS e
 > Linux também estão por verificar. O app mobile precisa da versão que
-> fale a especificação 0.4 do protocolo (a que tem `activate-tab`). Veja
-> a dívida no [roadmap](roadmap.md).
+> fale a especificação 0.5 do protocolo (a que tem `view-tab`); com uma
+> versão mais antiga do app, a conexão cai logo depois de abrir. Veja a
+> dívida no [roadmap](roadmap.md).
 
 ### As três partes
 
@@ -1634,20 +1635,23 @@ O celular pode:
   passam pelo **mesmo codificador do teclado do desktop** (respeitando o
   modo do programa), e **nunca** disparam um atalho do Porecatu;
 - **criar abas** (numa janela e num grupo à escolha, com o perfil que
-  quiser), **fechar abas e painéis**, **renomear abas**, **ativar uma
-  aba**, **iniciar** um painel não iniciado e **conectar** uma aba SSH
-  dormente;
+  quiser), **fechar abas e painéis**, **renomear abas**, **iniciar** um
+  painel não iniciado e **conectar** uma aba SSH dormente;
 - **organizar**: mover aba entre grupos, **criar**, renomear, mudar a cor,
   colapsar e desfazer grupos, e mover aba ou grupo **entre janelas**, com
   o processo vivo, como no arraste.
 
-Cada ação faz **o mesmo que o gesto equivalente no desktop** — inclusive
-a **ativação da aba**: a aba criada pelo celular fica ativa na janela
-dela, e quem volta para a mesa encontra ativa a aba em que estava
-trabalhando. O celular **nunca** dá foco, levanta nem desminimiza uma janela
-do sistema, nem muda o painel focado. Se o gerenciador de tarefas estava
-aberto numa janela e o celular ativa ou cria uma aba nela, a janela volta
-ao terminal, como num clique seu.
+Cada ação faz **o mesmo que o gesto equivalente no desktop**, com uma
+exceção: o celular **nunca muda a aba ativa**. Abrir uma aba no celular não
+a abre no desktop; a aba criada pelo celular nasce sem ficar ativa;
+expandir um grupo e mover uma aba para outra janela não trocam a aba em que
+você está. A aba ativa só muda quando o celular fecha ou move justamente
+ela (ou colapsa o grupo dela): aí o Porecatu ativa a vizinha, como faria
+se você mesmo a fechasse. O celular também **nunca** dá foco, levanta nem
+desminimiza uma janela do sistema, nem muda o painel focado, e o
+gerenciador de tarefas aberto numa janela continua aberto. A aba que o
+celular está vendo aparece marcada na barra (veja "Saber quem está
+conectado").
 
 Alguns limites:
 
@@ -1664,8 +1668,8 @@ Alguns limites:
   "aguardando o desktop". Segredo não viaja para o celular.
 - Ficam **fora do alcance** do celular: fixar e desafixar, sessões
   nomeadas, configurações, o gerenciador de tarefas, abrir janela nova,
-  destacar aba numa janela nova e qualquer coisa que dê foco à janela do
-  sistema.
+  destacar aba numa janela nova, trocar a aba ativa e qualquer coisa que dê
+  foco à janela do sistema.
 - Com o Porecatu fechado, o celular mostra o computador como *offline*.
   Não há modo em segundo plano nem notificação push.
 - **Fechar a última aba fixada** (`close-pane` no último painel de uma aba
@@ -1685,6 +1689,15 @@ Desconectar derruba a conexão; o aparelho **continua pareado** e pode
 voltar. A cada nova conexão aparece também um aviso, "Aparelho
 conectado", com o nome. A ação `remote.disconnect_all` faz o mesmo que
 "Desconectar todos".
+
+**A aba que o celular está vendo** ganha o mesmo ícone de celular, em
+verde, à esquerda do botão de fechar (no lugar dele, se você configurou
+`show_close_button = "never"`; com `"hover"`, o ícone não se mexe quando o
+"x" aparece). Numa aba fixada, a marca é um pontinho verde no canto
+inferior direito. Com mais de um celular, cada um marca a aba que está
+vendo; passe o mouse sobre o ícone para ver quais aparelhos. A marca some
+quando o celular sai da aba ou se desconecta; numa aba dentro de um grupo
+colapsado ela não aparece. Também não há como escondê-la.
 
 Desligar o acesso (a alternância ou `remote.toggle`) derruba todas as
 conexões, avisando os celulares; a lista de pareados fica.

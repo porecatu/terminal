@@ -14,6 +14,35 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [Não lançado]
+
+### Mudado
+
+- **O celular não muda mais a aba ativa do desktop**
+  ([ADR-0111](docs/adr/0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md), que
+  substitui o [ADR-0109](docs/adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md)):
+  abrir uma aba no celular, criar uma aba, expandir um grupo, mover uma aba ou
+  um grupo para outra janela e iniciar um painel deixam a aba ativa como
+  estava. Só fechar, mover ou colapsar o grupo da própria aba ativa a troca,
+  pela escada de foco. O gerenciador de tarefas não fecha por causa do
+  celular. Expandir pelo celular não apaga os indicadores de nenhuma aba.
+- **Protocolo 0.5**: o host fala a especificação 0.5 do
+  [porecatu-protocol](https://github.com/porecatu/protocol) (`rev` `4ce7e4f`,
+  o mesmo do Relay e do app Remote): sai a ação `activate-tab`, entra a
+  mensagem `view-tab`. O fio continua `[0, 1]` e não distingue a 0.4 da 0.5:
+  um app 0.4 não conversa com este host.
+
+### Adicionado
+
+- **Indicador de aba vista pelo celular**
+  ([ADR-0112](docs/adr/0112-indicador-de-aba-vista-pelo-celular.md), PRD-025
+  RF-25.30): a aba que um celular conectado está vendo mostra o ícone de
+  celular em Acento à esquerda do "x" (no lugar dele com
+  `show_close_button = "never"`, sem se mover com `"hover"`); na aba fixada,
+  um ponto no canto inferior direito. Tooltip com os aparelhos e estado na
+  árvore de acessibilidade. Nenhum valor novo de aparência; aval visual
+  pendente.
+
 ## [0.10.0] - 2026-11-18
 
 Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado por padrão. Substitui a 0.9.11, retirada.

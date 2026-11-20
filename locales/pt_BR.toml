@@ -71,6 +71,8 @@ name_placeholder = "nome da sessão"
 # Botão e popover de aparelhos conectados (PRD-025 RF-25.12, ADR-0108 §4).
 [devices]
 summary = { one = "{count} aparelho conectado: {names}", other = "{count} aparelhos conectados: {names}" }
+viewed_on = "Vista em: {names}"
+viewed_on_pinned = "{title} · Vista em: {names}"
 row_detail = "{platform} · conectado {since}"
 since_now = "agora"
 since_minutes = { one = "há {count} minuto", other = "há {count} minutos" }
@@ -696,6 +698,7 @@ group_collapsed_colored = "Grupo {name}, colapsado, cor {color}"
 tab_state = " ({state})"
 state_active = "ativa"
 state_pinned = "fixada"
+state_remote_viewing = "vista no celular"
 state_not_started = "não iniciada"
 state_bell = "campainha"
 state_activity = "atividade"

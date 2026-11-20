@@ -81,6 +81,9 @@ struct Active {
     /// The panes this client subscribes to, with the flow control of each
     /// (at most [`MAX_SUBSCRIPTIONS`]).
     subs: BTreeMap<u64, Subscription>,
+    /// The tab (protocol id) this client says it shows (`view-tab`), if any.
+    /// Information only: it never reaches the workspace.
+    viewing: Option<u64>,
 }
 
 fn platform_of(platform: PairPlatform) -> DevicePlatform {
@@ -355,6 +358,7 @@ impl Session {
             device_key,
             rev: 0,
             subs: BTreeMap::new(),
+            viewing: None,
         });
         self.send(
             core,
@@ -402,6 +406,7 @@ impl Session {
         match message {
             Message::Action(action) => core.emit(RemoteEvent::Action { client, action }),
             Message::Confirm(confirm) => core.emit(RemoteEvent::Confirm { client, confirm }),
+            Message::ViewTab(view) => self.on_view_tab(core, view.tab),
             Message::Goodbye(_) => self.closing = Some(CloseReason::Normal),
             // A second `hello` is out of place.
             Message::Hello(_) => self.send_error(core, ErrorCode::Protocol, None, None),
@@ -515,6 +520,48 @@ impl Session {
             core.emit(RemoteEvent::Input { client, input });
         } else {
             self.send_error(core, ErrorCode::NotSubscribed, Some(pane), None);
+        }
+    }
+
+    // -- view-tab ---------------------------------------------------------
+
+    /// `view-tab`: the tab the client shows, or none. A tab that is not in
+    /// the tree is an `unknown-tab` error and counts as none.
+    fn on_view_tab(&mut self, core: &Core, tab: Option<u64>) {
+        let shown = match tab {
+            Some(tab) if !core.has_tab(tab) => {
+                self.send_error(core, ErrorCode::UnknownTab, None, None);
+                None
+            }
+            other => other,
+        };
+        self.set_viewing(core, shown);
+    }
+
+    /// Keeps `tab` as what this client shows and tells the UI, but only when
+    /// it changed.
+    fn set_viewing(&mut self, core: &Core, tab: Option<u64>) {
+        let Stage::Active(active) = &mut self.stage else {
+            return;
+        };
+        if active.viewing == tab {
+            return;
+        }
+        active.viewing = tab;
+        core.emit(RemoteEvent::ClientViewing {
+            client: active.client,
+            tab,
+        });
+    }
+
+    /// Forgets the tab this client shows when it left the tree.
+    pub(crate) fn end_gone_view(&mut self, core: &Core) {
+        let gone = matches!(
+            &self.stage,
+            Stage::Active(Active { viewing: Some(tab), .. }) if !core.has_tab(*tab)
+        );
+        if gone {
+            self.set_viewing(core, None);
         }
     }
 

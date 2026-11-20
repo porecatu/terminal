@@ -24,6 +24,8 @@
 //! campos de texto (só `Value`) e sem despacho de `ActionRequest` de volta
 //! ao app (a árvore expõe, não interage -- RF-11.17/18 pedem o primeiro).
 
+use std::collections::HashMap;
+
 use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use porecatu_core::{GroupColor, GroupId, PaneId, TabId, Workspace};
 use porecatu_locale::Catalog;
@@ -474,6 +476,7 @@ pub(crate) fn build_tree(
     active_pane_order: Option<&[PaneId]>,
     task_manager: Option<&TaskManagerAccess<'_>>,
     devices: &[DeviceEntry],
+    remote_viewers: &HashMap<TabId, Vec<String>>,
     style: &TabBarStyle,
     catalog: &Catalog,
     language: &str,
@@ -508,6 +511,7 @@ pub(crate) fn build_tree(
         workspace,
         &layout,
         pane_order,
+        remote_viewers,
         catalog,
         &mut nodes,
         &mut root_children,
@@ -634,6 +638,7 @@ fn build_tab_list(
     workspace: &Workspace,
     layout: &tab_bar::TabBarLayout,
     active_pane_order: Option<&[PaneId]>,
+    remote_viewers: &HashMap<TabId, Vec<String>>,
     catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
     root_children: &mut Vec<NodeId>,
@@ -651,6 +656,7 @@ fn build_tab_list(
             id,
             tab,
             tab_bar::tab_indicator(tab),
+            tab_bar::is_viewed(remote_viewers, id),
             active_pane_order,
             catalog,
             nodes,
@@ -690,6 +696,7 @@ fn build_tab_list(
                 tab_rect.id,
                 tab,
                 tab_rect.indicator,
+                tab_bar::is_viewed(remote_viewers, tab_rect.id),
                 active_pane_order,
                 catalog,
                 nodes,
@@ -714,11 +721,13 @@ fn build_tab_list(
 /// The node of one tab -- a track tab or a pinned box -- and its children:
 /// the close button (not for a pinned tab, RF-21.22) and the panes of the
 /// active tab. The caller adds the id to the tab list.
+#[allow(clippy::too_many_arguments)]
 fn push_tab_node(
     workspace: &Workspace,
     tab_id: TabId,
     tab: &porecatu_core::Tab,
     indicator: Option<Indicator>,
+    remote_viewed: bool,
     active_pane_order: Option<&[PaneId]>,
     catalog: &Catalog,
     nodes: &mut Vec<(NodeId, Node)>,
@@ -750,6 +759,10 @@ fn push_tab_node(
         Some(Indicator::Bell) => push_state(msg::access::state_bell(catalog)),
         Some(Indicator::Activity) => push_state(msg::access::state_activity(catalog)),
         None => {}
+    }
+    // ADR-0112 section 4: the state of the tab, not a node of the indicator.
+    if remote_viewed {
+        push_state(msg::access::state_remote_viewing(catalog));
     }
     node.set_label(label);
     // ADR-0070 §7: the profile's name is the **description**; the
@@ -1940,6 +1953,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             language,
@@ -1980,11 +1994,75 @@ mod tests {
             None,
             None,
             devices,
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
             &mut measurer(),
         )
+    }
+
+    fn build_with_viewers(ws: &Workspace, viewers: &HashMap<TabId, Vec<String>>) -> TreeUpdate {
+        build_tree(
+            ws,
+            &WarningStack::default(),
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            &None,
+            None,
+            &None,
+            &None,
+            None,
+            None,
+            None,
+            &[],
+            viewers,
+            &TabBarStyle::DEFAULT,
+            &crate::messages::test_support::pt_br(),
+            "pt-BR",
+            &mut measurer(),
+        )
+    }
+
+    /// ADR-0112 section 4: the node `Tab` of a tab a phone is viewing -- on the
+    /// track or pinned -- carries the state "vista no celular" in its label,
+    /// the others do not, and the indicator has no node of its own.
+    #[test]
+    fn a_tab_viewed_on_a_phone_has_the_state_and_no_node_of_its_own() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("bash", None);
+        let c = ws.append_tab("fish", None);
+        ws.pin_tab(c, 0);
+
+        let none = build_with_viewers(&ws, &HashMap::new());
+        let viewers = HashMap::from([
+            (a, vec!["Pixel".to_owned()]),
+            (c, vec!["Pixel".to_owned(), "iPad".to_owned()]),
+            (b, Vec::new()),
+        ]);
+        let viewed = build_with_viewers(&ws, &viewers);
+
+        fn label(update: &TreeUpdate, id: TabId) -> &str {
+            node(update, tab_node_id(id)).label().unwrap()
+        }
+        assert!(
+            label(&viewed, a).contains("(vista no celular)"),
+            "{}",
+            label(&viewed, a)
+        );
+        assert!(label(&viewed, c).contains("(vista no celular)"));
+        assert!(label(&viewed, c).contains("(fixada)"), "the states add up");
+        assert!(
+            !label(&viewed, b).contains("celular"),
+            "an empty list is nobody"
+        );
+        assert!(!label(&none, a).contains("celular"));
+        assert_eq!(viewed.nodes.len(), none.nodes.len(), "no node for the icon");
     }
 
     /// The button of the connected devices is in the tree while a phone is
@@ -2145,6 +2223,7 @@ mod tests {
             order,
             access,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2211,6 +2290,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &style,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2640,6 +2720,7 @@ mod tests {
             Some(&order),
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2692,6 +2773,7 @@ mod tests {
             Some(&order),
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2747,6 +2829,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2802,6 +2885,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2872,6 +2956,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2925,6 +3010,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -2972,6 +3058,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -3016,6 +3103,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -3068,6 +3156,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &pt,
             "pt-BR",
@@ -3141,6 +3230,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &pt,
             "pt-BR",
@@ -3224,6 +3314,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -3265,6 +3356,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &catalog,
             "pt-BR",
@@ -3336,6 +3428,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",
@@ -3374,6 +3467,7 @@ mod tests {
             None,
             None,
             &[],
+            &HashMap::new(),
             &TabBarStyle::DEFAULT,
             &crate::messages::test_support::pt_br(),
             "pt-BR",

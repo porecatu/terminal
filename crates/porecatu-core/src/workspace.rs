@@ -718,6 +718,18 @@ impl Workspace {
         true
     }
 
+    /// Expands `id` without visiting it: unlike [`Self::collapse_group`] with
+    /// `collapsed == false`, it does not activate the first tab of the group,
+    /// so the active tab, the indicators (activity, bell) of every tab and the
+    /// group's `last_active` stay as they were (ADR-0111 section 1: a remote
+    /// expansion is not a visit). The resulting tab order is the same as the
+    /// local expansion's. `false` on an implicit group or an unknown `id`;
+    /// expanding a group that is already expanded is `true` and changes
+    /// nothing.
+    pub fn expand_group_in_place(&mut self, id: GroupId) -> bool {
+        self.group_mut(id).is_some_and(|g| g.set_collapsed(false))
+    }
+
     /// RF-2.9. `false` sobre grupo implícito ou `id` inexistente.
     pub fn rename_group(&mut self, id: GroupId, name: impl Into<String>) -> bool {
         self.group_mut(id).is_some_and(|g| g.rename(name))
@@ -1528,6 +1540,72 @@ mod tests {
         assert!(!ws.group(grupo).unwrap().is_collapsed());
         assert_eq!(ws.active_tab(), Some(a));
         let _ = fora;
+    }
+
+    /// ADR-0111 section 1: expanding in place is not a visit. `a [G: b c] d`
+    /// with `a` active, `c` the last visited tab of G, and activity and bell
+    /// lit on `b` (the first tab of G): nothing of that changes.
+    #[test]
+    fn expanding_in_place_keeps_the_active_tab_the_indicators_and_the_group_mru() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let c = ws.append_tab("zsh", None);
+        let d = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b, c], "g", GroupColor::Blue).unwrap();
+        ws.activate_tab(c);
+        ws.activate_tab(a);
+        assert!(ws.collapse_group(group, true));
+        ws.tab_mut(b).unwrap().mark_activity();
+        ws.tab_mut(b).unwrap().mark_bell();
+        assert_eq!(ws.group(group).unwrap().last_active(), Some(c));
+
+        // The local expansion on a copy, for the order to compare with.
+        let mut local = ws.clone();
+        assert!(local.collapse_group(group, false));
+
+        assert!(ws.expand_group_in_place(group));
+        assert!(!ws.group(group).unwrap().is_collapsed());
+        assert_eq!(ws.active_tab(), Some(a));
+        assert!(ws.tab(b).unwrap().activity());
+        assert!(ws.tab(b).unwrap().bell());
+        assert_eq!(ws.group(group).unwrap().last_active(), Some(c));
+        assert_eq!(ws.track_order().collect::<Vec<_>>(), [a, b, c, d]);
+        assert_eq!(
+            ws.track_order().collect::<Vec<_>>(),
+            local.track_order().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ws.visual_order().collect::<Vec<_>>(),
+            local.visual_order().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            ws.navigable_order().collect::<Vec<_>>(),
+            local.navigable_order().collect::<Vec<_>>()
+        );
+        // The local expansion is the visit this one is not.
+        assert_eq!(local.active_tab(), Some(b));
+        assert!(!local.tab(b).unwrap().activity());
+    }
+
+    #[test]
+    fn expanding_in_place_changes_nothing_when_there_is_nothing_to_expand() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[b], "g", GroupColor::Blue).unwrap();
+        ws.activate_tab(a);
+
+        // Already expanded: `true`, and the active tab stays.
+        let before = ws.clone();
+        assert!(ws.expand_group_in_place(group));
+        assert_eq!(ws, before);
+
+        // Implicit group and unknown id: `false`.
+        let implicit = ws.group_of_tab(a).unwrap();
+        assert!(!ws.expand_group_in_place(implicit));
+        assert!(!ws.expand_group_in_place(GroupId::new(99)));
+        assert_eq!(ws, before);
     }
 
     /// Regressão do laço que a regra do RF-2.17 poderia criar: colapsar um

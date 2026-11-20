@@ -12,10 +12,10 @@
 //! pending confirmations and their 60 s deadline, and, for the groups and the
 //! moves between windows, the plan of each action (ids, `busy`, rules).
 //!
-//! A remote action does what the local gesture does, the activation of a tab
-//! included (ADR-0109, which revises ADR-0107 section 2): the plan of an
-//! `activate-tab` is here, the rest is the model's own rule. What it never
-//! does is touch the window of the OS: no focus, no raise, no restore.
+//! A remote action does what the local gesture does, except that it never
+//! activates a tab (ADR-0111, which restores ADR-0107 section 2): only the
+//! removal of the active tab moves it, by the focus ladder. What no action does
+//! is touch the window of the OS: no focus, no raise, no restore.
 
 use std::collections::BTreeMap;
 use std::hash::Hash;
@@ -464,45 +464,11 @@ pub(crate) fn plan_group_edit<W: Copy + Eq + Hash>(
     Ok((window, group))
 }
 
-// `collapse-group` has no plan of its own beyond `plan_group_edit`: both
-// directions follow the model (ADR-0109 section 1) -- expanding activates what
-// `Workspace::collapse_group` activates, collapsing the group of the active tab
-// moves it by the focus ladder (RF-2.14) -- so there is no "active tab policy"
-// to decide here.
-
-/// What a valid `activate-tab` does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ActivateStep<W> {
-    /// The tab is already the active one of its window: success, no effect.
-    AlreadyActive,
-    /// Make it the active tab of its window, by the function of the click on
-    /// a tab (ADR-0109 section 2).
-    Activate { window: W, tab: TabId },
-}
-
-/// Validates an `activate-tab` (spec 03 section 7, ADR-0109 section 2):
-/// `unknown-tab`, then `busy` in the window of the tab, then, if the tab is
-/// already the active one, a success that changes nothing.
-pub(crate) fn plan_activate_tab<W: Copy + Eq + Hash>(
-    ids: &ProtocolIds<W>,
-    tab: u64,
-    tab_exists: impl Fn(W, TabId) -> bool,
-    is_active: impl Fn(W, TabId) -> bool,
-    is_busy: impl Fn(W) -> bool,
-) -> Result<ActivateStep<W>, ErrorCode> {
-    let (window, tab) = ids
-        .tab_of(tab)
-        .filter(|(window, tab)| tab_exists(*window, *tab))
-        .ok_or(ErrorCode::UnknownTab)?;
-    if is_busy(window) {
-        return Err(ErrorCode::Busy);
-    }
-    if is_active(window, tab) {
-        Ok(ActivateStep::AlreadyActive)
-    } else {
-        Ok(ActivateStep::Activate { window, tab })
-    }
-}
+// `collapse-group` has no plan of its own beyond `plan_group_edit`: it calls the
+// model, and the active tab follows ADR-0111 section 1 -- collapsing the group
+// of the active tab moves it by the focus ladder (RF-2.14), expanding does not
+// change it: it calls `Workspace::expand_group_in_place`, which activates
+// nothing (unlike `collapse_group`, which activates the first tab).
 
 /// What a valid `move-tab-to-window` is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1232,7 +1198,7 @@ mod tests {
         assert_eq!(group_edit(1, |w| w == 8), Ok((7, GroupId::new(3))));
     }
 
-    // --- collapse-group and activate-tab -----------------------------------
+    // --- collapse-group -----------------------------------
 
     /// `a [G: b c] d` with `a` active, G collapsed or not as asked.
     fn grouped(collapsed: bool) -> (Workspace, GroupId, [TabId; 4]) {
@@ -1249,29 +1215,42 @@ mod tests {
         (ws, group, [a, b, c, d])
     }
 
-    /// ADR-0109 section 1: a remote `collapse-group` is the model call of the
-    /// click on the pill, both ways, and the order that results is fixed.
+    /// ADR-0111 section 1: a remote `collapse-group` expands in place (no tab
+    /// is activated) and collapses like the click on the pill; the order that
+    /// results is fixed. Collapsing the group of the active tab moves it by
+    /// the ladder.
     #[test]
-    fn collapsing_and_expanding_follow_the_model_like_the_pill() {
+    fn expanding_keeps_the_active_tab_and_collapsing_its_group_follows_the_ladder() {
         // Collapsing a group that does not hold the active tab keeps it.
         let (mut ws, group, [a, b, c, d]) = grouped(false);
         assert!(ws.collapse_group(group, true));
         assert!(ws.group(group).unwrap().is_collapsed());
         assert_eq!(ws.active_tab(), Some(a));
-        // Expanding activates what the model activates: the first tab of the
-        // group (the pill does the same).
-        assert!(ws.collapse_group(group, false));
+
+        // Expanding: nothing is activated.
+        assert!(ws.expand_group_in_place(group));
         assert!(!ws.group(group).unwrap().is_collapsed());
-        assert_eq!(ws.active_tab(), Some(b));
+        assert_eq!(ws.active_tab(), Some(a));
         assert_eq!(ws.track_order().collect::<Vec<_>>(), [a, b, c, d]);
+
+        // Expanding a group that is already expanded, with the active tab
+        // inside it (not the first): the active tab stays.
+        assert!(ws.activate_tab(c));
+        assert!(ws.expand_group_in_place(group));
+        assert_eq!(ws.active_tab(), Some(c));
+        assert!(!ws.group(group).unwrap().is_collapsed());
 
         // Collapsing the group of the active tab: the ladder (RF-2.14); the
         // active tab leaves the group, to the nearest visible one.
-        assert!(ws.activate_tab(c));
         assert!(ws.collapse_group(group, true));
         assert_ne!(ws.active_tab(), Some(c));
         assert!(matches!(ws.active_tab(), Some(t) if t == a || t == d));
         assert_eq!(ws.track_order().collect::<Vec<_>>(), [a, b, c, d]);
+
+        // Expanding it again leaves the active tab where the ladder put it.
+        let landed = ws.active_tab();
+        assert!(ws.expand_group_in_place(group));
+        assert_eq!(ws.active_tab(), landed);
     }
 
     #[test]
@@ -1300,95 +1279,52 @@ mod tests {
         assert!(!ws.group(group).unwrap().is_collapsed());
     }
 
-    /// ADR-0109 section 1: a remote `new-tab` is `tab.new` -- the model call
-    /// activates the new tab, and puts it where the one of the desktop goes
-    /// (the end of the group of the active tab).
+    /// ADR-0111 section 1: a remote `new-tab` creates the tab where `tab.new`
+    /// puts it (the end of the group of the active tab) but **does not
+    /// activate** it, and it is born `Running` -- the process is spawned by
+    /// `open_tab` whatever `activate` says, so it is not a `NotStarted` one.
     #[test]
-    fn a_remote_new_tab_is_active_where_tab_new_puts_it() {
+    fn a_remote_new_tab_is_where_tab_new_puts_it_and_the_active_tab_stays() {
         let (mut ws, group, [a, b, c, d]) = grouped(false);
         assert!(ws.activate_tab(b));
-        let created = ws.append_tab_with("zsh", None, true);
-        assert_eq!(ws.active_tab(), Some(created));
+        let created = ws.append_tab_with("zsh", None, false);
+        assert_eq!(ws.active_tab(), Some(b));
         assert_eq!(ws.group_of_tab(created), Some(group));
         assert_eq!(ws.track_order().collect::<Vec<_>>(), [a, b, c, created, d]);
-        // With a group asked for, at its end, active as well.
+        assert!(!ws.tab(created).unwrap().is_not_started());
+        // With a group asked for, at its end, the active tab stays as well.
         assert!(ws.activate_tab(a));
-        let in_group = ws.new_tab_with(Some(group), "zsh", None, 3, true);
-        assert_eq!(ws.active_tab(), Some(in_group));
+        let in_group = ws.new_tab_with(Some(group), "zsh", None, 3, false);
+        assert_eq!(ws.active_tab(), Some(a));
         assert_eq!(
             ws.track_order().collect::<Vec<_>>(),
             [a, b, c, created, in_group, d]
         );
+        assert!(!ws.tab(in_group).unwrap().is_not_started());
+        // Without a group, in the window of a pinned active tab: at the end of
+        // the track, and the pinned one stays active.
+        let mut pinned = Workspace::new();
+        let p = pinned.append_tab("zsh", None);
+        assert!(pinned.pin_tab(p, 0));
+        assert!(pinned.activate_tab(p));
+        let loose = pinned.append_tab_with("zsh", None, false);
+        assert_eq!(pinned.active_tab(), Some(p));
+        assert_eq!(pinned.track_order().collect::<Vec<_>>(), [loose]);
     }
 
-    fn activate(
-        tab: u64,
-        active: impl Fn(u8, TabId) -> bool,
-        busy: impl Fn(u8) -> bool,
-    ) -> Result<ActivateStep<u8>, ErrorCode> {
-        plan_activate_tab(&world_ids(), tab, tab_exists, active, busy)
-    }
-
+    /// ADR-0111 section 1: a remote `start-pane` starts the tab without
+    /// activating it. In the model, starting a `NotStarted` tab is a state
+    /// change of the tab (`Tab::start`) and leaves the active tab alone.
     #[test]
-    fn activate_tab_resolves_the_tab_of_any_window() {
-        let never_active = |_: u8, _: TabId| false;
-        assert_eq!(
-            activate(2, never_active, never_busy),
-            Ok(ActivateStep::Activate {
-                window: 7,
-                tab: tab(1)
-            })
-        );
-        assert_eq!(
-            activate(4, never_active, never_busy),
-            Ok(ActivateStep::Activate {
-                window: 8,
-                tab: tab(0)
-            })
-        );
-        // A pinned tab activates like any other.
-        assert!(matches!(
-            activate(3, never_active, never_busy),
-            Ok(ActivateStep::Activate { .. })
-        ));
-    }
-
-    #[test]
-    fn activate_tab_checks_unknown_then_busy_then_already_active() {
-        let always_active = |_: u8, _: TabId| true;
-        assert_eq!(
-            activate(99, always_active, |_| true),
-            Err(ErrorCode::UnknownTab)
-        );
-        // A tab in the table that is gone from the model.
-        let gone = plan_activate_tab(
-            &world_ids(),
-            1,
-            |_: u8, _: TabId| false,
-            always_active,
-            never_busy,
-        );
-        assert_eq!(gone, Err(ErrorCode::UnknownTab));
-        // Busy in the window of the tab, before "already active".
-        assert_eq!(activate(1, always_active, |w| w == 7), Err(ErrorCode::Busy));
-        // Busy elsewhere does not matter.
-        assert_eq!(
-            activate(1, always_active, |w| w == 8),
-            Ok(ActivateStep::AlreadyActive)
-        );
-        // Already the active tab of its window: success with no effect.
-        assert_eq!(
-            activate(2, |w, t| (w, t) == (7, tab(1)), never_busy),
-            Ok(ActivateStep::AlreadyActive)
-        );
-        // The active tab of another window does not count.
-        assert_eq!(
-            activate(2, |w, t| (w, t) == (8, tab(0)), never_busy),
-            Ok(ActivateStep::Activate {
-                window: 7,
-                tab: tab(1)
-            })
-        );
+    fn starting_a_tab_that_is_not_active_leaves_the_active_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.new_tab_not_started(None, "zsh", None, 1);
+        assert!(ws.activate_tab(a));
+        assert!(ws.tab(b).unwrap().is_not_started());
+        ws.tab_mut(b).unwrap().start();
+        assert!(!ws.tab(b).unwrap().is_not_started());
+        assert_eq!(ws.active_tab(), Some(a));
     }
 
     fn tab_to_window(

@@ -108,10 +108,12 @@
 | [0104](0104-crate-porecatu-remote.md) | Crate `porecatu-remote`: folha com `tokio` e `keyring` próprios, fronteira síncrona com `porecatu-ui` | Aceito — implementado; verificado só por teste automatizado |
 | [0105](0105-espelhamento-da-grade-e-input-remoto.md) | Espelhamento da grade e input remoto: snapshot do motor no ritmo do relógio da UI, diff fora da main thread, teclas pelo codificador local | Aceito — implementado; verificado só por teste automatizado |
 | [0106](0106-pareamento-identidade-e-autorizacao.md) | Pareamento, identidade e autorização: QR na tela de configurações, confirmação no desktop, lista de aparelhos escrita só por gesto | Aceito — implementado; verificado só por teste automatizado |
-| [0107](0107-acoes-remotas-sobre-o-workspace.md) | Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop | Aceito — implementado; verificado só por teste automatizado · §2 revisto pelo 0109 |
+| [0107](0107-acoes-remotas-sobre-o-workspace.md) | Ações remotas sobre o workspace: o caminho do menu de contexto, alvo explícito, sem foco e sem diálogo no desktop | Aceito — implementado; verificado só por teste automatizado · §2 revisto pelo 0109 e restabelecido pelo 0111 |
 | [0108](0108-superficies-de-ui-do-acesso-remoto.md) | Superfícies de UI do acesso remoto: grupo nas configurações, QR em `Quad`s, diálogo de pareamento e botão de aparelhos conectados na zona fixa | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
-| [0109](0109-o-celular-muda-a-aba-ativa-do-desktop.md) | O celular muda a aba ativa do desktop: ações com a ativação do gesto local e `activate-tab` | Aceito — implementado; verificado só por teste automatizado |
+| [0109](0109-o-celular-muda-a-aba-ativa-do-desktop.md) | O celular muda a aba ativa do desktop: ações com a ativação do gesto local e `activate-tab` | Superseded by ADR-0111 |
 | [0110](0110-mascara-de-modal-nas-janelas-bloqueadas.md) | Máscara de modal nas janelas bloqueadas: a cor do overlay do diálogo, com fade | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
+| [0111](0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md) | O celular não muda a aba ativa do desktop | Aceito — implementado; verificado só por teste automatizado |
+| [0112](0112-indicador-de-aba-vista-pelo-celular.md) | Indicador de aba vista pelo celular: o ícone de aparelho ao lado do "x" | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
 
 ## Convenção
 

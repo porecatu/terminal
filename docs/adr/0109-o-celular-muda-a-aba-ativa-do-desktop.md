@@ -1,6 +1,6 @@
 # ADR-0109 — O celular muda a aba ativa do desktop: ações com a ativação do gesto local e `activate-tab`
 
-**Status:** Aceito em 2026-11-17 — implementado em 2026-11-17 (`App::remote_activate_tab` e as demais em `porecatu-ui/src/app_remote.rs`, decisões puras em `remote/actions.rs`; verificação ao vivo é dívida, no [roadmap](../roadmap.md))
+**Status:** Superseded by ADR-0111 (2026-11-20) · antes: aceito em 2026-11-17 — implementado em 2026-11-17 (`App::remote_activate_tab` e as demais em `porecatu-ui/src/app_remote.rs`, decisões puras em `remote/actions.rs`; verificação ao vivo é dívida, no [roadmap](../roadmap.md))
 **Data:** 2026-11-17
 **Supersedes (parcial):** ADR-0107 §2 (o celular passa a mudar a aba ativa; a janela do sistema continua intocada) e a frase do ADR-0107 §2 sobre o gerenciador de tarefas · PRD-025 RF-25.27 e a última cláusula do RF-25.28 (emendados)
 **Relacionados:** [PRD-002](../prd/prd-002-grupos-de-abas.md), [PRD-024](../prd/prd-024-gerenciador-de-tarefas.md), [PRD-025](../prd/prd-025-acesso-remoto.md), [ADR-0037](0037-aba-nao-iniciada.md), [ADR-0090](0090-transferencia-de-abas-entre-janelas.md), [ADR-0095](0095-gerenciador-de-tarefas-modo-da-janela.md), [ADR-0103](0103-acesso-remoto-tres-partes-e-protocolo-externo.md), [ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md), [ADR-0107](0107-acoes-remotas-sobre-o-workspace.md)
@@ -12,6 +12,8 @@ O [ADR-0107](0107-acoes-remotas-sobre-o-workspace.md) §2 decidiu que nenhuma a�
 O motivo era proteger quem está **no desktop ao mesmo tempo**: se o celular troca a aba ativa enquanto alguém digita no teclado do desktop, as teclas seguintes vão para outra aba. O dono do produto decidiu, durante a implementação, que esse risco não justifica a regra. O uso típico é uma pessoa só, longe da mesa. Quem volta para o desktop quer encontrar ativa a aba em que estava trabalhando pelo celular, e o desvio "sem ativar" fazia cada ação remota diferir do gesto local que ela diz reproduzir.
 
 ## Decisão
+
+> **Substituído pelo [ADR-0111](0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md) (2026-11-20).** O dono desfez esta decisão por inteiro: nenhuma ação remota muda a aba ativa do desktop, `activate-tab` sai do protocolo (especificação 0.5) e o ADR-0107 §2 volta a valer. A janela do sistema continua intocada (§3 abaixo, que já era regra). A aba que o celular vê passa a ser só indicada na barra ([ADR-0112](0112-indicador-de-aba-vista-pelo-celular.md)).
 
 **A ação remota segue o gesto local por inteiro, inclusive a ativação de aba que ele faz. O protocolo ganha `activate-tab`. A janela do sistema operacional continua intocada: o celular nunca levanta, desminimiza nem dá foco a janela.**
 

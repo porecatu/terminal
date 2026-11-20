@@ -206,12 +206,14 @@ pub(crate) fn detail_text(catalog: &Catalog, device: &DeviceEntry, now: Instant)
 /// The text of the button's tooltip and of its accessibility node: "N
 /// device(s) connected: name, name" (ADR-0108 section 4).
 pub(crate) fn summary_text(catalog: &Catalog, devices: &[DeviceEntry]) -> String {
-    let names = devices
-        .iter()
-        .map(|device| device.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let names = join_names(devices.iter().map(|device| device.name.as_str()));
     msg::devices::summary(catalog, devices.len(), names)
+}
+
+/// The names of devices as one list, the way every text about them joins it
+/// (the button's tooltip, the tooltip of a viewed tab): ", ".
+pub(crate) fn join_names<'a>(names: impl IntoIterator<Item = &'a str>) -> String {
+    names.into_iter().collect::<Vec<_>>().join(", ")
 }
 
 #[cfg(test)]
