@@ -43,6 +43,9 @@ pub enum HoverKey {
     /// (ADR-0060 §2: "Restaurar padrão", espec. §2.20); o índice é o do bloco
     /// no painel. Ícone sem texto: o tooltip diz o que ele faz.
     SettingsRestore(usize),
+    /// O acessório da linha `n` da tela de configurações (a lixeira do token, o
+    /// ponto de estado do relay).
+    SettingsAccessory(usize),
     /// The name of a row of the task manager list, cut by the column
     /// (PRD-024 RF-24.16, ADR-0095 §7). By the row's identity, not its index:
     /// a new sample does not make the tooltip jump to another row.

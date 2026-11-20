@@ -6,7 +6,8 @@
 //! - o **token do relay**, que mora no cofre do sistema e nunca no arquivo: o
 //!   campo mascarado, a pendência (digitado, ou "apagar o guardado"), a
 //!   validação do ADR-0106 §7 e o que o cofre disse sobre o token guardado;
-//! - a **linha de estado**: o texto de cada [`RemoteStatus`].
+//! - o **estado do relay**: o texto (do tooltip) e o tom do indicador de cada
+//!   [`RemoteStatus`].
 //!
 //! Estado puro -- sem `winit`, sem `wgpu`, sem cofre: quem conversa com o cofre
 //! (que bloqueia) é uma thread curta de `App`, e o que ela acha chega aqui como
@@ -21,6 +22,7 @@ use porecatu_remote::{RelayFailure, VaultError};
 use porecatu_term::Secret;
 use winit::keyboard::Key;
 
+use super::content::StatusTone;
 use super::draft::ValueError;
 use super::remote_pairing::DeviceRow;
 use crate::masked_field::{MaskedFieldState, MaskedKey, apply_masked_key};
@@ -455,9 +457,15 @@ pub(crate) fn status_text(catalog: &Catalog, status: RemoteStatus) -> String {
     }
 }
 
-/// O estado é uma falha: a linha se desenha na cor de Erro.
-pub(crate) fn status_is_failure(status: RemoteStatus) -> bool {
-    matches!(status, RemoteStatus::Failed(_))
+/// O tom do indicador ao lado do endereço do relay: Acento conectado, Aviso
+/// conectando, Erro numa falha, e o Terciário desligado.
+pub(crate) fn status_tone(status: RemoteStatus) -> StatusTone {
+    match status {
+        RemoteStatus::Off => StatusTone::Off,
+        RemoteStatus::Connecting => StatusTone::Connecting,
+        RemoteStatus::Connected => StatusTone::Connected,
+        RemoteStatus::Failed(_) => StatusTone::Failed,
+    }
 }
 
 /// Depois de gravar o token, o host precisa recomeçar (ele lê o token só ao
@@ -811,13 +819,30 @@ mod tests {
     }
 
     #[test]
-    fn only_a_failure_is_drawn_as_one() {
-        assert!(!status_is_failure(RemoteStatus::Off));
-        assert!(!status_is_failure(RemoteStatus::Connecting));
-        assert!(!status_is_failure(RemoteStatus::Connected));
-        assert!(status_is_failure(RemoteStatus::Failed(
-            RelayFailure::RelayFull
-        )));
+    fn each_state_has_its_own_indicator_tone_and_every_failure_is_one() {
+        assert_eq!(status_tone(RemoteStatus::Off), StatusTone::Off);
+        assert_eq!(
+            status_tone(RemoteStatus::Connecting),
+            StatusTone::Connecting
+        );
+        assert_eq!(status_tone(RemoteStatus::Connected), StatusTone::Connected);
+        for failure in [
+            RelayFailure::Unreachable,
+            RelayFailure::TokenMissing,
+            RelayFailure::TokenRejected,
+            RelayFailure::RelayFull,
+            RelayFailure::TooManyConnections,
+            RelayFailure::Protocol,
+            RelayFailure::Replaced,
+            RelayFailure::InvalidUrl,
+            RelayFailure::VaultUnavailable,
+        ] {
+            assert_eq!(
+                status_tone(RemoteStatus::Failed(failure)),
+                StatusTone::Failed,
+                "{failure:?}"
+            );
+        }
     }
 
     #[test]

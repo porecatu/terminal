@@ -108,6 +108,13 @@ pub(crate) const LABEL_FONT: FontFace = FontFace::System {
 const DRAG_HIGHLIGHT_BORDER_ALPHA: f64 = 0.45;
 const DRAG_HIGHLIGHT_BORDER_WIDTH: f32 = 1.0;
 
+/// A em dos ícones da zona fixa (engrenagem, sessões, aparelhos) em relação à
+/// `[appearance.tabs] icon_em_size`: a engrenagem preenche 0.84 em contra 0.68 do
+/// "+", então a mesma em a desenharia maior. O indicador de aba vista pelo
+/// celular (ADR-0112 §2) usa a mesma, para ser o mesmo glifo do botão de
+/// aparelhos no mesmo tamanho. Sem chave própria.
+pub(crate) const ZONE_ICON_SCALE: f32 = 0.8;
+
 /// RF-3.9 (ADR-0037 §5): rótulo de aba `NotStarted` esmaecido. Mesmo `.45`
 /// de cima -- **não é valor novo**, é o já usado no realce de borda do
 /// arraste (espec. §1.8, "Tingimentos"); só o consumidor é outro.
@@ -307,7 +314,7 @@ pub fn paint(
     // A engrenagem preenche 0.84 em contra 0.68 do "+", então a mesma em a
     // desenharia bem maior que os outros ícones. Reduzida para o desenho
     // bater com o do "+" -- ver `porecatu_render::icon`. Sem chave própria.
-    let settings_icon_size = style.icon_em_size * 0.8;
+    let settings_icon_size = style.icon_em_size * ZONE_ICON_SCALE;
 
     // Com a imagem da janela exibida o fundo opaco cobriria a imagem; o
     // `clear` do passe tem a mesma cor, então nada fora da imagem muda
@@ -655,13 +662,14 @@ pub fn paint(
             // ADR-0112 §2: a phone is viewing this tab. Not a button: no
             // hover, no background, no hit target (the click is the tab's).
             // `dialog_focus_ring` is the Acento token, the devices button's
-            // own. The closing tab and the drag ghost are painted elsewhere
-            // and never get here.
+            // own -- and so is the em (`ZONE_ICON_SCALE`), the same glyph at
+            // the same size as the one in the fixed zone. The closing tab and
+            // the drag ghost are painted elsewhere and never get here.
             if let Some(viewer_box) = tab.viewer_box(style) {
                 out.push(centered_glyph(
                     icon::SMARTPHONE,
                     shift(viewer_box, dx),
-                    close_icon_size,
+                    settings_icon_size,
                     scale_alpha(pal.dialog_focus_ring, fade_in),
                 ));
             }
@@ -2376,7 +2384,11 @@ mod tests {
         let runs = glyph_runs(&out, icon::SMARTPHONE.glyph);
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].color, pal.dialog_focus_ring, "Acento");
-        assert_eq!(runs[0].size_px, style.icon_em_size, "the em of the x");
+        assert_eq!(
+            runs[0].size_px,
+            style.icon_em_size * ZONE_ICON_SCALE,
+            "the em of the devices button, not the one of the x"
+        );
 
         let tab = &layout.groups[0].tabs[0];
         assert_eq!(tab.id, a);
@@ -2384,11 +2396,13 @@ mod tests {
         let viewer_box = tab.viewer_box(&style).expect("the viewed tab has a box");
         assert_eq!(
             runs[0].origin,
-            icon::SMARTPHONE.centered_origin(shift(viewer_box, dx), style.icon_em_size)
+            icon::SMARTPHONE
+                .centered_origin(shift(viewer_box, dx), style.icon_em_size * ZONE_ICON_SCALE)
         );
-        assert!(
-            viewer_box.x + viewer_box.width + style.internal_gap <= tab.close_button.x,
-            "left of the x, the gap of the tab between them"
+        assert_eq!(
+            viewer_box.x + viewer_box.width + style.internal_gap / 2.0,
+            tab.close_button.x,
+            "left of the x, half the gap of the tab between them (the drawings ~10.6 px apart)"
         );
         assert!(layout.groups[0].tabs[1].viewer_box(&style).is_none());
 
@@ -2435,7 +2449,7 @@ mod tests {
                     layout.groups[0].tabs[0].close_button,
                     tab_bar::track_shift(&style, false, 0)
                 ),
-                style.icon_em_size
+                style.icon_em_size * ZONE_ICON_SCALE
             ),
             "the box is the rectangle of the x"
         );

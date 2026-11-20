@@ -46,9 +46,9 @@ use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::window::WindowAttributes;
 
 pub(crate) use catalog::Group;
-pub(crate) use content::{BannerView, ControlView, RowView};
+pub(crate) use content::{Accessory, BannerView, ControlView, RowView};
 #[cfg(test)]
-pub(crate) use content::{ChipTone, ChipView, ListItemView};
+pub(crate) use content::{ChipTone, ChipView, ListItemView, StatusTone};
 pub(crate) use file_state::Disk;
 pub(crate) use layout::{FOOTER_BUTTONS, FooterButton, Layout};
 pub(crate) use profile_editor::ProfileEditor;

@@ -45,7 +45,7 @@ use crate::profile_menu::ProfileMenu;
 use crate::search_bar::SearchBarState;
 use crate::session_picker::{self, SessionPicker};
 use crate::settings::{
-    BannerView, ControlView, EDITOR_BUTTONS, EditorButton, EditorFocus, FOOTER_BUTTONS,
+    Accessory, BannerView, ControlView, EDITOR_BUTTONS, EditorButton, EditorFocus, FOOTER_BUTTONS,
     FooterButton, Group, Layout as SettingsLayout, RowView,
 };
 use crate::status_bar::{SegmentRole, StatusBarLayout};
@@ -1676,6 +1676,19 @@ fn settings_row_node(
         Some(note) => format!("{description} {note}"),
         None => description,
     };
+    // O ponto de estado do relay, ao lado do endereço, não é lido por si: a frase
+    // do estado vai junto da descrição da linha, como `Estado: Conectado`.
+    let description = match &row.accessory {
+        Some(Accessory::Status { text, .. }) => {
+            let status = format!("{}: {text}", msg::settings::remote::status_label(catalog));
+            if description.is_empty() {
+                status
+            } else {
+                format!("{description} {status}")
+            }
+        }
+        _ => description,
+    };
     row_control_node(id, row, &description, read_only, catalog, nodes);
     id
 }
@@ -1813,6 +1826,18 @@ fn row_control_node(
         // O token do relay (ADR-0108 §1): um campo de senha. O conteúdo nunca é
         // exposto -- só se está preenchido, na descrição.
         ControlView::Secret { filled, .. } => {
+            // Com um token guardado a linha leva ao lado a lixeira que o apaga
+            // ao salvar: um grupo com o campo e o botão -- o campo é o nó da
+            // linha, o botão vem depois dele. Sem token guardado, só o campo.
+            let trash = matches!(
+                row.accessory,
+                Some(Accessory::TrashToken {
+                    available: true,
+                    ..
+                })
+            );
+            let (input_id, trash_id) = (NodeId(id.0 + 1), NodeId(id.0 + 2));
+            let target_id = if trash { input_id } else { id };
             let mut node = leaf(Role::PasswordInput, row.name.clone());
             let state = if *filled > 0 {
                 msg::settings::remote::access_secret_filled(catalog)
@@ -1834,11 +1859,25 @@ fn row_control_node(
             if read_only {
                 node.set_read_only();
             }
-            nodes.push((id, node));
-        }
-        // A linha de estado: só texto, lida como `Estado: Conectado`.
-        ControlView::Text { text, .. } => {
-            nodes.push((id, leaf(Role::Label, format!("{}: {text}", row.name))));
+            nodes.push((target_id, node));
+            if trash {
+                let armed = matches!(
+                    row.accessory,
+                    Some(Accessory::TrashToken { armed: true, .. })
+                );
+                let mut button = leaf(Role::Button, msg::settings::remote::delete_button(catalog));
+                button.set_description(msg::settings::remote::delete_description(catalog));
+                if armed {
+                    button.set_toggled(accesskit::Toggled::True);
+                }
+                if read_only {
+                    button.set_read_only();
+                }
+                nodes.push((trash_id, button));
+                let mut group = container(Role::Group, vec![input_id, trash_id]);
+                group.set_label(row.name.clone());
+                nodes.push((id, group));
+            }
         }
         // O QR de pareamento (ADR-0108 §2) não é uma imagem na árvore: o nó é
         // um botão "Copiar link de pareamento", e a descrição diz quando o
@@ -3523,6 +3562,56 @@ mod settings_tree_tests {
             .find(|(n, _)| *n == id)
             .expect("nó ausente")
             .1
+    }
+
+    /// A lixeira ao lado do token é um botão dentro do grupo da linha, depois do
+    /// campo; sem token guardado a linha é só o campo, e o estado do relay vai na
+    /// descrição do endereço.
+    #[test]
+    fn the_token_row_has_the_trash_button_beside_the_field_and_the_address_reads_the_state() {
+        let base = rows_for_test(Group::General).remove(0);
+        let secret = |accessory| RowView {
+            control: ControlView::Secret {
+                filled: 0,
+                width: 100.0,
+                placeholder: String::new(),
+            },
+            accessory: Some(accessory),
+            ..base.clone()
+        };
+        let id = NodeId(SETTINGS_ROW_BASE);
+
+        let rows = [secret(Accessory::TrashToken {
+            available: true,
+            armed: true,
+        })];
+        let update = tree_with_rows(Group::General, false, true, "pt-BR", &rows);
+        let group = node(&update, id);
+        assert_eq!(group.role(), Role::Group);
+        assert_eq!(group.children(), [NodeId(id.0 + 1), NodeId(id.0 + 2)]);
+        assert_eq!(node(&update, NodeId(id.0 + 1)).role(), Role::PasswordInput);
+        let button = node(&update, NodeId(id.0 + 2));
+        assert_eq!(button.role(), Role::Button);
+        assert_eq!(button.label(), Some("Apagar"));
+        assert_eq!(button.toggled(), Some(accesskit::Toggled::True));
+
+        let rows = [secret(Accessory::TrashToken {
+            available: false,
+            armed: false,
+        })];
+        let update = tree_with_rows(Group::General, false, true, "pt-BR", &rows);
+        assert_eq!(node(&update, id).role(), Role::PasswordInput);
+
+        let rows = [RowView {
+            accessory: Some(Accessory::Status {
+                tone: crate::settings::StatusTone::Connected,
+                text: "Conectado".to_owned(),
+            }),
+            ..base.clone()
+        }];
+        let update = tree_with_rows(Group::General, false, true, "pt-BR", &rows);
+        let described = node(&update, id).description().unwrap_or_default();
+        assert!(described.ends_with("Estado: Conectado"), "{described}");
     }
 
     #[test]

@@ -42,8 +42,8 @@ use winit::window::{CursorIcon, Window, WindowId};
 use super::catalog::{self, Control, OptionDef};
 use super::choice_list::{self, ChoiceItem, ChoiceLayout, ChoiceList};
 use super::content::{
-    self, Block, ChipTone, Content, ContentKey, ControlView, ProfileTarget, RemoteTarget, RowView,
-    ShortcutsView, ViewExtras, choice_label,
+    self, Accessory, Block, ChipTone, Content, ContentKey, ControlView, ProfileTarget,
+    RemoteTarget, RowView, ShortcutsView, ViewExtras, choice_label,
 };
 use super::draft::Draft;
 use super::editor_modal;
@@ -1273,6 +1273,18 @@ impl SettingsWindow {
         if row.can_reset && tab_bar::rect_contains(shift(geometry.restore), point) {
             return Hit::Restore(index);
         }
+        // A lixeira do token é o único acessório que se clica; o ponto de estado
+        // só tem tooltip, e a lixeira sem token guardado não é alvo de nada.
+        if matches!(
+            row.accessory,
+            Some(Accessory::TrashToken {
+                available: true,
+                ..
+            })
+        ) && tab_bar::rect_contains(shift(geometry.accessory), point)
+        {
+            return Hit::Accessory(index);
+        }
         match row.control.part_at(shift(geometry.control), &m, point) {
             Some(part) => Hit::Control(index, part),
             None => Hit::Row(index),
@@ -1463,9 +1475,13 @@ impl SettingsWindow {
     /// se clica.
     fn cursor_for(&self, hit: Option<Hit>) -> CursorIcon {
         match hit {
-            Some(Hit::Group(_) | Hit::Footer(_) | Hit::Restore(_) | Hit::Banner(_)) => {
-                CursorIcon::Pointer
-            }
+            Some(
+                Hit::Group(_)
+                | Hit::Footer(_)
+                | Hit::Restore(_)
+                | Hit::Accessory(_)
+                | Hit::Banner(_),
+            ) => CursorIcon::Pointer,
             Some(Hit::Control(index, part)) => {
                 match self.content().row(index).map(|row| &row.control) {
                     Some(ControlView::Field { .. } | ControlView::Secret { .. }) => {
@@ -1475,9 +1491,7 @@ impl SettingsWindow {
                         ControlPart::ListField { .. } => CursorIcon::Text,
                         _ => CursorIcon::Pointer,
                     },
-                    Some(ControlView::Themes { .. } | ControlView::Text { .. }) | None => {
-                        CursorIcon::Default
-                    }
+                    Some(ControlView::Themes { .. }) | None => CursorIcon::Default,
                     Some(_) => CursorIcon::Pointer,
                 }
             }
@@ -1524,14 +1538,47 @@ impl SettingsWindow {
                     msg::settings::button::restore_default(&self.catalog),
                 ))
             }
-            Hit::Row(index) => {
-                let row = content.row(index)?;
-                if !row.description_truncated {
+            // Só a lixeira do token é alvo (`refine_row_hit`); o ponto de estado
+            // do relay tem o tooltip dele no ramo `Hit::Row`, abaixo.
+            Hit::Accessory(index) => {
+                if !matches!(
+                    content.row(index)?.accessory,
+                    Some(Accessory::TrashToken { .. })
+                ) {
                     return None;
                 }
                 let BlockGeometry::Row(geometry) = content.geometry.blocks.get(index)? else {
                     return None;
                 };
+                let area = Rect {
+                    x: geometry.accessory.x + layout.panel_body.x,
+                    y: geometry.accessory.y + layout.panel_body.y - self.scroll,
+                    ..geometry.accessory
+                };
+                Some((
+                    HoverKey::SettingsAccessory(index),
+                    area,
+                    msg::settings::remote::delete_description(&self.catalog),
+                ))
+            }
+            Hit::Row(index) => {
+                let row = content.row(index)?;
+                let BlockGeometry::Row(geometry) = content.geometry.blocks.get(index)? else {
+                    return None;
+                };
+                if let Some(Accessory::Status { text, .. }) = &row.accessory {
+                    let area = Rect {
+                        x: geometry.accessory.x + layout.panel_body.x,
+                        y: geometry.accessory.y + layout.panel_body.y - self.scroll,
+                        ..geometry.accessory
+                    };
+                    if tab_bar::rect_contains(area, point) {
+                        return Some((HoverKey::SettingsAccessory(index), area, text.clone()));
+                    }
+                }
+                if !row.description_truncated {
+                    return None;
+                }
                 let area = Rect {
                     x: geometry.description_origin.0 + layout.panel_body.x,
                     y: geometry.description_origin.1 + layout.panel_body.y - self.scroll,
@@ -1688,7 +1735,9 @@ impl SettingsWindow {
             }
             // Somente leitura (RF-16.22) ou linha indisponível por dependência
             // (ADR-0068 §10): o clique só leva o foco à linha.
-            Some(Hit::Restore(index) | Hit::Control(index, _)) if self.row_blocked(index) => {
+            Some(Hit::Restore(index) | Hit::Control(index, _) | Hit::Accessory(index))
+                if self.row_blocked(index) =>
+            {
                 self.commit_edit();
                 self.focus = Focus::Row(index);
                 self.window.request_redraw();
@@ -1703,6 +1752,15 @@ impl SettingsWindow {
                     self.draft.reset(option);
                 }
                 self.invalidate();
+                Press::Nothing
+            }
+            // A lixeira ao lado do token: alterna o "apagar o guardado".
+            Some(Hit::Accessory(index)) => {
+                self.commit_edit();
+                self.focus = Focus::Row(index);
+                self.token.blur();
+                self.toggle_token_delete();
+                self.window.request_redraw();
                 Press::Nothing
             }
             Some(Hit::Control(index, part)) => {
@@ -2046,13 +2104,11 @@ impl SettingsWindow {
         self.commit_edit();
         match (target, part) {
             (RemoteTarget::Token, _) => self.token.focus(),
-            (RemoteTarget::DeleteToken, ControlPart::Segment(0)) => self.toggle_token_delete(),
             (RemoteTarget::Pair, ControlPart::Segment(0)) => self.toggle_pairing(),
             (RemoteTarget::Qr, _) => self.copy_pairing_link(),
             (RemoteTarget::Device(item), ControlPart::ListRemove(_)) => self.revoke_device(item),
             (RemoteTarget::Recreate, _) => self.recreate_identity(),
-            (RemoteTarget::DeleteToken | RemoteTarget::Pair | RemoteTarget::Device(_), _)
-            | (RemoteTarget::Status, _) => {}
+            (RemoteTarget::Pair | RemoteTarget::Device(_), _) => {}
         }
     }
 
@@ -2766,6 +2822,20 @@ impl SettingsWindow {
                 }
                 Press::Nothing
             }
+            // O caminho do teclado até a lixeira ao lado do token: `Delete` na
+            // linha do token (fora do campo) alterna o "apagar o guardado".
+            Key::Named(NamedKey::Delete) => {
+                if let Focus::Row(index) = self.focus
+                    && !self.row_blocked(index)
+                    && self
+                        .content()
+                        .row(index)
+                        .is_some_and(|row| row.remote == Some(RemoteTarget::Token))
+                {
+                    self.toggle_token_delete();
+                }
+                Press::Nothing
+            }
             _ => Press::Nothing,
         }
     }
@@ -2828,16 +2898,15 @@ impl SettingsWindow {
             return;
         }
         // Uma linha do grupo "Acesso remoto": `Enter` entra no campo do token
-        // ou alterna o "apagar o guardado".
+        // (`Delete`, na linha, alterna o "apagar o guardado"), pareia, copia o
+        // link, revoga ou recria.
         if let Some(target) = self.content().row(index).and_then(|row| row.remote) {
             match target {
                 RemoteTarget::Token => self.token.focus(),
-                RemoteTarget::DeleteToken => self.toggle_token_delete(),
                 RemoteTarget::Pair => self.toggle_pairing(),
                 RemoteTarget::Qr => self.copy_pairing_link(),
                 RemoteTarget::Device(item) => self.revoke_device(item),
                 RemoteTarget::Recreate => self.recreate_identity(),
-                RemoteTarget::Status => {}
             }
             self.window.request_redraw();
             return;
@@ -2879,8 +2948,7 @@ impl SettingsWindow {
             | ControlView::Secret { .. }
             | ControlView::Qr { .. }
             | ControlView::Device { .. }
-            | ControlView::Danger { .. }
-            | ControlView::Text { .. } => {}
+            | ControlView::Danger { .. } => {}
         }
         self.window.request_redraw();
     }

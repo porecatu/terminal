@@ -1563,14 +1563,17 @@ Abra a [tela de configurações](#tela-de-configurações) e vá ao grupo
 - **Token do relay**: um campo mascarado. O token **nunca** vai para o
   `porecatu.toml`: fica no **cofre do sistema** (Gerenciador de Credenciais
   no Windows, Keychain no macOS, Secret Service no Linux), com o nome de
-  serviço `porecatu-remote`, gravado quando você salva. A linha "Token guardado" mostra se há um e tem o
-  botão **Apagar**. Num Linux sem serviço de segredos o recurso **não
+  serviço `porecatu-remote`, gravado quando você salva. Havendo um token guardado, aparece ao lado do campo
+  um botão de **lixeira** que o apaga do cofre quando você salva (clique de novo
+  para desistir; com a linha focada, a tecla `Delete` faz o mesmo). Num Linux sem serviço de segredos o recurso **não
   liga** e a tela diz por quê: não existe arquivo de reserva, porque uma
   chave que dá acesso de digitação ao seu computador não fica em texto no
   disco.
-- **Estado**: *Desligado*, *Conectando*, *Conectado* ou uma falha com o
-  motivo (relay inacessível, token ausente, token recusado, relay cheio,
-  excesso de conexões, erro de protocolo, cofre indisponível). Queda de
+- **Estado**: um ponto colorido ao lado direito do endereço do relay — verde-água
+  (Acento) conectado, amarelo conectando, vermelho numa falha, cinza desligado.
+  Passe o mouse para ler a frase: *Desligado*, *Conectando*, *Conectado* ou uma
+  falha com o motivo (relay inacessível, token ausente, token recusado, relay
+  cheio, excesso de conexões, erro de protocolo, cofre indisponível). Queda de
   rede é refeita sozinha, com espera crescente.
 
 As duas chaves do arquivo, se você preferir editá-lo à mão:

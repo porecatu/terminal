@@ -791,7 +791,6 @@ registry! {
             token_too_short(min),
             token_too_long(max),
             token_bad_characters(),
-            delete_label(),
             delete_description(),
             delete_button(),
             status_label(),

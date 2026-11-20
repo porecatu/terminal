@@ -144,7 +144,7 @@ pub const ARROW_DOWN: Icon = Icon {
 
 /// Todos os ícones nomeados, com o nome do catálogo -- é o que os testes
 /// varrem para pegar glyph ausente ou tamanho de desenho desatualizado.
-pub const ALL: [(&str, Icon); 16] = [
+pub const ALL: [(&str, Icon); 17] = [
     ("x", X),
     ("plus", PLUS),
     ("chevron-right", CHEVRON_RIGHT),
@@ -161,6 +161,7 @@ pub const ALL: [(&str, Icon); 16] = [
     ("pencil", PENCIL),
     ("app-window", APP_WINDOW),
     ("smartphone", SMARTPHONE),
+    ("trash-2", TRASH),
 ];
 
 /// `minus` -- botão de minimizar a janela (ADR-0027).
@@ -240,5 +241,14 @@ pub const APP_WINDOW: Icon = Icon {
 pub const SMARTPHONE: Icon = Icon {
     glyph: "\u{e163}",
     ink_width_em: 0.670,
+    ink_height_em: 0.920,
+};
+
+/// `trash-2` -- botão de apagar o token guardado do grupo "Acesso remoto" da
+/// tela de configurações, ao lado do campo do token. O codepoint vem do `cmap`
+/// do `Lucide.ttf` embutido (glifo `trash-2`).
+pub const TRASH: Icon = Icon {
+    glyph: "\u{e18e}",
+    ink_width_em: 0.835,
     ink_height_em: 0.920,
 };

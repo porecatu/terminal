@@ -15,11 +15,11 @@ use porecatu_render::{
     Color, FontFace, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun, icon,
 };
 
-use super::content::{BODY_FONT, TITLE_FONT};
 use super::content::{
-    Block, CHIP_FONT, ChipTone, ChipView, Content, ControlView, ListItemView, NoteTone, RowView,
-    SWATCH_COUNT, SWATCH_GAP,
+    Accessory, Block, CHIP_FONT, ChipTone, ChipView, Content, ControlView, ListItemView, NoteTone,
+    RowView, SWATCH_COUNT, SWATCH_GAP, StatusTone,
 };
+use super::content::{BODY_FONT, TITLE_FONT};
 use super::field_edit::{EditPart, Editing};
 use super::layout::{
     BlockGeometry, ControlPart, FOOTER_BUTTONS, Focus, FooterButton, Hit, Layout, Metrics,
@@ -597,8 +597,18 @@ fn paint_row(
         out,
     );
 
-    // O ponto de pendente 6×6, em Acento, entre o controle e o botão de
-    // restaurar (ADR-0060 §2). No aparelho pareado o mesmo ponto, no mesmo
+    if let Some(accessory) = &row.accessory {
+        paint_accessory(
+            &input.ctx(),
+            index,
+            accessory,
+            shift(geometry.accessory, dx, dy),
+            out,
+        );
+    }
+
+    // O ponto de pendente 6×6, em Acento, entre o controle (e o acessório) e o
+    // botão de restaurar (ADR-0060 §2). No aparelho pareado o mesmo ponto, no mesmo
     // lugar, diz "conectado agora" (ADR-0108 §1): a anatomia do indicador da
     // aba.
     if row.pending || matches!(row.control, ControlView::Device { connected: true }) {
@@ -617,10 +627,80 @@ fn paint_row(
     }
 }
 
+/// O diâmetro do ponto do indicador de estado do relay. Sem chave no TOML: é o
+/// ponto das abas (`indicator_dot_size`, 6) e o de pendente (6) com folga para ler
+/// o tom ao lado de um campo.
+const STATUS_DOT_SIZE: f32 = 8.0;
+
+/// O acessório de uma linha, no quadrado que o layout reservou (`rect`):
+///
+/// - **estado do relay**: um ponto de [`STATUS_DOT_SIZE`] no tom do estado --
+///   Acento conectado, Aviso conectando, Erro numa falha, Terciário desligado.
+///   Não é botão: sem hover nem fundo, só o tooltip diz a frase;
+/// - **lixeira do token**: o botão de ícone `trash-2`, com a anatomia do
+///   restaurar padrão (quadrado de raio 4, fundo no hover). Com a exclusão
+///   pendente (`armed`) fica com o fundo do hover fixo e o ícone em Erro, até
+///   o clique seguinte desfazer. Sem token guardado não se desenha.
+fn paint_accessory(
+    input: &ControlCtx<'_>,
+    index: usize,
+    accessory: &Accessory,
+    rect: Rect,
+    out: &mut Vec<Primitive>,
+) {
+    let pal = input.pal;
+    match accessory {
+        Accessory::Status { tone, .. } => {
+            let color = match tone {
+                StatusTone::Connected => pal.dialog_focus_ring,
+                StatusTone::Connecting => pal.warning_severity_warning,
+                StatusTone::Failed => pal.warning_severity_error,
+                StatusTone::Off => pal.status_bar_stale_cwd,
+            };
+            out.push(rounded(
+                Rect {
+                    x: rect.x + (rect.width - STATUS_DOT_SIZE) / 2.0,
+                    y: rect.y + (rect.height - STATUS_DOT_SIZE) / 2.0,
+                    width: STATUS_DOT_SIZE,
+                    height: STATUS_DOT_SIZE,
+                },
+                STATUS_DOT_SIZE / 2.0,
+                color,
+                palette::TRANSPARENT,
+                0.0,
+            ));
+        }
+        Accessory::TrashToken { available, armed } => {
+            if !available {
+                return;
+            }
+            let hovered = !input.read_only && input.hovered == Some(Hit::Accessory(index));
+            if *armed {
+                out.push(rounded(
+                    rect,
+                    RESTORE_RADIUS,
+                    RESTORE_HOVER_BACKGROUND,
+                    palette::TRANSPARENT,
+                    0.0,
+                ));
+                out.push(centered_glyph(
+                    icon::TRASH,
+                    rect,
+                    input.style.icon_em_size,
+                    pal.warning_severity_error,
+                ));
+            } else {
+                paint_icon_button(input, rect, icon::TRASH, hovered, IconHover::Backed, out);
+            }
+        }
+    }
+}
+
 /// "Restaurar padrão": botão de ícone `rotate-ccw` com a anatomia do botão de
-/// fechar da aba -- 25×17 de alvo, raio 4, ícone `#727a86`, e no hover fundo
-/// `#39404b` com o ícone `#e4e8ee` --, visível só com a linha sob o cursor ou
-/// focada, e só quando a opção difere do padrão (ADR-0060 §2).
+/// fechar da aba -- um quadrado de 25 (`Metrics::restore_size`) de raio 4, ícone
+/// `#727a86`, e no hover fundo `#39404b` com o ícone `#e4e8ee` --, visível só
+/// com a linha sob o cursor ou focada, e só quando a opção difere do padrão
+/// (ADR-0060 §2).
 fn paint_restore(
     input: &Input<'_>,
     index: usize,
@@ -803,25 +883,6 @@ pub(super) fn paint_control(
         ControlView::Qr { matrix } => paint_qr(input, matrix, rect, out),
         ControlView::Device { .. } => paint_device(input, index, rect, out),
         ControlView::Danger { label, .. } => paint_danger(input, index, label, rect, out),
-        // A linha de estado: texto à direita, em Erro quando é uma falha.
-        ControlView::Text {
-            text: value,
-            width,
-            failed,
-        } => out.push(text(
-            (
-                rect.x + rect.width - width,
-                centered_y(rect, m.field_font_size),
-            ),
-            value,
-            BODY_FONT,
-            m.field_font_size,
-            if *failed {
-                input.pal.warning_severity_error
-            } else {
-                input.ink(input.pal.menu_item_text)
-            },
-        )),
         ControlView::GitPoll {
             on,
             seconds,
@@ -1756,6 +1817,16 @@ mod tests {
             p,
             Primitive::RoundedQuad(q) if q.color == RESTORE_HOVER_BACKGROUND
         )));
+        // O botão é um quadrado arredondado: mesma altura e largura.
+        let background = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.color == RESTORE_HOVER_BACKGROUND => Some(q),
+                _ => None,
+            })
+            .expect("the hover background");
+        assert_eq!(background.rect.width, background.rect.height);
+        assert_eq!(background.radius, RESTORE_RADIUS);
         assert!(out.iter().any(|p| matches!(
             p,
             Primitive::Text(run) if run.text == icon::ROTATE_CCW.glyph && run.color == RESTORE_HOVER_ICON
@@ -2951,6 +3022,112 @@ mod remote_tests {
                 matches!(block, Block::Row(row) if matches!(row.control, ControlView::Qr { .. }))
             })
             .expect("the qr row")
+    }
+
+    /// O bloco da linha cujo controle é o campo do `option` (o endereço do relay)
+    /// ou o do token (`None`).
+    fn row_block(content: &content::Content, option: Option<&str>) -> usize {
+        content
+            .blocks
+            .iter()
+            .position(|block| {
+                matches!(block, Block::Row(row) if match option {
+                    Some(id) => row.option == Some(id),
+                    None => matches!(row.control, ControlView::Secret { .. }),
+                })
+            })
+            .expect("the row")
+    }
+
+    /// Onde o acessório da linha cai na tela (a rolagem é zero).
+    fn accessory_rect(content: &content::Content, layout: &Layout, block: usize) -> Rect {
+        let BlockGeometry::Row(row) = &content.geometry.blocks[block] else {
+            panic!("a row");
+        };
+        shift(row.accessory, layout.panel_body.x, layout.panel_body.y)
+    }
+
+    #[test]
+    fn the_state_indicator_is_a_dot_beside_the_address_in_the_tone_of_the_state() {
+        let f = fixture(Config::default());
+        for (status, color) in [
+            (RemoteStatus::Connected, f.pal.dialog_focus_ring),
+            (RemoteStatus::Connecting, f.pal.warning_severity_warning),
+            (
+                RemoteStatus::Failed(porecatu_remote::RelayFailure::Unreachable),
+                f.pal.warning_severity_error,
+            ),
+            (RemoteStatus::Off, f.pal.status_bar_stale_cwd),
+        ] {
+            let (out, content, layout, _) =
+                paint_remote(&f, status, None, &[], 1.0, false, |_| None);
+            let slot = accessory_rect(&content, &layout, row_block(&content, Some("relay_url")));
+            let dots: Vec<_> = out
+                .iter()
+                .filter_map(|p| match p {
+                    Primitive::RoundedQuad(q)
+                        if q.color == color && q.radius == STATUS_DOT_SIZE / 2.0 =>
+                    {
+                        Some(q.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(dots.len(), 1, "{status:?}");
+            let dot = dots[0];
+            assert_eq!((dot.width, dot.height), (STATUS_DOT_SIZE, STATUS_DOT_SIZE));
+            // Centered in the slot the layout reserved, with no text for the state.
+            assert_eq!(dot.x + dot.width / 2.0, slot.x + slot.width / 2.0);
+            assert_eq!(dot.y + dot.height / 2.0, slot.y + slot.height / 2.0);
+            assert!(!out.iter().any(|p| matches!(
+                p,
+                Primitive::Text(run) if run.text.starts_with("Falha") || run.text == "Conectado"
+            )));
+        }
+    }
+
+    #[test]
+    fn the_trash_beside_the_token_is_a_square_button_with_the_hover_of_the_restore() {
+        let f = fixture(Config::default());
+        // At rest: the icon in the rest color, no background.
+        let (out, content, layout, m) =
+            paint_remote(&f, RemoteStatus::Off, None, &[], 1.0, false, |_| None);
+        let block = row_block(&content, None);
+        let slot = accessory_rect(&content, &layout, block);
+        assert_eq!((slot.width, slot.height), (m.restore_size, m.restore_size));
+        let trash: Vec<_> = out
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text(run) if run.text == icon::TRASH.glyph => Some(run.color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(trash, [RESTORE_ICON]);
+        assert!(!out.iter().any(|p| matches!(
+            p,
+            Primitive::RoundedQuad(q) if q.color == RESTORE_HOVER_BACKGROUND
+        )));
+
+        // Hovered: the square background and the hover icon.
+        let (out, content, layout, _) =
+            paint_remote(&f, RemoteStatus::Off, None, &[], 1.0, false, |content| {
+                Some(Hit::Accessory(row_block(content, None)))
+            });
+        let slot = accessory_rect(&content, &layout, row_block(&content, None));
+        let backgrounds: Vec<_> = out
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.color == RESTORE_HOVER_BACKGROUND => Some(q),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(backgrounds.len(), 1);
+        assert_eq!(backgrounds[0].rect, slot);
+        assert_eq!(backgrounds[0].radius, RESTORE_RADIUS);
+        assert!(out.iter().any(|p| matches!(
+            p,
+            Primitive::Text(run) if run.text == icon::TRASH.glyph && run.color == RESTORE_HOVER_ICON
+        )));
     }
 
     #[test]

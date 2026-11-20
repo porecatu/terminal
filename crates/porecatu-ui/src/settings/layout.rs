@@ -237,9 +237,14 @@ pub(crate) struct Metrics {
     pub text_field_width: f32,
     pub number_field_width: f32,
     pub swatch_size: f32,
-    /// Restaurar padrão: alvo 25×17 (ADR-0060 §2).
+    /// Alvo dos botões pequenos da linha -- o lápis e o `X` de um perfil, o `X`
+    /// de um aparelho --: 25×17 (ADR-0060 §2).
     pub restore_width: f32,
     pub restore_height: f32,
+    /// Restaurar padrão e o botão do acessório de uma linha (a lixeira do
+    /// token): um **quadrado** de 25 px, de cantos arredondados (o lado é a
+    /// largura do alvo de 25×17, então a conta do orçamento do texto não muda).
+    pub restore_size: f32,
     /// Ponto de pendente 6×6 (ADR-0060 §2).
     pub dot_size: f32,
     /// `gap: 6` entre itens de lista e entre campos de nome e valor
@@ -311,6 +316,7 @@ impl Metrics {
             swatch_size: settings.theme_swatch_size as f32,
             restore_width: 25.0,
             restore_height: 17.0,
+            restore_size: 25.0,
             dot_size: 6.0,
             list_gap: 6.0,
             chip_font_size: 10.5,
@@ -368,6 +374,11 @@ pub(crate) enum BlockSpec {
         /// lápis e o `X` --, encostado na borda. `None` nas outras linhas, que
         /// têm o controle antes do ponto e do restaurar padrão.
         profile_badge: Option<f32>,
+        /// A linha tem um acessório (o indicador de estado do relay, a lixeira do
+        /// token): um quadrado de `restore_size` **logo à direita do controle**,
+        /// antes do ponto de pendente. Reserva o espaço mesmo que o acessório
+        /// esteja apagado, para os campos de linhas vizinhas alinharem.
+        accessory: bool,
     },
     /// O campo de filtro do grupo Atalhos (RF-16.28), em largura cheia no
     /// topo.
@@ -388,7 +399,10 @@ pub(crate) struct RowGeometry {
     /// Onde a razão de um valor recusado começa, abaixo da descrição.
     pub reason_origin: (f32, f32),
     pub control: Rect,
-    /// Ponto de pendente, entre o controle e o botão de restaurar.
+    /// O acessório, logo à direita do controle (largura zero, sem ele).
+    pub accessory: Rect,
+    /// Ponto de pendente, entre o controle (ou o acessório) e o botão de
+    /// restaurar.
     pub dot: Rect,
     pub restore: Rect,
     /// Largura que sobra à esquerda para nome e descrição: o orçamento do
@@ -433,6 +447,13 @@ pub(crate) fn row_left_width(m: &Metrics, panel_width: f32, control_width: f32) 
     let right_cluster =
         control_width + m.row_gap + m.dot_size + m.row_gap + m.restore_width + m.row_padding_x;
     (row_width - m.row_padding_x - right_cluster - m.row_gap).max(0.0)
+}
+
+/// O que o acessório de uma linha soma à largura do controle: o vão `list_gap`
+/// e o quadrado. Quem chama [`row_left_width`] numa linha com acessório passa
+/// `control_width + accessory_space(m)`.
+pub(crate) fn accessory_space(m: &Metrics) -> f32 {
+    m.list_gap + m.restore_size
 }
 
 /// O espaço que o badge de um perfil toma antes do nome: o desenho e o vão
@@ -520,6 +541,7 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 two_lines,
                 reason,
                 profile_badge,
+                accessory,
             } => {
                 if previous_was_row {
                     y += m.row_gap;
@@ -535,6 +557,10 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 if reason {
                     left_height = reason_y + m.description_size;
                 }
+                // A altura da linha segue o alvo 25×17 de sempre: o quadrado de
+                // 25 do restaurar padrão (e do acessório) cabe nela com folga, nas
+                // bordas do `padding` vertical (9 + 17 + 9 = 35), então não engorda
+                // as linhas de uma linha só.
                 let inner = left_height.max(control.1).max(m.restore_height);
                 let height = m.row_padding_y * 2.0 + inner;
                 let rect = Rect {
@@ -561,17 +587,37 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 // nessa ordem. A de um perfil não tem restaurar: o controle (lápis
                 // e `X`) encosta na borda, o ponto vem antes dele, e o badge
                 // abre a linha, antes do nome.
-                let (inner_x, control_rect, dot, restore) = match profile_badge {
+                let (inner_x, control_rect, dot, restore, accessory_rect) = match profile_badge {
                     None => {
                         let restore = Rect {
-                            x: right - m.restore_width,
-                            y: center_y - m.restore_height / 2.0,
-                            width: m.restore_width,
-                            height: m.restore_height,
+                            x: right - m.restore_size,
+                            y: center_y - m.restore_size / 2.0,
+                            width: m.restore_size,
+                            height: m.restore_size,
                         };
                         let dot = dot_at(restore.x - m.row_gap - m.dot_size);
-                        let control_rect = control_at(dot.x - m.row_gap - control.0);
-                        (x + m.row_padding_x, control_rect, dot, restore)
+                        // O acessório vem logo à direita do controle, antes do
+                        // ponto: ponto, depois ele, depois o controle.
+                        let accessory_x = dot.x - m.row_gap - m.restore_size;
+                        let accessory_rect = Rect {
+                            x: accessory_x,
+                            y: center_y - m.restore_size / 2.0,
+                            width: if accessory { m.restore_size } else { 0.0 },
+                            height: m.restore_size,
+                        };
+                        let control_right = if accessory {
+                            accessory_x - m.list_gap
+                        } else {
+                            dot.x - m.row_gap
+                        };
+                        let control_rect = control_at(control_right - control.0);
+                        (
+                            x + m.row_padding_x,
+                            control_rect,
+                            dot,
+                            restore,
+                            accessory_rect,
+                        )
                     }
                     Some(badge_width) => {
                         let control_rect = control_at(right - control.0);
@@ -582,11 +628,18 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                             width: 0.0,
                             height: m.restore_height,
                         };
+                        let accessory_rect = Rect {
+                            x: right,
+                            y: restore.y,
+                            width: 0.0,
+                            height: m.restore_height,
+                        };
                         (
                             x + m.row_padding_x + badge_space(m, badge_width),
                             control_rect,
                             dot,
                             restore,
+                            accessory_rect,
                         )
                     }
                 };
@@ -604,6 +657,7 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                     description_origin: (inner_x, top + description_y),
                     reason_origin: (inner_x, top + reason_y),
                     control: control_rect,
+                    accessory: accessory_rect,
                     dot,
                     restore,
                     left_width: (name_end - m.row_gap - inner_x).max(0.0),
@@ -953,6 +1007,8 @@ pub(crate) enum Hit {
     Control(usize, ControlPart),
     /// O botão de restaurar padrão da linha.
     Restore(usize),
+    /// O acessório da linha (o indicador de estado, a lixeira do token).
+    Accessory(usize),
     Footer(FooterButton),
     /// Um botão da faixa.
     Banner(BannerButton),
@@ -963,7 +1019,10 @@ impl Hit {
     /// fundo e o botão de restaurar valem para a linha inteira.
     pub(crate) fn row_index(self) -> Option<usize> {
         match self {
-            Hit::Row(index) | Hit::Control(index, _) | Hit::Restore(index) => Some(index),
+            Hit::Row(index)
+            | Hit::Control(index, _)
+            | Hit::Restore(index)
+            | Hit::Accessory(index) => Some(index),
             Hit::Group(_) | Hit::Footer(_) | Hit::Banner(_) => None,
         }
     }
@@ -1269,6 +1328,7 @@ mod tests {
             two_lines,
             reason: false,
             profile_badge: None,
+            accessory: false,
         }
     }
 
@@ -1323,6 +1383,7 @@ mod tests {
                 two_lines: true,
                 reason: true,
                 profile_badge: None,
+                accessory: false,
             }],
         );
         let plain = row_of(&plain.blocks[0]);
@@ -1351,6 +1412,7 @@ mod tests {
                 two_lines: false,
                 reason: true,
                 profile_badge: None,
+                accessory: false,
             }],
         );
         let row = row_of(&geometry.blocks[0]);
@@ -1395,16 +1457,56 @@ mod tests {
             r.restore.x + r.restore.width,
             r.rect.x + r.rect.width - 11.0
         );
-        assert_eq!((r.restore.width, r.restore.height), (25.0, 17.0));
+        // O restaurar padrão é um quadrado; o alvo 25×17 é dos botões de perfil.
+        assert_eq!((r.restore.width, r.restore.height), (25.0, 25.0));
+        assert_eq!((m.restore_width, m.restore_height), (25.0, 17.0));
         assert_eq!((r.dot.width, r.dot.height), (6.0, 6.0));
         assert_eq!(r.restore.x - (r.dot.x + r.dot.width), m.row_gap);
         assert_eq!(r.dot.x - (r.control.x + r.control.width), m.row_gap);
         assert_eq!(r.control.width, 88.0);
+        assert_eq!(r.accessory.width, 0.0, "sem acessório, nada reservado");
         // tudo centrado na vertical da linha
         let center = r.rect.y + r.rect.height / 2.0;
         for rect in [r.control, r.dot, r.restore] {
             assert!((rect.y + rect.height / 2.0 - center).abs() < 0.001);
         }
+    }
+
+    /// O acessório é um quadrado de `restore_size` logo à direita do controle,
+    /// com o `list_gap` entre os dois, e o ponto e o restaurar seguem à direita
+    /// dele; o orçamento do nome encolhe pelo que ele toma.
+    #[test]
+    fn the_accessory_sits_right_of_the_control_before_the_dot() {
+        let m = metrics();
+        let spec = BlockSpec::Row {
+            control: (240.0, 30.0),
+            two_lines: true,
+            reason: false,
+            profile_badge: None,
+            accessory: true,
+        };
+        let g = panel_geometry(&m, PANEL_WIDTH, &[spec]);
+        let r = row_of(&g.blocks[0]);
+        assert_eq!(
+            (r.accessory.width, r.accessory.height),
+            (m.restore_size, m.restore_size)
+        );
+        assert_eq!(r.accessory.x - (r.control.x + r.control.width), m.list_gap);
+        assert_eq!(r.dot.x - (r.accessory.x + r.accessory.width), m.row_gap);
+        assert_eq!(r.control.width, 240.0);
+        let center = r.rect.y + r.rect.height / 2.0;
+        assert!((r.accessory.y + r.accessory.height / 2.0 - center).abs() < 0.001);
+        // O orçamento do nome é o que sobra do controle **e** do acessório.
+        assert_eq!(
+            r.left_width,
+            row_left_width(&m, PANEL_WIDTH, 240.0 + accessory_space(&m))
+        );
+        // E o controle, sem acessório, ficaria à direita de onde está.
+        let plain = panel_geometry(&m, PANEL_WIDTH, &[row((240.0, 30.0), true)]);
+        assert_eq!(
+            row_of(&plain.blocks[0]).control.x - r.control.x,
+            accessory_space(&m)
+        );
     }
 
     #[test]
@@ -1690,6 +1792,7 @@ mod tests {
             two_lines: true,
             reason: false,
             profile_badge: None,
+            accessory: false,
         };
         let specs = [
             BlockSpec::Section,

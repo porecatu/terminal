@@ -88,19 +88,30 @@ pub(crate) fn viewed_tabs(viewers: &HashMap<TabId, Vec<String>>) -> HashSet<TabI
 /// from the tab's `close_button` rectangle and `style.show_close_button` -- the
 /// **one** formula for it, never a computation of its own at the call site:
 ///
-/// - `Always` and `Hover`: a box the size of the "x" rectangle, right at its
-///   **left**, `internal_gap` (the tab's `gap: 8`) away. In `Hover` the place
-///   of the "x" is reserved (the layout computes its rectangle in every mode),
-///   so the box does not depend on the hover.
+/// - `Always` and `Hover`: a box the width of the **glyph's ink** (the
+///   `smartphone` at the em of the fixed zone's buttons), at the **left** of
+///   the "x" rectangle, `internal_gap / 2` (4) away, the same height. What the
+///   eye measures is the distance between the two **drawings**, not between
+///   boxes: the "x" rectangle (25 wide) has ~6.6 px of air on each side of its
+///   11.8 px "x", so with the first 25-wide box and `gap: 8` the drawings were
+///   ~21 px apart; with this one ~10.6 px (half). Touching the rectangle (6.6)
+///   looked glued to the "x". In `Hover` the place of the "x" is reserved (the
+///   layout computes its rectangle in every mode), so the box does not depend
+///   on the hover.
 /// - `Never`: the box **is** the "x" rectangle (the "x" is not there).
 pub fn viewer_indicator_rect(close_button: Rect, style: &TabBarStyle) -> Rect {
     match style.show_close_button {
         porecatu_config::CloseButtonVisibility::Never => close_button,
         porecatu_config::CloseButtonVisibility::Always
-        | porecatu_config::CloseButtonVisibility::Hover => Rect {
-            x: close_button.x - style.internal_gap - close_button.width,
-            ..close_button
-        },
+        | porecatu_config::CloseButtonVisibility::Hover => {
+            let width = porecatu_render::icon::SMARTPHONE
+                .ink_width(style.icon_em_size * crate::chrome::ZONE_ICON_SCALE);
+            Rect {
+                x: close_button.x - style.internal_gap / 2.0 - width,
+                width,
+                ..close_button
+            }
+        }
     }
 }
 
@@ -3067,10 +3078,13 @@ mod tests {
         };
 
         let (always, close, style) = box_in(Always);
-        assert_eq!((always.width, always.height), (close.width, close.height));
+        // The box is the width of the glyph ink, touching the "x" rectangle:
+        // the drawings end up ~6.6 px apart, not the ~21 of the first version.
+        let ink = porecatu_render::icon::SMARTPHONE
+            .ink_width(style.icon_em_size * crate::chrome::ZONE_ICON_SCALE);
+        assert_eq!((always.width, always.height), (ink, close.height));
         assert_eq!(always.y, close.y);
-        assert_eq!(always.x + always.width + style.internal_gap, close.x);
-        assert_eq!(style.internal_gap, 8.0, "the gap: 8 of the tab");
+        assert_eq!(always.x + always.width + style.internal_gap / 2.0, close.x);
 
         let (hover, hover_close, _) = box_in(Hover);
         assert_eq!(hover_close, close, "the place of the x is reserved");
@@ -3119,10 +3133,10 @@ mod tests {
             if visibility == Never {
                 assert_eq!(viewed_a.label, plain_a.label, "{visibility:?}");
             } else {
-                assert_eq!(
-                    reserve,
-                    style.icon_button_width(style.close_button_size) + style.internal_gap
-                );
+                let ink = porecatu_render::icon::SMARTPHONE
+                    .ink_width(style.icon_em_size * crate::chrome::ZONE_ICON_SCALE);
+                let expected = ink + style.internal_gap / 2.0;
+                assert!((reserve - expected).abs() < 1e-3, "{reserve} vs {expected}");
                 assert!(viewed_a.label.len() < plain_a.label.len(), "{visibility:?}");
                 let width = m.measure_width(&viewed_a.label, LABEL_FONT, style.font_size);
                 assert!(width <= style.label_cap(reserve), "{visibility:?}");

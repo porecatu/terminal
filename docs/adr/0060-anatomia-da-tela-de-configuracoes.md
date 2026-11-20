@@ -168,3 +168,5 @@ Ver §1: seria o primeiro widget do tipo no app, e a rolagem já se lê pela lin
 - A frase do aviso do RF-16.27 chama-se `settings.option.trusted_paths_warning` (o carregador de `locales/` recusa tabela com mais de dois níveis).
 
 **Resolvido:** a borda de retângulo arredondado não era pintada pelo renderizador (`quad.wgsl` subtraía a área encolhida da cheia, sempre <= 0). Corrigida a pedido do dono do produto; o anel de `border_width` desenha por dentro do contorno, sobre o preenchimento.
+
+> **Revisão (2026-11-20, pedido do dono do produto).** O botão **Restaurar padrão** (§2) passa a ser um **quadrado arredondado de 25×25** (`Metrics::restore_size`, raio 4, ícone e hover como antes), e não mais um alvo de 25×17 — a mesma largura de antes, então o orçamento do texto da linha não muda, e a altura da linha segue a de 17 (o quadrado cabe no `padding` vertical). O lápis e o ✕ de perfil e o ✕ de aparelho continuam 25×17.
