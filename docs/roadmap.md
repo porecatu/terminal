@@ -1424,3 +1424,33 @@ Pedido do dono em 2026-11-20: abrir uma aba no celular trocava a aba ativa do de
 7. **Documentação de fechamento**: especificação visual (§2.5 item 4 e §2.5.1 deixam de ser "ainda não no binário"), guia do usuário (o celular não ativa mais; o ícone na aba), CLAUDE.md, ADR-0103 (nota da versão 0.5), CHANGELOG e o status dos ADR-0111 e ADR-0112.
 
 **Dívida de verificação prevista:** ao vivo no Windows, com o app real e um relay real: abrir uma aba no celular sem a aba ativa mudar; o ícone nos três modos do "x", sem deslocamento no `hover`; o ponto da fixada; dois aparelhos em abas diferentes e na mesma aba; queda do celular apagando o ícone; aba movida entre janelas levando o ícone. Aval visual do dono sobre o binário.
+
+### Depois do fechamento — restaurar sessão nomeada pelo celular (ADR-0113) — documentado, não implementado
+
+Pedido do dono em 2026-11-20: o celular escolhe uma sessão nomeada ([PRD-014](prd/prd-014-sessoes-nomeadas.md)) e a restaura. Requisito RF-25.31 e emenda ao RF-25.28 no [PRD-025](prd/prd-025-acesso-remoto.md). Decisões no [ADR-0113](adr/0113-restaurar-sessao-nomeada-pelo-celular.md), que revê parcialmente os ADR-0092, ADR-0102 e ADR-0107. O fio está na especificação **0.6** do protocolo ([ADR-0012 do protocolo](https://github.com/porecatu/protocol/blob/main/docs/adr/0012-sessoes-nomeadas-pelo-cliente.md)): `list-sessions`/`sessions`, a ação `restore-session` e os erros `unknown-session` e `session-unreadable`.
+
+O dono decidiu quatro coisas antes da escrita:
+- o destino segue `[session] restore_named_in_current_window`;
+- a janela nova nasce **sem foco**;
+- o acréscimo **não ativa** a aba da sessão e **não fecha** o terminal parado;
+- o celular só lista e restaura, sem salvar nem excluir.
+
+**Só a documentação existe** (2026-11-20). Etapas, na ordem de dependência:
+
+1. **Protocolo 0.6 implementado** no crate, no pacote TS e nos vetores ([roadmap do protocolo](https://github.com/porecatu/protocol/blob/main/docs/roadmap.md), P0). É pré-requisito externo; hoje só o texto e o schema estão escritos.
+2. **`rev` do protocolo** em `crates/porecatu-remote/Cargo.toml` passa ao commit que implementar a 0.6, junto com o Relay e o Remote.
+3. **Ator:** `RemoteEvent::ListSessions` em `porecatu-remote` (`api.rs`, `session.rs`), com teste em `host/tests.rs`.
+4. **Ids:** tabela `sessions` em `remote/ids.rs`, por `PathBuf`, nunca reaproveitada; `Table` com `K: Clone + Eq + Hash`.
+5. **Listar:** resposta na main thread por `porecatu_session::named::list_named()`, com o `mode` lido da chave.
+6. **Restaurar:** `plan_restore_session` puro, com teste de ordem das checagens (`unknown-session`, `unknown-window`, `busy`, `invalid-argument`, `session-unreadable`). Depois:
+   - `restore_named_session` dividida em ler e aplicar;
+   - `WindowActivation::Background` em `open_window_from_session`/`base_window_attributes`;
+   - `FocusOrder::push_back`;
+   - `AppendRules` em `append_named_window`;
+   - um teste por destino fixando que a aba ativa das janelas que existiam não muda e que nada fecha.
+7. **Documentação de fechamento:** guia do usuário (o celular restaura; a diferença em relação ao popover), CLAUDE.md, ADR-0103 (nota da versão 0.6), CHANGELOG e o status do ADR-0113.
+
+**Dívida de verificação prevista:**
+- **Ao vivo no Windows**, com o app real e um relay real: restaurar com a chave desligada e conferir por `GetForegroundWindow` que a janela nova não tomou o foco; com a chave ligada, acrescentar a uma janela com o terminal parado solitário e conferir que ele continua lá e que a aba ativa não mudou; e restaurar com o popover de sessões aberto na janela alvo (`busy`).
+- **macOS:** `with_active(false)`.
+- **X11 e Wayland:** sem garantia, porque o gerenciador de janelas decide o foco.

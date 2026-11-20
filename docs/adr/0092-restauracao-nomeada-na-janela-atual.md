@@ -74,6 +74,8 @@ Gravar passa por `porecatu-config::edit`, por edição de chave ([ADR-0058](0058
 
 > **Revisto pelo [ADR-0102](0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md) (2026-11-12).** Há uma exceção a "nada é fechado": se a janela tem uma única aba e ela é um terminal parado (um painel, shell vivo, nenhum processo rodando, nenhuma aba fixada), essa aba é fechada **depois** de a sessão ser acrescentada e de a aba ativa dela ser ativada.
 
+> **Revisto pelo [ADR-0113](0113-restaurar-sessao-nomeada-pelo-celular.md) (2026-11-20; implementação pendente).** O celular também restaura (`restore-session`, especificação 0.6 do protocolo), pelo mesmo caminho dividido em ler e aplicar. Quando quem restaura é o celular, o passo 5 abaixo **não** ativa a aba da sessão nem rola a trilha, e a exceção do ADR-0102 não se aplica: `append_named_window` recebe `AppendRules { activate_session_tab: false, close_lone_idle: false }`. Pelo popover, tudo continua como escrito.
+
 `restore_named_session(event_loop, origin, file)` continua sendo o único ponto de entrada, chamado pelo popover. A leitura e o tratamento de falha (aviso na janela de origem, canal 1) **não mudam**. Muda o que acontece com um `WindowV1` válido:
 
 ```text

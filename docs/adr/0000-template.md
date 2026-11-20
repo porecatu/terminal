@@ -114,6 +114,7 @@
 | [0110](0110-mascara-de-modal-nas-janelas-bloqueadas.md) | Máscara de modal nas janelas bloqueadas: a cor do overlay do diálogo, com fade | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
 | [0111](0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md) | O celular não muda a aba ativa do desktop | Aceito — implementado; verificado só por teste automatizado |
 | [0112](0112-indicador-de-aba-vista-pelo-celular.md) | Indicador de aba vista pelo celular: o ícone de aparelho ao lado do "x" | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
+| [0113](0113-restaurar-sessao-nomeada-pelo-celular.md) | Restaurar sessão nomeada pelo celular: a restauração do popover, sem foco, sem ativar e sem fechar | Aceito — implementação pendente |
 
 ## Convenção
 
