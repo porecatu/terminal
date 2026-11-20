@@ -28,6 +28,15 @@ impl<W: Copy + Eq> FocusOrder<W> {
         self.order.insert(0, w);
     }
 
+    /// ADR-0113 §3: `w` is new and nobody focused it (a window born in the
+    /// background): it goes at the **back**, unless it is already in the
+    /// order, in which case it does not move.
+    pub(crate) fn push_back(&mut self, w: W) {
+        if !self.order.contains(&w) {
+            self.order.push(w);
+        }
+    }
+
     /// `w` is gone.
     pub(crate) fn remove(&mut self, w: W) {
         self.order.retain(|&other| other != w);
@@ -315,6 +324,24 @@ mod tests {
         assert_eq!(order.as_slice(), [1, 3, 2]);
         order.touch(1);
         assert_eq!(order.as_slice(), [1, 3, 2], "no duplicate");
+    }
+
+    #[test]
+    fn push_back_puts_a_new_window_last_and_never_moves_one_already_in() {
+        let mut order = FocusOrder::<Win>::new();
+        order.push_back(1);
+        assert_eq!(order.as_slice(), [1], "into an empty order");
+        order.touch(2);
+        order.touch(3);
+        assert_eq!(order.as_slice(), [3, 2, 1]);
+        order.push_back(4);
+        assert_eq!(order.as_slice(), [3, 2, 1, 4], "at the back");
+        order.push_back(3);
+        order.push_back(1);
+        order.push_back(4);
+        assert_eq!(order.as_slice(), [3, 2, 1, 4], "already in: does not move");
+        order.touch(4);
+        assert_eq!(order.as_slice(), [4, 3, 2, 1], "a later focus still wins");
     }
 
     #[test]

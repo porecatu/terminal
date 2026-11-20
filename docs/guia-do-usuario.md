@@ -1276,6 +1276,14 @@ A opção vale na hora, sem reiniciar o app; o resto (`cwd`, painéis,
 `lazy_restore`, `.porecatu`, SSH sem conectar) é igual ao de uma janela
 nova.
 
+**Pelo celular.** Com o acesso remoto ligado, o app do celular também
+restaura uma sessão salva, com o mesmo destino que a opção acima escolhe
+(veja "Acesso remoto"). Duas diferenças, de propósito: o celular **não
+muda a aba ativa** (as abas da sessão entram sem que nenhuma fique ativa)
+e **não fecha o terminal parado**; e a janela nova que ele abre aparece
+sem tomar o foco. Um arquivo que não pode ser lido vira um aviso no
+celular, não no computador. Salvar e excluir continuam só aqui.
+
 **Sobrescrever e excluir.** Salvar com um nome que já existe (sem
 diferenciar maiúsculas) pede confirmação antes de substituir o arquivo; o
 `✕` de cada linha exclui, também com confirmação. Nenhum dos dois
@@ -1518,8 +1526,8 @@ Porecatu não abre conexão de rede por causa dele, nem cria thread.
 > **Estado.** Implementado e coberto por testes automatizados, mas ainda
 > **não visto rodando** com o app real nem com um relay real; macOS e
 > Linux também estão por verificar. O app mobile precisa da versão que
-> fale a especificação 0.5 do protocolo (a que tem `view-tab`); com uma
-> versão mais antiga do app, a conexão cai logo depois de abrir. Veja a
+> fale a especificação 0.6 do protocolo (a que tem as sessões salvas); com
+> uma versão mais antiga do app, a conexão cai logo depois de abrir. Veja a
 > dívida no [roadmap](roadmap.md).
 
 ### As três partes
@@ -1642,7 +1650,12 @@ O celular pode:
   painel não iniciado e **conectar** uma aba SSH dormente;
 - **organizar**: mover aba entre grupos, **criar**, renomear, mudar a cor,
   colapsar e desfazer grupos, e mover aba ou grupo **entre janelas**, com
-  o processo vivo, como no arraste.
+  o processo vivo, como no arraste;
+- **restaurar uma sessão salva** (veja "Sessões nomeadas"): o celular
+  lista as sessões, na ordem do botão de sessões, e restaura a escolhida.
+  Com **Restaurar sessões salvas na janela atual** desligado, ela abre
+  numa **janela nova**, que aparece **sem tomar o foco** de quem está no
+  computador; ligado, o celular pergunta **em qual janela** acrescentá-la.
 
 Cada ação faz **o mesmo que o gesto equivalente no desktop**, com uma
 exceção: o celular **nunca muda a aba ativa**. Abrir uma aba no celular não
@@ -1669,9 +1682,9 @@ Alguns limites:
 - As **perguntas da conexão SSH** (senha, passphrase, chave de servidor
   desconhecida) aparecem **só no desktop**; o celular vê o painel
   "aguardando o desktop". Segredo não viaja para o celular.
-- Ficam **fora do alcance** do celular: fixar e desafixar, sessões
-  nomeadas, configurações, o gerenciador de tarefas, abrir janela nova,
-  destacar aba numa janela nova, trocar a aba ativa e qualquer coisa que dê
+- Ficam **fora do alcance** do celular: fixar e desafixar, salvar e
+  excluir sessões nomeadas, configurações, o gerenciador de tarefas, abrir
+  uma janela vazia, destacar aba numa janela nova, trocar a aba ativa e qualquer coisa que dê
   foco à janela do sistema.
 - Com o Porecatu fechado, o celular mostra o computador como *offline*.
   Não há modo em segundo plano nem notificação push.

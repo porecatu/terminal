@@ -1365,7 +1365,7 @@ Correção a pedido do dono: com a máquina sob carga alta os gráficos abriam l
 
 Fora da ordem de fases, a pedido do dono do produto: operar a sessão viva do Porecatu a partir de um app mobile, por um servidor intermediário auto-hospedado e cego. Requisitos no [PRD-025](prd/prd-025-acesso-remoto.md) (aprovado em 2026-11-16, implementado em 2026-11-17); decisões nos [ADR-0103](adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) a [ADR-0109](adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md) (0103 a 0107 aceitos em 2026-11-16; o 0108 aceito para implementação, com o aval visual pendente sobre o binário; o 0109, de 2026-11-17, revê o §2 do 0107). O recurso tem três projetos irmãos, cada um com roadmap próprio: o protocolo ([porecatu/protocol](https://github.com/porecatu/protocol)), o relay ([porecatu/relay](https://github.com/porecatu/relay)) e o app ([porecatu/remote](https://github.com/porecatu/remote)). Este roadmap cobre só o lado do host.
 
-**Dependência externa:** o host depende do crate `porecatu-protocol` (fase P1 do [roadmap do protocolo](https://github.com/porecatu/protocol/blob/main/docs/roadmap.md)), que **ainda não foi publicado** — a publicação é a fase P3, junto com o congelamento de `[0, 1]` e a primeira versão das três partes —, então a dependência é por `git` + `rev` com `version = "=0.1.0"` ao lado, como no `Cargo.toml` do Relay ([ADR-0103](adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) §5). O `rev` é `4ce7e4fea324a85a2e99aedccf5b8335755d183e`, o commit da especificação **0.5** (`view-tab`, sem `activate-tab`; ADR-0111 e ADR-0112) na `main` do protocolo, em 2026-11-20; de 2026-11-17 até então foi `0909e7ca88e3c180198e8ce7246445c4b0d9fbd1`, o merge da 0.4. O Relay e o tarball do Remote usam o mesmo commit.
+**Dependência externa:** o host depende do crate `porecatu-protocol` (fase P1 do [roadmap do protocolo](https://github.com/porecatu/protocol/blob/main/docs/roadmap.md)), que **ainda não foi publicado** — a publicação é a fase P3, junto com o congelamento de `[0, 1]` e a primeira versão das três partes —, então a dependência é por `git` + `rev` com `version = "=0.1.0"` ao lado, como no `Cargo.toml` do Relay ([ADR-0103](adr/0103-acesso-remoto-tres-partes-e-protocolo-externo.md) §5). O `rev` é `a52fbb1d5c1a5ab9cd3fb14336b40bdc37c977b2`, o commit da especificação **0.6** (sessões salvas, ADR-0113) na `main` do protocolo, em 2026-11-20; antes foram `4ce7e4fea324a85a2e99aedccf5b8335755d183e` (a 0.5, `view-tab`; ADR-0111 e ADR-0112), também de 2026-11-20, e, de 2026-11-17, `0909e7ca88e3c180198e8ce7246445c4b0d9fbd1`, o merge da 0.4. O Relay e o tarball do Remote usam o mesmo commit.
 
 **Etapas:** feitas em 2026-11-16 e 2026-11-17. A ordem abaixo é a de dependência da implementação (várias rodaram em paralelo: o crate de rede, o `porecatu-term` e a config não se tocam); o plano original de seis etapas foi partido em dezoito mais a da aba ativa, e a verificação ao vivo de ponta a ponta, que era a sexta, **não foi feita** (ver a dívida).
 
@@ -1425,7 +1425,7 @@ Pedido do dono em 2026-11-20: abrir uma aba no celular trocava a aba ativa do de
 
 **Dívida de verificação prevista:** ao vivo no Windows, com o app real e um relay real: abrir uma aba no celular sem a aba ativa mudar; o ícone nos três modos do "x", sem deslocamento no `hover`; o ponto da fixada; dois aparelhos em abas diferentes e na mesma aba; queda do celular apagando o ícone; aba movida entre janelas levando o ícone. Aval visual do dono sobre o binário.
 
-### Depois do fechamento — restaurar sessão nomeada pelo celular (ADR-0113) — documentado, não implementado
+### Depois do fechamento — restaurar sessão nomeada pelo celular (ADR-0113) — implementado (verificação ao vivo pendente)
 
 Pedido do dono em 2026-11-20: o celular escolhe uma sessão nomeada ([PRD-014](prd/prd-014-sessoes-nomeadas.md)) e a restaura. Requisito RF-25.31 e emenda ao RF-25.28 no [PRD-025](prd/prd-025-acesso-remoto.md). Decisões no [ADR-0113](adr/0113-restaurar-sessao-nomeada-pelo-celular.md), que revê parcialmente os ADR-0092, ADR-0102 e ADR-0107. O fio está na especificação **0.6** do protocolo ([ADR-0012 do protocolo](https://github.com/porecatu/protocol/blob/main/docs/adr/0012-sessoes-nomeadas-pelo-cliente.md)): `list-sessions`/`sessions`, a ação `restore-session` e os erros `unknown-session` e `session-unreadable`.
 
@@ -1435,9 +1435,9 @@ O dono decidiu quatro coisas antes da escrita:
 - o acréscimo **não ativa** a aba da sessão e **não fecha** o terminal parado;
 - o celular só lista e restaura, sem salvar nem excluir.
 
-**Só a documentação existe** (2026-11-20). Etapas, na ordem de dependência:
+**Implementado em 2026-11-20**, todas as etapas abaixo, verificado só por teste automatizado (`cargo test --workspace` verde, `clippy -D warnings`, `fmt --check`, `verify-docs.py`). Etapas, na ordem de dependência:
 
-1. **Protocolo 0.6 implementado** no crate, no pacote TS e nos vetores ([roadmap do protocolo](https://github.com/porecatu/protocol/blob/main/docs/roadmap.md), P0). É pré-requisito externo; hoje só o texto e o schema estão escritos.
+1. **Protocolo 0.6 implementado** no crate, no pacote TS e nos vetores ([roadmap do protocolo](https://github.com/porecatu/protocol/blob/main/docs/roadmap.md), P0). Feito no commit `a52fbb1` da `main` do protocolo.
 2. **`rev` do protocolo** em `crates/porecatu-remote/Cargo.toml` passa ao commit que implementar a 0.6, junto com o Relay e o Remote.
 3. **Ator:** `RemoteEvent::ListSessions` em `porecatu-remote` (`api.rs`, `session.rs`), com teste em `host/tests.rs`.
 4. **Ids:** tabela `sessions` em `remote/ids.rs`, por `PathBuf`, nunca reaproveitada; `Table` com `K: Clone + Eq + Hash`.

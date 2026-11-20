@@ -31,6 +31,7 @@ pub(crate) mod grid;
 pub(crate) mod ids;
 pub(crate) mod input;
 pub(crate) mod qr;
+pub(crate) mod sessions;
 pub(crate) mod theme;
 pub(crate) mod tree;
 
@@ -644,7 +645,8 @@ impl RemoteState {
             }
             other @ (RemoteEvent::Input { .. }
             | RemoteEvent::Action { .. }
-            | RemoteEvent::Confirm { .. }) => Effect::Unhandled(other),
+            | RemoteEvent::Confirm { .. }
+            | RemoteEvent::ListSessions { .. }) => Effect::Unhandled(other),
         }
     }
 }

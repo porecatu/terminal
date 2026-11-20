@@ -1288,6 +1288,41 @@ async fn scrollback_requests_reach_the_ui_and_its_page_reaches_the_phone() {
 }
 
 #[tokio::test]
+async fn list_sessions_becomes_an_event_and_its_answer_reaches_the_phone() {
+    use crate::protocol::message::{ListSessions, NamedSession, Sessions, SessionsMode};
+
+    let mut rig = Rig::up().await;
+    let (mut phone, _invite, client) = rig.session(&device()).await;
+
+    phone
+        .send(&Message::ListSessions(ListSessions { id: 21 }))
+        .await;
+    let got = rig
+        .wait(|e| match e {
+            RemoteEvent::ListSessions { client, id } => Some((client, id)),
+            _ => None,
+        })
+        .await;
+    assert_eq!(got, (client, 21));
+
+    // The answer is a plain `Command::Send` to the client that asked.
+    let answer = Message::Sessions(Sessions {
+        id: 21,
+        mode: SessionsMode::NewWindow,
+        list: vec![NamedSession {
+            session: 1,
+            name: "work".to_owned(),
+            readable: true,
+        }],
+    });
+    rig.host.send(Command::Send {
+        client,
+        message: answer.clone(),
+    });
+    assert_eq!(phone.message().await, answer);
+}
+
+#[tokio::test]
 async fn a_pane_that_leaves_the_tree_ends_its_subscription() {
     let mut rig = Rig::up().await;
     let (mut phone, _client) = rig.session_on(&[1, 2]).await;

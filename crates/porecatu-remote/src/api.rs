@@ -221,6 +221,13 @@ pub enum RemoteEvent {
         /// The request.
         request: protocol::message::ScrollbackRequest,
     },
+    /// A request for the list of saved named sessions (ADR-0113).
+    ListSessions {
+        /// The client that sent it.
+        client: ClientId,
+        /// The `id` of the request, to echo in the answer.
+        id: u64,
+    },
 }
 
 /// Main thread to network. `RemoteHost::send` never blocks.

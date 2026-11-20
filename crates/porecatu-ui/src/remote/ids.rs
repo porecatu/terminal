@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::path::{Path, PathBuf};
 
 use porecatu_core::{GroupId, PaneId, TabId};
 
@@ -50,7 +51,7 @@ struct Table<K> {
     reverse: HashMap<u64, K>,
 }
 
-impl<K: Copy + Eq + Hash> Table<K> {
+impl<K: Clone + Eq + Hash> Table<K> {
     fn new() -> Self {
         Self {
             forward: HashMap::new(),
@@ -64,13 +65,18 @@ impl<K: Copy + Eq + Hash> Table<K> {
         }
         let id = *counter;
         *counter += 1;
-        self.forward.insert(key, id);
+        self.forward.insert(key.clone(), id);
         self.reverse.insert(id, key);
         id
     }
 
     fn of(&self, id: u64) -> Option<K> {
-        self.reverse.get(&id).copied()
+        self.reverse.get(&id).cloned()
+    }
+
+    /// The key of `id`, borrowed (for keys that are not cheap to clone).
+    fn of_ref(&self, id: u64) -> Option<&K> {
+        self.reverse.get(&id)
     }
 
     fn remove(&mut self, key: &K) -> Option<u64> {
@@ -81,7 +87,7 @@ impl<K: Copy + Eq + Hash> Table<K> {
 
     /// Binds `id` to `key` (the id keeps its number, only the key changes).
     fn insert(&mut self, key: K, id: u64) {
-        self.forward.insert(key, id);
+        self.forward.insert(key.clone(), id);
         self.reverse.insert(id, key);
     }
 
@@ -98,10 +104,15 @@ pub(crate) struct ProtocolIds<W> {
     next_group: u64,
     next_tab: u64,
     next_pane: u64,
+    next_session: u64,
     windows: Table<W>,
     groups: Table<(W, GroupId)>,
     tabs: Table<(W, TabId)>,
     panes: Table<(W, TabId, PaneId)>,
+    /// Saved named sessions, keyed by the file (ADR-0113 section 2). Not
+    /// tied to the tree: `retain_seen` and `forget_window` never touch it, and
+    /// it only grows.
+    sessions: Table<PathBuf>,
 }
 
 impl<W: Copy + Eq + Hash> Default for ProtocolIds<W> {
@@ -117,10 +128,12 @@ impl<W: Copy + Eq + Hash> ProtocolIds<W> {
             next_group: 1,
             next_tab: 1,
             next_pane: 1,
+            next_session: 1,
             windows: Table::new(),
             groups: Table::new(),
             tabs: Table::new(),
             panes: Table::new(),
+            sessions: Table::new(),
         }
     }
 
@@ -144,6 +157,19 @@ impl<W: Copy + Eq + Hash> ProtocolIds<W> {
     pub(crate) fn pane(&mut self, window: W, tab: TabId, pane: PaneId) -> u64 {
         self.panes
             .get_or_assign((window, tab, pane), &mut self.next_pane)
+    }
+
+    /// The protocol id of a saved named session, assigned on first use
+    /// (ADR-0113 section 2). The same file keeps its id for the life of the
+    /// process; ids are never reused.
+    pub(crate) fn session(&mut self, file: &Path) -> u64 {
+        self.sessions
+            .get_or_assign(file.to_path_buf(), &mut self.next_session)
+    }
+
+    /// The file of a session id the host listed before.
+    pub(crate) fn session_of(&self, id: u64) -> Option<&Path> {
+        self.sessions.of_ref(id).map(PathBuf::as_path)
     }
 
     pub(crate) fn window_of(&self, id: u64) -> Option<W> {
@@ -423,6 +449,35 @@ mod tests {
         // The counters did not go back.
         assert!(ids.tab(1, tab(1)) > t1);
         assert!(ids.group(1, group(0)) > g);
+    }
+
+    #[test]
+    fn the_same_session_file_keeps_its_id_and_other_files_get_growing_ones() {
+        let mut ids = ProtocolIds::<u8>::new();
+        let a = ids.session(Path::new("a.json"));
+        let b = ids.session(Path::new("b.json"));
+        assert_eq!(a, 1);
+        assert!(b > a);
+        assert_eq!(ids.session(Path::new("a.json")), a);
+        assert_eq!(ids.session(Path::new("b.json")), b);
+        assert_eq!(ids.session_of(a), Some(Path::new("a.json")));
+        assert_eq!(ids.session_of(b), Some(Path::new("b.json")));
+        assert_eq!(ids.session_of(99), None);
+        // The session counter is independent of the other four.
+        assert_eq!(ids.window(1), 1);
+        assert_eq!(ids.tab(1, tab(0)), 1);
+    }
+
+    #[test]
+    fn retain_seen_and_forget_window_do_not_prune_sessions() {
+        let mut ids = ProtocolIds::<u8>::new();
+        let s = ids.session(Path::new("a.json"));
+        ids.window(1);
+        ids.retain_seen(&SeenIds::default());
+        ids.forget_window(1);
+        assert_eq!(ids.session_of(s), Some(Path::new("a.json")));
+        assert_eq!(ids.session(Path::new("a.json")), s);
+        assert!(ids.session(Path::new("c.json")) > s);
     }
 
     #[test]

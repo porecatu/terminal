@@ -76,7 +76,7 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 - **RF-25.15** — Há ações para ligar e desligar o acesso e para desconectar todos os aparelhos, **sem atalho padrão** (catálogo de ações, [ADR-0107](../adr/0107-acoes-remotas-sobre-o-workspace.md)).
 - **RF-25.16** — Desligar o acesso remoto encerra todas as conexões, com aviso ao celular; a lista de pareados fica.
 - **RF-25.30** — *(acrescentado e implementado em 2026-11-20, [ADR-0112](../adr/0112-indicador-de-aba-vista-pelo-celular.md); aval visual pendente)* Toda aba que um celular conectado está **vendo** é indicada na barra de abas do desktop, em toda janela, sem que a aba ativa mude: o ícone de aparelho à esquerda do botão de fechar (no lugar dele quando o botão nunca aparece) e, na aba fixada, uma marca no canto. Com vários aparelhos, a marca é uma só, e o tooltip diz quais aparelhos veem a aba. Como o RF-25.12, o indicador não pode ser desligado.
-- **RF-25.31** — *(acrescentado em 2026-11-20, [ADR-0113](../adr/0113-restaurar-sessao-nomeada-pelo-celular.md); implementação pendente)* O celular **lista as sessões nomeadas** salvas no desktop ([PRD-014](prd-014-sessoes-nomeadas.md)), na ordem do popover de sessões e com as ilegíveis marcadas, e **restaura uma delas**. O destino segue a chave `[session] restore_named_in_current_window` no momento da ação ([PRD-023](prd-023-restaurar-sessao-nomeada-na-janela-atual.md)):
+- **RF-25.31** — *(acrescentado e implementado em 2026-11-20, [ADR-0113](../adr/0113-restaurar-sessao-nomeada-pelo-celular.md); verificado só por teste automatizado)* O celular **lista as sessões nomeadas** salvas no desktop ([PRD-014](prd-014-sessoes-nomeadas.md)), na ordem do popover de sessões e com as ilegíveis marcadas, e **restaura uma delas**. O destino segue a chave `[session] restore_named_in_current_window` no momento da ação ([PRD-023](prd-023-restaurar-sessao-nomeada-na-janela-atual.md)):
   - **desligada:** abre uma **janela nova** com a disposição da sessão, com o tamanho salvo e em cascata a partir da janela usada por último. A janela **não ganha o foco** do sistema e fica por último na ordem das janelas;
   - **ligada:** acrescenta os grupos e as abas da sessão ao fim da trilha de uma **janela escolhida no celular**.
 
@@ -111,7 +111,7 @@ O mesmo do [PRD-000](prd-000-visao-de-produto.md), mais uma condição: tem (ou 
 
   > **Emenda (2026-11-20).** Desfeita ([ADR-0111](../adr/0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md)): vale de novo o texto original, e trocar a aba ativa do desktop volta a estar fora do alcance do celular.
 
-  > **Emenda (2026-11-20, [ADR-0113](../adr/0113-restaurar-sessao-nomeada-pelo-celular.md); implementação pendente).** **Restaurar** uma sessão nomeada sai desta lista (RF-25.31), e com isso o celular passa a poder abrir uma janela, mas só a de uma sessão restaurada e sem foco. Continuam fora do alcance: **salvar e excluir** sessões nomeadas, **abrir janela vazia** e destacar aba numa janela nova.
+  > **Emenda (2026-11-20, [ADR-0113](../adr/0113-restaurar-sessao-nomeada-pelo-celular.md)).** **Restaurar** uma sessão nomeada sai desta lista (RF-25.31), e com isso o celular passa a poder abrir uma janela, mas só a de uma sessão restaurada e sem foco. Continuam fora do alcance: **salvar e excluir** sessões nomeadas, **abrir janela vazia** e destacar aba numa janela nova.
 - **RF-25.29** — Com o Porecatu fechado, o celular mostra o desktop como **offline**. Não há modo em segundo plano.
 
 ## Requisitos não funcionais

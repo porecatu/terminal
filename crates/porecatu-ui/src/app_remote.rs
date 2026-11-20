@@ -32,7 +32,7 @@ use porecatu_remote::protocol::message::grid::MAX_SCROLLBACK_COUNT;
 use porecatu_remote::protocol::message::{
     Action, ActionBody, ActionResult, Confirm, ConfirmKind, ConfirmRequest, ErrorCode,
     ErrorMessage, GridSnapshot as WireGrid, Message, PaneState as WireState, ScrollbackPage,
-    ScrollbackRequest, Workspace as WireWorkspace,
+    ScrollbackRequest, Sessions, Workspace as WireWorkspace,
 };
 use porecatu_remote::{
     ClientId, Command, PairingAnswer, PairingId, RemoteEvent, RemoteHost, RemoteInput,
@@ -52,6 +52,7 @@ use crate::remote::actions::{
 use crate::remote::grid::{empty_frame, live_frame, scrollback_lines};
 use crate::remote::ids::{ProtocolIds, SeenIds};
 use crate::remote::input::remote_input_bytes;
+use crate::remote::sessions::{RestoreTarget, named_sessions, plan_restore_session, sessions_mode};
 use crate::remote::theme::{protocol_profiles, protocol_theme};
 use crate::remote::tree::{
     PaneFacts, PaneSignals, TabFacts, WindowInput, build_workspace, pane_state,
@@ -73,6 +74,15 @@ pub(crate) enum VaultReport {
         deleted: bool,
         result: Result<(), VaultError>,
     },
+}
+
+/// What the phone is told of a restore that went through the read of the file
+/// (ADR-0113 section 4, step 5): success has no `created`; any failure to
+/// read, whatever the cause, is `session-unreadable`.
+fn restore_outcome(restored: Result<(), RestoreFailure>) -> Result<Option<u64>, ErrorCode> {
+    restored
+        .map(|()| None)
+        .map_err(|_| ErrorCode::SessionUnreadable)
 }
 
 /// The size the protocol gets for a pane that has no grid yet (a `NotStarted`
@@ -998,6 +1008,15 @@ impl App {
             RemoteEvent::Confirm { client, confirm } => {
                 self.apply_remote_confirm(client, confirm, event_loop, now);
             }
+            // ADR-0113 section 1: read on demand, on the main thread, as the
+            // popover reads it; a directory that cannot be read is an empty
+            // list (`list_named` already says so).
+            RemoteEvent::ListSessions { client, id } => {
+                let entries = porecatu_session::named::list_named();
+                let list = named_sessions(&entries, &mut self.remote.ids);
+                let mode = sessions_mode(self.config.session.restore_named_in_current_window);
+                self.remote_send(client, Message::Sessions(Sessions { id, mode, list }));
+            }
             // `absorb` handles the rest; they never come back as unhandled.
             _ => {}
         }
@@ -1030,6 +1049,44 @@ impl App {
                 .windows
                 .get(&window)
                 .is_some_and(WindowState::is_capturing)
+    }
+
+    /// `restore-session` (ADR-0113 sections 3 and 4): the checks of
+    /// `plan_restore_session` with the key read **now**, then the restore of the
+    /// popover with explicit parameters -- a new window born without focus, or
+    /// an append that activates, scrolls and closes nothing. A file that cannot
+    /// be read is `session-unreadable` for the phone; the desktop shows nothing.
+    fn remote_restore_session(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        session: u64,
+        window: Option<u64>,
+    ) -> ActionFlow {
+        let plan = plan_restore_session(
+            session,
+            window,
+            self.config.session.restore_named_in_current_window,
+            |id| self.remote.ids.session_of(id).map(Path::to_path_buf),
+            Path::exists,
+            |id| {
+                self.remote
+                    .ids
+                    .window_of(id)
+                    .filter(|window| self.windows.contains_key(window))
+            },
+            |window| self.remote_window_busy(window),
+            self.cross_drag.is_some(),
+        );
+        let plan = match plan {
+            Ok(plan) => plan,
+            Err(code) => return ActionFlow::Done(Err(code)),
+        };
+        let append_to = match plan.target {
+            RestoreTarget::NewWindow => None,
+            RestoreTarget::Append(window) => Some(window),
+        };
+        let restored = self.restore_named_session_remote(event_loop, &plan.file, append_to);
+        ActionFlow::Done(restore_outcome(restored))
     }
 
     /// The tab a protocol id names, if it is still a tab of a window.
@@ -1116,6 +1173,9 @@ impl App {
             }
             ActionBody::MoveGroupToWindow { group, window } => {
                 self.remote_move_group_to_window(group, window, event_loop, now)
+            }
+            ActionBody::RestoreSession { session, window } => {
+                self.remote_restore_session(event_loop, session, window)
             }
         };
         self.finish_remote_action(client, id, flow);
@@ -1782,6 +1842,28 @@ mod tests {
     use porecatu_remote::protocol::message::PaneState as WireState;
 
     use super::*;
+
+    #[test]
+    fn a_restore_that_read_the_file_has_no_created_tab() {
+        assert_eq!(restore_outcome(Ok(())), Ok(None));
+    }
+
+    #[test]
+    fn every_failure_to_read_is_session_unreadable() {
+        for failure in [
+            RestoreFailure::Corrupt(PathBuf::from("a.json")),
+            RestoreFailure::NewerSchema {
+                found: 9,
+                supported: 1,
+            },
+            RestoreFailure::Unreadable,
+        ] {
+            assert_eq!(
+                restore_outcome(Err(failure)),
+                Err(ErrorCode::SessionUnreadable)
+            );
+        }
+    }
 
     fn signals() -> PaneSignals {
         PaneSignals {

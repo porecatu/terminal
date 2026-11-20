@@ -1318,9 +1318,54 @@ mod ensure_config_file_exists_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WindowPlacement {
     Saved,
-    /// `App::restore_named_session`, o único lugar que constrói esta
-    /// variante.
-    CascadeFrom(WindowId),
+    /// `App::restore_named_session` (always `Some`) and
+    /// `App::restore_named_session_remote` (`None` when no terminal window
+    /// exists, ADR-0113 §3: the saved size, the position left to the OS).
+    CascadeFrom(Option<WindowId>),
+}
+
+/// ADR-0113 §3: whether a window born by `App::open_window_from_session`
+/// takes the focus of the OS. `Focus` is today's behaviour (startup and the
+/// sessions popover); `Background` is the phone's: the window appears
+/// without activation (`with_active(false)`, which makes winit show it with
+/// `SW_SHOWNOACTIVATE` on Windows) and goes to the **back** of the focus
+/// order, where a window nobody focused belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowActivation {
+    Focus,
+    Background,
+}
+
+/// Why a named session could not be read for a restore (ADR-0113 §3, step
+/// 1). Carries what the desktop notice needs; the phone only needs to know
+/// it failed (`session-unreadable`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RestoreFailure {
+    /// The file was corrupt and was moved aside to this path.
+    Corrupt(PathBuf),
+    /// Saved by a newer version of the app; the file stays as it was.
+    NewerSchema { found: u32, supported: u32 },
+    /// Anything else: unreadable, missing, or not exactly one window.
+    Unreadable,
+}
+
+/// ADR-0113 §3, step 1: reads the one window of a named session. The
+/// `.corrupt` quarantine happens inside `load_named`, as before.
+fn load_named_window(file: &Path) -> Result<porecatu_session::WindowV1, RestoreFailure> {
+    let porecatu_session::LoadOutcome { session, notices } =
+        porecatu_session::named::load_named(file);
+    if let Some(mut session) = session
+        && session.windows.len() == 1
+    {
+        return Ok(session.windows.swap_remove(0));
+    }
+    Err(match notices.into_iter().next() {
+        Some(porecatu_session::Notice::Corrupt(path)) => RestoreFailure::Corrupt(path),
+        Some(porecatu_session::Notice::NewerSchema { found, supported }) => {
+            RestoreFailure::NewerSchema { found, supported }
+        }
+        None => RestoreFailure::Unreadable,
+    })
 }
 
 /// Uma superfície do app que desenha um quadro: janela de terminal ou a de
@@ -9285,8 +9330,16 @@ impl App {
         window_v1: &porecatu_session::WindowV1,
         placement: WindowPlacement,
         open_pinned: bool,
+        activation: WindowActivation,
     ) -> Option<WindowId> {
         let mut attributes = base_window_attributes(wants_transparent(&self.config));
+        if activation == WindowActivation::Background {
+            // ADR-0113 §3: no activation at any moment. winit keeps this as
+            // the absence of `MARKER_ACTIVATE`, and the first
+            // `set_visible(true)` of `create_window_with_attributes` becomes
+            // `SW_SHOWNOACTIVATE`.
+            attributes = attributes.with_active(false);
+        }
         match placement {
             WindowPlacement::Saved => {
                 if self.config.session.restore_window_geometry {
@@ -9331,7 +9384,9 @@ impl App {
                 );
                 attributes =
                     attributes.with_inner_size(winit::dpi::PhysicalSize::new(size.0, size.1));
-                if let Some(origin_window) = self.windows.get(&origin).map(|s| &s.window)
+                if let Some(origin_window) = origin
+                    .and_then(|origin| self.windows.get(&origin))
+                    .map(|s| &s.window)
                     && let Ok(origin_position) = origin_window.outer_position()
                 {
                     let monitor = origin_window.current_monitor().map(|m| {
@@ -9404,7 +9459,13 @@ impl App {
         }
         state.sync_window_title();
         self.windows.insert(window_id, state);
-        self.focus_order.touch(window_id);
+        match activation {
+            WindowActivation::Focus => self.focus_order.touch(window_id),
+            // Still in `windows_by_recent_focus` (so it stays in the remote
+            // workspace), but last: nobody focused it. The first real focus
+            // does the usual `touch`.
+            WindowActivation::Background => self.focus_order.push_back(window_id),
+        }
         Some(window_id)
     }
 
@@ -9427,44 +9488,83 @@ impl App {
         origin: WindowId,
         file: &Path,
     ) {
-        let outcome = porecatu_session::named::load_named(file);
-        if let Some(session) = &outcome.session
-            && let [window_v1] = session.windows.as_slice()
-        {
-            if self.config.session.restore_named_in_current_window {
-                self.append_named_window(origin, window_v1);
-            } else {
+        let window_v1 = match load_named_window(file) {
+            Ok(window_v1) => window_v1,
+            Err(failure) => {
+                let Some(state) = self.windows.get_mut(&origin) else {
+                    return;
+                };
+                let now = Instant::now();
+                let catalog = &self.catalog;
+                let (title, body) = match &failure {
+                    RestoreFailure::Corrupt(path) => (
+                        msg::notice::named_session_corrupt::title(catalog),
+                        msg::notice::named_session_corrupt::body(catalog, path.display()),
+                    ),
+                    RestoreFailure::NewerSchema { found, supported } => (
+                        msg::notice::named_session_newer::title(catalog),
+                        msg::notice::named_session_newer::body(catalog, found, supported),
+                    ),
+                    RestoreFailure::Unreadable => (
+                        msg::notice::named_session_unreadable::title(catalog),
+                        msg::notice::named_session_unreadable::body(catalog),
+                    ),
+                };
+                state.warnings.push(Severity::Error, title, body, now);
+                state.window.request_redraw();
+                return;
+            }
+        };
+        if self.config.session.restore_named_in_current_window {
+            self.append_named_window(origin, &window_v1, app_named_append::AppendRules::POPOVER);
+        } else {
+            self.open_window_from_session(
+                event_loop,
+                &window_v1,
+                WindowPlacement::CascadeFrom(Some(origin)),
+                // RF-21.13: a restauração nomeada nunca abre fixadas.
+                false,
+                WindowActivation::Focus,
+            );
+        }
+    }
+
+    /// ADR-0113 §3: the same restore as [`Self::restore_named_session`] for
+    /// the phone, with the origin window replaced by explicit parameters and
+    /// **no notice on the desktop** (the failure goes back to the caller,
+    /// who answers the phone). `append_to` is the window the phone chose
+    /// (`Some`: `[session] restore_named_in_current_window` is on) and the
+    /// session is appended without activating, scrolling or closing
+    /// anything ([`AppendRules::REMOTE`]); `None` opens a new window that is
+    /// born without focus and goes to the back of the focus order
+    /// ([`WindowActivation::Background`]), cascaded from the most recently
+    /// focused window. Who decides between the two, from the key read at
+    /// the time of the action, is the caller.
+    pub(crate) fn restore_named_session_remote(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        file: &Path,
+        append_to: Option<WindowId>,
+    ) -> Result<(), RestoreFailure> {
+        let window_v1 = load_named_window(file)?;
+        match append_to {
+            Some(window) => {
+                self.append_named_window(window, &window_v1, app_named_append::AppendRules::REMOTE)
+            }
+            None => {
+                let placement =
+                    WindowPlacement::CascadeFrom(self.windows_by_recent_focus().first().copied());
                 self.open_window_from_session(
                     event_loop,
-                    window_v1,
-                    WindowPlacement::CascadeFrom(origin),
+                    &window_v1,
+                    placement,
                     // RF-21.13: a restauração nomeada nunca abre fixadas.
                     false,
+                    WindowActivation::Background,
                 );
             }
-            return;
         }
-        let Some(state) = self.windows.get_mut(&origin) else {
-            return;
-        };
-        let now = Instant::now();
-        let catalog = &self.catalog;
-        let (title, body) = match outcome.notices.first() {
-            Some(porecatu_session::Notice::Corrupt(path)) => (
-                msg::notice::named_session_corrupt::title(catalog),
-                msg::notice::named_session_corrupt::body(catalog, path.display()),
-            ),
-            Some(porecatu_session::Notice::NewerSchema { found, supported }) => (
-                msg::notice::named_session_newer::title(catalog),
-                msg::notice::named_session_newer::body(catalog, found, supported),
-            ),
-            None => (
-                msg::notice::named_session_unreadable::title(catalog),
-                msg::notice::named_session_unreadable::body(catalog),
-            ),
-        };
-        state.warnings.push(Severity::Error, title, body, now);
-        state.window.request_redraw();
+        Ok(())
     }
 
     /// RF-14.1/RF-14.4/RF-14.6 (ADR-0054 §5/§9): monta o `WindowV1` de
@@ -12273,6 +12373,7 @@ impl ApplicationHandler<Wakeup> for App {
                         window_v1,
                         WindowPlacement::Saved,
                         restored_window_id.is_none(),
+                        WindowActivation::Focus,
                     );
                     if restored_window_id.is_none() {
                         restored_window_id = window_id;

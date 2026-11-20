@@ -55,6 +55,8 @@ A versão `[major, minor]` é negociada no início da sessão (`hello`/`welcome`
 
 > **Nota de implementação (2026-11-20).** O host passa à especificação **0.5** ([ADR-0111](0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md), [ADR-0112](0112-indicador-de-aba-vista-pelo-celular.md); ADR-0011 do `porecatu-protocol`): sai `activate-tab`, entra `view-tab`. O fio continua `[0, 1]` e não distingue a 0.4 da 0.5, então o host, o Relay e o Remote sobem juntos para o mesmo `rev`, `4ce7e4fea324a85a2e99aedccf5b8335755d183e`, um commit direto na `main` do protocolo.
 
+> **Nota de implementação (2026-11-20, de novo).** O host passa à especificação **0.6** ([ADR-0113](0113-restaurar-sessao-nomeada-pelo-celular.md); ADR-0012 do `porecatu-protocol`): `list-sessions`, `sessions` e a ação `restore-session`. O `rev` passa a `a52fbb1d5c1a5ab9cd3fb14336b40bdc37c977b2`, junto com o Relay e o Remote.
+
 ## Alternativas consideradas
 
 ### Sessão no servidor (estilo `tmux -CC` ou servidor de multiplexação)

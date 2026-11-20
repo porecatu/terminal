@@ -18,6 +18,12 @@ primeiro release.
 
 ### Mudado
 
+- **Protocolo 0.6**: o host fala a especificação 0.6 do
+  [porecatu-protocol](https://github.com/porecatu/protocol) (`rev` `a52fbb1`,
+  o mesmo do Relay e do app Remote): entram `list-sessions`, `sessions`, a
+  ação `restore-session` e os erros `unknown-session` e `session-unreadable`.
+  O fio continua `[0, 1]` e não distingue a 0.5 da 0.6: um app 0.5 não
+  conversa com este host.
 - **O celular não muda mais a aba ativa do desktop**
   ([ADR-0111](docs/adr/0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md), que
   substitui o [ADR-0109](docs/adr/0109-o-celular-muda-a-aba-ativa-do-desktop.md)):
@@ -34,6 +40,15 @@ primeiro release.
 
 ### Adicionado
 
+- **Restaurar sessão nomeada pelo celular**
+  ([ADR-0113](docs/adr/0113-restaurar-sessao-nomeada-pelo-celular.md), PRD-025
+  RF-25.31): o celular lista as sessões salvas e restaura uma, pelo mesmo
+  caminho do botão de sessões. Com `[session] restore_named_in_current_window
+  = false`, abre uma janela nova **sem foco** (no Windows,
+  `SW_SHOWNOACTIVATE`) e no fim da ordem de foco; com `true`, acrescenta à
+  janela que o celular escolher, **sem ativar** a aba da sessão e **sem
+  fechar** o terminal parado. A falha de leitura vai ao celular, sem aviso no
+  desktop.
 - **Indicador de aba vista pelo celular**
   ([ADR-0112](docs/adr/0112-indicador-de-aba-vista-pelo-celular.md), PRD-025
   RF-25.30): a aba que um celular conectado está vendo mostra o ícone de

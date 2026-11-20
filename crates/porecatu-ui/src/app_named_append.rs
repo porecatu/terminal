@@ -148,6 +148,78 @@ pub(crate) fn tabs_to_start(appended: &Appended, lazy_restore: bool) -> Vec<TabI
     }
 }
 
+/// ADR-0113 §3: what the append does around the append itself. The rest
+/// (append, start the tabs, title, redraw, access tree) is the same for
+/// everybody.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppendRules {
+    /// Activate the session's active tab and scroll the track to it
+    /// (RF-23.9, ADR-0092 §4). Off, the window keeps its active tab.
+    pub(crate) activate_session_tab: bool,
+    /// Close the lone parked terminal afterwards (ADR-0102). Off,
+    /// `lone_idle_tab` is not even asked. Closing only makes sense after
+    /// the activation, so it needs `activate_session_tab` as well.
+    pub(crate) close_lone_idle: bool,
+}
+
+impl AppendRules {
+    /// The sessions popover: today's behaviour.
+    pub(crate) const POPOVER: Self = Self {
+        activate_session_tab: true,
+        close_lone_idle: true,
+    };
+    /// The phone (ADR-0111, ADR-0113 §3): nothing activates, nothing
+    /// scrolls, nothing closes.
+    pub(crate) const REMOTE: Self = Self {
+        activate_session_tab: false,
+        close_lone_idle: false,
+    };
+}
+
+/// What [`after_append`] decides, to be done in this order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AfterAppend {
+    /// Tab to activate (never `Some` when the rules do not activate).
+    pub(crate) activate: Option<TabId>,
+    /// `mark_session_dirty`: the activation marks it by itself, so this is
+    /// for when there is none (RF-23.14: the automatic session has to write
+    /// the new tabs).
+    pub(crate) mark_dirty: bool,
+    /// Parked terminal to close, **after** the activation (ADR-0102).
+    pub(crate) close_parked: Option<TabId>,
+    /// Scroll the track to the active tab (`reveal_active_tab`).
+    pub(crate) reveal: bool,
+}
+
+/// The decision "activate? close the parked terminal? reveal?" of
+/// [`App::append_named_window`], from the rules, the translated active tab
+/// of the session and the parked terminal found **before** the append.
+pub(crate) fn after_append(
+    rules: AppendRules,
+    appended_active: Option<TabId>,
+    parked: Option<TabId>,
+) -> AfterAppend {
+    if !rules.activate_session_tab {
+        return AfterAppend {
+            activate: None,
+            mark_dirty: true,
+            close_parked: None,
+            reveal: false,
+        };
+    }
+    AfterAppend {
+        activate: appended_active,
+        mark_dirty: appended_active.is_none(),
+        // ADR-0102: only once a restored tab is the active one; without a
+        // translated active tab there is nothing safe to hand the focus to.
+        close_parked: match appended_active {
+            Some(_) if rules.close_lone_idle => parked,
+            _ => None,
+        },
+        reveal: true,
+    }
+}
+
 /// ADR-0102 (RF-23.16): the one tab of a window that is a **parked
 /// terminal** -- the window was just opened, holds nothing else, and its
 /// shell has nothing running -- or `None`.
@@ -206,11 +278,15 @@ impl App {
     /// `monitor` and `active_pinned` of the saved window are never read, and
     /// `open_pinned_tabs_into` and `window_needs_a_minimum_tab` are not
     /// called. The panes are sized by `spawn_tab_runtime` from the size the
-    /// window has, so no resize follows.
+    /// window has, so no resize follows. `rules` (ADR-0113 §3) says whether
+    /// the session's active tab is activated and revealed and whether the
+    /// parked terminal is closed: the popover does all of it
+    /// ([`AppendRules::POPOVER`]), the phone none ([`AppendRules::REMOTE`]).
     pub(crate) fn append_named_window(
         &mut self,
         origin: WindowId,
         window_v1: &porecatu_session::WindowV1,
+        rules: AppendRules,
     ) {
         let lazy_restore = self.config.session.lazy_restore;
         // Built before `state` borrows `self.windows`: the same conversion
@@ -222,7 +298,11 @@ impl App {
 
         // ADR-0102: decided **before** the append -- afterwards the window
         // holds more than one tab and the question has no answer.
-        let parked = lone_idle_tab(&state.workspace, |id| state.tab_is_idle_terminal(id));
+        let parked = if rules.close_lone_idle {
+            lone_idle_tab(&state.workspace, |id| state.tab_is_idle_terminal(id))
+        } else {
+            None
+        };
 
         let appended = append_session_workspace(&mut state.workspace, source);
         if appended.tabs.is_empty() {
@@ -242,26 +322,29 @@ impl App {
             Instant::now(),
         );
 
-        match appended.active {
-            Some(active) => {
-                let _ = state.touch_workspace(|ws| ws.activate_tab(active));
-            }
-            // RF-23.14: the automatic session has to write the new tabs.
-            None => state.mark_session_dirty(),
+        let after = after_append(rules, appended.active, parked);
+        if let Some(active) = after.activate {
+            let _ = state.touch_workspace(|ws| ws.activate_tab(active));
+        }
+        // RF-23.14: the automatic session has to write the new tabs.
+        if after.mark_dirty {
+            state.mark_session_dirty();
         }
         // ADR-0102: the parked terminal goes **last**, once a restored tab is
         // the active one -- closing the active tab would run the focus ladder,
         // and `activate_tab` expands a collapsed group (RF-23.6). Without a
         // translated active tab (a session that saved none) it stays: there
         // is nothing safe to hand the focus to.
-        if let (Some(parked), Some(_)) = (parked, appended.active) {
+        if let Some(parked) = after.close_parked {
             state.close_tab_unconditionally(parked);
         }
         state.profile_badges_dirty = true;
         state.sync_window_title();
         state.window.request_redraw();
 
-        self.reveal_active_tab(origin);
+        if after.reveal {
+            self.reveal_active_tab(origin);
+        }
         self.refresh_access_tree(origin);
     }
 }
@@ -480,6 +563,75 @@ mod tests {
     #[test]
     fn an_empty_workspace_has_no_parked_terminal() {
         assert_eq!(lone_idle_tab(&Workspace::new(), |_| true), None);
+    }
+
+    // --- after_append (ADR-0113 §3) ---
+
+    const ACTIVE: TabId = TabId::new(7);
+    const PARKED: TabId = TabId::new(1);
+
+    #[test]
+    fn the_popover_activates_closes_the_parked_tab_and_reveals() {
+        assert_eq!(
+            after_append(AppendRules::POPOVER, Some(ACTIVE), Some(PARKED)),
+            AfterAppend {
+                activate: Some(ACTIVE),
+                mark_dirty: false,
+                close_parked: Some(PARKED),
+                reveal: true,
+            }
+        );
+    }
+
+    #[test]
+    fn the_popover_without_a_translated_active_tab_keeps_the_parked_one() {
+        // ADR-0102: nothing safe to hand the focus to; RF-23.14: dirty.
+        assert_eq!(
+            after_append(AppendRules::POPOVER, None, Some(PARKED)),
+            AfterAppend {
+                activate: None,
+                mark_dirty: true,
+                close_parked: None,
+                reveal: true,
+            }
+        );
+    }
+
+    #[test]
+    fn the_popover_with_nothing_parked_closes_nothing() {
+        let after = after_append(AppendRules::POPOVER, Some(ACTIVE), None);
+        assert_eq!(after.activate, Some(ACTIVE));
+        assert_eq!(after.close_parked, None);
+    }
+
+    #[test]
+    fn the_phone_activates_nothing_closes_nothing_reveals_nothing_and_saves() {
+        let rest = AfterAppend {
+            activate: None,
+            mark_dirty: true,
+            close_parked: None,
+            reveal: false,
+        };
+        for (active, parked) in [
+            (Some(ACTIVE), Some(PARKED)),
+            (Some(ACTIVE), None),
+            (None, Some(PARKED)),
+            (None, None),
+        ] {
+            assert_eq!(after_append(AppendRules::REMOTE, active, parked), rest);
+        }
+    }
+
+    #[test]
+    fn closing_the_parked_tab_needs_the_activation() {
+        let rules = AppendRules {
+            activate_session_tab: false,
+            close_lone_idle: true,
+        };
+        assert_eq!(
+            after_append(rules, Some(ACTIVE), Some(PARKED)).close_parked,
+            None
+        );
     }
 
     /// The order `append_named_window` uses: append, activate the translated

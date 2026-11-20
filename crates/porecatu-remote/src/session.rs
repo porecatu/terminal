@@ -407,6 +407,10 @@ impl Session {
             Message::Action(action) => core.emit(RemoteEvent::Action { client, action }),
             Message::Confirm(confirm) => core.emit(RemoteEvent::Confirm { client, confirm }),
             Message::ViewTab(view) => self.on_view_tab(core, view.tab),
+            Message::ListSessions(request) => core.emit(RemoteEvent::ListSessions {
+                client,
+                id: request.id,
+            }),
             Message::Goodbye(_) => self.closing = Some(CloseReason::Normal),
             // A second `hello` is out of place.
             Message::Hello(_) => self.send_error(core, ErrorCode::Protocol, None, None),

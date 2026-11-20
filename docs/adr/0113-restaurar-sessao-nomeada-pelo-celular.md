@@ -1,6 +1,6 @@
 # ADR-0113 — Restaurar sessão nomeada pelo celular: a restauração do popover, sem foco, sem ativar e sem fechar
 
-**Status:** Aceito em 2026-11-20 — **implementação pendente** (só a documentação existe; etapas no [roadmap](../roadmap.md))
+**Status:** Aceito em 2026-11-20 — implementado em 2026-11-20 (verificado só por teste automatizado; ninguém viu rodando, dívida no [roadmap](../roadmap.md))
 **Data:** 2026-11-20
 **Relacionados:** [PRD-014](../prd/prd-014-sessoes-nomeadas.md), [PRD-023](../prd/prd-023-restaurar-sessao-nomeada-na-janela-atual.md), [PRD-025](../prd/prd-025-acesso-remoto.md) (RF-25.28, RF-25.31), [ADR-0054](0054-sessoes-nomeadas.md), [ADR-0055](0055-botao-e-popover-de-sessoes.md), [ADR-0091](0091-arraste-entre-janelas.md), [ADR-0092](0092-restauracao-nomeada-na-janela-atual.md), [ADR-0102](0102-fechar-o-terminal-parado-ao-restaurar-na-janela-atual.md), [ADR-0104](0104-crate-porecatu-remote.md), [ADR-0105](0105-espelhamento-da-grade-e-input-remoto.md), [ADR-0107](0107-acoes-remotas-sobre-o-workspace.md), [ADR-0111](0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md); no protocolo, [ADR-0012](https://github.com/porecatu/protocol/blob/main/docs/adr/0012-sessoes-nomeadas-pelo-cliente.md) e as [§4.5 e §7 de 03 — Mensagens](https://github.com/porecatu/protocol/blob/main/docs/especificacao/03-mensagens.md)
 **Supersedes:** PRD-025 RF-25.28 (**parcial**: "sessões nomeadas" e "abrir janela nova" saem da lista do que fica fora do alcance do celular, só para restaurar) · ADR-0092 §4 e ADR-0102 (**parcial**: a ativação da aba da sessão e o fechamento do terminal parado não valem quando quem restaura é o celular)
@@ -101,6 +101,12 @@ O sucesso devolve `action-result` sem `created` e marca a árvore suja (`mark_tr
 | `porecatu-ui/src/cross_window.rs` | `FocusOrder::push_back` |
 
 Nenhuma frase nova de interface: nada aparece no desktop.
+
+> **Nota de implementação (2026-11-20).** Quatro detalhes que o texto acima não fixava:
+> - as peças puras moram num módulo próprio, `porecatu-ui/src/remote/sessions.rs` (`named_sessions`, `sessions_mode`, `plan_restore_session`, `RestoreTarget`, `RestorePlan`), e não em `remote/actions.rs`; `Table` ganhou `of_ref` para `session_of` emprestar o caminho;
+> - `WindowPlacement::CascadeFrom` passou a receber `Option<WindowId>`: sem janela de origem, a janela nova usa o tamanho salvo e deixa a posição ao sistema, o mesmo que o popover já fazia com uma origem que não existe;
+> - a decisão de ativar, fechar o terminal parado e revelar saiu para a função pura `app_named_append::after_append(rules, appended_active, parked)`, testada para `AppendRules::POPOVER` e `AppendRules::REMOTE`;
+> - a falha de leitura é `RestoreFailure::{Corrupt, NewerSchema, Unreadable}` (`load_named_window`), e `app_remote::restore_outcome` converte toda falha em `session-unreadable`.
 
 ## Alternativas consideradas
 

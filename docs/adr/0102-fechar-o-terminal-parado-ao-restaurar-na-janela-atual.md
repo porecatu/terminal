@@ -13,7 +13,7 @@ Com `[session] restore_named_in_current_window = true`, restaurar uma sessão no
 
 **Se a janela de origem tem uma única aba e ela é um terminal parado, essa aba é fechada depois de a sessão ser acrescentada.**
 
-> **Revisto pelo [ADR-0113](0113-restaurar-sessao-nomeada-pelo-celular.md) (2026-11-20; implementação pendente).** A regra vale só para o gesto local (popover de sessões). Quando o celular restaura na janela atual (`restore-session`, especificação 0.6 do protocolo), nada é fechado e a aba ativa não muda. `append_named_window` recebe `AppendRules { close_lone_idle: false, .. }`, e `lone_idle_tab` nem é consultada. O fechamento depende da ativação da aba da sessão (§2), que o celular não faz (ADR-0111).
+> **Revisto pelo [ADR-0113](0113-restaurar-sessao-nomeada-pelo-celular.md) (2026-11-20; implementado no mesmo dia, verificado só por teste automatizado).** A regra vale só para o gesto local (popover de sessões). Quando o celular restaura na janela atual (`restore-session`, especificação 0.6 do protocolo), nada é fechado e a aba ativa não muda. `append_named_window` recebe `AppendRules { close_lone_idle: false, .. }`, e `lone_idle_tab` nem é consultada. O fechamento depende da ativação da aba da sessão (§2), que o celular não faz (ADR-0111).
 
 ### 1. O que é "única aba" e "terminal parado"
 
