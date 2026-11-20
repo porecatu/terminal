@@ -4555,13 +4555,6 @@ mod remote_group_tests {
             .collect()
     }
 
-    fn row_of(content: &Content, target: RemoteTarget) -> &RowView {
-        rows_of(content)
-            .into_iter()
-            .find(|row| row.remote == Some(target))
-            .expect("the row is in the group")
-    }
-
     fn token_with_vault(present: Result<bool, porecatu_remote::VaultError>) -> RemoteToken {
         let mut token = RemoteToken::new();
         token.set_presence(present);
