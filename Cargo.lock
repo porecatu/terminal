@@ -708,9 +708,9 @@ checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "bytes"
-version = "1.12.1"
+version = "1.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+checksum = "776dfebd015e2d8732c684a2c71003674ccb49457b539b9e82151ba38e96dd7c"
 
 [[package]]
 name = "calloop"
@@ -3520,7 +3520,7 @@ dependencies = [
 [[package]]
 name = "porecatu-protocol"
 version = "0.1.0"
-source = "git+https://github.com/porecatu/protocol?rev=a52fbb1d5c1a5ab9cd3fb14336b40bdc37c977b2#a52fbb1d5c1a5ab9cd3fb14336b40bdc37c977b2"
+source = "git+https://github.com/porecatu/protocol?rev=76174dae340c4ea95c64c14506c553dd48e7711d#76174dae340c4ea95c64c14506c553dd48e7711d"
 dependencies = [
  "blake2 0.10.6",
  "bytes",
@@ -6309,9 +6309,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.9.1"
+version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+checksum = "85ccff8a4805aba1eaa4cd4afcd49f7557dd2cf5fd79ffc37f8959466effc5aa"
 
 [[package]]
 name = "zerotrie"

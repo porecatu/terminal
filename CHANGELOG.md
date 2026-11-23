@@ -18,6 +18,13 @@ primeiro release.
 
 ### Mudado
 
+- **Protocolo 0.7**: o host aceita `new-tab` com `group: null`
+  ([ADR-0114](docs/adr/0114-nova-aba-solta-pelo-celular.md)) e cria uma aba
+  **solta**, no fim da trilha, sem olhar a aba ativa, pelo caminho do "+" do
+  fim da trilha. Antes, a aba pedida sem grupo entrava no grupo da aba ativa.
+  O `rev` do [porecatu-protocol](https://github.com/porecatu/protocol) sobe
+  para `76174da` (o mesmo do Relay e do app Remote) e o `bytes` exato do
+  `porecatu-remote`, para `=1.12.2`. Um app 0.6 não conversa com este host.
 - **Protocolo 0.6**: o host fala a especificação 0.6 do
   [porecatu-protocol](https://github.com/porecatu/protocol) (`rev` `a52fbb1`,
   o mesmo do Relay e do app Remote): entram `list-sessions`, `sessions`, a

@@ -115,6 +115,7 @@
 | [0111](0111-o-celular-nao-muda-a-aba-ativa-do-desktop.md) | O celular não muda a aba ativa do desktop | Aceito — implementado; verificado só por teste automatizado |
 | [0112](0112-indicador-de-aba-vista-pelo-celular.md) | Indicador de aba vista pelo celular: o ícone de aparelho ao lado do "x" | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
 | [0113](0113-restaurar-sessao-nomeada-pelo-celular.md) | Restaurar sessão nomeada pelo celular: a restauração do popover, sem foco, sem ativar e sem fechar | Aceito — implementado; verificado só por teste automatizado |
+| [0114](0114-nova-aba-solta-pelo-celular.md) | Nova aba solta pelo celular: `new-tab` com `group: null` | Aceito — implementado; verificado só por teste automatizado |
 
 ## Convenção
 

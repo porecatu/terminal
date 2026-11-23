@@ -17,7 +17,7 @@ workspace = true
 # e mesmo commit do `Cargo.toml` do Relay; o `version` impede curinga no
 # cargo-deny). Features padrao (`session`, `message`); `test-vectors` nunca.
 # Subir acompanha a versao de fio que o Relay e o Remote falam.
-porecatu-protocol = { version = "=0.1.0", git = "https://github.com/porecatu/protocol", rev = "a52fbb1d5c1a5ab9cd3fb14336b40bdc37c977b2" }
+porecatu-protocol = { version = "=0.1.0", git = "https://github.com/porecatu/protocol", rev = "76174dae340c4ea95c64c14506c553dd48e7711d" }
 # ADR-0104 §2: `tokio` so em crate de rede folha, com runtime proprio; a mesma
 # versao exata em `porecatu-ssh` e aqui, subidas juntas (`cargo tree -d`).
 # Nunca em `[workspace.dependencies]`.
@@ -46,7 +46,7 @@ ring = "0.17"
 # RustCrypto ja traz.
 zeroize = "1.9"
 # O mesmo `bytes` do crate de protocolo e do Relay.
-bytes = "=1.12.1"
+bytes = "=1.12.2"
 # Divide o WebSocket em leitura e escrita; so `sink` e `std`.
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # `remote_devices.json`, ao lado do `session.json`.

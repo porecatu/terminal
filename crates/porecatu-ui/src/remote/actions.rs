@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use porecatu_core::{GroupColor, GroupId, TabId, Workspace};
 use porecatu_remote::ClientId;
-use porecatu_remote::protocol::message::{ConfirmKind, ErrorCode, PaneState, Profile};
+use porecatu_remote::protocol::message::{ConfirmKind, ErrorCode, NewTabGroup, PaneState, Profile};
 
 use super::ids::ProtocolIds;
 use crate::pinned::CloseAsk;
@@ -116,13 +116,23 @@ impl CaptureModes {
 
 // --- new-tab ------------------------------------------------------------
 
-/// What a valid `new-tab` is: the window, the group (`None` = where `tab.new`
-/// would create) and the profile (`None` = the default; `Some("")` is the
-/// `[shell]`).
+/// Where a valid `new-tab` puts the tab (spec 03 section 7, `group`): where
+/// `tab.new` would (absent), outside any group at the end of the track
+/// (`null`) or at the end of a group of the window (an id, already resolved
+/// to the internal one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NewTabPlace {
+    ActiveGroup,
+    Ungrouped,
+    Group(GroupId),
+}
+
+/// What a valid `new-tab` is: the window, the place and the profile (`None` =
+/// the default; `Some("")` is the `[shell]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NewTabPlan<W> {
     pub window: W,
-    pub group: Option<GroupId>,
+    pub place: NewTabPlace,
     pub profile: Option<String>,
 }
 
@@ -134,12 +144,13 @@ pub(crate) fn profile_known(offered: &[Profile], id: &str) -> bool {
 
 /// Validates a `new-tab` (spec 03 section 7): the window must exist
 /// (`unknown-window`), the group must exist **in that window**
-/// (`unknown-group`) and the profile must be one the phone was offered
-/// (`unknown-profile`), checked in that order.
+/// (`unknown-group`; a `null` group names no group, so it is never unknown)
+/// and the profile must be one the phone was offered (`unknown-profile`),
+/// checked in that order.
 pub(crate) fn plan_new_tab<W: Copy + Eq + Hash>(
     ids: &ProtocolIds<W>,
     window: u64,
-    group: Option<u64>,
+    group: NewTabGroup,
     profile: Option<&str>,
     offered: &[Profile],
     window_exists: impl Fn(W) -> bool,
@@ -149,14 +160,15 @@ pub(crate) fn plan_new_tab<W: Copy + Eq + Hash>(
         .window_of(window)
         .filter(|w| window_exists(*w))
         .ok_or(ErrorCode::UnknownWindow)?;
-    let group = group
-        .map(|id| {
-            ids.group_of(id)
-                .filter(|(owner, group)| *owner == window && group_exists(window, *group))
-                .map(|(_, group)| group)
-                .ok_or(ErrorCode::UnknownGroup)
-        })
-        .transpose()?;
+    let place = match group {
+        NewTabGroup::Auto => NewTabPlace::ActiveGroup,
+        NewTabGroup::Ungrouped => NewTabPlace::Ungrouped,
+        NewTabGroup::Group(id) => ids
+            .group_of(id)
+            .filter(|(owner, group)| *owner == window && group_exists(window, *group))
+            .map(|(_, group)| NewTabPlace::Group(group))
+            .ok_or(ErrorCode::UnknownGroup)?,
+    };
     if let Some(profile) = profile
         && !profile_known(offered, profile)
     {
@@ -164,7 +176,7 @@ pub(crate) fn plan_new_tab<W: Copy + Eq + Hash>(
     }
     Ok(NewTabPlan {
         window,
-        group,
+        place,
         profile: profile.map(str::to_owned),
     })
 }
@@ -700,6 +712,16 @@ mod tests {
         group: Option<u64>,
         profile: Option<&str>,
     ) -> Result<NewTabPlan<u8>, ErrorCode> {
+        let group = group.map_or(NewTabGroup::Auto, NewTabGroup::Group);
+        plan_of(ids, window, group, profile)
+    }
+
+    fn plan_of(
+        ids: &ProtocolIds<u8>,
+        window: u64,
+        group: NewTabGroup,
+        profile: Option<&str>,
+    ) -> Result<NewTabPlan<u8>, ErrorCode> {
         let offered = [
             profile_of("zsh"),
             profile_of(""),
@@ -727,10 +749,37 @@ mod tests {
             plan,
             NewTabPlan {
                 window: 7,
-                group: None,
+                place: NewTabPlace::ActiveGroup,
                 profile: None
             }
         );
+    }
+
+    /// Spec 0.7: `group: null` is a loose tab. It names no group, so there is
+    /// nothing to be unknown, but the window and the profile are still checked.
+    #[test]
+    fn a_null_group_is_a_loose_tab_and_never_an_unknown_group() {
+        let loose = plan_of(&ids(), 1, NewTabGroup::Ungrouped, None).unwrap();
+        assert_eq!((loose.window, loose.place), (7, NewTabPlace::Ungrouped));
+        assert_eq!(
+            plan_of(&ids(), 9, NewTabGroup::Ungrouped, None),
+            Err(ErrorCode::UnknownWindow)
+        );
+        assert_eq!(
+            plan_of(&ids(), 1, NewTabGroup::Ungrouped, Some("fish")),
+            Err(ErrorCode::UnknownProfile)
+        );
+        // No group is looked up: even if none exists, it goes through.
+        let none = plan_new_tab(
+            &ids(),
+            1,
+            NewTabGroup::Ungrouped,
+            None,
+            &[],
+            |_: u8| true,
+            |_: u8, _: GroupId| false,
+        );
+        assert_eq!(none.unwrap().place, NewTabPlace::Ungrouped);
     }
 
     #[test]
@@ -744,7 +793,7 @@ mod tests {
         let gone = plan_new_tab(
             &ids(),
             1,
-            None,
+            NewTabGroup::Auto,
             None,
             &[],
             |_: u8| false,
@@ -766,7 +815,7 @@ mod tests {
         let dissolved = plan_new_tab(
             &ids(),
             1,
-            Some(1),
+            NewTabGroup::Group(1),
             None,
             &[],
             |_: u8| true,
@@ -775,9 +824,12 @@ mod tests {
         assert_eq!(dissolved, Err(ErrorCode::UnknownGroup));
         // The right one goes through, and comes back as the internal id.
         let ok = plan(&ids(), 1, Some(1), None).unwrap();
-        assert_eq!(ok.group, Some(GroupId::new(3)));
+        assert_eq!(ok.place, NewTabPlace::Group(GroupId::new(3)));
         let other = plan(&ids(), 2, Some(2), None).unwrap();
-        assert_eq!((other.window, other.group), (8, Some(GroupId::new(4))));
+        assert_eq!(
+            (other.window, other.place),
+            (8, NewTabPlace::Group(GroupId::new(4)))
+        );
     }
 
     #[test]
@@ -1310,6 +1362,27 @@ mod tests {
         let loose = pinned.append_tab_with("zsh", None, false);
         assert_eq!(pinned.active_tab(), Some(p));
         assert_eq!(pinned.track_order().collect::<Vec<_>>(), [loose]);
+    }
+
+    /// Spec 0.7: `new-tab` with `group: null` goes through
+    /// `append_ungrouped_tab_with` (`NewTabTarget::Ungrouped`): with the active
+    /// tab inside the **last** group, the tab is born outside it, at the end of
+    /// the track, and the active tab stays. (Without the `null`, it would join
+    /// the group of the active tab: the bug this fixes.)
+    #[test]
+    fn a_loose_remote_new_tab_ignores_the_group_of_the_active_tab() {
+        let mut ws = Workspace::new();
+        let a = ws.append_tab("zsh", None);
+        let b = ws.append_tab("zsh", None);
+        let group = ws.group_tabs(&[a, b], "last", GroupColor::Blue).unwrap();
+        assert!(ws.activate_tab(b));
+        let in_group = ws.append_tab_with("zsh", None, false);
+        assert_eq!(ws.group_of_tab(in_group), Some(group));
+        let loose = ws.append_ungrouped_tab_with("zsh", None, false);
+        assert_eq!(ws.active_tab(), Some(b));
+        assert_ne!(ws.group_of_tab(loose), Some(group));
+        assert!(!ws.group(group).unwrap().tabs().contains(&loose));
+        assert_eq!(ws.track_order().last(), Some(loose));
     }
 
     /// ADR-0111 section 1: a remote `start-pane` starts the tab without

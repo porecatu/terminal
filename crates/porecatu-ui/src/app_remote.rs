@@ -31,8 +31,8 @@ use porecatu_core::PaneState as ModelPaneState;
 use porecatu_remote::protocol::message::grid::MAX_SCROLLBACK_COUNT;
 use porecatu_remote::protocol::message::{
     Action, ActionBody, ActionResult, Confirm, ConfirmKind, ConfirmRequest, ErrorCode,
-    ErrorMessage, GridSnapshot as WireGrid, Message, PaneState as WireState, ScrollbackPage,
-    ScrollbackRequest, Sessions, Workspace as WireWorkspace,
+    ErrorMessage, GridSnapshot as WireGrid, Message, NewTabGroup, PaneState as WireState,
+    ScrollbackPage, ScrollbackRequest, Sessions, Workspace as WireWorkspace,
 };
 use porecatu_remote::{
     ClientId, Command, PairingAnswer, PairingId, RemoteEvent, RemoteHost, RemoteInput,
@@ -44,10 +44,10 @@ use crate::app_transfer::{TransferArrival, TransferDest, TransferPayload};
 use crate::devices_popover::DeviceEntry;
 use crate::move_to_window::destination_insert_at;
 use crate::remote::actions::{
-    CaptureModes, CloseStep, ConfirmTarget, GroupMove, LivePane, PaneStep, close_tab_step,
-    confirm_summary, leave_group_slot, pane_step, parse_group_color, plan_group_edit,
-    plan_group_to_window, plan_move_tab_to_group, plan_new_group, plan_new_tab, plan_tab_to_window,
-    start_step,
+    CaptureModes, CloseStep, ConfirmTarget, GroupMove, LivePane, NewTabPlace, PaneStep,
+    close_tab_step, confirm_summary, leave_group_slot, pane_step, parse_group_color,
+    plan_group_edit, plan_group_to_window, plan_move_tab_to_group, plan_new_group, plan_new_tab,
+    plan_tab_to_window, start_step,
 };
 use crate::remote::grid::{empty_frame, live_frame, scrollback_lines};
 use crate::remote::ids::{ProtocolIds, SeenIds};
@@ -1218,8 +1218,10 @@ impl App {
         }
     }
 
-    /// `new-tab`: the creation of `tab.new` (no group) or `group.new_tab`
-    /// (with one, at its end), the profile of the menu of profiles (none is
+    /// `new-tab`: the creation of `tab.new` (no group), of the "+" that
+    /// closes the track (`group: null`, a loose tab at the end of the track,
+    /// whatever the active tab) or of `group.new_tab` (with an id, at the end
+    /// of the group), the profile of the menu of profiles (none is
     /// the default; `Some("")` is the `[shell]`), the `cwd` they inherit. The
     /// tab is born **without being activated** (ADR-0111 section 1):
     /// `open_tab(.., activate = false)` still spawns its process, the active
@@ -1229,7 +1231,7 @@ impl App {
     fn remote_new_tab(
         &mut self,
         window: u64,
-        group: Option<u64>,
+        group: NewTabGroup,
         profile: Option<String>,
         now: Instant,
     ) -> ActionFlow {
@@ -1256,9 +1258,11 @@ impl App {
         let Some(state) = self.windows.get_mut(&plan.window) else {
             return ActionFlow::Done(Err(ErrorCode::UnknownWindow));
         };
-        let target = plan
-            .group
-            .map_or(NewTabTarget::ActiveGroup, NewTabTarget::Group);
+        let target = match plan.place {
+            NewTabPlace::ActiveGroup => NewTabTarget::ActiveGroup,
+            NewTabPlace::Ungrouped => NewTabTarget::Ungrouped,
+            NewTabPlace::Group(group) => NewTabTarget::Group(group),
+        };
         let cwd = state.new_tab_cwd(target, &self.startup_directory);
         let tab = state.open_tab(
             self.cell_metrics,
