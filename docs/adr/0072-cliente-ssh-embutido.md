@@ -56,6 +56,8 @@ tokio = { version = "…", default-features = false, features = ["rt-multi-threa
 ```
 
 > **Nota (2026-11-17).** A versão em uso é `=0.65.1`, subida pelo Dependabot (#103, `4a34fca`) dentro da mesma série; a decisão (versão exata, `ring`, sem DSA) não mudou.
+>
+> **Nota (2026-11-24).** A versão em uso é `=0.65.2` (Dependabot, #114), dentro da mesma série; a decisão não mudou. O `Cargo.lock` passou a trazer o `rsa` `0.10.0` estável (antes `0.10.0-rc.18`), que é a versão corrigida do RUSTSEC-2023-0071 (`patched = ">= 0.10.0"` no advisory-db, conferido em 2026-11-24): o risco do *Marvin* na tabela abaixo deixa de estar aberto.
 
 - **Versão exata**, como `alacritty_terminal`, `wgpu` e `toml_edit` (CLAUDE.md, "Dependências"). O `russh` fixa `ssh-key` e `rsa` em pré-lançamento com `=`, e subir um sem o outro é exatamente o tipo de resolução que quebra em silêncio.
 - **`ring`, não `aws-lc-rs`**: mesma compatibilidade de licença, um requisito de build a menos (NASM) nas máquinas de quem contribui e no CI de Windows.

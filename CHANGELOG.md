@@ -181,6 +181,7 @@ Gerenciador de tarefas na janela (botão do app), com gráficos de CPU, memória
 ### Dependências
 
 - `russh` 0.65.0 → 0.65.1 e `unicode-script` 0.5.8 → 0.5.9.
+- `russh` 0.65.1 → 0.65.2 (traz o `rsa` 0.10.0 estável, a versão corrigida do RUSTSEC-2023-0071), `tokio-tungstenite` 0.29.0 → 0.30.0, `qrcode` 0.14.1 → 0.15.0, `sysinfo` 0.40.3 → 0.40.4 e `pollster` 1.0.1 → 1.0.3.
 
 ## [0.9.10] - 2026-11-07 [YANKED]
 
