@@ -43,7 +43,7 @@ png = "0.18"
 # QR do pareamento do acesso remoto (ADR-0106 §2, ADR-0108 §2): só a matriz de
 # módulos, desenhada com `Quad`s; sem a feature `image`. Versão exata, subir é
 # tarefa própria. MIT OR Apache-2.0, compatível com GPLv3.
-qrcode = { version = "=0.14.1", default-features = false }
+qrcode = { version = "=0.15.0", default-features = false }
 # Buffer do campo mascarado (ADR-0075 §1): a mesma versão que `porecatu-ssh`
 # declara e que a pilha RustCrypto do `russh` já traz. MIT OR Apache-2.0.
 zeroize = "1.9"
