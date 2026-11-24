@@ -26,7 +26,7 @@ tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-t
 # (decisao do dono, 2026-11-16). Exato, a versao do Relay. Sem as features
 # padrao e sem `rustls-tls-webpki-roots` (a licenca CDLA dos dados do
 # `webpki-roots` nao esta na lista aceita).
-tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 # ADR-0104 §1: provedor de criptografia `ring`, o mesmo do `russh` e do Relay.
 # Sem `aws-lc-rs` (exige NASM no Windows): `cargo tree -i aws-lc-rs` tem de
 # nao achar o pacote.
