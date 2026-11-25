@@ -543,6 +543,12 @@ registry! {
         open_link(),
         copy_link(),
     }
+    field_menu {
+        cut(),
+        copy(),
+        paste(),
+        select_all(),
+    }
     group_menu {
         rename(),
         set_color(),

@@ -12,6 +12,27 @@
 //! acoplar ao resto do `App`. Custo de abrir/fechar a cada cópia/colagem é
 //! desprezível perto da frequência dessas ações.
 
+/// O clipboard como o campo de texto o vê (ADR-0115 §4): uma interface
+/// mínima para que o teste injete um falso, sem tocar o `arboard`.
+pub trait ClipboardIo {
+    fn copy(&mut self, text: &str);
+    /// `None` com o clipboard vazio, sem texto ou ilegível.
+    fn paste(&mut self) -> Option<String>;
+}
+
+/// O clipboard do sistema: as funções livres abaixo.
+pub struct SystemClipboard;
+
+impl ClipboardIo for SystemClipboard {
+    fn copy(&mut self, text: &str) {
+        copy(text);
+    }
+
+    fn paste(&mut self) -> Option<String> {
+        paste()
+    }
+}
+
 pub fn copy(text: &str) {
     match arboard::Clipboard::new() {
         Ok(mut clipboard) => {

@@ -37,6 +37,12 @@ search = "Search"
 open_link = "Open link"
 copy_link = "Copy link"
 
+[field_menu]
+cut = "Cut"
+copy = "Copy"
+paste = "Paste"
+select_all = "Select all"
+
 [group_menu]
 rename = "Rename"
 set_color = "Change color"

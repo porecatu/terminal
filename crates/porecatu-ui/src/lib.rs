@@ -36,6 +36,7 @@ mod access;
 mod acrylic;
 mod animation;
 mod app_cross_drag;
+mod app_field_menu;
 mod app_icon;
 mod app_key_edit;
 mod app_move_to_window;
@@ -54,6 +55,8 @@ mod cross_window;
 mod cursor_blink;
 mod devices_popover;
 mod dialog;
+mod field_clipboard;
+mod field_menu;
 mod git;
 mod group_editor;
 mod group_menu;
@@ -104,9 +107,12 @@ use app_cross_drag::{CrossDrag, IncomingDrag};
 use app_move_to_window::{GroupActionOutcome, MoveToWindowState};
 use app_transfer::TransferPayload;
 use chrome::{DragGhost, GhostSource, GroupDragGhost};
+use clipboard::SystemClipboard;
 use context_menu::{ContextMenu, MenuAction};
 use devices_popover::{DeviceEntry, DevicesOutcome, DevicesPopover};
 use dialog::{ConfirmDialog, DialogAction, DialogButton, HostKeyFacts};
+use field_clipboard::{edit_field_key, paste_into_masked};
+use field_menu::FieldContextMenu;
 use group_editor::{EditorRegion, GroupEditor};
 use group_menu::{GroupAction, GroupContextMenu};
 use input::ClickTracker;
@@ -129,7 +135,7 @@ use tab_bar::{DragDrop, DropOp, TabBarHit, TabBarStyle};
 use terminal_menu::{
     TerminalContextMenu, TerminalMenuAction, TerminalMenuItem, terminal_menu_items,
 };
-use text_field::{TextFieldState, apply_text_field_key};
+use text_field::TextFieldState;
 use tooltip::{Hover, HoverKey};
 use warning::{Severity, WarningStack};
 
@@ -1532,6 +1538,8 @@ enum OverlayTarget {
     GroupMenu(usize),
     ProfileMenu(usize),
     TerminalMenu(usize),
+    /// An item of the right-click menu of a text field (ADR-0115 §7).
+    FieldMenu(usize),
     /// An item of the row menu of the task manager (PRD-024).
     TaskMenu(usize),
     /// Um swatch ou uma ação do editor de grupo (nunca o campo de nome).
@@ -1661,6 +1669,12 @@ struct WindowState {
     /// Menu de contexto do terminal (PRD-011 RF-11.14, ADR-0042 §9) --
     /// mesma exclusão mútua de `close_all_popovers`.
     terminal_context_menu: Option<TerminalContextMenu>,
+    /// Right-click menu of a text field of this window (ADR-0115 §7,
+    /// RF-10.31): the fourth context menu, wired like the terminal one. Its
+    /// target is only a name (`MainField`), resolved to the live field at
+    /// every use, so it never outlives the surface that owns the field
+    /// (`app_field_menu`).
+    field_context_menu: Option<FieldContextMenu<app_field_menu::MainField>>,
     /// Editor de grupo (ADR-0023), o quinto widget de chrome.
     group_editor: Option<GroupEditor>,
     /// Popover de destino do `tab.move_to_group` (RF-2.20, ADR-0023 §4).
@@ -2933,6 +2947,7 @@ impl WindowState {
             || self.group_context_menu.is_some()
             || self.profile_menu.is_some()
             || self.terminal_context_menu.is_some()
+            || self.field_context_menu.is_some()
             || self.group_editor.is_some()
             || self.move_to_group.is_some()
             || self.move_to_window.is_some()
@@ -3004,6 +3019,7 @@ impl WindowState {
             notices: notice_queue::PendingNotices::default(),
             dismissed_notices: Vec::new(),
             terminal_context_menu: None,
+            field_context_menu: None,
             group_editor: None,
             move_to_group: None,
             move_to_window: None,
@@ -3056,6 +3072,13 @@ impl WindowState {
         // fechamento é `move` e o `measurer` já viaja nele -- o custo é
         // montar cinco strings curtas, sem syscall nenhuma (RF-9.8), e
         // isto roda por mudança de estado, não por frame.
+        // ADR-0115 §7: the field menu, from the live field, added over the
+        // finished tree (it has its own ids, `access::add_field_menu`).
+        self.drop_stale_field_menu();
+        let field_menu = self.field_context_menu.and_then(|menu| {
+            self.field_menu_items(menu.target)
+                .map(|items| (menu.highlighted(), items))
+        });
         let status_bar_layout = (status_bar::height(style) > 0.0).then(|| {
             let content = self.status_bar_content(home, git_remotes);
             status_bar::layout_status_bar(
@@ -3111,7 +3134,7 @@ impl WindowState {
                     background_monitoring,
                 });
         self.access_adapter.update_if_active(move || {
-            access::build_tree(
+            let mut update = access::build_tree(
                 workspace,
                 warnings,
                 dialog,
@@ -3133,7 +3156,11 @@ impl WindowState {
                 catalog,
                 language,
                 measurer,
-            )
+            );
+            if let Some((highlighted, items)) = &field_menu {
+                access::add_field_menu(&mut update, *highlighted, items, catalog);
+            }
+            update
         });
     }
 
@@ -3228,6 +3255,7 @@ impl WindowState {
         self.group_context_menu = None;
         self.profile_menu = None;
         self.terminal_context_menu = None;
+        self.field_context_menu = None;
         self.group_editor = None;
         self.move_to_group = None;
         self.move_to_window = None;
@@ -4856,7 +4884,7 @@ impl WindowState {
     /// keybind nem pro terminal. `Ctrl+A`/`Cmd+A`, `Shift+seta`,
     /// `Home`/`End` e o texto digitado (com substituição de seleção) vêm
     /// de `apply_text_field_key` (ADR-0035), compartilhado com o editor de
-    /// grupo.
+    /// grupo; copiar, recortar e colar, por `edit_field_key` (ADR-0115).
     fn handle_rename_key(&mut self, event: &KeyEvent) {
         if event.state != ElementState::Pressed {
             return;
@@ -4867,11 +4895,13 @@ impl WindowState {
             Key::Named(NamedKey::Backspace) => self.rename.backspace(),
             _ => {
                 if let RenameState::Editing { field, .. } = &mut self.rename {
-                    apply_text_field_key(
+                    edit_field_key(
                         field,
                         &event.logical_key,
                         event.text.as_deref(),
                         self.modifiers,
+                        None,
+                        &mut SystemClipboard,
                     );
                 }
             }
@@ -4907,31 +4937,30 @@ impl WindowState {
                 if let Some(search) = self.search.as_mut() {
                     search.field_mut().backspace();
                 }
-                let pane = focused_pane(&self.workspace, tab);
-                if let Some(rt) = pane.and_then(|p| self.panes.get(&(tab, p)))
-                    && let Some(search) = self.search.as_mut()
-                {
-                    search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
-                }
+                self.restart_search();
                 true
             }
             _ => {
                 let modifiers = self.modifiers;
                 let mut consumed = false;
+                let mut changed = false;
                 if let Some(search) = self.search.as_mut() {
-                    consumed = apply_text_field_key(
+                    // Every clipboard key is consumed here, even without effect
+                    // (ADR-0115 §5): `Ctrl+C` never reaches the process.
+                    let before = search.field().text().to_string();
+                    consumed = edit_field_key(
                         search.field_mut(),
                         &event.logical_key,
                         event.text.as_deref(),
                         modifiers,
+                        None,
+                        &mut SystemClipboard,
                     );
+                    // Copying or moving the cursor must not restart the search.
+                    changed = search.field().text() != before;
                 }
-                let pane = focused_pane(&self.workspace, tab);
-                if consumed
-                    && let Some(rt) = pane.and_then(|p| self.panes.get(&(tab, p)))
-                    && let Some(search) = self.search.as_mut()
-                {
-                    search.restart(&rt.terminal, DEFAULT_SEARCH_LINES_PER_STEP);
+                if changed {
+                    self.restart_search();
                 }
                 consumed
             }
@@ -5187,9 +5216,7 @@ impl WindowState {
                 secret_dialog::SecretKey::Paste => {
                     // O texto da área de transferência não é nosso: é zerado
                     // assim que entra no campo.
-                    if let Some(pasted) = clipboard::paste().map(zeroize::Zeroizing::new) {
-                        field.paste(&pasted);
-                    }
+                    paste_into_masked(field, &mut SystemClipboard);
                     None
                 }
             };
@@ -5577,11 +5604,13 @@ impl WindowState {
             },
             _ => {
                 if let Some(field) = editor.name_field_mut() {
-                    apply_text_field_key(
+                    edit_field_key(
                         field,
                         &event.logical_key,
                         event.text.as_deref(),
                         modifiers,
+                        None,
+                        &mut SystemClipboard,
                     );
                 }
                 GroupEditorOutcome::None
@@ -5644,6 +5673,7 @@ impl WindowState {
             event.text.as_deref(),
             modifiers,
             max_visible_rows,
+            &mut SystemClipboard,
         )
     }
 
@@ -6296,44 +6326,23 @@ impl WindowState {
                 // ativar a aba de novo nem armar arraste -- ela já está
                 // ativa e em edição.
                 if self.rename.editing_tab() == Some(id)
-                    && let Some(tab_rect) = tab_bar::tab_rect(&layout, id)
+                    && let Some(field_screen) =
+                        self.rename_field_screen_rect(&layout, id, style, track_left)
+                    && tab_bar::rect_contains(field_screen, logical_point)
                 {
-                    let field_content = chrome::rename_field_rect(tab_rect, style);
-                    let field_screen = Rect {
-                        x: field_content.x + track_left - self.scroll_offset,
-                        y: field_content.y,
-                        width: field_content.width,
-                        height: field_content.height,
-                    };
-                    if tab_bar::rect_contains(field_screen, logical_point) {
-                        if let Some(field) = self.rename.field() {
-                            let buffer = field.text().to_string();
-                            let text_area =
-                                (field_content.width - style.rename_padding_x * 2.0).max(0.0);
-                            let measurer = gpu.text_measurer();
-                            let text_width = measurer.measure_width(
-                                &buffer,
-                                chrome::LABEL_FONT,
-                                style.rename_font_size,
-                            );
-                            let text_x_screen = tab_bar::scrolled_text_x(
-                                field_screen.x,
-                                style.rename_padding_x,
-                                text_width,
-                                text_area,
-                            );
-                            let local_x = logical_point.0 - text_x_screen;
-                            let byte_index = measurer.index_at_offset(
-                                &buffer,
-                                chrome::LABEL_FONT,
-                                style.rename_font_size,
-                                local_x,
-                            );
-                            self.rename.click_at(byte_index);
-                        }
-                        self.mouse_button_down = Some(MouseButton::Left);
-                        return NewTabRequest::None;
+                    if let Some(field) = self.rename.field() {
+                        let buffer = field.text().to_string();
+                        let byte_index = app_field_menu::rename_byte_at(
+                            &buffer,
+                            field_screen,
+                            style,
+                            logical_point.0,
+                            gpu.text_measurer(),
+                        );
+                        self.rename.click_at(byte_index);
                     }
+                    self.mouse_button_down = Some(MouseButton::Left);
+                    return NewTabRequest::None;
                 }
                 if self
                     .rename
@@ -11883,6 +11892,12 @@ impl App {
                     button: MouseButton::Left,
                     ..
                 } => press = editor.left_pressed(env, gpu.text_measurer(), draft),
+                // O botão direito abre o menu de um campo de texto (ADR-0115 §7).
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Right,
+                    ..
+                } => press = editor.right_pressed(env, gpu.text_measurer(), draft),
                 WindowEvent::MouseInput {
                     state: ElementState::Released,
                     button: MouseButton::Left,
@@ -12100,6 +12115,20 @@ impl App {
                         config: &self.config,
                     };
                     press = settings.left_pressed(env, gpu.text_measurer());
+                }
+            }
+            // O botão direito abre o menu de um campo de texto (ADR-0115 §7).
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
+                if let (Some(settings), Some(gpu)) = (&mut self.settings, &mut self.gpu) {
+                    let env = settings::Env {
+                        style: &self.style,
+                        config: &self.config,
+                    };
+                    press = settings.right_pressed(env, gpu.text_measurer());
                 }
             }
             WindowEvent::MouseInput {
@@ -13138,6 +13167,18 @@ impl App {
         // (ADR-0021 §2, `Esc` limpa) > ações de aba/janela > terminal. Cada
         // nível consome a tecla por inteiro -- "um binding que casa nunca
         // cai para o terminal" vale igual pros modos de captura.
+        //
+        // O menu de clique direito de um campo (ADR-0115 §7) é o primeiro da
+        // cadeia, acima do diálogo: o campo mascarado vive num, e o menu está
+        // sempre por cima do que o abriu. `Esc` fecha só ele.
+        state.drop_stale_field_menu();
+        if state.field_context_menu.is_some() {
+            if let Some((target, action)) = state.handle_field_menu_key(&key) {
+                state.run_field_menu_action(target, action, &mut SystemClipboard);
+            }
+            state.window.request_redraw();
+            return;
+        }
         if state.dialog.is_some() {
             if let Some(action) = state.handle_dialog_key(&key) {
                 self.run_dialog_action(window_id, action, event_loop);
@@ -13593,26 +13634,12 @@ impl App {
                 match editing_buffer {
                     None => picker.enter_editing(),
                     Some(buffer) => {
-                        let cfg = &self.config.appearance.group_editor;
-                        let input_padding_x = cfg.input_padding_x as f32;
-                        let input_font_size = cfg.input_font_size as f32;
-                        let measurer = gpu.text_measurer();
-                        let available_width =
-                            (layout.save_rect.width - input_padding_x * 2.0).max(0.0);
-                        let text_width =
-                            measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
-                        let text_x = tab_bar::scrolled_text_x(
-                            layout.save_rect.x,
-                            input_padding_x,
-                            text_width,
-                            available_width,
-                        );
-                        let local_x = logical_point.0 - text_x;
-                        let byte_index = measurer.index_at_offset(
+                        let byte_index = app_field_menu::overlay_input_byte_at(
                             &buffer,
-                            overlay::BODY_FONT,
-                            input_font_size,
-                            local_x,
+                            layout.save_rect,
+                            &self.config,
+                            logical_point.0,
+                            gpu.text_measurer(),
                         );
                         picker.click_name_at(byte_index);
                         state.mouse_button_down = Some(button);
@@ -13720,28 +13747,13 @@ impl App {
         match hit {
             Some(overlay::GroupEditorHit::NameField) => {
                 if let Some(editor) = &mut state.group_editor {
-                    let cfg = &self.config.appearance.group_editor;
-                    let input_padding_x = cfg.input_padding_x as f32;
-                    let input_font_size = cfg.input_font_size as f32;
-                    let name_input_rect = layout.name_input_rect;
                     let buffer = editor.name_buffer().to_string();
-                    let measurer = gpu.text_measurer();
-                    let available_text_width =
-                        (name_input_rect.width - input_padding_x * 2.0).max(0.0);
-                    let text_width =
-                        measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
-                    let text_x = tab_bar::scrolled_text_x(
-                        name_input_rect.x,
-                        input_padding_x,
-                        text_width,
-                        available_text_width,
-                    );
-                    let local_x = logical_point.0 - text_x;
-                    let byte_index = measurer.index_at_offset(
+                    let byte_index = app_field_menu::overlay_input_byte_at(
                         &buffer,
-                        overlay::BODY_FONT,
-                        input_font_size,
-                        local_x,
+                        layout.name_input_rect,
+                        &self.config,
+                        logical_point.0,
+                        gpu.text_measurer(),
                     );
                     editor.click_name_at(byte_index);
                     state.mouse_button_down = Some(button);
@@ -13798,6 +13810,7 @@ impl App {
             || state.group_context_menu.is_some()
             || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
+            || state.field_context_menu.is_some()
             || state.group_editor.is_some()
         {
             return;
@@ -13916,6 +13929,33 @@ impl App {
         // visual, mutuamente exclusivos" -- mover o mouse sobre o menu
         // move o realce. Menu aberto não faz mais nada com o movimento do
         // mouse (sem hover de barra, sem seleção de terminal).
+        //
+        // O menu do campo (ADR-0115 §7) é o primeiro: itens recomputados do
+        // campo vivo; o mouse fora das linhas tira o realce, sobre um item
+        // desabilitado o realce não muda.
+        state.drop_stale_field_menu();
+        if let Some(menu) = state.field_context_menu {
+            let logical_point = (
+                position.x as f32 / state.scale,
+                position.y as f32 / state.scale,
+            );
+            if let Some(items) = state.field_menu_items(menu.target) {
+                let layout = overlay::layout_field_menu(
+                    menu.anchor,
+                    &self.config,
+                    state.logical_width,
+                    state.logical_height,
+                );
+                if let Some(open) = state.field_context_menu.as_mut() {
+                    match overlay::field_menu_hit(&layout, logical_point) {
+                        Some(index) => open.set_highlight_item(index, &items),
+                        None => open.set_highlight(None),
+                    }
+                }
+            }
+            state.window.request_redraw();
+            return;
+        }
         if let Some(menu) = &mut state.context_menu {
             let logical_point = (
                 position.x as f32 / state.scale,
@@ -14073,27 +14113,12 @@ impl App {
                         && editor.focus() == EditorRegion::Name
                     {
                         let buffer = editor.name_buffer().to_string();
-                        let cfg = &self.config.appearance.group_editor;
-                        let input_padding_x = cfg.input_padding_x as f32;
-                        let input_font_size = cfg.input_font_size as f32;
-                        let name_input_rect = layout.name_input_rect;
-                        let measurer = gpu.text_measurer();
-                        let available_text_width =
-                            (name_input_rect.width - input_padding_x * 2.0).max(0.0);
-                        let text_width =
-                            measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
-                        let text_x = tab_bar::scrolled_text_x(
-                            name_input_rect.x,
-                            input_padding_x,
-                            text_width,
-                            available_text_width,
-                        );
-                        let local_x = logical_point.0 - text_x;
-                        let byte_index = measurer.index_at_offset(
+                        let byte_index = app_field_menu::overlay_input_byte_at(
                             &buffer,
-                            overlay::BODY_FONT,
-                            input_font_size,
-                            local_x,
+                            layout.name_input_rect,
+                            &self.config,
+                            logical_point.0,
+                            gpu.text_measurer(),
                         );
                         editor.drag_name_to(byte_index);
                     } else {
@@ -14188,25 +14213,12 @@ impl App {
                     SessionMode::Browsing => None,
                 };
                 if let Some(buffer) = editing_buffer {
-                    let cfg = &self.config.appearance.group_editor;
-                    let input_padding_x = cfg.input_padding_x as f32;
-                    let input_font_size = cfg.input_font_size as f32;
-                    let measurer = gpu.text_measurer();
-                    let available_width = (layout.save_rect.width - input_padding_x * 2.0).max(0.0);
-                    let text_width =
-                        measurer.measure_width(&buffer, overlay::BODY_FONT, input_font_size);
-                    let text_x = tab_bar::scrolled_text_x(
-                        layout.save_rect.x,
-                        input_padding_x,
-                        text_width,
-                        available_width,
-                    );
-                    let local_x = logical_point.0 - text_x;
-                    let byte_index = measurer.index_at_offset(
+                    let byte_index = app_field_menu::overlay_input_byte_at(
                         &buffer,
-                        overlay::BODY_FONT,
-                        input_font_size,
-                        local_x,
+                        layout.save_rect,
+                        &self.config,
+                        logical_point.0,
+                        gpu.text_measurer(),
                     );
                     picker.drag_name_to(byte_index);
                 }
@@ -14274,26 +14286,11 @@ impl App {
             let layout = search_bar::layout_search_bar(box_rect, &self.style);
             let measurer = gpu.text_measurer();
             if let Some(search) = state.search.as_mut() {
-                let buffer = search.field().text().to_string();
-                let text_width = measurer.measure_width(
-                    &buffer,
-                    search_bar::FIELD_FONT,
-                    search_bar::FIELD_FONT_SIZE,
-                );
-                let text_area =
-                    (layout.field_rect.width - search_bar::FIELD_PADDING_X * 2.0).max(0.0);
-                let text_x = tab_bar::scrolled_text_x(
-                    layout.field_rect.x,
-                    search_bar::FIELD_PADDING_X,
-                    text_width,
-                    text_area,
-                );
-                let local_x = logical_point.0 - text_x;
-                let byte_index = measurer.index_at_offset(
-                    &buffer,
-                    search_bar::FIELD_FONT,
-                    search_bar::FIELD_FONT_SIZE,
-                    local_x,
+                let byte_index = app_field_menu::search_byte_at(
+                    search.field().text(),
+                    layout.field_rect,
+                    logical_point.0,
+                    measurer,
                 );
                 search.field_mut().drag_to(byte_index);
             }
@@ -14315,48 +14312,20 @@ impl App {
                 position.y as f32 / state.scale,
             );
             let style = &self.style;
-            let bar_width = state.logical_width;
-            let pinned_count = state.workspace.pinned().len();
-            let trilha_width = tab_bar::trilha_width(
-                style,
-                bar_width,
-                is_macos(),
-                pinned_count,
-                state.devices_button(),
-            );
-            let layout = tab_bar::fit_width(
-                &state.workspace,
-                style,
-                trilha_width,
-                gpu.text_measurer(),
-                is_macos(),
-            );
-            if let Some(tab_rect) = tab_bar::tab_rect(&layout, id) {
-                let field_content = chrome::rename_field_rect(tab_rect, style);
-                let field_screen_x = field_content.x
-                    + tab_bar::track_shift(style, is_macos(), pinned_count)
-                    - state.scroll_offset;
+            if let Some(field_screen) =
+                state.rename_field_screen_rect_now(id, style, gpu.text_measurer())
+            {
                 let buffer = state
                     .rename
                     .field()
                     .map(|f| f.text().to_string())
                     .unwrap_or_default();
-                let text_area = (field_content.width - style.rename_padding_x * 2.0).max(0.0);
-                let measurer = gpu.text_measurer();
-                let text_width =
-                    measurer.measure_width(&buffer, chrome::LABEL_FONT, style.rename_font_size);
-                let text_x_screen = tab_bar::scrolled_text_x(
-                    field_screen_x,
-                    style.rename_padding_x,
-                    text_width,
-                    text_area,
-                );
-                let local_x = logical_point.0 - text_x_screen;
-                let byte_index = measurer.index_at_offset(
+                let byte_index = app_field_menu::rename_byte_at(
                     &buffer,
-                    chrome::LABEL_FONT,
-                    style.rename_font_size,
-                    local_x,
+                    field_screen,
+                    style,
+                    logical_point.0,
+                    gpu.text_measurer(),
                 );
                 state.rename.drag_to(byte_index);
             }
@@ -14525,6 +14494,7 @@ impl App {
             || state.group_context_menu.is_some()
             || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
+            || state.field_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
             || state.move_to_window.is_some()
@@ -14733,6 +14703,17 @@ impl App {
             state.cursor_position.1 as f32 / state.scale,
         );
         let (width, height) = (state.logical_width, state.logical_height);
+        // O menu do campo (ADR-0115 §7) vem antes do diálogo: o campo
+        // mascarado vive nele, e o menu está por cima. Item desabilitado não
+        // arma, como no menu do terminal.
+        state.drop_stale_field_menu();
+        if let Some(menu) = state.field_context_menu {
+            let items = state.field_menu_items(menu.target)?;
+            let layout = overlay::layout_field_menu(menu.anchor, &self.config, width, height);
+            return overlay::field_menu_hit(&layout, point)
+                .filter(|&index| items[index].enabled)
+                .map(OverlayTarget::FieldMenu);
+        }
         if let Some(dialog) = state.dialog.as_ref() {
             let gpu = self.gpu.as_mut()?;
             let layout =
@@ -14912,6 +14893,10 @@ impl App {
         replay: bool,
     ) {
         let pressed = element_state == ElementState::Pressed;
+        // O menu do campo nunca sobrevive ao campo (ADR-0115 §7).
+        if let Some(state) = self.windows.get_mut(&window_id) {
+            state.drop_stale_field_menu();
+        }
         // Botão e item de overlay só armam no press; quem age é o release
         // sobre o mesmo alvo (ADR-0081). Clique fora e campo de texto seguem
         // a cascata abaixo, já no press.
@@ -14919,6 +14904,13 @@ impl App {
             if let Some(state) = self.windows.get_mut(&window_id) {
                 state.armed_overlay = None;
                 state.overlay_press_consumed = state.modal_overlay_open();
+            }
+            // ADR-0115 §7: o clique direito num campo abre o menu do campo,
+            // antes de qualquer outra regra de clique direito (menu de aba,
+            // fechar o editor, fechar o popover...) e sem fechar a superfície
+            // dona do campo.
+            if self.try_open_field_menu(window_id, button) {
+                return;
             }
             if button == MouseButton::Left
                 && let Some(target) = self.overlay_target(window_id)
@@ -15136,6 +15128,29 @@ impl App {
             state.cursor_position.0 as f32 / state.scale,
             state.cursor_position.1 as f32 / state.scale,
         );
+
+        // Menu do campo (ADR-0115 §7): clique esquerdo num item habilitado o
+        // aciona, qualquer outro clique -- fora do menu, num item esmaecido,
+        // outro botão -- só o fecha, e o campo e a superfície dele ficam como
+        // estavam. Mesmo padrão do menu do terminal, e acima do diálogo.
+        if let Some(menu) = state.field_context_menu.take() {
+            let items = state.field_menu_items(menu.target);
+            let layout = overlay::layout_field_menu(
+                menu.anchor,
+                &self.config,
+                state.logical_width,
+                state.logical_height,
+            );
+            if button == MouseButton::Left
+                && let Some(items) = items
+                && let Some(index) = overlay::field_menu_hit(&layout, logical_point)
+                && items[index].enabled
+            {
+                state.run_field_menu_action(menu.target, items[index].action, &mut SystemClipboard);
+            }
+            state.window.request_redraw();
+            return;
+        }
 
         // Diálogo modal captura todo clique enquanto aberto.
         if let Some(layout) = state.dialog.as_ref().and_then(|dialog| {
@@ -15537,27 +15552,11 @@ impl App {
                             if let Some(gpu) = &mut self.gpu {
                                 let measurer = gpu.text_measurer();
                                 if let Some(search) = state.search.as_mut() {
-                                    let buffer = search.field().text().to_string();
-                                    let text_width = measurer.measure_width(
-                                        &buffer,
-                                        search_bar::FIELD_FONT,
-                                        search_bar::FIELD_FONT_SIZE,
-                                    );
-                                    let text_area = (layout.field_rect.width
-                                        - search_bar::FIELD_PADDING_X * 2.0)
-                                        .max(0.0);
-                                    let text_x = tab_bar::scrolled_text_x(
-                                        layout.field_rect.x,
-                                        search_bar::FIELD_PADDING_X,
-                                        text_width,
-                                        text_area,
-                                    );
-                                    let local_x = logical_point.0 - text_x;
-                                    let byte_index = measurer.index_at_offset(
-                                        &buffer,
-                                        search_bar::FIELD_FONT,
-                                        search_bar::FIELD_FONT_SIZE,
-                                        local_x,
+                                    let byte_index = app_field_menu::search_byte_at(
+                                        search.field().text(),
+                                        layout.field_rect,
+                                        logical_point.0,
+                                        measurer,
                                     );
                                     search.field_mut().click_at(byte_index);
                                     state.mouse_button_down = Some(button);
@@ -16364,6 +16363,7 @@ impl App {
             || state.group_context_menu.is_some()
             || state.profile_menu.is_some()
             || state.terminal_context_menu.is_some()
+            || state.field_context_menu.is_some()
             || state.group_editor.is_some()
             || state.move_to_group.is_some()
             || state.move_to_window.is_some()
@@ -16938,6 +16938,36 @@ impl App {
                 gpu.text_measurer(),
             ));
         }
+        // Menu do campo (ADR-0115 §7): itens recomputados do campo vivo, e o
+        // menu some se o campo some. Sem diálogo, é um popover como os outros
+        // menus; com diálogo, o campo é o mascarado dele e o menu tem de
+        // aparecer **por cima do diálogo** -- `Layer::Modal`, empurrado depois
+        // dele (logo abaixo), é a camada acima da `Popover`.
+        state.drop_stale_field_menu();
+        let mut field_menu_primitives = Vec::new();
+        if let Some(menu) = state.field_context_menu
+            && let Some(items) = state.field_menu_items(menu.target)
+        {
+            let layout = overlay::layout_field_menu(
+                menu.anchor,
+                config,
+                state.logical_width,
+                state.logical_height,
+            );
+            field_menu_primitives = overlay::paint_field_menu(
+                &layout,
+                &items,
+                menu.highlighted(),
+                config,
+                pal,
+                &self.catalog,
+                gpu.text_measurer(),
+            );
+        }
+        let field_menu_over_dialog = state.dialog.is_some();
+        if !field_menu_over_dialog {
+            popover.append(&mut field_menu_primitives);
+        }
         if !popover.is_empty() {
             frame.set_layer(Layer::Popover, popover);
         }
@@ -16968,6 +16998,9 @@ impl App {
                 gpu.text_measurer(),
             );
             frame.set_layer(Layer::Modal, primitives);
+        }
+        for primitive in field_menu_primitives {
+            frame.push(Layer::Modal, primitive);
         }
 
         // ADR-0110: the modal mask, over everything in the window (its own

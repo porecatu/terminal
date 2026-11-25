@@ -367,7 +367,9 @@ escolha; `Espaço` alterna; `Enter` confirma um campo; `Alt+↑` e `Alt+↓`
 reordenam o item de uma lista em edição; `Esc` fecha a janela quando nenhum
 campo, lista ou captura de atalho o está usando. Essas teclas valem só ali:
 não são ações do catálogo, e o mapa de `[keybindings]` não é consultado na
-janela de configurações.
+janela de configurações. Dentro de um campo, copiar, recortar, colar e o menu
+do clique direito funcionam como em todo campo do app
+([Editar texto nos campos](#editar-texto-nos-campos)).
 
 ### Atalhos
 
@@ -441,7 +443,7 @@ usados, no default de fábrica:
 | `Alt+←` `→` `↑` `↓` | igual | Trocar o painel focado |
 | `Ctrl+Shift+N` | `Cmd+N` | Nova janela |
 | `F11` | igual | Alternar tela cheia |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | `Cmd+C` / `Cmd+V` | Copiar/colar |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` | `Cmd+C` / `Cmd+V` | Copiar/colar no terminal (num campo de texto, as teclas são do campo — ver [Editar texto nos campos](#editar-texto-nos-campos)) |
 | `Shift+PageUp` / `Shift+PageDown` | igual | Rolar o scrollback |
 | `Ctrl+Shift+F` | `Cmd+F` | Buscar no scrollback |
 | `F3` / `Shift+F3` | igual | Próxima/anterior ocorrência da busca |
@@ -529,7 +531,7 @@ identity_file = "~/.ssh/id_ed25519"      # opcional; "~" é a sua pasta pessoal
 
 Se a pergunta chega com a aba em segundo plano, o diálogo **não rouba o foco**: a campainha da aba acende, e o diálogo abre quando você chega ao painel.
 
-**Senha e passphrase.** Quando o agente e a chave não bastam (ou a chave tem passphrase, ou `auth` inclui `password`), um diálogo pede o segredo num **campo mascarado**: cada caractere vira `•`, `Ctrl+C` e `Ctrl+X` não fazem nada nele e colar (`Ctrl+V`) funciona. O foco já está no campo; `Enter` conecta, `Esc` cancela (a aba fica com a nota de autenticação cancelada). Um servidor que só oferece senha por keyboard-interactive com **um campo oculto** é atendido do mesmo jeito, e o diálogo usa sempre os textos do Porecatu, nunca o que o servidor escreveu. Keyboard-interactive com mais de um campo, campo visível ou segundo fator **não é suportado**: a conexão falha com uma nota que diz isso, sem pedir senha, e você usa o `ssh` do sistema.
+**Senha e passphrase.** Quando o agente e a chave não bastam (ou a chave tem passphrase, ou `auth` inclui `password`), um diálogo pede o segredo num **campo mascarado**: cada caractere vira `•`, `Ctrl+C` e `Ctrl+X` não fazem nada nele e colar (`Ctrl+V`) funciona; no menu do clique direito, Copiar e Recortar ficam esmaecidos ([Editar texto nos campos](#editar-texto-nos-campos)). O foco já está no campo; `Enter` conecta, `Esc` cancela (a aba fica com a nota de autenticação cancelada). Um servidor que só oferece senha por keyboard-interactive com **um campo oculto** é atendido do mesmo jeito, e o diálogo usa sempre os textos do Porecatu, nunca o que o servidor escreveu. Keyboard-interactive com mais de um campo, campo visível ou segundo fator **não é suportado**: a conexão falha com uma nota que diz isso, sem pedir senha, e você usa o `ssh` do sistema.
 
 A caixa **"Lembrar no cofre do sistema"** (Gerenciador de Credenciais do Windows, Keychain do macOS, Secret Service no Linux) vem desmarcada. Marcada, o segredo só é gravado **depois** de o servidor aceitá-lo: senha errada nunca fica salva. Na próxima conexão ele é tentado sem perguntar; se o servidor **recusar a senha** (e continuar oferecendo o método), a entrada é apagada e o diálogo volta com "O servidor recusou a senha." Uma conexão derrubada no meio da autenticação (`fail2ban`, `MaxAuthTries`) ou um método retirado **não** apagam nada. Sem cofre (Linux sem Secret Service), a caixa fica desabilitada, com a nota dizendo por quê, e o segredo é pedido a cada conexão: não há outro lugar onde guardá-lo. Se o cofre recusar a gravação, a conexão segue e um aviso diz que o segredo não foi salvo. As entradas aparecem no cofre do sistema com o nome de serviço `porecatu-ssh`, uma por `usuário@host:porta` (senha) e uma por arquivo de chave (passphrase), e é lá que você as apaga à mão.
 
@@ -976,6 +978,31 @@ Faltando uma delas, o app **desenha sem o efeito** e mostra um aviso que diz qua
 **Tela de configurações.** As duas opções estão no grupo **Aparência**, logo depois das três da imagem de fundo da janela: **Efeito acrílico** (alternância) e **Desfoque do acrílico** (número de 1 a 64). Sem as duas condições, as **duas linhas ficam esmaecidas e sem edição**, com uma nota abaixo da descrição — "Exige a opacidade da janela em 100%" ou "Exige uma imagem de fundo da janela". A conta usa os valores ainda **não salvos** da própria tela: baixar a opacidade da janela para `0.9` esmaece as linhas na hora, e voltá-la a `1.0` as devolve, antes de Salvar. Esmaecer não apaga nada: o valor que está no arquivo continua lá, e o Salvar grava as outras mudanças sem tocar nas chaves do acrílico.
 
 **Aplicação.** Mudar `enabled` ou `blur` vale **na hora**, em todas as janelas, sem reiniciar e sem redimensionar terminal nenhum, e o mesmo vale quando uma das condições passa a valer ou deixa de valer por recarga. Com o acrílico ligado e nada mudando, nenhum quadro é desenhado: o terminal ocioso continua custando zero. A janela de configurações, os avisos, os menus, o tooltip e os diálogos **não têm** o efeito.
+
+## Editar texto nos campos
+
+Os campos de texto do app são todos de uma linha e se comportam do mesmo jeito: o nome da aba no rename (`F2`), o nome do grupo no editor, o nome de uma sessão no popover de sessões, a barra de busca, os campos da tela de configurações e do editor de perfil, e os campos mascarados (senha, passphrase, token do relay).
+
+| Tecla (Win/Linux) | Tecla (macOS) | O que faz |
+|---|---|---|
+| `←` `→` | igual | Move o cursor; com texto selecionado, vai à borda da seleção |
+| `Home` / `End` | igual | Início / fim do campo |
+| `Shift` + seta, `Home` ou `End` | igual | Estende a seleção |
+| `Ctrl+A` | `Cmd+A` | Seleciona tudo |
+| `Ctrl+C`, `Ctrl+Shift+C` ou `Ctrl+Insert` | `Cmd+C` | Copia a seleção |
+| `Ctrl+X` ou `Shift+Delete` | `Cmd+X` | Recorta a seleção |
+| `Ctrl+V`, `Ctrl+Shift+V` ou `Shift+Insert` | `Cmd+V` | Cola no cursor, substituindo a seleção |
+
+O mouse também edita: clique põe o cursor, clique e arraste seleciona, e o **clique direito** abre um menu com **Recortar**, **Copiar**, **Colar** e **Selecionar tudo**. Sem seleção, Recortar e Copiar aparecem esmaecidos. O clique direito dentro da seleção a mantém; fora dela, põe o cursor no ponto. `Esc` fecha o menu sem fechar o campo.
+
+Algumas regras valem em todo campo:
+
+- **Copiar sem seleção não faz nada**: não copia o campo inteiro nem mexe na área de transferência.
+- **Colar texto de várias linhas** junta tudo numa linha: cada quebra de linha e cada `Tab` viram um espaço. Num campo com limite de tamanho, como o nome de uma sessão, o que passa do limite é cortado.
+- **Com um campo focado, essas teclas são dele.** Na barra de busca, `Ctrl+C` copia do campo e **não** interrompe o programa que está rodando, e `Ctrl+Shift+V` cola no campo, não no terminal. Para mandar `Ctrl+C` ao programa, feche a busca com `Esc` antes.
+- **Campo mascarado só cola.** Copiar e recortar não fazem nada num campo de senha, e no menu os dois ficam sempre esmaecidos.
+
+Nenhuma dessas teclas é ação do catálogo nem aparece em `[keybindings]`: elas só existem enquanto um campo tem o foco.
 
 ## Selecionar texto dentro de um programa que pede o mouse (`Shift`)
 

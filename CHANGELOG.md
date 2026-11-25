@@ -64,6 +64,25 @@ primeiro release.
   um ponto no canto inferior direito. Tooltip com os aparelhos e estado na
   árvore de acessibilidade. Nenhum valor novo de aparência; aval visual
   pendente.
+- **Menu de clique direito nos campos de texto**
+  ([ADR-0115](docs/adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md),
+  PRD-010 RF-10.31): Recortar, Copiar, Colar e Selecionar tudo em todo campo
+  — rename da aba, editor de grupo, popover de sessões, busca, diálogo de
+  senha, tela de configurações e editor de perfil. Recortar e Copiar
+  esmaecidos sem seleção e sempre no campo mascarado. Nenhum valor novo de
+  aparência; aval visual pendente.
+
+### Corrigido
+
+- **Copiar, recortar e colar nos campos de texto**
+  ([ADR-0115](docs/adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md),
+  PRD-010 RF-10.26 a RF-10.30): `Ctrl+C`, `Ctrl+X` e `Ctrl+V` não faziam nada
+  nos campos do app. Agora funcionam, junto com `Ctrl+Shift+C`/`V`,
+  `Ctrl+Insert`, `Shift+Insert` e `Shift+Delete` (`Cmd+C`/`X`/`V` no macOS).
+  Colar texto de várias linhas troca cada quebra e cada `Tab` por um espaço.
+  Na barra de busca, `Ctrl+C` interrompia o programa em execução e
+  `Ctrl+Shift+V` colava no terminal: as duas teclas agora são do campo. O
+  campo mascarado continua só colando.
 
 ## [0.10.0] - 2026-11-18
 

@@ -81,7 +81,7 @@ Uma janela própria, aberta pela engrenagem da barra de abas:
 
 **RF-16.10** — Teclado: `Tab`/`Shift+Tab` percorrem guia, opções do painel e botões do rodapé, nessa ordem, com anel de foco visível; setas movem dentro da guia e entre opções de escolha; `Espaço` alterna; `Enter` confirma campo; `Ctrl+S` (`Cmd+S` no macOS) salva. Nada disso é ação do catálogo — vale só dentro da janela de configurações, como as teclas do diálogo e do editor de grupo.
 
-> **Emenda ([PRD-010](prd-010-interacao-e-superficie-de-app.md) RF-10.26 a RF-10.31, [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) — a implementar).** Num campo de texto da janela (e do editor de perfil), copiar, recortar e colar funcionam pelas teclas do sistema (`Ctrl+C`/`X`/`V`, `Ctrl+Shift+C`/`V`, `Ctrl+Insert`, `Shift+Insert`, `Shift+Delete`; `Cmd+C`/`X`/`V` no macOS), e o clique direito no campo abre o menu do campo. Também não são ações do catálogo.
+> **Emenda ([PRD-010](prd-010-interacao-e-superficie-de-app.md) RF-10.26 a RF-10.31, [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) — implementado).** Num campo de texto da janela (e do editor de perfil), copiar, recortar e colar funcionam pelas teclas do sistema (`Ctrl+C`/`X`/`V`, `Ctrl+Shift+C`/`V`, `Ctrl+Insert`, `Shift+Insert`, `Shift+Delete`; `Cmd+C`/`X`/`V` no macOS), e o clique direito no campo abre o menu do campo. Também não são ações do catálogo.
 
 ### O que a tela mostra
 

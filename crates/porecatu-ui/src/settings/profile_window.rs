@@ -43,7 +43,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 use super::choice_list::{self, ChoiceLayout, ChoiceList};
 use super::content::BODY_FONT;
 use super::content::{self, ControlView, ProfileClick, ProfileTarget};
-use super::field_edit::{EditPart, Editing};
+use super::field_edit::{EditPart, Editing, MenuField, field_menu_target_alive};
 use super::layout::{
     self, ControlPart, Hit, Layout, Metrics, left_aligned_buttons, right_aligned_buttons,
 };
@@ -52,12 +52,17 @@ use super::profile_editor::{EditorProblems, Focus as ProblemFocus, ProfileEditor
 use super::profile_form::{FormView, is_text_field};
 use super::profiles_draft::{Field, Forget, ListKind, ProfilesDraft, SecretKind};
 use super::window::{Env, forget_in_vault, header_height, paint_header_title, titlebar_drag};
+use crate::clipboard::SystemClipboard;
+use crate::field_clipboard::edit_field_key;
+use crate::field_menu::{
+    FIELD_MENU_ITEM_COUNT, FieldContextMenu, FieldMenuAction, FieldMenuItem, FieldMenuKey,
+    field_menu_key,
+};
 use crate::input::modifiers_from;
 use crate::messages::msg;
 use crate::palette::{ResolvedPalette, ResolvedTermPalette};
 use crate::tab_bar::{self, WindowButtonHit};
-use crate::text_field::apply_text_field_key;
-use crate::{access, bar_height, chrome, is_macos, titlebar};
+use crate::{access, bar_height, chrome, is_macos, overlay, titlebar};
 
 /// O único botão de janela do editor (ADR-0080 §3).
 const SHOWN_WINDOW_BUTTONS: [WindowButtonHit; 1] = [WindowButtonHit::Close];
@@ -163,6 +168,8 @@ enum Armed {
     Control(usize, ControlPart),
     /// O item `n` da lista aberta.
     ChoiceItem(usize),
+    /// O item `n` do menu de clique direito de um campo (ADR-0115 §7).
+    FieldMenuItem(usize),
 }
 
 /// A ordem do `Tab`: as `rows` linhas do formulário, depois os botões do rodapé
@@ -316,6 +323,10 @@ pub(crate) struct ProfileEditorWindow {
     dragging_field: bool,
     /// A lista de escolha (a autenticação), aberta.
     choice: Option<ChoiceList>,
+    /// O menu de clique direito do campo em edição (ADR-0115 §7), aberto. O
+    /// alvo é só um nome: cada uso o resolve de novo no estado vivo, e o menu
+    /// cai com a edição (`drop_stale_field_menu`).
+    field_menu: Option<FieldContextMenu<MenuField>>,
     modifiers: Modifiers,
     /// A largura de cada botão do rodapé, medida uma vez (e de novo quando o
     /// idioma muda).
@@ -365,6 +376,7 @@ impl ProfileEditorWindow {
             editing: None,
             dragging_field: false,
             choice: None,
+            field_menu: None,
             modifiers: Modifiers::NONE,
             footer_widths: None,
             initial_focus: true,
@@ -446,6 +458,7 @@ impl ProfileEditorWindow {
         self.footer_widths = None;
         self.form = None;
         self.choice = None;
+        self.field_menu = None;
         self.window.set_title(&self.title_text());
         self.window.request_redraw();
     }
@@ -462,6 +475,7 @@ impl ProfileEditorWindow {
         self.logical_height = height as f32 / self.scale;
         // A lista é ancorada à linha; a largura nova refaz o formulário.
         self.choice = None;
+        self.field_menu = None;
         self.window.request_redraw();
     }
 
@@ -738,6 +752,27 @@ impl ProfileEditorWindow {
         index: usize,
         part: EditPart,
     ) {
+        self.enter_field(env, measurer, draft, index, part);
+        if let Some(byte) = self.byte_at(env, measurer)
+            && let Some(editing) = &mut self.editing
+        {
+            editing.state.click_at(byte);
+            self.dragging_field = true;
+        }
+        self.window.request_redraw();
+    }
+
+    /// Põe `part` da linha `index` em edição, confirmando antes o outro campo
+    /// se era outro. O que o clique esquerdo e o direito têm em comum; o
+    /// cursor é de cada um.
+    fn enter_field(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        draft: &ProfilesDraft,
+        index: usize,
+        part: EditPart,
+    ) {
         let already = self
             .editing
             .as_ref()
@@ -746,13 +781,6 @@ impl ProfileEditorWindow {
             self.commit_edit(env, measurer, draft);
             self.start_edit(index, part);
         }
-        if let Some(byte) = self.byte_at(env, measurer)
-            && let Some(editing) = &mut self.editing
-        {
-            editing.state.click_at(byte);
-            self.dragging_field = true;
-        }
-        self.window.request_redraw();
     }
 
     /// A posição, em bytes, do texto do campo em edição que o ponteiro aponta.
@@ -903,6 +931,12 @@ impl ProfileEditorWindow {
         self.cursor_position = (position.x, position.y);
         self.ensure_form(env, measurer, draft);
         let point = self.cursor_logical();
+        // O menu do campo cobre o resto: só ele reage ao ponteiro.
+        self.drop_stale_field_menu();
+        if self.field_menu.is_some() {
+            self.field_menu_hover(env, point);
+            return;
+        }
         if self.dragging_field {
             if let Some(byte) = self.byte_at(env, measurer)
                 && let Some(editing) = &mut self.editing
@@ -1004,6 +1038,10 @@ impl ProfileEditorWindow {
         measurer: &mut TextMeasurer,
         draft: &ProfilesDraft,
     ) {
+        // O menu é ancorado ao campo: rolar o deixaria solto.
+        if self.field_menu.take().is_some() {
+            self.window.request_redraw();
+        }
         self.ensure_form(env, measurer, draft);
         let body = self.layout(env).panel_body;
         if !tab_bar::rect_contains(body, self.cursor_logical()) {
@@ -1034,6 +1072,18 @@ impl ProfileEditorWindow {
     ) -> EditorPress {
         self.ensure_form(env, measurer, draft);
         let point = self.cursor_logical();
+        // O menu do campo aberto é modal para o mouse: um clique num item o
+        // arma (age no release), qualquer outro só o fecha, e em nenhum dos
+        // dois casos chega ao que está por baixo.
+        self.drop_stale_field_menu();
+        if self.field_menu.is_some() {
+            self.press_field_menu(env, point);
+            return EditorPress::Nothing;
+        }
+        // No macOS, `Ctrl`+clique esquerdo é o clique secundário.
+        if is_macos() && self.modifiers.ctrl && self.open_field_menu(env, measurer, draft) {
+            return EditorPress::Nothing;
+        }
         if !is_macos() {
             if let Some(hit) = self.window_button_at(env, point) {
                 // Só arma: dispara no release (`left_released`).
@@ -1141,9 +1191,17 @@ impl ProfileEditorWindow {
     /// O clique nesta parte de controle só age no release (ADR-0081)? O campo
     /// de texto não: o press leva o foco e começa o arraste de seleção.
     fn defers(&self, index: usize, part: ControlPart) -> bool {
-        self.row_target(index).is_some_and(|target| {
-            !matches!(content::profile_click(target, part), ProfileClick::Edit(_))
-        })
+        self.row_target(index).is_some() && self.edit_part_at(index, part).is_none()
+    }
+
+    /// O campo de texto que a parte `part` da linha `index` edita, se ela é um:
+    /// a única leitura de `profile_click` que o clique esquerdo e o direito
+    /// fazem.
+    fn edit_part_at(&self, index: usize, part: ControlPart) -> Option<EditPart> {
+        match content::profile_click(self.row_target(index)?, part) {
+            ProfileClick::Edit(edit) => Some(edit),
+            _ => None,
+        }
     }
 
     /// Press com a lista aberta: arma o item sob o ponteiro; fora do menu a
@@ -1183,6 +1241,11 @@ impl ProfileEditorWindow {
                 .choice_layout(env)
                 .and_then(|layout| choice_list::hit(&layout, point))
                 .map(Armed::ChoiceItem),
+            Armed::FieldMenuItem(_) => self.field_menu_view(env).and_then(|(_, items, layout)| {
+                overlay::field_menu_hit(&layout, point)
+                    .filter(|&index| items[index].enabled)
+                    .map(Armed::FieldMenuItem)
+            }),
         };
         match crate::input::release_on_armed(Some(armed), over) {
             Some(Armed::Button(button)) => {
@@ -1198,6 +1261,12 @@ impl ProfileEditorWindow {
                     list.highlighted = index;
                 }
                 self.select_choice();
+                EditorPress::Nothing
+            }
+            // O item do menu do campo age e fecha o menu; solto fora do item,
+            // o menu fica como estava.
+            Some(Armed::FieldMenuItem(index)) => {
+                self.run_field_menu_item(env, index);
                 EditorPress::Nothing
             }
             None => EditorPress::Nothing,
@@ -1235,7 +1304,9 @@ impl ProfileEditorWindow {
         self.dragging_field = false;
         let window_button = self.pressed_window_button.take().is_some();
         let armed = self.armed.take().is_some();
-        if window_button || armed {
+        // O menu do campo não sobrevive a perder o foco.
+        let menu = self.field_menu.take().is_some();
+        if window_button || armed || menu {
             self.window.request_redraw();
         }
     }
@@ -1271,6 +1342,187 @@ impl ProfileEditorWindow {
         EditorPress::Nothing
     }
 
+    // ---- menu de clique direito do campo (ADR-0115 §7, RF-10.31)
+
+    /// Fecha o menu se a edição dele acabou (confirmada, desfeita, o foco foi
+    /// a outra linha) ou se a lista de escolha tomou a janela. Chamada no
+    /// começo de cada evento que olha o menu e de cada quadro.
+    fn drop_stale_field_menu(&mut self) {
+        if let Some(menu) = self.field_menu
+            && !field_menu_target_alive(
+                menu.target,
+                self.editing.is_some(),
+                false,
+                self.choice.is_some(),
+            )
+        {
+            self.field_menu = None;
+        }
+    }
+
+    /// As linhas do menu, do campo vivo; `None` se não há campo em edição.
+    fn field_menu_items(&self) -> Option<[FieldMenuItem; FIELD_MENU_ITEM_COUNT]> {
+        self.editing.as_ref().map(Editing::menu_items)
+    }
+
+    /// O menu aberto, as linhas dele e onde ficam na janela -- a única
+    /// geometria para o realce, o clique e a pintura.
+    fn field_menu_view(
+        &self,
+        env: Env<'_>,
+    ) -> Option<(
+        FieldContextMenu<MenuField>,
+        [FieldMenuItem; FIELD_MENU_ITEM_COUNT],
+        overlay::TerminalMenuLayout,
+    )> {
+        let menu = self.field_menu?;
+        let items = self.field_menu_items()?;
+        let layout = overlay::layout_field_menu(
+            menu.anchor,
+            env.config,
+            self.logical_width,
+            self.logical_height,
+        );
+        Some((menu, items, layout))
+    }
+
+    /// O botão direito (e `Ctrl`+clique no macOS, por `left_pressed`): abre o
+    /// menu do campo de texto sob o cursor. Com o menu já aberto, fecha-o,
+    /// como todo clique fora; fora de um campo, não faz nada.
+    pub(crate) fn right_pressed(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        draft: &ProfilesDraft,
+    ) -> EditorPress {
+        self.ensure_form(env, measurer, draft);
+        self.drop_stale_field_menu();
+        if self.field_menu.take().is_some() {
+            self.window.request_redraw();
+            return EditorPress::Nothing;
+        }
+        self.open_field_menu(env, measurer, draft);
+        EditorPress::Nothing
+    }
+
+    /// Abre o menu sobre o campo de texto sob o cursor, dando ao campo o foco
+    /// que um clique esquerdo daria -- confirma o outro campo em edição, põe
+    /// este em edição -- e o cursor pela regra do clique direito: **dentro**
+    /// da seleção ela fica, **fora** o cursor vai ao ponto. Abre com o
+    /// primeiro item habilitado realçado, como o menu do terminal. `false` se
+    /// não há campo ali, ou se a lista de escolha está aberta (ela é modal).
+    fn open_field_menu(
+        &mut self,
+        env: Env<'_>,
+        measurer: &mut TextMeasurer,
+        draft: &ProfilesDraft,
+    ) -> bool {
+        if self.choice.is_some() {
+            return false;
+        }
+        let point = self.cursor_logical();
+        let Some(Hit::Control(index, part)) = self.form_hit(env, point) else {
+            return false;
+        };
+        let Some(edit) = self.edit_part_at(index, part) else {
+            return false;
+        };
+        self.focus = Some(EditorFocus::Row(index));
+        self.enter_field(env, measurer, draft, index, edit);
+        let Some(byte) = self.byte_at(env, measurer) else {
+            return false;
+        };
+        if let Some(editing) = &mut self.editing {
+            editing.place_caret_for_menu(byte);
+        }
+        // O direito não começa arraste de seleção.
+        self.dragging_field = false;
+        let Some(items) = self.field_menu_items() else {
+            return false;
+        };
+        let mut menu = FieldContextMenu::new(MenuField::Editing, point);
+        menu.highlight_first_enabled(&items);
+        self.field_menu = Some(menu);
+        self.window.request_redraw();
+        true
+    }
+
+    /// Press esquerdo com o menu aberto: num item habilitado o arma (age no
+    /// release, ADR-0081); fora do menu, num item esmaecido ou no divisor,
+    /// só fecha o menu -- e o clique não chega ao que está por baixo.
+    fn press_field_menu(&mut self, env: Env<'_>, point: (f32, f32)) {
+        let Some((_, items, layout)) = self.field_menu_view(env) else {
+            self.field_menu = None;
+            return;
+        };
+        match overlay::field_menu_hit(&layout, point) {
+            Some(index) if items[index].enabled => self.armed = Some(Armed::FieldMenuItem(index)),
+            _ => self.field_menu = None,
+        }
+        self.window.request_redraw();
+    }
+
+    /// O ponteiro sobre o menu: o item habilitado sob ele é o realce; fora
+    /// das linhas o realce some, e sobre um item esmaecido não muda.
+    fn field_menu_hover(&mut self, env: Env<'_>, point: (f32, f32)) {
+        let Some((mut menu, items, layout)) = self.field_menu_view(env) else {
+            self.field_menu = None;
+            return;
+        };
+        let before = menu.highlighted();
+        match overlay::field_menu_hit(&layout, point) {
+            Some(index) => menu.set_highlight_item(index, &items),
+            None => menu.set_highlight(None),
+        }
+        self.field_menu = Some(menu);
+        self.window.set_cursor(CursorIcon::Default);
+        if menu.highlighted() != before {
+            self.window.request_redraw();
+        }
+    }
+
+    /// O teclado do menu aberto: setas e `Enter` como nos outros menus, `Esc`
+    /// fecha só o menu, o resto é engolido.
+    fn key_field_menu(&mut self, key: &Key) {
+        let Some(mut menu) = self.field_menu else {
+            return;
+        };
+        let Some(items) = self.field_menu_items() else {
+            self.field_menu = None;
+            return;
+        };
+        match field_menu_key(&mut menu, key, &items) {
+            FieldMenuKey::Nothing => self.field_menu = Some(menu),
+            FieldMenuKey::Close => self.field_menu = None,
+            FieldMenuKey::Run(action) => {
+                self.field_menu = None;
+                self.run_field_menu_action(action);
+            }
+        }
+        self.window.request_redraw();
+    }
+
+    /// O release sobre o item `index` armado: age e fecha o menu.
+    fn run_field_menu_item(&mut self, env: Env<'_>, index: usize) {
+        let Some((_, items, _)) = self.field_menu_view(env) else {
+            return;
+        };
+        self.field_menu = None;
+        if let Some(item) = items.get(index).filter(|item| item.enabled) {
+            self.run_field_menu_action(item.action);
+        }
+        self.window.request_redraw();
+    }
+
+    /// Aplica a ação ao campo em edição, pela mesma função da tecla. Como a
+    /// tecla, o texto só vai à cópia quando o campo é confirmado.
+    fn run_field_menu_action(&mut self, action: FieldMenuAction) {
+        if let Some(editing) = &mut self.editing {
+            editing.run_menu_action(action, &mut SystemClipboard);
+        }
+        self.window.request_redraw();
+    }
+
     // ---- teclado
 
     pub(crate) fn modifiers_changed(&mut self, state: ModifiersState) {
@@ -1302,6 +1554,15 @@ impl ProfileEditorWindow {
             return EditorPress::Nothing;
         }
         self.ensure_form(env, measurer, draft);
+        // O menu do campo aberto fica com o teclado inteiro: setas e `Enter`
+        // andam e acionam, `Esc` fecha **só o menu** (não desfaz a digitação
+        // e não vale como Cancelar), e toda outra tecla -- as de clipboard
+        // inclusive -- é engolida.
+        self.drop_stale_field_menu();
+        if self.field_menu.is_some() {
+            self.key_field_menu(&event.logical_key);
+            return EditorPress::Nothing;
+        }
         if self.choice.is_some() {
             self.key_choice(&event.logical_key);
             return EditorPress::Nothing;
@@ -1375,11 +1636,13 @@ impl ProfileEditorWindow {
             }
             key => {
                 if let Some(editing) = &mut self.editing {
-                    apply_text_field_key(
+                    edit_field_key(
                         &mut editing.state,
                         key,
                         event.text.as_deref(),
                         self.modifiers,
+                        None,
+                        &mut SystemClipboard,
                     );
                 }
             }
@@ -1525,6 +1788,7 @@ impl ProfileEditorWindow {
         draft: &ProfilesDraft,
     ) -> Frame {
         self.ensure_form(env, measurer, draft);
+        self.drop_stale_field_menu();
         let m = Self::metrics(env);
         let layout = self.layout(env);
         let rects = self.footer_rects(env, measurer);
@@ -1605,11 +1869,25 @@ impl ProfileEditorWindow {
         }
         let mut frame = Frame::new();
         frame.set_layer(Layer::Chrome, out);
+        let mut popover = Vec::new();
         if let (Some(list), Some(list_layout)) = (&self.choice, self.choice_layout(env)) {
-            frame.set_layer(
-                Layer::Popover,
-                choice_list::paint(list, &list_layout, env.config, pal),
-            );
+            popover.extend(choice_list::paint(list, &list_layout, env.config, pal));
+        }
+        // O menu do campo (ADR-0115 §7): por cima de tudo na janela, da lista
+        // de escolha inclusive -- que nunca está aberta junto com ele.
+        if let Some((menu, items, layout)) = self.field_menu_view(env) {
+            popover.extend(overlay::paint_field_menu(
+                &layout,
+                &items,
+                menu.highlighted(),
+                env.config,
+                pal,
+                &self.catalog,
+                measurer,
+            ));
+        }
+        if !popover.is_empty() {
+            frame.set_layer(Layer::Popover, popover);
         }
         for primitive in chrome::window_border(
             self.logical_width,

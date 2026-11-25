@@ -388,7 +388,57 @@ impl RemoteToken {
         outcome
     }
 
-    /// Cola o que veio da área de transferência.
+    /// Cola o que está na área de transferência, pela função única dos
+    /// campos (`field_clipboard::paste_into_masked`, ADR-0115 §4): o texto
+    /// lido é zerado assim que entra. Indisponível, nem lê a área.
+    pub(crate) fn paste_from(&mut self, io: &mut impl crate::clipboard::ClipboardIo) {
+        if self.unavailable() {
+            return;
+        }
+        crate::field_clipboard::paste_into_masked(&mut self.field, io);
+        if !self.field.is_empty() {
+            self.delete = false;
+        }
+    }
+
+    /// The rows of the right-click menu over this field (ADR-0115 §7): Cut and
+    /// Copy are always dimmed -- the content of a masked field never reaches
+    /// the clipboard (ADR-0075 §1) -- and Paste and Select all are enabled.
+    pub(crate) fn menu_items(
+        &self,
+    ) -> [crate::field_menu::FieldMenuItem; crate::field_menu::FIELD_MENU_ITEM_COUNT] {
+        crate::field_menu::field_menu_items(self.field.display().selection_range().is_some(), true)
+    }
+
+    /// What a right click on the dot `scalar` does to the caret: inside the
+    /// selection it stays, outside it goes there. Positions are scalars (one
+    /// dot each), never bytes of the text.
+    pub(crate) fn place_caret_for_menu(&mut self, scalar: usize) {
+        crate::app_field_menu::place_masked_caret_for_menu(&mut self.field, scalar);
+    }
+
+    /// What an item of the menu does: Paste is the function of the key
+    /// (`paste_from`, which also drops a pending delete and respects an
+    /// unavailable vault); Select all selects every dot; Cut and Copy do
+    /// nothing (their items are dimmed; this is the guard if one gets here).
+    pub(crate) fn run_menu_action(
+        &mut self,
+        action: crate::field_menu::FieldMenuAction,
+        io: &mut impl crate::clipboard::ClipboardIo,
+    ) {
+        use crate::field_menu::FieldMenuAction;
+        if self.unavailable() {
+            return;
+        }
+        match action {
+            FieldMenuAction::Paste => self.paste_from(io),
+            FieldMenuAction::SelectAll => self.field.select_all(),
+            FieldMenuAction::Cut | FieldMenuAction::Copy => {}
+        }
+    }
+
+    /// Cola um texto já em mãos (só os testes o têm).
+    #[cfg(test)]
     pub(crate) fn paste(&mut self, text: &str) {
         if self.unavailable() {
             return;
@@ -761,6 +811,120 @@ mod tests {
             state.key(&Key::Named(NamedKey::Escape), None, no_mods()),
             MaskedKey::Ignored
         );
+    }
+
+    // ---- the right-click menu (ADR-0115 §7)
+
+    struct FakeClipboard {
+        content: Option<String>,
+        writes: Vec<String>,
+    }
+
+    impl FakeClipboard {
+        fn holding(text: &str) -> Self {
+            Self {
+                content: Some(text.to_string()),
+                writes: Vec::new(),
+            }
+        }
+    }
+
+    impl crate::clipboard::ClipboardIo for FakeClipboard {
+        fn copy(&mut self, text: &str) {
+            self.writes.push(text.to_string());
+            self.content = Some(text.to_string());
+        }
+
+        fn paste(&mut self) -> Option<String> {
+            self.content.clone()
+        }
+    }
+
+    fn menu_enabled(state: &RemoteToken) -> Vec<bool> {
+        state.menu_items().iter().map(|item| item.enabled).collect()
+    }
+
+    #[test]
+    fn the_token_menu_never_enables_cut_or_copy() {
+        use crate::field_menu::FieldMenuAction;
+        let mut state = typed(GOOD);
+        assert_eq!(menu_enabled(&state), [false, false, true, true]);
+        state.run_menu_action(FieldMenuAction::SelectAll, &mut FakeClipboard::holding(""));
+        assert!(state.display().selection_range().is_some());
+        assert_eq!(menu_enabled(&state), [false, false, true, true]);
+    }
+
+    #[test]
+    fn cut_and_copy_from_the_menu_leave_the_token_and_the_clipboard_alone() {
+        use crate::field_menu::FieldMenuAction;
+        let mut state = typed(GOOD);
+        let mut io = FakeClipboard::holding("kept");
+        state.run_menu_action(FieldMenuAction::SelectAll, &mut io);
+        state.run_menu_action(FieldMenuAction::Copy, &mut io);
+        state.run_menu_action(FieldMenuAction::Cut, &mut io);
+        assert!(io.writes.is_empty());
+        assert_eq!(io.content.as_deref(), Some("kept"));
+        assert_eq!(state.view().filled, GOOD.chars().count());
+    }
+
+    #[test]
+    fn pasting_from_the_menu_fills_the_field_and_cancels_a_pending_delete() {
+        use crate::field_menu::FieldMenuAction;
+        let mut state = RemoteToken::new();
+        state.set_presence(Ok(true));
+        assert!(state.toggle_delete());
+        let mut io = FakeClipboard::holding("tok\r\nen");
+        state.run_menu_action(FieldMenuAction::Paste, &mut io);
+        // The same normalization as the key: a line break becomes one space.
+        assert_eq!(state.view().filled, 6);
+        assert!(!state.view().deleting);
+        state.field.inspect(|text| assert_eq!(text, "tok en"));
+    }
+
+    #[test]
+    fn an_empty_clipboard_pastes_nothing_into_the_token() {
+        use crate::field_menu::FieldMenuAction;
+        let mut state = RemoteToken::new();
+        let mut io = FakeClipboard::holding("");
+        state.run_menu_action(FieldMenuAction::Paste, &mut io);
+        state.run_menu_action(
+            FieldMenuAction::Paste,
+            &mut FakeClipboard {
+                content: None,
+                writes: Vec::new(),
+            },
+        );
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn a_vault_that_failed_takes_the_menu_actions_too() {
+        use crate::field_menu::FieldMenuAction;
+        let mut state = RemoteToken::new();
+        state.set_presence(Err(VaultError::Unavailable));
+        let mut io = FakeClipboard::holding(GOOD);
+        state.run_menu_action(FieldMenuAction::Paste, &mut io);
+        state.run_menu_action(FieldMenuAction::SelectAll, &mut io);
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn a_right_click_on_the_dots_works_in_scalars() {
+        let mut state = typed("abcdef");
+        // A fresh caret before the third dot, selection gone.
+        state.place_caret_for_menu(2);
+        assert_eq!(state.display().selection_range(), None);
+        assert_eq!(
+            state.display().cursor(),
+            2 * crate::masked_field::MASK_CHAR.len_utf8()
+        );
+        // Inside a selection it stays.
+        state.run_menu_action(
+            crate::field_menu::FieldMenuAction::SelectAll,
+            &mut FakeClipboard::holding(""),
+        );
+        state.place_caret_for_menu(3);
+        assert!(state.display().selection_range().is_some());
     }
 
     // ---- the status line

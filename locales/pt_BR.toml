@@ -39,6 +39,12 @@ search = "Buscar"
 open_link = "Abrir link"
 copy_link = "Copiar link"
 
+[field_menu]
+cut = "Recortar"
+copy = "Copiar"
+paste = "Colar"
+select_all = "Selecionar tudo"
+
 [group_menu]
 rename = "Renomear"
 set_color = "Mudar cor"

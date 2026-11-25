@@ -12,6 +12,9 @@
 use porecatu_config::EditValue;
 
 use super::catalog::{Control, OptionDef};
+use crate::app_field_menu::{FieldRef, apply_field_menu_action, place_caret_for_menu};
+use crate::clipboard::ClipboardIo;
+use crate::field_menu::{FIELD_MENU_ITEM_COUNT, FieldMenuAction, FieldMenuItem, field_menu_items};
 use crate::text_field::TextFieldState;
 
 /// Qual campo de uma linha está em edição. `git.remote_poll_interval_secs`
@@ -108,6 +111,63 @@ impl Editing {
     /// A digitação mudou o texto desde que a edição começou.
     pub(crate) fn changed(&self) -> bool {
         self.state.text() != self.initial
+    }
+
+    /// The rows of the right-click menu over this field (ADR-0115 §7): Cut
+    /// and Copy follow the selection.
+    pub(crate) fn menu_items(&self) -> [FieldMenuItem; FIELD_MENU_ITEM_COUNT] {
+        field_menu_items(self.state.selection_range().is_some(), false)
+    }
+
+    /// What a right click at `byte` does to the caret: inside the selection
+    /// it stays, outside it the caret goes there (the rule the other windows
+    /// follow, `app_field_menu::place_caret_for_menu`).
+    pub(crate) fn place_caret_for_menu(&mut self, byte: usize) {
+        place_caret_for_menu(&mut self.state, byte);
+    }
+
+    /// What an item of the menu does to this field: exactly what the key
+    /// does (`field_clipboard::run_field_op`). These fields have no length
+    /// cap of their own.
+    pub(crate) fn run_menu_action(&mut self, action: FieldMenuAction, io: &mut impl ClipboardIo) {
+        apply_field_menu_action(
+            FieldRef::Plain {
+                field: &mut self.state,
+                max_chars: None,
+            },
+            action,
+            io,
+        );
+    }
+}
+
+/// What the right-click menu of a settings window is over. Only a name: the
+/// field is looked up in live state at every use, so the menu never outlives
+/// it ([`field_menu_target_alive`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MenuField {
+    /// The field being edited (`editing`): text, number, list item, filter.
+    Editing,
+    /// The masked field of the relay token (the screen only).
+    Token,
+}
+
+/// Is the target of an open field menu still there? The menu closes when the
+/// edit ends (confirmed, cancelled, discarded, the group changed) and when a
+/// modal surface -- a dialog, the choice list, a shortcut capture, the profile
+/// editor over the screen -- takes the window.
+pub(crate) fn field_menu_target_alive(
+    target: MenuField,
+    editing: bool,
+    token_focused: bool,
+    modal_open: bool,
+) -> bool {
+    if modal_open {
+        return false;
+    }
+    match target {
+        MenuField::Editing => editing,
+        MenuField::Token => token_focused,
     }
 }
 
@@ -308,5 +368,110 @@ mod tests {
         assert_eq!(EditPart::Field.at_item(3), EditPart::Field);
         assert_eq!(EditPart::ListSecond(2).list_item(), Some(2));
         assert_eq!(EditPart::GitSeconds.list_item(), None);
+    }
+
+    // ---- the field menu (ADR-0115 §7)
+
+    #[derive(Default)]
+    struct FakeClipboard {
+        content: Option<String>,
+        writes: Vec<String>,
+    }
+
+    impl FakeClipboard {
+        fn holding(text: &str) -> Self {
+            Self {
+                content: Some(text.to_string()),
+                writes: Vec::new(),
+            }
+        }
+    }
+
+    impl ClipboardIo for FakeClipboard {
+        fn copy(&mut self, text: &str) {
+            self.writes.push(text.to_string());
+            self.content = Some(text.to_string());
+        }
+
+        fn paste(&mut self) -> Option<String> {
+            self.content.clone()
+        }
+    }
+
+    fn selecting(text: &str, from: usize, to: usize) -> Editing {
+        let mut editing = Editing::new(0, EditPart::Field, text.to_owned());
+        editing.state.click_at(from);
+        editing.state.drag_to(to);
+        editing
+    }
+
+    fn enabled(editing: &Editing) -> Vec<bool> {
+        editing.menu_items().iter().map(|i| i.enabled).collect()
+    }
+
+    #[test]
+    fn the_menu_dims_cut_and_copy_without_a_selection() {
+        let mut editing = Editing::new(0, EditPart::Field, "14".to_owned());
+        editing.state.click_at(0);
+        assert_eq!(enabled(&editing), [false, false, true, true]);
+        editing.state.select_all();
+        assert_eq!(enabled(&editing), [true; 4]);
+    }
+
+    #[test]
+    fn a_right_click_inside_the_selection_keeps_it_and_outside_moves_the_caret() {
+        let mut editing = selecting("hello world", 2, 8);
+        editing.place_caret_for_menu(5);
+        assert_eq!(editing.state.selection_range(), Some((2, 8)));
+        editing.place_caret_for_menu(10);
+        assert_eq!(editing.state.selection_range(), None);
+        assert_eq!(editing.state.cursor(), 10);
+    }
+
+    #[test]
+    fn the_items_cut_copy_paste_and_select_all_act_on_the_field_in_edit() {
+        let mut io = FakeClipboard::default();
+        let mut editing = selecting("hello world", 0, 6);
+        editing.run_menu_action(FieldMenuAction::Copy, &mut io);
+        assert_eq!(io.writes, ["hello "]);
+        assert_eq!(editing.state.text(), "hello world");
+
+        editing.run_menu_action(FieldMenuAction::Cut, &mut io);
+        assert_eq!(editing.state.text(), "world");
+        assert_eq!(io.writes.len(), 2);
+
+        let mut io = FakeClipboard::holding("a\r\nb\tc");
+        editing.state.click_at(0);
+        editing.run_menu_action(FieldMenuAction::Paste, &mut io);
+        assert_eq!(editing.state.text(), "a b cworld");
+
+        editing.run_menu_action(FieldMenuAction::SelectAll, &mut io);
+        assert_eq!(
+            editing.state.selection_range(),
+            Some((0, editing.state.text().len()))
+        );
+    }
+
+    #[test]
+    fn an_empty_clipboard_pastes_nothing_into_the_field_in_edit() {
+        let mut editing = Editing::new(0, EditPart::Field, "keep".to_owned());
+        for mut io in [FakeClipboard::default(), FakeClipboard::holding("")] {
+            editing.run_menu_action(FieldMenuAction::Paste, &mut io);
+        }
+        assert_eq!(editing.state.text(), "keep");
+    }
+
+    #[test]
+    fn the_menu_lives_only_while_its_field_does() {
+        use MenuField::{Editing as Edit, Token};
+        // The field being edited: the edit has to be there.
+        assert!(field_menu_target_alive(Edit, true, false, false));
+        assert!(!field_menu_target_alive(Edit, false, false, false));
+        // The token: its field has to hold the focus.
+        assert!(field_menu_target_alive(Token, false, true, false));
+        assert!(!field_menu_target_alive(Token, true, false, false));
+        // Any modal surface takes the menu with it.
+        assert!(!field_menu_target_alive(Edit, true, false, true));
+        assert!(!field_menu_target_alive(Token, false, true, true));
     }
 }

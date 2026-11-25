@@ -57,6 +57,7 @@ use crate::chrome::{badge_size, centered_glyph, paint_zone_icon_button, push_bad
 use crate::context_menu::ContextMenu;
 use crate::devices_popover::{self, DeviceEntry, DevicesTarget};
 use crate::dialog::{ConfirmDialog, DialogButton, LineTone, SecretFocus};
+use crate::field_menu::{FIELD_MENU_DIVIDER_ABOVE, FIELD_MENU_ITEM_COUNT, FieldMenuItem};
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{self, EDITOR_ACTION_ORDER, GroupActionItem, GroupContextMenu};
 use crate::messages::msg;
@@ -1738,16 +1739,23 @@ pub(crate) fn paint_profile_menu(
             continue;
         }
         out.push(Primitive::Quad(Quad {
-            rect: Rect {
-                x: layout.menu_rect.x + padding + SAVE_DIVIDER_MARGIN_X,
-                y: layout.item_rects[index].y - SAVE_DIVIDER_MARGIN_Y - SAVE_DIVIDER_HEIGHT,
-                width: layout.menu_rect.width - padding * 2.0 - SAVE_DIVIDER_MARGIN_X * 2.0,
-                height: SAVE_DIVIDER_HEIGHT,
-            },
+            rect: menu_divider_rect(layout.menu_rect, layout.item_rects[index], padding),
             color: pal.editor_divider,
         }));
     }
     out
+}
+
+/// The divider that sits directly above `item_rect` inside a menu of
+/// `menu_rect` with `padding`: shared by the profile menu and the anchored
+/// menus that have dividers (the field menu), so the formula lives once.
+fn menu_divider_rect(menu_rect: Rect, item_rect: Rect, padding: f32) -> Rect {
+    Rect {
+        x: menu_rect.x + padding + SAVE_DIVIDER_MARGIN_X,
+        y: item_rect.y - SAVE_DIVIDER_MARGIN_Y - SAVE_DIVIDER_HEIGHT,
+        width: menu_rect.width - padding * 2.0 - SAVE_DIVIDER_MARGIN_X * 2.0,
+        height: SAVE_DIVIDER_HEIGHT,
+    }
 }
 
 pub(crate) fn profile_menu_hit(layout: &ProfileMenuLayout, point: (f32, f32)) -> Option<usize> {
@@ -1768,6 +1776,9 @@ pub(crate) fn profile_menu_hit(layout: &ProfileMenuLayout, point: (f32, f32)) ->
 pub struct TerminalMenuLayout {
     pub menu_rect: Rect,
     pub item_rects: Vec<Rect>,
+    /// One rect per divider, in order; empty for every menu without dividers
+    /// (the terminal menu, the task manager row menu). Never a hit target.
+    pub divider_rects: Vec<Rect>,
 }
 
 pub fn layout_terminal_menu(
@@ -1790,12 +1801,37 @@ pub(crate) fn layout_anchored_menu(
     window_width: f32,
     window_height: f32,
 ) -> TerminalMenuLayout {
+    layout_anchored_menu_with_dividers(anchor, item_count, &[], config, window_width, window_height)
+}
+
+/// [`layout_anchored_menu`] with a divider above each index of
+/// `dividers_above` (strictly increasing; `0` and indices past the last item
+/// are ignored, a divider only separates two items). Each divider adds the
+/// block of the profile menu (`SAVE_DIVIDER_*`), and the menu is shifted back
+/// into the window by the same rule, now over the taller height.
+pub(crate) fn layout_anchored_menu_with_dividers(
+    anchor: (f32, f32),
+    item_count: usize,
+    dividers_above: &[usize],
+    config: &porecatu_config::Config,
+    window_width: f32,
+    window_height: f32,
+) -> TerminalMenuLayout {
     let cfg = &config.appearance.context_menu;
     let width = cfg.width as f32;
     let padding = cfg.padding as f32;
     let item_height = cfg.item_height as f32;
 
-    let height = padding * 2.0 + item_height * item_count as f32;
+    let dividers: Vec<usize> = dividers_above
+        .iter()
+        .copied()
+        .filter(|&index| index > 0 && index < item_count)
+        .collect();
+    let divider_block = SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT;
+    let dividers_before = |index: usize| dividers.iter().filter(|&&d| d <= index).count() as f32;
+
+    let height =
+        padding * 2.0 + item_height * item_count as f32 + divider_block * dividers.len() as f32;
     let mut x = anchor.0;
     let mut y = anchor.1;
     if x + width > window_width {
@@ -1810,17 +1846,22 @@ pub(crate) fn layout_anchored_menu(
         width,
         height,
     };
-    let item_rects = (0..item_count)
+    let item_rects: Vec<Rect> = (0..item_count)
         .map(|i| Rect {
             x: menu_rect.x + padding,
-            y: menu_rect.y + padding + item_height * i as f32,
+            y: menu_rect.y + padding + item_height * i as f32 + divider_block * dividers_before(i),
             width: menu_rect.width - padding * 2.0,
             height: item_height,
         })
         .collect();
+    let divider_rects = dividers
+        .iter()
+        .map(|&index| menu_divider_rect(menu_rect, item_rects[index], padding))
+        .collect();
     TerminalMenuLayout {
         menu_rect,
         item_rects,
+        divider_rects,
     }
 }
 
@@ -1851,6 +1892,20 @@ pub(crate) fn paint_menu_entries(
     pal: &ResolvedPalette,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
+    paint_menu_entries_highlighting(layout, entries, Some(highlighted), config, pal, measurer)
+}
+
+/// [`paint_menu_entries`] with no row highlighted when `highlighted` is
+/// `None` (the field menu opens without one until the mouse or an arrow moves
+/// it); paints the layout's dividers, if any, above the items.
+pub(crate) fn paint_menu_entries_highlighting(
+    layout: &TerminalMenuLayout,
+    entries: &[(String, bool)],
+    highlighted: Option<usize>,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
     let cfg = &config.appearance.context_menu;
     let corner_radius = cfg.corner_radius as f32;
     let item_radius = cfg.item_corner_radius as f32;
@@ -1868,7 +1923,7 @@ pub(crate) fn paint_menu_entries(
     }));
     for (index, (label, enabled)) in entries.iter().enumerate() {
         let rect = layout.item_rects[index];
-        if index == highlighted {
+        if Some(index) == highlighted {
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect,
                 radius: item_radius,
@@ -1898,6 +1953,12 @@ pub(crate) fn paint_menu_entries(
             color,
         }));
     }
+    for &rect in &layout.divider_rects {
+        out.push(Primitive::Quad(Quad {
+            rect,
+            color: pal.editor_divider,
+        }));
+    }
     out
 }
 
@@ -1906,6 +1967,50 @@ pub fn terminal_menu_hit(layout: &TerminalMenuLayout, point: (f32, f32)) -> Opti
         .item_rects
         .iter()
         .position(|&rect| rect_contains(rect, point))
+}
+
+// ---- menu de contexto do campo de texto (ADR-0115 §7, PRD-010 RF-10.31) ----
+
+/// Divider above "Select all": the one divider of the field menu, over the
+/// anatomy of the terminal menu (`layout_anchored_menu_with_dividers`).
+pub(crate) fn layout_field_menu(
+    anchor: (f32, f32),
+    config: &porecatu_config::Config,
+    window_width: f32,
+    window_height: f32,
+) -> TerminalMenuLayout {
+    layout_anchored_menu_with_dividers(
+        anchor,
+        FIELD_MENU_ITEM_COUNT,
+        &[FIELD_MENU_DIVIDER_ABOVE],
+        config,
+        window_width,
+        window_height,
+    )
+}
+
+/// Paints the field menu: `highlighted` is `None` until the mouse or an arrow
+/// key sets it (one highlight at a time, espec §2.16). A disabled item is
+/// dimmed, never absent. No key chip (ADR-0115 §7).
+pub(crate) fn paint_field_menu(
+    layout: &TerminalMenuLayout,
+    items: &[FieldMenuItem],
+    highlighted: Option<usize>,
+    config: &porecatu_config::Config,
+    pal: &ResolvedPalette,
+    catalog: &Catalog,
+    measurer: &mut TextMeasurer,
+) -> Vec<Primitive> {
+    let entries: Vec<(String, bool)> = items
+        .iter()
+        .map(|item| (item.action.label(catalog), item.enabled))
+        .collect();
+    paint_menu_entries_highlighting(layout, &entries, highlighted, config, pal, measurer)
+}
+
+/// Index of the item under `point`; a divider is not a target.
+pub(crate) fn field_menu_hit(layout: &TerminalMenuLayout, point: (f32, f32)) -> Option<usize> {
+    terminal_menu_hit(layout, point)
 }
 
 // ---- editor de grupo (espec §2.10, ADR-0023, `[appearance.group_editor]`) ----
@@ -5312,5 +5417,207 @@ mod tests {
         assert_eq!(detail.size_px, DEVICE_DETAIL_SIZE);
         assert_eq!(detail.color, pal.status_bar_stale_cwd);
         assert!(detail.origin.1 > name.origin.1 + name.size_px);
+    }
+
+    // ---- field menu (ADR-0115 §7) ----
+
+    fn divider_block() -> f32 {
+        SAVE_DIVIDER_MARGIN_Y * 2.0 + SAVE_DIVIDER_HEIGHT
+    }
+
+    #[test]
+    fn the_field_menu_is_the_four_item_menu_plus_one_divider_block() {
+        let config = porecatu_config::Config::default();
+        let plain =
+            layout_anchored_menu((10.0, 10.0), FIELD_MENU_ITEM_COUNT, &config, 1000.0, 700.0);
+        let field = layout_field_menu((10.0, 10.0), &config, 1000.0, 700.0);
+        assert_eq!(field.item_rects.len(), 4);
+        assert_eq!(
+            field.menu_rect.height,
+            plain.menu_rect.height + divider_block()
+        );
+        assert_eq!(field.menu_rect.width, plain.menu_rect.width);
+        // Items before the divider keep their place, the last one drops by one block.
+        for i in 0..FIELD_MENU_DIVIDER_ABOVE {
+            assert_eq!(field.item_rects[i], plain.item_rects[i], "{i}");
+        }
+        assert_eq!(
+            field.item_rects[3].y,
+            plain.item_rects[3].y + divider_block()
+        );
+        // The last item still ends at the menu's inner bottom edge.
+        let cfg = &config.appearance.context_menu;
+        let bottom = field.item_rects[3].y + field.item_rects[3].height;
+        assert_eq!(
+            bottom + cfg.padding as f32,
+            field.menu_rect.y + field.menu_rect.height
+        );
+    }
+
+    #[test]
+    fn the_field_menu_divider_sits_between_paste_and_select_all() {
+        let config = porecatu_config::Config::default();
+        let layout = layout_field_menu((10.0, 10.0), &config, 1000.0, 700.0);
+        assert_eq!(layout.divider_rects.len(), 1);
+        let divider = layout.divider_rects[0];
+        let paste = layout.item_rects[2];
+        let select_all = layout.item_rects[3];
+        assert_eq!(divider.height, SAVE_DIVIDER_HEIGHT);
+        assert_eq!(divider.y, paste.y + paste.height + SAVE_DIVIDER_MARGIN_Y);
+        assert_eq!(
+            divider.y + divider.height + SAVE_DIVIDER_MARGIN_Y,
+            select_all.y
+        );
+        assert!(divider.x >= layout.menu_rect.x);
+        assert!(divider.x + divider.width <= layout.menu_rect.x + layout.menu_rect.width);
+    }
+
+    #[test]
+    fn a_hit_on_the_divider_is_no_item() {
+        let config = porecatu_config::Config::default();
+        let layout = layout_field_menu((10.0, 10.0), &config, 1000.0, 700.0);
+        let divider = layout.divider_rects[0];
+        let centre = (
+            divider.x + divider.width / 2.0,
+            divider.y + divider.height / 2.0,
+        );
+        assert_eq!(field_menu_hit(&layout, centre), None);
+        for (index, rect) in layout.item_rects.iter().enumerate() {
+            let inside = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+            assert_eq!(field_menu_hit(&layout, inside), Some(index));
+        }
+        // Outside the menu is no item either.
+        assert_eq!(field_menu_hit(&layout, (0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn the_field_menu_flips_back_into_the_window_like_the_terminal_menu() {
+        let config = porecatu_config::Config::default();
+        let (w, h) = (300.0, 200.0);
+        let layout = layout_field_menu((w - 5.0, h - 5.0), &config, w, h);
+        let menu = layout.menu_rect;
+        assert!(menu.x >= 0.0 && menu.x + menu.width <= w, "{menu:?}");
+        assert!(menu.y >= 0.0 && menu.y + menu.height <= h, "{menu:?}");
+        let plain = layout_anchored_menu((w - 5.0, h - 5.0), 4, &config, w, h);
+        assert_eq!(menu.x, plain.menu_rect.x);
+        assert_eq!(menu.y + menu.height, h);
+        // The divider block moved with it.
+        assert!(layout.divider_rects[0].y > menu.y);
+        assert!(layout.divider_rects[0].y < menu.y + menu.height);
+    }
+
+    #[test]
+    fn menus_without_dividers_keep_their_layout() {
+        let config = porecatu_config::Config::default();
+        let layout = layout_anchored_menu((10.0, 10.0), 6, &config, 1000.0, 700.0);
+        assert!(layout.divider_rects.is_empty());
+        let cfg = &config.appearance.context_menu;
+        let padding = cfg.padding as f32;
+        let item_height = cfg.item_height as f32;
+        assert_eq!(layout.menu_rect.height, padding * 2.0 + item_height * 6.0);
+        for (i, rect) in layout.item_rects.iter().enumerate() {
+            assert_eq!(rect.y, 10.0 + padding + item_height * i as f32);
+        }
+        // A divider at the edges (0 or past the end) separates nothing.
+        let edges =
+            layout_anchored_menu_with_dividers((10.0, 10.0), 6, &[0, 6], &config, 1000.0, 700.0);
+        assert!(edges.divider_rects.is_empty());
+        assert_eq!(edges.menu_rect, layout.menu_rect);
+    }
+
+    #[test]
+    fn the_field_menu_dims_disabled_items_and_paints_one_divider() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let catalog = test_support::pt_br();
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_field_menu((10.0, 10.0), &config, 1000.0, 700.0);
+        let items = crate::field_menu::field_menu_items(false, false);
+        let primitives = paint_field_menu(
+            &layout,
+            &items,
+            None,
+            &config,
+            &pal,
+            &catalog,
+            &mut measurer,
+        );
+        let texts = text_colors(&primitives);
+        let color_of = |label: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("no text {label:?} in {texts:?}"))
+                .1
+        };
+        assert_eq!(color_of("Recortar"), pal.menu_item_disabled_text);
+        assert_eq!(color_of("Copiar"), pal.menu_item_disabled_text);
+        assert_eq!(color_of("Colar"), pal.menu_item_text);
+        assert_eq!(color_of("Selecionar tudo"), pal.menu_item_text);
+        let dividers: Vec<&Quad> = primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Quad(quad) => Some(quad),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dividers.len(), 1);
+        assert_eq!(dividers[0].rect, layout.divider_rects[0]);
+        assert_eq!(dividers[0].color, pal.editor_divider);
+        // No highlight: no hover quad over any item.
+        let hovers = primitives
+            .iter()
+            .filter(|p| matches!(p, Primitive::RoundedQuad(q) if q.color == pal.menu_item_hover))
+            .count();
+        assert_eq!(hovers, 0);
+    }
+
+    #[test]
+    fn the_field_menu_highlights_only_the_given_item() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let catalog = test_support::pt_br();
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_field_menu((10.0, 10.0), &config, 1000.0, 700.0);
+        let items = crate::field_menu::field_menu_items(true, false);
+        let primitives = paint_field_menu(
+            &layout,
+            &items,
+            Some(3),
+            &config,
+            &pal,
+            &catalog,
+            &mut measurer,
+        );
+        let hovers: Vec<Rect> = primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.color == pal.menu_item_hover => Some(q.rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hovers, [layout.item_rects[3]]);
+        assert_eq!(text_colors(&primitives).len(), 4);
+    }
+
+    #[test]
+    fn the_terminal_menu_paints_the_same_with_or_without_the_option_form() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_anchored_menu((10.0, 10.0), 2, &config, 1000.0, 700.0);
+        let entries = vec![("A".to_string(), true), ("B".to_string(), false)];
+        let old = paint_menu_entries(&layout, &entries, 1, &config, &pal, &mut measurer);
+        let new = paint_menu_entries_highlighting(
+            &layout,
+            &entries,
+            Some(1),
+            &config,
+            &pal,
+            &mut measurer,
+        );
+        // `Primitive` has no `PartialEq`; its `Debug` form is complete.
+        assert_eq!(format!("{old:?}"), format!("{new:?}"));
+        assert!(old.iter().all(|p| !matches!(p, Primitive::Quad(_))));
     }
 }

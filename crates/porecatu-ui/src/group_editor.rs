@@ -107,6 +107,15 @@ impl GroupEditor {
         }
     }
 
+    /// The name field whatever region has the focus. The right-click menu of
+    /// the field (ADR-0115 §7) edits it through here: opening the menu moves
+    /// the focus to the field (`click_name_at`), and while the menu is open
+    /// no key reaches the editor, so the focus cannot leave it -- but the menu
+    /// must not depend on that, hence no focus check as in `name_field_mut`.
+    pub fn name_field_state_mut(&mut self) -> &mut TextFieldState {
+        &mut self.name_field
+    }
+
     pub const fn swatch_highlight(&self) -> usize {
         self.swatch_highlight
     }

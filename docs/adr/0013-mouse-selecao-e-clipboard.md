@@ -77,7 +77,7 @@ Ciclo de vida: a seleção é limpa por input de teclado e por escrita do progra
 
 Crate **`arboard`**, encapsulado no ponto onde a UI trata `clipboard.copy` e `clipboard.paste` (ações já definidas no ADR-0008).
 
-> **Revisto pelo [ADR-0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §4 — decidido, a implementar.** O mesmo ponto (`porecatu-ui/src/clipboard.rs`) passa a atender também os campos de texto do app: copiar, recortar e colar num campo leem e escrevem por ele, e ele continua sendo o único lugar do `arboard` na UI. O núcleo do campo (`TextFieldState`) não fala com o clipboard. O resto desta seção continua.
+> **Revisto pelo [ADR-0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §4 — implementado.** O mesmo ponto (`porecatu-ui/src/clipboard.rs`) passa a atender também os campos de texto do app: copiar, recortar e colar num campo leem e escrevem por ele, e ele continua sendo o único lugar do `arboard` na UI. O núcleo do campo (`TextFieldState`) não fala com o clipboard. O resto desta seção continua.
 
 **OSC 52 — escrita permitida, leitura negada:**
 

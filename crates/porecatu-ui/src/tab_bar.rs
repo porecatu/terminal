@@ -2004,6 +2004,32 @@ pub(crate) fn scrolled_text_x(
     }
 }
 
+/// Byte index in `buffer` under the screen x `point_x`, for a one-line field
+/// whose box starts at `field_x` and is `field_width` wide, with `padding_x`
+/// inside on each side. The text is drawn from [`scrolled_text_x`], so the
+/// click lands on the character the user sees even when the text is scrolled.
+///
+/// The one place that turns "a point over a field" into "a position in its
+/// text": the left click, the drag and the right click (the field menu,
+/// ADR-0115 §7) of every field of the main window call it instead of each
+/// carrying a copy of the formula.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn text_index_at(
+    measurer: &mut TextMeasurer,
+    buffer: &str,
+    font: FontFace,
+    size_px: f32,
+    field_x: f32,
+    field_width: f32,
+    padding_x: f32,
+    point_x: f32,
+) -> usize {
+    let available_width = (field_width - padding_x * 2.0).max(0.0);
+    let text_width = measurer.measure_width(buffer, font, size_px);
+    let text_x = scrolled_text_x(field_x, padding_x, text_width, available_width);
+    measurer.index_at_offset(buffer, font, size_px, point_x - text_x)
+}
+
 #[cfg(test)]
 mod tests {
     use porecatu_core::GroupColor;

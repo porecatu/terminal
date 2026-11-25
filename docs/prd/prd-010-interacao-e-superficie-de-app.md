@@ -86,7 +86,7 @@ Os diálogos existentes são os de RF-1.6 (aba com programa de tela cheia, confo
 
 **RF-10.19** — Existem menus de contexto de aba (RF-1.1, RF-1.2, RF-2.20), de grupo (RF-2.22) e de terminal. Abrem ancorados no cursor, viram nos dois eixos para caber na tela, são navegáveis por teclado e fecham em clique fora ou perda de foco.
 
-> **Emenda (2026-11-25, [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §7 — a implementar).** Um quarto menu de contexto: o do **campo de texto** (RF-10.31), com a mesma anatomia e as mesmas regras deste requisito.
+> **Emenda (2026-11-25, [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §7 — implementado).** Um quarto menu de contexto: o do **campo de texto** (RF-10.31), com a mesma anatomia e as mesmas regras deste requisito.
 
 **RF-10.20** — Item indisponível aparece **esmaecido, nunca ausente**. *(Menu que muda de tamanho a cada abertura obriga a reaprender a posição dos itens.)*
 
@@ -110,7 +110,7 @@ Glyphs fora dessas faces — emoji, ícones de Nerd Font, CJK — continuam vind
 
 ### Campos de texto
 
-> **Acrescentada em 2026-11-25**, transcrevendo o [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) — **a implementar**. Vale para todo campo de texto do app: rename de aba, editor de grupo, nome no popover de sessões, barra de busca, diálogo de segredo, campos da tela de configurações e do editor de perfil, token do relay.
+> **Acrescentada em 2026-11-25**, transcrevendo o [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) — **implementada**, verificada só por teste automatizado. Vale para todo campo de texto do app: rename de aba, editor de grupo, nome no popover de sessões, barra de busca, diálogo de segredo, campos da tela de configurações e do editor de perfil, token do relay.
 
 **RF-10.26** — Num campo de texto focado, `Ctrl+C`, `Ctrl+Shift+C` e `Ctrl+Insert` copiam a seleção; `Ctrl+X` e `Shift+Delete` a recortam; `Ctrl+V`, `Ctrl+Shift+V` e `Shift+Insert` colam. No macOS, `Cmd+C`, `Cmd+X` e `Cmd+V`. São teclas do campo, não ações do catálogo, e não são configuráveis. *(`Ctrl+Shift+C`/`V` são os atalhos de copiar e colar do terminal: quem os tem na mão não pode errar no campo.)*
 

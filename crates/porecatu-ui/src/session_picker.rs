@@ -23,7 +23,9 @@ use porecatu_session::named::{EntryStatus, MAX_NAME_CHARS, NamedSessionEntry};
 use porecatu_term::Modifiers;
 use winit::keyboard::{Key, NamedKey};
 
-use crate::text_field::{TextFieldState, apply_text_field_key};
+use crate::clipboard::ClipboardIo;
+use crate::field_clipboard::edit_field_key;
+use crate::text_field::TextFieldState;
 use std::path::PathBuf;
 
 /// O que está realçado -- o item fixo "Salvar esta janela..." ou uma
@@ -152,6 +154,16 @@ impl SessionPicker {
         }
     }
 
+    /// The name field while the popover is editing it, `None` while it only
+    /// browses. The right-click menu of the field (ADR-0115 §7) reads and
+    /// edits it through here; `None` is what tells the menu its field is gone.
+    pub fn name_field_mut(&mut self) -> Option<&mut TextFieldState> {
+        match &mut self.mode {
+            Mode::EditingName(field) => Some(field),
+            Mode::Browsing => None,
+        }
+    }
+
     /// Arraste dentro do campo -- mesmo padrão de
     /// `GroupEditor::drag_name_to`.
     pub fn drag_name_to(&mut self, byte_index: usize) {
@@ -271,6 +283,7 @@ impl SessionPicker {
         text: Option<&str>,
         modifiers: Modifiers,
         max_visible_rows: usize,
+        io: &mut impl ClipboardIo,
     ) -> PickerOutcome {
         let mut cancel_editing = false;
         if let Mode::EditingName(field) = &mut self.mode {
@@ -284,7 +297,7 @@ impl SessionPicker {
                     };
                 }
                 Key::Named(NamedKey::Escape) => cancel_editing = true,
-                // Não é `apply_text_field_key`: essa função não trata
+                // Não é `edit_field_key`: essa função não trata
                 // `Backspace` (mesmo motivo de `GroupEditor::backspace`
                 // tratar a tecla à parte).
                 Key::Named(NamedKey::Backspace) => {
@@ -301,7 +314,9 @@ impl SessionPicker {
                     } else {
                         text
                     };
-                    apply_text_field_key(field, key, capped_text, modifiers);
+                    // Colar passa pelo mesmo teto (`max_chars`), contado em
+                    // `char`, e o excedente é cortado.
+                    edit_field_key(field, key, capped_text, modifiers, Some(MAX_NAME_CHARS), io);
                     return PickerOutcome::None;
                 }
             }
@@ -381,8 +396,33 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeClipboard {
+        content: Option<String>,
+    }
+
+    impl ClipboardIo for FakeClipboard {
+        fn copy(&mut self, text: &str) {
+            self.content = Some(text.to_string());
+        }
+
+        fn paste(&mut self) -> Option<String> {
+            self.content.clone()
+        }
+    }
+
     fn key(picker: &mut SessionPicker, k: Key) -> PickerOutcome {
-        picker.handle_key(&k, None, no_mods(), 6)
+        picker.handle_key(&k, None, no_mods(), 6, &mut FakeClipboard::default())
+    }
+
+    /// `handle_key` with an empty fake clipboard, for the tests that only type.
+    fn press(
+        picker: &mut SessionPicker,
+        k: Key,
+        text: Option<&str>,
+        modifiers: Modifiers,
+    ) -> PickerOutcome {
+        picker.handle_key(&k, text, modifiers, 6, &mut FakeClipboard::default())
     }
 
     #[test]
@@ -551,7 +591,7 @@ mod tests {
     #[test]
     fn enter_with_blank_name_does_nothing() {
         let mut picker = SessionPicker::open_editing(vec![]);
-        let outcome = picker.handle_key(&Key::Named(NamedKey::Enter), None, no_mods(), 6);
+        let outcome = key(&mut picker, Key::Named(NamedKey::Enter));
         assert_eq!(outcome, PickerOutcome::None);
     }
 
@@ -559,11 +599,11 @@ mod tests {
     fn enter_with_trimmed_name_submits() {
         let mut picker = SessionPicker::open_editing(vec![]);
         for c in "  api ".chars() {
-            picker.handle_key(
-                &Key::Character(c.to_string().into()),
+            press(
+                &mut picker,
+                Key::Character(c.to_string().into()),
                 Some(&c.to_string()),
                 no_mods(),
-                6,
             );
         }
         let outcome = key(&mut picker, Key::Named(NamedKey::Enter));
@@ -574,10 +614,75 @@ mod tests {
     fn name_field_stops_accepting_text_at_the_char_ceiling() {
         let mut picker = SessionPicker::open_editing(vec![]);
         for _ in 0..MAX_NAME_CHARS + 5 {
-            picker.handle_key(&Key::Character("a".into()), Some("a"), no_mods(), 6);
+            press(
+                &mut picker,
+                Key::Character("a".into()),
+                Some("a"),
+                no_mods(),
+            );
         }
         match picker.mode() {
             Mode::EditingName(field) => assert_eq!(field.text().chars().count(), MAX_NAME_CHARS),
+            Mode::Browsing => panic!("esperava EditingName"),
+        }
+    }
+
+    fn primary() -> Modifiers {
+        Modifiers {
+            ctrl: !cfg!(target_os = "macos"),
+            super_: cfg!(target_os = "macos"),
+            ..no_mods()
+        }
+    }
+
+    #[test]
+    fn paste_respects_the_char_ceiling_and_normalizes() {
+        let mut picker = SessionPicker::open_editing(vec![]);
+        let mut io = FakeClipboard {
+            content: Some(format!("a\nb{}", "é".repeat(MAX_NAME_CHARS))),
+        };
+        let outcome = picker.handle_key(
+            &Key::Character("v".into()),
+            Some("\u{16}"),
+            primary(),
+            6,
+            &mut io,
+        );
+        assert_eq!(outcome, PickerOutcome::None);
+        match picker.mode() {
+            Mode::EditingName(field) => {
+                assert_eq!(field.text().chars().count(), MAX_NAME_CHARS);
+                assert!(field.text().starts_with("a bé"), "{:?}", field.text());
+            }
+            Mode::Browsing => panic!("esperava EditingName"),
+        }
+    }
+
+    #[test]
+    fn paste_at_the_ceiling_adds_nothing() {
+        let mut picker = SessionPicker::open_editing(vec![]);
+        for _ in 0..MAX_NAME_CHARS {
+            press(
+                &mut picker,
+                Key::Character("a".into()),
+                Some("a"),
+                no_mods(),
+            );
+        }
+        let mut io = FakeClipboard {
+            content: Some("zzz".to_string()),
+        };
+        picker.handle_key(
+            &Key::Character("v".into()),
+            Some("\u{16}"),
+            primary(),
+            6,
+            &mut io,
+        );
+        match picker.mode() {
+            Mode::EditingName(field) => {
+                assert_eq!(field.text(), "a".repeat(MAX_NAME_CHARS));
+            }
             Mode::Browsing => panic!("esperava EditingName"),
         }
     }
@@ -586,9 +691,14 @@ mod tests {
     fn arrows_still_work_at_the_char_ceiling() {
         let mut picker = SessionPicker::open_editing(vec![]);
         for _ in 0..MAX_NAME_CHARS {
-            picker.handle_key(&Key::Character("a".into()), Some("a"), no_mods(), 6);
+            press(
+                &mut picker,
+                Key::Character("a".into()),
+                Some("a"),
+                no_mods(),
+            );
         }
-        picker.handle_key(&Key::Named(NamedKey::ArrowLeft), None, no_mods(), 6);
+        key(&mut picker, Key::Named(NamedKey::ArrowLeft));
         match picker.mode() {
             Mode::EditingName(field) => {
                 assert_eq!(
@@ -604,8 +714,13 @@ mod tests {
     #[test]
     fn backspace_works_while_editing() {
         let mut picker = SessionPicker::open_editing(vec![]);
-        picker.handle_key(&Key::Character("x".into()), Some("x"), no_mods(), 6);
-        picker.handle_key(&Key::Named(NamedKey::Backspace), None, no_mods(), 6);
+        press(
+            &mut picker,
+            Key::Character("x".into()),
+            Some("x"),
+            no_mods(),
+        );
+        key(&mut picker, Key::Named(NamedKey::Backspace));
         match picker.mode() {
             Mode::EditingName(field) => assert_eq!(field.text(), ""),
             Mode::Browsing => panic!("esperava EditingName"),

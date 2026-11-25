@@ -44,7 +44,7 @@ A acessibilidade tem um alvo próprio e menor, e é a razão de o requisito exis
 
 **RF-11.5** — `search.next` e `search.prev` andam entre as ocorrências **circulando nas duas pontas**, rolando a vista até a ocorrência ativa. `Enter` equivale a `search.next` e `Shift+Enter` a `search.prev`.
 
-> **Emenda ([PRD-010](prd-010-interacao-e-superficie-de-app.md) RF-10.26 a RF-10.28, [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §5 — a implementar).** Com o campo da busca focado, copiar, recortar e colar são do campo: `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+Shift+C`, `Ctrl+Shift+V` e as variantes com `Insert`/`Delete` (`Cmd+C`/`X`/`V` no macOS) nunca chegam ao terminal. `Ctrl+C` sem seleção não faz nada — não interrompe o processo —, e `Ctrl+Shift+V` cola no campo.
+> **Emenda ([PRD-010](prd-010-interacao-e-superficie-de-app.md) RF-10.26 a RF-10.28, [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §5 — implementado).** Com o campo da busca focado, copiar, recortar e colar são do campo: `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+Shift+C`, `Ctrl+Shift+V` e as variantes com `Insert`/`Delete` (`Cmd+C`/`X`/`V` no macOS) nunca chegam ao terminal. `Ctrl+C` sem seleção não faz nada — não interrompe o processo —, e `Ctrl+Shift+V` cola no campo.
 
 **RF-11.6** — A barra mostra a posição da ocorrência ativa e o total (`3/17`). Nenhuma ocorrência é um estado próprio, visualmente distinto de campo vazio.
 

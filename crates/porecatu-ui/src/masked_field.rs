@@ -24,7 +24,7 @@ use porecatu_term::{Modifiers, Secret};
 use winit::keyboard::{Key, NamedKey};
 use zeroize::Zeroizing;
 
-use crate::text_field::TextFieldState;
+use crate::text_field::{TextFieldState, paste_chars};
 
 /// O que se desenha no lugar de cada escalar (U+2022, da própria Iosevka).
 pub(crate) const MASK_CHAR: char = '•';
@@ -139,9 +139,12 @@ impl MaskedFieldState {
         self.dots.insert_char(MASK_CHAR);
     }
 
-    /// Cola: cada escalar que cabe entra, os controles não.
+    /// Cola: cada escalar que cabe entra. A normalização é a dos outros
+    /// campos (`text_field::paste_chars`, ADR-0115 §3): quebra de linha e
+    /// `Tab` viram um espaço, os demais controles não entram. Itera sem
+    /// alocar -- nenhuma cópia do texto fica fora do buffer zerado.
     pub fn paste(&mut self, text: &str) {
-        for c in text.chars() {
+        for c in paste_chars(text) {
             self.insert_char(c);
         }
     }
@@ -403,8 +406,16 @@ mod tests {
     #[test]
     fn control_characters_never_enter() {
         let mut field = MaskedFieldState::new();
-        field.paste("a\nb\tc\u{7f}\u{1b}");
+        field.paste("a\u{7f}b\u{1b}c");
         assert_eq!(field.reveal_for_test(), "abc");
+    }
+
+    #[test]
+    fn pasting_turns_line_breaks_and_tabs_into_one_space_each() {
+        let mut field = MaskedFieldState::new();
+        field.paste("a\r\nb\nc\rd\te\u{7f}");
+        assert_eq!(field.reveal_for_test(), "a b c d e");
+        assert_eq!(field.display().text(), "•".repeat(9));
     }
 
     #[test]

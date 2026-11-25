@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Estado puro de um campo de texto de uma linha, com cursor navegável e
-//! seleção -- compartilhado pelo campo de nome do editor de grupo
-//! (`group_editor.rs`) e pelo campo de rename de aba (`rename.rs`). Os dois
+//! seleção -- compartilhado por todo campo de texto do app: rename de aba,
+//! editor de grupo, nome no popover de sessões, barra de busca e campos da
+//! tela de configurações e do editor de perfil. Os dois primeiros
 //! tinham, até o ADR-0035, a mesma simplificação ("sem posição de cursor no
 //! meio da string -- sempre no fim") que o ADR-0023 e o ADR-0008
 //! registravam; o ADR-0035 supera essa parte de cada um. Testável sem
 //! `winit`, mesmo padrão de `context_menu.rs`/`dialog.rs`/`rename.rs`.
+//!
+//! O núcleo nunca fala com o clipboard (ADR-0115 §4): `apply_text_field_key`
+//! devolve [`FieldKey::Copy`]/[`FieldKey::Cut`]/[`FieldKey::Paste`] e quem
+//! chama executa, por `field_clipboard`.
 //!
 //! Todos os índices são em bytes, sempre em fronteira de char UTF-8 --
 //! nunca aritmética de byte crua sobre o meio de um caractere multibyte.
@@ -98,6 +103,35 @@ impl TextFieldState {
         self.delete_selection();
         self.buffer.insert(self.cursor, c);
         self.cursor += c.len_utf8();
+    }
+
+    /// O trecho selecionado, ou `None` sem seleção ativa.
+    pub fn selected_text(&self) -> Option<&str> {
+        let (start, end) = self.selection_range()?;
+        self.buffer.get(start..end)
+    }
+
+    /// Recorta a seleção: devolve o trecho e o apaga, com o cursor no início
+    /// dele e sem âncora. `None` -- sem mudar nada -- se não há seleção.
+    pub fn cut_selection(&mut self) -> Option<String> {
+        let text = self.selected_text()?.to_string();
+        self.delete_selection();
+        Some(text)
+    }
+
+    /// Cola `text` no cursor, substituindo a seleção. O texto passa por
+    /// [`paste_chars`] (uma linha só) e a inserção para quando o buffer
+    /// atinge `max_chars` caracteres (contados em `char`, não em bytes); o
+    /// excedente é cortado. O cursor fica no fim do que entrou.
+    pub fn insert_str(&mut self, text: &str, max_chars: Option<usize>) {
+        self.delete_selection();
+        let room = max_chars.map_or(usize::MAX, |max| {
+            max.saturating_sub(self.buffer.chars().count())
+        });
+        for c in paste_chars(text).take(room) {
+            self.buffer.insert(self.cursor, c);
+            self.cursor += c.len_utf8();
+        }
     }
 
     pub fn backspace(&mut self) {
@@ -218,22 +252,77 @@ impl TextFieldState {
     }
 }
 
-/// Traduz uma tecla em uma edição de `field`, para o modo de captura de um
-/// campo de nome (editor de grupo ou rename de aba). `logical_key`/`text`
+/// Normaliza texto colado para um campo de uma linha, **sem alocar** (o
+/// campo mascarado também a usa e não pode deixar cópia não zerada):
+/// `CRLF`, `LF`, `CR` e `Tab` viram um espaço cada (`CRLF` conta como uma
+/// quebra só), os demais caracteres de controle são descartados e o resto
+/// passa (ADR-0115 §3).
+pub fn paste_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+    let mut chars = text.chars().peekable();
+    std::iter::from_fn(move || {
+        loop {
+            match chars.next()? {
+                '\r' => {
+                    if chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    return Some(' ');
+                }
+                '\n' | '\t' => return Some(' '),
+                c if c.is_control() => {}
+                c => return Some(c),
+            }
+        }
+    })
+}
+
+/// O que uma tecla fez ao campo (ADR-0115 §4). `Copy`, `Cut` e `Paste` são
+/// pedidos de clipboard: o núcleo não fala com ele, quem chama executa (por
+/// `field_clipboard`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKey {
+    /// Não é de edição: quem chama decide (`Enter`, `Esc`, `Tab`...).
+    Ignored,
+    /// Consumida como edição ou navegação, já aplicada ao campo.
+    Handled,
+    /// Copiar a seleção. Consumida mesmo sem seleção.
+    Copy,
+    /// Recortar a seleção. Consumida mesmo sem seleção.
+    Cut,
+    /// Colar. Consumida mesmo com o clipboard vazio.
+    Paste,
+}
+
+impl FieldKey {
+    /// `true` para tudo menos [`FieldKey::Ignored`].
+    pub const fn consumed(self) -> bool {
+        !matches!(self, FieldKey::Ignored)
+    }
+}
+
+/// Traduz uma tecla em uma edição de `field`, para o modo de captura de
+/// qualquer campo de texto do app. `logical_key`/`text`
 /// são os mesmos campos de `winit::event::KeyEvent` (que não é
 /// publicamente construível fora do `winit` -- por isso a assinatura toma
 /// os dois separados, em vez do evento inteiro, também testável sem
-/// `winit::event`). Devolve `true` se a tecla foi consumida como edição de
-/// texto -- `Enter`/`Esc`/`Tab`, que são exclusivos de cada widget
+/// `winit::event`). Devolve o que a tecla fez ([`FieldKey`]) --
+/// `Enter`/`Esc`/`Tab`, que são exclusivos de cada widget
 /// (confirmar/cancelar/trocar de região), não passam por aqui e continuam
 /// tratados por quem chama. Não filtra `event.state`; quem chama já
 /// garantiu `Pressed`, mesmo padrão dos outros `handle_*_key` de `lib.rs`.
+///
+/// Teclas de clipboard (ADR-0115 §1): copiar `Ctrl+C`/`Ctrl+Shift+C`/
+/// `Ctrl+Insert`, recortar `Ctrl+X`/`Shift+Delete`, colar `Ctrl+V`/
+/// `Ctrl+Shift+V`/`Shift+Insert` (`Cmd+C/X/V` no macOS). A função nunca toca
+/// o clipboard: devolve `Copy`/`Cut`/`Paste`. Com o modificador primário,
+/// nenhuma letra é digitada -- no macOS o `winit` entrega a letra em `text`
+/// com `Cmd`. `Ctrl+Alt` (AltGr) não entra neste ramo e continua digitando.
 pub fn apply_text_field_key(
     field: &mut TextFieldState,
     logical_key: &Key,
     text: Option<&str>,
     modifiers: Modifiers,
-) -> bool {
+) -> FieldKey {
     // Mesmo idioma do modificador de seleção múltipla de aba (ADR-0021 §3):
     // `Ctrl` em Windows/Linux, `Cmd` (`super_`) no macOS.
     let primary = if cfg!(target_os = "macos") {
@@ -242,40 +331,57 @@ pub fn apply_text_field_key(
         modifiers.ctrl
     };
     match logical_key {
-        Key::Character(s) if primary && !modifiers.alt && s.eq_ignore_ascii_case("a") => {
-            field.select_all();
-            true
+        Key::Character(s) if primary && !modifiers.alt => {
+            if s.eq_ignore_ascii_case("a") {
+                field.select_all();
+                FieldKey::Handled
+            } else if s.eq_ignore_ascii_case("c") {
+                FieldKey::Copy
+            } else if s.eq_ignore_ascii_case("x") {
+                FieldKey::Cut
+            } else if s.eq_ignore_ascii_case("v") {
+                FieldKey::Paste
+            } else {
+                FieldKey::Ignored
+            }
         }
+        Key::Named(NamedKey::Insert) if modifiers.shift => FieldKey::Paste,
+        Key::Named(NamedKey::Insert) if modifiers.ctrl => FieldKey::Copy,
+        Key::Named(NamedKey::Delete) if modifiers.shift => FieldKey::Cut,
         Key::Named(NamedKey::ArrowLeft) => {
             field.move_left(modifiers.shift);
-            true
+            FieldKey::Handled
         }
         Key::Named(NamedKey::ArrowRight) => {
             field.move_right(modifiers.shift);
-            true
+            FieldKey::Handled
         }
         Key::Named(NamedKey::Home) => {
             field.move_home(modifiers.shift);
-            true
+            FieldKey::Handled
         }
         Key::Named(NamedKey::End) => {
             field.move_end(modifiers.shift);
-            true
+            FieldKey::Handled
         }
         Key::Named(NamedKey::Delete) => {
             field.delete_forward();
-            true
+            FieldKey::Handled
         }
         _ => {
             let Some(text) = text else {
-                return false;
+                return FieldKey::Ignored;
             };
             let mut consumed = false;
             for c in text.chars().filter(|c| !c.is_control()) {
                 field.insert_char(c);
                 consumed = true;
             }
-            consumed
+            if consumed {
+                FieldKey::Handled
+            } else {
+                FieldKey::Ignored
+            }
         }
     }
 }
@@ -479,12 +585,10 @@ mod tests {
         let mut field = TextFieldState::new("abc");
         field.click_at(1);
         let logical_key = Key::Character("a".into());
-        assert!(apply_text_field_key(
-            &mut field,
-            &logical_key,
-            Some("a"),
-            primary_mods(false)
-        ));
+        assert_eq!(
+            apply_text_field_key(&mut field, &logical_key, Some("a"), primary_mods(false)),
+            FieldKey::Handled
+        );
         assert_eq!(field.selection_range(), Some((0, 3)));
     }
 
@@ -492,12 +596,10 @@ mod tests {
     fn apply_text_field_key_plain_a_inserts_char_not_select_all() {
         let mut field = TextFieldState::new("");
         let logical_key = Key::Character("a".into());
-        assert!(apply_text_field_key(
-            &mut field,
-            &logical_key,
-            Some("a"),
-            mods(false, false)
-        ));
+        assert_eq!(
+            apply_text_field_key(&mut field, &logical_key, Some("a"), mods(false, false)),
+            FieldKey::Handled
+        );
         assert_eq!(field.text(), "a");
     }
 
@@ -506,12 +608,203 @@ mod tests {
         let mut field = TextFieldState::new("abc");
         field.move_home(false);
         let logical_key = Key::Named(NamedKey::ArrowRight);
-        assert!(apply_text_field_key(
-            &mut field,
-            &logical_key,
-            None,
-            mods(false, true)
-        ));
+        assert_eq!(
+            apply_text_field_key(&mut field, &logical_key, None, mods(false, true)),
+            FieldKey::Handled
+        );
         assert_eq!(field.selection_range(), Some((0, 1)));
+    }
+
+    fn key_of(key: Key, text: Option<&str>, modifiers: Modifiers) -> FieldKey {
+        let mut field = TextFieldState::new("abc");
+        apply_text_field_key(&mut field, &key, text, modifiers)
+    }
+
+    #[test]
+    fn clipboard_keys_map_to_copy_cut_and_paste() {
+        let ch = |s: &str| Key::Character(s.into());
+        // Copy: C, Ctrl+Shift+C ("C"), Ctrl+Insert.
+        assert_eq!(
+            key_of(ch("c"), Some("\u{3}"), primary_mods(false)),
+            FieldKey::Copy
+        );
+        assert_eq!(
+            key_of(ch("C"), Some("\u{3}"), primary_mods(true)),
+            FieldKey::Copy
+        );
+        assert_eq!(
+            key_of(Key::Named(NamedKey::Insert), None, mods(true, false)),
+            FieldKey::Copy
+        );
+        // Cut: X, Shift+Delete.
+        assert_eq!(
+            key_of(ch("x"), Some("\u{18}"), primary_mods(false)),
+            FieldKey::Cut
+        );
+        assert_eq!(
+            key_of(ch("X"), Some("\u{18}"), primary_mods(true)),
+            FieldKey::Cut
+        );
+        assert_eq!(
+            key_of(Key::Named(NamedKey::Delete), None, mods(false, true)),
+            FieldKey::Cut
+        );
+        // Paste: V, Ctrl+Shift+V ("V"), Shift+Insert.
+        assert_eq!(
+            key_of(ch("v"), Some("\u{16}"), primary_mods(false)),
+            FieldKey::Paste
+        );
+        assert_eq!(
+            key_of(ch("V"), Some("\u{16}"), primary_mods(true)),
+            FieldKey::Paste
+        );
+        assert_eq!(
+            key_of(Key::Named(NamedKey::Insert), None, mods(false, true)),
+            FieldKey::Paste
+        );
+    }
+
+    #[test]
+    fn shift_delete_cuts_instead_of_deleting_forward() {
+        let mut field = TextFieldState::new("abc");
+        field.click_at(0);
+        let result = apply_text_field_key(
+            &mut field,
+            &Key::Named(NamedKey::Delete),
+            None,
+            mods(false, true),
+        );
+        assert_eq!(result, FieldKey::Cut);
+        assert_eq!(
+            field.text(),
+            "abc",
+            "the core never edits for a clipboard key"
+        );
+        // Plain Delete is unchanged.
+        let result = apply_text_field_key(
+            &mut field,
+            &Key::Named(NamedKey::Delete),
+            None,
+            mods(false, false),
+        );
+        assert_eq!(result, FieldKey::Handled);
+        assert_eq!(field.text(), "bc");
+    }
+
+    #[test]
+    fn primary_plus_any_other_letter_is_swallowed_and_never_typed() {
+        let mut field = TextFieldState::new("");
+        let result = apply_text_field_key(
+            &mut field,
+            &Key::Character("z".into()),
+            Some("z"),
+            primary_mods(false),
+        );
+        assert_eq!(result, FieldKey::Ignored);
+        assert_eq!(field.text(), "");
+    }
+
+    #[test]
+    fn ctrl_alt_still_types_for_altgr() {
+        let mut field = TextFieldState::new("");
+        let altgr = Modifiers {
+            shift: false,
+            ctrl: true,
+            alt: true,
+            super_: false,
+        };
+        let result =
+            apply_text_field_key(&mut field, &Key::Character("@".into()), Some("@"), altgr);
+        assert_eq!(result, FieldKey::Handled);
+        assert_eq!(field.text(), "@");
+    }
+
+    #[test]
+    fn consumed_is_everything_but_ignored() {
+        assert!(!FieldKey::Ignored.consumed());
+        for key in [
+            FieldKey::Handled,
+            FieldKey::Copy,
+            FieldKey::Cut,
+            FieldKey::Paste,
+        ] {
+            assert!(key.consumed());
+        }
+    }
+
+    #[test]
+    fn paste_chars_normalizes_to_one_line() {
+        let norm = |s: &str| paste_chars(s).collect::<String>();
+        assert_eq!(norm("a\r\nb"), "a b");
+        assert_eq!(norm("a\nb"), "a b");
+        assert_eq!(norm("a\rb"), "a b");
+        assert_eq!(norm("a\tb"), "a b");
+        assert_eq!(norm("a\n\nb"), "a  b");
+        assert_eq!(norm("a\r\rb"), "a  b");
+        assert_eq!(norm("a\u{7}\u{1b}\u{7f}b"), "ab");
+        assert_eq!(norm("olá, mundo"), "olá, mundo");
+        assert_eq!(norm(""), "");
+    }
+
+    #[test]
+    fn selected_text_and_cut_selection() {
+        let mut field = TextFieldState::new("abcdef");
+        assert_eq!(field.selected_text(), None);
+        assert_eq!(field.cut_selection(), None);
+        assert_eq!(field.text(), "abcdef");
+
+        field.click_at(1);
+        field.drag_to(4);
+        assert_eq!(field.selected_text(), Some("bcd"));
+        assert_eq!(field.cut_selection(), Some("bcd".to_string()));
+        assert_eq!(field.text(), "aef");
+        assert_eq!(field.cursor(), 1);
+        assert_eq!(field.selection_range(), None);
+    }
+
+    #[test]
+    fn selected_text_handles_multibyte() {
+        let mut field = TextFieldState::new("aéb");
+        field.select_all();
+        assert_eq!(field.selected_text(), Some("aéb"));
+    }
+
+    #[test]
+    fn insert_str_replaces_the_selection_and_leaves_the_cursor_after_it() {
+        let mut field = TextFieldState::new("abcdef");
+        field.click_at(1);
+        field.drag_to(4);
+        field.insert_str("XY", None);
+        assert_eq!(field.text(), "aXYef");
+        assert_eq!(field.cursor(), 3);
+        assert_eq!(field.selection_range(), None);
+    }
+
+    #[test]
+    fn insert_str_inserts_at_the_cursor_and_normalizes() {
+        let mut field = TextFieldState::new("ad");
+        field.click_at(1);
+        field.insert_str("b\r\nc", None);
+        assert_eq!(field.text(), "ab cd");
+        assert_eq!(field.cursor(), 4);
+    }
+
+    #[test]
+    fn insert_str_ceiling_counts_chars_not_bytes() {
+        let mut field = TextFieldState::new("");
+        field.insert_str("ááááá", Some(3));
+        assert_eq!(field.text(), "ááá");
+        assert_eq!(field.cursor(), "ááá".len());
+
+        // A selection that goes away frees room for the paste.
+        let mut field = TextFieldState::new("abcd");
+        field.select_all();
+        field.insert_str("éééééé", Some(4));
+        assert_eq!(field.text(), "éééé");
+
+        // Already at the ceiling: nothing enters.
+        let mut field = TextFieldState::new("abc");
+        field.insert_str("zz", Some(3));
+        assert_eq!(field.text(), "abc");
     }
 }

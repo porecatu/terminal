@@ -1455,7 +1455,7 @@ O dono decidiu quatro coisas antes da escrita:
 - **macOS:** `with_active(false)`.
 - **X11 e Wayland:** sem garantia, porque o gerenciador de janelas decide o foco.
 
-## Copiar, recortar e colar nos campos de texto (fora de fase) — decidido, a implementar
+## Copiar, recortar e colar nos campos de texto (fora de fase) — implementado, verificado ao vivo no Windows (parcial; aval visual pendente)
 
 Relato do dono em 2026-11-25: nos campos de texto do app (nome do grupo, campos da tela de configurações) `Ctrl+C`, `Ctrl+X` e `Ctrl+V` não funcionam. A causa é de implementação: `apply_text_field_key` nunca tratou essas teclas, e o caractere de controle que o `winit` entrega no texto do evento era descartado em silêncio. Na busca, a captura parcial deixava `Ctrl+C` chegar ao PTY e interromper o processo. Decisões no [ADR-0115](adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md); requisitos RF-10.26 a RF-10.31 no [PRD-010](prd/prd-010-interacao-e-superficie-de-app.md).
 
@@ -1465,17 +1465,24 @@ O dono decidiu quatro coisas antes da escrita:
 - colar troca quebras de linha e `Tab` por espaço;
 - o campo ganha um menu de clique direito (Recortar, Copiar, Colar, Selecionar tudo), com aval visual do dono.
 
-Etapas, na ordem de dependência:
+**Implementado em 2026-11-25**, todas as etapas abaixo, verificado só por teste automatizado (`cargo test --workspace` verde, `clippy -D warnings`, `fmt --check`, `verify-docs.py`). Etapas, na ordem de dependência:
 
 1. **Documentação da decisão — feita.** ADR-0115; blockquotes de revisão nos ADR-0013, 0035, 0041, 0059, 0075 e 0080; RF-10.26 a RF-10.31 e emenda ao RF-10.19 no PRD-010; emendas ao PRD-011 (busca) e ao RF-16.10; `acoes.md`; tabela de ADRs.
-2. **Núcleo do campo.** `TextFieldState` ganha o texto selecionado, recortar a seleção e inserir texto normalizado (quebras e `Tab` viram espaço, teto respeitado); `apply_text_field_key` devolve copiar, recortar e colar como resultado; guarda de `Cmd`+letra no macOS. Testes puros, com a ordem resultante do texto.
-3. **Chamadores.** Uma função só que aplica o resultado pelo `clipboard.rs`, chamada por rename, editor de grupo, popover de sessões, busca, tela de configurações e editor de perfil. Na busca, as teclas de clipboard passam a ser consumidas (inclusive `Ctrl+Shift+C`/`V`). O campo mascarado já trata essas teclas (`apply_masked_key`) e não muda; colar nele passa a usar a mesma normalização.
-4. **Menu do campo.** Clique direito em todo campo, na anatomia do menu de contexto, desenhado também nas janelas de configurações e de perfil; seção nova no catálogo de textos em todo arquivo de `locales/`.
-5. **Fechamento.** Especificação visual (§2.16, tabela de fases, §4.4), guia do usuário (uma seção sobre editar texto nos campos), CHANGELOG, `descobertas.md` (a causa, com o comportamento do `winit` conferido) e o status do ADR-0115.
+2. **Núcleo e teclas — feita.** `text_field.rs` ganha `FieldKey` (copiar, recortar e colar como resultado), `paste_chars` (quebras e `Tab` viram espaço, sem alocar, usado também pelo campo mascarado), `selected_text`, `cut_selection` e `insert_str` com teto; `Cmd`/`Ctrl`+letra que o campo não conhece nunca digita, e `Ctrl+Alt` (AltGr) continua digitando. `clipboard::ClipboardIo` para injetar em teste e `field_clipboard.rs` como a função única (`edit_field_key`, `run_field_op`, `paste_into_masked`), chamada por rename, editor de grupo, popover de sessões (com o teto do nome), busca, tela de configurações, editor de perfil, diálogo de segredo e token do relay. A busca consome as teclas de clipboard sempre e só reinicia quando o texto muda.
+3. **Menu do campo, peças — feita.** `field_menu.rs` (itens, habilitação, `FieldContextMenu<T>` genérico no alvo, `field_menu_key`), `overlay::layout_field_menu`/`paint_field_menu`/`field_menu_hit` sobre `layout_anchored_menu`, que ganhou divisores (os do menu de perfis, fórmula extraída), e `[field_menu]` nos cinco arquivos de `locales/`.
+4. **Menu na janela de terminal — feita.** `app_field_menu.rs`: rename, editor de grupo, popover de sessões, busca e campo mascarado do diálogo de segredo; arma no press e age no release (ADR-0081); antes de todo modo de captura no teclado; por cima do diálogo na camada `Modal`; na árvore de acessibilidade. As quatro cópias do "índice sob o ponto" viraram `tab_bar::text_index_at`.
+5. **Menu nas janelas de configurações e de perfil — feita.** Todo campo de texto, número, item de lista, filtro e o token do relay (Colar por `RemoteTokenState::paste_from`); sem acessibilidade, porque essas árvores não têm overlay nenhum.
+6. **Fechamento — feita.** Especificação visual (§2.16, tabela de fases, §4.4), guia do usuário ("Editar texto nos campos"), CHANGELOG, `descobertas.md`, CLAUDE.md e o status do ADR-0115 com a nota "Como ficou".
 
-**Dívida de verificação prevista:**
-- **Ao vivo no Windows:** copiar, recortar e colar por cada combinação em cada campo; `Ctrl+C` na busca com um processo rodando; colar texto de várias linhas; o menu em cada campo, inclusive nas janelas de configurações e de perfil.
+**Verificado ao vivo no Windows em 2026-11-25** (binário de debug, input sintético, config e sessão isoladas por `PORECATU_CONFIG`/`PORECATU_SESSION`, 96 DPI), sem defeito encontrado:
+- **Rename da aba:** `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+Insert`, `Shift+Insert`, `Shift+Delete` e `Ctrl+Shift+C`/`V`; texto com `CRLF` e `Tab` colado como uma linha com espaços; `Ctrl+Q` não digita; `Shift+Delete` sem seleção não faz nada.
+- **Busca:** `Ctrl+C` com e sem seleção, com `ping -t` rodando, não interrompe o processo (vivo depois de fechar a busca; o `Ctrl+C` seguinte, no terminal, o encerra); `Ctrl+Shift+V` cola no campo e a busca reinicia.
+- **Editor de grupo, popover de sessões e tela de configurações:** copiar, recortar e colar; o colar de 200 caracteres no nome de sessão para no teto de 64.
+- **Menu do campo** no rename, na busca, no editor de grupo (por cima do editor), no popover de sessões e na tela de configurações: clique direito dentro da seleção a mantém, fora dela põe o cursor no ponto; Recortar e Copiar esmaecidos sem seleção; os quatro itens por clique e por teclado (setas e `Enter`); `Esc` fecha só o menu, o campo segue em edição.
+
+**Dívida de verificação:**
+- **Ao vivo no Windows, o que faltou:** o diálogo de segredo (o campo mascarado e o menu na camada `Modal`), o editor de perfil e o token do relay; hover do menu; DPI ≠ 100%.
 - **Aval visual do dono:** o menu do campo.
-- **macOS:** `Cmd`+letra e a guarda contra digitar a letra.
+- **macOS:** `Cmd`+letra, a guarda contra digitar a letra e o `Ctrl`+clique como clique secundário.
 - **Linux:** X11 e Wayland, onde o clipboard do `arboard` é o ponto frágil.
-- **Leitor de tela:** o menu do campo.
+- **Leitor de tela:** o menu do campo na janela de terminal; nas janelas de configurações e de perfil ele não está na árvore.

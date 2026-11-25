@@ -35,6 +35,7 @@ use winit::window::WindowId;
 use crate::context_menu::ContextMenu;
 use crate::devices_popover::{self, DeviceEntry};
 use crate::dialog::{ConfirmDialog, DialogButton, SecretFocus};
+use crate::field_menu::FieldMenuItem;
 use crate::group_editor::{EditorRegion, GroupEditor};
 use crate::group_menu::{EDITOR_ACTION_ORDER, GroupContextMenu};
 use crate::is_macos;
@@ -116,6 +117,11 @@ const TASK_MANAGER_BACKGROUND_ID: NodeId = NodeId(113);
 /// PRD-025 RF-25.12, ADR-0108 section 4: the connected-devices button, right
 /// after the fixed ids above. Present only while a phone is connected.
 const DEVICES_BUTTON_ID: NodeId = NodeId(114);
+/// ADR-0115 §7: the right-click menu of a text field and its four items, right
+/// after the ids above. Own ids, not `MENU_ID`: it is added over a tree that may
+/// already carry a menu-like surface (the group editor, the sessions popover).
+const FIELD_MENU_ID: NodeId = NodeId(115);
+const FIELD_MENU_ITEM_FIRST_ID: u64 = 116;
 /// Linhas da lista do gerenciador: uma faixa de 2^40 ids, acima de tudo o que
 /// as outras faixas usam. `PID` e instante de início não cabem num múltiplo
 /// fixo como `TAB_STRIDE`, então o id sai de um hash da `RowKey` (ver
@@ -439,6 +445,42 @@ fn build_task_menu(
     nodes.push((MENU_ID, container(Role::Menu, children)));
     root_children.push(MENU_ID);
     focus
+}
+
+/// The right-click menu of a text field (ADR-0115 §7), added **on top of** a
+/// finished tree: it is over whatever surface owns the field, so it gets its own
+/// ids (the other menus share `MENU_ID`, because only one of them is ever open),
+/// is appended to the root's children and takes the focus -- on the highlighted
+/// item, or on the menu with none. The items come from the live field (a dimmed
+/// Cut and Copy are disabled nodes).
+pub(crate) fn add_field_menu(
+    update: &mut TreeUpdate,
+    highlighted: Option<usize>,
+    items: &[FieldMenuItem],
+    catalog: &Catalog,
+) {
+    let mut children = Vec::new();
+    let mut focus = FIELD_MENU_ID;
+    for (index, item) in items.iter().enumerate() {
+        let id = NodeId(FIELD_MENU_ITEM_FIRST_ID + index as u64);
+        let mut node = Node::new(Role::MenuItem);
+        node.set_label(item.action.label(catalog));
+        if !item.enabled {
+            node.set_disabled();
+        }
+        update.nodes.push((id, node));
+        children.push(id);
+        if Some(index) == highlighted {
+            focus = id;
+        }
+    }
+    update
+        .nodes
+        .push((FIELD_MENU_ID, container(Role::Menu, children)));
+    if let Some((_, root)) = update.nodes.iter_mut().find(|(id, _)| *id == ROOT_ID) {
+        root.push_child(FIELD_MENU_ID);
+    }
+    update.focus = focus;
 }
 
 fn leaf(role: Role, label: impl Into<String>) -> Node {
@@ -3368,6 +3410,48 @@ mod tests {
             .unwrap();
         let move_item = node(&update, menu_item_id(move_index));
         assert_eq!(move_item.is_disabled(), !TAB_MENU_ITEMS[move_index].enabled);
+    }
+
+    /// ADR-0115 §7: the field menu is added over a finished tree, with its own
+    /// ids, under the root, with the focus on the highlighted item; a dimmed
+    /// Cut and Copy stay in it, disabled.
+    #[test]
+    fn the_field_menu_is_added_over_the_tree_with_the_focus_on_its_item() {
+        let mut ws = Workspace::new();
+        ws.append_tab("a", None);
+        let mut update = build(&ws);
+        let nodes_before = update.nodes.len();
+        let items = crate::field_menu::field_menu_items(false, false);
+        add_field_menu(
+            &mut update,
+            Some(2),
+            &items,
+            &crate::messages::test_support::pt_br(),
+        );
+        assert_eq!(update.nodes.len(), nodes_before + items.len() + 1);
+
+        let menu = node(&update, FIELD_MENU_ID);
+        assert_eq!(menu.role(), Role::Menu);
+        assert_eq!(menu.children().len(), items.len());
+        assert!(node(&update, ROOT_ID).children().contains(&FIELD_MENU_ID));
+
+        let cut = node(&update, NodeId(FIELD_MENU_ITEM_FIRST_ID));
+        assert_eq!(cut.role(), Role::MenuItem);
+        assert!(cut.is_disabled());
+        assert_eq!(cut.label(), Some("Recortar"));
+        let paste = node(&update, NodeId(FIELD_MENU_ITEM_FIRST_ID + 2));
+        assert!(!paste.is_disabled());
+        assert_eq!(update.focus, NodeId(FIELD_MENU_ITEM_FIRST_ID + 2));
+
+        // With no item highlighted the focus is the menu itself.
+        let mut bare = build(&ws);
+        add_field_menu(
+            &mut bare,
+            None,
+            &items,
+            &crate::messages::test_support::pt_br(),
+        );
+        assert_eq!(bare.focus, FIELD_MENU_ID);
     }
 
     /// RF-21.12 (ADR-0087 §6): o menu de uma fixada mantém "Mover para grupo"

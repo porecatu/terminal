@@ -23,6 +23,12 @@ search = "Rechercher"
 open_link = "Ouvrir le lien"
 copy_link = "Copier le lien"
 
+[field_menu]
+cut = "Couper"
+copy = "Copier"
+paste = "Coller"
+select_all = "Tout sélectionner"
+
 [group_menu]
 rename = "Renommer"
 set_color = "Changer la couleur"
