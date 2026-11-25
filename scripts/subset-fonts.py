@@ -20,6 +20,12 @@ O que fica de fora sai pela cadeia de fallback do sistema (ADR-0016):
 emoji, CJK, e todo o resto do Unicode. É a mesma divisão de sempre — o
 binário garante o que o design promete, o sistema cobre o resto.
 
+Dentro das faixas, dois grupos saem do recorte (ADR-0117): todo caractere
+de largura dupla na grade (East Asian Width W ou F, calculado aqui, não
+listado) e os de `EXCLUIDOS`, que a variante Fixed desenha pequenos
+demais. Os dois passam a vir do fallback, que o ADR-0116 encaixa na
+célula pela tinta.
+
 Requer `fonttools`. Rodado à mão quando a versão da Iosevka sobe, não no
 build: o resultado é versionado em `assets/fonts/`.
 """
@@ -29,6 +35,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
+import unicodedata
 
 # Blocos que o Porecatu desenha por conta própria. Cada faixa está aqui
 # por um motivo verificável, não por precaução.
@@ -62,6 +70,15 @@ FAIXAS = [
     ("FFFD", "caractere de substituição"),
 ]
 
+# Tirados do recorte mesmo dentro de uma faixa acima (ADR-0117). A Fixed
+# espreme em meia em o que a Iosevka normal desenha numa em, e estes saem
+# visivelmente menores que o texto ao lado. Medidas da Fixed 34.8.1, em
+# fração da em; a altura de versal é 0.735.
+EXCLUIDOS = [
+    ("26A0", "⚠ — triângulo estreito, 0.44 de largura; o aviso do Claude Code"),
+    ("23F4-23F7", "⏴⏵⏶⏷ — triângulos médios de 0.22 × 0.44, 60% da versal; o ⏵⏵ do Claude Code"),
+]
+
 FACES = [
     "IosevkaFixed-Regular.ttf",
     "IosevkaFixed-Medium.ttf",
@@ -70,46 +87,79 @@ FACES = [
 DESTINO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "fonts")
 
 
+def expandir(faixa: str) -> range:
+    inicio, _, fim = faixa.partition("-")
+    return range(int(inicio, 16), int(fim or inicio, 16) + 1)
+
+
+def largura_dupla(codepoint: int) -> bool:
+    """A grade reserva duas células para ele, e a Fixed desenha uma.
+
+    É a mesma propriedade que o `unicode-width` do `alacritty_terminal`
+    usa para marcar a célula como larga. Depende da versão do Unicode do
+    Python que roda o script; a 3.12 traz a 15.0.
+    """
+    return unicodedata.east_asian_width(chr(codepoint)) in ("W", "F")
+
+
+def codepoints() -> list[int]:
+    manter: set[int] = set()
+    for faixa, _ in FAIXAS:
+        manter.update(expandir(faixa))
+    excluir = {cp for faixa, _ in EXCLUIDOS for cp in expandir(faixa)}
+    excluir.update(cp for cp in manter if largura_dupla(cp))
+    return sorted(manter - excluir)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__)
         return 2
     origem = sys.argv[1]
-    unicodes = ",".join(faixa for faixa, _ in FAIXAS)
+    print(f"Unicode {unicodedata.unidata_version}")
 
-    total_antes = total_depois = 0
-    for face in FACES:
-        entrada = os.path.join(origem, face)
-        if not os.path.isfile(entrada):
-            print(f"ERRO: não achei {entrada}")
-            return 1
-        saida = os.path.join(DESTINO, face)
-        antes = os.path.getsize(entrada)
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "fontTools.subset",
-                entrada,
-                f"--unicodes={unicodes}",
-                f"--output-file={saida}",
-                # Sem os conjuntos estilísticos alternativos, que são o
-                # grosso do peso e que o projeto não expõe.
-                "--layout-features=ccmp,locl,mark,mkmk",
-                "--no-hinting",
-                "--desubroutinize",
-                # O nome da família precisa sobreviver: a config e a
-                # especificação visual se referem a ele.
-                "--name-IDs=*",
-                "--glyph-names",
-                "--drop-tables+=DSIG",
-            ],
-            check=True,
-        )
-        depois = os.path.getsize(saida)
-        total_antes += antes
-        total_depois += depois
-        print(f"  {face}: {antes // 1024} KB -> {depois // 1024} KB")
+    # Em arquivo, não em `--unicodes=`: a lista explícita, com as exclusões,
+    # passa do limite de linha de comando do Windows.
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="ascii") as arquivo:
+        arquivo.write("\n".join(f"{cp:04X}" for cp in codepoints()))
+        lista = arquivo.name
+
+    try:
+        total_antes = total_depois = 0
+        for face in FACES:
+            entrada = os.path.join(origem, face)
+            if not os.path.isfile(entrada):
+                print(f"ERRO: não achei {entrada}")
+                return 1
+            saida = os.path.join(DESTINO, face)
+            antes = os.path.getsize(entrada)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "fontTools.subset",
+                    entrada,
+                    f"--unicodes-file={lista}",
+                    f"--output-file={saida}",
+                    # Sem os conjuntos estilísticos alternativos, que são o
+                    # grosso do peso e que o projeto não expõe.
+                    "--layout-features=ccmp,locl,mark,mkmk",
+                    "--no-hinting",
+                    "--desubroutinize",
+                    # O nome da família precisa sobreviver: a config e a
+                    # especificação visual se referem a ele.
+                    "--name-IDs=*",
+                    "--glyph-names",
+                    "--drop-tables+=DSIG",
+                ],
+                check=True,
+            )
+            depois = os.path.getsize(saida)
+            total_antes += antes
+            total_depois += depois
+            print(f"  {face}: {antes // 1024} KB -> {depois // 1024} KB")
+    finally:
+        os.unlink(lista)
 
     print(f"\ntotal: {total_antes // 1024 // 1024} MB -> {total_depois // 1024} KB")
     return 0

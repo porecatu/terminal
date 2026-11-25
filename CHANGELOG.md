@@ -74,6 +74,19 @@ primeiro release.
 
 ### Corrigido
 
+- **Símbolos de fallback pequenos demais no terminal**
+  ([ADR-0116](docs/adr/0116-glyph-de-fallback-encaixado-pela-tinta.md)):
+  um símbolo que a fonte do terminal não tem, e que vem de outra fonte do
+  sistema, era encolhido pela largura de avanço dessa fonte, que é bem maior
+  que o desenho. Com isso, `⏵⏵` quase sumia e `⚠` saía com menos da metade
+  da altura do texto. Agora o símbolo encolhe só o que o desenho pede e, se a
+  célula seguinte está vazia, pode ocupá-la também. As colunas não mudam.
+- **Símbolos pequenos e caracteres largos na fonte embutida**
+  ([ADR-0117](docs/adr/0117-recorte-da-iosevka-sem-largos-e-espremidos.md)):
+  a Iosevka Fixed desenhava `⚠` e `⏴⏵⏶⏷` bem menores que o texto, e
+  `✅`, `⭐`, `⚡` e outros 21 caracteres de largura dupla numa célula só,
+  ao lado de uma célula vazia. Esses 29 saem do recorte da fonte e vêm da
+  fonte de símbolos ou de emoji do sistema.
 - **Copiar, recortar e colar nos campos de texto**
   ([ADR-0115](docs/adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md),
   PRD-010 RF-10.26 a RF-10.30): `Ctrl+C`, `Ctrl+X` e `Ctrl+V` não faziam nada

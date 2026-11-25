@@ -14,15 +14,20 @@
 //! triângulo geométrico. Num run compartilhado isso empurra todo o resto
 //! da linha para a direita -- os gráficos de braille do `btop` saem
 //! escorrendo. Então o trecho **quebra** nesses caracteres: cada um vira
-//! um `TextRun` próprio, ancorado no `x` da célula dele e reduzido para
-//! caber nela. É o "posicionar cada glyph manualmente pela grade" que
-//! estava anotado aqui como pendente até virar visível na prática.
+//! um `TextRun` próprio, ancorado na célula dele e reduzido para caber
+//! nela. É o "posicionar cada glyph manualmente pela grade" que estava
+//! anotado aqui como pendente até virar visível na prática.
+//!
+//! O encaixe é pela **tinta** do glyph, não pelo avanço (`place_fallback`),
+//! e um símbolo de uma célula seguido de célula vazia pode usar as duas --
+//! senão o `⚠` da Segoe UI Emoji saía a 44% e o `⏵` da Segoe UI Symbol
+//! quase sumia.
 //!
 //! A quebra é por caractere que precisa dela, não por célula: uma linha de
 //! ASCII continua sendo um run só.
 
 use porecatu_render::{
-    Color, FontFace, ImageId, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun,
+    Color, FontFace, ImageId, InkBox, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun,
 };
 use porecatu_term::{
     Cell, CellFlags, CellText, CursorShape, GridSnapshot, HyperlinkSpan, OccurrenceSpan,
@@ -616,19 +621,38 @@ fn paint_row_text(
         }
 
         // Caractere que não avança o que a grade reservou sai sozinho,
-        // ancorado no `x` da célula e encolhido para caber nela -- senão
+        // ancorado na célula e encolhido para caber nela -- senão
         // empurraria o resto do run e transbordaria para a célula
         // seguinte.
         if !fits_the_grid(cell, bold, measurer) {
             let mut text = String::new();
             push_cell_text(cell, &snapshot.clusters, &mut text);
             if !text.trim().is_empty() {
-                let target = metrics.width * cell_span(cell);
-                let size_px = fitted_size(cell, &text, bold, font_size_px, target, measurer);
+                let x0 = col_left(x_offset, col, metrics);
+                let slot = FallbackSlot {
+                    x: x0,
+                    y: row_y,
+                    width: col_left(x_offset, col + cell_span(cell) as usize, metrics) - x0,
+                    height: row_bottom - row_y,
+                    spill: next_cell_is_blank(snapshot, row, col, cols, cell)
+                        .then_some(metrics.width),
+                };
+                let font = FontFace::Mono { bold };
+                let ink = match cell.text {
+                    CellText::Char(ch) => measurer.ink_em(ch, font),
+                    CellText::Cluster { .. } => measurer.cluster_ink_em(&text, font),
+                };
+                let (origin, size_px) = match ink {
+                    Some(ink) => place_fallback(ink, font_size_px, slot),
+                    None => (
+                        (slot.x, slot.y),
+                        fitted_size(cell, &text, bold, font_size_px, slot.width, measurer),
+                    ),
+                };
                 out.push(Primitive::Text(TextRun {
-                    origin: (x_offset + col as f32 * metrics.width, row_y),
+                    origin,
                     text,
-                    font: FontFace::Mono { bold },
+                    font,
                     size_px,
                     color: fg,
                 }));
@@ -680,7 +704,96 @@ fn paint_row_text(
     }
 }
 
-/// Tamanho em que `text` cabe em `target_width`. Só encolhe: um glyph de
+/// Onde um glyph de fallback pode pintar: a(s) célula(s) dele e, se a
+/// seguinte está vazia, a largura dela (`spill`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FallbackSlot {
+    x: f32,
+    y: f32,
+    /// Largura das células do caractere (uma, ou duas se `WIDE`).
+    width: f32,
+    height: f32,
+    /// Largura extra que o glyph pode tomar à direita, quando a célula
+    /// seguinte está vazia -- `None` quando não pode.
+    spill: Option<f32>,
+}
+
+/// Se o glyph de `cell` pode transbordar para a célula à direita: só
+/// caractere de uma célula, e só com a seguinte em branco (espaço, sem ser
+/// metade de um largo). É a mesma regra do kitty e do WezTerm
+/// (`allow_square_glyphs_to_overflow_width = "WhenFollowedBySpace"`): um
+/// `⚠ ` ou `✔ ` vindo de fonte de símbolo tem tinta de quase duas células,
+/// e o texto que os programas escrevem já deixa o espaço depois dele.
+fn next_cell_is_blank(
+    snapshot: &GridSnapshot,
+    row: usize,
+    col: usize,
+    cols: usize,
+    cell: &Cell,
+) -> bool {
+    if cell.flags.contains(CellFlags::WIDE) || col + 1 >= cols {
+        return false;
+    }
+    let next = &snapshot.cells[row * cols + col + 1];
+    next.text == CellText::Char(' ')
+        && !next
+            .flags
+            .intersects(CellFlags::WIDE | CellFlags::WIDE_SPACER)
+}
+
+/// Origem e tamanho de um glyph de fallback, a partir da tinta dele
+/// ([`InkBox`], em fração da em) -- função pura.
+///
+/// - **Escala** só encolhe, e só o quanto a tinta pede: a largura disponível
+///   é a da célula e, se a tinta não cabe nela, mais `spill`; a altura é a
+///   da linha. Um glyph cuja tinta cabe sai no tamanho da fonte, por maior
+///   que seja o avanço dele.
+/// - **Horizontal**: fica onde a fonte o põe (pena no `x` da célula) se a
+///   tinta cabe ali; senão a tinta é centrada no espaço disponível. Não
+///   centrar sempre preserva glyph que ocupa só parte da célula de
+///   propósito (sextantes, meios-blocos de fontes de símbolo).
+/// - **Vertical**: encolhe em torno do centro da tinta no tamanho cheio,
+///   então símbolo continua no meio da linha e pontuação continua embaixo;
+///   se ainda sair da linha, é empurrado para dentro.
+fn place_fallback(ink: InkBox, font_size_px: f32, slot: FallbackSlot) -> ((f32, f32), f32) {
+    let ink_width = ink.width() * font_size_px;
+    let ink_height = ink.height() * font_size_px;
+    let room = match slot.spill {
+        Some(extra) if ink_width > slot.width => slot.width + extra,
+        _ => slot.width,
+    };
+    let mut scale = 1.0_f32;
+    if ink_width > room {
+        scale = scale.min(room / ink_width);
+    }
+    if ink_height > slot.height {
+        scale = scale.min(slot.height / ink_height);
+    }
+    let size_px = font_size_px * scale;
+
+    let left = ink.left * size_px;
+    let right = ink.right * size_px;
+    let x = if left >= 0.0 && right <= room {
+        slot.x
+    } else {
+        slot.x + (room - (right - left)) / 2.0 - left
+    };
+
+    let center = (ink.top + ink.bottom) / 2.0 * font_size_px;
+    let mut y = slot.y + center * (1.0 - scale);
+    let top = y + ink.top * size_px;
+    let bottom = y + ink.bottom * size_px;
+    if top < slot.y {
+        y += slot.y - top;
+    } else if bottom > slot.y + slot.height {
+        y -= bottom - (slot.y + slot.height);
+    }
+
+    ((x, y), size_px)
+}
+
+/// Tamanho em que `text` cabe em `target_width`, pelo avanço -- só para
+/// glyph sem tinta mensurável (`place_fallback` cobre o resto). Só encolhe: um glyph de
 /// fallback mais estreito que a célula fica onde está, porque esticá-lo
 /// deformaria o desenho sem ganhar alinhamento nenhum -- o `x` da próxima
 /// célula não depende dele.
@@ -1661,11 +1774,17 @@ mod tests {
         assert_eq!(runs[0].0, padding);
 
         assert_eq!(runs[1].1, "\u{1F600}");
-        assert_eq!(
-            runs[1].0,
-            padding + 2.0 * cell.width,
-            "glyph de fallback fora da celula dele"
-        );
+        // A origem do run pode sair do `x` da célula (`place_fallback`
+        // centra a tinta); o que não pode é a tinta sair da célula.
+        if let Some(ink) = m.ink_em('\u{1F600}', FontFace::Mono { bold: false }) {
+            let left = runs[1].0 + ink.left * runs[1].2;
+            let right = runs[1].0 + ink.right * runs[1].2;
+            let cell_x = padding + 2.0 * cell.width;
+            assert!(
+                left >= cell_x - 0.5 && right <= cell_x + cell.width + 0.5,
+                "glyph de fallback fora da celula dele: {left}..{right}"
+            );
+        }
 
         assert_eq!(runs[2].1, "cd");
         assert_eq!(
@@ -1676,8 +1795,8 @@ mod tests {
     }
 
     /// E o glyph de fallback é encolhido para não invadir a célula
-    /// seguinte -- com o avanço da fonte de onde ele veio, ocuparia mais
-    /// de uma.
+    /// seguinte -- a **tinta** dele, que é o que se vê; o avanço da fonte de
+    /// onde ele veio pode ser bem maior que ela.
     #[test]
     fn fallback_char_is_shrunk_to_fit_its_cell() {
         let mut m = porecatu_render::TextMeasurer::new();
@@ -1696,15 +1815,183 @@ mod tests {
         let runs = runs(&out);
         assert_eq!(runs.len(), 1);
         let size = runs[0].2;
-        let width = m.measure_width(&runs[0].1, FontFace::Mono { bold: false }, size);
+        let Some(ink) = m.ink_em('\u{1F600}', FontFace::Mono { bold: false }) else {
+            return; // sem fonte de emoji na máquina: nada pintado, nada a medir
+        };
+        let width = ink.width() * size;
         // Folga em pixels, não `ADVANCE_TOLERANCE` -- essa constante é em
         // fração da em, e aqui se compara largura desenhada com largura de
-        // célula. Meio pixel cobre o arredondamento do shaping.
+        // célula. Meio pixel cobre o arredondamento da rasterização.
         assert!(
             width <= cell.width + 0.5,
             "glyph de fallback com {width} numa celula de {}",
             cell.width
         );
+    }
+
+    /// Com a célula seguinte vazia, um glyph de fallback de uma célula usa
+    /// as duas (`next_cell_is_blank`): o `⚠ ` que os programas escrevem
+    /// sai inteiro, não a menos da metade. Sem o espaço, continua numa só.
+    #[test]
+    fn fallback_char_followed_by_a_blank_cell_may_use_both() {
+        let mut m = porecatu_render::TextMeasurer::new();
+        let cell = cell(&mut m);
+        let font = FontFace::Mono { bold: false };
+        let Some(ink) = m.ink_em('\u{1F600}', font) else {
+            return; // sem fonte de emoji na máquina
+        };
+        let drawn = |text: &str, m: &mut porecatu_render::TextMeasurer| {
+            let out = build_primitives(
+                &snapshot(text),
+                cell,
+                SIZE,
+                test_box_rect(),
+                &TabBarStyle::DEFAULT,
+                &test_term_pal(),
+                test_cursor(),
+                m,
+                &[],
+            );
+            runs(&out)[0].2
+        };
+
+        let spilled = drawn("\u{1F600} a", &mut m);
+        let width = ink.width() * spilled;
+        assert!(width > cell.width + 0.5, "nao usou a celula vazia: {width}");
+        assert!(
+            width <= 2.0 * cell.width + 0.5,
+            "passou de duas celulas: {width}"
+        );
+
+        let glued = drawn("\u{1F600}a", &mut m);
+        assert!(ink.width() * glued <= cell.width + 0.5);
+        assert!(glued < spilled);
+    }
+
+    fn slot(spill: Option<f32>) -> FallbackSlot {
+        FallbackSlot {
+            x: 100.0,
+            y: 50.0,
+            width: 8.0,
+            height: 20.0,
+            spill,
+        }
+    }
+
+    fn ink(left: f32, right: f32, top: f32, bottom: f32) -> InkBox {
+        InkBox {
+            left,
+            right,
+            top,
+            bottom,
+        }
+    }
+
+    /// O caso do `⏵` da Segoe UI Symbol: avança 1 em, mas a tinta cabe na
+    /// célula. Sai no tamanho da fonte; se a tinta já está dentro da célula
+    /// na posição natural, fica nela.
+    #[test]
+    fn ink_that_fits_keeps_the_font_size_and_position() {
+        let (origin, size) = place_fallback(ink(0.1, 0.4, 0.3, 0.9), 16.0, slot(None));
+        assert_eq!(size, 16.0);
+        assert_eq!(origin, (100.0, 50.0));
+    }
+
+    /// Tinta que cabe, mas que a fonte põe para fora da célula (sobra de
+    /// avanço à esquerda): centrada, sem encolher.
+    #[test]
+    fn ink_that_fits_but_sits_outside_is_centered() {
+        // 0.4 a 0.7 em a 16 px: 6.4 a 11.2 px, numa célula de 8.
+        let (origin, size) = place_fallback(ink(0.4, 0.7, 0.3, 0.9), 16.0, slot(None));
+        assert_eq!(size, 16.0);
+        let left = origin.0 + 0.4 * 16.0;
+        let right = origin.0 + 0.7 * 16.0;
+        assert!(
+            (left - 100.0 - (108.0 - right)).abs() < 1e-4,
+            "{left}..{right}"
+        );
+    }
+
+    /// Mais larga que a célula, sem célula vazia ao lado: encolhe até a
+    /// tinta caber na célula.
+    #[test]
+    fn wide_ink_without_spill_shrinks_to_the_cell() {
+        let (origin, size) = place_fallback(ink(0.1, 1.1, 0.2, 1.0), 16.0, slot(None));
+        assert!((size - 8.0).abs() < 1e-4, "{size}");
+        let left = origin.0 + 0.1 * size;
+        let right = origin.0 + 1.1 * size;
+        assert!(
+            left >= 100.0 - 1e-4 && right <= 108.0 + 1e-4,
+            "{left}..{right}"
+        );
+    }
+
+    /// Com a célula seguinte vazia, a mesma tinta cabe nas duas e sai no
+    /// tamanho da fonte, centrada nelas.
+    #[test]
+    fn wide_ink_with_spill_uses_two_cells() {
+        // 0.0 a 0.9 em a 16 px: 14.4 px, em 16 de espaço.
+        let (origin, size) = place_fallback(ink(0.0, 0.9, 0.2, 1.0), 16.0, slot(Some(8.0)));
+        assert_eq!(size, 16.0);
+        assert_eq!(origin, (100.0, 50.0));
+
+        // Mais larga que duas células: encolhe até elas, centrada.
+        let (origin, size) = place_fallback(ink(0.2, 1.4, 0.2, 1.0), 16.0, slot(Some(8.0)));
+        assert!((size - 16.0 / 1.2 * 1.0).abs() < 1e-3, "{size}");
+        let left = origin.0 + 0.2 * size;
+        assert!((left - 100.0).abs() < 1e-3, "{left}");
+    }
+
+    /// A célula vazia só entra se a tinta não cabe na própria: um glyph
+    /// estreito não é centrado em duas células.
+    #[test]
+    fn spill_is_not_used_when_the_ink_fits_its_cell() {
+        let (origin, size) = place_fallback(ink(0.4, 0.7, 0.3, 0.9), 16.0, slot(Some(8.0)));
+        assert_eq!(size, 16.0);
+        let right = origin.0 + 0.7 * 16.0;
+        assert!(right <= 108.0 + 1e-4, "{right}");
+    }
+
+    /// Encolher é em torno do centro da tinta no tamanho cheio -- um
+    /// símbolo no meio da linha continua no meio -- e o que passa da altura
+    /// da linha encolhe até ela e é empurrado para dentro.
+    #[test]
+    fn shrinking_keeps_the_ink_centre_and_stays_inside_the_row() {
+        let full = ink(0.0, 1.0, 0.25, 0.75);
+        let (origin, size) = place_fallback(full, 16.0, slot(None));
+        let centre = origin.1 + 0.5 * size;
+        assert!((centre - (50.0 + 0.5 * 16.0)).abs() < 1e-4, "{centre}");
+
+        let tall = ink(0.0, 0.4, -0.2, 1.4);
+        let (origin, size) = place_fallback(tall, 16.0, slot(None));
+        let top = origin.1 + -0.2 * size;
+        let bottom = origin.1 + 1.4 * size;
+        assert!(
+            top >= 50.0 - 1e-4 && bottom <= 70.0 + 1e-4,
+            "{top}..{bottom}"
+        );
+    }
+
+    #[test]
+    fn spill_needs_a_blank_narrow_neighbour() {
+        let blank = |text: &str, col: usize| {
+            let snap = snapshot(text);
+            next_cell_is_blank(&snap, 0, col, snap.cols, &snap.cells[col])
+        };
+        assert!(blank("x a", 0));
+        assert!(!blank("xa", 0));
+        assert!(!blank("x", 0), "ultima coluna");
+
+        let mut snap = snapshot("x  ");
+        snap.cells[0].flags = CellFlags::WIDE;
+        assert!(
+            !next_cell_is_blank(&snap, 0, 0, 3, &snap.cells[0]),
+            "largo nunca transborda"
+        );
+
+        let mut snap = snapshot("x  ");
+        snap.cells[1].flags = CellFlags::WIDE_SPACER;
+        assert!(!next_cell_is_blank(&snap, 0, 0, 3, &snap.cells[0]));
     }
 
     fn snapshot_with_cursor(shape: CursorShape) -> GridSnapshot {

@@ -255,6 +255,44 @@ pub(crate) fn cap_center_fraction(
     Some((run.line_y - ink_center_above_baseline) / REFERENCE_PX)
 }
 
+/// Caixa da tinta de um texto, em múltiplos de `size_px`, relativa à origem
+/// de um `TextRun` desenhado com ele: `x` a partir da posição da pena, `y`
+/// para baixo a partir do topo da caixa de linha (`size_px * 1.2`, a mesma
+/// de `text.rs`). Escala linearmente com `size_px`.
+///
+/// Existe porque o **avanço** não diz quanto um glyph de fallback ocupa de
+/// verdade: o `⏵` da Segoe UI Symbol avança 1 em e pinta 0.31 em, o `⚠` da
+/// Segoe UI Emoji avança 1.37 em e pinta 1.06 em. Encolher pelo avanço
+/// deixava o primeiro quase invisível sem necessidade nenhuma.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InkBox {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+
+impl InkBox {
+    pub fn width(&self) -> f32 {
+        self.right - self.left
+    }
+
+    pub fn height(&self) -> f32 {
+        self.bottom - self.top
+    }
+}
+
+/// Tamanho em que [`TextMeasurer::ink_em`] rasteriza, antes de normalizar.
+/// Grande pelo mesmo motivo de [`cap_center_fraction`]: a `placement` do
+/// `swash` vem em pixel inteiro, e o erro de arredondamento cai com o
+/// tamanho.
+const INK_PROBE_SIZE: f32 = 128.0;
+
+/// Teto do cache de tinta de grafemas compostos. Caractere único tem um
+/// conjunto pequeno e estável; cluster é texto arbitrário (ZWJ, combinantes)
+/// e não pode crescer sem limite numa sessão longa.
+const CLUSTER_INK_CACHE_LIMIT: usize = 1024;
+
 /// Tamanho em que [`TextMeasurer::advance_em`] mede, antes de normalizar
 /// pela em. Grande de propósito: o avanço vem do shaping em ponto
 /// flutuante, e medir num tamanho de tela deixaria o arredondamento
@@ -276,6 +314,11 @@ pub struct TextMeasurer {
     /// CLAUDE.md registra. O conjunto de caracteres distintos numa sessão
     /// é pequeno e estável, então o cache satura rápido.
     advance_cache: HashMap<(char, FontFace), f32>,
+    /// Tinta por caractere ([`InkBox`]), pelo mesmo motivo do cache de
+    /// avanço: a grade consulta isto por célula de fallback desenhada.
+    ink_cache: HashMap<(char, FontFace), Option<InkBox>>,
+    /// Tinta por grafema composto, com teto ([`CLUSTER_INK_CACHE_LIMIT`]).
+    cluster_ink_cache: HashMap<(String, FontFace), Option<InkBox>>,
     /// `[terminal.font] letter_spacing` como a config pediu, sem a correção
     /// de `align_mono_advance_to` -- que vive em
     /// `families.mono_letter_spacing_em` e é refeita a cada tamanho novo a
@@ -316,6 +359,8 @@ impl TextMeasurer {
             configured_letter_spacing_em: families.mono_letter_spacing_em,
             families,
             advance_cache: HashMap::new(),
+            ink_cache: HashMap::new(),
+            cluster_ink_cache: HashMap::new(),
             missing_mono_family,
         }
     }
@@ -380,6 +425,94 @@ impl TextMeasurer {
         advance
     }
 
+    /// Caixa da tinta de `ch` na face `font` ([`InkBox`], em múltiplos de
+    /// `size_px`), `None` se nada é pintado (espaço, glyph ausente).
+    ///
+    /// Serve à grade para encaixar um glyph de fallback na célula pelo que
+    /// ele **pinta**, não pelo que avança. Cacheado: depois da primeira
+    /// medição de cada caractere, não rasteriza nada.
+    pub fn ink_em(&mut self, ch: char, font: FontFace) -> Option<InkBox> {
+        if let Some(&cached) = self.ink_cache.get(&(ch, font)) {
+            return cached;
+        }
+        let mut buffer = [0u8; 4];
+        let ink = self.measure_ink(ch.encode_utf8(&mut buffer), font);
+        self.ink_cache.insert((ch, font), ink);
+        ink
+    }
+
+    /// [`Self::ink_em`] para um grafema composto (base + combinantes, ZWJ).
+    pub fn cluster_ink_em(&mut self, text: &str, font: FontFace) -> Option<InkBox> {
+        let key = (text.to_owned(), font);
+        if let Some(&cached) = self.cluster_ink_cache.get(&key) {
+            return cached;
+        }
+        let ink = self.measure_ink(text, font);
+        if self.cluster_ink_cache.len() >= CLUSTER_INK_CACHE_LIMIT {
+            self.cluster_ink_cache.clear();
+        }
+        self.cluster_ink_cache.insert(key, ink);
+        ink
+    }
+
+    /// Rasteriza `text` em [`INK_PROBE_SIZE`] e une a tinta de todos os
+    /// glyphs, na mesma conta de posição que o `glyphon` usa para desenhar
+    /// (`x = pena + placement.left`, `y = baseline + deslocamento -
+    /// placement.top`).
+    fn measure_ink(&mut self, text: &str, font: FontFace) -> Option<InkBox> {
+        use glyphon::SwashCache;
+
+        if text.is_empty() {
+            return None;
+        }
+        let metrics = Metrics::new(INK_PROBE_SIZE, INK_PROBE_SIZE * 1.2);
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(None, None);
+        let attrs = attrs_for(font, &self.families);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let mut swash = SwashCache::new();
+        let mut ink: Option<InkBox> = None;
+        for run in buffer.layout_runs() {
+            for glyph in run.glyphs {
+                let physical = glyph.physical((0.0, 0.0), 1.0);
+                let Some(image) =
+                    swash.get_image_uncached(&mut self.font_system, physical.cache_key)
+                else {
+                    continue;
+                };
+                let placement = image.placement;
+                if placement.width == 0 || placement.height == 0 {
+                    continue;
+                }
+                let left = (physical.x + placement.left) as f32;
+                let top = run.line_y + physical.y as f32 - placement.top as f32;
+                let glyph_ink = InkBox {
+                    left,
+                    right: left + placement.width as f32,
+                    top,
+                    bottom: top + placement.height as f32,
+                };
+                ink = Some(match ink {
+                    None => glyph_ink,
+                    Some(acc) => InkBox {
+                        left: acc.left.min(glyph_ink.left),
+                        right: acc.right.max(glyph_ink.right),
+                        top: acc.top.min(glyph_ink.top),
+                        bottom: acc.bottom.max(glyph_ink.bottom),
+                    },
+                });
+            }
+        }
+        ink.map(|ink| InkBox {
+            left: ink.left / INK_PROBE_SIZE,
+            right: ink.right / INK_PROBE_SIZE,
+            top: ink.top / INK_PROBE_SIZE,
+            bottom: ink.bottom / INK_PROBE_SIZE,
+        })
+    }
+
     /// Famílias resolvidas -- usado por `WindowSurface::render` para montar
     /// os `Attrs` do pipeline de texto (`text.rs`) com a mesma família que
     /// mediu a grade, sem duplicar a resolução.
@@ -408,7 +541,6 @@ impl TextMeasurer {
     pub(crate) fn font_system_and_families_mut(&mut self) -> (&mut FontSystem, &FontFamilies) {
         (&mut self.font_system, &self.families)
     }
-
     /// Largura de avanço de `text` numa face e tamanho, numa linha só, sem
     /// quebra -- é o avanço que se quer medir, não um layout.
     pub fn measure_width(&mut self, text: &str, font: FontFace, size_px: f32) -> f32 {
@@ -450,6 +582,9 @@ impl TextMeasurer {
         if self.families.mono_letter_spacing_em != self.configured_letter_spacing_em {
             self.families.mono_letter_spacing_em = self.configured_letter_spacing_em;
             self.advance_cache.clear();
+            // O espaçamento muda a posição do segundo glyph em diante de um
+            // cluster; a tinta de um caractere só não depende dele.
+            self.cluster_ink_cache.clear();
         }
     }
 
@@ -490,6 +625,7 @@ impl TextMeasurer {
         }
         self.families.mono_letter_spacing_em += delta_em;
         self.advance_cache.clear();
+        self.cluster_ink_cache.clear();
     }
 
     /// RF-1.10: trunca `text` para caber em `max_width`, cortando por
@@ -1190,6 +1326,73 @@ mod tests {
             assert!(
                 (0.3..1.2).contains(&fraction),
                 "{font:?}: centro de versal em {fraction} em fora da linha"
+            );
+        }
+    }
+
+    /// A tinta de `H` na Iosevka Fixed embutida: 0.372 em de largura e a
+    /// altura de versal, 0.735 em (`fontTools`, no TTF recortado) -- e
+    /// espaço não pinta nada.
+    #[test]
+    fn ink_of_a_capital_matches_the_font_outline() {
+        let mut m = TextMeasurer::new();
+        let font = FontFace::Mono { bold: false };
+        let ink = m.ink_em('H', font).expect("H pinta");
+        // Rasterizado em pixel inteiro a 128 px, com borda de antialias.
+        assert!((ink.width() - 0.372).abs() < 0.03, "{ink:?}");
+        assert!((ink.height() - 0.735).abs() < 0.03, "{ink:?}");
+        assert!(ink.left >= 0.0 && ink.right <= 0.5, "{ink:?}");
+        assert!(ink.top > 0.0 && ink.bottom < 1.2, "{ink:?}");
+        assert_eq!(m.ink_em(' ', font), None);
+        assert_eq!(m.cluster_ink_em("H", font), Some(ink));
+    }
+
+    /// Família e glyph com que `ch` é desenhado na face mono default.
+    fn shaped_family(m: &mut TextMeasurer, ch: char) -> (String, u16) {
+        let font = FontFace::Mono { bold: false };
+        let (font_system, families) = m.font_system_and_families_mut();
+        let mut buffer = Buffer::new(font_system, Metrics::new(SIZE, SIZE * 1.2));
+        buffer.set_size(None, None);
+        let attrs = attrs_for(font, families);
+        buffer.set_text(&ch.to_string(), &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(font_system, false);
+        let glyph = buffer.layout_runs().next().unwrap().glyphs[0].clone();
+        let family = font_system
+            .db()
+            .face(glyph.font_id)
+            .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+            .unwrap_or_default();
+        (family, glyph.glyph_id)
+    }
+
+    /// ADR-0117: o recorte tira da Iosevka Fixed embutida os caracteres de
+    /// largura dupla e os que ela desenha pequenos demais (`⚠`, `⏴⏵⏶⏷`),
+    /// e mantém os vizinhos de bloco. Sem fonte do sistema que os cubra, o
+    /// `cosmic-text` pode cair no `.notdef` da Iosevka (glyph 0) -- o que
+    /// não pode é desenhá-los com um glyph dela.
+    #[test]
+    fn the_embedded_face_leaves_wide_and_shrunken_symbols_to_the_fallback() {
+        let mut m = TextMeasurer::new();
+        for ch in [
+            '\u{26A0}', '\u{23F4}', '\u{23F5}', '\u{23F6}', '\u{23F7}', '\u{2705}', '\u{2B50}',
+            '\u{26A1}', '\u{231B}', '\u{274C}', '\u{25FE}',
+        ] {
+            let (family, glyph) = shaped_family(&mut m, ch);
+            assert!(
+                family != DEFAULT_FAMILY || glyph == 0,
+                "U+{:04X} ainda sai da Iosevka embutida",
+                ch as u32
+            );
+        }
+        for ch in [
+            '\u{25CF}', '\u{23FA}', '\u{273D}', '\u{2026}', '\u{2192}', '\u{2713}', '\u{25B6}',
+            '\u{2800}',
+        ] {
+            let (family, glyph) = shaped_family(&mut m, ch);
+            assert!(
+                family == DEFAULT_FAMILY && glyph != 0,
+                "U+{:04X} saiu de {family}, não da Iosevka embutida",
+                ch as u32
             );
         }
     }

@@ -1486,3 +1486,17 @@ O dono decidiu quatro coisas antes da escrita:
 - **macOS:** `Cmd`+letra, a guarda contra digitar a letra e o `Ctrl`+clique como clique secundário.
 - **Linux:** X11 e Wayland, onde o clipboard do `arboard` é o ponto frágil.
 - **Leitor de tela:** o menu do campo na janela de terminal; nas janelas de configurações e de perfil ele não está na árvore.
+
+## Glyphs de símbolo pequenos demais (fora de fase) — implementado, sem commit (aval visual pendente)
+
+Relato do dono em 2026-11-25: alguns símbolos, como `⚠` e o `⏵⏵` do Claude Code, saem no terminal muito menores do que deveriam. A causa: o glyph de fallback era encolhido até o **avanço** caber na célula, e fonte de símbolo avança bem mais do que pinta. Decisão no [ADR-0116](adr/0116-glyph-de-fallback-encaixado-pela-tinta.md), ainda **Proposto**: encaixe pela tinta (`TextMeasurer::ink_em`) e transbordo para a célula seguinte quando ela está vazia (`paint::place_fallback`, `next_cell_is_blank`). A grade não muda.
+
+Pedido do dono no mesmo dia: corrigir também a Iosevka Fixed embutida, que desenha `⚠` e `⏵` pequenos e os 24 caracteres de largura dupla (`✅`, `⭐`, `⚡`...) numa célula só. Decisão no [ADR-0117](adr/0117-recorte-da-iosevka-sem-largos-e-espremidos.md), também **Proposto**: `scripts/subset-fonts.py` tira do recorte todo caractere de largura dupla (East Asian Width) e os de `EXCLUIDOS` (`⚠`, `⏴⏵⏶⏷`). As faces foram regeradas dos originais da 34.8.1, com 29 codepoints a menos.
+
+**Verificado em 2026-11-25:** testes automatizados (`cargo test --workspace`, `clippy -D warnings`, `fmt --check`, `verify-docs.py`) e smoke test no Windows, no binário de debug, com config e sessão isoladas. O smoke test rodou com a família do dono (`Google Sans Code`, 13 px, a mesma cadeia de fallback) e com a default (Iosevka Fixed), capturando a janela antes e depois.
+
+**Dívida:**
+- **Aval visual do dono**, em especial do `⚠` encostando no texto seguinte quando transborda.
+- **DPI ≠ 100%, macOS e Linux:** não verificados.
+- **Linux e macOS sem fonte de símbolo:** os 29 codepoints tirados da Iosevka dependem do fallback do sistema e, sem ele, saem como retângulo vazio.
+- **Emoji colorido:** `⚠`, `✅`, `⭐`, `⚡` vêm da Segoe UI Emoji, que ignora a cor SGR do programa.

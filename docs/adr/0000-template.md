@@ -117,6 +117,8 @@
 | [0113](0113-restaurar-sessao-nomeada-pelo-celular.md) | Restaurar sessão nomeada pelo celular: a restauração do popover, sem foco, sem ativar e sem fechar | Aceito — implementado; verificado só por teste automatizado |
 | [0114](0114-nova-aba-solta-pelo-celular.md) | Nova aba solta pelo celular: `new-tab` com `group: null` | Aceito — implementado; verificado só por teste automatizado |
 | [0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) | Copiar, recortar e colar nos campos de texto: teclas do sistema, colar numa linha só e menu de clique direito | Aceito — implementado; verificado ao vivo só no Windows (parcial); aval visual do dono pendente |
+| [0116](0116-glyph-de-fallback-encaixado-pela-tinta.md) | Glyph de fallback encaixado pela tinta, com transbordo para a célula vazia | Proposto — implementado; smoke test só no Windows; aval visual do dono pendente |
+| [0117](0117-recorte-da-iosevka-sem-largos-e-espremidos.md) | Recorte da Iosevka sem os caracteres largos e os símbolos espremidos | Proposto — implementado; smoke test só no Windows; aval visual do dono pendente · revisa ADR-0025 (**parcial**) |
 
 ## Convenção
 
