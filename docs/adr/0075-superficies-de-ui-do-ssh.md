@@ -44,6 +44,8 @@ Um tipo **à parte**, `MaskedFieldState`, e não uma flag em `TextFieldState`: e
 
 Não há botão de "mostrar senha": seria um ícone novo e um terceiro estado do campo, sem requisito pedindo.
 
+> **Revisto pelo [ADR-0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §6 e §7 — decidido, a implementar.** A regra de clipboard deste campo não muda: copiar e recortar continuam sem efeito, e colar continua funcionando, pelas mesmas teclas dos outros campos (`Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert`; `Cmd+V` no macOS), com quebras de linha e `Tab` trocados por espaço. O que muda é que o clique direito no campo abre o menu do campo, com **Copiar** e **Recortar** sempre **esmaecidos, nunca ausentes**, e Colar e Selecionar tudo habilitados.
+
 ### 2. Diálogo de segredo
 
 Sobre a anatomia da §2.15 — overlay, largura 380, título, botões —, na ordem:

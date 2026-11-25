@@ -1454,3 +1454,28 @@ O dono decidiu quatro coisas antes da escrita:
 - **Ao vivo no Windows**, com o app real e um relay real: restaurar com a chave desligada e conferir por `GetForegroundWindow` que a janela nova não tomou o foco; com a chave ligada, acrescentar a uma janela com o terminal parado solitário e conferir que ele continua lá e que a aba ativa não mudou; e restaurar com o popover de sessões aberto na janela alvo (`busy`).
 - **macOS:** `with_active(false)`.
 - **X11 e Wayland:** sem garantia, porque o gerenciador de janelas decide o foco.
+
+## Copiar, recortar e colar nos campos de texto (fora de fase) — decidido, a implementar
+
+Relato do dono em 2026-11-25: nos campos de texto do app (nome do grupo, campos da tela de configurações) `Ctrl+C`, `Ctrl+X` e `Ctrl+V` não funcionam. A causa é de implementação: `apply_text_field_key` nunca tratou essas teclas, e o caractere de controle que o `winit` entrega no texto do evento era descartado em silêncio. Na busca, a captura parcial deixava `Ctrl+C` chegar ao PTY e interromper o processo. Decisões no [ADR-0115](adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md); requisitos RF-10.26 a RF-10.31 no [PRD-010](prd/prd-010-interacao-e-superficie-de-app.md).
+
+O dono decidiu quatro coisas antes da escrita:
+- todas as convenções de teclado: `Ctrl+C`/`X`/`V`, `Ctrl+Shift+C`/`V`, `Ctrl+Insert`, `Shift+Insert` e `Shift+Delete` (`Cmd+C`/`X`/`V` no macOS);
+- na busca, o campo consome essas teclas sempre, e `Ctrl+C` sem seleção não faz nada;
+- colar troca quebras de linha e `Tab` por espaço;
+- o campo ganha um menu de clique direito (Recortar, Copiar, Colar, Selecionar tudo), com aval visual do dono.
+
+Etapas, na ordem de dependência:
+
+1. **Documentação da decisão — feita.** ADR-0115; blockquotes de revisão nos ADR-0013, 0035, 0041, 0059, 0075 e 0080; RF-10.26 a RF-10.31 e emenda ao RF-10.19 no PRD-010; emendas ao PRD-011 (busca) e ao RF-16.10; `acoes.md`; tabela de ADRs.
+2. **Núcleo do campo.** `TextFieldState` ganha o texto selecionado, recortar a seleção e inserir texto normalizado (quebras e `Tab` viram espaço, teto respeitado); `apply_text_field_key` devolve copiar, recortar e colar como resultado; guarda de `Cmd`+letra no macOS. Testes puros, com a ordem resultante do texto.
+3. **Chamadores.** Uma função só que aplica o resultado pelo `clipboard.rs`, chamada por rename, editor de grupo, popover de sessões, busca, tela de configurações e editor de perfil. Na busca, as teclas de clipboard passam a ser consumidas (inclusive `Ctrl+Shift+C`/`V`). O campo mascarado já trata essas teclas (`apply_masked_key`) e não muda; colar nele passa a usar a mesma normalização.
+4. **Menu do campo.** Clique direito em todo campo, na anatomia do menu de contexto, desenhado também nas janelas de configurações e de perfil; seção nova no catálogo de textos em todo arquivo de `locales/`.
+5. **Fechamento.** Especificação visual (§2.16, tabela de fases, §4.4), guia do usuário (uma seção sobre editar texto nos campos), CHANGELOG, `descobertas.md` (a causa, com o comportamento do `winit` conferido) e o status do ADR-0115.
+
+**Dívida de verificação prevista:**
+- **Ao vivo no Windows:** copiar, recortar e colar por cada combinação em cada campo; `Ctrl+C` na busca com um processo rodando; colar texto de várias linhas; o menu em cada campo, inclusive nas janelas de configurações e de perfil.
+- **Aval visual do dono:** o menu do campo.
+- **macOS:** `Cmd`+letra e a guarda contra digitar a letra.
+- **Linux:** X11 e Wayland, onde o clipboard do `arboard` é o ponto frágil.
+- **Leitor de tela:** o menu do campo.

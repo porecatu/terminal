@@ -281,6 +281,12 @@ Nenhuma delas faz nada na tela alternativa, onde não existe scrollback ([ADR-00
 > únicos defaults de app que não dependem de `porecatu-config`, e é deliberado. O caminho completo já existe: seleção pelo
 > motor, `arboard` de um lado só e bracketed paste na cola.
 
+> **Campos de texto ([ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md), a implementar).**
+> Com um campo de texto focado — inclusive o da busca —, `Ctrl+Shift+C`/`V` são do
+> **campo**, não destas duas ações: copiam e colam no campo, junto com `Ctrl+C`/`X`/`V`
+> e as variantes com `Insert`/`Delete`. Essas teclas não são ações do catálogo (ver a
+> tabela de superfícies, abaixo).
+
 ---
 
 ## `font.*`, `theme.*`, `config.*`, `settings.*`, `search.*`, `app.*`
@@ -358,7 +364,7 @@ Precisar de uma delas é sinal de requisito faltando, não de catálogo incomple
 
 ### Superfícies de mouse e de modal, que não são ações
 
-Vinte e quatro comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os onze últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
+Vinte e cinco comportamentos têm requisito aprovado e **não recebem nome de ação** — os seis primeiros são da F2, os sete seguintes da F3, e os doze últimos são fora de fase. Registrados aqui porque a ausência confunde: eles não estão faltando no catálogo, estão fora dele por definição. O critério é o da seção Convenções — ação é o que o parser de `[keybindings]` resolve, e nenhum destes é vinculável a tecla.
 
 | Comportamento | Requisito | Por que não é ação |
 |---|---|---|
@@ -386,5 +392,6 @@ Vinte e quatro comportamentos têm requisito aprovado e **não recebem nome de a
 | Escolher um perfil numa linha do menu de perfis | RF-7.9, RF-7.10, ADR-0070 §6 | o alvo é o perfil da linha, e os detectados não têm posição estável; `profile.new_tab_N` cobre os declarados |
 | Navegar, salvar, descartar e capturar atalho dentro da janela de configurações | [RF-16.10](../prd/prd-016-tela-de-configuracoes.md), RF-16.29, [ADR-0059](../adr/0059-janela-de-configuracoes.md) §3 | a janela é um modo de captura, como o diálogo: `Tab`, setas, `Espaço`, `Enter`, `Esc` e `Ctrl+S`/`Cmd+S` são consumidos por ela e o mapa de `[keybindings]` não é consultado ali |
 | Arrastar aba, seleção, grupo ou fixada para a barra de outra janela, ou para fora de todas (destacar) | [RF-22.7 a RF-22.16](../prd/prd-022-abas-e-grupos-entre-janelas.md), [ADR-0091](../adr/0091-arraste-entre-janelas.md) §2 a §5 | o destino vem do ponto global sob o cursor; `tab.move_to_window` e `group.move_to_window` são o equivalente sem mouse, com destinos fixos (fim da trilha ou da zona, janela nova em cascata) |
+| Copiar, recortar e colar num campo de texto, por tecla ou pelo menu de clique direito do campo (a implementar) | [RF-10.26 a RF-10.31](../prd/prd-010-interacao-e-superficie-de-app.md), [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) | o campo focado é um modo de captura: as teclas são dele, como `Ctrl+A` e as setas do [ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md), e o mapa de `[keybindings]` não as vê. `clipboard.copy`/`clipboard.paste` são do terminal |
 
 Vincular qualquer um deles a tecla exigiria um argumento que a tecla não tem — que é a mesma razão pela qual `group.set_color` é marcada `Arg` e não é vinculável.

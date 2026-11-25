@@ -71,6 +71,8 @@ Uma linha por campo, **o rótulo acima do controle**:
 - `Esc` = Cancelar, quando nenhum campo ou lista está consumindo o `Esc`.
 - `Ctrl+S`/`Cmd+S` **não faz nada** no editor: salvar é da tela, e a tela só se alcança depois de fechar o editor.
 
+> **Revisto pelo [ADR-0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §1 e §7 — decidido, a implementar.** Os campos do editor copiam, recortam e colam pelas mesmas teclas dos outros campos (`Ctrl+C`/`X`/`V`, `Ctrl+Shift+C`/`V`, `Ctrl+Insert`, `Shift+Insert`, `Shift+Delete`; `Cmd+C`/`X`/`V` no macOS), e o clique direito num campo abre o menu do campo, desenhado no próprio editor. O `Esc` que fecha esse menu não vale como Cancelar.
+
 ### 6. OK leva às pendências; Cancelar descarta
 
 O editor trabalha sobre uma **cópia** do `Form` do perfil (ou sobre um `Form` novo, na criação). O `ProfilesDraft` da tela não muda enquanto o editor está aberto.

@@ -44,6 +44,8 @@ Enquanto a busca está aberta e o campo tem foco, o nível de captura consome:
 
 **Todo o resto cai para o passo 2 da cadeia** — o keybind de aplicação. Trocar de aba, abrir aba nova, rolar o scrollback e fechar a janela continuam funcionando com a busca aberta.
 
+> **Revisto pelo [ADR-0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §5 — decidido, a implementar.** A lista acima ganha as teclas de clipboard do campo: `Ctrl+C`, `Ctrl+Shift+C`, `Ctrl+Insert`, `Ctrl+X`, `Shift+Delete`, `Ctrl+V`, `Ctrl+Shift+V` e `Shift+Insert` (`Cmd+C`/`X`/`V` no macOS). Com a busca focada elas são sempre do campo: `Ctrl+C` sem seleção não faz nada e **nunca** chega ao processo, e `Ctrl+Shift+V` cola no campo, não no terminal. Até aqui, essas teclas caíam para o passo 2 e, sem keybind, para o PTY — `Ctrl+C` interrompia o processo com a busca aberta. O resto do teclado continua caindo para o passo 2.
+
 Isto é um **refinamento** do ADR-0008, não uma contradição: o passo 1 continua vindo primeiro e continua consumindo por inteiro **o que reivindica**. O que muda é que a busca reivindica um conjunto nomeado em vez de tudo. A razão é decisiva e não estética: `search.next`/`search.prev` são ações do catálogo, vinculáveis a tecla (`docs/reference/acoes.md`), e uma captura total as tornaria inalcançáveis exatamente quando fazem sentido.
 
 Os quatro modos de captura existentes **não mudam**: diálogo, menu, rename e editor de grupo são modais por natureza — o usuário está no meio de uma decisão ou de uma edição curta, e sair dela é um `Esc`. A busca fica aberta enquanto o usuário trabalha.

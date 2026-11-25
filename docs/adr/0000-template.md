@@ -16,7 +16,7 @@
 | [0010](0010-licenciamento.md) | Licenciamento sob GPL-3.0-or-later | Aceito |
 | [0011](0011-toolchain-rust.md) | Toolchain Rust pinada e política de versão | Aceito |
 | [0012](0012-identificacao-do-terminal.md) | Identificação do terminal: `TERM` e capacidades anunciadas | Aceito |
-| [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito |
+| [0013](0013-mouse-selecao-e-clipboard.md) | Mouse, seleção e clipboard | Aceito · §Clipboard revisto por ADR-0115 (**parcial**: `clipboard.rs` também atende os campos de texto) |
 | [0014](0014-superficie-de-aviso-e-dialogo.md) | Superfície de aviso, diálogo e menu de contexto | Aceito · menu de contexto revisto por ADR-0070 (**parcial**: o menu de perfis, ancorado num botão) · diálogo e canais revistos por ADR-0075 (**parcial**: campo, caixa de marcar e linhas de dado; consumidores do SSH) |
 | [0015](0015-multiplas-janelas.md) | Múltiplas janelas no v1, em escopo mínimo | Aceito · "Escopo" Superseded by ADR-0059 (**parcial**: uma janela sem abas, a de configurações) · "Escopo" e "Refino do ADR-0007" revistos por ADR-0090 (**parcial**: abas e grupos mudam de janela; o endereço do wakeup deixa de ser fixo no spawn) |
 | [0016](0016-fontes-embutidas.md) | Fontes do design embutidas no binário | Superseded by ADR-0024 · "embutidas" revisto por ADR-0084 (**parcial**: a fonte de interface é a do sistema) |
@@ -38,13 +38,13 @@
 | [0032](0032-interface-do-v1-fechada.md) | A interface do v1 está fechada | Aceito |
 | [0033](0033-job-object-encerramento-de-processo.md) | Encerramento robusto de árvore de processo (Windows) | Aceito · §3 revisto por ADR-0093 (**parcial**: a varredura ganha a amostragem do gerenciador de tarefas; `descendants_of` nas três plataformas) |
 | [0034](0034-deteccao-de-processo-ativo-para-confirmacao.md) | Detecção de processo ativo para confirmação de fechamento | Aceito · "Decisão" revista por ADR-0071 (**parcial**: conexão SSH aberta também confirma) |
-| [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito |
+| [0035](0035-selecao-de-texto-em-campo-de-nome.md) | Cursor navegável e seleção de texto no campo de nome | Aceito · §2 revisto por ADR-0115 (**parcial**: copiar, recortar e colar ganham teclas e menu) |
 | [0036](0036-formato-do-arquivo-de-sessao.md) | Formato do arquivo de sessão: DTO versionado em `porecatu-session` | Aceito · `TabV1` Superseded by ADR-0053 (**parcial**: campo novo, sem subir a versão) · §1 e §6 Superseded by ADR-0054 (**parcial**: dois campos opcionais e o diretório `sessions/`) · §3 revisto por ADR-0070 (**parcial**: `profile` por painel, sem subir a versão) · §3 revisto por ADR-0086 (**parcial**: fixadas fora da sessão, `active_pinned` opcional) |
 | [0037](0037-aba-nao-iniciada.md) | Aba não iniciada: o terceiro estado do ciclo de vida | Aceito · Superseded by ADR-0053 (**parcial**: só a granularidade) · §2 e §6 revistos por ADR-0075 (**parcial**: painel SSH conecta por gesto, nunca por foco nem por `lazy_restore = false`) |
 | [0038](0038-fallbacks-de-cwd.md) | Diretório de trabalho sem OSC 7: fallbacks por `sysinfo` | Aceito |
 | [0039](0039-convite-a-integracao-de-shell.md) | Convite à integração de shell: nota no grid, uma vez, dispensável em definitivo | Aceito · Superseded by ADR-0053 (**parcial**: só o endereço da nota) |
 | [0040](0040-superficie-de-linha-de-comando.md) | Superfície de linha de comando | Aceito · §1 Superseded by ADR-0056 (**parcial**: só o idioma do texto impresso, que passa a inglês fixo) |
-| [0041](0041-busca-no-scrollback.md) | Busca no scrollback: barra sobreposta no topo do quadro | Aceito · Superseded by ADR-0053 (**parcial**: só o quadro sobre o qual ela se posiciona) |
+| [0041](0041-busca-no-scrollback.md) | Busca no scrollback: barra sobreposta no topo do quadro | Aceito · Superseded by ADR-0053 (**parcial**: só o quadro sobre o qual ela se posiciona) · §3 revisto por ADR-0115 (**parcial**: a busca consome as teclas de clipboard do campo) |
 | [0042](0042-hyperlinks-osc-8.md) | Hyperlinks OSC 8: spans no snapshot, abertura sob modificador, esquemas fechados | Aceito |
 | [0043](0043-arvore-de-acessibilidade.md) | Árvore de acessibilidade: `accesskit` sobre o chrome, grade fora do v1 | Aceito · acrescentado por ADR-0053 (**parcial**: nós de painel; a grade continua fora) |
 | [0044](0044-empacotamento-e-release.md) | Empacotamento por plataforma e a primeira release | Superseded by ADR-0045 (**parcial**: só §3, o número da versão) · §1 e §4 Superseded by ADR-0057 (**parcial**: binário cru deixa de ser publicado; arquivos de idioma em todo artefato) |
@@ -60,7 +60,7 @@
 | [0056](0056-catalogo-de-textos-da-interface.md) | Catálogo de textos da interface: arquivos TOML por idioma em disco, crate `porecatu-locale`, prosa só em `porecatu-ui` | Aceito |
 | [0057](0057-idiomas-nos-artefatos.md) | Idiomas nos artefatos de release: `locales/` dentro de todo instalador, e o binário cru deixa de ser publicado | Aceito |
 | [0058](0058-escrita-do-arquivo-de-configuracao.md) | Escrita do arquivo de configuração: `toml_edit`, edição por chave e gravação atômica | Aceito |
-| [0059](0059-janela-de-configuracoes.md) | Janela de configurações: a primeira janela que não é um workspace de terminal | Aceito · §2 revisto por ADR-0064 (**parcial**: no Windows, modal e possuída pela janela de terminal) · §1 e §2 revistos por ADR-0080 (**parcial**: janela filha, o editor de perfil) |
+| [0059](0059-janela-de-configuracoes.md) | Janela de configurações: a primeira janela que não é um workspace de terminal | Aceito · §2 revisto por ADR-0064 (**parcial**: no Windows, modal e possuída pela janela de terminal) · §1 e §2 revistos por ADR-0080 (**parcial**: janela filha, o editor de perfil) · §3 revisto por ADR-0115 (**parcial**: teclas de clipboard e menu do campo) |
 | [0060](0060-anatomia-da-tela-de-configuracoes.md) | Anatomia da tela de configurações: guia lateral, painel de opções e os controles que faltavam | Aceito — aval visual em 2026-10-02 · acrescentado por ADR-0075 (**parcial**: grupo "Perfis", com lista e formulário) · revisto por ADR-0080 (**parcial**: formulário sai do painel) |
 | [0061](0061-imagem-de-fundo-do-terminal.md) | Imagem de fundo do terminal: `image` para decodificar, primitiva de imagem no render, alfa multiplicado | Aceito |
 | [0062](0062-imagem-de-fundo-da-janela.md) | Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots | Aceito · §4 Superseded by ADR-0063 (**parcial**: sem furo até o desktop com imagem da janela) |
@@ -76,12 +76,12 @@
 | [0072](0072-cliente-ssh-embutido.md) | Cliente SSH embutido: `russh` com `ring` num crate novo `porecatu-ssh`, runtime `tokio` isolado dentro dele, perfil `ssh` em `[[profiles.list]]` | Aceito · regra "único crate com `tokio`" revista por ADR-0104 (**parcial**: `porecatu-remote` também, com runtime próprio) |
 | [0073](0073-credenciais-no-cofre-do-sistema.md) | Credenciais SSH no cofre do sistema: `keyring` dentro de `porecatu-ssh`, entrada por destino, gravada só depois de aceita | Aceito · isolamento do `keyring` revisto por ADR-0104 (**parcial**: módulo `vault` próprio em `porecatu-remote`) |
 | [0074](0074-verificacao-da-chave-do-host.md) | Verificação da chave do host: `~/.ssh/known_hosts` do OpenSSH, leitura pelo `ssh-key`, casamento próprio, só acréscimo | Aceito |
-| [0075](0075-superficies-de-ui-do-ssh.md) | Superfícies de UI do SSH: diálogo com campo mascarado e linhas de dado, pergunta que espera o foco da aba, grupo "Perfis" na tela de configurações | Aceito — aval visual pendente · §6 revisto por ADR-0080 (**parcial**: formulário em janela própria, lápis na linha) |
+| [0075](0075-superficies-de-ui-do-ssh.md) | Superfícies de UI do SSH: diálogo com campo mascarado e linhas de dado, pergunta que espera o foco da aba, grupo "Perfis" na tela de configurações | Aceito — aval visual pendente · §6 revisto por ADR-0080 (**parcial**: formulário em janela própria, lápis na linha) · §1 revisto por ADR-0115 (**parcial**: o campo mascarado ganha o menu do campo, com Copiar e Recortar esmaecidos) |
 | [0076](0076-reconexao-automatica.md) | Reconexão automática: keepalive de 15 s, cinco tentativas em 1-2-4-8-16 s decididas por estado puro em `porecatu-ui`, uma reconexão por conexão | Aceito |
 | [0077](0077-avisos-do-app-em-dialogo-modal.md) | Avisos do app em diálogo modal, no lugar de nota escrita no grid | Aceito |
 | [0078](0078-largura-e-quebra-de-texto-do-dialogo.md) | Largura e quebra de texto do diálogo: piso 360, teto 720, nunca reticências | Aceito |
 | [0079](0079-botao-de-menu-do-app.md) | Botão de menu do app: zona fixa à esquerda, com a caixa de uma aba solta e o ícone do app; hover e pressionado, sem ação | Aceito · decisões 2 e 6 revistas por ADR-0087 (**parcial**: `track_shift` soma a zona de fixadas); decisão 3 revista: sem fundo e sem borda, hover e pressionado do botão de configurações · decisão 5 revista por ADR-0095 (**parcial**: o botão alterna o gerenciador de tarefas) · aparência revista por ADR-0096 (**parcial**: estado ligado, com sombra interna) |
-| [0080](0080-editor-de-perfil-em-janela-propria.md) | Editor de perfil em janela própria: formulário em coluna, modal sobre a tela de configurações, OK que só leva às pendências | Aceito — aval visual pendente |
+| [0080](0080-editor-de-perfil-em-janela-propria.md) | Editor de perfil em janela própria: formulário em coluna, modal sobre a tela de configurações, OK que só leva às pendências | Aceito — aval visual pendente · §5 revisto por ADR-0115 (**parcial**: teclas de clipboard e menu do campo) |
 | [0081](0081-disparo-no-release-para-botoes-e-itens.md) | Disparo no release para botões e itens: o press arma, o release sobre o mesmo alvo age; clique fora, texto e gestos de terminal seguem no press | Aceito — aval visual do estado pressionado pendente |
 | [0082](0082-botoes-da-barra-com-o-tamanho-do-botao-de-menu.md) | Botões da barra com o tamanho do botão de menu do app: sessões, configurações e "+" avulso em 40×40; "+" de grupo fica 30×30; zona fixa de 94 para 98px | Aceito — aval visual pendente |
 | [0083](0083-gap-entre-os-botoes-da-zona-fixa.md) | Gap entre os botões da zona fixa: `window_controls.gap` de 6 para 3px, entre sessões, configurações e botões de janela; zona fixa de 98 para 92px | Aceito — aval visual pendente |
@@ -116,6 +116,7 @@
 | [0112](0112-indicador-de-aba-vista-pelo-celular.md) | Indicador de aba vista pelo celular: o ícone de aparelho ao lado do "x" | Aceito — implementado; verificado só por teste automatizado; aval visual do dono pendente |
 | [0113](0113-restaurar-sessao-nomeada-pelo-celular.md) | Restaurar sessão nomeada pelo celular: a restauração do popover, sem foco, sem ativar e sem fechar | Aceito — implementado; verificado só por teste automatizado |
 | [0114](0114-nova-aba-solta-pelo-celular.md) | Nova aba solta pelo celular: `new-tab` com `group: null` | Aceito — implementado; verificado só por teste automatizado |
+| [0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) | Copiar, recortar e colar nos campos de texto: teclas do sistema, colar numa linha só e menu de clique direito | Aceito — a implementar |
 
 ## Convenção
 

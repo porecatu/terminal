@@ -3,7 +3,7 @@
 **Status:** Aprovado
 **Data:** 2026-08-26
 **Requisito de origem:** nenhum dos cinco originais — consolidação de comportamentos que os ADR-0013 a 0016 decidiram e que nenhum PRD abrigava
-**Relacionados:** [ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md), [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), [ADR-0015](../adr/0015-multiplas-janelas.md), [ADR-0016](../adr/0016-fontes-embutidas.md), [PRD-001](prd-001-abas.md), [PRD-004](prd-004-aparencia-do-chrome.md), [PRD-005](prd-005-aparencia-do-terminal.md)
+**Relacionados:** [ADR-0013](../adr/0013-mouse-selecao-e-clipboard.md), [ADR-0014](../adr/0014-superficie-de-aviso-e-dialogo.md), [ADR-0015](../adr/0015-multiplas-janelas.md), [ADR-0016](../adr/0016-fontes-embutidas.md), [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md), [PRD-001](prd-001-abas.md), [PRD-004](prd-004-aparencia-do-chrome.md), [PRD-005](prd-005-aparencia-do-terminal.md)
 
 ## Problema
 
@@ -86,6 +86,8 @@ Os diálogos existentes são os de RF-1.6 (aba com programa de tela cheia, confo
 
 **RF-10.19** — Existem menus de contexto de aba (RF-1.1, RF-1.2, RF-2.20), de grupo (RF-2.22) e de terminal. Abrem ancorados no cursor, viram nos dois eixos para caber na tela, são navegáveis por teclado e fecham em clique fora ou perda de foco.
 
+> **Emenda (2026-11-25, [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §7 — a implementar).** Um quarto menu de contexto: o do **campo de texto** (RF-10.31), com a mesma anatomia e as mesmas regras deste requisito.
+
 **RF-10.20** — Item indisponível aparece **esmaecido, nunca ausente**. *(Menu que muda de tamanho a cada abertura obriga a reaprender a posição dos itens.)*
 
 **RF-10.21** — O menu de contexto do grupo e o editor de grupo oferecem exatamente a mesma lista de ações, lida de uma definição única.
@@ -105,6 +107,22 @@ Os diálogos existentes são os de RF-1.6 (aba com programa de tela cheia, confo
 **RF-10.25** — A aparência padrão do app **não depende de fonte instalada no sistema**: as faces que o design especifica acompanham o app. É o que torna verificável a afirmação de que o binário com a config padrão confere com o mockup ([ADR-0009](../adr/0009-referencia-visual-e-reconciliacao.md)).
 
 Glyphs fora dessas faces — emoji, ícones de Nerd Font, CJK — continuam vindo do sistema, pela cadeia de fallback do RF-5.2.
+
+### Campos de texto
+
+> **Acrescentada em 2026-11-25**, transcrevendo o [ADR-0115](../adr/0115-copiar-recortar-e-colar-nos-campos-de-texto.md) — **a implementar**. Vale para todo campo de texto do app: rename de aba, editor de grupo, nome no popover de sessões, barra de busca, diálogo de segredo, campos da tela de configurações e do editor de perfil, token do relay.
+
+**RF-10.26** — Num campo de texto focado, `Ctrl+C`, `Ctrl+Shift+C` e `Ctrl+Insert` copiam a seleção; `Ctrl+X` e `Shift+Delete` a recortam; `Ctrl+V`, `Ctrl+Shift+V` e `Shift+Insert` colam. No macOS, `Cmd+C`, `Cmd+X` e `Cmd+V`. São teclas do campo, não ações do catálogo, e não são configuráveis. *(`Ctrl+Shift+C`/`V` são os atalhos de copiar e colar do terminal: quem os tem na mão não pode errar no campo.)*
+
+**RF-10.27** — Copiar e recortar sem seleção não fazem nada. Colar substitui a seleção, ou insere no cursor. Clipboard vazio ou ilegível: colar não faz nada, sem aviso. Com o campo focado, essas teclas **nunca** chegam ao terminal nem ao mapa de teclas, mesmo quando não fazem nada.
+
+**RF-10.28** — Na barra de busca, as teclas do RF-10.26 são do campo enquanto ele tem o foco. `Ctrl+C` com a busca focada **nunca** interrompe o processo, e `Ctrl+Shift+V` cola no campo, não no terminal. O resto do teclado continua alcançando as ações de aplicação, como no [PRD-011](prd-011-polimento.md). *(Copiar do campo e interromper o processo com o mesmo gesto, conforme haja ou não seleção, faria do engano um processo interrompido.)*
+
+**RF-10.29** — Todo campo é de uma linha. O texto colado tem cada quebra de linha (`CRLF`, `LF` ou `CR`) e cada `Tab` trocados por **um espaço**, e os demais caracteres de controle descartados. Num campo com teto de comprimento ([PRD-014](prd-014-sessoes-nomeadas.md) RF-14.3), o excedente é cortado, sem aviso.
+
+**RF-10.30** — O campo mascarado (senha, passphrase, token do relay) **não copia nem recorta** — as teclas são consumidas e não fazem nada — e **cola** pelas teclas do RF-10.26, com a troca do RF-10.29. É o [PRD-020](prd-020-conexoes-ssh.md) RF-20.35, que não muda.
+
+**RF-10.31** — O clique secundário num campo abre um menu de contexto com **Recortar**, **Copiar**, **Colar** e, depois de um divisor, **Selecionar tudo**. Recortar e Copiar ficam esmaecidos sem seleção e, no campo mascarado, sempre (RF-10.20). O clique secundário dentro da seleção a mantém; fora dela, põe o cursor no ponto. `Esc` fecha o menu sem cancelar o campo.
 
 ---
 
@@ -180,6 +198,46 @@ Cenário: aparência padrão sem fonte instalada
   Quando o usuário abre o app com a configuração padrão
   Então a barra de abas e o terminal usam as faces do design
   E nenhum aviso de fonte ausente é exibido
+
+Cenário: recortar e colar no nome do grupo
+  Dado o editor de grupo aberto com o nome "Projeto antigo"
+  Quando o usuário seleciona "antigo" e pressiona Ctrl+X
+  E pressiona Home e depois Ctrl+V
+  Então o campo mostra "antigoProjeto "
+  E o clipboard contém "antigo"
+
+Cenário: Ctrl+C na busca não interrompe o processo
+  Dado um "ping" em execução e a busca aberta com o campo focado
+  E nenhum texto selecionado no campo
+  Quando o usuário pressiona Ctrl+C
+  Então o "ping" continua em execução
+  E o campo da busca não muda
+
+Cenário: Ctrl+Shift+V na busca cola no campo
+  Dado a busca aberta com o campo focado
+  E "erro" no clipboard
+  Quando o usuário pressiona Ctrl+Shift+V
+  Então o campo da busca contém "erro"
+  E nada é escrito no terminal
+
+Cenário: colar texto de várias linhas
+  Dado um campo de texto da tela de configurações focado e vazio
+  E o clipboard contém "linha um", uma quebra de linha e "linha dois"
+  Quando o usuário pressiona Ctrl+V
+  Então o campo contém "linha um linha dois"
+
+Cenário: campo de senha cola mas não copia
+  Dado o diálogo de senha de uma conexão SSH com "segredo" digitado
+  Quando o usuário seleciona tudo e pressiona Ctrl+C
+  Então o clipboard não muda
+  Mas Ctrl+V cola o conteúdo do clipboard no campo
+
+Cenário: menu do campo sem seleção
+  Dado o campo de nome de uma sessão com texto e nenhuma seleção
+  Quando o usuário clica com o botão direito no campo
+  Então o menu mostra Recortar, Copiar, Colar e Selecionar tudo
+  E Recortar e Copiar aparecem esmaecidos
+  E Esc fecha o menu sem fechar o campo
 ```
 
 ## Fora de escopo
@@ -190,6 +248,7 @@ Cenário: aparência padrão sem fonte instalada
 - Notificação de desktop do sistema operacional na campainha — está na F6 do [roadmap](../roadmap.md), não aqui
 - Menu de contexto do terminal com busca e hyperlink, que dependem da F6
 - Protocolo de mouse por pixel (modo 1016)
+- Desfazer e refazer (`Ctrl+Z`) nos campos de texto, e duplo clique que seleciona palavra no campo ([ADR-0035](../adr/0035-selecao-de-texto-em-campo-de-nome.md), "Alternativas")
 
 ## Métricas de sucesso
 

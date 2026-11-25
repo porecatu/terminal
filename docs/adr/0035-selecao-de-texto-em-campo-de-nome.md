@@ -66,6 +66,8 @@ editor_key`, `handle_rename_key` em `lib.rs`), que continuam tratando
 `Enter`/`Esc`/`Tab` — exclusivos de cada widget (confirmar, cancelar,
 trocar de região) — fora dela.
 
+> **Revisto pelo [ADR-0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) §1 a §4 e §7 — decidido, a implementar.** O "colar" citado acima nunca ganhou tecla, e copiar e recortar não existiam. Passam a existir em todo campo: `Ctrl+C`/`Ctrl+Shift+C`/`Ctrl+Insert` copiam, `Ctrl+X`/`Shift+Delete` recortam, `Ctrl+V`/`Ctrl+Shift+V`/`Shift+Insert` colam (`Cmd+C`/`X`/`V` no macOS), e um menu de clique direito oferece os mesmos gestos mais "Selecionar tudo". Colar troca quebras de linha e `Tab` por espaço. `apply_text_field_key` devolve copiar, recortar e colar como resultado, e quem chama fala com o clipboard. O resto desta seção continua.
+
 ### 3. Mouse
 
 Clique posiciona o cursor no caractere sob o ponto — resolvido por um
