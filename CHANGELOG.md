@@ -14,7 +14,9 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
-## [Não lançado]
+## [0.10.1] - 2026-11-26
+
+Copiar, recortar e colar nos campos de texto, símbolos de fallback e Iosevka corrigidos, protocolo 0.7 do acesso remoto e a janela sem aba ativa com imagem de fundo e gerenciador. Substitui a 0.10.0, retirada.
 
 ### Mudado
 
@@ -103,7 +105,10 @@ primeiro release.
   `Ctrl+Shift+V` colava no terminal: as duas teclas agora são do campo. O
   campo mascarado continua só colando.
 
-## [0.10.0] - 2026-11-18
+## [0.10.0] - 2026-11-18 [YANKED]
+
+> Tag e release retiradas em 2026-11-26; todo o conteúdo abaixo segue
+> publicado na [0.10.1](#0101---2026-11-26).
 
 Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado por padrão. Substitui a 0.9.11, retirada.
 
@@ -166,7 +171,8 @@ Acesso remoto: operar a sessão viva pelo celular, por um relay seu. Desligado p
 ## [0.9.11] - 2026-11-12 [YANKED]
 
 > Tag e release retiradas em 2026-11-18; todo o conteúdo abaixo segue
-> publicado na [0.10.0](#0100---2026-11-18).
+> publicado na [0.10.0](#0100---2026-11-18-yanked), por sua vez incluída na
+> [0.10.1](#0101---2026-11-26).
 
 Gerenciador de tarefas na janela (botão do app), com gráficos de CPU, memória e disco e a lista de processos. Substitui a 0.9.10, retirada.
 
@@ -225,7 +231,8 @@ Gerenciador de tarefas na janela (botão do app), com gráficos de CPU, memória
 
 > Tag e release retiradas em 2026-11-12; todo o conteúdo abaixo segue
 > publicado na [0.9.11](#0911---2026-11-12-yanked), por sua vez incluída na
-> [0.10.0](#0100---2026-11-18).
+> [0.10.0](#0100---2026-11-18-yanked) e, depois, na
+> [0.10.1](#0101---2026-11-26).
 
 Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popover "Mover para janela…") e restauração de sessão nomeada na janela atual. Substitui a 0.9.9, retirada.
 
@@ -283,7 +290,7 @@ Abas e grupos que mudam de janela com o processo vivo (por arraste ou pelo popov
 > Tag e release retiradas em 2026-11-07; todo o conteúdo abaixo segue
 > publicado na [0.9.10](#0910---2026-11-07-yanked), por sua vez incluída na
 > [0.9.11](#0911---2026-11-12-yanked) e, depois, na
-> [0.10.0](#0100---2026-11-18).
+> [0.10.0](#0100---2026-11-18-yanked) e na [0.10.1](#0101---2026-11-26).
 
 Abas fixadas (apps que abrem junto com o Porecatu), relógio do sistema na barra de status em tela cheia e botão de menu do app sem fundo nem borda.
 
