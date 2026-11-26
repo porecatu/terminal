@@ -1500,3 +1500,11 @@ Pedido do dono no mesmo dia: corrigir também a Iosevka Fixed embutida, que dese
 - **DPI ≠ 100%, macOS e Linux:** não verificados.
 - **Linux e macOS sem fonte de símbolo:** os 29 codepoints tirados da Iosevka dependem do fallback do sistema e, sem ele, saem como retângulo vazio.
 - **Emoji colorido:** `⚠`, `✅`, `⭐`, `⚡` vêm da Segoe UI Emoji, que ignora a cor SGR do programa.
+
+## Janela sem aba ativa (fora de fase) — implementado, verificado ao vivo no Windows
+
+Relato do dono em 2026-11-26: com todas as abas em grupos e todos os grupos colapsados, o painel central some (aceito), mas a imagem de fundo da janela some junto e o gerenciador de tarefas não aparece. Causa e lição em [descobertas](descobertas.md): a camada `Grid` e a pintura do gerenciador estavam dentro do bloco da aba ativa em `App::redraw`. Conserto só no render (`box_rect`, imagem da janela, paleta, gerenciador e `set_layer` fora do bloco; sem aba, o relógio do cursor é desligado); o core e o ADR-0020 §3 não mudam.
+
+**Verificado em 2026-11-26** no Windows, no binário de debug, com config e sessão descartáveis (imagem de janela em degradê, um grupo): com o grupo colapsado a imagem cobre a janela inteira sob a barra de abas e a de status; o botão do app abre o gerenciador visível, com o botão aceso, e `Esc` o fecha de volta à janela só com a imagem; clicar o grupo o expande e o terminal volta.
+
+**Dívida:** aval visual do dono; DPI ≠ 100%, macOS e Linux; com a janela transparente ou o acrílico ligado, sem aba ativa.

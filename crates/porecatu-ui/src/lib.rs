@@ -16377,16 +16377,48 @@ impl App {
             state.cursor_position.1 as f32 / state.scale,
         );
 
+        // What does not depend on a tab lives out here: with every group
+        // collapsed there is no active tab, yet the window image and the task
+        // manager (ADR-0062 §2, ADR-0095 §4) still have to be painted.
+        let box_rect = paint::terminal_box_rect(
+            style,
+            h,
+            status_bar_h,
+            state.logical_width,
+            state.logical_height,
+        );
+        // A imagem da janela abre a lista: acima do `clear`, abaixo de
+        // sombra, fundo, imagem do terminal e grade de todo quadro.
+        let mut grid_primitives: Vec<porecatu_render::Primitive> = window_image
+            .map(|image| image.primitive(window_rect, 0.0))
+            .into_iter()
+            .collect();
+        // Fundo translúcido só substitui o que há atrás se a surface desta
+        // janela compõe com o desktop e não há imagem da janela.
+        let mut window_term_pal = self.term_pal.clone();
+        window_term_pal.backdrop_punch = backdrop_punch(
+            state.window_surface.is_transparent(),
+            window_image_configured(&self.config),
+        );
+        window_term_pal.acrylic = acrylic_active;
+        // PRD-017: a textura do processo, a mesma em toda janela e todo
+        // painel (RF-17.18). `displayed` é a da chave atual se `Ready`, ou
+        // a anterior enquanto a nova carrega; `Loading` sem anterior e
+        // `Failed` dão `None`, e o painel desenha como sempre. Só o
+        // `scale` é da janela -- ele decide o tamanho natural, e mudar de
+        // monitor refaz a conta sem recarregar nada (RF-17.6).
+        let background_image = self
+            .background_image
+            .displayed(background_image::BackgroundImageSlot::Terminal)
+            .map(|texture| paint::BackgroundImagePaint {
+                image: texture.id,
+                size_px: texture.size,
+                scale: state.scale,
+            });
+
         if let Some(id) = state.workspace.active_tab()
             && let Some(tab) = state.workspace.tab(id)
         {
-            let box_rect = paint::terminal_box_rect(
-                style,
-                h,
-                status_bar_h,
-                state.logical_width,
-                state.logical_height,
-            );
             // ADR-0053 §5: subdivide o retângulo do quadro pela árvore de
             // painéis da aba -- com um painel só, `pane_layout` tem uma
             // entrada, e ela é o `box_rect` inteiro (nenhum vão tirado).
@@ -16410,35 +16442,7 @@ impl App {
             }
             .unwrap_or(self.term_pal.cursor);
 
-            // A imagem da janela abre a lista: acima do `clear`, abaixo de
-            // sombra, fundo, imagem do terminal e grade de todo quadro.
-            let mut grid_primitives: Vec<porecatu_render::Primitive> = window_image
-                .map(|image| image.primitive(window_rect, 0.0))
-                .into_iter()
-                .collect();
             let mut cursor_blinks = false;
-            // Fundo translúcido só substitui o que há atrás se a surface desta
-            // janela compõe com o desktop e não há imagem da janela.
-            let mut window_term_pal = self.term_pal.clone();
-            window_term_pal.backdrop_punch = backdrop_punch(
-                state.window_surface.is_transparent(),
-                window_image_configured(&self.config),
-            );
-            window_term_pal.acrylic = acrylic_active;
-            // PRD-017: a textura do processo, a mesma em toda janela e todo
-            // painel (RF-17.18). `displayed` é a da chave atual se `Ready`, ou
-            // a anterior enquanto a nova carrega; `Loading` sem anterior e
-            // `Failed` dão `None`, e o painel desenha como sempre. Só o
-            // `scale` é da janela -- ele decide o tamanho natural, e mudar de
-            // monitor refaz a conta sem recarregar nada (RF-17.6).
-            let background_image = self
-                .background_image
-                .displayed(background_image::BackgroundImageSlot::Terminal)
-                .map(|texture| paint::BackgroundImagePaint {
-                    image: texture.id,
-                    size_px: texture.size,
-                    scale: state.scale,
-                });
             for (pane_id, pane_rect) in &pane_layout {
                 let pane_id = *pane_id;
                 let Some(runtime) = state.panes.get_mut(&(id, pane_id)) else {
@@ -16522,25 +16526,6 @@ impl App {
                     background_image,
                 ));
             }
-            // ADR-0095 §4, ADR-0096 §1: the task manager takes the panes' place
-            // in the same box and layer. The background of the frame goes
-            // through the path of the panes' (color, opacity, image,
-            // acrylic); the painting never draws it.
-            if task_manager_open {
-                app_task_manager::paint_task_manager(
-                    &mut grid_primitives,
-                    state,
-                    box_rect,
-                    style,
-                    config,
-                    pal,
-                    &window_term_pal,
-                    background_image,
-                    &self.catalog,
-                    gpu.text_measurer(),
-                );
-            }
-            frame.set_layer(Layer::Grid, grid_primitives);
             // Liga/desliga o relógio do piscar conforme o que acabou de ser
             // desenhado; o prazo entra em `next_wake`, então cursor fixo
             // continua custando zero frame.
@@ -16572,7 +16557,30 @@ impl App {
                     frame.push(Layer::Chrome, primitive);
                 }
             }
+        } else {
+            // No active tab (every group collapsed): nothing to blink.
+            state.cursor_blink.set_interval(None, Instant::now());
         }
+        // ADR-0095 §4, ADR-0096 §1: the task manager takes the panes' place
+        // in the same box and layer. The background of the frame goes
+        // through the path of the panes' (color, opacity, image,
+        // acrylic); the painting never draws it. Outside the active-tab
+        // block on purpose: it needs the box, not a tab.
+        if task_manager_open {
+            app_task_manager::paint_task_manager(
+                &mut grid_primitives,
+                state,
+                box_rect,
+                style,
+                config,
+                pal,
+                &window_term_pal,
+                background_image,
+                &self.catalog,
+                gpu.text_measurer(),
+            );
+        }
+        frame.set_layer(Layer::Grid, grid_primitives);
 
         // Barra de status (ADR-0048). Camada `Chrome`, como a busca: sem
         // camada nova. A altura dela já saiu da grade lá em cima, em

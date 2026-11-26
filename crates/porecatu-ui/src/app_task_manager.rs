@@ -2592,6 +2592,31 @@ mod tests {
         assert_eq!(count(&ws), 3);
     }
 
+    #[test]
+    fn with_every_group_collapsed_the_open_manager_stays_until_a_group_expands() {
+        // No active tab but live tabs: the window the manager has to paint in
+        // (lib.rs, `redraw`) and that it must not leave on its own.
+        let (mut ws, ids) = workspace_of(2);
+        let color = ws.next_auto_color();
+        let group = ws.group_tabs(&[ids[0], ids[1]], "g", color).expect("group");
+        ws.activate_tab(ids[0]);
+        assert!(ws.collapse_group(group, true));
+        assert_eq!(ws.active_tab(), None);
+        let none_active = (ws.active_tab(), ws.visual_order().count());
+        assert_eq!(none_active.1, 2);
+        // The dispatch that opened it, and any that changes nothing, stay.
+        assert!(!should_leave(none_active, none_active, false));
+        // Expanding a group activates a tab: like any activation, it leaves.
+        assert!(ws.collapse_group(group, false));
+        let after = (ws.active_tab(), ws.visual_order().count());
+        assert!(after.0.is_some());
+        assert!(should_leave(
+            none_active,
+            after,
+            is_closing(none_active, after)
+        ));
+    }
+
     // --- row menu, kill route (step 07b) ----------------------------------
 
     fn test_list() -> ListLayout {

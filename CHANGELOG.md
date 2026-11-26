@@ -74,6 +74,12 @@ primeiro release.
 
 ### Corrigido
 
+- **Janela sem aba ativa perdia a imagem de fundo e o gerenciador de tarefas**:
+  com todas as abas em grupos e todos os grupos colapsados, o painel central
+  some (como sempre), mas a imagem de fundo da janela sumia junto e o
+  gerenciador de tarefas, aberto pelo botão do app, ficava invisível. Os dois
+  eram pintados só quando havia aba ativa. Agora a imagem cobre a janela e o
+  gerenciador aparece normalmente; expandir um grupo volta ao terminal.
 - **Símbolos de fallback pequenos demais no terminal**
   ([ADR-0116](docs/adr/0116-glyph-de-fallback-encaixado-pela-tinta.md)):
   um símbolo que a fonte do terminal não tem, e que vem de outra fonte do

@@ -25,6 +25,8 @@ A imagem da janela usa o que o ADR-0061 criou: o crate `image` (PNG e JPEG), o r
 
 A imagem da janela é a **primeira primitiva da lista de `Layer::Grid`**, antes da sombra e do fundo do primeiro quadro de terminal. Como `resolve_layer` respeita a ordem da lista para geometria, isso a põe acima do `clear` e abaixo de tudo o que a grade e as camadas seguintes desenham (RF-18.9), sem tocar em `Layer`.
 
+> **Esclarecimento:** a imagem entra em `Layer::Grid` mesmo quando a janela não tem aba ativa (todos os grupos colapsados): a lista e o `set_layer` não dependem de aba ([descobertas](../descobertas.md)).
+
 - `rect` e `mask`: o retângulo da janela inteira em coordenadas lógicas (`0, 0, logical_width, logical_height`). `mask_radius = 0`: a janela não tem canto arredondado pintado por nós, e o ramo de caixa por eixo do `box_coverage` corta reto.
 - A borda de 1px da janela (`chrome::window_border`, em `Layer::Modal`) continua por cima (RF-18.8).
 - `alpha = opacity` da imagem, só. A multiplicação por `[appearance.window] opacity` (RF-18.15) **já acontece** no blit de opacidade da `WindowSurface`, que compõe a cena inteira com esse alfa: fazer a conta de novo no primitivo multiplicaria duas vezes.
