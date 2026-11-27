@@ -16978,6 +16978,7 @@ impl App {
                 &layout,
                 &items,
                 menu.highlighted(),
+                None,
                 config,
                 pal,
                 &self.catalog,

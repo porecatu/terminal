@@ -335,11 +335,11 @@ impl ControlView {
             // O lápis e o `X`; o badge não é do controle, abre a linha.
             ControlView::ProfileItem { .. } => (
                 layout::profile_control_width(m),
-                m.restore_height.max(m.chip_height),
+                m.restore_size.max(m.chip_height),
             ),
             ControlView::Secret { width, .. } => (*width, m.field_height),
             ControlView::Qr { .. } => (m.qr_size, m.qr_size),
-            ControlView::Device { .. } => (m.restore_width, m.restore_height),
+            ControlView::Device { .. } => (m.restore_size, m.restore_size),
             ControlView::Danger { width, .. } => (*width, m.button_height),
         }
     }
@@ -1301,16 +1301,13 @@ user = "deploy"
             x: 100.0,
             y: 50.0,
             width: layout::profile_control_width(&m),
-            height: m.restore_height.max(m.chip_height),
+            height: m.restore_size.max(m.chip_height),
         };
         let (edit, remove) = layout::profile_item_buttons(control, &m);
-        // O mesmo tamanho (o alvo 25x17 do botão de fechar da aba), na mesma
+        // O mesmo tamanho (o quadrado do restaurar padrão), na mesma
         // altura, e o vão que as listas põem entre o campo e o `X`.
         assert_eq!((edit.width, edit.height), (remove.width, remove.height));
-        assert_eq!(
-            (edit.width, edit.height),
-            (m.restore_width, m.restore_height)
-        );
+        assert_eq!((edit.width, edit.height), (m.restore_size, m.restore_size));
         assert_eq!(edit.y, remove.y);
         assert_eq!(remove.x - (edit.x + edit.width), m.list_gap);
         // Os dois dentro do controle, que os cabe sem sobra.

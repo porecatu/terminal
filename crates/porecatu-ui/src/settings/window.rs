@@ -1842,6 +1842,7 @@ impl SettingsWindow {
             return Press::Nothing;
         }
         self.dragging_field = false;
+        self.clear_dialog_pressed();
         if let Some(armed) = self.armed.take() {
             // Apaga o estado armado mesmo sem disparar.
             self.window.request_redraw();
@@ -1876,6 +1877,7 @@ impl SettingsWindow {
     /// recebe mais o release correspondente.
     pub(crate) fn focus_lost(&mut self) {
         let window_button = self.pressed_window_button.take().is_some();
+        self.clear_dialog_pressed();
         let armed = self.armed.take().is_some();
         // O menu do campo não sobrevive a perder o foco.
         let menu = self.field_menu.take().is_some();
@@ -1911,6 +1913,13 @@ impl SettingsWindow {
                     .filter(|&index| items[index].enabled)
                     .map(Armed::FieldMenuItem)
             }
+        }
+    }
+
+    /// O release (ou a perda de foco) desarma o botão do diálogo.
+    fn clear_dialog_pressed(&mut self) {
+        if let Some(dialog) = &mut self.dialog {
+            dialog.set_pressed(None);
         }
     }
 
@@ -1996,6 +2005,13 @@ impl SettingsWindow {
             return;
         };
         self.armed = Self::dialog_target(&layout, point);
+        let pressed = match self.armed {
+            Some(Armed::DialogButton(button)) => Some(button),
+            _ => None,
+        };
+        if let Some(dialog) = &mut self.dialog {
+            dialog.set_pressed(pressed);
+        }
         self.window.request_redraw();
     }
 
@@ -3818,7 +3834,16 @@ impl SettingsWindow {
             ));
         }
         if let (Some(list), Some(list_layout)) = (&self.choice, self.choice_layout(env)) {
-            popover.extend(choice_list::paint(list, &list_layout, env.config, pal));
+            popover.extend(choice_list::paint(
+                list,
+                &list_layout,
+                match self.armed {
+                    Some(Armed::ChoiceItem(index)) => Some(index),
+                    _ => None,
+                },
+                env.config,
+                pal,
+            ));
         }
         // O menu do campo (ADR-0115 §7): por cima de tudo na janela, da lista
         // de escolha inclusive -- que nunca está aberta junto com ele.
@@ -3827,6 +3852,10 @@ impl SettingsWindow {
                 &layout,
                 &items,
                 menu.highlighted(),
+                match self.armed {
+                    Some(Armed::FieldMenuItem(index)) => Some(index),
+                    _ => None,
+                },
                 env.config,
                 pal,
                 &self.catalog,

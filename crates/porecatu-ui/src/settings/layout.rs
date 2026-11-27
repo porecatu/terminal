@@ -487,27 +487,34 @@ pub(crate) fn profile_left_width(
 /// de fechar da aba) e o vão `list_gap` entre eles, o mesmo que separa o campo
 /// do `X` nas listas. Uma conta só para a pintura, o clique e a árvore.
 pub(crate) fn profile_item_buttons(control: Rect, m: &Metrics) -> (Rect, Rect) {
-    let button = |x: f32| Rect {
-        x,
-        y: control.y + (control.height - m.restore_height) / 2.0,
-        width: m.restore_width,
-        height: m.restore_height,
-    };
-    let remove = button(control.x + control.width - m.restore_width);
-    let edit = button(remove.x - m.list_gap - m.restore_width);
+    let center_y = control.y + control.height / 2.0;
+    let remove = icon_button_rect(control.x + control.width - m.restore_size, center_y, m);
+    let edit = icon_button_rect(remove.x - m.list_gap - m.restore_size, center_y, m);
     (edit, remove)
+}
+
+/// O retângulo de **todo** botão de ícone da tela (restaurar padrão, lixeira do
+/// token, lápis e `X` de perfil, `X` de aparelho e `X` das listas): o quadrado
+/// de `restore_size` com a borda esquerda em `x`, centrado na vertical em
+/// `center_y`. Uma conta só, para os botões nunca divergirem de tamanho.
+pub(crate) fn icon_button_rect(x: f32, center_y: f32, m: &Metrics) -> Rect {
+    Rect {
+        x,
+        y: center_y - m.restore_size / 2.0,
+        width: m.restore_size,
+        height: m.restore_size,
+    }
 }
 
 /// O botão `X` de revogar de um aparelho pareado, dentro do retângulo `control`
 /// dele: o mesmo botão do `X` de um perfil (a anatomia do excluir do popover de
 /// sessões), encostado na direita. Uma conta só para a pintura e o clique.
 pub(crate) fn device_remove_button(control: Rect, m: &Metrics) -> Rect {
-    Rect {
-        x: control.x + control.width - m.restore_width,
-        y: control.y + (control.height - m.restore_height) / 2.0,
-        width: m.restore_width,
-        height: m.restore_height,
-    }
+    icon_button_rect(
+        control.x + control.width - m.restore_size,
+        control.y + control.height / 2.0,
+        m,
+    )
 }
 
 /// Largura do controle de um perfil: o lápis, o vão e o `X`.
@@ -589,21 +596,14 @@ pub(crate) fn panel_geometry(m: &Metrics, panel_width: f32, specs: &[BlockSpec])
                 // abre a linha, antes do nome.
                 let (inner_x, control_rect, dot, restore, accessory_rect) = match profile_badge {
                     None => {
-                        let restore = Rect {
-                            x: right - m.restore_size,
-                            y: center_y - m.restore_size / 2.0,
-                            width: m.restore_size,
-                            height: m.restore_size,
-                        };
+                        let restore = icon_button_rect(right - m.restore_size, center_y, m);
                         let dot = dot_at(restore.x - m.row_gap - m.dot_size);
                         // O acessório vem logo à direita do controle, antes do
                         // ponto: ponto, depois ele, depois o controle.
                         let accessory_x = dot.x - m.row_gap - m.restore_size;
                         let accessory_rect = Rect {
-                            x: accessory_x,
-                            y: center_y - m.restore_size / 2.0,
                             width: if accessory { m.restore_size } else { 0.0 },
-                            height: m.restore_size,
+                            ..icon_button_rect(accessory_x, center_y, m)
                         };
                         let control_right = if accessory {
                             accessory_x - m.list_gap
@@ -1113,12 +1113,11 @@ pub(crate) fn list_geometry(
                 None,
             )
         };
-        let remove = Rect {
-            x: control.x + m.text_field_width + m.list_gap,
-            y: y + (m.field_height - m.restore_height) / 2.0,
-            width: m.restore_width,
-            height: m.restore_height,
-        };
+        let remove = icon_button_rect(
+            control.x + m.text_field_width + m.list_gap,
+            y + m.field_height / 2.0,
+            m,
+        );
         items.push(ListItemRects {
             first,
             second,
@@ -1748,7 +1747,7 @@ mod tests {
             );
             assert_eq!(
                 (item.remove.width, item.remove.height),
-                (m.restore_width, m.restore_height)
+                (m.restore_size, m.restore_size)
             );
         }
         // O "Adicionar" vem logo depois do último item, na largura do campo.

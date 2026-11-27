@@ -38,3 +38,7 @@ Um alvo armado, com o cursor ainda sobre ele, pinta **um passo de brilho acima d
 - Não há teste que simule `dispatch_mouse_input` (precisa de janela winit): a lógica testável é `release_on_armed` e a pintura; o resto é verificação ao vivo.
 - O release de um press de overlay não repassa mais nada ao terminal.
 - Soltar o botão fora do alvo é um gesto de desistência em todo o app, não só nos botões da barra.
+
+> **Revisão (2026-11-27).** O estado pressionado cobre agora também os **botões de ícone da tela de configurações** (restaurar padrão, lixeira do token, lápis e ✕ de perfil, ✕ de aparelho, ✕ das listas), no editor de perfil também: `ControlCtx::pressed`, um passo de brilho sobre o fundo do hover. Ver a revisão do [ADR-0060](0060-anatomia-da-tela-de-configuracoes.md). Os demais controles de linha continuam com a dívida do §5.
+
+> **Segunda revisão (2026-11-27).** O estado pressionado cobre também o botão de parear e demais segmentos, o botão destrutivo, o "Adicionar" das listas, o botão de escolha, o chip de atalho, os botões dos diálogos da tela de configurações e os itens do menu do campo e da lista de escolha (`ConfirmDialog::set_pressed`, `pressed` em `paint_field_menu` e `choice_list::paint`). Com isso a dívida do §5 só resta nos itens de menu e diálogos **da janela principal**. Ver o ADR-0060.

@@ -1098,6 +1098,29 @@ pub fn paint_dialog(
         }));
     }
 
+    // Hover e pressionado de todo botão do diálogo (ADR-0081): o hover é a cor
+    // de cada estilo -- a borda do cancelar, o tom destrutivo do descartar, o
+    // brilho do confirmar --, e o pressionado, um passo de brilho acima dele. O
+    // pressionado só vale com o cursor ainda sobre o botão armado.
+    let hovered = dialog.hovered();
+    let pressed = dialog.pressed().filter(|button| hovered == Some(*button));
+    let hover_brightness = config.appearance.tabs.colors.hover_brightness;
+    let fill_of = |button: DialogButton, rest: Color, hover: Color| -> Color {
+        if pressed == Some(button) {
+            crate::chrome::brighten(hover, hover_brightness)
+        } else if hovered == Some(button) {
+            hover
+        } else {
+            rest
+        }
+    };
+    let confirm_fill = |button: DialogButton, rest: Color| {
+        fill_of(
+            button,
+            rest,
+            crate::chrome::brighten(rest, hover_brightness),
+        )
+    };
     if let (Some(discard_rect), Some(discard_label)) =
         (layout.discard_rect, dialog.discard_label.as_ref())
     {
@@ -1105,7 +1128,6 @@ pub fn paint_dialog(
         // Descartar e fechar destrutivo -- texto `#e08585`, hover `#2e2224`,
         // as cores do item destrutivo do menu --, e Salvar e fechar
         // primário, o par ligado da alternância com hover por brilho.
-        let hovered = dialog.hovered();
         let ring_or = |button: DialogButton, border: Color| {
             if dialog.focused() == button {
                 pal.dialog_focus_ring
@@ -1116,11 +1138,11 @@ pub fn paint_dialog(
         paint_dialog_button(
             layout.cancel_rect,
             &dialog.cancel_label,
-            if hovered == Some(DialogButton::Cancel) {
-                pal.dialog_cancel_border
-            } else {
-                palette::TRANSPARENT
-            },
+            fill_of(
+                DialogButton::Cancel,
+                palette::TRANSPARENT,
+                pal.dialog_cancel_border,
+            ),
             pal.dialog_cancel_text,
             ring_or(DialogButton::Cancel, pal.dialog_cancel_border),
             body_size,
@@ -1131,11 +1153,11 @@ pub fn paint_dialog(
         paint_dialog_button(
             discard_rect,
             discard_label,
-            if hovered == Some(DialogButton::Discard) {
-                pal.menu_item_destructive_hover
-            } else {
-                palette::TRANSPARENT
-            },
+            fill_of(
+                DialogButton::Discard,
+                palette::TRANSPARENT,
+                pal.menu_item_destructive_hover,
+            ),
             pal.dialog_confirm_background,
             ring_or(DialogButton::Discard, pal.dialog_cancel_border),
             body_size,
@@ -1147,14 +1169,7 @@ pub fn paint_dialog(
             paint_dialog_button(
                 layout.confirm_rect,
                 &dialog.confirm_label,
-                if hovered == Some(DialogButton::Confirm) {
-                    crate::chrome::brighten(
-                        crate::settings::TOGGLE_ON,
-                        config.appearance.tabs.colors.hover_brightness,
-                    )
-                } else {
-                    crate::settings::TOGGLE_ON
-                },
+                confirm_fill(DialogButton::Confirm, crate::settings::TOGGLE_ON),
                 crate::toggle::TOGGLE_KNOB_COLOR,
                 ring_or(DialogButton::Confirm, palette::TRANSPARENT),
                 body_size,
@@ -1168,7 +1183,11 @@ pub fn paint_dialog(
     paint_dialog_button(
         layout.cancel_rect,
         &dialog.cancel_label,
-        palette::TRANSPARENT,
+        fill_of(
+            DialogButton::Cancel,
+            palette::TRANSPARENT,
+            pal.dialog_cancel_border,
+        ),
         pal.dialog_cancel_text,
         if focused_button(DialogButton::Cancel) {
             pal.dialog_focus_ring
@@ -1183,18 +1202,22 @@ pub fn paint_dialog(
     if !dialog.has_confirm() {
         return out;
     }
+    let primary = dialog.secret.is_some() || dialog.primary_confirm;
     paint_dialog_button(
         layout.confirm_rect,
         &dialog.confirm_label,
         // Conectar é o primário do rodapé da tela de configurações, não o
         // destrutivo (ADR-0075 §2); o Parear do pareamento remoto também
         // (ADR-0108 §3, `primary_confirm`).
-        if dialog.secret.is_some() || dialog.primary_confirm {
-            crate::settings::TOGGLE_ON
-        } else {
-            pal.dialog_confirm_background
-        },
-        if dialog.secret.is_some() || dialog.primary_confirm {
+        confirm_fill(
+            DialogButton::Confirm,
+            if primary {
+                crate::settings::TOGGLE_ON
+            } else {
+                pal.dialog_confirm_background
+            },
+        ),
+        if primary {
             crate::toggle::TOGGLE_KNOB_COLOR
         } else {
             pal.dialog_confirm_text
@@ -1892,7 +1915,15 @@ pub(crate) fn paint_menu_entries(
     pal: &ResolvedPalette,
     measurer: &mut TextMeasurer,
 ) -> Vec<Primitive> {
-    paint_menu_entries_highlighting(layout, entries, Some(highlighted), config, pal, measurer)
+    paint_menu_entries_highlighting(
+        layout,
+        entries,
+        Some(highlighted),
+        None,
+        config,
+        pal,
+        measurer,
+    )
 }
 
 /// [`paint_menu_entries`] with no row highlighted when `highlighted` is
@@ -1902,6 +1933,7 @@ pub(crate) fn paint_menu_entries_highlighting(
     layout: &TerminalMenuLayout,
     entries: &[(String, bool)],
     highlighted: Option<usize>,
+    pressed: Option<usize>,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
     measurer: &mut TextMeasurer,
@@ -1924,10 +1956,20 @@ pub(crate) fn paint_menu_entries_highlighting(
     for (index, (label, enabled)) in entries.iter().enumerate() {
         let rect = layout.item_rects[index];
         if Some(index) == highlighted {
+            // Armado pelo press e com o cursor ainda sobre o item (o realce
+            // acompanha o cursor): um passo de brilho acima do hover (ADR-0081).
+            let fill = if pressed == Some(index) {
+                crate::chrome::brighten(
+                    pal.menu_item_hover,
+                    config.appearance.tabs.colors.hover_brightness,
+                )
+            } else {
+                pal.menu_item_hover
+            };
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect,
                 radius: item_radius,
-                color: pal.menu_item_hover,
+                color: fill,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
             }));
@@ -1992,10 +2034,12 @@ pub(crate) fn layout_field_menu(
 /// Paints the field menu: `highlighted` is `None` until the mouse or an arrow
 /// key sets it (one highlight at a time, espec §2.16). A disabled item is
 /// dimmed, never absent. No key chip (ADR-0115 §7).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_field_menu(
     layout: &TerminalMenuLayout,
     items: &[FieldMenuItem],
     highlighted: Option<usize>,
+    pressed: Option<usize>,
     config: &porecatu_config::Config,
     pal: &ResolvedPalette,
     catalog: &Catalog,
@@ -2005,7 +2049,15 @@ pub(crate) fn paint_field_menu(
         .iter()
         .map(|item| (item.action.label(catalog), item.enabled))
         .collect();
-    paint_menu_entries_highlighting(layout, &entries, highlighted, config, pal, measurer)
+    paint_menu_entries_highlighting(
+        layout,
+        &entries,
+        highlighted,
+        pressed,
+        config,
+        pal,
+        measurer,
+    )
 }
 
 /// Index of the item under `point`; a divider is not a target.
@@ -5007,11 +5059,11 @@ mod tests {
     }
 
     #[test]
-    fn a_two_button_dialog_ignores_hover_and_paints_the_destructive_confirm_as_before() {
+    fn a_two_button_dialog_paints_the_destructive_confirm_as_before_at_rest() {
         let config = porecatu_config::Config::default();
         let pal = ResolvedPalette::from_config(&config);
         let mut measurer = TextMeasurer::new();
-        let mut dialog = two_button_dialog();
+        let dialog = two_button_dialog();
         let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
         let plain = paint_dialog(
             &layout,
@@ -5023,18 +5075,6 @@ mod tests {
             None,
             &mut measurer,
         );
-        dialog.set_hovered(Some(DialogButton::Confirm));
-        let hovered = paint_dialog(
-            &layout,
-            &dialog,
-            &config,
-            &pal,
-            1000.0,
-            700.0,
-            None,
-            &mut measurer,
-        );
-        assert_eq!(plain.len(), hovered.len());
         let fills = colors_of(&plain);
         // O confirmar segue cheio de `#e08585`, o destrutivo de sempre.
         assert_eq!(
@@ -5045,7 +5085,68 @@ mod tests {
                 .1,
             pal.dialog_confirm_background
         );
-        assert_eq!(colors_of(&plain), colors_of(&hovered));
+    }
+
+    /// Todo botão de diálogo reage como os demais da tela de configurações
+    /// (ADR-0081): hover na cor do estilo e, armado pelo press com o cursor
+    /// ainda sobre ele, um passo de brilho acima. Armado com o cursor fora, nada.
+    #[test]
+    fn a_dialog_button_takes_its_hover_and_one_more_step_when_pressed() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let brightness = config.appearance.tabs.colors.hover_brightness;
+        let step = |color: Color| crate::chrome::brighten(color, brightness);
+        let mut measurer = TextMeasurer::new();
+        let mut dialog = two_button_dialog();
+        let layout = layout_dialog(1000.0, 700.0, &dialog, &config, &mut measurer);
+        let fill = |dialog: &ConfirmDialog, rect: Rect, measurer: &mut TextMeasurer| {
+            let primitives = paint_dialog(
+                &layout, dialog, &config, &pal, 1000.0, 700.0, None, measurer,
+            );
+            colors_of(&primitives)
+                .iter()
+                .find(|(r, _)| *r == rect)
+                .unwrap()
+                .1
+        };
+        // Cancelar: transparente em repouso, a borda no hover, um passo acima armado.
+        assert_eq!(
+            fill(&dialog, layout.cancel_rect, &mut measurer),
+            palette::TRANSPARENT
+        );
+        dialog.set_hovered(Some(DialogButton::Cancel));
+        assert_eq!(
+            fill(&dialog, layout.cancel_rect, &mut measurer),
+            pal.dialog_cancel_border
+        );
+        dialog.set_pressed(Some(DialogButton::Cancel));
+        assert_eq!(
+            fill(&dialog, layout.cancel_rect, &mut measurer),
+            step(pal.dialog_cancel_border)
+        );
+        // Armado, mas com o cursor em outro botão ou fora: sem pressionado.
+        dialog.set_hovered(Some(DialogButton::Confirm));
+        assert_eq!(
+            fill(&dialog, layout.cancel_rect, &mut measurer),
+            palette::TRANSPARENT
+        );
+        dialog.set_hovered(None);
+        assert_eq!(
+            fill(&dialog, layout.cancel_rect, &mut measurer),
+            palette::TRANSPARENT
+        );
+        // Confirmar: brilho no hover e mais um passo armado.
+        dialog.set_pressed(Some(DialogButton::Confirm));
+        dialog.set_hovered(Some(DialogButton::Confirm));
+        assert_eq!(
+            fill(&dialog, layout.confirm_rect, &mut measurer),
+            step(step(pal.dialog_confirm_background))
+        );
+        dialog.set_pressed(None);
+        assert_eq!(
+            fill(&dialog, layout.confirm_rect, &mut measurer),
+            step(pal.dialog_confirm_background)
+        );
     }
 
     // ---- "Move to window..." popover (PRD-022 RF-22.21)
@@ -5537,6 +5638,7 @@ mod tests {
             &layout,
             &items,
             None,
+            None,
             &config,
             &pal,
             &catalog,
@@ -5572,6 +5674,46 @@ mod tests {
         assert_eq!(hovers, 0);
     }
 
+    /// O item armado pelo press, com o cursor ainda sobre ele (o realce o
+    /// acompanha), pinta um passo de brilho acima do hover (ADR-0081).
+    #[test]
+    fn a_pressed_field_menu_item_takes_one_more_hover_step() {
+        let config = porecatu_config::Config::default();
+        let pal = ResolvedPalette::from_config(&config);
+        let catalog = test_support::pt_br();
+        let mut measurer = TextMeasurer::new();
+        let layout = layout_field_menu((10.0, 10.0), &config, 1000.0, 700.0);
+        let items = crate::field_menu::field_menu_items(true, true);
+        let step = crate::chrome::brighten(
+            pal.menu_item_hover,
+            config.appearance.tabs.colors.hover_brightness,
+        );
+        let mut fills = |highlighted: Option<usize>, pressed: Option<usize>| {
+            paint_field_menu(
+                &layout,
+                &items,
+                highlighted,
+                pressed,
+                &config,
+                &pal,
+                &catalog,
+                &mut measurer,
+            )
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.color == pal.menu_item_hover || q.color == step => {
+                    Some(q.color)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(fills(Some(1), None), [pal.menu_item_hover]);
+        assert_eq!(fills(Some(1), Some(1)), [step]);
+        // Armado em um item com o cursor em outro: o realce é do outro, sem passo.
+        assert_eq!(fills(Some(2), Some(1)), [pal.menu_item_hover]);
+    }
+
     #[test]
     fn the_field_menu_highlights_only_the_given_item() {
         let config = porecatu_config::Config::default();
@@ -5584,6 +5726,7 @@ mod tests {
             &layout,
             &items,
             Some(3),
+            None,
             &config,
             &pal,
             &catalog,
@@ -5612,6 +5755,7 @@ mod tests {
             &layout,
             &entries,
             Some(1),
+            None,
             &config,
             &pal,
             &mut measurer,

@@ -295,6 +295,9 @@ pub struct ConfirmDialog {
     /// O botão sob o cursor, só no diálogo de três saídas: os de dois botões
     /// não têm realce de hover.
     hovered: Option<DialogButton>,
+    /// O botão que o press armou (ADR-0081); só pinta pressionado enquanto o
+    /// cursor segue sobre ele (`hovered`).
+    pressed: Option<DialogButton>,
 }
 
 impl ConfirmDialog {
@@ -321,6 +324,7 @@ impl ConfirmDialog {
             primary_confirm: false,
             focused: DialogButton::Cancel,
             hovered: None,
+            pressed: None,
         }
     }
 
@@ -836,6 +840,15 @@ impl ConfirmDialog {
 
     pub fn set_hovered(&mut self, button: Option<DialogButton>) {
         self.hovered = button;
+    }
+
+    /// O botão armado pelo press, se algum.
+    pub const fn pressed(&self) -> Option<DialogButton> {
+        self.pressed
+    }
+
+    pub fn set_pressed(&mut self, button: Option<DialogButton>) {
+        self.pressed = button;
     }
 
     /// Os botões do diálogo, da esquerda para a direita: a ordem de leitura e

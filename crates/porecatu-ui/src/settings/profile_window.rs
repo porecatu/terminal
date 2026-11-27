@@ -1797,6 +1797,10 @@ impl ProfileEditorWindow {
             let ctx = ControlCtx {
                 metrics: &m,
                 hovered: self.hovered,
+                pressed: match self.armed {
+                    Some(Armed::Control(index, part)) => Some(Hit::Control(index, part)),
+                    _ => None,
+                },
                 editing: self.editing.as_ref(),
                 selection_color: term_pal.selection_background,
                 read_only: false,
@@ -1871,7 +1875,16 @@ impl ProfileEditorWindow {
         frame.set_layer(Layer::Chrome, out);
         let mut popover = Vec::new();
         if let (Some(list), Some(list_layout)) = (&self.choice, self.choice_layout(env)) {
-            popover.extend(choice_list::paint(list, &list_layout, env.config, pal));
+            popover.extend(choice_list::paint(
+                list,
+                &list_layout,
+                match self.armed {
+                    Some(Armed::ChoiceItem(index)) => Some(index),
+                    _ => None,
+                },
+                env.config,
+                pal,
+            ));
         }
         // O menu do campo (ADR-0115 §7): por cima de tudo na janela, da lista
         // de escolha inclusive -- que nunca está aberta junto com ele.
@@ -1880,6 +1893,10 @@ impl ProfileEditorWindow {
                 &layout,
                 &items,
                 menu.highlighted(),
+                match self.armed {
+                    Some(Armed::FieldMenuItem(index)) => Some(index),
+                    _ => None,
+                },
                 env.config,
                 pal,
                 &self.catalog,

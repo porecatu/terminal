@@ -147,6 +147,7 @@ pub(crate) fn layout(
 pub(crate) fn paint(
     list: &ChoiceList,
     layout: &ChoiceLayout,
+    pressed: Option<usize>,
     config: &Config,
     pal: &ResolvedPalette,
 ) -> Vec<Primitive> {
@@ -167,10 +168,20 @@ pub(crate) fn paint(
     }));
     for (index, (item, rect)) in list.items.iter().zip(&layout.items).enumerate() {
         if index == list.highlighted {
+            // Armado pelo press, com o cursor ainda sobre o item: um passo de
+            // brilho acima do hover (ADR-0081).
+            let fill = if pressed == Some(index) {
+                crate::chrome::brighten(
+                    pal.menu_item_hover,
+                    config.appearance.tabs.colors.hover_brightness,
+                )
+            } else {
+                pal.menu_item_hover
+            };
             out.push(Primitive::RoundedQuad(RoundedQuad {
                 rect: *rect,
                 radius: item_radius,
-                color: pal.menu_item_hover,
+                color: fill,
                 border_color: palette::TRANSPARENT,
                 border_width: 0.0,
             }));
@@ -318,7 +329,7 @@ mod tests {
         let pal = ResolvedPalette::from_config(&config);
         let list = ChoiceList::open(0, items(&["a", "b"]), "b");
         let l = layout(&list, anchor(), &config, 900.0, 640.0);
-        let out = paint(&list, &l, &config, &pal);
+        let out = paint(&list, &l, None, &config, &pal);
         let highlights = out
             .iter()
             .filter(|p| matches!(p, Primitive::RoundedQuad(q) if q.color == pal.menu_item_hover))

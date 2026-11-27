@@ -83,6 +83,7 @@ impl Input<'_> {
         ControlCtx {
             metrics: self.metrics,
             hovered: self.hovered,
+            pressed: self.pressed,
             editing: self.editing,
             selection_color: self.selection_color,
             read_only: self.read_only,
@@ -101,6 +102,9 @@ impl Input<'_> {
 pub(super) struct ControlCtx<'a> {
     pub metrics: &'a Metrics,
     pub hovered: Option<Hit>,
+    /// O alvo armado pelo press (ADR-0081); só pinta pressionado com o cursor
+    /// ainda sobre ele.
+    pub pressed: Option<Hit>,
     pub editing: Option<&'a Editing>,
     pub selection_color: Color,
     pub read_only: bool,
@@ -674,7 +678,11 @@ fn paint_accessory(
             if !available {
                 return;
             }
-            let hovered = !input.read_only && input.hovered == Some(Hit::Accessory(index));
+            let state = if input.read_only {
+                IconState::default()
+            } else {
+                input.icon_state(|hit| hit == Hit::Accessory(index))
+            };
             if *armed {
                 out.push(rounded(
                     rect,
@@ -690,7 +698,7 @@ fn paint_accessory(
                     pal.warning_severity_error,
                 ));
             } else {
-                paint_icon_button(input, rect, icon::TRASH, hovered, IconHover::Backed, out);
+                paint_icon_button(input, rect, icon::TRASH, state, out);
             }
         }
     }
@@ -713,26 +721,9 @@ fn paint_restore(
     if !row.can_reset || !row_active {
         return;
     }
-    let hovered = input.hovered == Some(Hit::Restore(index));
-    if hovered {
-        out.push(rounded(
-            rect,
-            RESTORE_RADIUS,
-            RESTORE_HOVER_BACKGROUND,
-            palette::TRANSPARENT,
-            0.0,
-        ));
-    }
-    out.push(centered_glyph(
-        icon::ROTATE_CCW,
-        rect,
-        input.style.icon_em_size,
-        if hovered {
-            RESTORE_HOVER_ICON
-        } else {
-            RESTORE_ICON
-        },
-    ));
+    let ctx = input.ctx();
+    let state = ctx.icon_state(|hit| hit == Hit::Restore(index));
+    paint_icon_button(&ctx, rect, icon::ROTATE_CCW, state, out);
 }
 
 // ---- controles
@@ -793,9 +784,32 @@ pub(super) fn paint_control(
             labels,
             widths,
             selected,
-        } => paint_segmented(input, labels, widths, *selected, rect, out),
+        } => paint_segmented(
+            input,
+            index,
+            (labels, widths, *selected),
+            row.unavailable.is_none(),
+            rect,
+            out,
+        ),
         ControlView::Choice { text: value } => {
-            paint_field_box(input, rect, false, out);
+            // O botão de escolha: hover e pressionado como todo botão da tela,
+            // por brilho sobre o fundo do campo (ADR-0081).
+            let state = if input.read_only {
+                IconState::default()
+            } else {
+                input.icon_state(|hit| hit == Hit::Control(index, ControlPart::Whole))
+            };
+            let base = input.pal.editor_input_background;
+            let hover = crate::chrome::brighten(base, input.style.tab_hover_brightness);
+            let fill = if state.pressed {
+                pressed_fill(hover, input.style)
+            } else if state.hovered {
+                hover
+            } else {
+                base
+            };
+            paint_field_box_filled(input, rect, false, fill, out);
             paint_field_text(input, value, rect.x + m.field_padding_x, rect, out);
             paint_caret(input, rect, out);
         }
@@ -829,7 +843,7 @@ pub(super) fn paint_control(
             }
         }
         ControlView::ProfileItem { .. } => paint_profile_item(input, index, rect, out),
-        ControlView::Chips { chips } => paint_chips(input, chips, rect, measurer, out),
+        ControlView::Chips { chips } => paint_chips(input, index, chips, rect, measurer, out),
         // O token do relay (ADR-0108 §1): com o foco é um campo em edição --
         // os pontos, o cursor e a seleção do `MaskedFieldState`, lidos por
         // `Editing` --; sem ele, a caixa com um ponto por escalar digitado ou a
@@ -916,11 +930,23 @@ pub(super) fn paint_control(
 /// O campo de texto: fundo, borda e raio do editor de grupo (ADR-0060 §3). A
 /// borda fica em Erro quando o valor foi recusado (RF-16.18).
 fn paint_field_box(input: &ControlCtx<'_>, rect: Rect, invalid: bool, out: &mut Vec<Primitive>) {
+    paint_field_box_filled(input, rect, invalid, input.pal.editor_input_background, out);
+}
+
+/// [`paint_field_box`] com o fundo dado: o botão de escolha, que é um campo que
+/// se comporta como botão, o troca no hover e no pressionado.
+fn paint_field_box_filled(
+    input: &ControlCtx<'_>,
+    rect: Rect,
+    invalid: bool,
+    fill: Color,
+    out: &mut Vec<Primitive>,
+) {
     let pal = input.pal;
     out.push(rounded(
         rect,
         input.metrics.field_radius,
-        pal.editor_input_background,
+        fill,
         if invalid {
             pal.warning_severity_error
         } else {
@@ -1086,14 +1112,49 @@ fn paint_caret(input: &ControlCtx<'_>, rect: Rect, out: &mut Vec<Primitive>) {
 /// é reto.
 fn paint_segmented(
     input: &ControlCtx<'_>,
-    labels: &[String],
-    widths: &[f32],
-    selected: usize,
+    block: usize,
+    (labels, widths, selected): (&[String], &[f32], usize),
+    enabled: bool,
     rect: Rect,
     out: &mut Vec<Primitive>,
 ) {
     let m = input.metrics;
     let pal = input.pal;
+    // Hover e pressionado de um segmento que não é o escolhido: o do botão de
+    // cancelar do diálogo (a cor da borda dele e um passo de brilho acima,
+    // ADR-0081). O preenchimento é a moldura inteira recortada ao segmento, e
+    // vai **antes** da moldura, que desenha a borda por cima: só as pontas
+    // ficam arredondadas e a borda não some sob o fundo.
+    let mut x = rect.x;
+    for (index, width) in widths.iter().enumerate().take(labels.len()) {
+        let segment = Rect {
+            x,
+            y: rect.y,
+            width: *width,
+            height: rect.height,
+        };
+        x += width;
+        if index == selected || input.read_only || !enabled {
+            continue;
+        }
+        let state = input.icon_state(|hit| hit == Hit::Control(block, ControlPart::Segment(index)));
+        if state.hovered {
+            let fill = if state.pressed {
+                pressed_fill(pal.dialog_cancel_border, input.style)
+            } else {
+                pal.dialog_cancel_border
+            };
+            out.push(Primitive::PushClip(segment));
+            out.push(rounded(
+                rect,
+                m.button_radius,
+                fill,
+                palette::TRANSPARENT,
+                0.0,
+            ));
+            out.push(Primitive::PopClip);
+        }
+    }
     out.push(rounded(
         rect,
         m.button_radius,
@@ -1221,34 +1282,49 @@ fn paint_profile_badge(
     );
 }
 
-/// Como um botão de ícone reage ao ponteiro: o ícone muda de cor, e -- só no
-/// `Backed` -- o botão ganha um fundo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IconHover {
-    /// O fundo `#39404b` de raio 4 aparece sob o ícone, que vai a `#e4e8ee`: o
-    /// botão de fechar da aba, o `X` das listas editáveis e o restaurar padrão.
-    Backed,
-    /// **Sem fundo**: só o ícone vai de `#727a86` a `#e4e8ee`. O lápis e o `X`
-    /// de um perfil da lista (pedido do dono do produto depois de ver a linha).
-    IconOnly,
+/// Se o ponteiro está sobre um botão de ícone e se o press o armou.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct IconState {
+    hovered: bool,
+    /// Armado pelo press **e** com o cursor ainda sobre ele (ADR-0081); implica
+    /// `hovered`.
+    pressed: bool,
 }
 
-/// Um botão de ícone de uma linha: o ícone na em do chrome, `#727a86`, e no
-/// hover `#e4e8ee` -- com o fundo `#39404b` de raio 4 ou sem ele, conforme
-/// `hover`. O lápis e o `X` de um perfil saem daqui, então nunca divergem.
+impl ControlCtx<'_> {
+    /// O estado de um botão (de ícone ou segmento): `is_target` diz quais `Hit`
+    /// são dele. O pressionado só vale enquanto o cursor segue sobre o mesmo alvo.
+    fn icon_state(&self, is_target: impl Fn(Hit) -> bool) -> IconState {
+        let hovered = self.hovered.is_some_and(&is_target);
+        IconState {
+            hovered,
+            pressed: hovered && self.pressed.is_some_and(&is_target),
+        }
+    }
+}
+
+/// O botão de ícone da tela, **um só para todos** -- restaurar padrão, lixeira do
+/// token, lápis e `X` de perfil, `X` de aparelho e `X` das listas --: o ícone na
+/// em do chrome, `#727a86`; no hover o fundo `#39404b` de raio 4 aparece e o ícone
+/// vai a `#e4e8ee`; pressionado, o fundo ganha um passo de brilho (`pressed_fill`,
+/// ADR-0081). O tamanho do `rect` é o de `layout::icon_button_rect`.
 fn paint_icon_button(
     input: &ControlCtx<'_>,
     rect: Rect,
     what: icon::Icon,
-    hovered: bool,
-    hover: IconHover,
+    state: IconState,
     out: &mut Vec<Primitive>,
 ) {
-    if hovered && hover == IconHover::Backed {
+    if state.hovered {
+        let fill = if state.pressed {
+            pressed_fill(RESTORE_HOVER_BACKGROUND, input.style)
+        } else {
+            RESTORE_HOVER_BACKGROUND
+        };
         out.push(rounded(
             rect,
             RESTORE_RADIUS,
-            RESTORE_HOVER_BACKGROUND,
+            fill,
             palette::TRANSPARENT,
             0.0,
         ));
@@ -1257,7 +1333,7 @@ fn paint_icon_button(
         what,
         rect,
         input.style.icon_em_size,
-        if hovered {
+        if state.hovered {
             RESTORE_HOVER_ICON
         } else {
             RESTORE_ICON
@@ -1267,30 +1343,27 @@ fn paint_icon_button(
 
 /// Os botões de um perfil da lista (ADR-0080 §7): o lápis, que abre o editor, e
 /// à direita dele o `X` de excluir -- os dois com o mesmo tamanho e o mesmo ícone
-/// de [`paint_icon_button`], mas **sem fundo** no hover (só o ícone muda de cor),
-/// nos retângulos de `layout::profile_item_buttons`.
+/// de [`paint_icon_button`], o mesmo do restaurar padrão, nos retângulos de
+/// `layout::profile_item_buttons`.
 fn paint_profile_item(input: &ControlCtx<'_>, index: usize, rect: Rect, out: &mut Vec<Primitive>) {
     let (edit, remove) = profile_item_buttons(rect, input.metrics);
-    let hovered = |part: fn(&ControlPart) -> bool| {
-        matches!(
-            input.hovered,
-            Some(Hit::Control(hit_index, hit_part)) if hit_index == index && part(&hit_part)
-        )
+    let state = |part: fn(&ControlPart) -> bool| {
+        input.icon_state(|hit| {
+            matches!(hit, Hit::Control(hit_index, hit_part) if hit_index == index && part(&hit_part))
+        })
     };
     paint_icon_button(
         input,
         edit,
         icon::PENCIL,
-        hovered(|part| matches!(part, ControlPart::EditProfile)),
-        IconHover::IconOnly,
+        state(|part| matches!(part, ControlPart::EditProfile)),
         out,
     );
     paint_icon_button(
         input,
         remove,
         icon::X,
-        hovered(|part| matches!(part, ControlPart::ListRemove(_))),
-        IconHover::IconOnly,
+        state(|part| matches!(part, ControlPart::ListRemove(_))),
         out,
     );
 }
@@ -1313,20 +1386,18 @@ fn paint_qr(
     }
 }
 
-/// Um aparelho pareado: o `X` de revogar, com a anatomia do `X` de um perfil
-/// (só o ícone muda de cor no hover). O ponto de "conectado agora" é do ponto de
+/// Um aparelho pareado: o `X` de revogar, o mesmo botão de ícone do `X` de um
+/// perfil. O ponto de "conectado agora" é do ponto de
 /// pendente da linha.
 fn paint_device(input: &ControlCtx<'_>, index: usize, rect: Rect, out: &mut Vec<Primitive>) {
-    let hovered = matches!(
-        input.hovered,
-        Some(Hit::Control(hit_index, ControlPart::ListRemove(_))) if hit_index == index
-    );
+    let state = input.icon_state(|hit| {
+        matches!(hit, Hit::Control(hit_index, ControlPart::ListRemove(_)) if hit_index == index)
+    });
     paint_icon_button(
         input,
         device_remove_button(rect, input.metrics),
         icon::X,
-        hovered,
-        IconHover::IconOnly,
+        state,
         out,
     );
 }
@@ -1344,22 +1415,25 @@ fn paint_danger(
 ) {
     let m = input.metrics;
     let pal = input.pal;
-    let hovered = matches!(
-        input.hovered,
-        Some(Hit::Control(hit_index, _)) if hit_index == index
-    );
+    let state =
+        input.icon_state(|hit| matches!(hit, Hit::Control(hit_index, _) if hit_index == index));
     let (fill, border, color) = if input.read_only {
         (
             palette::TRANSPARENT,
             pal.dialog_cancel_border,
             pal.editor_section_text,
         )
-    } else if hovered {
+    } else if state.hovered {
+        let hover = crate::chrome::brighten(
+            pal.dialog_confirm_background,
+            input.style.tab_hover_brightness,
+        );
         (
-            crate::chrome::brighten(
-                pal.dialog_confirm_background,
-                input.style.tab_hover_brightness,
-            ),
+            if state.pressed {
+                pressed_fill(hover, input.style)
+            } else {
+                hover
+            },
             palette::TRANSPARENT,
             pal.dialog_confirm_text,
         )
@@ -1385,6 +1459,7 @@ fn paint_danger(
 
 fn paint_chips(
     input: &ControlCtx<'_>,
+    index: usize,
     chips: &[ChipView],
     rect: Rect,
     _measurer: &mut TextMeasurer,
@@ -1393,7 +1468,7 @@ fn paint_chips(
     let m = input.metrics;
     let pal = input.pal;
     let mut x = rect.x;
-    for chip in chips {
+    for (chip_index, chip) in chips.iter().enumerate() {
         let chip_rect = Rect {
             x,
             y: rect.y + (rect.height - m.chip_height) / 2.0,
@@ -1405,13 +1480,26 @@ fn paint_chips(
             ChipTone::Muted => (pal.editor_divider, pal.editor_section_text),
             ChipTone::Capturing => (pal.dialog_focus_ring, pal.editor_section_text),
         };
-        out.push(rounded(
-            chip_rect,
-            m.chip_radius,
+        // O chip é o botão que entra em captura: hover e pressionado por brilho
+        // sobre o fundo dele, como todo botão da tela (ADR-0081). O que já está
+        // em captura não reage.
+        let state = if input.read_only || chip.tone == ChipTone::Capturing {
+            IconState::default()
+        } else {
+            input.icon_state(|hit| hit == Hit::Control(index, ControlPart::Chip(chip_index)))
+        };
+        let hover = crate::chrome::brighten(
             pal.settings_chip_background,
-            border,
-            1.0,
-        ));
+            input.style.tab_hover_brightness,
+        );
+        let fill = if state.pressed {
+            pressed_fill(hover, input.style)
+        } else if state.hovered {
+            hover
+        } else {
+            pal.settings_chip_background
+        };
+        out.push(rounded(chip_rect, m.chip_radius, fill, border, 1.0));
         out.push(text(
             (
                 chip_rect.x + 1.0 + m.chip_padding_x,
@@ -1449,10 +1537,6 @@ fn paint_list(
             .editing
             .filter(|editing| editing.block == index && editing.part == part)
     };
-    let hovered_part = match input.hovered {
-        Some(Hit::Control(hit_index, part)) if hit_index == index => Some(part),
-        _ => None,
-    };
     for (item_index, (item, rects)) in items.iter().zip(&geometry.items).enumerate() {
         let fields = [
             (rects.first, &item.first, EditPart::ListFirst(item_index)),
@@ -1481,17 +1565,25 @@ fn paint_list(
             input,
             rects.remove,
             icon::X,
-            hovered_part == Some(ControlPart::ListRemove(item_index)),
-            IconHover::Backed,
+            input.icon_state(|hit| hit == Hit::Control(index, ControlPart::ListRemove(item_index))),
             out,
         );
     }
     let add = geometry.add;
-    if hovered_part == Some(ControlPart::ListAdd) {
+    let add_state = if input.read_only {
+        IconState::default()
+    } else {
+        input.icon_state(|hit| hit == Hit::Control(index, ControlPart::ListAdd))
+    };
+    if add_state.hovered {
         out.push(rounded(
             add,
             input.config.appearance.context_menu.item_corner_radius as f32,
-            pal.menu_item_hover,
+            if add_state.pressed {
+                pressed_fill(pal.menu_item_hover, style)
+            } else {
+                pal.menu_item_hover
+            },
             palette::TRANSPARENT,
             0.0,
         ));
@@ -2105,6 +2197,166 @@ mod tests {
             p,
             Primitive::RoundedQuad(q) if q.color == f.pal.menu_item_hover
         )));
+    }
+
+    /// Os botões que não são de ícone seguem a mesma regra (ADR-0081): hover e,
+    /// armado pelo press com o cursor ainda sobre eles, um passo de brilho acima.
+    #[test]
+    fn danger_add_and_chip_buttons_take_hover_and_the_pressed_step() {
+        let f = fixture();
+        let m = Metrics::from_config(&f.config, 52.0);
+        let ctx = |hovered: Option<Hit>, pressed: Option<Hit>| ControlCtx {
+            metrics: &m,
+            hovered,
+            pressed,
+            editing: None,
+            selection_color: f.pal.menu_item_hover,
+            read_only: false,
+            style: &f.style,
+            pal: &f.pal,
+            config: &f.config,
+        };
+        let step = |c: Color| pressed_fill(c, &f.style);
+        let rect = Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 120.0,
+            height: 30.0,
+        };
+        let first_fill = |out: &[Primitive]| {
+            out.iter().find_map(|p| match p {
+                Primitive::RoundedQuad(q) => Some(q.color),
+                _ => None,
+            })
+        };
+        let hit = |part| Some(Hit::Control(5, part));
+
+        // "Recriar identidade": o confirmar do diálogo; hover por brilho.
+        let danger = |c: &ControlCtx<'_>| {
+            let mut out = Vec::new();
+            paint_danger(c, 5, "x", rect, &mut out);
+            first_fill(&out)
+        };
+        let rest = f.pal.dialog_confirm_background;
+        let hover = crate::chrome::brighten(rest, f.style.tab_hover_brightness);
+        let whole = hit(layout::ControlPart::Whole);
+        assert_eq!(danger(&ctx(None, None)), Some(rest));
+        assert_eq!(danger(&ctx(whole, None)), Some(hover));
+        assert_eq!(danger(&ctx(whole, whole)), Some(step(hover)));
+
+        // O "Adicionar" da lista: o hover do item de menu e um passo acima.
+        let add = |c: &ControlCtx<'_>| {
+            let mut out = Vec::new();
+            let mut measurer = TextMeasurer::new();
+            paint_list(c, 5, (&[], false, "Add"), rect, &mut measurer, &mut out);
+            out.iter().find_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.color != palette::TRANSPARENT => Some(q.color),
+                _ => None,
+            })
+        };
+        let add_hit = hit(layout::ControlPart::ListAdd);
+        assert_eq!(add(&ctx(None, None)), None);
+        assert_eq!(add(&ctx(add_hit, None)), Some(f.pal.menu_item_hover));
+        assert_eq!(
+            add(&ctx(add_hit, add_hit)),
+            Some(step(f.pal.menu_item_hover))
+        );
+
+        // O chip de atalho: brilho sobre o fundo dele; em captura não reage.
+        let chip = |c: &ControlCtx<'_>, tone| {
+            let chips = [ChipView {
+                text: "Ctrl+T".to_owned(),
+                width: 60.0,
+                tone,
+            }];
+            let mut out = Vec::new();
+            let mut measurer = TextMeasurer::new();
+            paint_chips(c, 5, &chips, rect, &mut measurer, &mut out);
+            first_fill(&out)
+        };
+        let base = f.pal.settings_chip_background;
+        let chip_hover = crate::chrome::brighten(base, f.style.tab_hover_brightness);
+        let chip_hit = hit(layout::ControlPart::Chip(0));
+        assert_eq!(chip(&ctx(None, None), ChipTone::Normal), Some(base));
+        assert_eq!(
+            chip(&ctx(chip_hit, None), ChipTone::Normal),
+            Some(chip_hover)
+        );
+        assert_eq!(
+            chip(&ctx(chip_hit, chip_hit), ChipTone::Normal),
+            Some(step(chip_hover))
+        );
+        assert_eq!(
+            chip(&ctx(chip_hit, chip_hit), ChipTone::Capturing),
+            Some(base)
+        );
+    }
+
+    /// Todo botão de ícone da tela pinta o mesmo: o hover do restaurar padrão
+    /// (fundo `#39404b` e ícone `#e4e8ee`) e, armado pelo press com o cursor
+    /// ainda sobre ele, um passo de brilho acima no fundo (ADR-0081).
+    #[test]
+    fn every_icon_button_shares_the_restore_hover_and_the_pressed_step() {
+        let f = fixture();
+        let m = Metrics::from_config(&f.config, 52.0);
+        let target = Hit::Control(3, layout::ControlPart::EditProfile);
+        let other = Hit::Control(4, layout::ControlPart::EditProfile);
+        let ctx = |hovered: Option<Hit>, pressed: Option<Hit>| ControlCtx {
+            metrics: &m,
+            hovered,
+            pressed,
+            editing: None,
+            selection_color: f.pal.menu_item_hover,
+            read_only: false,
+            style: &f.style,
+            pal: &f.pal,
+            config: &f.config,
+        };
+        let is_target = |hit: Hit| hit == target;
+        let rect = layout::icon_button_rect(10.0, 40.0, &m);
+        assert_eq!(
+            (rect.width, rect.height),
+            (m.restore_size, m.restore_size),
+            "um tamanho só para todo botão de ícone"
+        );
+        let fill = |c: &ControlCtx<'_>| {
+            let mut out = Vec::new();
+            paint_icon_button(c, rect, icon::PENCIL, c.icon_state(is_target), &mut out);
+            let background = out.iter().find_map(|p| match p {
+                Primitive::RoundedQuad(q) => Some(q.color),
+                _ => None,
+            });
+            let glyph = out.iter().find_map(|p| match p {
+                Primitive::Text(run) => Some(run.color),
+                _ => None,
+            });
+            (background, glyph)
+        };
+        // Repouso: só o ícone, sem fundo.
+        assert_eq!(fill(&ctx(None, None)), (None, Some(RESTORE_ICON)));
+        // Hover: o fundo e o ícone do restaurar padrão.
+        assert_eq!(
+            fill(&ctx(Some(target), None)),
+            (Some(RESTORE_HOVER_BACKGROUND), Some(RESTORE_HOVER_ICON))
+        );
+        // Pressionado: um passo de brilho acima do hover.
+        assert_eq!(
+            fill(&ctx(Some(target), Some(target))),
+            (
+                Some(pressed_fill(RESTORE_HOVER_BACKGROUND, &f.style)),
+                Some(RESTORE_HOVER_ICON)
+            )
+        );
+        assert_ne!(
+            pressed_fill(RESTORE_HOVER_BACKGROUND, &f.style),
+            RESTORE_HOVER_BACKGROUND
+        );
+        // Armado, mas com o cursor fora do alvo (ou sobre outro): sem pressionado.
+        assert_eq!(fill(&ctx(None, Some(target))), (None, Some(RESTORE_ICON)));
+        assert_eq!(
+            fill(&ctx(Some(other), Some(target))),
+            (None, Some(RESTORE_ICON))
+        );
     }
 
     #[test]
@@ -3128,6 +3380,45 @@ mod remote_tests {
             p,
             Primitive::Text(run) if run.text == icon::TRASH.glyph && run.color == RESTORE_HOVER_ICON
         )));
+    }
+
+    /// O botão de parear (mostrar o QR) é um segmentado de um botão só: no
+    /// hover ele ganha o fundo do botão de cancelar do diálogo; fora dele, nada.
+    #[test]
+    fn the_pair_button_takes_the_cancel_hover_background() {
+        let f = fixture(Config::default());
+        let filled = |out: &[Primitive]| {
+            out.iter().any(|p| {
+                matches!(
+                    p,
+                    Primitive::RoundedQuad(q)
+                        if q.color == f.pal.dialog_cancel_border
+                            && q.border_color == palette::TRANSPARENT
+                )
+            })
+        };
+        let hover_pair = |content: &content::Content| {
+            let index = content
+                .blocks
+                .iter()
+                .position(|block| {
+                    matches!(block, Block::Row(row) if matches!(row.control, ControlView::Segmented { .. }))
+                })
+                .expect("the pair button");
+            Some(Hit::Control(index, layout::ControlPart::Segment(0)))
+        };
+        let (out, ..) = paint_remote(
+            &f,
+            RemoteStatus::Connected,
+            None,
+            &[],
+            1.0,
+            false,
+            hover_pair,
+        );
+        assert!(filled(&out), "hovered");
+        let (out, ..) = paint_remote(&f, RemoteStatus::Connected, None, &[], 1.0, false, |_| None);
+        assert!(!filled(&out), "at rest");
     }
 
     #[test]
