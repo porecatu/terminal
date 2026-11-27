@@ -288,6 +288,14 @@ impl InkBox {
 /// tamanho.
 const INK_PROBE_SIZE: f32 = 128.0;
 
+/// Erro máximo de [`TextMeasurer::ink_em`], em fração da em: dois pixels
+/// de [`INK_PROBE_SIZE`] -- um do arredondamento da `placement` do
+/// `swash` para pixel inteiro, um da borda de antialias, que conta como
+/// tinta. Quem compara tinta com a largura da célula usa esta folga, senão
+/// um glyph desenhado para encostar na borda (o braille da Segoe UI Symbol
+/// termina em 0.599 em, numa célula de 0.6) sai medido além dela.
+pub const INK_SLACK_EM: f32 = 2.0 / INK_PROBE_SIZE;
+
 /// Teto do cache de tinta de grafemas compostos. Caractere único tem um
 /// conjunto pequeno e estável; cluster é texto arbitrário (ZWJ, combinantes)
 /// e não pode crescer sem limite numa sessão longa.

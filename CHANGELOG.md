@@ -14,6 +14,18 @@ primeiro release.
 > ([ADR-0044](docs/adr/0044-empacotamento-e-release.md)). Dívida de
 > verificação registrada por fase — ver [docs/roadmap.md](docs/roadmap.md).
 
+## [Não publicado]
+
+### Corrigido
+
+- **Gráficos de braille do `btop` dançando para os lados** com fonte de
+  terminal sem braille (como a `Google Sans Code`). Desde o
+  [ADR-0116](docs/adr/0116-glyph-de-fallback-encaixado-pela-tinta.md), o glyph
+  de fallback que saía da célula por um fio de antialias era recentrado, e
+  só os padrões com a coluna direita de pontos andavam ~1 px. Agora a tinta é
+  empurrada para dentro pelo excesso, e o transbordo e a escala têm a folga da
+  medição.
+
 ## [0.10.1] - 2026-11-26
 
 Copiar, recortar e colar nos campos de texto, símbolos de fallback e Iosevka corrigidos, protocolo 0.7 do acesso remoto e a janela sem aba ativa com imagem de fundo e gerenciador. Substitui a 0.10.0, retirada.

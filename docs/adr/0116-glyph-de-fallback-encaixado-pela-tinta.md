@@ -25,9 +25,9 @@ Com a Iosevka Fixed embutida (a config default), `⚠` e `⏵` **não** são fal
 O glyph de fallback se encaixa na célula pela **tinta**, e um glyph de uma célula pode **transbordar para a célula seguinte quando ela está vazia**. A grade não muda.
 
 1. **Medida.** `TextMeasurer::ink_em` (caractere) e `cluster_ink_em` (grafema composto) devolvem a caixa da tinta (`InkBox`), em fração de `size_px`, relativa à origem do `TextRun`. A medição rasteriza a 128 px pela mesma conta de posição do `glyphon` e entra em cache: uma rasterização por caractere distinto. O cache de grafemas tem teto de 1024 entradas.
-2. **Espaço.** O espaço disponível são as células do caractere: uma, ou duas se for `WIDE`. Se a tinta não cabe nele, o caractere é de uma célula e a célula seguinte é um espaço que não pertence a um caractere largo, o espaço passa a ter duas células (`next_cell_is_blank`). É a regra do kitty e a `allow_square_glyphs_to_overflow_width = "WhenFollowedBySpace"` do WezTerm, o default dele.
-3. **Escala.** O glyph só encolhe, e só o necessário para a tinta caber na largura disponível e na altura da linha.
-4. **Posição** (`place_fallback`, função pura). Na horizontal, o glyph fica onde a fonte o põe, com a pena no `x` da célula, se a tinta cabe ali; senão, a tinta é centrada no espaço disponível. Na vertical, o glyph encolhe em torno do centro da própria tinta no tamanho cheio e, se ainda passar da linha, é empurrado para dentro dela.
+2. **Espaço.** O espaço disponível são as células do caractere: uma, ou duas se for `WIDE`. Se a tinta não cabe nele, além da folga da medição (`INK_SLACK_EM`, dois pixels da rasterização a 128 px), o caractere é de uma célula e a célula seguinte é um espaço que não pertence a um caractere largo, o espaço passa a ter duas células (`next_cell_is_blank`). É a regra do kitty e a `allow_square_glyphs_to_overflow_width = "WhenFollowedBySpace"` do WezTerm, o default dele.
+3. **Escala.** O glyph só encolhe, e só o necessário para a tinta caber na largura disponível e na altura da linha. Tinta que passa delas só pela folga da medição não encolhe.
+4. **Posição** (`place_fallback`, função pura). Na horizontal, o glyph fica onde a fonte o põe, com a pena no `x` da célula, e, se a tinta sai do espaço disponível, é **empurrado para dentro pelo mínimo**; só a tinta mais larga que o espaço é centrada nele. A correção é contínua, proporcional ao excesso (ver "Centrar a tinta quando ela sai da caixa", em Alternativas). Na vertical, o glyph encolhe em torno do centro da própria tinta no tamanho cheio e, se ainda passar da linha, é empurrado para dentro dela.
 5. **O que não muda.** Nenhuma coluna muda: largura de caractere, cursor, seleção, hit-testing e o tamanho do PTY continuam os do motor. A célula vazia segue vazia para o programa; só o desenho passa por cima dela. Caracteres que a face mono cobre na largura da grade continuam no run compartilhado, sem medição de tinta. Glyph sem tinta mensurável (`ink_em` devolve `None`) segue o caminho antigo, pelo avanço.
 
 ## Alternativas consideradas
@@ -47,6 +47,10 @@ Já resolve o `⏵`. O `⚠` seguido de espaço, porém, ainda sairia a 57% (tin
 ### Centrar sempre a tinta na célula
 
 Mais simples, mas move glyph que ocupa só parte da célula de propósito (sextantes e meios-blocos de fontes de símbolo, que precisam encostar na borda certa). Centrar só quando a posição natural sai da caixa preserva esses glyphs.
+
+### Centrar a tinta quando ela sai da caixa
+
+Era a regra da primeira versão deste ADR, e o `btop` a derrubou (relato do dono em 2026-11-27, com `Google Sans Code`, que não tem braille). O braille vem da Segoe UI Symbol, cuja coluna direita de pontos termina em 0.599 em, numa célula de 0.600. A medição rasteriza em pixel inteiro e conta a borda de antialias, então todo padrão com a coluna direita saía medido um fio além da célula e era recentrado, ~0.08 em (~1.1 px a 14 px) para a esquerda. Os padrões só com a coluna esquerda ficavam no lugar. O gráfico rola uma coluna por atualização, os padrões de cada célula mudam o tempo todo, e os pontos dançavam para os lados. O defeito é o **degrau**: um erro de medição de 0.005 em virava um salto de 0.08 em, e glyphs de uma mesma família caíam de lados diferentes dele. Empurrar para dentro pelo excesso, com a folga nos limiares, deixa o deslocamento proporcional ao erro, subpixel nesse caso.
 
 ### Tirar da Iosevka embutida os símbolos que ela espreme
 
@@ -72,4 +76,5 @@ Com a config default, `⚠` e `⏵` vêm da Iosevka Fixed, estreitos por desenho
 |---|---|---|---|
 | A tinta medida diverge da posição em que o `glyphon` desenha | Baixa | Glyph deslocado alguns décimos de pixel | Mesma conta de posição do `glyphon` (`x = pena + placement.left`, `y = baseline + deslocamento − placement.top`), medida a 128 px; teste contra o contorno do `H` da Iosevka |
 | Custo no caminho quente | Baixa | Frame mais lento em tela cheia de fallback (braille numa fonte sem braille) | Cache por caractere: depois da primeira medição, uma consulta de `HashMap` por célula de fallback, como `advance_em` |
+| Glyphs feitos para se encaixar lado a lado (braille, sextantes) com tintas diferentes por caractere | Média | Desenho que pula quando o conteúdo muda | Posição contínua na tinta e folga de medição nos limiares (`INK_SLACK_EM`); teste `braille_patterns_keep_their_columns_put` com as tintas medidas da Segoe UI Symbol |
 | Máquina sem fonte de emoji ou de símbolo | Média (CI Linux) | Nada pintado | `ink_em` devolve `None` e o caminho antigo vale; os testes que dependem da fonte se calam sem ela |

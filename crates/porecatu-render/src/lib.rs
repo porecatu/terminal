@@ -32,5 +32,5 @@ pub use primitives::{
     Area, Color, FontFace, ImageId, Point, Polyline, Primitive, Quad, Rect, RoundedQuad,
     SansWeight, TextRun,
 };
-pub use text_measurer::{FontFamilies, InkBox, TextMeasurer};
+pub use text_measurer::{FontFamilies, INK_SLACK_EM, InkBox, TextMeasurer};
 pub use window_surface::WindowSurface;

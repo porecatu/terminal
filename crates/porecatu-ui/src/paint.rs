@@ -21,13 +21,15 @@
 //! O encaixe é pela **tinta** do glyph, não pelo avanço (`place_fallback`),
 //! e um símbolo de uma célula seguido de célula vazia pode usar as duas --
 //! senão o `⚠` da Segoe UI Emoji saía a 44% e o `⏵` da Segoe UI Symbol
-//! quase sumia.
+//! quase sumia. A posição é contínua na tinta: o que sai da célula é
+//! empurrado para dentro pelo excesso, nunca recentrado.
 //!
 //! A quebra é por caractere que precisa dela, não por célula: uma linha de
 //! ASCII continua sendo um run só.
 
 use porecatu_render::{
-    Color, FontFace, ImageId, InkBox, Primitive, Quad, Rect, RoundedQuad, TextMeasurer, TextRun,
+    Color, FontFace, INK_SLACK_EM, ImageId, InkBox, Primitive, Quad, Rect, RoundedQuad,
+    TextMeasurer, TextRun,
 };
 use porecatu_term::{
     Cell, CellFlags, CellText, CursorShape, GridSnapshot, HyperlinkSpan, OccurrenceSpan,
@@ -744,13 +746,20 @@ fn next_cell_is_blank(
 /// Origem e tamanho de um glyph de fallback, a partir da tinta dele
 /// ([`InkBox`], em fração da em) -- função pura.
 ///
+/// Toda comparação de tinta com a caixa tem a folga da medição
+/// ([`INK_SLACK_EM`]), e toda correção de posição é **contínua** --
+/// proporcional ao excesso. Glyphs de uma mesma família (os 256 padrões de
+/// braille) têm tintas diferentes; uma regra com degrau faria cada padrão
+/// cair de um lado dele, e o gráfico do `btop` dançava conforme rolava.
+///
 /// - **Escala** só encolhe, e só o quanto a tinta pede: a largura disponível
-///   é a da célula e, se a tinta não cabe nela, mais `spill`; a altura é a
-///   da linha. Um glyph cuja tinta cabe sai no tamanho da fonte, por maior
-///   que seja o avanço dele.
-/// - **Horizontal**: fica onde a fonte o põe (pena no `x` da célula) se a
-///   tinta cabe ali; senão a tinta é centrada no espaço disponível. Não
-///   centrar sempre preserva glyph que ocupa só parte da célula de
+///   é a da célula e, se a tinta passa dela (além da folga), mais `spill`;
+///   a altura é a da linha. Um glyph cuja tinta cabe sai no tamanho da
+///   fonte, por maior que seja o avanço dele.
+/// - **Horizontal**: fica onde a fonte o põe (pena no `x` da célula) e,
+///   se a tinta sai do espaço disponível, é empurrado para dentro pelo
+///   mínimo; só a tinta mais larga que o espaço é centrada nele. Não mover
+///   o que já cabe preserva glyph que ocupa só parte da célula de
 ///   propósito (sextantes, meios-blocos de fontes de símbolo).
 /// - **Vertical**: encolhe em torno do centro da tinta no tamanho cheio,
 ///   então símbolo continua no meio da linha e pontuação continua embaixo;
@@ -758,25 +767,30 @@ fn next_cell_is_blank(
 fn place_fallback(ink: InkBox, font_size_px: f32, slot: FallbackSlot) -> ((f32, f32), f32) {
     let ink_width = ink.width() * font_size_px;
     let ink_height = ink.height() * font_size_px;
+    let slack = INK_SLACK_EM * font_size_px;
     let room = match slot.spill {
-        Some(extra) if ink_width > slot.width => slot.width + extra,
+        Some(extra) if ink_width > slot.width + slack => slot.width + extra,
         _ => slot.width,
     };
     let mut scale = 1.0_f32;
-    if ink_width > room {
+    if ink_width > room + slack {
         scale = scale.min(room / ink_width);
     }
-    if ink_height > slot.height {
+    if ink_height > slot.height + slack {
         scale = scale.min(slot.height / ink_height);
     }
     let size_px = font_size_px * scale;
 
     let left = ink.left * size_px;
     let right = ink.right * size_px;
-    let x = if left >= 0.0 && right <= room {
-        slot.x
-    } else {
+    let x = if right - left > room {
         slot.x + (room - (right - left)) / 2.0 - left
+    } else if left < 0.0 {
+        slot.x - left
+    } else if right > room {
+        slot.x - (right - room)
+    } else {
+        slot.x
     };
 
     let center = (ink.top + ink.bottom) / 2.0 * font_size_px;
@@ -1898,18 +1912,66 @@ mod tests {
     }
 
     /// Tinta que cabe, mas que a fonte põe para fora da célula (sobra de
-    /// avanço à esquerda): centrada, sem encolher.
+    /// avanço à esquerda): empurrada para dentro pelo mínimo, sem encolher
+    /// e sem recentrar -- o deslocamento é do tamanho do excesso.
     #[test]
-    fn ink_that_fits_but_sits_outside_is_centered() {
+    fn ink_that_fits_but_sits_outside_is_pushed_inside() {
         // 0.4 a 0.7 em a 16 px: 6.4 a 11.2 px, numa célula de 8.
         let (origin, size) = place_fallback(ink(0.4, 0.7, 0.3, 0.9), 16.0, slot(None));
         assert_eq!(size, 16.0);
-        let left = origin.0 + 0.4 * 16.0;
         let right = origin.0 + 0.7 * 16.0;
+        assert!((right - 108.0).abs() < 1e-4, "{right}");
+    }
+
+    /// O braille do `btop` vindo da Segoe UI Symbol (fonte configurada sem
+    /// braille): a tinta de `⡇` cabe na célula, a de `⣿` sai medida um fio
+    /// além dela pela borda de antialias da rasterização. Os dois têm a
+    /// coluna esquerda no mesmo lugar da fonte, e ela tem de continuar no
+    /// mesmo lugar na tela -- recentrar só o `⣿` fazia o gráfico dançar
+    /// conforme rolava.
+    #[test]
+    fn braille_patterns_keep_their_columns_put() {
+        let left_column = ink(0.154, 0.325, 0.2, 1.17);
+        let full = ink(0.154, 0.605, 0.2, 1.17);
+        for spill in [None, Some(8.4)] {
+            let slot = FallbackSlot {
+                x: 100.0,
+                y: 50.0,
+                width: 8.4,
+                height: 17.0,
+                spill,
+            };
+            let (a, size_a) = place_fallback(left_column, 14.0, slot);
+            let (b, size_b) = place_fallback(full, 14.0, slot);
+            assert_eq!(size_a, size_b, "{spill:?}");
+            let left_a = a.0 + left_column.left * size_a;
+            let left_b = b.0 + full.left * size_b;
+            assert!(
+                (left_a - left_b).abs() <= 0.1,
+                "coluna esquerda andou {} px ({spill:?})",
+                left_b - left_a
+            );
+            assert_eq!(a.1, b.1, "{spill:?}");
+        }
+    }
+
+    /// Passar da célula só pela folga da rasterização não toma a célula
+    /// vazia nem encolhe o glyph; passar de verdade, sim.
+    #[test]
+    fn spill_needs_more_than_raster_slack() {
+        let slack = porecatu_render::INK_SLACK_EM * 16.0;
+        let hair = (8.0 + slack / 2.0) / 16.0;
+        let (origin, size) = place_fallback(ink(0.0, hair, 0.2, 1.0), 16.0, slot(Some(8.0)));
+        assert_eq!(size, 16.0);
+        let right = origin.0 + hair * 16.0;
         assert!(
-            (left - 100.0 - (108.0 - right)).abs() < 1e-4,
-            "{left}..{right}"
+            origin.0 >= 100.0 - slack && right <= 108.0 + slack,
+            "{origin:?}..{right}"
         );
+
+        let (origin, size) = place_fallback(ink(0.0, 0.9, 0.2, 1.0), 16.0, slot(Some(8.0)));
+        assert_eq!(size, 16.0);
+        assert!(origin.0 + 0.9 * 16.0 > 108.0, "nao transbordou");
     }
 
     /// Mais larga que a célula, sem célula vazia ao lado: encolhe até a
