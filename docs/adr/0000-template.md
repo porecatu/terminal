@@ -66,7 +66,7 @@
 | [0062](0062-imagem-de-fundo-da-janela.md) | Imagem de fundo da janela: cabeça da camada da grade, recorte por quadro e estado em dois slots | Aceito · §4 Superseded by ADR-0063 (**parcial**: sem furo até o desktop com imagem da janela) |
 | [0063](0063-imagem-da-janela-sem-furo-ate-o-desktop.md) | Imagem da janela sem furo até o desktop | Aceito |
 | [0064](0064-janela-de-configuracoes-modal.md) | Janela de configurações modal, possuída pela janela de terminal | Aceito · §4 revisto (no X11, tipo diálogo para flutuar em gerenciador tiling) · §2 revisto por ADR-0080 (**parcial**: modalidade encadeada do editor de perfil) |
-| [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito · família revista por ADR-0084 (**parcial**: a barra de abas usa a fonte do sistema; o tamanho continua `[terminal.font] size`) |
+| [0065](0065-fonte-unica-para-terminal-e-chrome.md) | Fonte única para terminal e chrome: `[terminal.font]` vale para a barra de abas | Aceito · família revista por ADR-0084 (**parcial**: a barra de abas usa a fonte do sistema) · tamanho revisto por ADR-0119 (**parcial**: o da fonte do sistema, não `[terminal.font] size`) |
 | [0066](0066-estado-pressionado-dos-botoes-de-janela.md) | Estado pressionado dos botões de janela | Aceito · cores revistas por ADR-0067 (fundos translúcidos) |
 | [0067](0067-temas-em-arquivos-proprios.md) | Temas em arquivos próprios (`thm_*.toml`), cor só no tema, botões de janela translúcidos | Aceito |
 | [0068](0068-efeito-acrilico-no-fundo-do-terminal.md) | Efeito acrílico no fundo do terminal: desfoque da camada da janela em passe próprio, amostrado por quadro | Aceito — aval visual pendente |
@@ -120,6 +120,7 @@
 | [0116](0116-glyph-de-fallback-encaixado-pela-tinta.md) | Glyph de fallback encaixado pela tinta, com transbordo para a célula vazia | Proposto — implementado; smoke test só no Windows; aval visual do dono pendente |
 | [0117](0117-recorte-da-iosevka-sem-largos-e-espremidos.md) | Recorte da Iosevka sem os caracteres largos e os símbolos espremidos | Proposto — implementado; smoke test só no Windows; aval visual do dono pendente · revisa ADR-0025 (**parcial**) |
 | [0118](0118-botoes-de-rolagem-da-barra-de-abas-cheia.md) | Botões de rolagem da barra de abas cheia: retangulares, de cima a baixo, com hover e clique | Proposto — implementado; verificado só por teste automatizado; aval visual do dono pendente · revisa ADR-0084 §1 (**parcial**) |
+| [0119](0119-tamanho-da-fonte-da-barra-de-abas-segue-o-sistema.md) | Tamanho da fonte da barra de abas segue o sistema: rótulo da aba, nome do grupo e renomear com o tamanho padrão da fonte do sistema, não `[terminal.font] size` | Proposto — aval visual pendente |
 
 ## Convenção
 

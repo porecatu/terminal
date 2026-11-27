@@ -89,9 +89,10 @@ reiniciar) — o app assiste o arquivo e recarrega sozinho. Algumas mudanças
 (fonte, por exemplo) exigem recalcular a grade e podem levar um instante a
 mais para aparecer; nenhuma exige fechar e reabrir o app.
 
-`[terminal.font] family` e `size` valem para o terminal; o **tamanho** vale
-também para o texto da barra de abas — título da aba, nome do grupo e campo de
-renomear ([ADR-0065](adr/0065-fonte-unica-para-terminal-e-chrome.md)). A
+`[terminal.font] family` e `size` valem só para o terminal. O texto da barra de
+abas — título da aba, nome do grupo e campo de renomear — tem o **tamanho padrão
+da fonte do sistema** (12px no Windows, 13px no macOS), que não muda com
+`[terminal.font] size` nem com o zoom ([ADR-0119](adr/0119-tamanho-da-fonte-da-barra-de-abas-segue-o-sistema.md)). A
 **família** da interface (abas, grupos, menus, popovers, diálogos, avisos,
 barra de status e telas de configurações) é a fonte de interface do sistema —
 Segoe UI no Windows, Helvetica Neue no macOS —, que não tem chave de

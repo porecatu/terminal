@@ -4,7 +4,7 @@
 **Data:** 2026-10-21
 **Relacionados:** [ADR-0026](0026-chrome-unificado-em-iosevka-fixed.md), [ADR-0030](0030-escopo-do-hot-reload.md), [ADR-0032](0032-interface-do-v1-fechada.md), [PRD-004](../prd/prd-004-aparencia-do-chrome.md), [PRD-005](../prd/prd-005-aparencia-do-terminal.md), [PRD-016](../prd/prd-016-tela-de-configuracoes.md)
 
-> **Revisão ([ADR-0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)):** `[terminal.font] family` deixou de valer para o texto da barra de abas — rótulo da aba, nome do grupo, campo de renomear — que agora usa a fonte de interface do sistema (`FontFace::System`, sem chave de configuração). O **tamanho** (`[terminal.font] size`) continua valendo para os três. O nome do grupo passa de `Medium` a `SemiBold`, peso que a Segoe UI tem. O que está abaixo é o que valia aqui.
+> **Revisão ([ADR-0084](0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)):** `[terminal.font] family` deixou de valer para o texto da barra de abas — rótulo da aba, nome do grupo, campo de renomear — que agora usa a fonte de interface do sistema (`FontFace::System`, sem chave de configuração). O **tamanho** (`[terminal.font] size`) valia para os três até o [ADR-0119](0119-tamanho-da-fonte-da-barra-de-abas-segue-o-sistema.md), que o troca pelo tamanho padrão da fonte do sistema. O nome do grupo passa de `Medium` a `SemiBold`, peso que a Segoe UI tem. O que está abaixo é o que valia aqui.
 
 
 ## Contexto

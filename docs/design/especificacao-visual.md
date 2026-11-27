@@ -33,7 +33,8 @@ Fallback de UI: a cadeia da plataforma (`cosmic-text`). Fallback mono: `monospac
 | 19px / 500 | título da tela de nova aba |
 | 15px / 500 | título do painel de configurações |
 | 14.5px | campo de busca da paleta de comandos |
-| 14px | **conteúdo do terminal**, **rótulo da aba** (peso 400), **nome do grupo** (peso **600**, `SemiBold` — lê como bold; ver seção 4.4) e **campo de rename da aba** — um valor só, `[terminal.font] size` ([ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)); a **família** do chrome é a fonte do sistema ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)), a do terminal é `[terminal.font] family`; o zoom de sessão muda só a grade |
+| 14px | **conteúdo do terminal** (`[terminal.font] size`; o zoom de sessão muda só a grade) |
+| 12px (Windows) | **rótulo da aba** (peso 400), **nome do grupo** (peso **600**, `SemiBold` — lê como bold; ver seção 4.4) e **campo de rename da aba** — um valor só, o **tamanho padrão da fonte do sistema** (`tab_bar::SYSTEM_UI_FONT_SIZE`: 12 no Windows, 13 no macOS, 13.33 nas demais), que **não** segue `[terminal.font] size` ([ADR-0119](../adr/0119-tamanho-da-fonte-da-barra-de-abas-segue-o-sistema.md), que revê o [ADR-0065](../adr/0065-fonte-unica-para-terminal-e-chrome.md)); a **família** é a fonte do sistema ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)) |
 | 13px | nome de perfil, item de resultado, campo de nome de grupo |
 | 12.5px | itens de menu |
 | 12px | nome do app |

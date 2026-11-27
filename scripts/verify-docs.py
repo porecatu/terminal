@@ -262,11 +262,8 @@ VALORES = [
     ("icon_button_padding_x", "tab_bar.rs", "icon_button_padding_x",
      "appearance.tabs.icon_button_padding_x",
      "`icon_button_padding_x` **4px de cada lado**"),
-    # ADR-0065: aba e pílula não têm chave própria, seguem a fonte do terminal.
-    ("font_size da aba", "tab_bar.rs", "font_size", "terminal.font.size",
-     "14px"),
-    ("font_size da pílula", "tab_bar.rs", "pill_font_size",
-     "terminal.font.size", "14px/**600**"),
+    # ADR-0119: o tamanho da aba e da pílula é o da fonte do sistema
+    # (`SYSTEM_UI_FONT_SIZE`), sem chave no TOML; não há o que conferir aqui.
     ("label_max_width", "tab_bar.rs", "pill_name_max_width",
      "appearance.groups.label_max_width", "**140px** (`pill_name_max_width`)"),
     ("wrapper_padding", "tab_bar.rs", "wrapper_padding",

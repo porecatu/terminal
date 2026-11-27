@@ -31,6 +31,18 @@ use std::collections::{HashMap, HashSet};
 use porecatu_core::{GroupId, InsertAt, TabId, UnpinTarget, Workspace};
 use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer, icon};
 
+/// Tamanho padrão da fonte de interface do sistema, em pixels lógicos
+/// (ADR-0119): 9pt da Segoe UI no Windows, 13pt da fonte de sistema no macOS e
+/// 10pt (13.33px, o padrão de GTK e Qt) nas demais. É o tamanho do rótulo da
+/// aba, do nome do grupo e do campo de renomear; não segue `[terminal.font]
+/// size` nem o zoom de sessão.
+#[cfg(target_os = "windows")]
+pub const SYSTEM_UI_FONT_SIZE: f32 = 12.0;
+#[cfg(target_os = "macos")]
+pub const SYSTEM_UI_FONT_SIZE: f32 = 13.0;
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub const SYSTEM_UI_FONT_SIZE: f32 = 13.33;
+
 /// Fonte de rótulo de aba (espec. §1.1: "12.5px, rótulo da aba").
 const LABEL_FONT: FontFace = FontFace::System {
     weight: SansWeight::Regular,
@@ -193,8 +205,8 @@ pub struct TabBarStyle {
     /// `[appearance.tabs] show_close_button` -- `Never` tira o `X` do hit
     /// test; `Hover` só o desenha com o cursor na aba (`chrome::paint`).
     pub show_close_button: porecatu_config::CloseButtonVisibility,
-    /// `[terminal.font] size` -- a mesma fonte do terminal (ADR-0065), sem
-    /// o zoom de sessão, que é só da grade.
+    /// Tamanho padrão da fonte de interface do sistema
+    /// ([`SYSTEM_UI_FONT_SIZE`], ADR-0119); não segue `[terminal.font] size`.
     pub font_size: f32,
     /// `[appearance.groups] label_padding_left` -- pílula (espec. §2.4).
     /// 10px, 2px a mais que o `label_padding_left` da espec (8) -- pedido
@@ -206,9 +218,9 @@ pub struct TabBarStyle {
     /// que a espec também intercala saiu -- ver [`GroupPillRect`]). Sem
     /// chave própria no TOML (mesmo padrão de `internal_gap`).
     pub pill_gap: f32,
-    /// `[terminal.font] size` -- tamanho do nome da pílula, o mesmo do
-    /// rótulo da aba e do terminal (ADR-0065): meio pixel de diferença lado
-    /// a lado só faz o nome parecer de outra fonte. O **peso**, no entanto,
+    /// Tamanho do nome da pílula, o mesmo do rótulo da aba
+    /// ([`SYSTEM_UI_FONT_SIZE`], ADR-0119): meio pixel de diferença lado a
+    /// lado só faz o nome parecer de outra fonte. O **peso**, no entanto,
     /// diverge da aba -- ver [`PILL_NAME_FONT`].
     pub pill_font_size: f32,
     /// `[appearance.groups] label_max_width` -- teto do nome (RF-2.12): o
@@ -332,11 +344,11 @@ impl TabBarStyle {
         show_app_menu_button: true,
         show_profile_badge: true,
         show_close_button: porecatu_config::CloseButtonVisibility::Always,
-        font_size: 14.0, // = `[terminal.font] size` (ADR-0065)
+        font_size: SYSTEM_UI_FONT_SIZE,
         pill_padding_left: 10.0,
         pill_padding_right: 9.0,
         pill_gap: 7.0,
-        pill_font_size: 14.0, // = `font_size`
+        pill_font_size: SYSTEM_UI_FONT_SIZE,
         pill_name_max_width: 140.0,
         // `icon::WIDEST_CARET_INK_EM * chrome::PILL_CARET_ICON_SIZE`,
         // fixado aqui porque `TabBarStyle::DEFAULT` é `const` e o
@@ -363,7 +375,7 @@ impl TabBarStyle {
         indicator_dot_size: 6.0,
         rename_field_height: 20.0,
         rename_field_width: 120.0,
-        rename_font_size: 14.0, // = `font_size`
+        rename_font_size: SYSTEM_UI_FONT_SIZE,
         rename_padding_x: 5.0,
         terminal_frame_margin: 6.0,
         terminal_frame_padding: 6.0,
@@ -406,11 +418,11 @@ impl TabBarStyle {
             show_app_menu_button: tabs.show_app_menu_button,
             show_profile_badge: tabs.show_profile_badge,
             show_close_button: tabs.show_close_button,
-            font_size: config.terminal.font.size as f32,
+            font_size: Self::DEFAULT.font_size,
             pill_padding_left: groups.label_padding_left as f32,
             pill_padding_right: groups.label_padding_right as f32,
             pill_gap: Self::DEFAULT.pill_gap,
-            pill_font_size: config.terminal.font.size as f32,
+            pill_font_size: Self::DEFAULT.pill_font_size,
             pill_name_max_width: groups.label_max_width as f32,
             pill_caret_size: Self::DEFAULT.pill_caret_size,
             overflow_scroll_step: tabs.overflow.scroll_step as f32,
@@ -433,7 +445,7 @@ impl TabBarStyle {
             indicator_dot_size: groups.collapsed_indicator_size as f32,
             rename_field_height: tabs.rename.height as f32,
             rename_field_width: tabs.rename.width as f32,
-            rename_font_size: config.terminal.font.size as f32,
+            rename_font_size: Self::DEFAULT.rename_font_size,
             rename_padding_x: tabs.rename.padding_x as f32,
             terminal_frame_margin: terminal_frame.margin as f32,
             terminal_frame_padding: terminal_frame.padding as f32,
@@ -2206,15 +2218,16 @@ mod tests {
         assert_eq!(window_button_release(None, Some(Close)), None);
     }
 
-    /// ADR-0065: abas, pílula e rename seguem `[terminal.font] size`.
+    /// ADR-0119: abas, pílula e rename têm o tamanho da fonte do sistema e
+    /// não seguem `[terminal.font] size`.
     #[test]
-    fn chrome_font_size_follows_the_terminal_font() {
+    fn chrome_font_size_ignores_the_terminal_font() {
         let mut config = porecatu_config::Config::default();
         config.terminal.font.size = 18.0;
         let style = TabBarStyle::from_config(&config);
-        assert_eq!(style.font_size, 18.0);
-        assert_eq!(style.pill_font_size, 18.0);
-        assert_eq!(style.rename_font_size, 18.0);
+        assert_eq!(style.font_size, SYSTEM_UI_FONT_SIZE);
+        assert_eq!(style.pill_font_size, SYSTEM_UI_FONT_SIZE);
+        assert_eq!(style.rename_font_size, SYSTEM_UI_FONT_SIZE);
     }
 
     #[test]
