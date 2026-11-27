@@ -28,6 +28,7 @@ move_to_window = "Move to window…"
 reconnect = "Reconnect"
 pin = "Pin tab"
 unpin = "Unpin tab"
+rename = "Rename tab"
 
 [terminal_menu]
 copy = "Copy"

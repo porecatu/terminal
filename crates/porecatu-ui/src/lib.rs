@@ -4778,6 +4778,12 @@ impl WindowState {
         let Some(id) = self.workspace.active_tab() else {
             return;
         };
+        self.start_rename(id);
+    }
+
+    /// Starts the inline rename of `id` (the active tab for `tab.rename`, the
+    /// clicked one for the context menu).
+    fn start_rename(&mut self, id: TabId) {
         // ADR-0087 §6: uma fixada não tem rótulo onde editar -- `tab.rename`
         // com ela ativa não faz nada.
         if self.workspace.is_pinned(id) {
@@ -10236,6 +10242,12 @@ impl App {
             MenuAction::Unpin => {
                 if self.unpin_tab_gesture(window_id, tab, UnpinTarget::TrackStart) {
                     self.reveal_active_tab(window_id);
+                }
+            }
+            MenuAction::RenameTab => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.start_rename(tab);
+                    state.window.request_redraw();
                 }
             }
             MenuAction::CloseTab => {

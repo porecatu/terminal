@@ -534,6 +534,7 @@ registry! {
         reconnect(),
         pin(),
         unpin(),
+        rename(),
     }
     terminal_menu {
         copy(),

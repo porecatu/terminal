@@ -981,7 +981,7 @@ Faltando uma delas, o app **desenha sem o efeito** e mostra um aviso que diz qua
 
 ## Editar texto nos campos
 
-Os campos de texto do app são todos de uma linha e se comportam do mesmo jeito: o nome da aba no rename (`F2`), o nome do grupo no editor, o nome de uma sessão no popover de sessões, a barra de busca, os campos da tela de configurações e do editor de perfil, e os campos mascarados (senha, passphrase, token do relay).
+Os campos de texto do app são todos de uma linha e se comportam do mesmo jeito: o nome da aba no rename (`F2` ou **Renomear aba** no menu de contexto), o nome do grupo no editor, o nome de uma sessão no popover de sessões, a barra de busca, os campos da tela de configurações e do editor de perfil, e os campos mascarados (senha, passphrase, token do relay).
 
 | Tecla (Win/Linux) | Tecla (macOS) | O que faz |
 |---|---|---|

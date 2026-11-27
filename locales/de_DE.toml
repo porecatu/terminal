@@ -14,6 +14,7 @@ move_to_window = "In Fenster verschieben…"
 reconnect = "Neu verbinden"
 pin = "Tab anheften"
 unpin = "Tab lösen"
+rename = "Tab umbenennen"
 
 [terminal_menu]
 copy = "Kopieren"

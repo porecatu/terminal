@@ -14,6 +14,7 @@ move_to_window = "Mover a ventana…"
 reconnect = "Reconectar"
 pin = "Fijar pestaña"
 unpin = "Desfijar pestaña"
+rename = "Renombrar pestaña"
 
 [terminal_menu]
 copy = "Copiar"

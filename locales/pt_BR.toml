@@ -30,6 +30,7 @@ move_to_window = "Mover para janela…"
 reconnect = "Reconectar"
 pin = "Fixar aba"
 unpin = "Desafixar aba"
+rename = "Renomear aba"
 
 [terminal_menu]
 copy = "Copiar"

@@ -14,6 +14,7 @@ move_to_window = "Déplacer vers une fenêtre…"
 reconnect = "Reconnecter"
 pin = "Épingler l'onglet"
 unpin = "Désépingler l'onglet"
+rename = "Renommer l'onglet"
 
 [terminal_menu]
 copy = "Copier"
