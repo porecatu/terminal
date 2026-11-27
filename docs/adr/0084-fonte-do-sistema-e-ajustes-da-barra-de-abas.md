@@ -19,6 +19,8 @@ O dono do produto fez uma série de ajustes visuais experimentais na barra de ab
 
 ### 1. Os botões de abas fora da vista saem
 
+> **Revisto pelo [ADR-0118](0118-botoes-de-rolagem-da-barra-de-abas-cheia.md):** com a barra cheia há de novo dois botões de rolagem, de outro desenho (retangulares, estreitos, de cima a baixo da barra, sem raio e sem borda). As chaves, a cor e as frases removidas abaixo **não voltam**; a contagem de abas ocultas também não.
+
 A trilha continua rolando pela roda do mouse (passo `[appearance.tabs.overflow] scroll_step`, 90px) e para trazer a aba ativa à vista (RF-1.18). Saem o desenho, o clique e os dois nós de acessibilidade ([ADR-0043](0043-arvore-de-acessibilidade.md)) dos indicadores, e com eles a contagem de abas ocultas (`Overflow` guarda só o deslocamento já saturado).
 
 Saem do schema `[appearance.tabs.overflow] indicator_size` e `edge_inset`, a cor `[tabs] overflow_indicator_background` dos temas (e `ResolvedPalette::overflow_count_background`) e as frases `access.tabs_hidden_left`/`right` dos catálogos. Arquivo do usuário que ainda as traga cai no aviso de chave desconhecida, como qualquer outra.

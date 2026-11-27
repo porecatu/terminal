@@ -16,6 +16,17 @@ primeiro release.
 
 ## [Não publicado]
 
+### Adicionado
+
+- **Botões de rolagem na barra de abas cheia**
+  ([ADR-0118](docs/adr/0118-botoes-de-rolagem-da-barra-de-abas-cheia.md), revê o
+  [ADR-0084](docs/adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) §1).
+  Quando as abas não cabem, dois botões retangulares e estreitos, de cima a
+  baixo da barra, sem raio nem borda, com chevrons do tamanho do "+" e hover e
+  pressionado, rolam a trilha para cada lado; o botão da ponta em que a trilha
+  já está fica apagado. A roda do mouse segue rolando. Sem acessibilidade
+  própria ainda. Aval visual do dono pendente.
+
 ### Corrigido
 
 - **Gráficos de braille do `btop` dançando para os lados** com fonte de

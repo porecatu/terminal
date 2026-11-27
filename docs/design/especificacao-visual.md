@@ -960,13 +960,28 @@ O botão de fechar **não desaparece por falta de espaço**. `show_close_button`
 - **Sem barra de rolagem desenhada.** Não há token de scrollbar, e 6 px numa barra de 52 px sairiam do rótulo. Também não há botões de rolagem (ver abaixo): a affordance é o recorte da trilha na ponta.
 - Trazer a aba ativa para a vista (RF-1.18) é **rolagem mínima**: alinha à borda esquerda da trilha se ela está à esquerda, à direita se está à direita. Nunca centraliza — centralizar move mais que o necessário e desorienta.
 
-**Indicador de abas fora da vista (RF-1.19): removido** ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) §1). Esta seção especificava dois
+**Indicador de abas fora da vista (RF-1.19): removido, depois substituído pelos botões de rolagem acima** ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md) §1). Esta seção especificava dois
 círculos de 18×18 com chevron, um por ponta, que rolavam a trilha em 90 px por clique;
 antes deles houve uma cápsula de 34×18 com a contagem de abas ocultas. Saíram os
 botões, a contagem, as chaves `[appearance.tabs.overflow] indicator_size` e `edge_inset`,
 a cor `[tabs] overflow_indicator_background` dos temas e os dois nós de acessibilidade.
-A trilha rola pela roda do mouse (acima) e ao trazer a aba ativa à vista, e **o recorte
-na ponta é o único sinal** de que há mais abas. Registro na seção 4.4.
+A trilha rola pela roda do mouse (acima) e ao trazer a aba ativa à vista. Registro na seção 4.4.
+
+**Botões de rolagem (ADR-0118, que revê o ADR-0084 §1).** Só com a trilha **estourada**
+(`content_width` maior que a largura da trilha; a decisão usa a largura inteira, nunca a que
+sobra depois dos botões). Dois botões **retangulares e estreitos**, um em cada ponta da janela
+da trilha, **parados** (fora do recorte e do scroll), **de cima a baixo da barra**
+(`chrome::bar_height`), **sem raio e sem borda**. Chevron Lucide (`chevron-left`/`chevron-right`)
+no tamanho dos demais ícones do chrome (`icon_em_size`, o do "+"), cor `chrome_icon`, centrado;
+**largura** = tinta do chevron + 6 px de respiro de cada lado (`SCROLL_BUTTON_PADDING_X`),
+arredondada para cima (`tab_bar::scroll_button_width`, ≈ 19 px — constante, sem chave no TOML).
+Hover e pressionado: o fundo `hover_background`/`pressed_background` dos botões de janela sobre o
+retângulo inteiro (ADR-0069); dispara no release sobre o mesmo botão. **Apagado** (chevron em
+`menu_item_disabled_text`, sem hover nem clique) quando a trilha já está naquela ponta; o botão
+apagado continua dono do pixel. Um clique rola `scroll_step` (90 px). O recorte da trilha é o que
+sobra **entre** os botões, e o deslocamento varia de `−largura` (primeira aba logo depois do botão
+da esquerda) a `conteúdo − trilha + largura`; sem estourar, os botões não existem e a barra é a de
+antes. Sem tooltip e sem nó de acessibilidade (dívida do ADR-0118).
 
 ### 2.19 Arraste de aba `[v1]`
 
@@ -1405,6 +1420,7 @@ A coluna **Onde** diz em que fase (ou por qual ADR) a decisão foi tomada.
 | O canvas dá a cada perfil uma cor própria no menu de perfis (§2.9) | **Sem cor por perfil**: o badge usa a cor do grupo, na aba e no menu. Uma cor por item de uma lista do usuário não tem onde morar no tema ([ADR-0067](../adr/0067-temas-em-arquivos-proprios.md)), e `[[profiles.list]]` não tem chave `color` | ADR-0070 (alternativas) |
 | Pílula de fundo cheio a `.92` com rim de vidro, hover `brightness(1.25)` e chevron (§2.4) | **Só o nome**, sobre a cápsula: sem fundo, sem borda, sem hover, sem chevron e sem o espaço dele. O grupo colapsado mostra **um ponto de 6×6 por aba** à direita do nome, com 8px até o nome e 8px até a borda. `[appearance.groups] label_hover_brightness` sai do schema. O fantasma de arraste do grupo mantém o preenchimento, sem borda | pedido do dono do produto ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)), aval visual dado |
 | Indicador de overflow: círculo 18×18 com chevron nas duas pontas da trilha (§2.18, linha acima) | **Removido.** A trilha rola pela roda do mouse e ao trazer a aba ativa à vista; saem as chaves `overflow.indicator_size`/`edge_inset`, a cor `overflow_indicator_background` dos temas e os nós `tabs_hidden_*` da árvore de acessibilidade | pedido do dono do produto (ADR-0084 §1) |
+| Sem botões de overflow; o recorte na ponta é o único sinal (linha acima) | **Dois botões de rolagem com a trilha estourada**: retangulares e estreitos (≈ 19 px), de cima a baixo da barra, sem raio e sem borda, chevron no tamanho do "+", hover e pressionado como os da zona fixa, apagados na ponta; o recorte da trilha fica entre eles. Sem contagem, sem chaves e sem cores novas | pedido do dono do produto ([ADR-0118](../adr/0118-botoes-de-rolagem-da-barra-de-abas-cheia.md)), aval visual pendente |
 | Aba com borda 1px em todo estado (§2.5) | **Sem borda dentro de grupo**; a aba solta e a borda de seleção continuam | pedido do dono do produto (ADR-0084 §3) |
 | Aba de 229px, rótulo de até 180px (§1.7, §2.5) | **209px**, rótulo de até 160px (`label_max_width`, constante) | pedido do dono do produto (ADR-0084 §4) |
 | Botão de fechar da aba sem estado visual além da cor do ícone (§2.5) | **Hover e pressionado como o "+"**: quadrado arredondado de 24px (`close_hover_size` = 30 − 2 × 3, menor que o do "+" para caber na aba de grupo); o retângulo do botão passa de 25×17 para 25×24 | pedido do dono do produto (ADR-0084 §5) |

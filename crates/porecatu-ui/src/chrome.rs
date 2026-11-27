@@ -411,10 +411,14 @@ pub fn paint(
         .and_then(|ghost| ghost.base_pinned)
         .unwrap_or_else(|| workspace.pinned().len());
     let track_left = tab_bar::track_shift(style, is_macos, pinned_count);
+    // Trilha cheia (ADR-0118): os botões de rolagem tomam `overflow.inset` px
+    // de cada ponta, e o recorte é só o que sobra entre eles.
+    let track_width =
+        tab_bar::trilha_width(style, bar_width, is_macos, pinned_count, devices_button);
     out.push(Primitive::PushClip(Rect {
-        x: track_left,
+        x: track_left + overflow.inset,
         y: 0.0,
-        width: tab_bar::trilha_width(style, bar_width, is_macos, pinned_count, devices_button),
+        width: (track_width - overflow.inset * 2.0).max(0.0),
         height: bar_height,
     }));
     // Conteúdo -> tela: a origem do conteúdo é o início da trilha.
@@ -793,6 +797,35 @@ pub fn paint(
 
     out.push(Primitive::PopClip);
 
+    // Botões de rolagem da trilha cheia (ADR-0118): fora do recorte, parados,
+    // de cima a baixo da barra. Só existem com a trilha estourada.
+    if overflow.scrollable() {
+        for (dir, glyph) in [
+            (tab_bar::ScrollDir::Left, icon::CHEVRON_LEFT),
+            (tab_bar::ScrollDir::Right, icon::CHEVRON_RIGHT),
+        ] {
+            let hit = dir.hit();
+            let hovered = hover_zone_button == Some(hit);
+            paint_scroll_button(
+                tab_bar::scroll_button_rect(
+                    style,
+                    bar_width,
+                    bar_height,
+                    is_macos,
+                    pinned_count,
+                    devices_button,
+                    dir,
+                ),
+                glyph,
+                new_tab_icon_size,
+                (hovered, hovered && pressed_zone_button == Some(hit)),
+                overflow.can_scroll(dir),
+                pal,
+                &mut out,
+            );
+        }
+    }
+
     // Zona fixa à direita da barra, fora do recorte da trilha -- não rola
     // com o conteúdo, ao contrário do botão por grupo pintado acima.
     //
@@ -830,7 +863,9 @@ pub fn paint(
                 tab_bar::settings_button_rect(style, bar_width, bar_height, is_macos)
             }
             // Not an icon button: painted before the track.
-            tab_bar::ZoneButtonHit::AppMenu => continue,
+            tab_bar::ZoneButtonHit::AppMenu
+            | tab_bar::ZoneButtonHit::ScrollLeft
+            | tab_bar::ZoneButtonHit::ScrollRight => continue,
         };
         let hovered = hover_zone_button == Some(hit);
         let pressed = hovered && pressed_zone_button == Some(hit);
@@ -1114,6 +1149,36 @@ pub(crate) fn paint_zone_icon_button(
         border_width: 0.0,
     }));
     out.push(centered_glyph(icon, rect, icon_size, icon_color));
+}
+
+/// Botão de rolagem da trilha cheia (ADR-0118): retangular, sem raio, sem
+/// borda e de cima a baixo da barra; o chevron fica centrado, no tamanho dos
+/// demais ícones. Hover e pressionado revelam o fundo dos botões de janela
+/// ([`zone_button_background`]) sobre o retângulo inteiro. `enabled` falso
+/// (a trilha já está na ponta daquele lado): o chevron sai na cor de item
+/// desabilitado e o botão não reage -- quem chama não o dá como alvo.
+fn paint_scroll_button(
+    rect: Rect,
+    glyph: icon::Icon,
+    icon_size: f32,
+    (hovered, pressed): (bool, bool),
+    enabled: bool,
+    pal: &ResolvedPalette,
+    out: &mut Vec<Primitive>,
+) {
+    out.push(Primitive::RoundedQuad(RoundedQuad {
+        rect,
+        radius: 0.0,
+        color: zone_button_background((hovered, pressed), false, pal),
+        border_color: palette::TRANSPARENT,
+        border_width: 0.0,
+    }));
+    let color = if enabled {
+        pal.chrome_icon
+    } else {
+        pal.menu_item_disabled_text
+    };
+    out.push(centered_glyph(glyph, rect, icon_size, color));
 }
 
 /// Fundo revelado de um botão da zona fixa (ADR-0069): transparente em
@@ -2163,6 +2228,9 @@ mod tests {
                 tab_bar::devices_button_rect(&style, 800.0, 52.0, false)
             }
             tab_bar::ZoneButtonHit::AppMenu => tab_bar::app_menu_button_rect(&style, false),
+            tab_bar::ZoneButtonHit::ScrollLeft | tab_bar::ZoneButtonHit::ScrollRight => {
+                unreachable!("not an icon button of the fixed zone")
+            }
         };
         let sessions = rect_of(tab_bar::ZoneButtonHit::Sessions);
         let settings = rect_of(tab_bar::ZoneButtonHit::Settings);
@@ -2203,7 +2271,7 @@ mod tests {
                 &pal,
                 &term_pal,
                 bar_width,
-                Overflow { scroll_offset: 0.0 },
+                Overflow::default(),
                 None,
                 None,
                 None,
@@ -2279,7 +2347,7 @@ mod tests {
             &default_palette(),
             &default_term_palette(),
             800.0,
-            Overflow { scroll_offset: 0.0 },
+            Overflow::default(),
             None,
             None,
             None,
@@ -2338,7 +2406,7 @@ mod tests {
             &default_palette(),
             &default_term_palette(),
             800.0,
-            Overflow { scroll_offset: 0.0 },
+            Overflow::default(),
             None,
             None,
             None,
@@ -2837,7 +2905,7 @@ mod tests {
                 &pal,
                 &term_pal,
                 bar_width,
-                Overflow { scroll_offset: 0.0 },
+                Overflow::default(),
                 None,
                 None,
                 None,
@@ -2904,7 +2972,7 @@ mod tests {
         let mut m = TextMeasurer::new();
         let bar_width = 800.0;
         let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m, false);
-        let overflow = Overflow { scroll_offset: 0.0 };
+        let overflow = Overflow::default();
 
         let out = paint(
             &layout,
@@ -3244,6 +3312,138 @@ mod tests {
         );
     }
 
+    /// ADR-0118: a full track gets two rectangular, borderless scroll buttons
+    /// over the whole height of the bar, at both ends of the track, and the
+    /// clip shrinks to what is left between them; hover reveals the window
+    /// button background on the whole rectangle, and a button with nowhere to
+    /// scroll draws its chevron in the disabled colour.
+    #[test]
+    fn a_full_track_has_two_full_height_scroll_buttons_between_which_the_track_is_clipped() {
+        let style = TabBarStyle::DEFAULT;
+        let pal = default_palette();
+        let term_pal = default_term_palette();
+        let mut ws = Workspace::new();
+        ws.append_tab("zsh", None);
+        let mut m = TextMeasurer::new();
+        let bar_width = 800.0;
+        let bar_h = bar_height(&style);
+        let layout = tab_bar::fit_width(&ws, &style, bar_width, &mut m, false);
+        let inset = tab_bar::scroll_button_width(&style);
+        let overflow = Overflow {
+            scroll_offset: -inset,
+            inset,
+            can_scroll_left: false,
+            can_scroll_right: true,
+        };
+        let mut paint_with = |overflow: Overflow, hover: Option<tab_bar::ZoneButtonHit>| {
+            paint(
+                &layout,
+                &ws,
+                ws.active_tab(),
+                &RenameState::Idle,
+                &Selection::default(),
+                None,
+                &style,
+                &pal,
+                &term_pal,
+                bar_width,
+                overflow,
+                None,
+                None,
+                None,
+                &AnimationClock::default(),
+                Instant::now(),
+                &mut m,
+                false,
+                false,
+                None,
+                None,
+                None,
+                hover,
+                None,
+                None,
+                false,
+                None,
+                &HashMap::new(),
+                false,
+                0,
+                &HashMap::new(),
+            )
+        };
+        let rect_of =
+            |dir| tab_bar::scroll_button_rect(&style, bar_width, bar_h, false, 0, false, dir);
+        let button_quad = |out: &[Primitive], rect: Rect| {
+            out.iter().find_map(|p| match p {
+                Primitive::RoundedQuad(q) if q.rect == rect => Some(*q),
+                _ => None,
+            })
+        };
+
+        let out = paint_with(overflow, Some(tab_bar::ZoneButtonHit::ScrollRight));
+        let clip = out
+            .iter()
+            .find_map(|p| match p {
+                Primitive::PushClip(rect) => Some(*rect),
+                _ => None,
+            })
+            .expect("recorte da trilha");
+        let (left, right) = (
+            rect_of(tab_bar::ScrollDir::Left),
+            rect_of(tab_bar::ScrollDir::Right),
+        );
+        assert_eq!(clip.x, left.x + left.width);
+        assert_eq!(
+            clip.x + clip.width,
+            right.x,
+            "o recorte termina onde o botão da direita começa"
+        );
+        for r in [left, right] {
+            assert_eq!((r.y, r.height), (0.0, bar_h), "a altura da barra inteira");
+        }
+
+        let left_quad = button_quad(&out, left).expect("fundo do botão da esquerda");
+        let right_quad = button_quad(&out, right).expect("fundo do botão da direita");
+        assert_eq!(
+            (left_quad.radius, left_quad.border_width),
+            (0.0, 0.0),
+            "sem raio nem borda"
+        );
+        assert_eq!(left_quad.color, palette::TRANSPARENT, "repouso: sem fundo");
+        assert_eq!(
+            right_quad.color, pal.window_button_hover_bg,
+            "hover revela o fundo"
+        );
+
+        let glyph_color = |out: &[Primitive], glyph: &str| {
+            out.iter().find_map(|p| match p {
+                Primitive::Text(run) if run.text == glyph => Some(run.color),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            glyph_color(&out, icon::CHEVRON_LEFT.glyph),
+            Some(pal.menu_item_disabled_text),
+            "sem para onde rolar, apagado"
+        );
+        assert_eq!(
+            glyph_color(&out, icon::CHEVRON_RIGHT.glyph),
+            Some(pal.chrome_icon)
+        );
+
+        // A trilha que cabe é a barra de antes: sem botões, recorte inteiro.
+        let rest = paint_with(Overflow::default(), None);
+        assert!(button_quad(&rest, left).is_none());
+        assert!(glyph_color(&rest, icon::CHEVRON_LEFT.glyph).is_none());
+        let clip = rest
+            .iter()
+            .find_map(|p| match p {
+                Primitive::PushClip(rect) => Some(*rect),
+                _ => None,
+            })
+            .expect("recorte da trilha");
+        assert_eq!(clip.x, tab_bar::track_shift(&style, false, 0));
+    }
+
     /// The track starts after the fixed app menu button: the clip's left
     /// edge is `track_shift`, a `trilha_padding` past the button (the margin
     /// the button has on its other sides), and the first tab sits on it.
@@ -3268,7 +3468,7 @@ mod tests {
             &pal,
             &term_pal,
             bar_width,
-            Overflow { scroll_offset: 0.0 },
+            Overflow::default(),
             None,
             None,
             None,
@@ -3350,7 +3550,7 @@ mod tests {
             &pal,
             &term_pal,
             bar_width,
-            Overflow { scroll_offset: 0.0 },
+            Overflow::default(),
             None,
             None,
             None,
@@ -3772,7 +3972,7 @@ mod tests {
             &pal,
             &term_pal,
             bar_width,
-            Overflow { scroll_offset: 0.0 },
+            Overflow::default(),
             Some(drag),
             None,
             None,
@@ -4084,7 +4284,7 @@ mod tests {
             &pal,
             &term_pal,
             bar_width,
-            Overflow { scroll_offset: 0.0 },
+            Overflow::default(),
             None,
             None,
             None,

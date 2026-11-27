@@ -81,7 +81,7 @@ Todo usuário do Porecatu. Este é o recurso de base.
 
 **RF-1.19** — Um indicador mostra que há abas fora da vista, com contagem.
 
-> **Emendado ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md)).** O indicador **saiu**: a barra não desenha botões nem contagem de abas fora da vista. A trilha rola pela roda do mouse, e a aba ativa continua sendo trazida para a área visível (RF-1.18).
+> **Emendado ([ADR-0084](../adr/0084-fonte-do-sistema-e-ajustes-da-barra-de-abas.md), de novo pelo [ADR-0118](../adr/0118-botoes-de-rolagem-da-barra-de-abas-cheia.md)).** O indicador com contagem **saiu**. Com a trilha estourada, a barra tem dois **botões de rolagem** (chevrons, um por ponta, de cima a baixo da barra, apagados na ponta); sem contagem. A trilha também rola pela roda do mouse, e a aba ativa continua sendo trazida para a área visível (RF-1.18).
 
 ### Indicadores de estado
 

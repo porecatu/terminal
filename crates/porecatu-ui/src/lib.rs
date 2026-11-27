@@ -1612,6 +1612,10 @@ struct WindowState {
     /// Deslocamento horizontal da trilha (espec §2.18) -- saturado a cada
     /// redraw por `tab_bar::overflow_state`, nunca lido cru fora dali.
     scroll_offset: f32,
+    /// A rolagem da trilha como o último `tab_bar::overflow_state` a deixou
+    /// (ADR-0118): se há botões de rolagem e se cada um tem para onde rolar.
+    /// Só o `update_overflow` escreve; hover, clique e tooltip leem.
+    bar_overflow: tab_bar::Overflow,
     /// Arraste de reordenação em andamento (espec §2.19), se algum.
     drag: Drag,
     /// The **other** selected tabs a tab drag carries along (RF-22.17,
@@ -3001,6 +3005,7 @@ impl WindowState {
             click_tracker: ClickTracker::default(),
             rename: RenameState::Idle,
             scroll_offset: 0.0,
+            bar_overflow: tab_bar::Overflow::default(),
             drag: Drag::Idle,
             drag_block: Vec::new(),
             incoming: None,
@@ -3408,13 +3413,88 @@ impl WindowState {
             self.workspace.pinned().len(),
             self.devices_button(),
         );
-        let window_start = self.scroll_offset;
-        let window_end = self.scroll_offset + trilha_width;
+        // ADR-0118: com a trilha estourada os botões de rolagem tomam
+        // `inset` px de cada ponta da janela, e a aba tem de caber entre eles.
+        // O estado é atualizado antes, para o recuo da passagem de "cabe" para
+        // "estoura" não se somar ao ajuste feito aqui.
+        let inset = self.update_overflow(style, &layout, trilha_width).inset;
+        let window_start = self.scroll_offset + inset;
+        let window_end = self.scroll_offset + trilha_width - inset;
         if rect.x < window_start {
-            self.scroll_offset = rect.x;
+            self.scroll_offset = rect.x - inset;
         } else if rect.x + rect.width > window_end {
-            self.scroll_offset = rect.x + rect.width - trilha_width;
+            self.scroll_offset = rect.x + rect.width - trilha_width + inset;
         }
+    }
+
+    /// Satura `scroll_offset` contra a trilha e guarda o resultado em
+    /// `bar_overflow` (ADR-0118). Um só lugar, para a transição "cabe" ->
+    /// "estoura" (que recua o deslocamento) acontecer uma vez só.
+    fn update_overflow(
+        &mut self,
+        style: &TabBarStyle,
+        layout: &tab_bar::TabBarLayout,
+        trilha_width: f32,
+    ) -> tab_bar::Overflow {
+        let overflow = tab_bar::overflow_state(
+            style,
+            layout,
+            trilha_width,
+            self.scroll_offset,
+            self.bar_overflow.scrollable(),
+        );
+        self.scroll_offset = overflow.scroll_offset;
+        self.bar_overflow = overflow;
+        overflow
+    }
+
+    /// O botão fixo da barra sob `point` (tela, lógico): os de rolagem da
+    /// trilha -- só os que têm para onde rolar -- e depois os da zona fixa.
+    fn zone_button_at(
+        &self,
+        style: &TabBarStyle,
+        point: (f32, f32),
+    ) -> Option<tab_bar::ZoneButtonHit> {
+        let bar_h = bar_height(style);
+        let devices = self.devices_button();
+        tab_bar::point_in_scroll_button(
+            style,
+            self.logical_width,
+            bar_h,
+            is_macos(),
+            self.workspace.pinned().len(),
+            devices,
+            self.bar_overflow,
+            point,
+        )
+        .filter(|&dir| self.bar_overflow.can_scroll(dir))
+        .map(tab_bar::ScrollDir::hit)
+        .or_else(|| {
+            tab_bar::point_in_zone_button(
+                style,
+                self.logical_width,
+                bar_h,
+                is_macos(),
+                devices,
+                point,
+            )
+        })
+    }
+
+    /// O ponto cai sobre um botão de rolagem da trilha, mesmo apagado
+    /// (ADR-0118): o pixel é do botão, não da aba que está por baixo.
+    fn over_scroll_button(&self, style: &TabBarStyle, point: (f32, f32)) -> bool {
+        tab_bar::point_in_scroll_button(
+            style,
+            self.logical_width,
+            bar_height(style),
+            is_macos(),
+            self.workspace.pinned().len(),
+            self.devices_button(),
+            self.bar_overflow,
+            point,
+        )
+        .is_some()
     }
 
     /// Canto esquerdo, em coordenadas de tela, da pílula de `group` --
@@ -6107,14 +6187,7 @@ impl WindowState {
             self.cursor_position.0 as f32 / self.scale,
             self.cursor_position.1 as f32 / self.scale,
         );
-        let released_over = tab_bar::point_in_zone_button(
-            style,
-            self.logical_width,
-            bar_height(style),
-            is_macos(),
-            self.devices_button(),
-            logical_point,
-        );
+        let released_over = self.zone_button_at(style, logical_point);
         tab_bar::zone_button_release(self.pressed_zone_button.take(), released_over)
     }
 
@@ -6213,8 +6286,7 @@ impl WindowState {
             gpu.text_measurer(),
             is_macos(),
         );
-        let overflow = tab_bar::overflow_state(&layout, trilha_width, self.scroll_offset);
-        self.scroll_offset = overflow.scroll_offset;
+        self.update_overflow(style, &layout, trilha_width);
 
         if !right_click {
             // Botões de janela (ADR-0027): zona fixa à direita, ainda mais
@@ -6235,17 +6307,17 @@ impl WindowState {
             // hit-test de conteúdo. Como os botões de janela, o press só
             // arma; quem dispara (`settings.open`, ADR-0059 §6, ou o popover
             // de sessões) é o release (`release_zone_button`).
-            if let Some(hit) = tab_bar::point_in_zone_button(
-                style,
-                bar_width,
-                h,
-                is_macos(),
-                devices,
-                logical_point,
-            ) {
+            if let Some(hit) = self.zone_button_at(style, logical_point) {
                 self.pressed_zone_button = Some(hit);
                 return NewTabRequest::None;
             }
+        }
+
+        // ADR-0118: o botão de rolagem é dono do pixel mesmo apagado e no
+        // clique direito -- por baixo dele há uma aba rolada para fora de
+        // vista, que não pode responder no lugar dele.
+        if self.over_scroll_button(style, logical_point) {
+            return NewTabRequest::None;
         }
 
         // ADR-0087 §4: the pinned boxes come after the zone buttons and before
@@ -7202,7 +7274,7 @@ impl WindowState {
                 self.devices_button(),
             );
         if logical_x >= track_left && logical_x < track_left + DRAG_EDGE_ZONE_PX {
-            self.scroll_offset = (self.scroll_offset - DRAG_AUTOSCROLL_STEP_PX).max(0.0);
+            self.scroll_offset -= DRAG_AUTOSCROLL_STEP_PX;
         } else if logical_x > track_right - DRAG_EDGE_ZONE_PX {
             self.scroll_offset += DRAG_AUTOSCROLL_STEP_PX;
         }
@@ -7737,7 +7809,8 @@ impl WindowState {
                     pinned_count,
                     self.devices_button(),
                     bar_point.0,
-                ) {
+                ) || self.over_scroll_button(style, bar_point)
+                {
                     return None;
                 }
                 // ADR-0112 section 4: over the box of the viewed-on-a-phone
@@ -13887,8 +13960,9 @@ impl App {
                 MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
             };
             if notches != 0.0 {
+                // Saturado no próximo redraw por `overflow_state` (o piso é
+                // negativo com a trilha estourada, ADR-0118).
                 state.scroll_offset -= notches.signum() * self.style.overflow_scroll_step;
-                state.scroll_offset = state.scroll_offset.max(0.0);
                 state.window.request_redraw();
             }
         } else if state.task_manager.is_some() {
@@ -15020,6 +15094,16 @@ impl App {
                     Some(tab_bar::ZoneButtonHit::AppMenu) => {
                         self.toggle_task_manager(window_id);
                     }
+                    // ADR-0118: um passo da roda do mouse por clique; o
+                    // redraw satura o deslocamento nas pontas.
+                    Some(tab_bar::ZoneButtonHit::ScrollLeft) => {
+                        state.scroll_offset -= self.style.overflow_scroll_step;
+                        state.window.request_redraw();
+                    }
+                    Some(tab_bar::ZoneButtonHit::ScrollRight) => {
+                        state.scroll_offset += self.style.overflow_scroll_step;
+                        state.window.request_redraw();
+                    }
                     None => {
                         state.window.request_redraw();
                     }
@@ -15896,8 +15980,7 @@ impl App {
         let viewed_tabs = tab_bar::viewed_tabs(&state.remote_viewers);
         let base_layout =
             tab_bar::fit_width_viewed(&state.workspace, style, gpu.text_measurer(), &viewed_tabs);
-        let overflow = tab_bar::overflow_state(&base_layout, trilha_width, state.scroll_offset);
-        state.scroll_offset = overflow.scroll_offset;
+        let overflow = state.update_overflow(style, &base_layout, trilha_width);
 
         // Hover dos botões de janela (ADR-0027): calculado do zero a cada
         // frame a partir da posição do cursor, mesmo padrão do resto do
@@ -15928,14 +16011,7 @@ impl App {
                 state.cursor_position.0 as f32 / state.scale,
                 state.cursor_position.1 as f32 / state.scale,
             );
-            tab_bar::point_in_zone_button(
-                style,
-                bar_width,
-                bar_height(style),
-                is_mac,
-                devices_button,
-                cursor_logical,
-            )
+            state.zone_button_at(style, cursor_logical)
         } else {
             None
         };
@@ -15972,7 +16048,8 @@ impl App {
                 pinned_count,
                 devices_button,
                 cursor_logical.0,
-            ) {
+            ) && !state.over_scroll_button(style, cursor_logical)
+            {
                 tab_bar::hit_test(&base_layout, content_point)
             } else {
                 None

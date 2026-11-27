@@ -29,7 +29,7 @@
 use std::collections::{HashMap, HashSet};
 
 use porecatu_core::{GroupId, InsertAt, TabId, UnpinTarget, Workspace};
-use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer};
+use porecatu_render::{FontFace, Rect, SansWeight, TextMeasurer, icon};
 
 /// Fonte de rótulo de aba (espec. §1.1: "12.5px, rótulo da aba").
 const LABEL_FONT: FontFace = FontFace::System {
@@ -1143,20 +1143,103 @@ pub fn fit_width_viewed(
     layout_viewed(workspace, style, measurer, viewed)
 }
 
-/// Estado de rolagem da trilha (espec. §2.18) para um `content_width` e uma
-/// largura disponível dados: deslocamento já saturado em
-/// `[0, content_width - available_width]`. Não há mais botões de abas fora
-/// da vista (RF-1.19 emendado): a trilha rola pela roda do mouse e pelo
-/// arraste, então a contagem de abas ocultas deixou de existir.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Overflow {
-    pub scroll_offset: f32,
+/// Padding horizontal de cada lado do chevron dos botões de rolagem (ADR-0118):
+/// o que impede o desenho de encostar nas bordas do botão. Sem chave no TOML --
+/// geometria fixa, como `COLLAPSED_DOTS_GAP`.
+const SCROLL_BUTTON_PADDING_X: f32 = 6.0;
+
+/// Largura de cada botão de rolagem da trilha cheia (espec. §2.18, ADR-0118):
+/// a tinta do chevron, no tamanho dos demais ícones do chrome
+/// (`icon_em_size`), mais [`SCROLL_BUTTON_PADDING_X`] dos dois lados,
+/// arredondada para cima para o botão cair no pixel. Estreito de propósito --
+/// bem menos largo que alto (a altura é a da barra inteira).
+pub fn scroll_button_width(style: &TabBarStyle) -> f32 {
+    (icon::CHEVRON_LEFT.ink_width(style.icon_em_size) + SCROLL_BUTTON_PADDING_X * 2.0).ceil()
 }
 
-pub fn overflow_state(layout: &TabBarLayout, available_width: f32, scroll_offset: f32) -> Overflow {
-    let max_scroll = (layout.content_width - available_width).max(0.0);
+/// Direção de um botão de rolagem da trilha.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollDir {
+    Left,
+    Right,
+}
+
+impl ScrollDir {
+    /// O alvo de hover/clique que este botão é.
+    pub fn hit(self) -> ZoneButtonHit {
+        match self {
+            ScrollDir::Left => ZoneButtonHit::ScrollLeft,
+            ScrollDir::Right => ZoneButtonHit::ScrollRight,
+        }
+    }
+}
+
+/// Estado de rolagem da trilha (espec. §2.18, ADR-0118).
+///
+/// A trilha **estoura** quando `content_width` passa da largura disponível;
+/// só então os dois botões de rolagem existem, e cada um toma `inset` px de
+/// uma ponta da janela da trilha. A conversão tela-conteúdo continua
+/// `tela = conteúdo + track_shift - scroll_offset`: para o conteúdo não
+/// ficar por baixo dos botões, o deslocamento passa a variar em
+/// `[-inset, content_width - available_width + inset]` -- no mínimo a
+/// primeira aba começa logo depois do botão da esquerda, no máximo a última
+/// termina logo antes do da direita. Sem estourar, `inset` é 0 e o
+/// deslocamento é sempre 0.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Overflow {
+    pub scroll_offset: f32,
+    /// Largura de cada botão de rolagem; 0 quando a trilha não estoura.
+    pub inset: f32,
+    pub can_scroll_left: bool,
+    pub can_scroll_right: bool,
+}
+
+impl Overflow {
+    /// Há botões de rolagem na barra.
+    pub fn scrollable(&self) -> bool {
+        self.inset > 0.0
+    }
+
+    /// O botão de `dir` tem para onde rolar; sem isso ele fica apagado e
+    /// não reage.
+    pub fn can_scroll(&self, dir: ScrollDir) -> bool {
+        match dir {
+            ScrollDir::Left => self.can_scroll_left,
+            ScrollDir::Right => self.can_scroll_right,
+        }
+    }
+}
+
+/// `was_scrollable`: a trilha já estourava no estado anterior. Na passagem
+/// de "cabe" para "estoura" o deslocamento 0 deixaria o começo da primeira
+/// aba por baixo do botão da esquerda, então ele recua `inset` -- o novo
+/// "começo". A decisão de estourar usa a largura **inteira** da trilha, não
+/// a que sobra depois dos botões, para a barra não oscilar entre os dois
+/// estados.
+pub fn overflow_state(
+    style: &TabBarStyle,
+    layout: &TabBarLayout,
+    available_width: f32,
+    scroll_offset: f32,
+    was_scrollable: bool,
+) -> Overflow {
+    if layout.content_width <= available_width {
+        return Overflow::default();
+    }
+    let inset = scroll_button_width(style);
+    let min = -inset;
+    let max = (layout.content_width - available_width + inset).max(min);
+    let wanted = if was_scrollable {
+        scroll_offset
+    } else {
+        scroll_offset - inset
+    };
+    let scroll_offset = wanted.clamp(min, max);
     Overflow {
-        scroll_offset: scroll_offset.clamp(0.0, max_scroll),
+        scroll_offset,
+        inset,
+        can_scroll_left: scroll_offset > min,
+        can_scroll_right: scroll_offset < max,
     }
 }
 
@@ -1329,6 +1412,63 @@ pub fn point_in_track(
     x >= left && x < left + trilha_width(style, bar_width, is_macos, pinned, devices)
 }
 
+/// Retângulo de um botão de rolagem (ADR-0118), em coordenadas de tela:
+/// nas duas pontas da janela da trilha, de cima a baixo da barra
+/// (`bar_height`, a de `chrome::bar_height`), sem raio e sem borda. Existe
+/// sempre como geometria; só é pintado e só é alvo com a trilha estourada
+/// ([`point_in_scroll_button`]).
+pub fn scroll_button_rect(
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+    pinned: usize,
+    devices: bool,
+    dir: ScrollDir,
+) -> Rect {
+    let left = track_shift(style, is_macos, pinned);
+    let width = scroll_button_width(style);
+    let x = match dir {
+        ScrollDir::Left => left,
+        ScrollDir::Right => {
+            left + trilha_width(style, bar_width, is_macos, pinned, devices) - width
+        }
+    };
+    Rect {
+        x,
+        y: 0.0,
+        width,
+        height: bar_height,
+    }
+}
+
+/// Qual botão de rolagem `point` atinge, **mesmo apagado**: o botão sem
+/// para onde rolar continua sendo dono do pixel (não cai na trilha nem na
+/// drag region), só não reage. Sem a trilha estourada, `None`.
+#[allow(clippy::too_many_arguments)]
+pub fn point_in_scroll_button(
+    style: &TabBarStyle,
+    bar_width: f32,
+    bar_height: f32,
+    is_macos: bool,
+    pinned: usize,
+    devices: bool,
+    overflow: Overflow,
+    point: (f32, f32),
+) -> Option<ScrollDir> {
+    if !overflow.scrollable() {
+        return None;
+    }
+    [ScrollDir::Left, ScrollDir::Right]
+        .into_iter()
+        .find(|&dir| {
+            rect_contains(
+                scroll_button_rect(style, bar_width, bar_height, is_macos, pinned, devices, dir),
+                point,
+            )
+        })
+}
+
 /// Retângulo do botão de configurações, em coordenadas de tela da barra
 /// (zona fixa à direita -- não rola com a trilha, ao contrário do botão
 /// por grupo dentro de [`GroupWrapperRect::new_tab_button`]). Colado nos
@@ -1426,8 +1566,8 @@ pub fn devices_button_rect(
     }
 }
 
-/// Qual botão fixo da barra (menu do app, aparelhos, sessões ou
-/// configurações) um ponto atinge.
+/// Qual botão fixo da barra (menu do app, aparelhos, sessões,
+/// configurações ou rolagem da trilha) um ponto atinge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoneButtonHit {
     /// Botão de menu do app, à esquerda da trilha.
@@ -1436,6 +1576,12 @@ pub enum ZoneButtonHit {
     Devices,
     Sessions,
     Settings,
+    /// Botões de rolagem da trilha cheia (ADR-0118). Não saem de
+    /// [`point_in_zone_button`], que não sabe se a trilha estoura: saem de
+    /// [`point_in_scroll_button`], e só chegam aqui quando têm para onde
+    /// rolar.
+    ScrollLeft,
+    ScrollRight,
 }
 
 /// Testa um ponto contra os botões fixos. Mesma geometria de
@@ -3358,13 +3504,94 @@ mod tests {
         let fitted = fit_width(&ws, &TabBarStyle::DEFAULT, 300.0, &mut m, false);
         assert!(fitted.content_width > 300.0);
 
-        let none = overflow_state(&fitted, 300.0, 0.0);
-        assert_eq!(none.scroll_offset, 0.0);
-        assert_eq!(overflow_state(&fitted, 300.0, -40.0).scroll_offset, 0.0);
+        // ADR-0118: estourada, a rolagem varia de -inset (a primeira aba logo
+        // depois do botão da esquerda) a max + inset (a última logo antes do
+        // da direita).
+        let style = TabBarStyle::DEFAULT;
+        let inset = scroll_button_width(&style);
+        assert!(inset > 0.0);
+        let min = overflow_state(&style, &fitted, 300.0, -500.0, true);
+        assert_eq!(min.scroll_offset, -inset);
+        assert!(!min.can_scroll_left && min.can_scroll_right);
 
-        let max_scroll = fitted.content_width - 300.0;
-        let clamped = overflow_state(&fitted, 300.0, max_scroll + 500.0);
-        assert_eq!(clamped.scroll_offset, max_scroll);
+        let max_scroll = fitted.content_width - 300.0 + inset;
+        let max = overflow_state(&style, &fitted, 300.0, max_scroll + 500.0, true);
+        assert_eq!(max.scroll_offset, max_scroll);
+        assert!(max.can_scroll_left && !max.can_scroll_right);
+        assert_eq!(max.inset, inset);
+
+        let middle = overflow_state(&style, &fitted, 300.0, 10.0, true);
+        assert_eq!(middle.scroll_offset, 10.0);
+        assert!(middle.can_scroll_left && middle.can_scroll_right);
+    }
+
+    /// ADR-0118: a transição "cabe" -> "estoura" recua o deslocamento para o
+    /// começo (-inset), uma vez só; e uma trilha que cabe não tem botões nem
+    /// deslocamento.
+    #[test]
+    fn overflow_state_starts_at_the_beginning_when_the_track_begins_to_overflow() {
+        let style = TabBarStyle::DEFAULT;
+        let mut ws = Workspace::new();
+        for _ in 0..10 {
+            ws.append_tab("zsh", None);
+        }
+        let mut m = measurer();
+        let fitted = fit_width(&ws, &style, 300.0, &mut m, false);
+        let inset = scroll_button_width(&style);
+
+        let first = overflow_state(&style, &fitted, 300.0, 0.0, false);
+        assert_eq!(first.scroll_offset, -inset);
+        // Já estourada: o mesmo 0 é 0, não recua de novo.
+        let again = overflow_state(&style, &fitted, 300.0, 0.0, true);
+        assert_eq!(again.scroll_offset, 0.0);
+
+        let fits = overflow_state(&style, &fitted, fitted.content_width, 40.0, true);
+        assert_eq!(fits, Overflow::default());
+        assert!(!fits.scrollable());
+    }
+
+    /// ADR-0118: botões retangulares estreitos, de cima a baixo da barra, nas
+    /// duas pontas da janela da trilha; só alvo com a trilha estourada, e o
+    /// apagado continua dono do pixel.
+    #[test]
+    fn scroll_buttons_are_narrow_full_height_and_sit_at_both_ends_of_the_track() {
+        let style = TabBarStyle::DEFAULT;
+        let (bar_width, bar_height) = (800.0, 52.0);
+        let width = scroll_button_width(&style);
+        assert!(width < bar_height, "estreito, não quadrado");
+        assert!(
+            width
+                >= icon::CHEVRON_LEFT.ink_width(style.icon_em_size) + SCROLL_BUTTON_PADDING_X * 2.0,
+            "o chevron não encosta nas bordas"
+        );
+        let rect = |dir| scroll_button_rect(&style, bar_width, bar_height, false, 0, false, dir);
+        let (left, right) = (rect(ScrollDir::Left), rect(ScrollDir::Right));
+        assert_eq!(left.x, track_shift(&style, false, 0));
+        assert_eq!(
+            right.x + right.width,
+            track_shift(&style, false, 0) + trilha_width(&style, bar_width, false, 0, false)
+        );
+        for r in [left, right] {
+            assert_eq!((r.y, r.height, r.width), (0.0, bar_height, width));
+        }
+
+        let at = |overflow, point| {
+            point_in_scroll_button(
+                &style, bar_width, bar_height, false, 0, false, overflow, point,
+            )
+        };
+        let scrollable = Overflow {
+            scroll_offset: 0.0,
+            inset: width,
+            can_scroll_left: false,
+            can_scroll_right: true,
+        };
+        let inside_left = (left.x + 1.0, 1.0);
+        let inside_right = (right.x + right.width - 1.0, bar_height - 1.0);
+        assert_eq!(at(scrollable, inside_left), Some(ScrollDir::Left));
+        assert_eq!(at(scrollable, inside_right), Some(ScrollDir::Right));
+        assert_eq!(at(scrollable, (left.x + left.width + 1.0, 10.0)), None);
+        assert_eq!(at(Overflow::default(), inside_left), None);
     }
 
     #[test]

@@ -119,6 +119,7 @@
 | [0115](0115-copiar-recortar-e-colar-nos-campos-de-texto.md) | Copiar, recortar e colar nos campos de texto: teclas do sistema, colar numa linha só e menu de clique direito | Aceito — implementado; verificado ao vivo só no Windows (parcial); aval visual do dono pendente |
 | [0116](0116-glyph-de-fallback-encaixado-pela-tinta.md) | Glyph de fallback encaixado pela tinta, com transbordo para a célula vazia | Proposto — implementado; smoke test só no Windows; aval visual do dono pendente |
 | [0117](0117-recorte-da-iosevka-sem-largos-e-espremidos.md) | Recorte da Iosevka sem os caracteres largos e os símbolos espremidos | Proposto — implementado; smoke test só no Windows; aval visual do dono pendente · revisa ADR-0025 (**parcial**) |
+| [0118](0118-botoes-de-rolagem-da-barra-de-abas-cheia.md) | Botões de rolagem da barra de abas cheia: retangulares, de cima a baixo, com hover e clique | Proposto — implementado; verificado só por teste automatizado; aval visual do dono pendente · revisa ADR-0084 §1 (**parcial**) |
 
 ## Convenção
 
