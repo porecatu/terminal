@@ -14716,6 +14716,30 @@ impl App {
             state.update_hover(gpu, Instant::now(), &self.config, &self.style);
         }
 
+        // Dialog buttons (ADR-0081): the hover follows the cursor and the
+        // pointer says they are clickable, as in the settings window. The
+        // frame recomputes the hover; here only the change asks for it.
+        if let Some(dialog) = state.dialog.as_ref()
+            && let Some(gpu) = &mut self.gpu
+        {
+            let layout = overlay::layout_dialog(
+                state.logical_width,
+                state.logical_height,
+                dialog,
+                &self.config,
+                gpu.text_measurer(),
+            );
+            let hit = overlay::dialog_hit(&layout, logical_point);
+            if dialog.hovered() != hit {
+                state.window.request_redraw();
+            }
+            state.window.set_cursor(if hit.is_some() {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Default
+            });
+        }
+
         if state.dialog.is_some() || state.context_menu.is_some() {
             return;
         }
@@ -17070,6 +17094,35 @@ impl App {
             frame.set_layer(Layer::Popover, popover);
         }
 
+        if state.dialog.is_some() {
+            let dialog_point = (
+                state.cursor_position.0 as f32 / state.scale,
+                state.cursor_position.1 as f32 / state.scale,
+            );
+            // Hover and pressed of the dialog buttons (ADR-0081), computed
+            // fresh from the cursor each frame, never stored past it: the
+            // press armed this very button (`armed_overlay`) and
+            // `paint_dialog` only paints it pressed while the cursor is still
+            // over it.
+            let armed_button = match state.armed_overlay {
+                Some(OverlayTarget::Dialog(button)) => Some(button),
+                _ => None,
+            };
+            if let Some(dialog) = &state.dialog {
+                let layout = overlay::layout_dialog(
+                    state.logical_width,
+                    state.logical_height,
+                    dialog,
+                    config,
+                    gpu.text_measurer(),
+                );
+                let hovered = overlay::dialog_hit(&layout, dialog_point);
+                if let Some(dialog) = state.dialog.as_mut() {
+                    dialog.set_hovered(hovered);
+                    dialog.set_pressed(armed_button);
+                }
+            }
+        }
         if let Some(dialog) = &state.dialog {
             let layout = overlay::layout_dialog(
                 state.logical_width,

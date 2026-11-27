@@ -292,8 +292,7 @@ pub struct ConfirmDialog {
     /// remoto (ADR-0108 §3). Falso em todos os outros diálogos.
     pub primary_confirm: bool,
     focused: DialogButton,
-    /// O botão sob o cursor, só no diálogo de três saídas: os de dois botões
-    /// não têm realce de hover.
+    /// O botão sob o cursor (hover, ADR-0081), em todo diálogo.
     hovered: Option<DialogButton>,
     /// O botão que o press armou (ADR-0081); só pinta pressionado enquanto o
     /// cursor segue sobre ele (`hovered`).
@@ -833,7 +832,7 @@ impl ConfirmDialog {
         }
     }
 
-    /// O botão sob o cursor, realçado só no diálogo de três saídas.
+    /// O botão sob o cursor, realçado em todo diálogo.
     pub const fn hovered(&self) -> Option<DialogButton> {
         self.hovered
     }

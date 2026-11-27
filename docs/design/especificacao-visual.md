@@ -876,6 +876,8 @@ O foco inicial é o cancelar. `Enter` aciona o botão focado, `Esc` cancela.
 
 **Anel de foco:** o botão focado leva borda `1px #5ed3bc` — o mesmo acento do campo de rename, que é o token que o projeto usa para dizer "as teclas vão para cá". Sem isso o RF-10.18 é inverificável: "o foco inicial é o cancelar" não é observável se o foco não tem aparência. **Hover do cancelar:** fundo `#262b34`, o mesmo dos botões de borda `#262b34` da barra.
 
+**Hover e pressionado de todo botão do diálogo da janela principal** (a mesma regra da tela de configurações, §2.12, [ADR-0081](../adr/0081-disparo-no-release-para-botoes-e-itens.md) §5): com o cursor sobre o botão, o **cancelar** toma o fundo `#262b34`, o **descartar** o tom destrutivo (`#2e2224`) e o **confirmar** (destrutivo ou primário) um passo de brilho acima do próprio fundo (`hover_brightness`); armado pelo press, com o cursor ainda sobre ele, cada um vai **um passo de brilho acima do hover** (`pressed_fill`). Armado e com o cursor fora, nada. O cursor do mouse vira mão sobre o botão. Vale para todo diálogo (fechar aba, grupo ou janela, excluir sessão, sobrescrever, host desconhecido, segredo). Zero valor novo; aval visual do dono **pendente**.
+
 O corpo é curto por construção nos três diálogos do v1, e **não rola**: texto longo quebra e o modal cresce, como descrito acima. Sem animação no overlay; só o modal tem `pop .14s`.
 
 Camada **modal** do [ADR-0018](../adr/0018-composicao-de-frame.md), a mais alta: cobre tudo e suprime tooltip.
